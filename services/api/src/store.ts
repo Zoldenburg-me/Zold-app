@@ -159,6 +159,8 @@ export const store = {
     // The one place an IBAN changes, so the one place its date is kept.
     const bare = (v?: string) => (v ?? "").replace(/\s+/g, "").toUpperCase();
     const ibanChanged = typeof patch.iban === "string" && bare(patch.iban) !== "" && bare(patch.iban) !== bare(u.iban);
+    // Cleared counts too: an org account backed by this user prints the IBAN.
+    const ibanReplaced = "iban" in patch && bare(patch.iban) !== bare(u.iban);
     // The one place a Monerium profile is recorded, so the one place its
     // history is appended to. A patch cannot write the history itself.
     const { moneriumProfileHistory: _ignored, ...rest } = patch;
@@ -169,6 +171,16 @@ export const store = {
       ibanChanged && !patch.ibanSince ? { ibanSince: new Date().toISOString() } : {},
       history ? { moneriumProfileHistory: history } : {},
     );
+    // An org account backed by this user's Safe shows the IBAN that pays into
+    // that Safe, so it follows the user's: a moved-away IBAN is taken off the
+    // account (the row stays), and one attributed to the Safe again returns.
+    if (ibanReplaced) {
+      const iban = bare(u.iban) || undefined;
+      for (const a of db.accounts) {
+        if (a.backingUserId !== id || a.currency !== "EUR") continue;
+        Object.assign(a, { identifier: { ...a.identifier, iban }, updatedAt: new Date().toISOString() });
+      }
+    }
     persist();
     return u;
   },

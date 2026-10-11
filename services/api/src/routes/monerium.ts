@@ -45,7 +45,13 @@ import {
   } from "../wallet/candide.js";
 import { b64urlToBuf, verifyAssertionForChallenge } from "../webauthn.js";
 import { normalizeIban } from "../sepa.js";
-import { confirmedMoves, mayApproveOnIban, releaseIbanFromOtherUsers } from "../adapters/monerium-sandbox.js";
+import {
+  applyIbanBinding,
+  confirmedMoves,
+  mayApproveOnIban,
+  paysInto,
+  releaseIbanFromOtherUsers,
+} from "../adapters/monerium-sandbox.js";
 import {
   forgetUserClient,
   hasOwnMoneriumCredentials,
@@ -137,14 +143,14 @@ function otherProfileRefused(user: User, named: unknown) {
   };
 }
 
-/** An IBAN Monerium attributes to this address, on the connected profile.
- *  An item that names another profile is not this account's; one that names
- *  none is taken on the address match alone. */
+/** An IBAN Monerium attributes to this address on our chain, on the
+ *  connected profile. An item that names another profile is not this
+ *  account's; one that names none is taken on the address match alone. */
 function ownIbanOf(ibans: any[], address: string, profileId: string | undefined): string {
   return (
     ibans.find(
       (i: any) =>
-        String(i?.address ?? "").toLowerCase() === address.toLowerCase() &&
+        paysInto(i, address) &&
         i.iban &&
         !(profileId && typeof i.profile === "string" && i.profile !== profileId),
     )?.iban ?? ""
@@ -153,13 +159,17 @@ function ownIbanOf(ibans: any[], address: string, profileId: string | undefined)
 
 /**
  * May an IBAN this account already stores stay through a (re)connect under
- * `profileId`? Only when the connected login lists it on that profile. A
- * login connected earlier under its personal profile and now under its
- * corporate one would otherwise keep a personal IBAN on a company account.
+ * `profileId`? Only when the connected login lists it on that profile, paying
+ * into this Safe on our chain. A login connected earlier under its personal
+ * profile and now under its corporate one would otherwise keep a personal
+ * IBAN on a company account, and an IBAN moved to another address since
+ * would be shown again as this account's.
  */
 function storedIbanOnProfile(user: User, ibans: any[], profileId: string): boolean {
   const stored = ibanKey(user.iban);
-  return Boolean(stored) && ibans.some((i: any) => ibanKey(i?.iban) === stored && i?.profile === profileId);
+  return Boolean(stored) && ibans.some(
+    (i: any) => ibanKey(i?.iban) === stored && i?.profile === profileId && paysInto(i, user.address),
+  );
 }
 
 type Hex = `0x${string}`;
@@ -169,9 +179,6 @@ type ActiveSafeUser = User & {
 };
 const hasActiveSafe = (user: User): user is ActiveSafeUser =>
   Boolean(user.passkey?.publicKey && user.passkeySafe && user.passkeySafe.status === "active");
-
-const sameAddress = (a: unknown, b: unknown) =>
-  typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
 
 /** An IBAN as the user typed or Monerium listed it, compared without spaces. */
 const ibanKey = (v: unknown) => (typeof v === "string" ? normalizeIban(v) : "");
@@ -517,9 +524,11 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         return res.status(409).json({ error: "no Monerium account is connected to this account — connect one by OAuth or with your own API keys" });
       }
       const snapshot = await readMoneriumAccountSnapshot(user);
-      const updated = store.updateUser(user.id, {
+      let updated = store.updateUser(user.id, {
         monerium: { ...user.monerium!, ...snapshot },
       });
+      // The list was just read: check the stored IBAN still pays in here.
+      updated = applyIbanBinding(updated, snapshot.ibans);
       res.json(publicUser(updated).monerium);
     }),
   );
@@ -732,10 +741,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       // (scoped to their profiles, unlike the app's) says so directly.
       if (!viaApp && profileId && !iban) {
         profileHasIban ||= snapshot.ibans.some(
-          (i: any) =>
-            i?.profile === profileId &&
-            ibanKey(i.iban) &&
-            String(i?.address ?? "").toLowerCase() !== user.address.toLowerCase(),
+          (i: any) => i?.profile === profileId && ibanKey(i.iban) && !paysInto(i, user.address),
         );
       }
 
@@ -796,6 +802,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         // What Monerium attributes to THIS address, or nothing. Falling back to
         // a previously stored value would preserve a mis-attribution.
         iban,
+        ...(iban ? { moneriumIbanElsewhere: undefined } : {}),
         // Approval is the address-matched IBAN, not the POSTs succeeding: a
         // "duplicate" answer on both proves nothing about THIS address, and an
         // IBAN not yet issued is iban_pending, which refreshPendingIban resolves
@@ -963,7 +970,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         toChain: MONERIUM.chain,
         requestedAt,
       };
-      if (!sameAddress(current.address, user.address)) {
+      if (!paysInto(current, user.address)) {
         try {
           await moneriumBearerRequest(MONERIUM.baseUrl, accessToken, "PATCH", `/ibans/${encodeURIComponent(requested)}`, {
             address: user.address,
@@ -978,7 +985,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       // Only Monerium's own list decides. A failed re-read is "not confirmed".
       const after = await readMoneriumAccountSnapshot(user, accessToken).catch(() => undefined);
       const landed = after?.ibans.filter((i: any) => ibanKey(i?.iban) === requested) ?? [];
-      const confirmed = landed.length === 1 && sameAddress(landed[0].address, user.address);
+      const confirmed = landed.length === 1 && paysInto(landed[0], user.address);
       const moves = [...(user.moneriumIbanMoves ?? []), move];
       let updated: User;
       if (confirmed) {
@@ -986,6 +993,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         releaseIbanFromOtherUsers(iban, user.id);
         updated = store.updateUser(user.id, {
           iban,
+          moneriumIbanElsewhere: undefined,
           moneriumIbanMoves: moves,
           ...(!mayApproveOnIban(user)
             ? {}
@@ -1129,7 +1137,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
                   reason: "own Monerium API keys connected; activate IBAN with passkey",
                 },
               }),
-        ...(ownIban ? { iban: ownIban } : dropIban ? { iban: undefined } : {}),
+        ...(ownIban ? { iban: ownIban, moneriumIbanElsewhere: undefined } : dropIban ? { iban: undefined } : {}),
         funding: {
           ...(user.funding ?? {}),
           mode: "sandbox" as const,
