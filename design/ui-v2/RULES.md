@@ -45,7 +45,6 @@ These deviations are decided. Do not undo them, and do not add new ones without 
 | No outer glows (9.A) | A pink glow only under the ONE primary button and a faint hero radial | This is the live site's signature. Keep it on primary actions only; never glow cards, text or icons. |
 | No div-based fake product UI (9.E, 9.F) | Product mockups on the landing page (the transaction list, the payment-link and flow panels); the ones that show names or amounts are tagged "Illustration" | The copy brief required them. Replace them with real screenshots of the shipped app once it exists. |
 | Section numbering banned (9.F) | "01 02 03" on the three landing send steps | These are real ordered steps, not section eyebrows. Nowhere else. |
-| Serif discipline: Instrument Serif banned as a default, no emphasis in a second family (4.1) | Instrument Serif italic 400 for one line only: "you own." in the landing hero; Inter everywhere else. Self-hosted in `vendor/fonts/text.css` | A deliberate brand choice by the owner. Never in the app, legal pages or body text. |
 
 ## 4. Honesty (repo rule 2: nothing renders as real that has not moved real money)
 
