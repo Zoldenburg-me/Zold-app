@@ -9,12 +9,13 @@
  * In memory only: a restart empties the list (the log keeps the lines). What
  * is kept is chosen so it holds no credential: the route PATTERN, never the
  * URL (an invoice-link or pay-link path is a bearer token, and a query string
- * may carry one), and no request body.
+ * may carry one), no request body, and of the stack only its redacted call
+ * frames (log-cause.ts callFrames).
  */
 import { randomBytes } from "node:crypto";
 import type express from "express";
 import { ROUTE_PATTERN } from "./async-errors.js";
-import { describeCause, describeError } from "./log-cause.js";
+import { callFrames, describeCause, describeError } from "./log-cause.js";
 
 export interface ServerErrorEntry {
   ref: string;
@@ -58,7 +59,7 @@ export function recordServerError(err: unknown, req: express.Request, status = 5
     status,
     name: typeof e?.name === "string" ? e.name : typeof err,
     message: describeCause(err),
-    stack: typeof e?.stack === "string" ? e.stack.split("\n").slice(1, 9).map((l) => l.trim()) : [],
+    stack: callFrames(err),
   };
   entries.unshift(entry);
   if (entries.length > MAX) entries.length = MAX;
