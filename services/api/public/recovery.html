@@ -20,6 +20,7 @@
   .r-err { color: var(--z-red, #e5484d); margin: 12px 0 0; }
   .r-ref b { font-family: ui-monospace, monospace; letter-spacing: 0.04em; }
   h2 { font-size: 17px; margin: 28px 0 8px; }
+  .r-net { max-width: 528px; margin: 0 auto 32px; padding: 10px 12px; border-radius: 12px; font-size: 14px; background: var(--z-amber-tint); border: 1px solid var(--z-amber-border); }
   .r-warn { font-size: 14px; padding: 10px 12px; border-radius: 12px; background: var(--z-amber-tint); border: 1px solid var(--z-amber-border); }
   .r-done { font-weight: 600; }
   .r-list { list-style: none; padding: 0; margin: 16px 0 0; border: 1px solid var(--z-line-strong, #444); border-radius: 12px; }
@@ -37,5 +38,7 @@
   <h1>Get your account back</h1>
   <p>Loading…</p>
 </main>
+<!-- Outside #r-body: screens redraw, this stays until the page reaches Zold again. -->
+<p class="r-net" id="r-net" role="status" hidden></p>
 <script type="module" src="/recovery/main.js"></script>
 </html>

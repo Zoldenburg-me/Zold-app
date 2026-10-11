@@ -953,7 +953,8 @@ export interface RecoveryRequest {
       passedAt?: string;
       orderId?: string;
       enrolledAt?: string;
-      lastCheck?: { at: string; outcome: "waiting" | "mismatch" | "unreadable"; reason: string };
+      /** `cause` names why an unreadable check failed, for the operator. */
+      lastCheck?: { at: string; outcome: "waiting" | "mismatch" | "unreadable"; reason: string; cause?: "not_armed" | "monerium_orders" | "monerium_profile" | "error" };
     };
     /** The EIP-712 digest the guardian signed, as the module computed it. */
     recoveryHash?: `0x${string}`;
