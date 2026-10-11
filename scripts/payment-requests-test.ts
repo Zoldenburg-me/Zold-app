@@ -503,6 +503,23 @@ try {
     const { accountBalances, eur, usd } = await import("../services/api/src/chain.js");
     const rate = BigInt(Math.round(MID * 1e6));
 
+    // What a swap took is read from its own Transfer logs: USDC out of the
+    // Safe, less any paid to the paymaster as gas.
+    {
+      const { usdcSwappedIn } = await import("../services/api/src/adapters/crypto-deposits.js");
+      const me = deployerWallet!.account.address;
+      const venue = `0x${"7e".repeat(20)}` as `0x${string}`;
+      const paymasterAddr = `0x${"9a".repeat(20)}` as `0x${string}`;
+      await writeAndWait(deployerWallet!, { address: addrs().usdc, abi: abis.MockToken, functionName: "mint", args: [me, 10_000_000n] });
+      const toVenue = await writeAndWait(deployerWallet!, { address: addrs().usdc, abi: abis.MockToken, functionName: "transfer", args: [venue, 3_250_000n] });
+      const toPaymaster = await writeAndWait(deployerWallet!, { address: addrs().usdc, abi: abis.MockToken, functionName: "transfer", args: [paymasterAddr, 400_000n] });
+      check("the USDC a swap took is measured from its logs, gas to the paymaster excluded, someone else's transfer not counted",
+        (await usdcSwappedIn(toVenue, me, paymasterAddr)) === 3_250_000n &&
+          (await usdcSwappedIn(toPaymaster, me, paymasterAddr)) === 0n &&
+          (await usdcSwappedIn(toVenue, owner, null)) === 0n &&
+          (await usdcSwappedIn(undefined, me, null)) === undefined);
+    }
+
     // A partial fill first: the swap takes half. The rest stays held and
     // convertible; the invoice is not rewritten until it is all converted.
     const half = BigInt(dInv.amountUnits) / 2n;

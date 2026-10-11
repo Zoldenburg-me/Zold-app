@@ -457,11 +457,18 @@ await check("the executed swap is recorded before settling, and a failed settle 
   const marked = body.indexOf('holding: "unconfirmed",\n          reason: "the swap went through');
   const settle = body.indexOf("settleConvertedDeposit(");
   assert.ok(marked > 0 && marked < settle, "unconfirmed is written before settlement runs");
-  assert.match(body.slice(settle - 200), /try \{\s*settled = await settleConvertedDeposit[\s\S]*catch[\s\S]*SAFE_OP_UNCONFIRMED/,
+  assert.match(body.slice(body.indexOf("let settled: CryptoDeposit;")), /^let settled: CryptoDeposit;\s*try \{[\s\S]*?settled = await settleConvertedDeposit[\s\S]*catch[\s\S]*SAFE_OP_UNCONFIRMED/,
     "a settle failure answers SAFE_OP_UNCONFIRMED and leaves the row unconfirmed");
   const fn = dep.slice(dep.indexOf("export async function settleConvertedDeposit"));
   assert.ok(!/assertRateSane\(/.test(fn.slice(0, fn.indexOf("export function recordInvoiceSettlement"))),
     "no rate check that can throw after the swap executed");
+});
+
+await check("the units swapped are measured from the swap's logs, capped at what was left, never taken from the request", () => {
+  const conv = srv.slice(srv.indexOf('"/users/:id/crypto-deposits/:depositId/convert"'));
+  assert.match(conv, /const took = await usdcSwappedIn\(submitted\.txHash, user\.address, pending\.userOperation\.paymaster\)/);
+  assert.match(conv, /const amountIn = took === undefined \|\| took <= 0n \|\| took > asked \? asked : took;/);
+  assert.match(conv, /conversionFacts\(submitted, amountIn\.toString\(\)\)/);
 });
 
 await check("one conversion per deposit at a time; failure writes never undo a conversion", () => {

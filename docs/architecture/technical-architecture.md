@@ -663,9 +663,11 @@ flowchart LR
   receipt value in whole cents. Each fill books its own disposal line
   (`deposit:<id>:disposal:p<n>`) and Beleg; the final conversion's line takes
   what is left, so the receipt and every disposal sum to the EURe that
-  arrived. The convert route records the units it asked to swap, so today's
-  exact-input routes never produce a partial; one appears only where the swap
-  reports taking less.
+  arrived. The units swapped are measured from the swap transaction's own
+  USDC Transfer logs out of the Safe (`usdcSwappedIn`), leaving out gas paid
+  to the paymaster in USDC; a balance delta would also count a payment that
+  arrived in the same block. With no receipt to read, the whole remainder is
+  taken as swapped.
 - After the swap executes, the route marks the deposit `unconfirmed` with the
   swap step before settling. If settling then fails, it stays `unconfirmed`
   and is never offered again; there is no rate check after the swap that can
