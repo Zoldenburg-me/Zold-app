@@ -6,14 +6,21 @@
  * crypto without a bank.
  *
  *   detect  - read Transfer logs addressed to the watched addresses (this file)
- *   convert - a user-signed batch swaps USDC->EURe into the merchant Safe;
- *             settleConvertedDeposit records what arrived
+ *   settle  - on arrival, whatever the asset: the invoice, the pay link and the
+ *             books' receipt line (settleOnArrival)
+ *   convert - later, and only with the user's passkey: a Safe batch swaps the
+ *             held USDC to EURe; settleConvertedDeposit records what arrived
+ *
+ * Settled and converted are separate facts. The payer paid when the money
+ * landed; whether the payee keeps it as USDC or swaps it is `holding`.
  *
  * Only the swap needs Candide's bundler, which hardhat lacks, so detection and
  * settlement are testable locally and the swap is not.
  *
  * Limits:
- * - Nothing converts without `user.paymentPage.autoConvert`.
+ * - Nothing converts without a passkey signature. `paymentPage.autoConvert`
+ *   only decides whether a deposit asks for one (awaiting_approval) or is
+ *   simply held until the user chooses to convert.
  * - It watches the page's configured forwarding recipient. In production that
  *   should be the merchant Safe via Candide's forwarding address, not an
  *   API-held payment-page owner key.
@@ -26,8 +33,8 @@ import { randomUUID } from "node:crypto";
 import { usdToken } from "../usd-token.js";
 import { CHAIN_ID, CRYPTO_IN } from "../config.js";
 import { store, type CryptoDeposit, type User } from "../store.js";
-import { describeCause, redactedMessage } from "../http/log-cause.js";
-import { addrs, eur, usd, publicClient } from "../chain.js";
+import { describeCause } from "../http/log-cause.js";
+import { abis, addrs, eur, usd, publicClient } from "../chain.js";
 import { balanceAfterWrite } from "../liquidity.js";
 import { safeDebitBlocker } from "../orchestrator.js";
 import { walletBlocker } from "../domain/wallet-tier.js";
@@ -167,39 +174,67 @@ export async function assertRateSane(rate: bigint): Promise<{ venue: number; mid
   return { venue, mid };
 }
 
+/** The currency this account settles in. A Safe with no payment page is a
+ *  euro account: its IBAN and its books are in euro. */
+export function settlementTarget(user: User): "EURE" | "USDC" {
+  return user.paymentPage?.settlementAsset ?? "EURE";
+}
+
 /**
  * Can this deposit be converted, and if not, why in words the user can act on?
  *
  * Nothing sweeps anywhere: the swap is one user-signed batch out of the user's
- * own Safe, delivering EURe back into it.
+ * own Safe, delivering EURe back into it. Held and refused deposits can be
+ * converted at any time; only a converted one, or one already in the
+ * settlement currency, cannot.
  */
+/** USDC units of this deposit not yet converted: all of it, less any
+ *  partial fills. */
+export function unconvertedUnits(deposit: CryptoDeposit): bigint {
+  const swapped = (deposit.partials ?? []).reduce((n, p) => n + BigInt(p.conversion.amountInUnits ?? "0"), 0n);
+  const left = BigInt(deposit.amountUnits) - swapped;
+  return left > 0n ? left : 0n;
+}
+
+/**
+ * Did a swap of this deposit execute that is not recorded as a fill? Then its
+ * USDC is spent, whatever became of the result. Each partial fill accounts for
+ * one executed swap step; a row from before `partials` that carries a
+ * conversion counts as executed too.
+ */
+function unrecordedSwap(deposit: CryptoDeposit): boolean {
+  const executed = deposit.txs.filter((t) => t.step === "safe.swap(usdc->eure)").length;
+  return executed > (deposit.partials?.length ?? 0) || (!!deposit.conversion && deposit.holding !== "converted");
+}
+
 export function depositConversionBlocker(user: User, deposit: CryptoDeposit): string | null {
-  if (deposit.state === "CONVERTED") return "this deposit has already been settled";
-  if (deposit.state === "UNCONFIRMED") {
+  if (deposit.token !== "USDC") return `only ${usdToken().symbol} deposits can be converted`;
+  if (deposit.holding === "converted") return "this deposit has already been converted to EURe";
+  if (deposit.holding === "unconfirmed") {
     return "a conversion of this deposit was sent and may still land — it has to be checked on chain before it can be converted again";
+  }
+  if (deposit.holding === "none") return "this deposit is already in your settlement currency, so there is nothing to convert";
+  // Refused after the swap executed (it delivered nothing, or less than the
+  // floor): that USDC is spent, and a second swap would spend other USDC.
+  // Only a refusal before or without an executed swap can be retried.
+  if (deposit.holding === "refused" && unrecordedSwap(deposit)) {
+    return "a swap of this deposit went through and is under review — it cannot be converted again";
   }
   const identity = walletBlocker(user);
   if (identity) return identity;
-  const page = user.paymentPage;
-  if (!page) return "this account has no payment page";
-  if (page.settlementAsset === "USDC") {
-    return `your payment page settles in ${usdToken().symbol}, so there is nothing to convert`;
-  }
-  const amountUsdc = deposit.amountUsdc ?? 0;
+  const amountUsdc = usd.fromUnits(unconvertedUnits(deposit));
   if (amountUsdc < CRYPTO_IN.minUsdc) {
     const sym = usdToken().symbol;
     return `${amountUsdc} ${sym} is below the ${CRYPTO_IN.minUsdc} ${sym} floor — converting it would cost more than it delivers`;
   }
   /**
-   * No Safe, nothing to sign with. Without this check the deposit would sit at
-   * DETECTED telling the user to approve it with a passkey that has no Safe
-   * to act on. safeDebitBlocker is the same check the send path uses, so the
-   * two cannot drift.
+   * No Safe, nothing to sign with. safeDebitBlocker is the same check the send
+   * path uses, so the two cannot drift.
    */
   const safeBlocker = safeDebitBlocker(user);
   if (safeBlocker) {
     return (
-      `${safeBlocker}. Your ${deposit.amountUsdc ?? 0} ${usdToken().symbol} is still yours at ${user.address} — ` +
+      `${safeBlocker}. Your ${amountUsdc} ${usdToken().symbol} is still yours at ${user.address} — ` +
       "it simply cannot be converted until the account can sign."
     );
   }
@@ -207,66 +242,70 @@ export function depositConversionBlocker(user: User, deposit: CryptoDeposit): st
 }
 
 /**
- * Convert one detected deposit and settle the euros.
+ * Does the Safe still hold this deposit's USDC? A held deposit can sit for
+ * months, and the user may have spent it in the meantime. Read from the chain
+ * before a quote is taken, so the answer is a plain sentence rather than a
+ * bundler revert after the passkey prompt.
  *
- * Ordering is the point. The swap sends EURe to the merchant Safe and the
- * settlement record is sized from the Safe's measured balance change, not from
- * `expectedOut`.
+ * Per deposit: two held deposits over a balance that covers only one both
+ * pass, and the second swap then fails at the bundler.
  */
-export async function convertDeposit(deposit: CryptoDeposit): Promise<CryptoDeposit> {
-  if (deposit.state === "CONVERTED") return deposit;
-  const user = store.findUser(deposit.userId);
-  if (!user) throw new Error(`unknown user for crypto deposit ${deposit.id}`);
-  const txs: CryptoDeposit["txs"] = [...deposit.txs];
+export async function heldUsdcBlocker(user: User, deposit: CryptoDeposit): Promise<string | null> {
+  const need = unconvertedUnits(deposit);
+  const have = (await publicClient.readContract({
+    address: addrs().usdc,
+    abi: abis.MockToken,
+    functionName: "balanceOf",
+    args: [user.address as `0x${string}`],
+  })) as bigint;
+  if (have >= need) return null;
+  return (
+    `your account holds ${usd.fromUnits(have)} ${usdToken().symbol}, less than the ${usd.fromUnits(need)} ${usdToken().symbol} of this ` +
+    "deposit still to convert — it may have been spent. Nothing was prepared."
+  );
+}
 
-  try {
-    const page = user.paymentPage;
-    if (!page) throw new Error("this account has no payment page");
-    const blocker = depositConversionBlocker(user, deposit);
-    // Settling in USDC, or auto-settlement off, completes the deposit as USDC:
-    // the forwarder has already delivered it to the Safe. Marking it REFUSED
-    // would show a fault to a payee whose link was paid in full.
-    if (page.settlementAsset === "USDC" || !page.autoConvert) {
-      const settled = store.updateCryptoDeposit(deposit.id, {
-        state: "CONVERTED",
-        creditedUsdc: deposit.amountUsdc ?? 0,
-        settlementAsset: "USDC",
-        txs,
-        reason: undefined,
-      });
-      /**
-       * Record it on the invoice even though nothing converted. Settling in
-       * USDC is still an event the books need: the receivable is discharged
-       * and an asset is acquired at its euro value on receipt. Only the
-       * disposal has not happened yet, so the row carries no conversion and no
-       * realised gain — absent, not zero, because zero would be a claim.
-       * Leaving this out meant the default configuration (auto-convert off)
-       * wrote no invoice settlement at all.
-       */
-      if (settled.invoiceId) recordInvoiceSettlement(settled);
-      noteDepositSettled(settled);
-      return settled;
-    }
-    if (blocker) throw new Error(blocker);
-
-    /**
-     * The swap is not performed here. Moving the user's USDC needs a
-     * UserOperation their passkey signed, and this poller runs unattended.
-     * "Auto-convert" means detected automatically and converted on approval;
-     * the reason text tells the user a signature is pending.
-     */
-    return store.updateCryptoDeposit(deposit.id, {
-      state: "DETECTED",
+/** What becomes of a newly arrived asset: kept as is, held, or waiting for
+ *  the user's signature to convert. */
+function holdingOnArrival(user: User, deposit: CryptoDeposit): Pick<CryptoDeposit, "holding" | "reason"> {
+  if (deposit.token !== "USDC" || settlementTarget(user) === "USDC") return { holding: "none", reason: undefined };
+  const blocker = depositConversionBlocker(user, { ...deposit, holding: "held" });
+  if (user.paymentPage?.autoConvert && !blocker) {
+    return {
+      holding: "awaiting_approval",
       reason:
         "ready to convert to EURe — approve it with your passkey. Nothing can move your funds " +
         "without that signature.",
-      txs,
-    });
-  } catch (err: any) {
-    const reason = redactedMessage(err);
-    console.warn(`crypto-in: refusing deposit ${deposit.txHash}#${deposit.logIndex}: ${reason}`);
-    return store.updateCryptoDeposit(deposit.id, { state: "REFUSED", reason, txs });
+    };
   }
+  return { holding: "held", reason: blocker ?? undefined };
+}
+
+/**
+ * Settle a deposit on arrival: the invoice it pays, the pay link it matched,
+ * and (via the statement writer) the books' receipt line. Once per deposit,
+ * keyed on `settledAt`; a later conversion updates these records in place
+ * rather than settling again.
+ *
+ * The swap is not performed here. Moving the user's USDC needs a UserOperation
+ * their passkey signed, and this runs unattended.
+ */
+export function settleOnArrival(deposit: CryptoDeposit): CryptoDeposit {
+  if (deposit.settledAt) return deposit;
+  const user = store.findUser(deposit.userId);
+  if (!user) throw new Error(`unknown user for crypto deposit ${deposit.id}`);
+  const settled = store.updateCryptoDeposit(deposit.id, {
+    // A migrated row may already know its holding (held, refused); only a
+    // fresh one is decided here.
+    ...(deposit.holding === "awaiting_approval" || deposit.holding === undefined
+      ? holdingOnArrival(user, deposit)
+      : {}),
+    ...(deposit.token === "USDC" && deposit.holding !== "converted" ? { creditedUsdc: deposit.amountUsdc ?? 0 } : {}),
+    settledAt: new Date().toISOString(),
+  });
+  if (settled.invoiceId) recordInvoiceSettlement(settled);
+  noteDepositSettled(settled);
+  return settled;
 }
 
 /**
@@ -275,6 +314,10 @@ export async function convertDeposit(deposit: CryptoDeposit): Promise<CryptoDepo
  * The credited amount is measured as the Safe's EURe balance delta, not copied
  * from the quote (a swap that did not revert may still deliver less). The
  * signed floor is checked against that delta too.
+ *
+ * Runs after the swap executed, so it must not throw on anything but a
+ * failure to read the chain: the caller has already marked the row
+ * `unconfirmed` and leaves it there if this throws.
  */
 export async function settleConvertedDeposit(
   deposit: CryptoDeposit,
@@ -286,20 +329,24 @@ export async function settleConvertedDeposit(
    *  submitter had a receipt. Absent on the harness stand-ins. */
   conversion?: CryptoDeposit["conversion"],
 ): Promise<CryptoDeposit> {
-  const { venue: venueRate, mid: midRate } = await assertRateSane(quote.rate);
+  // The rate was checked against the mid before the swap was submitted. After
+  // it, a feed outage must not lose the record of a swap that happened: the
+  // mid is recorded when there is one and left out when there is not.
+  const venueRate = Number(quote.rate) / 1e6;
+  const midRate = await midRates().then((r) => r.eur.USD, () => undefined);
   const after = await balanceAfterWrite(addrs().eure, user.address as `0x${string}`, balanceBeforeWei);
   const receivedWei = after - balanceBeforeWei;
 
   if (receivedWei <= 0n) {
     return store.updateCryptoDeposit(deposit.id, {
-      state: "REFUSED",
+      holding: "refused",
       reason: "the swap delivered no EURe to your account — nothing has been credited",
       txs,
     });
   }
   if (receivedWei < quote.minOut) {
     return store.updateCryptoDeposit(deposit.id, {
-      state: "REFUSED",
+      holding: "refused",
       reason:
         `the swap delivered €${eur.fromWei(receivedWei)}, under the €${eur.fromWei(quote.minOut)} ` +
         "floor your signature guaranteed — left for review rather than credited",
@@ -307,11 +354,52 @@ export async function settleConvertedDeposit(
     });
   }
 
-  const creditedEur = eur.fromWei(receivedWei);
+  const filledEur = eur.fromWei(receivedWei);
+  const remaining = unconvertedUnits(deposit);
+  const amountInUnits = BigInt(conversion?.amountInUnits ?? remaining.toString());
+  const leftover = remaining - amountInUnits;
+  const partials = deposit.partials ?? [];
+  const rates = { provider: quote.provider, rate: venueRate, ...(midRate ? { midRate } : {}) };
+  console.log(
+    `crypto-in: converted ${usd.fromUnits(amountInUnits)} USDC to EUR ${filledEur} for ${user.name} ` +
+      `via ${quote.provider} at ${venueRate.toFixed(4)}` + (leftover > 0n ? ` (${usd.fromUnits(leftover)} USDC left held)` : ""),
+  );
+
   /**
-   * The realised gain: what arrived minus its value at receipt. Recorded once,
-   * now, and never recomputed from a later rate. Near zero when conversion
-   * follows receipt promptly (the tax reason to convert promptly).
+   * A partial fill: the swap took less than was held. The rest stays held and
+   * can be converted later; this fill is kept as a partial with its share of
+   * the receipt value, which its own disposal line books.
+   */
+  if (leftover > 0n) {
+    const receiptPortionEur = deposit.receipt
+      ? Number((BigInt(Math.round(deposit.receipt.amountEur * 100)) * amountInUnits) / BigInt(deposit.amountUnits)) / 100
+      : undefined;
+    const held = store.updateCryptoDeposit(deposit.id, {
+      holding: "held",
+      partials: [
+        ...partials,
+        {
+          creditedEur: filledEur,
+          ...(receiptPortionEur === undefined ? {} : { receiptPortionEur }),
+          ...rates,
+          conversion: { ...(conversion ?? {}), amountInUnits: amountInUnits.toString() },
+        },
+      ],
+      creditedUsdc: usd.fromUnits(leftover),
+      leftoverUnits: leftover.toString(),
+      txs,
+      reason: `part of it converted; ${usd.fromUnits(leftover)} ${usdToken().symbol} is still held and can be converted any time`,
+    });
+    writeStatementLines();
+    return held;
+  }
+
+  const creditedEur = Math.round((filledEur + partials.reduce((n, p) => n + p.creditedEur, 0)) * 100) / 100;
+  /**
+   * The realised gain over every conversion of this deposit: what arrived
+   * minus its value at receipt. Recorded once, now, and never recomputed from
+   * a later rate. Near zero when conversion follows receipt promptly (the tax
+   * reason to convert promptly).
    *
    * Absent, not zero, when the receipt could not be valued.
    */
@@ -319,23 +407,21 @@ export async function settleConvertedDeposit(
     deposit.receipt
       ? Math.round((creditedEur - deposit.receipt.amountEur) * 100) / 100
       : undefined;
-  console.log(
-    `crypto-in: converted ${deposit.amountUsdc ?? 0} USDC to EUR ${creditedEur} for ${user.name} ` +
-      `via ${quote.provider} at ${venueRate.toFixed(4)}` +
-      (realisedGainEur === undefined ? "" : ` (realised EUR ${realisedGainEur})`),
-  );
-  const amountInUnits = conversion?.amountInUnits ?? deposit.amountUnits;
-  const leftover = BigInt(deposit.amountUnits) - BigInt(amountInUnits);
+  /**
+   * The deposit was settled on arrival; this records the disposal. The invoice
+   * and pay-link rows are rewritten in place under the same ref (the receipt
+   * value they were paid at does not change), and the statement writer adds
+   * the disposal line — never a second receipt.
+   */
   const settled = store.updateCryptoDeposit(deposit.id, {
-    state: "CONVERTED",
+    holding: "converted",
     creditedEur,
+    creditedUsdc: undefined,
     settlementAsset: "EURE",
-    provider: quote.provider,
-    rate: venueRate,
-    midRate,
+    ...rates,
     ...(realisedGainEur === undefined ? {} : { realisedGainEur }),
-    conversion: { ...(conversion ?? {}), amountInUnits },
-    ...(leftover > 0n ? { leftoverUnits: leftover.toString() } : {}),
+    conversion: { ...(conversion ?? {}), amountInUnits: amountInUnits.toString() },
+    leftoverUnits: undefined,
     txs,
     reason: undefined,
   });
@@ -363,12 +449,12 @@ export function recordInvoiceSettlement(deposit: CryptoDeposit): void {
 
 
 /**
- * One scan of the chain for inbound USDC, followed by conversion of whatever
- * is new.
+ * One scan of the chain for inbound USDC and EURe, followed by settlement of
+ * whatever is new.
  *
  * The cursor advances once every log in the window is recorded, whether or not
- * it converted. An unconverted deposit is a REFUSED row someone can act on; an
- * unrecorded one behind the cursor is never seen again.
+ * it settled. An unsettled deposit is picked up by the sweep; an unrecorded one
+ * behind the cursor is never seen again.
  */
 let scanning = false;
 
@@ -499,7 +585,6 @@ async function scanCryptoDeposits(): Promise<{ found: number; more: boolean }> {
       if (match.source === "safe" && ownPage && ownPage !== to && from === ownPage) continue;
       const user = match.user;
       const now = new Date().toISOString();
-      const directSafeFunding = match.source === "safe" || token.token === "EURE";
       /**
        * The acquisition value, stamped once at detection with the rate's
        * provenance and never recomputed. A later feed rate is not the value
@@ -534,14 +619,12 @@ async function scanCryptoDeposits(): Promise<{ found: number; more: boolean }> {
             ? {
                 amountUsdc: usd.fromUnits(value),
                 ...(receipt ? { receipt, amountEur: receipt.amountEur } : {}),
-                ...(directSafeFunding ? { creditedUsdc: usd.fromUnits(value) } : {}),
               }
             : {}),
-          settlementAsset: directSafeFunding
-            ? token.token
-            : user.paymentPage?.settlementAsset ?? token.token,
+          settlementAsset: token.token,
           paymentAddress: match.address,
-          state: directSafeFunding ? "CONVERTED" : "DETECTED",
+          // Decided by settleOnArrival below, once attribution has run.
+          holding: "awaiting_approval",
           txs: [],
           detectedAt: now,
           updatedAt: now,
@@ -552,18 +635,11 @@ async function scanCryptoDeposits(): Promise<{ found: number; more: boolean }> {
 
   store.setCryptoDepositCursor(cursorKey, toBlock);
 
-  // Does this money pay a link? Decided BEFORE conversion, because whether a
-  // deposit is asked-for changes what happens to it when auto-convert is off.
+  // Does this money pay a link? Decided BEFORE settlement, so the link's
+  // invoice is on the deposit when the settlement is written.
   for (const deposit of fresh) {
     try {
       attributeDepositToRequest(deposit);
-      /**
-       * A deposit straight to the Safe is written CONVERTED, so its conversion
-       * has already been and gone by the time attribution hands it an invoice.
-       * Record here rather than let that case silently lose its settlement.
-       */
-      const linked = store.findCryptoDeposit(deposit.txHash, deposit.logIndex);
-      if (linked?.state === "CONVERTED" && linked.invoiceId) recordInvoiceSettlement(linked);
     } catch (err: any) {
       console.error(`crypto-in: could not attribute deposit ${deposit.id} to a request: ${describeCause(err)}`);
     }
@@ -571,12 +647,10 @@ async function scanCryptoDeposits(): Promise<{ found: number; more: boolean }> {
 
   for (const stale of fresh) {
     const deposit = store.cryptoDeposits.find((d) => d.id === stale.id) ?? stale;
-    if (deposit.state !== "DETECTED") continue;
     try {
-      await convertDeposit(deposit);
+      settleOnArrival(deposit);
     } catch (err: any) {
-      // convertDeposit records its own refusals; reaching here means the
-      // record itself could not be written.
+      // Left without settledAt, so the next sweep writes it.
       console.error(`crypto-in: could not settle deposit ${deposit.id}: ${describeCause(err)}`);
     }
   }
@@ -585,20 +659,32 @@ async function scanCryptoDeposits(): Promise<{ found: number; more: boolean }> {
 }
 
 /**
- * Retry deposits left DETECTED by a crash between recording and conversion.
+ * Settle deposits recorded but not yet settled: a crash between recording and
+ * settlement, or rows from before settlement happened on arrival.
  *
- * REFUSED deposits are skipped: they are below the floor or not opted in, and
- * retrying them would hit the venue on every tick.
+ * Only rows without `settledAt`, and each is settled once. Held, waiting and
+ * refused deposits are not looked at again: converting one is the user's act.
  */
 export async function sweepPendingCryptoDeposits(): Promise<number> {
   if (!CRYPTO_IN.enabled) return 0;
   let n = 0;
   for (const d of [...store.cryptoDeposits]) {
-    if (d.state !== "DETECTED") continue;
-    if (d.token !== "USDC") continue;
-    await convertDeposit(d);
-    n++;
+    if (d.settledAt) continue;
+    try {
+      // A crash between recording and attributing would otherwise settle the
+      // deposit with no pay link, and nothing attributes it afterwards.
+      attributeDepositToRequest(d);
+    } catch (err: any) {
+      console.error(`crypto-in: could not attribute deposit ${d.id} to a request: ${describeCause(err)}`);
+    }
+    try {
+      settleOnArrival(store.cryptoDeposits.find((x) => x.id === d.id) ?? d);
+      n++;
+    } catch (err: any) {
+      console.error(`crypto-in: could not settle deposit ${d.id}: ${describeCause(err)}`);
+    }
   }
+  if (n) writeStatementLines();
   return n;
 }
 

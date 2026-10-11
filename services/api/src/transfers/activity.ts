@@ -28,7 +28,8 @@ export type ActivityRow =
       txHash: string;
       amountEur?: number;
       amountUsdc?: number;
-      state: CryptoDeposit["state"];
+      holding: CryptoDeposit["holding"];
+      settledAt?: string;
       reason?: string;
       settlementAsset?: CryptoDeposit["settlementAsset"];
       detectedAt: string;
@@ -44,7 +45,7 @@ export interface ActivitySources {
 
 /** An EURe mint the watcher accepted: Monerium issuing against a SEPA credit. */
 const isAcceptedMint = (d: CryptoDeposit) =>
-  d.token === "EURE" && Boolean(d.from && ZERO_ADDRESS.test(d.from)) && d.state !== "REFUSED" && (d.amountEur ?? 0) > 0;
+  d.token === "EURE" && Boolean(d.from && ZERO_ADDRESS.test(d.from)) && d.holding !== "refused" && (d.amountEur ?? 0) > 0;
 
 const mintMatchesIssue = (d: CryptoDeposit, o: MoneriumIssueRecord) =>
   Math.abs((d.amountEur ?? 0) - o.amountEur) < SAME_AMOUNT_EUR &&
@@ -75,7 +76,8 @@ const fundingRow = (d: CryptoDeposit): ActivityRow => ({
   txHash: d.txHash,
   amountEur: d.amountEur ?? d.creditedEur,
   amountUsdc: d.amountUsdc ?? d.creditedUsdc,
-  state: d.state,
+  holding: d.holding,
+  settledAt: d.settledAt,
   reason: d.reason,
   settlementAsset: d.settlementAsset,
   detectedAt: d.detectedAt,

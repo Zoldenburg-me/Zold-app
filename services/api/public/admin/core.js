@@ -106,10 +106,13 @@ const TERMINAL_STATES = ['PAID', 'CONVERTED', ...ATTENTION_STATES];
 const STALE_MS = 30 * 60_000;
 const isInflight = (t) => t.kind !== 'funding' && !TERMINAL_STATES.includes(t.state);
 const isStale = (t) => isInflight(t) && Date.now() - (Date.parse(t.updatedAt || t.createdAt || '') || 0) > STALE_MS;
+// A deposit's status is its `holding` (none: nothing to convert, so received).
+const txStatus = (t) => (t.kind === 'funding' ? (t.holding === 'none' ? 'RECEIVED' : String(t.holding || '').toUpperCase()) : t.state);
 function txPill(t) {
-  if (['PAID', 'CONVERTED'].includes(t.state)) return pill('good', t.state);
-  if (ATTENTION_STATES.includes(t.state)) return pill(t.state === 'REFUNDED' ? 'warn' : 'bad', t.state);
-  return pill(isStale(t) ? 'warn' : 'dim', isStale(t) ? `${t.state} · stuck` : t.state || 'unknown');
+  const st = txStatus(t);
+  if (['PAID', 'CONVERTED', 'RECEIVED'].includes(st)) return pill('good', st);
+  if (ATTENTION_STATES.includes(st)) return pill(st === 'REFUNDED' ? 'warn' : 'bad', st);
+  return pill(isStale(t) ? 'warn' : 'dim', isStale(t) ? `${st} · stuck` : st || 'unknown');
 }
 function railLabel(t) {
   if (t.kind === 'funding') return `${t.token || 'Token'} deposit`;

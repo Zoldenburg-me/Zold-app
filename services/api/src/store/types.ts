@@ -452,16 +452,29 @@ export type TransferState =
   | "FAILED"
   | "REFUNDED";
 
+/** One fill of a held deposit that left part of it unconverted. */
+export interface CryptoPartialConversion {
+  /** EURe this fill delivered, measured. */
+  creditedEur: number;
+  /** The share of the receipt value this fill disposed of, in proportion to
+   *  the units it swapped. Absent when the receipt had no value. */
+  receiptPortionEur?: number;
+  provider: string;
+  rate: number;
+  midRate?: number;
+  conversion: NonNullable<CryptoDeposit["conversion"]>;
+}
+
+export type CryptoHolding = "none" | "held" | "awaiting_approval" | "converted" | "refused" | "unconfirmed";
+
 /**
  * One inbound crypto transfer seen at a user's account.
  *
  * Recorded before anything is moved or credited, so a crash between detection
- * and conversion leaves a record to resume from. `txHash` + `logIndex`
+ * and settlement leaves a record to resume from. `txHash` + `logIndex`
  * identifies an ERC-20 transfer and makes reprocessing a no-op.
- *
- * REFUSED is a resting state, not something to retry: nothing was credited and
- * the tokens are still the user's, where they landed.
  */
+
 export interface CryptoDeposit {
   id: string;
   userId: string;
@@ -519,13 +532,34 @@ export interface CryptoDeposit {
   /** The payment request (pay link) this deposit was matched to by amount.
    *  Set by payment-requests.ts; absent for money nobody asked for. */
   paymentRequestId?: string;
-  /** UNCONFIRMED: a conversion was sent and its inclusion never confirmed.
-   *  It may still land, so it is not offered for conversion again. */
-  state: "DETECTED" | "CONVERTED" | "REFUSED" | "UNCONFIRMED";
-  /** Why it was refused, in words a support person can act on. */
+  /**
+   * When the arrival was written onto the invoice, the pay link and the books.
+   * Set once, on arrival, whatever later happens to the asset: the payer paid
+   * when the money landed. Absent means that write is still owed, and the
+   * poller's sweep makes it.
+   */
+  settledAt?: string;
+  /**
+   * What happened to the received asset, separate from settlement.
+   * - none: it already is the settlement currency; nothing to convert.
+   * - held: not converted; the user may convert it at any time.
+   * - awaiting_approval: auto-convert is on, and the swap waits for the
+   *   passkey signature (the API cannot move funds).
+   * - converted: swapped; `creditedEur` is the measured delta.
+   * - refused: a swap was refused or failed; the USDC is still held and the
+   *   conversion can be retried.
+   * - unconfirmed: a conversion was sent and its inclusion never confirmed.
+   *   It may still land, so it is not offered for conversion again.
+   */
+  holding: CryptoHolding;
+  /** Why it is held or refused, in words a support person can act on. */
   reason?: string;
   creditedEur?: number;
+  /** USDC the account holds from this deposit; cleared once converted
+   *  (`amountUsdc` keeps the received figure). */
   creditedUsdc?: number;
+  /** What this money is held as now: the received token, then EURE once
+   *  converted. */
   settlementAsset?: "EURE" | "USDC";
   paymentAddress?: `0x${string}`;
   /** The venue that filled it and the rate it filled at, for the receipt. */
@@ -547,8 +581,8 @@ export interface CryptoDeposit {
     blockNumber?: number;
     /** Block time of the conversion. */
     at?: string;
-    /** USDC units actually swapped. Equals amountUnits on an exact-input
-     *  conversion; less on an exact-output one, where the rest stays in the Safe. */
+    /** USDC units this conversion swapped. Less than what was left to convert
+     *  on a partial fill, whose remainder stays held (see `partials`). */
     amountInUnits?: string;
     /** Venue fee taken out of the input, in USDC units, where the venue
      *  itemises one (LI.FI's fixed fee); absent when it does not. */
@@ -558,9 +592,16 @@ export interface CryptoDeposit {
     gasCostWei?: string;
     gasPaidBy?: "sponsored" | "safe-native" | "safe-token";
   };
-  /** Exact-output conversion: USDC units left in the Safe after the swap,
-   *  waiting for the monthly sweep. */
+  /** USDC units still held after a partial fill; cleared once the rest is
+   *  converted. */
   leftoverUnits?: string;
+  /**
+   * Earlier conversions that filled only part of what was held, oldest first.
+   * The deposit stays `held` for the rest. The final conversion is recorded in
+   * the fields above (`creditedEur` then totals every conversion), and each
+   * partial books its own disposal line and Beleg.
+   */
+  partials?: CryptoPartialConversion[];
   txs: { step: string; hash: string }[];
   detectedAt: string;
   updatedAt: string;

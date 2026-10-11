@@ -148,25 +148,52 @@ export function buildBeleg(entry: LedgerEntry, ctx: BelegContext): BelegSnapshot
         ? { valueEur: d.receipt.amountEur, rate: d.receipt.rate, rateProvider: d.receipt.rateProvider, rateAsOf: d.receipt.rateAsOf, ratedAt: d.receipt.ratedAt }
         : {}),
     };
-    if (d.settlementAsset === "EURE" && d.creditedEur !== undefined) {
-      const amountIn = d.conversion?.amountInUnits ? usd.fromUnits(BigInt(d.conversion.amountInUnits)) : d.amountUsdc;
+    // The receipt line's Beleg is the receipt alone; the conversion belongs
+    // to the disposal line (or, for an unvalued receipt, the one line that
+    // books the proceeds).
+    const conversionLine = s.event === "crypto_disposal" || s.event === "crypto_converted";
+    // A partial fill's line (key ending :p<n>) shows that fill; the final
+    // line shows the last conversion alone, the partials' share taken out.
+    const partials = d.partials ?? [];
+    const pi = /:p(\d+)$/.exec(s.key);
+    const partial = pi ? partials[Number(pi[1]) - 1] : undefined;
+    const partialEur = partials.reduce((n, p) => n + p.creditedEur, 0);
+    const partialGain = partials.reduce((n, p) => n + (p.receiptPortionEur === undefined ? 0 : p.creditedEur - p.receiptPortionEur), 0);
+    const fill = partial
+      ? {
+          conversion: partial.conversion, provider: partial.provider, rate: partial.rate, midRate: partial.midRate,
+          creditedEur: partial.creditedEur,
+          gainEur: partial.receiptPortionEur === undefined ? undefined : r2(partial.creditedEur - partial.receiptPortionEur),
+          leftoverUnits: undefined, totalEur: undefined,
+        }
+      : d.holding === "converted" && d.creditedEur !== undefined
+        ? {
+            conversion: d.conversion, provider: d.provider, rate: d.rate, midRate: d.midRate,
+            creditedEur: r2(d.creditedEur - partialEur),
+            gainEur: d.realisedGainEur === undefined ? undefined : r2(d.realisedGainEur - partialGain),
+            leftoverUnits: d.leftoverUnits, totalEur: d.creditedEur,
+          }
+        : undefined;
+    if (conversionLine && fill) {
+      const amountIn = fill.conversion?.amountInUnits ? usd.fromUnits(BigInt(fill.conversion.amountInUnits)) : d.amountUsdc;
       const expected = req?.amountEur ?? (req?.payments.find((p) => p.depositId === d.id)?.amountEur);
       snap.conversion = {
-        ...(d.conversion?.txHash ? { txHash: d.conversion.txHash } : {}),
-        ...(d.conversion?.userOpHash ? { userOpHash: d.conversion.userOpHash } : {}),
-        ...(d.conversion?.blockNumber !== undefined ? { blockNumber: d.conversion.blockNumber } : {}),
-        ...(d.conversion?.at ? { at: d.conversion.at } : {}),
-        ...(d.provider ? { venue: d.provider } : {}),
-        ...(d.rate ? { rate: d.rate } : {}),
-        ...(d.midRate ? { midRate: d.midRate } : {}),
+        ...(fill.conversion?.txHash ? { txHash: fill.conversion.txHash } : {}),
+        ...(fill.conversion?.userOpHash ? { userOpHash: fill.conversion.userOpHash } : {}),
+        ...(fill.conversion?.blockNumber !== undefined ? { blockNumber: fill.conversion.blockNumber } : {}),
+        ...(fill.conversion?.at ? { at: fill.conversion.at } : {}),
+        ...(fill.provider ? { venue: fill.provider } : {}),
+        ...(fill.rate ? { rate: fill.rate } : {}),
+        ...(fill.midRate ? { midRate: fill.midRate } : {}),
         ...(amountIn !== undefined ? { amountInUsdc: amountIn } : {}),
-        creditedEur: d.creditedEur,
-        ...(d.conversion?.venueFeeUnits ? { venueFeeUsdc: usd.fromUnits(BigInt(d.conversion.venueFeeUnits)) } : {}),
-        ...(d.leftoverUnits ? { leftoverUsdc: usd.fromUnits(BigInt(d.leftoverUnits)) } : {}),
-        ...(expected !== undefined ? { receivableDifferenceEur: r2(d.creditedEur - expected) } : {}),
-        ...(d.realisedGainEur !== undefined ? { gainEur: d.realisedGainEur } : {}),
+        creditedEur: fill.creditedEur,
+        ...(fill.conversion?.venueFeeUnits ? { venueFeeUsdc: usd.fromUnits(BigInt(fill.conversion.venueFeeUnits)) } : {}),
+        ...(fill.leftoverUnits ? { leftoverUsdc: usd.fromUnits(BigInt(fill.leftoverUnits)) } : {}),
+        // What the payer owed against what the deposit delivered in all.
+        ...(expected !== undefined && fill.totalEur !== undefined ? { receivableDifferenceEur: r2(fill.totalEur - expected) } : {}),
+        ...(fill.gainEur !== undefined ? { gainEur: fill.gainEur } : {}),
       };
-      snap.gas = { ...(d.conversion?.gasCostWei ? { costWei: d.conversion.gasCostWei } : {}), ...(d.conversion?.gasPaidBy ? { paidBy: d.conversion.gasPaidBy } : {}) };
+      snap.gas = { ...(fill.conversion?.gasCostWei ? { costWei: fill.conversion.gasCostWei } : {}), ...(fill.conversion?.gasPaidBy ? { paidBy: fill.conversion.gasPaidBy } : {}) };
     }
   }
   const sw = ctx.sweep;
@@ -205,7 +232,9 @@ export function belegStillAgrees(
     else {
       if (ctx.deposit.txHash.toLowerCase() !== snap.receipt.txHash.toLowerCase()) diffs.push("the receipt transaction differs");
       if (snap.conversion?.creditedEur !== undefined && ctx.deposit.creditedEur !== snap.conversion.creditedEur) diffs.push("the credited amount differs");
-      if (ctx.deposit.state !== "CONVERTED") diffs.push(`the deposit is now ${ctx.deposit.state}`);
+      // A later conversion does not change what arrived, so a receipt Beleg
+      // stays valid; a conversion Beleg needs the conversion to still stand.
+      if (snap.conversion && ctx.deposit.holding !== "converted") diffs.push(`the deposit is now ${ctx.deposit.holding}`);
     }
   }
   if (snap.bank?.transferId) {
@@ -227,7 +256,8 @@ const EVENT_TITLES: Record<StatementFacts["event"], string> = {
   sepa_out: "SEPA payment sent",
   sepa_out_reversal: "Reversal of a failed payment",
   crypto_converted: "USDC received and converted to EURe",
-  crypto_held: "USDC received and held",
+  crypto_held: "USDC received",
+  crypto_disposal: "Held USDC converted to EURe (disposal)",
   eure_in: "EURe received on chain",
   sweep: "Monthly conversion of leftover USDC",
 };

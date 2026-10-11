@@ -62,10 +62,10 @@ export function issues(now = Date.now()): Issue[] {
   }
 
   for (const d of store.cryptoDeposits) {
-    if (d.state !== "REFUSED" && d.state !== "UNCONFIRMED") continue;
+    if (d.holding !== "refused" && d.holding !== "unconfirmed") continue;
     out.push({
       id: `deposit:${d.id}`, source: "deposit", severity: "warning", at: d.updatedAt || d.detectedAt,
-      title: d.state === "UNCONFIRMED" ? `${d.token} conversion unconfirmed` : `${d.token} deposit refused`, detail: d.reason,
+      title: d.holding === "unconfirmed" ? `${d.token} conversion unconfirmed` : `${d.token} deposit refused`, detail: d.reason,
       userId: d.userId, userName: name(d.userId), target: { kind: "transfer", id: d.id },
     });
   }
