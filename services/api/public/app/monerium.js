@@ -12,6 +12,15 @@ const IBAN_MOVED_AWAY = {
   sub: "Payments to it no longer reach this account.",
   action: "Move IBAN back to Zold",
 };
+/* Approved, yet this account holds no IBAN now and Monerium has not said it
+   pays elsewhere (a move back not confirmed yet, or a cleared IBAN). The way
+   back is switching it on again, which offers the move when Monerium answers
+   that the IBAN pays another address; never a second ID check. */
+const IBAN_SWITCHED_OFF = "Your IBAN isn’t switched on for this account. One approval switches it on again.";
+function ibanSwitchedOff(u = user) {
+  return !!u && kycApproved(u) && !u.iban && bankOffered(u) && !ibanMovedAway(u);
+}
+
 function ibanMovedAway(u = user) {
   return !!u && kycApproved(u) && !u.iban && u.funding?.status === "iban_pending" && !!u.moneriumIbanElsewhere?.iban;
 }

@@ -222,6 +222,10 @@ function phPayBody(u) {
   if (!u.iban || !kycApproved(u)) {
     if (!bankOffered(u)) return `<p class="z-hint">${esc(kycCopy(u.kycStatus, u)[2])} Use the ${esc(usdSym())} tab to get paid.</p>`;
     if (ibanMovedAway(u)) return ibanMovedAwayHtml("ph-pay-iban-back");
+    if (ibanSwitchedOff(u)) {
+      return `<p class="z-hint">${esc(IBAN_SWITCHED_OFF)}</p>
+      ${Z.button({ variant: "primary", full: true, label: "Switch on your IBAN", id: "ph-det-verify" })}`;
+    }
     return `<p class="z-hint">Your IBAN appears here once Monerium has verified you and issued it.</p>
       ${Z.button({ variant: "primary", full: true, label: "Verify your identity", id: "ph-det-verify" })}`;
   }

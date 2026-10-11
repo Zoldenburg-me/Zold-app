@@ -38,6 +38,7 @@ function phSideActive(name) {
   if (name === "contacts") return "contacts";
   if (name === "soon") return "soon";
   if (["more", "settings", "security", "plan", "settings/currency"].includes(name)) return "settings";
+  if (name === "in") return "activity";
   if (/^(tx|send)/.test(name)) return name.startsWith("tx") ? "activity" : "send";
   if (/^(get-paid|link)/.test(name)) return "get-paid";
   if (/^(add|convert|account-details)/.test(name)) return "home";
@@ -159,6 +160,9 @@ function phDeskBalance(u) {
       </div>`
     : ibanMovedAway(u)
     ? `<div class="z-dhome__ids z-dhome__ids--none">${ibanMovedAwayHtml("ph-iban-back")}</div>`
+    : ibanSwitchedOff(u)
+    ? `<div class="z-dhome__ids z-dhome__ids--none"><p class="z-sub">${esc(IBAN_SWITCHED_OFF)}</p>
+        ${Z.button({ label: "Switch on your IBAN", id: "ph-det-verify", className: "z-btn--sm" })}</div>`
     : `<div class="z-dhome__ids z-dhome__ids--none"><p class="z-sub">Your IBAN appears here once Monerium has verified you and issued it.</p>
         ${Z.button({ label: "Verify your identity", id: "ph-det-verify", className: "z-btn--sm" })}</div>`;
   return `<section class="z-card z-dhome__bal">
@@ -277,54 +281,60 @@ PH.home.desk = {
    One payment, desktop: a drawer over Activity
    ========================================================================== */
 
-PH.tx.desk = {
-  live: (id) => `${PH.activity.live(null)}|${PH.tx.live(id)}`,
-  html: () => PH.activity.html(null),
-  bind(root, id) {
-    PH.activity.bind(root, null);
-    const p = phTxParts(id);
-    document.body.insertAdjacentHTML("beforeend", Z.overlay({
-      id: "ph-txd", title: "Payment",
-      body: `<div class="z-sheet__body">${p.body}${p.foot}</div>`,
-    }));
-    const scrim = $("ph-txd");
-    scrim.dataset.ph = "1";
-    PH.tx.bind(scrim, id);
-    Z.openOverlay(scrim, root.querySelector(`a[href="${phHref("tx", id)}"]`));
-    // Closed: the address is Activity again, so back and reload agree.
-    const watch = new MutationObserver(() => {
-      if (scrim.classList.contains("is-open")) return;
-      watch.disconnect();
-      // Removed by a redraw, which drew its own drawer: not a close.
-      if (!scrim.isConnected) return;
-      if (phRoute?.name === "tx") {
-        phRoute = { name: "activity", arg: null };
-        history.replaceState({ ph: true }, "", `${location.pathname}${location.search}#activity`);
-        document.title = "Activity · Zold";
-      }
-      // Opened from an address, not a row: focus the page, not the closed drawer.
-      if (scrim.contains(document.activeElement)) {
-        const h = $("ph-root").querySelector("h1");
-        h?.setAttribute("tabindex", "-1");
-        h?.focus({ preventScroll: true });
-      }
-    });
-    watch.observe(scrim, { attributes: true, attributeFilter: ["class"] });
-  },
-  // The payment changed (or the list arrived) while the drawer is open.
-  refresh(id) {
-    const list = $("ph-results");
-    if (list) { list.innerHTML = phActivityResults("all"); phBindRetry(list); }
-    const scrim = $("ph-txd");
-    const body = scrim?.querySelector(".z-sheet__body");
-    if (!body) return;
-    const had = body.contains(document.activeElement);
-    const p = phTxParts(id);
-    body.innerHTML = `${p.body}${p.foot}`;
-    PH.tx.bind(scrim, id);
-    if (had) scrim.querySelector(".z-overlay__close")?.focus();
-  },
-};
+/* One payment as a drawer over Activity: a transfer out (tx) or money in. */
+function phDeskDrawer(name, title, parts) {
+  const screen = PH[name];
+  return {
+    live: (id) => `${PH.activity.live(null)}|${screen.live(id)}`,
+    html: () => PH.activity.html(null),
+    bind(root, id) {
+      PH.activity.bind(root, null);
+      const p = parts(id);
+      document.body.insertAdjacentHTML("beforeend", Z.overlay({
+        id: "ph-txd", title,
+        body: `<div class="z-sheet__body">${p.body}${p.foot}</div>`,
+      }));
+      const scrim = $("ph-txd");
+      scrim.dataset.ph = "1";
+      screen.bind(scrim, id);
+      Z.openOverlay(scrim, root.querySelector(`a[href="${phHref(name, id)}"]`));
+      // Closed: the address is Activity again, so back and reload agree.
+      const watch = new MutationObserver(() => {
+        if (scrim.classList.contains("is-open")) return;
+        watch.disconnect();
+        // Removed by a redraw, which drew its own drawer: not a close.
+        if (!scrim.isConnected) return;
+        if (phRoute?.name === name) {
+          phRoute = { name: "activity", arg: null };
+          history.replaceState({ ph: true }, "", `${location.pathname}${location.search}#activity`);
+          document.title = "Activity · Zold";
+        }
+        // Opened from an address, not a row: focus the page, not the closed drawer.
+        if (scrim.contains(document.activeElement)) {
+          const h = $("ph-root").querySelector("h1");
+          h?.setAttribute("tabindex", "-1");
+          h?.focus({ preventScroll: true });
+        }
+      });
+      watch.observe(scrim, { attributes: true, attributeFilter: ["class"] });
+    },
+    // The payment changed (or the list arrived) while the drawer is open.
+    refresh(id) {
+      const list = $("ph-results");
+      if (list) { list.innerHTML = phActivityResults("all"); phBindRetry(list); }
+      const scrim = $("ph-txd");
+      const body = scrim?.querySelector(".z-sheet__body");
+      if (!body) return;
+      const had = body.contains(document.activeElement);
+      const p = parts(id);
+      body.innerHTML = `${p.body}${p.foot}`;
+      screen.bind(scrim, id);
+      if (had) scrim.querySelector(".z-overlay__close")?.focus();
+    },
+  };
+}
+PH.tx.desk = phDeskDrawer("tx", "Payment", phTxParts);
+PH.in.desk = phDeskDrawer("in", "Payment", phInParts);
 
 /* ==========================================================================
    Search (Cmd or Ctrl K)
@@ -355,12 +365,12 @@ function phSearchResults(raw) {
     .map((t) => {
       if (t.kind === "bank_in") {
         const name = [t.counterpartyName || "Bank transfer", t.memo].filter(Boolean).join(" · ");
-        return { group: "Payments", go: ["activity", null], lead: Z.iconTile({ icon: "south_west" }), title: phMark(name, q), right: `+${esc(phEur(t.amountEur))} · ${esc(phDay(t.at))}`, label: name };
+        return { group: "Payments", go: ["in", t.id], lead: Z.iconTile({ icon: "south_west" }), title: phMark(name, q), right: `+${esc(phEur(t.amountEur))} · ${esc(phDay(t.at))}`, label: name };
       }
       if (t.kind === "funding") {
         const usdc = t.token === "USDC";
         const name = usdc ? `Digital dollars (${usdSym()})` : "Euros received";
-        return { group: "Payments", go: usdc ? ["add/wallet", null] : ["activity", null], lead: Z.iconTile({ icon: "south_west" }), title: phMark(name, q), right: `+${esc(usdc ? Z.formatMoney(t.amountUsdc || 0, usdSym()) : phEur(t.amountEur))} · ${esc(phDay(t.at || t.detectedAt))}`, label: name };
+        return { group: "Payments", go: ["in", t.id], lead: Z.iconTile({ icon: "south_west" }), title: phMark(name, q), right: `+${esc(usdc ? Z.formatMoney(t.amountUsdc || 0, usdSym()) : phEur(t.amountEur))} · ${esc(phDay(t.at || t.detectedAt))}`, label: name };
       }
       const name = [t.recipientName || "Payment", t.reference].filter(Boolean).join(" · ");
       return { group: "Payments", go: ["tx", t.id], lead: Z.iconTile({ icon: "arrow_outward" }), title: phMark(name, q), right: `${phOut(t) ? "−" : ""}${esc(phEur(t.sendEur))} · ${esc(phDay(t.createdAt))}`, label: name };
