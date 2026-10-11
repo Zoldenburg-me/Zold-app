@@ -559,6 +559,18 @@ check("an invoice with a payment against it cannot be deleted", () => {
   assert.throws(() => assertDeletable(invoice({ state: "PAID" })), InvoiceError);
 });
 
+check("an invoice you issued cannot be deleted, open or paid; its draft can", () => {
+  // Issued means numbered and sent: deleting it would leave a gap in the
+  // invoice series. Only a cancellation invoice may cancel it.
+  assert.throws(() => assertDeletable(invoice({ direction: "outgoing", state: "SUBMITTED" })), /issued/);
+  assert.throws(() => assertDeletable(invoice({ direction: "outgoing", state: "PAID" })), InvoiceError);
+  assert.throws(() => assertDeletable(invoice({ direction: "outgoing", state: "RECONCILED" })), InvoiceError);
+  assert.doesNotThrow(() => assertDeletable(invoice({ direction: "outgoing", state: "DRAFT" })));
+  // A supplier's invoice that nobody has paid stays deletable.
+  assert.doesNotThrow(() => assertDeletable(invoice({ state: "SUBMITTED" })));
+  assert.doesNotThrow(() => assertDeletable(invoice({ state: "LINK_CREATED" })));
+});
+
 check("line totals are computed, not taken from the payload", () => {
   const { lines, total } = validateLines([
     { description: "A", quantity: "3", unitPrice: "10.00", amount: "999.99" },
