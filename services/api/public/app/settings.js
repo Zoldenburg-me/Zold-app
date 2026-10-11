@@ -41,6 +41,18 @@ function phRecovery(u) {
   return { zold, zoldUnarmed, cr, codes, on: (zold && !zoldUnarmed) || codes, offered, pending: !zold && cr?.guardianStatus === "pending_setup" };
 }
 
+/* Zoldenburg added, bank account not confirmed: can the user do that now?
+   The 1 € goes to their Zold IBAN, so not before it is active. */
+const phZoldCanFinish = (u) => Boolean(caps.zoldenburgEnrolment && kycApproved(u) && u?.iban);
+
+function phZoldUnarmedText(u, r) {
+  const what = !caps.zoldenburgEnrolment ? "Zoldenburg added. Not usable on this server yet."
+    : phZoldCanFinish(u) ? "Zoldenburg added. Confirm your bank account to finish."
+    : "Zoldenburg added. Your Zold IBAN comes first, then you confirm your bank account.";
+  // Codes still protect the account: say so first, or "Active" reads as Zoldenburg's.
+  return r.codes ? `Codes to your email or phone. ${what}` : what;
+}
+
 /* What Security would flag: an unprotected key, or no way back in. */
 function phSecurityChecks() {
   const r = phRecovery(user);
@@ -141,7 +153,7 @@ function phSignerRows() {
 
 PH.security = {
   title: "Security",
-  live: () => JSON.stringify([phKey, user?.passkey?.credentialId, user?.authorizerAddress, user?.passkeySafe?.recovery?.status, user?.zoldenburgArmed,
+  live: () => JSON.stringify([phKey, user?.passkey?.credentialId, user?.authorizerAddress, user?.passkeySafe?.recovery?.status, user?.zoldenburgArmed, caps.zoldenburgEnrolment, user?.iban, user?.kycStatus,
     user?.passkeySafe?.candideRecovery, !!phCache.signers, phCache.signers?.threshold, phCache.signers?.error]),
   html() {
     const u = user || {};
@@ -151,8 +163,8 @@ PH.security = {
       recoveryRows.push(Z.row({
         lead: Z.iconTile({ icon: "settings_backup_restore" }),
         title: "Recovery",
-        sub: r.zoldUnarmed ? (caps.zoldenburgEnrolment ? "Zoldenburg added. Confirm your bank account to finish." : "Zoldenburg added. Not usable on this server yet.") : r.zold ? "Zoldenburg is your guardian" : r.codes ? "Codes to your email or phone" : r.pending ? "Set up, not on your account yet" : "Not set up. A lost phone means a lost account.",
-        right: Z.tag(r.on ? "Active" : r.zoldUnarmed ? (caps.zoldenburgEnrolment ? "1 step left" : "Not finished") : r.pending ? "Waiting" : "Off", r.on ? "mint" : r.zoldUnarmed ? "amber" : undefined),
+        sub: r.zoldUnarmed ? phZoldUnarmedText(u, r) : r.zold ? "Zoldenburg is your guardian" : r.codes ? "Codes to your email or phone" : r.pending ? "Set up, not on your account yet" : "Not set up. A lost phone means a lost account.",
+        right: Z.tag(r.on ? "Active" : r.zoldUnarmed ? (phZoldCanFinish(u) ? "1 step left" : "Not finished") : r.pending ? "Waiting" : "Off", r.on ? "mint" : r.zoldUnarmed ? "amber" : undefined),
         chevron: false,
       }));
       for (const c of r.cr?.channels || []) {
@@ -177,7 +189,7 @@ PH.security = {
       });
     return `${phSecurityTop()}${phMain(`
       ${phKeyUnprotected() ? Z.note({ tone: "a", text: "Your payment key is stored unencrypted in this browser: the passkey here can’t encrypt it. The key signs what a payment is (amount and payee). On its own it moves nothing: every payment also needs your Face ID or fingerprint, which your account checks on the chain. Someone with a copy could still sign payment terms. Don’t use Zold in this browser on a shared computer, and remove extensions you don’t trust." }) : ""}
-      ${recoveryRows.length ? Z.listGroup({ label: "Recovery", action: { href: "#recovery-settings", label: r.on ? "Change" : r.zoldUnarmed && caps.zoldenburgEnrolment ? "Finish" : r.zold ? "Change" : "Set up" }, rows: recoveryRows }) : ""}
+      ${recoveryRows.length ? Z.listGroup({ label: "Recovery", action: { href: "#recovery-settings", label: r.zoldUnarmed && phZoldCanFinish(u) ? "Finish" : r.on || r.zold ? "Change" : "Set up" }, rows: recoveryRows }) : ""}
       ${Z.listGroup({ label: "Sign-in and keys", rows: [
         Z.row({ lead: Z.iconTile({ icon: "fingerprint" }), title: "Face ID or fingerprint", sub: u.passkey?.createdAt ? `Signs you in and approves payments. Added ${phDay(u.passkey.createdAt)} ${new Date(u.passkey.createdAt).getFullYear()}` : "Not set up", right: Z.tag(u.passkey?.credentialId ? "Active" : "Off", u.passkey?.credentialId ? "mint" : undefined), chevron: false }),
         keyRow,
