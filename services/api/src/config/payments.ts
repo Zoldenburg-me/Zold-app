@@ -74,4 +74,17 @@ export const CRYPTO_IN = {
   firstLookbackBlocks: BigInt(envNumber("CRYPTO_IN_FIRST_LOOKBACK_BLOCKS", 5_000, { min: 1 })),
   /** Windows per tick: 20 × 1,000 Base blocks is about 11 hours of chain. */
   windowsPerTick: envNumber("CRYPTO_IN_WINDOWS_PER_TICK", 20, { min: 1, integer: true }),
+  /**
+   * One-shot rescan: on boot the scanner rewinds to just before this block and
+   * reads forward again, picking up deposits it passed without recording.
+   * Recording is keyed on (txHash, logIndex), so a re-read records nothing
+   * twice. Applied once per value; a restart with it still set does not rewind
+   * again. Unset means no rescan.
+   */
+  rescanFromBlock: process.env.CRYPTO_IN_RESCAN_FROM_BLOCK
+    ? BigInt(envNumber("CRYPTO_IN_RESCAN_FROM_BLOCK", 0, { min: 0, integer: true }))
+    : undefined,
+  /** The furthest back a rescan may start. Every maxBlockSpan blocks is one
+   *  getLogs call; 100,000 Base blocks is about 2.3 days of chain. */
+  maxRescanBlocks: BigInt(envNumber("CRYPTO_IN_MAX_RESCAN_BLOCKS", 100_000, { min: 1, integer: true })),
 };

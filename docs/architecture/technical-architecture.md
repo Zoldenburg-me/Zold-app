@@ -624,6 +624,12 @@ flowchart LR
 - The cursor is `${CHAIN_ID}:safe-funding-v1`. It advances only after every
   log in the window is recorded. `(txHash, logIndex)` is the identity, and an
   overlap guard stops concurrent ticks.
+- A rescan is a boot-time env var, `CRYPTO_IN_RESCAN_FROM_BLOCK`: the first
+  tick rewinds the cursor to just before that block (never forward), and the
+  applied value is stored beside the cursor so a restart does not rewind
+  again. A block past the head or further back than
+  `CRYPTO_IN_MAX_RESCAN_BLOCKS` (default 100,000) is refused and the cursor
+  left alone. `/api/health` shows `cryptoIn.rescan`.
 - There is no sender screening. The forwarder's second hop (page address to
   Safe) is skipped to avoid double counting.
 - The conversion venue must implement `safeSwapPlan`. Otherwise the answer is

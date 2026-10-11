@@ -476,9 +476,19 @@ export function recordInvoiceSettlement(deposit: CryptoDeposit): void {
  */
 let scanning = false;
 
+const SCAN_CURSOR_KEY = () => `${CHAIN_ID}:safe-funding-v1`;
+/** Where the last applied rescan started, kept beside the cursor it moved. */
+const RESCAN_APPLIED_KEY = () => `${CHAIN_ID}:safe-funding-v1:rescan-applied`;
+
+export type RescanState = "applied" | "already-applied" | "refused";
+
 /** Whether the scan is keeping up, for /api/health. No error text: an RPC
  *  error can carry the RPC URL, and some providers put the key in it. */
-export const cryptoInScan: { lastOkAt?: string; failingSince?: string } = {};
+export const cryptoInScan: {
+  lastOkAt?: string;
+  failingSince?: string;
+  rescan?: { fromBlock: string; state: RescanState };
+} = {};
 
 export async function pollCryptoDepositsOnce(): Promise<number> {
   if (!CRYPTO_IN.enabled) return 0;
@@ -520,7 +530,7 @@ export async function pollCryptoDepositsOnce(): Promise<number> {
 async function scanCryptoDeposits(): Promise<{ found: number; more: boolean }> {
   const watched = watchedAddresses();
   if (watched.length === 0) return { found: 0, more: false };
-  const cursorKey = `${CHAIN_ID}:safe-funding-v1`;
+  const cursorKey = SCAN_CURSOR_KEY();
 
   /**
    * cacheTime: 0 is load-bearing.
@@ -709,14 +719,55 @@ export async function sweepPendingCryptoDeposits(): Promise<number> {
   return n;
 }
 
+/**
+ * Rewind the scan cursor to just before `fromBlock`, once per value.
+ *
+ * Never moves the cursor forward: a cursor already behind the block is left
+ * where it is. Refuses a block past the chain head, or further back than
+ * `maxBlocks` (each window is an RPC call); a refusal leaves the cursor alone
+ * and is not recorded, so a corrected value applies on the next boot.
+ */
+export async function applyCryptoRescan(
+  fromBlock: bigint | undefined = CRYPTO_IN.rescanFromBlock,
+  maxBlocks: bigint = CRYPTO_IN.maxRescanBlocks,
+): Promise<RescanState | undefined> {
+  if (fromBlock === undefined) return undefined;
+  const note = (state: RescanState) => {
+    cryptoInScan.rescan = { fromBlock: fromBlock.toString(), state };
+    return state;
+  };
+  if (store.cryptoDepositCursor(RESCAN_APPLIED_KEY()) === fromBlock) return note("already-applied");
+
+  const head = await publicClient.getBlockNumber({ cacheTime: 0 });
+  if (fromBlock > head || head - fromBlock > maxBlocks) {
+    console.error(
+      `crypto-in: refusing rescan from block ${fromBlock}: the head is ${head} and the limit is ` +
+        `${maxBlocks} blocks back (CRYPTO_IN_MAX_RESCAN_BLOCKS). The cursor is unchanged.`,
+    );
+    return note("refused");
+  }
+  const target = fromBlock > 0n ? fromBlock - 1n : 0n;
+  const cursor = store.cryptoDepositCursor(SCAN_CURSOR_KEY());
+  if (cursor === undefined || cursor > target) store.setCryptoDepositCursor(SCAN_CURSOR_KEY(), target);
+  store.setCryptoDepositCursor(RESCAN_APPLIED_KEY(), fromBlock);
+  console.log(`crypto-in: rescanning from block ${fromBlock} (cursor was ${cursor ?? "unset"}, head ${head})`);
+  return note("applied");
+}
+
 export function startCryptoDepositPoller() {
   // One tick at a time: a slow partner or RPC must not stack a second pass
   // over the same rows on top of the first.
   let busy = false;
+  // Set only once the rescan check returns: an RPC failure retries next tick.
+  let rescanChecked = false;
   const tick = async () => {
     if (busy) return;
     busy = true;
     try {
+      if (!rescanChecked) {
+        await applyCryptoRescan();
+        rescanChecked = true;
+      }
       await sweepPendingCryptoDeposits();
       await pollCryptoDepositsOnce();
     } catch (err: any) {
