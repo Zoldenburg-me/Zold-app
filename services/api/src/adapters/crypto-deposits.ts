@@ -552,14 +552,17 @@ async function scanCryptoDeposits(): Promise<{ found: number; more: boolean }> {
     { token: "EURE" as const, address: addrs().eure },
     { token: "USDC" as const, address: addrs().usdc },
   ];
-  const { toBlock, result: logsByToken } = await readLogWindow(fromBlock, safeHead, CRYPTO_IN.maxBlockSpan, (from, to) =>
-    Promise.all(tokens.map((t) => publicClient.getLogs({
-      address: t.address,
+  // One getLogs naming both tokens, split by log.address below: a provider
+  // that caps the range (Alchemy's free tier: 10 blocks) bills per call.
+  const { toBlock, result: logs } = await readLogWindow(fromBlock, safeHead, CRYPTO_IN.maxBlockSpan, (from, to) =>
+    publicClient.getLogs({
+      address: tokens.map((t) => t.address),
       event: TRANSFER_EVENT,
       args: { to: watched.map((x) => x.address) },
       fromBlock: from,
       toBlock: to,
-    }))));
+    }));
+  const logsByToken = tokens.map((t) => logs.filter((l) => l.address.toLowerCase() === t.address.toLowerCase()));
 
   const byAddress = new Map<string, WatchedAddress[]>();
   for (const item of watched) {
