@@ -226,6 +226,22 @@ sequenceDiagram
    `iban_pending`. The move (old address, old chain, profile, when) is kept
    on the user as `moneriumIbanMoves`, and any other Zold account still
    showing that IBAN loses it.
+8. **An IBAN moved away** (BUILT, tested against a fake Monerium only). Anyone
+   with the Monerium login (another app, Monerium's own site) can point the
+   IBAN at another address. Zold re-reads an active account's IBAN on the
+   user's own connection (the deposit poller and the account read, at most
+   every `MONERIUM_IBAN_CHECK_MS`, default 5 minutes; the Monerium accounts
+   refresh on every call). When Monerium lists it on another address, or on
+   this address on another chain, the IBAN comes off the account and off the
+   organisation accounts that Safe backs (the rows stay), funding goes to
+   `iban_pending`, and `moneriumIbanElsewhere` records where it pays now.
+   Home, the account details and the Monerium screen say "Your IBAN was moved
+   to another app. Payments to it no longer reach this account." and offer
+   "Move IBAN back to Zold", the same move as in step 7. A read that fails,
+   or a list without the IBAN, changes nothing. Moved back at Monerium by any
+   route, the IBAN is attached again by `refreshPendingIban`. A reconnect
+   (OAuth or API keys) keeps a stored IBAN only if Monerium lists it paying
+   into this Safe on our chain.
 
 ### 4.2 How a payment is authorised
 

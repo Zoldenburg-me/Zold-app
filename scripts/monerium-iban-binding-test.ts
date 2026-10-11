@@ -1,0 +1,223 @@
+/**
+ * An IBAN this account stores must still pay into this account's Safe.
+ *
+ * Monerium attributes an IBAN to one address on one chain, and anyone holding
+ * the Monerium login (another app, Monerium's own site) can point it
+ * elsewhere with PATCH /ibans. Zold reads the IBAN's address when it first
+ * stores it; verifyIbanBinding re-reads it later. When Monerium lists it on
+ * another address or chain, the IBAN comes off the account (and off the org
+ * accounts the Safe backs), funding goes to iban_pending, and the account
+ * says where it went so the app can offer moving it back. Anything short of
+ * a clear answer (read failed, IBAN not listed, listed twice) changes
+ * nothing.
+ *
+ * The fake Monerium answers GET /ibans per bearer token. No network, no
+ * chain: the adapter and the store run in-process.
+ *
+ * Run: npm run monerium:iban-binding:test
+ */
+import "./_test-env.js";
+import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
+process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-iban-binding-")), "db.json");
+process.env.TRANSF_CHAIN_ID = "31337";
+process.env.LOCAL_HARNESS = "";
+process.env.MONERIUM_TOKEN_ENCRYPTION_KEY = "test-encryption-key-for-iban-binding-32b";
+process.env.MONERIUM_CLIENT_ID = "";
+process.env.MONERIUM_CLIENT_SECRET = "";
+process.env.MONERIUM_CHAIN = "base";
+process.env.MONERIUM_IBAN_CHECK_MS = "300000";
+
+/** The IBANs each bearer token sees at GET /ibans. */
+const ibansOf = new Map<string, any[]>();
+const fake = { down: false, reads: 0 };
+
+const monerium = createServer((req, res) => {
+  const url = new URL(req.url ?? "/", "http://fake");
+  const send = (code: number, b: any) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(b)); };
+  if (fake.down) return send(503, { code: 503, status: "Service Unavailable" });
+  const token = String(req.headers.authorization ?? "").replace(/^Bearer /, "");
+  const list = ibansOf.get(token);
+  if (!list) return send(401, { code: 401, status: "Unauthorized" });
+  if (url.pathname === "/ibans") { fake.reads++; return send(200, { ibans: list }); }
+  send(404, { code: 404, status: "Not Found" });
+});
+await new Promise<void>((r) => monerium.listen(0, "127.0.0.1", r));
+process.env.MONERIUM_BASE_URL = `http://127.0.0.1:${(monerium.address() as any).port}`;
+
+const { initStore, store } = await import("../services/api/src/store.js");
+const { SECRETS } = await import("../services/api/src/stored-secrets.js");
+const { publicUser } = await import("../services/api/src/users/public-user.js");
+const { MONERIUM } = await import("../services/api/src/config.js");
+const { verifyIbanBinding, applyIbanBinding, refreshPendingIban } = await import("../services/api/src/adapters/monerium-sandbox.js");
+const { accountBankOf } = await import("../services/api/src/routes/business/shared.js");
+
+let passed = 0;
+const check = async (name: string, fn: () => void | Promise<void>) => {
+  try { await fn(); passed++; console.log(`  ok  ${name}`); }
+  catch (err) { console.error(`FAIL  ${name}\n      ${(err as Error).stack}`); process.exitCode = 1; }
+};
+
+initStore();
+const now = new Date().toISOString();
+const PROFILE = "22222222-aaaa-4bbb-8ccc-000000000001";
+const OTHER = "0x00000000000000000000000000000000000000cc";
+
+/** An approved account with an active IBAN on its own OAuth connection. */
+function addUser(n: number, opts: { ownCredentials?: boolean } = {}) {
+  const id = `u_bind_${n}`;
+  const token = `tok-${id}`;
+  const address = `0x${String(n).repeat(40).slice(0, 40)}` as `0x${string}`;
+  const iban = `DE8937040044053201300${n}`;
+  store.addUser({
+    id, name: id, country: "DE", kycStatus: "approved", createdAt: now, address, iban,
+    funding: { mode: "sandbox", status: "active", moneriumProfileId: PROFILE },
+    ...(opts.ownCredentials === false
+      ? {}
+      : { monerium: { connectedAt: now, method: "oauth", profileId: PROFILE, accessTokenEnc: SECRETS.moneriumAccessToken.seal(id, token) } }),
+  } as any);
+  return { id, token, address, iban };
+}
+const listed = (iban: string, address: string, chain: string = MONERIUM.chain) => ({ iban, address, chain, profile: PROFILE, bic: "MONEDEFF" });
+
+console.log("\nDetection");
+
+await check("an IBAN Monerium now lists on another address comes off the account, which says where it went", async () => {
+  const u = addUser(1);
+  ibansOf.set(u.token, [listed(u.iban, OTHER)]);
+  const after = await verifyIbanBinding(store.findUser(u.id)!);
+  assert.equal(after.iban, "");
+  assert.equal(after.funding?.status, "iban_pending", "a move back is picked up by refreshPendingIban");
+  assert.match(after.funding?.detail ?? "", new RegExp(`ending ${u.iban.slice(-4)}`));
+  assert.match(after.funding?.detail ?? "", /0x0000…00cc/);
+  assert.match(after.funding?.detail ?? "", /no longer pays into this account/);
+  assert.deepEqual(
+    { ...after.moneriumIbanElsewhere, seenAt: undefined },
+    { iban: u.iban, address: OTHER, chain: MONERIUM.chain, profileId: PROFILE, seenAt: undefined },
+  );
+  assert.ok(after.moneriumIbanElsewhere?.seenAt);
+  assert.equal(after.kycStatus, "approved", "approval is not taken back; only the IBAN is");
+  const pub = publicUser(after) as any;
+  assert.equal(pub.iban, "");
+  assert.equal(pub.moneriumIbanElsewhere.address, OTHER, "the app needs it to offer the move back");
+  assert.equal(pub.moneriumIbanElsewhere.iban, u.iban);
+  const audit = store.auditFor(u.id, 50).find((e) => e.kind === "partner.iban_moved_elsewhere");
+  assert.ok(audit, "the detection is in the audit log");
+});
+
+await check("the same address on another chain counts as elsewhere: deposits there are not this account's", async () => {
+  const u = addUser(2);
+  ibansOf.set(u.token, [listed(u.iban, u.address, "gnosis")]);
+  const after = await verifyIbanBinding(store.findUser(u.id)!);
+  assert.equal(after.iban, "");
+  assert.equal(after.moneriumIbanElsewhere?.chain, "gnosis");
+  assert.match(after.funding?.detail ?? "", /on gnosis/);
+});
+
+await check("an IBAN still on this Safe, on our chain or with no chain named, stays", async () => {
+  const u = addUser(3);
+  ibansOf.set(u.token, [listed(u.iban, u.address.toUpperCase().replace("0X", "0x"))]);
+  assert.equal((await verifyIbanBinding(store.findUser(u.id)!)).iban, u.iban);
+  const noChain = applyIbanBinding(store.findUser(u.id)!, [{ iban: u.iban, address: u.address, profile: PROFILE }]);
+  assert.equal(noChain.iban, u.iban);
+  assert.equal(noChain.moneriumIbanElsewhere, undefined);
+});
+
+console.log("\nFail closed");
+
+await check("Monerium not answering changes nothing", async () => {
+  const u = addUser(4);
+  ibansOf.set(u.token, [listed(u.iban, OTHER)]);
+  fake.down = true;
+  try {
+    const after = await verifyIbanBinding(store.findUser(u.id)!);
+    assert.equal(after.iban, u.iban);
+    assert.equal(after.funding?.status, "active");
+    assert.equal(after.moneriumIbanElsewhere, undefined);
+  } finally {
+    fake.down = false;
+  }
+});
+
+await check("an IBAN missing from Monerium's list, or listed twice, is no verdict and changes nothing", async () => {
+  const u = addUser(5);
+  const missing = applyIbanBinding(store.findUser(u.id)!, [listed("DE00000000000000000099", OTHER)]);
+  assert.equal(missing.iban, u.iban);
+  const twice = applyIbanBinding(store.findUser(u.id)!, [listed(u.iban, OTHER), listed(u.iban, u.address)]);
+  assert.equal(twice.iban, u.iban);
+  const empty = applyIbanBinding(store.findUser(u.id)!, []);
+  assert.equal(empty.iban, u.iban);
+  assert.equal(store.findUser(u.id)!.funding?.status, "active");
+});
+
+await check("an account without its own Monerium credentials is not read on anyone else's", async () => {
+  const u = addUser(6, { ownCredentials: false });
+  const reads = fake.reads;
+  const after = await verifyIbanBinding(store.findUser(u.id)!);
+  assert.equal(after.iban, u.iban);
+  assert.equal(fake.reads, reads, "no read was made");
+});
+
+await check("one user is re-read at most once per MONERIUM_IBAN_CHECK_MS", async () => {
+  const u = addUser(7);
+  ibansOf.set(u.token, [listed(u.iban, u.address)]);
+  await verifyIbanBinding(store.findUser(u.id)!);
+  const reads = fake.reads;
+  ibansOf.set(u.token, [listed(u.iban, OTHER)]);
+  const after = await verifyIbanBinding(store.findUser(u.id)!);
+  assert.equal(fake.reads, reads, "the second call within the interval reads nothing");
+  assert.equal(after.iban, u.iban);
+});
+
+console.log("\nMoving back");
+
+await check("an IBAN on our chain at this address again is re-attached and the elsewhere record cleared", async () => {
+  const u = addUser(8);
+  ibansOf.set(u.token, [listed(u.iban, OTHER)]);
+  await verifyIbanBinding(store.findUser(u.id)!);
+  assert.ok(store.findUser(u.id)!.moneriumIbanElsewhere);
+  // Still elsewhere: the poller's re-check attaches nothing.
+  assert.equal((await refreshPendingIban(store.findUser(u.id)!)).iban, "");
+  ibansOf.set(u.token, [listed(u.iban, u.address)]);
+  const back = await refreshPendingIban(store.findUser(u.id)!);
+  assert.equal(back.iban, u.iban);
+  assert.equal(back.funding?.status, "active");
+  assert.equal(back.moneriumIbanElsewhere, undefined);
+  assert.equal((publicUser(back) as any).moneriumIbanElsewhere, undefined);
+});
+
+await check("refreshPendingIban does not attach an IBAN that pays this address on another chain", async () => {
+  const u = addUser(9);
+  store.updateUser(u.id, { iban: "", funding: { mode: "sandbox", status: "iban_pending", moneriumProfileId: PROFILE } });
+  ibansOf.set(u.token, [listed(u.iban, u.address, "gnosis")]);
+  const after = await refreshPendingIban(store.findUser(u.id)!);
+  assert.equal(after.iban, "");
+  assert.equal(after.funding?.status, "iban_pending");
+});
+
+console.log("\nOrganisation accounts");
+
+await check("an org account backed by the user drops the IBAN with the user's (the row stays) and gets it back", async () => {
+  const u = addUser(10);
+  store.addOrganisation({ id: "org_bind", type: "business", name: "Bind GmbH", legalName: "Bind GmbH", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now } as any);
+  store.addAccount({ id: "acc_bind", orgId: "org_bind", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: { iban: u.iban }, address: u.address, backingUserId: u.id, createdAt: now, updatedAt: now });
+  const org = store.findOrganisation("org_bind")!;
+  assert.equal(accountBankOf(org)?.iban, u.iban);
+  ibansOf.set(u.token, [listed(u.iban, OTHER)]);
+  await verifyIbanBinding(store.findUser(u.id)!);
+  const acc = store.findAccount("acc_bind")!;
+  assert.ok(acc, "the account row is never deleted");
+  assert.equal(acc.identifier.iban, undefined, "invoices and the company page stop printing it");
+  assert.equal(accountBankOf(org), undefined);
+  ibansOf.set(u.token, [listed(u.iban, u.address)]);
+  await refreshPendingIban(store.findUser(u.id)!);
+  assert.equal(store.findAccount("acc_bind")!.identifier.iban, u.iban);
+  assert.equal(accountBankOf(org)?.iban, u.iban);
+});
+
+monerium.close();
+console.log(process.exitCode ? "\nMONERIUM IBAN BINDING TEST FAILED" : `\nMONERIUM IBAN BINDING TEST PASSED — ${passed}/${passed}`);

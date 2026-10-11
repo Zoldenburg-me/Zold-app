@@ -33,6 +33,9 @@ export type AuditKind =
   | "partner.connect_refused"
   /** A user moved their existing Monerium IBAN to this Safe (PATCH /ibans). */
   | "partner.iban_moved"
+  /** A re-read found the account's IBAN paying into another address or chain
+   *  at Monerium, so it was taken off the account (verifyIbanBinding). */
+  | "partner.iban_moved_elsewhere"
   /** Belege pushed to an accounting inbox; counts only, never a key. */
   | "partner.documents_pushed"
   /** An org account's Monerium profile was checked (adopt, fund, re-check or

@@ -2053,6 +2053,9 @@ async function issueAppIban() {
   // IS what approves it (address-matched IBAN on the connected account).
   if (!user?.id || user.iban || !(kycApproved(user) || hasConnectedMonerium(user))) return false;
   if ((user.funding || {}).mode !== "sandbox") return false;
+  // The IBAN was moved away at Monerium: the way back is the move itself,
+  // without asking Monerium for an IBAN first.
+  if (ibanMovedAway(user)) return moveIbanBack();
   await finishPasskeySafeSetup();
   // The server picked the profile at connect (personal for a personal
   // account, corporate for a company); any other profile is refused.
@@ -2090,6 +2093,19 @@ async function issueAppIban() {
   }
   renderUser(activated);
   return true;
+}
+
+/* The account's IBAN pays into another address at Monerium now (moved from
+   another app or Monerium's site; user.moneriumIbanElsewhere). The same move
+   dialog as at activation, for that IBAN. Resolves true when the API took
+   the move, false on Cancel. */
+async function moveIbanBack() {
+  const away = user?.moneriumIbanElsewhere;
+  if (!away?.iban) return false;
+  const profileId = user.monerium?.profileId || away.profileId;
+  const moved = await offerIbanMove([{ iban: away.iban, address: away.address, chain: away.chain, profileId }], profileId);
+  renderUser(moved || await api(`/api/users/${user.id}`));
+  return !!moved;
 }
 
 /* "Move my existing Monerium IBAN to Zold". A Monerium profile has ONE IBAN,
