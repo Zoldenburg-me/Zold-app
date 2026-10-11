@@ -96,6 +96,12 @@ function renderRecoveryDetail(root, id, message) {
   const review = r.status === 'REVIEW_PENDING';
   const grace = r.status === 'GRACE_PERIOD';
   const ready = grace && z.finalizeAfter && Date.now() >= Date.parse(z.finalizeAfter);
+  // The checks the API enforces before it hands out or relays a signature
+  // (refusalFor in routes/recovery-zoldenburg.ts). No override here either.
+  const en = r.enrolment || {};
+  const bank = r.bankCheck || {};
+  const checksOk = Boolean(en.armed && bank.passed);
+  const lock = checksOk ? '' : 'disabled';
   root.innerHTML = `
     <a class="back" href="#/recoveries">← All recoveries</a>
     <section class="card"><div class="card-h">
@@ -127,6 +133,15 @@ function renderRecoveryDetail(root, id, message) {
       </div></section>
 
     ${review ? `<section class="card"><div class="card-h"><h2>Review and sign</h2></div><div class="card-b stack" id="rvActions">
+      <div class="facts">
+        ${fact('Bank account enrolled', en.armed ? `yes · ending ${esc(en.bankAccountLast4 || '????')} · ${esc(fmtWhen(en.enrolledAt))}` : '<b>no</b> — this account never sent its enrolment 1 €', true)}
+        ${fact('1 € from that account', bank.passed
+          ? `passed · ${esc(fmtWhen(bank.passedAt))} · order ${chip(bank.orderId)}`
+          : bank.codeIssuedAt
+            ? `<b>not yet</b> · code issued ${esc(fmtWhen(bank.codeIssuedAt))}${bank.lastCheck ? ` · last check: ${esc(bank.lastCheck.reason)}` : ''}`
+            : '<b>not yet</b> · the person has not asked for transfer details', true)}
+      </div>
+      ${checksOk ? '' : `<div class="note bad"><b>Signing is locked.</b> Both checks above must pass first. There is no override.</div>`}
       <div class="note warn">
         <b>Before you sign.</b> Signing starts a takeover of this account: after the waiting period the new passkey owns it. Only the old passkey can stop it.
         <ol>
@@ -143,16 +158,16 @@ function renderRecoveryDetail(root, id, message) {
         ${r.safeCoverLink
           ? `<a class="btn" href="${esc(r.safeCoverLink)}" target="_blank" rel="noopener noreferrer">Open in Safe Cover ↗</a>
              <button type="button" class="btn" data-rv="sync">I signed in Safe Cover — check chain</button>`
-          : `<span class="sub2">Safe Cover does not list chain ${esc(S.recoveries.chainId)} — sign here</span>`}
-        <button type="button" class="btn primary" data-rv="sign">Sign with Keycard Shell</button>
+          : checksOk ? `<span class="sub2">Safe Cover does not list chain ${esc(S.recoveries.chainId)} — sign here</span>` : ''}
+        <button type="button" class="btn primary" data-rv="sign" ${lock}>Sign with Keycard Shell</button>
       </div>
       <details>
         <summary>Signed on another device? Paste the signature</summary>
-        <div class="actions" style="margin:10px 0"><button type="button" class="btn sm" data-rv="payload">Show typed data to sign</button></div>
+        <div class="actions" style="margin:10px 0"><button type="button" class="btn sm" data-rv="payload" ${lock}>Show typed data to sign</button></div>
         <pre class="json" id="rvPayload" hidden></pre>
         <label for="rvSig" style="margin-top:10px">eth_signTypedData_v4 signature (0x…, 65 bytes)</label>
         <textarea id="rvSig" class="mono" rows="2" autocomplete="off" spellcheck="false"></textarea>
-        <div class="actions" style="margin-top:10px"><button type="button" class="btn primary" data-rv="execute">Relay signature</button></div>
+        <div class="actions" style="margin-top:10px"><button type="button" class="btn primary" data-rv="execute" ${lock}>Relay signature</button></div>
       </details>
       <div>
         <label for="rvReason">Reject — reason the person will see</label>

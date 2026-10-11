@@ -23,7 +23,8 @@ export function publicRecoveryRequest(request: RecoveryRequest) {
     };
   }
   if (zoldenburg) {
-    const { newPasskey, accessHash: _accessHash, ...rest } = zoldenburg;
+    // bankCheck holds a code hash; routes/recovery-zoldenburg.ts adds its own view.
+    const { newPasskey, accessHash: _accessHash, bankCheck: _bankCheck, ...rest } = zoldenburg;
     out.zoldenburg = { ...rest, newPasskeyRegistered: Boolean(newPasskey) };
   }
   if (turnkey) {
