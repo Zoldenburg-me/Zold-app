@@ -325,6 +325,11 @@ function cryptoLines(inp: StatementInputs): LineDraft[] {
       ...(inv ? { invoiceId: inv.id } : {}),
       ...(invoiceNumber(inv) ? { invoiceNumber: invoiceNumber(inv) } : req?.externalInvoiceNumber ? { invoiceNumber: req.externalInvoiceNumber } : {}),
     };
+    const partials = d.partials ?? [];
+    const partialTx = new Set(partials.flatMap((p) => [p.conversion.txHash, p.conversion.userOpHash].filter((h): h is string => !!h)));
+    // Each partial fill disposes of its share of the receipt value; the final
+    // conversion disposes of what is left, so every share sums to the receipt.
+    const portionCents = (p: (typeof partials)[number]) => cents(p.receiptPortionEur ?? 0);
     // Chain transactions only: the userOperation hash is the bundler's
     // identifier, kept beside them, never among them.
     const conversionLinks: StatementFacts["links"] = {
@@ -332,7 +337,8 @@ function cryptoLines(inp: StatementInputs): LineDraft[] {
       txHashes: [
         ...(d.conversion?.txHash ? [d.conversion.txHash] : []),
         ...d.txs
-          .filter((x) => x.step !== "userOperation" && x.hash !== d.conversion?.userOpHash)
+          // A partial fill's swap belongs to its own line.
+          .filter((x) => x.step !== "userOperation" && x.hash !== d.conversion?.userOpHash && !partialTx.has(x.hash))
           .map((x) => x.hash)
           .filter((h) => /^0x[0-9a-fA-F]{64}$/.test(h) && h !== d.conversion?.txHash),
       ],
@@ -357,11 +363,58 @@ function cryptoLines(inp: StatementInputs): LineDraft[] {
         note: `${d.amountUsdc ?? 0} USDC received, valued at the ECB reference rate of ${d.receipt!.rateAsOf} (1 EUR = ${d.receipt!.rate} USD).`,
       });
     }
+    partials.forEach((p, i) => {
+      const at = p.conversion.at ?? d.updatedAt;
+      const units = p.conversion.amountInUnits ? Number(p.conversion.amountInUnits) / 1e6 : undefined;
+      const pVia = [`via ${p.provider}`, `at ${p.rate}`, p.midRate ? `(independent mid ${p.midRate})` : ""].filter(Boolean).join(" ");
+      const links: StatementFacts["links"] = {
+        ...baseLinks,
+        txHashes: p.conversion.txHash ? [p.conversion.txHash] : [],
+        ...(p.conversion.userOpHash ? { userOpHash: p.conversion.userOpHash } : {}),
+      };
+      if (valued) {
+        const gain = cents(p.creditedEur) - portionCents(p);
+        out.push({
+          event: "crypto_disposal",
+          key: `deposit:${d.id}:disposal:p${i + 1}`,
+          bookingAt: at,
+          valueAt: at,
+          amountCents: gain,
+          counterparty: { name: `Conversion via ${p.provider}` },
+          reference,
+          links,
+          txType: gain >= 0 ? "realised_gain" : "realised_loss",
+          tags: ["usdc", "disposal", "partial"],
+          note:
+            `Part disposal of ${units ?? "?"} USDC (book value €${(portionCents(p) / 100).toFixed(2)} of the receipt) ` +
+            `for €${p.creditedEur.toFixed(2)} EURe ${pVia}; realised €${(gain / 100).toFixed(2)}. The rest stays held.`,
+          unexecuted: !inp.swapsHaveExecuted,
+        });
+      } else {
+        out.push({
+          event: "crypto_converted",
+          key: `deposit:${d.id}:converted:p${i + 1}`,
+          bookingAt: receivedAt,
+          valueAt: at,
+          amountCents: cents(p.creditedEur),
+          counterparty,
+          reference,
+          links: { ...links, txHashes: [d.txHash, ...links.txHashes] },
+          txType: "invoice_payment",
+          tags: ["usdc", "converted", "partial"],
+          note: `Part of ${d.amountUsdc ?? 0} USDC received on a day with no ECB reference rate, booked at the measured proceeds ${pVia}. The rest stays held.`,
+          unexecuted: !inp.swapsHaveExecuted,
+        });
+      }
+    });
     if (!converted) continue;
     const convertedAt = d.conversion?.at ?? d.updatedAt;
     const via = [d.provider ? `via ${d.provider}` : "", d.rate ? `at ${d.rate}` : "", d.midRate ? `(independent mid ${d.midRate})` : ""].filter(Boolean).join(" ");
+    // This conversion alone: the total less what the partials delivered.
+    const finalUsdc = d.conversion?.amountInUnits ? Number(d.conversion.amountInUnits) / 1e6 : d.amountUsdc ?? 0;
+    const finalCents = cents(d.creditedEur!) - partials.reduce((n, p) => n + cents(p.creditedEur), 0);
     if (valued) {
-      const gainCents = cents(d.creditedEur!) - cents(d.receipt!.amountEur);
+      const gainCents = finalCents - (cents(d.receipt!.amountEur) - partials.reduce((n, p) => n + portionCents(p), 0));
       out.push({
         event: "crypto_disposal",
         key: `deposit:${d.id}:disposal`,
@@ -374,9 +427,11 @@ function cryptoLines(inp: StatementInputs): LineDraft[] {
         // A loss is its own type so the default rules book it as an expense.
         txType: gainCents >= 0 ? "realised_gain" : "realised_loss",
         tags: ["usdc", "disposal"],
-        note:
-          `Disposal of ${d.amountUsdc ?? 0} USDC (book value €${d.receipt!.amountEur.toFixed(2)} at receipt) ` +
-          `for €${d.creditedEur!.toFixed(2)} EURe${via ? ` ${via}` : ""}; realised €${(gainCents / 100).toFixed(2)}.`,
+        note: partials.length
+          ? `Disposal of the remaining ${finalUsdc} USDC (book value €${((finalCents - gainCents) / 100).toFixed(2)} of the receipt) ` +
+            `for €${(finalCents / 100).toFixed(2)} EURe${via ? ` ${via}` : ""}; realised €${(gainCents / 100).toFixed(2)}.`
+          : `Disposal of ${d.amountUsdc ?? 0} USDC (book value €${d.receipt!.amountEur.toFixed(2)} at receipt) ` +
+            `for €${d.creditedEur!.toFixed(2)} EURe${via ? ` ${via}` : ""}; realised €${(gainCents / 100).toFixed(2)}.`,
         unexecuted: !inp.swapsHaveExecuted,
       });
       continue;
@@ -386,7 +441,7 @@ function cryptoLines(inp: StatementInputs): LineDraft[] {
       key: `deposit:${d.id}:converted`,
       bookingAt: receivedAt,
       valueAt: convertedAt,
-      amountCents: cents(d.creditedEur!),
+      amountCents: finalCents,
       counterparty,
       reference,
       links: { ...conversionLinks, txHashes: [d.txHash, ...conversionLinks.txHashes] },
@@ -443,7 +498,7 @@ export function projectStatementLines(inp: StatementInputs, now = new Date().toI
  * existing one stands and the pair is not added.
  */
 function bookedAsOneLine(byKey: Map<string, LedgerEntry>, key: string): boolean {
-  const m = /^deposit:(.+):(held|disposal)$/.exec(key);
+  const m = /^deposit:(.+?):(held|disposal(?::p\d+)?)$/.exec(key);
   return !!m && byKey.has(`deposit:${m[1]}:converted`);
 }
 

@@ -229,6 +229,22 @@ await check("converted with no receipt value: ONE payment line at the measured p
   assert.match(lines[0].note!, /no ECB reference rate/);
 });
 
+await check("a partial fill books its own disposal; the rest's disposal follows, and the lines sum to what arrived", () => {
+  const inp = base();
+  const p1 = { creditedEur: 32.3, receiptPortionEur: 32.44, provider: "dex", rate: 1.1452, conversion: { txHash: H(30), at: "2026-09-10T10:01:00.000Z", amountInUnits: "37000000" } };
+  inp.deposits = [usdcDeposit({ holding: "held", creditedEur: undefined, conversion: undefined, partials: [p1], txs: [{ step: "safe.swap(usdc->eure)", hash: H(30) }] }) as any];
+  const held = projectStatementLines(inp).map((l) => l.statement!);
+  assert.deepEqual(held.map((x) => [x.key, x.amountCents]), [["deposit:d-1:held", 12014], ["deposit:d-1:disposal:p1", -14]]);
+  assert.deepEqual(held[1].links.txHashes, [H(30)]);
+
+  inp.deposits = [usdcDeposit({ partials: [p1], conversion: { ...usdcDeposit().conversion, amountInUnits: "100000000" },
+    txs: [{ step: "safe.swap(usdc->eure)", hash: H(30) }] }) as any];
+  const all = projectStatementLines(inp).map((l) => l.statement!);
+  assert.deepEqual(all.map((x) => x.key), ["deposit:d-1:held", "deposit:d-1:disposal:p1", "deposit:d-1:disposal"]);
+  assert.equal(all.reduce((n, x) => n + x.amountCents, 0), 11962, "the receipt and both disposals are the EURe that arrived");
+  assert.ok(!all[2].links.txHashes.includes(H(30)), "the partial's swap is on its own line, not the final one");
+});
+
 await check("a deposit already booked as one :converted line gets no receipt or disposal line beside it", () => {
   const inp = base();
   const legacy = projectStatementLines({ ...inp, deposits: [usdcDeposit({ receipt: undefined }) as any] });

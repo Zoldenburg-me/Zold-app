@@ -658,9 +658,21 @@ flowchart LR
 - A `refused` row whose swap executed (it delivered nothing, or under the
   floor) is not offered again: that USDC is spent. A refusal before submit, or
   a reverted swap, can be retried. `unconfirmed` is never offered again.
-- Not handled: an exact-output conversion's disposal line books the whole
-  receipt value as disposed of (no route uses exact output yet); a swap that
-  delivers under `minOut` is `refused` with its EURe unbooked.
+- A partial fill (the swap took less than was held) keeps the deposit `held`
+  for the rest and records the fill in `partials`, with its share of the
+  receipt value in whole cents. Each fill books its own disposal line
+  (`deposit:<id>:disposal:p<n>`) and Beleg; the final conversion's line takes
+  what is left, so the receipt and every disposal sum to the EURe that
+  arrived. The convert route records the units it asked to swap, so today's
+  exact-input routes never produce a partial; one appears only where the swap
+  reports taking less.
+- After the swap executes, the route marks the deposit `unconfirmed` with the
+  swap step before settling. If settling then fails, it stays `unconfirmed`
+  and is never offered again; there is no rate check after the swap that can
+  throw. One conversion per deposit runs at a time, and a failure write never
+  moves a `converted` deposit backwards.
+- Not handled: a swap that delivers under `minOut` is `refused` with its EURe
+  unbooked.
 
 ---
 

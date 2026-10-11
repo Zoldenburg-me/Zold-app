@@ -245,7 +245,7 @@ let q25: import("../services/api/src/payment-requests.js").CryptoQuote;
     settlementAsset: "EURE", creditedEur: 872.5, realisedGainEur: -6.31, provider: "lifi",
     rate: 1.1461, midRate: 1.1379, detectedAt: now.toISOString(),
     receipt: { amountEur: 878.81, rate: 1.1379, rateProvider: "open.er-api.com", rateAsOf: "2026-09-10", ratedAt: now.toISOString(), blockTimestamp: now.toISOString() },
-    txs: [{ step: "usdc->eure", hash: "0xswap" }],
+    txs: [{ step: "safe.swap(usdc->eure)", hash: "0xswap" }],
   };
   const c = inv.buildCryptoSettlement(dep) as any;
   check("a crypto settlement carries the wallet tx, the euro value at receipt and the rate's source",
@@ -499,23 +499,45 @@ try {
   // EURe it would deliver is minted into the Safe and the settle step runs on
   // the measured delta, as crypto:test does.
   {
-    const { settleConvertedDeposit } = await import("../services/api/src/adapters/crypto-deposits.js");
-    const { accountBalances, eur } = await import("../services/api/src/chain.js");
+    const { settleConvertedDeposit, depositConversionBlocker, unconvertedUnits } = await import("../services/api/src/adapters/crypto-deposits.js");
+    const { accountBalances, eur, usd } = await import("../services/api/src/chain.js");
+    const rate = BigInt(Math.round(MID * 1e6));
+
+    // A partial fill first: the swap takes half. The rest stays held and
+    // convertible; the invoice is not rewritten until it is all converted.
+    const half = BigInt(dInv.amountUnits) / 2n;
+    const firstBefore = eur.toWei((await accountBalances(owner)).safeBalanceEur);
+    const firstOut = 12;
+    await writeAndWait(deployerWallet!, { address: addrs().eure, abi: abis.MockToken, functionName: "mint", args: [owner, eur.toWei(firstOut)] });
+    const part = await settleConvertedDeposit(store.cryptoDeposits.find((d) => d.id === dInv.id)!, miriam,
+      { provider: "dex", rate, minOut: eur.toWei(11) }, firstBefore, [{ step: "safe.swap(usdc->eure)", hash: `0x${"aa".repeat(32)}` }],
+      { txHash: `0x${"aa".repeat(32)}`, amountInUnits: half.toString() });
+    const rest = BigInt(dInv.amountUnits) - half;
+    check("a partial fill stays held for the rest, with that fill kept as a partial",
+      part.holding === "held" && part.partials?.length === 1 && part.partials[0].creditedEur === firstOut &&
+        unconvertedUnits(part) === rest && part.creditedUsdc === usd.fromUnits(rest), JSON.stringify(part));
+    check("what a partial fill leaves can still be converted",
+      depositConversionBlocker(miriam, part) === null, String(depositConversionBlocker(miriam, part)));
+    check("the invoice is not marked converted by a partial fill",
+      !((store.findInvoice(theirs)!.settlements ?? []) as any[]).find((x) => x.depositId === dInv.id)?.conversion);
+
     const before = eur.toWei((await accountBalances(owner)).safeBalanceEur);
     const out = 24.93;
+    const total = Math.round((firstOut + out) * 100) / 100;
     await writeAndWait(deployerWallet!, { address: addrs().eure, abi: abis.MockToken, functionName: "mint", args: [owner, eur.toWei(out)] });
-    const rate = BigInt(Math.round(MID * 1e6));
     const conv = await settleConvertedDeposit(store.cryptoDeposits.find((d) => d.id === dInv.id)!, miriam,
-      { provider: "dex", rate, minOut: eur.toWei(24) }, before, [{ step: "safe.swap(usdc->eure)", hash: `0x${"ab".repeat(32)}` }]);
+      { provider: "dex", rate, minOut: eur.toWei(24) }, before,
+      [{ step: "safe.swap(usdc->eure)", hash: `0x${"aa".repeat(32)}` }, { step: "safe.swap(usdc->eure)", hash: `0x${"ab".repeat(32)}` }]);
     const after = store.findInvoice(theirs)!;
     const rows = (after.settlements ?? []).filter((x: any) => x.depositId === dInv.id) as any[];
-    check("converting later leaves ONE settlement row for the deposit, now carrying the conversion",
-      conv.holding === "converted" && rows.length === 1 && rows[0].conversion?.creditedEur === out, JSON.stringify(after.settlements));
+    check("converting the rest leaves ONE settlement row for the deposit, carrying both fills' EURe",
+      conv.holding === "converted" && rows.length === 1 && rows[0].conversion?.creditedEur === total &&
+        conv.realisedGainEur === Math.round((total - dInv.receipt!.amountEur) * 100) / 100, JSON.stringify(after.settlements));
     check("its amount is still the receipt value and the invoice stays PAID once",
       rows[0].amountEur === dInv.receipt?.amountEur && after.state === "PAID" && rows[0].realisedGainEur === conv.realisedGainEur, JSON.stringify(rows[0]));
     const payRow = store.findPaymentRequest(forInvoice.body.id)!.payments.filter((p) => p.depositId === dInv.id);
     check("the pay-link payment row is rewritten in place to the EURe now held",
-      payRow.length === 1 && payRow[0].settledAsset === "EURE" && payRow[0].settledEur === out, JSON.stringify(payRow));
+      payRow.length === 1 && payRow[0].settledAsset === "EURE" && payRow[0].settledEur === total, JSON.stringify(payRow));
   }
 
   // A customer who just paid the invoice by bank transfer, quoting its number —

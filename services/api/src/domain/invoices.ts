@@ -241,6 +241,9 @@ export function buildCryptoSettlement(deposit: CryptoDeposit): CryptoInvoiceSett
    * it from the receipt-to-credit difference, which also contains market
    * movement.
    */
+  // The swap that converted it: the chain's record, else the executed step.
+  // Never a reverted or unconfirmed attempt, whose steps also say usdc->eure.
+  const conversionTx = deposit.conversion?.txHash ?? deposit.txs.filter((t) => t.step === "safe.swap(usdc->eure)").at(-1)?.hash;
   const spreadEur =
     converted && deposit.rate && deposit.midRate && deposit.amountUsdc
       ? Math.round((deposit.amountUsdc / deposit.midRate - deposit.amountUsdc / deposit.rate) * 100) / 100
@@ -265,9 +268,7 @@ export function buildCryptoSettlement(deposit: CryptoDeposit): CryptoInvoiceSett
     ...(converted
       ? {
           conversion: {
-            ...(deposit.txs.find((t) => t.step.includes("usdc->eure"))?.hash
-              ? { txHash: deposit.txs.find((t) => t.step.includes("usdc->eure"))!.hash }
-              : {}),
+            ...(conversionTx ? { txHash: conversionTx } : {}),
             ...(deposit.provider ? { venue: deposit.provider } : {}),
             ...(deposit.rate ? { rate: deposit.rate } : {}),
             ...(deposit.midRate ? { midRate: deposit.midRate } : {}),
