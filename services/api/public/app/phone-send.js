@@ -107,7 +107,7 @@ PH["send/new"] = {
         ${Z.field({ id: "ph-new-name", label: "Their full name", name: "name", autocomplete: "off", placeholder: "Name on their account…", value: p?.name || "", required: true })}
         ${Z.field({ id: "ph-new-iban", label: "IBAN", name: "iban", autocomplete: "off", spellcheck: false, placeholder: "DE89 3704 0044 0532 0130 00…", value: p?.iban ? Z.groupIban(p.iban) : prefill ? Z.groupIban(prefill) : "", required: true })}
       </div>
-      ${Z.note({ text: "Check the name and IBAN with them. Your Face ID approves the payment to exactly this IBAN." })}
+      ${Z.note({ text: `Check the name and IBAN with them. Your ${Z.byDevice("Face ID", "passkey")} approves the payment to exactly this IBAN.` })}
     `)}${phFoot(Z.button({ variant: "primary", full: true, label: "Continue", type: "submit" }))}</form>`;
   },
   bind(root) {
@@ -242,13 +242,13 @@ PH["send/review"] = {
         { key: `${first} receives`, value: phEur(q.receiveEur), strong: true },
       ])}
       ${phSameIban(payee.iban, user?.iban) ? Z.note({ tone: "a", icon: "sync_alt", text: "This is your own IBAN. The money leaves and comes back to this account, minus the Zold fee." }) : ""}
-      ${Z.note({ icon: "verified_user", text: "Your Face ID approves this amount to this IBAN only. If either changes, nothing is sent." })}
+      ${Z.note({ icon: "verified_user", text: `Your ${Z.byDevice("Face ID", "passkey")} approves this amount to this IBAN only. If either changes, nothing is sent.` })}
       <details class="z-disclose"><summary>Technical details${Z.icon("expand_more")}</summary>${Z.kv([
         { key: "Price", value: q.id, mono: true },
         { key: "Price valid until", value: phFull(q.expiresAt) },
       ])}</details>
       <p class="z-err" id="ph-rev-err" role="alert" hidden></p>
-    `)}${phFoot(Z.button({ variant: "primary", full: true, icon: "fingerprint", label: "Approve with Face ID", id: "ph-approve" }))}`;
+    `)}${phFoot(Z.button({ variant: "primary", full: true, icon: "fingerprint", label: Z.byDevice("Approve with Face ID", "Approve with your passkey"), id: "ph-approve" }))}`;
   },
   bind(root) {
     const b = root.querySelector("#ph-approve");
@@ -304,12 +304,12 @@ async function phSubmit(btn, errEl) {
     Z.setLoading(btn, false);
     if (!created) {
       // Nothing was created: say why here, on the screen the user is on.
-      errEl.textContent = e?.name === "NotAllowedError" ? "Face ID or fingerprint was cancelled. Nothing was sent." : e.message;
+      errEl.textContent = e?.name === "NotAllowedError" ? Z.byDevice("Face ID or fingerprint was cancelled. Nothing was sent.", "The passkey prompt was cancelled. Nothing was sent.") : e.message;
       errEl.hidden = false;
       return;
     }
     // A transfer exists: its own state decides what the user is told.
-    phSend.error = e?.name === "NotAllowedError" ? "You cancelled Face ID or fingerprint." : e.message;
+    phSend.error = e?.name === "NotAllowedError" ? Z.byDevice("You cancelled Face ID or fingerprint.", "You cancelled the passkey prompt.") : e.message;
     try {
       const fresh = await api(`/api/transfers/${created.id}`);
       phPutTransfer(fresh);
@@ -331,7 +331,7 @@ function phTimeline(t) {
   const paid = t.state === "PAID";
   const time = (iso) => (iso ? new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit" }).format(new Date(iso)) : "");
   const steps = [
-    { t: "Approved", d: approved ? `With Face ID${t.auth?.authorizedAt ? `, ${time(t.auth.authorizedAt)}` : ""}` : "Waiting for your approval", done: approved },
+    { t: "Approved", d: approved ? `With your ${Z.byDevice("Face ID", "passkey")}${t.auth?.authorizedAt ? `, ${time(t.auth.authorizedAt)}` : ""}` : "Waiting for your approval", done: approved },
     { t: "Sent to their bank", d: sent ? "Left your account. Waiting for the bank to confirm." : "Next, once approved", done: sent },
     { t: "Paid", d: paid ? `Their bank confirmed${t.updatedAt ? `, ${time(t.updatedAt)}` : ""}` : "We mark it paid when the bank confirms", done: paid },
   ];

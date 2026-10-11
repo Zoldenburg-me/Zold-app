@@ -152,9 +152,9 @@ export const ROLE_CAN = {
 export const roleCan = (role, what) => !!ROLE_CAN[role]?.[what];
 
 /** Server text for people: the API's words for a few chain and passkey
- *  errors, said plainly. */
+ *  errors, said plainly. A passkey is named for this device (Z.onPhone). */
 export const plain = (msg) => String(msg || "")
-  .replace(/\bpasskey\b/gi, "Face ID or fingerprint")
+  .replace(/\bpasskey\b/gi, (word) => (Z.onPhone() ? "Face ID or fingerprint" : word))
   .replace(/\bEURe\b/g, "euros")
   .replace(/\bSEPA\b/g, "bank transfer")
   .replace(/\s+—\s+/g, ": ")
