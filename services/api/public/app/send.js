@@ -204,19 +204,19 @@ $("back-options").onclick = () => showSendStep("options");
 
 /* ---------- transfer + animated timeline ---------- */
 const STEP_LABELS = {
-  "safe.transfer(orchestrator)": ["Moving EURe from your Safe", "💶"],
+  "safe.transfer(orchestrator)": ["Moving euros from your account", "💶"],
   "safe.transfer(fee)": ["Collecting the transfer fee", "💶"],
-  "swapper.swapExactIn": ["Swapping EURe → USDC", "🔁"],
-  "liquidity.fx-swapper.eure-usdc": ["Routing EURe → USDC liquidity", "🔁"],
-  "liquidity.fx-swapper.usdc-eure": ["Routing USDC → EURe liquidity", "🔁"],
+  "swapper.swapExactIn": ["Swapping euros → USDC", "🔁"],
+  "liquidity.fx-swapper.eure-usdc": ["Routing euros → USDC liquidity", "🔁"],
+  "liquidity.fx-swapper.usdc-eure": ["Routing USDC → euros liquidity", "🔁"],
   "bridge.xyz.dry-run.transfer": ["Planning Bridge.xyz transfer", "🌉"],
-  "bridge.xyz.deposit.funded": ["Bridge deposit funded by your signed batch", "🌉"],
+  "bridge.xyz.deposit.funded": ["Bridge deposit funded by your approved payment", "🌉"],
   "bridge.xyz.live.transfer": ["Creating Bridge.xyz transfer", "🌉"],
   "bridge.xyz.deposit.address": ["Bridge deposit address ready", "🏦"],
   "bridge.xyz.deposit.memo": ["Bridge deposit memo ready", "🏦"],
   "bridge.xyz.deposit.transfer": ["Funding Bridge.xyz transfer", "💵"],
   "bridge.xyz.destination_tx": ["Bridge destination funded", "✅"],
-  "safe.refundTransfer": ["Refunding your Safe", "💶"],
+  "safe.refundTransfer": ["Refunding your account", "💶"],
 };
 
 /* What the server records but a person should not read as progress: the
@@ -394,7 +394,7 @@ $("btn-send").onclick = async () => {
     const dev = await deviceLib;
     const addr = await dev.deviceAddress(credId());
     if (created.authorization.authorizer.toLowerCase() !== addr.toLowerCase()) {
-      throw new Error("this account's spending key was registered in a different browser — sign in there, or rotate the key from that device");
+      throw new Error("this account's payment key was registered in a different browser — sign in there, or rotate the key from that device");
     }
     // Recompute the payout commitment from what WE typed and refuse to sign if
     // the server's signed terms name a different destination — this is what
@@ -405,7 +405,7 @@ $("btn-send").onclick = async () => {
       name: recipient.recipientName,
     });
     if (created.authorization.typedData.message.destination.toLowerCase() !== expectedDestination.toLowerCase()) {
-      throw new Error("the payout destination in the signed terms does not match the recipient you entered — not signing");
+      throw new Error("the payout destination in the payment terms does not match the recipient you entered — not approving");
     }
     const signature = await dev.signTypedData(created.authorization.typedData, credId());
     const execution = await safeExecutionAssertion(created.authorization);
@@ -505,7 +505,7 @@ function histRow(t) {
     </div>`;
   }
   if (t.kind === "funding") {
-    const token = t.token === "USDC" ? usdSym() : "EURe";
+    const token = t.token === "USDC" ? usdSym() : "Euro";
     const amount = t.token === "USDC" ? `${fmt(t.amountUsdc || 0)} ${usdSym()}` : `€${fmt(t.amountEur || 0)}`;
     // unconfirmed: the conversion was sent and not yet seen on chain.
     const color = t.holding === "refused" || t.holding === "unconfirmed" ? "var(--amber)" : "var(--green)";

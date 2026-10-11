@@ -127,7 +127,7 @@ export async function loadAccess(me, api) {
   return {
     noSafe: false,
     signers: s.status === "fulfilled" ? signersView(s.value) : null,
-    signersError: s.status === "rejected" ? String(s.reason?.message || "Couldn’t read the account’s signers.") : null,
+    signersError: s.status === "rejected" ? String(s.reason?.message || "Couldn’t read who can approve for the account.") : null,
     recovery: recoveryStatus(c, z),
   };
 }

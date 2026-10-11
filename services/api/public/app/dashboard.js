@@ -15,7 +15,7 @@ function renderUser(u) {
   $("safe-balance").textContent = `€${fmt(u.safeBalanceEur ?? 0)}`;
   $("vault-balance").textContent = `€${fmt(u.balanceEur ?? u.safeBalanceEur ?? 0)}`;
   const plannedSafe = needsPasskeySafeSetup(u) ? u.passkeySafe?.address : null;
-  $("address").textContent = plannedSafe ? `planned ${shortAddr(plannedSafe)} — finish smart wallet` : u.address;
+  $("address").textContent = plannedSafe ? `planned ${shortAddr(plannedSafe)} — finish setting up your account` : u.address;
   document.querySelector('[data-copy="address"]')?.classList.toggle("hidden", !!plannedSafe);
   renderHandle(u.paymentPage);
   const chip = $("fund-chip");
@@ -187,7 +187,7 @@ function renderCardScreen() {
       <div class="m-rows">
         ${connected ? `
           <div class="m-row"><span class="k">Connected wallet</span><span class="v">${esc(shortAddr(connected.connectedAddress))}</span></div>
-          ${connected.safeAddress ? `<div class="m-row"><span class="k">Gnosis Pay Safe</span><span class="v">${esc(shortAddr(connected.safeAddress))}</span></div>` : ""}
+          ${connected.safeAddress ? `<div class="m-row"><span class="k">Gnosis Pay account</span><span class="v">${esc(shortAddr(connected.safeAddress))}</span></div>` : ""}
           ${connected.kycStatus ? `<div class="m-row"><span class="k">Their KYC</span><span class="v">${esc(connected.kycStatus)}</span></div>` : ""}
           <div class="m-row"><span class="k">Last seen</span><span class="v">${esc(gpWhen(connected.asOf) || "—")}</span></div>
         ` : `
@@ -217,10 +217,10 @@ function renderCardScreen() {
       <div class="m-row"><span class="k">Spendable</span><span class="v">${b ? esc(gpAmount(b.spendable)) : "—"}</span></div>
       <div class="m-row"><span class="k">Pending</span><span class="v">${b ? esc(gpAmount(b.pending)) : "—"}</span></div>
       <div class="m-row"><span class="k">Total</span><span class="v">${b ? esc(gpAmount(b.total)) : "—"}</span></div>
-      ${a.user?.safeAddress ? `<div class="m-row"><span class="k">Gnosis Pay Safe</span><span class="v">${esc(shortAddr(a.user.safeAddress))}</span></div>` : ""}
+      ${a.user?.safeAddress ? `<div class="m-row"><span class="k">Gnosis Pay account</span><span class="v">${esc(shortAddr(a.user.safeAddress))}</span></div>` : ""}
       ${a.user?.kycStatus ? `<div class="m-row"><span class="k">Their KYC</span><span class="v">${esc(a.user.kycStatus)}</span></div>` : ""}
     </div>
-    ${!b ? `<div class="m-lede" style="font-size:13px;margin-top:12px">No balance yet — Gnosis Pay has not deployed a card Safe for this account.</div>` : ""}
+    ${!b ? `<div class="m-lede" style="font-size:13px;margin-top:12px">No balance yet — Gnosis Pay has not set up a card account here yet.</div>` : ""}
     <div class="m-sec" style="margin-top:24px"><div class="m-mono">Cards</div></div>
     ${cards.length
       ? `<div class="m-rows">${cards.map((c) => `
@@ -261,7 +261,7 @@ async function gpSignIn() {
     if (out.connected && user) user.gnosisPay = out.connected;
     await gpLoadAccount();
   } catch (err) {
-    showErr("m-card-err", err.code === 4001 ? new Error("signature request was rejected") : err);
+    showErr("m-card-err", err.code === 4001 ? new Error("sign-in request was rejected") : err);
   }
 }
 

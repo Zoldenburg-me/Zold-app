@@ -148,7 +148,7 @@ function signatures(doc) {
   const s = doc.attestations.safe;
   return `<div class="sig">
     <div><span class="k">Signed by Zold</span> · <span class="mono">${esc(short(z.signer))}</span> · ${esc(when(z.signedAt))}</div>
-    ${s ? `<div><span class="k">Signed by the account holder's smart account</span> · <span class="mono">${esc(short(s.address))}</span> · ${esc(when(s.signedAt))}</div>` : ""}
+    ${s ? `<div><span class="k">Signed by the account holder's account</span> · <span class="mono">${esc(short(s.address))}</span> · ${esc(when(s.signedAt))}</div>` : ""}
   </div>`;
 }
 
@@ -232,7 +232,7 @@ function render(doc) {
     return head(doc, "Proof of account ownership", "Zold account document") + holder(s.holder) +
       `<div class="prose">${esc(s.statement)}</div>
       <div class="prose sub">Zold signed this document: if any word or number on it is changed, the check at the address below fails. ${doc.attestations.safe
-        ? "The account itself also signed it, which only the holder’s passkey can do. That shows whoever requested this document controls the account; the signature is checked against the account on every verification."
+        ? "The account itself also signed it, which only the holder can do. That shows whoever requested this document controls the account; the signature is checked against the account on every verification."
         : "The account’s own signature has not been added yet. The holder can add it from the app, to show they control the account."}</div>` +
       signatures(doc) + legal(doc);
   }

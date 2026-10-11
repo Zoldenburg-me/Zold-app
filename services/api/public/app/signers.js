@@ -27,9 +27,9 @@ async function signersRun(path, body, errId, btn) {
   btn.textContent = "Preparing…";
   try {
     const prepared = await api(path, body);
-    btn.textContent = "Confirm with your passkey…";
+    btn.textContent = "Approve with Face ID or fingerprint…";
     const sig = await passkeySignPrepared(prepared);
-    btn.textContent = "Waiting for the chain…";
+    btn.textContent = "Finishing…";
     signersState = await api(prepared.submitTo, sig);
     signersView = "main";
     renderSignersScreen(prepared.summary);
@@ -43,7 +43,7 @@ async function signersRun(path, body, errId, btn) {
 async function renderSignersScreen(done) {
   const el = $("m-sg-body");
   if (signersView !== "main" && signersState) return renderSignersForm(el);
-  el.innerHTML = `<div class="m-lede" style="font-size:13px" aria-live="polite">Reading your smart account…</div>`;
+  el.innerHTML = `<div class="m-lede" style="font-size:13px" aria-live="polite">Reading your account…</div>`;
   try { signersState = await api(`/api/users/${user.id}/safe/signers`); }
   catch (e) { el.innerHTML = `<div class="m-err" role="alert">${esc(e.message)}</div>`; return; }
   const s = signersState;
@@ -56,37 +56,37 @@ async function renderSignersScreen(done) {
   const bareDelegates = s.allowance.limits.filter((l) => l.token === "0x0000000000000000000000000000000000000000");
 
   el.innerHTML = `
-    <div aria-live="polite">${done ? `<div class="m-note info" role="status"><span class="material-symbols-rounded" aria-hidden="true">task_alt</span><div>Done on chain. ${esc(done)}</div></div>` : ""}</div>
+    <div aria-live="polite">${done ? `<div class="m-note info" role="status"><span class="material-symbols-rounded" aria-hidden="true">task_alt</span><div>Done. ${esc(done)}</div></div>` : ""}</div>
     ${locked ? `<div class="m-note warn" role="alert"><span class="material-symbols-rounded" aria-hidden="true">lock</span><div>
-      This account needs ${s.threshold} of ${s.owners.length} signatures. Zold can give only your passkey's, so sending, converting and changing settings from Zold will be refused. Recovery is the only way to reset it.</div></div>` : ""}
+      This account needs ${s.threshold} approvals. Zold can give only your Face ID or fingerprint approval, so sending, converting and changing settings from Zold will be refused. Recovery is the only way to reset it.</div></div>` : ""}
 
-    <div class="m-seclabel">Owners · ${s.threshold} of ${s.owners.length} signature${s.owners.length === 1 ? "" : "s"} needed</div>
+    <div class="m-seclabel">Approvers · needs ${s.threshold} approval${s.threshold === 1 ? "" : "s"} of ${s.owners.length}</div>
     <div class="m-rows">
       ${s.owners.map((o) => `
         <div class="m-secrow">
           <span class="material-symbols-rounded" aria-hidden="true">${o.kind === "passkey" ? "fingerprint" : "security_key"}</span>
           <div style="flex:1;min-width:0">
-            <div class="t">${o.kind === "passkey" ? "Your passkey" : "Second owner"}</div>
-            <div class="d" style="overflow-wrap:anywhere">${o.kind === "passkey" ? "How Zold signs. Works only in Zold." : `${sgAddr(o.address)} · can act on app.safe.global`}</div>
+            <div class="t">${o.kind === "passkey" ? "Your Face ID or fingerprint" : "Backup key"}</div>
+            <div class="d" style="overflow-wrap:anywhere">${o.kind === "passkey" ? "How you approve in Zold. Works only in Zold." : `${sgAddr(o.address)} · can act on app.safe.global`}</div>
           </div>
-          ${o.kind === "passkey" ? `<span class="st" style="color:var(--m-mint)">Owner</span>`
-            : `<button class="m-copybtn" data-sg-remove-owner="${esc(o.address)}" ${locked ? "disabled" : ""} aria-label="Remove owner ${esc(o.address)}">Remove</button>`}
+          ${o.kind === "passkey" ? `<span class="st" style="color:var(--m-mint)">Approver</span>`
+            : `<button class="m-copybtn" data-sg-remove-owner="${esc(o.address)}" ${locked ? "disabled" : ""} aria-label="Remove backup key ${esc(o.address)}">Remove</button>`}
         </div>`).join("")}
     </div>
     ${second.length ? "" : `
       <button class="m-optrow" id="m-sg-add-owner" style="margin-top:8px">
         <span class="material-symbols-rounded ic" aria-hidden="true">person_add</span>
-        <span class="tx"><span class="t">Add a second owner</span><span class="d">A hardware wallet you hold. It can manage the account without Zold.</span></span>
+        <span class="tx"><span class="t">Add a backup key</span><span class="d">A hardware wallet you hold. It can manage the account without Zold.</span></span>
         <span class="material-symbols-rounded ch" aria-hidden="true">chevron_right</span>
       </button>`}
 
-    <div class="m-seclabel">Cosigner rules</div>
+    <div class="m-seclabel">Approval rules</div>
     <div class="m-rows">
       <div class="m-secrow">
         <span class="material-symbols-rounded" aria-hidden="true">group</span>
         <div style="flex:1;min-width:0">
-          <div class="t">Require the second owner on every transaction</div>
-          <div class="d">${locked ? "On. Zold can no longer sign on its own." : second.length ? "Off. Either owner can move funds alone." : "Needs a second owner first."}</div>
+          <div class="t">Require the backup key on every transaction</div>
+          <div class="d">${locked ? "On. Zold can no longer approve on its own." : second.length ? "Off. Either approver can move funds alone." : "Needs a backup key first."}</div>
         </div>
         ${locked ? `<span class="st" style="color:var(--m-amber)">On</span>`
           : `<button class="m-copybtn" id="m-sg-lock" ${second.length ? "" : "disabled"}>Turn On…</button>`}
@@ -110,22 +110,22 @@ async function renderSignersScreen(done) {
     ${offerLimits ? `<button class="m-optrow${s.allowance.moduleDeployed && !locked ? "" : " off"}" id="m-sg-add-limit" style="margin-top:8px" ${s.allowance.moduleDeployed && !locked ? "" : "disabled"}>
       <span class="material-symbols-rounded ic" aria-hidden="true">add_card</span>
       <span class="tx"><span class="t">Allow someone to spend from your account <span class="m-tag">ADVANCED</span></span><span class="d">${s.allowance.moduleDeployed
-        ? "Up to a limit you set, without your signature."
-        : "The Allowance module is not deployed on this chain."}</span></span>
+        ? "Up to a limit you set, without your approval."
+        : "Not available on this deployment."}</span></span>
       <span class="material-symbols-rounded ch" aria-hidden="true">chevron_right</span>
     </button>` : ""}
     <div class="m-err hidden" id="m-sg-err" role="alert" style="margin-top:12px"></div>
 
-    <div class="m-seclabel">Recovery with two owners</div>
+    <div class="m-seclabel">Recovery with a backup key</div>
     <div class="m-lede" style="font-size:13px;margin-top:0">
-      ${s.guardians ? `A recovery guardian is on this account.` : `<strong>No recovery guardian is on this account.</strong>`}
-      A recovery replaces <em>every</em> owner with your new passkey at 1 signature: the second owner is removed and the cosigner rule is reset.
+      ${s.guardians ? `A recovery helper is on this account.` : `<strong>No recovery helper is on this account.</strong>`}
+      A recovery replaces <em>every</em> approver with your new phone, needing 1 approval: the backup key is removed and the approval rule is reset.
       Spending limits are <em>not</em> touched by a recovery — remove them yourself.
       ${caps.emailSmsRecovery ? "" : "Recovery here is manual and operator-reviewed; email / SMS recovery is not offered on this deployment."}
     </div>
     <a class="m-optrow" href="${esc(s.safeAppUrl)}" target="_blank" rel="noopener noreferrer" style="margin-top:12px;text-decoration:none">
       <span class="material-symbols-rounded ic" aria-hidden="true">open_in_new</span>
-      <span class="tx"><span class="t">Open in Safe{Wallet}</span><span class="d">app.safe.global — where the second owner signs</span></span>
+      <span class="tx"><span class="t">Open in Safe{Wallet}</span><span class="d">app.safe.global — where the backup key approves</span></span>
     </a>`;
 
   const add = $("m-sg-add-owner");
@@ -137,7 +137,7 @@ async function renderSignersScreen(done) {
   el.querySelectorAll("[data-sg-remove-owner]").forEach((b) => {
     b.onclick = () => {
       const a = b.dataset.sgRemoveOwner;
-      if (!confirm(`Remove ${a} as an owner? It will no longer be able to sign for this account.`)) return;
+      if (!confirm(`Remove ${a} as a backup key? It will no longer be able to approve for this account.`)) return;
       signersRun(`/api/users/${user.id}/safe/owners/${a}/remove`, {}, "m-sg-err", b);
     };
   });
@@ -167,19 +167,19 @@ function renderSignersForm(el) {
 
   if (signersView === "owner") {
     el.innerHTML = `
-      <div class="m-h1" style="font-size:24px">Add a second owner</div>
+      <div class="m-h1" style="font-size:24px">Add a backup key</div>
       <div class="m-note warn" role="note"><span class="material-symbols-rounded" aria-hidden="true">warning</span>
-        <div>Use a secured hardware wallet. Whoever holds this key can move everything in the account, without your passkey and without Zold.</div></div>
+        <div>Use a secured hardware wallet. Whoever holds this key can move everything in the account, without your Face ID or fingerprint and without Zold.</div></div>
       <div class="m-rows" style="margin-top:12px">
-        ${sgWarnItem("open_in_new", "It works without Zold", "The second wallet can manage this account on app.safe.global without the Zold app or your passkey.")}
-        ${sgWarnItem("group", "1 of 2 signatures", "The threshold stays at 1 of 2: either owner can move funds alone. Finer controls — requiring both, or spending limits — are in Cosigner rules.")}
-        ${sgWarnItem("link_off", "Zold cannot connect this wallet", "Zold does not offer connecting a second signer to its app. A rule that needs a signature Zold cannot collect makes the account unusable here and can brick it; the only way back is a manual recovery that resets the rules.")}
-        ${sgWarnItem("restart_alt", "Recovery removes it", "A recovery replaces every owner with your new passkey. This wallet would have to be added again afterwards.")}
+        ${sgWarnItem("open_in_new", "It works without Zold", "The backup key can manage this account on app.safe.global without the Zold app or your Face ID or fingerprint.")}
+        ${sgWarnItem("group", "Needs 1 approval", "Payments still need just 1 approval: either approver can move funds alone. Finer controls — requiring both, or spending limits — are in Approval rules.")}
+        ${sgWarnItem("link_off", "Zold cannot connect this wallet", "Zold does not offer connecting a backup key to its app. A rule that needs an approval Zold cannot collect makes the account unusable here and can brick it; the only way back is a manual recovery that resets the rules.")}
+        ${sgWarnItem("restart_alt", "Recovery removes it", "A recovery replaces every approver with your new phone. This wallet would have to be added again afterwards.")}
       </div>
-      <div class="m-field" style="margin-top:16px"><label for="m-sg-owner-addr">Owner address</label>
+      <div class="m-field" style="margin-top:16px"><label for="m-sg-owner-addr">Backup key address</label>
         <input id="m-sg-owner-addr" name="owner-address" autocomplete="off" spellcheck="false" autocapitalize="off" inputmode="text" placeholder="0x…" translate="no" /></div>
       ${sgAckBox("m-sg-owner-ack", "I understand this address can move all funds on its own, and that Zold cannot use it.")}
-      <button class="m-cta" id="m-sg-owner-go" type="button">Sign with Passkey to Add Owner</button>
+      <button class="m-cta" id="m-sg-owner-go" type="button">Approve to add backup key</button>
       <div class="m-err hidden" id="m-sg-form-err" role="alert" style="margin-top:12px"></div>
       ${back}`;
     $("m-sg-owner-go").onclick = () => {
@@ -191,17 +191,17 @@ function renderSignersForm(el) {
   }
 
   if (signersView === "lock") {
-    const blocked = !s.guardians ? "No recovery guardian is on this account, so a locked account could never be reset. Set up recovery first." : "";
+    const blocked = !s.guardians ? "No recovery helper is on this account, so a locked account could never be reset. Set up recovery first." : "";
     el.innerHTML = `
-      <div class="m-h1" style="font-size:24px">Require the second owner</div>
+      <div class="m-h1" style="font-size:24px">Require the backup key</div>
       <div class="m-note warn" role="note"><span class="material-symbols-rounded" aria-hidden="true">lock</span>
-        <div>Every transaction will need both your passkey <em>and</em> ${second ? sgAddr(second.address) : "the second owner"}. Zold can collect only the passkey's signature, and your passkey does not work on app.safe.global.
-        <strong>From Zold and from app.safe.global alike, nothing can be signed afterwards</strong> — sending, converting and changing this setting back all stop.
-        The only way back is a recovery, which also removes the second owner.</div></div>
+        <div>Every transaction will need both your Face ID or fingerprint <em>and</em> ${second ? sgAddr(second.address) : "the backup key"}. Zold can collect only your Face ID or fingerprint approval, and that does not work on app.safe.global.
+        <strong>From Zold and from app.safe.global alike, nothing can be approved afterwards</strong> — sending, converting and changing this setting back all stop.
+        The only way back is a recovery, which also removes the backup key.</div></div>
       ${blocked ? `<div class="m-err" role="alert" style="margin-top:12px">${esc(blocked)}</div>` : `
       <div class="m-field" style="margin-top:16px"><label for="m-sg-lock-phrase">Type ${esc(s.lockPhrase)} to confirm</label>
         <input id="m-sg-lock-phrase" name="lock-confirmation" autocomplete="off" spellcheck="false" autocapitalize="characters" translate="no" /></div>
-      <button class="m-cta" id="m-sg-lock-go" type="button" style="background:var(--m-amber);color:#1a1206">Sign with Passkey to Lock</button>`}
+      <button class="m-cta" id="m-sg-lock-go" type="button" style="background:var(--m-amber);color:#1a1206">Approve to lock</button>`}
       <div class="m-err hidden" id="m-sg-form-err" role="alert" style="margin-top:12px"></div>
       ${back}`;
     const go = $("m-sg-lock-go");
@@ -216,7 +216,7 @@ function renderSignersForm(el) {
     el.innerHTML = `
       <div class="m-h1" style="font-size:24px">Allow someone to spend from your account</div>
       <span class="m-tag">ADVANCED</span>
-      <div class="m-lede" style="font-size:13px;margin-top:8px">This person can spend up to the limit you set without your signature, through Safe's Allowance module. They spend it with their own wallet at app.safe.global, under Spending limits. Zold cannot move it for them. You can remove the limit here at any time; a recovery does not remove it.</div>
+      <div class="m-lede" style="font-size:13px;margin-top:8px">This person can spend up to the limit you set without your approval. They spend it with their own wallet at app.safe.global, under Spending limits. Zold cannot move it for them. You can remove the limit here at any time; a recovery does not remove it.</div>
       <div class="m-field" style="margin-top:16px"><label for="m-sg-lim-delegate">Their wallet address</label>
         <input id="m-sg-lim-delegate" name="delegate-address" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="0x…" translate="no" value="${esc(second?.address || "")}" /></div>
       <div class="m-field" style="margin-top:12px"><label for="m-sg-lim-token">Token</label>
@@ -227,8 +227,8 @@ function renderSignersForm(el) {
       <div class="m-field" style="margin-top:12px"><label for="m-sg-lim-period">Refills</label>
         <select id="m-sg-lim-period" name="period" style="width:100%;background:var(--m-surface);color:#fff;border:0;padding:8px 0;font:inherit">
           <option value="day">Every day</option><option value="week">Every week</option><option value="month">Every 30 days</option><option value="once">Never (one-time)</option></select></div>
-      ${sgAckBox("m-sg-lim-ack", "I understand this person can spend up to this limit without my passkey, and that a recovery does not remove it.")}
-      <button class="m-cta" id="m-sg-lim-go" type="button">Sign with passkey to allow</button>
+      ${sgAckBox("m-sg-lim-ack", "I understand this person can spend up to this limit without my approval, and that a recovery does not remove it.")}
+      <button class="m-cta" id="m-sg-lim-go" type="button">Approve to allow</button>
       <div class="m-err hidden" id="m-sg-form-err" role="alert" style="margin-top:12px"></div>
       ${back}`;
     $("m-sg-lim-go").onclick = () => {
