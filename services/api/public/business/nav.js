@@ -249,15 +249,15 @@ function recoveryBanner() {
   // Access included: its card is read once per visit, the banner every
   // minute (shell.js watchRecovery).
   if (recoveryUnknown) {
-    return `<div class="banner warn" role="note">${Z.icon("help")}<span><b>We couldn’t check for a recovery on your sign-in.</b> Check it in the app, so a recovery you did not start cannot replace your passkey unseen.</span>
+    return `<div class="banner warn" role="note">${Z.icon("help")}<span><b>We couldn’t check for a recovery on your sign-in.</b> Check it in the app, so a recovery you did not start cannot replace your sign-in unseen.</span>
     <a class="z-btn z-btn--secondary z-btn--sm" href="/app?from=business#recovery-alert">Check now</a></div>`;
   }
   if (recoveryNone && own && view !== "access") {
-    return `<div class="banner warn">${Z.icon("warning")}<span><b>No one can recover this company’s account.</b> If this sign-in’s passkey is lost, Zoldenburg UG cannot recover it.</span>
+    return `<div class="banner warn">${Z.icon("warning")}<span><b>No one can recover this company’s account.</b> If this sign-in’s key is lost, Zoldenburg UG cannot recover it.</span>
     <a class="z-btn z-btn--secondary z-btn--sm" href="?view=access" data-view-link="access">Access</a></div>`;
   }
   if (!recoveryPending) return "";
-  return `<div class="banner warn" role="note">${Z.icon("warning")}<span><b>A recovery is under way on your sign-in.</b> If you did not start it, stop it now: it would replace your passkey.</span>
+  return `<div class="banner warn" role="note">${Z.icon("warning")}<span><b>A recovery is under way on your sign-in.</b> If you did not start it, stop it now: it would replace your sign-in.</span>
     <a class="z-btn z-btn--primary z-btn--sm" href="/app?from=business#recovery-alert">Check it</a></div>`;
 }
 

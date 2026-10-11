@@ -266,11 +266,11 @@ async function unlock(credentialId) {
   if (blob.damaged) throw new Error("the spending key stored in this browser is damaged");
   if (blob.protection !== "prf") return blob.key;
   const secret = await prfSecret(credentialId);
-  if (!secret) throw new Error("your passkey is needed to approve this payment — the device key stays locked without it");
+  if (!secret) throw new Error("your Face ID or fingerprint is needed to approve this payment — the payment key stays locked without it");
   try {
     return await unwrapKey(blob, secret);
   } catch {
-    throw new Error("could not unlock the device key with this passkey");
+    throw new Error("could not unlock the payment key with this Face ID or fingerprint");
   }
 }
 

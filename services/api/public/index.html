@@ -163,8 +163,8 @@
            read from the chain on every visit. Changes are passkey-signed. -->
       <div class="m-screen" id="m-signers-screen">
         <div class="m-sheadrow"><button class="m-backbtn" data-mback="profile" aria-label="Back"><span class="material-symbols-rounded" style="font-size:24px" aria-hidden="true">arrow_back</span></button></div>
-        <div class="m-h1">Signers &amp; rules</div>
-        <div class="m-lede">Who can sign for your smart account, and what they need. Read live from the chain.</div>
+        <div class="m-h1">Approvals &amp; limits</div>
+        <div class="m-lede">Who can approve payments from your account, and how many approvals each needs.</div>
         <div id="m-sg-body" style="margin-top:24px"></div>
       </div>
 
@@ -175,7 +175,7 @@
       <div class="m-screen" id="m-recovery-screen">
         <div class="m-sheadrow"><button class="m-backbtn" data-mback="profile" aria-label="Back"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:24px">arrow_back</span></button></div>
         <div class="m-h1">Recovery</div>
-        <div class="m-lede">Who can move this account to a new passkey if you lose this device. Every recovery waits on chain first, and this device can cancel it until it lands.</div>
+        <div class="m-lede">Who can move your account to a new phone if you lose this one. Every recovery waits through a delay first, and this phone can cancel it until it completes.</div>
         <div id="m-rc-body" style="margin-top:24px"></div>
       </div>
 
@@ -186,7 +186,7 @@
            and never shown again — not even to the person who pasted it. -->
       <div class="m-screen" id="m-monerium-screen">
         <div class="m-sheadrow"><button class="m-backbtn" data-mback="profile" aria-label="Back"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:24px">arrow_back</span></button></div>
-        <div class="m-h1">Monerium keys</div>
+        <div class="m-h1">Monerium keys (advanced)</div>
         <div class="m-lede" id="m-mon-lede">Connect the API keys of your own Monerium account.</div>
         <div id="m-mon-body" style="margin-top:24px"></div>
       </div>
@@ -229,7 +229,7 @@
           </svg>
         </div>
         <div class="detail">
-          <span class="k">SAFE EURe</span>
+          <span class="k">EURO BALANCE</span>
           <span class="v" id="safe-balance">€0.00</span>
         </div>
         <div class="detail">
@@ -242,14 +242,14 @@
           <button class="copybtn" data-copy="iban" aria-label="Copy IBAN">copy</button>
         </div>
         <div class="detail">
-          <span class="k">SMART ACCOUNT</span>
+          <span class="k">ACCOUNT ADDRESS</span>
           <span class="v" id="address">—</span>
-          <button class="copybtn" data-copy="address" aria-label="Copy smart account address">copy</button>
+          <button class="copybtn" data-copy="address" aria-label="Copy account address">copy</button>
         </div>
         <div class="row2 hidden" id="funding-actions" style="margin-top:1rem">
-          <button class="ghost" id="btn-finish-safe">Finish smart wallet</button>
-          <button class="ghost hidden" id="btn-finish-import">Finish bringing in your Safe</button>
-          <button id="btn-monerium-dashboard">Verify with Monerium</button>
+          <button class="ghost" id="btn-finish-safe">Finish setting up your account</button>
+          <button class="ghost hidden" id="btn-finish-import">Finish setting up your account</button>
+          <button id="btn-monerium-dashboard">Verify your identity</button>
         </div>
         <div class="hint hidden" id="funding-action-hint"></div>
       </div>
@@ -331,12 +331,12 @@
       <section class="view" id="view-accounts">
         <div class="split-grid">
           <div class="card acct">
-            <h2>EUR Safe</h2>
+            <h2>Euro account</h2>
             <div class="amount" id="acct-balance"><span class="cur">€</span>0.00</div>
             <div class="info-list">
               <div class="detail"><span class="k">IBAN</span><span class="v" id="acct-iban">—</span><button class="copybtn" data-copy="acct-iban" aria-label="Copy IBAN">copy</button></div>
-              <div class="detail"><span class="k">SMART ACCOUNT</span><span class="v" id="acct-address">—</span><button class="copybtn" data-copy="acct-address" aria-label="Copy smart account address">copy</button></div>
-              <div class="detail"><span class="k">SAFE POLICY</span><span class="v" id="acct-owner">—</span></div>
+              <div class="detail"><span class="k">ACCOUNT ADDRESS</span><span class="v" id="acct-address">—</span><button class="copybtn" data-copy="acct-address" aria-label="Copy account address">copy</button></div>
+              <div class="detail"><span class="k">APPROVAL RULES</span><span class="v" id="acct-owner">—</span></div>
             </div>
           </div>
           <div class="card">
@@ -364,9 +364,9 @@
         <div class="split-grid">
           <div class="card">
             <h2>Security</h2>
-            <div class="setting-row"><div><div class="st">Passkey</div><div class="sd" id="set-passkey">—</div></div></div>
-            <div class="setting-row"><div><div class="st">Device spending key</div><div class="sd" id="set-device">—</div></div></div>
-            <div class="setting-row"><div><div class="st">Wallet policy</div><div class="sd" id="set-wallet-policy">—</div></div></div>
+            <div class="setting-row"><div><div class="st">Face ID / fingerprint</div><div class="sd" id="set-passkey">—</div></div></div>
+            <div class="setting-row"><div><div class="st">This phone</div><div class="sd" id="set-device">—</div></div></div>
+            <div class="setting-row"><div><div class="st">Approval rules</div><div class="sd" id="set-wallet-policy">—</div></div></div>
             <div class="setting-row"><div><div class="st">Recovery</div><div class="sd" id="set-recovery">—</div></div><button class="ghost" id="btn-recovery-start">Start</button></div>
             <div class="error hidden" role="alert" id="recovery-err"></div>
             <div class="setting-row"><div><div class="st">Session</div><div class="sd">Stored only in this browser.</div></div><button class="ghost" id="btn-signout">Sign out</button></div>

@@ -141,7 +141,7 @@ await t("a PRF-wrapped key refuses to sign without the passkey", async () => {
   // same path a browser takes when the ceremony is cancelled or unavailable.
   await assert.rejects(
     () => dev.signTypedData(TYPED_DATA, "some-credential-id"),
-    /passkey is needed/,
+    /Face ID or fingerprint is needed/,
     "a locked key must not sign without the authenticator",
   );
 });
