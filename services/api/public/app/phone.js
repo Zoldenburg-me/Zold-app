@@ -238,7 +238,7 @@ const phOut = (t) => !["FAILED", "REFUNDED"].includes(t.state) && t.state !== "C
 function phActivityRow(t) {
   if (t.kind === "funding") {
     const usdc = t.token === "USDC";
-    const word = t.state === "REFUSED" ? "IN REVIEW" : "RECEIVED";
+    const word = t.holding === "refused" ? "IN REVIEW" : "RECEIVED";
     return Z.row({
       lead: Z.iconTile({ icon: usdc ? "currency_exchange" : "euro" }),
       title: usdc ? "Digital dollars (USDC)" : "Euros received",
@@ -1077,13 +1077,13 @@ PH.add = {
 
 PH["add/wallet"] = {
   title: "From a crypto wallet",
-  live: () => JSON.stringify([phCache.deposits?.map((d) => `${d.id}:${d.state}`), user?.paymentPage?.handle]),
+  live: () => JSON.stringify([phCache.deposits?.map((d) => `${d.id}:${d.holding}`), user?.paymentPage?.handle]),
   html() {
     const u = user || {};
     const page = u.paymentPage || {};
     const address = page.depositAddress || (u.passkeySafe?.status === "active" ? u.address : "");
     const deps = phCache.deposits;
-    const waiting = (deps || []).filter((d) => d.state === "DETECTED");
+    const waiting = (deps || []).filter((d) => d.holding === "awaiting_approval");
     const asset = phCache.settlementAsset || page.settlementAsset;
     const autoConvert = phCache.autoConvert ?? page.autoConvert;
     return `${phTop("From a crypto wallet", "add", Z.tag("Beta"))}${phMain(`

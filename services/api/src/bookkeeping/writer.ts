@@ -32,7 +32,7 @@ import { mergeStatementLines, projectStatementLines, type StatementInputs } from
 export function swapsHaveExecuted(): boolean {
   if (!IS_REAL_MONEY_CHAIN) return false;
   return store.cryptoDeposits.some(
-    (d) => d.state === "CONVERTED" && d.settlementAsset === "EURE" && /^0x[0-9a-fA-F]{64}$/.test(d.conversion?.txHash ?? ""),
+    (d) => d.holding === "converted" && /^0x[0-9a-fA-F]{64}$/.test(d.conversion?.txHash ?? ""),
   );
 }
 

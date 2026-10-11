@@ -364,6 +364,8 @@ export type TransferState =
  * REFUSED is a resting state, not something to retry: nothing was credited and
  * the tokens are still the user's, where they landed.
  */
+export type CryptoHolding = "none" | "held" | "awaiting_approval" | "converted" | "refused";
+
 export interface CryptoDeposit {
   id: string;
   userId: string;
@@ -418,11 +420,32 @@ export interface CryptoDeposit {
   /** The payment request (pay link) this deposit was matched to by amount.
    *  Set by payment-requests.ts; absent for money nobody asked for. */
   paymentRequestId?: string;
-  state: "DETECTED" | "CONVERTED" | "REFUSED";
-  /** Why it was refused, in words a support person can act on. */
+  /**
+   * When the arrival was written onto the invoice, the pay link and the books.
+   * Set once, on arrival, whatever later happens to the asset: the payer paid
+   * when the money landed. Absent means that write is still owed, and the
+   * poller's sweep makes it.
+   */
+  settledAt?: string;
+  /**
+   * What happened to the received asset, separate from settlement.
+   * - none: it already is the settlement currency; nothing to convert.
+   * - held: not converted; the user may convert it at any time.
+   * - awaiting_approval: auto-convert is on, and the swap waits for the
+   *   passkey signature (the API cannot move funds).
+   * - converted: swapped; `creditedEur` is the measured delta.
+   * - refused: a swap was refused or failed; the USDC is still held and the
+   *   conversion can be retried.
+   */
+  holding: CryptoHolding;
+  /** Why it is held or refused, in words a support person can act on. */
   reason?: string;
   creditedEur?: number;
+  /** USDC the account holds from this deposit; cleared once converted
+   *  (`amountUsdc` keeps the received figure). */
   creditedUsdc?: number;
+  /** What this money is held as now: the received token, then EURE once
+   *  converted. */
   settlementAsset?: "EURE" | "USDC";
   paymentAddress?: `0x${string}`;
   /** The venue that filled it and the rate it filled at, for the receipt. */

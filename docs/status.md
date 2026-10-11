@@ -8,6 +8,12 @@ Say this plainly rather than letting the surface imply otherwise:
   operator keys the user holds.
 - **No real money has moved through a swap.** No dex/LI.FI/RFQ/CoW swap has
   executed; no Base Sepolia send has exercised execution → debit.
+- **Converting held USDC has never run.** Settle-on-arrival, the holding
+  states, the spent-USDC check and the conversion's bookkeeping are tested on
+  hardhat with a stand-in for the swap (EURe minted into the Safe, the USDC
+  left in place); the prepare → passkey → convert path has not run against a
+  bundler. The receipt and disposal statement lines have not been reviewed by
+  a Steuerberater.
 - **The cash rail has never opened.** Bridge live mode is entirely unexercised,
   CCTP has never executed live, and the anchor-attribution half of the Stellar
   payout has never run — only the on-ledger payment half is proven (tx

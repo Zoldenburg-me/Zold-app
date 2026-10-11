@@ -246,25 +246,41 @@ function sepaOutLines(inp: StatementInputs): LineDraft[] {
   return out;
 }
 
-// ── Crypto in: converted, or held ────────────────────────────────────────────
+// ── Crypto in: the receipt, and later its disposal ──────────────────────────
+//
+// The account is one euro clearing account, and held USDC sits in it at its
+// euro value on arrival. So a USDC payment is booked in up to two lines:
+//
+//   receipt   on arrival, whatever the settlement currency: + the ECB value of
+//             the day, as the payment (invoice_payment). That is the income
+//             and the cost basis.
+//   disposal  when the held USDC is converted: + (EURe credited − receipt
+//             value), the realised gain or loss (realised_gain / realised_loss).
+//             The account's euro value moves by exactly that, so the income is
+//             counted once.
+//
+// With no ECB rate at arrival there is no receipt line (rule 3); a later
+// conversion then books its measured proceeds as the payment instead, once.
 
 function cryptoLines(inp: StatementInputs): LineDraft[] {
   const out: LineDraft[] = [];
   for (const d of inp.deposits) {
-    if (d.userId !== inp.userId || d.token !== "USDC" || d.state !== "CONVERTED") continue;
+    if (d.userId !== inp.userId || d.token !== "USDC" || !d.settledAt) continue;
     const req = requestFor(inp, d.paymentRequestId);
     const inv = d.invoiceId ? inp.invoices.find((i) => i.id === d.invoiceId) : undefined;
     const receivedAt = d.receipt?.blockTimestamp ?? d.detectedAt;
     const reference = referenceFor([req?.externalInvoiceNumber, invoiceNumber(inv), req ? `Pay link ${req.code}` : undefined], `Deposit ${d.txHash.slice(0, 10)}`);
-    const links: StatementFacts["links"] = {
+    const baseLinks = {
       depositId: d.id,
       ...(req ? { paymentRequestId: req.id } : {}),
       ...(inv ? { invoiceId: inv.id } : {}),
       ...(invoiceNumber(inv) ? { invoiceNumber: invoiceNumber(inv) } : req?.externalInvoiceNumber ? { invoiceNumber: req.externalInvoiceNumber } : {}),
-      // Chain transactions only: the userOperation hash is the bundler's
-      // identifier, kept beside them, never among them.
+    };
+    // Chain transactions only: the userOperation hash is the bundler's
+    // identifier, kept beside them, never among them.
+    const conversionLinks: StatementFacts["links"] = {
+      ...baseLinks,
       txHashes: [
-        d.txHash,
         ...(d.conversion?.txHash ? [d.conversion.txHash] : []),
         ...d.txs
           .filter((x) => x.step !== "userOperation" && x.hash !== d.conversion?.userOpHash)
@@ -274,40 +290,62 @@ function cryptoLines(inp: StatementInputs): LineDraft[] {
       ...(d.conversion?.userOpHash ? { userOpHash: d.conversion.userOpHash } : {}),
     };
     const counterparty = { ...(req?.source.orderName ? { name: `Order ${req.source.orderName}` } : {}), ...(d.from ? { address: d.from } : {}) };
-    if (d.settlementAsset === "EURE" && (d.creditedEur ?? 0) > 0) {
-      out.push({
-        event: "crypto_converted",
-        key: `deposit:${d.id}:converted`,
-        bookingAt: receivedAt,
-        valueAt: d.conversion?.at ?? d.updatedAt,
-        amountCents: cents(d.creditedEur!),
-        counterparty,
-        reference,
-        links,
-        txType: "invoice_payment",
-        tags: ["usdc", "converted"],
-        unexecuted: !inp.swapsHaveExecuted,
-      });
-      continue;
-    }
-    if (d.settlementAsset === "USDC") {
-      // Held as USDC: the receivable is discharged and an asset acquired at
-      // its euro value on the day. No ECB rate, no value, no line.
-      if (!d.receipt || !(d.receipt.amountEur > 0)) continue;
+    const converted = d.holding === "converted" && (d.creditedEur ?? 0) > 0;
+    const valued = !!d.receipt && d.receipt.amountEur > 0;
+
+    if (valued) {
       out.push({
         event: "crypto_held",
         key: `deposit:${d.id}:held`,
         bookingAt: receivedAt,
         valueAt: receivedAt,
-        amountCents: cents(d.receipt.amountEur),
+        amountCents: cents(d.receipt!.amountEur),
         counterparty,
         reference,
-        links,
+        links: { ...baseLinks, txHashes: [d.txHash] },
         txType: "invoice_payment",
-        tags: ["usdc", "held"],
-        note: `${d.amountUsdc ?? 0} USDC held, not converted. Valued at the ECB reference rate of ${d.receipt.rateAsOf}.`,
+        tags: ["usdc", "received"],
+        note: `${d.amountUsdc ?? 0} USDC received, valued at the ECB reference rate of ${d.receipt!.rateAsOf} (1 EUR = ${d.receipt!.rate} USD).`,
       });
     }
+    if (!converted) continue;
+    const convertedAt = d.conversion?.at ?? d.updatedAt;
+    const via = [d.provider ? `via ${d.provider}` : "", d.rate ? `at ${d.rate}` : "", d.midRate ? `(independent mid ${d.midRate})` : ""].filter(Boolean).join(" ");
+    if (valued) {
+      const gainCents = cents(d.creditedEur!) - cents(d.receipt!.amountEur);
+      out.push({
+        event: "crypto_disposal",
+        key: `deposit:${d.id}:disposal`,
+        bookingAt: convertedAt,
+        valueAt: convertedAt,
+        amountCents: gainCents,
+        counterparty: { name: d.provider ? `Conversion via ${d.provider}` : "Conversion USDC to EURe" },
+        reference,
+        links: conversionLinks,
+        // A loss is its own type so the default rules book it as an expense.
+        txType: gainCents >= 0 ? "realised_gain" : "realised_loss",
+        tags: ["usdc", "disposal"],
+        note:
+          `Disposal of ${d.amountUsdc ?? 0} USDC (book value €${d.receipt!.amountEur.toFixed(2)} at receipt) ` +
+          `for €${d.creditedEur!.toFixed(2)} EURe${via ? ` ${via}` : ""}; realised €${(gainCents / 100).toFixed(2)}.`,
+        unexecuted: !inp.swapsHaveExecuted,
+      });
+      continue;
+    }
+    out.push({
+      event: "crypto_converted",
+      key: `deposit:${d.id}:converted`,
+      bookingAt: receivedAt,
+      valueAt: convertedAt,
+      amountCents: cents(d.creditedEur!),
+      counterparty,
+      reference,
+      links: { ...conversionLinks, txHashes: [d.txHash, ...conversionLinks.txHashes] },
+      txType: "invoice_payment",
+      tags: ["usdc", "converted"],
+      note: `${d.amountUsdc ?? 0} USDC received on a day with no ECB reference rate; booked at the measured conversion proceeds${via ? ` ${via}` : ""}.`,
+      unexecuted: !inp.swapsHaveExecuted,
+    });
   }
   return out;
 }
@@ -350,6 +388,17 @@ export function projectStatementLines(inp: StatementInputs, now = new Date().toI
 }
 
 /**
+ * A deposit whose conversion was booked as one `:converted` line (the payment
+ * at its conversion proceeds) must not also get a receipt and a disposal
+ * line: that would count the income twice. Lines are never deleted, so the
+ * existing one stands and the pair is not added.
+ */
+function bookedAsOneLine(byKey: Map<string, LedgerEntry>, key: string): boolean {
+  const m = /^deposit:(.+):(held|disposal)$/.exec(key);
+  return !!m && byKey.has(`deposit:${m[1]}:converted`);
+}
+
+/**
  * What to write. Rows are matched by statement key. A new row is added; an
  * existing one has only its statement facts refreshed (a conversion that
  * gained a tx hash, an order that gained a counterparty), and keeps its id,
@@ -366,6 +415,7 @@ export function mergeStatementLines(
   for (const p of projected) {
     const cur = byKey.get(p.statement!.key);
     if (!cur) {
+      if (bookedAsOneLine(byKey, p.statement!.key)) continue;
       toAdd.push(p);
       continue;
     }
