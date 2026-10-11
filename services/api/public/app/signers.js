@@ -27,7 +27,7 @@ async function signersRun(path, body, errId, btn) {
   btn.textContent = "Preparing…";
   try {
     const prepared = await api(path, body);
-    btn.textContent = "Approve with Face ID or fingerprint…";
+    btn.textContent = `Approve with your ${Z.passkeyName()}…`;
     const sig = await passkeySignPrepared(prepared);
     btn.textContent = "Finishing…";
     signersState = await api(prepared.submitTo, sig);
@@ -58,7 +58,7 @@ async function renderSignersScreen(done) {
   el.innerHTML = `
     <div aria-live="polite">${done ? `<div class="m-note info" role="status"><span class="material-symbols-rounded" aria-hidden="true">task_alt</span><div>Done. ${esc(done)}</div></div>` : ""}</div>
     ${locked ? `<div class="m-note warn" role="alert"><span class="material-symbols-rounded" aria-hidden="true">lock</span><div>
-      This account needs ${s.threshold} approvals. Zold can give only your Face ID or fingerprint approval, so sending, converting and changing settings from Zold will be refused. Recovery is the only way to reset it.</div></div>` : ""}
+      This account needs ${s.threshold} approvals. Zold can give only the approval of your ${Z.passkeyName()}, so sending, converting and changing settings from Zold will be refused. Recovery is the only way to reset it.</div></div>` : ""}
 
     <div class="m-seclabel">Approvers · needs ${s.threshold} approval${s.threshold === 1 ? "" : "s"} of ${s.owners.length}</div>
     <div class="m-rows">
@@ -66,7 +66,7 @@ async function renderSignersScreen(done) {
         <div class="m-secrow">
           <span class="material-symbols-rounded" aria-hidden="true">${o.kind === "passkey" ? "fingerprint" : "security_key"}</span>
           <div style="flex:1;min-width:0">
-            <div class="t">${o.kind === "passkey" ? "Your Face ID or fingerprint" : "Backup key"}</div>
+            <div class="t">${o.kind === "passkey" ? `Your ${Z.passkeyName()}` : "Backup key"}</div>
             <div class="d" style="overflow-wrap:anywhere">${o.kind === "passkey" ? "How you approve in Zold. Works only in Zold." : `${sgAddr(o.address)} · can act on app.safe.global`}</div>
           </div>
           ${o.kind === "passkey" ? `<span class="st" style="color:var(--m-mint)">Approver</span>`
@@ -169,9 +169,9 @@ function renderSignersForm(el) {
     el.innerHTML = `
       <div class="m-h1" style="font-size:24px">Add a backup key</div>
       <div class="m-note warn" role="note"><span class="material-symbols-rounded" aria-hidden="true">warning</span>
-        <div>Use a secured hardware wallet. Whoever holds this key can move everything in the account, without your Face ID or fingerprint and without Zold.</div></div>
+        <div>Use a secured hardware wallet. Whoever holds this key can move everything in the account, without your ${Z.passkeyName()} and without Zold.</div></div>
       <div class="m-rows" style="margin-top:12px">
-        ${sgWarnItem("open_in_new", "It works without Zold", "The backup key can manage this account on app.safe.global without the Zold app or your Face ID or fingerprint.")}
+        ${sgWarnItem("open_in_new", "It works without Zold", `The backup key can manage this account on app.safe.global without the Zold app or your ${Z.passkeyName()}.`)}
         ${sgWarnItem("group", "Needs 1 approval", "Payments still need just 1 approval: either approver can move funds alone. Finer controls — requiring both, or spending limits — are in Approval rules.")}
         ${sgWarnItem("link_off", "Zold cannot connect this wallet", "Zold does not offer connecting a backup key to its app. A rule that needs an approval Zold cannot collect makes the account unusable here and can brick it; the only way back is a manual recovery that resets the rules.")}
         ${sgWarnItem("restart_alt", "Recovery removes it", "A recovery replaces every approver with your new phone. This wallet would have to be added again afterwards.")}
@@ -195,7 +195,7 @@ function renderSignersForm(el) {
     el.innerHTML = `
       <div class="m-h1" style="font-size:24px">Require the backup key</div>
       <div class="m-note warn" role="note"><span class="material-symbols-rounded" aria-hidden="true">lock</span>
-        <div>Every transaction will need both your Face ID or fingerprint <em>and</em> ${second ? sgAddr(second.address) : "the backup key"}. Zold can collect only your Face ID or fingerprint approval, and that does not work on app.safe.global.
+        <div>Every transaction will need both your ${Z.passkeyName()} <em>and</em> ${second ? sgAddr(second.address) : "the backup key"}. Zold can collect only the approval of your ${Z.passkeyName()}, and that does not work on app.safe.global.
         <strong>From Zold and from app.safe.global alike, nothing can be approved afterwards</strong> — sending, converting and changing this setting back all stop.
         The only way back is a recovery, which also removes the backup key.</div></div>
       ${blocked ? `<div class="m-err" role="alert" style="margin-top:12px">${esc(blocked)}</div>` : `

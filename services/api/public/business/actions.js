@@ -480,7 +480,7 @@ export const ACTIONS = {
         <li>${Z.icon("domain")}<span>Your account${me?.iban ? `, IBAN ${esc(Z.groupIban(me.iban))},` : ""} then belongs to ${esc(org.name)}, with everything on it.</span></li>
         <li>${Z.icon("menu_book")}<span>Its transactions${since ? ` since ${esc(since)}` : ""} appear in ${esc(org.name)}’s books and statements. Members who can see the books see them.</span></li>
         <li>${Z.icon("block")}<span>While it is connected here, it can’t be connected to another organisation.</span></li>
-        <li>${Z.icon("fingerprint")}<span>Only your Face ID or fingerprint can approve its payments.</span></li>
+        <li>${Z.icon("fingerprint")}<span>Only your ${Z.passkeyName()} can approve its payments.</span></li>
       </ul>`, connect, { okLabel: "Connect" });
     return "keep";
   },
@@ -978,7 +978,7 @@ export const ACTIONS = {
       toast("Submitted. Someone other than you approves it next.");
     } else {
       ap.tab = "drafts";
-      toast("Saved. Send it from the list with Face ID or fingerprint.");
+      toast(`Saved. Send it from the list with your ${Z.passkeyName()}.`);
     }
     setView("payments");
   },
@@ -986,7 +986,7 @@ export const ACTIONS = {
    *  their passkey; the server checks that approval and the owner role. */
   "review-off"() {
     dialog("Turn payment review off?",
-      `<p class="desc">Anyone who may send payments could then send one without a second person approving it. Payments already waiting for review keep waiting until someone approves them. You’ll confirm with Face ID or fingerprint.</p>`,
+      `<p class="desc">Anyone who may send payments could then send one without a second person approving it. Payments already waiting for review keep waiting until someone approves them. You’ll confirm with your ${Z.passkeyName()}.</p>`,
       async () => {
         const stepUp = await passkeyStepUp("org.payment-review.off");
         await api(`/api/orgs/${org.id}/payment-review`, { method: "POST", body: { required: false, stepUp } });

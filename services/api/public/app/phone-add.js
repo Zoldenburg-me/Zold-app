@@ -232,7 +232,7 @@ PH["settings/currency"] = {
       ${usdc || pending === "USDC" ? "" : `<fieldset class="z-fieldset" id="ph-cur-ask">
         <legend class="z-eyebrow">When dollars arrive</legend>
         <div class="z-choices">
-          ${choice("ask", "ask", ask, "Ask me to convert", "We spot the payment and show you the price. It converts only after you approve with Face ID or fingerprint.")}
+          ${choice("ask", "ask", ask, "Ask me to convert", `We spot the payment and show you the price. It converts only after you approve with your ${Z.passkeyName()}.`)}
           ${choice("ask", "keep", !ask, "Keep them as dollars", `They stay as ${usdSym()} in your account.`)}
         </div>
       </fieldset>`}
@@ -350,7 +350,7 @@ PH.convert = {
       <p class="z-err" id="ph-conv-err" role="alert" hidden></p>
     `)}${phFoot(`${expired
       ? Z.button({ variant: "primary", full: true, icon: "refresh", label: "Get a new price", id: "ph-conv-retry" })
-      : Z.button({ variant: "primary", full: true, icon: "fingerprint", label: "Convert with Face ID", id: "ph-conv-go" })}<a class="z-link-btn" href="#add/wallet">Keep as dollars for now</a>`)}`;
+      : Z.button({ variant: "primary", full: true, icon: "fingerprint", label: Z.byDevice("Convert with Face ID", "Convert with your passkey"), id: "ph-conv-go" })}<a class="z-link-btn" href="#add/wallet">Keep as dollars for now</a>`)}`;
   },
   bind(root, id) {
     if (phCache.deposits === null) {
@@ -425,11 +425,11 @@ async function phConvert(id, btn, errEl) {
       allowCredentials: p.credentialId ? [{ type: "public-key", id: b64urlToBytes(p.credentialId) }] : [],
       userVerification: "required",
     });
-    if (!assertion) throw new Error("No response from Face ID or fingerprint.");
+    if (!assertion) throw new Error(Z.byDevice("No response from Face ID or fingerprint.", "No response from the passkey prompt."));
   } catch (e) {
     // Nothing has been sent to the server yet: the payment is where it was.
     Z.setLoading(btn, false);
-    errEl.textContent = e?.name === "NotAllowedError" ? "Face ID or fingerprint was cancelled. Nothing was converted." : e.message;
+    errEl.textContent = e?.name === "NotAllowedError" ? Z.byDevice("Face ID or fingerprint was cancelled. Nothing was converted.", "The passkey prompt was cancelled. Nothing was converted.") : e.message;
     errEl.hidden = false;
     return;
   }

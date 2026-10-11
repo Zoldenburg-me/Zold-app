@@ -187,15 +187,15 @@ PH.security = {
       : Z.row({
         lead: Z.iconTile({ icon: "smartphone" }),
         title: "Payment key",
-        sub: phKey === undefined ? "Checking this phone…" : keyHere ? (phKey.protection === "none" ? "On this phone, not encrypted" : "On this phone, encrypted by your Face ID or fingerprint") : "On another device",
+        sub: phKey === undefined ? "Checking this phone…" : keyHere ? (phKey.protection === "none" ? "On this phone, not encrypted" : `On this phone, encrypted by your ${Z.passkeyName()}`) : "On another device",
         right: keyHere ? Z.tag(phKey.protection === "none" ? "Not encrypted" : "This device", phKey.protection === "none" ? "amber" : "pink") : "",
         chevron: false,
       });
     return `${phSecurityTop()}${phMain(`
-      ${phKeyUnprotected() ? Z.note({ tone: "a", text: "Your payment key is stored unencrypted in this browser: Face ID or fingerprint here can’t encrypt it. The key vouches for what a payment is (amount and payee). On its own it moves nothing: every payment also needs your Face ID or fingerprint, which your account checks. Someone with a copy could still vouch for payment terms. Don’t use Zold in this browser on a shared computer, and remove extensions you don’t trust." }) : ""}
+      ${phKeyUnprotected() ? Z.note({ tone: "a", text: `Your payment key is stored unencrypted in this browser: your ${Z.passkeyName()} here can’t encrypt it. The key vouches for what a payment is (amount and payee). On its own it moves nothing: every payment also needs your ${Z.passkeyName()}, which your account checks. Someone with a copy could still vouch for payment terms. Don’t use Zold in this browser on a shared computer, and remove extensions you don’t trust.` }) : ""}
       ${recoveryRows.length ? Z.listGroup({ label: "Recovery", action: recoveryAction, rows: recoveryRows }) : ""}
       ${Z.listGroup({ label: "Sign-in and keys", rows: [
-        Z.row({ lead: Z.iconTile({ icon: "fingerprint" }), title: "Face ID or fingerprint", sub: u.passkey?.createdAt ? `Signs you in and approves payments. Added ${phDay(u.passkey.createdAt)} ${new Date(u.passkey.createdAt).getFullYear()}` : "Not set up", right: Z.tag(u.passkey?.credentialId ? "Active" : "Off", u.passkey?.credentialId ? "mint" : undefined), chevron: false }),
+        Z.row({ lead: Z.iconTile({ icon: "fingerprint" }), title: Z.byDevice("Face ID or fingerprint", "Passkey"), sub: u.passkey?.createdAt ? `Signs you in and approves payments. Added ${phDay(u.passkey.createdAt)} ${new Date(u.passkey.createdAt).getFullYear()}` : "Not set up", right: Z.tag(u.passkey?.credentialId ? "Active" : "Off", u.passkey?.credentialId ? "mint" : undefined), chevron: false }),
         keyRow,
       ] })}
       <section class="z-group"><div class="z-group__head"><h2 class="z-eyebrow">Who approves payments</h2></div>${phSignerRows()}</section>

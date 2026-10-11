@@ -256,6 +256,9 @@ export async function deviceAddress(credentialId, options = {}) {
   return addressOf(blob.key); // pre-PRF plaintext blob with no cached address
 }
 
+/* The authenticator, named for this device by ui.js where the page loads it. */
+const passkeyName = () => globalThis.Z?.passkeyName?.() ?? "passkey";
+
 /**
  * Unlock the private key for one signature. With PRF this triggers the
  * authenticator — the passkey is the gate, not a formality.
@@ -266,11 +269,11 @@ async function unlock(credentialId) {
   if (blob.damaged) throw new Error("the spending key stored in this browser is damaged");
   if (blob.protection !== "prf") return blob.key;
   const secret = await prfSecret(credentialId);
-  if (!secret) throw new Error("your Face ID or fingerprint is needed to approve this payment — the payment key stays locked without it");
+  if (!secret) throw new Error(`your ${passkeyName()} is needed to approve this payment — the payment key stays locked without it`);
   try {
     return await unwrapKey(blob, secret);
   } catch {
-    throw new Error("could not unlock the payment key with this Face ID or fingerprint");
+    throw new Error(`could not unlock the payment key with this ${passkeyName()}`);
   }
 }
 
