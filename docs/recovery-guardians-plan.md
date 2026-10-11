@@ -246,8 +246,9 @@ sample documents only.
   add is refused (`OTHER_GUARDIAN`), because threshold 2 with no route that
   collects two signatures would leave Zoldenburg unable to recover alone.
   Removing it is the same passkey op (`revokeGuardianWithThreshold`); the
-  row goes when the module no longer lists the address. Zoldenburg is
-  refused while a Google/Apple guardian is on the account, and the reverse.
+  row goes when the module no longer lists the address. A Google/Apple
+  guardian is never on the Safe beside another (the rule:
+  `recovery-and-signers.md`).
   Recovering works end to end in code: on the new device /recovery falls
   through to a `turnkey` request (new passkey held on it), logs in with the
   Google/Apple login, gets a Turnkey session bound to a fresh key, signs the
