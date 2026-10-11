@@ -40,11 +40,19 @@ export function enrolmentHtml(e, { issued = null, ibanReady = false } = {}) {
     return `<p class="g-note">Your bank account ending ${esc(e.bankAccountLast4)} is confirmed. If you ever need Zoldenburg, you confirm it’s you with 1 € from this account again.</p>
       ${waiting || `<div class="g-actions"><button type="button" class="z-btn" data-enrol="new">Changed banks? Use another account</button></div>`}`;
   }
-  return `<p><b>One step left: confirm your bank account.</b> Move ${esc(e.minimumEur)} € from your own bank account to your Zold IBAN, with a code we give you as the reference. It’s your money: it lands in your Zold balance, and nothing is charged.</p>
-    <p class="g-note">This tells us which bank account is yours, and it’s how you confirm a recovery later. We keep a fingerprint of the account and its last 4 characters, not the IBAN.</p>
-    ${!ibanReady
-      ? `<p class="g-note">Your Zold IBAN comes first. Once Monerium has issued it, this step opens here.</p>`
-      : waiting || `<div class="g-actions"><button type="button" class="z-btn z-btn--primary" data-enrol="new">Show my transfer details</button></div>`}`;
+  // Not confirmed yet: the step comes first, as one line and one button;
+  // the why folds away under it.
+  const why = `<details class="g-why"><summary>Why 1 €?</summary>
+      <p class="g-note">It tells us which bank account is yours, and a recovery later needs 1 € from the same account. It’s your money: it lands in your Zold balance, and nothing is charged. We keep a fingerprint of the account and its last 4 characters, not the IBAN.</p>
+    </details>`;
+  if (!ibanReady) {
+    return `<p class="g-step"><b>2 steps left.</b> First your Zold IBAN, then you confirm your bank account with 1 € to yourself.</p>
+      <div class="g-actions"><a class="z-btn z-btn--primary" href="/app#monerium-settings">Get my Zold IBAN</a></div>
+      ${why}`;
+  }
+  return `<p class="g-step"><b>1 step left:</b> confirm your bank account by moving ${esc(e.minimumEur)} € to yourself.</p>
+    ${waiting || `<div class="g-actions"><button type="button" class="z-btn z-btn--primary" data-enrol="new">Confirm my bank account</button></div>`}
+    ${why}`;
 }
 
 /** A new code, approved with a passkey step-up every time. Returns the POST's answer. */
