@@ -32,6 +32,7 @@ import { safeBooksStart } from "../domain/safe-books.js";
 import type { MoneriumOrderLike } from "../documents.js";
 import { mergeStatementLines, projectStatementLines, type StatementInputs } from "./statement.js";
 import { describeCause } from "../http/log-cause.js";
+import { withoutConversionOutputs } from "../transfers/activity.js";
 
 /**
  * Rule 2. No dex, LI.FI, RFQ or CoW swap has executed with real money, so a
@@ -87,7 +88,7 @@ interface Rows {
 
 const storeRows: Rows = {
   transfersOf: (id) => store.transfers.filter((t) => t.userId === id),
-  depositsOf: (id) => store.cryptoDeposits.filter((d) => d.userId === id),
+  depositsOf: (id) => withoutConversionOutputs(store.cryptoDeposits.filter((d) => d.userId === id)),
   issueOrdersOf: (id) => store.moneriumIssueOrders.filter((o) => o.userId === id),
   sweepsOf: (id) => store.conversionSweeps.filter((s) => s.userId === id),
   paymentRequestsOf: (id) => store.paymentRequestsForUser(id),
@@ -113,7 +114,8 @@ function groupBy<T>(rows: readonly T[], key: (row: T) => string | undefined): Ma
 /** Valid for one synchronous sweep: nothing else writes these tables meanwhile. */
 function groupedRows(): Rows {
   const transfers = groupBy(store.transfers, (t) => t.userId);
-  const deposits = groupBy(store.cryptoDeposits, (d) => d.userId);
+  // A conversion's EURe output is not income (transfers/activity.ts).
+  const deposits = groupBy(withoutConversionOutputs(store.cryptoDeposits), (d) => d.userId);
   const issueOrders = groupBy(store.moneriumIssueOrders, (o) => o.userId);
   const sweeps = groupBy(store.conversionSweeps, (s) => s.userId);
   const paymentRequests = groupBy(store.paymentRequests, (r) => r.userId);
