@@ -63,7 +63,18 @@ const ownAccountName = (u = user) => {
   const connected = (u.monerium?.profiles || []).find((p) => p?.id && p.id === u.monerium?.profileId);
   return connected?.name || ownCompanyOrg?.legalName || ownCompanyOrg?.name || "Company account";
 };
+/* A bank account (IBAN, SEPA) is on offer to this account: its segment has a
+   fiat partner, and that partner has not refused it. Without one the account
+   is a wallet (docs/wallet-tier.md), and nothing asks it to verify. An
+   account with no segment predates segmentation and keeps the bank path. */
+const bankOffered = (u = user) =>
+  (u?.segment?.capabilities ?? ["monerium"]).includes("monerium") && u?.kycStatus !== "rejected";
 const kycCopy = (status = "pending", u = user) => {
+  if (status !== "approved" && !bankOffered(u)) {
+    return status === "rejected"
+      ? ["WALLET", "No bank account for now", "We can’t open a bank account for you at the moment, because our banking partner can’t onboard you. You can keep using Zold as a wallet."]
+      : ["WALLET", "Wallet account", "Bank accounts aren’t available where you live yet. You can use Zold as a wallet."];
+  }
   if (status !== "approved" && hasConnectedMonerium(u)) {
     return ["MONERIUM", "Activate your IBAN", "Your Monerium account is connected. One passkey confirmation links your wallet to it and asks Monerium for the IBAN."];
   }

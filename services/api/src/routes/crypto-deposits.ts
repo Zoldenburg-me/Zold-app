@@ -22,7 +22,7 @@ import {
   settleConvertedDeposit,
 } from "../adapters/crypto-deposits.js";
 import { store, type CryptoDeposit, type User } from "../store.js";
-import { custodyBlockerBeforeFunding, requireCapability, requireKycApproved } from "../http/guards.js";
+import { custodyBlockerBeforeFunding, requireCapability } from "../http/guards.js";
 import type { PendingPasskeySafeDeployment } from "../http/pending.js";
 import { AUTH_WINDOW_SEC } from "../transfers/build.js";
 import { publicUser } from "../users/public-user.js";
@@ -357,10 +357,10 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
       if (typeof enabled !== "boolean") {
         return res.status(400).json({ error: "enabled must be true or false" });
       }
-      // The output is e-money, so the same gate that gates a SEPA deposit
-      // applies. Say so plainly rather than accepting the setting and silently
-      // refusing every deposit later.
-      if (enabled && !requireKycApproved(user, res)) return;
+      // Conversion is a swap the user signs from their own Safe: it needs an
+      // on-chain balance in the segment, not Monerium approval
+      // (docs/wallet-tier.md).
+      if (enabled && !requireCapability(user, "onchain_balance", res)) return;
       const custodyBlocked = enabled ? custodyBlockerBeforeFunding(user) : null;
       if (custodyBlocked) return res.status(409).json({ error: custodyBlocked });
       const page = user.paymentPage;
