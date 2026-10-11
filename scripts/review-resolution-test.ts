@@ -123,7 +123,7 @@ try {
     assert.equal(store.findTransfer("t_review")!.state, "MANUAL_REVIEW");
   });
 
-  await check("the route refuses without the operator token", async () => {
+  await check("the route refuses without an operator session", async () => {
     assert.equal((await post("t_review", { state: "REFUNDED", note: NOTE }, null)).status, 401);
     assert.equal((await post("t_review", { state: "REFUNDED", note: NOTE }, "wrong-token-of-sufficient-length-000000")).status, 401);
     assert.equal(store.findTransfer("t_review")!.state, "MANUAL_REVIEW");

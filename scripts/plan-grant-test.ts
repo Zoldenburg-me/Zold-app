@@ -80,7 +80,7 @@ await check("downgrading to the free plan stays open", async () => {
   assert.equal(r.status, 200);
   assert.equal(store.findOrganisation("org_p")!.plan, "starter");
 });
-await check("the operator route refuses without the operator token", async () => {
+await check("the operator route refuses without an operator session", async () => {
   assert.equal((await call("/api/admin/orgs/org_b/plan", { plan: "business" }, asOwner)).status, 401);
   assert.equal((await call("/api/admin/orgs/org_b/plan", { plan: "business" }, { authorization: "Bearer wrong-token-of-sufficient-length-00" })).status, 401);
   assert.equal(store.findOrganisation("org_b")!.plan, "starter");

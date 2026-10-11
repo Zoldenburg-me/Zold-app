@@ -3,7 +3,8 @@
  *
  * One page for every guardian (recovery/flow.js picks it): email, a new
  * passkey made on this phone, then the guardian's step — codes by email/SMS,
- * Zoldenburg's ID check, or the person's own Google/Apple login (signed here,
+ * Zoldenburg's 1 € from the person's bank and ID check (recovery/bank-step.js),
+ * or the person's own Google/Apple login (signed here,
  * recovery/approve.js) — then the waiting period, during which the old phone
  * can stop it, then sign in.
  *
@@ -15,6 +16,7 @@ import { IndexedDbStamper } from "../vendor/turnkey.js";
 import { startLogin } from "../guardian/oauth.js";
 import { providerButtons } from "../guardian/providers.js";
 import { finishApprove } from "./approve.js";
+import { bankStepChanged, bankStepHtml, issuedFor, keepIssued } from "./bank-step.js";
 import {
   EMAIL_KEY, SECRET_KEY, TICKET_KEY, currentAuth, endedText, finalizeAfter, requestPath, saveFor, savedFor, screenFor, startRecovery,
 } from "./flow.js";
@@ -103,12 +105,22 @@ async function boot() {
       if (gen !== s.gen) return;
       if (next) {
         const changed = next.status !== r.status;
+        // The 1 € step moves while the request stays in review: redraw it
+        // in place, without taking focus from the person.
+        const stepMoved = !changed && s.mode === "zoldenburg" && bankStepChanged(s.request, next);
         s.request = next;
         if (changed) return show();
+        if (stepMoved) redraw();
       }
       tick();
       follow();
     }, wait);
+  };
+  /* Draw the current screen again, focus kept where the person is. */
+  const redraw = () => {
+    const screen = screenFor(s.mode, s.request);
+    el.innerHTML = SCREENS[screen]();
+    BIND[screen]?.();
   };
   const tick = () => {
     const until = finalizeAfter(s.request);
@@ -204,11 +216,15 @@ async function boot() {
     zoldenburg: () => {
       const ref = s.request.zoldenburg?.reference || "";
       const mail = `mailto:support@zoldhq.com?subject=${encodeURIComponent(`Account recovery ${ref}`)}`;
+      const paid = Boolean(s.request.bankCheck?.passed);
       return `
       <h1 tabindex="-1">Let’s confirm it’s you</h1>
-      <p>Our team checks you against the ID you gave Monerium, then moves your account to this phone.</p>
+      <p>Two checks: 1 € from your own bank account, and our team checks you against the ID you gave Monerium. Then your account moves to this phone.</p>
       ${ref ? `<p class="r-ref">Your reference <b translate="no">${esc(ref)}</b></p>` : ""}
-      <div class="r-actions"><a class="z-btn z-btn--primary" href="${esc(mail)}">Email support</a></div>
+      ${bankStepHtml(s.request, issuedFor(sessionStorage, s.request))}
+      <p class="r-err" id="r-err" role="alert"${s.error ? "" : " hidden"}>${esc(s.error)}</p>
+      ${paid ? "<h2>Then: email us</h2>" : "<h2>And: email us</h2>"}
+      <div class="r-actions"><a class="z-btn${paid ? " z-btn--primary" : ""}" href="${esc(mail)}">Email support</a></div>
       <p class="r-note">Write from the email on your account and keep this page open.</p>`;
     },
     approve: () => {
@@ -261,6 +277,41 @@ async function boot() {
         });
       } catch (err) { busy(b, false); fail(err); }
     })),
+    zoldenburg: () => {
+      el.querySelector('[data-bank="copy"]')?.addEventListener("click", async (e) => {
+        const btn = e.currentTarget;
+        const memo = issuedFor(sessionStorage, s.request)?.memo || "";
+        try { await navigator.clipboard.writeText(memo); btn.textContent = "Copied"; } catch { btn.textContent = "Copy failed: select it above"; }
+      });
+      el.querySelector('[data-bank="new"]')?.addEventListener("click", async (e) => {
+        const btn = e.currentTarget;
+        busy(btn, true);
+        try {
+          const { code: _code, memo, ...request } = await api(requestPath("zoldenburg", s.request.id, "/bank-code"), {}, auth());
+          keepIssued(sessionStorage, { ...request, memo });
+          s.request = request;
+          s.error = "";
+          clearTimeout(s.timer);
+          s.gen++;
+          redraw();
+          el.querySelector("#r-bank-ref")?.scrollIntoView({ block: "center" });
+          follow();
+        } catch (err) { busy(btn, false); fail(err); }
+      });
+      el.querySelector('[data-bank="check"]')?.addEventListener("click", async (e) => {
+        const btn = e.currentTarget;
+        busy(btn, true);
+        try {
+          s.request = await api(requestPath("zoldenburg", s.request.id, "/bank-check"), {}, auth());
+          s.error = "";
+          clearTimeout(s.timer);
+          s.gen++;
+          redraw();
+          el.querySelector(s.request.bankCheck?.passed ? "h1" : '[data-bank="check"]')?.focus();
+          follow();
+        } catch (err) { busy(btn, false); fail(err); }
+      });
+    },
     wait: () => {
       tick();
       el.querySelector("#r-finalize")?.addEventListener("click", async (e) => {

@@ -780,7 +780,7 @@ try {
     const blocked = await call("/api/recovery/candide", { email: EMAIL }, undefined, "");
     assert.equal(blocked.status, 409, JSON.stringify(blocked.data));
     assert.equal(blocked.data.code, "RECOVERY_IN_PROGRESS");
-    // Only the operator token sees or rejects Candide requests; a user session is not enough.
+    // Only an operator session sees or rejects Candide requests; a user session is not enough.
     assert.equal((await call("/api/admin/recoveries/candide", undefined, "GET")).status, 401);
     const list = await call("/api/admin/recoveries/candide", undefined, "GET", OPERATOR);
     assert.equal(list.status, 200, JSON.stringify(list.data));
