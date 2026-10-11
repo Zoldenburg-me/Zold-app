@@ -6,9 +6,9 @@
  * stranger can reach. Applied by server.ts before any route is mounted.
  */
 import type express from "express";
-import { CHECKOUT_SERVICE, IS_PRODUCTION, SECURITY } from "../config.js";
+import { CHECKOUT_SERVICE, IS_PRODUCTION, OPERATOR, SECURITY } from "../config.js";
 import { checkoutCredentialFor } from "../checkout-service.js";
-import { isOperator } from "./guards.js";
+import { operatorBucketId } from "./guards.js";
 import { bearerToken } from "./sessions.js";
 
 /**
@@ -17,7 +17,10 @@ import { bearerToken } from "./sessions.js";
  */
 export const originPolicy: express.RequestHandler = (req, res, next) => {
   const origin = req.header("origin");
-  if (origin && SECURITY.origins.includes(origin)) {
+  // The admin origin is allowed for the admin API only; to the rest of the
+  // API it is as foreign as any other site.
+  const adminCall = origin === OPERATOR.adminOrigin && /^\/api\/admin(\/|$)/i.test(req.path);
+  if (origin && (SECURITY.origins.includes(origin) || adminCall)) {
     res.setHeader("access-control-allow-origin", origin);
     res.setHeader("access-control-allow-headers", "content-type, authorization");
     res.setHeader("access-control-allow-methods", "GET, POST, DELETE");
@@ -26,6 +29,33 @@ export const originPolicy: express.RequestHandler = (req, res, next) => {
     return res.status(403).json({ error: "origin not allowed" });
   }
   next();
+};
+
+/** What the admin host serves: the dashboard page and its views, its scripts
+ *  and styles, the fonts and icons it loads, and the admin API. */
+const ADMIN_HOST_PATHS =
+  /^\/(admin\/?|admin\/[a-z]+(\.js)?|admin\.css|tokens\.css|favicon\.(svg|ico)|vendor\/fonts\/[\w.-]+|icons\/[\w.-]+|api\/admin(\/.*)?)$/i;
+
+const hostname = (host: string | undefined) => (host ?? "").toLowerCase().replace(/:\d+$/, "").replace(/\.$/, "");
+
+/**
+ * With ADMIN_ORIGIN set, its host serves the dashboard and nothing else. A
+ * page of the user app served there would put any script injected into it on
+ * the origin that holds the operator's session and may ask for the
+ * operator's passkey.
+ */
+export const adminHostPolicy: express.RequestHandler = (req, res, next) => {
+  if (!OPERATOR.adminOriginExplicit || hostname(req.get("host")) !== new URL(OPERATOR.adminOrigin).hostname) return next();
+  // The static handler decodes and resolves a path after this check, so a
+  // path that could change under decoding (an escape, a dot segment, a
+  // backslash, an empty segment) is refused, not matched.
+  if (!/[%\\]|\.\.|\/\//.test(req.path) && ADMIN_HOST_PATHS.test(req.path)) {
+    // The dashboard has no inline script, so its host allows none: an
+    // injected <script> cannot run where the operator's session lives.
+    res.setHeader("content-security-policy", ADMIN_CONTENT_SECURITY_POLICY);
+    return next();
+  }
+  res.status(404).type("text/plain").send("not found");
 };
 
 /**
@@ -58,6 +88,10 @@ export const CONTENT_SECURITY_POLICY = [
   "form-action 'self'",
   "frame-ancestors 'none'",
 ].join("; ");
+
+/** The admin host's policy: the site's, with inline scripts refused. The
+ *  dashboard loads every script from a file. */
+export const ADMIN_CONTENT_SECURITY_POLICY = CONTENT_SECURITY_POLICY.replace("script-src 'self' 'unsafe-inline'", "script-src 'self'");
 
 /**
  * /guardian and /recovery: the app's policy without inline script. They drive
@@ -235,7 +269,11 @@ function partnerBucket(req: express.Request): "p" | "d" | undefined {
 /** The one per-IP bucket every /api call counts against, and its limit. */
 function primaryBucket(req: express.Request, path: string): [string, number] {
   if (path.startsWith("/shopify/")) return ["s", SECURITY.shopifyRateLimitPerMin];
-  if (path.startsWith("/admin") && isOperator(req)) return ["o", SECURITY.operatorRateLimitPerMin];
+  if (path.startsWith("/admin")) {
+    // Keyed per operator: the shared token and each operator count apart.
+    const operator = operatorBucketId(req);
+    if (operator) return [`o:${operator}`, SECURITY.operatorRateLimitPerMin];
+  }
   // A valid checkout-service credential polls at its own rate; a wrong one is
   // a guess and stays on the auth bucket.
   if (path.startsWith("/service/")) {

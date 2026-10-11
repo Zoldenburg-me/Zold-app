@@ -112,7 +112,7 @@ These are **wallet private keys and secrets we create**. This is the part Baer f
 | `DEPLOY_RAMP_KEY` | Credits deposits | **Hot** |
 | `STELLAR_TREASURY_SECRET` | Holds the payout float | **Hot — holds funds** |
 | `MONERIUM_TOKEN_ENCRYPTION_KEY` | Encrypts user OAuth tokens at rest | ≥32 chars, app refuses to start without it |
-| `KYC_OPERATOR_TOKEN` | Approves KYC decisions | Required in production |
+| `KYC_OPERATOR_TOKEN` | Opens the admin dashboard read-only; changes need an operator passkey | Required in production |
 
 **Where this stands re: Baer's Safe question**
 

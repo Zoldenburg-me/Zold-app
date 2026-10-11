@@ -29,6 +29,8 @@ import type {
 } from "../domain/types.js";
 import type {
   ConversionSweep,
+  Operator,
+  OperatorSession,
   CryptoDeposit,
   MoneriumIssueRecord,
   PaymentRequest,
@@ -48,6 +50,9 @@ export interface Db {
   quotes: Quote[];
   transfers: Transfer[];
   sessions: Session[];
+  /** Admin dashboard operators and their sessions (operators/). */
+  operators: Operator[];
+  operatorSessions: OperatorSession[];
   /** Hashed bearer credentials of our own services (checkout-service.ts). */
   serviceCredentials: ServiceCredential[];
   /** Public shareable receipts, keyed by an unguessable slug. */
@@ -113,13 +118,15 @@ export interface Db {
 export const DB_PATH = process.env.TRANSF_DB_PATH
   ? path.resolve(process.env.TRANSF_DB_PATH)
   : path.join(ROOT, "data", "db.json");
-const DATA_DIR = path.dirname(DB_PATH);
+export const DATA_DIR = path.dirname(DB_PATH);
 
 export let db: Db = {
   users: [],
   quotes: [],
   transfers: [],
   sessions: [],
+  operators: [],
+  operatorSessions: [],
   serviceCredentials: [],
   receiptShares: [],
   documents: [],
@@ -151,6 +158,8 @@ export function initStore() {
   if (existsSync(DB_PATH)) {
     db = JSON.parse(readFileSync(DB_PATH, "utf8"));
     db.sessions ??= [];
+    db.operators ??= [];
+    db.operatorSessions ??= [];
     db.serviceCredentials ??= [];
     db.receiptShares ??= [];
     db.documents ??= [];

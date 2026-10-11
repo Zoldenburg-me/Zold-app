@@ -26,7 +26,7 @@ import express from "express";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { PUBLIC_URL } from "../config.js";
+import { OPERATOR, PUBLIC_URL } from "../config.js";
 import { guardianPageCsp } from "../http/policy.js";
 import { TURNKEY } from "../config/turnkey.js";
 import { displayCode, isRequestCode, normaliseCode } from "../payment-requests.js";
@@ -137,10 +137,16 @@ export function createPageRouter() {
   router.get("/favicon.ico", (_req, res) => res.redirect(301, "/icons/icon-192.png"));
   router.get(["/app", "/app/"], (_req, res) => res.sendFile(path.join(pub, "index.html")));
   /** The operator dashboard; each section has its own path (the page reads
-   *  it), and its scripts are under /admin/*.js. */
+   *  it), and its scripts are under /admin/*.js. With ADMIN_ORIGIN set it is
+   *  served there only: an operator passkey works on that origin alone. */
   router.get(
-    ["/admin", "/admin/", "/admin/:view(overview|users|monerium|transactions|recoveries|errors)"],
-    (_req, res) => res.sendFile(path.join(pub, "admin.html")),
+    ["/admin", "/admin/", "/admin/:view(overview|users|monerium|transactions|recoveries|errors|operator)"],
+    (req, res) => {
+      if (OPERATOR.adminOriginExplicit && req.get("host") !== new URL(OPERATOR.adminOrigin).host) {
+        return res.redirect(302, `${OPERATOR.adminOrigin}${req.path}`);
+      }
+      res.sendFile(path.join(pub, "admin.html"));
+    },
   );
   /** The org dashboard — business and premium personal accounts. */
   router.get(["/business", "/business/"], (_req, res) =>

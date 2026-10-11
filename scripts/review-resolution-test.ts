@@ -24,6 +24,10 @@ process.env.KYC_OPERATOR_TOKEN = OPERATOR;
 
 const { initStore, store } = await import("../services/api/src/store.js");
 const { createAdminRouter } = await import("../services/api/src/routes/admin.js");
+const { createOperatorGate } = await import("../services/api/src/operators/gate.js");
+const { createOperatorAuthRouter } = await import("../services/api/src/routes/operator-auth.js");
+const { OPERATOR: OPERATOR_CONFIG, SECURITY } = await import("../services/api/src/config.js");
+const { operatorKit } = await import("./_operator.js");
 const { createTransferRouter } = await import("../services/api/src/routes/transfers.js");
 const { strandedAction, compensateTransfer, DEBIT_STEP } = await import("../services/api/src/orchestrator.js");
 const { projectStatementLines } = await import("../services/api/src/bookkeeping/statement.js");
@@ -85,13 +89,19 @@ store.updateTransfer("t_bridge_done", {
 
 const app = express();
 app.use(express.json());
+app.use("/api/admin", createOperatorGate());
+app.use("/api", createOperatorAuthRouter());
 app.use("/api", createAdminRouter());
 // The session is not under test here: every request is the owner.
 app.use("/api", createTransferRouter({ requireUserSession: () => true }));
 const server = app.listen(0, "127.0.0.1");
 await new Promise<void>((r) => server.once("listening", () => r()));
 const API = `http://127.0.0.1:${(server.address() as any).port}`;
+const kit = await operatorKit({ base: API, origin: OPERATOR_CONFIG.adminOrigin, rpId: SECURITY.rpId, dataDir: path.dirname(process.env.TRANSF_DB_PATH!) });
 const post = async (id: string, body: unknown, token: string | null = OPERATOR) => {
+  // The operator's change goes through a passkey session and a fresh approval;
+  // any other bearer is sent as given.
+  if (token === OPERATOR) return kit.call("POST", `/api/admin/transfers/${id}/resolve-review`, body);
   const res = await fetch(`${API}/api/admin/transfers/${id}/resolve-review`, {
     method: "POST",
     headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
@@ -160,7 +170,7 @@ try {
     assert.equal(t.state, "REFUNDED");
     assert.equal(t.reviewResolution.state, "REFUNDED");
     assert.equal(t.reviewResolution.note, NOTE);
-    assert.match(t.reviewResolution.by, /^operator:[0-9a-f]{12}$/);
+    assert.equal(t.reviewResolution.by, `operator:${kit.operator.id}`);
     assert.ok(!t.reviewResolution.by.includes(OPERATOR), "the token itself is never recorded");
     assert.equal(t.reviewResolution.previousError, "redeem order outcome unknown: socket hang up");
     assert.ok(Date.parse(t.reviewResolution.at));
