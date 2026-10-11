@@ -50,6 +50,17 @@ export type AuditKind =
   /** An operator took a transfer out of MANUAL_REVIEW: the state chosen, the
    *  note, and which operator (a hash of the token). */
   | "operator.transfer_review_resolved"
+  /** An admin request, by operator id and name: every change, and each read
+   *  of a path once per operator in ten minutes (operators/gate.ts). */
+  | "operator.request"
+  /** An operator enrolled from a host-started link, or added a passkey. */
+  | "operator.enrolled"
+  | "operator.passkey_added"
+  /** An admin change refused for its approval (missing, wrong, replayed),
+   *  and whether the session was ended for it. Never the header or body. */
+  | "operator.step_up_refused"
+  /** An operator signed in with a passkey, and which one (its label). */
+  | "operator.signed_in"
   /** An operator issued a new service credential; the previous one keeps
    *  working until `previousValidUntil`. Ids only, never a token. */
   | "service.credential_rotated"
