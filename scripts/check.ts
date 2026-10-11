@@ -23,6 +23,7 @@ const scripts = [
   "authorize:test",
   "country:policy:test",
   "recovery:test",
+  "recovery:remove:test",
   "recovery:candide:test",
   "turnkey:test",
   "turnkey-page:test",
@@ -58,6 +59,7 @@ const scripts = [
   "forwarder:test",
   "email:test",
   "recovery-alerts:test",
+  "enrolment:test",
   "best:test",
   "webhook:test",
   "checkout-service:test",
@@ -107,7 +109,7 @@ const scripts = [
   "exact-output:test",
   "gmi:test",
 ];
-const liveScripts = ["anchor:test", "travelrule:test", "trustline:test"];
+const liveScripts = ["anchor:test", "travelrule:test", "trustline:test", "recovery:fork:test"];
 if (process.env.CHECK_LIVE === "1") scripts.push(...liveScripts);
 
 async function freePort(): Promise<number> {

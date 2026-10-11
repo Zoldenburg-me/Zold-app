@@ -12,6 +12,11 @@
  * /business (public/business/*.js, ES modules): the real readRecovery and
  * banner, the Access view, and the real minute timer.
  *
+ * /app, Zoldenburg's 1 € bank check: Security never says Active before it
+ * is done, no transfer details before the IBAN is active, the guardian add
+ * says it is working and refuses a second click; and the skip link never
+ * changes the hash.
+ *
  * Runs the real scripts with a stub DOM and recorded API calls. What this
  * cannot show: the strip in a browser, or a real cancel (the passkey-signed
  * `cancelRecovery`, covered by recovery:test). Offline.
@@ -77,7 +82,7 @@ load("ui.js");
 // Z is frozen; a copy whose announce records what a screen reader would hear.
 const announced: string[] = [];
 ctx.Z = { ...ctx.Z, announce: (m: string) => announced.push(m) };
-for (const f of ["app/core.js", "app/recovery.js", "app/monerium.js", "app/phone.js", "app/phone-home.js"]) load(f);
+for (const f of ["app/core.js", "app/recovery.js", "app/monerium.js", "app/phone.js", "app/phone-home.js", "app/settings.js"]) load(f);
 const run = (code: string) => vm.runInContext(code, ctx);
 
 // Every API call, and the answer for each path suffix (an Error rejects;
@@ -371,6 +376,51 @@ await t("the strip's container is on the page, outside the redesigned and the ol
   const at = html.indexOf('id="ph-recbar"');
   assert.ok(at > 0);
   assert.ok(at < html.indexOf('<section id="phone"') && at < html.indexOf('<section id="dashboard"'));
+});
+
+// ------------------------------------------- Zoldenburg enrolment UI ----
+// The 1 € bank check (recovery/zoldenburg-enrolment.ts) as /app shows it.
+
+const unarmedUser = (over = "") => `({ id: "u1", kycStatus: "approved", iban: "DE00 0000", zoldenburgArmed: false,
+  passkeySafe: { status: "active", recovery: { status: "active" } }${over} })`;
+
+await t("Security never says Active for a Zoldenburg guardian whose bank account is not confirmed", () => {
+  run(`caps = { ...caps, zoldenburgEnrolment: true }`);
+  const r = run(`phRecovery(${unarmedUser()})`);
+  assert.equal(r.zoldUnarmed, true);
+  assert.equal(r.on, false);
+  assert.match(run(`phZoldUnarmedText(${unarmedUser()}, phRecovery(${unarmedUser()}))`), /Confirm your bank account to finish/);
+  const armed = run(`phRecovery(${unarmedUser(", zoldenburgArmed: true")})`);
+  assert.equal(armed.on, true);
+  assert.equal(armed.zoldUnarmed, false);
+  // No IBAN yet: the step cannot be taken, and the row says what comes first.
+  assert.equal(run(`phZoldCanFinish(${unarmedUser(", iban: null")})`), false);
+  assert.match(run(`phZoldUnarmedText(${unarmedUser(", iban: null")}, { codes: false })`), /IBAN comes first/);
+  // Bank check not open on this server: never Active, never "Finish".
+  run(`caps = { ...caps, zoldenburgEnrolment: false }`);
+  assert.equal(run(`phRecovery(${unarmedUser()})`).on, false);
+  assert.match(run(`phZoldUnarmedText(${unarmedUser()}, { codes: false })`), /Not usable on this server/);
+  // Codes protect the account: they come first in the text.
+  assert.match(run(`phZoldUnarmedText(${unarmedUser()}, { codes: true })`), /^Codes to your email or phone\./);
+});
+
+await t("the skip link moves focus to the content and never changes the hash", async () => {
+  const click = (listeners.click || [])[0] as any;
+  assert.ok(click, "ui.js listens for clicks");
+  const main: any = { attrs: {} as Record<string, string>, focused: false,
+    hasAttribute(k: string) { return k in this.attrs; }, setAttribute(k: string, v: string) { this.attrs[k] = v; }, focus() { this.focused = true; } };
+  let blurred = false, prevented = 0;
+  const skip = { getAttribute: () => "#main", blur: () => { blurred = true; } };
+  const before = ctx.document.getElementById;
+  ctx.document.getElementById = (id: string) => (id === "main" ? main : before(id));
+  try {
+    await click({ target: { closest: (sel: string) => (sel === ".z-skip" ? skip : null) }, preventDefault: () => { prevented++; } });
+  } finally { ctx.document.getElementById = before; }
+  assert.equal(prevented, 1);
+  assert.equal(ctx.location.hash, "");
+  assert.ok(main.focused);
+  assert.equal(main.attrs.tabindex, "-1");
+  assert.ok(blurred, "it does not stay over the page");
 });
 
 // ------------------------------------------------------------ /business ----

@@ -81,13 +81,18 @@ function renderGuardianSection(el) {
   const safe = user.passkeySafe || {};
   const zold = safe.recovery?.status === "active";
   const social = (safe.socialGuardians || []).some((g) => g.status === "active");
+  // Zoldenburg on the Safe but its 1 € bank check not done: no operator may
+  // sign for it yet (the bank step is on /guardian).
+  const unarmed = zold && !user.zoldenburgArmed;
   const who = zold ? "Zoldenburg" : social ? "Your Google or Apple login" : "";
+  const text = unarmed
+    ? "Zoldenburg is added. One step left: confirm your bank account by moving 1 € to yourself."
+    : who ? `${who} can move your account to a new phone if you lose this one.`
+    : "Lose your phone, keep your account: choose Zoldenburg or your own Google or Apple login to help you move Zold to a new phone.";
   el.innerHTML = `
     <div class="m-seclabel">Your guardian</div>
-    <div class="m-lede" style="font-size:13px">${who
-      ? `${esc(who)} can move your account to a new phone if you lose this one.`
-      : "Lose your phone, keep your account: choose Zoldenburg or your own Google or Apple login to help you move Zold to a new phone."}</div>
-    <a class="m-cta" href="/guardian" style="margin-top:12px;display:inline-flex">${who ? "Manage your guardian" : "Choose your guardian"}</a>`;
+    <div class="m-lede" style="font-size:13px">${esc(text)}</div>
+    <a class="m-cta" href="/guardian" style="margin-top:12px;display:inline-flex">${unarmed ? "Finish on the guardian page" : who ? "Manage your guardian" : "Choose your guardian"}</a>`;
 }
 
 async function renderCandideSection(el) {

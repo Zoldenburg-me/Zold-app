@@ -418,6 +418,72 @@ await check("return: blocked storage, or an answer without a guardian, ends in a
   assert.equal((await page.finishAdd(undefined, empty.env)).step, "error", "Finish on a row that has gone");
 });
 
+// ---- the 1 € bank step and the Zoldenburg op on /guardian -------------------
+const enrol = await import(pathToFileURL(path.join(PUB, "guardian/enrolment.js")).href);
+
+await check("bank step: no transfer details before the IBAN is active; then they read as the person's own money", () => {
+  const e = { available: true, armed: false, minimumEur: 1 };
+  const noIban = enrol.enrolmentHtml(e, { ibanReady: false });
+  assert.doesNotMatch(noIban, /Show my transfer details|data-enrol="new"/);
+  assert.match(noIban, /Your Zold IBAN comes first/);
+  const ready = enrol.enrolmentHtml(e, { ibanReady: true });
+  assert.match(ready, /Show my transfer details/);
+  assert.match(ready, /nothing is charged/i, "reads as the user's own money, not a fee");
+  assert.match(enrol.enrolmentHtml({ available: false }), /isn’t open yet/);
+  assert.equal(enrol.enrolmentHtml(undefined), "");
+});
+
+await check("bank step: the code's details show only for the code this page issued, escaped", () => {
+  const e = { available: true, armed: false, minimumEur: 1, codeIssuedAt: "2026-10-11T10:00:00Z", codeExpiresAt: "2026-10-18T10:00:00Z" };
+  const issued = { codeIssuedAt: e.codeIssuedAt, memo: "ZOLD <b>X</b>", payTo: { iban: "DE00 TEST", name: "Ada" } };
+  const mine = enrol.enrolmentHtml(e, { ibanReady: true, issued });
+  assert.match(mine, /ZOLD &lt;b&gt;X&lt;\/b&gt;/);
+  assert.match(mine, /I sent it — check now/);
+  const stale = enrol.enrolmentHtml(e, { ibanReady: true, issued: { ...issued, codeIssuedAt: "2026-10-01T00:00:00Z" } });
+  assert.doesNotMatch(stale, /ZOLD/, "a code replaced since, on another device, is not shown");
+  assert.match(stale, /valid until/);
+  const armed = enrol.enrolmentHtml({ available: true, armed: true, minimumEur: 1, bankAccountLast4: "1234" });
+  assert.match(armed, /ending 1234 is confirmed/);
+});
+
+await check("bank step: a new code needs a passkey step-up for exactly that action", async () => {
+  const calls: any[] = [];
+  const r = await enrol.issueEnrolmentCode({
+    userId: "u 1",
+    stepUp: async (action: string) => ({ approved: action }),
+    api: async (p: string, b: any) => { calls.push([p, b]); return { memo: "M" }; },
+  });
+  assert.equal(r.memo, "M");
+  assert.deepEqual(calls, [["/api/users/u%201/recovery/zoldenburg/enrolment", { stepUp: { approved: "recovery.enrolment" } }]]);
+});
+
+const fakeButton = (text: string) => ({ textContent: text, attrs: {} as Record<string, string>,
+  getAttribute(k: string) { return this.attrs[k] ?? null; }, setAttribute(k: string, v: string) { this.attrs[k] = v; }, removeAttribute(k: string) { delete this.attrs[k]; } });
+
+await check("adding Zoldenburg: after the passkey the button says it is working and is read out; a second click does nothing", async () => {
+  const btn = fakeButton("Choose Zoldenburg");
+  const announced: string[] = [];
+  let during: any = null, submits = 0;
+  const api = async (p: string) => {
+    if (p.endsWith("/ops/x")) {
+      submits++;
+      during = { text: btn.textContent, busy: btn.getAttribute("aria-disabled") };
+      await second();
+      return {};
+    }
+    return { challenge: "c", credentialId: "k", submitTo: "/api/users/u1/recovery/zoldenburg/ops/x" };
+  };
+  const click = page.oneAtATime(btn, () => page.zoldenburgOp(true, btn, { api, userId: "u1", passkeyGet: async () => ({}), announce: (m: string) => announced.push(m) }));
+  const second = click;
+  await click();
+  assert.equal(submits, 1, "the click during the operation did nothing");
+  assert.match(during.text, /^Adding Zoldenburg to your wallet…/);
+  assert.equal(during.busy, "true", "aria-disabled, so it keeps focus");
+  assert.ok(announced.some((m) => /^Adding Zoldenburg to your wallet/.test(m)), "read out, not only drawn");
+  assert.equal(btn.textContent, "Choose Zoldenburg");
+  assert.equal(btn.getAttribute("aria-disabled"), null);
+});
+
 const approveEnv = (over: Record<string, any> = {}) => {
   const storage = memoryStorage();
   storage.setItem(oauth.OAUTH_STATE_KEY, stored());
