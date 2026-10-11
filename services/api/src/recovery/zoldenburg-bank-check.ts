@@ -96,7 +96,9 @@ export function issueRecoveryBankCode(r: RecoveryRequest, now = new Date()): { c
   return { code, memo: memoFor(code) };
 }
 
-export type BankCheckOutcome = "passed" | "waiting" | "mismatch" | "unreadable" | "no_code";
+/** `running`: another check of this request is reading Monerium now.
+ *  `no_code`: nothing to check (no open code, not in review, or expired). */
+export type BankCheckOutcome = "passed" | "waiting" | "mismatch" | "unreadable" | "no_code" | "running";
 
 const inFlight = new Set<string>();
 
@@ -112,13 +114,18 @@ export async function checkRecoveryBankPayment(
   if (!r || !user || !code || r.mode !== "zoldenburg" || r.status !== CHECKED_STATUS || now.getTime() >= Date.parse(r.expiresAt)) {
     return "no_code";
   }
-  if (inFlight.has(requestId)) return "waiting";
+  if (inFlight.has(requestId)) return "running";
   inFlight.add(requestId);
-  // Written only while this code still owns the request: a newer code, or a
-  // request that moved on while the reads ran, is left as it is.
+  // Written only while one of this request's codes still owns it: a request
+  // that moved on, or got a new code, while the reads ran keeps its newer
+  // state. A payment with an earlier code still counts.
+  const hashes = () => {
+    const b = store.findRecoveryRequest(requestId)!.zoldenburg?.bankCheck;
+    return new Set([b?.code?.hash, ...(b?.earlierCodes ?? []).map((c) => c.hash)].filter(Boolean));
+  };
   const stillOpen = () => {
     const fresh = store.findRecoveryRequest(requestId)!;
-    return fresh.status === CHECKED_STATUS && fresh.zoldenburg?.bankCheck?.code?.hash === code.hash ? fresh : undefined;
+    return fresh.status === CHECKED_STATUS && hashes().has(code.hash) ? fresh : undefined;
   };
   const record = (outcome: "waiting" | "mismatch" | "unreadable", reason: string) => {
     const fresh = stillOpen();
@@ -128,11 +135,13 @@ export async function checkRecoveryBankPayment(
     });
     return outcome;
   };
-  // The throttle's clock, set before Monerium is asked.
-  store.updateRecoveryRequest(requestId, { zoldenburg: { ...r.zoldenburg, bankCheck: { ...r.zoldenburg!.bankCheck, lastReadAt: now.toISOString() } } });
   try {
+    // The throttle's clock, set before Monerium is asked.
+    store.updateRecoveryRequest(requestId, { zoldenburg: { ...r.zoldenburg, bankCheck: { ...r.zoldenburg!.bankCheck, lastReadAt: now.toISOString() } } });
     if (!zoldenburgArmed(user)) {
-      return record("mismatch", "This account never confirmed a bank account for Zoldenburg recovery, so Zoldenburg cannot recover it.");
+      // Also what a server without the HMAC key or the guardian sees: the
+      // reason names no cause, and the next check looks again.
+      return record("unreadable", "Zoldenburg cannot check this payment right now. Contact support@zoldhq.com.");
     }
     let orders: MoneriumOrderLike[];
     try {
@@ -156,21 +165,35 @@ export async function checkRecoveryBankPayment(
     if (!name) return record("unreadable", "Your payment arrived, but we could not read the verified name at Monerium. We will try again.");
     let reason = "";
     for (const o of found) {
-      const verdict = judgeRecoveryOrder(o, user, name);
+      // The account as it is now: an enrolment removed or replaced during
+      // the reads is not the one this payment can pass against.
+      const live = store.findUser(user.id);
+      if (!live || !zoldenburgArmed(live)) return record("unreadable", "Zoldenburg cannot check this payment right now. Contact support@zoldhq.com.");
+      const verdict = judgeRecoveryOrder(o, live, name);
       if (!verdict.ok) {
         reason = verdict.reason;
         continue;
       }
       const fresh = stillOpen();
       if (!fresh) return "no_code";
-      // The code is spent: the pass replaces it.
+      // The codes are spent: the pass replaces them.
       const { codesIssued, lastReadAt } = fresh.zoldenburg!.bankCheck!;
-      const passed: BankCheck = { codesIssued, lastReadAt, passedAt: now.toISOString(), orderId: o.id, enrolledAt: user.zoldenburgEnrolment!.enrolledAt };
+      const passed: BankCheck = { codesIssued, lastReadAt, passedAt: now.toISOString(), orderId: o.id, enrolledAt: live.zoldenburgEnrolment!.enrolledAt };
       store.updateRecoveryRequest(requestId, { zoldenburg: { ...fresh.zoldenburg, bankCheck: passed } });
       console.log(`RECOVERY: ${requestId} passed the 1 € check from the enrolled account (order ${o.id})`);
       return "passed";
     }
     return record("mismatch", reason);
+  } catch (err) {
+    // Anything else (a malformed order, a store write) is recorded, so the
+    // person and the operator see the check failing rather than an older
+    // answer. The cause stays in the log.
+    console.error(`recovery ${requestId}: 1 € check failed: ${describeCause(err)}`);
+    try {
+      return record("unreadable", "Something went wrong checking your payment. We will try again; if this stays, contact support.");
+    } catch {
+      return "unreadable";
+    }
   } finally {
     inFlight.delete(requestId);
   }

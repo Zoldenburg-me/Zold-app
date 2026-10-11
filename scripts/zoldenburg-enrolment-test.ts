@@ -308,6 +308,9 @@ await t("the Monerium reads: both list shapes, the profile id fallback, and an u
   assert.deepEqual(asked, ["pf", "pf", "pf"]);
   assert.equal(await E.moneriumReadsWith(client([]), profile).profileName(u), "name of pf");
   assert.equal(await E.moneriumReadsWith(client([]), profile).profileName({ ...u, funding: undefined }), undefined);
+  // No profile id: Monerium would answer with its default profile's orders.
+  await assert.rejects(E.moneriumReadsWith(client([{ id: "c" }]), profile).orders({ ...u, funding: undefined }), /no Monerium profile id/);
+  assert.equal(asked.length, 3, "and it never asks");
 });
 
 await t("the owner's view names the account by its last 4 only; the public user carries none of it", () => {
