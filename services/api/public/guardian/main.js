@@ -101,17 +101,21 @@ export async function runPasskeyOp(prepPath, body, { api, passkeyGet }) {
 }
 
 /**
- * A button's click that runs one at a time. aria-disabled, not disabled: a
- * disabled button drops focus to the page, and its progress is never read out.
+ * A button's click that runs one at a time, and only while no other action
+ * sharing `lock` runs: each one redraws the page, so a second would draw over
+ * the first. aria-disabled, not disabled: a disabled button drops focus to the
+ * page, and its progress is never read out.
  */
-export function oneAtATime(b, fn) {
+export function oneAtATime(b, fn, lock = { busy: false }) {
   return async () => {
-    if (b.getAttribute("aria-disabled") === "true") return;
+    if (lock.busy || b.getAttribute("aria-disabled") === "true") return;
+    lock.busy = true;
     b.setAttribute("aria-disabled", "true");
     b.setAttribute("aria-busy", "true");
     try {
       await fn();
     } finally {
+      lock.busy = false;
       b.removeAttribute("aria-disabled");
       b.removeAttribute("aria-busy");
     }
@@ -219,7 +223,7 @@ function render(el, { caps, zold, guardians, message, issued = null, ibanReady =
       <h2 class="g-sub" id="g-zold-head" tabindex="-1">Zoldenburg</h2>
       <p>Our team checks it’s you against the ID you gave Monerium, then moves your account to your new phone.</p>
       ${zoldOn
-        ? `${zold.enrolment?.armed ? `<p class="g-ok">Your guardian</p>` : ""}
+        ? `${zold.enrolment?.armed ? `<p class="g-ok">Your guardian</p>` : `<p>Added to your wallet.</p>`}
           ${enrolmentHtml(zold.enrolment, { issued, ibanReady })}
           <div class="g-actions"><button type="button" class="z-btn" data-zold="remove">Remove</button></div>`
         : social.length
@@ -294,6 +298,8 @@ async function boot() {
 
   // The last enrolment code issued in this page: shown until it is used or replaced.
   let issued = null;
+  // One action at a time on the whole page, across redraws.
+  const pageLock = { busy: false };
   const ibanReady = me.kycStatus === "approved" && Boolean(me.iban);
   const stepUp = stepUpWith(api, me);
   const live = document.getElementById("g-status");
@@ -318,7 +324,7 @@ async function boot() {
       await draw().catch(showError);
       if (message?.text) announce(message.text);
       if (head) document.getElementById(head)?.focus({ preventScroll: false });
-    });
+    }, pageLock);
     el.querySelectorAll("[data-start]").forEach((b) => {
       b.addEventListener("click", busyThen(b, async () => {
         try {
