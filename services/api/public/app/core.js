@@ -141,8 +141,9 @@ async function api(path, body, method, extraHeaders) {
     throw err;
   }
   const data = await res.json().catch(() => ({}));
-  // 503 is what the service worker returns when it could not reach us at all.
-  setReachable(res.status !== 503);
+  // Only the service worker's own 503 means it could not reach us at all; the
+  // API answers 503 too (a partner down, a closed rail) and that is not offline.
+  setReachable(res.headers.get("x-zold-offline") !== "1");
   // statusText is EMPTY over HTTP/2, so a non-JSON error (a proxy's HTML 502,
   // a dropped tunnel) would otherwise surface as a blank "Error".
   if (!res.ok) {
