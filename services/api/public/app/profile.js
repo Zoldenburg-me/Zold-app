@@ -30,7 +30,7 @@ async function renderDocumentsScreen() {
       </select></div>
     <button class="m-cta" id="m-doc-statement" style="margin-top:12px">Create statement</button>
     ${letters ? `<button class="m-cta quiet" id="m-doc-balance" style="margin-top:8px">Balance confirmation (now)</button>
-    <button class="m-cta quiet" id="m-doc-ownership" style="margin-top:8px">Proof of ownership (approve with Face ID or fingerprint)</button>`
+    <button class="m-cta quiet" id="m-doc-ownership" style="margin-top:8px">Proof of ownership (approve with your ${Z.passkeyName()})</button>`
     : `<div class="m-lede" style="font-size:13px;margin-top:12px">Balance confirmations and proofs of ownership are issued once Monerium has verified you and your IBAN is active.</div>`}
     <div class="m-err hidden" role="alert" id="m-doc-err" style="margin-top:12px"></div>
     <div class="m-seclabel" style="margin-top:24px">Issued</div>

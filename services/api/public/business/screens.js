@@ -80,7 +80,7 @@ META.payments = () => ({
   title: reviewOn() ? "Approvals" : "Payments",
   sub: reviewOn()
     ? "Whoever drafts a payment can’t approve it. Bank details are checked again before sending."
-    : "Draft a payment, then send it with Face ID or fingerprint.",
+    : `Draft a payment, then send it with your ${Z.passkeyName()}.`,
   actions: roleCan(org.role, "propose") ? linkBtn("New payment", "send", "arrow_outward", "primary") : "",
 });
 

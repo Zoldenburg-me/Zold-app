@@ -17,6 +17,7 @@ import { IndexedDbStamper } from "../vendor/turnkey.js";
 import { OAUTH_STATE_KEY, readReturn, startLogin } from "./oauth.js";
 import { providerButtons } from "./providers.js";
 import { afterCheck, checkEnrolment, enrolmentHtml, issueEnrolmentCode } from "./enrolment.js";
+import { byDevice } from "./device-words.js";
 
 
 /**
@@ -69,7 +70,7 @@ export async function finishAdd(guardian, { api, userId, passkeyGet, beforePassk
     beforePasskey(guardian);
     assertion = await passkeyGet(prep);
   } catch {
-    return { step: "created", guardian, reason: "Face ID or fingerprint was cancelled. Tap Finish to try again." };
+    return { step: "created", guardian, reason: byDevice("Face ID or fingerprint was cancelled. Tap Finish to try again.", "The passkey prompt was cancelled. Click Finish to try again.") };
   }
   try {
     const done = await api(prep.submitTo, assertion);
@@ -92,7 +93,7 @@ export async function runPasskeyOp(prepPath, body, { api, passkeyGet }) {
     try {
       assertion = await passkeyGet(prep);
     } catch {
-      return { ok: false, reason: "Face ID or fingerprint was cancelled. Nothing changed." };
+      return { ok: false, reason: byDevice("Face ID or fingerprint was cancelled. Nothing changed.", "The passkey prompt was cancelled. Nothing changed.") };
     }
     return { ok: true, result: await api(prep.submitTo, assertion) };
   } catch (e) {
@@ -156,7 +157,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 /** A step-up for one action (routes/auth.ts): a challenge bound to it, approved with the account's passkey. */
 function stepUpWith(api, me) {
   return async (action) => {
-    if (!me.passkey?.credentialId) throw new Error("Add Face ID or fingerprint sign-in in Zold first, then come back.");
+    if (!me.passkey?.credentialId) throw new Error(byDevice("Add Face ID or fingerprint sign-in in Zold first, then come back.", "Add passkey sign-in in Zold first, then come back."));
     const { challenge } = await api("/api/webauthn/challenge", { purpose: "step_up", action });
     const cred = await navigator.credentials.get({
       publicKey: {
@@ -284,7 +285,7 @@ async function boot() {
       const p = document.createElement("p");
       p.className = "g-ok";
       p.setAttribute("role", "status");
-      p.textContent = `Confirm with Face ID or fingerprint to add ${g.address} as your recovery helper.`;
+      p.textContent = `Confirm with your ${byDevice("Face ID or fingerprint", "passkey")} to add ${g.address} as your recovery helper.`;
       el.prepend(p);
     },
   };

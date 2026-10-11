@@ -141,8 +141,9 @@ async function api(path, body, method, extraHeaders) {
     throw err;
   }
   const data = await res.json().catch(() => ({}));
-  // 503 is what the service worker returns when it could not reach us at all.
-  setReachable(res.status !== 503);
+  // Only the service worker's own 503 means it could not reach us at all; the
+  // API answers 503 too (a partner down, a closed rail) and that is not offline.
+  setReachable(res.headers.get("x-zold-offline") !== "1");
   // statusText is EMPTY over HTTP/2, so a non-JSON error (a proxy's HTML 502,
   // a dropped tunnel) would otherwise surface as a blank "Error".
   if (!res.ok) {
@@ -177,7 +178,7 @@ const credId = () => user?.passkey?.credentialId || null;
 const PASSKEY_TIMEOUT_MS = 120000;
 const PASSKEY_DEADLINE_MS = PASSKEY_TIMEOUT_MS + 10000;
 /* The waiting overlay comes up only if the prompt is still open after this:
-   a quick Face ID never flashes it. */
+   a quick Face ID or Touch ID never flashes it. */
 const PASSKEY_OVERLAY_AFTER_MS = 400;
 const PASSKEY_HINT_AFTER_MS = 8000;
 let passkeyOpen = null; // { ctl, stop }
@@ -186,13 +187,12 @@ const passkeyCancel = () => { const o = passkeyOpen; passkeyOpen = null; o?.ctl.
    caller it was the person's choice. */
 const passkeyUserCancel = () => { passkeyOpen?.stop(passkeyError("PASSKEY_CANCELLED", "You cancelled the approval. Try again when you’re ready.")); };
 
-const passkeyOnPhone = () => !!window.matchMedia?.("(pointer: coarse)").matches;
 function passkeyError(code, message) {
   const e = new Error(message);
   e.code = code;
   return e;
 }
-const passkeyNoAnswer = () => passkeyError("PASSKEY_NO_ANSWER", passkeyOnPhone()
+const passkeyNoAnswer = () => passkeyError("PASSKEY_NO_ANSWER", Z.onPhone()
   ? "No answer from Face ID or fingerprint. Is a screen lock set up on this phone?"
   : "The passkey prompt got no answer, so it was closed. Try again when you’re ready.");
 
@@ -257,7 +257,7 @@ function passkeyOverlayShow(owner, endsAt) {
   try {
     // A modal <dialog> sits in the top layer, above any overlay; it shows its own status.
     if (passkeyOverlay || document.querySelector("dialog[open]")) return;
-    const phone = passkeyOnPhone();
+    const phone = Z.onPhone();
     const box = document.createElement("div");
     box.innerHTML = Z.overlay({
       id: "passkey-wait",

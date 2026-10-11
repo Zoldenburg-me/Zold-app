@@ -38,7 +38,7 @@ function phChecklist(u) {
   const approved = kycApproved(u);
   const wait = ibanWait(u);
   const items = [
-    { title: "Face ID sign-in", sub: "This phone approves payments.", done: !!u.passkey?.credentialId },
+    { title: Z.byDevice("Face ID sign-in", "Passkey sign-in"), sub: Z.byDevice("This phone approves payments.", "This device approves payments."), done: !!u.passkey?.credentialId },
     { title: "Account created", sub: safe.status === "active" ? "Your account is live." : "Finish setting up your account.",
       done: safe.status === "active", action: { id: "ph-ck-account", label: "Finish" } },
     ...(caps.emailVerification && u.email
@@ -379,7 +379,7 @@ PH["recovery-alert"] = {
       <p class="z-sub">If this wasn’t you, cancel now. Nothing moves while you decide, and your money stays in your account.</p>
       <div class="z-alert hidden" role="alert" id="ph-rec-err"></div>
     `, "z-app__main--state")
-      + phFoot(`${Z.button({ variant: "primary", full: true, icon: chain ? "passkey" : "block", label: chain ? "Cancel with Face ID" : "Cancel the request", id: "ph-rec-cancel" })}
+      + phFoot(`${Z.button({ variant: "primary", full: true, icon: chain ? "passkey" : "block", label: chain ? Z.byDevice("Cancel with Face ID", "Cancel with your passkey") : "Cancel the request", id: "ph-rec-cancel" })}
         ${Z.button({ variant: "secondary", full: true, label: "It was me", id: "ph-rec-mine" })}
         <p class="z-screen__fine z-screen__fine--flush">“It was me” only hides this on this phone. ${chain ? "The move goes ahead." : "The request stays open."}</p>`);
   },
@@ -401,7 +401,7 @@ PH["recovery-alert"] = {
         phRender({ focus: true });
         phRecDone = false;
       } catch (e) {
-        showErr("ph-rec-err", e?.name === "NotAllowedError" ? new Error("Face ID or fingerprint was cancelled. The recovery is still under way.") : e);
+        showErr("ph-rec-err", e?.name === "NotAllowedError" ? new Error(Z.byDevice("Face ID or fingerprint was cancelled. The recovery is still under way.", "The passkey prompt was cancelled. The recovery is still under way.")) : e);
       } finally { if (cancel.isConnected) Z.setLoading(cancel, false); }
     };
     const mine = root.querySelector("#ph-rec-mine");
