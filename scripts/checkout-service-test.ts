@@ -150,7 +150,7 @@ await check("no credential issued answers 503", async () => {
   const r = await get("t-ok", "anything");
   assert.equal(r.status, 503);
 });
-await check("rotation without the operator token is refused", async () => {
+await check("rotation without an operator session is refused", async () => {
   assert.equal((await rotate()).status, 401);
   assert.equal((await rotate("not-the-operator-token-xxxxxxxx")).status, 401);
 });

@@ -183,7 +183,9 @@ required, in either order:
 
 **1 € from the enrolled account.**
 - A recovery code (separate from the enrolment code, same credential rules)
-  is shown on the recovery page with the user's IBAN.
+  is shown on the recovery page. The page shows no digits of the Zold IBAN
+  or the enrolled account: anyone who knows the account's email can start a
+  request, and the real owner sent the enrolment 1 € to that IBAN.
 - Same poller; the order must carry the code, and HMAC(payer IBAN) must equal
   the enrolled hash, and the payer name must match the Monerium name.
 - If the Monerium connection cannot be read (e.g. the refresh token expired),
@@ -476,9 +478,10 @@ processing rests on explicit consent (Art. 9(2)(a)), collected each time.
 
 1. Phase 0 alerts: the banner is built; the mail transport behind its flag
    is next.
-2. Phase 1: the enrolment 1 € check and the operator's refusal to sign for an
-   unenrolled account are built (`recovery/zoldenburg-enrolment.ts`). Next:
-   the recovery-time Didit + 1 € checks, gating the sign button on both.
+2. Phase 1: the enrolment 1 € check, the recovery-time 1 € from the enrolled
+   account, and the operator's refusal to sign until both passed are built
+   (`recovery/zoldenburg-enrolment.ts`, `recovery/zoldenburg-bank-check.ts`).
+   Next: the Didit check, added to the same gate (`refusalFor`).
 3. Phase 2 Turnkey integration + own social guardian.
 4. Phase 3 friend invites (screen, mail, reminders) + the n-of-m rule and UI.
 5. Phase 4 removal of the Candide hosted guardian (can run in parallel with 2).

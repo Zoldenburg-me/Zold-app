@@ -1,7 +1,7 @@
 /**
  * The operator dashboard's read routes.
  *
- * - every route answers only to the operator token, never a user session;
+ * - every route answers only to an operator session, never a user session;
  * - no Monerium token, secret or ciphertext reaches the JSON;
  * - the live Monerium read uses the account's OWN connection, refuses an
  *   account without a stored token or keys (the app client would answer with
