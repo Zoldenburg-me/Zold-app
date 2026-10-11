@@ -918,6 +918,14 @@ export interface RecoveryRequest {
      */
     bankCheck?: {
       code?: { hash: string; issuedAt: string };
+      /** Codes this request was given before `code`. A transfer already sent
+       *  with one still counts: a new code is for a lost one, not a reset. */
+      earlierCodes?: { hash: string; issuedAt: string }[];
+      /** How many codes this request was given, and when Monerium was last
+       *  read for it. Both survive a new code, so issuing codes cannot reset
+       *  the read throttle or run without limit. */
+      codesIssued?: number;
+      lastReadAt?: string;
       passedAt?: string;
       orderId?: string;
       enrolledAt?: string;

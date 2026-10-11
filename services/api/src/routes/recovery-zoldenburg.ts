@@ -69,6 +69,7 @@ import { ENROLMENT, enrolmentAvailable, enrolmentView, zoldenburgArmed } from ".
 import {
   bankCheckPassed,
   bankCheckView,
+  canIssueRecoveryBankCode,
   checkRecoveryBankPayment,
   issueRecoveryBankCode,
 } from "../recovery/zoldenburg-bank-check.js";
@@ -635,22 +636,26 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       const user = store.findUser(request.userId);
       if (!enrolmentAvailable()) return res.status(503).json({ error: "This check cannot run on this server yet. Contact support.", code: "ENROLMENT_UNAVAILABLE" });
       if (!user || !zoldenburgArmed(user)) {
-        return res.status(409).json({ error: "This account never confirmed a bank account for Zoldenburg recovery, so Zoldenburg cannot recover it. Contact support.", code: "NOT_ARMED" });
+        return res.status(409).json({ error: "This check is not available for this account. Contact support@zoldhq.com.", code: "NOT_ARMED" });
       }
       if (bankCheckPassed(request, user)) return res.status(409).json({ ...askView(request), error: "The 1 € check has already passed.", code: "ALREADY_PASSED" });
+      if (!canIssueRecoveryBankCode(request)) {
+        return res.status(429).json({ ...askView(request), error: "No more references for this recovery. Use the last one, or contact support@zoldhq.com.", code: "TOO_MANY_CODES" });
+      }
       const { code, memo } = issueRecoveryBankCode(request);
       res.status(201).json({ ...askView(store.findRecoveryRequest(request.id)!), code, memo });
     }),
   );
 
   /** Look for the second 1 € now. Monerium is asked at most every
-   *  checkEveryMs per request; a faster click gets the last answer. */
+   *  checkEveryMs per request, however many codes were issued; a faster
+   *  click gets the last answer. */
   router.post(
     "/recovery/zoldenburg/:id/bank-check",
     wrap(async (req, res) => {
       const request = requestFor(req, res);
       if (!request) return;
-      const last = request.zoldenburg?.bankCheck?.lastCheck?.at;
+      const last = request.zoldenburg?.bankCheck?.lastReadAt;
       if (!last || Date.now() - Date.parse(last) >= ENROLMENT.checkEveryMs) await checkRecoveryBankPayment(request.id);
       res.json(askView(store.findRecoveryRequest(request.id)!));
     }),

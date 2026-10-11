@@ -127,7 +127,7 @@ await t("refusals: another bank account, another name, the Zold IBAN, under 1 �
   const j = (o: any) => B.judgeRecoveryOrder(o, user(), "Anna Müller") as any;
   const other = j(order({ counterpart: { details: { name: "Anna Müller" }, identifier: { iban: OTHER_BANK } } }));
   assert.match(other.reason, /different bank account/);
-  assert.match(other.reason, /ending 3000/);
+  assert.ok(!other.reason.includes("3000"), "no digits of the enrolled account");
   assert.match(j(order({ counterpart: { details: { name: "Peter Schmidt" }, identifier: { iban: BANK } } })).reason, /does not match/);
   assert.match(j(order({ counterpart: { details: { name: "Anna Müller" }, identifier: { iban: ZOLD_IBAN.replace(/ /g, "") } } })).reason, /Zold IBAN/);
   assert.match(j(order({ amount: "0.50" })).reason, /under 1 €/);
@@ -175,7 +175,7 @@ await t("the right payment passes: time, order id, the enrolment it matched; no 
   const o = order();
   assert.equal(await B.checkRecoveryBankPayment("r1", reads([order({ amount: "0.2" }), o]), at(24)), "passed");
   const b = req().zoldenburg!.bankCheck!;
-  assert.deepEqual(b, { passedAt: at(24).toISOString(), orderId: o.id, enrolledAt: T0.toISOString() });
+  assert.deepEqual(b, { codesIssued: 1, lastReadAt: at(24).toISOString(), passedAt: at(24).toISOString(), orderId: o.id, enrolledAt: T0.toISOString() });
   for (const s of [BANK, "MUELLER", "Müller"]) assert.ok(!JSON.stringify(req()).includes(s), `no ${s}`);
   assert.ok(B.bankCheckPassed(req(), user()));
   assert.equal(await B.checkRecoveryBankPayment("r1", reads([o]), at(25)), "no_code");
@@ -222,15 +222,32 @@ await t("a newer code issued while a check ran is not overwritten by the older c
   assert.ok(req("r3").zoldenburg!.bankCheck!.code);
 });
 
-await t("the public projection carries none of it; the person's view only last 4s", () => {
+await t("the public projection carries none of it; the person's view no IBAN digits at all", () => {
   const pub = JSON.stringify(publicRecoveryRequest(req("r3")));
   assert.ok(!pub.includes("bankCheck") && !pub.includes('"hash"'), pub);
-  const v = B.bankCheckView(req("r3"), user());
-  assert.equal(v.passed, false);
-  assert.equal(v.fromLast4, "3000");
-  assert.equal(v.toLast4, "0339");
-  assert.ok(!/hash|hmac/i.test(JSON.stringify(v)));
-  assert.ok(!JSON.stringify(v).includes(ZOLD_IBAN.replace(/ /g, "").slice(0, 8)), "never the whole Zold IBAN");
+  const v = JSON.stringify(B.bankCheckView(req("r3"), user()));
+  assert.ok(!/hash|hmac|last4/i.test(v), v);
+  for (const s of ["3000", "0339"]) assert.ok(!v.includes(s), s);
+});
+
+await t("a transfer sent with an earlier code still counts after a new one is issued", async () => {
+  newRequest("r6");
+  const first = B.issueRecoveryBankCode(req("r6"), at(60));
+  B.issueRecoveryBankCode(req("r6"), at(70));
+  assert.equal(req("r6").zoldenburg!.bankCheck!.earlierCodes!.length, 1);
+  open = first;
+  assert.equal(await B.checkRecoveryBankPayment("r6", reads([order(paidAt(65))]), at(71)), "passed");
+});
+
+await t("a request gets at most maxCodes codes; the count and the read clock survive a new code", async () => {
+  newRequest("r7");
+  for (let i = 0; i < B.RECOVERY_BANK.maxCodes; i++) {
+    assert.ok(B.canIssueRecoveryBankCode(req("r7")));
+    B.issueRecoveryBankCode(req("r7"), at(80 + i));
+    if (i === 0) await B.checkRecoveryBankPayment("r7", reads([]), at(80));
+  }
+  assert.equal(B.canIssueRecoveryBankCode(req("r7")), false);
+  assert.equal(req("r7").zoldenburg!.bankCheck!.lastReadAt, at(80).toISOString(), "a new code does not reset the read clock");
 });
 
 // ---- routes ----------------------------------------------------------------
@@ -261,13 +278,13 @@ await t("routes: the request's secret is required; without it, 404", async () =>
 });
 
 let routeCode = "";
-await t("routes: a code once, carried by its memo; GET shows the check by last 4s, never the code or a hash", async () => {
+await t("routes: a code once, carried by its memo; GET shows the check, never the code, a hash or IBAN digits", async () => {
   const r = await call("/recovery/zoldenburg/r4/bank-code", {}, person);
   assert.equal(r.status, 201, r.text);
   routeCode = r.data.code;
   assert.match(r.data.memo, /^ZOLD [0-9A-Z]{4}-[0-9A-Z]{4}$/);
   assert.ok(E.memoCarriesCode(r.data.memo, req("r4").zoldenburg!.bankCheck!.code!.hash, "recovery"));
-  assert.equal(r.data.bankCheck.fromLast4, "3000");
+  assert.equal(r.data.bankCheck.canIssueCode, true);
   const g = await call("/recovery/zoldenburg/r4", undefined, person);
   assert.equal(g.status, 200, g.text);
   assert.equal(g.data.bankCheck.passed, false);
@@ -285,6 +302,21 @@ await t("routes: check-now fails closed with no Monerium connection, and is thro
   const at1 = c.data.bankCheck.lastCheck.at;
   const again = await call("/recovery/zoldenburg/r4/bank-check", {}, person);
   assert.equal(again.data.bankCheck.lastCheck.at, at1, "a fast second click gets the last answer");
+  // A new code does not buy a new Monerium read.
+  const fresh = await call("/recovery/zoldenburg/r4/bank-code", {}, person);
+  assert.equal(fresh.status, 201, fresh.text);
+  routeCode = fresh.data.code;
+  const third = await call("/recovery/zoldenburg/r4/bank-check", {}, person);
+  assert.equal(third.data.bankCheck.lastCheck, undefined, "no read: the new code has no answer yet");
+});
+
+await t("routes: past maxCodes, 429 TOO_MANY_CODES", async () => {
+  newRequest("r8");
+  for (let i = 0; i < B.RECOVERY_BANK.maxCodes; i++) assert.equal((await call("/recovery/zoldenburg/r8/bank-code", {}, person)).status, 201);
+  const over = await call("/recovery/zoldenburg/r8/bank-code", {}, person);
+  assert.equal(over.status, 429, over.text);
+  assert.equal(over.data.code, "TOO_MANY_CODES");
+  assert.equal(over.data.bankCheck.canIssueCode, false);
 });
 
 await t("operator: BANK_CHECK_PENDING on sign-request, execute and sync until the 1 € passed; no Safe Cover link", async () => {
@@ -295,7 +327,7 @@ await t("operator: BANK_CHECK_PENDING on sign-request, execute and sync until th
   }
   const row = (await call("/admin/recoveries", undefined, operator)).data.requests.find((x: any) => x.id === "r4");
   assert.equal(row.bankCheck.passed, false);
-  assert.equal(row.bankCheck.lastCheck.outcome, "unreadable");
+  assert.ok(row.bankCheck.codeIssuedAt);
   assert.equal(row.safeCoverLink, null);
   assert.ok(!/"hash"|hmac/i.test(JSON.stringify(row)));
 });

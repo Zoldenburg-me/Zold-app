@@ -318,9 +318,11 @@ if (zoldenburgRecoveryEnabled() && enrolmentAvailable()) {
   const runEnrolments = () =>
     sweepEnrolments()
       .then((n) => n && console.log(`enrolment sweep: armed ${n} account${n === 1 ? "" : "s"}`))
+      .catch((e) => console.error(`enrolment sweep failed: ${describeCause(e)}`))
+      // Its own catch: a failed enrolment sweep must not skip the recoveries.
       .then(() => sweepRecoveryBankChecks())
       .then((n) => n && console.log(`recovery 1 € sweep: ${n} request${n === 1 ? "" : "s"} passed`))
-      .catch((e) => console.error(`enrolment sweep failed: ${describeCause(e)}`));
+      .catch((e) => console.error(`recovery 1 € sweep failed: ${describeCause(e)}`));
   setInterval(runEnrolments, ENROLMENT.pollMs).unref();
 }
 // Candide recoveries finalize themselves once the grace period has run, so a

@@ -544,7 +544,7 @@ try {
     const person = await rc(`/api/recovery/zoldenburg/${recoveryId}`);
     assert.equal(person.status, 200, JSON.stringify(person.data));
     assert.equal(person.data.bankCheck.passed, false);
-    assert.equal(person.data.bankCheck.fromLast4, "3000");
+    assert.ok(!JSON.stringify(person.data).includes("3000"), "no digits of the enrolled account");
     const code = await rc(`/api/recovery/zoldenburg/${recoveryId}/bank-code`, {});
     assert.equal(code.status, 201, JSON.stringify(code.data));
     assert.match(code.data.memo, /^ZOLD /);
