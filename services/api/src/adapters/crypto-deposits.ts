@@ -74,12 +74,14 @@ interface WatchedAddress {
  *   one payers are told), not its recipient. Watching the recipient turned
  *   direct Safe USDC into page auto-convert and missed forwarder deposits.
  *   When the deposit address is the user's Safe (local-safe provider), the
- *   page entry wins: opting it into auto-convert is the owner's instruction.
+ *   page entry wins.
+ * - A page is watched whatever its auto-convert setting. The scanner skips a
+ *   forwarder's second hop (page address to Safe) as already recorded, so an
+ *   unwatched page with auto-convert off recorded a payment nowhere. What
+ *   happens to the money is decided by holdingOnArrival, not by watching.
  * - Direct Safe funding is recorded for all accounts, approved or not. A
  *   pending account's Safe can already receive, and skipping it moves the
- *   cursor past the transfer for good. Page auto-convert is watched for any
- *   account walletBlocker lets through: conversion is a swap the user signs
- *   from their own Safe, not a fiat rail.
+ *   cursor past the transfer for good.
  */
 function watchedAddresses(): WatchedAddress[] {
   const seen = new Set<string>();
@@ -92,26 +94,10 @@ function watchedAddresses(): WatchedAddress[] {
       seen.add(key);
       out.push({ user, address, source });
     };
-    if (!walletBlocker(user) && user.paymentPage?.autoConvert && user.paymentPage.depositAddress) {
-      add(user.paymentPage.depositAddress, "payment-page");
-    }
-    // A payment REQUEST (pay link) is an explicit ask for money at the page
-    // address, so the page is watched while one is open whatever the
-    // auto-convert setting says — otherwise a paid link would go unseen on a
-    // forwarder address. What happens to the money is still decided below.
-    if (user.paymentPage?.depositAddress && hasOpenCryptoRequest(user.id)) {
-      add(user.paymentPage.depositAddress, "payment-page");
-    }
+    if (user.paymentPage?.depositAddress) add(user.paymentPage.depositAddress, "payment-page");
     add(user.address, "safe");
   }
   return out;
-}
-
-function hasOpenCryptoRequest(userId: string): boolean {
-  const now = Date.now();
-  return store
-    .paymentRequestsForUser(userId)
-    .some((r) => r.state === "OPEN" && r.methods.includes("crypto") && Date.parse(r.expiresAt) > now);
 }
 
 /**
