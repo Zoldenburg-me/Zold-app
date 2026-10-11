@@ -6,7 +6,8 @@
   "description": "Zoldenburg — cross-border remittance infrastructure (Zold app: stablecoin in, local payout rails out)",
   "type": "module",
   "scripts": {
-    "start": "tsx services/api/src/server.ts"
+    "start": "tsx services/api/src/server.ts",
+    "operator:enrol": "tsx services/api/src/operators/enrol-cli.ts"
   },
   "dependencies": {
     "@stellar/stellar-sdk": "^16.1.0",

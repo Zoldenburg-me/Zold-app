@@ -27,12 +27,6 @@ export const KYC = {
    * ignored on every other chain and refused in production mode below.
    */
   autoApprove: process.env.KYC_AUTO_APPROVE === "1" && HARNESS.enabled,
-  /**
-   * Shared secret for the operator/admin routes (ops dashboard, recovery
-   * approvals). Unset means no operator path at all — fail closed rather than
-   * leave an unauthenticated admin endpoint exposed.
-   */
-  operatorToken: process.env.KYC_OPERATOR_TOKEN ?? "",
 };
 
 export const RECOVERY = {
@@ -75,14 +69,6 @@ if (RECOVERY.ibanHmacKey && RECOVERY.ibanHmacKey.length < 32) {
  * a hijacked recovery, so production refuses to boot with it.
  */
 export const RECOVERY_MODULE_3_MINUTES = "0x949d01d424bE050D09C16025dd007CB59b3A8c66";
-
-// A guessable operator token is worse than none: it is a remote approval
-// switch for every account. Refuse to start rather than serve one.
-if (KYC.operatorToken && KYC.operatorToken.length < 24) {
-  throw new Error(
-    "KYC_OPERATOR_TOKEN is too short (need >= 24 chars) — generate one with `openssl rand -base64 32`",
-  );
-}
 
 /**
  * Custody posture: whether the orchestrator may ever hold a user's input funds.
