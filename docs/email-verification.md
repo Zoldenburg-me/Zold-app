@@ -36,7 +36,13 @@ recovery lookup. The Home row asks them to confirm.
   5 tries, then the code is void. Expired after 15 minutes. Right: sets
   `emailVerifiedAt` and drops the code. Re-checked at the write: if another
   account confirmed the address first, 409 `EMAIL_IN_USE`.
-- Limits: one code a minute, five an hour per account; both routes are on the
+- Limits: one code a minute, five an hour per address, counted across every
+  account that signed up with it; both routes are on the
   auth rate bucket (`http/policy.ts`).
+- Accepted limit: anyone can sign up with someone else's address and keep its
+  hourly codes used up, so the owner cannot confirm it while that goes on.
+  Nothing else is blocked (signup stays open while the address is
+  unconfirmed). Before switching on, add an edge rate rule on
+  `POST /api/users/*/email/code` so holding an address costs many IPs.
 
 There is no route that changes an account's email.
