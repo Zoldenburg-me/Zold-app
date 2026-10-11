@@ -1017,14 +1017,14 @@ export const ACTIONS = {
     const r = await api(`/api/orgs/${org.id}/drafts/${el.dataset.id}/execute`, { method: "POST" });
 
     if (r.unsigned) {
-      return dialog("Sign in your own wallet",
+      return dialog("Approve in your own wallet",
         `<p class="desc">${esc(r.note)}</p>
          <table><thead><tr><th>To</th><th>Amount</th></tr></thead><tbody>${r.lines
            .map((l) => `<tr><td>${esc(l.destination.displayName)}</td>
              <td class="mono">${esc(l.amount)} ${esc(l.asset)}</td></tr>`).join("")}</tbody></table>`,
         null, { closeOnly: true });
     }
-    if (!r.authorizations?.length) return toast(r.note || "Nothing to sign.");
+    if (!r.authorizations?.length) return toast(r.note || "Nothing to approve.");
 
     const lib = await window.__deviceLib;
     // The passkey that wraps this browser's device key, from the session:
@@ -1050,7 +1050,7 @@ export const ACTIONS = {
           },
         });
         signed++;
-        toast(`Signed ${signed} of ${r.authorizations.length}…`);
+        toast(`Approved ${signed} of ${r.authorizations.length}…`);
       } catch (e) {
         // Reported per line rather than aborting silently: the ones already
         // signed are real payments and the user must know which.
@@ -1060,7 +1060,7 @@ export const ACTIONS = {
     toast(
       failures.length
         ? `${signed} of ${r.authorizations.length} sent. Not sent: ${failures.join("; ")}`
-        : `All ${signed} payment${signed === 1 ? "" : "s"} signed and sent to the bank.`,
+        : `All ${signed} payment${signed === 1 ? "" : "s"} approved and sent to the bank.`,
       failures.length > 0,
     );
   },

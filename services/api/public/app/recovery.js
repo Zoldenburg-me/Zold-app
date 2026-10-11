@@ -44,9 +44,9 @@ function graceText(seconds) {
    wherever the account is not covered. Same words as onboarding. */
 function zoldWarnHtml() {
   return `<div class="rec-warn">
-    <div class="rec-warn-title"><span aria-hidden="true">⚠</span> Without a guardian, a lost passkey is a lost account</div>
-    <p>If you lose access to this account or your passkey, <b>Zoldenburg UG cannot recover your account.</b></p>
-    <p>Only your e-money balance (<b>EURe</b>) can be recovered — from Monerium, its issuer, under Icelandic law. Anything else held in the account cannot be recovered.</p>
+    <div class="rec-warn-title"><span aria-hidden="true">⚠</span> Without a recovery helper, a lost phone is a lost account</div>
+    <p>If you lose access to this account or this phone, <b>Zoldenburg UG cannot recover your account.</b></p>
+    <p>Only your e-money balance (<b>euros</b>) can be recovered — from Monerium, its issuer, under Icelandic law. Anything else held in the account cannot be recovered.</p>
   </div>`;
 }
 
@@ -55,18 +55,18 @@ async function renderRecoveryScreen() {
   const row = (k, v) => `<div class="m-row"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`;
   if (!caps.emailSmsRecovery && !caps.zoldenburgRecovery && !caps.turnkeyGuardians) {
     el.innerHTML = `<div class="m-rows">${row("Status", "Unavailable")}</div>
-      <div class="m-lede" style="font-size:13px;margin-top:16px">This deployment has no recovery guardian configured, so nothing here can be promised. Nothing is set up on your account.</div>
+      <div class="m-lede" style="font-size:13px;margin-top:16px">This deployment has no recovery helper configured, so nothing here can be promised. Nothing is set up on your account.</div>
       <div style="margin-top:16px">${zoldWarnHtml()}</div>`;
     return;
   }
   if (!user?.passkeySafe || user.passkeySafe.status !== "active") {
-    el.innerHTML = `<div class="m-rows">${row("Status", "Needs your smart account")}</div>
-      <div class="m-lede" style="font-size:13px;margin-top:16px">Recovery is a guardian on your smart account. Finish the passkey and smart-account setup first.</div>`;
+    el.innerHTML = `<div class="m-rows">${row("Status", "Needs your account set up")}</div>
+      <div class="m-lede" style="font-size:13px;margin-top:16px">Recovery adds a helper to your account. Finish setting up your account first.</div>`;
     return;
   }
   if (!recoveryOfferedFor()) {
     el.innerHTML = `<div class="m-rows">${row("Status", "Not available yet")}</div>
-      <div class="m-lede" style="font-size:13px;margin-top:16px">Recovery adds a guardian to your Safe, and Zold has not yet tested that on a Safe brought in from outside. Until it has, it isn’t offered. Your Safe’s other owner, if you kept one, can still add or replace owners in Safe{Wallet}.</div>
+      <div class="m-lede" style="font-size:13px;margin-top:16px">Recovery adds a recovery helper to your Safe, and Zold has not yet tested that on a Safe brought in from outside. Until it has, it isn’t offered. Your Safe’s other owner, if you kept one, can still add or replace owners in Safe{Wallet}.</div>
       <div style="margin-top:16px">${zoldWarnHtml()}</div>`;
     return;
   }
@@ -94,13 +94,13 @@ function renderGuardianSection(el) {
     : who ? `${who} can move your account to a new phone if you lose this one.`
     : "Lose your phone, keep your account: choose Zoldenburg or your own Google or Apple login to help you move Zold to a new phone.";
   el.innerHTML = `
-    <div class="m-seclabel">Your guardian</div>
+    <div class="m-seclabel">Your recovery helper</div>
     <div class="m-lede" style="font-size:13px">${esc(text)}</div>
     ${unarmed && caps.zoldenburgEnrolment && !canFinish
       // The IBAN is the next step, not the guardian page.
       ? `<a class="m-cta" href="#monerium-settings" style="margin-top:12px">Get my Zold IBAN</a>
-         <a class="m-link" href="/guardian" style="margin-top:8px;display:inline-block">Manage your guardian</a>`
-      : `<a class="m-cta" href="/guardian" style="margin-top:12px">${unarmed && canFinish ? "Confirm my bank account" : who ? "Manage your guardian" : "Choose your guardian"}</a>`}`;
+         <a class="m-link" href="/guardian" style="margin-top:8px;display:inline-block">Manage your recovery helper</a>`
+      : `<a class="m-cta" href="/guardian" style="margin-top:12px">${unarmed && canFinish ? "Confirm my bank account" : who ? "Manage your recovery helper" : "Choose your recovery helper"}</a>`}`;
 }
 
 async function renderCandideSection(el) {
@@ -110,7 +110,7 @@ async function renderCandideSection(el) {
   catch (e) { el.innerHTML = `<div class="m-err" role="alert">${esc(e.message)}</div>`; return; }
   const r = recoveryScreen;
   const grace = r.gracePeriodSeconds == null ? "unknown" : r.gracePeriodSeconds < 3600 ? `${Math.round(r.gracePeriodSeconds / 60)} minutes (test module)` : `${Math.round(r.gracePeriodSeconds / 86400)} days`;
-  const status = r.guardianStatus === "active" ? "Active" : r.guardianStatus === "pending_setup" ? "Guardian not on your smart account yet" : "Not set up";
+  const status = r.guardianStatus === "active" ? "Active" : r.guardianStatus === "pending_setup" ? "Recovery helper not on your account yet" : "Not set up";
   // The Zoldenburg section already shows (and cancels) a pending recovery.
   const pending = caps.zoldenburgRecovery ? null : r.onChain?.pendingRecovery;
   const channels = (r.channels || []).map((c) => `
@@ -123,28 +123,28 @@ async function renderCandideSection(el) {
     ${caps.zoldenburgRecovery ? `<div class="m-seclabel" style="margin-top:28px">Email / SMS recovery</div>` : ""}
     ${pending ? `<div class="m-rows" style="border:1px solid var(--m-pink)">
       ${row("Recovery in progress", `finalizable ${esc(new Date(pending.executeAfter * 1000).toLocaleString())}`)}
-      ${row("New owner", esc(String(pending.newOwners?.[0] || "").slice(0, 12)) + "…")}
+      ${row("New approver", esc(String(pending.newOwners?.[0] || "").slice(0, 12)) + "…")}
     </div>
-    <div class="m-lede" style="font-size:13px;margin-top:8px">Someone passed the codes on every channel and started moving this account to a new passkey. If that was not you, cancel it now — after the waiting period it cannot be undone.</div>
-    <button class="m-cta" id="m-rc-cancel" style="margin-top:12px">Cancel this recovery with my passkey</button>` : ""}
+    <div class="m-lede" style="font-size:13px;margin-top:8px">Someone passed the codes on every channel and started moving this account to a new phone. If that was not you, cancel it now — after the waiting period it cannot be undone.</div>
+    <button class="m-cta" id="m-rc-cancel" style="margin-top:12px">Cancel this recovery with Face ID or fingerprint</button>` : ""}
     <div class="m-rows" style="margin-top:${pending ? 20 : 0}px">
       ${row("Status", status)}
       ${row("Waiting period", grace)}
-      ${r.guardianAddress ? row("Guardian", `Candide · ${r.guardianAddress.slice(0, 10)}…`) : ""}
+      ${r.guardianAddress ? row("Recovery helper", `Candide · ${r.guardianAddress.slice(0, 10)}…`) : ""}
     </div>
     ${channels ? `<div class="m-seclabel" style="margin-top:20px">Channels</div><div class="m-rows">${channels}</div>` : ""}
     ${r.guardianStatus === "pending_setup" ? `
-      <div class="m-lede" style="font-size:13px;margin-top:16px">Your channel is registered with Candide, but the guardian is not on your smart account yet, so no recovery can run. One passkey approval fixes that.</div>
-      <button class="m-cta" id="m-rc-activate" style="margin-top:12px">Add guardian to my smart account</button>` : ""}
+      <div class="m-lede" style="font-size:13px;margin-top:16px">Your channel is registered with Candide, but the recovery helper is not on your account yet, so no recovery can run. One approval with Face ID or fingerprint fixes that.</div>
+      <button class="m-cta" id="m-rc-activate" style="margin-top:12px">Add recovery helper to my account</button>` : ""}
     <div id="m-rc-otp" class="hidden" style="margin-top:20px"></div>
     <div id="m-rc-add" style="margin-top:20px">
       <div class="m-seclabel">Add a channel</div>
       <div class="m-field"><label>Email or phone (+49…)</label><input id="m-rc-target" autocomplete="off" placeholder="name@example.com or +4915112345678"></div>
-      <button class="m-cta" id="m-rc-addbtn" style="margin-top:12px">Register with my passkey</button>
+      <button class="m-cta" id="m-rc-addbtn" style="margin-top:12px">Register with Face ID or fingerprint</button>
     </div>
     <div class="m-lede" style="font-size:12px;margin-top:20px;color:var(--m-dim)">
-      Candide holds the guardian key and signs a recovery only after a code is confirmed on EVERY channel here.
-      Adding or removing a channel is a message your smart account signs with your passkey. The waiting period is enforced on chain, not by Zold.
+      Candide holds the recovery helper key and approves a recovery only after a code is confirmed on EVERY channel here.
+      Adding or removing a channel is a message your account approves with your Face ID or fingerprint. The waiting period is enforced by your account itself, not by Zold.
     </div>`;
   const act = $("m-rc-activate");
   if (act) act.onclick = recoveryActivateGuardian;
@@ -238,7 +238,7 @@ async function recoveryCancelRun() {
 
 async function recoveryCancelOnChain() {
   clearErr("m-rc-err");
-  if (!confirm("Cancel the recovery in progress? The new passkey will not take over this account.")) return;
+  if (!confirm("Cancel the recovery in progress? The new phone will not take over this account.")) return;
   const btn = $("m-rc-cancel");
   if (btn) btn.disabled = true;
   try {

@@ -76,7 +76,7 @@ const kycCopy = (status = "pending", u = user) => {
       : ["WALLET", "Wallet account", "Bank accounts aren’t available where you live yet. You can use Zold as a wallet."];
   }
   if (status !== "approved" && hasConnectedMonerium(u)) {
-    return ["MONERIUM", "Activate your IBAN", "Your Monerium account is connected. One passkey confirmation links your wallet to it and asks Monerium for the IBAN."];
+    return ["MONERIUM", "Get your IBAN", "Your Monerium account is connected. One approval links your account to it and asks Monerium for the IBAN."];
   }
   return ({
   pending: ["PENDING", "Connect Monerium", "Your IBAN, deposits, quotes and transfers open once a Monerium account is connected and the IBAN is activated."],
@@ -184,7 +184,7 @@ let passkeyOpen = null; // { ctl, stop }
 const passkeyCancel = () => { const o = passkeyOpen; passkeyOpen = null; o?.ctl.abort(); };
 /* Cancel on the waiting overlay: close the browser's prompt, and tell the
    caller it was the person's choice. */
-const passkeyUserCancel = () => { passkeyOpen?.stop(passkeyError("PASSKEY_CANCELLED", "You cancelled the passkey prompt. Try again when you’re ready.")); };
+const passkeyUserCancel = () => { passkeyOpen?.stop(passkeyError("PASSKEY_CANCELLED", "You cancelled the approval. Try again when you’re ready.")); };
 
 const passkeyOnPhone = () => !!window.matchMedia?.("(pointer: coarse)").matches;
 function passkeyError(code, message) {
@@ -262,7 +262,7 @@ function passkeyOverlayShow(owner, endsAt) {
     box.innerHTML = Z.overlay({
       id: "passkey-wait",
       kind: "dialog",
-      title: phone ? "Waiting for Face ID" : "Waiting for your passkey",
+      title: phone ? "Waiting for Face ID" : "Waiting for your approval",
       body: `<div class="pk-wait">
         <span class="z-live__spin pk-wait__spin" aria-hidden="true"></span>
         <p class="pk-wait__lede">${phone

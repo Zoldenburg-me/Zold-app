@@ -47,7 +47,7 @@ function phChecklist(u) {
       : []),
     // A wallet account has no bank step: the checklist ends at the account.
     ...(bankOffered(u) ? [
-    { title: "Verify with Monerium", sub: approved || connected ? "Connected." : "ID check, a few minutes.",
+    { title: "Verify your identity", sub: approved || connected ? "Connected." : "ID check, a few minutes.",
       done: approved || connected, action: { id: "ph-ck-verify", label: "Start" } },
     { title: "IBAN active",
       sub: u.iban && approved ? "Ready to receive bank transfers."
@@ -225,12 +225,12 @@ function phRecBar() {
   if (!key) return "";
   const go = (label, variant) => `<a class="z-btn z-btn--${variant} z-btn--sm" href="#recovery-alert">${esc(label)}</a>`;
   if (key === "failed") {
-    return `<div class="z-banner" role="note">${Z.icon("help")}<span><b>We couldn’t check for a recovery.</b> If someone started one, it would replace your passkey.</span>${go("Check now", "secondary")}</div>`;
+    return `<div class="z-banner" role="note">${Z.icon("help")}<span><b>We couldn’t check for a recovery.</b> If someone started one, it would move your account to another phone.</span>${go("Check now", "secondary")}</div>`;
   }
   const until = phRec.chain ? phRecUntil(phRec.chain) : null;
   const text = phRec.chain
     ? `<b>Someone is moving your account to a new phone.</b> ${until ? `It completes on ${esc(rcWhenText(until))} unless you cancel.` : "It completes after the waiting period unless you cancel."}`
-    : "<b>Someone asked to move your account to a new phone.</b> Nothing has been signed yet.";
+    : "<b>Someone asked to move your account to a new phone.</b> Nothing has been approved yet.";
   return `<div class="z-banner z-banner--alert" role="note">${Z.icon("gpp_maybe")}<span>${text}</span>${go("Review", "primary")}</div>`;
 }
 
@@ -319,8 +319,8 @@ async function phRecRead() {
   const kinds = [...new Set((Array.isArray(c?.channels) ? c.channels : []).map((x) => (x.channel === "sms" ? "phone" : "email")))];
   const codes = kinds.length ? `${kinds.join(" and ").replace(/^./, (x) => x.toUpperCase())} ${kinds.length > 1 ? "codes" : "code"}` : "Email or phone codes";
   const byLogin = (r) => r?.mode === "turnkey";
-  const method = !chain ? (byLogin(request) ? "Your Google or Apple guardian" : "Zoldenburg ID check")
-    : reqs.some((r) => r?.status === "GRACE_PERIOD") ? (reqs.some((r) => r?.status === "GRACE_PERIOD" && byLogin(r)) ? "Your Google or Apple guardian" : "Zoldenburg ID check")
+  const method = !chain ? (byLogin(request) ? "Your Google or Apple recovery helper" : "Zoldenburg ID check")
+    : reqs.some((r) => r?.status === "GRACE_PERIOD") ? (reqs.some((r) => r?.status === "GRACE_PERIOD" && byLogin(r)) ? "Your Google or Apple recovery helper" : "Zoldenburg ID check")
       : c?.guardianStatus === "active" && !z?.active ? codes : null;
   phRec = chain || request ? { chain, request, method } : { none: true };
   phRecBarSync();
@@ -365,7 +365,7 @@ PH["recovery-alert"] = {
     const asked = request?.requestedAt ? new Date(request.requestedAt) : null;
     const lede = chain
       ? (until ? `It completes on ${rcWhenText(until)} unless you cancel.` : "It completes after the waiting period unless you cancel.")
-      : `They asked Zoldenburg support${asked && Number.isFinite(asked.getTime()) ? ` on ${rcWhenText(asked)}` : ""}. Nothing has been signed yet.`;
+      : `They asked Zoldenburg support${asked && Number.isFinite(asked.getTime()) ? ` on ${rcWhenText(asked)}` : ""}. Nothing has been approved yet.`;
     const rows = [
       ...(method ? [{ key: "Recovery method", value: method }] : []),
       ...(chain && until ? [{ key: "Time left to cancel", valueHtml: `<span class="z-warn-fig">${esc(left > 0 ? rcLeftText(left) : "Finishing…")}</span>` }] : []),
@@ -451,7 +451,7 @@ function phDetailsBody(u, bic, { loadingBic = false } = {}) {
     return `${walletOpen}
       ${bankOffered(u)
         ? `<p class="z-sub">Your IBAN appears here once Monerium has verified you and issued it.</p>
-          ${Z.button({ variant: hasWallet ? "secondary" : "primary", full: true, label: "Verify with Monerium", id: "ph-det-verify" })}`
+          ${Z.button({ variant: hasWallet ? "secondary" : "primary", full: true, label: "Verify your identity", id: "ph-det-verify" })}`
         : ""}`;
   }
   const bicRow = loadingBic

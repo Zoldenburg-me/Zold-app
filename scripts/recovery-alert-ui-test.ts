@@ -147,7 +147,7 @@ await t("every open request status shows the strip; a finished one does not", as
   for (const status of ["PASSKEY_PENDING", "OTP_PENDING", "KYC_PENDING", "REVIEW_PENDING"]) {
     answers = { "/recovery/zoldenburg": zOk({ requests: [request(status, status)] }) };
     await check();
-    assert.match(bar.innerHTML, /Nothing has been signed yet/, status);
+    assert.match(bar.innerHTML, /Nothing has been approved yet/, status);
   }
   for (const status of ["CANCELED", "FINALIZED", "EXPIRED"]) {
     answers = { "/recovery/zoldenburg": zOk({ requests: [request(status, status)] }) };
@@ -178,8 +178,8 @@ await t("a deployment with only Google/Apple guardians reads the Turnkey route a
   await check();
   assert.deepEqual(calls, ["/api/users/u1/recovery/turnkey/requests"]);
   assert.equal(state().request?.id, "tk1");
-  assert.match(state().method, /Google or Apple guardian/);
-  assert.match(bar.innerHTML, /Nothing has been signed yet/);
+  assert.match(state().method, /Google or Apple recovery helper/);
+  assert.match(bar.innerHTML, /Nothing has been approved yet/);
 });
 
 await t("a recovery on chain found through the Turnkey route shows the strip", async () => {
@@ -188,7 +188,7 @@ await t("a recovery on chain found through the Turnkey route shows the strip", a
   answers = { "/recovery/zoldenburg": zOk(), "/recovery/turnkey/requests": tOk({ requests: [tkRequest("GRACE_PERIOD")], onChain: { pendingRecovery: chain, guardians: [] } }) };
   await check();
   assert.ok(state().chain);
-  assert.match(state().method, /Google or Apple guardian/);
+  assert.match(state().method, /Google or Apple recovery helper/);
   assert.match(bar.innerHTML, /Someone is moving your account/);
 });
 

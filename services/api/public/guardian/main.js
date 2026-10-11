@@ -43,7 +43,7 @@ export async function finishLogin(env) {
     const publicKey = stamper.getPublicKey();
     if (!publicKey) return { step: "error", reason: "That login timed out in this browser. Try again." };
     ({ guardian } = await api(`/api/recovery/turnkey/users/${userId}/guardians`, { oidcToken: back.idToken, publicKey }));
-    if (!guardian) return { step: "error", reason: "That login didn’t come back as a guardian. Try again." };
+    if (!guardian) return { step: "error", reason: "That login didn’t come back as a recovery helper. Try again." };
   } catch (e) {
     return { step: "error", reason: e.message };
   } finally {
@@ -222,13 +222,13 @@ function render(el, { caps, zold, guardians, message, issued = null, ibanReady =
     <section class="g-card">
       <h2 class="g-sub" id="g-zold-head" tabindex="-1">Zoldenburg</h2>
       ${zoldOn
-        ? `${zold.enrolment?.armed ? `<p class="g-ok">Your guardian</p>` : `<p class="g-ok">Added to your wallet.</p>`}
+        ? `${zold.enrolment?.armed ? `<p class="g-ok">Your recovery helper</p>` : `<p class="g-ok">Added to your wallet.</p>`}
           ${enrolmentHtml(zold.enrolment, { issued, ibanReady })}
           <p class="g-note">If you lose your phone, our team checks it’s you against the ID you gave Monerium, then moves your account to your new phone.</p>
           <div class="g-actions"><button type="button" class="z-link-btn" data-zold="remove">Remove Zoldenburg</button></div>`
         : social.length
           ? `<p>Our team checks it’s you against the ID you gave Monerium, then moves your account to your new phone.</p>
-            <p class="g-note">One guardian at a time: remove your backup login to choose Zoldenburg.</p>`
+            <p class="g-note">One recovery helper at a time: remove your backup login to choose Zoldenburg.</p>`
           : `<p>Our team checks it’s you against the ID you gave Monerium, then moves your account to your new phone.</p>
             <div class="g-actions"><button type="button" class="z-btn z-btn--primary" data-zold="add">Choose Zoldenburg</button></div>`}
     </section>` : "";
@@ -236,7 +236,7 @@ function render(el, { caps, zold, guardians, message, issued = null, ibanReady =
   const buttons = providerButtons(caps, "Add");
   const rows = guardians.map((g) => `<li><span translate="no">${esc(shortAddr(g.address))}</span>
       ${g.status === "active"
-        ? `<span class="g-ok">Your guardian</span><button type="button" class="z-btn" data-remove="${esc(g.turnkeySubOrgId)}">Remove</button>`
+        ? `<span class="g-ok">Your recovery helper</span><button type="button" class="z-btn" data-remove="${esc(g.turnkeySubOrgId)}">Remove</button>`
         : `<span>Almost there</span><button type="button" class="z-btn" data-finish="${esc(g.turnkeySubOrgId)}">Finish</button>`}</li>`).join("");
   const loginCard = caps.turnkeyGuardians ? `
     <section class="g-card">
@@ -244,13 +244,13 @@ function render(el, { caps, zold, guardians, message, issued = null, ibanReady =
       <p>Approve the move with a login you already have. It stays yours alone: Zold never holds its key.</p>
       ${rows ? `<ul class="g-list">${rows}</ul>` : ""}
       ${social.length ? ""
-        : zoldOn ? `<p class="g-note">One guardian at a time: remove Zoldenburg to use your Google or Apple login.</p>`
+        : zoldOn ? `<p class="g-note">One recovery helper at a time: remove Zoldenburg to use your Google or Apple login.</p>`
           : buttons ? `<div class="z-providers">${buttons}</div>` : ""}
       <p class="g-note">Tip: pick a login with a different email from your Zold account, and turn on two-step sign-in for it.</p>
     </section>` : "";
 
   el.innerHTML = `
-    <h1>Your guardian</h1>
+    <h1>Your recovery helper</h1>
     <p>Lose your phone, keep your account. Pick who can help you move Zold to a new phone.</p>
     ${message ? `<p class="${message.ok ? "g-ok" : "g-err"}" role="${message.ok ? "status" : "alert"}">${esc(message.text)}</p>` : ""}
     ${zoldCard}
@@ -270,7 +270,7 @@ async function boot() {
   try { token = localStorage.getItem("zold-session"); } catch { /* storage blocked */ }
   const health = await fetch("/api/health").then((r) => r.json()).catch(() => null);
   const caps = health?.capabilities ?? {};
-  if (!caps.zoldenburgRecovery && !caps.turnkeyGuardians) return show(`<h1>Your guardian</h1><p>Guardians aren’t available right now.</p><p><a href="/app">Back to Zold</a></p>`);
+  if (!caps.zoldenburgRecovery && !caps.turnkeyGuardians) return show(`<h1>Your recovery helper</h1><p>Recovery helpers aren’t available right now.</p><p><a href="/app">Back to Zold</a></p>`);
   if (!token) return show(`<h1>Sign in first</h1><p>Open Zold and sign in, then come back to Security → Recovery.</p><p><a href="/app">Open Zold</a></p>`);
   const api = apiWith(token);
   let me;
@@ -284,7 +284,7 @@ async function boot() {
       const p = document.createElement("p");
       p.className = "g-ok";
       p.setAttribute("role", "status");
-      p.textContent = `Confirm with Face ID or fingerprint to add ${g.address} as your guardian.`;
+      p.textContent = `Confirm with Face ID or fingerprint to add ${g.address} as your recovery helper.`;
       el.prepend(p);
     },
   };
