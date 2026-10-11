@@ -692,7 +692,8 @@ export async function sweepPaymentRequests(now = new Date()): Promise<{ expired:
     }
   }
   for (const r of store.paymentRequests) {
-    if (r.state === "PAID" && r.source.kind !== "app" && r.source.kind !== "api" && !r.source.resolvedAt) {
+    // A merchant link's request is the checkout service's to settle.
+    if (r.state === "PAID" && r.source.kind !== "app" && r.source.kind !== "api" && !r.source.resolvedAt && !r.source.linkId) {
       for (const hook of paidHooks) {
         try {
           await hook(r);

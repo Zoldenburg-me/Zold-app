@@ -275,7 +275,8 @@ function primaryBucket(req: express.Request, path: string): [string, number] {
     if (operator) return [`o:${operator}`, SECURITY.operatorRateLimitPerMin];
   }
   // A valid checkout-service credential polls at its own rate; a wrong one is
-  // a guess and stays on the auth bucket.
+  // a guess and stays on the auth bucket. Covers the transfer read and every
+  // /service/merchant/* route alike.
   if (path.startsWith("/service/")) {
     return checkoutCredentialFor(bearerToken(req))
       ? ["c", CHECKOUT_SERVICE.rateLimitPerMin]
