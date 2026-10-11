@@ -22,6 +22,7 @@ ZoldUSD (zUSD, test chains, `deploy:zusd`) · OffchainResolver (L1 ENS, `deploy:
 | Gnosis Pay | card account read (SIWE) | adapters/gnosis-pay.ts |
 | GetMyInvoices | push Belege (Beta) | adapters/getmyinvoices.ts |
 | Shopify | payments app / custom-app checkout | routes/shopify.ts, shopify/ |
+| Zold checkout service | Shopify adapter for linked shops (CHECKOUT_SERVICE_ORIGIN) | merchant-links.ts, routes/merchant-links.ts, routes/service-merchant.ts |
 | VIES | EU VAT ID check | adapters/vies.ts |
 | SMTP | email codes (off unless EMAIL_VERIFICATION=1) | adapters/mailer.ts |
 | Rates source | independent mid for price sanity | rates.ts |

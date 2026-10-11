@@ -64,6 +64,7 @@ const scripts = [
   "best:test",
   "webhook:test",
   "checkout-service:test",
+  "merchant-links:test",
   "reconcile:test",
   "anchor:config:test",
   "anchor:safety",

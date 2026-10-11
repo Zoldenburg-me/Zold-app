@@ -26,6 +26,8 @@ json → securityHeaders → originPolicy → /api rate limit → pages → rout
 | /api | routes/recovery-turnkey-requests.ts | recovery with that guardian: /recovery/turnkey/requests (+/:id/passkey, /digest, /signature, /finalize; per-request secret), /users/:id/recovery/turnkey/requests (+/:rid/cancel) |
 | /api | routes/safe-signers.ts, safe-import.ts | owners, threshold, spending limits, import |
 | /api | routes/shopify.ts | install/callback, payments app hooks, order pay pages |
+| /api | routes/merchant-links.ts | POST/GET/DELETE /orgs/:orgId/merchant-links (issue a link code, list, revoke) |
+| /api | routes/service-merchant.ts | /service/merchant/links/exchange, links/:id, links/:id/payment-requests[/:id[/cancel]] (checkout-service credential) |
 | /api/admin | operators/gate.ts (middleware) | ahead of every admin route: Cloudflare Access, operator passkey session, a fresh approval per change, audit |
 | /api | routes/operator-auth.ts | /admin/auth/*: enrolment, login, step-up challenge, add passkey, logout, me |
 | /api | routes/email-verification.ts, faucet.ts, admin.ts | codes, testnet faucet, operator stats |
@@ -43,6 +45,7 @@ ens.ts (CCIP-Read encoding, signer) · usd-token.ts (the dollar token: USDC, or 
 log-range.ts (eth_getLogs window halves on RPC range refusals) · users/display-name.ts ·
 payment-requests.ts (707) · pay.ts · documents.ts · receipt.ts · audit.ts ·
 checkout-service.ts (checkout scope, allowlist, hashed credential) · checkout-webhook.ts (signed state-change hint) ·
+merchant-links.ts (link codes, availability, re-checks, service view) ·
 http/standard-webhooks.ts (sign and verify, both directions) ·
 wallet/signature-check.ts (the one signed-message verifier: EIP-1271, ECDSA, ERC-6492) ·
 wallet-sync/{sync,valuation,token-class,token-lists,ownership (proof checked on the wallet's chain),revalue (price retry)}

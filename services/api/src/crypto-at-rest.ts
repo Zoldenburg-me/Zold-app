@@ -24,7 +24,7 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, randomBytes } from "node:crypto";
 
 /** Named so a key is never accidentally shared across two kinds of secret. */
-export type EncryptionPurpose = "monerium" | "monerium-api-secret" | "shopify" | "shopify-link" | "getmyinvoices";
+export type EncryptionPurpose = "monerium" | "monerium-api-secret" | "shopify" | "shopify-link" | "merchant-link" | "getmyinvoices";
 
 export class EncryptionUnavailableError extends Error {}
 

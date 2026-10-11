@@ -66,7 +66,17 @@ export type AuditKind =
   | "service.credential_rotated"
   /** The checkout service read a transfer: which credential, which id, and
    *  whether it was served or answered 404. */
-  | "service.checkout_transfer_read";
+  | "service.checkout_transfer_read"
+  /** The checkout service called a merchant-link route: which credential,
+   *  which link, and the outcome. Never the link code or secret. */
+  | "service.merchant_link_exchange"
+  | "service.merchant_link_read"
+  | "service.merchant_request_create"
+  | "service.merchant_request_read"
+  | "service.merchant_request_cancel"
+  /** A member issued a link code for a shop, or revoked a merchant link. */
+  | "merchant_link.code_issued"
+  | "merchant_link.revoked";
 
 export interface AuditEntry {
   id: string;
