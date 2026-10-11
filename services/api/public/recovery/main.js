@@ -15,6 +15,7 @@
 import { IndexedDbStamper } from "../vendor/turnkey.js";
 import { startLogin } from "../guardian/oauth.js";
 import { providerButtons } from "../guardian/providers.js";
+import { byDevice, passkeyName } from "../guardian/device-words.js";
 import { finishApprove } from "./approve.js";
 import { bankStepChanged, bankStepHtml, checkAnswerText, issuedFor, keepIssued } from "./bank-step.js";
 import {
@@ -85,7 +86,7 @@ async function boot() {
     if (["wait", "zoldenburg", "approve"].includes(screen)) follow();
   };
   const fail = (e) => {
-    s.error = e?.name === "NotAllowedError" ? Z.byDevice("Face ID or fingerprint was cancelled. Try again when you’re ready.", "The passkey prompt was cancelled. Try again when you’re ready.") : e?.message || String(e);
+    s.error = e?.name === "NotAllowedError" ? byDevice("Face ID or fingerprint was cancelled. Try again when you’re ready.", "The passkey prompt was cancelled. Try again when you’re ready.") : e?.message || String(e);
     const box = el.querySelector("#r-err");
     if (box) { box.textContent = s.error; box.hidden = false; }
   };
@@ -191,7 +192,7 @@ async function boot() {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return fail(new Error("Enter the email on your account."));
     busy(btn, true);
     try {
-      if (!window.PublicKeyCredential) throw new Error(`This browser can’t use ${Z.passkeyName()} sign-in. Open Zold in Safari or Chrome.`);
+      if (!window.PublicKeyCredential) throw new Error(`This browser can’t use ${passkeyName()} sign-in. Open Zold in Safari or Chrome.`);
       s.email = email;
       try { sessionStorage.setItem(EMAIL_KEY, email); } catch { /* resumes by typing the email again */ }
       let { mode, request } = await startRecovery(email, { api, caps, secret: secret() });
@@ -210,7 +211,7 @@ async function boot() {
   const SCREENS = {
     email: () => `
       <h1 tabindex="-1">Get your account back</h1>
-      <p>${Z.byDevice("New phone? Enter the email on your Zold account. You’ll set up Face ID or fingerprint here, then confirm it’s you.", "New device? Enter the email on your Zold account. You’ll set up a passkey here, then confirm it’s you.")}</p>
+      <p>${byDevice("New phone? Enter the email on your Zold account. You’ll set up Face ID or fingerprint here, then confirm it’s you.", "New device? Enter the email on your Zold account. You’ll set up a passkey here, then confirm it’s you.")}</p>
       ${s.notice ? `<p class="r-note" role="status">${esc(s.notice)}</p>` : ""}
       <form id="r-start" novalidate>
         <label for="r-email">Email</label>
@@ -220,10 +221,10 @@ async function boot() {
       </form>
       <p><a href="/app">Back to sign in</a></p>`,
     passkey: () => `
-      <h1 tabindex="-1">${Z.byDevice("Set up this phone", "Set up this device")}</h1>
-      <p>${Z.byDevice("Add Face ID or fingerprint sign-in on this phone.", "Add passkey sign-in on this device.")} It becomes the way you approve everything on your account.</p>
+      <h1 tabindex="-1">${byDevice("Set up this phone", "Set up this device")}</h1>
+      <p>${byDevice("Add Face ID or fingerprint sign-in on this phone.", "Add passkey sign-in on this device.")} It becomes the way you approve everything on your account.</p>
       <p class="r-err" id="r-err" role="alert" hidden></p>
-      <div class="r-actions"><button type="button" class="z-btn z-btn--primary" id="r-passkey">${Z.byDevice("Set up Face ID", "Set up a passkey")}</button></div>`,
+      <div class="r-actions"><button type="button" class="z-btn z-btn--primary" id="r-passkey">${byDevice("Set up Face ID", "Set up a passkey")}</button></div>`,
     codes: () => {
       const r = s.request;
       const a = r.candide?.auths?.[currentAuth(r)];
@@ -270,7 +271,7 @@ async function boot() {
     },
     done: () => `
       <h1 tabindex="-1">Welcome back</h1>
-      <p>${Z.byDevice("Your account is on this phone. Sign in with Face ID or fingerprint, and you’re all set.", "Your account is on this device. Sign in with your passkey, and you’re all set.")}</p>
+      <p>${byDevice("Your account is on this phone. Sign in with Face ID or fingerprint, and you’re all set.", "Your account is on this device. Sign in with your passkey, and you’re all set.")}</p>
       <div class="r-actions"><a class="z-btn z-btn--primary" href="/app">Sign in</a></div>`,
   };
 

@@ -17,6 +17,7 @@ import { IndexedDbStamper } from "../vendor/turnkey.js";
 import { OAUTH_STATE_KEY, readReturn, startLogin } from "./oauth.js";
 import { providerButtons } from "./providers.js";
 import { afterCheck, checkEnrolment, enrolmentHtml, issueEnrolmentCode } from "./enrolment.js";
+import { byDevice } from "./device-words.js";
 
 
 /**
@@ -150,9 +151,6 @@ export async function zoldenburgOp(add, btn, { api, userId, passkeyGet, announce
 
 const b64urlToBytes = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(s.length / 4) * 4, "=")), (c) => c.charCodeAt(0));
 const bytesToB64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-/* The passkey prompt named for this device by ui.js (Z.byDevice); the
-   computer's wording where ui.js is not loaded. */
-const byDevice = (phone, computer) => globalThis.Z?.byDevice?.(phone, computer) ?? computer;
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
 /** The account's passkey approves the prepared Safe op. */
