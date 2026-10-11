@@ -50,7 +50,7 @@ function renderCryptoDeposits(deposits) {
   if (!deposits?.length) { el.innerHTML = ""; return; }
   el.innerHTML = deposits
     .map((d) => {
-      const ok = d.state === "CONVERTED";
+      const ok = ["none", "held", "converted"].includes(d.holding);
       const right = ok
         ? (d.settlementAsset === "USDC" ? `${fmt(d.creditedUsdc ?? d.amountUsdc, 2)} USDC` : `€${fmt(d.creditedEur ?? 0)}`)
         : `<span title="${esc(d.reason ?? "")}">not converted</span>`;
@@ -527,7 +527,7 @@ function histRow(t) {
   if (t.kind === "funding") {
     const token = t.token === "USDC" ? "USDC" : "EURe";
     const amount = t.token === "USDC" ? `${fmt(t.amountUsdc || 0)} USDC` : `€${fmt(t.amountEur || 0)}`;
-    const color = t.state === "REFUSED" ? "var(--amber)" : "var(--green)";
+    const color = t.holding === "refused" ? "var(--amber)" : "var(--green)";
     return `
     <div class="hic">IN</div>
     <div class="hmain">
@@ -536,7 +536,7 @@ function histRow(t) {
     </div>
     <div>
       <div class="hamt">+${esc(amount)}</div>
-      <div class="hst" style="color:${color}">${t.state === "REFUSED" ? "REVIEW" : "RECEIVED"}</div>
+      <div class="hst" style="color:${color}">${t.holding === "refused" ? "REVIEW" : "RECEIVED"}</div>
     </div>`;
   }
   const paid = t.state === "PAID";

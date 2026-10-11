@@ -76,7 +76,9 @@ export function belegUpload(snap: BelegSnapshot, code: string, issuedAt: string,
     currency: "EUR",
     paymentMethod: snap.receipt ? "online_payment" : "bank_transfer",
     paymentStatus: "Paid",
-    paidAt: snap.receipt?.blockTime ? snap.receipt.blockTime.slice(0, 10) : snap.line.valueDate,
+    // A payment is paid when the chain says it arrived; a disposal happens
+    // when the conversion did, which is its value date.
+    paidAt: snap.line.event !== "crypto_disposal" && snap.receipt?.blockTime ? snap.receipt.blockTime.slice(0, 10) : snap.line.valueDate,
     note: [
       `${belegTitle(snap)} — ${snap.line.reference}`,
       snap.line.links.invoiceNumber ? `Invoice ${snap.line.links.invoiceNumber}` : undefined,

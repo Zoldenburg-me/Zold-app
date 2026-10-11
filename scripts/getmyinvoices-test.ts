@@ -119,7 +119,7 @@ store.addMember({ id: "m_owner2", orgId: "org_starter", userId: "u_owner", email
 store.addAccount({ id: "acc_1", orgId: "org_1", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: SAFE, backingUserId: "u_owner", createdAt: now, updatedAt: now });
 store.recordMoneriumIssue({ orderId: "ord-1", userId: "u_owner", amountEur: 119, counterpartyName: "Kunde AG", counterpartyIban: "DE89370400440532013000", memo: "RE-2026-0041", processedAt: "2026-09-03T09:00:00.000Z", recordedAt: now });
 store.addPaymentRequest({ id: "pr_1", code: "ABCDEFGHJKMNPQR", userId: "u_owner", orgId: "org_1", handle: "zold", amountEur: 119, currency: "EUR", methods: ["crypto"], state: "PAID", externalInvoiceNumber: "RE-2026-0042", cryptoQuotes: [], payments: [], source: { kind: "app" }, expiresAt: now, createdAt: now, updatedAt: now });
-store.addCryptoDeposit({ id: "d-1", userId: "u_owner", chainId: 31337, token: "USDC", txHash: H(5), logIndex: 0, amountUnits: "137000000", amountUsdc: 137, receipt: { amountEur: 120.14, rate: 1.1403, rateProvider: "ecb", rateAsOf: "2026-09-10", ratedAt: now, blockTimestamp: "2026-09-10T09:58:00.000Z" }, state: "CONVERTED", settlementAsset: "EURE", creditedEur: 119.62, provider: "dex", rate: 1.1452, midRate: 1.1403, conversion: { txHash: H(7), at: "2026-09-10T10:02:00.000Z", amountInUnits: "137000000" }, paymentRequestId: "pr_1", txs: [], detectedAt: now, updatedAt: now });
+store.addCryptoDeposit({ id: "d-1", userId: "u_owner", chainId: 31337, token: "USDC", txHash: H(5), logIndex: 0, amountUnits: "137000000", amountUsdc: 137, receipt: { amountEur: 120.14, rate: 1.1403, rateProvider: "ecb", rateAsOf: "2026-09-10", ratedAt: now, blockTimestamp: "2026-09-10T09:58:00.000Z" }, holding: "converted", settledAt: now, settlementAsset: "EURE", creditedEur: 119.62, provider: "dex", rate: 1.1452, midRate: 1.1403, conversion: { txHash: H(7), at: "2026-09-10T10:02:00.000Z", amountInUnits: "137000000" }, paymentRequestId: "pr_1", txs: [], detectedAt: now, updatedAt: now });
 writeStatementLines();
 
 const app = express();
@@ -170,24 +170,25 @@ await check("connecting verifies the key against /account, stores it encrypted a
 await check("the export prepares Belege for the month; the CSV and the ZIP follow", async () => {
   const st = await call("GET", "/api/orgs/org_1/bookkeeping/statement?month=2026-09");
   assert.equal(st.status, 200);
-  assert.equal(st.body.lines.length, 2, JSON.stringify(st.body));
+  // The SEPA credit, and the USDC payment as its receipt and its disposal.
+  assert.equal(st.body.lines.length, 3, JSON.stringify(st.body));
   assert.ok(st.body.note, "rule 2 note while no swap has executed");
   const prep = await call("POST", "/api/orgs/org_1/bookkeeping/export/2026-09/prepare");
   assert.equal(prep.status, 200, JSON.stringify(prep.body));
-  assert.equal(prep.body.belegeIssued, 2);
+  assert.equal(prep.body.belegeIssued, 3);
   assert.deepEqual(prep.body.failed, []);
   const csv = await call("GET", "/api/orgs/org_1/bookkeeping/export/2026-09/lexware.csv");
   assert.equal(csv.status, 200);
   assert.match(csv.headers.get("content-type") ?? "", /text\/csv/);
   const rows = csv.bytes.toString("latin1").split("\r\n");
   assert.equal(rows[0].split(";").length, 7);
-  assert.equal(rows.length, 4, "header + 2 lines + trailing");
-  assert.ok(rows[1].includes("Beleg ") && rows[2].includes("Beleg "), rows.join("|"));
+  assert.equal(rows.length, 5, "header + 3 lines + trailing");
+  assert.ok(rows[1].includes("Beleg ") && rows[2].includes("Beleg ") && rows[3].includes("Beleg "), rows.join("|"));
   const zip = await fetch(`${API}/api/orgs/org_1/bookkeeping/export/2026-09/belege.zip`, { headers: { "x-user": "u_owner" } });
   assert.equal(zip.status, 200);
   const { listZip } = await import("../services/api/src/bookkeeping/zip.js");
   const entries = listZip(Buffer.from(await zip.arrayBuffer()));
-  assert.equal(entries.length, 2);
+  assert.equal(entries.length, 3);
   assert.ok(entries.every((e) => e.name.endsWith(".pdf") && e.crcOk));
   assert.equal((await call("GET", "/api/orgs/org_1/bookkeeping/export/2026-13/lexware.csv")).status, 400);
   assert.equal((await call("GET", "/api/orgs/org_1/bookkeeping/statement", undefined, "u_viewer")).status, 200, "a viewer may read");
@@ -195,18 +196,24 @@ await check("the export prepares Belege for the month; the CSV and the ZIP follo
 });
 
 await check("the upload body carries the document number (the Beleg code), the amounts, paid state, receipt date and the tx hashes", async () => {
-  const doc = store.documentsForOrg("org_1").find((d) => (d.snapshot as any).receipt)!;
+  const docOf = (event: string) => store.documentsForOrg("org_1").find((d) => (d.snapshot as any).line?.event === event)!;
+  const doc = docOf("crypto_held");
   const up = belegUpload(doc.snapshot as any, doc.code, doc.createdAt, 12);
   assert.equal(up.documentNumber, doc.code);
-  assert.equal(up.grossAmount, "119.62");
+  assert.equal(up.grossAmount, "120.14", "the payment at its value on arrival");
   assert.equal(up.paymentStatus, "Paid");
   assert.equal(up.paidAt, "2026-09-10", "the receipt's block date, for Ist-Versteuerung");
   assert.equal(up.documentType, "PAYMENT_RECEIPT");
   assert.equal(up.paymentMethod, "online_payment");
-  assert.ok(up.tags!.includes(`tx:${H(5)}`) && up.tags!.includes(`tx:${H(7)}`) && up.tags!.includes("invoice:RE-2026-0042"));
-  assert.match(up.note!, /No conversion has yet executed with real money/);
+  assert.ok(up.tags!.includes(`tx:${H(5)}`) && up.tags!.includes("invoice:RE-2026-0042"));
   assert.equal(up.companyId, 12);
   assert.ok(up.file.subarray(0, 5).toString() === "%PDF-");
+  const disp = docOf("crypto_disposal");
+  const upD = belegUpload(disp.snapshot as any, disp.code, disp.createdAt, 12);
+  assert.equal(upD.grossAmount, "0.52", "the disposal is the realised loss");
+  assert.equal(upD.documentType, "RECEIPT", "a loss is not a payment received");
+  assert.ok(upD.tags!.includes(`tx:${H(7)}`) && upD.tags!.includes("crypto_disposal"));
+  assert.match(upD.note!, /No conversion has yet executed with real money/);
 });
 
 await check("push uploads each Beleg once; a second push uploads nothing", async () => {
@@ -214,12 +221,12 @@ await check("push uploads each Beleg once; a second push uploads nothing", async
   const startIdx = seen.requests.length;
   const r1 = await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09" });
   assert.equal(r1.status, 200, JSON.stringify(r1.body));
-  assert.deepEqual(r1.body.results.map((x: any) => x.outcome).sort(), ["uploaded", "uploaded"]);
+  assert.deepEqual(r1.body.results.map((x: any) => x.outcome).sort(), ["uploaded", "uploaded", "uploaded"]);
   const r2 = await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09" });
-  assert.deepEqual(r2.body.results.map((x: any) => x.outcome).sort(), ["exists", "exists"]);
-  assert.equal(seen.requests.filter((r) => r.method === "POST" && r.path === "/documents").length - before, 2);
+  assert.deepEqual(r2.body.results.map((x: any) => x.outcome).sort(), ["exists", "exists", "exists"]);
+  assert.equal(seen.requests.filter((r) => r.method === "POST" && r.path === "/documents").length - before, 3);
   const pushed = seen.requests.slice(startIdx).filter((r) => r.path.startsWith("/documents"));
-  assert.ok(pushed.length >= 4, "two lookups and two uploads, then two lookups");
+  assert.ok(pushed.length >= 6, "three lookups and three uploads, then three lookups");
   assert.ok(pushed.every((r) => r.key === GOOD_KEY && r.ua?.includes("account 4711")), "the stored key and the account-bearing User-Agent are used");
   const audit = store.auditFor("u_owner").find((a) => a.kind === "partner.documents_pushed");
   assert.ok(audit, "the push is audited");

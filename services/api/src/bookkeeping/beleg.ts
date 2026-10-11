@@ -148,7 +148,11 @@ export function buildBeleg(entry: LedgerEntry, ctx: BelegContext): BelegSnapshot
         ? { valueEur: d.receipt.amountEur, rate: d.receipt.rate, rateProvider: d.receipt.rateProvider, rateAsOf: d.receipt.rateAsOf, ratedAt: d.receipt.ratedAt }
         : {}),
     };
-    if (d.settlementAsset === "EURE" && d.creditedEur !== undefined) {
+    // The receipt line's Beleg is the receipt alone; the conversion belongs
+    // to the disposal line (or, for an unvalued receipt, the one line that
+    // books the proceeds).
+    const conversionLine = s.event === "crypto_disposal" || s.event === "crypto_converted";
+    if (conversionLine && d.holding === "converted" && d.creditedEur !== undefined) {
       const amountIn = d.conversion?.amountInUnits ? usd.fromUnits(BigInt(d.conversion.amountInUnits)) : d.amountUsdc;
       const expected = req?.amountEur ?? (req?.payments.find((p) => p.depositId === d.id)?.amountEur);
       snap.conversion = {
@@ -205,7 +209,9 @@ export function belegStillAgrees(
     else {
       if (ctx.deposit.txHash.toLowerCase() !== snap.receipt.txHash.toLowerCase()) diffs.push("the receipt transaction differs");
       if (snap.conversion?.creditedEur !== undefined && ctx.deposit.creditedEur !== snap.conversion.creditedEur) diffs.push("the credited amount differs");
-      if (ctx.deposit.state !== "CONVERTED") diffs.push(`the deposit is now ${ctx.deposit.state}`);
+      // A later conversion does not change what arrived, so a receipt Beleg
+      // stays valid; a conversion Beleg needs the conversion to still stand.
+      if (snap.conversion && ctx.deposit.holding !== "converted") diffs.push(`the deposit is now ${ctx.deposit.holding}`);
     }
   }
   if (snap.bank?.transferId) {
@@ -227,7 +233,8 @@ const EVENT_TITLES: Record<StatementFacts["event"], string> = {
   sepa_out: "SEPA payment sent",
   sepa_out_reversal: "Reversal of a failed payment",
   crypto_converted: "USDC received and converted to EURe",
-  crypto_held: "USDC received and held",
+  crypto_held: "USDC received",
+  crypto_disposal: "Held USDC converted to EURe (disposal)",
   sweep: "Monthly conversion of leftover USDC",
 };
 

@@ -403,7 +403,7 @@ RENDER.members = async () => {
  */
 const EVENT_LABEL = {
   sepa_in: "SEPA in", sepa_out: "SEPA out", sepa_out_reversal: "Reversal",
-  crypto_converted: "USDC → EURe", crypto_held: "USDC held", sweep: "Kursdifferenz sweep",
+  crypto_converted: "USDC → EURe", crypto_held: "USDC received", crypto_disposal: "USDC → EURe (disposal)", sweep: "Kursdifferenz sweep",
 };
 export let exportMonth = null;
 export const setExportMonth = (v) => { exportMonth = v; };

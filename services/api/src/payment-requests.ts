@@ -23,9 +23,10 @@
  *
  * No money moves in this file. Matching records that a payment arrived;
  * converting a USDC deposit to EURe is the user-signed path in
- * adapters/crypto-deposits.ts, and a request settles in EUR only after that
- * (`settledEur`). Until then the request is PAID (the funds are at the payee's
- * own address) and the record says which asset is held.
+ * adapters/crypto-deposits.ts. The request is PAID when the deposit arrives
+ * (the funds are at the payee's own address); the payment row says which
+ * asset is held and its euro value (`settledAsset`, `settledEur`), and is
+ * rewritten in place if the USDC is later converted.
  */
 import { randomBytes } from "node:crypto";
 import { MONERIUM, PAYMENT_REQUESTS } from "./config.js";
@@ -61,7 +62,7 @@ export interface RequestPayment {
   /** Idempotency key: the deposit id, Monerium order id or transfer id. */
   ref: string;
   /** Euro value attributed. For crypto this is the quoted euro amount the
-   *  deposit matched; `settledEur` is what the conversion later delivered. */
+   *  deposit matched; `settledEur` is what the payee holds from it. */
   amountEur: number;
   amountUsdc?: number;
   txHash?: string;
@@ -73,8 +74,9 @@ export interface RequestPayment {
   /** full: covers a quote within tolerance. partial: a real but short payment.
    *  over: more than asked. */
   kind: "full" | "partial" | "over";
-  /** What the payee actually holds after settlement, in EUR. Absent while a
-   *  crypto deposit is still USDC or its conversion has not happened. */
+  /** What the payee holds, in EUR: held USDC at its value on arrival, or the
+   *  EURe it was converted to. Absent until the deposit has settled, or when
+   *  USDC arrived on a day with no reference rate. */
   settledEur?: number;
   settledAsset?: "EURE" | "USDC";
   at: string;

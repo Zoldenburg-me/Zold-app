@@ -179,6 +179,7 @@ export function initStore() {
     }
     migrateUsersToOrganisations();
     stripSenderProfiles();
+    migrateCryptoDepositHolding(db.cryptoDeposits, db.users);
     for (const q of db.quotes) q.status ??= "OPEN";
     for (const s of db.sessions) s.expiresAt ??= new Date(Date.parse(s.createdAt) + 24 * 60 * 60 * 1000).toISOString();
     pruneSessions();
@@ -214,6 +215,41 @@ export function pruneSessions(retainMs = 24 * 60 * 60 * 1000) {
  * Idempotent (keyed on a member row existing for the user), so it is safe on
  * every start, and it never touches a user who already has an org.
  */
+/**
+ * Deposits written with the single `state` field, which meant both "settled"
+ * and "swapped", get `settledAt` and `holding` instead. Only those two fields
+ * change; nothing is deleted and no invoice row is rewritten.
+ *
+ * A CONVERTED row was already written onto its invoice, pay link and books,
+ * so it keeps `updatedAt` as its settlement time. A DETECTED or REFUSED row
+ * never was, so `settledAt` stays absent and the poller's sweep writes it
+ * once. A REFUSED row with no swap behind it was refused at detection (KYC,
+ * the floor, no Safe), which no longer happens: that money is simply held.
+ */
+export function migrateCryptoDepositHolding(deposits: CryptoDeposit[], users: User[]): void {
+  for (const d of deposits as (CryptoDeposit & { state?: string })[]) {
+    const state = d.state;
+    if (state === undefined) continue;
+    const page = users.find((u) => u.id === d.userId)?.paymentPage;
+    const target = page?.settlementAsset ?? "EURE";
+    if (state === "CONVERTED") {
+      d.settledAt ??= d.updatedAt;
+      d.holding =
+        d.token !== "USDC" ? "none"
+        : d.settlementAsset === "EURE" ? "converted"
+        : target === "USDC" ? "none"
+        : "held";
+    } else if (state === "REFUSED") {
+      const swapTried = !!d.conversion || d.txs.some((t) => t.step.startsWith("safe.swap"));
+      d.holding = d.token !== "USDC" ? "none" : swapTried ? "refused" : target === "USDC" ? "none" : "held";
+    } else {
+      d.holding = d.token !== "USDC" || target === "USDC" ? "none" : "awaiting_approval";
+    }
+    if (d.holding !== "converted") d.settlementAsset = d.token;
+    delete d.state;
+  }
+}
+
 /**
  * Delete stored Travel Rule sender profiles (Sep 2026).
  *
