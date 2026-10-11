@@ -149,7 +149,8 @@ const adminMember = member(org.id, admin.id, "admin");
 member(org.id, viewer.id, "viewer");
 const owner2 = user("other", "Other Owner", addr("af"));
 const org2 = orgOf("Other Shop GmbH");
-member(org2.id, owner2.id, "owner");
+const owner2Member = member(org2.id, owner2.id, "owner");
+const treasurer = user("other-treasury", "Tess Treasurer", addr("b1"));
 const org3 = orgOf("No Page GmbH");
 member(org3.id, noPage.id, "owner");
 
@@ -406,6 +407,7 @@ for (const [label, body] of [
   ["a non-order gid", { amountEur: 10, order: { gid: "gid://shopify/Customer/1" } }],
   ["an http status URL", { amountEur: 10, order: { gid: ORDER(6001), statusUrl: "http://x.example/s" } }],
   ["a javascript: status URL", { amountEur: 10, order: { gid: ORDER(6001), statusUrl: "javascript:alert(1)" } }],
+  ["a status URL over 2048 characters", { amountEur: 10, order: { gid: ORDER(6001), statusUrl: `https://${SHOP}/${"a".repeat(2048)}` } }],
   ["a 41-character order name", { amountEur: 10, order: { gid: ORDER(6001), name: "x".repeat(41) } }],
   ["a 141-character description", { amountEur: 10, description: "x".repeat(141), order: { gid: ORDER(6001) } }],
   ["an expiry over 7 days", { amountEur: 10, expiresInSec: 7 * 86400 + 1, order: { gid: ORDER(6001) } }],
@@ -421,6 +423,33 @@ await check("create on an unknown link is 404, with a wrong bearer 401", async (
   assert.equal(missing.status, 404);
   assert.equal(missing.body.code, "NOT_FOUND");
   assert.equal((await create(link.linkId, { amountEur: 10, order: { gid: ORDER(6002) } }, "zsc_wrong")).status, 401);
+});
+
+console.log("stale payee (fail closed)");
+await check("the installer whose own page the store pays into has left: create is 409 NO_PAYMENT_PAGE, nothing opened", async () => {
+  store.updateMember(owner2Member.id, { status: "deactivated" });
+  try {
+    const r = await create(link2.linkId, { amountEur: 10, order: { gid: ORDER(9001) } });
+    assert.equal(r.status, 409);
+    assert.equal(r.body.code, "NO_PAYMENT_PAGE");
+    assert.match(r.body.error, /link the store again/);
+    assert.equal(store.findPaymentRequestBySource("shopify", ORDER(9001), SHOP2), undefined);
+  } finally {
+    store.updateMember(owner2Member.id, { status: "active" } as any);
+  }
+});
+await check("the org gained a EUR account backed by someone else after linking: create is 409 NO_PAYMENT_PAGE", async () => {
+  const account = store.addAccount({ id: randomUUID(), orgId: org2.id, currency: "EUR", label: "EUR account", status: "active", provider: null, identifier: {} as any, backingUserId: treasurer.id } as any);
+  try {
+    const r = await create(link2.linkId, { amountEur: 10, order: { gid: ORDER(9002) } });
+    assert.equal(r.status, 409);
+    assert.equal(r.body.code, "NO_PAYMENT_PAGE");
+    assert.match(r.body.error, /link the store again/);
+    assert.equal(store.findPaymentRequestBySource("shopify", ORDER(9002), SHOP2), undefined);
+  } finally {
+    store.updateAccount(account.id, { backingUserId: undefined });
+  }
+  assert.equal((await create(link2.linkId, { amountEur: 10, order: { gid: ORDER(9003) } })).status, 201, "restored payee opens again");
 });
 
 console.log("routes 7-8: read and cancel");
@@ -554,7 +583,9 @@ await check("a viewer may not revoke (403); another org's link id is 404", async
   assert.equal((await call("DELETE", `/api/orgs/${org.id}/merchant-links/${link.linkId}`, { user: viewer.id })).status, 403);
   assert.equal((await call("DELETE", `/api/orgs/${org2.id}/merchant-links/${link.linkId}`, { user: owner2.id })).status, 404);
 });
+let preRevokeCode = "";
 await check("an owner revokes: revokedAt and revokedBy set, {linkId} announced, the second call idempotent and silent", async () => {
+  preRevokeCode = codeOf((await issue(org, owner)).body.installUrl);
   deliveries.length = 0;
   const r = await call("DELETE", `/api/orgs/${org.id}/merchant-links/${link.linkId}`, { user: owner.id });
   assert.equal(r.status, 200);
@@ -572,6 +603,12 @@ await check("an owner revokes: revokedAt and revokedBy set, {linkId} announced, 
   await sleep(100);
   assert.equal(deliveries.length, 1);
   assert.ok(store.findMerchantLink(link.linkId), "a revoked link is kept");
+});
+await check("a link code issued before the revoke cannot be exchanged after it", async () => {
+  const r = await exchange(preRevokeCode);
+  assert.equal(r.status, 404);
+  assert.equal(r.body.code, "LINK_CODE_INVALID");
+  assert.equal(store.activeMerchantLinkForShop(SHOP), undefined);
 });
 await check("a revoked link opens nothing (403 LINK_REVOKED), not even a repeat of a known order", async () => {
   const r = await create(link.linkId, { amountEur: 10, order: { gid: ORDER(8001) } });
@@ -609,6 +646,8 @@ await check("every service call is audited with its credential and outcome, neve
   assert.ok(rows.every((a) => a.data.credentialId && a.data.outcome));
   const s = JSON.stringify(rows);
   assert.ok(!s.includes(link.linkSecret) && !s.includes(token) && !s.includes("zlc_"));
+  const linked = rows.filter((a) => a.data.outcome === "linked");
+  assert.ok(linked.length > 0 && linked.every((a) => a.data.payeeUserId), "linked rows name the payee");
 });
 
 server.close();

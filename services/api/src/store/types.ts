@@ -1046,7 +1046,8 @@ export interface MerchantLink {
    *  It leaves the API only to the checkout at exchange, and inside the
    *  email template shown to members who may change the org. */
   linkSecretEnc: string;
-  /** The member whose consent created it. */
+  /** The member whose consent is in force: who linked it, or linked the
+   *  shop again most recently. */
   createdBy: string;
   createdAt: string;
   updatedAt: string;

@@ -31,6 +31,7 @@ import {
   MAX_REQUEST_TTL_MS,
   consumeLinkCode,
   establishLink,
+  linkPayeeProblem,
   linkRefusal,
   linkSecretOf,
   merchantLinksAvailable,
@@ -42,6 +43,7 @@ import {
 const MAX_AUDITED_ID = 64;
 const MAX_DESCRIPTION = 140;
 const MAX_ORDER_NAME = 40;
+const MAX_STATUS_URL = 2048;
 const ORDER_GID = /^gid:\/\/shopify\/Order\/\d{1,20}$/;
 
 type Caller = { credential: ServiceCredential };
@@ -112,6 +114,7 @@ function parseCreate(b: any): CreateBody | { error: string } {
   }
   let statusUrl: string | undefined;
   if (o.statusUrl !== undefined) {
+    if (typeof o.statusUrl !== "string" || o.statusUrl.length > MAX_STATUS_URL) return { error: `order.statusUrl must be an https URL of at most ${MAX_STATUS_URL} characters` };
     statusUrl = externalHttpUrl(o.statusUrl);
     if (!statusUrl) return { error: "order.statusUrl must be an https URL" };
   }
@@ -162,14 +165,20 @@ export function createServiceMerchantRouter() {
         audit("service.merchant_link_exchange", caller, "", "refused:NO_PAYMENT_PAGE", { orgId: pending.orgId, shop });
         return res.status(409).json({ code: "NO_PAYMENT_PAGE", error: "the receiving account no longer has a payment page" });
       }
-      let link: MerchantLink;
+      let established: ReturnType<typeof establishLink>;
       try {
-        link = establishLink(pending);
+        established = establishLink(pending);
       } catch (err) {
-        if (err instanceof EncryptionUnavailableError) return res.status(503).json({ error: err.message, code: "MERCHANT_LINKS_UNAVAILABLE" });
+        if (err instanceof EncryptionUnavailableError) {
+          audit("service.merchant_link_exchange", caller, "", "unavailable:encryption", { orgId: pending.orgId, shop });
+          return res.status(503).json({ error: err.message, code: "MERCHANT_LINKS_UNAVAILABLE" });
+        }
         throw err;
       }
-      audit("service.merchant_link_exchange", caller, link.id, "linked", { orgId: link.orgId, shop }, pending.installerId);
+      const { link, previousPayeeUserId } = established;
+      audit("service.merchant_link_exchange", caller, link.id, "linked", {
+        orgId: link.orgId, shop, payeeUserId: link.payeeUserId, ...(previousPayeeUserId ? { previousPayeeUserId } : {}),
+      }, pending.installerId);
       res.json({
         linkId: link.id,
         shop: link.shop,
@@ -225,9 +234,12 @@ export function createServiceMerchantRouter() {
       // The shop is the link's, never the body's.
       const existing = store.findPaymentRequestBySource("shopify", body.gid, link.shop);
       if (existing) return answer(existing, 200, "existing");
+      // Fail closed on a payee that is no longer the one the org would choose.
+      const payeeProblem = linkPayeeProblem(link);
+      if (payeeProblem) return refuse(409, "stale_payee", { error: payeeProblem, code: "NO_PAYMENT_PAGE" });
       const payee = store.findUser(link.payeeUserId);
       if (!payee?.paymentPage?.handle || !payee.paymentPage.depositAddress) {
-        return refuse(409, "no_payment_page", { error: "the receiving account has no payment page", code: "NO_PAYMENT_PAGE" });
+        return refuse(409, "no_payment_page", { error: "the receiving account has no payment page; an organisation admin must link the store again from the dashboard", code: "NO_PAYMENT_PAGE" });
       }
       let created = false;
       const r = await openOnce(`${link.shop}|${body.gid}`, async () => {
