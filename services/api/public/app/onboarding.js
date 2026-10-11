@@ -62,7 +62,10 @@ function obFinish() {
    dashboard's KYC banner, which opens the Monerium step from Home. */
 function enterKycReview(_name) {
   obShow();
-  obGo(obNextAfterAccount() || "monerium", { replace: true });
+  // An approved account without its IBAN switches it on again; Home only
+  // offers this when nothing else is left to set up.
+  const off = ibanSwitchedOff(user) && hasConnectedMonerium(user) && !obNextAfterAccount();
+  obGo(off ? "activate" : obNextAfterAccount() || "monerium", { replace: true });
 }
 
 /* Home's "Confirm your email" row: the code screen, then back to wherever
@@ -121,7 +124,7 @@ function obGuard(name) {
     if (name === "welcome") return name;
     if (name === "email") return caps.emailVerification && user.email && !user.emailVerifiedAt ? name : obNextAfterAccount() || "monerium";
     if (name === "recovery-email") return caps.emailSmsRecovery && user.passkeySafe?.status === "active" && recoveryOfferedFor() ? name : obNextAfterAccount() || "monerium";
-    if (name === "monerium-keys") return caps.moneriumApiKeys && !kycApproved(user) ? name : obNextAfterAccount() || "monerium";
+    if (name === "monerium-keys") return caps.moneriumApiKeys && (!kycApproved(user) || !user.iban) ? name : obNextAfterAccount() || "monerium";
     if (name === "recovery") return recoveryEnrolmentPending() || obRecoveryDone ? name : obNextAfterAccount() || "monerium";
     return name;
   }
