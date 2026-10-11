@@ -1,0 +1,45 @@
+# Rebuilds the `production` branch after every merge to main. zoldhq.com
+# watches `production` and deploys each new commit on it, so this workflow is
+# how a merge reaches the site. It never talks to Akash and holds no secret
+# beyond the job's own GITHUB_TOKEN.
+name: production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# One build at a time, in merge order: each run adds a commit on top of the
+# previous one.
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.17.0
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      # A red check stops here: nothing reaches production.
+      - run: npm run check
+      - name: Build production from this main commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          scripts/build-production-branch.sh "$GITHUB_SHA"
+      - name: Push production
+        run: |
+          if git rev-parse -q --verify refs/heads/production >/dev/null; then
+            git push origin production
+          fi

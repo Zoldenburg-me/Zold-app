@@ -7,7 +7,7 @@ import type { RecoveryRequest } from "./store.js";
  * someone's phone number.
  */
 export function publicRecoveryRequest(request: RecoveryRequest) {
-  const { contact: _contact, reviewedBy: _reviewedBy, reviewReason: _reviewReason, candide, zoldenburg, ...pub } = request;
+  const { contact: _contact, reviewedBy: _reviewedBy, reviewReason: _reviewReason, ownerAlerts: _ownerAlerts, candide, zoldenburg, turnkey, ...pub } = request;
   const out: Record<string, unknown> = { ...pub };
   if (candide) {
     const { newPasskey, auths, accessHash: _accessHash, otpTicketHash: _otpTicketHash, ...rest } = candide;
@@ -23,8 +23,13 @@ export function publicRecoveryRequest(request: RecoveryRequest) {
     };
   }
   if (zoldenburg) {
-    const { newPasskey, accessHash: _accessHash, ...rest } = zoldenburg;
+    // bankCheck holds a code hash; routes/recovery-zoldenburg.ts adds its own view.
+    const { newPasskey, accessHash: _accessHash, bankCheck: _bankCheck, ...rest } = zoldenburg;
     out.zoldenburg = { ...rest, newPasskeyRegistered: Boolean(newPasskey) };
+  }
+  if (turnkey) {
+    const { newPasskey, accessHash: _accessHash, ...rest } = turnkey;
+    out.turnkey = { ...rest, newPasskeyRegistered: Boolean(newPasskey) };
   }
   return out;
 }

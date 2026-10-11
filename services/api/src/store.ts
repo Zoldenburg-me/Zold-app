@@ -14,7 +14,9 @@
  * ./store/db.ts; both are re-exported here.
  */
 import { randomUUID } from "node:crypto";
-import { db, persist, pruneSessions, seedChartOfAccounts } from "./store/db.js";
+import { batched, db, persist, pruneSessions, seedChartOfAccounts } from "./store/db.js";
+import { nextProfileHistory } from "./domain/monerium-identity.js";
+import { auditEntry } from "./audit.js";
 import type {
   Account,
   AccountRule,
@@ -27,28 +29,95 @@ import type {
   Member,
   Organisation,
 } from "./domain/types.js";
+import { OPERATOR_REFUND_STEP, REVIEW_RESOLUTION_STATES } from "./store/types.js";
+import { matchesPayoutEvidence } from "./transfers/review-evidence.js";
 import type {
   ConversionSweep,
   CryptoDeposit,
   MoneriumIssueRecord,
+  Operator,
+  OperatorCredential,
+  OperatorSession,
   PaymentRequest,
   Quote,
   ReceiptShare,
   RecoveryRequest,
+  ReviewResolutionState,
+  ServiceCredential,
   Session,
   ShopifyConnection,
   StoredDocument,
   Transfer,
   User,
 } from "./store/types.js";
+import { describeCause } from "./http/log-cause.js";
 
 export * from "./store/types.js";
 export { initStore } from "./store/db.js";
 
+/** Bounds of an operator's review-resolution note. */
+export const REVIEW_NOTE_MIN = 20;
+export const REVIEW_NOTE_MAX = 2000;
+/** Bound of the order id, tx hash or reference an operator cites. */
+export const REVIEW_EVIDENCE_MAX = 200;
+
 /** Daily-cap holds for transfers being prepared — see store.holdDailyCap. */
 const capHolds = new Map<string, { userId: string; eur: number; day: string }>();
 
+/** Called after a transfer's state changed and was persisted. */
+type TransferStateListener = (t: Transfer, from: Transfer["state"]) => void;
+const transferStateListeners: TransferStateListener[] = [];
+
+/** A listener's failure is logged, never thrown into the write that moved the
+ *  state: the change is already on disk. */
+function announceStateChange(t: Transfer, from: Transfer["state"]) {
+  if (t.state === from) return;
+  for (const listener of transferStateListeners) {
+    try {
+      listener(t, from);
+    } catch (err) {
+      console.error(`store: transfer state listener failed for ${t.id}: ${describeCause(err)}`);
+    }
+  }
+}
+
+/**
+ * Which record already holds `hash`, among everything the bank statement
+ * books hashes from (bookkeeping/statement.ts): every transfer's steps, every
+ * crypto deposit's tx, conversion and steps, every sweep's conversion and
+ * steps, and the ledger's own lines. Undefined when none does.
+ */
+function hashOnRecord(hash: string, userId: string): string | undefined {
+  const h = hash.toLowerCase();
+  const is = (x: string | undefined) => typeof x === "string" && x.toLowerCase() === h;
+  const t = db.transfers.find((x) => x.txs.some((s) => is(s.hash)));
+  if (t) return `transfer ${t.id}`;
+  // The refund itself, sent to this user's Safe, is recorded by the deposit
+  // scanner as a plain EURe arrival, usually before the operator resolves.
+  // That one is the refund: citing it books it as the reversal instead of a
+  // deposit. A deposit that is anyone else's, was converted, or pays an
+  // invoice or a pay link is a different payment.
+  const refundArrival = (x: (typeof db.cryptoDeposits)[number]) =>
+    x.userId === userId && x.token === "EURE" && is(x.txHash) && !x.conversion && !x.invoiceId && !x.paymentRequestId &&
+    !(x.txs ?? []).some((s) => is(s.hash));
+  const d = db.cryptoDeposits.find(
+    (x) =>
+      !refundArrival(x) &&
+      (is(x.txHash) || is(x.conversion?.txHash) || is(x.conversion?.userOpHash) || (x.txs ?? []).some((s) => is(s.hash))),
+  );
+  if (d) return `deposit ${d.id}`;
+  const sw = db.conversionSweeps.find(
+    (x) => is(x.conversion?.txHash) || is(x.conversion?.userOpHash) || x.txs.some((s) => is(s.hash)),
+  );
+  if (sw) return `sweep ${sw.id}`;
+  const l = db.ledger.find((x) => is(x.txHash));
+  if (l) return `ledger line ${l.id}`;
+  return undefined;
+}
+
 export const store = {
+  /** Several writes, one file write (store/db.ts). */
+  batched,
   get users() {
     return db.users;
   },
@@ -71,9 +140,60 @@ export const store = {
   updateUser(id: string, patch: Partial<User>) {
     const u = db.users.find((x) => x.id === id);
     if (!u) throw new Error(`unknown user ${id}`);
-    Object.assign(u, patch);
+    // The one place an IBAN changes, so the one place its date is kept.
+    const bare = (v?: string) => (v ?? "").replace(/\s+/g, "").toUpperCase();
+    const ibanChanged = typeof patch.iban === "string" && bare(patch.iban) !== "" && bare(patch.iban) !== bare(u.iban);
+    // The one place a Monerium profile is recorded, so the one place its
+    // history is appended to. A patch cannot write the history itself.
+    const { moneriumProfileHistory: _ignored, ...rest } = patch;
+    const history = nextProfileHistory(u, rest, new Date().toISOString());
+    Object.assign(
+      u,
+      rest,
+      ibanChanged && !patch.ibanSince ? { ibanSince: new Date().toISOString() } : {},
+      history ? { moneriumProfileHistory: history } : {},
+    );
     persist();
     return u;
+  },
+  /**
+   * Record a verified assertion's signCount, only while `credentialId` is
+   * still the account's passkey: a recovery can replace the passkey while an
+   * assertion is being verified. Undefined when it was replaced; the caller
+   * refuses the assertion.
+   */
+  recordPasskeyUse(id: string, credentialId: string, signCount: number) {
+    const u = db.users.find((x) => x.id === id);
+    if (!u?.passkey || u.passkey.credentialId !== credentialId) return undefined;
+    return store.updateUser(id, { passkey: { ...u.passkey, signCount } });
+  },
+  serviceCredentials(service: ServiceCredential["service"]): readonly ServiceCredential[] {
+    return db.serviceCredentials.filter((c) => c.service === service);
+  },
+  /**
+   * Make `next` the service's current credential. Every other one of that
+   * service stops working `overlapMs` from now, or earlier if a past rotation
+   * already set that. One write, with its audit row. Returns when the
+   * previous credential stops working.
+   */
+  rotateServiceCredential(next: ServiceCredential, overlapMs: number, by: string, revoked = false): string {
+    const until = new Date(Date.now() + overlapMs).toISOString();
+    for (const c of db.serviceCredentials) {
+      if (c.service !== next.service) continue;
+      if (!c.expiresAt || c.expiresAt > until) c.expiresAt = until;
+    }
+    db.serviceCredentials.push(next);
+    db.audit.push(
+      auditEntry("service.credential_rotated", {
+        service: next.service,
+        credentialId: next.id,
+        previousValidUntil: until,
+        revokedPrevious: revoked,
+        operator: by,
+      }),
+    );
+    persist();
+    return until;
   },
   /**
    * Append one audit entry. There is deliberately no update and no delete —
@@ -155,11 +275,13 @@ export const store = {
     if (!needle) return [];
     return db.users.filter((u) => (u.email ?? "").trim().toLowerCase() === needle);
   },
-  /** Case-insensitive email match. Prefers an account that can actually be
+  /** Case-insensitive email match. Prefers the account that confirmed the
+   *  address (routes/email-verification.ts), then one that can actually be
    *  recovered when the same address was used more than once. */
   findUserByEmail(email: string) {
     const matches = store.usersByEmail(email);
     return (
+      matches.find((u) => !!u.emailVerifiedAt) ??
       matches.find((u) => u.passkeySafe?.candideRecovery?.guardianStatus === "active") ??
       matches.find((u) => u.passkeySafe?.status === "active") ??
       matches[0]
@@ -179,6 +301,7 @@ export const store = {
     return db.processedMoneriumOrders.includes(orderId);
   },
   markOrderProcessed(orderId: string) {
+    if (db.processedMoneriumOrders.includes(orderId)) return;
     db.processedMoneriumOrders.push(orderId);
     persist();
   },
@@ -190,6 +313,11 @@ export const store = {
     persist();
   },
   addQuote(q: Quote) {
+    // A quote nobody took is worth nothing a day after it expired, and every
+    // POST /quotes adds one: drop those, so asking for prices cannot grow the
+    // file without end. A CONSUMED quote is a transfer's terms and stays.
+    const stale = Date.now() - 24 * 60 * 60_000;
+    db.quotes = db.quotes.filter((x) => x.status === "CONSUMED" || Date.parse(x.expiresAt) > stale);
     db.quotes.push(q);
     persist();
   },
@@ -287,13 +415,113 @@ export const store = {
     // REFUNDED and PAID are final. A slow live leg finishing after the sweep
     // refunded the transfer must not move it back and complete a payout the
     // sender was already repaid for; the late write keeps its other fields.
-    if ((t.state === "REFUNDED" || t.state === "PAID") && patch.state && patch.state !== t.state) {
+    // MANUAL_REVIEW belongs to an operator: no automatic path moves it on,
+    // since FAILED is what the sweep refunds. resolveTransferReview is the one
+    // way out, and the state an operator resolved into is final too.
+    if (
+      (t.state === "REFUNDED" || t.state === "PAID" || t.state === "MANUAL_REVIEW" || t.reviewResolution) &&
+      patch.state &&
+      patch.state !== t.state
+    ) {
       console.error(`store: refusing to move transfer ${id} from ${t.state} to ${patch.state}`);
-      patch = { ...patch, state: undefined };
+      // Omit state. Assigning `state: undefined` copies the key and erases the field.
+      const { state: _dropped, ...rest } = patch;
+      patch = rest;
     }
+    const from = t.state;
     Object.assign(t, patch, { updatedAt: new Date().toISOString() });
     persist();
+    announceStateChange(t, from);
     return t;
+  },
+  /** Subscribe to transfer state changes (checkout-webhook.ts). */
+  onTransferStateChange(listener: TransferStateListener) {
+    transferStateListeners.push(listener);
+  },
+  /**
+   * The only way out of MANUAL_REVIEW: an operator records what they decided
+   * after acting on chain or at the partner. Moves no money. Records the
+   * resolution on the transfer and an audit entry, once per transfer.
+   */
+  resolveTransferReview(
+    id: string,
+    r: { state: ReviewResolutionState; note: string; by: string; evidence?: string; refund?: { amountEur: number; movedEur: number } },
+  ):
+    | { ok: true; transfer: Transfer }
+    | { ok: false; code: "NOT_FOUND" | "NOT_IN_REVIEW" | "NO_PAYOUT_EVIDENCE" }
+    | { ok: false; code: "EVIDENCE_ON_RECORD"; recordedOn: string } {
+    if (!(REVIEW_RESOLUTION_STATES as readonly string[]).includes(r.state)) {
+      throw new Error(`a review resolves to ${REVIEW_RESOLUTION_STATES.join(", ")}, not ${r.state}`);
+    }
+    const note = r.note.trim();
+    if (note.length < REVIEW_NOTE_MIN || note.length > REVIEW_NOTE_MAX) {
+      throw new Error(`a review resolution needs a note of ${REVIEW_NOTE_MIN}-${REVIEW_NOTE_MAX} characters`);
+    }
+    if (!r.by) throw new Error("a review resolution names its operator");
+    if (r.state === "REFUNDED") {
+      const a = r.refund?.amountEur;
+      if (typeof a !== "number" || !Number.isFinite(a) || a < 0 || a > (r.refund?.movedEur ?? 0) || !r.evidence?.trim()) {
+        throw new Error("a review resolved as REFUNDED names the amount returned (0 up to what left the Safe) and its evidence");
+      }
+    }
+    const t = db.transfers.find((x) => x.id === id);
+    if (!t) return { ok: false, code: "NOT_FOUND" };
+    if (t.state !== "MANUAL_REVIEW" || t.reviewResolution) return { ok: false, code: "NOT_IN_REVIEW" };
+    // PAID settles linked pay links, invoices and shop orders: the operator
+    // cites a payout the transfer recorded as carried out (review-evidence.ts).
+    const evidence = r.evidence?.trim() || undefined;
+    if (r.state === "PAID" && !(evidence && matchesPayoutEvidence(t, evidence))) {
+      return { ok: false, code: "NO_PAYOUT_EVIDENCE" };
+    }
+    // A refund tx hash is booked as the reversal and kept out of the EURe
+    // arrivals, so it must be one no record holds yet: otherwise it would hide
+    // a real arrival, take a debit line's link, or count for two transfers.
+    const refundTx = r.state === "REFUNDED" && evidence && /^0x[0-9a-fA-F]{64}$/.test(evidence) ? evidence : undefined;
+    if (refundTx) {
+      const recordedOn = hashOnRecord(refundTx, t.userId);
+      if (recordedOn) return { ok: false, code: "EVIDENCE_ON_RECORD", recordedOn };
+    }
+    const at = new Date().toISOString();
+    t.reviewResolution = {
+      state: r.state,
+      note,
+      by: r.by,
+      at,
+      ...(t.error ? { previousError: t.error } : {}),
+      ...(evidence ? { evidence } : {}),
+    };
+    if (r.state === "REFUNDED" && r.refund) {
+      const short = Math.round((r.refund.movedEur - r.refund.amountEur) * 100) / 100;
+      t.refund = {
+        amountEur: r.refund.amountEur,
+        recoveredFrom: "operator-resolved",
+        deductions: short > 0 ? `€${short.toFixed(2)} not returned` : "none",
+        at,
+      };
+      // A fresh refund tx is booked as the reversal, not as a stray EURe
+      // arrival. A partner reference stays in reviewResolution.evidence only.
+      if (refundTx) t.txs.push({ step: OPERATOR_REFUND_STEP, hash: refundTx });
+    }
+    t.state = r.state;
+    t.updatedAt = at;
+    db.audit.push(
+      auditEntry(
+        "operator.transfer_review_resolved",
+        {
+          transferId: t.id,
+          from: "MANUAL_REVIEW",
+          to: r.state,
+          note,
+          operator: r.by,
+          ...(evidence ? { evidence } : {}),
+          ...(t.refund && r.state === "REFUNDED" ? { refundedEur: t.refund.amountEur } : {}),
+        },
+        t.userId,
+      ),
+    );
+    persist();
+    announceStateChange(t, "MANUAL_REVIEW");
+    return { ok: true, transfer: t };
   },
   /**
    * One share per transfer, deliberately.
@@ -447,6 +675,88 @@ export const store = {
     persist();
     return s;
   },
+  get operators() {
+    return db.operators;
+  },
+  findOperator(id: string) {
+    return db.operators.find((o) => o.id === id);
+  },
+  /** Emails are compared case-insensitively; they are stored lowercase. */
+  findOperatorByEmail(email: string) {
+    const e = email.trim().toLowerCase();
+    return db.operators.find((o) => o.email === e);
+  },
+  /** Operator credentials only: a user's passkey is never found here. */
+  findOperatorCredential(credentialId: string): { operator: Operator; credential: OperatorCredential } | undefined {
+    for (const operator of db.operators) {
+      const credential = operator.credentials.find((c) => c.credentialId === credentialId);
+      if (credential) return { operator, credential };
+    }
+    return undefined;
+  },
+  addOperator(o: Operator) {
+    if (db.operators.some((x) => x.email === o.email)) throw new Error("an operator with that email exists");
+    db.operators.push({ ...o, email: o.email.trim().toLowerCase() });
+    persist();
+    return db.operators[db.operators.length - 1];
+  },
+  addOperatorCredential(operatorId: string, credential: OperatorCredential) {
+    const o = db.operators.find((x) => x.id === operatorId);
+    if (!o) throw new Error(`unknown operator ${operatorId}`);
+    if (db.operators.some((x) => x.credentials.some((c) => c.credentialId === credential.credentialId))) {
+      throw new Error("that passkey is already registered");
+    }
+    o.credentials = [...o.credentials, credential];
+    persist();
+    return o;
+  },
+  /** The sign counter and last use, after a verified assertion. */
+  recordOperatorCredentialUse(operatorId: string, credentialId: string, signCount: number) {
+    const o = db.operators.find((x) => x.id === operatorId);
+    const c = o?.credentials.find((x) => x.credentialId === credentialId);
+    if (!o || !c) throw new Error(`unknown operator credential ${credentialId}`);
+    o.credentials = o.credentials.map((x) =>
+      x.credentialId === credentialId ? { ...x, signCount, lastUsedAt: new Date().toISOString() } : x,
+    );
+    persist();
+  },
+  disableOperator(id: string) {
+    const o = db.operators.find((x) => x.id === id);
+    if (!o) throw new Error(`unknown operator ${id}`);
+    o.disabledAt ??= new Date().toISOString();
+    for (const s of db.operatorSessions) if (s.operatorId === id && !s.revokedAt) s.revokedAt = o.disabledAt;
+    persist();
+    return o;
+  },
+  addOperatorSession(s: OperatorSession) {
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    db.operatorSessions = db.operatorSessions.filter((x) => {
+      const dead = x.revokedAt ? Date.parse(x.revokedAt) : Date.parse(x.expiresAt);
+      return !(Number.isFinite(dead) && dead < cutoff);
+    });
+    db.operatorSessions.push(s);
+    persist();
+  },
+  findOperatorSessionByTokenHash(tokenHash: string) {
+    return db.operatorSessions.find((s) => s.tokenHash === tokenHash);
+  },
+  revokeOperatorSession(id: string) {
+    const s = db.operatorSessions.find((x) => x.id === id);
+    if (!s) throw new Error(`unknown operator session ${id}`);
+    s.revokedAt ??= new Date().toISOString();
+    persist();
+    return s;
+  },
+  /** Minute granularity, as for user sessions: the idle limit is 30 minutes. */
+  touchOperatorSession(id: string) {
+    const s = db.operatorSessions.find((x) => x.id === id);
+    if (!s) throw new Error(`unknown operator session ${id}`);
+    const now = Date.now();
+    if (now - Date.parse(s.lastUsedAt) < 60_000) return s;
+    s.lastUsedAt = new Date(now).toISOString();
+    persist();
+    return s;
+  },
   /** Handles are compared case-insensitively; they are stored lowercase. */
   findUserByHandle(handle: string) {
     const h = handle.trim().toLowerCase();
@@ -454,6 +764,11 @@ export const store = {
   },
   findUser(id: string) {
     return db.users.find((u) => u.id === id);
+  },
+  /** An organisation's payment page handle, compared like a user's. */
+  findOrgByHandle(handle: string) {
+    const h = handle.trim().toLowerCase();
+    return db.organisations.find((o) => o.paymentPage?.handle === h);
   },
   findUserByIban(iban: string) {
     const norm = iban.replace(/\s/g, "").toUpperCase();
@@ -672,14 +987,20 @@ export const store = {
    * parallel submissions of one draft cannot both pass. Returns null when
    * somebody else already claimed it.
    *
-   * `from` is the set of states this caller may claim out of: ["REVIEWED"] for
-   * an org with approvals, ["DRAFT"] for one without. Passed in rather than
-   * hardcoded so the plan decides, but still checked here — inside the same
-   * synchronous window as the write.
+   * `from` is the set of states this caller may claim out of: ["REVIEWED"]
+   * for an org whose review policy is on, ["DRAFT", "REVIEWED"] for one
+   * without. Passed in so the policy decides, but still checked here, inside
+   * the same synchronous window as the write. With `expectedUpdatedAt`, a
+   * draft written at all since the caller read it is not claimed either.
    */
-  claimDraftExecution(id: string, from: DraftPayment["state"][] = ["REVIEWED"]): DraftPayment | null {
+  claimDraftExecution(
+    id: string,
+    from: DraftPayment["state"][] = ["REVIEWED"],
+    expectedUpdatedAt?: string,
+  ): DraftPayment | null {
     const d = db.drafts.find((x) => x.id === id);
     if (!d || !from.includes(d.state)) return null;
+    if (expectedUpdatedAt !== undefined && d.updatedAt !== expectedUpdatedAt) return null;
     d.state = "EXECUTING";
     d.updatedAt = new Date().toISOString();
     persist();

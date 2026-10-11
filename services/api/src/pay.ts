@@ -38,6 +38,58 @@ const RESERVED = new Set([
   "users", "www", "zold", "zoldenburg",
 ]);
 
+/**
+ * Names a handle may not impersonate: us, staff roles, partners, and
+ * well-known people. A handle sits next to a deposit address, so one that
+ * reads as any of these collects money on borrowed trust. Not complete and
+ * cannot be; these are the names a phish reaches for first.
+ *
+ * Checked when a handle is claimed, never when one is looked up: a page that
+ * exists keeps working if a later list would have refused it.
+ */
+
+/** Refused anywhere, including inside a longer handle (`zold-support`,
+ *  `zoldpay`, `vitalikbuterin`). Only words long or rare enough that a hit is
+ *  almost always the name itself — `admin` does also catch `badminton`. */
+const BLOCKED_ANYWHERE = [
+  "zold", "support", "admin",
+  "monerium", "gnosis", "bebop", "uniswap", "cowswap", "moonpay", "shopify",
+  "sevdesk", "lexware", "coinbase", "binance", "metamask",
+  "vitalik", "buterin", "satoshi", "nakamoto", "elonmusk", "changpeng", "saylor",
+];
+
+/** Refused as the whole handle or as one hyphen-separated part, not inside a
+ *  longer word: `iron` blocks `iron-pay` but not `ironing`, and `lifi` would
+ *  otherwise block `amplifier`. */
+const BLOCKED_AS_WORD = new Set([
+  "iron", "lifi", "safe", "base", "circle", "bridge", "mony", "eure", "usdc", "zusd",
+  "stellar", "elon", "musk", "sbf",
+]);
+
+/** Digits swapped in for letters (`z0ld`, `adm1n`, `5upport`). `1` stands for
+ *  both `i` and `l`, so it is folded both ways. */
+const LOOKALIKE_DIGITS: Record<string, string> = { "0": "o", "3": "e", "4": "a", "5": "s", "7": "t", "8": "b" };
+
+function lookalikeFoldings(text: string): string[] {
+  const folded = text.replace(/[034578]/g, (d) => LOOKALIKE_DIGITS[d]);
+  return [folded.replace(/1/g, "i"), folded.replace(/1/g, "l")];
+}
+
+/** The blocked name a handle impersonates, or undefined. Expects a handle that
+ *  already passed `HANDLE_RE`. */
+export function impersonatedName(handle: string): string | undefined {
+  for (const compact of lookalikeFoldings(handle.replace(/-/g, ""))) {
+    const inside = BLOCKED_ANYWHERE.find((word) => compact.includes(word));
+    if (inside) return inside;
+    if (BLOCKED_AS_WORD.has(compact)) return compact;
+  }
+  for (const part of handle.split("-")) {
+    const word = lookalikeFoldings(part).find((folded) => BLOCKED_AS_WORD.has(folded));
+    if (word) return word;
+  }
+  return undefined;
+}
+
 export class HandleError extends Error {}
 
 /**
@@ -49,6 +101,14 @@ export class HandleError extends Error {}
 export function normaliseHandle(raw: unknown): string {
   if (typeof raw !== "string") throw new HandleError("handle must be a string");
   const handle = raw.trim().toLowerCase();
+  // Letters from other scripts (Cyrillic "а", Greek "ο", fullwidth "ｚ") can
+  // render identically to latin ones, so `zоld` with a Cyrillic о would pass
+  // every list below. Refused with its own message, not folded.
+  if (/[^\x00-\x7f]/.test(handle)) {
+    throw new HandleError(
+      "handle may only use the latin letters a-z, numbers and hyphens — letters from other alphabets can look identical",
+    );
+  }
   if (handle.length < 3 || handle.length > 30) {
     throw new HandleError("handle must be between 3 and 30 characters");
   }
@@ -60,7 +120,16 @@ export function normaliseHandle(raw: unknown): string {
       "handle may use lowercase letters, numbers and hyphens, and cannot begin or end with a hyphen",
     );
   }
+  // ENSIP-15 refuses "--" in the third and fourth place (the "xn--" punycode
+  // prefix), and a handle is also an ENS name, `<handle>.zoldhq.com`.
+  if (handle.slice(2, 4) === "--") {
+    throw new HandleError("handle cannot have two hyphens as its third and fourth characters");
+  }
   if (RESERVED.has(handle)) throw new HandleError(`"${handle}" is reserved`);
+  const impersonated = impersonatedName(handle);
+  if (impersonated) {
+    throw new HandleError(`handle cannot contain "${impersonated}" — it would read as someone else's page`);
+  }
   return handle;
 }
 
@@ -83,7 +152,15 @@ export interface PublicPayee {
   address: `0x${string}`;
   chainId: number;
   token: { symbol: string; address: `0x${string}`; decimals: number };
-  supportedTokens?: { chainId: number; symbol: "EURE" | "USDC"; address: `0x${string}`; decimals: number }[];
+  supportedTokens?: {
+    chainId: number;
+    chainName?: string;
+    symbol: string;
+    address: `0x${string}`;
+    decimals: number;
+    minAmount?: string;
+    feeBps?: number;
+  }[];
   settlementAsset: "EURE" | "USDC";
   autoConvert: boolean;
 }
@@ -108,7 +185,9 @@ export function publicPayee(
     address: page.depositAddress,
     chainId: chain.chainId,
     token: chain.token,
-    ...(page.supportedTokens?.length ? { supportedTokens: page.supportedTokens } : {}),
+    // Only a list read from the forwarder's routes: an older page stored a
+    // hard-coded EURe + USDC, and Candide strands what its routes do not list.
+    ...(page.routesReadAt && page.supportedTokens?.length ? { supportedTokens: page.supportedTokens } : {}),
     settlementAsset: page.settlementAsset,
     autoConvert: page.autoConvert,
   };
@@ -126,4 +205,39 @@ export function paymentUri(payee: PublicPayee, amount?: number): string {
   if (amount === undefined || !(amount > 0)) return base;
   const units = BigInt(Math.round(amount * 10 ** payee.token.decimals));
   return `${base}&uint256=${units}`;
+}
+
+/** What a stranger may read about an organisation's payment page: its name and
+ *  the bank details of its euro account. An allowlist, like publicPayee: no
+ *  member, no backing account, no balance. The BIC is Monerium's as reported,
+ *  left out when unknown rather than guessed. `holder` is the name Monerium has
+ *  for the profile, which is what the payer's bank checks the IBAN against.
+ *  Without one it is the name the organisation typed, and `holderVerified` is
+ *  false so the page says so. */
+export interface PublicOrgPayee {
+  kind: "organisation";
+  handle: string;
+  displayName: string;
+  bank: { holder: string; holderVerified: boolean; iban: string; bic?: string };
+}
+
+export function publicOrgPayee(
+  org: { name: string; legalName?: string; paymentPage?: { handle: string; displayName?: string } },
+  account: { identifier: { iban?: string; bic?: string } },
+  holder?: string,
+): PublicOrgPayee {
+  const page = org.paymentPage;
+  const iban = account.identifier.iban;
+  if (!page?.handle || !iban) throw new HandleError("organisation has no payment page");
+  return {
+    kind: "organisation",
+    handle: page.handle,
+    displayName: page.displayName || org.legalName || org.name,
+    bank: {
+      holder: holder?.trim() || org.legalName || org.name,
+      holderVerified: Boolean(holder?.trim()),
+      iban: iban.replace(/\s+/g, ""),
+      ...(account.identifier.bic ? { bic: account.identifier.bic } : {}),
+    },
+  };
 }

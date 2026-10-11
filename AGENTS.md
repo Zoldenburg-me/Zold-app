@@ -11,13 +11,14 @@ budget: replace or move something, do not append.
 
 Read when the task touches it:
 - `docs/status.md` — **what has never run** (no mainnet, no real swap, no cash
-  rail, no on-chain recovery, no mail). Read before saying anything works.
+  rail, no on-chain recovery). Read before saying anything works.
 - `docs/running-locally.md` — dev vs api, preflight, local funding and KYC
-  gate, the test-suite table.
+  gate, tests, the production branch.
 - `docs/recovery-and-signers.md` — second owner, Zoldenburg guardian, recovery.
 - `docs/roadmap.md` — agreed priority and parked ideas.
-- `docs/architecture/` — product (what exists, status) and technical (how,
-  routes). Design docs and `docs/gitbook/` are alongside.
+- `docs/architecture/` — product (what exists) and technical (how).
+- `docs/CODEMAPS/` — routes, modules, data, deps.
+- `docs/security-hardening.md` — secrets, keys, Postgres, mail; its Rules bind.
 
 ## How to write in this repo (comments, docs, this file, notes)
 
@@ -28,10 +29,10 @@ exists, a guard against a return, or a one-clause reason. Dates only on
 verified observations. Cleanup: `docs/agents/prune-history.md`.
 
 THREE RULES OVERRIDE CONVENIENCE:
-1. **main is PR-merge only.**
+1. **main is PR-merge only. Only `scripts/build-production-branch.sh` writes
+   `production`**, from merged main (`docs/running-locally.md`).
 2. **Nothing renders as real that has not moved real money.** This is the UPI
-   lesson (a rail that minted its own reference numbers for money that reached
-   nobody) and it is why gated currencies, SOON labels, `simulated` badges,
+   lesson and it is why gated currencies, SOON labels, `simulated` badges,
    dry-run plans and `heldByUs` all exist. Deleting a fake is cheaper than
    explaining one.
 3. **Fail closed.** No rate, no quote. No venue, no trade — never a silent
@@ -42,7 +43,7 @@ THREE RULES OVERRIDE CONVENIENCE:
 
 - **Chain**: `TRANSF_CHAIN_ID` selects it; default **8453 (Base mainnet)**.
   `deployments.json` is keyed by chain id; on a real chain it holds only EURe
-  and USDC (FxSwapper, AdminTimelock are hardhat-only). **No 8453 entry yet.**
+  and USDC. **No 8453 entry yet.**
   The running deployment is **Base Sepolia (84532)** + Monerium sandbox at
   zoldhq.com on an Akash lease (technical-architecture §18.1): closing the
   lease deletes every tester's account.
@@ -50,7 +51,6 @@ THREE RULES OVERRIDE CONVENIENCE:
   (no skip) → Safe deployed → recovery enrolment → the gate offers OAuth *or*
   your own Monerium API keys → "Activate IBAN with passkey". `POST /api/users`
   always creates `pending` with no IBAN; only an address-matched IBAN approves.
-  There is no KYC provider, no Sumsub, no operator review route.
 - **Rails**: SEPA (Monerium redeem, non-custodial for the principal, fee €0) is
   open. The **cash rail is CLOSED** unless `cashRailOpen()` — quotes answer 503
   RAIL_CLOSED and the app hides the corridor. There is no UPI rail; do not
@@ -58,8 +58,9 @@ THREE RULES OVERRIDE CONVENIENCE:
 - **Custody**: `LIQUIDITY.PROVIDER` defaults to `best` over `lifi,dex`, both
   Safe-executable, so the default deployment is non-custodial. The fee always
   lands at the orchestrator and `transfer.custody` records it.
-- **No simulation**: no mock deposits, faucet or mock IBANs (`config.ts`
-  refuses the old env vars). `/api/health` publishes `capabilities()`
+- **No simulation**: no mock deposits or mock IBANs (`config.ts` refuses
+  the old env vars). The testnet faucet (`faucet.ts`, `FAUCET_KEY`) sends
+  real test-chain EURe and refuses a real-money chain. `/api/health` publishes `capabilities()`
   (capabilities.ts), and the UI renders a control only where the API would
   accept it.
 - **The one harness seam that stays**: `KYC_AUTO_APPROVE=1` is honoured only on
@@ -79,8 +80,6 @@ THREE RULES OVERRIDE CONVENIENCE:
   the last holds declarations and wiring only, and NOTHING CALLS FORWARD into a
   later file. The last is `app/main.js`, and anything that awaits and then
   renders goes there (an early fetch can resolve before later code exists).
-  `sw.js` serves page `.js`/`.css` network-first, so a deploy needs no
-  `SHELL_CACHE` bump unless the SHELL list or a vendored file changes.
   `public/business/*.js` are **ES modules**; `core.js` owns shared state.
 - **server.ts owns authentication**: every router is a factory taking
   `requireUserSession`.
@@ -138,9 +137,8 @@ Each of these was a bug once.
   at execution. The gap between approval and execution is where an address-book
   edit lands.
 - **An org can never lose its last owner** — by role change or by deactivation.
-- **PRF is a per-authenticator capability, not a design guarantee.** Real
-  hardware reported no PRF support, so the device key was stored unwrapped:
-  anything that can read localStorage can spend there. Detect and surface it.
+- **The device key's protection is per-authenticator.** `device.js` reports
+  it; the Security screen shows what it reports.
 
 **Data and exposure**
 - **Collect per call, store nothing.** `SenderDetails` (name, birth date, ID
@@ -157,6 +155,16 @@ Each of these was a bug once.
   webhook cancels or dedupes against another's request.
 - **Documents are frozen snapshots, re-verified on every visit.** A revoked one
   fails verification rather than vanishing.
+
+**Secrets and storage**
+- **Agents never read `.env*`, `.private/` (bar `pentest/`) or
+  `data/*.json`**, and never print a secret.
+- **No secret in source, commits, PRs, logs, errors or fixtures.**
+- **Stored credentials go through `stored-secrets.ts`** (v2, a purpose per
+  kind, row-bound), never a plaintext fallback.
+- **No unencrypted copy of the database.** No real money or user data on a
+  host without a processing agreement. Staging is never under the passkey
+  domain.
 
 **Two strings keep the old "zoll" spelling on purpose** — do not finish the
 rename. `PRF_SALT = "zoll/device-key/v1"` is an *input* to key derivation, so a
@@ -176,26 +184,18 @@ the current authorizer can rotate a device key.
 ## Environment
 
 - Ports 3000 (API/UI), 8545 (chain); contract tests pick a free port.
-- No `gh` CLI, no brew. `origin` is SSH and pushes without a token. Opening
-  PRs via the REST API needs a PAT the user mints per session (HTTPS username
-  `tonyzil`, not `x-access-token`); tell the user to revoke it after.
+- No `gh` CLI, no brew. `origin` is SSH and pushes without a token.
 - Node lives in-project: `export PATH="$PWD/.toolchain/node-v22.17.0-darwin-arm64/bin:$PATH"`.
-  It is an **arm64** build: on an Intel Mac ("Bad CPU type", tsx fails too) use
-  a system node. `npm run typecheck` works on either (tsc is pure JS).
-- In the embedded browser pane, click coordinates are in SCREENSHOT space, and
-  WebAuthn ceremonies never resolve — test passkeys in a real browser.
-- Check `document.compatMode === "CSS1Compat"` on any new page: without
-  `<!DOCTYPE html>` tables do not inherit colour.
+  arm64 only; on Intel see `docs/running-locally.md`.
+- Browser-pane and new-page checks: `docs/running-locally.md`.
 
 ## Naming
 
 - **Zoldenburg** = the company / infra brand (B2B, legal, footer).
-- **Zold** = the consumer app. The old name **Zoll** survives only in the two
-  strings under Invariants ("Two strings keep the old zoll spelling").
+- **Zold** = the consumer app. **Zoll** survives only in the two strings above.
 - **Narwhal** = mascot. No narwhal emoji exists; the UI uses 🦄.
 - Repo dir on disk is still `transF`; do NOT rewrite absolute paths in
   `.claude/launch.json`. GitHub repo rename is pending.
-- TODO before public: domain + trademark clearance for "Zold" in fintech.
 
 ## Multi-agent workflow
 
@@ -206,11 +206,12 @@ More than one agent commits here.
   commit you last pushed; after merging, grep the tree — "merged: true" is not
   proof (a PR once dropped a pushed commit).
 - Start every session with `git fetch`; expect main to have moved mid-session.
-- A grep count of zero is not proof: confirm the file is READABLE first (zsh
-  reads `:s/` in `$REF:services/...` as a substitution modifier).
+- A grep count of zero is not proof: confirm the file is readable first.
 
 ## Style
 
 - Prose without AI-marketing jargon: what is real vs simulated, specifics over
   adjectives, shortcuts stated openly.
 - Honest assessments, not cheerleading. Say what is mocked.
+- **A user-visible change gets a PR on `Zoldenburg-me/zold-docs`** (GitBook)
+  in the same task; its `AGENTS.md` sets the voice.

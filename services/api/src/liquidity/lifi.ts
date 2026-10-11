@@ -24,11 +24,13 @@ import {
   SafeSwapContext,
   SafeSwapPlan,
   applySurplus,
+  assertMinOutBound,
   assertVenueTarget,
   balanceAfterWrite,
   defaultTokens,
   type VenueTokens,
   } from "./contract.js";
+import { redactedMessage } from "../http/log-cause.js";
 
 export class LifiLiquidityProvider implements LiquidityProvider {
   private indicative: { at: number; rate: number; raw: bigint } | null = null;
@@ -60,7 +62,7 @@ export class LifiLiquidityProvider implements LiquidityProvider {
     try {
       res = await fetch(url, { headers, signal: AbortSignal.timeout(LIQUIDITY.LIFI_TIMEOUT_MS) });
     } catch (e: any) {
-      throw new Error(`LI.FI unreachable (${e?.message ?? e}) — refusing to quote rather than pricing off our own book`);
+      throw new Error(`LI.FI unreachable (${redactedMessage(e)}) — refusing to quote rather than pricing off our own book`);
     }
     const body: any = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -93,6 +95,7 @@ export class LifiLiquidityProvider implements LiquidityProvider {
     const { estimate, tx, tool, toToken } = await this.fetchQuote(side, amountIn, ctx);
     const expectedOut = BigInt(estimate.toAmount);
     const minOut = BigInt(estimate.toAmountMin);
+    assertMinOutBound("LI.FI", expectedOut, minOut, BigInt(Math.round(LIQUIDITY.LIFI_SLIPPAGE * 10_000)));
 
     const eureWei = side === "EURE_TO_USDC" ? amountIn : expectedOut;
     const usdcUnits = side === "EURE_TO_USDC" ? expectedOut : amountIn;

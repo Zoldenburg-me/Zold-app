@@ -10,6 +10,7 @@
 // is the double-payout case the orchestrator guards against.
 
 import { partnerTimeout } from "../http.js";
+import { moneriumFetch } from "./monerium-limit.js";
 
 /** A non-2xx response from Monerium, carrying the status so callers can tell
  *  "this order does not exist" from "Monerium is briefly unreachable". */
@@ -19,6 +20,26 @@ export class MoneriumApiError extends Error {
     this.name = "MoneriumApiError";
   }
 }
+
+/**
+ * Zold cannot act on this account at Monerium: nothing is connected, or
+ * Monerium refused the credentials it holds (revoked, expired, a spent OAuth
+ * code). The user can fix it by connecting again, so it answers 409
+ * MONERIUM_NOT_CONNECTED (http/known-errors.ts), not a 500.
+ */
+export class MoneriumAccessError extends Error {
+  constructor(message: string, readonly partnerStatus?: number) {
+    super(message);
+    this.name = "MoneriumAccessError";
+  }
+}
+
+/** Monerium's own refusal of a token request is an access error; its 5xx
+ *  (or a proxy's) is a transient and stays a plain Error. */
+const tokenError = (what: string, status: number, body: string) =>
+  status >= 400 && status < 500
+    ? new MoneriumAccessError(`${what} (${status}): ${body}`, status)
+    : new Error(`${what} (${status}): ${body}`);
 
 export interface MoneriumConfig {
   baseUrl: string; // https://api.monerium.dev (sandbox) | .app (production)
@@ -56,7 +77,7 @@ export class MoneriumClient {
     if (this.token && Date.now() < this.token.expiresAt - 60_000) {
       return this.token.value;
     }
-    const res = await fetch(`${this.cfg.baseUrl}/auth/token`, {
+    const res = await moneriumFetch(`${this.cfg.baseUrl}/auth/token`, {
       signal: partnerTimeout(),
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -67,7 +88,7 @@ export class MoneriumClient {
       }),
     });
     if (!res.ok) {
-      throw new Error(`Monerium auth failed (${res.status}): ${await res.text()}`);
+      throw tokenError("Monerium auth failed", res.status, await res.text());
     }
     const data = (await res.json()) as { access_token: string; expires_in: number };
     this.token = { value: data.access_token, expiresAt: Date.now() + data.expires_in * 1000 };
@@ -76,7 +97,7 @@ export class MoneriumClient {
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const token = await this.accessToken();
-    const res = await fetch(`${this.cfg.baseUrl}${path}`, {
+    const res = await moneriumFetch(`${this.cfg.baseUrl}${path}`, {
       signal: partnerTimeout(),
       method,
       headers: {
@@ -222,7 +243,7 @@ export async function exchangeAuthorizationCode(cfg: MoneriumConfig, params: {
   codeVerifier: string;
   redirectUri: string;
 }): Promise<MoneriumTokenResponse> {
-  const res = await fetch(`${cfg.baseUrl}/auth/token`, {
+  const res = await moneriumFetch(`${cfg.baseUrl}/auth/token`, {
     signal: partnerTimeout(),
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -236,7 +257,7 @@ export async function exchangeAuthorizationCode(cfg: MoneriumConfig, params: {
     }),
   });
   if (!res.ok) {
-    throw new Error(`Monerium OAuth code exchange failed (${res.status}): ${await res.text()}`);
+    throw tokenError("Monerium OAuth code exchange failed", res.status, await res.text());
   }
   return (await res.json()) as MoneriumTokenResponse;
 }
@@ -245,7 +266,7 @@ export async function refreshAuthorizationToken(
   cfg: MoneriumConfig,
   refreshToken: string,
 ): Promise<MoneriumTokenResponse> {
-  const res = await fetch(`${cfg.baseUrl}/auth/token`, {
+  const res = await moneriumFetch(`${cfg.baseUrl}/auth/token`, {
     signal: partnerTimeout(),
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -257,7 +278,7 @@ export async function refreshAuthorizationToken(
     }),
   });
   if (!res.ok) {
-    throw new Error(`Monerium OAuth refresh failed (${res.status}): ${await res.text()}`);
+    throw tokenError("Monerium OAuth refresh failed", res.status, await res.text());
   }
   return (await res.json()) as MoneriumTokenResponse;
 }
@@ -270,7 +291,7 @@ export async function moneriumBearerRequest<T>(
   path: string,
   body?: unknown,
 ): Promise<T> {
-  const res = await fetch(`${baseUrl}${path}`, {
+  const res = await moneriumFetch(`${baseUrl}${path}`, {
     signal: partnerTimeout(),
     method,
     headers: {

@@ -72,7 +72,8 @@ const { initStore, store } = await import("../services/api/src/store.js");
 const { createShopifyRouter, resolveShopifyRequest } = await import("../services/api/src/routes/shopify.js");
 const { attributeDepositToRequest, onPaymentRequestPaid, sweepPaymentRequests } = await import("../services/api/src/routes/payment-requests.js");
 const { signBody, signQuery } = await import("../services/api/src/shopify/hmac.js");
-const { decryptField } = await import("../services/api/src/crypto-at-rest.js");
+const { fieldKeyId } = await import("../services/api/src/crypto-at-rest.js");
+const { SECRETS } = await import("../services/api/src/stored-secrets.js");
 initStore();
 onPaymentRequestPaid(resolveShopifyRequest);
 
@@ -181,7 +182,9 @@ await check("the genuine callback exchanges the code, stores the token ENCRYPTED
   const c = store.findShopifyConnectionByShop(SHOP)!;
   assert.ok(c, "no connection stored");
   assert.notEqual(c.accessTokenEnc, TOKEN);
-  assert.equal(decryptField("shopify", "test-encryption-key", c.accessTokenEnc), TOKEN);
+  assert.equal(fieldKeyId(c.accessTokenEnc), "t1", "written as v2 under the active key");
+  assert.equal(SECRETS.shopifyAccessToken.open(c.id, c.accessTokenEnc), TOKEN);
+  assert.throws(() => SECRETS.shopifyAccessToken.open("another-connection", c.accessTokenEnc), "bound to its row");
   assert.equal(c.payeeUserId, merchant.id);
   assert.ok(c.configuredAt, `configure did not run: ${c.configureError}`);
   const cfg = calls.find((x) => x.op === "paymentsAppConfigure");

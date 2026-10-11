@@ -31,6 +31,7 @@
 import { randomBytes } from "node:crypto";
 import { MONERIUM, PAYMENT_REQUESTS } from "./config.js";
 import type { CryptoDeposit, Transfer, User } from "./store.js";
+import { reportedBic } from "./sepa.js";
 
 export type PaymentMethod = "crypto" | "bank";
 export type PaymentRequestState = "OPEN" | "PAID" | "EXPIRED" | "CANCELLED";
@@ -98,6 +99,9 @@ export interface PaymentRequestSource {
   orderName?: string;
   /** Shopify's order status page — where the buyer lands afterwards. */
   orderStatusUrl?: string;
+  /** custom-app: SHA-256 of the order's `checkout_token`. The thank-you
+   *  page extension holds the token and presents it to read the order. */
+  checkoutTokenHash?: string;
   cancelUrl?: string;
   /** Where the payer goes once the merchant has been told. Set when the
    *  merchant's system answers the settlement call. */
@@ -227,7 +231,7 @@ export function validateCreate(body: any, user: User, now = new Date()): CreateI
     const n = Number(b.amountEur);
     if (!Number.isFinite(n) || n <= 0) throw new PaymentRequestError("amountEur must be a positive number");
     if (Math.round(n * 100) !== n * 100) throw new PaymentRequestError("amountEur has at most two decimals");
-    if (n > 1_000_000) throw new PaymentRequestError("amountEur is above the €1,000,000 ceiling");
+    if (n > MAX_REQUEST_EUR) throw new PaymentRequestError("amountEur is above the €1,000,000 ceiling");
     amountEur = n;
   }
   let description: string | undefined;
@@ -287,6 +291,8 @@ export function validateCreate(body: any, user: User, now = new Date()): CreateI
 // ── Crypto quotes ────────────────────────────────────────────────────────────
 
 const USDC_UNITS = 1_000_000;
+/** The largest amount one payment request may ask for. */
+export const MAX_REQUEST_EUR = 1_000_000;
 
 export function usdcToUnits(amount: number): bigint {
   return BigInt(Math.round(amount * USDC_UNITS));
@@ -309,6 +315,12 @@ export function quoteCrypto(
   allowanceBps = PAYMENT_REQUESTS.cryptoAllowanceBps,
 ): CryptoQuote {
   if (!(mid.usdPerEur > 0)) throw new PaymentRequestError("no live EUR/USD rate to quote from", 503);
+  // Every caller's amount passes here, including an open-amount page's and
+  // Shopify's: past the ceiling the USDC figure overflows to Infinity, which
+  // BigInt refuses with a RangeError.
+  if (!(amountEur > 0) || amountEur > MAX_REQUEST_EUR) {
+    throw new PaymentRequestError("the amount must be above €0 and at most €1,000,000");
+  }
   const cents = Math.round(amountEur * 100);
   let units = BigInt(Math.ceil(cents * mid.usdPerEur * (1 + allowanceBps / 10_000) * 10_000));
   const taken = new Set(Array.from(takenUsdcAmounts, (a) => usdcToUnits(a).toString()));
@@ -596,18 +608,27 @@ export function publicPaymentRequest(
   ctx: {
     chainId: number;
     token: { symbol: string; address: `0x${string}`; decimals: number };
-    bicFor: (iban?: string) => string | undefined;
     baseUrl: string;
     now?: Date;
     quote?: CryptoQuote;
+    /** A company's name, for a link booked under it: the holder of the IBAN. */
+    payeeName?: string;
+    /** Whether the page's deposit address may be shown (livePaymentPage).
+     *  Required, and only true shows it: a caller that did not ask gets no
+     *  address, rather than a lapsed forwarder's. */
+    cryptoLive: boolean;
+    /** The handle the payer opened it under, when the one it was minted
+     *  under now belongs to someone else: that one is never shown. */
+    handle?: string;
   },
 ): PublicPaymentRequest {
   const now = ctx.now ?? new Date();
+  const handle = ctx.handle ?? r.handle;
   const state = effectiveState(r, now);
   const paid = paidEur(r);
   const page = user.paymentPage;
   const methods: PublicPaymentRequest["methods"] = {};
-  if (r.methods.includes("crypto") && page?.depositAddress) {
+  if (r.methods.includes("crypto") && page?.depositAddress && ctx.cryptoLive === true) {
     const q = ctx.quote;
     methods.crypto = {
       chainId: ctx.chainId,
@@ -615,22 +636,27 @@ export function publicPaymentRequest(
       address: page.depositAddress,
       ...(q ? { amountUsdc: q.amountUsdc, rate: q.rate, allowanceBps: q.allowanceBps, validUntil: q.validUntil } : {}),
       uri: requestPaymentUri(ctx.token, ctx.chainId, page.depositAddress, q?.amountUsdc),
-      qrUrl: `${ctx.baseUrl}/api/pay/${encodeURIComponent(page.handle)}/qr.svg`,
+      // Under the payee's own page, the page's QR, which needs no code (the
+      // Shopify order lookup must never hand the code out). A company link
+      // gets its own, so it does not name the member's personal page.
+      qrUrl: handle === page.handle
+        ? `${ctx.baseUrl}/api/pay/${encodeURIComponent(page.handle)}/qr.svg`
+        : `${ctx.baseUrl}/api/pay/${encodeURIComponent(handle)}/${displayCode(r.code)}/qr.svg`,
     };
   }
   if (r.methods.includes("bank") && user.iban) {
     methods.bank = {
       iban: user.iban,
-      bic: ctx.bicFor(user.iban),
-      holder: user.name,
+      ...(reportedBic(user) ? { bic: reportedBic(user) } : {}),
+      holder: ctx.payeeName ?? user.name,
       reference: displayCode(r.code),
-      appUrl: `${ctx.baseUrl}/app?pay=${encodeURIComponent(r.handle)}/${displayCode(r.code)}`,
+      appUrl: `${ctx.baseUrl}/app?pay=${encodeURIComponent(handle)}/${displayCode(r.code)}`,
     };
   }
   return {
     code: displayCode(r.code),
-    handle: r.handle,
-    ...(page?.displayName ? { displayName: page.displayName } : {}),
+    handle,
+    ...(ctx.payeeName ? { displayName: ctx.payeeName } : page?.displayName ? { displayName: page.displayName } : {}),
     state,
     ...(r.amountEur !== undefined ? { amountEur: r.amountEur, outstandingEur: Math.max(0, Math.round((r.amountEur - paid) * 100) / 100) } : {}),
     paidEur: paid,

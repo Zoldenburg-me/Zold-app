@@ -5,7 +5,9 @@
  * document number), and the gates in front of both.
  *
  * The fake answers only to the one known key, records every request, and
- * plays a document as "already there" once uploaded. No network.
+ * plays a document as "already there" once uploaded. It can also answer an
+ * upload too slowly (keeping or dropping the document), refuse it, or answer
+ * reads too slowly, the way the live account answered uploads. No network.
  *
  * Run: npm run gmi:test
  */
@@ -20,10 +22,17 @@ import express from "express";
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-gmi-")), "db.json");
 process.env.TRANSF_CHAIN_ID = "31337";
 process.env.MONERIUM_TOKEN_ENCRYPTION_KEY = "test-encryption-key-for-getmyinvoices-32";
+// Shorter than the fake's slow upload, so the routes see a timeout.
+process.env.GETMYINVOICES_UPLOAD_TIMEOUT_MS = "1000";
 
 const GOOD_KEY = "gmi_test_key_0123456789abcdef";
 const seen = { requests: [] as { method: string; path: string; key: string | undefined; ua: string | undefined; body: any }[], uploaded: new Map<string, number>() };
 let nextUid = 1000;
+const bank = { lines: [] as any[], assigned: [] as { transactionUid: number; documentUid: number }[] };
+/** normal | slow (records, answers after 1.5 s) | slow-drop (answers after
+ *  1.5 s, records nothing) | reject (422). readDelayMs slows GET /account. */
+const fakeMode = { upload: "normal" as "normal" | "slow" | "slow-drop" | "reject", readDelayMs: 0, banksDown: false };
+const SLOW_MS = 1500;
 
 const fake = createServer((req, res) => {
   let raw = "";
@@ -32,11 +41,13 @@ const fake = createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://fake");
     const body = raw ? JSON.parse(raw) : undefined;
     seen.requests.push({ method: req.method!, path: url.pathname + url.search, key: req.headers["x-api-key"] as string | undefined, ua: req.headers["user-agent"], body });
-    const send = (code: number, b: any) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(b)); };
+    const send = (code: number, b: any) => { if (res.destroyed) return; res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(b)); };
     if (req.headers["x-api-key"] !== GOOD_KEY) return send(401, { success: false, detail: "Unauthorized", error_code: 401 });
     if (!req.headers["user-agent"]) return send(400, { success: false, detail: "Bad request. User-Agent malformed" });
-    if (url.pathname === "/account") return send(200, { name: "Tony", organization: "Zoldenburg UG", accountId: 4711, email: "books@example.com", hasBankingAccess: true, apiKeyType: "FULL_PERMISSION", currency: "EUR" });
-    if (url.pathname === "/bankAccounts") return send(200, { totalCount: 1, records: [{ bankAccountUid: 77, accountType: "CUSTOM", name: "Zold clearing", currencyCode: "EUR" }] });
+    if (url.pathname === "/account" && fakeMode.readDelayMs) return void setTimeout(() => send(200, { accountId: 4711 }), fakeMode.readDelayMs);
+    if (url.pathname === "/account") return send(200, { name: "Sara Lindner", organization: "Zoldenburg UG", accountId: 4711, email: "books@example.com", hasBankingAccess: true, apiKeyType: "FULL_PERMISSION", currency: "EUR" });
+    if (url.pathname === "/bankAccounts" && fakeMode.banksDown) return send(503, { success: false, detail: "down" });
+    if (url.pathname === "/bankAccounts") return send(200, { totalCount: 2, records: [{ bankAccountUid: 77, accountType: "CUSTOM", name: "Zold clearing", currencyCode: "EUR" }, { bankAccountUid: 88, accountType: "BANKCONNECT", name: "Sparkasse", currencyCode: "EUR" }] });
     if (url.pathname === "/documents" && req.method === "GET") {
       const num = url.searchParams.get("documentNumberFilter") ?? "";
       const uid = seen.uploaded.get(num);
@@ -44,11 +55,31 @@ const fake = createServer((req, res) => {
     }
     if (url.pathname === "/documents" && req.method === "POST") {
       if (!body?.fileName || !body?.fileContent || !body?.documentType) return send(400, { success: false, detail: "fileName, documentType and fileContent are required" });
+      if (fakeMode.upload === "reject") return send(422, { success: false, detail: "documentDate is invalid" });
       const uid = nextUid++;
-      seen.uploaded.set(body.documentNumber, uid);
-      return send(200, { success: true, documentUid: uid });
+      if (fakeMode.upload !== "slow-drop") seen.uploaded.set(body.documentNumber, uid);
+      if (fakeMode.upload === "normal") return send(200, { success: true, documentUid: uid });
+      return void setTimeout(() => send(200, { success: true, documentUid: uid }), SLOW_MS);
     }
-    if (/^\/bankAccounts\/\d+\/transactions$/.test(url.pathname) && req.method === "POST") return send(200, { success: true, meta_data: {} });
+    const txPath = /^\/bankAccounts\/(\d+)\/transactions$/.exec(url.pathname);
+    if (txPath && req.method === "POST") {
+      // As live (2026-10-03): an identical line is refused, naming the one there.
+      const same = bank.lines.find((t) => t.bankAccountUid === Number(txPath[1]) && t.description === body.description && t.bookingDate === body.bookingDate && t.amount === body.amount);
+      if (same) return send(422, { errors: [{ code: 127, detail: "Transaction Record Already Exist.", transactionUid: same.transactionUid }] });
+      const transactionUid = nextUid++;
+      bank.lines.push({ transactionUid, bankAccountUid: Number(txPath[1]), ...body });
+      return send(200, { success: true, meta_data: { transactionUid } });
+    }
+    if (txPath && req.method === "GET") {
+      const text = url.searchParams.get("textFilter") ?? "";
+      const day = url.searchParams.get("startDateFilter");
+      const records = bank.lines.filter((t) => t.bankAccountUid === Number(txPath[1]) && String(t.description).includes(text) && (!day || t.bookingDate === day));
+      // Live answers key the records by transactionUid, not as an array.
+      return send(200, { totalCount: records.length, records: Object.fromEntries(records.map((t) => [String(t.transactionUid), t])) });
+    }
+    const assignPath = /^\/bankAccounts\/\d+\/transactions\/(\d+)\/assign$/.exec(url.pathname);
+    if (assignPath && req.method === "GET") return send(200, { records: bank.assigned.filter((a) => a.transactionUid === Number(assignPath[1])).map((a) => ({ documentUid: a.documentUid })) });
+    if (assignPath && req.method === "POST") { bank.assigned.push({ transactionUid: Number(assignPath[1]), documentUid: body.documentUid }); return send(200, { success: true, meta_data: { assignmentUid: nextUid++ } }); }
     send(404, { success: false, detail: "unhandled " + url.pathname });
   });
 });
@@ -59,11 +90,11 @@ process.env.GETMYINVOICES_BASE_URL = FAKE;
 const { GetMyInvoicesClient, GmiApiError, gmiUserAgent } = await import("../services/api/src/adapters/getmyinvoices.js");
 const { initStore, store } = await import("../services/api/src/store.js");
 const { writeStatementLines } = await import("../services/api/src/bookkeeping/writer.js");
-const { issueBelegForLine } = await import("../services/api/src/bookkeeping/issue.js");
 const { belegUpload, createIntegrationRoutes } = await import("../services/api/src/routes/business/integrations.js");
 const { createBookkeepingExportRoutes } = await import("../services/api/src/routes/business/bookkeeping-export.js");
 const { resolveOrg } = await import("../services/api/src/routes/org-context.js");
-const { decryptField } = await import("../services/api/src/crypto-at-rest.js");
+const { fieldKeyId } = await import("../services/api/src/crypto-at-rest.js");
+const { SECRETS } = await import("../services/api/src/stored-secrets.js");
 
 let passed = 0;
 const check = async (name: string, fn: () => void | Promise<void>) => {
@@ -103,13 +134,78 @@ await check("pushDocument uploads once, then reports the existing document; the 
   assert.equal(seen.requests.filter((r) => r.method === "POST" && r.path === "/documents").length, 1);
 });
 
+const uploadsOf = (num: string) => seen.requests.filter((r) => r.method === "POST" && r.path === "/documents" && r.body?.documentNumber === num).length;
+const slowDoc = (documentNumber: string) => ({ fileName: "s.pdf", file: Buffer.from("%PDF-1.4 slow"), documentType: "PAYMENT_RECEIPT" as const, documentNumber, documentDate: "2026-09-11", grossAmount: "10.00", currency: "EUR", tags: ["tx:0xabc"] });
+
+await check("uploads have their own, longer timeout; reads keep the short one", async () => {
+  const { GETMYINVOICES } = await import("../services/api/src/config.js");
+  assert.equal(GETMYINVOICES.TIMEOUT_MS, 20_000, "reads default to 20 s");
+  assert.equal(GETMYINVOICES.UPLOAD_TIMEOUT_MS, 1000, "uploads read GETMYINVOICES_UPLOAD_TIMEOUT_MS");
+  const c = new GetMyInvoicesClient({ apiKey: GOOD_KEY, userAgent: gmiUserAgent(), timeoutMs: 1000, uploadTimeoutMs: 3000, relookupDelaysMs: [] });
+  fakeMode.upload = "slow";
+  try {
+    const r = await c.pushDocument(slowDoc("SLOWBUTINTIME01"));
+    assert.equal(r.outcome, "uploaded");
+    assert.equal((r as any).verifiedAfterTimeout, undefined, "a 1.5 s upload is inside the upload timeout, though past the read one");
+  } finally { fakeMode.upload = "normal"; }
+  fakeMode.readDelayMs = SLOW_MS;
+  try {
+    await assert.rejects(() => c.account(), (e: any) => e instanceof GmiApiError && e.status === 0, "a 1.5 s read is past the read timeout");
+  } finally { fakeMode.readDelayMs = 0; }
+});
+
+await check("an upload that times out but landed is found by its number: uploaded, tags may be missing, never sent twice", async () => {
+  const c = new GetMyInvoicesClient({ apiKey: GOOD_KEY, userAgent: gmiUserAgent(), uploadTimeoutMs: 1000, relookupDelaysMs: [10, 10] });
+  fakeMode.upload = "slow";
+  try {
+    const r = await c.pushDocument(slowDoc("SLOWLANDED00001"));
+    assert.equal(r.outcome, "uploaded", JSON.stringify(r));
+    assert.equal((r as any).documentUid, seen.uploaded.get("SLOWLANDED00001"));
+    assert.equal((r as any).verifiedAfterTimeout, true);
+    assert.equal((r as any).tagsMayBeMissing, true);
+    assert.equal(uploadsOf("SLOWLANDED00001"), 1);
+  } finally { fakeMode.upload = "normal"; }
+});
+
+await check("an upload that times out and cannot be found is unknown, not failed, and is not re-sent", async () => {
+  const c = new GetMyInvoicesClient({ apiKey: GOOD_KEY, userAgent: gmiUserAgent(), uploadTimeoutMs: 1000, relookupDelaysMs: [10, 10, 10] });
+  fakeMode.upload = "slow-drop";
+  const lookupsBefore = seen.requests.filter((r) => r.method === "GET" && r.path.includes("SLOWDROPPED0001")).length;
+  try {
+    const r = await c.pushDocument(slowDoc("SLOWDROPPED0001"));
+    assert.equal(r.outcome, "unknown", JSON.stringify(r));
+    assert.match((r as any).error, /unreachable/);
+    assert.equal(uploadsOf("SLOWDROPPED0001"), 1, "one upload, then lookups only");
+    assert.equal(seen.requests.filter((r) => r.method === "GET" && r.path.includes("SLOWDROPPED0001")).length - lookupsBefore, 4, "one lookup before, three after");
+  } finally { fakeMode.upload = "normal"; }
+});
+
+await check("a refused upload (4xx) still throws, so the route reports it failed; no re-lookup", async () => {
+  const c = new GetMyInvoicesClient({ apiKey: GOOD_KEY, userAgent: gmiUserAgent(), relookupDelaysMs: [10] });
+  fakeMode.upload = "reject";
+  try {
+    await assert.rejects(() => c.pushDocument(slowDoc("REJECTED0000001")), (e: any) => e instanceof GmiApiError && e.status === 422);
+    assert.equal(seen.requests.filter((r) => r.method === "GET" && r.path.includes("REJECTED0000001")).length, 1, "only the lookup before");
+  } finally { fakeMode.upload = "normal"; }
+});
+
+await check("deleteDocument sends DELETE with a JSON content type and an {} body", async () => {
+  const seenDelete: any[] = [];
+  const c = new GetMyInvoicesClient({ apiKey: GOOD_KEY, userAgent: gmiUserAgent(), fetchImpl: (async (url: any, init: any) => { seenDelete.push({ url: String(url), init }); return new Response(JSON.stringify({ success: true }), { status: 200 }); }) as any });
+  await c.deleteDocument(1234);
+  assert.equal(seenDelete[0].init.method, "DELETE");
+  assert.match(seenDelete[0].url, /\/documents\/1234$/);
+  assert.equal(seenDelete[0].init.headers["content-type"], "application/json");
+  assert.equal(seenDelete[0].init.body, "{}");
+});
+
 console.log("\nRoutes");
 
 initStore();
 const SAFE = `0x${"aa".repeat(20)}` as const;
 const now = new Date().toISOString();
 const H = (n: number) => `0x${n.toString(16).padStart(64, "0")}`;
-store.addUser({ id: "u_owner", name: "Tony", country: "DE", kycStatus: "approved", address: SAFE, createdAt: now } as any);
+store.addUser({ id: "u_owner", name: "Sara Lindner", country: "DE", kycStatus: "approved", address: SAFE, createdAt: "2026-01-01T00:00:00.000Z" } as any);
 store.addUser({ id: "u_viewer", name: "Viewer", country: "DE", kycStatus: "approved", address: `0x${"bb".repeat(20)}`, createdAt: now } as any);
 store.addOrganisation({ id: "org_1", type: "business", name: "Zoldenburg UG", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });
 store.addOrganisation({ id: "org_starter", type: "business", name: "Starter GmbH", plan: "starter", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });
@@ -161,7 +257,9 @@ await check("connecting verifies the key against /account, stores it encrypted a
   assert.ok(!JSON.stringify(ok.body).includes(GOOD_KEY), "the key is not in the response");
   const stored = store.findOrganisation("org_1")!.integrations!.getmyinvoices!;
   assert.notEqual(stored.apiKeyEnc, GOOD_KEY);
-  assert.equal(decryptField("getmyinvoices", process.env.MONERIUM_TOKEN_ENCRYPTION_KEY!, stored.apiKeyEnc), GOOD_KEY);
+  assert.equal(fieldKeyId(stored.apiKeyEnc), "t1", "written as v2 under the active key");
+  assert.equal(SECRETS.gmiApiKey.open("org_1", stored.apiKeyEnc), GOOD_KEY);
+  assert.throws(() => SECRETS.gmiApiKey.open("org_2", stored.apiKeyEnc), "bound to its org");
   assert.equal(stored.accountId, "4711");
   const list = await call("GET", "/api/orgs/org_1/integrations");
   assert.ok(!JSON.stringify(list.body).includes(GOOD_KEY) && !JSON.stringify(list.body).includes(stored.apiKeyEnc));
@@ -232,6 +330,89 @@ await check("push uploads each Beleg once; a second push uploads nothing", async
   assert.ok(audit, "the push is audited");
 });
 
+await check("push adds each line to the manual bank account once, with its Beleg assigned; a re-send adds nothing", async () => {
+  const lines = bank.lines.length;
+  const r = await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09" });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.bankAccountUid, 77, "the only manual account is used and remembered");
+  assert.equal(store.findOrganisation("org_1")!.integrations!.getmyinvoices!.bankAccountUid, 77);
+  assert.ok(r.body.results.every((x: any) => ["added", "exists"].includes(x.bankLine?.outcome) && x.bankLine.assigned === true), JSON.stringify(r.body.results));
+  const added = bank.lines.slice(lines);
+  const total = bank.lines.length;
+  for (const x of r.body.results) {
+    const line = bank.lines.find((t) => t.transactionUid === x.bankLine.transactionUid)!;
+    assert.match(line.description, new RegExp(`Beleg ${x.code}`), "the Beleg code is what finds it again");
+    assert.ok(bank.assigned.some((a) => a.transactionUid === line.transactionUid && a.documentUid === x.documentUid), "the Beleg is attached to its line");
+  }
+  assert.ok(added.every((t) => typeof t.amount === "number" && t.currencyCode === "EUR" && /^\d{4}-\d{2}-\d{2}$/.test(t.bookingDate)));
+  const again = await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09" });
+  assert.ok(again.body.results.every((x: any) => x.bankLine?.outcome === "exists"));
+  assert.equal(bank.lines.length, total, "no line twice");
+  assert.equal(new Set(bank.assigned.map((a) => `${a.transactionUid}:${a.documentUid}`)).size, bank.assigned.length, "no Beleg assigned twice");
+  assert.equal((await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09", bankAccountUid: 999 })).status, 400, "a bank account that is not theirs is refused");
+  assert.equal((await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09", bankAccountUid: 88 })).status, 400, "a connected bank's own account is refused: lines go to a manual one");
+  assert.equal(bank.lines.filter((t) => t.bankAccountUid === 88).length, 0);
+});
+
+await check("a line the lookup misses is found by GetMyInvoices' own duplicate refusal (code 127), not added twice", async () => {
+  const c = new GetMyInvoicesClient({ apiKey: GOOD_KEY, userAgent: gmiUserAgent() });
+  const tx = { bookingDate: "2026-09-20", valueDate: "2026-09-20", description: "Ref · Beleg MISSME", amount: 7, currencyCode: "EUR" };
+  const first = await c.pushBankLine(77, tx, "MISSME");
+  // A marker the lookup cannot see: only their refusal can find it.
+  const second = await c.pushBankLine(77, tx, "NOT-IN-DESCRIPTION");
+  assert.equal(first.outcome, "added");
+  assert.equal(second.outcome, "exists");
+  assert.equal(second.transactionUid, first.transactionUid);
+});
+
+await check("with the bank account list unavailable the Belege still go up, and the answer says why there are no lines", async () => {
+  fakeMode.banksDown = true;
+  try {
+    const r = await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09" });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.ok(r.body.results.every((x: any) => ["uploaded", "exists"].includes(x.outcome) && !x.bankLine));
+    assert.equal(r.body.bankAccountUid, null);
+    assert.match(r.body.bankAccountsError, /503/);
+  } finally { fakeMode.banksDown = false; }
+});
+
+await check("a long reference and memo never cut the Beleg code out of the bank line's description", async () => {
+  const { bankLineFor } = await import("../services/api/src/routes/business/integrations.js");
+  const snap: any = { line: { reference: "R".repeat(200), bookingDate: "2026-09-10", valueDate: "2026-09-10", amountCents: 500, counterparty: {}, links: { txHashes: [] } }, bank: { memo: "M".repeat(140) } };
+  const d = bankLineFor(snap, "ABCDEFGHJKMNPQR").description;
+  assert.ok(d.length <= 250, `${d.length}`);
+  assert.ok(d.endsWith("Beleg ABCDEFGHJKMNPQR"));
+  assert.equal(bankLineFor({ ...snap, line: { ...snap.line, reference: "" }, bank: undefined }, "ABC").description, "Beleg ABC");
+});
+
+await check("push: an upload that times out but landed is reported uploaded (tags may be missing), not failed; nothing is sent twice", async () => {
+  seen.uploaded.clear();
+  const before = seen.requests.filter((r) => r.method === "POST" && r.path === "/documents").length;
+  fakeMode.upload = "slow";
+  try {
+    const r = await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09" });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.deepEqual(r.body.results.map((x: any) => x.outcome), ["uploaded", "uploaded", "uploaded"], JSON.stringify(r.body));
+    assert.ok(r.body.results.every((x: any) => x.verifiedAfterTimeout === true && x.tagsMayBeMissing === true && typeof x.documentUid === "number"));
+  } finally { fakeMode.upload = "normal"; }
+  assert.equal(seen.requests.filter((r) => r.method === "POST" && r.path === "/documents").length - before, 3);
+  const again = await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09" });
+  assert.deepEqual(again.body.results.map((x: any) => x.outcome), ["exists", "exists", "exists"]);
+});
+
+await check("push: a refused upload (4xx) is still failed, and audited as such", async () => {
+  seen.uploaded.clear();
+  fakeMode.upload = "reject";
+  try {
+    const r = await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09" });
+    assert.deepEqual(r.body.results.map((x: any) => x.outcome), ["failed", "failed", "failed"]);
+    assert.match(r.body.results[0].error, /422/);
+  } finally { fakeMode.upload = "normal"; }
+  const audit = store.auditFor("u_owner").find((a) => a.kind === "partner.documents_pushed") as any; // newest first
+  assert.equal(audit.data.failed, 3, JSON.stringify(audit));
+  assert.equal(audit.data.unknown, 0);
+});
+
 await check("removing the key stops pushes and leaves nothing of it in the org", async () => {
   assert.equal((await call("DELETE", "/api/orgs/org_1/integrations/getmyinvoices")).status, 200);
   assert.equal(store.findOrganisation("org_1")!.integrations?.getmyinvoices, undefined);
@@ -241,4 +422,4 @@ await check("removing the key stops pushes and leaves nothing of it in the org",
 server.close();
 fake.close();
 console.log(`\ngetmyinvoices: ${passed} checks passed${process.exitCode ? " (with failures)" : ""}`);
-console.log("NOT PROVEN HERE: no upload has been made to the real account. Only GET /account and GET /bankAccounts have been called there.");
+console.log("NOT PROVEN HERE: this script calls no real account. One live push (2026-10-03, fake data, deleted after) is the only upload made to a real one.");

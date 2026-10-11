@@ -23,9 +23,10 @@ import assert from "node:assert/strict";
 import { createHash, randomBytes, webcrypto } from "node:crypto";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createServer } from "node:http";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { operatorKit, type OperatorKit } from "./_operator.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const API_PORT = Number(process.env.TRANSF_API_PORT ?? 3041);
@@ -40,6 +41,8 @@ const MODULE = "0x949d01d424bE050D09C16025dd007CB59b3A8c66"; // Candide's 3-minu
 const GUARDIAN = "0x00000000000000000000000000000000C0FFEE01";
 const OTP = "246810";
 const EMAIL = "recover.me@example.com";
+/** Stands for the operator in `call`: the request goes through the kit. */
+const OPERATOR = "operator";
 const PHONE_RAW = "+49 151 1234567";
 const PHONE = "+491511234567";
 
@@ -109,7 +112,7 @@ async function makePasskey(label: string) {
     jwk,
     register: (challenge: string) => ({
       credentialId: b64url(credId),
-      attestation: b64url(enc(new Map<string, any>([["fmt", "none"], ["attStmt", new Map()], ["authData", authData(0x41, 0, true)]]))),
+      attestation: b64url(enc(new Map<string, any>([["fmt", "none"], ["attStmt", new Map()], ["authData", authData(0x45, 0, true)]]))),
       clientDataJSON: clientData("webauthn.create", challenge),
     }),
     assert: async (challenge: string) => {
@@ -143,6 +146,9 @@ const registered: { id: string; channel: string; target: string; challengeId: st
 const pendingReg = new Map<string, { channel: string; target: string }>();
 const sigRequests = new Map<string, { auths: { challengeId: string; channel: string; target: string; verified: boolean }[] }>();
 let recoveryCounter = 0;
+/** How the stub reports a wrong recovery code: an error body (the SDK throws),
+ *  or `{ success: false }` after a short delay, so parallel guesses overlap. */
+let wrongCodeAs: "error" | "delayed-failure" = "error";
 
 const stub = createServer((req, res) => {
   const send = (code: number, body: any) => {
@@ -200,6 +206,10 @@ const stub = createServer((req, res) => {
       const r = sigRequests.get(body.requestId);
       const auth = r?.auths.find((a) => a.challengeId === body.challengeId);
       if (!r || !auth) return send(200, { code: 404, message: "unknown challenge" });
+      if (body.challenge !== OTP && wrongCodeAs === "delayed-failure") {
+        setTimeout(() => send(200, { success: false }), 50);
+        return;
+      }
       if (body.challenge !== OTP) return send(200, { code: 400, message: "invalid code" });
       auth.verified = true;
       if (r.auths.every((a) => a.verified)) {
@@ -222,7 +232,15 @@ const stub = createServer((req, res) => {
   });
 });
 
+let opKit: OperatorKit | undefined;
 async function call(pathname: string, body?: any, method?: string, bearer = token, extra: Record<string, string> = {}) {
+  // The operator calls through a passkey session; a change gets a fresh
+  // approval.
+  if (bearer === OPERATOR) {
+    if (!opKit) throw new Error(`an operator call (${pathname}) before the operator kit is enrolled`);
+    const r = await opKit.call(method ?? "POST", pathname, body ?? {});
+    return { status: r.status, data: r.body, text: JSON.stringify(r.body) };
+  }
   const headers: Record<string, string> = { ...extra };
   if (body) headers["content-type"] = "application/json";
   if (bearer) headers.authorization = `Bearer ${bearer}`;
@@ -299,6 +317,7 @@ try {
   };
   await waitForApi();
 
+  opKit = await operatorKit({ base: API, origin: API, rpId: "localhost", dataDir: path.dirname(process.env.TRANSF_DB_PATH!) });
   const health = await call("/api/health");
   assert.equal(health.data.capabilities?.emailSmsRecovery, true, "capability must be published when the service URL is set");
 
@@ -324,6 +343,16 @@ try {
   }
   const safeAddress: string = (await call(`/api/users/${userId}`)).data.address;
 
+  await t("a deployed Safe's passkey cannot be swapped through registration: refused, Safe plan untouched", async () => {
+    const before = (await call(`/api/users/${userId}`)).data.passkeySafe;
+    const other = await makePasskey("swap-attempt");
+    const challenge = await call("/api/webauthn/challenge", { purpose: "register" });
+    const r = await call(`/api/users/${userId}/passkey`, other.register(challenge.data.challenge));
+    assert.equal(r.status, 409, JSON.stringify(r.data));
+    assert.equal(r.data.code, "SAFE_OWNER_ON_CHAIN");
+    assert.deepEqual((await call(`/api/users/${userId}`)).data.passkeySafe, before);
+  });
+
   // Signup rules that exist for recovery's sake: the email is what a lost
   // device names, so it must exist and must resolve to ONE claimable account.
   await t("signup refuses an account with no email", async () => {
@@ -335,6 +364,32 @@ try {
     const r = await call("/api/users", { name: "Second Rosa", email: EMAIL.toUpperCase(), country: "DE" }, undefined, "");
     assert.equal(r.status, 409, JSON.stringify(r.data));
     assert.equal(r.data.code, "EMAIL_IN_USE");
+  });
+  await t("replacing a passkey before the Safe exists needs the old one, and signs out every other session", async () => {
+    const acct = await call("/api/users", { name: "Swap Sam", email: "swap@example.com", country: "DE" }, undefined, "");
+    assert.equal(acct.status, 201, JSON.stringify(acct.data));
+    const id: string = acct.data.id;
+    const mine: string = acct.data.sessionToken;
+    const first = await makePasskey("swap-first");
+    const reg1 = await call("/api/webauthn/challenge", { purpose: "register" }, undefined, mine);
+    assert.equal((await call(`/api/users/${id}/passkey`, first.register(reg1.data.challenge), undefined, mine)).status, 201);
+    const login = await call("/api/webauthn/challenge", { purpose: "login" }, undefined, "");
+    const other = await call("/api/passkey/login", await first.assert(login.data.challenge), undefined, "");
+    assert.equal(other.status, 200, JSON.stringify(other.data));
+    const second = await makePasskey("swap-second");
+    const reg2 = await call("/api/webauthn/challenge", { purpose: "register" }, undefined, mine);
+    const refused = await call(`/api/users/${id}/passkey`, second.register(reg2.data.challenge), undefined, mine);
+    assert.equal(refused.status, 401, `a session alone must not replace the passkey: ${JSON.stringify(refused.data)}`);
+    const reg3 = await call("/api/webauthn/challenge", { purpose: "register" }, undefined, mine);
+    const step = await call("/api/webauthn/challenge", { purpose: "step_up", action: "passkey.replace" }, undefined, mine);
+    const replaced = await call(`/api/users/${id}/passkey`, {
+      ...second.register(reg3.data.challenge),
+      stepUp: await first.assert(step.data.challenge),
+    }, undefined, mine);
+    assert.equal(replaced.status, 201, JSON.stringify(replaced.data));
+    assert.equal(replaced.data.passkey.credentialId, second.credentialId);
+    assert.equal((await call(`/api/users/${id}`, undefined, undefined, other.data.sessionToken)).status, 401, "the other session is revoked");
+    assert.equal((await call(`/api/users/${id}`, undefined, undefined, mine)).status, 200, "the session that approved it stays");
   });
   await t("an abandoned signup with no passkey does not lock its email", async () => {
     const first = await call("/api/users", { name: "Abandoned", email: "abandoned@example.com", country: "DE" }, undefined, "");
@@ -406,6 +461,15 @@ try {
   await t("a lost-device recovery cannot start while the guardian is not on the Safe", async () => {
     const r = await call("/api/recovery/candide", { email: EMAIL }, undefined, "");
     assert.equal(r.status, 404);
+  });
+
+  await t("the guardian operation is not submitted on an approval of a different challenge", async () => {
+    const prep = await call(`/api/users/${userId}/recovery/candide/guardian`, {});
+    assert.equal(prep.status, 201, JSON.stringify(prep.data));
+    const done = await call(prep.data.submitTo, await passkey.assert(b64url(randomBytes(32))));
+    assert.equal(done.status, 401, JSON.stringify(done.data));
+    const me = await call(`/api/users/${userId}/recovery/candide/guardian`, {});
+    assert.equal(me.status, 201, "the guardian is still not on the Safe");
   });
 
   await t("adding the guardian is a user-signed Safe operation that enables the module", async () => {
@@ -579,6 +643,10 @@ try {
     const bySafe = await call("/api/recovery/candide", { safeAddress }, undefined, "");
     assert.equal(bySafe.status, 409, JSON.stringify(bySafe.data));
     assert.ok(!bySafe.text.includes(recovery.id));
+    // Executed on chain: an operator cannot clear it either; only the owner's passkey cancels.
+    const operator = await call(`/api/admin/recoveries/candide/${recovery.id}/reject`, { reason: "executed already" }, "POST", OPERATOR);
+    assert.equal(operator.status, 409, JSON.stringify(operator.data));
+    assert.equal((await rc(`/api/recovery/candide/${recovery.id}`)).data.status, "GRACE_PERIOD");
   });
 
   await t("finalizing inside the grace period is refused", async () => {
@@ -662,6 +730,73 @@ try {
   await t("there is no co-signer removal route", async () => {
     const r = await call(`/api/users/${userId}/passkey-safe/cosigner-removal`, {});
     assert.equal(r.status, 404, JSON.stringify(r.data));
+  });
+
+  /** A fresh recovery of the same account, through to OTP_PENDING, by someone guessing codes. */
+  const guesserRecovery = async (label: string) => {
+    const pk = await makePasskey(label);
+    const start = await call("/api/recovery/candide", { email: EMAIL }, undefined, "");
+    assert.equal(start.status, 201, JSON.stringify(start.data));
+    const s = start.data.recoverySecret;
+    const reg = await rc(start.data.submitTo, pk.register(start.data.registerChallenge), undefined, s, "");
+    assert.equal(reg.status, 200, JSON.stringify(reg.data));
+    assert.equal(reg.data.status, "OTP_PENDING");
+    const tk = reg.data.otpTicket;
+    const challengeId = reg.data.candide.auths[0].challengeId;
+    return {
+      challengeId,
+      guess: (otp: string) => rc(`/api/recovery/candide/${reg.data.id}/otp`, { challengeId, otp }, undefined, s, tk),
+      state: () => rc(`/api/recovery/candide/${reg.data.id}`, undefined, undefined, s, tk),
+    };
+  };
+
+  await t("five wrong codes, sent one after another, cancel the recovery", async () => {
+    const r = await guesserRecovery("guesser-one-by-one");
+    for (let i = 1; i <= 5; i++) {
+      const g = await r.guess("000000");
+      assert.equal(g.status, 400, `guess ${i}: ${JSON.stringify(g.data)}`);
+    }
+    const sixth = await r.guess("000000");
+    assert.equal(sixth.status, 429, JSON.stringify(sixth.data));
+    assert.equal((await r.state()).data.status, "CANCELED");
+  });
+
+  await t("wrong codes sent all at once still stop at five", async () => {
+    wrongCodeAs = "delayed-failure";
+    try {
+      const r = await guesserRecovery("guesser-parallel");
+      const reached = () => seen.signatureSubmits.filter((b) => b.challengeId === r.challengeId).length;
+      const all = await Promise.all(Array.from({ length: 20 }, () => r.guess("000000")));
+      assert.ok(reached() <= 5, `${reached()} guesses reached Candide`);
+      assert.ok(all.filter((g) => g.status === 400).length <= 5, all.map((g) => g.status).join(","));
+      assert.equal((await r.state()).data.status, "CANCELED");
+    } finally {
+      wrongCodeAs = "error";
+    }
+  });
+
+  await t("a stranger's request held at OTP_PENDING blocks the owner until an operator rejects it with a reason", async () => {
+    await guesserRecovery("stranger-holding-the-account");
+    const blocked = await call("/api/recovery/candide", { email: EMAIL }, undefined, "");
+    assert.equal(blocked.status, 409, JSON.stringify(blocked.data));
+    assert.equal(blocked.data.code, "RECOVERY_IN_PROGRESS");
+    // Only an operator session sees or rejects Candide requests; a user session is not enough.
+    assert.equal((await call("/api/admin/recoveries/candide", undefined, "GET")).status, 401);
+    const list = await call("/api/admin/recoveries/candide", undefined, "GET", OPERATOR);
+    assert.equal(list.status, 200, JSON.stringify(list.data));
+    const held = list.data.requests.find((r: any) => r.userId === userId && r.status === "OTP_PENDING");
+    assert.ok(held, JSON.stringify(list.data));
+    assert.ok(!list.text.includes("recoverySecret") && !list.text.includes("otpTicket") && !list.text.includes("Hash"), "no secrets in the operator view");
+    assert.equal((await call(`/api/admin/recoveries/candide/${held.id}/reject`, { reason: "not the owner" })).status, 401);
+    assert.equal((await call(`/api/admin/recoveries/candide/${held.id}/reject`, {}, "POST", OPERATOR)).status, 400, "a reason is required");
+    const rejected = await call(`/api/admin/recoveries/candide/${held.id}/reject`, { reason: "not requested by the account owner" }, "POST", OPERATOR);
+    assert.equal(rejected.status, 200, JSON.stringify(rejected.data));
+    assert.equal(rejected.data.status, "CANCELED");
+    const fresh = await call("/api/recovery/candide", { email: EMAIL }, undefined, "");
+    assert.equal(fresh.status, 201, JSON.stringify(fresh.data));
+    // A request past the owner's codes is on chain: only the owner's passkey can cancel it.
+    const late = await call(`/api/admin/recoveries/candide/${recovery.id}/reject`, { reason: "too late" }, "POST", OPERATOR);
+    assert.equal(late.status, 409, JSON.stringify(late.data));
   });
 
   console.log(`\nCANDIDE RECOVERY TEST PASSED — ${pass}/${pass}`);

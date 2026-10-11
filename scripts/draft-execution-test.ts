@@ -15,13 +15,16 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { newDevice, registerDevice, signTerms } from "./device.js";
+import { newDevice, registerDevice } from "./device.js";
 
 const PIN = { USD: 1.1379, INR: 109.87, KES: 147.53 };
 process.env.TRANSF_RATES_FIXED ??= JSON.stringify(PIN);
 process.env.DEPLOY_EURUSD_RATE ??= String(Math.round(PIN.USD * 1e6));
 // SEPA is free by default; pin a fee so the fee-arithmetic refusal is exercised.
 process.env.SEPA_FEE_EUR ??= "0.99";
+// The EUR rail opens only with a Monerium connection path; pin one so the
+// suite does not depend on the operator's .env.
+process.env.MONERIUM_TOKEN_ENCRYPTION_KEY ||= "test-encryption-key-for-draft-execution-32";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const API_PORT = Number(process.env.TRANSF_API_PORT ?? 3000);
@@ -185,7 +188,7 @@ try {
   });
   check("a business account without a funding identity says so", () => {
     assert.equal(unfunded.account.backingUserId, undefined);
-    assert.match(unfunded.note, /useMyAccount/);
+    assert.match(unfunded.note, /No IBAN is connected/);
   });
 
   const draftNoFunding = await ok("POST", `/api/orgs/${org.id}/drafts`, {
@@ -208,7 +211,7 @@ try {
   );
   check("execution refuses an account with no funding identity, by name", () => {
     assert.equal(refusedNoFunding.status, 409);
-    assert.match(refusedNoFunding.data.error, /no funding identity/i);
+    assert.match(refusedNoFunding.data.error, /No IBAN is connected/);
   });
 
   // Fund the account the org already has, from the owner's own balance.
@@ -290,7 +293,7 @@ try {
   });
   check("with approvals bought, an unreviewed draft cannot be sent", () => {
     assert.equal(unreviewed.status, 409);
-    assert.match(unreviewed.data.error, /reviewed by a second person/i);
+    assert.match(unreviewed.data.error, /requires a second person to review/i);
   });
 
   // Four eyes: a second human approves.
@@ -510,6 +513,36 @@ try {
     assert.equal(paidFresh.contact.bankAccounts[0].iban, "FR7630006000011234567890189");
     assert.equal(paidFresh.contact.bankAccounts[0].country, "FR");
     assert.equal(paidFresh.draft.lines[0].amount, "60.00");
+  });
+
+  // A supplier link that names a known contact's IBAN under another holder:
+  // the address book is not touched and the draft names the contact's holder.
+  const link4 = await ok("POST", `/api/orgs/${org.id}/invoices`, { token: ownerToken, body: { currency: "EUR" } });
+  const supplierBody = (over: Record<string, unknown>) => ({
+    supplier: { orgName: "Someone Else GmbH", email: "x@else.example", invoiceNumber: "SE-1" },
+    lines: [{ description: "Work", quantity: "1", unitPrice: "10.00" }],
+    payTo: { kind: "bank", bank: { holderName: "Someone Else GmbH", iban: "DE89370400440532013000" } },
+    ...over,
+  });
+  const badDue = await call("POST", `/api/invoice-links/${link4.linkToken}/submit`, { body: supplierBody({ dueDate: "x".repeat(5000) }) });
+  const longHolder = await call("POST", `/api/invoice-links/${link4.linkToken}/submit`, {
+    body: supplierBody({ payTo: { kind: "bank", bank: { holderName: "H".repeat(71), iban: "DE89370400440532013000" } } }),
+  });
+  check("a supplier's due date must be a date and the holder name is bounded", () => {
+    assert.equal(badDue.status, 400, JSON.stringify(badDue.data));
+    assert.match(badDue.data.error, /due date/i);
+    assert.equal(longHolder.status, 400, JSON.stringify(longHolder.data));
+    assert.match(longHolder.data.error, /70 characters/);
+  });
+  const before = JSON.stringify((await ok("GET", `/api/orgs/${org.id}/contacts`, { token: ownerToken })).contacts.find((c: any) => c.id === contact.id));
+  const other = await ok("POST", `/api/invoice-links/${link4.linkToken}/submit`, { body: supplierBody({ dueDate: "2026-12-31" }) });
+  const paidOther = await ok("POST", `/api/orgs/${org.id}/invoices/${other.invoice.id}/pay`, { token: ownerToken, body: {} });
+  const after = JSON.stringify((await ok("GET", `/api/orgs/${org.id}/contacts`, { token: ownerToken })).contacts.find((c: any) => c.id === contact.id));
+  check("a supplier naming a known IBAN changes nothing in the address book, and the draft names the contact's holder", () => {
+    assert.equal(paidOther.contact.id, contact.id);
+    assert.equal(after, before, "the contact's bank details are untouched");
+    assert.equal(paidOther.draft.lines[0].destination.displayName, contact.bankAccounts[0].holderName);
+    assert.equal(paidOther.draft.state, "DRAFT", "paying it is a draft, which goes through review like any other");
   });
 
   console.log(`\nDRAFT EXECUTION TEST PASSED — ${passed}/${passed} checks.`);

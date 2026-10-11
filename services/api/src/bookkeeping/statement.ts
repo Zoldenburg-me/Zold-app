@@ -24,6 +24,8 @@ import type {
   MoneriumIssueRecord,
   Transfer,
 } from "../store/types.js";
+import { OPERATOR_REFUND_STEP } from "../store/types.js";
+import { safeMovedEur } from "../transfers/safe-moved.js";
 import type { PaymentRequest } from "../payment-requests.js";
 import { textCarriesCode } from "../payment-requests.js";
 import { paymentMemo } from "../sepa.js";
@@ -166,6 +168,8 @@ function sepaInLines(inp: StatementInputs): LineDraft[] {
 // ── SEPA out, and its reversal ───────────────────────────────────────────────
 
 const SEPA_LEFT = new Set(["PAYOUT_SUBMITTED", "PAID"]);
+/** Steps whose hash is the refund: ours, or one an operator recorded. */
+const REFUND_STEPS = new Set<string>(["safe.refundTransfer", OPERATOR_REFUND_STEP]);
 
 function sepaOutLines(inp: StatementInputs): LineDraft[] {
   const out: LineDraft[] = [];
@@ -212,22 +216,26 @@ function sepaOutLines(inp: StatementInputs): LineDraft[] {
         });
       }
     }
-    if (t.state === "REFUNDED" && t.refund && t.refund.amountEur > 0) {
-      // Money left the Safe and came back: two lines, so the books show both
-      // movements and any deduction between them, rather than nothing.
+    const movedEur = safeMovedEur(t);
+    if (t.state === "REFUNDED" && t.refund && movedEur > 0) {
+      // Money left the Safe: the debit is booked whatever came back, so a
+      // refund of €0 still shows the loss. What came back is the reversal,
+      // and the gap between the two lines is the deduction.
       out.push({
         event: "sepa_out",
         key: `transfer:${t.id}:debit`,
         bookingAt: t.createdAt,
         valueAt: t.auth?.authorizedAt ?? t.createdAt,
-        amountCents: -cents(t.sendEur),
+        amountCents: -cents(movedEur),
         counterparty: { name: t.recipientName, iban: t.recipientIban },
         reference: referenceFor([t.reference], paymentMemo(t.id, t.reference)),
-        links: { transferId: t.id, txHashes: hashes.filter((h) => !t.txs.find((x) => x.hash === h && x.step === "safe.refundTransfer")) },
+        links: { transferId: t.id, txHashes: hashes.filter((h) => !t.txs.find((x) => x.hash === h && REFUND_STEPS.has(x.step))) },
         txType: "payout",
         tags: ["sepa", "failed"],
         note: t.error ? `Failed: ${t.error.slice(0, 160)}` : "Failed before payout.",
       });
+    }
+    if (t.state === "REFUNDED" && t.refund && movedEur > 0 && t.refund.amountEur > 0) {
       out.push({
         event: "sepa_out_reversal",
         key: `transfer:${t.id}:refund`,
@@ -236,12 +244,53 @@ function sepaOutLines(inp: StatementInputs): LineDraft[] {
         amountCents: cents(t.refund.amountEur),
         counterparty: { name: t.recipientName, iban: t.recipientIban },
         reference: `Reversal ${t.id.replace(/-/g, "").slice(0, 8)}`,
-        links: { transferId: t.id, txHashes: t.txs.filter((x) => x.step === "safe.refundTransfer").map((x) => x.hash) },
+        links: { transferId: t.id, txHashes: t.txs.filter((x) => REFUND_STEPS.has(x.step)).map((x) => x.hash) },
         txType: "transfer_in",
         tags: ["reversal"],
         note: `Refund of a failed payout (${t.refund.recoveredFrom}). ${t.refund.deductions}`.slice(0, 240),
       });
     }
+  }
+  return out;
+}
+
+// ── EURe in from another wallet ──────────────────────────────────────────────
+
+/**
+ * EURe that reached the Safe as a plain transfer from another wallet. Every
+ * other EURe arrival is already a line of its own and is left out here:
+ * a mint (from the zero address) is a SEPA credit, booked from Monerium's
+ * order; a refund is the reversal of a payout; a swap's output is the
+ * conversion line of the deposit or sweep it belongs to.
+ */
+function eureInLines(inp: StatementInputs): LineDraft[] {
+  const booked = new Set<string>();
+  for (const t of inp.transfers) for (const x of t.txs) booked.add(x.hash.toLowerCase());
+  for (const s of inp.sweeps) {
+    if (s.conversion?.txHash) booked.add(s.conversion.txHash.toLowerCase());
+    for (const x of s.txs) booked.add(x.hash.toLowerCase());
+  }
+  for (const d of inp.deposits) {
+    if (d.conversion?.txHash) booked.add(d.conversion.txHash.toLowerCase());
+    for (const x of d.txs) booked.add(x.hash.toLowerCase());
+  }
+  const out: LineDraft[] = [];
+  for (const d of inp.deposits) {
+    if (d.userId !== inp.userId || d.token !== "EURE" || !((d.amountEur ?? 0) > 0)) continue;
+    if ((d.from ?? ZERO) === ZERO || booked.has(d.txHash.toLowerCase())) continue;
+    const at = d.arrivedAt ?? d.detectedAt;
+    out.push({
+      event: "eure_in",
+      key: `deposit:${d.id}:eure`,
+      bookingAt: at,
+      valueAt: at,
+      amountCents: cents(d.amountEur!),
+      counterparty: { address: d.from },
+      reference: `Deposit ${d.txHash.slice(0, 10)}`,
+      links: { depositId: d.id, txHashes: [d.txHash] },
+      txType: "transfer_in",
+      tags: ["eure"],
+    });
   }
   return out;
 }
@@ -376,7 +425,7 @@ function sweepLines(inp: StatementInputs): LineDraft[] {
 
 /** Every line the inputs support, sorted by value date. */
 export function projectStatementLines(inp: StatementInputs, now = new Date().toISOString()): LedgerEntry[] {
-  const drafts = [...sepaInLines(inp), ...sepaOutLines(inp), ...cryptoLines(inp), ...sweepLines(inp)];
+  const drafts = [...sepaInLines(inp), ...sepaOutLines(inp), ...cryptoLines(inp), ...eureInLines(inp), ...sweepLines(inp)];
   const seen = new Set<string>();
   const out: LedgerEntry[] = [];
   for (const d of drafts) {

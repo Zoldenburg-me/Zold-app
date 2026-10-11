@@ -24,6 +24,15 @@ forwarding — and exits 1 on any FAIL. `--chain 8453 --gas token` overrides.
 `npm run dev` wiping its own db is why test accounts vanish between runs — and
 why the live accounts in `data/db.json` must never be exercised with it.
 
+Imported wallets sync only on chains with an RPC: `WALLET_SYNC_RPC_1=https://…`
+(or `WALLET_SYNC_RPCS='{"1":"https://…"}'`). Locally, point
+`WALLET_SYNC_RPC_31337` at the hardhat node and set
+`WALLET_SYNC_CONFIRMATIONS=0`; a MockToken mint to an imported address is then
+booked within one poll (`WALLET_SYNC_POLL_MS`, default 60 s). Classing a
+token needs the curated lists (`WALLET_SYNC_TOKEN_LISTS`, default Uniswap +
+CoinGecko) fetched once a day; offline, point it at a local JSON in the
+tokenlists.org shape, or the window holds with "Waiting for the token lists".
+
 To fund locally: mint MockToken EURe straight to the user's Safe from hardhat
 account 0 (the token owner) and `refresh()` picks it up.
 
@@ -33,12 +42,115 @@ sets `KYC_AUTO_APPROVE=1`). Run a second API against the chain dev.ts started �
 with the operator `*_KEY` vars **blanked** (.env holds real Base Sepolia keys
 that do not own the local deployment).
 
+## Toolchain and shell
+
+- The in-project node (`.toolchain/node-v22.17.0-darwin-arm64`) is an
+  **arm64** build. On an Intel Mac it fails with "Bad CPU type" (tsx too), so
+  use a system node; `npm run typecheck` works on either (tsc is pure JS).
+- `sw.js` serves page `.js`/`.css` network-first, so a deploy needs no
+  `SHELL_CACHE` bump unless the SHELL list or a vendored file changes.
+- zsh reads `:s/` in `$REF:services/...` as a substitution modifier, so a grep
+  over such a path can silently read nothing. Quote it, and confirm the file
+  is readable before trusting a count of zero.
+
+## Secrets
+
+`.env` and `.private/` can be kept `age`-encrypted (`docs/security-hardening.md`,
+Phase 0). The identity is in the macOS Keychain (`zold-age-identity`), or in a
+file named by `AGE_IDENTITY_FILE` (an `age-plugin-yubikey` stub).
+
+- `npm run age:fetch` installs the pinned `age` into `.toolchain/`, refusing a
+  download whose SHA-256 differs from the one in `scripts/_age.sh`.
+- `npm run secrets -- init` makes the identity and writes its public key to
+  `.age-recipients`.
+- `npm run secrets -- encrypt .env` writes `.env.age`. `npm run secrets -- run
+  -- npm run api` decrypts it into that command's environment only; nothing
+  decrypted touches the disk. Delete `.env` once that works. A variable set in
+  the shell wins over `.env.age`, as with `.env`. To read one value yourself:
+  `npm run -s secrets -- run -- printenv NAME`.
+- `npm run secrets -- set NAME` adds one variable to `.env.age`, reading the
+  value at a hidden prompt (or from a pipe). `--random` makes 32 random bytes
+  as base64 instead, after an optional `--prefix` (for example
+  `set DATA_ENCRYPTION_KEYS --random --prefix k1:`). A name that is already
+  set is refused without `--replace`. The new file replaces `.env.age` only
+  once it decrypts and holds NAME; the previous one stays as `.env.prev.age`,
+  which still holds a replaced value: delete it after replacing a leaked one.
+  It is encrypted to the keys in `.age-recipients`, so a recipient missing
+  there loses access. Run these from the main checkout: a worktree has no
+  `.toolchain/` or `.env.age`.
+- `npm run secrets -- seal .private` writes `.private.tar.age`; `unseal` puts it
+  back into a directory you name, refusing one that exists. A failed unseal
+  leaves nothing behind.
+- `npm run backup:db` is the only way to copy the database: an `age`-encrypted
+  file in `.local-backups/`. The store writes `data/db*.json` mode 600.
+
+## Browser pane and new pages
+
+- In the embedded browser pane, click coordinates are in SCREENSHOT space, and
+  WebAuthn ceremonies never resolve — test passkeys in a real browser.
+- An agent or scanner that needs a signed-in account (a pentest, say) uses
+  `scripts/pentest-user.ts`: a software passkey that signs up and logs in
+  through the real routes and prints a 24h session token. Its key files sit in
+  the git-ignored `.private/pentest/`; holding one is holding the account.
+- Check `document.compatMode === "CSS1Compat"` on any new page: without
+  `<!DOCTYPE html>` tables do not inherit colour.
+
+## The production branch
+
+Deploys run `production`, not main. It holds only what the server needs at
+runtime: `services/api/{src,public,site}`, the compiled contract ABIs that
+`chain.ts` loads at import, a `package.json` with runtime dependencies only
+(tsx included) and its lock. No docs, design, tests, scripts, Solidity, hardhat
+or Shopify extension.
+
+Merging a PR to main is the whole deploy. `.github/workflows/production.yml`
+runs `npm run check`, then `scripts/build-production-branch.sh` on the merged
+commit, and pushes `production`; a red check stops it there. zoldhq.com
+follows `refs/heads/production` (never main) and switches to each new commit
+within a few minutes, backing up `/data/db.json` first and rolling back a
+commit that fails `/api/health` (technical-architecture §18.1). By hand, the
+same build is:
+
+```bash
+scripts/build-production-branch.sh
+git push origin production
+```
+
+Each run adds one commit whose tree is main's tree through that allowlist and
+whose message names the main commit. It refuses a source that is not on
+origin/main or does not descend from the source of the current `production`
+commit, so a dispatch on another branch or a re-run of an older workflow run
+fails instead of publishing or rolling back. On the host: `npm ci --omit=dev`, write
+`deployments.json`, `npm start`; there is no `hardhat compile` step.
+
+Rules, because whatever is on `production` is what zoldhq.com runs:
+
+- **Only the script writes it** (in the workflow, or by hand), and only from
+  merged main.
+  Never commit, merge main, cherry-pick, rebase, reset or force-push. A fix
+  goes through a PR to main, then a rebuild.
+- **Never build from an unmerged branch.** The script's argument exists for
+  re-snapshotting an older main commit, not for shipping a branch.
+- **Roll back with a revert PR to main**, which deploys like any merge. To
+  hold the site on an older production commit meanwhile, set
+  `ZOLD_COMMIT=<sha>` on the lease: a pinned lease stops following the
+  branch until `ZOLD_COMMIT=production` is set again. Never move the branch
+  back. History only grows.
+- **A file the server newly needs at runtime goes in the script's allowlist**
+  in the same PR. Then check a clean checkout boots: `npm ci --omit=dev`,
+  `npm start`, `/api/health`. The ABIs were found this way.
+- On GitHub, `production` should be protected against force-pushes and
+  deletion (Settings → Branches). Regular pushes stay allowed, since the
+  script only adds commits.
+
 ## Test suites
 
 `npm run check` is OFFLINE and is the one to run. `npm run check:live` adds the
 three Stellar suites (each pins testnet via `scripts/_stellar-testnet.ts` —
 config defaults to pubnet, and a real treasury secret in .env would otherwise
 submit mainnet ops).
+
+Human testing on zoldhq.com follows `docs/test-round.md`.
 
 | area | suites |
 |---|---|

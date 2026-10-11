@@ -13,7 +13,7 @@
  * content lives now.
  */
 (function () {
-  var MOVED = { "#notes": "/legal", "#cookies": "/privacy#cookies", "#rails": "#get-paid", "#account": "#get-paid", "#approval": "#security" };
+  var MOVED = { "#notes": "/legal", "#cookies": "/privacy#cookies", "#rails": "#get-paid", "#account": "#get-paid", "#approval": "#security", "#trust": "#security" };
   var onLanding = location.pathname === "/" || location.pathname === "/landing.html";
   if (onLanding && MOVED[location.hash]) {
     var to = MOVED[location.hash];
@@ -22,6 +22,12 @@
     var el = document.getElementById(to.slice(1));
     if (el) el.scrollIntoView();
   }
+
+  // The phone menu is a <details>: a link to a section of this same page
+  // scrolls but would leave it open over the content.
+  document.querySelectorAll(".s-menu a").forEach(function (a) {
+    a.addEventListener("click", function () { var d = a.closest("details"); if (d) d.open = false; });
+  });
 
   var NETWORK = { 8453: "Base", 84532: "Base test network", 31337: "Local test network" };
 

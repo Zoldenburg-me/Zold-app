@@ -17,7 +17,6 @@ function renderUser(u) {
   const plannedSafe = needsPasskeySafeSetup(u) ? u.passkeySafe?.address : null;
   $("address").textContent = plannedSafe ? `planned ${shortAddr(plannedSafe)} — finish smart wallet` : u.address;
   document.querySelector('[data-copy="address"]')?.classList.toggle("hidden", !!plannedSafe);
-  renderAutoConvert(u.paymentPage?.autoConvert);
   renderHandle(u.paymentPage);
   const chip = $("fund-chip");
   if (!kycApproved(u)) {
@@ -57,7 +56,7 @@ function renderMobile(u = user) {
   const active = sub && sub.status !== "canceled";
   const plan = active ? bundlePlan(sub.planId) : null;
   applySegment();
-  $("m-card-name").textContent = (u.name || "").toUpperCase() || "—";
+  $("m-card-name").textContent = ownAccountName(u).toUpperCase() || "—";
   const cheapest = privacyCatalog?.plans?.[0];
   $("m-bundle-sub").textContent = active
     ? `${plan ? plan.name : "Subscribed"} · ${sub.status === "pending_fulfillment" ? "awaiting partner setup" : "active"}`
@@ -81,15 +80,15 @@ function mobileNav(target) {
 /** Routing of the older screens. `msub` names the sub-screen. */
 function mobileNavLegacy(target) {
   const shell = $("dashboard");
-  const sub = { plus: "plus", bundle: "bundle", payment: "payment", share: "share", profile: "profile", card: "card",
-    monerium: "monerium", recovery: "recovery", documents: "documents", signers: "signers" }[target] || "profile";
+  const sub = { plus: "plus", bundle: "bundle", payment: "payment", share: "share", card: "card",
+    monerium: "monerium", recovery: "recovery", documents: "documents", signers: "signers" }[target];
+  if (!sub) return phGo("settings");
   shell.dataset.msub = sub;
   switchView("dashboard");
   if (sub === "payment") { $("m-subtitle").textContent = "Payment page"; renderHandle(user?.paymentPage); }
   if (sub === "bundle") $("m-subtitle").textContent = "Zold Plus";
   if (sub === "card") renderCardScreen();
   if (sub === "share") renderShareScreen();
-  if (sub === "profile") renderProfileScreen();
   if (sub === "monerium") renderMoneriumScreen();
   if (sub === "recovery") renderRecoveryScreen();
   if (sub === "documents") renderDocumentsScreen();
@@ -119,75 +118,6 @@ function applySegment() {
   // Home, Send and Add money read the capabilities themselves (app/phone.js);
   // this is what is left of the older layout.
   $("btn-send")?.classList.toggle("hidden", !HAS("onchain_balance"));
-}
-
-/* ==========================================================================
-   RECEIVED PAYMENTS — arrive automatically, convert on approval
-   --------------------------------------------------------------------------
-   "Auto-convert" cannot mean unattended. Moving the user's USDC is a
-   UserOperation their passkey signs, and the poller that spots the deposit
-   runs with nobody present. So deposits are detected automatically and
-   converted when the account holder approves, and the screen says so.
-
-   Pending conversions are surfaced prominently. A German company books crypto
-   income at its EUR value on the day it arrives, and converting later realises
-   a gain or loss against that value; converting promptly keeps it near zero.
-   The UI does not explain the tax reasoning.
-   ========================================================================== */
-const dEur = (n) => (typeof n === "number" ? `€${n.toFixed(2)}` : "—");
-
-/**
- * Convert one deposit: prepare the batch, sign its hash with the passkey,
- * submit.
- *
- * One deposit at a time. Each conversion is its own disposal with its own rate
- * and transaction, so each payment traces one-to-one to what it became. Don't
- * batch several into one swap to save a signature.
- */
-async function convertDeposit(depositId, btn) {
-  const label = btn?.textContent;
-  const setBusy = (t) => { if (btn) { btn.disabled = true; btn.textContent = t; } };
-  try {
-    setBusy("Preparing…");
-    const prep = await api(`/api/users/${user.id}/crypto-deposits/${depositId}/convert/prepare`, {});
-    setBusy(`Approve ${dEur(prep.expectedEur)}…`);
-
-    const assertion = await navigator.credentials.get({
-      publicKey: {
-        challenge: b64urlToBytes(prep.challenge),
-        rpId: location.hostname,
-        allowCredentials: prep.credentialId
-          ? [{ type: "public-key", id: b64urlToBytes(prep.credentialId) }]
-          : [],
-        userVerification: "required",
-      },
-    });
-    if (!assertion) throw new Error("no passkey response");
-
-    setBusy("Converting…");
-    const out = await api(`/api/users/${user.id}/crypto-deposits/${depositId}/convert`, {
-      executionAssertion: {
-        credentialId: prep.credentialId,
-        // b64url and b64urlToBytes are declared further down the file. Safe:
-        // both are only reached from a click or a navigation, long after the
-        // script has finished evaluating.
-        authenticatorData: b64url(assertion.response.authenticatorData),
-        clientDataJSON: b64url(assertion.response.clientDataJSON),
-        signature: b64url(assertion.response.signature),
-      },
-    });
-    if (out.safeBalanceEur !== undefined) {
-      user.safeBalanceEur = out.safeBalanceEur;
-      user.balanceEur = out.balanceEur ?? out.safeBalanceEur;
-      renderUser(user);
-    }
-  } catch (err) {
-    if (btn) { btn.disabled = false; btn.textContent = label || "Convert to euro"; }
-    // The passkey being cancelled is not an error worth a red banner — the
-    // user changed their mind, and the deposit is exactly where it was.
-    if (err?.name === "NotAllowedError") return;
-    alert(err.message || "could not convert this payment");
-  }
 }
 
 /* ==========================================================================
@@ -367,4 +297,13 @@ function parseEurInput(raw) {
   if (!/^\d+([.,]\d{0,2})?$/.test(v)) return NaN;
   const n = Number(v.replace(",", "."));
   return n >= 0.01 ? n : NaN;
+}
+
+/* Why parseEurInput refused what was typed, in the words that fix it. */
+function eurInputError(raw, example = "120,50") {
+  const v = String(raw ?? "").replace(/\s/g, "");
+  if (/^-/.test(v)) return "The amount can’t be negative.";
+  if (/^\d+[.,]\d{3,}$/.test(v)) return `Use at most two decimals for cents, like ${example}.`;
+  if (/^\d+([.,]\d*)?$/.test(v)) return "Enter more than €0.00.";
+  return `Enter euros and cents, like ${example}.`;
 }

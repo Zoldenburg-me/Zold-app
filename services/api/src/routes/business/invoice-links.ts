@@ -21,24 +21,25 @@ import {
   validateLines,
 } from "../../domain/invoices.js";
 import { passwordMatches } from "../../domain/passwords.js";
-import { recordFailure, tooManyFailures } from "../../http/policy.js";
-import { parsePayTo } from "./shared.js";
+import { forgetFailure, recordFailure, tooManyFailures } from "../../http/policy.js";
+import { invoiceBankOf, parsePayTo } from "./shared.js";
 import type { Invoice } from "../../domain/types.js";
 
 /** Wrong passwords one link absorbs, from any number of addresses, per window. */
 const PASSWORD_FAILURES_MAX = 10;
 const PASSWORD_FAILURE_WINDOW_MS = 15 * 60_000;
+const DUE_DATE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 
 export function createInvoiceLinkRouter(): express.Router {
   const r = express.Router();
 
-  const load = (
+  const load = async (
     req: express.Request,
     res: express.Response,
-  ): Invoice | undefined => {
+  ): Promise<Invoice | undefined> => {
     const token = String(req.params.token ?? "");
     const invoice = store.findInvoiceByLinkHash(hashToken(token));
-    if (!invoice || invoice.state === "DELETED") {
+    if (!invoice || invoice.state === "DELETED" || invoice.state === "DRAFT") {
       res.status(404).json({ error: "That invoice link is not valid." });
       return undefined;
     }
@@ -53,11 +54,14 @@ export function createInvoiceLinkRouter(): express.Router {
         res.status(401).json({ error: "This invoice link is password protected.", passwordRequired: true });
         return undefined;
       }
-      if (supplied.length > 256 || !passwordMatches(supplied, invoice.linkPasswordHash)) {
-        recordFailure(key, PASSWORD_FAILURE_WINDOW_MS);
+      // Counted as a failure before the (async) check, so guesses in flight
+      // together are all counted; a right password takes its count back.
+      recordFailure(key, PASSWORD_FAILURE_WINDOW_MS);
+      if (supplied.length > 256 || !(await passwordMatches(supplied, invoice.linkPasswordHash))) {
         res.status(401).json({ error: "That password is not right.", passwordRequired: true });
         return undefined;
       }
+      forgetFailure(key);
     }
     return invoice;
   };
@@ -84,18 +88,18 @@ export function createInvoiceLinkRouter(): express.Router {
     ]
       .filter(Boolean)
       .join(" · ");
-    return { bank: org?.invoicing?.bank, footerNote: footerNote || undefined };
+    return { bank: org ? invoiceBankOf(org) : undefined, footerNote: footerNote || undefined };
   };
 
-  r.get("/:token", (req, res) => {
-    const invoice = load(req, res);
+  r.get("/:token", async (req, res) => {
+    const invoice = await load(req, res);
     if (!invoice) return;
     res.json({ invoice: supplierView(invoice, payorName(invoice), issuerExtras(invoice)) });
   });
 
   /** The supplier fills the invoice in. Locked once submitted. */
-  r.post("/:token/submit", (req, res) => {
-    const invoice = load(req, res);
+  r.post("/:token/submit", async (req, res) => {
+    const invoice = await load(req, res);
     if (!invoice) return;
     if (invoice.state !== "LINK_CREATED") {
       return res.status(409).json({
@@ -111,6 +115,18 @@ export function createInvoiceLinkRouter(): express.Router {
           return res.status(400).json({ error: `Your ${field} is required.` });
         }
       }
+      // Printed on the payor's documents; the link is reachable by anyone who
+      // holds it, so nothing in it is unbounded.
+      const maxLength: Record<string, number> = { orgName: 200, email: 254, address: 500, taxId: 40, invoiceNumber: 60 };
+      for (const [field, max] of Object.entries(maxLength)) {
+        if (String(supplier[field] ?? "").trim().length > max) {
+          return res.status(400).json({ error: `Your ${field} is limited to ${max} characters.` });
+        }
+      }
+      const dueDate = req.body?.dueDate;
+      if (dueDate !== undefined && dueDate !== null && dueDate !== "" && !(typeof dueDate === "string" && DUE_DATE.test(dueDate))) {
+        return res.status(400).json({ error: "The due date must be a date, YYYY-MM-DD." });
+      }
       assertInvoiceTransition(invoice.state, "SUBMITTED");
       const updated = store.updateInvoice(invoice.id, {
         state: "SUBMITTED",
@@ -124,7 +140,7 @@ export function createInvoiceLinkRouter(): express.Router {
         lines,
         total,
         payTo: parsePayTo(req.body?.payTo, invoice.currency),
-        dueDate: typeof req.body?.dueDate === "string" ? req.body.dueDate : invoice.dueDate,
+        dueDate: typeof dueDate === "string" && dueDate ? dueDate : invoice.dueDate,
         submittedAt: new Date().toISOString(),
       });
       res.json({ invoice: supplierView(updated, payorName(updated), issuerExtras(updated)) });

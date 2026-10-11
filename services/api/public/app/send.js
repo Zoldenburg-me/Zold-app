@@ -1,5 +1,5 @@
 /**
- * The payment page, inbound crypto, the destination-first send flow, the
+ * The payment page settings, the destination-first send flow, the
  * animated transfer timeline, and history.
  */
 /* ---------- payment page ---------- */
@@ -12,7 +12,6 @@ function renderHandle(page) {
     return;
   }
   $("handle-input").value = page.handle;
-  $("settlement-asset").value = page.settlementAsset || "EURE";
   // Shown as an absolute URL because the whole point is pasting it elsewhere.
   $("paylink").textContent = `${location.origin}/pay/${page.handle}`;
   $("payaddr").textContent = page.depositAddress || "—";
@@ -25,61 +24,18 @@ $("btn-handle").onclick = async () => {
   clearErr("handle-err");
   try {
     const handle = $("handle-input").value.trim().toLowerCase();
-    const settlementAsset = $("settlement-asset").value;
-    const r = await api(`/api/users/${user.id}/handle`, { handle, settlementAsset });
+    // Main currency owns the asset; a rename keeps it (the route defaults
+    // an absent one to EURE).
+    const settlementAsset = user.paymentPage?.settlementAsset;
+    const r = await api(`/api/users/${user.id}/handle`, {
+      handle,
+      ...(user.paymentPage?.displayName ? { displayName: user.paymentPage.displayName } : {}),
+      ...(settlementAsset ? { settlementAsset } : {}),
+    });
     user.paymentPage = r.paymentPage;
     renderHandle(r.paymentPage);
-    renderAutoConvert(r.paymentPage?.autoConvert);
     renderMobile(user);
   } catch (e) { showErr("handle-err", e); }
-};
-
-/* ---------- crypto in ---------- */
-function renderAutoConvert(on) {
-  const b = $("btn-autoconvert");
-  b.textContent = on ? "on" : "off";
-  b.dataset.on = on ? "1" : "0";
-  b.setAttribute("aria-pressed", on ? "true" : "false");
-}
-
-/* Deposits are shown whatever their outcome. A refusal is the case a user most
-   needs to see — their USDC arrived and is sitting there unconverted, and the
-   reason says what to do about it. */
-function renderCryptoDeposits(deposits) {
-  const el = $("crypto-list");
-  if (!deposits?.length) { el.innerHTML = ""; return; }
-  el.innerHTML = deposits
-    .map((d) => {
-      const ok = ["none", "held", "converted"].includes(d.holding);
-      const right = ok
-        ? (d.settlementAsset === "USDC" ? `${fmt(d.creditedUsdc ?? d.amountUsdc, 2)} USDC` : `€${fmt(d.creditedEur ?? 0)}`)
-        : `<span title="${esc(d.reason ?? "")}">not converted</span>`;
-      return `<div class="cdep">
-        <span class="amt">${fmt(d.amountUsdc, 2)} USDC</span>
-        <span class="st ${ok ? "ok" : "no"}">${right}</span>
-      </div>`;
-    })
-    .join("");
-}
-
-async function refreshCryptoDeposits() {
-  if (!user?.id || !sessionToken) return;
-  try {
-    const r = await api(`/api/users/${user.id}/crypto-deposits`);
-    renderAutoConvert(r.autoConvert);
-    if (r.settlementAsset) $("settlement-asset").value = r.settlementAsset;
-    renderCryptoDeposits(r.deposits);
-  } catch { /* the panel is informational; a failure here must not blank the app */ }
-}
-
-$("btn-autoconvert").onclick = async () => {
-  clearErr("crypto-err");
-  try {
-    const next = $("btn-autoconvert").dataset.on !== "1";
-    const u = await api(`/api/users/${user.id}/auto-convert`, { enabled: next });
-    renderUser({ ...user, ...u });
-    await refreshCryptoDeposits();
-  } catch (e) { showErr("crypto-err", e); }
 };
 
 document.querySelectorAll(".copybtn").forEach((b) => {
@@ -263,6 +219,16 @@ const STEP_LABELS = {
   "safe.refundTransfer": ["Refunding your Safe", "💶"],
 };
 
+/* What the server records but a person should not read as progress: the
+   intent marked before a call goes out (".pending", hash "0x"), an outcome the
+   error or the SEPA line already states (".placed" carries the Monerium order
+   id, ".refused", ".reverted", ".not-sent", ".unconfirmed"). */
+const INTERNAL_STEP = /\.(pending|placed|refused|reverted|not-sent|unconfirmed)$/;
+const txStepShown = (x) => !!x?.step && !INTERNAL_STEP.test(x.step);
+/* Only a chain transaction hash is shown or linked as one; the same field
+   also holds order ids, deposit addresses and the "0x" placeholder. */
+const isTxHash = (h) => /^0x[0-9a-fA-F]{64}$/.test(String(h || ""));
+
 /** Synthetic (off-chain) steps appended after the tx steps per rail. */
 function sepaSteps(t) {
   const s = t.sepa || {};
@@ -282,9 +248,9 @@ function stepEl(title, detail, icon) {
 function playTimeline(t, { onDone } = {}) {
   const tl = $("timeline");
   tl.innerHTML = "";
-  const steps = t.txs.map((x) => {
+  const steps = (t.txs || []).filter(txStepShown).map((x) => {
     const [label, icon] = STEP_LABELS[x.step] || [x.step, "⚙️"];
-    return stepEl(label, `tx ${x.hash}`, icon);
+    return stepEl(label, isTxHash(x.hash) ? `tx ${x.hash}` : "", icon);
   });
   if (t.rail === "sepa") {
     for (const [label, detail, icon] of sepaSteps(t)) steps.push(stepEl(label, detail, icon));
@@ -505,6 +471,8 @@ $("btn-again").onclick = () => {
 
 /* ---------- history ---------- */
 const hist = [];
+/* Money in: a crypto deposit, or a bank transfer in (a Monerium issue order). */
+const histIsIn = (t) => t.kind === "funding" || t.kind === "bank_in";
 /* Set when the last activity load failed. An empty `hist` then means "we could
    not ask", not "nothing happened": an outage must not read as an empty
    account. Rows already loaded stay on screen; only the empty state changes. */
@@ -524,10 +492,23 @@ function bindHistRetry(el) {
   el.querySelectorAll("[data-hist-retry]").forEach((b) => { b.onclick = () => loadTransfers(); });
 }
 function histRow(t) {
+  if (t.kind === "bank_in") {
+    return `
+    <div class="hic">IN</div>
+    <div class="hmain">
+      <div class="hn">${esc(t.counterpartyName || "Bank transfer")}</div>
+      <div class="hs">${esc(t.memo || "Bank transfer")}</div>
+    </div>
+    <div>
+      <div class="hamt">+€${esc(fmt(t.amountEur || 0))}</div>
+      <div class="hst" style="color:var(--green)">RECEIVED</div>
+    </div>`;
+  }
   if (t.kind === "funding") {
-    const token = t.token === "USDC" ? "USDC" : "EURe";
-    const amount = t.token === "USDC" ? `${fmt(t.amountUsdc || 0)} USDC` : `€${fmt(t.amountEur || 0)}`;
-    const color = t.holding === "refused" ? "var(--amber)" : "var(--green)";
+    const token = t.token === "USDC" ? usdSym() : "EURe";
+    const amount = t.token === "USDC" ? `${fmt(t.amountUsdc || 0)} ${usdSym()}` : `€${fmt(t.amountEur || 0)}`;
+    // unconfirmed: the conversion was sent and not yet seen on chain.
+    const color = t.holding === "refused" || t.holding === "unconfirmed" ? "var(--amber)" : "var(--green)";
     return `
     <div class="hic">IN</div>
     <div class="hmain">
@@ -536,7 +517,7 @@ function histRow(t) {
     </div>
     <div>
       <div class="hamt">+${esc(amount)}</div>
-      <div class="hst" style="color:${color}">${t.holding === "refused" ? "REVIEW" : "RECEIVED"}</div>
+      <div class="hst" style="color:${color}">${t.holding === "refused" ? "REVIEW" : t.holding === "unconfirmed" ? "CHECKING" : "RECEIVED"}</div>
     </div>`;
   }
   const paid = t.state === "PAID";

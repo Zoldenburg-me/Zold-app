@@ -129,9 +129,23 @@ await check("settling twice is a no-op: one settlement per deposit", async () =>
 
 console.log("\nThe blocker names what a user can act on");
 
-await check("an unapproved account is refused for KYC, not for something cryptic", () => {
+await check("a pending account converts: the swap is user-signed from its own Safe, not a fiat rail", () => {
   const u = mkUser({ kycStatus: "pending" });
-  assert.match(depositConversionBlocker(u, mkDeposit(u.id))!, /not approved/i);
+  assert.equal(depositConversionBlocker(u, mkDeposit(u.id)), null);
+});
+
+await check("a rejected or manual-review account still converts: the partner refused a bank account, not the wallet", () => {
+  for (const kycStatus of ["rejected", "manual_review"]) {
+    const u = mkUser({ kycStatus });
+    assert.equal(depositConversionBlocker(u, mkDeposit(u.id)), null, kycStatus);
+  }
+});
+
+await check("a WALLET_ONLY account converts; a segment without an on-chain balance is refused", () => {
+  const w = mkUser({ kycStatus: "pending", segment: { value: "WALLET_ONLY" } });
+  assert.equal(depositConversionBlocker(w, mkDeposit(w.id)), null);
+  const b = mkUser({ segment: { value: "BLOCKED_SANCTIONED" } });
+  assert.match(depositConversionBlocker(b, mkDeposit(b.id))!, /not part of your account/i);
 });
 
 await check("dust below the floor is refused with the floor in it", () => {
@@ -144,6 +158,31 @@ await check("dust below the floor is refused with the floor in it", () => {
 await check("an already-converted deposit cannot be converted twice", () => {
   const u = mkUser();
   assert.match(depositConversionBlocker(u, mkDeposit(u.id, { holding: "converted" }))!, /already been converted/i);
+});
+
+await check("a conversion whose outcome is unconfirmed cannot be prepared again", () => {
+  const u = mkUser();
+  const d = mkDeposit(u.id, { holding: "unconfirmed", txs: [{ step: "safe.swap(usdc->eure).unconfirmed", hash: "0xop" }] });
+  assert.match(depositConversionBlocker(u, d)!, /may still land/i);
+});
+
+await check("a refusal after an executed swap cannot be converted again; a reverted one can", () => {
+  const u = mkUser();
+  const spent = mkDeposit(u.id, { holding: "refused", txs: [{ step: "safe.swap(usdc->eure)", hash: "0x1" }] });
+  assert.match(depositConversionBlocker(u, spent)!, /went through/i);
+  const reverted = mkDeposit(u.id, { holding: "refused", txs: [{ step: "safe.swap(usdc->eure).reverted", hash: "0x2" }] });
+  assert.equal(depositConversionBlocker(u, reverted), null);
+});
+
+await check("the convert route parks an uncertain submit as unconfirmed and refuses a reverted one", () => {
+  const src = readFileSync("services/api/src/routes/crypto-deposits.ts", "utf8");
+  const route = src.slice(src.indexOf('"/users/:id/crypto-deposits/:depositId/convert"'));
+  const body = route.slice(0, route.indexOf("settleConvertedDeposit("));
+  assert.match(body, /instanceof SafeOperationUncertainError[\s\S]*holding: "unconfirmed"/,
+    "an op the bundler may have taken must not read as refused and convertible again");
+  assert.match(body, /err\.userOpHash/, "the unconfirmed row carries the userOpHash to check");
+  assert.match(body, /submitted\.success !== true[\s\S]*holding: "refused"/,
+    "an included-but-reverted swap moved nothing and is refused before settlement");
 });
 
 await check("a deposit already in the settlement currency has nothing to convert", () => {
@@ -174,6 +213,7 @@ await check("each old state maps to settled + a holding; nothing else changes", 
     row({ id: "det", state: "DETECTED", settlementAsset: "EURE" }),
     row({ id: "ref-swap", state: "REFUSED", txs: [{ step: "safe.swap(usdc->eure)", hash: "0x1" }] }),
     row({ id: "ref-kyc", state: "REFUSED" }),
+    row({ id: "unc", state: "UNCONFIRMED", txs: [{ step: "safe.swap(usdc->eure).unconfirmed", hash: "0x2" }] }),
   ];
   migrateCryptoDepositHolding(rows, users);
   const by = (id: string) => rows.find((r) => r.id === id);
@@ -187,7 +227,8 @@ await check("each old state maps to settled + a holding; nothing else changes", 
   assert.deepEqual([by("ref-kyc").holding, by("ref-kyc").settledAt], ["held", undefined], "a detection-time refusal is money held");
   assert.ok(rows.every((r) => !("state" in r)), "the old field is gone");
   assert.ok(rows.every((r) => r.reason === "kept"), "the reason survives");
-  assert.equal(rows.length, 7, "no row is dropped");
+  assert.deepEqual([by("unc").holding, by("unc").settledAt], ["unconfirmed", undefined], "a swap that may still land is not offered again");
+  assert.equal(rows.length, 8, "no row is dropped");
   migrateCryptoDepositHolding(rows, users);
   assert.equal(by("cu").holding, "held", "running it twice changes nothing");
 });
@@ -280,6 +321,17 @@ const liq = readFileSync("services/api/src/liquidity.ts", "utf8");
 const dep = readFileSync("services/api/src/adapters/crypto-deposits.ts", "utf8");
 // The deposit routes left server.ts in the modularity pass.
 const srv = readFileSync("services/api/src/routes/crypto-deposits.ts", "utf8");
+
+await check("conversion is gated by the segment, never by KYC approval", () => {
+  const route = srv.slice(srv.indexOf('"/users/:id/auto-convert"'));
+  const body = route.slice(0, route.indexOf("router.", 1));
+  assert.ok(!/requireKycApproved/.test(body), "auto-convert must not require Monerium approval");
+  assert.match(body, /requireCapability\(user, "onchain_balance", res\)/, "auto-convert must check the segment");
+  const watched = dep.slice(dep.indexOf("function watchedAddresses"));
+  assert.ok(!/kycStatus === "approved"/.test(watched.slice(0, watched.indexOf("return out;"))),
+    "a pending account's page address must be watched when auto-convert is on");
+  assert.match(dep, /walletBlocker\(user\)/, "depositConversionBlocker must use walletBlocker");
+});
 
 await check("nothing sweeps the user's USDC to the orchestrator", () => {
   assert.ok(!/sweepToOrchestrator\s*\(/.test(dep.replace(/\*.*sweepToOrchestrator.*/g, "")),

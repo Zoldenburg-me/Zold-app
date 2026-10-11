@@ -12,6 +12,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { createServer } from "node:net";
+import { urlForLog } from "../services/api/src/http/log-safe.js";
 
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const scripts = [
@@ -22,7 +23,11 @@ const scripts = [
   "authorize:test",
   "country:policy:test",
   "recovery:test",
+  "recovery:remove:test",
   "recovery:candide:test",
+  "turnkey:test",
+  "turnkey-page:test",
+  "turnkey-recovery:test",
   "documents:test",
   "paylinks:test",
   "shopify:test",
@@ -30,46 +35,84 @@ const scripts = [
   "monerium:oauth:test",
   "monerium:apikeys:test",
   "monerium:profile:test",
+  "monerium:ratelimit:test",
+  "display-name:test",
+  "activity:test",
   "sepa:test",
   "receipt:test",
+  "convert:test",
+  "safe-op-uncertain:test",
   "device-key:test",
   "passkey-safe:test",
   "safe-signers:test",
   "safe-import:test",
+  "safe-import:ui:test",
+  "passkey-prompt:test",
   "execution:test",
   "gas:test",
+  "faucet:test",
   "quote-binding:test",
   "fx:test",
   "jit:test",
   "dex:test",
   "lifi:test",
   "forwarder:test",
+  "email:test",
+  "recovery-alerts:test",
+  "enrolment:test",
+  "recovery-bank:test",
   "best:test",
   "webhook:test",
+  "checkout-service:test",
   "reconcile:test",
   "anchor:config:test",
   "anchor:safety",
   "anchor:sweep:test",
   "refund:guard:test",
+  "safe-funded:test",
+  "final-state:test",
   "business:test",
+  "business:access:test",
+  "recovery-alert:ui:test",
   "draft:test",
   "draft:failure:test",
+  "payment-review:test",
+  "deposit-invoice-link:test",
   "security:test",
+  "crypto:test",
+  "org-migration:test",
+  "production-branch:test",
+  "identity:test",
   "plan:test",
+  "admin:test",
+  "operator:test",
+  "admin:ui:test",
+  "review-resolution:test",
   "invoicing:test",
+  "async-errors:test",
+  "input-errors:test",
+  "vat:test",
+  "org-accounts:test",
+  "bounds:test",
   "custody:test",
   "segments:test",
   "gnosispay:test",
   "onboarding:test",
   "pay:test",
+  "ens:test",
   "tx:audit:test",
   "statement:test",
+  "wallet-sync:test",
+  "income-invoices:test",
+  "wallet-proof:test",
+  "holdings:test",
+  "org-ceiling:test",
   "beleg:test",
   "lexware:csv:test",
   "exact-output:test",
   "gmi:test",
 ];
-const liveScripts = ["anchor:test", "travelrule:test", "trustline:test"];
+const liveScripts = ["anchor:test", "travelrule:test", "trustline:test", "recovery:fork:test"];
 if (process.env.CHECK_LIVE === "1") scripts.push(...liveScripts);
 
 async function freePort(): Promise<number> {
@@ -101,7 +144,7 @@ const env = {
   TRANSF_RATES_STUB_PORT: ratesStubPort,
 };
 
-console.log(`check ports: api=${env.TRANSF_API_PORT} rpc=${env.TRANSF_RPC_URL} stub=${env.TRANSF_STUB_PORT} rates=${env.TRANSF_RATES_STUB_PORT}`);
+console.log(`check ports: api=${env.TRANSF_API_PORT} rpc=${urlForLog(env.TRANSF_RPC_URL)} stub=${env.TRANSF_STUB_PORT} rates=${env.TRANSF_RATES_STUB_PORT}`);
 
 for (const script of scripts) {
   const r = spawnSync(npm, ["run", script], { stdio: "inherit", env });

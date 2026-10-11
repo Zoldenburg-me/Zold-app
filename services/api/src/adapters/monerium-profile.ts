@@ -11,13 +11,17 @@ import { auditEntry } from "../audit.js";
 import { store, type User } from "../store.js";
 import type { Account, Organisation } from "../domain/types.js";
 import {
+  expectedProfileKind,
+  ibanIssuedTo,
   judgeProfile,
+  kindMismatch,
   nameWarning,
   type MoneriumProfileFacts,
   type ProfileRefusal,
 } from "../domain/monerium-profile.js";
 import { MoneriumApiError } from "./monerium-client.js";
 import { hasOwnMoneriumCredentials, moneriumClientFor } from "./monerium-connection.js";
+import { describeCause } from "../http/log-cause.js";
 
 /** The one profile a user's connection stands for. */
 export function backingProfileIdOf(user: User): string | undefined {
@@ -64,6 +68,12 @@ export async function readMoneriumProfile(user: User, profileId: string): Promis
   if (!one || one.id !== profileId || typeof one.kind !== "string" || typeof one.state !== "string") {
     throw unreachable();
   }
+  const fresh = store.findUser(user.id);
+  if (fresh?.monerium) {
+    store.updateUser(user.id, {
+      monerium: { ...fresh.monerium, profileSeen: { id: profileId, kind: one.kind, state: one.state, at: new Date().toISOString() } },
+    });
+  }
   let name: string | undefined = typeof one.name === "string" ? one.name : undefined;
   if (!name) {
     // The name only feeds a warning, so a failed list read leaves it unknown
@@ -79,7 +89,7 @@ export async function readMoneriumProfile(user: User, profileId: string): Promis
 }
 
 export type BackingCheck =
-  | { ok: true; record: NonNullable<Account["moneriumProfile"]>; warning?: string }
+  | { ok: true; record: NonNullable<Account["moneriumProfile"]>; warning?: string; /** Passed while the profile is still pending, on an IBAN Monerium issued to this Safe. */ viaIssuedIban?: true }
   | ({ ok: false } & ProfileRefusal);
 
 /**
@@ -113,7 +123,8 @@ export async function checkBackingProfile(
     if (isRefusal(err)) return { ok: false, ...err };
     return { ok: false, ...unreachable() };
   }
-  const refused = judgeProfile(org, facts);
+  const viaIssuedIban = facts.state === "pending" && await ibanIssuedLive(user, profileId);
+  const refused = judgeProfile(org, facts, viaIssuedIban);
   if (refused) return { ok: false, ...refused };
   const warning = nameWarning(org, facts.name) ?? undefined;
   return {
@@ -125,7 +136,20 @@ export async function checkBackingProfile(
       checkedAt: now,
     },
     ...(warning ? { warning } : {}),
+    ...(viaIssuedIban ? { viaIssuedIban: true } : {}),
   };
+}
+
+/** GET /ibans on the user's own connection, read only for a pending profile.
+ *  A failed read counts as no IBAN: the profile stays refused. */
+async function ibanIssuedLive(user: User, profileId: string): Promise<boolean> {
+  if (!user.address) return false;
+  try {
+    return ibanIssuedTo(await moneriumClientFor(user).ibans(), profileId, user.address);
+  } catch (err) {
+    console.warn(`monerium-profile: GET /ibans failed for ${user.id} (profile ${profileId}); the pending profile stays refused: ${describeCause(err)}`);
+    return false;
+  }
 }
 
 function refusal(status: number, code: ProfileRefusal["code"], error: string): ProfileRefusal {
@@ -155,7 +179,7 @@ export function auditProfileCheck(
     ...(where.accountId ? { accountId: where.accountId } : {}),
     backingUserId,
     ...(result.ok
-      ? { outcome: "passed", profileId: result.record.id, profileKind: result.record.kind, profileName: result.record.name ?? null, nameWarning: Boolean(result.warning) }
+      ? { outcome: "passed", profileId: result.record.id, profileKind: result.record.kind, profileName: result.record.name ?? null, nameWarning: Boolean(result.warning), viaIssuedIban: Boolean(result.viaIssuedIban) }
       : { outcome: "refused", code: result.code }),
   }, actorId));
 }
@@ -180,10 +204,33 @@ export function adoptionHint(
       : "Connect your Monerium account first." };
   }
   if (harnessProfile(user)) return { allowed: true };
+  // Only the kind is judged from the stored copy: a profile does not change
+  // kind. Its state does, and the copy is from the last connect or activation,
+  // often from before Monerium approved it. The state is left to the live
+  // check (checkBackingProfile), which refuses a profile still pending, so a
+  // stale "pending" never hides the button that runs it.
   const known = (user.monerium?.profiles ?? []).find((p: any) => p?.id === profileId);
-  if (known && typeof known.kind === "string" && typeof known.state === "string") {
-    const refused = judgeProfile(org, known);
-    if (refused) return { allowed: false, code: refused.code, reason: refused.error };
+  if (known && typeof known.kind === "string" && known.kind !== expectedProfileKind(org.type)) {
+    const refused = kindMismatch(org);
+    return { allowed: false, code: refused.code, reason: refused.error };
   }
   return { allowed: true };
+}
+
+/**
+ * What Monerium last said about the caller's profile when it was not yet
+ * approved, for the Accounts screen: the latest live read if there is one,
+ * else the snapshot from connect. Stored facts only; `at` says how old they
+ * are, and the live check on "connect" is what decides.
+ */
+export function profileWait(user: User | undefined): { state: string; at: string } | undefined {
+  if (!user || harnessProfile(user)) return undefined;
+  const id = backingProfileIdOf(user);
+  if (!id) return undefined;
+  const seen = user.monerium?.profileSeen;
+  if (seen?.id === id) return seen.state === "approved" ? undefined : { state: seen.state, at: seen.at };
+  const known = (user.monerium?.profiles ?? []).find((p: any) => p?.id === id);
+  const at = user.monerium?.connectedAt;
+  if (known && typeof known.state === "string" && known.state !== "approved" && at) return { state: known.state, at };
+  return undefined;
 }

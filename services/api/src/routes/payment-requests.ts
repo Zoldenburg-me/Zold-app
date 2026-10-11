@@ -7,9 +7,10 @@
  * when money shows up; they hold no network of their own.
  */
 import { wrap } from "./util.js";
+import { usdToken } from "../usd-token.js";
 import express from "express";
 import { randomUUID } from "node:crypto";
-import { CHAIN_ID, PAYMENT_REQUESTS, PUBLIC_URL } from "../config.js";
+import { CHAIN_ID, IS_PRODUCTION, MONERIUM, PAYMENT_REQUESTS, PUBLIC_URL } from "../config.js";
 import { store, type CryptoDeposit, type User } from "../store.js";
 import {
   buildBankSettlement,
@@ -19,6 +20,8 @@ import {
   type MoneriumOrderLike,
 } from "../domain/invoices.js";
 import { addrs } from "../chain.js";
+import { livePaymentPage } from "./payment-page.js";
+import { qrSvg } from "../qr.js";
 import { midRates } from "../rates.js";
 import {
   applyPayment,
@@ -28,6 +31,7 @@ import {
   effectiveState,
   isRequestCode,
   matchDepositToRequests,
+  MAX_REQUEST_EUR,
   matchMoneriumOrder,
   matchTransfer,
   newRequestCode,
@@ -42,27 +46,51 @@ import {
   type PaymentRequest,
   type PaymentRequestSource,
 } from "../payment-requests.js";
+import { CEILINGS, ceilingRefusal } from "../domain/ceilings.js";
+import { describeCause } from "../http/log-cause.js";
 
 type SessionCheck = (req: express.Request, res: express.Response, userId: string) => unknown;
 
 
+/**
+ * The origin absolute links are built on. In production only TRANSF_PUBLIC_URL
+ * says what it is (startup refuses to run without it): the Host header is
+ * written by the caller, and a link built from it can point a payer anywhere.
+ * Locally the Host header stands in, so a dev server needs no setting.
+ */
+export function baseUrlFrom(publicUrl: string, production: boolean, req: express.Request): string {
+  if (publicUrl) return publicUrl;
+  if (production) throw new Error("TRANSF_PUBLIC_URL is not set; absolute links are not built from the Host header in production");
+  return `${req.protocol}://${req.get("host")}`;
+}
+
 export function baseUrlFor(req: express.Request): string {
-  return PUBLIC_URL || `${req.protocol}://${req.get("host")}`;
+  return baseUrlFrom(PUBLIC_URL, IS_PRODUCTION, req);
 }
 
 function payToken() {
-  return { symbol: "USDC", address: addrs().usdc, decimals: 6 };
+  return { symbol: usdToken().symbol, address: addrs().usdc, decimals: 6 };
 }
 
-/** LHV's BIC, only beside an Estonian IBAN it applies to (documents.ts holds
- *  the same rule; duplicated here to keep this module free of that import). */
-/** What the payer-facing projection needs from this deployment. Exported so
- *  the Shopify order lookup renders the SAME projection the pay page does. */
-export function payerContext(req: express.Request, quote?: CryptoQuote) {
-  return { chainId: CHAIN_ID, token: payToken(), bicFor, baseUrl: baseUrlFor(req), quote };
+/**
+ * Everything the payer-facing projection needs beyond the request: this
+ * deployment's chain and token, whether the page's deposit address may be
+ * shown (a lapsed forwarder's may not), and the company name a link booked
+ * under a company carries. Every public route that renders a request builds
+ * its context here, so none can forget a part: the pay page, its quote, and
+ * the Shopify order lookup.
+ */
+export async function payerContext(req: express.Request, r: PaymentRequest, user: User, quote?: CryptoQuote) {
+  return {
+    chainId: CHAIN_ID,
+    token: payToken(),
+    baseUrl: baseUrlFor(req),
+    quote,
+    payeeName: payeeNameFor(r),
+    cryptoLive: await livePaymentPage(user),
+  };
 }
 
-const bicFor = (iban?: string) => (iban && /^EE/i.test(iban.replace(/\s/g, "")) ? "LHVBEE22" : undefined);
 
 /** Amounts this payee has quoted on requests still open — the set a new quote
  *  must not collide with. */
@@ -136,6 +164,9 @@ function assertInvoiceCollectable(invoiceId: string, orgId: string | undefined, 
     );
   }
   if (invoice.state === "DELETED") throw new PaymentRequestError("that invoice was deleted", 409);
+  // A draft made from receipts bills money that has already arrived; nothing
+  // is collected against it, before or after it is issued.
+  if (invoice.state === "DRAFT") throw new PaymentRequestError("that invoice is a draft and has not been issued", 409);
   if (invoice.state === "PAID" || invoice.state === "RECONCILED") {
     throw new PaymentRequestError("that invoice is already settled", 409);
   }
@@ -150,8 +181,19 @@ function assertInvoiceCollectable(invoiceId: string, orgId: string | undefined, 
  * theirs, not the company's. `Account.backingUserId` records whose Safe an
  * account actually is.
  */
-function orgsBackedBy(userId: string): Set<string> {
+export function orgsBackedBy(userId: string): Set<string> {
   return new Set(store.accounts.filter((a) => a.backingUserId === userId).map((a) => a.orgId));
+}
+
+/**
+ * The company page a link opens under: the business's own /pay/:handle, when
+ * it has claimed one and the payee's Safe backs it. Anyone else's link, and a
+ * Shopify checkout, keeps the payee's own handle.
+ */
+export function companyPageHandle(userId: string, orgId: string | undefined): string | undefined {
+  const org = orgId ? store.findOrganisation(orgId) : undefined;
+  if (org?.type !== "business" || !org.paymentPage || !orgsBackedBy(userId).has(org.id)) return undefined;
+  return org.paymentPage.handle;
 }
 
 export async function createPaymentRequest(
@@ -168,8 +210,14 @@ export async function createPaymentRequest(
   source: PaymentRequestSource,
   orgId?: string,
 ): Promise<PaymentRequest> {
-  const handle = user.paymentPage?.handle;
+  const handle = (source.kind === "app" ? companyPageHandle(user.id, orgId) : undefined) ?? user.paymentPage?.handle;
   if (!handle) throw new PaymentRequestError("claim a payment page before creating a payment link", 409);
+  // Not for Shopify: its checkouts open requests at the shop's volume, signed
+  // by Shopify, and each expires with its checkout.
+  const open = source.kind === "shopify" ? 0 : store.paymentRequestsForUser(user.id).filter((r) => effectiveState(r) === "OPEN").length;
+  if (open >= CEILINGS.openPaymentRequestsPerUser) {
+    throw new PaymentRequestError(ceilingRefusal("open payment links", CEILINGS.openPaymentRequestsPerUser).error, 409);
+  }
   /**
    * A link for an invoice collects THAT invoice's amount.
    *
@@ -230,10 +278,29 @@ function fail(res: express.Response, err: unknown) {
   throw err;
 }
 
-/** The personal org a request is booked under by default. */
-function defaultOrgId(userId: string): string | undefined {
-  const orgs = store.organisationsForUser(userId);
-  return (orgs.find((o) => o.org.type === "personal") ?? orgs[0])?.org.id;
+/**
+ * The org a link from the app is booked under: the user's company when they
+ * signed up as one and their Safe backs its account, else their personal org,
+ * else none. A company the Safe does not back would book money the member
+ * received into the company's books.
+ */
+function defaultOrgId(user: User): string | undefined {
+  const orgs = store.organisationsForUser(user.id);
+  if (user.accountType === "company") {
+    const backed = orgsBackedBy(user.id);
+    const company = orgs.find((o) => o.org.type === "business" && backed.has(o.org.id));
+    if (company) return company.org.id;
+  }
+  return orgs.find((o) => o.org.type === "personal")?.org.id;
+}
+
+/** The name a payer sees for a link booked under a company: the company's,
+ *  only when the payee's Safe backs that company's account, so the IBAN it
+ *  pays into is the company's. */
+function payeeNameFor(r: PaymentRequest): string | undefined {
+  const org = r.orgId ? store.findOrganisation(r.orgId) : undefined;
+  if (org?.type !== "business" || !orgsBackedBy(r.userId).has(org.id)) return undefined;
+  return org.legalName?.trim() || org.name;
 }
 
 export function createPaymentRequestRouter(requireUserSession: SessionCheck): express.Router {
@@ -257,7 +324,7 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
       if (!requireUserSession(req, res, user.id)) return;
       try {
         const input = validateCreate(req.body, user);
-        const r = await createPaymentRequest(user, input, { kind: "app" }, defaultOrgId(user.id));
+        const r = await createPaymentRequest(user, input, { kind: "app" }, defaultOrgId(user));
         res.status(201).json(ownerPaymentRequest(r, baseUrlFor(req)));
       } catch (err) {
         fail(res, err);
@@ -313,6 +380,17 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
 
   // ── Payer side, no session ──────────────────────────────────────────────
 
+  /**
+   * Whether a handle now belongs to someone other than this link's payee. A
+   * company's address opens only that company's links, and only while their
+   * payee still backs it; an old handle another user has claimed is theirs.
+   */
+  const heldByOther = (handle: string, r: PaymentRequest) => {
+    const holder = store.findUserByHandle(handle);
+    return (!!holder && holder.id !== r.userId)
+      || (!!store.findOrgByHandle(handle) && companyPageHandle(r.userId, r.orgId) !== handle);
+  };
+
   const resolvePublic = (req: express.Request, res: express.Response) => {
     const code = normaliseCode(String(req.params.code ?? ""));
     res.setHeader("cache-control", "no-store");
@@ -324,16 +402,18 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
     const r = store.findPaymentRequestByCode(code);
     const user = r ? store.findUser(r.userId) : undefined;
     // The code resolves; the handle is for the reader. A link minted under an
-    // old handle keeps working, but a code under someone else's handle is a
-    // 404, so a page cannot impersonate another payee.
-    if (!r || !user || (user.paymentPage?.handle !== req.params.handle && r.handle !== req.params.handle)) {
+    // old handle keeps working, and so does the payee's own handle or the
+    // company page their Safe backs, but a code under anyone else's handle is
+    // a 404, so a page cannot impersonate another payee.
+    const handles = r && user ? [r.handle, user.paymentPage?.handle, companyPageHandle(r.userId, r.orgId)] : [];
+    if (!r || !user || !handles.includes(req.params.handle) || heldByOther(req.params.handle, r)) {
       res.status(404).json({ error: "no such payment request" });
       return undefined;
     }
-    return { r, user };
+    // Opened under the payee's current address, a link minted under a handle
+    // someone else has since claimed shows the address it was opened under.
+    return { r, user, handle: heldByOther(r.handle, r) ? req.params.handle : undefined };
   };
-
-  const publicCtx = (req: express.Request, quote?: CryptoQuote) => payerContext(req, quote);
 
   router.get(
     "/pay/:handle/:code",
@@ -344,7 +424,26 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
       const hit = resolvePublic(req, res);
       if (!hit) return;
       const { request, quote } = await ensureQuote(hit.r, hit.r.amountEur);
-      res.json(publicPaymentRequest(request, hit.user, publicCtx(req, quote)));
+      const ctx = await payerContext(req, request, hit.user, quote);
+      const user = store.findUser(hit.user.id) ?? hit.user;
+      res.json(publicPaymentRequest(request, user, { ...ctx, handle: hit.handle }));
+    }),
+  );
+
+  /**
+   * The deposit address as a QR, under the link's own handle and code: a
+   * company link must not point the payer at the member's personal page.
+   */
+  router.get(
+    "/pay/:handle/:code/qr.svg",
+    wrap(async (req, res) => {
+      const hit = resolvePublic(req, res);
+      if (!hit) return;
+      const address = hit.user.paymentPage?.depositAddress;
+      if (!hit.r.methods.includes("crypto") || !address) return res.status(404).json({ error: "this request does not take crypto" });
+      if (!(await livePaymentPage(hit.user))) return res.status(503).json({ error: "crypto payment is unavailable on this link just now" });
+      res.type("image/svg+xml");
+      res.send(qrSvg(address));
     }),
   );
 
@@ -360,9 +459,13 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
       if (!hit) return;
       if (effectiveState(hit.r) !== "OPEN") return res.status(409).json({ error: `this request is ${effectiveState(hit.r).toLowerCase()}` });
       if (!hit.r.methods.includes("crypto")) return res.status(409).json({ error: "this request does not take crypto" });
+      // No address to send to, so no amount to quote for it.
+      if (!(await livePaymentPage(hit.user))) {
+        return res.status(503).json({ error: "crypto payment is unavailable on this link just now — try bank transfer, or try again in a few minutes" });
+      }
       const n = Number(req.body?.amountEur);
-      if (!Number.isFinite(n) || n <= 0 || Math.round(n * 100) !== n * 100) {
-        return res.status(400).json({ error: "amountEur must be a positive amount with at most two decimals" });
+      if (!Number.isFinite(n) || n <= 0 || n > MAX_REQUEST_EUR || Math.round(n * 100) !== n * 100) {
+        return res.status(400).json({ error: "amountEur must be a positive amount up to €1,000,000 with at most two decimals" });
       }
       if (hit.r.amountEur !== undefined && n !== hit.r.amountEur) {
         return res.status(409).json({ error: `this request is for €${hit.r.amountEur.toFixed(2)}` });
@@ -373,7 +476,7 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
       try {
         const { request, quote } = await ensureQuote(hit.r, n);
         if (!quote) return res.status(503).json({ error: "no live EUR/USD rate right now — try bank transfer, or try again shortly" });
-        res.json(publicPaymentRequest(request, hit.user, publicCtx(req, quote)));
+        res.json(publicPaymentRequest(request, hit.user, { ...(await payerContext(req, request, hit.user, quote)), handle: hit.handle }));
       } catch (err) {
         fail(res, err);
       }
@@ -415,7 +518,7 @@ function record(r: PaymentRequest, payment: Parameters<typeof applyPayment>[1]):
     for (const hook of paidHooks) {
       Promise.resolve()
         .then(() => hook(saved))
-        .catch((e) => console.error(`pay-request: paid hook failed for ${displayCode(saved.code)}: ${e?.message ?? e}`));
+        .catch((e) => console.error(`pay-request: paid hook failed for ${displayCode(saved.code)}: ${describeCause(e)}`));
     }
   }
   return saved;
@@ -511,6 +614,10 @@ function recordBankSettlement(
  */
 export function attributeMoneriumOrderToInvoice(order: MoneriumOrderLike): void {
   if ((order.kind ?? "issue") !== "issue") return;
+  // A GBPe issue, or EURe minted on another chain, is not a euro paid into
+  // this account. Absent fields (pure fixtures) pass; a real order carries both.
+  if (order.chain && order.chain !== MONERIUM.chain) return;
+  if (order.currency && order.currency.toLowerCase() !== "eur") return;
   if ((order.meta?.state ?? order.state) !== "processed") return;
   const address = String(order.address ?? "").toLowerCase();
   if (!address) return;
@@ -590,7 +697,7 @@ export async function sweepPaymentRequests(now = new Date()): Promise<{ expired:
         try {
           await hook(r);
         } catch (e: any) {
-          console.error(`pay-request: paid hook retry failed for ${displayCode(r.code)}: ${e?.message ?? e}`);
+          console.error(`pay-request: paid hook retry failed for ${displayCode(r.code)}: ${describeCause(e)}`);
         }
       }
     }

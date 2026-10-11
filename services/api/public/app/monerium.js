@@ -18,7 +18,7 @@ function renderMoneriumScreen() {
   if (!caps.moneriumApiKeys) {
     el.innerHTML = `
       <div class="m-rows">${row("Status", "Unavailable")}</div>
-      <div class="m-lede" style="font-size:13px;margin-top:16px">This deployment has no MONERIUM_TOKEN_ENCRYPTION_KEY, so it cannot store a client secret. It refuses rather than keep one in plaintext.</div>`;
+      <div class="m-lede" style="font-size:13px;margin-top:16px">This deployment has no data encryption key (DATA_ENCRYPTION_KEYS), so it cannot store a client secret. It refuses rather than keep one in plaintext.</div>`;
     return;
   }
 
@@ -63,7 +63,7 @@ function renderMoneriumScreen() {
       clearErr("m-mon-err");
       if (!confirm("Remove the Monerium keys from this account? Deposits and payouts on it pause until keys are connected again.")) return;
       try {
-        renderUser(await api(`/api/users/${user.id}/monerium/api-keys`, undefined, "DELETE"));
+        renderUser(await api(`/api/users/${user.id}/monerium/api-keys`, await moneriumStepUp(user, true), "DELETE"));
         mobileNav("monerium");
       } catch (e) { showErr("m-mon-err", e); }
     };
@@ -92,6 +92,7 @@ async function connectMoneriumKeys() {
   btn.textContent = "Checking with Monerium…";
   try {
     const updated = await api(`/api/users/${user.id}/monerium/api-keys`, {
+      ...(await moneriumStepUp(user)),
       clientId: $("m-mon-id").value,
       clientSecret: $("m-mon-secret").value,
       label: $("m-mon-label").value,
@@ -106,9 +107,6 @@ async function connectMoneriumKeys() {
   }
 }
 
-$("m-pf-plus").onclick = () => mobileNav("plus");
-$("m-pf-monerium").onclick = () => mobileNav("monerium");
-$("m-pf-signout").onclick = () => $("btn-signout").click();
 
 /* The older screens' back buttons: back where the user came from. */
 document.querySelectorAll("[data-mback]").forEach((b) => {
@@ -129,10 +127,21 @@ let caps = { sandbox: true, cashRail: false, moneriumOAuth: false, moneriumApiKe
    every deployment, so it cannot decide the "Test mode" pill. */
 let realMoney = false;
 
+/* The app's dollar token as it names itself: "USDC" on Base mainnet, "zUSD"
+   on a staging chain. Read only after loadCapabilities(), never at load. */
+const usdSym = () => {
+  const s = caps.usdToken?.symbol;
+  return typeof s === "string" && /^[A-Za-z0-9.]{1,11}$/.test(s) ? s : "USDC";
+};
+
+/* Whether /api/health has answered with capabilities. Until it has, the
+   defaults above say a feature is off when it may be on, so a check that
+   depends on one (the recovery strip) says it could not check. */
+let capsLoaded = false;
 async function loadCapabilities() {
   try {
     const h = await (await fetch("/api/health")).json();
-    if (h?.capabilities) caps = { ...caps, ...h.capabilities };
+    if (h?.capabilities) { caps = { ...caps, ...h.capabilities }; capsLoaded = true; }
     realMoney = h?.realMoney === true;
   } catch {
     /* keep the safe defaults */
@@ -150,12 +159,86 @@ function renderFundCard() {
     : "Your IBAN appears here once your Monerium account is connected and the IBAN is activated.";
 }
 
+/* What the account's segment includes. A pre-segmentation account keeps
+   everything, as on the server (requireCapability's fallback). */
+function segmentHas(u, cap) {
+  const list = u?.segment?.capabilities;
+  return !Array.isArray(list) || list.includes(cap);
+}
+
+/* A segment without "safe" (India's collections path) gets no Safe: the
+   server refuses the deployment with CAPABILITY_UNAVAILABLE, so asking for it
+   only strands the person on a step that cannot finish. */
 function needsPasskeySafeSetup(u = user) {
-  return !!(u?.passkeySafe && u.passkeySafe.status !== "active");
+  return !!(u?.passkeySafe && u.passkeySafe.status !== "active" && segmentHas(u, "safe"));
+}
+
+/* Bringing in a company's existing Safe (onboarding's b-safe-choice). Offered
+   only where the server takes it and this login could still switch: a passkey
+   and a Safe of its own that was never activated. The server also refuses a
+   planned Safe that is deployed or holds money; only `prepare` can say so. */
+function safeImportOffered(u = user) {
+  return !!(caps.safeImport && u?.accountType === "company" && u.passkey && u.passkeySafe
+    && u.passkeySafe.status !== "active");
+}
+
+/* "An import was started on THIS device." `prepare` stores nothing, so the
+   server cannot know an owner change may be on its way; this flag is the only
+   thing that keeps this browser from deploying the account's own Safe in the
+   meantime, which would end the import for good. Per device: another browser
+   signed in to the same account does not see it. A hint, never the truth —
+   every screen that reads it asks `prepare` again. */
+const SAFE_IMPORT_KEY = "zold-safe-import";
+function safeImportFlag(u = user) {
+  try {
+    const f = JSON.parse(localStorage.getItem(SAFE_IMPORT_KEY) || "null");
+    return f && u?.id && f.userId === u.id && /^0x[0-9a-fA-F]{40}$/.test(f.address || "") ? f : null;
+  } catch { return null; }
+}
+function setSafeImportFlag(address, u = user) {
+  try { localStorage.setItem(SAFE_IMPORT_KEY, JSON.stringify({ userId: u.id, address })); } catch { /* private mode: this visit only */ }
+}
+function clearSafeImportFlag() {
+  try { localStorage.removeItem(SAFE_IMPORT_KEY); } catch {}
 }
 
 function hasConnectedMonerium(u = user) {
   return !!u?.monerium?.connectedAt;
+}
+
+/* Which Monerium login and profile the connection stands for, as rows for
+   Z.kv. A browser still signed in at Monerium skips its login form, so this
+   is the one place the user sees which login Zold got. */
+function moneriumConnectedRows(u = user) {
+  const m = u?.monerium;
+  if (!m) return [];
+  const p = (m.profiles || []).find((x) => x?.id === m.profileId);
+  const kind = p?.kind === "corporate" ? "Company" : p?.kind === "personal" ? "Personal" : "";
+  const state = p?.state && p.state !== "approved" ? ` · ${p.state}` : "";
+  return [
+    ...(m.accountEmail ? [{ key: "Monerium login", value: m.accountEmail }] : []),
+    ...(p ? [{ key: "Profile", value: `${p.name || "Unnamed"}${kind ? ` (${kind})` : ""}${state}` }] : []),
+  ];
+}
+
+/* The IBAN has been asked for and the account waits on Monerium, not on the
+   user. null when there is something to do here (or nothing left to wait for).
+   `idCheck` reads the profile state Zold last saw, which only says "still
+   checking" while Monerium itself says so. */
+function ibanWait(u = user) {
+  if (!u || kycApproved(u) || u.iban || u.funding?.status !== "iban_pending") return null;
+  const detail = String(u.funding?.detail || "");
+  if (/linked under Monerium profile/.test(detail)) {
+    return { support: true, title: "Monerium needs to fix a link",
+      sub: "Your account is linked to a different Monerium profile than the one you signed in with. Only Monerium support can move it. Write to us and we’ll raise it with them." };
+  }
+  const profile = (u.monerium?.profiles || []).find((p) => p.id === u.monerium?.profileId);
+  const idCheck = !!profile && profile.state !== "approved";
+  return idCheck
+    ? { idCheck, title: "Monerium is checking your ID",
+        sub: "Your IBAN is requested. Monerium issues it once they’ve verified you. If they ask for anything, it comes by email from Monerium." }
+    : { idCheck, title: "Monerium is issuing your IBAN",
+        sub: "Your IBAN is requested. It usually appears within minutes." };
 }
 
 function renderFundingActions(u = user) {
@@ -164,18 +247,24 @@ function renderFundingActions(u = user) {
   if (!row || !hint || !u) return;
   const funding = u.funding || {};
   const needsIban = kycApproved(u) && !u.iban && funding.mode === "sandbox";
-  const showSafe = needsIban && needsPasskeySafeSetup(u);
+  // While an import is under way on this device, "Finish smart wallet" would
+  // deploy the account's own Safe and end it: offer the import's last step.
+  const importing = needsPasskeySafeSetup(u) && !!safeImportFlag(u);
+  const showSafe = needsIban && needsPasskeySafeSetup(u) && !importing;
   // Approval is already settled by this point (needsIban requires it), so the
   // remaining step is the same for both paths: one passkey ceremony that links
   // the Safe and issues the IBAN. In-house approved users do not need
   // Monerium's OAuth.
   const showActivate = needsIban && !needsPasskeySafeSetup(u);
-  row.classList.toggle("hidden", !(showSafe || showActivate));
+  row.classList.toggle("hidden", !(showSafe || showActivate || importing));
   $("btn-finish-safe").classList.toggle("hidden", !showSafe);
+  $("btn-finish-import").classList.toggle("hidden", !importing);
   $("btn-monerium-dashboard").classList.toggle("hidden", !showActivate);
   $("btn-monerium-dashboard").textContent = "Activate IBAN";
-  hint.classList.toggle("hidden", !(showSafe || showActivate));
-  hint.textContent = showSafe
+  hint.classList.toggle("hidden", !(showSafe || showActivate || importing));
+  hint.textContent = importing
+    ? "Once your Safe’s owner has added this phone, finish bringing the Safe in."
+    : showSafe
     ? "Finish the smart wallet first, then activate the app IBAN."
     : showActivate
       ? hasConnectedMonerium(u)
@@ -322,8 +411,12 @@ async function refresh() {
     if (e?.status === 401) return signOut();
   }
   // Conversion happens on the server's poll, not on a user action, so the
-  // panel has to be re-read rather than updated optimistically.
-  await refreshCryptoDeposits();
+  // payments are re-read rather than updated optimistically.
+  await phLoadDeposits();
+  phRefresh();
+  // At most once a minute, one read at a time; it never rejects (a failure
+  // shows as "couldn't check"). A recovery under way shows on every screen.
+  phRecoveryCheck();
 }
 
 function switchView(view) {
@@ -363,7 +456,10 @@ function renderShellPages() {
   const safe = user.passkeySafe;
   $("set-wallet-policy").textContent = !safe
     ? "Passkey Safe not planned yet."
-    : `Passkey-only Safe · you are its only owner and sign every movement with your passkey.`;
+    : safe.importedAt
+      // An imported Safe may keep the owner's own wallet as a second owner.
+      ? "Your company’s Safe, brought into Zold · your passkey is an owner and signs every movement Zold makes. Any other owner is your own wallet."
+      : `Passkey-only Safe · you are its only owner and sign every movement with your passkey.`;
   renderRecoveryInfo();
   $("set-privacy-live").textContent = privacyCatalog
     ? `Kokio ${privacyCatalog.fulfillment.kokio}; Mysterium ${privacyCatalog.fulfillment.mysterium}.`

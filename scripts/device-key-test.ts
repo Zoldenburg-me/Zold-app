@@ -152,5 +152,49 @@ await t("the cached address is readable while the key stays locked", async () =>
   assert.equal(await dev.deviceAddress("some-credential-id"), expected);
 });
 
+console.log("device key — strict mode and damaged records:");
+await t("strict createKey refuses a key the passkey cannot protect, and stores nothing", async () => {
+  slots.clear();
+  await assert.rejects(() => dev.createKey(null, { requirePrf: true }), /PRF/);
+  assert.equal(dev.keyStatus().present, false);
+});
+
+await t("strict deviceAddress never mints an unprotected key just to report an address", async () => {
+  slots.clear();
+  await assert.rejects(() => dev.deviceAddress(null, { requirePrf: true }), /PRF/);
+  assert.equal(dev.keyStatus().present, false);
+});
+
+await t("a damaged record is reported present and unusable, and left exactly as it was", async () => {
+  slots.clear();
+  slots.set("zold-device-key", "{not json");
+  assert.deepEqual(dev.keyStatus(), { present: true, protection: null, damaged: true });
+  await assert.rejects(() => dev.createKey(null), /already/);
+  await assert.rejects(() => dev.deviceAddress(null), /damaged/);
+  await assert.rejects(() => dev.signTypedData(TYPED_DATA, null), /damaged/);
+  assert.equal(slots.get("zold-device-key"), "{not json");
+});
+
+await t("a damaged record is replaced only when the caller says no key is bound", async () => {
+  const { address } = await dev.createKey(null, { replaceDamaged: true });
+  assert.match(address, /^0x[0-9a-f]{40}$/);
+  assert.equal(dev.keyStatus().damaged, undefined);
+});
+
+await t("a readable stored key is never replaced", async () => {
+  const before = slots.get("zold-device-key");
+  await assert.rejects(() => dev.createKey(null), /already/);
+  await assert.rejects(() => dev.createKey(null, { replaceDamaged: true }), /already/);
+  assert.equal(slots.get("zold-device-key"), before);
+});
+
+await t("onboarding replaces a damaged record only for an account with no key bound", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(path.join(ROOT, "services/api/public/app/onboarding.js"), "utf8");
+  const fn = src.slice(src.indexOf("async function registerDeviceKey"), src.indexOf("async function registerDeviceKey") + 1200);
+  assert.match(fn, /replaceDamaged = !!dev\.keyStatus\(\)\.damaged && !u\.authorizerAddress/);
+  assert.match(fn, /createKey\(credId\(\), \{ replaceDamaged \}\)/);
+});
+
 console.log(`\nDEVICE-KEY TEST PASSED — ${pass}/${pass}`);
 console.log("note: PRF availability and cross-ceremony stability need a real browser");

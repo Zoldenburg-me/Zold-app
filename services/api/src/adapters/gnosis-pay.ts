@@ -23,6 +23,7 @@
  * status (connected address, Safe address, KYC state) is stored.
  */
 import { GNOSIS_PAY } from "../config.js";
+import { redactedMessage } from "../http/log-cause.js";
 
 export interface GnosisPayNonce {
   nonce: string;
@@ -84,17 +85,15 @@ async function gpFetch(
   if (cookie) headers.cookie = cookie;
   if (rest.body) headers["content-type"] = "application/json";
 
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), GNOSIS_PAY.timeoutMs);
+  // The signal stays armed while the caller reads the body, so a response
+  // that sends headers and then stalls is bounded too.
   try {
-    return await fetch(`${baseUrl()}${path}`, { ...rest, headers, signal: ctrl.signal });
+    return await fetch(`${baseUrl()}${path}`, { ...rest, headers, signal: AbortSignal.timeout(GNOSIS_PAY.timeoutMs) });
   } catch (err: any) {
-    if (err?.name === "AbortError") {
+    if (err?.name === "AbortError" || err?.name === "TimeoutError") {
       throw new GnosisPayError(`Gnosis Pay did not answer within ${GNOSIS_PAY.timeoutMs}ms`, 504);
     }
-    throw new GnosisPayError(`Gnosis Pay unreachable: ${err?.message ?? err}`, 502);
-  } finally {
-    clearTimeout(timer);
+    throw new GnosisPayError(`Gnosis Pay unreachable: ${redactedMessage(err)}`, 502);
   }
 }
 

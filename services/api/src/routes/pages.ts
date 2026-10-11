@@ -18,7 +18,7 @@
  * caller writes. A page marks the spot with <!--zold:abs-->; without a public
  * url, og:image falls back to a relative path and canonical is left out.
  *
- * The website pages (landing, legal notes, partner terms, cookies, 404) share one nav and one
+ * The website pages (landing, imprint, legal notes, partner terms, cookies, 404) share one nav and one
  * footer, kept in ../../site/ and filled in at <!--zold:site-nav--> and
  * <!--zold:site-footer--> so they are not six copies that drift apart.
  */
@@ -26,7 +26,10 @@ import express from "express";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { PUBLIC_URL } from "../config.js";
+import { OPERATOR, PUBLIC_URL } from "../config.js";
+import { guardianPageCsp } from "../http/policy.js";
+import { TURNKEY } from "../config/turnkey.js";
+import { displayCode, isRequestCode, normaliseCode } from "../payment-requests.js";
 
 const pub = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../public");
 const site = path.join(pub, "../site");
@@ -34,7 +37,7 @@ const base = PUBLIC_URL.replace(/\/+$/, "");
 
 /** The pages search engines are invited to: the landing and the legal pages.
  *  Everything else is an app screen or a credential-bearing link. */
-const INDEXABLE = ["/", "/legal", "/partner-terms", "/privacy"];
+const INDEXABLE = ["/", "/imprint", "/legal", "/partner-terms", "/privacy"];
 
 const attr = (s: string) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 
@@ -65,6 +68,20 @@ function page(file: string, canonicalPath?: string): express.RequestHandler {
   };
 }
 
+/**
+ * A shared link with the message glued on ("…/HSC94-E52WR-26M44 €400.00: you
+ * can pay me here:"), as some share targets paste it, goes to the clean link.
+ * Only a complete, well-formed code followed by whitespace and more text is
+ * trimmed; anything shorter or different is served as it came and draws its
+ * own not-found, so nothing here widens what a code matches.
+ */
+const tidyRequestCode: express.RequestHandler = (req, res, next) => {
+  const m = /^([0-9A-Za-z]{5}-?[0-9A-Za-z]{5}-?[0-9A-Za-z]{5})\s+\S/.exec(String(req.params.code ?? ""));
+  const code = m ? normaliseCode(m[1]) : "";
+  if (!isRequestCode(code)) return next();
+  res.redirect(302, `/pay/${encodeURIComponent(String(req.params.handle))}/${displayCode(code)}`);
+};
+
 /** Served after every router: an unknown path gets the site's own page, not
  *  express's "Cannot GET", and an unknown API path gets JSON. */
 export function notFound(): express.RequestHandler {
@@ -81,6 +98,7 @@ export function createPageRouter() {
   const router = express.Router();
 
   router.get(["/", "/landing.html"], page("landing.html", "/"));
+  router.get("/imprint", page("imprint.html", "/imprint"));
   router.get("/legal", page("legal.html", "/legal"));
   router.get("/partner-terms", page("partner-terms.html", "/partner-terms"));
   router.get("/privacy", page("privacy.html", "/privacy"));
@@ -99,6 +117,8 @@ export function createPageRouter() {
       "Disallow: /r/",
       "Disallow: /v/",
       "Disallow: /invoice/",
+      "Disallow: /guardian",
+      "Disallow: /recovery",
     ];
     if (base) lines.push("", `Sitemap: ${base}/sitemap.xml`);
     res.type("text/plain").send(lines.join("\n") + "\n");
@@ -116,7 +136,18 @@ export function createPageRouter() {
 
   router.get("/favicon.ico", (_req, res) => res.redirect(301, "/icons/icon-192.png"));
   router.get(["/app", "/app/"], (_req, res) => res.sendFile(path.join(pub, "index.html")));
-  router.get(["/admin", "/admin/"], (_req, res) => res.sendFile(path.join(pub, "admin.html")));
+  /** The operator dashboard; each section has its own path (the page reads
+   *  it), and its scripts are under /admin/*.js. With ADMIN_ORIGIN set it is
+   *  served there only: an operator passkey works on that origin alone. */
+  router.get(
+    ["/admin", "/admin/", "/admin/:view(overview|users|monerium|transactions|recoveries|errors|operator)"],
+    (req, res) => {
+      if (OPERATOR.adminOriginExplicit && req.get("host") !== new URL(OPERATOR.adminOrigin).host) {
+        return res.redirect(302, `${OPERATOR.adminOrigin}${req.path}`);
+      }
+      res.sendFile(path.join(pub, "admin.html"));
+    },
+  );
   /** The org dashboard — business and premium personal accounts. */
   router.get(["/business", "/business/"], (_req, res) =>
     res.sendFile(path.join(pub, "business.html")),
@@ -126,8 +157,24 @@ export function createPageRouter() {
   /** An account document, re-verified on every visit. */
   router.get("/v/:code", (_req, res) => res.sendFile(path.join(pub, "document.html")));
   /** A payment page, and a payment request against it. */
+  // The testnet faucet page; it draws "no faucet" itself where there is none.
+  router.get("/faucet", page("faucet.html"));
+  /** Google or Apple login as a recovery guardian: its own ES-module page and
+   *  a stricter CSP, never cached (a login comes back to it). */
+  /** Choosing a guardian (Zoldenburg, or your own Google/Apple login) and
+   *  getting your account back on a new phone: ES-module pages with a
+   *  stricter CSP, never cached (a login comes back to each). */
+  const ownPage = (file: string): express.RequestHandler => (_req, res) => {
+    res.setHeader("content-security-policy", guardianPageCsp(TURNKEY.enabled ? new URL(TURNKEY.baseUrl).origin : undefined));
+    res.setHeader("cache-control", "no-store");
+    res.sendFile(path.join(pub, file));
+  };
+  router.get("/guardian.html", (_req, res) => res.redirect(301, "/guardian"));
+  router.get(["/guardian", "/guardian/"], ownPage("guardian.html"));
+  router.get("/recovery.html", (_req, res) => res.redirect(301, "/recovery"));
+  router.get(["/recovery", "/recovery/"], ownPage("recovery.html"));
   router.get("/pay/:handle", page("pay.html"));
-  router.get("/pay/:handle/:code", page("pay-request.html"));
+  router.get("/pay/:handle/:code", tidyRequestCode, page("pay-request.html"));
   /** A shared receipt. */
   router.get("/r/:slug", page("receipt.html"));
 

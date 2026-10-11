@@ -19,6 +19,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 export type AuditKind =
   | "segment.decided"
+  | "user.name_changed"
   | "segment.changed_by_admin"
   | "us_questions.answered"
   | "consent.given"
@@ -36,7 +37,36 @@ export type AuditKind =
   | "partner.documents_pushed"
   /** An org account's Monerium profile was checked (adopt, fund, re-check or
    *  execution): which profile, which kind, and whether it passed. */
-  | "account.monerium_profile_checked";
+  | "account.monerium_profile_checked"
+  /** An operator read an account's Monerium data live, on the account's own
+   *  connection (admin dashboard). Which operator, which profile. */
+  | "operator.monerium_read"
+  /** An imported wallet's ownership proof was checked on its chain: prove or
+   *  re-check, and what the chain answered. */
+  | "wallet.ownership_checked"
+  | "org.payment_review_changed"
+  /** The payout IBAN printed on invoices changed: last four characters only. */
+  | "org.invoice_iban_changed"
+  /** An operator took a transfer out of MANUAL_REVIEW: the state chosen, the
+   *  note, and which operator (a hash of the token). */
+  | "operator.transfer_review_resolved"
+  /** An admin request, by operator id and name: every change, and each read
+   *  of a path once per operator in ten minutes (operators/gate.ts). */
+  | "operator.request"
+  /** An operator enrolled from a host-started link, or added a passkey. */
+  | "operator.enrolled"
+  | "operator.passkey_added"
+  /** An admin change refused for its approval (missing, wrong, replayed),
+   *  and whether the session was ended for it. Never the header or body. */
+  | "operator.step_up_refused"
+  /** An operator signed in with a passkey, and which one (its label). */
+  | "operator.signed_in"
+  /** An operator issued a new service credential; the previous one keeps
+   *  working until `previousValidUntil`. Ids only, never a token. */
+  | "service.credential_rotated"
+  /** The checkout service read a transfer: which credential, which id, and
+   *  whether it was served or answered 404. */
+  | "service.checkout_transfer_read";
 
 export interface AuditEntry {
   id: string;

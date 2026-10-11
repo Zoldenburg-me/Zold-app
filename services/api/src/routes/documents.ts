@@ -18,6 +18,7 @@ import { randomUUID } from "node:crypto";
 import { CHAIN_ID, HARNESS, SECURITY } from "../config.js";
 import { store, type Transfer, type User } from "../store.js";
 import { abis, addrs, eur, publicClient } from "../chain.js";
+import { checkSignedMessage, type SignatureCheck } from "../wallet/signature-check.js";
 import { moneriumClientFor, moneriumLiveFor } from "../adapters/monerium-connection.js";
 import { safeMessageHash, signMessageAsPasskeySafe, type PasskeySafeDeploymentPlan } from "../wallet/candide.js";
 import { b64urlToBuf, bufToB64url, verifyAssertionForChallenge } from "../webauthn.js";
@@ -30,8 +31,10 @@ import {
   type StatementSnapshot,
   type StoredDocument,
   holderBlock,
+  holderLetterRefusal,
   isDocumentCode,
   linesFromChainCredits,
+  linesFromFaucet,
   linesFromMoneriumOrders,
   linesFromTransfers,
   mergeLines,
@@ -46,6 +49,8 @@ import {
   verifyZoldAttestation,
 } from "../documents.js";
 import { belegPdf, belegStillAgrees, belegFileName } from "../bookkeeping/beleg.js";
+import { CEILINGS, ceilingRefusal } from "../domain/ceilings.js";
+import { redactedMessage } from "../http/log-cause.js";
 
 export interface DocumentsDeps {
   requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
@@ -103,7 +108,7 @@ async function moneriumOrdersFor(user: User): Promise<{ orders: any[]; status: "
     const orders = Array.isArray(res) ? res : (res?.orders ?? []);
     return { orders, status: "ok" };
   } catch (err: any) {
-    return { orders: [], status: `Monerium unavailable: ${String(err?.message ?? err).slice(0, 120)}` };
+    return { orders: [], status: `Monerium unavailable: ${redactedMessage(err).slice(0, 120)}` };
   }
 }
 
@@ -119,7 +124,7 @@ export async function buildStatement(user: User, from: Date, to: Date): Promise<
   const lines = mergeLines(
     linesFromMoneriumOrders(mon.orders, user.address),
     linesFromTransfers(transfers),
-    linesFromChainCredits(credits),
+    [...linesFromChainCredits(credits), ...linesFromFaucet(user.faucet)],
   ).filter((l) => inPeriod(l.at));
 
   let opening: StatementSnapshot["opening"] = null;
@@ -132,7 +137,7 @@ export async function buildStatement(user: User, from: Date, to: Date): Promise<
     if (openBlock) opening = { ...openBlock, amountEur: await balanceAtBlock(holder.safeAddress, openBlock.number) };
     else if (closeBlock) opening = { number: 0, at: from.toISOString(), amountEur: 0 };
   } catch (err: any) {
-    chainStatus = `chain unavailable: ${String(err?.message ?? err).slice(0, 120)}`;
+    chainStatus = `chain unavailable: ${redactedMessage(err).slice(0, 120)}`;
   }
   const totals = statementTotals(lines);
   return {
@@ -198,7 +203,7 @@ async function verifyDocument(doc: StoredDocument): Promise<{ ok: boolean; check
       const ok = Math.abs(live - doc.snapshot.balanceEur) < 0.005;
       checks.push({ name: "Balance re-read from the chain at that block", ok, detail: ok ? `€${live.toFixed(2)} at block ${doc.snapshot.block.number}` : `chain says €${live.toFixed(2)}` });
     } catch (err: any) {
-      checks.push({ name: "Balance re-read from the chain at that block", ok: false, detail: `chain unavailable: ${String(err?.message ?? err).slice(0, 100)}` });
+      checks.push({ name: "Balance re-read from the chain at that block", ok: false, detail: `chain unavailable: ${redactedMessage(err).slice(0, 100)}` });
     }
   }
   if (doc.snapshot.kind === "statement" && doc.snapshot.closing) {
@@ -207,7 +212,7 @@ async function verifyDocument(doc: StoredDocument): Promise<{ ok: boolean; check
       const ok = Math.abs(live - doc.snapshot.closing.amountEur) < 0.005;
       checks.push({ name: "Closing balance re-read from the chain", ok, detail: `€${live.toFixed(2)} at block ${doc.snapshot.closing.number}` });
     } catch (err: any) {
-      checks.push({ name: "Closing balance re-read from the chain", ok: false, detail: `chain unavailable: ${String(err?.message ?? err).slice(0, 100)}` });
+      checks.push({ name: "Closing balance re-read from the chain", ok: false, detail: `chain unavailable: ${redactedMessage(err).slice(0, 100)}` });
     }
     checks.push({
       name: "Lines reconcile with the balances",
@@ -231,7 +236,7 @@ async function verifyDocument(doc: StoredDocument): Promise<{ ok: boolean; check
         const rc = await publicClient.getTransactionReceipt({ hash: s.receipt.txHash as `0x${string}` });
         checks.push({ name: "Receipt transaction on chain", ok: rc.status === "success", detail: `block ${rc.blockNumber}` });
       } catch (err: any) {
-        checks.push({ name: "Receipt transaction on chain", ok: false, detail: `could not read: ${String(err?.message ?? err).slice(0, 100)}` });
+        checks.push({ name: "Receipt transaction on chain", ok: false, detail: `could not read: ${redactedMessage(err).slice(0, 100)}` });
       }
     }
   }
@@ -240,15 +245,26 @@ async function verifyDocument(doc: StoredDocument): Promise<{ ok: boolean; check
     if (HARNESS.enabled) {
       checks.push({ name: "Signed by the account's smart account", ok: true, detail: "recorded; not checked on the local harness chain" });
     } else {
-      try {
-        const ok = await publicClient.verifyMessage({ address: safe.address, message: safe.message, signature: safe.signature });
-        checks.push({ name: "Signed by the account's smart account", ok, detail: ok ? `EIP-1271 valid for ${safe.address}` : "the smart account rejects this signature" });
-      } catch (err: any) {
-        checks.push({ name: "Signed by the account's smart account", ok: false, detail: `could not check: ${String(err?.message ?? err).slice(0, 100)}` });
-      }
+      checks.push(safeAttestationCheck(
+        await checkSignedMessage(publicClient, { address: safe.address, message: safe.message, signature: safe.signature }),
+        safe.address,
+      ));
     }
   }
   return { ok: checks.every((c) => c.ok), checks };
+}
+
+/** The Safe attestation's line on the verification page: only a valid
+ *  answer passes; a chain that could not be asked fails as "could not check". */
+export function safeAttestationCheck(r: SignatureCheck, address: string): { name: string; ok: boolean; detail: string } {
+  return {
+    name: "Signed by the account's smart account",
+    ok: r.verdict === "valid",
+    detail:
+      r.verdict === "valid" ? `${r.method === "eip1271" ? "EIP-1271" : "ECDSA"} valid for ${address}`
+      : r.verdict === "rejected" ? "the smart account rejects this signature"
+      : `could not check: ${r.reason}`,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -267,6 +283,22 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
     }
     if (!deps.requireUserSession(req, res, user.id)) return undefined;
     return user;
+  };
+
+  /** Checked before any chain read: a statement is about fifty of them. */
+  const underDocumentCeiling = (user: User, res: express.Response): boolean => {
+    const since = Date.now() - 24 * 60 * 60_000;
+    const today = store.documentsForUser(user.id).filter((d) => Date.parse(d.createdAt) > since).length;
+    if (today < CEILINGS.documentsPerUserPerDay) return true;
+    res.status(409).json(ceilingRefusal("documents made in the last 24 hours", CEILINGS.documentsPerUserPerDay));
+    return false;
+  };
+
+  const mayIssueHolderLetter = (user: User, res: express.Response): boolean => {
+    const refusal = holderLetterRefusal(user);
+    if (!refusal) return true;
+    res.status(409).json(refusal);
+    return false;
   };
 
   /** No smart account, no account of record: a document naming the zero
@@ -311,14 +343,14 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
     wrap(async (req, res) => {
       const user = userFor(req, res);
       if (!user) return;
-      if (!hasAccountOfRecord(user, res)) return;
+      if (!hasAccountOfRecord(user, res) || !underDocumentCeiling(user, res)) return;
       const transfer = store.findTransfer(String(req.body?.transferId ?? ""));
       if (!transfer || transfer.userId !== user.id) return res.status(404).json({ error: "transfer not found" });
       let snapshot: ReceiptSnapshot;
       try {
         snapshot = buildReceipt(user, transfer);
       } catch (err: any) {
-        return res.status(409).json({ error: String(err?.message ?? err) });
+        return res.status(409).json({ error: redactedMessage(err) });
       }
       res.status(201).json(publicDocument(await issue(user, snapshot)));
     }),
@@ -329,7 +361,7 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
     wrap(async (req, res) => {
       const user = userFor(req, res);
       if (!user) return;
-      if (!hasAccountOfRecord(user, res)) return;
+      if (!hasAccountOfRecord(user, res) || !underDocumentCeiling(user, res)) return;
       const { from, to } = periodFrom(req.body);
       if (!from || !to || from >= to) return res.status(400).json({ error: "from and to must be ISO dates with from before to" });
       if (to.getTime() - from.getTime() > 400 * 24 * 3600_000) return res.status(400).json({ error: "a statement covers at most one year" });
@@ -343,7 +375,8 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
     wrap(async (req, res) => {
       const user = userFor(req, res);
       if (!user) return;
-      if (!hasAccountOfRecord(user, res)) return;
+      if (!mayIssueHolderLetter(user, res)) return;
+      if (!hasAccountOfRecord(user, res) || !underDocumentCeiling(user, res)) return;
       const snapshot = await buildBalance(user);
       res.status(201).json(publicDocument(await issue(user, snapshot)));
     }),
@@ -356,7 +389,8 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
     wrap(async (req, res) => {
       const user = userFor(req, res);
       if (!user) return;
-      if (!hasAccountOfRecord(user, res)) return;
+      if (!mayIssueHolderLetter(user, res)) return;
+      if (!hasAccountOfRecord(user, res) || !underDocumentCeiling(user, res)) return;
       const holder = holderBlock(user);
       const date = new Date().toISOString().slice(0, 10);
       const code = newDocumentCode();
@@ -426,9 +460,11 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
           true,
         ));
       } catch (err: any) {
-        return res.status(401).json({ error: String(err?.message ?? err) });
+        return res.status(401).json({ error: redactedMessage(err) });
       }
-      store.updateUser(user.id, { passkey: { ...passkey, signCount } });
+      if (!store.recordPasskeyUse(user.id, passkey.credentialId, signCount)) {
+        return res.status(401).json({ error: "this passkey is no longer the account's passkey" });
+      }
       const plan = user.passkeySafe as PasskeySafeDeploymentPlan;
       const safeSig = await signMessageAsPasskeySafe(plan, plan.address, pending.message, {
         authenticatorData: b64urlToBuf(authenticatorData),

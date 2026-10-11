@@ -105,6 +105,8 @@ await check("a CREATED or DEBITED transfer produces no line — money that has n
 await check("a REFUNDED transfer is a debit and a reversal, with the deduction visible between them", () => {
   const inp = base();
   inp.transfers = [{ id: "t-r", userId: "u_1", quoteId: "q", rail: "sepa", state: "REFUNDED", sendEur: 40, recipientName: "Someone", recipientIban: "DE02120300000000202051", txs: [{ step: "safe.debit", hash: H(3) }, { step: "safe.refundTransfer", hash: H(4) }], error: "venue refused", refund: { amountEur: 39.5, recoveredFrom: "Safe-funded EURe", deductions: "€0.50 gas", at: "2026-09-07T12:00:00.000Z" }, auth: { authorizedAt: "2026-09-07T11:00:00.000Z" }, createdAt: "2026-09-07T10:00:00.000Z", updatedAt: "2026-09-07T12:00:00.000Z" } as any];
+  // The whole send left the Safe: the step recovery reads as a full debit.
+  inp.transfers[0].txs[0].step = "safe.transfer(orchestrator)";
   const lines = projectStatementLines(inp);
   assert.equal(lines.length, 2);
   const debit = lines.find((l) => l.statement!.key === "transfer:t-r:debit")!.statement!;
@@ -116,6 +118,32 @@ await check("a REFUNDED transfer is a debit and a reversal, with the deduction v
   assert.equal(refund.amountCents, 3950);
   assert.deepEqual(refund.links.txHashes, [H(4)]);
   assert.equal(debit.amountCents + refund.amountCents, -50, "the deduction is the net of the two lines");
+});
+
+const refunded = (id: string, amountEur: number, txs: { step: string; hash: string }[]) =>
+  ({ id, userId: "u_1", quoteId: "q", rail: "sepa", state: "REFUNDED", sendEur: 10, receiveEur: 9.01, recipientName: "Someone", txs, error: "redeem refused", refund: { amountEur, recoveredFrom: "operator-resolved", deductions: amountEur ? "none" : "€0.99 not returned", at: "2026-09-08T12:00:00.000Z" }, createdAt: "2026-09-08T10:00:00.000Z", updatedAt: "2026-09-08T12:00:00.000Z" }) as any;
+
+await check("a REFUNDED transfer that returned nothing still books what left the Safe, with no reversal", () => {
+  const inp = base();
+  inp.transfers = [refunded("t-z", 0, [{ step: "safe.transfer(fee)", hash: H(8) }])];
+  const lines = projectStatementLines(inp);
+  assert.equal(lines.length, 1, JSON.stringify(lines.map((l) => l.statement!.key)));
+  const debit = lines[0].statement!;
+  assert.equal(debit.key, "transfer:t-z:debit");
+  assert.equal(debit.amountCents, -99, "the debit is what left the Safe: the fee, not the whole send");
+});
+
+await check("a REFUNDED transfer where nothing left the Safe books nothing", () => {
+  const inp = base();
+  inp.transfers = [refunded("t-n", 0, [])];
+  assert.equal(projectStatementLines(inp).length, 0);
+});
+
+await check("a fee-only refund nets to zero: the fee out and the fee back", () => {
+  const inp = base();
+  inp.transfers = [refunded("t-f", 0.99, [{ step: "safe.transfer(fee)", hash: H(8) }, { step: "safe.refundTransfer", hash: H(9) }])];
+  const lines = projectStatementLines(inp).map((l) => l.statement!);
+  assert.deepEqual(lines.map((l) => [l.key, l.amountCents]), [["transfer:t-f:debit", -99], ["transfer:t-f:refund", 99]]);
 });
 
 const usdcDeposit = (over: any = {}) => ({
@@ -209,6 +237,28 @@ await check("a deposit already booked as one :converted line gets no receipt or 
   assert.equal(toAdd.length, 0, "the income would be counted twice");
 });
 
+await check("EURe sent from another wallet is one line dated by the block; a mint, a swap's output and a refund are not lines of their own", () => {
+  const inp = base();
+  const eure = (over: any) => ({ userId: "u_1", chainId: 31337, token: "EURE", logIndex: 0, amountUnits: "100000000000000000000", amountEur: 100, creditedEur: 100,
+    settlementAsset: "EURE", holding: "none", settledAt: "2026-10-03T16:00:00.000Z", txs: [], detectedAt: "2026-10-03T16:00:00.000Z", updatedAt: "2026-10-03T16:00:00.000Z", ...over });
+  inp.deposits = [
+    eure({ id: "e-wallet", txHash: H(20), from: `0x${"22".repeat(20)}`, arrivedAt: "2026-10-02T23:50:26.000Z" }),
+    eure({ id: "e-mint", txHash: H(21), from: `0x${"00".repeat(20)}` }),
+    eure({ id: "e-swap", txHash: H(7), from: `0x${"cc".repeat(20)}` }),
+    eure({ id: "e-refund", txHash: H(22), from: `0x${"dd".repeat(20)}` }),
+    usdcDeposit() as any,
+  ] as any;
+  inp.transfers = [{ id: "t-r", userId: "u_1", txs: [{ step: "safe.refundTransfer", hash: H(22) }] } as any];
+  const lines = projectStatementLines(inp).filter((l) => l.statement!.event === "eure_in");
+  assert.equal(lines.length, 1, JSON.stringify(lines.map((l) => l.statement!.links)));
+  const s = lines[0].statement!;
+  assert.equal(s.amountCents, 10000);
+  assert.equal(s.valueDate, "2026-10-02", "the block's day, not the day a late scan found it");
+  assert.equal(s.counterparty.address, `0x${"22".repeat(20)}`);
+  assert.deepEqual(s.links.txHashes, [H(20)]);
+  assert.equal(lines[0].txType, "transfer_in");
+});
+
 await check("a sweep is one Kursdifferenz / Restbeträge line for the month", () => {
   const inp = base();
   inp.sweeps = [{ id: "sw-1", userId: "u_1", month: "2026-09", depositIds: ["d-1", "d-2"], amountInUnits: "2310000", creditedEur: 2.01, provider: "dex", rate: 1.149, conversion: { txHash: H(9), at: "2026-10-01T06:00:00.000Z" }, txs: [], at: "2026-10-01T06:01:00.000Z" }];
@@ -261,9 +311,11 @@ console.log("\nWriter against the store");
 
 const { initStore, store } = await import("../services/api/src/store.js");
 const { writeStatementLines, writeStatementLinesFor, booksFor, noteMoneriumIssue } = await import("../services/api/src/bookkeeping/writer.js");
+const imported = await import("../services/api/src/domain/safe-books.js");
+const SAFE2 = `0x${"ab".repeat(20)}` as `0x${string}`;
 initStore();
 const now = new Date().toISOString();
-const user: any = { id: "u_1", name: "Zoldenburg UG", country: "DE", kycStatus: "approved", address: SAFE, createdAt: now, passkey: { credentialId: "c" }, passkeySafe: { status: "active", address: SAFE } };
+const user: any = { id: "u_1", name: "Zoldenburg UG", country: "DE", kycStatus: "approved", address: SAFE, createdAt: "2026-01-01T00:00:00.000Z", passkey: { credentialId: "c" }, passkeySafe: { status: "active", address: SAFE } };
 store.addUser(user);
 store.addUser({ ...user, id: "u_orphan", address: `0x${"cc".repeat(20)}` });
 store.addOrganisation({ id: "org_1", type: "business", name: "Zoldenburg UG", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });
@@ -271,9 +323,48 @@ store.addAccount({ id: "acc_1", orgId: "org_1", currency: "EUR", label: "EUR", s
 store.addCryptoDeposit(usdcDeposit({ paymentRequestId: undefined }) as any);
 
 await check("the writer maps a user to the org whose EUR account their Safe backs; a user with none writes nothing", () => {
-  assert.deepEqual(booksFor("u_1"), { orgId: "org_1", accountId: "acc_1" });
+  assert.deepEqual(booksFor("u_1"), { orgId: "org_1", accountId: "acc_1", since: "2026-01-01T00:00:00.000Z" });
   assert.equal(booksFor("u_orphan"), undefined);
   assert.deepEqual(writeStatementLinesFor(store.findUser("u_orphan")!), { added: 0, updated: 0 });
+});
+
+await check("a Safe connected to a company books there, from when its books start; a Zold-deployed Safe from its creation", () => {
+  store.addUser({ ...user, id: "u_both", address: `0x${"dd".repeat(20)}`, passkeySafe: { ...user.passkeySafe, createdAt: "2026-09-01T00:00:00.000Z" } });
+  store.addOrganisation({ id: "org_p", type: "personal", name: "Me", plan: "starter", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });
+  store.addOrganisation({ id: "org_b", type: "business", name: "Co", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });
+  store.addAccount({ id: "acc_p", orgId: "org_p", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: `0x${"dd".repeat(20)}`, backingUserId: "u_both", createdAt: now, updatedAt: now });
+  store.addAccount({ id: "acc_b", orgId: "org_b", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: `0x${"dd".repeat(20)}`, backingUserId: "u_both", createdAt: now, updatedAt: now });
+  assert.deepEqual(booksFor("u_both"), { orgId: "org_b", accountId: "acc_b", since: "2026-09-01T00:00:00.000Z" }, "no recorded date: worked out from the Safe");
+  store.updateAccount("acc_b", { backedSince: "2026-09-05T00:00:00.000Z" });
+  assert.equal(booksFor("u_both")!.since, "2026-09-05T00:00:00.000Z", "a recorded date wins");
+});
+
+await check("an imported Safe's books start when it got its IBAN here, else at the import; the IBAN date is stamped by the store", () => {
+  const { safeBooksStart } = imported;
+  const base = { createdAt: "2026-01-01T00:00:00.000Z", passkeySafe: { createdAt: "2026-01-02T00:00:00.000Z" } } as any;
+  assert.equal(safeBooksStart(base), "2026-01-02T00:00:00.000Z", "deployed by Zold: from its creation");
+  const imp = { ...base, passkeySafe: { ...base.passkeySafe, importedAt: "2026-05-01T00:00:00.000Z" } };
+  assert.equal(safeBooksStart(imp), "2026-05-01T00:00:00.000Z", "imported, no IBAN: from the import");
+  assert.equal(safeBooksStart({ ...imp, ibanSince: "2026-06-01T00:00:00.000Z" }), "2026-06-01T00:00:00.000Z", "imported: from the IBAN");
+  store.addUser({ ...user, id: "u_iban", address: `0x${"ee".repeat(20)}`, iban: "" } as any);
+  assert.equal(store.findUser("u_iban")!.ibanSince, undefined);
+  store.updateUser("u_iban", { iban: "EE382200221020145685" });
+  const first = store.findUser("u_iban")!.ibanSince;
+  assert.ok(first, "a new IBAN stamps its date");
+  store.updateUser("u_iban", { iban: "EE382200221020145685", name: "x" });
+  assert.equal(store.findUser("u_iban")!.ibanSince, first, "the same IBAN again keeps it");
+});
+
+await check("lines from before the Safe's books start are not written", () => {
+  store.addUser({ ...user, id: "u_imp", address: SAFE2, passkeySafe: { ...user.passkeySafe, address: SAFE2, importedAt: "2026-09-10T09:59:00.000Z" } });
+  store.addOrganisation({ id: "org_imp", type: "business", name: "Imp", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });
+  store.addAccount({ id: "acc_imp", orgId: "org_imp", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: SAFE2, backingUserId: "u_imp", backedSince: "2026-09-10T10:03:00.000Z", createdAt: now, updatedAt: now });
+  store.addCryptoDeposit(usdcDeposit({ id: "d-old", userId: "u_imp", txHash: H(40), paymentRequestId: undefined }) as any);
+  writeStatementLinesFor(store.findUser("u_imp")!);
+  assert.equal(store.ledgerOf("org_imp").length, 0, "the receipt (09:58) and the disposal (10:02) are both before the books start at 10:03");
+  store.updateAccount("acc_imp", { backedSince: "2026-09-10T09:00:00.000Z" });
+  writeStatementLinesFor(store.findUser("u_imp")!);
+  assert.equal(store.ledgerOf("org_imp").length, 2, "the receipt and the disposal");
 });
 
 await check("first run writes the receipt and the disposal with rule-mapped codes; a second run adds nothing", () => {

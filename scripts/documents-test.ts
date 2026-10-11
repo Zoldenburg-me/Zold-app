@@ -79,6 +79,16 @@ await t("three sources merge without double-counting the same money", () => {
   assert.equal(docs.statementTotals(merged).outEur, 40.99);
 });
 
+await t("the faucet's test EURe is a line of its own, so a statement with a drip reconciles", () => {
+  const at = "2026-10-02T23:50:24.460Z";
+  const lines = docs.linesFromFaucet({ grantedEur: 100, txHash: "0x5a68", at });
+  assert.deepEqual(lines, [{ at, direction: "in", amountEur: 100, counterpartyName: "Zold test faucet", memo: "Test EURe, testnet only", source: "chain", txHash: "0x5a68" }]);
+  assert.deepEqual(docs.linesFromFaucet(undefined), []);
+  assert.deepEqual(docs.linesFromFaucet({ grantedEur: 100, txHash: "", at }), [], "a claim whose send never went out moved nothing");
+  const merged = docs.mergeLines([], [], lines);
+  assert.equal(docs.reconcile(0, 100, docs.statementTotals(merged)).reconciles, true);
+});
+
 await t("reconciliation names the gap instead of hiding it", () => {
   assert.deepEqual(docs.reconcile(100, 59.01, { inEur: 0, outEur: 40.99 }), { reconciles: true, deltaEur: 0 });
   const r = docs.reconcile(100, 50, { inEur: 0, outEur: 40.99 });
@@ -101,11 +111,89 @@ await t("the digest is canonical and the signature round-trips", async () => {
   assert.equal((await docs.verifyZoldAttestation(tampered)).ok, false, "a changed figure must fail");
 });
 
-await t("the BIC is LHV's, and only next to an Estonian IBAN", () => {
-  assert.equal(docs.bicFor("EE43 7777 0001 3752 9827"), "LHVBEE22");
-  assert.equal(docs.bicFor("IS14 0159 2600 7654 5510 7303 39"), undefined);
+await t("the BIC is the one Monerium reported for the current IBAN, never one guessed from the country", () => {
+  const base: any = { name: "A", iban: "EE43 7777 0001 3752 9827", address: `0x${"aa".repeat(20)}`, createdAt: "x" };
+  assert.equal(docs.holderBlock(base).bic, undefined);
+  assert.equal(docs.holderBlock({ ...base, ibanBic: { iban: "EE437777000137529827", bic: "FAKEFK01", checkedAt: "x" } }).bic, "FAKEFK01");
+  assert.equal(docs.holderBlock({ ...base, ibanBic: { iban: "EE00OTHER", bic: "FAKEFK01", checkedAt: "x" } }).bic, undefined);
   assert.match(docs.PARTIES.footer, /AS LHV Pank/);
   assert.match(docs.PARTIES.footer, /Monerium ehf/);
+});
+
+await t("the holder is who Monerium names for the IBAN; the Zold user, when different, operates it", () => {
+  const base: any = { name: "Christian Lindner", iban: "EE32 5315 1162 8202 5727", address: `0x${"aa".repeat(20)}`, createdAt: "2026-10-02T23:00:22.550Z" };
+  const entry = { iban: "EE32 5315 1162 8202 5727", address: base.address, profile: "p1", name: "Linder GmBh" };
+  const company = docs.holderBlock({ ...base, monerium: { ibans: [entry] } });
+  assert.equal(company.name, "Linder GmBh");
+  assert.equal(company.operatedBy, "Christian Lindner");
+  const text = docs.ownershipStatement({ ...company, chainId: 84532 }, "2026-10-03");
+  assert.match(text, /^Linder GmBh holds the euro account with IBAN EE32 5315 1162 8202 5727\./);
+  assert.match(text, /Christian Lindner operates it for Linder GmBh\./);
+  assert.match(text, /Base Sepolia \(chain 84532\)/);
+  assert.match(text, /Only the holder can move money out/);
+  assert.match(text, /opened on 2026-10-02.*Issued 2026-10-03\./s);
+  // Monerium's snapshot may come wrapped as { ibans: [...] }.
+  assert.equal(docs.holderBlock({ ...base, monerium: { ibans: { ibans: [entry] } } }).name, "Linder GmBh");
+  // The same person, written differently: no "operated by".
+  const own = docs.holderBlock({ ...base, monerium: { ibans: [{ ...entry, name: "CHRISTIAN  LINDNER" }] } });
+  assert.equal(own.name, "Christian Lindner");
+  assert.equal(own.operatedBy, undefined);
+  assert.doesNotMatch(docs.ownershipStatement(own, "2026-10-03"), /operates it/);
+  // An entry for another IBAN, or no name from Monerium, says nothing.
+  assert.equal(docs.holderBlock({ ...base, monerium: { ibans: [{ ...entry, iban: "EE00OTHER" }] } }).name, "Christian Lindner");
+  assert.equal(docs.holderBlock({ ...base, monerium: { ibans: [{ ...entry, name: "" }] } }).operatedBy, undefined);
+});
+
+await t("a holder name nobody verified is labelled self-declared, on the snapshot and in the statement", () => {
+  const base: any = { name: "Typed Name", iban: "DE89 3704 0044 0532 0130 00", address: `0x${"aa".repeat(20)}`, createdAt: "2026-10-02T23:00:22.550Z", kycStatus: "approved" };
+  const typed = docs.holderBlock(base);
+  assert.equal(typed.name, "Typed Name");
+  assert.equal(typed.nameSource, "self-declared");
+  assert.match(docs.ownershipStatement(typed, "2026-10-03"), /Typed Name is as the holder entered it; Monerium has not reported a name/);
+  const entry = { iban: base.iban, address: base.address, profile: "p1", name: "Real Holder" };
+  const fromIban = docs.holderBlock({ ...base, monerium: { ibans: [entry] } });
+  assert.equal(fromIban.nameSource, "monerium");
+  assert.doesNotMatch(docs.ownershipStatement(fromIban, "2026-10-03"), /as the holder entered it/);
+  // No IBAN name: an APPROVED connected profile's name is Monerium's too; a
+  // pending one is not.
+  const profile = (state: string) => ({ ...base, iban: "", monerium: { profileId: "p1", profiles: [{ id: "p1", kind: "personal", state, name: "Real Holder" }] } });
+  assert.equal(docs.holderBlock(profile("approved")).name, "Real Holder");
+  assert.equal(docs.holderBlock(profile("approved")).nameSource, "monerium");
+  assert.equal(docs.holderBlock(profile("pending")).nameSource, "self-declared");
+  assert.equal(docs.holderBlock(profile("pending")).name, "Typed Name");
+});
+
+await t("words Monerium did not report, in any script or as symbols, make the typed name a different name", async () => {
+  const { publicUser } = await import("../services/api/src/users/public-user.js");
+  const base: any = { iban: "EE382200221020145685", address: `0x${"aa".repeat(20)}`, createdAt: "2026-10-02T23:00:22.550Z", kycStatus: "approved",
+    monerium: { ibans: [{ iban: "EE382200221020145685", name: "Christian Lindner" }] } };
+  for (const typed of ["Christian Lindner АСМЕ ТАХ", "Christian Lindner ✓ ★", "Christian Lindner 公司"]) {
+    const holder = docs.holderBlock({ ...base, name: typed });
+    assert.equal(holder.name, "Christian Lindner", typed);
+    assert.equal(holder.operatedBy, typed);
+    assert.equal(publicUser({ ...base, name: typed }).nameVerified, false, typed);
+  }
+  // Case, spacing, order, accents and punctuation still read as the same person.
+  for (const typed of ["CHRISTIAN  LINDNER", "Lindner, Christian", "Christián Lindner"]) {
+    assert.equal(docs.holderBlock({ ...base, name: typed }).operatedBy, undefined, typed);
+    assert.equal(publicUser({ ...base, name: typed }).nameVerified, true, typed);
+  }
+  // Apostrophes and hyphens are punctuation; a name in another script is compared word by word.
+  const pairs: [reported: string, typed: string, same: boolean][] = [
+    ["O'Brien Anne-Marie", "O’Brien Anne Marie", true],
+    ["Иван Петров", "Петров Иван", true],
+    ["Иван Петров", "Пётр Иванов", false],
+  ];
+  for (const [reported, typed, same] of pairs) {
+    const user = { ...base, name: typed, monerium: { ibans: [{ iban: base.iban, name: reported }] } };
+    assert.equal(docs.holderBlock(user).operatedBy, same ? undefined : typed, `${reported} / ${typed}`);
+    assert.equal(publicUser(user).nameVerified, same, `${reported} / ${typed}`);
+  }
+});
+
+await t("only an approved account gets a balance or ownership letter", () => {
+  assert.equal(docs.holderLetterRefusal({ kycStatus: "pending" } as any)?.code, "ACCOUNT_NOT_VERIFIED");
+  assert.equal(docs.holderLetterRefusal({ kycStatus: "approved" } as any), undefined);
 });
 
 // ---------------------------------------------------------------------------
@@ -146,7 +234,7 @@ async function makePasskey() {
   };
   let count = 0;
   return {
-    register: (challenge: string) => ({ credentialId: b64url(credId), attestation: b64url(enc(new Map<string, any>([["fmt", "none"], ["attStmt", new Map()], ["authData", authData(0x41, 0, true)]]))), clientDataJSON: clientData("webauthn.create", challenge) }),
+    register: (challenge: string) => ({ credentialId: b64url(credId), attestation: b64url(enc(new Map<string, any>([["fmt", "none"], ["attStmt", new Map()], ["authData", authData(0x45, 0, true)]]))), clientDataJSON: clientData("webauthn.create", challenge) }),
     assert: async (challenge: string) => {
       count += 1;
       const cd = clientData("webauthn.get", challenge);

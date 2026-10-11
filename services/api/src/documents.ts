@@ -28,7 +28,8 @@ import { keccak256, toBytes, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { IS_PRODUCTION, CHAIN_ID, KEYS, PUBLIC_URL } from "./config.js";
 import type { Transfer, User } from "./store.js";
-import { paymentMemo } from "./sepa.js";
+import { paymentMemo, reportedBic } from "./sepa.js";
+import { moneriumVerifiedName, personKey } from "./users/verified-name.js";
 
 export type DocumentKind = "receipt" | "statement" | "balance" | "ownership" | "beleg";
 
@@ -43,8 +44,7 @@ export const PARTIES = {
 } as const;
 
 /** LHV's BIC, shown only next to an Estonian IBAN it actually applies to. */
-export const LHV_BIC = "LHVBEE22";
-export const bicFor = (iban?: string) => (iban && /^EE/i.test(iban.replace(/\s/g, "")) ? LHV_BIC : undefined);
+
 
 /** Verification codes: 15 Crockford characters (~75 bits), grouped for
  *  reading aloud. Holding one is the whole authorisation to read the page. */
@@ -63,7 +63,14 @@ export const isDocumentCode = (raw: string) => /^[0-9A-HJKMNP-TV-Z]{15}$/.test(n
 // snapshots
 
 export interface HolderBlock {
+  /** Who holds the IBAN: the name Monerium reports for it, else the user's. */
   name: string;
+  /** Where `name` came from: Monerium (users/verified-name.ts), or the name
+   *  the user typed, which nobody checked. Absent on documents issued before
+   *  it was recorded; those printed the typed name. */
+  nameSource?: "monerium" | "self-declared";
+  /** The Zold user, when Monerium names someone else (a company) as holder. */
+  operatedBy?: string;
   addressLines: string[];
   iban?: string;
   bic?: string;
@@ -171,13 +178,31 @@ export function holderBlock(user: User): HolderBlock {
   const lines: string[] = [];
   if (user.country) lines.push(user.country.toUpperCase());
   const iban = user.iban || undefined;
+  const verified = moneriumVerifiedName({ monerium: user.monerium, iban: user.iban });
+  const differs = verified !== undefined && personKey(verified) !== personKey(user.name);
   return {
-    name: user.name,
+    name: differs ? verified : user.name,
+    nameSource: verified ? "monerium" : "self-declared",
+    ...(differs ? { operatedBy: user.name } : {}),
     addressLines: lines,
-    ...(iban ? { iban, bic: bicFor(iban) } : {}),
+    ...(iban ? { iban, ...(reportedBic(user) ? { bic: reportedBic(user) } : {}) } : {}),
     safeAddress: user.address as `0x${string}`,
     chainId: CHAIN_ID,
     accountSince: user.createdAt,
+  };
+}
+
+/**
+ * Why Zold will not sign a letter about who holds this account, or undefined
+ * when it will. A balance confirmation and a proof of ownership are read by a
+ * landlord or a bank as Zold vouching for the holder, so they are issued only
+ * once Monerium has approved the account.
+ */
+export function holderLetterRefusal(user: Pick<User, "kycStatus">): { code: "ACCOUNT_NOT_VERIFIED"; error: string } | undefined {
+  if (user.kycStatus === "approved") return undefined;
+  return {
+    code: "ACCOUNT_NOT_VERIFIED",
+    error: "Balance confirmations and proofs of ownership are issued once Monerium has verified you and your IBAN is active.",
   };
 }
 
@@ -277,6 +302,22 @@ export function linesFromChainCredits(credits: ChainCreditLike[]): StatementLine
       source: "chain" as const,
       txHash: c.txHash,
     }));
+}
+
+/** The onboarding faucet grant (faucet.ts, test chains only): test EURe sent
+ *  straight to the Safe, which no other source records. A claim with no
+ *  txHash is one whose send never went out. */
+export function linesFromFaucet(grant: { grantedEur: number; txHash: string; at: string } | undefined): StatementLine[] {
+  if (!grant?.txHash || !(grant.grantedEur > 0)) return [];
+  return [{
+    at: grant.at,
+    direction: "in",
+    amountEur: grant.grantedEur,
+    counterpartyName: "Zold test faucet",
+    memo: "Test EURe, testnet only",
+    source: "chain",
+    txHash: grant.txHash,
+  }];
 }
 
 /**
@@ -407,19 +448,37 @@ export function ownershipMessage(holder: HolderBlock, code: string, date: string
   );
 }
 
+const CHAIN_NAMES: Record<number, string> = { 8453: "Base", 84532: "Base Sepolia", 31337: "a local test chain" };
+
+/** The proof in words a bank or an authority reads: who holds which IBAN,
+ *  where it pays into, and who can move the money. The signatures below it
+ *  are explained on the page. */
 export function ownershipStatement(holder: HolderBlock, date: string): string {
-  return (
-    `This confirms that ${holder.name} holds a Zold account, opened on ${holder.accountSince.slice(0, 10)}, ` +
-    `whose account of record is the smart account ${holder.safeAddress} on chain ${holder.chainId}` +
-    (holder.iban ? `, to which the IBAN ${holder.iban} is linked` : "") +
-    `. Issued ${date}.`
-  );
+  const chain = `${CHAIN_NAMES[holder.chainId] ?? "chain"} (chain ${holder.chainId})`;
+  return [
+    holder.iban
+      ? `${holder.name} holds the euro account with IBAN ${holder.iban}${holder.bic ? ` (BIC ${holder.bic})` : ""}.`
+      : `${holder.name} holds a Zold account. It has no IBAN yet.`,
+    ...(holder.operatedBy ? [`${holder.operatedBy} operates it for ${holder.name}.`] : []),
+    ...(holder.nameSource === "monerium" ? [] : [`The name ${holder.name} is as the holder entered it; Monerium has not reported a name for this account.`]),
+    `Money sent to ${holder.iban ? "this IBAN" : "it"} lands in a Zold smart account at address ${holder.safeAddress} on ${chain}.`,
+    "Only the holder can move money out: every payment needs their passkey, and Zold cannot pay out on its own.",
+    `The account was opened on ${holder.accountSince.slice(0, 10)}. Issued ${date}.`,
+  ].join(" ");
 }
 
 export const documentUrl = (code: string) => `${PUBLIC_URL || ""}/v/${normaliseCode(code)}`;
 
-/** Public projection: everything except the ids. The code is the credential. */
+/** Public projection, an allowlist: the frozen snapshot and its signatures,
+ *  never the ids. The code is the credential. */
 export function publicDocument(doc: StoredDocument) {
-  const { id, userId, orgId, ...pub } = doc;
-  return { ...pub, url: documentUrl(doc.code) };
+  return {
+    code: doc.code,
+    kind: doc.kind,
+    createdAt: doc.createdAt,
+    snapshot: doc.snapshot,
+    attestations: doc.attestations,
+    ...(doc.revokedAt ? { revokedAt: doc.revokedAt } : {}),
+    url: documentUrl(doc.code),
+  };
 }

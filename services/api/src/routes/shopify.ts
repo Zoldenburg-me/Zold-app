@@ -40,14 +40,17 @@
  */
 import { wrap } from "./util.js";
 import express from "express";
-import { randomBytes, randomUUID } from "node:crypto";
-import { MONERIUM, PAYMENT_REQUESTS, SHOPIFY } from "../config.js";
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { PAYMENT_REQUESTS, SHOPIFY } from "../config.js";
 import { store, type User } from "../store.js";
-import { decryptField, encryptField, EncryptionUnavailableError } from "../crypto-at-rest.js";
-import { displayCode, effectiveState, normaliseCode, type PaymentRequest } from "../payment-requests.js";
+import { EncryptionUnavailableError } from "../crypto-at-rest.js";
+import { dataEncryptionProblem } from "../config/data-keys.js";
+import { SECRETS } from "../stored-secrets.js";
+import { MAX_REQUEST_EUR, displayCode, effectiveState, normaliseCode, type PaymentRequest } from "../payment-requests.js";
 import { baseUrlFor, createPaymentRequest, ensureQuote, payerContext } from "./payment-requests.js";
 import { publicPaymentRequest } from "../payment-requests.js";
 import { requirePermission, resolveOrg, type SessionResolver } from "./org-context.js";
+import { roleCan } from "../domain/roles.js";
 import { isValidShopDomain, normaliseShop, verifyBodyHmac, verifyQueryHmac } from "../shopify/hmac.js";
 import {
   authorizeUrl,
@@ -65,6 +68,7 @@ import {
   webhookSubscriptionDelete,
 } from "../shopify/admin.js";
 import type { ShopifyConnection } from "../shopify/types.js";
+import { describeCause, redactedMessage } from "../http/log-cause.js";
 
 /**
  * A merchant-supplied URL we will put in an href or a 302, or nothing.
@@ -94,18 +98,116 @@ export function externalHttpUrl(raw: unknown): string | undefined {
   return u.protocol === "https:" ? u.toString() : undefined;
 }
 
+// ── Webhook deliveries ────────────────────────────────────────────────────
+//
+// Every store's webhooks are signed with the one app secret, and the shop
+// header that picks the connection is not covered by the signature. A signed
+// body is therefore bound to the first shop it arrived under, by Shopify's
+// delivery id: the same id under another shop is refused, and a redelivery of
+// one already handled is acknowledged without being processed again. Shopify
+// retries for 48 hours, so ids are kept 72; in memory, so after a restart the
+// order-level idempotency (shop + order id) is what holds.
+
+const DELIVERY_TTL_MS = 72 * 3_600_000;
+const DELIVERIES_MAX = 50_000;
+const deliveries = new Map<string, { shop: string; at: number; handled: boolean }>();
+
+function pruneDeliveries(now: number) {
+  for (const [id, d] of deliveries) {
+    if (deliveries.size <= DELIVERIES_MAX && now - d.at < DELIVERY_TTL_MS) break;
+    deliveries.delete(id);
+  }
+}
+
+/** Requests being opened right now, by shop and Shopify id: a concurrent
+ *  delivery of the same order or session waits for the first one's request
+ *  instead of opening a second. */
+const opening = new Map<string, Promise<PaymentRequest>>();
+function openOnce(key: string, open: () => Promise<PaymentRequest>): Promise<PaymentRequest> {
+  const running = opening.get(key);
+  if (running) return running;
+  const p = open().finally(() => opening.delete(key));
+  opening.set(key, p);
+  return p;
+}
+
 /** Pending installs: our nonce → who started it. In memory on purpose; an
  *  install that outlives a restart simply starts again. */
-const pendingInstalls = new Map<string, { orgId: string; shop: string; payeeUserId: string; installerId: string; expiresAt: number }>();
+type PendingInstall = { orgId: string; shop: string; payeeUserId: string; installerId: string; expiresAt: number };
+const pendingInstalls = new Map<string, PendingInstall>();
+
+const CONNECTED_ELSEWHERE = "this store is connected to a different organisation";
+
+type InstallRefusal = { code: "SHOP_CONNECTED_ELSEWHERE" | "INSTALLER_NOT_ALLOWED"; error: string };
+
+/** The reason this install may not write the shop's connection, or
+ *  undefined when it may. A connection belongs to one org; only that org's
+ *  flows rewrite it. The shop is the lookup key, as everywhere a
+ *  merchant-side id is. A missing org refuses like a missing member. */
+function installRefusal(p: PendingInstall): InstallRefusal | undefined {
+  const existing = store.findShopifyConnectionByShop(p.shop);
+  if (existing && existing.orgId !== p.orgId) return { code: "SHOP_CONNECTED_ELSEWHERE", error: CONNECTED_ELSEWHERE };
+  const member = store.findOrganisation(p.orgId) ? store.memberFor(p.orgId, p.installerId) : undefined;
+  if (!member || member.status !== "active" || !roleCan(member.role, "org.update")) {
+    return { code: "INSTALLER_NOT_ALLOWED", error: "whoever started this install can no longer connect stores for the organisation — start again from the dashboard" };
+  }
+  return undefined;
+}
 
 export function shopifyAvailable(): { available: boolean; reason?: string } {
   if (!SHOPIFY.enabled) return { available: false, reason: "SHOPIFY_API_KEY / SHOPIFY_API_SECRET are not set — no Shopify app is registered for this deployment" };
-  if (!MONERIUM.tokenEncryptionKey) return { available: false, reason: "no encryption key (MONERIUM_TOKEN_ENCRYPTION_KEY) to store a store's access token" };
+  const keyProblem = dataEncryptionProblem();
+  if (keyProblem) return { available: false, reason: `${keyProblem}, so a store's access token cannot be stored` };
   return { available: true };
 }
 
 function tokenOf(c: ShopifyConnection): string {
-  return decryptField("shopify", MONERIUM.tokenEncryptionKey, c.accessTokenEnc);
+  return SECRETS.shopifyAccessToken.open(c.id, c.accessTokenEnc);
+}
+
+// ── Proof of the buyer, for the order routes ─────────────────────────────
+//
+// Order ids are per-store sequences, so (shop, order id) names an order to
+// anyone who can count. Each order route therefore also takes something only
+// the buyer holds:
+//  - the confirmation email's link carries `b`, the order id signed with a
+//    per-shop key that lives in the store's email template (Liquid
+//    `hmac_sha256`);
+//  - the thank-you page extension sends `t`, the checkout token Shopify gives
+//    it, which the orders webhook delivered to us as `checkout_token`.
+
+const sha256Hex = (s: string) => createHash("sha256").update(s).digest("hex");
+
+function sameHex(a: string, b: string): boolean {
+  return a.length === b.length && /^[0-9a-f]+$/.test(a) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
+
+/** The shop's email-link key, created on first use. Throws when no
+ *  encryption key is configured; `canSignPayLinks` says so first. */
+function orderLinkSecret(c: ShopifyConnection): string {
+  if (c.orderLinkSecretEnc) return SECRETS.shopifyOrderLinkSecret.open(c.id, c.orderLinkSecretEnc);
+  const secret = randomBytes(32).toString("hex");
+  store.updateShopifyConnection(c.id, { orderLinkSecretEnc: SECRETS.shopifyOrderLinkSecret.seal(c.id, secret) });
+  return secret;
+}
+
+/** A shop can be given a signed pay link when its key exists or can be made. */
+const canSignPayLinks = (c: ShopifyConnection) => Boolean(c.orderLinkSecretEnc) || dataEncryptionProblem() === null;
+
+/** What Liquid's `{{ id | hmac_sha256: key }}` renders: lower-case hex. */
+const orderLinkProof = (secret: string, orderId: string) => createHmac("sha256", secret).update(orderId).digest("hex");
+
+/** One template per connected store: the store's domain is written in, so
+ *  the email needs only `{{ id }}` and the `hmac_sha256` filter from Liquid. */
+function payLinkTemplate(base: string, c: ShopifyConnection): string {
+  return `${base}/api/shopify/orders/${encodeURIComponent(c.shop)}/{{ id }}/pay?b={{ id | hmac_sha256: "${orderLinkSecret(c)}" }}`;
+}
+
+/** Does `b` sign this order id under the shop's key? A shop that never had
+ *  a key made has no valid link. */
+function emailLinkValid(c: ShopifyConnection | undefined, orderId: string, b: unknown): boolean {
+  if (!c?.orderLinkSecretEnc || typeof b !== "string") return false;
+  return sameHex(b.toLowerCase(), orderLinkProof(orderLinkSecret(c), orderId));
 }
 
 export function publicConnection(c: ShopifyConnection) {
@@ -163,7 +265,7 @@ export async function resolveShopifyRequest(r: PaymentRequest): Promise<void> {
         paidAt: r.paidAt,
       };
       orderSetPaymentMetafield(connection.shop, tokenOf(connection), r.source.orderGid, facts).catch((err) =>
-        console.error(`shopify: order marked paid but the zold.payment metafield was refused at ${connection.shop}: ${err?.message ?? err}`),
+        console.error(`shopify: order marked paid but the zold.payment metafield was refused at ${connection.shop}: ${describeCause(err)}`),
       );
       return;
     }
@@ -173,7 +275,7 @@ export async function resolveShopifyRequest(r: PaymentRequest): Promise<void> {
     });
     console.log(`shopify: resolved session for ${displayCode(r.code)} at ${connection.shop}`);
   } catch (err: any) {
-    store.updatePaymentRequest(r.id, { source: { ...r.source, resolveAttempts: attempts, resolveError: String(err?.message ?? err).slice(0, 300) } });
+    store.updatePaymentRequest(r.id, { source: { ...r.source, resolveAttempts: attempts, resolveError: redactedMessage(err).slice(0, 300) } });
     throw err;
   }
 }
@@ -189,6 +291,8 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       const ctx = resolveOrg(req, res, requireSession);
       if (!ctx) return;
       if (!requirePermission(ctx, res, "org.read")) return;
+      // Carries payment codes and each store's email-link key.
+      res.setHeader("cache-control", "no-store");
       const connections = store.shopifyConnectionsForOrg(ctx.org.id);
       const shops = new Set(connections.map((c) => c.shop));
       const base = baseUrlFor(req);
@@ -230,12 +334,13 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
           : {
               redirect: `${base}/api/shopify/callback`,
               webhook: `${base}/api/shopify/webhooks/orders`,
-              // Liquid for the order-confirmation email template: a link that
-              // reaches the order's pay page with no code to type.
-              payLinkTemplate: `${base}/api/shopify/orders/{{ shop.permanent_domain }}/{{ order.id }}/pay`,
-              orderLookup: `${base}/api/shopify/orders/<shop>/<order id>`,
             },
-        connections: connections.map(publicConnection),
+        // custom-app: each store's Liquid for its order-confirmation email,
+        // a link to the order's pay page signed with that store's key.
+        connections: connections.map((c) => ({
+          ...publicConnection(c),
+          ...(c.mode === "custom-app" && canSignPayLinks(c) ? { payLinkTemplate: payLinkTemplate(base, c) } : {}),
+        })),
         requests,
       });
     }),
@@ -255,7 +360,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       }
       const existing = store.findShopifyConnectionByShop(shop);
       if (existing && existing.orgId !== ctx.org.id) {
-        return res.status(409).json({ error: "this store is connected to a different organisation" });
+        return res.status(409).json({ error: CONNECTED_ELSEWHERE, code: "SHOP_CONNECTED_ELSEWHERE" });
       }
       const payee = payeeFor(ctx.org.id, ctx.userId);
       if (!payee.user) return res.status(409).json({ error: payee.reason });
@@ -281,25 +386,40 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
         return back({ error: "this install was not started from Zold, or it has expired — start again from the dashboard" });
       }
       pendingInstalls.delete(String(q.state));
+      const refuse = (r: InstallRefusal) => {
+        console.error(`shopify: install callback for ${shop} refused (${r.code}): org ${pending.orgId}, installer ${pending.installerId}`);
+        return back({ error: r.error, code: r.code });
+      };
+      // The install route's checks held when the install started, up to 15
+      // minutes ago. Ask again before fetching a token, and once more after
+      // the exchange (another callback may have connected the shop meanwhile)
+      // with no await between that check and the write.
+      const refusedEarly = installRefusal(pending);
+      if (refusedEarly) return refuse(refusedEarly);
       let token: { accessToken: string; scope: string };
       try {
         token = await exchangeCode(shop, String(q.code ?? ""));
       } catch (err: any) {
-        return back({ error: `Shopify refused the install: ${String(err?.message ?? err).slice(0, 160)}` });
+        return back({ error: `Shopify refused the install: ${redactedMessage(err).slice(0, 160)}` });
       }
+      // The row id is part of the AAD, so it is fixed before sealing. Nothing
+      // awaits between here and the write below.
+      const existing = store.findShopifyConnectionByShop(shop);
+      const connectionId = existing?.id ?? randomUUID();
       let enc: string;
       try {
-        enc = encryptField("shopify", MONERIUM.tokenEncryptionKey, token.accessToken);
+        enc = SECRETS.shopifyAccessToken.seal(connectionId, token.accessToken);
       } catch (err) {
         if (err instanceof EncryptionUnavailableError) return back({ error: err.message });
         throw err;
       }
+      const refusedLate = installRefusal(pending);
+      if (refusedLate) return refuse(refusedLate);
       const now = new Date().toISOString();
-      const existing = store.findShopifyConnectionByShop(shop);
       const connection = existing
         ? store.updateShopifyConnection(existing.id, { accessTokenEnc: enc, scope: token.scope, mode: SHOPIFY.mode, payeeUserId: pending.payeeUserId, installedByUserId: pending.installerId, installedAt: now, configuredAt: undefined, configureError: undefined })
         : store.addShopifyConnection({
-            id: randomUUID(),
+            id: connectionId,
             orgId: pending.orgId,
             shop,
             payeeUserId: pending.payeeUserId,
@@ -322,14 +442,14 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
           // gid is the idempotency key).
           const created = await webhookSubscriptionCreate(shop, token.accessToken, "ORDERS_CREATE", `${base}/api/shopify/webhooks/orders`);
           await webhookSubscriptionCreate(shop, token.accessToken, "ORDERS_CANCELLED", `${base}/api/shopify/webhooks/orders`).catch((err) =>
-            console.error(`shopify: orders/cancelled subscription refused at ${shop}: ${err?.message ?? err}`),
+            console.error(`shopify: orders/cancelled subscription refused at ${shop}: ${describeCause(err)}`),
           );
           // "already been taken" returns no id; the one we stored last time
           // is still the live subscription, so keep it.
           store.updateShopifyConnection(connection.id, { configuredAt: new Date().toISOString(), configureError: undefined, webhookSubscriptionId: created.id ?? existing?.webhookSubscriptionId });
         }
       } catch (err: any) {
-        store.updateShopifyConnection(connection.id, { configureError: String(err?.message ?? err).slice(0, 300) });
+        store.updateShopifyConnection(connection.id, { configureError: redactedMessage(err).slice(0, 300) });
       }
       back({ shop });
     }),
@@ -351,8 +471,10 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
         } else if (c.webhookSubscriptionId) {
           await webhookSubscriptionDelete(c.shop, tokenOf(c), c.webhookSubscriptionId);
         }
-      } catch {
-        /* the token may already be revoked; disconnecting is still right */
+      } catch (err) {
+        // The token may already be revoked; disconnecting is still right. A
+        // token we could not decrypt is logged, since Shopify was not told.
+        console.warn(`shopify: disconnect of ${c.shop} could not reach the store: ${describeCause(err)}`);
       }
       store.removeShopifyConnection(c.id);
       res.json({ ok: true });
@@ -394,11 +516,13 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       // Shopify retries; the same session must get the same page.
       const existing = store.findPaymentRequestBySource("shopify", sessionId, c.shop);
       if (existing) return res.status(201).json({ redirect_url: pageUrl(existing) });
+      const inFlight = opening.get(`${c.shop}|${sessionId}`);
+      if (inFlight) return res.status(201).json({ redirect_url: pageUrl(await inFlight) });
       if (String(b.currency ?? "").toUpperCase() !== "EUR") {
         return res.status(422).json({ error: `Zold settles in EUR; this store presented ${b.currency}. Restrict the payment method to EUR in the store's payment settings.` });
       }
       const amount = Number(b.amount);
-      if (!(amount > 0)) return res.status(400).json({ error: "amount must be positive" });
+      if (!(amount > 0) || amount > MAX_REQUEST_EUR) return res.status(400).json({ error: "amount must be positive and at most €1,000,000" });
       if (String(b.kind ?? "sale") !== "sale") {
         // Manual capture asks for a hold we cannot place on a wallet transfer.
         // Tell the merchant in their admin, then decline the session.
@@ -408,7 +532,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       }
       const payee = store.findUser(c.payeeUserId);
       if (!payee?.paymentPage?.handle) return res.status(409).json({ error: "the receiving account has no payment page" });
-      const r = await createPaymentRequest(
+      const r = await openOnce(`${c.shop}|${sessionId}`, () => createPaymentRequest(
         payee,
         {
           amountEur: Math.round(amount * 100) / 100,
@@ -426,7 +550,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
           ...(externalHttpUrl(b.payment_method?.data?.cancel_url) ? { cancelUrl: externalHttpUrl(b.payment_method?.data?.cancel_url)! } : {}),
         },
         c.orgId,
-      );
+      ));
       store.updateShopifyConnection(c.id, { lastSessionAt: new Date().toISOString() });
       res.status(201).json({ redirect_url: pageUrl(r) });
     }),
@@ -444,7 +568,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       // Shopify wants a 201 first and the verdict by mutation afterwards.
       res.status(201).json({});
       reject(c.shop, tokenOf(c), gid, message).catch((err) =>
-        console.error(`shopify: could not reject session ${gid} at ${c.shop}: ${err?.message ?? err}`),
+        console.error(`shopify: could not reject session ${gid} at ${c.shop}: ${describeCause(err)}`),
       );
     });
 
@@ -469,6 +593,22 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
     wrap(async (req, res) => {
       const c = fromShopify(req, res);
       if (!c) return;
+      const deliveryId = String(req.header("x-shopify-webhook-id") ?? "").trim();
+      if (!deliveryId || deliveryId.length > 200) return res.status(400).json({ error: "X-Shopify-Webhook-Id is required" });
+      const now = Date.now();
+      pruneDeliveries(now);
+      const seen = deliveries.get(deliveryId);
+      if (seen && seen.shop !== c.shop) {
+        return res.status(401).json({ error: "this delivery was signed for another store" });
+      }
+      if (seen?.handled) return res.status(200).json({ ok: true, duplicate: true });
+      if (!seen) deliveries.set(deliveryId, { shop: c.shop, at: now, handled: false });
+      // Handled once it has been answered without a server error; a failed one
+      // is processed again on Shopify's retry.
+      res.once("finish", () => {
+        const d = deliveries.get(deliveryId);
+        if (d && res.statusCode < 500) d.handled = true;
+      });
       const topic = String(req.header("x-shopify-topic") ?? "");
       const o = req.body ?? {};
       const orderGid = String(o.admin_graphql_api_id ?? (o.id ? `gid://shopify/Order/${o.id}` : ""));
@@ -482,6 +622,8 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       }
       if (topic !== "orders/create") return res.status(200).json({ ok: true, ignored: topic });
       if (existing) return res.status(200).json({ ok: true, code: displayCode(existing.code) });
+      const inFlight = opening.get(`${c.shop}|${orderGid}`);
+      if (inFlight) return res.status(200).json({ ok: true, code: displayCode((await inFlight).code) });
       const gateways: string[] = Array.isArray(o.payment_gateway_names) ? o.payment_gateway_names.map((g: unknown) => String(g).toLowerCase()) : [];
       const ours = gateways.some((g) => g.includes(SHOPIFY.manualGateway));
       if (!ours) return res.status(200).json({ ok: true, ignored: "not a Zold order" });
@@ -491,14 +633,14 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
         return res.status(200).json({ ok: true, ignored: `currency ${o.currency}` });
       }
       const amount = Number(o.total_price);
-      if (!(amount > 0)) return res.status(200).json({ ok: true, ignored: "amount" });
+      if (!(amount > 0) || amount > MAX_REQUEST_EUR) return res.status(200).json({ ok: true, ignored: "amount" });
       const payee = store.findUser(c.payeeUserId);
       if (!payee?.paymentPage?.handle) {
         console.error(`shopify: order ${o.name} at ${c.shop}: the receiving account has no payment page`);
         return res.status(200).json({ ok: true, ignored: "no payment page" });
       }
       const orderName = typeof o.name === "string" ? o.name : undefined;
-      const r = await createPaymentRequest(
+      const r = await openOnce(`${c.shop}|${orderGid}`, () => createPaymentRequest(
         payee,
         {
           amountEur: Math.round(amount * 100) / 100,
@@ -513,10 +655,11 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
           shop: c.shop,
           orderGid,
           ...(orderName ? { orderName } : {}),
+          ...(typeof o.checkout_token === "string" && o.checkout_token ? { checkoutTokenHash: sha256Hex(o.checkout_token) } : {}),
           ...(externalHttpUrl(o.order_status_url) ? { orderStatusUrl: externalHttpUrl(o.order_status_url)!, returnUrl: externalHttpUrl(o.order_status_url)! } : {}),
         },
         c.orgId,
-      );
+      ));
       store.updateShopifyConnection(c.id, { lastSessionAt: new Date().toISOString() });
       res.status(200).json({ ok: true, code: displayCode(r.code) });
     }),
@@ -531,21 +674,26 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
     return undefined;
   };
 
-  const requestForOrder = (shopRaw: string, orderRaw: string): PaymentRequest | undefined => {
+  /** The order's request, its shop and its numeric id, or nothing. */
+  const orderRef = (shopRaw: string, orderRaw: string) => {
     const shop = normaliseShop(shopRaw);
     const gid = orderGidOf(orderRaw);
     if (!isValidShopDomain(shop) || !gid) return undefined;
     // The shop in the URL is part of the key: order ids are per-store
     // sequences, so the same number names a different order at every store.
-    return store.findPaymentRequestBySource("shopify", gid, shop);
+    return { shop, orderId: gid.split("/").pop()!, request: store.findPaymentRequestBySource("shopify", gid, shop) };
   };
 
   /**
-   * What the thank-you page extension polls. It runs in Shopify's checkout
-   * sandbox, so the answer is CORS-open; it is the same allowlisted public
-   * projection the pay page renders (no IBAN, no name, no email on a crypto-
-   * only request). A 404 carries `pending: true` while the webhook is still
-   * on its way, which is the normal case for the first seconds.
+   * What the thank-you page extension polls, with `?t=<checkout token>`. It
+   * runs in Shopify's checkout sandbox, so the answer is CORS-open; it is the
+   * allowlisted public projection the pay page renders (no IBAN, no name, no
+   * email on a crypto-only request, no transaction hash) plus the pay page's
+   * URL.
+   *
+   * Without the order's checkout token the answer is the same 404 `pending`
+   * whether the order exists or not, so counting order ids learns nothing.
+   * With it, a 404 `pending` is the normal first seconds before the webhook.
    */
   router.get(
     "/shopify/orders/:shop/:orderId",
@@ -553,31 +701,41 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       res.setHeader("access-control-allow-origin", "*");
       res.setHeader("cache-control", "no-store");
       res.setHeader("x-robots-tag", "noindex, nofollow");
-      const r = requestForOrder(String(req.params.shop), String(req.params.orderId));
+      const r = orderRef(String(req.params.shop), String(req.params.orderId))?.request;
       const user = r ? store.findUser(r.userId) : undefined;
-      if (!r || !user) return res.status(404).json({ error: "no payment request for this order yet", pending: true });
+      const t = typeof req.query.t === "string" ? req.query.t : "";
+      const proven = Boolean(r?.source.checkoutTokenHash && t && sameHex(sha256Hex(t), r.source.checkoutTokenHash));
+      if (!r || !user || !proven) return res.status(404).json({ error: "no payment request for this order yet", pending: true });
       const { request, quote } = await ensureQuote(r, r.amountEur);
-      const base = baseUrlFor(req);
-      // Order ids are sequential, so this answer goes to anyone who can count.
-      // It carries no payment code: not `code`, and not the return/cancel/page
-      // URLs built from it. The page link is the order's own /pay route.
-      const { code: _code, returnUrl: _ret, cancelUrl: _cancel, ...payer } =
-        publicPaymentRequest(request, user, payerContext(req, quote));
+      const { code: _code, returnUrl: _ret, cancelUrl: _cancel, payments, ...payer } =
+        publicPaymentRequest(request, user, await payerContext(req, request, user, quote));
       res.json({
         ...payer,
-        pageUrl: `${base}/api/shopify/orders/${encodeURIComponent(r.source.shop!)}/${r.source.orderGid!.split("/").pop()}/pay`,
+        // The extension shows the state, not the payer's transaction: a tx
+        // hash ties the buyer's wallet to this order for anyone polling it.
+        payments: payments.map(({ txHash: _tx, ...p }) => p),
+        pageUrl: `${baseUrlFor(req)}/pay/${encodeURIComponent(r.handle)}/${displayCode(r.code)}`,
         ...(r.source.orderName ? { orderName: r.source.orderName } : {}),
       });
     }),
   );
 
-  /** A link the order-confirmation email can carry without knowing the code. */
+  /**
+   * The order-confirmation email's link, `?b=` signed by the store's
+   * template. Without a valid signature the page is the same whether the
+   * order exists or not, and names nothing about it.
+   */
   router.get(
     "/shopify/orders/:shop/:orderId/pay",
     wrap(async (req, res) => {
-      const r = requestForOrder(String(req.params.shop), String(req.params.orderId));
-      if (!r) return res.status(404).send("no payment request for this order yet — try again in a minute");
-      res.redirect(`${baseUrlFor(req)}/pay/${encodeURIComponent(r.handle)}/${displayCode(r.code)}`);
+      res.setHeader("cache-control", "no-store");
+      res.setHeader("x-robots-tag", "noindex, nofollow");
+      const ref = orderRef(String(req.params.shop), String(req.params.orderId));
+      if (!ref || !emailLinkValid(store.findShopifyConnectionByShop(ref.shop), ref.orderId, req.query.b)) {
+        return res.status(403).type("text/plain").send("This link does not open a payment. Use the link in your order confirmation email, or the payment block on the store's thank-you page.");
+      }
+      if (!ref.request) return res.status(404).type("text/plain").send("The payment for this order is not ready yet. Try again in a minute.");
+      res.redirect(`${baseUrlFor(req)}/pay/${encodeURIComponent(ref.request.handle)}/${displayCode(ref.request.code)}`);
     }),
   );
 

@@ -174,7 +174,7 @@ Implement in: `app/profile.js, app/signers.js, business/*` (confirm against docs
 
 | Screen | Status | What it is | Primary action | Goes to |
 |---|---|---|---|---|
-| [More](screens/More.html) | LIVE | More tab: organisation switcher, invoices, contacts, books, approvals, settings, coming soon, help. | none | [Activity](screens/Activity.html), [Approvals](screens/Approvals.html), [Contacts](screens/Contacts.html), [Desk-Books](screens/Desk-Books.html), [GetPaid](screens/GetPaid.html), [Home-Active](screens/Home-Active.html), [Invoices](screens/Invoices.html), [Pending](screens/Pending.html), [Send-Hub](screens/Send-Hub.html), [Settings](screens/Settings.html) |
+| [More](screens/More.html) | LIVE | Profile tab (route `#more`): name (locked once Monerium verifies), Zold tag and payment link, account, security, settings, contacts, Zold Business or create your personal space, coming soon, help. Acting for a company it shows that company's work. | none | [Activity](screens/Activity.html), [Approvals](screens/Approvals.html), [Contacts](screens/Contacts.html), [Desk-Books](screens/Desk-Books.html), [GetPaid](screens/GetPaid.html), [Home-Active](screens/Home-Active.html), [Invoices](screens/Invoices.html), [Pending](screens/Pending.html), [Send-Hub](screens/Send-Hub.html), [Settings](screens/Settings.html) |
 | [Approvals](screens/Approvals.html) | LIVE | Company approvals inbox: waiting for you, ready to send, sent. | Approve | [GetPaid](screens/GetPaid.html), [Home-Business](screens/Home-Business.html), [More](screens/More.html), [Send-Hub](screens/Send-Hub.html) |
 | [Members](screens/Members.html) | LIVE | Company members and what each can do. | none | [Approvals](screens/Approvals.html), [GetPaid](screens/GetPaid.html), [Home-Business](screens/Home-Business.html), [Invite-Dialog](screens/Invite-Dialog.html), [More](screens/More.html), [Send-Hub](screens/Send-Hub.html) |
 | [Invite-Dialog](screens/Invite-Dialog.html) | LIVE | Invite dialog: role, then share the link yourself. | Share | [Approvals](screens/Approvals.html), [GetPaid](screens/GetPaid.html), [Home-Business](screens/Home-Business.html), [Members](screens/Members.html), [More](screens/More.html), [Send-Hub](screens/Send-Hub.html) |
@@ -189,10 +189,10 @@ Implement in: `app/profile.js, app/signers.js, business/*` (confirm against docs
 - **Members** (412px). An org can never lose its last owner. 
 - **Invite-Dialog** (412px). No email transport exists: never say 'we emailed them'. 
 - **Settings** (412px). status tags: 1 to check.
-- **Security** (412px). The storage warning is real (PRF missing); show only when detected. status tags: ACTIVE, OFF, This device.
+- **Security** (412px). The storage warning shows only when device.js reports it. status tags: ACTIVE, OFF, This device.
 - **Plan** (412px). No upgrade button until billing exists. status tags: ACTIVE.
 - **Pending** (412px). status tags: SOON.
-- **Integrations** (412px). GetMyInvoices is tested only against a stand-in: keep Beta. sevDesk and DATEV are not built. status tags: Beta, Soon.
+- **Integrations** (412px). GetMyInvoices has run one live push, with test data: keep Beta. sevDesk and DATEV are not built. status tags: Beta, Soon.
 
 ## Desktop (sidebar layout)
 
@@ -218,7 +218,7 @@ Implement in: `index.html at >=1024px (personal), business.html + business/*.js 
 - **Desk-Invoices** (1440px). status tags: OPEN, OVERDUE, PAID.
 - **Desk-Invoice-Editor** (1440px). Preview follows the invoice language, not the app language. fields: customer, language, invoice_date, service_date, due, description, quantity, unit_price.
 - **Desk-Members** (1440px). status tags: ACTIVE.
-- **Desk-Integrations** (1440px). Say where to find the key in GetMyInvoices. Beta label stays until a real account has been used. fields: api_key; status tags: Beta, Ready, Soon.
+- **Desk-Integrations** (1440px). Say where to find the key in GetMyInvoices. Beta label stays until a month of real Belege has gone up. fields: api_key; status tags: Beta, Ready, Soon.
 
 ## Account recovery
 

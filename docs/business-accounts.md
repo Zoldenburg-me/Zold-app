@@ -99,9 +99,9 @@ login becomes a spending login.
 `Account` is the new product primitive — one local account in one currency.
 
     Account
-      currency  EUR | USD | GBP | KES | INR
+      currency  EUR | USD | GBP | CHF | KES | NGN
       status    gated | provisioning | active | error
-      provider  monerium | iron | triplea | dlocal | yellowcard | null
+      provider  monerium | iron | triplea | yellowcard | none
       identifier  iban / accountNumber+sortCode / routingNumber / mobile
       address   0x… smart account, where the currency is tokenised
 

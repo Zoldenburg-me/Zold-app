@@ -77,6 +77,10 @@ export interface Organisation {
     country: string;
   };
   plan: PlanId;
+  /** The organisation's public page at /pay/:handle: bank transfer details of
+   *  its euro account, under its own name. Handles share one namespace with
+   *  users' pages, so a link never resolves to the wrong payee. */
+  paymentPage?: { handle: string; displayName?: string; createdAt: string; updatedAt: string };
   /** A trial is a grant with an end date, not a plan change: when it lapses the
    *  org is back on `plan` with nothing deleted. One per org, ever. */
   trial?: {
@@ -158,7 +162,23 @@ export interface Organisation {
       connectedByMemberId: string;
       /** Uploads land under this company; absent means the account's own. */
       companyId?: number;
+      /** The manual bank account statement lines are added to, as picked at
+       *  the last send. */
+      bankAccountUid?: number;
     };
+  };
+  /**
+   * Whether a payment run needs a second person's approval before it is sent.
+   * Absent, it follows the plan (domain/payment-review.ts). Once set it is the
+   * org's own policy: a lapsed trial or a downgrade leaves it as it is, and
+   * only an owner turns it off.
+   */
+  paymentReview?: {
+    required: boolean;
+    changedAt: string;
+    /** "plan_change": recorded when the plan that required review was left. */
+    source: "owner" | "plan_change";
+    changedByMemberId?: string;
   };
   createdAt: string;
   updatedAt: string;
@@ -203,13 +223,12 @@ export interface Member {
 
 /** Currencies the account model knows about. Being listed here is NOT a claim
  *  that the rail works — see `AccountStatus.gated` and accounts.ts. */
-export type CurrencyCode = "EUR" | "USD" | "GBP" | "CHF" | "KES" | "NGN" | "INR";
+export type CurrencyCode = "EUR" | "USD" | "GBP" | "CHF" | "KES" | "NGN";
 
 export type AccountProvider =
   | "monerium"
   | "iron"
   | "triplea"
-  | "dlocal"
   | "yellowcard"
   /**
    * No candidate identified yet. Keep this separate from a named partner we
@@ -241,8 +260,6 @@ export interface AccountIdentifier {
   routingNumber?: string;
   /** Mobile-money rails (KES/M-Pesa). */
   mobile?: string;
-  /** UPI virtual payment address (INR). */
-  vpa?: string;
   /** NGN: a Nigerian bank account is a 10-digit NUBAN plus its bank code. */
   nuban?: string;
   bankCode?: string;
@@ -277,6 +294,12 @@ export interface Account {
    * rather than guessing at someone's wallet.
    */
   backingUserId?: string;
+  /**
+   * From when the backing Safe's movements are this account's, fixed when the
+   * Safe was connected (domain/safe-books.ts). Absent on accounts connected
+   * before it was recorded; the books then work it out from the Safe.
+   */
+  backedSince?: string;
   /**
    * The Monerium profile that owns the IBAN, as Monerium reported it when the
    * backing user's account was adopted or last re-checked: the legal entity a
@@ -330,8 +353,46 @@ export interface ImportedWallet {
     /** Last block scanned, as a string — JSON has no bigint. */
     cursor?: string;
     error?: string;
+    /** First day to book, YYYY-MM-DD. Absent: book from the import onwards.
+     *  Earlier history is the `ledger.historicalSync` capability. */
+    from?: string;
+    /** Transfers seen but not booked (a token whose decimals could not be
+     *  read), and the last reason. Counted rather than dropped silently. */
+    skipped?: number;
+    lastSkipReason?: string;
   };
+  /** The proof that the wallet is this organisation's (wallet-sync/ownership.ts).
+   *  Absent: unproven. Kept when a later check fails, as `lapsed`. */
+  ownership?: WalletOwnership;
+  /** The one challenge waiting to be signed. Spent by the proof it produces. */
+  ownershipChallenge?: WalletOwnershipChallenge;
   createdAt: string;
+}
+
+export interface WalletOwnershipChallenge {
+  id: string;
+  message: string;
+  issuedAt: string;
+  expiresAt: string;
+}
+
+export interface WalletOwnership {
+  /** `proven`: the chain accepted the signature at `checkedAt`. `lapsed`: a
+   *  later check was refused by the chain (owner signatures of a Safe whose
+   *  owners changed; a message the Safe signed on chain stays valid). */
+  status: "proven" | "lapsed";
+  /** EIP-1271 when the address holds code, ECDSA when it does not. */
+  method: "eip1271" | "ecdsa";
+  /** The challenge text that was signed, and the signature: "0x" for a Safe
+   *  that signed the message on chain. Re-checks use exactly these. */
+  message: string;
+  signature: `0x${string}`;
+  provenAt: string;
+  checkedAt: string;
+  lapsedAt?: string;
+  /** What the chain answered when the proof lapsed. */
+  lapseReason?: string;
+  provenByMemberId?: string;
 }
 
 // ── Address book ────────────────────────────────────────────────────────────
@@ -359,9 +420,6 @@ export interface ContactBankAccount {
   sortCode?: string;
   routingNumber?: string;
   mobile?: string;
-  /** UPI id. Modelled because INR is in the currency registry; the rail is
-   *  gated, so nothing can execute against it. */
-  vpa?: string;
   label?: string;
 }
 
@@ -373,8 +431,29 @@ export interface Contact {
   wallets: ContactWallet[];
   bankAccounts: ContactBankAccount[];
   notes?: string;
+  /** How this contact's wallet receipts are invoiced. Absent: they are not. */
+  payerRule?: PayerRule;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * A contact that pays for a service in amounts it decides itself (a DAO
+ * paying a delegate): each month's wallet receipts from it become one draft
+ * invoice. The rule holds what the receipts cannot say: what was supplied, to
+ * whom the invoice is addressed, and the tax line. The organisation chooses
+ * that line; Zold supplies no default for it.
+ */
+export interface PayerRule {
+  serviceDescription: string;
+  vat: { kind: "standard"; rate: number } | { kind: "exempt"; reason: string; note?: string };
+  recipient: InvoiceParty;
+  recipientIsBusiness?: boolean;
+  supplyKind?: "services" | "goods";
+  language?: "de" | "en";
+  notes?: string;
+  updatedAt: string;
+  updatedByMemberId: string;
 }
 
 // ── Draft payments (create -> review -> execute) ────────────────────────────
@@ -392,7 +471,9 @@ export type DraftState =
   | "INVALID_DATA"
   | "EXECUTING"
   | "EXECUTED"
-  | "FAILED";
+  | "FAILED"
+  /** Withdrawn before anything was sent. Kept, never deleted. */
+  | "CANCELLED";
 
 export interface DraftLine {
   id: string;
@@ -462,6 +543,9 @@ export interface DraftPayment {
  * and locked". Deleting is only allowed while unpaid.
  */
 export type InvoiceState =
+  /** An outgoing invoice collected from wallet receipts and not yet issued:
+   *  no number, no issue date, nothing a customer has seen. */
+  | "DRAFT"
   | "LINK_CREATED"
   | "SUBMITTED"
   | "PAYING"
@@ -474,6 +558,33 @@ export interface InvoiceLine {
   quantity: string;
   unitPrice: string;
   amount: string;
+  /** The wallet receipt this line invoices, on an invoice made from receipts. */
+  receipt?: InvoiceLineReceipt;
+}
+
+/** What arrived, as the ledger row recorded it when the line was written. */
+export interface InvoiceLineReceipt {
+  ledgerEntryId: string;
+  /** Block time. */
+  at: string;
+  chainId?: number;
+  asset: string;
+  token?: `0x${string}`;
+  /** Decimal string in asset units. */
+  amount: string;
+  txHash: string;
+  /** EUR value at receipt, in cents: what the row's `fiatValue` said. */
+  eurCents: number;
+}
+
+/** A wallet row of the payer's that is on no invoice line, and why. */
+export interface ExcludedReceipt {
+  ledgerEntryId: string;
+  at: string;
+  asset: string;
+  amount: string;
+  txHash?: string;
+  reason: string;
 }
 
 /**
@@ -589,7 +700,23 @@ export interface BankInvoiceSettlement extends InvoiceSettlementCommon {
  * written: a bank credit with a conversion rate, or a crypto receipt with a
  * counterparty IBAN, are not merely discouraged, they do not typecheck.
  */
-export type InvoiceSettlement = CryptoInvoiceSettlement | BankInvoiceSettlement;
+/**
+ * A transfer into an imported wallet that an invoice was written for after
+ * the fact. The invoice line and this record name the same ledger row, and
+ * `amountEur` is that row's value at receipt, so the invoice is paid by
+ * exactly what it bills.
+ */
+export interface WalletReceiptSettlement extends InvoiceSettlementCommon {
+  method: "wallet-receipt";
+  ledgerEntryId: string;
+  chainId?: number;
+  txHash: string;
+  asset: string;
+  /** Decimal string in asset units. */
+  receivedAmount: string;
+}
+
+export type InvoiceSettlement = CryptoInvoiceSettlement | BankInvoiceSettlement | WalletReceiptSettlement;
 
 
 export interface Invoice {
@@ -699,6 +826,19 @@ export interface Invoice {
     language?: "de" | "en";
     /** Compliance warnings accepted at issue, kept for the audit trail. */
     acceptedWarnings?: string[];
+    /** Business or private customer, and goods or services, as declared. */
+    recipientIsBusiness?: boolean;
+    supplyKind?: "services" | "goods";
+    /** VIES's answer for the customer's VAT ID at issue: the proof that
+     *  reverse charge or an intra-community supply rests on. */
+    recipientVatCheck?: {
+      vatId: string;
+      status: "valid" | "invalid" | "unavailable" | "not_checkable";
+      name?: string;
+      address?: string;
+      checkedAt: string;
+      requestIdentifier?: string;
+    };
     /**
      * Which rules were applied and how deep the check went. Frozen with the
      * document: the entity may later move country, and a 2026 invoice must keep
@@ -716,6 +856,33 @@ export interface Invoice {
   /** On-chain payments that settled this invoice. Appended, never replaced —
    *  an invoice can legitimately be paid more than once. */
   settlements?: InvoiceSettlement[];
+  /**
+   * Set on an invoice collected from a payer's wallet receipts: whose, for
+   * which calendar month in which time zone, and the rows of that payer and
+   * month that were left out. `mismatchCents` is set when the rule charges a
+   * VAT rate and no net amount plus its VAT equals what was received; such a
+   * draft is not issuable.
+   */
+  fromReceipts?: {
+    contactId: string;
+    /** The contact's name, and the rule's recipient and tax line, when the
+     *  draft was last collected: what the person issuing it is shown. Issuing
+     *  refuses if the rule has been saved since (`ruleUpdatedAt`). */
+    payerName?: string;
+    recipientName?: string;
+    vat?: PayerRule["vat"];
+    ruleUpdatedAt?: string;
+    /** What the wallets' sync state left uncertain about the month when the
+     *  draft was last collected: a wallet behind, or transfers it could not
+     *  read. Empty or absent: nothing known to be missing. */
+    syncWarnings?: string[];
+    /** YYYY-MM in `timeZone`. */
+    month: string;
+    timeZone: string;
+    excluded: ExcludedReceipt[];
+    mismatchCents?: number;
+    runAt: string;
+  };
 }
 
 // ── Chart of accounts + bookkeeping ─────────────────────────────────────────
@@ -768,6 +935,9 @@ export interface LedgerEntry {
   logIndex?: number;
   direction: "in" | "out";
   asset: string;
+  /** The token contract, on rows synced from an imported wallet. The symbol
+   *  in `asset` is whatever the contract says, so this is the identity. */
+  token?: `0x${string}`;
   /** Decimal string in asset units. */
   amount: string;
   /** Value in the org's reporting currency at `at`, and the rate used. Both
@@ -785,6 +955,17 @@ export interface LedgerEntry {
   txType?: string;
   at: string;
   createdAt: string;
+  /** Set when a row booked without a value was valued later by the same
+   *  price lookup sync uses, for its block time (wallet-sync/revalue.ts). */
+  valuation?: {
+    source: string;
+    /** The day the EUR rate was fixed. */
+    asOf: string;
+    revaluedAt: string;
+    revaluedByMemberId?: string;
+    /** The asset as booked unvalued (SYMBOL@chain:address). */
+    previousAsset: string;
+  };
   /**
    * Set on rows the statement-line writer projects from the account's real
    * activity (bookkeeping/statement.ts): one EUR line per economic event, the
@@ -807,6 +988,7 @@ export type StatementEvent =
   /** Held USDC converted to EURe: the realised gain or loss against the
    *  receipt value. */
   | "crypto_disposal"
+  | "eure_in"
   | "sweep";
 
 export interface StatementFacts {

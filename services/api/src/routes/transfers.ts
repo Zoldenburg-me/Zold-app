@@ -22,11 +22,14 @@ import { MONERIUM_NOT_CONNECTED, moneriumLiveFor } from "../adapters/monerium-co
 import { requireCapability, requireKycApproved } from "../http/guards.js";
 import { pendingTransferExecutions, prunePendingTransferExecutions } from "../http/pending.js";
 import { buildTransferFromQuote } from "../transfers/build.js";
+import { userTransfer } from "../transfers/user-transfer.js";
+import { buildActivity } from "../transfers/activity.js";
 import { passkeySafeChallenge } from "../wallet/passkey-safe-plan.js";
 import { safeMessageHash, signMessageAsPasskeySafe } from "../wallet/candide.js";
 import { b64urlToBuf, verifyAssertionForChallenge } from "../webauthn.js";
 import { verifyPasskeyStepUp } from "./auth.js";
 import { publicUser } from "../users/public-user.js";
+import { redactedMessage } from "../http/log-cause.js";
 
 /** requireUserSession is injected — server.ts owns authentication. */
 export interface TransferDeps {
@@ -66,6 +69,9 @@ export function createTransferRouter(deps: TransferDeps) {
       if (!user) return res.status(404).json({ error: "user not found" });
       if (!requireUserSession(req, res, user.id)) return;
       if (!requireCapability(user, "onchain_balance", res)) return;
+      // SEPA is Monerium's rail. A wallet-tier segment has an on-chain balance
+      // but no fiat partner, so the partner capability is checked by name.
+      if (rail === "sepa" && !requireCapability(user, "monerium", res)) return;
       if (!requireKycApproved(user, res)) return;
       if (!["cash", "sepa"].includes(rail)) {
         return res.status(400).json({ error: "rail must be cash or sepa" });
@@ -143,7 +149,7 @@ export function createTransferRouter(deps: TransferDeps) {
         reference,
       });
       if (!built.ok) return res.status(built.status).json(built.body);
-      res.status(201).json({ ...built.transfer, authorization: built.authorization });
+      res.status(201).json({ ...userTransfer(built.transfer), authorization: built.authorization });
     }),
   );
 
@@ -155,7 +161,8 @@ export function createTransferRouter(deps: TransferDeps) {
       if (!requireUserSession(req, res, user.id)) return;
       const transfers = store.transfers
         .filter((t) => t.userId === user.id)
-        .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+        .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+        .map(userTransfer);
       res.json({ transfers });
     }),
   );
@@ -166,29 +173,13 @@ export function createTransferRouter(deps: TransferDeps) {
       const user = store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
       if (!requireUserSession(req, res, user.id)) return;
-      const transfers = store.transfers
-        .filter((t) => t.userId === user.id)
-        .map((t) => ({ kind: "transfer" as const, at: t.createdAt, ...t }));
-      const funding = store.cryptoDeposits
-        .filter((d) => d.userId === user.id)
-        .map((d) => ({
-          kind: "funding" as const,
-          id: d.id,
-          at: d.detectedAt,
-          chainId: d.chainId,
-          token: d.token,
-          txHash: d.txHash,
-          amountEur: d.amountEur ?? d.creditedEur,
-          amountUsdc: d.amountUsdc ?? d.creditedUsdc,
-          holding: d.holding,
-          settledAt: d.settledAt,
-          reason: d.reason,
-          settlementAsset: d.settlementAsset,
-          detectedAt: d.detectedAt,
-          updatedAt: d.updatedAt,
-        }));
+      const mine = <T extends { userId: string }>(rows: T[]) => rows.filter((r) => r.userId === user.id);
       res.json({
-        activity: [...transfers, ...funding].sort((a, b) => Date.parse(b.at) - Date.parse(a.at)),
+        activity: buildActivity({
+          transfers: mine(store.transfers),
+          deposits: mine(store.cryptoDeposits),
+          issues: mine(store.moneriumIssueOrders),
+        }),
       });
     }),
   );
@@ -199,7 +190,7 @@ export function createTransferRouter(deps: TransferDeps) {
       const t = store.findTransfer(req.params.id);
       if (!t) return res.status(404).json({ error: "transfer not found" });
       if (!requireUserSession(req, res, t.userId)) return;
-      res.json(t);
+      res.json(userTransfer(t));
     }),
   );
 
@@ -209,7 +200,7 @@ export function createTransferRouter(deps: TransferDeps) {
       const t = store.findTransfer(req.params.id);
       if (!t) return res.status(404).json({ error: "transfer not found" });
       if (!requireUserSession(req, res, t.userId)) return;
-      res.json(await refreshPayout(t, { timeoutMs: 0 }));
+      res.json(userTransfer(await refreshPayout(t, { timeoutMs: 0 })));
     }),
   );
 
@@ -220,7 +211,7 @@ export function createTransferRouter(deps: TransferDeps) {
       if (!user) return res.status(404).json({ error: "user not found" });
       if (!requireUserSession(req, res, user.id)) return;
       if (!requireKycApproved(user, res)) return;
-      if (!(await verifyPasskeyStepUp(user, req.body, res))) return;
+      if (!(await verifyPasskeyStepUp(user, req.body, res, "authorizer.bind"))) return;
       const address = req.body?.address;
       if (typeof address !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(address)) {
         return res.status(400).json({ error: "address required (0x-prefixed, 20 bytes)" });
@@ -315,9 +306,11 @@ export function createTransferRouter(deps: TransferDeps) {
             pendingExecution.challenge,
             true,
           );
-          user = store.updateUser(user.id, { passkey: { ...user.passkey, signCount } });
+          const updated = store.recordPasskeyUse(user.id, credentialId, signCount);
+          if (!updated) throw new Error("this passkey is no longer the account's passkey");
+          user = updated;
         } catch (err: any) {
-          return res.status(401).json({ error: String(err?.message ?? err) });
+          return res.status(401).json({ error: redactedMessage(err) });
         }
       }
       let effectiveRedeemSignature = typeof redeemSignature === "string" ? redeemSignature as `0x${string}` : undefined;
@@ -350,7 +343,9 @@ export function createTransferRouter(deps: TransferDeps) {
             expectedChallenge,
             true,
           );
-          user = store.updateUser(user.id, { passkey: { ...user.passkey, signCount } });
+          const updated = store.recordPasskeyUse(user.id, credentialId, signCount);
+          if (!updated) throw new Error("this passkey is no longer the account's passkey");
+          user = updated;
           effectiveRedeemSignature = await signMessageAsPasskeySafe(
             passkeySafe,
             user.address,
@@ -362,7 +357,7 @@ export function createTransferRouter(deps: TransferDeps) {
             },
           );
         } catch (err: any) {
-          return res.status(401).json({ error: String(err?.message ?? err) });
+          return res.status(401).json({ error: redactedMessage(err) });
         }
       }
       if (
@@ -414,7 +409,7 @@ export function createTransferRouter(deps: TransferDeps) {
         executableTransfer.rail === "sepa"
           ? await executeSepaTransfer(executableTransfer, user, auth, execution)
           : await executeTransfer(executableTransfer, user, auth, execution);
-      res.status(result.state === "FAILED" ? 502 : 200).json(result);
+      res.status(result.state === "FAILED" ? 502 : 200).json(userTransfer(result));
     }),
   );
 

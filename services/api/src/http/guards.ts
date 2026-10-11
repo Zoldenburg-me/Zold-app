@@ -1,18 +1,19 @@
 /**
  * The checks a route runs before it does anything: KYC state, segment
- * capability, custody readiness, the daily cap, and the operator token.
+ * capability, custody readiness, the daily cap, and the operator.
  *
  * These are the enforcing checks; the UI hiding a button does not stop a
  * crafted request. They sit beside the session module so every route shares
  * them.
  */
 import type express from "express";
-import { createHash, timingSafeEqual } from "node:crypto";
-import { HARNESS, KYC } from "../config.js";
+import { HARNESS } from "../config.js";
 import { auditEntry } from "../audit.js";
 import { can, type Segment } from "../domain/segments.js";
 import { dailyCapUsage } from "../orchestrator.js";
 import { store, type User } from "../store.js";
+import { operatorOf } from "../operators/principal.js";
+import { operatorSessionFor } from "../operators/sessions.js";
 import { bearerToken } from "./sessions.js";
 
 export function requireKycApproved(user: User, res: express.Response) {
@@ -59,8 +60,8 @@ export function custodyBlockerBeforeFunding(user: User): string | null {
 /**
  * The gate in front of every partner call.
  *
- * Enforced here, not in the UI. An IN_COLLECTIONS account cannot reach
- * Monerium, a Safe, a card or an on-chain balance whatever it POSTs, because
+ * Enforced here, not in the UI. An IN_COLLECTIONS or WALLET_ONLY account
+ * cannot reach Monerium, a SEPA quote or a card whatever it POSTs, because
  * each of those routes checks here first.
  *
  * A user with no segment predates segmentation and is treated as EU_FULL: the
@@ -68,6 +69,8 @@ export function custodyBlockerBeforeFunding(user: User): string | null {
  * refusing would lock them out of a funded account. `npm run segments:test`
  * covers the resolver; this fallback is the migration seam and stays narrow.
  */
+const refusalAudited = new Map<string, number>();
+
 export function requireCapability(
   user: User,
   capability: Parameters<typeof can>[1],
@@ -75,7 +78,15 @@ export function requireCapability(
 ): boolean {
   const segment: Segment = user.segment?.value ?? "EU_FULL";
   if (can(segment, capability)) return true;
-  store.audit(auditEntry("partner.call_refused", { segment, capability }, user.id));
+  // One audit row per user and capability per hour: each row is a write of
+  // the whole store, and a client retrying a refused call would add one per
+  // request.
+  const key = `${user.id}:${capability}`;
+  const last = refusalAudited.get(key);
+  if (!last || Date.now() - last > 60 * 60_000) {
+    refusalAudited.set(key, Date.now());
+    store.audit(auditEntry("partner.call_refused", { segment, capability }, user.id));
+  }
   res.status(403).json({
     error: "This is not part of your account.",
     code: "CAPABILITY_UNAVAILABLE",
@@ -105,35 +116,28 @@ export async function assertDailyCap(
   return true;
 }
 
-/** Constant-time operator-token check; false when no token is configured. */
-export function isOperator(req: express.Request): boolean {
-  const expected = KYC.operatorToken;
-  if (!expected) return false;
-  const a = Buffer.from(expected);
-  const b = Buffer.from(bearerToken(req) ?? "");
-  return a.length === b.length && timingSafeEqual(a, b);
+/** The rate-limit key of the operator calling (a live passkey session), or
+ *  undefined. The limiter's question only; the gate decides what the caller
+ *  may do. */
+export function operatorBucketId(req: express.Request): string | undefined {
+  const found = operatorSessionFor(bearerToken(req));
+  return "refused" in found ? undefined : found.operator.id;
 }
 
 /**
- * Operator authentication, separate from user sessions so a user cannot act
- * as the operator on their own account. With no token configured there is no
- * operator path.
+ * The operator a request was admitted as, by the gate in front of every admin
+ * router (operators/gate.ts). Separate from user sessions, so a user cannot
+ * act as the operator on their own account.
  */
 export function requireOperator(req: express.Request, res: express.Response): boolean {
-  if (!KYC.operatorToken) {
-    res.status(503).json({
-      error: "no KYC operator token configured — set KYC_OPERATOR_TOKEN to enable operator review",
-    });
-    return false;
-  }
-  if (!isOperator(req)) {
-    res.status(401).json({ error: "operator authorization required" });
+  if (!operatorOf(req)) {
+    res.status(401).json({ error: "operator sign-in required", code: "OPERATOR_SIGN_IN" });
     return false;
   }
   return true;
 }
 
+/** Who did it, for a stored row: `operator:<id>`. */
 export function operatorLabel(req: express.Request): string {
-  const token = bearerToken(req) ?? "";
-  return `operator:${createHash("sha256").update(token).digest("hex").slice(0, 12)}`;
+  return `operator:${operatorOf(req)?.id ?? "unknown"}`;
 }

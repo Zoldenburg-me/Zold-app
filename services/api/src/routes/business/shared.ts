@@ -7,6 +7,7 @@
  * their own, and so a rule that applies to all of them has a single home.
  */
 import type express from "express";
+import { store } from "../../store.js";
 import { CoaError } from "../../domain/coa.js";
 import { DraftError } from "../../domain/drafts.js";
 import { InvoiceError } from "../../domain/invoices.js";
@@ -32,6 +33,7 @@ import {
 } from "../../domain/invoicing.js";
 import { createQuote } from "../../fx.js";
 import { midRates } from "../../rates.js";
+import { redactedMessage } from "../../http/log-cause.js";
 
 export const str = (v: unknown): string | undefined =>
   typeof v === "string" && v.trim() ? v.trim() : undefined;
@@ -45,16 +47,69 @@ export const str = (v: unknown): string | undefined =>
  * name, because the legal entity is what the tax office matches.
  */
 export function issuerParty(org: Organisation): InvoiceParty {
+  // The tax id given when the organisation was created stands in until the
+  // invoicing profile names one: VAT-ID-shaped (country letters first) is a
+  // VAT ID, anything else a national tax number.
+  const inv = org.invoicing;
+  const signupTaxId = !inv?.vatId && !inv?.taxNumber ? org.taxId?.trim() : undefined;
+  const signupIsVatId = Boolean(signupTaxId && /^[A-Za-z]{2}\s*[0-9A-Za-z]/.test(signupTaxId));
   return {
     name: org.legalName || org.name,
     addressLine: [org.address?.line1, org.address?.line2].filter(Boolean).join(", ") || undefined,
     postalCode: org.address?.postalCode,
     city: org.address?.city,
     country: org.address?.country,
-    vatId: org.invoicing?.vatId,
-    taxNumber: org.invoicing?.taxNumber,
+    vatId: inv?.vatId ?? (signupIsVatId ? signupTaxId!.replace(/\s+/g, "").toUpperCase() : undefined),
+    taxNumber: inv?.taxNumber ?? (signupTaxId && !signupIsVatId ? signupTaxId : undefined),
     email: org.email,
   };
+}
+
+/**
+ * What Zold already knows about the issuer and can offer to fill in, for the
+ * invoicing profile form. Suggestions only: nothing is saved until the user
+ * saves the form.
+ *
+ * Monerium's API returns a profile's id, kind, state and name, and nothing
+ * else of what was entered at Monerium (no address, no register number, no
+ * tax id). So the company name is the one thing taken from there, and only
+ * from a profile of the kind this org needs: the name recorded on one of the
+ * org's accounts when its profile was checked, else the caller's own
+ * connected profile.
+ */
+type InvoiceBank = NonNullable<NonNullable<Organisation["invoicing"]>["bank"]>;
+
+/** The IBAN of the org's own EUR account, when one is connected: the only
+ *  one whose incoming payments Zold sees and matches to invoices. */
+export function accountBankOf(org: Organisation): InvoiceBank | undefined {
+  const acc = store.accountsOf(org.id).find((a) => a.currency === "EUR" && a.status === "active" && a.identifier?.iban);
+  if (!acc?.identifier?.iban) return undefined;
+  return { holder: org.legalName?.trim() || org.name, iban: normaliseIban(acc.identifier.iban) };
+}
+
+/** The bank details an invoice prints: the profile's when it names an IBAN,
+ *  else the org account's own. */
+export function invoiceBankOf(org: Organisation): InvoiceBank | undefined {
+  const set = org.invoicing?.bank;
+  if (set?.iban) return { ...set, holder: set.holder || org.legalName?.trim() || org.name };
+  return accountBankOf(org);
+}
+
+export function issuerSuggestions(org: Organisation, callerId: string): { name?: string; source?: "monerium" } {
+  if (org.legalName?.trim()) return {};
+  const kind = org.type === "business" ? "corporate" : "personal";
+  const fromAccount = store
+    .accountsOf(org.id)
+    .map((a) => a.moneriumProfile)
+    .find((p) => p?.kind === kind && p.name?.trim());
+  if (fromAccount?.name) return { name: fromAccount.name.trim(), source: "monerium" };
+  const caller = store.findUser(callerId);
+  const profileId = caller?.monerium?.profileId ?? caller?.funding?.moneriumProfileId;
+  const own = (caller?.monerium?.profiles ?? []).find((p: any) => p?.id === profileId);
+  if (own && own.kind === kind && typeof own.name === "string" && own.name.trim()) {
+    return { name: own.name.trim(), source: "monerium" };
+  }
+  return {};
 }
 
 /**
@@ -177,11 +232,41 @@ export function draftFrom(org: Organisation, body: Record<string, any>): Invoice
         : undefined,
     issuer: issuerParty(org),
     recipient,
-    lines: Array.isArray(body.lines) ? body.lines : [],
+    ...(typeof body.recipient?.isBusiness === "boolean" ? { recipientIsBusiness: body.recipient.isBusiness } : {}),
+    ...(body.supplyKind === "goods" || body.supplyKind === "services" ? { supplyKind: body.supplyKind } : {}),
+    lines: lineInputs(body.lines),
     treatment,
     selfBilled: body.selfBilled === true,
     currency,
   };
+}
+
+/**
+ * The request's lines as line inputs, or a refusal naming the line: every
+ * field read later is a string (a number is taken as its digits), so a
+ * `null` line or a numeric description is a 400 here, not a crash in the
+ * totals.
+ */
+function lineInputs(raw: unknown): InvoiceDraft["lines"] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) throw new InvoiceComplianceError("lines must be a list of invoice lines.");
+  if (raw.length > 200) throw new InvoiceComplianceError("An invoice is limited to 200 lines.");
+  const text = (v: unknown) =>
+    typeof v === "string" ? v : typeof v === "number" && Number.isFinite(v) ? String(v) : "";
+  return raw.map((l, i) => {
+    if (!l || typeof l !== "object" || Array.isArray(l)) {
+      throw new InvoiceComplianceError(`Line ${i + 1} is not an invoice line.`);
+    }
+    const line = l as Record<string, unknown>;
+    const description = text(line.description).trim();
+    if (description.length > 500) throw new InvoiceComplianceError(`Line ${i + 1}'s description is limited to 500 characters.`);
+    return {
+      description,
+      quantity: text(line.quantity ?? "1"),
+      unitPriceNet: text(line.unitPriceNet),
+      ...(line.vatRate !== undefined && line.vatRate !== null ? { vatRate: Number(line.vatRate) } : {}),
+    };
+  });
 }
 
 /**
@@ -214,7 +299,7 @@ export async function withConversion(draft: InvoiceDraft): Promise<InvoiceDraft>
 
 export const badRequest = (res: express.Response, err: unknown) => {
   if (err instanceof DraftError || err instanceof InvoiceError || err instanceof CoaError) {
-    res.status(400).json({ error: (err as Error).message });
+    res.status(400).json({ error: redactedMessage(err) });
     return true;
   }
   return false;
@@ -240,6 +325,9 @@ export type TransferFactory = (
   | { ok: false; status: number; body: any }
 >;
 
+/** A supplier's account holder name: the SEPA creditor name field's length. */
+const PAY_TO_HOLDER_MAX = 70;
+
 /**
  * Where the supplier wants the money. A bank account is validated like an
  * address-book entry (IBAN checksum included) so that "Pay" later never
@@ -253,6 +341,10 @@ export function parsePayTo(raw: unknown, currency: string): Invoice["payTo"] {
     const b = p.bank ?? p;
     const iban = typeof b.iban === "string" ? normaliseIban(b.iban) : "";
     if (!iban) throw new InvoiceError("Bank details need an IBAN.");
+    const holder = b.holderName ?? b.holder;
+    if (typeof holder === "string" && holder.trim().length > PAY_TO_HOLDER_MAX) {
+      throw new InvoiceError(`The account holder's name is limited to ${PAY_TO_HOLDER_MAX} characters.`);
+    }
     return {
       kind: "bank",
       bank: validateBankAccount({
