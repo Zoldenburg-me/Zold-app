@@ -40,15 +40,21 @@ export function bankStepChanged(was, now) {
 }
 
 /** What a "check now" click found, from the route's `check` answer. Never an
- *  older reason dressed up as this click's. */
-export function checkAnswerText(answer) {
+ *  older reason dressed up as this click's: a reason is shown only when this
+ *  click recorded it. */
+export function checkAnswerText(answer, now = Date.now()) {
   const b = answer?.bankCheck || {};
+  const c = answer?.check || {};
   if (b.passed) return "Your 1 € arrived. That check is done.";
-  switch (answer?.check?.outcome) {
-    case "recent": return "We checked less than a minute ago. Try again in a moment.";
+  switch (c.outcome) {
+    case "recent": {
+      const s = Math.max(1, Math.ceil((Date.parse(c.nextCheckAt) - now) / 1000));
+      return Number.isFinite(s) ? `We checked a moment ago. Try again in ${s} second${s === 1 ? "" : "s"}.` : "We checked a moment ago. Try again shortly.";
+    }
     case "running": return "A check is already running. Its answer appears here shortly.";
-    case "no_code": return "There is no open reference to check. Get one first.";
-    default: return b.lastCheck?.reason || "Your 1 € has not arrived yet.";
+    case "no_code": return "There is nothing to check right now.";
+    case "waiting": return c.reason || "Your 1 € has not arrived yet.";
+    default: return c.reason || "We could not check your payment just now. We will try again.";
   }
 }
 

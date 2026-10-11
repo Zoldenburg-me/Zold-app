@@ -19,7 +19,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { store, type RecoveryRequest, type User } from "../store.js";
 import type { MoneriumOrderLike } from "../domain/invoices.js";
-import { describeCause } from "../http/log-cause.js";
+import { describeCause, describeError } from "../http/log-cause.js";
 import {
   ENROLMENT,
   inTime,
@@ -34,6 +34,10 @@ import {
 import { bankAccountHmac, ibanKeyId, zoldenburgArmed } from "./enrolment-key.js";
 
 type BankCheck = NonNullable<NonNullable<RecoveryRequest["zoldenburg"]>["bankCheck"]>;
+
+/** Why a check could not run, for the operator only. */
+export type UnreadableCause = "not_armed" | "monerium_orders" | "monerium_profile" | "error";
+const UNREADABLE_REASON = "We could not check your payment just now. We will try again; if this stays, contact support@zoldhq.com.";
 
 /** Requests whose second 1 € is still looked for. */
 const CHECKED_STATUS = "REVIEW_PENDING";
@@ -127,28 +131,35 @@ export async function checkRecoveryBankPayment(
     const fresh = store.findRecoveryRequest(requestId)!;
     return fresh.status === CHECKED_STATUS && hashes().has(code.hash) ? fresh : undefined;
   };
-  const record = (outcome: "waiting" | "mismatch" | "unreadable", reason: string) => {
+  const record = (outcome: "waiting" | "mismatch" | "unreadable", reason: string, cause?: UnreadableCause) => {
     const fresh = stillOpen();
     if (!fresh) return outcome;
     store.updateRecoveryRequest(requestId, {
-      zoldenburg: { ...fresh.zoldenburg, bankCheck: { ...fresh.zoldenburg!.bankCheck, lastCheck: { at: now.toISOString(), outcome, reason } } },
+      zoldenburg: {
+        ...fresh.zoldenburg,
+        bankCheck: { ...fresh.zoldenburg!.bankCheck, lastCheck: { at: now.toISOString(), outcome, reason, ...(cause ? { cause } : {}) } },
+      },
     });
     return outcome;
   };
+  // One text for every unreadable case: whoever holds the request may know
+  // only the email, and must not learn whether the account is armed or its
+  // Monerium connection works. The operator sees `cause`.
+  const unreadable = (cause: UnreadableCause) => record("unreadable", UNREADABLE_REASON, cause);
   try {
     // The throttle's clock, set before Monerium is asked.
     store.updateRecoveryRequest(requestId, { zoldenburg: { ...r.zoldenburg, bankCheck: { ...r.zoldenburg!.bankCheck, lastReadAt: now.toISOString() } } });
     if (!zoldenburgArmed(user)) {
       // Also what a server without the HMAC key or the guardian sees: the
       // reason names no cause, and the next check looks again.
-      return record("unreadable", "Zoldenburg cannot check this payment right now. Contact support@zoldhq.com.");
+      return unreadable("not_armed");
     }
     let orders: MoneriumOrderLike[];
     try {
       orders = await inTime(reads.orders(user));
     } catch (err) {
       console.warn(`recovery ${requestId}: could not read orders for ${user.id}: ${describeCause(err)}`);
-      return record("unreadable", "We could not read the account's payments at Monerium. We will try again; if this stays, contact support.");
+      return unreadable("monerium_orders");
     }
     const codes = [code, ...(r.zoldenburg!.bankCheck!.earlierCodes ?? [])];
     const seen = new Set<string>();
@@ -162,13 +173,13 @@ export async function checkRecoveryBankPayment(
     } catch (err) {
       console.warn(`recovery ${requestId}: could not read the Monerium profile for ${user.id}: ${describeCause(err)}`);
     }
-    if (!name) return record("unreadable", "Your payment arrived, but we could not read the verified name at Monerium. We will try again.");
+    if (!name) return unreadable("monerium_profile");
     let reason = "";
     for (const o of found) {
       // The account as it is now: an enrolment removed or replaced during
       // the reads is not the one this payment can pass against.
       const live = store.findUser(user.id);
-      if (!live || !zoldenburgArmed(live)) return record("unreadable", "Zoldenburg cannot check this payment right now. Contact support@zoldhq.com.");
+      if (!live || !zoldenburgArmed(live)) return unreadable("not_armed");
       const verdict = judgeRecoveryOrder(o, live, name);
       if (!verdict.ok) {
         reason = verdict.reason;
@@ -185,13 +196,17 @@ export async function checkRecoveryBankPayment(
     }
     return record("mismatch", reason);
   } catch (err) {
-    // Anything else (a malformed order, a store write) is recorded, so the
+    // A programming error is not a failed read: it fails loudly (the route
+    // answers 500, the sweep logs it) instead of reading as "try again".
+    if (err instanceof TypeError || err instanceof ReferenceError || err instanceof SyntaxError) throw err;
+    // Anything else (a store write, a malformed answer) is recorded, so the
     // person and the operator see the check failing rather than an older
     // answer. The cause stays in the log.
-    console.error(`recovery ${requestId}: 1 € check failed: ${describeCause(err)}`);
+    console.error(`recovery ${requestId}: 1 € check failed: ${describeError(err)}`);
     try {
-      return record("unreadable", "Something went wrong checking your payment. We will try again; if this stays, contact support.");
-    } catch {
+      return unreadable("error");
+    } catch (recordErr) {
+      console.error(`recovery ${requestId}: could not record the failed check either: ${describeError(recordErr)}`);
       return "unreadable";
     }
   } finally {
@@ -229,6 +244,6 @@ export function bankCheckView(r: RecoveryRequest, user: User | undefined) {
     canIssueCode: !bankCheckPassed(r, user) && canIssueRecoveryBankCode(r),
     ...(b?.passedAt ? { passedAt: b.passedAt } : {}),
     ...(b?.code ? { codeIssuedAt: b.code.issuedAt } : {}),
-    ...(b?.code && b.lastCheck ? { lastCheck: b.lastCheck } : {}),
+    ...(b?.code && b.lastCheck ? { lastCheck: { at: b.lastCheck.at, outcome: b.lastCheck.outcome, reason: b.lastCheck.reason } } : {}),
   };
 }

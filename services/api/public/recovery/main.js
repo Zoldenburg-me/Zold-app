@@ -91,12 +91,14 @@ async function boot() {
   };
   const busy = (btn, on) => { if (btn) { btn.toggleAttribute("aria-busy", on); btn.disabled = on; } };
 
-  /* Say, or stop saying, that the page cannot reach Zold. */
+  /* Say, or stop saying, that the page cannot reach Zold. Its own element,
+     outside the screens: a redraw does not hide it, and it never touches a
+     real error in #r-err. */
+  const net = document.getElementById("r-net");
   const unreachable = (on) => {
-    const box = el.querySelector("#r-err");
-    if (!box) return;
-    box.textContent = on ? "We can’t reach Zold right now. We keep trying; your recovery is not affected." : "";
-    box.hidden = !on;
+    if (!net) return;
+    net.textContent = on ? "We can’t reach Zold right now. We keep trying; your recovery is not affected." : "";
+    net.hidden = !on;
   };
 
   /* Re-read the request while it waits: every minute, or just after the waiting period. */
@@ -117,11 +119,11 @@ async function boot() {
         // Anything else: keep asking, and after a few misses say so, or the
         // page goes on promising to pick the payment up while it cannot.
         console.warn(`recovery: could not read the request (${e?.status || e?.message || e})`);
-        if (++s.misses === POLL_MISSES_SHOWN) unreachable(true);
+        if (++s.misses >= POLL_MISSES_SHOWN) unreachable(true);
       }
       if (gen !== s.gen) return;
       if (next && s.misses) {
-        if (s.misses >= POLL_MISSES_SHOWN) unreachable(false);
+        unreachable(false);
         s.misses = 0;
       }
       if (next) {
@@ -131,7 +133,8 @@ async function boot() {
         const stepMoved = !changed && s.mode === "zoldenburg" && bankStepChanged(s.request, next);
         s.request = next;
         if (changed) return show();
-        if (stepMoved) { s.bankNote = ""; redraw(); }
+        // A click's answer is for that moment: the next read replaces it.
+        if (stepMoved || s.bankNote) { s.bankNote = ""; redraw(); }
       }
       tick();
       follow();
@@ -323,8 +326,12 @@ async function boot() {
       el.querySelector('[data-bank="check"]')?.addEventListener("click", async (e) => {
         const btn = e.currentTarget;
         busy(btn, true);
+        const gen = s.gen;
         try {
           const { check, ...request } = await api(requestPath("zoldenburg", s.request.id, "/bank-check"), {}, auth());
+          // A poll moved the page on (a status change) while this was out:
+          // its screen is newer than this answer.
+          if (gen !== s.gen) return;
           s.request = request;
           s.bankNote = request.bankCheck?.passed ? "" : checkAnswerText({ ...request, check });
           s.error = "";

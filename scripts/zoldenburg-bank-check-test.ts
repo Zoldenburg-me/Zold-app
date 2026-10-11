@@ -170,7 +170,8 @@ await t("an account that is not armed never passes, whatever was paid, and the n
   store.updateUser("u1", { passkeySafe: { ...safe, recovery: { ...safe.recovery!, status: "planned" } } });
   try {
     assert.equal(await B.checkRecoveryBankPayment("r1", reads([order()]), at(23)), "unreadable");
-    assert.match(req().zoldenburg!.bankCheck!.lastCheck!.reason, /cannot check this payment right now/);
+    assert.equal(req().zoldenburg!.bankCheck!.lastCheck!.cause, "not_armed");
+    assert.ok(!/armed|enrol|confirm/i.test(req().zoldenburg!.bankCheck!.lastCheck!.reason), "the person's text names no cause");
     assert.equal(req().zoldenburg!.bankCheck!.passedAt, undefined);
   } finally {
     store.updateUser("u1", { passkeySafe: safe });
@@ -306,7 +307,26 @@ await t("a check that throws is recorded as unreadable, and never leaves the req
   // A malformed order throws inside the check: unreadable, not an old answer.
   const bad: Reads = { orders: async () => [{ get kind(): string { throw new Error("malformed"); } }] as any, profileName: async () => "Anna Müller" };
   assert.equal(await B.checkRecoveryBankPayment("r9", bad, at(105)), "unreadable");
-  assert.match(req("r9").zoldenburg!.bankCheck!.lastCheck!.reason, /Something went wrong/);
+  assert.equal(req("r9").zoldenburg!.bankCheck!.lastCheck!.cause, "error");
+  // A programming error is not a failed read: it is thrown, not recorded.
+  const buggy: Reads = { orders: async () => [{ get kind(): string { throw new TypeError("x is undefined"); } }] as any, profileName: async () => "Anna Müller" };
+  await assert.rejects(B.checkRecoveryBankPayment("r9", buggy, at(106)), TypeError);
+  assert.equal(await B.checkRecoveryBankPayment("r9", reads([]), at(107)), "waiting", "and the request is not stuck after it");
+});
+
+await t("an enrolment replaced during the reads by the same account binds the pass to the new one", async () => {
+  newRequest("r15");
+  open = B.issueRecoveryBankCode(req("r15"), at(120));
+  const e = structuredClone(user().zoldenburgEnrolment!);
+  const later = at(121).toISOString();
+  const mid: Reads = { orders: async () => { store.updateUser("u1", { zoldenburgEnrolment: { ...e, enrolledAt: later } }); return [order(paidAt(122))]; }, profileName: async () => "Anna Müller" };
+  try {
+    assert.equal(await B.checkRecoveryBankPayment("r15", mid, at(123)), "passed");
+    assert.equal(req("r15").zoldenburg!.bankCheck!.enrolledAt, later);
+    assert.ok(B.bankCheckPassed(req("r15"), user()));
+  } finally {
+    store.updateUser("u1", { zoldenburgEnrolment: e });
+  }
 });
 
 await t("an enrolment removed during the reads is not passed against", async () => {
@@ -491,6 +511,44 @@ await t("operator: references can be given back; codes stay valid", async () => 
   assert.equal((await call("/recovery/zoldenburg/r8/bank-code", {}, person)).status, 201);
   assert.equal((await opCall("/admin/recoveries/r5/bank-reset", {})).data.code, "NOTHING_TO_RESET");
 });
+
+await t("operator: a reset keeps the read clock, refuses a passed check or an ended request, and needs an operator", async () => {
+  const before = req("r8").zoldenburg!.bankCheck!;
+  store.updateRecoveryRequest("r8", { zoldenburg: { ...req("r8").zoldenburg, bankCheck: { ...before, lastReadAt: new Date().toISOString() } } });
+  const clock = req("r8").zoldenburg!.bankCheck!.lastReadAt;
+  assert.equal((await opCall("/admin/recoveries/r8/bank-reset", {})).status, 200);
+  assert.equal(req("r8").zoldenburg!.bankCheck!.lastReadAt, clock, "a reset buys no Monerium read");
+  assert.equal((await opCall("/admin/recoveries/r4/bank-reset", {})).data.code, "ALREADY_PASSED");
+  store.updateRecoveryRequest("r8", { status: "CANCELED" });
+  assert.equal((await opCall("/admin/recoveries/r8/bank-reset", {})).status, 409);
+  store.updateRecoveryRequest("r8", { status: "REVIEW_PENDING" });
+  const anon = await call("/admin/recoveries/r8/bank-reset", {});
+  assert.ok([401, 403].includes(anon.status), `no operator: ${anon.status}`);
+  const row = (await opCall("/admin/recoveries")).data.requests.find((x: any) => x.id === "r8");
+  assert.equal(row.bankCheck.maxCodes, B.RECOVERY_BANK.maxCodes);
+  assert.equal(typeof row.bankCheck.codesIssued, "number");
+});
+
+await t("routes: check-now with no open code says nothing to check; a recorded reason comes with the answer", async () => {
+  newRequest("r13");
+  const none = await call("/recovery/zoldenburg/r13/bank-check", {}, person);
+  assert.equal(none.data.check.outcome, "no_code");
+  assert.equal(none.data.check.reason, undefined);
+  newRequest("r14");
+  assert.equal((await call("/recovery/zoldenburg/r14/bank-code", {}, person)).status, 201);
+  const read = await call("/recovery/zoldenburg/r14/bank-check", {}, person);
+  assert.equal(read.data.check.outcome, "unreadable");
+  assert.ok(read.data.check.reason, "this click recorded a reason and returns it");
+  assert.equal(read.data.bankCheck.lastCheck.cause, undefined, "the cause is for the operator only");
+  const row = (await opCall("/admin/recoveries")).data.requests.find((x: any) => x.id === "r14");
+  assert.equal(row.bankCheck.lastCheck.cause, "monerium_orders");
+});
+
+await t("routes: a corrupt read clock does not 500", async () => {
+  store.updateRecoveryRequest("r14", { zoldenburg: { ...req("r14").zoldenburg, bankCheck: { ...req("r14").zoldenburg!.bankCheck, lastReadAt: "not a date" } } });
+  const r = await call("/recovery/zoldenburg/r14/bank-check", {}, person);
+  assert.equal(r.status, 200, r.text);
+});
 server.close();
 
 // ---- the page's 1 € step (public/recovery/bank-step.js) --------------------
@@ -531,11 +589,13 @@ await t("page: out of codes, no new-reference button and a way out; passed, the 
 
 await t("page: a click's answer is this click's, never an older reason", () => {
   const base = view({ codeIssuedAt: "x", lastCheck: { at: "1", reason: "old reason" } });
-  assert.match(UI.checkAnswerText({ ...base, check: { outcome: "recent" } }), /less than a minute ago/);
+  assert.equal(UI.checkAnswerText({ ...base, check: { outcome: "recent", nextCheckAt: new Date(10_000 + 12_000).toISOString() } }, 10_000), "We checked a moment ago. Try again in 12 seconds.");
   assert.match(UI.checkAnswerText({ ...base, check: { outcome: "running" } }), /already running/);
-  assert.match(UI.checkAnswerText({ ...base, check: { outcome: "no_code" } }), /no open reference/);
-  assert.equal(UI.checkAnswerText({ ...base, check: { outcome: "waiting" } }), "old reason", "a fresh read's own reason");
-  const html = UI.bankStepHtml(base, null, "We checked less than a minute ago. Try again in a moment.");
+  assert.match(UI.checkAnswerText({ ...base, check: { outcome: "no_code" } }), /nothing to check/);
+  assert.equal(UI.checkAnswerText({ ...base, check: { outcome: "waiting", reason: "this click's reason" } }), "this click's reason");
+  assert.ok(!UI.checkAnswerText({ ...base, check: { outcome: "waiting" } }).includes("old reason"), "a reason this click did not record is never shown");
+  assert.ok(!UI.checkAnswerText({ ...base, check: { outcome: "unreadable" } }).includes("old reason"));
+  const html = UI.bankStepHtml(base, null, "We checked a moment ago. Try again in 12 seconds.");
   assert.match(html, /id="r-bank-note"/);
   assert.ok(!html.includes("old reason"), "the note replaces the recorded reason");
 });

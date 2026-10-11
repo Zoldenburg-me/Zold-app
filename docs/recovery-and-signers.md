@@ -88,7 +88,9 @@ guardian built behind `TURNKEY_GUARDIANS`: `recovery-guardians-plan.md`.
   matches the Monerium name, read live. An unreadable Monerium, an account
   without a Monerium profile id, an account not armed at that moment, or any
   error inside the check is recorded as `unreadable` and leaves it open; it
-  never passes on a failed read.
+  never passes on a failed read. The person sees one text for all of these;
+  /admin shows the cause. A programming error (TypeError and kin) is thrown,
+  not recorded.
   A recovery code's purpose is in its hash, so an enrolment code never
   passes it. A request gets at most 5 codes, and an operator can give them
   back (`/admin/recoveries/:id/bank-reset`); a transfer sent with an earlier

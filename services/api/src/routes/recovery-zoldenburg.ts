@@ -687,13 +687,20 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
     wrap(async (req, res) => {
       const request = requestFor(req, res);
       if (!request) return;
-      const last = request.zoldenburg?.bankCheck?.lastReadAt;
-      const next = last ? Date.parse(last) + ENROLMENT.checkEveryMs : 0;
+      const last = Date.parse(request.zoldenburg?.bankCheck?.lastReadAt ?? "");
+      const next = Number.isFinite(last) ? last + ENROLMENT.checkEveryMs : 0;
       // What this click did, so the page says that and not an older answer:
-      // `recent` asked nothing (the last read is under checkEveryMs old).
-      const check = Date.now() >= next
-        ? { outcome: await checkRecoveryBankPayment(request.id) }
-        : { outcome: "recent" as const, nextCheckAt: new Date(next).toISOString() };
+      // `recent` asked nothing (the last read is under checkEveryMs old);
+      // `reason` only when this click recorded one.
+      const now = new Date();
+      let check: { outcome: string; nextCheckAt?: string; reason?: string };
+      if (now.getTime() >= next) {
+        const outcome = await checkRecoveryBankPayment(request.id, undefined, now);
+        const lc = store.findRecoveryRequest(request.id)!.zoldenburg?.bankCheck?.lastCheck;
+        check = { outcome, ...(lc?.at === now.toISOString() ? { reason: lc.reason } : {}) };
+      } else {
+        check = { outcome: "recent", nextCheckAt: new Date(next).toISOString() };
+      }
       res.json({ ...askView(store.findRecoveryRequest(request.id)!), check });
     }),
   );
@@ -954,8 +961,9 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
         reviewedBy: operatorLabel(req),
         reviewReason: note,
         factors: { ...r.factors, kyc: "passed", manualReview: "passed" },
+        // Read again after the chain calls above, as in syncZoldenburgFromChain.
         zoldenburg: {
-          ...r.zoldenburg,
+          ...zoldenburgNow(r.id),
           recoveryHash: digest,
           executeTxHash: txHash,
           executedAt: now.toISOString(),
@@ -1009,6 +1017,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       if (!r) return;
       if (r.status !== "REVIEW_PENDING") return res.status(409).json({ error: `recovery is ${r.status}` });
       const b = r.zoldenburg?.bankCheck;
+      if (b?.passedAt && bankCheckPassed(r, store.findUser(r.userId))) return res.status(409).json({ error: "the 1 € check has passed", code: "ALREADY_PASSED" });
       if (!b || !(b.codesIssued ?? 0)) return res.status(409).json({ error: "no references were issued for this recovery", code: "NOTHING_TO_RESET" });
       const updated = store.updateRecoveryRequest(r.id, { zoldenburg: { ...r.zoldenburg, bankCheck: { ...b, codesIssued: 0 } } });
       console.log(`RECOVERY: ${r.id} references reset by ${operatorLabel(req)} (had ${b.codesIssued})`);

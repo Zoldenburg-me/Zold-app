@@ -268,7 +268,7 @@ await t("source: no guardian key in the API, deployment adds no guardian, recove
   assert.ok(i("adminRequest(req, res)") > 0, "execute is operator-only");
   assert.ok(i("typedDataFor(r)") > 0 && i("assertGuardianSignature(") > i("typedDataFor(r)") && i("relayRecovery(") > i("assertGuardianSignature("),
     "execute recomputes the digest from the chain, then checks the signer, and only then relays");
-  assert.equal((r.match(/adminRequest\(req, res\)/g) ?? []).length, 5, "every by-id admin route goes through the operator check");
+  assert.equal((r.match(/adminRequest\(req, res\)/g) ?? []).length, 6, "every by-id admin route goes through the operator check");
 });
 
 console.log("2/2 the flow, against the API under the local harness");
