@@ -9,6 +9,11 @@
  * a day (the statement's `mergeLines` rule), so a deposit is listed once. A
  * mint with no recorded order is still a bank transfer: only Monerium mints
  * EURe. The payer's IBAN stays server-side.
+ *
+ * Converting held USDC lands EURe on the Safe from the venue, and the watcher
+ * sees that Transfer like any other. It is the user's own money changing
+ * form, not money in, so an EURe deposit made by a recorded conversion is not
+ * listed; the converted USDC row says what it became.
  */
 import type { CryptoDeposit, MoneriumIssueRecord, Transfer } from "../store/types.js";
 import { userTransfer, type UserTransfer } from "./user-transfer.js";
@@ -28,7 +33,15 @@ export type ActivityRow =
       txHash: string;
       amountEur?: number;
       amountUsdc?: number;
+      /** Who sent it; the zero address is a Monerium mint. */
+      from?: string;
+      /** The block time, when the chain recorded it. */
+      arrivedAt?: string;
       holding: CryptoDeposit["holding"];
+      /** What a conversion delivered, measured, and its transaction. */
+      creditedEur?: number;
+      conversionTxHash?: string;
+      convertedAt?: string;
       settledAt?: string;
       reason?: string;
       settlementAsset?: CryptoDeposit["settlementAsset"];
@@ -67,6 +80,18 @@ const bankRowFromMint = (d: CryptoDeposit): ActivityRow => ({
   amountEur: d.amountEur!,
 });
 
+/** Transactions that converted a deposit: its EURe output is not money in. */
+export function conversionTxHashes(deposits: CryptoDeposit[]): Set<string> {
+  const hashes = deposits.flatMap((d) => [d.conversion?.txHash, ...(d.partials ?? []).map((p) => p.conversion?.txHash)]);
+  return new Set(hashes.filter((h): h is string => Boolean(h)).map((h) => h.toLowerCase()));
+}
+
+/** Deposits that are money in: every one but a conversion's EURe output. */
+export function withoutConversionOutputs(deposits: CryptoDeposit[]): CryptoDeposit[] {
+  const conversions = conversionTxHashes(deposits);
+  return deposits.filter((d) => !(d.token === "EURE" && conversions.has(d.txHash.toLowerCase())));
+}
+
 const fundingRow = (d: CryptoDeposit): ActivityRow => ({
   kind: "funding",
   id: d.id,
@@ -76,7 +101,12 @@ const fundingRow = (d: CryptoDeposit): ActivityRow => ({
   txHash: d.txHash,
   amountEur: d.amountEur ?? d.creditedEur,
   amountUsdc: d.amountUsdc ?? d.creditedUsdc,
+  ...(d.from ? { from: d.from } : {}),
+  ...(d.arrivedAt ? { arrivedAt: d.arrivedAt } : {}),
   holding: d.holding,
+  ...(d.token === "USDC" && d.holding === "converted" && typeof d.creditedEur === "number"
+    ? { creditedEur: d.creditedEur, conversionTxHash: d.conversion?.txHash, convertedAt: d.conversion?.at }
+    : {}),
   settledAt: d.settledAt,
   reason: d.reason,
   settlementAsset: d.settlementAsset,
@@ -87,7 +117,7 @@ const fundingRow = (d: CryptoDeposit): ActivityRow => ({
 /** One user's rows, newest first. The caller has already scoped every source to the user. */
 export function buildActivity({ transfers, deposits, issues }: ActivitySources): ActivityRow[] {
   const unclaimed = [...issues];
-  const depositRows = deposits.flatMap((d): ActivityRow[] => {
+  const depositRows = withoutConversionOutputs(deposits).flatMap((d): ActivityRow[] => {
     if (!isAcceptedMint(d)) return [fundingRow(d)];
     const i = unclaimed.findIndex((o) => mintMatchesIssue(d, o));
     if (i < 0) return [bankRowFromMint(d)];
