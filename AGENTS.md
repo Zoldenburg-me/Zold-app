@@ -15,7 +15,7 @@ Read when the task touches it:
 - `docs/running-locally.md` — dev vs api, preflight, local funding and KYC
   gate, tests, the production branch.
 - `docs/recovery-and-signers.md` — second owner, Zoldenburg guardian, recovery.
-- `docs/roadmap.md` — agreed priority and parked ideas.
+- `docs/roadmap.md` — current milestone, agreed priority, parked ideas.
 - `docs/architecture/` — product (what exists) and technical (how).
 - `docs/CODEMAPS/` — routes, modules, data, deps.
 - `docs/security-hardening.md` — secrets, keys, Postgres, mail; its Rules bind.
