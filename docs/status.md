@@ -77,7 +77,10 @@ Say this plainly rather than letting the surface imply otherwise:
 - **No Shopify app is registered** and no store has installed one; the
   payments-app route additionally needs approval into Shopify's Payments Apps
   program, which is uncertain, not merely slow — hence `custom-app` is the
-  default mode.
+  default mode. Merchant links (a shop linked through the checkout service)
+  are tested in core against stubs (`merchant-links:test`); no store has been
+  linked, the checkout's Shopify adapter has never run, and no payment has
+  arrived through one.
 - **No Zoldenburg recovery has run on chain**: no guardian added, no relayed
   signature, no finalisation, and Safe Cover has not been used against a Zold
   Safe. `recovery:test` runs the flow under the harness only.

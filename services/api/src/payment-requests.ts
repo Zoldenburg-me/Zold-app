@@ -109,6 +109,9 @@ export interface PaymentRequestSource {
   resolvedAt?: string;
   resolveError?: string;
   resolveAttempts?: number;
+  /** Opened by the checkout service through this merchant link
+   *  (merchant-links.ts). The checkout marks the order paid, not us. */
+  linkId?: string;
 }
 
 export interface PaymentRequest {

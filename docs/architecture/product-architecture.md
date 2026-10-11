@@ -411,12 +411,14 @@ that were not real are flagged `simulated`.
 | mode | status | shape |
 |---|---|---|
 | **custom-app** (default) | BUILT, UNPROVEN | The store adds a manual payment method named "Zold". An `orders/create` webhook opens a crypto payment link. The buyer pays on the Thank-you page extension or through the email link. When the link is PAID, Zold calls `orderMarkAsPaid` and writes a `zold.payment` metafield. |
+| **merchant link** (through the checkout service) | BUILT in core, UNPROVEN; the adapter has never run | An org member with `org.update` links a shop from /business (Apps). Core issues a one-time 15-minute `zlc_` link code; the Zold checkout service installs the app at Shopify, exchanges the code with its `zsc_` credential, and from then on opens, reads and cancels the shop's payment requests through `/api/service/merchant/*`. The checkout holds the shop's Shopify token and marks orders paid; core holds the requests, the attribution and the pay page, and sends a webhook hint when a link's request is PAID or CANCELLED and when a link is revoked. Shown only when the org's merchant-links answer says `available` (CHECKOUT_SERVICE_ORIGIN set, a checkout credential issued, data encryption configured; `/api/health` publishes the same as `merchantLinks`). A shop is linked or connected in core, never both (409 either way). Revoking keeps the row and stops new requests; open ones still settle into the org's account. |
 | **payments-app** | BUILT, approval uncertain | Zold is an offsite payment method inside checkout, with Shopify payment sessions resolved on PAID. It needs admission to Shopify's Payments Apps programme, which is uncertain without a MiCA licence. |
 
 Shopify orders are **crypto only**, because a SEPA transfer cannot land inside
 a checkout. They are EUR only. Refund, capture and void are rejected with a
 merchant-readable message, and refunds are manual. The checkout extension has
-never been built with the Shopify CLI.
+never been built with the Shopify CLI. The in-core custom-app path stays until
+the merchant-link adapter has run end to end on a real store.
 
 **PARKED privacy caveat:** each account has one Safe, so anyone who has paid a
 merchant can read every incoming payment and the balance on an explorer. Do

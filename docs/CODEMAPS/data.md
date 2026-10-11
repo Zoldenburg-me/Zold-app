@@ -11,10 +11,10 @@ No SQL, no migrations tool: db.ts runs idempotent migrations at load
 Personal side
 - users (passkey, passkeySafe, iban/ibanBic + ibanSince, monerium, paymentPage) · sessions
 - quotes → transfers (orchestrator states, custody, marginBps)
-- paymentRequests (source: app | shopify) · receiptShares · documents
+- paymentRequests (source: app | shopify; `source.linkId` when the checkout opened it) · receiptShares · documents
 - cryptoDeposits (arrivedAt = block time) · conversionSweeps · moneriumIssueOrders
 - processedMoneriumOrders / processedMoneriumWebhooks (idempotency)
-- recoveryRequests · shopifyConnections · audit
+- recoveryRequests · shopifyConnections · merchantLinks (revoked, never deleted; secret sealed) · audit
 
 Organisations
 ```

@@ -36,6 +36,7 @@ function site(purpose: EncryptionPurpose, table: string, field: string, v1Purpos
 export const SECRETS = {
   shopifyAccessToken: site("shopify", "shopifyConnections", "accessToken"),
   shopifyOrderLinkSecret: site("shopify-link", "shopifyConnections", "orderLinkSecret"),
+  merchantLinkSecret: site("merchant-link", "merchantLinks", "linkSecret"),
   gmiApiKey: site("getmyinvoices", "organisations", "integrations.getmyinvoices.apiKey"),
   moneriumAccessToken: site("monerium", "users", "monerium.accessToken"),
   moneriumRefreshToken: site("monerium", "users", "monerium.refreshToken"),
@@ -85,6 +86,11 @@ export const STORED_SECRETS: StoredSecret[] = [
     site: SECRETS.shopifyOrderLinkSecret,
     rows: () => store.shopifyConnections.flatMap((c) => (c.orderLinkSecretEnc ? [{ rowId: c.id, stored: c.orderLinkSecretEnc }] : [])),
     write: (id, stored) => { store.updateShopifyConnection(id, { orderLinkSecretEnc: stored }); },
+  },
+  {
+    site: SECRETS.merchantLinkSecret,
+    rows: () => store.merchantLinks.map((l) => ({ rowId: l.id, stored: l.linkSecretEnc })),
+    write: (id, stored) => { store.updateMerchantLink(id, { linkSecretEnc: stored }); },
   },
   {
     site: SECRETS.gmiApiKey,

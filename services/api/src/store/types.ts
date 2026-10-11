@@ -1025,6 +1025,38 @@ export interface ServiceCredential {
   expiresAt?: string;
 }
 
+/**
+ * An organisation's consent that the checkout service may open payment
+ * requests for it, for one Shopify shop (merchant-links.ts). The checkout
+ * holds the shop's Shopify token; we hold nothing of Shopify's.
+ *
+ * Never deleted: revoking sets `revokedAt`, and a revoked link still reads
+ * its requests so a paid order can be marked paid. One active link per shop.
+ */
+export interface MerchantLink {
+  id: string;
+  orgId: string;
+  integration: "shopify";
+  /** myshopify.com domain, lower-case. */
+  shop: string;
+  /** The account whose payment page the shop's orders pay into. */
+  payeeUserId: string;
+  /** The key the order-confirmation email signs an order id with, sealed
+   *  through stored-secrets.ts (purpose `merchant-link`, bound to this row).
+   *  It leaves the API only to the checkout at exchange, and inside the
+   *  email template shown to members who may change the org. */
+  linkSecretEnc: string;
+  /** The member whose consent is in force: who linked it, or linked the
+   *  shop again most recently. */
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  revokedAt?: string;
+  revokedBy?: string;
+  /** The last payment request the checkout opened through it. */
+  lastRequestAt?: string;
+}
+
 /** A passkey an operator signs in and approves changes with. Never a user's:
  *  operator credentials live only here, and user login never searches them. */
 export interface OperatorCredential {

@@ -386,6 +386,16 @@ export const ACTIONS = {
     if (!/^https:\/\//i.test(String(r.authorizeUrl))) return toast("Shopify sent back an address Zold can’t use.", true);
     location.href = r.authorizeUrl;
   },
+  async "merchant-link-connect"() {
+    const shop = ($("#ml-shop").value || "").trim().toLowerCase();
+    const r = await api(`/api/orgs/${org.id}/merchant-links`, { method: "POST", body: { integration: "shopify", shop } });
+    if (!/^https:\/\//i.test(String(r.installUrl)) && !/^http:\/\/(localhost|127\.0\.0\.1)[:/]/i.test(String(r.installUrl))) {
+      return toast("The checkout sent back an address Zold can’t use.", true);
+    }
+    location.href = r.installUrl;
+  },
+  "merchant-link-disconnect": (el) => dialog("Disconnect this store?", `<p class="desc">The store can no longer open Zold payments. Orders already waiting for payment stay open, and money that arrives for them still reaches your account.</p>`,
+    async () => { await api(`/api/orgs/${org.id}/merchant-links/${el.dataset.id}`, { method: "DELETE" }); toast("Store disconnected."); }, { okLabel: "Disconnect" }),
   "shopify-disconnect": (el) => dialog("Disconnect this store?", `<p class="desc">Customers can no longer pick Zold at its checkout.</p>`,
     async () => { await api(`/api/orgs/${org.id}/shopify/${el.dataset.id}`, { method: "DELETE" }); toast("Store disconnected."); }, { okLabel: "Disconnect" }),
   async upgrade(el) {
