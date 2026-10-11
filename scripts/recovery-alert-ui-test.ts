@@ -421,6 +421,18 @@ await t("an unconfirmed Zoldenburg is finished on /guardian, and the recovery sc
   assert.match(readFileSync(path.join(PUB, "app/settings.js"), "utf8"), /phZoldCanFinish\(u\) \? \{ href: "\/guardian", label: "Finish" \}/);
 });
 
+await t("Security: the Recovery row itself goes where its action goes", () => {
+  run(`caps = { ...caps, zoldenburgEnrolment: true }`);
+  const recoveryRow = (u: string) => {
+    const html: string = run(`user = ${u}; PH.security.html()`);
+    const m = html.match(/<a class="z-row" href="([^"]+)">(?:(?!<\/a>).)*?Recovery<\/span>/s);
+    return m?.[1];
+  };
+  assert.equal(recoveryRow(unarmedUser()), "/guardian", "1 step left: the row finishes it");
+  assert.equal(recoveryRow(unarmedUser(", iban: null")), "#recovery-settings", "IBAN first: the row opens recovery settings");
+  assert.equal(recoveryRow(unarmedUser(", zoldenburgArmed: true")), "#recovery-settings");
+});
+
 await t("the skip link moves focus to the content and never changes the hash", async () => {
   const click = (listeners.click || [])[0] as any;
   assert.ok(click, "ui.js listens for clicks");

@@ -96,7 +96,7 @@ function renderGuardianSection(el) {
   el.innerHTML = `
     <div class="m-seclabel">Your guardian</div>
     <div class="m-lede" style="font-size:13px">${esc(text)}</div>
-    <a class="m-cta" href="/guardian" style="margin-top:12px;display:inline-flex">${unarmed && canFinish ? "Finish on the guardian page" : who ? "Manage your guardian" : "Choose your guardian"}</a>`;
+    <a class="m-cta" href="/guardian" style="margin-top:12px">${unarmed && canFinish ? "Finish on the guardian page" : who ? "Manage your guardian" : "Choose your guardian"}</a>`;
 }
 
 async function renderCandideSection(el) {
