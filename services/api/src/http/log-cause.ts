@@ -42,14 +42,20 @@ export function describeCause(cause: unknown): string {
 }
 
 /**
- * describeCause plus the stack's call frames, for a log line that needs to
- * say where it failed. A stack starts with the full message (a viem error's
- * names its URL and request body), so only the "at …" frames are kept.
+ * The first eight "at …" frames of an error's stack, each redacted. A stack
+ * starts with the full message (a viem error's names its URL and request
+ * body), so nothing else of it is kept.
  */
-export function describeError(err: unknown): string {
+export function callFrames(err: unknown): string[] {
   const stack = typeof (err as { stack?: unknown })?.stack === "string" ? (err as { stack: string }).stack : "";
   const frames = stack.split("\n").map((l) => l.trim()).filter((l) => l.startsWith("at ")).slice(0, 8);
-  return [describeCause(err), ...frames.map((f) => `    ${redactUrls(f.slice(0, MAX_LOGGED))}`)].join("\n");
+  return frames.map((f) => redactUrls(f.slice(0, MAX_LOGGED)));
+}
+
+/** describeCause plus the stack's call frames, for a log line that needs to
+ *  say where it failed. */
+export function describeError(err: unknown): string {
+  return [describeCause(err), ...callFrames(err).map((f) => `    ${f}`)].join("\n");
 }
 
 /**
