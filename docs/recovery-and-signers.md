@@ -24,7 +24,7 @@ guardian built behind `TURNKEY_GUARDIANS`: `recovery-guardians-plan.md`.
   person against Monerium's KYC and signs from a HARDWARE WALLET (a Keycard
   Shell: air-gapped, QR only, held in MetaMask/Rabby as a QR account), either in
   Safe Cover (Candide's open-source recovery UI; not on Base Sepolia) or in
-  /admin → Recoveries via eth_signTypedData_v4 with the deployer relaying.
+  /admin → Recoveries via eth_signTypedData_v4 with the relay key (`RELAY_KEY`) paying the gas.
   **The API never holds the guardian key**, recomputes the digest from the
   module before accepting a signature, and moves a request only on what the
   chain shows. Zoldenburg alone can START a takeover of an opted-in Safe; the
@@ -114,7 +114,7 @@ guardian built behind `TURNKEY_GUARDIANS`: `recovery-guardians-plan.md`.
   v1.4.1 `0x29fc…C762`, the passkey's WebAuthn verifier is an owner with at
   most one other owner, the threshold is 1, the 4337 module `0x2293…AEAd` is
   the only enabled module AND the fallback handler, no guard is set, and the
-  verifier has code (confirm deploys it from the deployer if not). A failed
+  verifier has code (confirm deploys it from the relay key if not). A failed
   RPC read binds nothing. Both routes refuse once the account's own Safe is
   active or deployed, or while anything (ETH, EURe, USDC) sits at its planned
   address — an import never replaces a live Safe. The plan records

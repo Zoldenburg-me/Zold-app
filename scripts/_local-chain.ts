@@ -52,6 +52,8 @@ for (const [role, key] of Object.entries(DEV_KEYS)) {
   process.env[`DEPLOY_${role}_KEY`] = key;
   process.env[`${role}_KEY`] = key;
 }
+// The server's own gas key (hardhat account #4); the deploy has no relay role.
+process.env.RELAY_KEY = "0x47e179ec197488593b187f80a00eb0da91f1b9d0b13f8733639f19c30a34926a"; // gitleaks:allow (hardhat public key)
 
 /**
  * The faucet wallet is hardhat account #3, and the faucet is OFF unless a

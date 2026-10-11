@@ -23,7 +23,7 @@ export const ENS_GATEWAY = (() => {
   if (parent && !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(parent)) throw new Error("ENS_PARENT_NAME must be a name like zoldhq.com");
   if (resolver && !/^0x[0-9a-fA-F]{40}$/.test(resolver)) throw new Error("ENS_RESOLVER_ADDRESS is not an address");
   if (key && !/^0x[0-9a-fA-F]{64}$/.test(key)) throw new Error("ENS_GATEWAY_KEY is not a 32-byte hex private key");
-  const otherKeys = ["FAUCET_KEY", "ORCHESTRATOR_KEY", "RAMP_KEY", "DEPLOYER_KEY", "DEPLOY_ORCHESTRATOR_KEY", "DEPLOY_RAMP_KEY", "DEPLOY_DEPLOYER_KEY"];
+  const otherKeys = ["FAUCET_KEY", "ORCHESTRATOR_KEY", "RAMP_KEY", "DEPLOYER_KEY", "DEPLOY_ORCHESTRATOR_KEY", "DEPLOY_RAMP_KEY", "DEPLOY_DEPLOYER_KEY", "RELAY_KEY"];
   const shared = otherKeys.find((name) => key && process.env[name]?.trim().toLowerCase() === key.toLowerCase());
   if (shared) throw new Error(`ENS_GATEWAY_KEY must not be the same key as ${shared} — it signs where every handle points, and nothing else`);
   return {
