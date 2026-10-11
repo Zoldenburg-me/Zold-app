@@ -13,7 +13,7 @@
 import express from "express";
 import { wrap } from "./util.js";
 import { LIQUIDITY, SECURITY } from "../config.js";
-import { accountBalances, addrs, eur, orchestratorAddress } from "../chain.js";
+import { accountBalances, addrs, eur, orchestratorAddress, usd } from "../chain.js";
 import { safeDebitBlocker } from "../orchestrator.js";
 import { prepareDepositConversion } from "../liquidity.js";
 import {
@@ -23,6 +23,7 @@ import {
   recordInvoiceSettlement,
   settleConvertedDeposit,
   settlementTarget,
+  unconvertedUnits,
 } from "../adapters/crypto-deposits.js";
 import { store, type CryptoDeposit, type User } from "../store.js";
 import { custodyBlockerBeforeFunding, requireCapability } from "../http/guards.js";
@@ -55,6 +56,20 @@ const pendingDepositConversions = new Map<string, {
   userOperation: PendingPasskeySafeDeployment;
   quote: { provider: string; rate: string; minOut: string };
 }>();
+
+/**
+ * Deposits with a conversion running. Prepare refuses while one runs, so a
+ * second signed operation cannot be lined up behind the first, and a failure
+ * of that second one cannot overwrite the first one's result.
+ */
+const convertingDeposits = new Set<string>();
+
+/** A failure write that never moves a converted deposit backwards. */
+function parkDeposit(id: string, patch: Partial<CryptoDeposit>): void {
+  const now = store.cryptoDeposits.find((d) => d.id === id);
+  if (!now || now.holding === "converted") return;
+  store.updateCryptoDeposit(id, patch);
+}
 
 /**
  * Tie a payment to the invoice it settles.
@@ -171,6 +186,9 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
       );
       if (!deposit) return res.status(404).json({ error: "deposit not found" });
 
+      if (convertingDeposits.has(deposit.id)) {
+        return res.status(409).json({ error: "a conversion of this deposit is already running" });
+      }
       const blocker = depositConversionBlocker(user, deposit);
       if (blocker) return res.status(409).json({ error: blocker });
       const safeBlocker = safeDebitBlocker(user);
@@ -181,7 +199,7 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
         if (spent) return res.status(409).json({ error: spent });
         const swap = await prepareDepositConversion(
           user.address as `0x${string}`,
-          BigInt(deposit.amountUnits),
+          unconvertedUnits(deposit),
           `crypto-in-${deposit.id}`,
         );
         if (!swap) {
@@ -223,7 +241,7 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
           depositId: deposit.id,
           credentialId: user.passkey?.credentialId,
           challenge,
-          amountUsdc: deposit.amountUsdc,
+          amountUsdc: usd.fromUnits(unconvertedUnits(deposit)),
           expectedEur: eur.fromWei(swap.plan.quote.expectedOut),
           minEur: eur.fromWei(swap.plan.quote.minOut),
           provider: swap.plan.quote.provider,
@@ -259,95 +277,125 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
       if (pending.userId !== user.id) {
         return res.status(403).json({ error: "this conversion belongs to a different account" });
       }
-
-      const a = req.body?.executionAssertion;
-      if (!a?.authenticatorData || !a?.clientDataJSON || !a?.signature) {
-        return res.status(400).json({
-          error: "executionAssertion requires authenticatorData, clientDataJSON and signature",
-        });
+      if (convertingDeposits.has(deposit.id)) {
+        return res.status(409).json({ error: "a conversion of this deposit is already running" });
       }
-      if (!user.passkey?.publicKey) {
-        return res.status(409).json({ error: "no passkey registered for this account" });
-      }
-      if (a.credentialId !== user.passkey.credentialId) {
-        return res.status(403).json({ error: "passkey credential does not match this account" });
-      }
-
+      convertingDeposits.add(deposit.id);
       try {
-        const { signCount } = await verifyAssertionForChallenge(
-          a.authenticatorData, a.clientDataJSON, a.signature,
-          user.passkey.publicKey, user.passkey.signCount ?? 0,
-          user.passkey.rpId ?? SECURITY.rpId, SECURITY.origins, pending.challenge,
-        );
-        if (!store.recordPasskeyUse(user.id, a.credentialId, signCount)) throw new Error("this passkey is no longer the account's passkey");
-      } catch (err: any) {
-        return res.status(401).json({ error: redactedMessage(err) });
-      }
+        // Prepared minutes ago: what was convertible then may not be now.
+        const current = store.cryptoDeposits.find((d) => d.id === deposit.id) ?? deposit;
+        const stale = depositConversionBlocker(user, current);
+        if (stale) return res.status(409).json({ error: stale });
 
-      // Measure BEFORE submitting: the credited amount is the balance delta, not
-      // anything the quote promised.
-      const before = eur.toWei(await accountBalances(user.address).then((b) => b.safeBalanceEur));
-      // The rate sanity check runs BEFORE the user-signed swap lands: after it,
-      // a rate-feed outage would leave the EURe in the Safe with the deposit
-      // still marked ready to convert.
-      try {
-        await assertRateSane(BigInt(pending.quote.rate));
-      } catch (err: any) {
-        return res.status(503).json({ error: redactedMessage(err) });
-      }
-      let submitted: SubmittedOperation;
-      try {
-        // The browser sends base64url; the Safe signature needs the bytes,
-        // exactly as the transfer path decodes them.
-        submitted = await submitPasskeySafeOperationWithReceipt(pending.plan, pending.userOperation, {
-          authenticatorData: b64urlToBuf(a.authenticatorData),
-          clientDataJSON: b64urlToBuf(a.clientDataJSON),
-          signature: b64urlToBuf(a.signature),
-        });
-      } catch (err: any) {
-        const reason = redactedMessage(err);
-        // The bundler may have taken the swap and it may still land. REFUSED
-        // would offer the same USDC for a second conversion, so the row waits
-        // for someone to check the operation on chain.
-        if (err instanceof SafeOperationUncertainError) {
-          console.error(`convert: Safe operation ${err.userOpHash} unconfirmed:`, describeCause(err.cause));
-          store.updateCryptoDeposit(deposit.id, {
-            holding: "unconfirmed",
-            reason: `${reason} — check the operation before converting again`,
-            txs: [...deposit.txs, { step: "safe.swap(usdc->eure).unconfirmed", hash: err.userOpHash }],
+        const a = req.body?.executionAssertion;
+        if (!a?.authenticatorData || !a?.clientDataJSON || !a?.signature) {
+          return res.status(400).json({
+            error: "executionAssertion requires authenticatorData, clientDataJSON and signature",
           });
-          return res.status(502).json({ error: reason, code: "SAFE_OP_UNCONFIRMED", userOpHash: err.userOpHash });
         }
-        store.updateCryptoDeposit(deposit.id, { holding: "refused", reason });
-        return res.status(502).json({ error: reason });
-      }
-      // Included but reverted: the chain undid the swap, so nothing moved and
-      // nothing is settled.
-      if (submitted.success !== true) {
-        const reason = `the swap ${submitted.userOpHash ?? ""} was included but reverted — nothing was converted`;
-        store.updateCryptoDeposit(deposit.id, {
-          holding: "refused",
-          reason,
-          txs: [...deposit.txs, { step: "safe.swap(usdc->eure).reverted", hash: submitted.txHash ?? submitted.userOpHash ?? "0x" }],
-        });
-        return res.status(502).json({ error: reason });
-      }
+        if (!user.passkey?.publicKey) {
+          return res.status(409).json({ error: "no passkey registered for this account" });
+        }
+        if (a.credentialId !== user.passkey.credentialId) {
+          return res.status(403).json({ error: "passkey credential does not match this account" });
+        }
 
-      // The chain's transaction hash is what an auditor resolves; the userOp
-      // hash is kept beside it because it is what the bundler answers for.
-      const txs = [
-        ...deposit.txs,
-        { step: "safe.swap(usdc->eure)", hash: submitted.txHash ?? submitted.userOpHash ?? "0x" },
-        ...(submitted.txHash && submitted.userOpHash ? [{ step: "userOperation", hash: submitted.userOpHash }] : []),
-      ];
-      const settled = await settleConvertedDeposit(
-        deposit, user,
-        { provider: pending.quote.provider, rate: BigInt(pending.quote.rate), minOut: BigInt(pending.quote.minOut) },
-        before, txs,
-        await conversionFacts(submitted, deposit.amountUnits),
-      );
-      const balances = await accountBalances(user.address);
-      res.json({ deposit: settled, ...balances });
+        try {
+          const { signCount } = await verifyAssertionForChallenge(
+            a.authenticatorData, a.clientDataJSON, a.signature,
+            user.passkey.publicKey, user.passkey.signCount ?? 0,
+            user.passkey.rpId ?? SECURITY.rpId, SECURITY.origins, pending.challenge,
+          );
+          if (!store.recordPasskeyUse(user.id, a.credentialId, signCount)) throw new Error("this passkey is no longer the account's passkey");
+        } catch (err: any) {
+          return res.status(401).json({ error: redactedMessage(err) });
+        }
+
+        // Measure BEFORE submitting: the credited amount is the balance delta, not
+        // anything the quote promised.
+        const before = eur.toWei(await accountBalances(user.address).then((b) => b.safeBalanceEur));
+        // The rate sanity check runs BEFORE the user-signed swap lands: after it,
+        // a rate-feed outage would leave the EURe in the Safe with the deposit
+        // still marked ready to convert.
+        try {
+          await assertRateSane(BigInt(pending.quote.rate));
+        } catch (err: any) {
+          return res.status(503).json({ error: redactedMessage(err) });
+        }
+        let submitted: SubmittedOperation;
+        try {
+          // The browser sends base64url; the Safe signature needs the bytes,
+          // exactly as the transfer path decodes them.
+          submitted = await submitPasskeySafeOperationWithReceipt(pending.plan, pending.userOperation, {
+            authenticatorData: b64urlToBuf(a.authenticatorData),
+            clientDataJSON: b64urlToBuf(a.clientDataJSON),
+            signature: b64urlToBuf(a.signature),
+          });
+        } catch (err: any) {
+          const reason = redactedMessage(err);
+          // The bundler may have taken the swap and it may still land. REFUSED
+          // would offer the same USDC for a second conversion, so the row waits
+          // for someone to check the operation on chain.
+          if (err instanceof SafeOperationUncertainError) {
+            console.error(`convert: Safe operation ${err.userOpHash} unconfirmed:`, describeCause(err.cause));
+            parkDeposit(deposit.id, {
+              holding: "unconfirmed",
+              reason: `${reason} — check the operation before converting again`,
+              txs: [...current.txs, { step: "safe.swap(usdc->eure).unconfirmed", hash: err.userOpHash }],
+            });
+            return res.status(502).json({ error: reason, code: "SAFE_OP_UNCONFIRMED", userOpHash: err.userOpHash });
+          }
+          parkDeposit(deposit.id, { holding: "refused", reason });
+          return res.status(502).json({ error: reason });
+        }
+        // Included but reverted: the chain undid the swap, so nothing moved and
+        // nothing is settled.
+        if (submitted.success !== true) {
+          const reason = `the swap ${submitted.userOpHash ?? ""} was included but reverted — nothing was converted`;
+          parkDeposit(deposit.id, {
+            holding: "refused",
+            reason,
+            txs: [...current.txs, { step: "safe.swap(usdc->eure).reverted", hash: submitted.txHash ?? submitted.userOpHash ?? "0x" }],
+          });
+          return res.status(502).json({ error: reason });
+        }
+
+        // The chain's transaction hash is what an auditor resolves; the userOp
+        // hash is kept beside it because it is what the bundler answers for.
+        const txs = [
+          ...current.txs,
+          { step: "safe.swap(usdc->eure)", hash: submitted.txHash ?? submitted.userOpHash ?? "0x" },
+          ...(submitted.txHash && submitted.userOpHash ? [{ step: "userOperation", hash: submitted.userOpHash }] : []),
+        ];
+        // The swap executed. Record that now, before anything below can fail,
+        // so the deposit is never offered again on a stale holding; settling
+        // then moves it on (converted, or held after a partial fill).
+        const executed = store.updateCryptoDeposit(deposit.id, {
+          holding: "unconfirmed",
+          reason: "the swap went through; recording what arrived",
+          txs,
+        });
+        let settled: CryptoDeposit;
+        try {
+          settled = await settleConvertedDeposit(
+            executed, user,
+            { provider: pending.quote.provider, rate: BigInt(pending.quote.rate), minOut: BigInt(pending.quote.minOut) },
+            before, txs,
+            await conversionFacts(submitted, unconvertedUnits(current).toString()),
+          );
+        } catch (err: any) {
+          const reason = redactedMessage(err);
+          console.error(`convert: swap ${submitted.txHash ?? submitted.userOpHash} executed but was not recorded:`, describeCause(err));
+          store.updateCryptoDeposit(deposit.id, {
+            reason: `the swap went through, but what arrived could not be recorded (${reason}) — it is being checked and will not be offered again`,
+          });
+          return res.status(502).json({ error: reason, code: "SAFE_OP_UNCONFIRMED", userOpHash: submitted.userOpHash });
+        }
+        const balances = await accountBalances(user.address).catch(() => ({}));
+        res.json({ deposit: settled, ...balances });
+      } finally {
+        convertingDeposits.delete(deposit.id);
+      }
     }),
   );
 

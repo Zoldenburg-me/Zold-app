@@ -239,7 +239,9 @@ export function pruneSessions(retainMs = 24 * 60 * 60 * 1000) {
 export function migrateCryptoDepositHolding(deposits: CryptoDeposit[], users: User[]): void {
   for (const d of deposits as (CryptoDeposit & { state?: string })[]) {
     const state = d.state;
-    if (state === undefined) continue;
+    // Migrated already. A row with neither field (a hand-written or partial
+    // row) is treated as just detected rather than left without a holding.
+    if (state === undefined && d.holding !== undefined) continue;
     const page = users.find((u) => u.id === d.userId)?.paymentPage;
     const target = page?.settlementAsset ?? "EURE";
     if (state === "CONVERTED") {

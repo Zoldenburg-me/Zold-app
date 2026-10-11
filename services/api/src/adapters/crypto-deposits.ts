@@ -188,6 +188,25 @@ export function settlementTarget(user: User): "EURE" | "USDC" {
  * converted at any time; only a converted one, or one already in the
  * settlement currency, cannot.
  */
+/** USDC units of this deposit not yet converted: all of it, less any
+ *  partial fills. */
+export function unconvertedUnits(deposit: CryptoDeposit): bigint {
+  const swapped = (deposit.partials ?? []).reduce((n, p) => n + BigInt(p.conversion.amountInUnits ?? "0"), 0n);
+  const left = BigInt(deposit.amountUnits) - swapped;
+  return left > 0n ? left : 0n;
+}
+
+/**
+ * Did a swap of this deposit execute that is not recorded as a fill? Then its
+ * USDC is spent, whatever became of the result. Each partial fill accounts for
+ * one executed swap step; a row from before `partials` that carries a
+ * conversion counts as executed too.
+ */
+function unrecordedSwap(deposit: CryptoDeposit): boolean {
+  const executed = deposit.txs.filter((t) => t.step === "safe.swap(usdc->eure)").length;
+  return executed > (deposit.partials?.length ?? 0) || (!!deposit.conversion && deposit.holding !== "converted");
+}
+
 export function depositConversionBlocker(user: User, deposit: CryptoDeposit): string | null {
   if (deposit.token !== "USDC") return `only ${usdToken().symbol} deposits can be converted`;
   if (deposit.holding === "converted") return "this deposit has already been converted to EURe";
@@ -198,12 +217,12 @@ export function depositConversionBlocker(user: User, deposit: CryptoDeposit): st
   // Refused after the swap executed (it delivered nothing, or less than the
   // floor): that USDC is spent, and a second swap would spend other USDC.
   // Only a refusal before or without an executed swap can be retried.
-  if (deposit.holding === "refused" && deposit.txs.some((t) => t.step === "safe.swap(usdc->eure)")) {
+  if (deposit.holding === "refused" && unrecordedSwap(deposit)) {
     return "a swap of this deposit went through and is under review — it cannot be converted again";
   }
   const identity = walletBlocker(user);
   if (identity) return identity;
-  const amountUsdc = deposit.amountUsdc ?? 0;
+  const amountUsdc = usd.fromUnits(unconvertedUnits(deposit));
   if (amountUsdc < CRYPTO_IN.minUsdc) {
     const sym = usdToken().symbol;
     return `${amountUsdc} ${sym} is below the ${CRYPTO_IN.minUsdc} ${sym} floor — converting it would cost more than it delivers`;
@@ -215,7 +234,7 @@ export function depositConversionBlocker(user: User, deposit: CryptoDeposit): st
   const safeBlocker = safeDebitBlocker(user);
   if (safeBlocker) {
     return (
-      `${safeBlocker}. Your ${deposit.amountUsdc ?? 0} ${usdToken().symbol} is still yours at ${user.address} — ` +
+      `${safeBlocker}. Your ${amountUsdc} ${usdToken().symbol} is still yours at ${user.address} — ` +
       "it simply cannot be converted until the account can sign."
     );
   }
@@ -232,7 +251,7 @@ export function depositConversionBlocker(user: User, deposit: CryptoDeposit): st
  * pass, and the second swap then fails at the bundler.
  */
 export async function heldUsdcBlocker(user: User, deposit: CryptoDeposit): Promise<string | null> {
-  const need = BigInt(deposit.amountUnits);
+  const need = unconvertedUnits(deposit);
   const have = (await publicClient.readContract({
     address: addrs().usdc,
     abi: abis.MockToken,
@@ -241,8 +260,8 @@ export async function heldUsdcBlocker(user: User, deposit: CryptoDeposit): Promi
   })) as bigint;
   if (have >= need) return null;
   return (
-    `your account holds ${usd.fromUnits(have)} ${usdToken().symbol}, less than the ${usd.fromUnits(need)} ${usdToken().symbol} this ` +
-    "deposit brought in — it may have been spent. Nothing was prepared."
+    `your account holds ${usd.fromUnits(have)} ${usdToken().symbol}, less than the ${usd.fromUnits(need)} ${usdToken().symbol} of this ` +
+    "deposit still to convert — it may have been spent. Nothing was prepared."
   );
 }
 
@@ -295,6 +314,10 @@ export function settleOnArrival(deposit: CryptoDeposit): CryptoDeposit {
  * The credited amount is measured as the Safe's EURe balance delta, not copied
  * from the quote (a swap that did not revert may still deliver less). The
  * signed floor is checked against that delta too.
+ *
+ * Runs after the swap executed, so it must not throw on anything but a
+ * failure to read the chain: the caller has already marked the row
+ * `unconfirmed` and leaves it there if this throws.
  */
 export async function settleConvertedDeposit(
   deposit: CryptoDeposit,
@@ -306,7 +329,11 @@ export async function settleConvertedDeposit(
    *  submitter had a receipt. Absent on the harness stand-ins. */
   conversion?: CryptoDeposit["conversion"],
 ): Promise<CryptoDeposit> {
-  const { venue: venueRate, mid: midRate } = await assertRateSane(quote.rate);
+  // The rate was checked against the mid before the swap was submitted. After
+  // it, a feed outage must not lose the record of a swap that happened: the
+  // mid is recorded when there is one and left out when there is not.
+  const venueRate = Number(quote.rate) / 1e6;
+  const midRate = await midRates().then((r) => r.eur.USD, () => undefined);
   const after = await balanceAfterWrite(addrs().eure, user.address as `0x${string}`, balanceBeforeWei);
   const receivedWei = after - balanceBeforeWei;
 
@@ -327,11 +354,52 @@ export async function settleConvertedDeposit(
     });
   }
 
-  const creditedEur = eur.fromWei(receivedWei);
+  const filledEur = eur.fromWei(receivedWei);
+  const remaining = unconvertedUnits(deposit);
+  const amountInUnits = BigInt(conversion?.amountInUnits ?? remaining.toString());
+  const leftover = remaining - amountInUnits;
+  const partials = deposit.partials ?? [];
+  const rates = { provider: quote.provider, rate: venueRate, ...(midRate ? { midRate } : {}) };
+  console.log(
+    `crypto-in: converted ${usd.fromUnits(amountInUnits)} USDC to EUR ${filledEur} for ${user.name} ` +
+      `via ${quote.provider} at ${venueRate.toFixed(4)}` + (leftover > 0n ? ` (${usd.fromUnits(leftover)} USDC left held)` : ""),
+  );
+
   /**
-   * The realised gain: what arrived minus its value at receipt. Recorded once,
-   * now, and never recomputed from a later rate. Near zero when conversion
-   * follows receipt promptly (the tax reason to convert promptly).
+   * A partial fill: the swap took less than was held. The rest stays held and
+   * can be converted later; this fill is kept as a partial with its share of
+   * the receipt value, which its own disposal line books.
+   */
+  if (leftover > 0n) {
+    const receiptPortionEur = deposit.receipt
+      ? Number((BigInt(Math.round(deposit.receipt.amountEur * 100)) * amountInUnits) / BigInt(deposit.amountUnits)) / 100
+      : undefined;
+    const held = store.updateCryptoDeposit(deposit.id, {
+      holding: "held",
+      partials: [
+        ...partials,
+        {
+          creditedEur: filledEur,
+          ...(receiptPortionEur === undefined ? {} : { receiptPortionEur }),
+          ...rates,
+          conversion: { ...(conversion ?? {}), amountInUnits: amountInUnits.toString() },
+        },
+      ],
+      creditedUsdc: usd.fromUnits(leftover),
+      leftoverUnits: leftover.toString(),
+      txs,
+      reason: `part of it converted; ${usd.fromUnits(leftover)} ${usdToken().symbol} is still held and can be converted any time`,
+    });
+    writeStatementLines();
+    return held;
+  }
+
+  const creditedEur = Math.round((filledEur + partials.reduce((n, p) => n + p.creditedEur, 0)) * 100) / 100;
+  /**
+   * The realised gain over every conversion of this deposit: what arrived
+   * minus its value at receipt. Recorded once, now, and never recomputed from
+   * a later rate. Near zero when conversion follows receipt promptly (the tax
+   * reason to convert promptly).
    *
    * Absent, not zero, when the receipt could not be valued.
    */
@@ -339,13 +407,6 @@ export async function settleConvertedDeposit(
     deposit.receipt
       ? Math.round((creditedEur - deposit.receipt.amountEur) * 100) / 100
       : undefined;
-  console.log(
-    `crypto-in: converted ${deposit.amountUsdc ?? 0} USDC to EUR ${creditedEur} for ${user.name} ` +
-      `via ${quote.provider} at ${venueRate.toFixed(4)}` +
-      (realisedGainEur === undefined ? "" : ` (realised EUR ${realisedGainEur})`),
-  );
-  const amountInUnits = conversion?.amountInUnits ?? deposit.amountUnits;
-  const leftover = BigInt(deposit.amountUnits) - BigInt(amountInUnits);
   /**
    * The deposit was settled on arrival; this records the disposal. The invoice
    * and pay-link rows are rewritten in place under the same ref (the receipt
@@ -357,12 +418,10 @@ export async function settleConvertedDeposit(
     creditedEur,
     creditedUsdc: undefined,
     settlementAsset: "EURE",
-    provider: quote.provider,
-    rate: venueRate,
-    midRate,
+    ...rates,
     ...(realisedGainEur === undefined ? {} : { realisedGainEur }),
-    conversion: { ...(conversion ?? {}), amountInUnits },
-    ...(leftover > 0n ? { leftoverUnits: leftover.toString() } : {}),
+    conversion: { ...(conversion ?? {}), amountInUnits: amountInUnits.toString() },
+    leftoverUnits: undefined,
     txs,
     reason: undefined,
   });
@@ -612,7 +671,14 @@ export async function sweepPendingCryptoDeposits(): Promise<number> {
   for (const d of [...store.cryptoDeposits]) {
     if (d.settledAt) continue;
     try {
-      settleOnArrival(d);
+      // A crash between recording and attributing would otherwise settle the
+      // deposit with no pay link, and nothing attributes it afterwards.
+      attributeDepositToRequest(d);
+    } catch (err: any) {
+      console.error(`crypto-in: could not attribute deposit ${d.id} to a request: ${describeCause(err)}`);
+    }
+    try {
+      settleOnArrival(store.cryptoDeposits.find((x) => x.id === d.id) ?? d);
       n++;
     } catch (err: any) {
       console.error(`crypto-in: could not settle deposit ${d.id}: ${describeCause(err)}`);

@@ -32,8 +32,9 @@ process.env.TRANSF_RATES_FIXED ??= JSON.stringify({ USD: 1.1379, KES: 147.53, IN
 process.env.ALLOW_FIXED_RATES = "1";
 
 const { store, initStore } = await import("../services/api/src/store.js");
-const { depositConversionBlocker, settleOnArrival } =
+const { depositConversionBlocker, settleOnArrival, unconvertedUnits } =
   await import("../services/api/src/adapters/crypto-deposits.js");
+const { buildCryptoSettlement } = await import("../services/api/src/domain/invoices.js");
 const { migrateCryptoDepositHolding } = await import("../services/api/src/store/db.js");
 
 initStore();
@@ -265,10 +266,11 @@ await check("the realised gain is what arrived minus the receipt value", () => {
 
 await check("an unvalued receipt yields NO gain rather than a zero", () => {
   const src = readFileSync("services/api/src/adapters/crypto-deposits.ts", "utf8");
-  const fn = src.slice(src.indexOf("export async function settleConvertedDeposit"));
-  assert.match(fn.slice(0, 2200), /deposit\.receipt\s*\n?\s*\?/,
+  const from = src.indexOf("export async function settleConvertedDeposit");
+  const fn = src.slice(from, src.indexOf("export function recordInvoiceSettlement", from));
+  assert.match(fn, /realisedGainEur =\s*deposit\.receipt\s*\n?\s*\?/,
     "the gain must be conditional on a receipt value existing");
-  assert.ok(!/realisedGainEur:\s*0\b/.test(fn.slice(0, 2200)),
+  assert.ok(!/realisedGainEur:\s*0\b/.test(fn),
     "an unknown basis gives an unknown gain — zero would be a claim");
 });
 
@@ -397,6 +399,84 @@ await check("the credited amount is MEASURED, never taken from the quote", () =>
   assert.match(fn.slice(0, 1600), /receivedWei\s*<\s*quote\.minOut/, "the signed floor must be checked");
   assert.ok(!/creditedEur:\s*eur\.fromWei\(quote\./.test(fn.slice(0, 1600)),
     "must not credit the quoted amount");
+});
+
+
+console.log("\nPartial fills, retries and the post-swap record");
+
+const partial = (amountInUnits: string, creditedEur: number, receiptPortionEur?: number) => ({
+  creditedEur, provider: "dex", rate: 1.14,
+  ...(receiptPortionEur === undefined ? {} : { receiptPortionEur }),
+  conversion: { txHash: "0x" + "c".repeat(64), amountInUnits },
+});
+
+await check("after a partial fill only the rest is to convert, and the floor applies to the rest", () => {
+  const u = mkUser();
+  const d = mkDeposit(u.id, { holding: "held", partials: [partial("499700000", 438)],
+    txs: [{ step: "safe.swap(usdc->eure)", hash: "0x1" }] });
+  assert.equal(unconvertedUnits(d), 300000n);
+  assert.match(depositConversionBlocker(u, d)!, /0\.3 .* below the .* floor/i);
+  assert.equal(depositConversionBlocker(u, { ...d, partials: [partial("100000000", 88)] }), null,
+    "400 left converts, and the partial's own swap step does not read as an unrecorded one");
+});
+
+await check("a refusal is retryable unless a swap executed that no fill records", () => {
+  const u = mkUser();
+  const fill = partial("100000000", 88);
+  const reverted = mkDeposit(u.id, { holding: "refused", partials: [fill],
+    txs: [{ step: "safe.swap(usdc->eure)", hash: "0x1" }, { step: "safe.swap(usdc->eure).reverted", hash: "0x2" }] });
+  assert.equal(depositConversionBlocker(u, reverted), null, "the partial's swap is recorded; the reverted one moved nothing");
+  const spent = mkDeposit(u.id, { holding: "refused", partials: [fill],
+    txs: [{ step: "safe.swap(usdc->eure)", hash: "0x1" }, { step: "safe.swap(usdc->eure)", hash: "0x3" }] });
+  assert.match(depositConversionBlocker(u, spent)!, /went through/i);
+  const legacy = mkDeposit(u.id, { holding: "refused", conversion: { txHash: "0x4" }, txs: [] });
+  assert.match(depositConversionBlocker(u, legacy)!, /went through/i, "a pre-partials row with a conversion counts as executed");
+});
+
+await check("the invoice names the swap that converted, never a reverted attempt", () => {
+  const u = mkUser();
+  const d = mkDeposit(u.id, { holding: "converted", settlementAsset: "EURE", creditedEur: 437,
+    txs: [{ step: "safe.swap(usdc->eure).reverted", hash: "0xrev" }, { step: "safe.swap(usdc->eure)", hash: "0xok" }] });
+  assert.equal(buildCryptoSettlement(d).conversion?.txHash, "0xok");
+  assert.equal(buildCryptoSettlement({ ...d, conversion: { txHash: "0xchain" } }).conversion?.txHash, "0xchain");
+});
+
+await check("a row with neither state nor holding is migrated, not skipped", () => {
+  const rows: any[] = [
+    { id: "bare", userId: "eu", token: "USDC", txs: [] },
+    { id: "bare-eure", userId: "eu", token: "EURE", txs: [] },
+    { id: "done", userId: "eu", token: "USDC", holding: "held", txs: [] },
+  ];
+  migrateCryptoDepositHolding(rows, [{ id: "eu", paymentPage: { settlementAsset: "EURE" } } as any]);
+  assert.deepEqual(rows.map((r) => r.holding), ["awaiting_approval", "none", "held"]);
+});
+
+await check("the executed swap is recorded before settling, and a failed settle leaves it unconfirmed", () => {
+  const route = srv.slice(srv.indexOf('"/users/:id/crypto-deposits/:depositId/convert"'));
+  const body = route.slice(0, route.indexOf('"/users/:id/auto-convert"'));
+  const marked = body.indexOf('holding: "unconfirmed",\n          reason: "the swap went through');
+  const settle = body.indexOf("settleConvertedDeposit(");
+  assert.ok(marked > 0 && marked < settle, "unconfirmed is written before settlement runs");
+  assert.match(body.slice(settle - 200), /try \{\s*settled = await settleConvertedDeposit[\s\S]*catch[\s\S]*SAFE_OP_UNCONFIRMED/,
+    "a settle failure answers SAFE_OP_UNCONFIRMED and leaves the row unconfirmed");
+  const fn = dep.slice(dep.indexOf("export async function settleConvertedDeposit"));
+  assert.ok(!/assertRateSane\(/.test(fn.slice(0, fn.indexOf("export function recordInvoiceSettlement"))),
+    "no rate check that can throw after the swap executed");
+});
+
+await check("one conversion per deposit at a time; failure writes never undo a conversion", () => {
+  const prep = srv.slice(srv.indexOf('"/users/:id/crypto-deposits/:depositId/convert/prepare"'));
+  assert.match(prep.slice(0, 1500), /convertingDeposits\.has\(deposit\.id\)[\s\S]{0,120}already running/);
+  const conv = srv.slice(srv.indexOf('"/users/:id/crypto-deposits/:depositId/convert"'));
+  assert.match(conv, /convertingDeposits\.add\(deposit\.id\);[\s\S]*finally \{\s*convertingDeposits\.delete\(deposit\.id\)/);
+  assert.match(conv.slice(0, 2500), /const stale = depositConversionBlocker\(user, current\)/, "re-checked after the price was claimed");
+  assert.match(srv, /function parkDeposit[\s\S]{0,200}holding === "converted"\) return;/);
+});
+
+await check("the sweep attributes a recovered deposit to its pay link before settling it", () => {
+  const fn = dep.slice(dep.indexOf("export async function sweepPendingCryptoDeposits"));
+  const a = fn.indexOf("attributeDepositToRequest(d)");
+  assert.ok(a > 0 && a < fn.indexOf("settleOnArrival("));
 });
 
 console.log("");

@@ -67,7 +67,7 @@ function phFaucetCard() {
 
 PH["add/wallet"] = {
   title: "From a crypto wallet",
-  live: () => JSON.stringify([phCache.deposits?.map((d) => `${d.id}:${d.holding}`), user?.paymentPage?.handle, phCache.settlementAsset, phCache.autoConvert]),
+  live: () => JSON.stringify([phCache.deposits?.map((d) => `${d.id}:${d.holding}:${d.creditedUsdc}:${d.convertBlocker ? 1 : 0}`), user?.paymentPage?.handle, phCache.settlementAsset, phCache.autoConvert]),
   html() {
     const u = user || {};
     const page = u.paymentPage || {};
@@ -101,12 +101,12 @@ PH["add/wallet"] = {
         : "Your main currency is euro, so we ask before converting dollars."}${change}` })}
       ${deps === null ? Z.skeletonRows(1, "Loading payments…") : Z.listGroup({
         label: "Waiting to convert",
-        rows: waiting.map((d) => `<div class="z-row">${Z.iconTile({ icon: "currency_exchange", tone: "m" })}<span class="z-row__main"><span class="z-row__title z-fig">${esc(Z.formatMoney(d.amountUsdc ?? 0, usdSym()))}</span><span class="z-row__sub">Arrived ${esc(phDay(d.detectedAt))}${d.receipt ? ` · worth ${esc(phEur(d.receipt.amountEur))} then` : ""}</span></span><span class="z-row__right"><a class="z-btn z-btn--primary z-btn--sm" href="${phHref("convert", d.id)}" aria-label="Convert ${esc(Z.formatMoney(d.amountUsdc ?? 0, usdSym()))}">Convert</a></span></div>`),
+        rows: waiting.map((d) => `<div class="z-row">${Z.iconTile({ icon: "currency_exchange", tone: "m" })}<span class="z-row__main"><span class="z-row__title z-fig">${esc(Z.formatMoney(phHeldUsdc(d), usdSym()))}</span><span class="z-row__sub">Arrived ${esc(phDay(d.detectedAt))}${d.receipt ? ` · worth ${esc(phEur(d.receipt.amountEur))} then` : ""}</span></span><span class="z-row__right">${d.convertBlocker ? "" : `<a class="z-btn z-btn--primary z-btn--sm" href="${phHref("convert", d.id)}" aria-label="Convert ${esc(Z.formatMoney(phHeldUsdc(d), usdSym()))}">Convert</a>`}</span></div>`),
         empty: { text: "Nothing waiting. Payments show up here within a minute of arriving." },
       })}
       ${held.length ? Z.listGroup({
         label: "Kept as dollars",
-        rows: held.map((d) => `<div class="z-row">${Z.iconTile({ icon: "currency_exchange" })}<span class="z-row__main"><span class="z-row__title z-fig">${esc(Z.formatMoney(d.amountUsdc ?? 0, usdSym()))}</span><span class="z-row__sub">Arrived ${esc(phDay(d.detectedAt))}${d.receipt ? ` · worth ${esc(phEur(d.receipt.amountEur))} then` : ""}</span></span><span class="z-row__right">${d.convertBlocker ? "" : `<a class="z-btn z-btn--secondary z-btn--sm" href="${phHref("convert", d.id)}" aria-label="Convert ${esc(Z.formatMoney(d.amountUsdc ?? 0, usdSym()))}">Convert</a>`}</span></div>`),
+        rows: held.map((d) => `<div class="z-row">${Z.iconTile({ icon: "currency_exchange" })}<span class="z-row__main"><span class="z-row__title z-fig">${esc(Z.formatMoney(phHeldUsdc(d), usdSym()))}</span><span class="z-row__sub">Arrived ${esc(phDay(d.detectedAt))}${d.receipt ? ` · worth ${esc(phEur(d.receipt.amountEur))} then` : ""}</span></span><span class="z-row__right">${d.convertBlocker ? "" : `<a class="z-btn z-btn--secondary z-btn--sm" href="${phHref("convert", d.id)}" aria-label="Convert ${esc(Z.formatMoney(phHeldUsdc(d), usdSym()))}">Convert</a>`}</span></div>`),
       }) : ""}
       ${refused.length ? Z.listGroup({
         label: "Not converted",
@@ -301,6 +301,9 @@ PH["settings/currency"] = {
 
 /* Waiting to convert, or kept as dollars, and the server sees nothing
    stopping it (convertBlocker). Refused and unconfirmed are never offered. */
+/* What is still to convert: all of it, or what a partial fill left. */
+const phHeldUsdc = (d) => d.creditedUsdc ?? d.amountUsdc ?? 0;
+
 const phConvertible = (d) =>
   (d.holding === "awaiting_approval" || d.holding === "held") && !d.convertBlocker;
 
@@ -518,7 +521,7 @@ PH["convert/refused"] = {
     return `${top}${phMain(`
       <span class="z-tile z-tile--a z-tile--lg" aria-hidden="true">${Z.icon("currency_exchange")}</span>
       <div class="z-intro"><h2 class="z-title">Nothing was converted</h2><p class="z-sub">${esc(lede)}</p></div>
-      ${d ? `<div class="z-card z-held"><p class="z-held__main"><span class="z-held__label">Still in your account</span><span class="z-held__fig z-fig">${esc(phUsdc(d.amountUsdc))}</span></p>${Z.iconTile({ icon: "account_balance_wallet" })}</div>` : ""}
+      ${d ? `<div class="z-card z-held"><p class="z-held__main"><span class="z-held__label">Still in your account</span><span class="z-held__fig z-fig">${esc(phUsdc(phHeldUsdc(d)))}</span></p>${Z.iconTile({ icon: "account_balance_wallet" })}</div>` : ""}
       <details class="z-disclose"><summary>Technical details${Z.icon("expand_more")}</summary>${Z.kv([{ key: "Payment ID", value: id, mono: true }])}</details>
     `)}${phFoot(`${Z.button({ variant: "primary", full: true, icon: "refresh", label: "Get a new price", id: "ph-conv-new" })}<a class="z-link-btn" href="#add/wallet">Keep as dollars for now</a>`)}`;
   },

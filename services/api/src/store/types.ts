@@ -452,6 +452,19 @@ export type TransferState =
   | "FAILED"
   | "REFUNDED";
 
+/** One fill of a held deposit that left part of it unconverted. */
+export interface CryptoPartialConversion {
+  /** EURe this fill delivered, measured. */
+  creditedEur: number;
+  /** The share of the receipt value this fill disposed of, in proportion to
+   *  the units it swapped. Absent when the receipt had no value. */
+  receiptPortionEur?: number;
+  provider: string;
+  rate: number;
+  midRate?: number;
+  conversion: NonNullable<CryptoDeposit["conversion"]>;
+}
+
 export type CryptoHolding = "none" | "held" | "awaiting_approval" | "converted" | "refused" | "unconfirmed";
 
 /**
@@ -568,8 +581,8 @@ export interface CryptoDeposit {
     blockNumber?: number;
     /** Block time of the conversion. */
     at?: string;
-    /** USDC units actually swapped. Equals amountUnits on an exact-input
-     *  conversion; less on an exact-output one, where the rest stays in the Safe. */
+    /** USDC units this conversion swapped. Less than what was left to convert
+     *  on a partial fill, whose remainder stays held (see `partials`). */
     amountInUnits?: string;
     /** Venue fee taken out of the input, in USDC units, where the venue
      *  itemises one (LI.FI's fixed fee); absent when it does not. */
@@ -579,9 +592,16 @@ export interface CryptoDeposit {
     gasCostWei?: string;
     gasPaidBy?: "sponsored" | "safe-native" | "safe-token";
   };
-  /** Exact-output conversion: USDC units left in the Safe after the swap,
-   *  waiting for the monthly sweep. */
+  /** USDC units still held after a partial fill; cleared once the rest is
+   *  converted. */
   leftoverUnits?: string;
+  /**
+   * Earlier conversions that filled only part of what was held, oldest first.
+   * The deposit stays `held` for the rest. The final conversion is recorded in
+   * the fields above (`creditedEur` then totals every conversion), and each
+   * partial books its own disposal line and Beleg.
+   */
+  partials?: CryptoPartialConversion[];
   txs: { step: string; hash: string }[];
   detectedAt: string;
   updatedAt: string;
