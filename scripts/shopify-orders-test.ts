@@ -414,8 +414,8 @@ const payRequest = (req: any) => {
   const q = req.cryptoQuotes[req.cryptoQuotes.length - 1];
   const d = store.addCryptoDeposit({
     id: randomUUID(), userId: merchant.id, chainId: 31337, token: "USDC", txHash: `0x${randomUUID().replace(/-/g, "").padEnd(64, "0")}`, logIndex: 0,
-    amountUnits: String(Math.round(q.amountUsdc * 1e6)), amountUsdc: q.amountUsdc, settlementAsset: "EURE", paymentAddress: owner,
-    state: "DETECTED", txs: [], detectedAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    amountUnits: String(Math.round(q.amountUsdc * 1e6)), amountUsdc: q.amountUsdc, settlementAsset: "USDC", paymentAddress: owner,
+    holding: "awaiting_approval", txs: [], detectedAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   });
   return attributeDepositToRequest(d);
 };

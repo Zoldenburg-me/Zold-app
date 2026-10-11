@@ -338,11 +338,14 @@ check("transfer timelines hide intent and outcome steps, and show only real tx h
   assert.ok(activity.includes("txStepShown(x) && isTxHash(x.hash)"), "phone details list only shown steps with real hashes");
 });
 
-check("the wallet screen shows an UNCONFIRMED conversion as being checked, never offered again", () => {
+check("the wallet screen shows an unconfirmed conversion as being checked, never offered again", () => {
   const src = readFileSync(new URL("../services/api/public/app/phone-add.js", import.meta.url), "utf8");
-  assert.ok(/d\.state === "UNCONFIRMED" && d\.token === "USDC"/.test(src), "UNCONFIRMED deposits are listed");
+  assert.ok(/d\.holding === "unconfirmed" && d\.token === "USDC"/.test(src), "unconfirmed deposits are listed");
   assert.ok(src.includes('Z.tag("CHECKING")'), "they carry the CHECKING tag the activity rows use");
-  assert.ok(/waiting = \(deps \|\| \[\]\)\.filter\(\(d\) => d\.state === "DETECTED"/.test(src), "only DETECTED gets a Convert button");
+  assert.ok(/waiting = \(deps \|\| \[\]\)\.filter\(\(d\) => d\.holding === "awaiting_approval"/.test(src), "waiting deposits get a Convert button");
+  assert.ok(/held = \(deps \|\| \[\]\)\.filter\(\(d\) => d\.holding === "held"/.test(src), "held deposits get one too, unless the server names a blocker");
+  assert.ok(/const phConvertible = \(d\) =>\s*\(d\.holding === "awaiting_approval" \|\| d\.holding === "held"\) && !d\.convertBlocker/.test(src),
+    "refused and unconfirmed are never offered for conversion");
   assert.ok(src.includes("SAFE_OP_UNCONFIRMED") && src.includes("SAFE_OP_REVERTED"), "the check screen words the server's codes");
 });
 
