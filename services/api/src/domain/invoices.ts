@@ -30,6 +30,7 @@ export class InvoiceError extends Error {}
  *  PAID is an outgoing invoice whose attributed payments cover it
  *  (`settlementUpdate`); an incoming one goes through PAYING. */
 const TRANSITIONS: Record<InvoiceState, InvoiceState[]> = {
+  DRAFT: ["SUBMITTED", "DELETED"],
   LINK_CREATED: ["SUBMITTED", "DELETED"],
   SUBMITTED: ["PAYING", "PAID", "RECONCILED", "DELETED"],
   PAYING: ["PAID", "SUBMITTED"],
@@ -115,9 +116,11 @@ export function validateLines(input: unknown): { lines: InvoiceLine[]; total: st
   }
   let totalCents = 0;
   const lines: InvoiceLine[] = input.map((raw, i) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new InvoiceError(`Line ${i + 1} is not an invoice line.`);
     const r = raw as Record<string, unknown>;
     const description = String(r.description ?? "").trim();
     if (!description) throw new InvoiceError(`Line ${i + 1} needs a description.`);
+    if (description.length > 500) throw new InvoiceError(`Line ${i + 1}'s description is limited to 500 characters.`);
     const quantity = String(r.quantity ?? "1").trim();
     const unitPrice = String(r.unitPrice ?? "").trim();
     if (!AMOUNT_RE.test(quantity) || Number(quantity) <= 0) {
@@ -169,7 +172,9 @@ export function supplierView(
       ? { bank: issuerExtras.bank, footerNote: issuerExtras.footerNote }
       : {}),
     supplier: invoice.supplier,
-    lines: invoice.lines,
+    // The printed columns only: a line's `receipt` names a ledger row and is
+    // the organisation's own record.
+    lines: invoice.lines.map(({ description, quantity, unitPrice, amount }) => ({ description, quantity, unitPrice, amount })),
     currency: invoice.currency,
     total: invoice.total,
     dueDate: invoice.dueDate,
@@ -302,6 +307,8 @@ export interface MoneriumOrderLike {
   kind?: string;
   amount: string;
   address?: string;
+  chain?: string;
+  currency?: string;
   memo?: string;
   meta?: { state?: string; processedAt?: string };
   state?: string;
@@ -375,10 +382,16 @@ export function settlementUpdate(
 
 /** Rows written before `ref` existed are keyed by their deposit id. */
 export function settlementRef(s: InvoiceSettlement): string {
-  return s.ref ?? (s.method === "bank" ? `monerium:${s.orderId}` : `deposit:${s.depositId}`);
+  if (s.ref) return s.ref;
+  if (s.method === "bank") return `monerium:${s.orderId}`;
+  if (s.method === "wallet-receipt") return `ledger:${s.ledgerEntryId}`;
+  return `deposit:${s.depositId}`;
 }
 
 export function assertDeletable(invoice: Invoice) {
+  // A draft made from receipts carries their settlements from the start, and
+  // nobody has been sent it: discarding it frees its rows for the next run.
+  if (invoice.state === "DRAFT") return;
   if (invoice.payment?.transferId || invoice.payment?.paidAt || invoice.settlements?.length) {
     throw new InvoiceError(
       "This invoice has a payment against it and cannot be deleted. Reconcile it instead.",

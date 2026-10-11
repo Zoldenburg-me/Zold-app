@@ -32,6 +32,7 @@ import express from "express";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { HARNESS, RECOVERY, SECURITY } from "../config.js";
 import { store, type RecoveryRequest, type User } from "../store.js";
+import { operatorLabel, requireOperator } from "../http/guards.js";
 import {
   CANDIDE,
   assertRecoveryModuleDeployed,
@@ -44,10 +45,12 @@ import {
   recoveryGuardianSetupTransactions,
   safeMessageHash,
   safeOwners,
+  SafeOperationUncertainError,
   signMessageAsPasskeySafe,
-  submitPasskeySafeOperation,
+  submitPasskeySafeOperationWithReceipt,
   webauthnOwnerFromJwk,
   type PasskeySafeDeploymentPlan,
+  type SubmittedOperation,
 } from "../wallet/candide.js";
 import {
   CandideGuardianError,
@@ -67,15 +70,15 @@ import {
 } from "../recovery/candide-guardian.js";
 import { b64urlToBuf, bufToB64url, issueChallenge, verifyAssertionForChallenge, verifyRegistration } from "../webauthn.js";
 import { publicRecoveryRequest } from "../recovery.js";
+import { hostedGuardianBlocked, ONE_GUARDIAN_MESSAGE } from "../recovery/one-guardian.js";
 import { bindRecoveredPasskey, deployVerifierForOwner } from "../recovery/recovered-passkey.js";
 import { ADDRESS_RE } from "../domain/contacts.js";
+import { describeCause, describeError, shortErrorForClient, redactedMessage } from "../http/log-cause.js";
 
 export interface CandideRecoveryDeps {
   requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
   publicUser: (user: User) => Record<string, unknown>;
 }
-
-type Assertion = { authenticatorData: string; clientDataJSON: string; signature: string };
 
 const CEREMONY_TTL_MS = 5 * 60_000;
 const OTP_MAX_ATTEMPTS = 5;
@@ -99,7 +102,15 @@ const pendingChannelRegistrations = new Map<
 >();
 const pendingSafeOperations = new Map<
   string,
-  { userId: string; kind: "guardian" | "cancel"; guardianAddress?: `0x${string}`; userOperation: any; expiresAt: number }
+  {
+    userId: string;
+    kind: "guardian" | "cancel";
+    guardianAddress?: `0x${string}`;
+    userOperation: any;
+    /** What the passkey must sign: the prepared operation's hash. */
+    challenge: string;
+    expiresAt: number;
+  }
 >();
 const pendingChannelRemovals = new Map<
   string,
@@ -154,8 +165,9 @@ function fail(res: express.Response, err: unknown) {
   if (err instanceof CandideGuardianError) {
     return res.status(err.status).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
   }
-  const message = String((err as any)?.message ?? err);
-  return res.status(502).json({ error: message.slice(0, 300) });
+  // 503, not 502: Cloudflare replaces an origin 502's body with its own page.
+  console.error(`recovery (candide): ${describeError(err)}`);
+  return res.status(503).json({ error: shortErrorForClient(err) });
 }
 
 // ---------------------------------------------------------------------------
@@ -199,23 +211,31 @@ function activePlan(user: User): PasskeySafeDeploymentPlan {
 }
 
 async function verifyOwnerAssertion(user: User, body: any, challenge: string): Promise<User> {
-  const { authenticatorData, clientDataJSON, signature } = (body ?? {}) as Partial<Assertion>;
-  if (!authenticatorData || !clientDataJSON || !signature) {
+  const { authenticatorData, clientDataJSON, signature } = (body ?? {}) as Record<string, unknown>;
+  if (typeof authenticatorData !== "string" || typeof clientDataJSON !== "string" || typeof signature !== "string" ||
+      !authenticatorData || !clientDataJSON || !signature) {
     throw new CandideGuardianError("authenticatorData, clientDataJSON and signature required", 400, "BAD_ASSERTION");
   }
   const passkey = user.passkey!;
-  const { signCount } = await verifyAssertionForChallenge(
-    authenticatorData,
-    clientDataJSON,
-    signature,
-    passkey.publicKey!,
-    passkey.signCount ?? 0,
-    passkey.rpId ?? SECURITY.rpId,
-    SECURITY.origins,
-    challenge,
-    true,
-  );
-  return store.updateUser(user.id, { passkey: { ...passkey, signCount } });
+  try {
+    const { signCount } = await verifyAssertionForChallenge(
+      authenticatorData,
+      clientDataJSON,
+      signature,
+      passkey.publicKey!,
+      passkey.signCount ?? 0,
+      passkey.rpId ?? SECURITY.rpId,
+      SECURITY.origins,
+      challenge,
+      true,
+    );
+    const updated = store.recordPasskeyUse(user.id, passkey.credentialId, signCount);
+    if (!updated) throw new Error("this passkey is no longer the account's passkey");
+    return updated;
+  } catch (err: any) {
+    // A wrong approval is the caller's to redo, not a partner failure.
+    throw new CandideGuardianError(`That passkey approval did not check out (${shortErrorForClient(err)}). Start again.`, 401, "BAD_ASSERTION");
+  }
 }
 
 const toAssertion = (body: any) => ({
@@ -223,6 +243,41 @@ const toAssertion = (body: any) => ({
   clientDataJSON: b64urlToBuf(body.clientDataJSON),
   signature: b64urlToBuf(body.signature),
 });
+
+/**
+ * Submit an owner-approved Safe operation and answer only for what the chain
+ * confirmed. An operation sent but not confirmed, or included and reverted,
+ * answers 502 here and the caller records nothing as done.
+ */
+async function submitConfirmed(
+  plan: PasskeySafeDeploymentPlan,
+  userOperation: any,
+  body: any,
+  res: express.Response,
+): Promise<SubmittedOperation | undefined> {
+  let op: SubmittedOperation;
+  try {
+    op = await submitPasskeySafeOperationWithReceipt(plan, userOperation, toAssertion(body));
+  } catch (err) {
+    if (!(err instanceof SafeOperationUncertainError)) throw err;
+    console.error(`recovery: Safe operation ${err.userOpHash} unconfirmed:`, describeCause(err.cause));
+    res.status(502).json({
+      error: `${redactedMessage(err)} — nothing is recorded until it is confirmed; check the chain before retrying`,
+      code: "SAFE_OP_UNCONFIRMED",
+      opHash: err.userOpHash,
+    });
+    return undefined;
+  }
+  if (op.success !== true) {
+    res.status(502).json({
+      error: `the Safe operation ${op.userOpHash} was included but reverted — nothing changed on chain`,
+      code: "SAFE_OP_REVERTED",
+      opHash: op.userOpHash,
+    });
+    return undefined;
+  }
+  return op;
+}
 
 // ---------------------------------------------------------------------------
 // finalisation — shared by the route and the sweep
@@ -262,7 +317,7 @@ export async function finalizeCandideRecovery(
     // The service may have finalized on its own sweep, in which case the
     // chain already shows the new owners and the error is moot; anything else
     // is recorded and retried by the next sweep.
-    finalizeError = String(err?.message ?? err).slice(0, 200);
+    finalizeError = redactedMessage(err).slice(0, 200);
   }
 
   let owners: string[];
@@ -273,7 +328,7 @@ export async function finalizeCandideRecovery(
       owners = (await safeOwners(request.safeAddress)).map((a) => a.toLowerCase());
     } catch (err: any) {
       owners = [];
-      finalizeError = `${finalizeError ? `${finalizeError}; ` : ""}could not read Safe owners: ${String(err?.message ?? err).slice(0, 120)}`;
+      finalizeError = `${finalizeError ? `${finalizeError}; ` : ""}could not read Safe owners: ${redactedMessage(err).slice(0, 120)}`;
     }
   }
   const recovered = newOwners.length > 0 && newOwners.every((o) => owners.includes(o));
@@ -310,7 +365,7 @@ export async function sweepCandideRecoveries(now = new Date()): Promise<number> 
         const out = await finalizeCandideRecovery(r, now);
         if (out.status === "FINALIZED") n++;
       } catch (err: any) {
-        console.error(`recovery sweep: ${r.id}: ${err?.message ?? err}`);
+        console.error(`recovery sweep: ${r.id}: ${describeCause(err)}`);
       }
     } else if (["PASSKEY_PENDING", "OTP_PENDING"].includes(r.status) && now >= new Date(r.expiresAt)) {
       store.updateRecoveryRequest(r.id, { status: "EXPIRED" });
@@ -359,7 +414,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
             pendingRecovery: state.pending,
           };
         } catch (err: any) {
-          out.onChain = { error: String(err?.message ?? err).slice(0, 160) };
+          out.onChain = { error: redactedMessage(err).slice(0, 160) };
         }
       }
       out.requests = store
@@ -515,6 +570,9 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
         });
         return res.json({ ...deps.publicUser(updated), recovery: publicCandideRecovery(updated), status: "active" });
       }
+      if (hostedGuardianBlocked(user, state.guardians)) {
+        return res.status(409).json({ error: ONE_GUARDIAN_MESSAGE, code: "OTHER_GUARDIAN" });
+      }
       await assertRecoveryModuleDeployed(c.moduleAddress);
       // Threshold 1: Candide alone may recover. A second guardian raising it
       // to 2 needs a signer nobody runs today; recorded as a decision, not an
@@ -528,6 +586,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
         kind: "guardian",
         guardianAddress: c.guardianAddress,
         userOperation: prepared.userOperation,
+        challenge: passkeySafeChallenge(prepared.challenge),
         expiresAt: Date.now() + CEREMONY_TTL_MS,
       });
       res.status(201).json({
@@ -555,12 +614,17 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       const plan = activePlan(user);
       const c = user.passkeySafe!.candideRecovery;
       if (!c) return res.status(409).json({ error: "register an email or phone for recovery first" });
-      const { authenticatorData, clientDataJSON, signature } = req.body ?? {};
-      if (!authenticatorData || !clientDataJSON || !signature) {
-        return res.status(400).json({ error: "authenticatorData, clientDataJSON and signature required" });
-      }
-      const opHash = await submitPasskeySafeOperation(plan, pending.userOperation, toAssertion(req.body));
+      // Claimed BEFORE any await: one approval submits the operation once.
       pendingSafeOperations.delete(req.params.requestId);
+      // The passkey must have approved THIS operation's hash.
+      await verifyOwnerAssertion(user, req.body, pending.challenge);
+      // Again right before submitting: another guardian may have landed since.
+      if (hostedGuardianBlocked(user, (await readRecoveryState(plan)).guardians)) {
+        return res.status(409).json({ error: ONE_GUARDIAN_MESSAGE, code: "OTHER_GUARDIAN" });
+      }
+      const op = await submitConfirmed(plan, pending.userOperation, req.body, res);
+      if (!op) return;
+      const opHash = op.userOpHash;
       const state = await readRecoveryState(plan, [c.guardianAddress]);
       const onChain = state.guardians.some((g) => g.toLowerCase() === c.guardianAddress.toLowerCase());
       if (!onChain) {
@@ -649,7 +713,13 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       const prepared = await prepareSafeSetupOperation(plan, [recoveryCancelTransaction(state.moduleAddress)]);
       prune(pendingSafeOperations);
       const requestId = randomUUID();
-      pendingSafeOperations.set(requestId, { userId: user.id, kind: "cancel", userOperation: prepared.userOperation, expiresAt: Date.now() + CEREMONY_TTL_MS });
+      pendingSafeOperations.set(requestId, {
+        userId: user.id,
+        kind: "cancel",
+        userOperation: prepared.userOperation,
+        challenge: passkeySafeChallenge(prepared.challenge),
+        expiresAt: Date.now() + CEREMONY_TTL_MS,
+      });
       res.status(201).json({
         requestId,
         credentialId: user.passkey!.credentialId,
@@ -672,17 +742,20 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
         return res.status(404).json({ error: "cancel request not found or expired" });
       }
       const plan = activePlan(user);
-      const { authenticatorData, clientDataJSON, signature } = req.body ?? {};
-      if (!authenticatorData || !clientDataJSON || !signature) {
-        return res.status(400).json({ error: "authenticatorData, clientDataJSON and signature required" });
-      }
-      const opHash = await submitPasskeySafeOperation(plan, pending.userOperation, toAssertion(req.body));
+      // Claimed BEFORE any await: one approval submits the operation once.
       pendingSafeOperations.delete(req.params.requestId);
+      // The passkey must have approved THIS operation's hash.
+      await verifyOwnerAssertion(user, req.body, pending.challenge);
+      // A cancel that is not confirmed on chain leaves the recovery running,
+      // so nothing is marked CANCELED unless the chain says it happened.
+      const op = await submitConfirmed(plan, pending.userOperation, req.body, res);
+      if (!op) return;
+      const opHash = op.userOpHash;
       const now = new Date().toISOString();
       for (const r of store.recoveryRequestsForUser(user.id)) {
         // The module holds one recovery per Safe, whoever's guardian started
-        // it, so the owner's cancel ends a Zoldenburg one too.
-        if ((r.mode === "candide" || r.mode === "zoldenburg") && ["OTP_PENDING", "REVIEW_PENDING", "GRACE_PERIOD"].includes(r.status)) {
+        // it, so the owner's cancel ends a Zoldenburg or Turnkey one too.
+        if ((r.mode === "candide" || r.mode === "zoldenburg" || r.mode === "turnkey") && ["OTP_PENDING", "REVIEW_PENDING", "GRACE_PERIOD"].includes(r.status)) {
           store.updateRecoveryRequest(r.id, { status: "CANCELED", canceledAt: now, cancelReason: "cancelled on chain by the account owner" });
         }
       }
@@ -802,7 +875,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       try {
         reg = verifyRegistration(attestation, clientDataJSON, SECURITY.rpId, SECURITY.origins, `recovery:${request.id}`);
       } catch (err: any) {
-        return res.status(400).json({ error: String(err?.message ?? err) });
+        return res.status(400).json({ error: redactedMessage(err) });
       }
       if (reg.credentialId !== credentialId) return res.status(400).json({ error: "credentialId does not match attestation" });
       if (reg.key.alg !== "ES256") return res.status(400).json({ error: "the new passkey must be a P-256 (ES256) credential to own a Safe" });
@@ -862,19 +935,24 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       if (auth.verified) return res.status(409).json({ error: "that channel is already verified" });
       // Bounded like enrolment: past the limit the request is canceled, so a
       // guesser must start over (and the owner sees a canceled attempt), while
-      // Candide's own throttle stays the outer bound.
-      if ((c.otpAttempts ?? 0) >= OTP_MAX_ATTEMPTS) {
+      // Candide's own throttle stays the outer bound. Every guess is counted
+      // before the await, as enrolment does: parallel guesses each see the one
+      // before, and a wrong code the SDK throws on still counts.
+      const attempts = (c.otpAttempts ?? 0) + 1;
+      if (attempts > OTP_MAX_ATTEMPTS) {
         store.updateRecoveryRequest(request.id, { status: "CANCELED", canceledAt: new Date().toISOString(), cancelReason: "too many wrong codes" });
         return res.status(429).json({ error: "too many wrong codes — this recovery is canceled; start again" });
       }
+      store.updateRecoveryRequest(request.id, { candide: { ...c, otpAttempts: attempts } });
 
       const result = await submitSignatureChallenge(c.serviceRequestId, challengeId, req.body?.otp);
       if (!result.success) {
-        store.updateRecoveryRequest(request.id, { candide: { ...c, otpAttempts: (c.otpAttempts ?? 0) + 1 } });
         return res.status(400).json({ error: "the code was not accepted" });
       }
       const auths = c.auths.map((a) => (a.challengeId === challengeId ? { ...a, verified: true } : a));
-      let patch: Partial<RecoveryRequest> = { candide: { ...c, auths } };
+      // request.candide is the stored row, so its count includes guesses made
+      // during the await; `c` is the snapshot from before it.
+      let patch: Partial<RecoveryRequest> = { candide: { ...c, ...request.candide, auths } };
 
       if (result.guardianSignature && result.guardianAddress) {
         // Every channel is verified: Candide has signed. Execute now — the
@@ -893,13 +971,14 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
           const owner = webauthnOwnerFromJwk(c.newPasskey.publicKey.jwk);
           if (owner) verifierDeployTxHash = await deployVerifierForOwner(owner);
         } catch (err: any) {
-          console.error(`recovery ${request.id}: verifier deploy failed (will matter at first use): ${err?.message ?? err}`);
+          console.error(`recovery ${request.id}: verifier deploy failed (will matter at first use): ${describeCause(err)}`);
         }
         patch = {
           status: "GRACE_PERIOD",
           factors: { ...request.factors, otp: "passed" },
           candide: {
             ...c,
+            ...request.candide,
             auths,
             otpTicketHash: undefined,
             guardianAddress: result.guardianAddress,
@@ -947,6 +1026,54 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       const request = requestFor(req, res);
       if (!request) return;
       res.json(publicRequest(request));
+    }),
+  );
+
+  // An open request refuses every other starter (above), so a stranger who
+  // names the account can hold one until it expires; the owner has lost the
+  // passkey that could cancel it. An operator clears one that has not reached
+  // the chain, as for a Zoldenburg request; once executed only the owner's
+  // passkey can cancel.
+  router.get(
+    "/admin/recoveries/candide",
+    wrap(async (req, res) => {
+      if (!requireOperator(req, res)) return;
+      const requests = store.recoveryRequests
+        .filter((r) => r.mode === "candide" && ["PASSKEY_PENDING", "OTP_PENDING"].includes(r.status) && Date.now() < Date.parse(r.expiresAt))
+        .sort((a, b) => Date.parse(b.requestedAt) - Date.parse(a.requestedAt))
+        .slice(0, 200)
+        .map((r) => ({
+          id: r.id,
+          userId: r.userId,
+          email: store.findUser(r.userId)?.email ?? null,
+          safeAddress: r.safeAddress,
+          status: r.status,
+          requestedAt: r.requestedAt,
+          expiresAt: r.expiresAt,
+        }));
+      res.json({ requests });
+    }),
+  );
+
+  router.post(
+    "/admin/recoveries/candide/:id/reject",
+    wrap(async (req, res) => {
+      if (!requireOperator(req, res)) return;
+      const r = store.findRecoveryRequest(req.params.id);
+      if (!r || r.mode !== "candide") return res.status(404).json({ error: "recovery not found" });
+      if (!["PASSKEY_PENDING", "OTP_PENDING"].includes(r.status)) {
+        return res.status(409).json({ error: `recovery is ${r.status} — once executed only the owner's passkey can cancel it` });
+      }
+      const reason = typeof req.body?.reason === "string" ? req.body.reason.trim().slice(0, 500) : "";
+      if (!reason) return res.status(400).json({ error: "give a reason — the person sees it" });
+      const updated = store.updateRecoveryRequest(r.id, {
+        status: "CANCELED",
+        canceledAt: new Date().toISOString(),
+        cancelReason: reason,
+        reviewedBy: operatorLabel(req),
+      });
+      console.log(`RECOVERY: ${r.id} rejected by ${operatorLabel(req)}`);
+      res.json({ id: updated.id, status: updated.status, cancelReason: updated.cancelReason });
     }),
   );
 

@@ -14,9 +14,11 @@
  * --replace    swap only: which owner to replace, when there is more than one
  * --rpc        defaults to the chain's public RPC
  * --out        where to write the Transaction Builder JSON
+ * --created-at the batch's createdAt in ms (default now), for reproducible output
  *
  * Output:
- * (a) a Safe Transaction Builder batch to load in app.safe.global → Apps →
+ * (a) a Safe Transaction Builder batch (services/api/src/wallet/safe-tx-builder.ts,
+ *     the same file the app offers for download) to load in app.safe.global → Apps →
  *     Transaction Builder and sign with the owner's hardware wallet;
  * (b) the raw to/data/value of each step, including an execTransaction the
  *     owner can send directly (a pre-validated signature: msg.sender is the
@@ -27,7 +29,7 @@
  * threshold other than 1, or more than two owners.
  */
 import { writeFileSync } from "node:fs";
-import { getAddress, keccak256, toBytes } from "viem";
+import { getAddress } from "viem";
 import {
   SafeImportRefusal,
   assertImportableShape,
@@ -39,6 +41,7 @@ import {
   verifierDeploymentTransaction,
   type OwnerChangeMode,
 } from "../services/api/src/wallet/safe-import.js";
+import { ownerChangeSender, ownerChangeTxBuilderJson, txBuilderFileName } from "../services/api/src/wallet/safe-tx-builder.js";
 
 type Hex = `0x${string}`;
 const RPC: Record<string, string> = { "8453": "https://mainnet.base.org", "84532": "https://sepolia.base.org" };
@@ -55,28 +58,6 @@ function args(): Record<string, string> {
     i++;
   }
   return out;
-}
-
-/**
- * Transaction Builder's own checksum (safe-react-apps, tx-builder
- * src/lib/checksum.ts): keccak256 over its key-sorted serialisation with
- * meta.name nulled. Written from that source, not tested against the app; a
- * mismatch only makes the app warn that the file was edited.
- */
-function serialize(json: unknown): string {
-  const replacer = (_: string, v: unknown) => (v === undefined ? null : v);
-  if (Array.isArray(json)) return `[${json.map(serialize).join(",")}]`;
-  if (json && typeof json === "object") {
-    const keys = Object.keys(json).sort();
-    let acc = `{${JSON.stringify(keys, replacer)}`;
-    for (const k of keys) acc += `${serialize((json as any)[k])},`;
-    return `${acc}}`;
-  }
-  return JSON.stringify(json, replacer);
-}
-function withChecksum(batch: any) {
-  const checksum = keccak256(toBytes(serialize({ ...batch, meta: { ...batch.meta, name: null } })));
-  return { ...batch, meta: { ...batch.meta, checksum } };
 }
 
 async function main() {
@@ -132,32 +113,20 @@ async function main() {
   }
   const deploy = needsVerifier && xy ? verifierDeploymentTransaction(xy.x, xy.y) : null;
 
-  // The owner who sends it: the one being replaced, or the only one.
-  const sender = mode === "swap"
-    ? state.owners.find((o) => !change.resultOwners.includes(o))!
-    : state.owners.length === 1 ? state.owners[0] : null;
+  const sender = ownerChangeSender(mode, state.owners, change.resultOwners);
   const exec = sender ? execTransactionByOwner(safe, sender, change) : null;
 
-  const steps = [
-    ...(deploy ? [{ to: deploy.to, value: deploy.value.toString(), data: deploy.data }] : []),
-    { to: change.to, value: change.value.toString(), data: change.data },
-  ];
-  const batch = withChecksum({
-    version: "1.0",
+  const out = a.out ?? txBuilderFileName(safe, chain);
+  writeFileSync(out, ownerChangeTxBuilderJson({
     chainId: chain,
-    createdAt: Date.now(),
-    meta: {
-      name: `Zold import: ${mode === "add" ? "add" : "swap in"} passkey verifier`,
-      description: `${deploy ? "Deploy the passkey's WebAuthn verifier, then " : ""}${
-        mode === "add" ? `add ${verifier} as owner (threshold 1)` : `replace ${sender} with ${verifier}`}. Owners after: ${change.resultOwners.join(", ")}.`,
-      txBuilderVersion: "1.18.0",
-      createdFromSafeAddress: safe,
-      createdFromOwnerAddress: "",
-    },
-    transactions: steps.map((s) => ({ ...s, contractMethod: null, contractInputsValues: null })),
-  });
-  const out = a.out ?? `safe-import-${safe}-${chain}.json`;
-  writeFileSync(out, JSON.stringify(batch, null, 2) + "\n");
+    safe,
+    owners: state.owners,
+    verifier,
+    mode,
+    change,
+    deploy,
+    createdAt: a["created-at"] ? Number(a["created-at"]) : Date.now(),
+  }));
 
   const print = (label: string, t: { to: string; value: bigint | string; data: string }) =>
     console.log(`\n${label}\n  to:    ${t.to}\n  value: ${t.value.toString()}\n  data:  ${t.data}`);

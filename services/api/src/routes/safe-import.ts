@@ -5,38 +5,50 @@
  * - `prepare` checks the account may still change Safes and that the target
  *   has the shape Zold can sign for, then hands back the passkey's verifier
  *   address and the owner change the Safe's current owner must send
- *   (scripts/safe-import-owner-tx.ts builds the same thing offline). Nothing
- *   is stored.
- * - `confirm` reads the Safe again and binds it only when the verifier is an
- *   owner and every check in wallet/safe-import.ts passes. An RPC failure
- *   binds nothing.
+ *   (scripts/safe-import-owner-tx.ts builds the same thing offline). Once the
+ *   verifier is an owner it also issues the passkey challenge for the import,
+ *   bound to the Safe's address, owners and threshold as read (the client
+ *   shows the other owner before the user approves). Nothing is stored.
+ * - `confirm` binds the Safe only with that passkey approval, for the Safe as
+ *   the chain still shows it, and only when the verifier is an owner and every
+ *   check in wallet/safe-import.ts passes. A session alone binds nothing: an
+ *   owner can be added to a Safe without its consent, so a Safe owned by the
+ *   verifier and someone else's key proves nothing about who imports it. An
+ *   RPC failure binds nothing.
  *
  * Never replaces a live Safe: once the account's own passkey Safe is active,
  * deployed, or holds anything, both routes refuse.
  */
 import express from "express";
 import { decodeFunctionResult, encodeFunctionData, getAddress, parseAbi } from "viem";
-import { HARNESS } from "../config.js";
+import { HARNESS, SECURITY } from "../config.js";
 import { addrs } from "../chain.js";
 import { store, type User } from "../store.js";
 import { ADDRESS_RE } from "../domain/contacts.js";
 import { partnerTimeout } from "../http.js";
 import { requireCapability } from "../http/guards.js";
+import { issueChallenge, stepUpBinding } from "../webauthn.js";
+import { verifyPasskeyStepUp } from "./auth.js";
 import { publicUser } from "../users/public-user.js";
 import { wrap } from "./util.js";
 import { CANDIDE, webauthnOwnerFromStore } from "../wallet/candide.js";
 import { deployVerifierForOwner, relayReader } from "../recovery/recovered-passkey.js";
 import {
   SafeImportRefusal,
+  assertImportableOwners,
   assertImportableShape,
   checkSafeForImport,
+  importApprovalTarget,
   jsonRpcReader,
   ownerChangeTransaction,
   passkeyVerifierAddress,
   readSafeForImport,
   verifierDeploymentTransaction,
   type ChainReader,
+  type SafeImportState,
 } from "../wallet/safe-import.js";
+import { ownerChangeTxBuilderJson, txBuilderFileName } from "../wallet/safe-tx-builder.js";
+import { redactedMessage } from "../http/log-cause.js";
 
 export interface SafeImportDeps {
   requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
@@ -46,11 +58,14 @@ export interface SafeImportDeps {
   deployVerifier?: (owner: { x: bigint; y: bigint }) => Promise<string | undefined>;
   /** Tests name the tokens; production reads EURe and USDC from deployments.json. */
   tokens?: () => Hex[];
+  /** Tests fix the Transaction Builder file's createdAt. */
+  now?: () => number;
 }
 
 type Hex = `0x${string}`;
 const ZERO = "0x0000000000000000000000000000000000000000";
 /** Chosen, not measured: up to 20 s for the RPC to show the verifier's code. */
+const VERIFIER_RECEIPT_TIMEOUT_MS = 60_000;
 const VERIFIER_CODE_POLLS = 10;
 const VERIFIER_CODE_POLL_MS = 2_000;
 const ERC20 = parseAbi(["function balanceOf(address) view returns (uint256)"]);
@@ -68,6 +83,7 @@ export function createSafeImportRouter(deps: SafeImportDeps) {
   const reader = deps.reader ?? (() => jsonRpcReader(CANDIDE.rpcUrl, () => partnerTimeout()));
   const deployVerifier = deps.deployVerifier ?? deployVerifierForOwner;
   const tokens = deps.tokens ?? (() => [addrs().eure, addrs().usdc]);
+  const now = deps.now ?? Date.now;
 
   /** Anything at `address` on the smart-account chain: ETH, EURe or USDC. */
   const holdsFunds = async (r: ChainReader, address: Hex): Promise<boolean> => {
@@ -103,7 +119,9 @@ export function createSafeImportRouter(deps: SafeImportDeps) {
     if (planCode && planCode !== "0x") {
       throw new Refusal(409, "this account's own Safe is already deployed; an import never replaces a live Safe", "SAFE_DEPLOYED");
     }
-    for (const a of new Set([plan.address.toLowerCase(), user.address.toLowerCase()])) {
+    // A new account's address is the zero address until its Safe exists, and
+    // the zero address holds burned ETH on every chain: it is never theirs.
+    for (const a of new Set([plan.address.toLowerCase(), user.address.toLowerCase()].filter((a) => a !== ZERO))) {
       if (await holdsFunds(r, a as Hex)) {
         throw new Refusal(409, `${a} holds funds; move them before binding the account to another Safe`, "PLAN_HAS_FUNDS");
       }
@@ -117,7 +135,7 @@ export function createSafeImportRouter(deps: SafeImportDeps) {
       return res.status(err.status).json({ error: err.message, code: err.code });
     }
     // A failed read is not an answer: nothing was bound.
-    return res.status(502).json({ error: `chain read failed, nothing was changed: ${(err as any)?.message ?? err}`, code: "RPC_FAILED" });
+    return res.status(502).json({ error: `chain read failed, nothing was changed: ${redactedMessage(err)}`, code: "RPC_FAILED" });
   };
 
   const userFor = (req: express.Request, res: express.Response): User | undefined => {
@@ -145,14 +163,39 @@ export function createSafeImportRouter(deps: SafeImportDeps) {
         const verifierCode = await r.getCode(verifier);
         const verifierDeployed = Boolean(verifierCode && verifierCode !== "0x");
         const alreadyOwner = state.owners.some((o) => o.toLowerCase() === verifier.toLowerCase());
+        const otherOwners = state.owners.filter((o) => o.toLowerCase() !== verifier.toLowerCase());
+        // Only once the owners are final: before the owner change, the set the
+        // user would approve is not the one confirm reads.
+        let approval: { challenge: string; rpId: string } | null = null;
+        try {
+          assertImportableOwners(state, verifier);
+          approval = {
+            challenge: issueChallenge("step_up", stepUpBinding(user.id, "safe.import", importApprovalTarget(state))),
+            rpId: user.passkey?.rpId ?? SECURITY.rpId,
+          };
+        } catch (err) {
+          if (!(err instanceof SafeImportRefusal)) throw err;
+        }
+        const deploy = verifierDeployed ? null : verifierDeploymentTransaction(owner.x, owner.y);
+        const createdAt = now();
         const changes: Record<string, unknown> = {};
         if (!alreadyOwner) {
           for (const mode of ["add", "swap"] as const) {
             try {
               const c = ownerChangeTransaction({ safe: address, owners: state.owners, threshold: state.threshold, verifier, mode });
-              changes[mode] = { ...tx(c), resultOwners: c.resultOwners };
+              changes[mode] = {
+                ...tx(c),
+                resultOwners: c.resultOwners,
+                // The browser only downloads this; it cannot build it.
+                txBuilder: {
+                  fileName: txBuilderFileName(address, CANDIDE.chainId.toString()),
+                  json: ownerChangeTxBuilderJson({
+                    chainId: CANDIDE.chainId.toString(), safe: address, owners: state.owners, verifier, mode, change: c, deploy, createdAt,
+                  }),
+                },
+              };
             } catch (err: any) {
-              changes[mode] = { refused: err?.message ?? String(err) };
+              changes[mode] = { refused: redactedMessage(err) };
             }
           }
         }
@@ -160,13 +203,15 @@ export function createSafeImportRouter(deps: SafeImportDeps) {
           safeAddress: address,
           chainId: Number(CANDIDE.chainId),
           owners: state.owners,
+          otherOwners,
           threshold: state.threshold,
           verifier,
           verifierDeployed,
           alreadyOwner,
           // Any key may send this; confirm also sends it from the deployer if needed.
-          deployVerifier: verifierDeployed ? null : tx(verifierDeploymentTransaction(owner.x, owner.y)),
+          deployVerifier: deploy ? tx(deploy) : null,
           ownerChange: alreadyOwner ? null : changes,
+          approval,
           script: `npm run safe:import-tx -- --chain ${CANDIDE.chainId} --safe ${address} --verifier ${verifier}`,
         });
       } catch (err) {
@@ -184,15 +229,31 @@ export function createSafeImportRouter(deps: SafeImportDeps) {
       try {
         const r = reader();
         const { plan, address, owner, verifier } = await eligible(user, r, String(req.body?.address ?? "").trim());
+        // Refusals that need no signature first, then the passkey, before
+        // anything is relayed or written.
+        const seen = await readSafeForImport(r, address);
+        assertImportableShape(seen);
+        assertImportableOwners(seen, verifier);
+        const approved = importApprovalTarget(seen);
+        if (!(await verifyPasskeyStepUp(user, req.body, res, "safe.import", approved))) return;
+        let state: SafeImportState;
         try {
-          await checkSafeForImport(r, address, verifier);
+          state = await checkSafeForImport(r, address, verifier);
         } catch (err) {
           if (!(err instanceof SafeImportRefusal) || err.code !== "VERIFIER_NO_CODE") throw err;
           // Every other check passed. The verifier is a permissionless
           // factory deployment; send it, wait for it, then check everything again.
           const hash = await deployVerifier(owner);
           if (!hash) throw err;
-          const receipt = await relayReader().waitForTransactionReceipt({ hash: hash as Hex, timeout: 120_000 });
+          // Bounded under Cloudflare's 100 s: past it the caller gets a 524
+          // while this carries on. A slow block is "try again", not an error;
+          // a retry finds the verifier deployed and goes straight through. 409,
+          // not 504: Cloudflare replaces an origin 5xx body with its own page.
+          const receipt = await relayReader()
+            .waitForTransactionReceipt({ hash: hash as Hex, timeout: VERIFIER_RECEIPT_TIMEOUT_MS })
+            .catch(() => {
+              throw new Refusal(409, "the verifier deployment is still confirming on chain; try again in a minute", "VERIFIER_PENDING");
+            });
           if (receipt.status !== "success") throw err;
           // A load-balanced RPC can answer from a node behind the receipt
           // (seen on sepolia.base.org). Wait for the code, bounded; still
@@ -202,7 +263,10 @@ export function createSafeImportRouter(deps: SafeImportDeps) {
             if (code && code !== "0x") break;
             await new Promise((ok) => setTimeout(ok, VERIFIER_CODE_POLL_MS));
           }
-          await checkSafeForImport(r, address, verifier);
+          state = await checkSafeForImport(r, address, verifier);
+        }
+        if (importApprovalTarget(state) !== approved) {
+          throw new Refusal(409, "the Safe's owners or threshold changed after you approved; check it again and approve the Safe as it is now", "SAFE_CHANGED");
         }
         const now = new Date().toISOString();
         const alreadyBound = store.findUserByAddress(address) ??

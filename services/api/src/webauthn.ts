@@ -150,7 +150,9 @@ async function importKey(k: StoredKey) {
 // ---------------------------------------------------------------------------
 // challenges (in-memory, single-use, 5 min TTL)
 
-export type ChallengePurpose = "register" | "login" | "step_up";
+/** The operator purposes are their own, so no user challenge can stand in for
+ *  an operator ceremony and no operator challenge for a user one. */
+export type ChallengePurpose = "register" | "login" | "step_up" | "operator_enrol" | "operator_login" | "operator_step_up";
 
 const challenges = new Map<string, { purpose: ChallengePurpose; binding?: string; exp: number }>();
 const CHALLENGE_TTL_MS = 5 * 60_000;
@@ -160,8 +162,14 @@ const CHALLENGE_TTL_MS = 5 * 60_000;
  *  its memory. */
 const MAX_CHALLENGES = 50_000;
 
+/* Every challenge lives CHALLENGE_TTL_MS, so the Map (insertion order) is
+ * also expiry order: stop at the first live one instead of scanning up to
+ * MAX_CHALLENGES on every unauthenticated issue. */
 function pruneChallenges(now = Date.now()) {
-  for (const [k, v] of challenges) if (v.exp < now) challenges.delete(k);
+  for (const [k, v] of challenges) {
+    if (v.exp >= now) break;
+    challenges.delete(k);
+  }
 }
 
 /**
@@ -183,6 +191,16 @@ export function issueChallenge(purpose: ChallengePurpose, binding?: string): str
   challenges.set(c, { purpose, binding, exp: Date.now() + CHALLENGE_TTL_MS });
   return c;
 }
+
+/**
+ * The binding of a step-up challenge: the account AND the action it approves,
+ * and for an action on one object (a Safe import) that object too. An approval
+ * collected for one change (say, a passkey replacement) is then refused by
+ * every other step-up-gated route on the same account, and an approval for one
+ * Safe by an import of any other.
+ */
+export const stepUpBinding = (userId: string, action: string, target?: string) =>
+  target === undefined ? `${userId}:${action}` : `${userId}:${action}:${target}`;
 
 function consumeChallenge(c: string, purpose: ChallengePurpose, binding?: string): boolean {
   const e = challenges.get(c);
@@ -230,13 +248,17 @@ export function verifyRegistration(
   rpId: string,
   origins: string[],
   binding?: string,
+  purpose: ChallengePurpose = "register",
 ): RegistrationResult {
   const clientDataJSON = b64urlToBuf(clientDataJSONB64);
-  checkClientData(clientDataJSON, "webauthn.create", origins, "register", binding);
+  checkClientData(clientDataJSON, "webauthn.create", origins, purpose, binding);
   const att = cborDecode(b64urlToBuf(attestationObjectB64)).value as Map<string, any>;
   const authData = parseAuthData(Buffer.from(att.get("authData")));
   if (!authData.rpIdHash.equals(sha256(rpId))) throw new Error("webauthn: rpId mismatch");
   if (!(authData.flags & 0x01)) throw new Error("webauthn: user presence not asserted");
+  // The passkey becomes the account's sign-in and its Safe's owner, so a key
+  // that only proves a touch (no PIN, no biometric) is not enough to enrol.
+  if (!(authData.flags & 0x04)) throw new Error("webauthn: user verification required to register a passkey");
   if (!authData.credentialId || !authData.key) throw new Error("webauthn: no credential in attestation");
   return { credentialId: bufToB64url(authData.credentialId), key: authData.key, signCount: authData.signCount };
 }
@@ -254,7 +276,9 @@ export async function verifyAssertion(
 ): Promise<{ signCount: number }> {
   const clientDataJSON = b64urlToBuf(clientDataJSONB64);
   checkClientData(clientDataJSON, "webauthn.get", origins, purpose, binding);
-  return verifyAssertionBytes(authenticatorDataB64, clientDataJSON, signatureB64, storedKey, storedCount, rpId, purpose === "step_up");
+  // Every purpose requires UV. A login hands out a session that can change
+  // account settings, so a touch on a stolen security key must not be one.
+  return verifyAssertionBytes(authenticatorDataB64, clientDataJSON, signatureB64, storedKey, storedCount, rpId, true);
 }
 
 export async function verifyAssertionForChallenge(
@@ -288,10 +312,9 @@ async function verifyAssertionBytes(
   const parsed = parseAuthDataHeader(authData);
   if (!parsed.rpIdHash.equals(sha256(rpId))) throw new Error("webauthn: rpId mismatch");
   if (!(parsed.flags & 0x01)) throw new Error("webauthn: user presence not asserted");
-  // A step-up gates a money-moving or key-binding action, so presence (someone
-  // touched the key) is not enough — require that the authenticator actually
-  // verified the human (UV flag). Otherwise "Face ID approved this payment" is a
-  // claim the server never checked.
+  // Presence (someone touched the key) is not enough — require that the
+  // authenticator actually verified the human (UV flag). Otherwise "Face ID
+  // approved this" is a claim the server never checked.
   if (requireUserVerification && !(parsed.flags & 0x04)) {
     throw new Error("webauthn: user verification required for this action");
   }

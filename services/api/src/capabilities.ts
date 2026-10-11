@@ -6,12 +6,17 @@
  * Extracted from server.ts so /api/health is not the reason this lives in a
  * 3,800-line file.
  */
-import { MONERIUM, SHOPIFY, moneriumOAuthEnabled } from "./config.js";
+import { TURNKEY } from "./config.js";
+import { EMAIL_VERIFICATION, ENS_GATEWAY, ENS_LOOKUP, FORWARDING, HARNESS, MONERIUM, SHOPIFY, TESTNET_FAUCET, moneriumOAuthEnabled } from "./config.js";
 import { moneriumApiKeysAvailable, moneriumEnvironment } from "./adapters/monerium-connection.js";
 import { cashRailOpen } from "./orchestrator.js";
+import { usdLabel } from "./usd-token.js";
+import { dripTokens, faucetEnabled } from "./faucet.js";
 import { shopifyAvailable } from "./routes/shopify.js";
 import { candideRecoveryEnabled } from "./recovery/candide-guardian.js";
 import { zoldenburgRecoveryEnabled } from "./recovery/zoldenburg-guardian.js";
+import { enrolmentAvailable } from "./recovery/enrolment-key.js";
+import { turnkeyGuardiansEnabled } from "./wallet/turnkey.js";
 
 /**
  * What this deployment can do, so the browser only offers actions the server
@@ -52,6 +57,43 @@ export function capabilities() {
     /** May a user add Zoldenburg as their recovery guardian, and may a lost
      *  device ask Zoldenburg to recover it? Needs the guardian address. */
     zoldenburgRecovery: zoldenburgRecoveryEnabled(),
+    /** May a user finish Zoldenburg recovery with 1 € from their bank? Needs
+     *  RECOVERY_IBAN_HMAC_KEY. Without it the operator can sign for nobody. */
+    zoldenburgEnrolment: zoldenburgRecoveryEnabled() && enrolmentAvailable(),
+    /** May a user make their own Google or Apple login a recovery guardian
+     *  (a Turnkey wallet)? Off until TURNKEY_GUARDIANS=1, which waits for
+     *  the recovery alerts; no screen offers it yet. */
+    turnkeyGuardians: turnkeyGuardiansEnabled(),
+    /** The OAuth client ids /guardian logs in with (not secrets: every login
+     *  URL carries them), or null while the switch is off. */
+    turnkeyLogins: turnkeyGuardiansEnabled() ? { google: TURNKEY.googleClientId, apple: TURNKEY.appleClientId } : null,
+    /** Turnkey's API, which /guardian alone calls to sign a recovery. */
+    turnkeyApi: turnkeyGuardiansEnabled() ? TURNKEY.baseUrl : null,
+    /** May a new company login bring in an existing Safe instead of
+     *  deploying one (routes/safe-import.ts)? Needs a real chain: under the
+     *  local harness both import routes answer NO_CHAIN. Whether one account
+     *  is still eligible is per user, and only `prepare` can tell. */
+    safeImport: !HARNESS.enabled,
+    /** Does a payment page take tokens from other chains? Only through a
+     *  Candide forwarder; without one the page's address is the Safe and
+     *  takes the app's USDC on this chain alone. */
+    paymentPageForwarding: Boolean(FORWARDING.rpcUrl) && !usdLabel().staging,
+    /** The app's dollar token, labelled by its own symbol(): "USDC" on Base
+     *  mainnet, "zUSD" on a staging chain (`staging: true`). */
+    usdToken: usdLabel(),
+    /** The ENS name payment pages resolve under (`alice.zoldhq.com`), or
+     *  null when this deployment runs no gateway. */
+    ensParent: ENS_GATEWAY.enabled ? ENS_GATEWAY.parent : null,
+    /** May a signed-in user look up an ENS name (GET /api/ens/lookup)? */
+    ensLookup: ENS_LOOKUP.enabled,
+    /** Does the app ask the user to confirm their email with a code? Off
+     *  until EMAIL_VERIFICATION is enabled with an SMTP server. */
+    emailVerification: EMAIL_VERIFICATION.enabled,
+    /** Test EURe per account from the testnet faucet, or 0 when there is
+     *  none — never on a chain where EURe is real money. */
+    faucetEur: faucetEnabled() ? TESTNET_FAUCET.grantEur : 0,
+    /** Tokens the public /faucet page drips, or none — same refusals. */
+    faucetTokens: dripTokens().map((t) => t.symbol),
     moneriumHost: (() => { try { return new URL(MONERIUM.baseUrl).host; } catch { return MONERIUM.baseUrl; } })(),
   };
 }

@@ -21,6 +21,7 @@ import {
   SafeSwapContext,
   SafeSwapPlan,
   MAX_SLIPPAGE_BPS,
+  assertMinOutBound,
   assertVenueTarget,
   balanceAfterWrite,
   defaultTokens,
@@ -87,6 +88,7 @@ export class RfqLiquidityProvider implements LiquidityProvider {
     const minOut = leg.minimumAmount
       ? BigInt(leg.minimumAmount)
       : (expectedOut * (10_000n - MAX_SLIPPAGE_BPS)) / 10_000n;
+    assertMinOutBound("RFQ maker", expectedOut, minOut, MAX_SLIPPAGE_BPS);
     // The maker's expiry wins when it is sooner than ours — executing past it
     // is a guaranteed revert.
     const makerExpiry = body.expiry ? new Date(Number(body.expiry) * 1000).toISOString() : null;

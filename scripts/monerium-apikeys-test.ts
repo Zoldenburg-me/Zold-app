@@ -67,6 +67,8 @@ const seen = {
   linkedAddress: "",
   linkSignature: "",
   linkedProfile: "",
+  /** Where GET /addresses/:a says the Safe is, when an earlier binding put it elsewhere. */
+  boundElsewhere: "",
   ibanRequestedFor: "",
   ibanRequestAnswered: 0,
   patches: [] as { iban: string; address: string; chain: string }[],
@@ -152,7 +154,7 @@ async function makePasskey() {
       attestation: b64url(enc(new Map<string, any>([
         ["fmt", "none"],
         ["attStmt", new Map()],
-        ["authData", authData(0x41, 0, true)],
+        ["authData", authData(0x45, 0, true)],
       ]))),
       clientDataJSON: clientData("webauthn.create", challenge),
     }),
@@ -225,7 +227,7 @@ const stub = createServer((req, res) => {
     if (url.pathname.startsWith("/addresses/")) {
       const addr = decodeURIComponent(url.pathname.slice("/addresses/".length)).toLowerCase();
       if (seen.linkedAddress && addr === seen.linkedAddress.toLowerCase()) {
-        return send(200, { address: seen.linkedAddress, chain: "sepolia", profile: seen.linkedProfile || PROFILE_ID });
+        return send(200, { address: seen.linkedAddress, chain: "sepolia", profile: seen.boundElsewhere || seen.linkedProfile || PROFILE_ID });
       }
       return send(404, { error: "address not linked" });
     }
@@ -306,13 +308,27 @@ async function call(pathname: string, body?: any, method?: string) {
     redirect: "manual",
   });
   const text = await res.text();
+  const headerLines: string[] = [];
+  res.headers.forEach((v, k) => headerLines.push(`${k}: ${v}`));
+  responses.push(`${headerLines.join("\n")}\n\n${text}`);
   let data: any = {};
   try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
   return { status: res.status, data, text };
 }
 
+/** Every response body and header this suite received, and everything the
+ *  API printed: the pasted secret must appear in none of them. */
+const responses: string[] = [];
+let serverLog = "";
+
 function bg(cmd: string, args: string[], env: Record<string, string> = {}) {
-  const c = spawn(cmd, args, { cwd: ROOT, stdio: "inherit", env: { ...process.env, ...env } });
+  const c = spawn(cmd, args, { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...env } });
+  for (const [from, to] of [[c.stdout, process.stdout], [c.stderr, process.stderr]] as const) {
+    from!.on("data", (chunk: Buffer) => {
+      serverLog += chunk.toString("utf8");
+      to.write(chunk);
+    });
+  }
   children.push(c);
   return c;
 }
@@ -436,8 +452,8 @@ try {
       const r = await call(`/api/users/${userId}/monerium/api-keys`, { clientId: USER_CLIENT_ID, clientSecret: USER_SECRET });
       assert.equal(r.status, 409, `expected 409, got ${r.status}: ${r.text}`);
       assert.equal(r.data.code, "MONERIUM_PROFILE_KIND_MISSING");
-      assert.match(r.data.error, /already connected with a company profile/);
-      assert.match(r.data.error, /connect again with your personal email/);
+      assert.match(r.data.error, /has only a company profile/);
+      assert.match(r.data.error, /choose Personal/);
       const me = await call(`/api/users/${userId}`);
       assert.equal(me.data.monerium, undefined, "a refused connect must leave no connection behind");
       assert.ok(!readFileSync(process.env.TRANSF_DB_PATH!, "utf8").includes("clientSecretEnc"), "a refused secret must not be written");
@@ -463,7 +479,8 @@ try {
   await t("the secret is encrypted at rest — plaintext never touches db.json", async () => {
     const db = readFileSync(process.env.TRANSF_DB_PATH!, "utf8");
     assert.ok(!db.includes(USER_SECRET), "client secret found in plaintext in db.json");
-    assert.ok(db.includes("clientSecretEnc"), "expected an encrypted secret field");
+    const stored = JSON.parse(db).users.find((u: any) => u.id === userId).monerium.apiKeys.clientSecretEnc;
+    assert.match(stored, /^v2\.t1\./, "the secret is written as v2 under the active key, bound to the user row");
   });
 
   await t("no endpoint returns the secret or even its ciphertext", async () => {
@@ -520,11 +537,33 @@ try {
     assert.equal(seen.linkedAddress, "", "nothing may be linked under the other profile");
   });
 
+  await t("an address Monerium already holds under the other profile gets no IBAN request", async () => {
+    // POST /addresses answers "linked" without moving an earlier binding, and
+    // POST /ibans would issue under whichever profile holds the address.
+    seen.boundElsewhere = BUSINESS_PROFILE_ID;
+    try {
+      const start = await call(`/api/users/${userId}/monerium/link-signature/start`, { profileId: PROFILE_ID });
+      assert.equal(start.status, 201, `link-signature start failed: ${start.text}`);
+      const approval = await passkey.assert(start.data.challenge, ++count);
+      const before = seen.ibanRequestedFor;
+      const r = await call(`/api/users/${userId}/monerium/activate`, { linkSignatureRequestId: start.data.requestId, ...approval });
+      assert.equal(r.status, 409, `expected 409, got ${r.status}: ${r.text}`);
+      assert.equal(r.data.code, "ADDRESS_NOT_ON_PROFILE");
+      assert.match(r.data.error, /corporate profile/);
+      assert.equal(seen.ibanRequestedFor, before, "no IBAN may be requested for an address on another profile");
+      const me = await call(`/api/users/${userId}`);
+      assert.equal(me.data.iban, "");
+      assert.match(me.data.funding.detail ?? "", /do NOT unlink/);
+    } finally {
+      seen.boundElsewhere = "";
+    }
+  });
+
   await t("activate on a profile that already has an IBAN answers IBAN_EXISTS_ELSEWHERE, not an error", async () => {
     const start = await call(`/api/users/${userId}/monerium/link-signature/start`, { profileId: PROFILE_ID });
     assert.equal(start.status, 201, `link-signature start failed: ${start.data.error ?? ""}`);
     safeAddress = start.data.address;
-    const approval = await passkey.assert(start.data.challenge, count);
+    const approval = await passkey.assert(start.data.challenge, ++count);
     const r = await call(`/api/users/${userId}/monerium/activate`, {
       profileId: PROFILE_ID,
       linkSignatureRequestId: start.data.requestId,
@@ -637,9 +676,51 @@ try {
     assert.equal(seen.unauthorised, 0);
   });
 
+  /** A fresh passkey approval, as the app sends with a credential change. */
+  const stepUp = async (action: "monerium.connect" | "monerium.disconnect") => {
+    const c = await call("/api/webauthn/challenge", { purpose: "step_up", action });
+    assert.equal(c.status, 200, `step-up challenge failed: ${c.text}`);
+    return { stepUp: await passkey.assert(c.data.challenge, ++count) };
+  };
+  /** Another signed-in browser on the same account. */
+  const otherSession = async () => {
+    const c = await call("/api/webauthn/challenge", { purpose: "login" });
+    const r = await call("/api/passkey/login", await passkey.assert(c.data.challenge, ++count));
+    assert.equal(r.status, 200, `login failed: ${r.text}`);
+    return r.data.sessionToken as string;
+  };
+  const withToken = async <T>(t: string, fn: () => Promise<T>) => {
+    const mine = token;
+    token = t;
+    try { return await fn(); } finally { token = mine; }
+  };
+
+  await t("a session alone cannot replace or drop the connected Monerium credential", async () => {
+    const replace = await call(`/api/users/${userId}/monerium/api-keys`, { clientId: USER_CLIENT_ID, clientSecret: USER_SECRET });
+    assert.equal(replace.status, 401, `replace without passkey: ${replace.text}`);
+    assert.match(replace.data.error, /fresh passkey approval/);
+    const dropKeys = await call(`/api/users/${userId}/monerium/api-keys`, undefined, "DELETE");
+    assert.equal(dropKeys.status, 401, `remove keys without passkey: ${dropKeys.text}`);
+    const dropConnection = await call(`/api/users/${userId}/monerium/connect`, undefined, "DELETE");
+    assert.equal(dropConnection.status, 401, `disconnect without passkey: ${dropConnection.text}`);
+    const me = await call(`/api/users/${userId}`);
+    assert.equal(me.data.monerium?.method, "api_keys", "the keys are still connected");
+    assert.equal(me.data.iban, EXISTING_IBAN, "and the IBAN is still recorded");
+  });
+
+  await t("replacing the keys with the passkey works and signs out every other session", async () => {
+    const other = await otherSession();
+    const r = await call(`/api/users/${userId}/monerium/api-keys`, { ...(await stepUp("monerium.connect")), clientId: USER_CLIENT_ID, clientSecret: USER_SECRET });
+    assert.equal(r.status, 201, `replace with passkey failed: ${r.text}`);
+    assert.equal((await withToken(other, () => call(`/api/users/${userId}`))).status, 401, "the other session is revoked");
+    assert.equal((await call(`/api/users/${userId}`)).status, 200, "the session that approved it stays");
+  });
+
   await t("removing the keys drops them from the store and closes the connection", async () => {
-    const r = await call(`/api/users/${userId}/monerium/api-keys`, undefined, "DELETE");
+    const other = await otherSession();
+    const r = await call(`/api/users/${userId}/monerium/api-keys`, await stepUp("monerium.disconnect"), "DELETE");
     assert.equal(r.status, 200, `remove failed: ${r.text}`);
+    assert.equal((await withToken(other, () => call(`/api/users/${userId}`))).status, 401, "the other session is revoked");
     assert.equal(r.data.monerium, undefined);
     assert.equal(r.data.iban, EXISTING_IBAN, "the IBAN Monerium attributes to the Safe still exists and stays recorded");
     assert.match(r.data.funding.detail ?? "", /keys removed/);
@@ -670,7 +751,7 @@ try {
       const r = await call(`/api/users/${companyId}/monerium/api-keys`, { clientId: USER_CLIENT_ID, clientSecret: USER_SECRET });
       assert.equal(r.status, 409, `expected 409, got ${r.status}: ${r.text}`);
       assert.equal(r.data.code, "MONERIUM_PROFILE_KIND_MISSING");
-      assert.match(r.data.error, /connect again with your company's email/);
+      assert.match(r.data.error, /choose Company/);
       assert.equal((await call(`/api/users/${companyId}`)).data.monerium, undefined);
     } finally {
       seen.profilesShown = "both";
@@ -682,6 +763,18 @@ try {
     assert.equal(r.status, 201, `connect failed: ${r.text}`);
     assert.equal(r.data.monerium.profileId, BUSINESS_PROFILE_ID);
     assert.equal(r.data.funding.moneriumProfileId, BUSINESS_PROFILE_ID);
+  });
+
+  await t("no response, header or API log line in this whole run carried a pasted secret", async () => {
+    assert.ok(responses.length > 20, `expected many responses, saw ${responses.length}`);
+    assert.match(serverLog, /Zold API listening/, "the API's output was not captured, so the log check would prove nothing");
+    for (const secret of [USER_SECRET, "usr_secret_definitely_wrong"]) {
+      const inResponse = responses.findIndex((r) => r.includes(secret));
+      assert.equal(inResponse, -1, `response ${inResponse} carried a pasted secret`);
+      assert.ok(!serverLog.includes(secret), "the API printed a pasted secret");
+    }
+    const db = readFileSync(process.env.TRANSF_DB_PATH!, "utf8");
+    assert.ok(!db.includes(USER_SECRET) && !db.includes("usr_secret_definitely_wrong"), "a pasted secret is in the store or its audit log");
   });
 
   if (failed.length) {

@@ -2,7 +2,7 @@
  * Draft payments: compose, edit, submit, review, execute.
  *
  * Four eyes: the reviewer may not be the drafter, whatever their role.
- * Editing another person's lines makes the editor the drafter.
+ * Any edit, with or without new lines, makes the editor the drafter.
  *
  * All-or-nothing at execution: every line is planned before anything is
  * created (wallet destinations, gated currencies, sub-fee and over-cap amounts
@@ -21,13 +21,14 @@ import { createQuote } from "../../fx.js";
 import { MONERIUM_NOT_CONNECTED, moneriumLiveFor } from "../../adapters/monerium-connection.js";
 import { accountBalances } from "../../chain.js";
 import { CURRENCY_REGISTRY, accountIsSpendable } from "../../domain/accounts.js";
-import { canReviewDraft } from "../../domain/roles.js";
+import { canReviewDraft, roleCan } from "../../domain/roles.js";
 import { auditProfileCheck, checkBackingProfile } from "../../adapters/monerium-profile.js";
 import {
   CSV_MAX_BYTES,
   activity,
   assertTransition,
   importCsv,
+  isCancellable,
   isEditable,
   totalsByAsset,
   validateLine,
@@ -35,13 +36,17 @@ import {
 import { paymentReference } from "../../domain/invoices.js";
 import type { DraftPayment, DraftState } from "../../domain/types.js";
 import { requireCapability, requirePermission, type OrgContext } from "../org-context.js";
-import { can, limitsFor } from "../../domain/plans.js";
+import { paymentReviewRequired } from "../../domain/payment-review.js";
+import { limitsFor } from "../../domain/plans.js";
 import {
   badRequest, type TransferFactory,
 } from "./shared.js";
 import {
   contactsById, reconcileDrift, releaseInvoicesOf, withExecutionState,
 } from "./state.js";
+import { CEILINGS, ceilingRefusal } from "../../domain/ceilings.js";
+import { knownError } from "../../http/known-errors.js";
+import { redactedMessage } from "../../http/log-cause.js";
 
 /** Resolving the org and the caller's role for a request — injected so this
  *  module cannot acquire its own way of deciding who is calling. */
@@ -75,6 +80,13 @@ export function createDraftRoutes(
     const ctx = ctxOf(req, res);
     if (!ctx) return;
     if (!requirePermission(ctx, res, "drafts.create")) return;
+    const open = store.draftsOf(ctx.org.id).filter((d) => !["EXECUTED", "FAILED", "REJECTED", "CANCELLED"].includes(d.state)).length;
+    if (open >= CEILINGS.openDraftsPerOrg) {
+      return res.status(409).json(ceilingRefusal("payment runs not yet executed", CEILINGS.openDraftsPerOrg));
+    }
+    if (!Array.isArray(req.body?.lines) || req.body.lines.length > CEILINGS.linesPerDraft) {
+      return res.status(400).json({ error: `A draft needs a list of lines, at most ${CEILINGS.linesPerDraft}.` });
+    }
 
     // The funding source is resolved INSIDE this org and stored as an id only:
     // an account or wallet id from another org must not be accepted, and the
@@ -96,7 +108,7 @@ export function createDraftRoutes(
       const contacts = contactsById(ctx.org.id);
       const lines = (req.body?.lines ?? []).map((l: Record<string, unknown>) => ({
         id: `dl_${randomUUID()}`,
-        ...validateLine(l, typeof l.contactId === "string" ? contacts.get(l.contactId) : undefined),
+        ...validateLine(l, typeof l?.contactId === "string" ? contacts.get(l.contactId) : undefined),
       }));
       if (!lines.length) return res.status(400).json({ error: "A draft needs at least one line." });
 
@@ -129,29 +141,42 @@ export function createDraftRoutes(
     }
     if (!isEditable(draft.state)) {
       return res.status(409).json({
-        error: `A draft in ${draft.state} cannot be edited. Send it back to draft first.`,
+        error: {
+          EXECUTING: "This payment run is being sent, so it can no longer be edited.",
+          EXECUTED: "This payment run was sent, so it can no longer be edited.",
+          FAILED: "This payment run failed while it was being sent. Start a new payment run instead of editing it.",
+          CANCELLED: "This payment run was cancelled. Start a new payment run instead.",
+        }[draft.state as "EXECUTING" | "EXECUTED" | "FAILED" | "CANCELLED"] ?? `A draft in ${draft.state} cannot be edited.`,
       });
     }
     try {
       const contacts = contactsById(ctx.org.id);
       const replaced = Array.isArray(req.body?.lines);
+      if (replaced && req.body.lines.length > CEILINGS.linesPerDraft) {
+        return res.status(400).json({ error: `A draft is limited to ${CEILINGS.linesPerDraft} lines.` });
+      }
       const lines = (replaced ? req.body.lines : draft.lines).map((l: Record<string, unknown>) => ({
-        id: typeof l.id === "string" ? l.id : `dl_${randomUUID()}`,
-        ...validateLine(l, typeof l.contactId === "string" ? contacts.get(l.contactId) : undefined),
+        id: typeof l?.id === "string" ? l.id : `dl_${randomUUID()}`,
+        ...validateLine(l, typeof l?.contactId === "string" ? contacts.get(l.contactId) : undefined),
       }));
       const updated = store.updateDraft(draft.id, {
         lines,
         // Re-pointing the lines is exactly how INVALID_DATA is resolved.
         state: "DRAFT",
         invalidLineIds: undefined,
-        // Whoever replaces the lines authored what is now in them, so they
-        // become the drafter four-eyes measures against. Without this, B could
-        // rewrite A's €1 draft into €9,000 to B's contact and then review it.
-        ...(replaced ? { createdByMemberId: ctx.member.id } : {}),
+        // Whoever edits authored what is now in it, so they become the drafter
+        // four-eyes measures against. That holds without `lines` too: every
+        // line is re-read from the address book above, so an empty edit is how
+        // a changed IBAN gets stamped into the draft. Without this, B could
+        // point A's payee at B's own IBAN, edit, and then review it.
+        createdByMemberId: ctx.member.id,
         reviewedByMemberId: undefined,
         reviewedAt: undefined,
         rejectedReason: undefined,
-        activity: [...draft.activity, activity(ctx.member.id, "edited")],
+        activity: [
+          ...draft.activity,
+          activity(ctx.member.id, "edited", ["PENDING_REVIEW", "REVIEWED"].includes(draft.state) ? `was ${draft.state}; review starts again` : undefined),
+        ],
       });
       res.json({ draft: updated, totals: totalsByAsset(updated) });
     } catch (err) {
@@ -165,7 +190,9 @@ export function createDraftRoutes(
     const ctx = ctxOf(req, res);
     if (!ctx) return;
     if (!requirePermission(ctx, res, "drafts.create")) return;
-    if (!requireCapability(ctx, res, "transfers.approvals")) return;
+    // Submitting is possible wherever review is: the plan includes it, or the
+    // org's policy still requires it after a downgrade.
+    if (!paymentReviewRequired(ctx.org) && !requireCapability(ctx, res, "transfers.approvals")) return;
 
     const draft = store.findDraft(String(req.params.draftId));
     if (!draft || draft.orgId !== ctx.org.id) {
@@ -200,13 +227,18 @@ export function createDraftRoutes(
   r.post("/:orgId/drafts/:draftId/review", (req, res) => {
     const ctx = ctxOf(req, res);
     if (!ctx) return;
-    if (!requireCapability(ctx, res, "transfers.approvals")) return;
+    // No plan check: a draft waiting for review was put there when review
+    // applied, and it stays reviewable after a downgrade or after review is
+    // turned off. The state machine only lets PENDING_REVIEW be reviewed.
 
     const draft = store.findDraft(String(req.params.draftId));
     if (!draft || draft.orgId !== ctx.org.id) {
       return res.status(404).json({ error: "no such draft" });
     }
-    const verdict = canReviewDraft(ctx.member.role, ctx.member.id, draft.createdByMemberId);
+    // Compared as people, not member rows: someone deactivated and re-invited
+    // holds a new row. A drafter that resolves to no user counts as the reviewer.
+    const drafterUserId = store.findMember(draft.createdByMemberId)?.userId ?? ctx.userId;
+    const verdict = canReviewDraft(ctx.member.role, ctx.userId, drafterUserId);
     if (!verdict.allowed) return res.status(403).json({ error: verdict.reason });
 
     const approve = req.body?.approve !== false;
@@ -246,6 +278,39 @@ export function createDraftRoutes(
   });
 
   /**
+   * Cancel a draft that has not started sending. A draft is a proposal, so
+   * whoever may propose payments, or review them, may withdraw one; the row
+   * is kept as CANCELLED, never deleted, and any invoice it was paying goes
+   * back to waiting for payment. Once execution starts, transfers may exist
+   * and nothing here can withdraw them.
+   */
+  r.post("/:orgId/drafts/:draftId/cancel", (req, res) => {
+    const ctx = ctxOf(req, res);
+    if (!ctx) return;
+    const draft = store.findDraft(String(req.params.draftId));
+    if (!draft || draft.orgId !== ctx.org.id) {
+      return res.status(404).json({ error: "no such draft" });
+    }
+    if (!roleCan(ctx.member.role, "drafts.create") && !roleCan(ctx.member.role, "drafts.review")) {
+      return res.status(403).json({ error: "Your role cannot propose or review payments, so it cannot cancel one." });
+    }
+    if (!isCancellable(draft.state)) {
+      return res.status(409).json({
+        error: draft.state === "CANCELLED"
+          ? "This draft is already cancelled."
+          : `A draft in ${draft.state} cannot be cancelled: sending has started.`,
+      });
+    }
+    const reason = String(req.body?.reason ?? "").trim().slice(0, 300) || undefined;
+    const cancelled = store.updateDraft(draft.id, {
+      state: "CANCELLED",
+      activity: [...draft.activity, activity(ctx.member.id, "cancelled", reason)],
+    });
+    releaseInvoicesOf(draft.id);
+    res.json({ draft: cancelled });
+  });
+
+  /**
    * Execute a reviewed draft: one transfer per line, each needing its own
    * device signature.
    *
@@ -267,13 +332,13 @@ export function createDraftRoutes(
     if (!draft || draft.orgId !== ctx.org.id) {
       return res.status(404).json({ error: "no such draft" });
     }
-    const checked = reconcileDrift(draft);
-    if (checked.state === "INVALID_DATA") {
-      return res.status(409).json({
+    let checked = reconcileDrift(draft);
+    const heldForDrift = () =>
+      res.status(409).json({
         error: "Some recipients changed since this draft was approved. It has been held.",
         draft: checked,
       });
-    }
+    if (checked.state === "INVALID_DATA") return heldForDrift();
 
     // An imported wallet is read-only: we build the transactions and its
     // owner signs them. The response says so explicitly.
@@ -301,7 +366,7 @@ export function createDraftRoutes(
     if (!account.backingUserId) {
       return res.status(409).json({
         error:
-          "This account has no funding identity yet. Provisioning a Safe and a Monerium profile per organisation is not built — only accounts carried over from an existing personal account can be spent from today.",
+          "No IBAN is connected to this account yet, so nothing can be sent from it. Connect one on the Accounts screen first.",
       });
     }
     // Spending authority is a device key in one person's browser. A `payer` on
@@ -342,6 +407,15 @@ export function createDraftRoutes(
     // A half-created batch consumes quotes and leaves transfers nobody asked
     // for, so every line is checked first and the whole draft is refused if any
     // one of them cannot be paid.
+    //
+    // The address book is checked here, with nothing awaited between this
+    // check and the bank details read below, so every IBAN and name planned
+    // is the one that was approved; later awaits use these copies.
+    checked = reconcileDrift(store.findDraft(checked.id) ?? checked);
+    if (checked.state === "INVALID_DATA") return heldForDrift();
+    // The row is live and written in place, so this is copied now: the claim
+    // below compares against the draft as it was when it was planned.
+    const plannedAt = checked.updatedAt;
     const plans: { lineId: string; iban: string; name: string; sendEur: number; invoiceId?: string }[] = [];
     const problems: { lineId: string; reason: string }[] = [];
 
@@ -415,20 +489,24 @@ export function createDraftRoutes(
       }
     } catch (err) {
       return res.status(502).json({
-        error: `Could not read the account balance, so the batch was not started: ${(err as Error).message}`,
+        error: `Could not read the account balance, so the batch was not started: ${redactedMessage(err)}`,
       });
     }
 
     // ── Claim, then create ────────────────────────────────────────────────
-    // Which states may be sent from depends on the plan. An org with
-    // approvals must go through review. An org without them has no review
-    // step, so requiring REVIEWED there would make every draft unsendable.
-    const approvals = can(ctx.org, "transfers.approvals").allowed;
-    const claimable: DraftState[] = approvals ? ["REVIEWED"] : ["DRAFT", "REVIEWED"];
+    // Which states may be sent from is the org's review policy, not the plan
+    // of the day: an org that requires review sends only REVIEWED drafts,
+    // after a downgrade too. One without review has no review step, so it
+    // sends from DRAFT. A draft waiting for review is never sent until it is
+    // reviewed, even if review has since been turned off.
+    const reviewRequired = paymentReviewRequired(ctx.org);
+    const claimable: DraftState[] = reviewRequired ? ["REVIEWED"] : ["DRAFT", "REVIEWED"];
     const notClaimable = (state: DraftState) => ({
-      error: approvals
-        ? `This draft is ${state}. On your plan a payment must be reviewed by a second person before it can be sent.`
-        : `This draft is ${state} and cannot be sent from that state — it may already be executing.`,
+      error: reviewRequired
+        ? `This draft is ${state}. This organisation requires a second person to review a payment before it can be sent.`
+        : state === "PENDING_REVIEW"
+          ? "This draft is waiting for review. It was submitted while review applied, so it is sent once someone reviews it."
+          : `This draft is ${state} and cannot be sent from that state — it may already be executing.`,
     });
     if (!claimable.includes(checked.state)) {
       return res.status(409).json(notClaimable(checked.state));
@@ -442,9 +520,16 @@ export function createDraftRoutes(
       return res.status(409).json(MONERIUM_NOT_CONNECTED);
     }
 
-    const claimed = store.claimDraftExecution(checked.id, claimable);
+    // Refused if anyone wrote the draft since the plans above were made from
+    // it (an edit, a cancel, a review): what is sent is what was checked.
+    const claimed = store.claimDraftExecution(checked.id, claimable, plannedAt);
     if (!claimed) {
-      return res.status(409).json(notClaimable(checked.state));
+      const now = store.findDraft(checked.id);
+      return res.status(409).json(
+        now && now.updatedAt !== plannedAt && claimable.includes(now.state)
+          ? { error: "This draft changed while it was being prepared. Nothing was sent; check it and send again." }
+          : notClaimable(now?.state ?? checked.state),
+      );
     }
 
     const authorizations: {
@@ -474,7 +559,13 @@ export function createDraftRoutes(
             : `${ctx.org.name} ${claimed.id.slice(0, 8)}`.slice(0, 140),
         });
       } catch (err) {
-        built = { ok: false as const, status: 500, body: { error: (err as Error).message } };
+        // A quote or build that threw is a partner or rate failure (a refusal
+        // comes back as built.ok === false): 503 with what failed, and the
+        // known kinds (rates down, Monerium refused) in their own words.
+        const known = knownError(err);
+        built = known
+          ? { ok: false as const, status: known.status, body: known.body }
+          : { ok: false as const, status: 503, body: { error: `Line ${plan.name}: the payment could not be prepared (${redactedMessage(err)}).` } };
       }
 
       if (!built.ok) {

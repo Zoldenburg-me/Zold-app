@@ -19,6 +19,22 @@ export interface User {
   /** The BIC Monerium lists for `iban` (GET /ibans). Keyed by the IBAN it was
    *  read for: after a move it no longer matches and is not published. */
   ibanBic?: { iban: string; bic: string; checkedAt: string };
+  /** When `iban` took its current value (issued onto this Safe or moved to
+   *  it). Stamped by store.updateUser; absent on rows from before. */
+  ibanSince?: string;
+  /** When a code sent to `email` was typed back (routes/email-verification.ts).
+   *  Cleared nowhere: there is no route that changes the email. */
+  emailVerifiedAt?: string;
+  /** The outstanding code, hashed. Never in any projection. */
+  emailCode?: {
+    hash: string;
+    /** The address the code went to; a code for another address is void. */
+    email: string;
+    expiresAt: string;
+    attempts: number;
+    /** Send times within the last hour, for the resend limits. */
+    sentAt: string[];
+  };
   /** Candide Safe smart-account address — the user's identity and balance
    *  account, and the address Monerium attaches the IBAN to. */
   address: `0x${string}`;
@@ -26,7 +42,27 @@ export interface User {
    *  store only its address — the private half stays in the user's browser. */
   authorizerAddress?: `0x${string}`;
   wallet?: { type: "candide-safe"; deployed: boolean; deployOpHash?: string };
-    /**
+  /** Testnet faucet grant, so one account is funded exactly once. txHash is
+   *  empty while the transfer is in flight (the synchronous claim that stops a
+   *  second call from paying twice). */
+  faucet?: { grantedEur: number; txHash: string; at: string };
+  /**
+   * The 1 € check that arms Zoldenburg as guardian
+   * (recovery/zoldenburg-enrolment.ts). `code` is open until a matching
+   * payment arrives; only its hash is kept. The enrolled account is kept as
+   * an HMAC (`keyId` names the key) and its last 4 characters, never the
+   * IBAN or the payer's name. Never in a public projection.
+   */
+  zoldenburgEnrolment?: {
+    code?: { hash: string; issuedAt: string; expiresAt: string };
+    bankAccountHmac?: string;
+    keyId?: string;
+    bankAccountLast4?: string;
+    orderId?: string;
+    enrolledAt?: string;
+    lastCheck?: { at: string; outcome: "waiting" | "mismatch" | "unreadable"; reason: string };
+  };
+  /**
    * Passkey Safe state. The passkey is the only owner (threshold 1).
    */
   passkeySafe?: {
@@ -74,6 +110,21 @@ export interface User {
       guardianOpHash?: string;
       activatedAt?: string;
     };
+    /**
+     * Turnkey guardians (routes/recovery-turnkey.ts): an account in a Turnkey
+     * sub-org whose only root user is the person. `created` means the Turnkey
+     * wallet exists and nothing more; `active` only once the module's
+     * guardian list on chain includes `address`. No ID token, no email.
+     */
+    socialGuardians?: {
+      kind: "self-social";
+      address: `0x${string}`;
+      turnkeySubOrgId: string;
+      status: "created" | "active";
+      createdAt: string;
+      /** When the module was seen listing `address`. */
+      activeAt?: string;
+    }[];
     createdAt: string;
     previousAddress?: `0x${string}`;
     /** Set once a recovery replaced the owner: the Safe keeps its address but
@@ -196,12 +247,22 @@ export interface User {
       expiresAt?: string;
       activatedAt: string;
     };
+    /** What a payer may send to depositAddress, as the forwarder's routes
+     *  said at the last activation (adapters/candide-forwarder.ts). */
     supportedTokens?: {
       chainId: number;
-      symbol: "EURE" | "USDC";
+      chainName?: string;
+      symbol: string;
       address: `0x${string}`;
       decimals: number;
+      /** Smallest unit; below it the deposit is not forwarded. */
+      minAmount?: string;
+      feeBps?: number;
     }[];
+    /** When supportedTokens was read from the forwarder's routes. Absent on a
+     *  page whose list predates that (a hard-coded EURe + USDC); such a list
+     *  is never served (routes/payment-page.ts livePaymentPage). */
+    routesReadAt?: string;
     settlementAsset: "EURE" | "USDC";
     autoConvert: boolean;
     createdAt: string;
@@ -240,6 +301,10 @@ export interface User {
      *  API-key connector existed, which were all OAuth. */
     method?: "oauth" | "api_keys";
     profileId?: string;
+    /** The email of the Monerium login the connection signed in with, from
+     *  Monerium's /auth/context. Shown back so a browser still signed in to
+     *  another Monerium login is noticed before an IBAN is moved. */
+    accountEmail?: string;
     accessTokenEnc?: string;
     refreshTokenEnc?: string;
     expiresAt?: string;
@@ -258,6 +323,10 @@ export interface User {
       accountEmail?: string;
     };
     profiles?: any[];
+    /** Monerium's answer the last time Zold read the connected profile live
+     *  (adopt, fund, re-check, execute). Newer than `profiles`, which is the
+     *  snapshot taken at connect. */
+    profileSeen?: { id: string; kind: string; state: string; at: string };
     ibans?: any[];
     addresses?: any[];
   };
@@ -267,6 +336,14 @@ export interface User {
    * that succeeds. Nothing else from the refused connect is kept.
    */
   moneriumRefusal?: { code: string; error: string; at: string };
+  /**
+   * Every Monerium profile this account has recorded, oldest first, APPEND-ONLY
+   * (domain/monerium-identity.ts nextProfileHistory, written only by
+   * store.updateUser). The Zoldenburg recovery review shows it, so a relink
+   * cannot quietly replace the identity the operator checks against. `at` is
+   * absent only for a profile held before the history was kept.
+   */
+  moneriumProfileHistory?: { profileId: string; at?: string }[];
   /**
    * IBANs the user moved to this Safe from another address at Monerium
    * (PATCH /ibans/{iban}), newest last, so support can see where an IBAN paid
@@ -339,6 +416,27 @@ export interface Quote {
   createdAt: string;
 }
 
+/** The states an operator may close a MANUAL_REVIEW transfer into. */
+export const REVIEW_RESOLUTION_STATES = ["REFUNDED", "PAID", "FAILED"] as const;
+export type ReviewResolutionState = (typeof REVIEW_RESOLUTION_STATES)[number];
+/** The step an operator's refund tx is recorded under when a review is
+ *  resolved as REFUNDED. */
+export const OPERATOR_REFUND_STEP = "operator.refund";
+
+export interface ReviewResolution {
+  state: ReviewResolutionState;
+  note: string;
+  /** operatorLabel(): `operator:<id>`; rows resolved before operator
+   *  passkeys hold a hash of the shared token that opened them. */
+  by: string;
+  at: string;
+  /** The transfer's error when it was resolved: why it was in review. */
+  previousError?: string;
+  /** What the operator cited: for PAID, a payout the transfer recorded as
+   *  carried out (transfers/review-evidence.ts). */
+  evidence?: string;
+}
+
 export type TransferState =
   | "CREATED"
   | "DEBITED"
@@ -354,17 +452,15 @@ export type TransferState =
   | "FAILED"
   | "REFUNDED";
 
+export type CryptoHolding = "none" | "held" | "awaiting_approval" | "converted" | "refused" | "unconfirmed";
+
 /**
  * One inbound crypto transfer seen at a user's account.
  *
  * Recorded before anything is moved or credited, so a crash between detection
- * and conversion leaves a record to resume from. `txHash` + `logIndex`
+ * and settlement leaves a record to resume from. `txHash` + `logIndex`
  * identifies an ERC-20 transfer and makes reprocessing a no-op.
- *
- * REFUSED is a resting state, not something to retry: nothing was credited and
- * the tokens are still the user's, where they landed.
  */
-export type CryptoHolding = "none" | "held" | "awaiting_approval" | "converted" | "refused";
 
 export interface CryptoDeposit {
   id: string;
@@ -378,6 +474,9 @@ export interface CryptoDeposit {
   /** The sending address, as the Transfer log named it. Absent on rows
    *  recorded before it was kept. The zero address is a Monerium mint. */
   from?: `0x${string}`;
+  /** The block's time: when the money arrived, whatever the token. Absent on
+   *  rows recorded before it was kept. */
+  arrivedAt?: string;
   amountEur?: number;
   amountUsdc?: number;
   /**
@@ -436,6 +535,8 @@ export interface CryptoDeposit {
    * - converted: swapped; `creditedEur` is the measured delta.
    * - refused: a swap was refused or failed; the USDC is still held and the
    *   conversion can be retried.
+   * - unconfirmed: a conversion was sent and its inclusion never confirmed.
+   *   It may still land, so it is not offered for conversion again.
    */
   holding: CryptoHolding;
   /** Why it is held or refused, in words a support person can act on. */
@@ -560,7 +661,7 @@ export interface Transfer {
   auth?: {
     to: `0x${string}`;
     amountWei: string; // bigint as decimal string (JSON store)
-    /** keccak256 commitment to the payout destination (rail + IBAN/VPA/phone),
+    /** keccak256 commitment to the payout destination (rail + IBAN or phone),
      *  signed by the device so the recipient cannot be swapped after signing. */
     destination: `0x${string}`;
     deadline: number; // unix seconds
@@ -694,6 +795,11 @@ export interface Transfer {
     deductions: string;
     at: string;
   };
+  /** An operator's decision that took the transfer out of MANUAL_REVIEW
+   *  (store.resolveTransferReview), after they acted on chain or at the
+   *  partner. Set once; no automatic path moves or compensates the transfer
+   *  after it. */
+  reviewResolution?: ReviewResolution;
   createdAt: string;
   updatedAt: string;
 }
@@ -721,8 +827,10 @@ export interface RecoveryRequest {
   userId: string;
   safeAddress: `0x${string}`;
   /** `zoldenburg`: the owner asks Zoldenburg, an operator reviews and signs
-   *  as guardian. `candide`: email/SMS OTPs. `managed` only on legacy rows. */
-  mode?: "managed" | "candide" | "zoldenburg";
+   *  as guardian. `candide`: email/SMS OTPs. `turnkey`: the owner's own
+   *  Google or Apple login signs as guardian on /guardian (REVIEW_PENDING
+   *  there means waiting for that signature). `managed` only on legacy rows. */
+  mode?: "managed" | "candide" | "zoldenburg" | "turnkey";
   status: RecoveryRequestStatus;
   requestedAt: string;
   expiresAt: string;
@@ -754,6 +862,12 @@ export interface RecoveryRequest {
     liveness: "pending" | "passed" | "failed";
     manualReview: "pending" | "passed" | "failed";
   };
+  /**
+   * The owner's alert emails (recovery/owner-alerts.ts): when each went out,
+   * or was covered by an earlier one, and how many sends failed. Never on a
+   * public projection.
+   */
+  ownerAlerts?: { requested?: string; executed?: string; failures?: number };
   /**
    * Candide email/SMS recovery, driven by the person who lost their device.
    *
@@ -819,6 +933,28 @@ export interface RecoveryRequest {
     };
     newOwners?: `0x${string}`[];
     newThreshold?: number;
+    /**
+     * The second 1 € (recovery/zoldenburg-bank-check.ts): it must come from
+     * the bank account enrolled for this account. `code` is open until it
+     * passes; only its hash is kept. `enrolledAt` names the enrolment it was
+     * matched against, so a later re-enrolment voids the pass. Never in a
+     * public projection as stored.
+     */
+    bankCheck?: {
+      code?: { hash: string; issuedAt: string };
+      /** Codes this request was given before `code`. A transfer already sent
+       *  with one still counts: a new code is for a lost one, not a reset. */
+      earlierCodes?: { hash: string; issuedAt: string }[];
+      /** How many codes this request was given, and when Monerium was last
+       *  read for it. Both survive a new code, so issuing codes cannot reset
+       *  the read throttle or run without limit. */
+      codesIssued?: number;
+      lastReadAt?: string;
+      passedAt?: string;
+      orderId?: string;
+      enrolledAt?: string;
+      lastCheck?: { at: string; outcome: "waiting" | "mismatch" | "unreadable"; reason: string };
+    };
     /** The EIP-712 digest the guardian signed, as the module computed it. */
     recoveryHash?: `0x${string}`;
     executeTxHash?: `0x${string}`;
@@ -830,6 +966,77 @@ export interface RecoveryRequest {
     finalizeAttempts?: number;
     finalizeError?: string;
   };
+  /**
+   * Turnkey-guardian recovery (recovery/turnkey-recovery.ts). Same custody
+   * rule: the new credential waits here until the chain shows it as owner.
+   * `guardianSubOrgId` names the sub-org whose login must sign.
+   */
+  turnkey?: {
+    accessHash?: string;
+    guardianSubOrgId?: string;
+    newPasskey?: NonNullable<RecoveryRequest["zoldenburg"]>["newPasskey"];
+    newOwners?: `0x${string}`[];
+    newThreshold?: number;
+    /** The digest the guardian signed, as the module computed it. */
+    recoveryHash?: `0x${string}`;
+    executeTxHash?: `0x${string}`;
+    executedAt?: string;
+    gracePeriodSeconds?: number;
+    finalizeAfter?: string;
+    finalizeTxHash?: `0x${string}`;
+    verifierDeployTxHash?: string;
+    finalizeAttempts?: number;
+    finalizeError?: string;
+  };
+}
+
+/**
+ * A bearer credential for one of our own services (today only the checkout
+ * service). Only the SHA-256 of the token is kept: the token is 256 random
+ * bits, so a plain hash is enough and the db file never holds a usable one.
+ * `expiresAt` is set when a rotation supersedes it; unset means current.
+ */
+export interface ServiceCredential {
+  id: string;
+  service: "checkout";
+  tokenHash: string;
+  createdAt: string;
+  expiresAt?: string;
+}
+
+/** A passkey an operator signs in and approves changes with. Never a user's:
+ *  operator credentials live only here, and user login never searches them. */
+export interface OperatorCredential {
+  credentialId: string;
+  key: { jwk: JsonWebKey; alg: "ES256" | "RS256" };
+  signCount: number;
+  /** The owner's name for it ("YubiKey, desk"); not a secret. */
+  label: string;
+  createdAt: string;
+  lastUsedAt?: string;
+}
+
+/** A named operator of the admin dashboard. Disabling is a read-time filter:
+ *  the record and its audit rows stay. */
+export interface Operator {
+  id: string;
+  name: string;
+  /** Must equal the Cloudflare Access identity on every admin request. */
+  email: string;
+  createdAt: string;
+  disabledAt?: string;
+  credentials: OperatorCredential[];
+}
+
+/** An operator's session: only the token's hash is stored, as for users. */
+export interface OperatorSession {
+  id: string;
+  operatorId: string;
+  tokenHash: string;
+  createdAt: string;
+  lastUsedAt: string;
+  expiresAt: string;
+  revokedAt?: string;
 }
 
 export interface Session {

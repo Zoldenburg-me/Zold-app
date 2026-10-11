@@ -13,6 +13,10 @@
  * GET /profiles list, and an id the token cannot see is a 403. No network,
  * no chain: the routers run in-process.
  *
+ * Also here: a stored connection that names a method but holds no secret is
+ * refused, never served on the app's own credentials (which see every
+ * app-provisioned profile).
+ *
  * Run: npm run monerium:profile:test
  */
 import "./_test-env.js";
@@ -33,12 +37,21 @@ process.env.MONERIUM_CLIENT_SECRET = "";
 type Profile = { id: string; kind: "personal" | "corporate"; state: string; name: string };
 /** What each bearer token can see at the fake Monerium. */
 const visible = new Map<string, Profile[]>();
-const fake = { down: false, reads: 0 };
+/** The IBANs each bearer token sees at GET /ibans (none unless set). */
+const ibansOf = new Map<string, any[]>();
+const fake = { down: false, reads: 0, appGrants: 0, onProfileRead: undefined as undefined | (() => void) };
+const APP_TOKEN = "tok-app";
 
 const monerium = createServer((req, res) => {
   const url = new URL(req.url ?? "/", "http://fake");
   const send = (code: number, b: any) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(b)); };
   if (fake.down) return send(503, { code: 503, status: "Service Unavailable" });
+  // The app's own credentials: a token that sees every app-provisioned
+  // profile, like the sandbox's GET /profiles on MONERIUM_CLIENT_SECRET.
+  if (url.pathname === "/auth/token") {
+    fake.appGrants++;
+    return send(200, { access_token: APP_TOKEN, token_type: "Bearer", expires_in: 3600 });
+  }
   const token = String(req.headers.authorization ?? "").replace(/^Bearer /, "");
   const mine = visible.get(token);
   if (!mine) return send(401, { code: 401, status: "Unauthorized" });
@@ -48,10 +61,12 @@ const monerium = createServer((req, res) => {
     const list = mine.filter((p) => !kind || p.kind === kind);
     return send(200, { profiles: list, total: list.length });
   }
+  if (url.pathname === "/ibans") return send(200, { ibans: ibansOf.get(token) ?? [] });
   const m = /^\/profiles\/([^/]+)$/.exec(url.pathname);
   if (m) {
     const p = mine.find((x) => x.id === decodeURIComponent(m[1]));
     if (!p) return send(403, { code: 403, status: "Forbidden" });
+    fake.onProfileRead?.();
     // Like the sandbox: no `name` on the single-profile answer.
     return send(200, { id: p.id, kind: p.kind, state: p.state, details: { state: "approved" }, form: { state: "approved" }, verifications: [] });
   }
@@ -64,9 +79,14 @@ const { initStore, store } = await import("../services/api/src/store.js");
 const { createOrgRouter } = await import("../services/api/src/routes/orgs.js");
 const { createDraftRoutes } = await import("../services/api/src/routes/business/drafts.js");
 const { resolveOrg } = await import("../services/api/src/routes/org-context.js");
-const { encryptToken } = await import("../services/api/src/adapters/monerium-connection.js");
+const { hasOwnMoneriumCredentials, connectionMethod, moneriumClientFor, moneriumLinkAccessToken } = await import("../services/api/src/adapters/monerium-connection.js");
+const { SECRETS } = await import("../services/api/src/stored-secrets.js");
+const { readMoneriumProfile } = await import("../services/api/src/adapters/monerium-profile.js");
+const { publicUser } = await import("../services/api/src/users/public-user.js");
+const { MoneriumAccessError } = await import("../services/api/src/adapters/monerium-client.js");
 const { normaliseLegalName, nameWarning, pickProfileForSignup } = await import("../services/api/src/domain/monerium-profile.js");
-const { HARNESS } = await import("../services/api/src/config.js");
+const { HARNESS, MONERIUM } = await import("../services/api/src/config.js");
+const { currentFingerprint } = await import("../services/api/src/domain/drafts.js");
 
 let passed = 0;
 const check = async (name: string, fn: () => void | Promise<void>) => {
@@ -89,7 +109,7 @@ function addUser(id: string, profile: Profile, n: number) {
     address: `0x${String(n).repeat(40).slice(0, 40)}`,
     iban: `DE8937040044053201300${n}`,
     funding: { mode: "sandbox", status: "active", moneriumProfileId: profile.id },
-    monerium: { connectedAt: now, method: "oauth", profileId: profile.id, accessTokenEnc: encryptToken(token), profiles: [{ id: profile.id, kind: profile.kind, state: profile.state }] },
+    monerium: { connectedAt: now, method: "oauth", profileId: profile.id, accessTokenEnc: SECRETS.moneriumAccessToken.seal(id, token), profiles: [{ id: profile.id, kind: profile.kind, state: profile.state }] },
   } as any);
   return token;
 }
@@ -142,7 +162,7 @@ await check("the signup kind picks the profile: personal for a person, corporate
   const onlyCorp = pickProfileForSignup("individual", [CORP, CORP_PENDING]);
   assert.equal(onlyCorp.ok, false);
   assert.equal((onlyCorp as any).code, "MONERIUM_PROFILE_KIND_MISSING");
-  assert.match((onlyCorp as any).error, /your personal email/);
+  assert.match((onlyCorp as any).error, /has only a company profile.*choose Personal/);
   assert.equal(pickProfileForSignup("company", [PERSONAL]).ok, false);
 });
 
@@ -166,6 +186,15 @@ await check("legal-form suffixes, case and punctuation do not make a name mismat
   assert.match(nameWarning({ type: "business", name: "Acme", legalName: "Acme Technik GmbH" }, "Other Holding AG")!, /Other Holding AG/);
 });
 
+/** These checks are about Monerium's profile answer, so they connect one
+ *  Safe to several companies; a Safe belongs to one, so the company accounts
+ *  it is active in step aside for the check and come back after. */
+async function withSafeFree(userId: string, fn: () => Promise<void>) {
+  const held = store.accounts.filter((a) => a.backingUserId === userId && a.status === "active").map((a) => a.id);
+  for (const id of held) store.updateAccount(id, { status: "gated" });
+  try { await fn(); } finally { for (const id of held) store.updateAccount(id, { status: "active" }); }
+}
+
 console.log("\nAdoption");
 
 await check("a corporate profile is adopted into a business org, and the account records whose IBAN it is", async () => {
@@ -183,17 +212,33 @@ await check("a corporate profile is adopted into a business org, and the account
   assert.equal(r.data.account.profile.status, "verified");
   assert.equal(r.data.warning, undefined, "matching names raise no warning");
   assert.equal(audits().at(-1)!.data.outcome, "passed");
+  assert.equal(audits().at(-1)!.data.viaIssuedIban, false);
 });
 
-await check("POST /accounts with useMyAccount adopts a corporate profile the same way", async () => {
+await check("a Safe connected to one company can't be connected to another, by either route; the account records when its books start", async () => {
+  assert.ok(store.findAccount("acc_biz")!.backedSince, "backedSince is recorded at the connection");
+  addOrg("org_biz_second", "business", "u_corp", "Acme Technik GmbH");
+  addGatedEur("acc_biz_second", "org_biz_second");
+  const fund = await call("POST", "/api/orgs/org_biz_second/accounts/acc_biz_second/fund", "u_corp");
+  assert.equal(fund.status, 409, JSON.stringify(fund.data));
+  assert.equal(fund.data.code, "SAFE_IN_OTHER_ORG");
+  assert.match(fund.data.error, /connected to Acme Technik GmbH/);
+  assert.equal(store.findAccount("acc_biz_second")!.backingUserId, undefined, "nothing written");
+  addOrg("org_biz_third", "business", "u_corp", "Acme Technik GmbH");
+  const open = await call("POST", "/api/orgs/org_biz_third/accounts", "u_corp", { currency: "EUR", useMyAccount: true });
+  assert.equal(open.status, 409);
+  assert.equal(open.data.code, "SAFE_IN_OTHER_ORG");
+});
+
+await check("POST /accounts with useMyAccount adopts a corporate profile the same way", () => withSafeFree("u_corp", async () => {
   addOrg("org_biz_new", "business", "u_corp", "Acme Technik GmbH");
   const r = await call("POST", "/api/orgs/org_biz_new/accounts", "u_corp", { currency: "EUR", useMyAccount: true });
   assert.equal(r.status, 201, JSON.stringify(r.data));
   assert.equal(r.data.account.moneriumProfile.kind, "corporate");
   assert.match(r.data.note, /company profile "Acme Technik GmbH"/);
-});
+}));
 
-await check("a different legal name is a visible warning, not a block", async () => {
+await check("a different legal name is a visible warning, not a block", () => withSafeFree("u_corp", async () => {
   addOrg("org_biz_other", "business", "u_corp", "Beta Handel UG (haftungsbeschränkt)");
   addGatedEur("acc_biz_other", "org_biz_other");
   const r = await call("POST", "/api/orgs/org_biz_other/accounts/acc_biz_other/fund", "u_corp");
@@ -201,7 +246,7 @@ await check("a different legal name is a visible warning, not a block", async ()
   assert.match(r.data.warning, /Acme Technik GmbH.*Beta Handel/);
   const list = await call("GET", "/api/orgs/org_biz_other/accounts", "u_corp");
   assert.match(list.data.accounts[0].profile.warning, /still go through/);
-});
+}));
 
 await check("a personal profile is refused for a business org, in plain words, and the account stays gated", async () => {
   addOrg("org_biz_p", "business", "u_personal", "Gamma GmbH");
@@ -233,14 +278,14 @@ await check("useMyAccount with a personal profile on a business org opens nothin
   assert.equal(store.accountsOf("org_biz_p").length, before);
 });
 
-await check("a corporate profile is refused for a personal org", async () => {
+await check("a corporate profile is refused for a personal org", () => withSafeFree("u_corp", async () => {
   addOrg("org_pers_c", "personal", "u_corp");
   addGatedEur("acc_pers_c", "org_pers_c");
   const r = await call("POST", "/api/orgs/org_pers_c/accounts/acc_pers_c/fund", "u_corp");
   assert.equal(r.status, 409);
   assert.equal(r.data.code, "MONERIUM_PROFILE_KIND_MISMATCH");
   assert.equal(store.findAccount("acc_pers_c")!.status, "gated");
-});
+}));
 
 await check("a personal profile is adopted into a personal org", async () => {
   addOrg("org_pers", "personal", "u_personal");
@@ -260,6 +305,60 @@ await check("a corporate profile Monerium has not approved is refused", async ()
   assert.equal(store.findAccount("acc_biz_pend")!.status, "gated");
 });
 
+const CORP_PENDING_IBAN: Profile = { id: "11111111-aaaa-4bbb-8ccc-000000000004", kind: "corporate", state: "pending", name: "Linder GmbH" };
+const pendingIbanToken = addUser("u_pending_iban", CORP_PENDING_IBAN, 4);
+const pendingIbanUser = () => store.findUser("u_pending_iban")!;
+const issued = (over: Record<string, unknown> = {}) => ({
+  profile: CORP_PENDING_IBAN.id, address: pendingIbanUser().address, iban: pendingIbanUser().iban, chain: "basesepolia", state: "approved", ...over,
+});
+
+await check("a pending company profile backs the account once Monerium has issued an IBAN on it to this Safe", async () => {
+  ibansOf.set(pendingIbanToken, [issued()]);
+  addOrg("org_lind", "business", "u_pending_iban", "Linder GmbH");
+  addGatedEur("acc_lind", "org_lind");
+  const r = await call("POST", "/api/orgs/org_lind/accounts/acc_lind/fund", "u_pending_iban");
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(store.findAccount("acc_lind")!.status, "active");
+  assert.equal(audits().at(-1)!.data.outcome, "passed");
+  assert.equal(audits().at(-1)!.data.viaIssuedIban, true, "the audit says this pass rests on an issued IBAN, not an approved profile");
+});
+
+await check("a pending company profile with no issued IBAN is still refused", () => withSafeFree("u_pending_iban", async () => {
+  ibansOf.set(pendingIbanToken, []);
+  addOrg("org_lind_none", "business", "u_pending_iban", "Linder GmbH");
+  addGatedEur("acc_lind_none", "org_lind_none");
+  const r = await call("POST", "/api/orgs/org_lind_none/accounts/acc_lind_none/fund", "u_pending_iban");
+  assert.equal(r.status, 409);
+  assert.equal(r.data.code, "MONERIUM_PROFILE_NOT_APPROVED");
+  assert.equal(store.findAccount("acc_lind_none")!.status, "gated");
+}));
+
+await check("an IBAN on the pending profile that pays into another address, or is not approved, does not count", () => withSafeFree("u_pending_iban", async () => {
+  addOrg("org_lind_other", "business", "u_pending_iban", "Linder GmbH");
+  const cases = [[issued({ address: `0x${"9".repeat(40)}` })], [issued({ state: "pending" })], [issued({ profile: CORP.id })]];
+  for (const [i, ibans] of cases.entries()) {
+    ibansOf.set(pendingIbanToken, ibans);
+    addGatedEur(`acc_lind_other_${i}`, "org_lind_other");
+    const r = await call("POST", `/api/orgs/org_lind_other/accounts/acc_lind_other_${i}/fund`, "u_pending_iban");
+    assert.equal(r.status, 409, JSON.stringify(ibans));
+    assert.equal(r.data.code, "MONERIUM_PROFILE_NOT_APPROVED");
+  }
+}));
+
+await check("a closed company profile is refused even with an IBAN issued to this Safe", () => withSafeFree("u_pending_iban", async () => {
+  ibansOf.set(pendingIbanToken, [issued()]);
+  visible.set(pendingIbanToken, [{ ...CORP_PENDING_IBAN, state: "closed" }]);
+  try {
+    addOrg("org_lind_closed", "business", "u_pending_iban", "Linder GmbH");
+    addGatedEur("acc_lind_closed", "org_lind_closed");
+    const r = await call("POST", "/api/orgs/org_lind_closed/accounts/acc_lind_closed/fund", "u_pending_iban");
+    assert.equal(r.status, 409);
+    assert.equal(r.data.code, "MONERIUM_PROFILE_NOT_APPROVED");
+  } finally {
+    visible.set(pendingIbanToken, [CORP_PENDING_IBAN]);
+  }
+}));
+
 await check("the client cannot claim a kind: a body saying corporate changes nothing", async () => {
   addGatedEur("acc_biz_p_claim", "org_biz_p");
   const r = await call("POST", "/api/orgs/org_biz_p/accounts/acc_biz_p_claim/fund", "u_personal", { kind: "corporate", profileId: CORP.id, name: "Gamma GmbH" });
@@ -267,7 +366,7 @@ await check("the client cannot claim a kind: a body saying corporate changes not
   assert.equal(r.data.code, "MONERIUM_PROFILE_KIND_MISMATCH");
 });
 
-await check("Monerium unreachable: refused with 503 and nothing written", async () => {
+await check("Monerium unreachable: refused with 503 and nothing written", () => withSafeFree("u_corp", async () => {
   addOrg("org_biz_down", "business", "u_corp", "Acme Technik GmbH");
   addGatedEur("acc_biz_down", "org_biz_down");
   const snapshot = JSON.stringify(store.findAccount("acc_biz_down"));
@@ -284,7 +383,7 @@ await check("Monerium unreachable: refused with 503 and nothing written", async 
   } finally {
     fake.down = false;
   }
-});
+}));
 
 console.log("\nExecution");
 
@@ -294,6 +393,32 @@ await check("execution passes the profile check for a still-corporate profile (a
   assert.ok(!String(r.data.code ?? "").startsWith("MONERIUM_"), JSON.stringify(r.data));
   assert.equal(audits().at(-1)!.data.stage, "execute");
   assert.equal(audits().at(-1)!.data.outcome, "passed");
+});
+
+await check("a contact's IBAN edited while execution waits on Monerium holds the draft: the edited IBAN is never planned", async () => {
+  const bank = { id: "ba_race", currency: "EUR", country: "DE", iban: "DE89370400440532013000", holderName: "Supplier GmbH" };
+  store.addContact({ id: "c_race", orgId: "org_biz", name: "Supplier GmbH", wallets: [], bankAccounts: [bank], createdAt: now, updatedAt: now } as any);
+  const destination: any = { kind: "bank", bankAccountId: bank.id, displayName: bank.holderName };
+  destination.fingerprint = currentFingerprint({ destination }, store.findContact("c_race")!);
+  store.addDraft({
+    id: "dr_race", orgId: "org_biz", source: { kind: "account", accountId: "acc_biz" }, state: "REVIEWED",
+    lines: [{ id: "ln_race", contactId: "c_race", destination, asset: "EUR", amount: "10.00", tags: [] }],
+    createdByMemberId: "m_org_biz_u_corp", activity: [], createdAt: now, updatedAt: now,
+  } as any);
+  // The edit lands after the drift check at the top of the route and before
+  // its bank details are read: inside the Monerium profile call.
+  fake.onProfileRead = () => {
+    store.updateContact("c_race", { bankAccounts: [{ ...bank, iban: "FR7630006000011234567890189", country: "FR" }] } as any);
+  };
+  try {
+    const r = await call("POST", "/api/orgs/org_biz/drafts/dr_race/execute", "u_corp");
+    assert.equal(r.status, 409, JSON.stringify(r.data));
+    assert.match(r.data.error, /recipients changed/);
+    assert.equal(store.findDraft("dr_race")!.state, "INVALID_DATA");
+    assert.deepEqual(store.findDraft("dr_race")!.invalidLineIds, ["ln_race"]);
+  } finally {
+    fake.onProfileRead = undefined;
+  }
 });
 
 await check("execution is refused after the profile's kind changes at Monerium, before any quote", async () => {
@@ -385,6 +510,160 @@ await check("a legacy business account backed by a personal profile fails its re
   assert.equal(r.status, 409);
   assert.equal(r.data.code, "MONERIUM_PROFILE_KIND_MISMATCH");
   assert.equal(store.findAccount("acc_legacy_p")!.moneriumProfile, undefined);
+});
+
+console.log("\nCompany signup");
+
+await check("a stored 'pending' copy does not hide the button: the list offers it and the live check connects the IBAN", async () => {
+  // Stored at activation, before Monerium approved; Monerium now says approved.
+  addUser("u_stale", CORP, 4);
+  store.updateUser("u_stale", { monerium: { ...store.findUser("u_stale")!.monerium!, profiles: [{ id: CORP.id, kind: "corporate", state: "pending" }] } } as any);
+  addOrg("org_stale", "business", "u_stale", "Acme Technik GmbH");
+  addGatedEur("acc_stale", "org_stale");
+  const list = await call("GET", "/api/orgs/org_stale/accounts", "u_stale");
+  assert.equal(list.data.adoption.allowed, true, JSON.stringify(list.data.adoption));
+  const r = await call("POST", "/api/orgs/org_stale/accounts/acc_stale/fund", "u_stale");
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(store.findAccount("acc_stale")!.status, "active");
+});
+
+await check("a stored copy of the other kind still refuses in the list", async () => {
+  const list = await call("GET", "/api/orgs/org_biz_p/accounts", "u_personal");
+  assert.equal(list.data.adoption.allowed, false);
+  assert.equal(list.data.adoption.code, "MONERIUM_PROFILE_KIND_MISMATCH");
+});
+
+await check("a company signup's first business org gets a gated EUR account that names no API flag", async () => {
+  addUser("u_signup", CORP_PENDING, 5);
+  store.updateUser("u_signup", { accountType: "company" } as any);
+  const r = await call("POST", "/api/orgs", "u_signup", { type: "business", name: "Acme Technik", legalName: "Acme Technik GmbH", country: "DE" });
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  const accts = store.accountsOf(r.data.organisation.id);
+  assert.equal(accts.length, 1);
+  assert.equal(accts[0].currency, "EUR");
+  assert.equal(accts[0].status, "gated");
+  assert.equal(accts[0].backingUserId, undefined, "no IBAN is connected until the owner's live check passes");
+  assert.doesNotMatch(JSON.stringify(accts[0].gate), /useMyAccount|provisioning/);
+  assert.match(accts[0].gate!.needs, /company’s IBAN/);
+});
+
+await check("a second business org, or one made by a personal signup, opens no account by itself", async () => {
+  const second = await call("POST", "/api/orgs", "u_signup", { type: "business", name: "Other Co", country: "DE" });
+  assert.equal(store.accountsOf(second.data.organisation.id).length, 0);
+  const personal = await call("POST", "/api/orgs", "u_personal", { type: "business", name: "Side Co", country: "DE" });
+  assert.equal(store.accountsOf(personal.data.organisation.id).length, 0);
+});
+
+await check("a company login cannot make a personal org: its Safe is the company's", async () => {
+  const r = await call("POST", "/api/orgs", "u_signup", { type: "personal", name: "Me", country: "DE" });
+  assert.equal(r.status, 409, JSON.stringify(r.data));
+  assert.equal(r.data.code, "PERSONAL_ORG_COMPANY_LOGIN");
+});
+
+await check("an organisation name with a hidden direction mark is refused, at creation and on rename", async () => {
+  addUser("u_names", PERSONAL, 7);
+  const made = await call("POST", "/api/orgs", "u_names", { type: "business", name: "Acme\u202e GmbH", country: "DE" });
+  assert.equal(made.status, 400, JSON.stringify(made.data));
+  assert.equal(made.data.code, "NAME_INVALID");
+  const legal = await call("POST", "/api/orgs", "u_names", { type: "business", name: "Acme", legalName: "Acme\u2066 GmbH", country: "DE" });
+  assert.equal(legal.status, 400, JSON.stringify(legal.data));
+  const ok = await call("POST", "/api/orgs", "u_names", { type: "business", name: "  Acme   Technik ", country: "DE" });
+  assert.equal(ok.status, 201, JSON.stringify(ok.data));
+  assert.equal(ok.data.organisation.name, "Acme Technik");
+  const renamed = await call("PATCH", `/api/orgs/${ok.data.organisation.id}`, "u_names", { name: "Ac\u00adme" });
+  assert.equal(renamed.status, 400, JSON.stringify(renamed.data));
+});
+
+await check("a name an older rule stored does not block a save that leaves it unchanged", async () => {
+  addOrg("org_old_rule", "business", "u_names", "Old​ Name");
+  const save = await call("PATCH", "/api/orgs/org_old_rule", "u_names", { name: "Old​ Name", legalName: "Old​ Name", taxId: "DE123" });
+  assert.equal(save.status, 200, JSON.stringify(save.data));
+  assert.equal(store.findOrganisation("org_old_rule")!.legalName, "Old​ Name");
+  assert.equal(store.findOrganisation("org_old_rule")!.taxId, "DE123");
+  // A personal space whose stored name has a double space: saving it as shown is no rename.
+  store.addOrganisation({ id: "org_two_space", type: "personal", name: "Anna  Maria", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now } as any);
+  store.addMember({ id: "m_two_space", orgId: "org_two_space", userId: "u_names", email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now });
+  const same = await call("PATCH", "/api/orgs/org_two_space", "u_names", { name: "Anna Maria", taxId: "1" });
+  assert.equal(same.status, 200, JSON.stringify(same.data));
+  const changed = await call("PATCH", "/api/orgs/org_old_rule", "u_names", { name: "Ne​w" });
+  assert.equal(changed.status, 400, "a changed name still follows the rule");
+});
+
+await check("an invited member's and a contact's name follow the same rule", async () => {
+  const invite = await call("POST", "/api/orgs/org_old_rule/members", "u_names", { email: "x@example.com", role: "viewer", name: "Ev‮il" });
+  assert.equal(invite.status, 400, JSON.stringify(invite.data));
+  assert.equal(invite.data.code, "NAME_INVALID");
+  const bad = await call("POST", "/api/orgs/org_old_rule/contacts", "u_names", { name: "Acme⁦ GmbH" });
+  assert.equal(bad.status, 400, JSON.stringify(bad.data));
+  const ok = await call("POST", "/api/orgs/org_old_rule/contacts", "u_names", { name: " Acme  GmbH " });
+  assert.equal(ok.status, 201, JSON.stringify(ok.data));
+  const id = ok.data.contact.id;
+  assert.equal(ok.data.contact.name, "Acme GmbH");
+  const short = await call("PATCH", `/api/orgs/org_old_rule/contacts/${id}`, "u_names", { name: "A" });
+  assert.equal(short.status, 400, "a too-short rename is refused, not silently dropped");
+  const kept = await call("PATCH", `/api/orgs/org_old_rule/contacts/${id}`, "u_names", { name: "Acme GmbH", notes: "n" });
+  assert.equal(kept.status, 200, JSON.stringify(kept.data));
+});
+
+await check("a person has one personal org: a second is refused", async () => {
+  addUser("u_fresh", PERSONAL, 6);
+  const first = await call("POST", "/api/orgs", "u_fresh", { type: "personal", name: "Fresh", country: "DE" });
+  assert.equal(first.status, 201, JSON.stringify(first.data));
+  const again = await call("POST", "/api/orgs", "u_fresh", { type: "personal", name: "Fresh 2", country: "DE" });
+  assert.equal(again.status, 409, JSON.stringify(again.data));
+  assert.equal(again.data.code, "PERSONAL_ORG_EXISTS");
+});
+
+await check("a personal space keeps its person's name: renaming it in /business is refused, other fields save", async () => {
+  const org = store.organisationsForUser("u_fresh").find(({ org: o }) => o.type === "personal")!.org;
+  const renamed = await call("PATCH", `/api/orgs/${org.id}`, "u_fresh", { name: "Something Else" });
+  assert.equal(renamed.status, 409, JSON.stringify(renamed.data));
+  assert.equal(renamed.data.code, "PERSONAL_ORG_NAME");
+  const same = await call("PATCH", `/api/orgs/${org.id}`, "u_fresh", { name: org.name, taxId: "DE123" });
+  assert.equal(same.status, 200, JSON.stringify(same.data));
+  assert.equal(store.findOrganisation(org.id)?.taxId, "DE123");
+});
+
+await check("opening an EUR account by hand without an IBAN says what it needs in plain words", async () => {
+  addOrg("org_hand", "business", "u_signup", "Hand GmbH");
+  const r = await call("POST", "/api/orgs/org_hand/accounts", "u_signup", { currency: "EUR" });
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  assert.doesNotMatch(`${r.data.note} ${JSON.stringify(r.data.account.gate)}`, /useMyAccount|provisioning/);
+});
+
+await check("a row that names a method but stores no secret is not a connection, and never falls back to the app's credentials", async () => {
+  // The app's credentials are present here, so a fallback would succeed and
+  // GET /profiles would list every app-provisioned profile.
+  visible.set(APP_TOKEN, [CORP, PERSONAL, CORP_PENDING]);
+  MONERIUM.clientId = "app-client";
+  MONERIUM.clientSecret = "app-secret";
+  try {
+    const empty = [
+      { id: "u_empty_oauth", monerium: { connectedAt: now, method: "oauth", profileId: CORP.id } },
+      { id: "u_empty_keys", monerium: { connectedAt: now, method: "api_keys", profileId: CORP.id } },
+      { id: "u_keys_claim_oauth_token", monerium: { connectedAt: now, method: "api_keys", profileId: CORP.id, accessTokenEnc: SECRETS.moneriumAccessToken.seal("u_keys_claim_oauth_token", corpToken) } },
+    ];
+    for (const row of empty) {
+      store.addUser({ id: row.id, name: row.id, country: "DE", kycStatus: "approved", createdAt: now, address: "0x" + "e".repeat(40), monerium: row.monerium } as any);
+      const user = store.findUser(row.id)!;
+      assert.equal(connectionMethod(user), null, row.id);
+      assert.equal(hasOwnMoneriumCredentials(user), false, row.id);
+      assert.throws(() => moneriumClientFor(user), MoneriumAccessError, row.id);
+      await assert.rejects(moneriumLinkAccessToken(user), MoneriumAccessError, row.id);
+      await assert.rejects(readMoneriumProfile(user, CORP.id), (e: any) => e.code === "MONERIUM_NOT_CONNECTED", row.id);
+      assert.equal(publicUser(user).monerium?.method, undefined, `${row.id}: the app must not show a method it cannot use`);
+    }
+    assert.equal(fake.appGrants, 0, "no app token was requested for a user who claims a connection");
+    // A user with no connection at all still gets the app client.
+    store.addUser({ id: "u_none", name: "u_none", country: "DE", kycStatus: "approved", createdAt: now, address: "0x" + "d".repeat(40) } as any);
+    await moneriumClientFor(store.findUser("u_none")!).bearerToken();
+    assert.equal(fake.appGrants, 1);
+    // And a real OAuth row is unaffected.
+    assert.equal(connectionMethod(store.findUser("u_corp")!), "oauth");
+  } finally {
+    MONERIUM.clientId = "";
+    MONERIUM.clientSecret = "";
+  }
 });
 
 server.close();

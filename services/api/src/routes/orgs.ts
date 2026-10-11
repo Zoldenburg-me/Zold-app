@@ -6,6 +6,7 @@
  * second way to decide who is calling.
  */
 
+import { safeBooksStart } from "../domain/safe-books.js";
 import express from "express";
 import { randomBytes, randomUUID } from "node:crypto";
 import { store } from "../store.js";
@@ -16,6 +17,7 @@ import {
   requirePermission,
   requireWithinLimit,
   resolveOrg,
+  type OrgContext,
   type SessionResolver,
 } from "./org-context.js";
 import {
@@ -29,6 +31,7 @@ import {
 import {
   PLANS,
   TRIAL_DAYS,
+  can,
   effectivePlan,
   limitsFor,
   plansFor,
@@ -39,12 +42,83 @@ import { ROLES, type Account, type OrgType, type Organisation, type PlanId, type
 import { ADDRESS_RE, ContactError, validateBankAccount, validateWallet } from "../domain/contacts.js";
 import { hashToken } from "../domain/invoices.js";
 import { emailIsProven, roleCan, wouldOrphanOrg } from "../domain/roles.js";
-import { KYC } from "../config.js";
+import { CHAIN_ID, KYC } from "../config.js";
 import { wrap } from "./util.js";
+import { hashMessage } from "viem";
+import { auditEntry } from "../audit.js";
+import { newChallenge, parseSignature, publicWallet } from "../domain/wallet-ownership.js";
+import { verifyOwnership } from "../wallet-sync/ownership.js";
+import { walletEntryId } from "../domain/wallet-transfers.js";
 import { accountProfileStanding } from "../domain/monerium-profile.js";
-import { adoptionHint, auditProfileCheck, checkBackingProfile } from "../adapters/monerium-profile.js";
+import { cleanName, sameName } from "../users/display-name.js";
+import { adoptionHint, auditProfileCheck, checkBackingProfile, profileWait } from "../adapters/monerium-profile.js";
+import { emailLooksValid } from "../domain/email.js";
+import { CEILINGS, ceilingRefusal } from "../domain/ceilings.js";
+import { paymentReviewRequired, reviewHeldOnPlanChange } from "../domain/payment-review.js";
+import { verifyPasskeyStepUp } from "./auth.js";
 
 const INVITE_TTL_MS = 3 * 24 * 60 * 60 * 1000; // Gnosis expired invites at 3 days
+/** An organisation's name and legal name, in characters. */
+const ORG_NAME_MAX = 120;
+/** A contact's (payee's) name, in characters. */
+const CONTACT_NAME_MAX = 200;
+
+/** Why an EUR account with no IBAN behind it cannot send, and what connects
+ *  one, in the words the Accounts screen shows: no API field names. */
+function noIbanGate(type: OrgType): NonNullable<Account["gate"]> {
+  return type === "business"
+    ? {
+        reason: "No IBAN is connected to this account yet, so nothing can be sent from it.",
+        needs: "the company’s IBAN from its company profile at Monerium. Once Monerium has issued it, connect it here.",
+      }
+    : {
+        reason: "No IBAN is connected to this account yet, so nothing can be sent from it.",
+        needs: "your own IBAN from Monerium. Once it is issued, fund this account from it.",
+      };
+}
+
+/**
+ * The gate an account shows, from what it lacks when it is read. A row's
+ * stored `gate` keeps the wording it was opened with, so it is only the
+ * fallback.
+ */
+function gateOf(org: Pick<Organisation, "type">, a: Account): Account["gate"] {
+  if (a.status !== "gated") return undefined;
+  if (a.currency === "EUR" && !a.backingUserId) return noIbanGate(org.type);
+  return initialStatusFor(a.currency).gate ?? a.gate;
+}
+
+/** An account as the API returns it: read-time gate and profile standing. */
+function accountView(org: Organisation, a: Account) {
+  // Who backs it, by the name members already see on Members: Home says
+  // "Spends from Jonas's account" instead of a bare user id.
+  const backer = a.backingUserId
+    ? store.membersOf(org.id).find((m) => m.userId === a.backingUserId && m.status === "active")
+    : undefined;
+  return {
+    ...a, gate: gateOf(org, a), profile: accountProfileStanding(org, a),
+    // As Members shows them: the name, else the email.
+    ...(backer?.name || backer?.email ? { backingMemberName: backer.name || backer.email } : {}),
+  };
+}
+
+/**
+ * A Safe belongs to one organisation: the company whose active account it
+ * backs. The person's own (personal) space does not count, since connecting
+ * the Safe to a company is how it moves there. Returns that company, if it is
+ * not `orgId`.
+ */
+export function safeTakenBy(userId: string, orgId: string): { id: string; name: string } | undefined {
+  for (const a of store.accounts) {
+    if (a.backingUserId !== userId || a.orgId === orgId || a.status !== "active") continue;
+    const other = store.findOrganisation(a.orgId);
+    if (other?.type === "business") return { id: other.id, name: other.name };
+  }
+  return undefined;
+}
+
+const safeTakenError = (o: { name: string }) =>
+  `Your account is connected to ${o.name}, and an account belongs to one organisation. It can't be connected here as well.`;
 
 export function createOrgRouter(requireSession: SessionResolver): express.Router {
   const r = express.Router();
@@ -83,8 +157,14 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
 
     const { name, type, country, legalName, taxId, email } = req.body ?? {};
     const orgType: OrgType = type === "business" ? "business" : "personal";
-    if (typeof name !== "string" || name.trim().length < 2) {
-      return res.status(400).json({ error: "An organisation needs a name." });
+    // Printed on invoices and documents: the same rule as a person's name.
+    const orgName = cleanName(name, { min: 2, max: ORG_NAME_MAX });
+    if (orgName === null) {
+      return res.status(400).json({ code: "NAME_INVALID", error: `An organisation needs a name of 2 to ${ORG_NAME_MAX} characters, without hidden or control characters.` });
+    }
+    const orgLegalName = typeof legalName === "string" && legalName.trim() ? cleanName(legalName, { min: 2, max: ORG_NAME_MAX }) : undefined;
+    if (orgLegalName === null) {
+      return res.status(400).json({ code: "NAME_INVALID", error: `The legal name needs 2 to ${ORG_NAME_MAX} characters, without hidden or control characters.` });
     }
     if (typeof country !== "string" || !/^[A-Za-z]{2}$/.test(country)) {
       return res
@@ -92,12 +172,37 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
         .json({ error: "Country must be an ISO 3166-1 alpha-2 code, e.g. DE." });
     }
 
+    /**
+     * A personal org is the person's own books, so there is one per person,
+     * and none for a company login: its Safe and IBAN are the company's.
+     */
+    if (orgType === "personal") {
+      if (store.findUser(session.userId)?.accountType === "company") {
+        return res.status(409).json({
+          code: "PERSONAL_ORG_COMPANY_LOGIN",
+          error: "This is a company login, so it has no personal space. For your own money, sign up for Zold as a person with your own email.",
+        });
+      }
+      if (store.organisationsForUser(session.userId).some(({ org: o }) => o.type === "personal")) {
+        return res.status(409).json({ code: "PERSONAL_ORG_EXISTS", error: "You already have a personal space." });
+      }
+    }
+
+    if (orgType === "business") {
+      const owned = store
+        .organisationsForUser(session.userId)
+        .filter(({ org: o, member: m }) => o.type === "business" && m.role === "owner").length;
+      if (owned >= CEILINGS.businessOrgsPerUser) {
+        return res.status(409).json(ceilingRefusal("business organisations you own", CEILINGS.businessOrgsPerUser));
+      }
+    }
+
     const now = new Date().toISOString();
     const org: Organisation = {
       id: `org_${randomUUID()}`,
       type: orgType,
-      name: name.trim(),
-      legalName: typeof legalName === "string" ? legalName.trim() : undefined,
+      name: orgName,
+      legalName: orgLegalName,
       taxId: typeof taxId === "string" ? taxId.trim() : undefined,
       email: typeof email === "string" ? email.trim() : undefined,
       address: { country: country.toUpperCase() },
@@ -126,6 +231,33 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       acceptedAt: now,
     });
 
+    /**
+     * A company signup's first business org is the company that login was
+     * made for, so it gets its EUR account now and the Accounts screen is not
+     * empty. Without an IBAN behind it: the owner connects the company's IBAN
+     * (POST .../fund) once Monerium has issued it, and that call is the live
+     * profile check. Any further business org opens its accounts by hand.
+     */
+    const caller = store.findUser(session.userId);
+    const firstCompanyOrg =
+      orgType === "business" &&
+      caller?.accountType === "company" &&
+      !store.organisationsForUser(session.userId).some(({ org: o }) => o.id !== org.id && o.type === "business");
+    if (firstCompanyOrg) {
+      store.addAccount({
+        id: `acc_${randomUUID()}`,
+        orgId: org.id,
+        currency: "EUR",
+        label: defaultLabel("EUR"),
+        status: "gated",
+        provider: CURRENCY_REGISTRY.EUR.provider,
+        identifier: {},
+        gate: noIbanGate("business"),
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+
     res.status(201).json({ organisation: publicOrg(org, member) });
   });
 
@@ -142,8 +274,26 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
 
     const patch: Partial<Organisation> = {};
     const b = req.body ?? {};
-    if (typeof b.name === "string" && b.name.trim().length >= 2) patch.name = b.name.trim();
-    if (typeof b.legalName === "string") patch.legalName = b.legalName.trim();
+    // Settings sends every field on save: a name it did not change is left as
+    // stored, so one an older rule let in does not block the rest of the save.
+    if (typeof b.name === "string" && !sameName(b.name, ctx.org.name)) {
+      const n = cleanName(b.name, { min: 2, max: ORG_NAME_MAX });
+      if (n === null) return res.status(400).json({ code: "NAME_INVALID", error: `The name needs 2 to ${ORG_NAME_MAX} characters, without hidden or control characters.` });
+      patch.name = n;
+    }
+    // A personal space is named after its person: one name, changed in the app.
+    if (ctx.org.type === "personal" && patch.name !== undefined) {
+      return res.status(409).json({
+        code: "PERSONAL_ORG_NAME",
+        error: "Your personal space is named after you. Change your name in the Zold app, under Profile.",
+      });
+    }
+    if (typeof b.legalName === "string" && !sameName(b.legalName, ctx.org.legalName ?? "")) {
+      // Empty clears it; anything else follows the name rule.
+      const n = b.legalName.trim() ? cleanName(b.legalName, { min: 2, max: ORG_NAME_MAX }) : "";
+      if (n === null) return res.status(400).json({ code: "NAME_INVALID", error: `The legal name needs 2 to ${ORG_NAME_MAX} characters, without hidden or control characters.` });
+      patch.legalName = n;
+    }
     if (typeof b.taxId === "string") patch.taxId = b.taxId.trim();
     if (typeof b.email === "string") patch.email = b.email.trim();
     if (typeof b.notificationEmail === "string") {
@@ -258,6 +408,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     }
     const org = store.updateOrganisation(ctx.org.id, {
       plan: plan as Organisation["plan"],
+      ...reviewHeldOnPlanChange(ctx.org, plan as PlanId),
       // A real plan change supersedes a running trial rather than stacking.
       ...(trialIsActive(ctx.org)
         ? { trial: { ...ctx.org.trial!, endedAt: new Date().toISOString() } }
@@ -271,6 +422,43 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
           : undefined,
     });
   });
+
+  // ── Payment review policy ─────────────────────────────────────────────────
+
+  /**
+   * Turn payment review on or off for this organisation.
+   *
+   * Off removes a financial control, so it takes an owner and a fresh passkey
+   * approval, on any plan: a downgraded org must be able to make the choice
+   * the plan no longer makes for it. On is the paid feature, so it needs the
+   * plan. Drafts already waiting for review keep waiting either way.
+   */
+  r.post("/:orgId/payment-review", wrap(async (req, res) => {
+    const ctx = ctxOf(req, res);
+    if (!ctx) return;
+    if (!requirePermission(ctx, res, "payments.policy")) return;
+    if (ctx.org.type !== "business") {
+      return res.status(400).json({ error: "Payment review is part of the business product." });
+    }
+    if (typeof req.body?.required !== "boolean") {
+      return res.status(400).json({ error: "Say whether review is required: { required: true | false }." });
+    }
+    const required: boolean = req.body.required;
+    const was = paymentReviewRequired(ctx.org);
+    if (required && !was && !requireCapability(ctx, res, "transfers.approvals")) return;
+    if (!required && was) {
+      const user = store.findUser(ctx.userId);
+      if (!user) return res.status(401).json({ error: "no such user" });
+      if (!(await verifyPasskeyStepUp(user, req.body, res, "org.payment-review.off"))) return;
+    }
+    const org = store.updateOrganisation(ctx.org.id, {
+      paymentReview: { required, changedAt: new Date().toISOString(), source: "owner", changedByMemberId: ctx.member.id },
+    });
+    if (required !== was) {
+      store.audit(auditEntry("org.payment_review_changed", { orgId: org.id, required, memberId: ctx.member.id }, ctx.userId));
+    }
+    res.json({ organisation: publicOrg(org, ctx.member) });
+  }));
 
   // ── Members ───────────────────────────────────────────────────────────────
 
@@ -289,11 +477,17 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
 
     const email = String(req.body?.email ?? "").trim().toLowerCase();
     const role = String(req.body?.role ?? "viewer") as Role;
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+    if (!emailLooksValid(email)) {
       return res.status(400).json({ error: "A member needs a valid email address." });
     }
     if (!ROLES.includes(role)) {
       return res.status(400).json({ error: `Role must be one of ${ROLES.join(", ")}.` });
+    }
+    // Optional, and shown on Members until they accept: the person name rule.
+    const rawName = req.body?.name;
+    const inviteName = typeof rawName === "string" && rawName.trim() ? cleanName(rawName, { min: 1, max: 120 }) : undefined;
+    if (inviteName === null) {
+      return res.status(400).json({ code: "NAME_INVALID", error: "The name needs 1 to 120 characters, without hidden or control characters." });
     }
     // Only an owner may mint another owner; otherwise an admin could promote
     // themselves past the person who pays the bill.
@@ -315,7 +509,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       id: `mem_${randomUUID()}`,
       orgId: ctx.org.id,
       email,
-      name: typeof req.body?.name === "string" ? req.body.name.trim() : undefined,
+      name: inviteName,
       role,
       status: "invited",
       invite: {
@@ -444,16 +638,20 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     if (!ctx) return;
     if (!requirePermission(ctx, res, "accounts.read")) return;
     const accounts = store.accountsOf(ctx.org.id);
+    const caller = store.findUser(ctx.userId);
+    const adoption = roleCan(ctx.member.role, "accounts.open")
+      ? adoptionHint(ctx.org, caller)
+      : { allowed: false, reason: `Your role (${ctx.member.role}) cannot open or fund accounts.` };
     res.json({
-      // `profile` is derived here, at read time: an account adopted before the
-      // Monerium profile check existed reads as needing one, and no row is
-      // rewritten to say so.
-      accounts: accounts.map((a) => ({ ...a, profile: accountProfileStanding(ctx.org, a) })),
+      // `gate` and `profile` are derived here, at read time: no row is
+      // rewritten when the wording or the Monerium check changes.
+      accounts: accounts.map((a) => accountView(ctx.org, a)),
       // Whether "fund from my account" would pass, from stored facts only, so
       // the UI offers it only where the API would accept it.
-      adoption: roleCan(ctx.member.role, "accounts.open")
-        ? adoptionHint(ctx.org, store.findUser(ctx.userId))
-        : { allowed: false, reason: `Your role (${ctx.member.role}) cannot open or fund accounts.` },
+      adoption,
+      // Monerium has not approved the caller's profile yet (as last seen), so
+      // connecting would be refused until it does.
+      ...(adoption.allowed ? { profileWait: profileWait(caller) } : {}),
       mayManageAccounts: roleCan(ctx.member.role, "accounts.open"),
       currencies: currencyAvailability(),
       // What a second account would cost, so the UI can show the ceiling
@@ -523,6 +721,8 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     // refuses the whole request: nothing is opened half-adopted.
     let profileRecord: NonNullable<Account["moneriumProfile"]> | undefined;
     let profileWarning: string | undefined;
+    const takenBy = wantsAdoption ? safeTakenBy(callerFunded!.id, ctx.org.id) : undefined;
+    if (takenBy) return res.status(409).json({ error: safeTakenError(takenBy), code: "SAFE_IN_OTHER_ORG" });
     if (wantsAdoption) {
       const checked = await checkBackingProfile(ctx.org, callerFunded!);
       auditProfileCheck("adopt", { orgId: ctx.org.id }, callerFunded!.id, checked, ctx.userId);
@@ -535,17 +735,14 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       if (store.accountsOf(ctx.org.id).some((a) => a.currency === currency)) {
         return res.status(409).json({ error: `This organisation already has a ${currency} account.` });
       }
+      const lateTaken = safeTakenBy(callerFunded!.id, ctx.org.id);
+      if (lateTaken) return res.status(409).json({ error: safeTakenError(lateTaken), code: "SAFE_IN_OTHER_ORG" });
     }
 
     const status = wantsAdoption ? "active" : "gated";
     const gate = wantsAdoption
       ? undefined
-      : (initial.gate ?? {
-          reason:
-            "This account has no funding identity, so nothing can be sent from it.",
-          needs:
-            "per-organisation account provisioning (a Safe and a Monerium profile of its own), which is not built. Until then an organisation can be funded from a member's own account with useMyAccount: true.",
-        });
+      : (initial.gate ?? noIbanGate(ctx.org.type));
 
     const account = store.addAccount({
       id: `acc_${randomUUID()}`,
@@ -557,6 +754,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       identifier: wantsAdoption ? { iban: callerFunded!.iban } : {},
       address: wantsAdoption ? callerFunded!.address : undefined,
       backingUserId: wantsAdoption ? callerFunded!.id : undefined,
+      ...(wantsAdoption ? { backedSince: safeBooksStart(callerFunded!) } : {}),
       ...(profileRecord ? { moneriumProfile: profileRecord } : {}),
       gate,
       createdAt: now,
@@ -565,17 +763,15 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
 
     let note: string | undefined;
     if (account.status === "gated") {
-      note = `Recorded, but ${CURRENCY_REGISTRY[currency].name} accounts cannot be opened yet: ${account.gate?.needs}`;
+      note = currency === "EUR"
+        ? `Opened. ${account.gate?.reason} It needs ${account.gate?.needs}`
+        : `Recorded, but ${CURRENCY_REGISTRY[currency].name} accounts cannot be opened yet: ${account.gate?.needs}`;
     } else if (wantsAdoption && ctx.org.type === "business") {
       note = `This organisation is now funded from the Monerium company profile${profileRecord?.name ? ` "${profileRecord.name}"` : ""} connected to your login. Only your device key can authorise its payments.`;
-    } else if (!wantsAdoption && currency === "EUR") {
-      note = callerFunded
-        ? "Opened without a funding identity. Pass useMyAccount: true to fund it from your own account until per-organisation provisioning exists."
-        : "Opened without a funding identity — your own account is not funded yet, and per-organisation provisioning is not built. Nothing can be sent from this account.";
     }
 
     res.status(201).json({
-      account: { ...account, profile: accountProfileStanding(ctx.org, account) },
+      account: accountView(ctx.org, account),
       note,
       ...(profileWarning ? { warning: profileWarning } : {}),
     });
@@ -583,6 +779,8 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
 
   /**
    * Give an existing account a funding identity, from the caller's own account.
+   * Refused while the caller's Safe is connected to another company
+   * (safeTakenBy).
    *
    * A separate endpoint because this is when a person's own balance starts
    * paying an organisation's bills: it gets its own call, permission check and
@@ -606,9 +804,10 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       });
     }
     if (account.currency !== "EUR") {
+      // A row can carry a currency the registry no longer lists.
       const def = CURRENCY_REGISTRY[account.currency];
       return res.status(409).json({
-        error: `${def.name} cannot be funded this way: ${def.needs}`,
+        error: `${def?.name ?? account.currency} cannot be funded this way: ${def?.needs ?? "no rail"}`,
       });
     }
     // `active` is set exactly when Monerium attributed an IBAN to the Safe
@@ -622,6 +821,9 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       });
     }
 
+    const takenBy = safeTakenBy(caller.id, ctx.org.id);
+    if (takenBy) return res.status(409).json({ error: safeTakenError(takenBy), code: "SAFE_IN_OTHER_ORG" });
+
     // The account stays gated on any refusal, including Monerium not
     // answering: fail closed, write nothing.
     const checked = await checkBackingProfile(ctx.org, caller);
@@ -633,17 +835,20 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     if (store.findAccount(account.id)?.backingUserId) {
       return res.status(409).json({ error: "This account was funded by another request while we checked with Monerium." });
     }
+    const lateTaken = safeTakenBy(caller.id, ctx.org.id);
+    if (lateTaken) return res.status(409).json({ error: safeTakenError(lateTaken), code: "SAFE_IN_OTHER_ORG" });
 
     const funded = store.updateAccount(account.id, {
       status: "active",
       identifier: { iban: caller.iban },
       address: caller.address,
       backingUserId: caller.id,
+      backedSince: safeBooksStart(caller),
       moneriumProfile: checked.record,
       gate: undefined,
     });
     res.json({
-      account: { ...funded, profile: accountProfileStanding(ctx.org, funded) },
+      account: accountView(ctx.org, funded),
       note:
         ctx.org.type === "business"
           ? `This organisation is now funded from the Monerium company profile${checked.record.name ? ` "${checked.record.name}"` : ""} connected to your login. Only your device key can authorise its payments.`
@@ -678,7 +883,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     }
     const updated = store.updateAccount(account.id, { moneriumProfile: checked.record });
     res.json({
-      account: { ...updated, profile: accountProfileStanding(ctx.org, updated) },
+      account: accountView(ctx.org, updated),
       ...(checked.warning ? { warning: checked.warning } : {}),
     });
   }));
@@ -689,7 +894,12 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     const ctx = ctxOf(req, res);
     if (!ctx) return;
     if (!requirePermission(ctx, res, "contacts.read")) return;
-    res.json({ contacts: store.contactsOf(ctx.org.id) });
+    // A payer rule belongs to invoicing: without that capability it is left
+    // out of the answer, and stays on the row.
+    const showRules = can(ctx.org, "invoices").allowed;
+    res.json({
+      contacts: store.contactsOf(ctx.org.id).map((c) => (showRules ? c : { ...c, payerRule: undefined })),
+    });
   });
 
   r.post("/:orgId/contacts", (req, res) => {
@@ -697,8 +907,12 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     if (!ctx) return;
     if (!requirePermission(ctx, res, "contacts.manage")) return;
 
-    const name = String(req.body?.name ?? "").trim();
-    if (name.length < 2) return res.status(400).json({ error: "A contact needs a name." });
+    // A payee: printed on payment runs and documents, so the name rule applies.
+    const name = cleanName(req.body?.name, { min: 2, max: CONTACT_NAME_MAX });
+    if (name === null) return res.status(400).json({ code: "NAME_INVALID", error: `A contact needs a name of 2 to ${CONTACT_NAME_MAX} characters, without hidden or control characters.` });
+    if (store.contactsOf(ctx.org.id).length >= CEILINGS.contactsPerOrg) {
+      return res.status(409).json(ceilingRefusal("contacts in this organisation", CEILINGS.contactsPerOrg));
+    }
 
     try {
       const now = new Date().toISOString();
@@ -737,14 +951,17 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     }
     try {
       const patch: Record<string, unknown> = {};
-      if (typeof req.body?.name === "string" && req.body.name.trim().length >= 2) {
-        patch.name = req.body.name.trim();
+      // The edit form sends the name on every save: unchanged is left as stored.
+      if (typeof req.body?.name === "string" && !sameName(req.body.name, contact.name)) {
+        const n = cleanName(req.body.name, { min: 2, max: CONTACT_NAME_MAX });
+        if (n === null) return res.status(400).json({ code: "NAME_INVALID", error: `A contact needs a name of 2 to ${CONTACT_NAME_MAX} characters, without hidden or control characters.` });
+        patch.name = n;
       }
       if (typeof req.body?.email === "string") patch.email = req.body.email.trim();
       if (typeof req.body?.notes === "string") patch.notes = req.body.notes;
       if (Array.isArray(req.body?.wallets)) {
         patch.wallets = req.body.wallets.map((w: Record<string, unknown>) => ({
-          id: typeof w.id === "string" ? w.id : `cw_${randomUUID()}`,
+          id: typeof w?.id === "string" ? w.id : `cw_${randomUUID()}`,
           ...validateWallet(w),
         }));
       }
@@ -753,11 +970,12 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
         // account keeps pointing at it — and so an edit shows up as DRIFT on
         // that draft rather than silently re-targeting the payment.
         patch.bankAccounts = req.body.bankAccounts.map((b: Record<string, unknown>) => ({
-          id: typeof b.id === "string" ? b.id : `cb_${randomUUID()}`,
+          id: typeof b?.id === "string" ? b.id : `cb_${randomUUID()}`,
           ...validateBankAccount(b),
         }));
       }
-      res.json({ contact: store.updateContact(contact.id, patch) });
+      const saved = store.updateContact(contact.id, patch);
+      res.json({ contact: can(ctx.org, "invoices").allowed ? saved : { ...saved, payerRule: undefined } });
     } catch (err) {
       if (err instanceof ContactError) return res.status(400).json({ error: err.message });
       throw err;
@@ -782,7 +1000,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     const ctx = ctxOf(req, res);
     if (!ctx) return;
     if (!requirePermission(ctx, res, "wallets.read")) return;
-    res.json({ wallets: store.importedWalletsOf(ctx.org.id) });
+    res.json({ wallets: store.importedWalletsOf(ctx.org.id).map(publicWallet) });
   });
 
   /**
@@ -818,8 +1036,34 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     if (!requireWithinLimit(ctx, res, "importedWallets", existing.length, "imported wallet")) {
       return;
     }
+    // The org's own Zold account is already in the books (statement lines);
+    // watching it too would book every movement twice.
+    if (
+      chainId === CHAIN_ID &&
+      store.accounts.some((a) => a.orgId === ctx.org.id && a.address?.toLowerCase() === address.toLowerCase())
+    ) {
+      return res.status(409).json({ error: "That is this organisation's own Zold account. It is already in the books." });
+    }
+    // Books from a past day: the sync starts at that day's first block.
+    // Without it, the wallet is booked from now on.
+    const syncFrom = req.body?.syncFrom ? String(req.body.syncFrom).trim() : undefined;
+    if (syncFrom !== undefined) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(syncFrom) || !Number.isFinite(Date.parse(`${syncFrom}T00:00:00Z`))) {
+        return res.status(400).json({ error: "Start day must be a date, YYYY-MM-DD." });
+      }
+      if (Date.parse(`${syncFrom}T00:00:00Z`) > Date.now()) {
+        return res.status(400).json({ error: "Start day is in the future." });
+      }
+      // No ERC-20 exists before Ethereum's first block; an earlier day only
+      // costs the binary search over block times.
+      if (syncFrom < "2015-07-30") {
+        return res.status(400).json({ error: "Start day is before any chain existed; the earliest is 2015-07-30." });
+      }
+      if (!requireCapability(ctx, res, "ledger.historicalSync")) return;
+    }
 
-    const wallet = store.addImportedWallet({
+    const wallet = store.batched(() => {
+      const added = store.addImportedWallet({
       id: `iw_${randomUUID()}`,
       orgId: ctx.org.id,
       address: address.toLowerCase() as `0x${string}`,
@@ -827,14 +1071,146 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       label: String(req.body?.label ?? "").trim() || `${kind.toUpperCase()} ${address.slice(0, 8)}`,
       kind,
       custody: "external",
-      sync: { status: "pending" },
+      sync: { status: "pending", ...(syncFrom ? { from: syncFrom } : {}) },
       createdAt: new Date().toISOString(),
+      });
+      // Rows booked for this address while it was imported before (removing a
+      // wallet keeps its rows) point at the removed wallet. They are this
+      // address's rows exactly when their id is this address's row id, and
+      // they follow the new wallet, its sync and its proof.
+      const live = new Set(store.importedWalletsOf(ctx.org.id).map((w) => w.id));
+      const orphans = store.ledgerOf(ctx.org.id).flatMap((e) =>
+        e.source.kind === "wallet" && !live.has(e.source.walletId) && e.chainId === chainId && e.txHash && e.logIndex !== undefined &&
+        e.id === walletEntryId(ctx.org.id, added.address, chainId, e.txHash, e.logIndex)
+          ? [{ ...e, source: { kind: "wallet" as const, walletId: added.id } }]
+          : [],
+      );
+      if (orphans.length) store.replaceLedgerEntries(orphans);
+      return added;
     });
     res.status(201).json({
       wallet,
-      note: "Imported read-only. We never hold a key for this wallet — payments from it are built here and signed by you.",
+      note: "Imported read-only. We never hold a key for this wallet — payments from it are built here and signed by you. Token transfers in and out are booked from " + (syncFrom ? syncFrom : "now") + " on, once an RPC is configured for its chain.",
     });
   });
+
+  // ── Proving an imported wallet is this organisation's ───────────────────
+  //
+  // The person signs a challenge in their own wallet; the wallet's chain is
+  // asked whether the signature is valid. Zold holds no key and proposes no
+  // transaction. See domain/wallet-ownership.ts.
+
+  const walletOf = (ctx: OrgContext, req: express.Request) => {
+    const wallet = store.findImportedWallet(String(req.params.walletId));
+    return wallet && wallet.orgId === ctx.org.id ? wallet : undefined;
+  };
+  const mayProve = (ctx: OrgContext, res: express.Response) =>
+    requirePermission(ctx, res, "wallets.manage") && requireCapability(ctx, res, "wallets.manage");
+
+  /** A new challenge for the wallet, replacing any that is waiting. */
+  r.post("/:orgId/wallets/:walletId/ownership/challenge", (req, res) => {
+    const ctx = ctxOf(req, res);
+    if (!ctx) return;
+    if (!mayProve(ctx, res)) return;
+    const wallet = walletOf(ctx, req);
+    if (!wallet) return res.status(404).json({ error: "no such wallet" });
+    const challenge = newChallenge(ctx.org, wallet, randomBytes(16).toString("hex"), new Date());
+    store.updateImportedWallet(wallet.id, { ownershipChallenge: challenge });
+    res.status(201).json({
+      challenge: { ...challenge, messageHash: hashMessage(challenge.message) },
+      howToSign:
+        "Sign this exact text in the wallet itself. An ordinary wallet: sign it as a message and send back the signature. " +
+        "A Safe: sign it as a message in Safe{Wallet}; send back the signature it shows once enough owners have signed, " +
+        "or nothing if the Safe signed the message on chain. Zold then asks the wallet's own chain.",
+    });
+  });
+
+  /** Prove the wallet with its current challenge. Only the chain's answer
+   *  writes anything; a challenge is spent by the proof it produces. */
+  r.post("/:orgId/wallets/:walletId/ownership", wrap(async (req, res) => {
+    const ctx = ctxOf(req, res);
+    if (!ctx) return;
+    if (!mayProve(ctx, res)) return;
+    const wallet = walletOf(ctx, req);
+    if (!wallet) return res.status(404).json({ error: "no such wallet" });
+    const challengeId = String(req.body?.challengeId ?? "");
+    const pending = wallet.ownershipChallenge;
+    if (!pending || pending.id !== challengeId) {
+      return res.status(409).json({ error: "That is not this wallet's current challenge. Ask for a new one and sign that." });
+    }
+    if (Date.parse(pending.expiresAt) <= Date.now()) {
+      store.updateImportedWallet(wallet.id, { ownershipChallenge: undefined });
+      return res.status(410).json({ error: "The challenge has expired. Ask for a new one and sign that." });
+    }
+    const signature = parseSignature(req.body?.signature);
+    if (!signature) return res.status(400).json({ error: "The signature is hex, starting 0x." });
+
+    const result = await verifyOwnership(wallet, pending.message, signature);
+    const audit = (outcome: string, reason?: string) =>
+      store.audit(auditEntry("wallet.ownership_checked", {
+        orgId: ctx.org.id, walletId: wallet.id, chainId: wallet.chainId, address: wallet.address,
+        check: "prove", outcome, ...(reason ? { reason } : {}),
+      }, ctx.userId));
+    if (result.verdict === "unverified") {
+      audit("unverified", result.reason);
+      return res.status(503).json({ proven: false, error: `Not verified: ${result.reason}. Nothing was recorded; try again with the same challenge.` });
+    }
+    if (result.verdict === "rejected") {
+      audit("rejected", result.reason);
+      return res.status(422).json({ proven: false, error: `The chain does not accept this as the wallet's signature of the challenge: ${result.reason}.` });
+    }
+    const answer = store.batched(() => {
+      // Another request may have spent or replaced the challenge meanwhile.
+      const current = store.findImportedWallet(wallet.id);
+      if (!current || current.orgId !== ctx.org.id || current.ownershipChallenge?.id !== pending.id) return undefined;
+      const at = new Date().toISOString();
+      audit("proven");
+      return store.updateImportedWallet(wallet.id, {
+        ownershipChallenge: undefined,
+        ownership: {
+          status: "proven", method: result.method, message: pending.message, signature,
+          provenAt: at, checkedAt: at, provenByMemberId: ctx.member.id,
+        },
+      });
+    });
+    if (!answer) return res.status(409).json({ error: "This challenge was used or replaced while it was being checked. Nothing was recorded." });
+    res.json({ proven: true, wallet: publicWallet(answer) });
+  }));
+
+  /** Ask the chain again about the stored proof. A refusal lapses it; a
+   *  chain that cannot be asked changes nothing. */
+  r.post("/:orgId/wallets/:walletId/ownership/recheck", wrap(async (req, res) => {
+    const ctx = ctxOf(req, res);
+    if (!ctx) return;
+    if (!mayProve(ctx, res)) return;
+    const wallet = walletOf(ctx, req);
+    if (!wallet) return res.status(404).json({ error: "no such wallet" });
+    const proof = wallet.ownership;
+    if (!proof) return res.status(409).json({ error: "This wallet has no proof to check. Prove it first." });
+
+    const result = await verifyOwnership(wallet, proof.message, proof.signature, proof.method);
+    store.audit(auditEntry("wallet.ownership_checked", {
+      orgId: ctx.org.id, walletId: wallet.id, chainId: wallet.chainId, address: wallet.address,
+      check: "recheck", outcome: result.verdict, ...(result.verdict !== "valid" ? { reason: result.reason } : {}),
+    }, ctx.userId));
+    if (result.verdict === "unverified") {
+      return res.status(503).json({ error: `Not checked: ${result.reason}. The proof stays as it was.`, wallet: publicWallet(wallet) });
+    }
+    const updated = store.batched(() => {
+      const current = store.findImportedWallet(wallet.id);
+      // Proven again meanwhile with another signature: this answer is about the old one.
+      if (!current?.ownership || current.ownership.signature !== proof.signature || current.ownership.message !== proof.message) return undefined;
+      const at = new Date().toISOString();
+      return store.updateImportedWallet(wallet.id, {
+        ownership:
+          result.verdict === "valid"
+            ? { ...current.ownership, status: "proven", checkedAt: at, lapsedAt: undefined, lapseReason: undefined }
+            : { ...current.ownership, status: "lapsed", checkedAt: at, lapsedAt: current.ownership.lapsedAt ?? at, lapseReason: result.reason },
+      });
+    });
+    if (!updated) return res.status(409).json({ error: "The proof changed while it was being checked. Check again." });
+    res.json({ wallet: publicWallet(updated) });
+  }));
 
   r.delete("/:orgId/wallets/:walletId", (req, res) => {
     const ctx = ctxOf(req, res);

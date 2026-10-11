@@ -9,6 +9,7 @@
  */
 
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import {
   CAPABILITIES,
   can,
@@ -28,7 +29,6 @@ import {
 } from "../services/api/src/domain/accounts.js";
 import {
   ContactError,
-  destinationFingerprint,
   ibanChecksumValid,
   validateBankAccount,
 } from "../services/api/src/domain/contacts.js";
@@ -209,6 +209,24 @@ check("an invitation seat needs a PROVEN email, not the one typed at signup", ()
 console.log("\nLocal accounts");
 
 check("only EUR can be live, and every gated currency names what it needs", () => {
+  // EUR's rail opens when Monerium credentials can be stored, i.e. with a
+  // data key ring, so pin both states rather than inherit this checkout's.
+  const before = process.env.DATA_ENCRYPTION_KEYS;
+  const eurWith = (open: boolean) => {
+    process.env.DATA_ENCRYPTION_KEYS = open ? `t1:${randomBytes(32).toString("base64url")}` : "";
+    try {
+      return currencyAvailability();
+    } finally {
+      if (before === undefined) delete process.env.DATA_ENCRYPTION_KEYS;
+      else process.env.DATA_ENCRYPTION_KEYS = before;
+    }
+  };
+  const closed = eurWith(false).find((c) => c.code === "EUR")!;
+  assert.equal(closed.available, false);
+  assert.equal(closed.token?.heldByUs, false, "a closed EUR rail must not show EURe as held");
+  const open = eurWith(true).find((c) => c.code === "EUR")!;
+  assert.equal(open.available, true);
+  assert.equal(open.token?.heldByUs, true, "an open EUR rail shows EURe as held");
   const list = currencyAvailability();
   for (const c of list) {
     if (c.available) {
@@ -618,11 +636,21 @@ check("FIFO consumes the oldest lot first", () => {
     led({ id: "d1", direction: "out", amount: "10", fiatValue: "250", at: "2026-03-01T00:00:00.000Z" }),
   ]);
   assert.equal(basis.disposals.length, 1);
-  assert.equal(basis.disposals[0].costBasis, 100, "the 10-at-100 lot goes first");
-  assert.equal(basis.disposals[0].realised, 150);
+  assert.equal(basis.disposals[0].costBasisCents, 10000, "the 10-at-100 lot goes first");
+  assert.equal(basis.disposals[0].realisedCents, 15000);
   const [pos] = positions(basis);
-  assert.equal(pos.quantity, 10);
-  assert.equal(pos.costBasis, 200);
+  assert.equal(pos.quantity, "10");
+  assert.equal(pos.costBasisCents, 20000);
+});
+
+check("EURe is e-money: no lot opens for it and spending it is no disposal", () => {
+  const basis = computeCostBasis([
+    led({ id: "e1", asset: "EURe", direction: "in", amount: "100", fiatValue: "100", at: "2026-01-01T00:00:00.000Z" }),
+    led({ id: "e2", asset: "EURe", direction: "out", amount: "40", fiatValue: "40", at: "2026-02-01T00:00:00.000Z" }),
+  ]);
+  assert.equal(basis.lots.length, 0);
+  assert.equal(basis.disposals.length, 0);
+  assert.equal(basis.shortfalls.length, 0);
 });
 
 check("a disposal with no matching acquisition is a shortfall, not free profit", () => {
@@ -630,13 +658,23 @@ check("a disposal with no matching acquisition is a shortfall, not free profit",
     led({ id: "d1", direction: "out", amount: "5", fiatValue: "100", at: "2026-03-01T00:00:00.000Z" }),
   ]);
   assert.equal(basis.shortfalls.length, 1);
-  assert.equal(basis.shortfalls[0].quantity, 5);
+  assert.equal(basis.shortfalls[0].quantity, "5");
+  assert.equal(basis.disposals[0].realisedCents, undefined, "not measured, rather than booked as pure profit");
 });
 
 check("CSV export neutralises formula injection", () => {
   const csv = toCsv([{ note: "=cmd|'/c calc'!A0", ok: "plain" }]);
   assert.match(csv, /'=cmd/, "a leading = must be escaped so it cannot execute in Excel");
   assert.doesNotMatch(csv.split("\r\n")[1], /^=/);
+});
+
+check("CSV export neutralises a formula behind leading whitespace or control characters", () => {
+  for (const note of [" =1+1", "\t=1+1", "\r=1+1", "\n+1", "  @SUM(A1)", "\u0001-2", "\u00a0=1", "\uff1d1+1", "\tplain"]) {
+    const csv = toCsv([{ note }]);
+    const cell = csv.split("\r\n").slice(1).join("\r\n");
+    assert.match(cell, /^"?'/, `${JSON.stringify(note)} must be prefixed with '`);
+  }
+  assert.equal(toCsv([{ note: "a = b" }]).split("\r\n")[1], "a = b", "an = later in the text is left alone");
 });
 
 check("CSV quoting survives commas, quotes and newlines", () => {

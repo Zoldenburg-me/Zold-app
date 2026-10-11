@@ -9,13 +9,10 @@
    recovery-side signature is one of these: the SIWE statement the Safe signs,
    the operation that adds the guardian, the cancel. */
 async function passkeySignPrepared(prepared) {
-  const cred = await navigator.credentials.get({
-    publicKey: {
-      challenge: b64urlToBytes(prepared.challenge),
-      allowCredentials: [{ type: "public-key", id: b64urlToBytes(prepared.credentialId) }],
-      userVerification: "required",
-      timeout: 60000,
-    },
+  const cred = await passkeyPrompt("get", {
+    challenge: b64urlToBytes(prepared.challenge),
+    allowCredentials: [{ type: "public-key", id: b64urlToBytes(prepared.credentialId) }],
+    userVerification: "required",
   });
   return {
     authenticatorData: b64url(cred.response.authenticatorData),
@@ -23,6 +20,13 @@ async function passkeySignPrepared(prepared) {
     signature: b64url(cred.response.signature),
   };
 }
+
+/* Adding a guardian enables a recovery module on the Safe, and that has never
+   run on a Safe brought in from outside (passkeySafe.importedAt). Until it
+   has, an imported Safe is not offered recovery anywhere: onboarding skips
+   the step and Security says so. The API does not refuse it yet; only the
+   screens hold it back. */
+const recoveryOfferedFor = (u = user) => !u?.passkeySafe?.importedAt;
 
 let recoveryScreen = null;   // last GET /recovery/candide
 let recoveryOtpStage = null; // { submitTo, channel, target } while a code is outstanding
@@ -49,7 +53,7 @@ function zoldWarnHtml() {
 async function renderRecoveryScreen() {
   const el = $("m-rc-body");
   const row = (k, v) => `<div class="m-row"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`;
-  if (!caps.emailSmsRecovery && !caps.zoldenburgRecovery) {
+  if (!caps.emailSmsRecovery && !caps.zoldenburgRecovery && !caps.turnkeyGuardians) {
     el.innerHTML = `<div class="m-rows">${row("Status", "Unavailable")}</div>
       <div class="m-lede" style="font-size:13px;margin-top:16px">This deployment has no recovery guardian configured, so nothing here can be promised. Nothing is set up on your account.</div>
       <div style="margin-top:16px">${zoldWarnHtml()}</div>`;
@@ -60,77 +64,39 @@ async function renderRecoveryScreen() {
       <div class="m-lede" style="font-size:13px;margin-top:16px">Recovery is a guardian on your smart account. Finish the passkey and smart-account setup first.</div>`;
     return;
   }
-  el.innerHTML = `<div id="m-rz"></div><div id="m-rc-candide"></div><div class="m-err hidden" role="alert" id="m-rc-err" style="margin-top:12px"></div>`;
-  if (caps.zoldenburgRecovery) await renderZoldenburgSection($("m-rz"));
+  if (!recoveryOfferedFor()) {
+    el.innerHTML = `<div class="m-rows">${row("Status", "Not available yet")}</div>
+      <div class="m-lede" style="font-size:13px;margin-top:16px">Recovery adds a guardian to your Safe, and Zold has not yet tested that on a Safe brought in from outside. Until it has, it isn’t offered. Your Safe’s other owner, if you kept one, can still add or replace owners in Safe{Wallet}.</div>
+      <div style="margin-top:16px">${zoldWarnHtml()}</div>`;
+    return;
+  }
+  el.innerHTML = `<div id="m-rc-guardian"></div><div id="m-rc-candide"></div><div class="m-err hidden" role="alert" id="m-rc-err" style="margin-top:12px"></div>`;
+  if (caps.zoldenburgRecovery || caps.turnkeyGuardians) renderGuardianSection($("m-rc-guardian"));
   if (caps.emailSmsRecovery) await renderCandideSection($("m-rc-candide"));
 }
 
-let zoldScreen = null; // last GET /recovery/zoldenburg
-
-async function renderZoldenburgSection(el) {
-  const row = (k, v) => `<div class="m-row"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`;
-  el.innerHTML = `<div class="m-lede" style="font-size:13px">Loading…</div>`;
-  try { zoldScreen = await api(`/api/users/${user.id}/recovery/zoldenburg`); }
-  catch (e) { el.innerHTML = `<div class="m-err" role="alert">${esc(e.message)}</div>`; return; }
-  const z = zoldScreen;
-  const grace = graceText(z.gracePeriodSeconds);
-  const pending = z.onChain?.pendingRecovery;
-  const asked = (z.requests || []).filter((r) => r.status === "PASSKEY_PENDING" || r.status === "REVIEW_PENDING");
-  const status = z.active ? "Active" : z.choice?.choice === "declined" ? `Not set up — declined ${new Date(z.choice.at).toLocaleDateString()}` : "Not set up";
+/** Who can move the account to a new phone. Chosen and changed on /guardian
+ *  (Zoldenburg, or the person's own Google or Apple login). */
+function renderGuardianSection(el) {
+  const safe = user.passkeySafe || {};
+  const zold = safe.recovery?.status === "active";
+  const social = (safe.socialGuardians || []).some((g) => g.status === "active");
+  // Zoldenburg on the Safe but its 1 € bank check not done: no operator may
+  // sign for it yet (the bank step is on /guardian).
+  const unarmed = zold && !user.zoldenburgArmed;
+  // The same three cases as the Security row (settings.js phZoldUnarmedText).
+  const canFinish = caps.zoldenburgEnrolment && kycApproved(user) && Boolean(user.iban);
+  const who = zold ? "Zoldenburg" : social ? "Your Google or Apple login" : "";
+  const text = unarmed
+    ? (!caps.zoldenburgEnrolment ? "Zoldenburg is added. The last step, confirming your bank account, isn’t open yet."
+      : canFinish ? "Zoldenburg is added. One step left: confirm your bank account by moving 1 € to yourself."
+      : "Zoldenburg is added. Your Zold IBAN comes first, then you confirm your bank account.")
+    : who ? `${who} can move your account to a new phone if you lose this one.`
+    : "Lose your phone, keep your account: choose Zoldenburg or your own Google or Apple login to help you move Zold to a new phone.";
   el.innerHTML = `
-    ${pending ? `<div class="rec-warn" role="alert">
-        <div class="rec-warn-title"><span aria-hidden="true">⚠</span> A recovery of this account is under way</div>
-        <p>It takes effect after <b>${esc(new Date(pending.executeAfter * 1000).toLocaleString())}</b> and replaces your passkey with a new one. If you did not ask for it, cancel it now — afterwards it cannot be undone.</p>
-      </div>
-      <button class="m-cta" id="m-rc-cancel" style="margin-top:12px">Cancel this recovery with my passkey</button>` : ""}
-    ${asked.map((r) => `<div class="rec-warn" role="alert" style="margin-top:${pending ? 16 : 0}px">
-        <div class="rec-warn-title"><span aria-hidden="true">⚠</span> Someone asked Zoldenburg to recover this account</div>
-        <p>Reference <b translate="no">${esc(r.zoldenburg?.reference || "")}</b>, ${esc(new Date(r.requestedAt).toLocaleString())}. Nothing has been signed yet. If this was not you, cancel it.</p>
-      </div>
-      <button class="m-cta" data-rz-cancel="${esc(r.id)}" style="margin-top:12px">It wasn't me — cancel this request</button>`).join("")}
-    <div class="m-seclabel" style="margin-top:${pending || asked.length ? 24 : 0}px">Zoldenburg recovery</div>
-    <div class="m-rows">
-      ${row("Status", status)}
-      ${row("Waiting period", grace)}
-      ${z.active && z.guardianAddress ? row("Guardian", `Zoldenburg · ${z.guardianAddress.slice(0, 10)}…`) : ""}
-    </div>
-    ${z.active ? `
-      <div class="m-lede" style="font-size:13px;margin-top:12px">If you lose your passkey, choose "Lost your passkey?" on the sign-in page, create a new passkey there and contact Zoldenburg support with the reference it shows. We check you against the identity Monerium verified before signing. The recovery then waits ${esc(grace)}, and this passkey can cancel it until then.</div>
-      <button class="m-link" id="m-rz-remove" style="margin-top:12px">Remove Zoldenburg as guardian</button>`
-    : `
-      <div style="margin-top:16px">${zoldWarnHtml()}</div>
-      <div class="m-lede" style="font-size:13px;margin-top:16px">With Zoldenburg as guardian, a lost passkey is not a lost account: contact support, we check you against the identity Monerium verified and sign a recovery to a new passkey. It waits ${esc(grace)} on chain, and while your passkey works you can cancel it. Zoldenburg can start a recovery on its own; it cannot skip the wait.</div>
-      <button class="m-cta" id="m-rz-add" style="margin-top:12px">Add Zoldenburg as guardian</button>`}`;
-  const add = $("m-rz-add");
-  if (add) add.onclick = () => zoldenburgRun(`/api/users/${user.id}/recovery/zoldenburg`, { acknowledged: true }, add);
-  const rm = $("m-rz-remove");
-  if (rm) rm.onclick = () => {
-    if (!confirm("Remove Zoldenburg as your recovery guardian?\n\nIf you then lose your passkey, Zoldenburg UG cannot recover your account. Only your EURe balance can be recovered, from Monerium, under Icelandic law.")) return;
-    zoldenburgRun(`/api/users/${user.id}/recovery/zoldenburg/remove`, {}, rm);
-  };
-  const cancel = $("m-rc-cancel");
-  if (cancel) cancel.onclick = recoveryCancelOnChain;
-  el.querySelectorAll("[data-rz-cancel]").forEach((b) => {
-    b.onclick = async () => {
-      clearErr("m-rc-err");
-      b.disabled = true;
-      try { await api(`/api/users/${user.id}/recovery/zoldenburg/requests/${b.dataset.rzCancel}/cancel`, {}); mobileNav("recovery"); }
-      catch (e) { showErr("m-rc-err", e); b.disabled = false; }
-    };
-  });
-}
-
-/* One passkey-signed guardian change: prepare, sign, submit, re-render. */
-async function zoldenburgRun(path, body, btn) {
-  clearErr("m-rc-err");
-  btn.disabled = true;
-  try {
-    const prep = await api(path, body);
-    if (prep.challenge) await api(prep.submitTo, await passkeySignPrepared(prep));
-    renderUser(await api(`/api/users/${user.id}`));
-    mobileNav("recovery");
-  } catch (e) { showErr("m-rc-err", e); }
-  finally { btn.disabled = false; }
+    <div class="m-seclabel">Your guardian</div>
+    <div class="m-lede" style="font-size:13px">${esc(text)}</div>
+    <a class="m-cta" href="/guardian" style="margin-top:12px">${unarmed && canFinish ? "Finish on the guardian page" : who ? "Manage your guardian" : "Choose your guardian"}</a>`;
 }
 
 async function renderCandideSection(el) {
@@ -258,191 +224,39 @@ async function recoveryRemoveChannel(registrationId) {
   } catch (e) { showErr("m-rc-err", e); }
 }
 
+/* Cancel the recovery under way on chain: one passkey signature from this
+   (the old) device. Also used by the Recovery-Alert screen in app/phone.js. */
+async function recoveryCancelRun() {
+  const prep = await api(`/api/users/${user.id}/recovery/candide/cancel`, {});
+  const sig = await passkeySignPrepared(prep);
+  await api(prep.submitTo, sig);
+}
+
 async function recoveryCancelOnChain() {
   clearErr("m-rc-err");
   if (!confirm("Cancel the recovery in progress? The new passkey will not take over this account.")) return;
   const btn = $("m-rc-cancel");
   if (btn) btn.disabled = true;
   try {
-    const prep = await api(`/api/users/${user.id}/recovery/candide/cancel`, {});
-    const sig = await passkeySignPrepared(prep);
-    await api(prep.submitTo, sig);
+    await recoveryCancelRun();
     mobileNav("recovery");
   } catch (e) { showErr("m-rc-err", e); }
   finally { if (btn) btn.disabled = false; }
 }
 
-/* ---------- lost device: recover from the onboarding page ---------- */
-let rcState = null;
-let rcEmail = "";
-/* Which guardian this recovery goes through: "candide" (email/SMS codes) or
-   "zoldenburg" (support checks the person, an operator signs). */
-let rcMode = "candide";
-/* The per-request secret the API hands out once when a recovery starts. It is
-   what lets THIS browser drive the request (the id alone is not enough), so it
-   is kept per email to survive a reload mid-recovery. */
-let rcSecret = "";
-const RC_SECRET_KEY = "zold-recovery-secret";
-function rcSaved(email) {
-  try { return JSON.parse(localStorage.getItem(RC_SECRET_KEY) || "{}")[email.toLowerCase()] || ""; } catch { return ""; }
-}
-function rcSave(email, secret) {
-  try {
-    const all = JSON.parse(localStorage.getItem(RC_SECRET_KEY) || "{}");
-    if (secret) all[email.toLowerCase()] = secret; else delete all[email.toLowerCase()];
-    localStorage.setItem(RC_SECRET_KEY, JSON.stringify(all));
-  } catch { /* private mode: the recovery still works in this tab */ }
-}
-const rcApi = (path, body, method) => api(path, body, method, {
-  ...(rcSecret ? { "x-recovery-secret": rcSecret } : {}),
-  ...(rcOtpTicket ? { "x-recovery-otp-ticket": rcOtpTicket } : {}),
-});
-/* Handed out when THIS browser registers the new passkey. The codes the owner
-   receives confirm that credential, so without the ticket the code form is not
-   shown: an open ceremony whose passkey was made elsewhere is not ours. */
-let rcOtpTicket = "";
-const RC_TICKET_KEY = "zold-recovery-otp-ticket";
-function rcTicketSaved(email) {
-  try { return JSON.parse(localStorage.getItem(RC_TICKET_KEY) || "{}")[email.toLowerCase()] || ""; } catch { return ""; }
-}
-function rcTicketSave(email, ticket) {
-  try {
-    const all = JSON.parse(localStorage.getItem(RC_TICKET_KEY) || "{}");
-    if (ticket) all[email.toLowerCase()] = ticket; else delete all[email.toLowerCase()];
-    localStorage.setItem(RC_TICKET_KEY, JSON.stringify(all));
-  } catch { /* private mode: the recovery still works in this tab */ }
+/* ---------- times the recovery alert shows ---------- */
+/* "2d 21h", "5h 12m", "12m". Under a minute is "Less than a minute". */
+function rcLeftText(ms) {
+  if (ms <= 60000) return "Less than a minute";
+  const m = Math.floor(ms / 60000), h = Math.floor(m / 60), d = Math.floor(h / 24);
+  if (d > 0) return `${d}d ${h % 24}h`;
+  if (h > 0) return `${h}h ${m % 60}m`;
+  return `${m}m`;
 }
 
-/* showRecoverPanel() lives in app/onboarding.js, which draws this screen. */
-
-function renderRecoverState() {
-  const r = rcState;
-  const otp = $("rc-otp");
-  const st = $("rc-status");
-  $("rc-start").classList.toggle("hidden", !!r);
-  otp.classList.add("hidden");
-  st.classList.add("hidden");
-  if (!r) return;
-  if (r.status === "OTP_PENDING" && !rcOtpTicket) {
-    st.classList.remove("hidden");
-    st.innerHTML = `<h2 class="z-rc-h">Don’t enter any codes</h2><p class="z-sub">The Face ID sign-in this recovery would install wasn’t made in this browser. If you didn’t start it, someone else may be trying to take the account. Don’t share codes with anyone. Start recovery again from this phone once it expires.</p>`;
-    return;
-  }
-  if (r.status === "OTP_PENDING") {
-    const auths = (r.candide?.auths || []);
-    otp.classList.remove("hidden");
-    otp.innerHTML = auths.map((a, i) => `
-      <div class="z-field"><label for="rc-code-${i}">${a.channel === "sms" ? "Code sent by SMS to" : "Code sent to"} ${esc(a.target)}${a.verified ? ", confirmed" : ""}</label>
-      <div class="z-rc-row">
-        <input class="z-input" id="rc-code-${i}" name="one-time-code" inputmode="numeric" autocomplete="one-time-code" spellcheck="false" ${a.verified ? "disabled" : ""} />
-        <button type="button" class="z-btn z-btn--secondary" data-rc-confirm="${i}" ${a.verified ? "disabled" : ""}><span>Confirm</span></button>
-      </div></div>`).join("") +
-      `<p class="z-sub">These codes hand the account to the Face ID sign-in you just set up in THIS browser. If you didn’t just set one up here, stop. Every channel must confirm before anything happens. Then the waiting period starts.</p>`;
-    otp.querySelectorAll("[data-rc-confirm]").forEach((b) => {
-      b.onclick = async () => {
-        clearErr("rc-err");
-        const i = Number(b.dataset.rcConfirm);
-        try {
-          rcState = await rcApi(`/api/recovery/candide/${r.id}/otp`, { challengeId: auths[i].challengeId, otp: $(`rc-code-${i}`).value });
-          renderRecoverState();
-        } catch (e) {
-          if (e?.status === 403) {
-            rcOtpTicket = ""; rcTicketSave(rcEmail, ""); renderRecoverState();
-          }
-          showErr("rc-err", e);
-        }
-      };
-    });
-    return;
-  }
-  st.classList.remove("hidden");
-  if (rcMode === "zoldenburg" && r.status === "REVIEW_PENDING") {
-    const ref = r.zoldenburg?.reference || "";
-    const mail = `mailto:support@zoldhq.com?subject=${encodeURIComponent(`Account recovery ${ref}`)}`;
-    st.innerHTML = `<h2 class="z-rc-h">Now contact Zoldenburg support</h2>
-      <p class="z-sub">Your new Face ID sign-in is saved in this browser. Email <a href="${mail}">support@zoldhq.com</a> from the address on your account and quote this reference:</p>
-      <div class="z-card z-rc-ref z-mono" translate="no">${esc(ref)}</div>
-      <p class="z-sub">We check you against the identity Monerium verified before we sign anything. Then the recovery waits ${esc(graceText(r.recoveryDelayHours * 3600))} before this phone owns the account. If the old phone still works, it can cancel in that time.</p>
-      <p class="z-sub">Keep using this browser: only this browser can follow the request.</p>`;
-    setTimeout(async () => {
-      try { rcState = await rcApi(`/api/recovery/zoldenburg/${r.id}`); if (rcState.status !== r.status) renderRecoverState(); } catch { /* keep the screen */ }
-    }, 60000);
-    return;
-  }
-  if (r.status === "GRACE_PERIOD") {
-    const until = (r.candide?.finalizeAfter || r.zoldenburg?.finalizeAfter) ? new Date(r.candide?.finalizeAfter || r.zoldenburg.finalizeAfter) : null;
-    const ready = until && Date.now() >= until.getTime();
-    st.innerHTML = `<h2 class="z-rc-h">Recovery is under way</h2>
-      <p class="z-sub">The account moves to this phone ${until ? `after ${esc(until.toLocaleString())}` : "after the waiting period"}. Until then the old phone can still cancel it. That delay is the protection, so it can’t be skipped.</p>
-      <button class="z-btn z-btn--primary z-btn--full" id="btn-rc-finalize" ${ready ? "" : "disabled"}><span>${ready ? "Finish recovery" : "Waiting…"}</span></button>
-      <p class="z-sub">You can close this page. Zold finishes the recovery once the period has passed; come back and sign in with Face ID.</p>`;
-    $("btn-rc-finalize").onclick = async () => {
-      clearErr("rc-err");
-      try {
-        // No session comes back: once finalized, the new passkey signs in
-        // through the ordinary login, which the FINALIZED state offers.
-        rcState = await rcApi(`/api/recovery/${rcMode}/${r.id}/finalize`, {});
-        renderRecoverState();
-      } catch (e) { showErr("rc-err", e); }
-    };
-    if (!ready && until) setTimeout(async () => {
-      try { rcState = await rcApi(`/api/recovery/${rcMode}/${r.id}`); renderRecoverState(); } catch { /* keep the screen */ }
-    }, Math.min(60000, Math.max(2000, until.getTime() - Date.now() + 1000)));
-    return;
-  }
-  if (r.status === "FINALIZED") {
-    rcSave(rcEmail, "");
-    rcTicketSave(rcEmail, "");
-    st.innerHTML = `<h2 class="z-rc-h">Recovered</h2><p class="z-sub">This phone now owns the account. Sign in with Face ID.</p>
-      <button class="z-btn z-btn--primary z-btn--full" id="btn-rc-signin"><span>Sign in with Face ID</span></button>`;
-    $("btn-rc-signin").onclick = () => { showRecoverPanel(false); $("link-signin").click(); };
-    return;
-  }
-  st.innerHTML = `<h2 class="z-rc-h">${esc(r.status.replaceAll("_", " ").toLowerCase())}</h2><p class="z-sub">${esc(r.error || r.cancelReason || "This recovery can’t continue. Start again.")}</p>`;
-}
-
-async function recoverStart() {
-  clearErr("rc-err");
-  rcEmail = $("rc-email").value.trim();
-  const btn = $("btn-rc-start");
-  btn.disabled = true;
-  try {
-    if (!window.PublicKeyCredential) throw new Error("passkeys aren't supported in this browser");
-    rcSecret = rcSaved(rcEmail);
-    rcOtpTicket = rcTicketSaved(rcEmail);
-    // Email/SMS first where the deployment has it; an account without it
-    // (404) falls through to Zoldenburg when that guardian is offered.
-    const body = { email: rcEmail, ...(rcSecret ? { recoverySecret: rcSecret } : {}) };
-    let r = null;
-    if (caps.emailSmsRecovery) {
-      try { r = await api("/api/recovery/candide", body); rcMode = "candide"; }
-      catch (e) { if (!(e?.status === 404 && caps.zoldenburgRecovery)) throw e; }
-    }
-    if (!r) { r = await api("/api/recovery/zoldenburg", body); rcMode = "zoldenburg"; }
-    if (r.recoverySecret) { rcSecret = r.recoverySecret; rcSave(rcEmail, rcSecret); }
-    if (r.status === "PASSKEY_PENDING") {
-      // The new owner: a passkey made on THIS device. P-256 only — it has to
-      // be able to own a Safe.
-      const cred = await navigator.credentials.create({
-        publicKey: {
-          challenge: b64urlToBytes(r.registerChallenge),
-          rp: { name: "Zold", id: location.hostname },
-          user: { id: new TextEncoder().encode(r.userHandle), name: rcEmail, displayName: r.displayName || rcEmail },
-          pubKeyCredParams: [{ type: "public-key", alg: -7 }],
-          authenticatorSelection: { residentKey: "preferred", userVerification: "preferred" },
-          timeout: 60000,
-          extensions: { prf: {} },
-        },
-      });
-      r = await rcApi(r.submitTo, {
-        credentialId: cred.id,
-        attestation: b64url(cred.response.attestationObject),
-        clientDataJSON: b64url(cred.response.clientDataJSON),
-      });
-      if (r.otpTicket) { rcOtpTicket = r.otpTicket; rcTicketSave(rcEmail, rcOtpTicket); }
-    }
-    rcState = r;
-    renderRecoverState();
-  } catch (e) { showErr("rc-err", e); }
-  finally { btn.disabled = false; }
+/* "Thu 2 Oct at 14:05", in the phone's own time zone. */
+function rcWhenText(d) {
+  const day = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short" }).format(d);
+  const time = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit" }).format(d);
+  return `${day} at ${time}`;
 }

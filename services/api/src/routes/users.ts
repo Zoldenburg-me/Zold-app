@@ -14,7 +14,7 @@
 import express from "express";
 import { wrap } from "./util.js";
 import { randomUUID } from "node:crypto";
-import { KYC, PRIVACY_BUNDLE } from "../config.js";
+import { EMAIL_VERIFICATION, KYC, PRIVACY_BUNDLE } from "../config.js";
 import { accountBalances } from "../chain.js";
 import { auditEntry, redact } from "../audit.js";
 import { normaliseCountryCode } from "../country-policy.js";
@@ -22,8 +22,16 @@ import { resolveSegment, type Segment } from "../domain/segments.js";
 import { store, type User } from "../store.js";
 import { requireKycApproved } from "../http/guards.js";
 import { publicUser, withSession } from "../users/public-user.js";
+import { cleanName, nameChange } from "../users/display-name.js";
 import { findIbanBic, refreshPendingIban } from "../adapters/monerium-sandbox.js";
 import { normalizeIban } from "../sepa.js";
+import { emailHeldBy, emailLooksValid } from "../domain/email.js";
+import { describeCause, redactedMessage } from "../http/log-cause.js";
+
+/** Consents a signup body may carry; the client sends one or two. */
+const MAX_SIGNUP_CONSENTS = 4;
+/** Distinct citizenships a signup may declare; more is refused, never cut. */
+const MAX_DECLARED_CITIZENSHIPS = 10;
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as `0x${string}`;
 
@@ -85,7 +93,12 @@ export function createUserRouter(deps: UserDeps) {
       if (typeof name !== "string" || !name.trim() || typeof country !== "string" || !country) {
         return res.status(400).json({ error: "name, email and country required" });
       }
-      if (name.trim().length > 120) return res.status(400).json({ error: "name is too long" });
+      // The same rule as a later rename (users/display-name.ts); a company
+      // signup's representative may have a longer name than a person's own.
+      const signupName = cleanName(name, { min: 1, max: 120 });
+      if (signupName === null) {
+        return res.status(400).json({ code: "NAME_INVALID", error: "Enter the name using letters, spaces, apostrophes or hyphens, up to 120 characters." });
+      }
       /**
        * Email is required as a channel, not an identity (identity is
        * Monerium's; the passkey is the login). It lets the account be found
@@ -96,7 +109,7 @@ export function createUserRouter(deps: UserDeps) {
        */
       const emailNorm = typeof email === "string" ? email.trim() : "";
       if (!emailNorm) return res.status(400).json({ error: "name, email and country required" });
-      if (emailNorm.length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(emailNorm)) {
+      if (!emailLooksValid(emailNorm)) {
         return res.status(400).json({ error: "invalid email" });
       }
       // One claimable account per email. Recovery resolves an email to an
@@ -104,7 +117,7 @@ export function createUserRouter(deps: UserDeps) {
       // lookup ambiguous. A row with no passkey is onboarding that stopped
       // before any credential existed (nothing can sign in to it), so the same
       // person may start again after a failed ceremony.
-      if (store.usersByEmail(emailNorm).some((u) => !!u.passkey)) {
+      if (emailHeldBy(store.usersByEmail(emailNorm), EMAIL_VERIFICATION.enabled)) {
         return res.status(409).json({
           error: "an account already uses this email — sign in with your passkey, or recover the account if you lost the device",
           code: "EMAIL_IN_USE",
@@ -141,9 +154,15 @@ export function createUserRouter(deps: UserDeps) {
       };
       // Store only citizenships the caller declared. Without any, screening
       // uses residence, but residence is never saved as a citizenship.
+      // The list is anonymous and kept whole (on the row, or in the audit row
+      // on a refusal), so it is de-duplicated and refused when too long. It is
+      // never cut: a cut could drop the entry screening has to see.
       const declaredCitizenships: string[] | null = Array.isArray(citizenships) && citizenships.length
-        ? citizenships.map((c: any) => normaliseCountryCode(String(c)))
+        ? [...new Set(citizenships.map((c: any) => normaliseCountryCode(String(c))))]
         : null;
+      if (declaredCitizenships && declaredCitizenships.length > MAX_DECLARED_CITIZENSHIPS) {
+        return res.status(400).json({ error: `declare at most ${MAX_DECLARED_CITIZENSHIPS} citizenships` });
+      }
       let decision;
       try {
         decision = resolveSegment({
@@ -155,7 +174,7 @@ export function createUserRouter(deps: UserDeps) {
           ...(softSignals ? { softSignals } : {}),
         });
       } catch (err: any) {
-        return res.status(400).json({ error: String(err?.message ?? err) });
+        return res.status(400).json({ error: redactedMessage(err) });
       }
 
       // A blocked segment is recorded before it is refused: the decision has to
@@ -188,7 +207,7 @@ export function createUserRouter(deps: UserDeps) {
       const approved = KYC.autoApprove;
       const user: User = {
         id,
-        name: name.trim(),
+        name: signupName,
         email: emailNorm,
         country: normaliseCountryCode(String(country)),
         kycStatus: approved ? "approved" : "pending",
@@ -238,17 +257,27 @@ export function createUserRouter(deps: UserDeps) {
         answeredAt: new Date().toISOString(),
         version: combined ? US_QUESTION_COMBINED_VERSION : US_QUESTIONS_VERSION,
       });
-      for (const c of Array.isArray(consents) ? consents : []) {
+      // One consent per kind and partner, at most MAX_SIGNUP_CONSENTS, in one
+      // write: the list comes from an unauthenticated body, and every store
+      // write rewrites the whole database file.
+      const given = new Map<string, any>();
+      for (const c of Array.isArray(consents) ? consents.slice(0, MAX_SIGNUP_CONSENTS) : []) {
         if (c?.kind !== "zold_terms" && c?.kind !== "partner_share") continue;
-        store.addConsent(user.id, {
-          kind: c.kind,
-          ...(typeof c.partner === "string" && c.partner ? { partner: c.partner.slice(0, 80) } : {}),
-          version: typeof c.version === "string" && c.version ? c.version.slice(0, 40) : CONSENT_VERSION,
-          at: new Date().toISOString(),
-          // No IP: the consent is tied to the account that gave it, and an
-          // address stored here was echoed to the operator's user list.
-        });
+        const partner = typeof c.partner === "string" && c.partner ? c.partner.slice(0, 80) : undefined;
+        given.set(`${c.kind}:${partner ?? ""}`, { ...c, partner });
       }
+      store.batched(() => {
+        for (const c of given.values()) {
+          store.addConsent(user.id, {
+            kind: c.kind,
+            ...(c.partner ? { partner: c.partner } : {}),
+            version: typeof c.version === "string" && c.version ? c.version.slice(0, 40) : CONSENT_VERSION,
+            at: new Date().toISOString(),
+            // No IP: the consent is tied to the account that gave it, and an
+            // address stored here was echoed to the operator's user list.
+          });
+        }
+      });
       store.audit(auditEntry("segment.decided", {
         residence: user.country,
         accountType: type,
@@ -277,6 +306,29 @@ export function createUserRouter(deps: UserDeps) {
   );
 
   /**
+   * The person's name: editable until Monerium verifies them, never on a
+   * company login (users/display-name.ts). Their personal space is named
+   * after them, so it follows.
+   */
+  router.patch(
+    "/users/:id/name",
+    wrap(async (req, res) => {
+      const user = store.findUser(req.params.id);
+      if (!user) return res.status(404).json({ error: "user not found" });
+      if (!requireUserSession(req, res, user.id)) return;
+      const r = nameChange(user, req.body?.name);
+      if ("code" in r) return res.status(r.status).json({ code: r.code, error: r.error });
+      const updated = store.updateUser(user.id, { name: r.name });
+      // That it changed, not to what: the name itself is on the user row.
+      store.audit(auditEntry("user.name_changed", {}, user.id));
+      for (const { org } of store.organisationsForUser(user.id)) {
+        if (org.type === "personal") store.updateOrganisation(org.id, { name: r.name });
+      }
+      res.json(publicUser(updated));
+    }),
+  );
+
+  /**
    * The BIC for the account's IBAN, as Monerium lists it. Read once per IBAN
    * and kept on the row; the app asks when it shows the account details, not
    * on every poll. No IBAN, or Monerium lists no BIC for it: `bic` is null and
@@ -295,7 +347,7 @@ export function createUserRouter(deps: UserDeps) {
       try {
         bic = await findIbanBic(user);
       } catch (err: any) {
-        console.error(`bic lookup failed for ${user.id}: ${err?.message ?? err}`);
+        console.error(`bic lookup failed for ${user.id}: ${describeCause(err)}`);
         return res.status(502).json({ error: "Monerium did not answer. Try again in a moment." });
       }
       if (!bic) return res.json({ bic: null });

@@ -98,7 +98,7 @@ flowchart LR
 | **Payer** | A public link, with no account. | `/pay/<handle>` and `/pay/<handle>/<code>`. |
 | **Supplier** | A one-time Invoice-Me link, optionally password-protected. | `/invoice/<token>`, to fill in and submit an invoice. |
 | **Receipt/document reader** | A slug or a verification code. | `/r/<slug>` for a redacted receipt, `/v/<code>` for a verified document. |
-| **Operator** | `KYC_OPERATOR_TOKEN` bearer. | A read-only console of users and transactions. It has no write actions. |
+| **Operator** | A named operator's passkey at `ADMIN_ORIGIN`, behind Cloudflare Access. | The admin console: users, transactions, recoveries. Its changes (review resolutions, recovery steps, plan grants, credential rotation) each need a fresh passkey approval and write an audit row naming the operator. |
 
 ---
 
@@ -110,7 +110,7 @@ flowchart TB
   Safe["Safe smart account on Base<br/>owner: passkey only (1-of-1)"]
   IBAN["Monerium IBAN<br/>address-matched to the Safe"]
   Dev["Device key (secp256k1)<br/>browser localStorage"]
-  POrg["Personal organisation<br/>(auto-created)"]
+  POrg["Personal organisation<br/>(one per person; none for a company login)"]
   BOrg["Business organisation"]
   Acc["Account (EUR)<br/>backingUserId → User's Safe"]
   User -->|owns| Safe
@@ -147,7 +147,10 @@ flowchart TB
   holds both. A personal signup that wants to use a company IBAN is refused
   and pointed to support@zoldhq.com, which sets up a separate account with
   its own Safe by hand: one Safe behind two IBANs would mix the balances.
-  The profile is re-checked at every draft execution
+  A company signup's first business org gets a gated EUR account when it is
+  created; the owner connects the company's IBAN to it once Monerium has
+  issued it. That login's Safe is the company's, so the business desk does
+  not link it to the personal app. The profile is re-checked at every draft execution
   (technical-architecture §13.1).
 
 ---
@@ -179,7 +182,7 @@ sequenceDiagram
 
 1. **Account.** Email is required, because it is the recovery handle. A
    *segment* is decided at signup and is immutable from the client: EU_FULL,
-   ONCHAIN_NO_CARD, IN_COLLECTIONS or BLOCKED_*. It drives which partners may
+   ONCHAIN_NO_CARD, IN_COLLECTIONS, WALLET_ONLY or BLOCKED_*. It drives which partners may
    be called for this user (§4.3). US persons and sanctioned residences are
    refused before any row is created.
 2. **Passkey.** There is no skip and no password path.
@@ -188,10 +191,14 @@ sequenceDiagram
    (sponsored, which works on Base Sepolia but NOT through the keyless public
    endpoint on Base mainnet), by the Safe in ETH, or by the Safe in USDC. The
    Safe is **1-of-1: the passkey is its only owner.** Zold holds no key that
-   can move or block the funds.
+   can move or block the funds. A company account may instead bring in the
+   Safe it already has (`safeImport`): its current owner adds the passkey as
+   an owner in Safe{Wallet}, optionally staying as the company's own second
+   owner (1 of 2), and Zold binds the Safe once the chain shows it
+   (technical-architecture §5.1.2).
 4. **Recovery** is offered where the deployment has `zoldenburgRecovery`
    (Zoldenburg as guardian; skipping needs an acknowledged warning) and/or
-   `emailSmsRecovery`.
+   `emailSmsRecovery`, except on an imported Safe, where it has never run.
 5. **Monerium gate.** The user connects by OAuth (PKCE) *or* pastes their own
    Monerium API keys. There is no white-label path: Zold never creates a
    Monerium profile for anyone.
@@ -209,7 +216,9 @@ sequenceDiagram
    app shows the IBAN masked to its last four digits, the old address and
    chain, and a plain warning: after the move, payments to the IBAN arrive in
    Zold and the old wallet stops receiving them; payers keep the same IBAN;
-   it can be moved back from Monerium. "Move IBAN to Zold" needs a typed
+   it can be moved back from Monerium. A profile holding several IBANs (a
+   sandbox test login can) gets every one listed in full with where it pays,
+   none preselected, and the user picks one. "Move IBAN to Zold" needs a typed
    `MOVE` and a fresh passkey ceremony. Zold links the Safe under the IBAN's
    profile, asks Monerium to point the IBAN at the Safe (`PATCH
    /ibans/{iban}`), and approves the account only when Monerium's re-read
@@ -230,9 +239,7 @@ A send needs up to three prompts on the same device:
 
 The device key is a secp256k1 key generated in the browser and bound once
 with a passkey step-up. Where the authenticator supports WebAuthn PRF, the key
-is wrapped with it. **On the hardware tested, PRF was not supported and the
-key is stored unwrapped in localStorage.** That is a known weakness and is
-surfaced in the profile.
+is wrapped with it, and the profile shows how this browser holds it.
 
 ### 4.3 Segments and partner capabilities — LIVE
 
@@ -240,8 +247,9 @@ surfaced in the profile.
 |---|---|---|
 | EU_FULL | EU/EEA, GB and CH residents | monerium, gnosis_pay, safe, card, onchain_balance |
 | ONCHAIN_NO_CARD | Monerium will serve, card partner will not | monerium, safe, onchain_balance |
-| IN_COLLECTIONS | India | xflow_collections (GATED: needs an Indian entity) |
-| BLOCKED_US / BLOCKED_SANCTIONED / BLOCKED_UNSUPPORTED | refused at signup | none |
+| IN_COLLECTIONS | India | safe, onchain_balance, xflow_collections (GATED: needs an Indian entity) |
+| WALLET_ONLY | a known residence no fiat partner serves, minus `WALLET_DENIED` | safe, onchain_balance |
+| BLOCKED_US / BLOCKED_SANCTIONED / BLOCKED_UNSUPPORTED | refused at signup (UNSUPPORTED: an unknown code or `WALLET_DENIED`) | none |
 
 These are *per-user partner* capabilities. They are separate from the
 *per-org plan* capabilities in §7.2.
@@ -342,6 +350,11 @@ wrong handle returns 404.
 | **Bank (SEPA)** | Pay the IBAN with the code as reference. | The Monerium poller finds the code in the memo. |
 | **Zold account** | The app opens a pre-filled SEPA send. | As bank. |
 
+A link is booked under an org: from the app, the company a company signup's
+Safe backs, else the personal org, else none; from
+`/orgs/:orgId/payment-requests`, that org. The payer sees the company's
+registered name as the holder only when the payee's Safe backs that company.
+
 There is no EPC/GiroCode QR. The link becomes PAID when funds reach the
 payee's address. Conversion to euros is separate (§6.3).
 
@@ -370,8 +383,11 @@ it does:
   through LI.FI or Uniswap. Before quoting, Zold checks the Safe still holds
   the deposit's USDC; the price holds for the passkey window and the app is
   told when it ends. The swap is refused if the venue rate is more than
-  100 bps off the mid, and the credited EURe is measured, not quoted. A
-  refused or failed swap leaves the USDC held, and it can be retried.
+  100 bps off the mid, and the credited EURe is measured, not quoted. A swap
+  refused before it was sent, or reverted on chain, leaves the USDC held, and
+  it can be retried. A swap that went through but delivered under the floor
+  is under review and not offered again, and so is one that was sent with no
+  confirmed result: either may have spent the USDC.
 - Converting later rewrites the invoice and pay-link records in place with
   the conversion and the realised gain; it never settles the invoice again.
 - Only USDC → EURe exists. There is no EURe → USDC swap for accounts that
@@ -482,7 +498,6 @@ gets 404, not 403.
 | CHF | SIC | none identified | GATED |
 | KES | M-Pesa | Yellow Card | GATED |
 | NGN | NIP | Yellow Card | GATED |
-| INR | UPI | dLocal | GATED ("a UPI rail without one would be a mock") |
 
 A gated account can still be *opened*. It rests in `gated` with its reason and
 what it needs, which keeps the demand signal without implying a balance.
@@ -490,7 +505,7 @@ what it needs, which keeps the demand signal without implying a balance.
 ### 7.5 Address book — LIVE
 
 A contact holds wallets and bank accounts, validated per rail: IBAN checksum,
-sort code, routing number, M-Pesa and UPI formats. Each payee destination has
+sort code, routing number and M-Pesa formats. Each payee destination has
 a **fingerprint** made of identifier plus holder name.
 
 ### 7.6 Payments and approvals (drafts) — LIVE, never moved money end to end
@@ -498,8 +513,8 @@ a **fingerprint** made of identifier plus holder name.
 ```mermaid
 stateDiagram-v2
   [*] --> DRAFT
-  DRAFT --> PENDING_REVIEW: submit (Business plan)
-  DRAFT --> EXECUTING: execute (no approvals plan)
+  DRAFT --> PENDING_REVIEW: submit (review on)
+  DRAFT --> EXECUTING: execute (review off)
   PENDING_REVIEW --> REVIEWED: approve (≠ drafter)
   PENDING_REVIEW --> REJECTED
   REVIEWED --> EXECUTING: execute (backing user only)
@@ -511,7 +526,33 @@ stateDiagram-v2
   EXECUTING --> EXECUTED: all transfers PAID
   EXECUTING --> FAILED
   FAILED --> DRAFT
+  PENDING_REVIEW --> DRAFT: edit
+  REVIEWED --> DRAFT: edit
+  DRAFT --> CANCELLED: cancel
+  PENDING_REVIEW --> CANCELLED
+  REVIEWED --> CANCELLED
+  REJECTED --> CANCELLED
+  INVALID_DATA --> CANCELLED
 ```
+
+- **Review is the organisation's policy** (`domain/payment-review.ts`).
+  Switching it on needs a plan with approvals (Business, or its trial). Once
+  an organisation has had it, a lapsed trial or a downgrade keeps it on: a
+  plan change records `paymentReview` as kept, so nobody can send alone
+  because the plan changed. Only an owner turns it off, under Settings → Who
+  approves payments, with a fresh passkey approval; the change is audited.
+  A draft already waiting for review keeps waiting and stays reviewable after
+  a downgrade or after review is turned off; it is sent once someone reviews
+  it.
+- **A draft can be edited and cancelled until sending starts.** Editing a
+  waiting or approved draft puts it back to DRAFT and clears its review; the
+  editor becomes its drafter. Cancelling keeps the row as CANCELLED with who
+  and why, and returns an invoice it was paying to waiting for payment.
+  Anyone who may propose or review payments may cancel. From EXECUTING on,
+  transfers may exist, so neither is possible.
+- Execution claims the draft only if nobody wrote it since its lines were
+  planned, so an edit or a cancel that lands while a run is being prepared
+  stops that run.
 
 - **INVALID_DATA** comes from payee fingerprints, which are recomputed at
   submit, at review *and* at execution. That closes the gap between approval
@@ -526,19 +567,70 @@ stateDiagram-v2
   - On Starter and Premium the UI offers no way to send a draft.
   - Bulk-CSV lines are always wallet destinations, and those are refused from
     an issued account.
-  - There is no UI to reject a draft or re-point lines.
+  - The draft drawer edits amounts and notes; there is no UI to re-point a
+    line to another payee (cancel the run and start a new payment).
 
-### 7.7 Imported wallets — INERT
+### 7.7 Imported wallets — BUILT, never run on mainnet
 
-An org can list external wallets (EOA, Safe or MPC) read-only. They **never
-sync**, so their ledger is empty. Drafts sourced from an imported wallet just
-echo the lines back as "unsigned".
+An org lists external wallets (EOA, Safe or MPC) read-only. Each one syncs on
+its own chain when the deployment has an RPC for that chain
+(`WALLET_SYNC_RPC_<chainId>`): every ERC-20 transfer in or out becomes one
+`wallet` ledger row, valued in EUR when it arrived, and the sender is named
+when exactly one contact lists the address on that chain. A DAO's multisig,
+distributor and stream contract all go on the one contact, so a claimed
+stream matches like a push. EURe is e-money at par (no tax lot); USDC and
+tokens on Uniswap's or CoinGecko's lists are virtual assets with FIFO lots;
+a token on no list books nothing, so an airdrop never reads as revenue or
+grows the books. A listed token without a price
+is still booked, tagged `needs-valuation` and under its contract address,
+never at €0; a member can ask the price feed again for its block time, and
+nothing else gives it a value. Without an RPC
+the wallet reads "Not syncing" and books nothing. Booking from a past day is
+the `ledger.historicalSync` capability (Business). Native ETH, NFTs and
+rebasing balances are not booked. Drafts sourced from an imported wallet echo
+the lines back as "unsigned".
 
-### 7.8 Operator console — LIVE, read-only
+Importing an address claims nothing, so a wallet is **proven** before its
+receipts are invoiced: Zold issues a short text naming the organisation, the
+address and the network, the member signs it in the wallet itself (a Safe in
+Safe{Wallet}, or on chain), and the wallet's own network is asked whether the
+signature is valid. Zold holds no key and proposes no transaction. A proof
+can be checked again; a Safe whose owners changed can fail, and the wallet
+then shows the proof as lapsed. An unproven or lapsed wallet still syncs and
+counts in the books, labelled; only collecting its receipts into drafts and
+issuing them wait for the proof.
 
-`/admin` shows users, stats, operator gas balances and a merged transaction
-feed, with a triage strip for stuck states. It is token-gated and has no write
-actions. It does not show organisations, drafts or invoices.
+**Holdings and realised gains** (Books): per token, what is held, what it
+cost first in first out, and every lot with the row it came from; per month,
+the EUR value of what left minus the cost of the lots it used. Where a value
+or a cost is missing, or more left than was ever booked, the gain is shown as
+not measurable rather than as zero. EURe opens no lot, a token on no list is
+a quantity only, and moving tokens between the organisation's own wallets
+realises nothing. Zold asserts no tax treatment.
+
+### 7.8 Operator console — LIVE, read-only except recovery signing
+
+`/admin` is a dashboard with six sections, each with its own path
+(`/admin/recoveries` etc.): **Overview** (counts, the onboarding funnel, 14-day
+signups and transfers, operator gas, newest issues); **Users** (filtered by
+onboarding stage — the first of account → passkey → Safe → recovery choice →
+Monerium → IBAN not done — and one account in full); **Monerium** (the
+deployment's Monerium settings, every connected account and its profile state,
+company accounts backed by a profile, incoming issue and outgoing redeem
+orders, the partner audit trail); **Transactions**; **Recoveries** (every
+Zoldenburg request from "passkey registered" to "recovered", the review and
+guardian signing, and who enrolled or declined Zoldenburg); **Errors** (one
+feed of server 500s by `E-` reference, failed and stuck transfers, refused
+deposits, Monerium refusals and provisioning errors, recoveries that would not
+finalize, partner calls refused by policy).
+
+Monerium data is what Zold stored at connect, plus a **live read** an operator
+asks for on one account: it uses that person's own OAuth token or API keys,
+refuses an account without one (the app's credentials would answer with every
+app account), stores nothing and writes an `operator.monerium_read` audit
+entry. Token-gated; the only writes are the recovery review actions. It does
+not show drafts or invoices. Server errors are held in memory, so a restart
+empties that part of the Errors feed.
 
 ---
 
@@ -571,13 +663,36 @@ LINK_CREATED → SUBMITTED → PAYING → PAID → RECONCILED     (+ soft DELETE
   issued.
 - **Getting paid on an outgoing invoice** only *records settlements*:
   - a SEPA credit whose memo names the invoice number,
-  - a pay link bound to the invoice (API only, and it currently works only for
-    personal-org invoices),
+  - a pay link bound to the invoice ("Payment link" on the invoice, console and
+    app), created only by the member whose Safe backs the org's account,
   - or a manual link of a crypto deposit.
 
-  **A recorded settlement does not mark the invoice PAID.** A settled issued
-  invoice still reads SUBMITTED, shows OVERDUE after its due date, and has to
-  be reconciled by hand.
+  Once the recorded settlements cover what the invoice is payable as (its
+  frozen euro gross, to half a cent), it goes PAID (`settlementUpdate`); short
+  of that it stays SUBMITTED, collectable for the rest. A SEPA credit is
+  matched only when the invoice number has at least six letters and digits
+  and exactly one open invoice is named; anything else is left for a person.
+- **Invoices from wallet receipts** (BUILT, run only on local hardhat). For a
+  payer that decides its own amounts, such as a DAO paying a delegate, the
+  invoice follows the money. A contact gets a payer rule: what is invoiced,
+  who the invoice is addressed to, the tax line the organisation chooses, and
+  the addresses the payer sends from. "Collect receipts" on the Invoices
+  screen takes a month and makes one draft per contact with a rule: one line
+  per receipt into a proven imported wallet (date, token, quantity, EUR
+  value at receipt, transaction), total the sum of those values. Receipts that cannot
+  be invoiced (no value yet, a token on no list, a transfer between own
+  addresses, a row tagged `refund`, any type but a plain inbound transfer or
+  an invoice payment, such as a swap leg or a realised gain, a wallet not
+  proven to be the organisation's) are listed on the
+  draft with the reason, and the summary also
+  counts receipts from contacts without a rule, from unknown senders, and
+  those an issued invoice already bills. Collecting again updates drafts and
+  leaves issued invoices alone. Nothing is issued until a member who may
+  issue invoices issues the draft; it then gets the next number and that
+  day's date, and is paid by its receipts, so there is no difference between
+  what was billed and what arrived. A draft does not count as money owed on
+  Home. Zold chooses no tax treatment; issuing is by one member, as for any
+  issued invoice (four-eyes review exists only for payment runs).
 - **Not built:** credit notes and cancellations, a void state, XRechnung or
   ZUGFeRD, invoice signing, PDF generation, email delivery.
 - **Product decision on record:** Zold pays from invoices and keeps the
@@ -595,7 +710,10 @@ can additionally be signed by the Safe with the passkey. Each document is:
 - **re-verified on every visit**: signature, a chain re-read of the balance,
   statement reconciliation, and the Safe's EIP-1271 signature.
 
-A revoked document still resolves but shows as failing verification. These
+A revoked document still resolves but shows as failing verification. The
+holder named on a document is the one Monerium reports for the IBAN; when
+that is not the Zold user (a company signup's IBAN sits on the company's
+profile), the document names the company and adds "operated by" the user. These
 belong to a *user's* account, not an org. Only the account holder can create
 them.
 
@@ -634,8 +752,8 @@ facts are refreshed, a human's account code is never overwritten.
 
 Which organisation: the one whose **EUR account is backed by the user's Safe**
 (`Account.backingUserId`). A user with no such account gets no lines and one
-log line saying so. Imported wallets still never sync, so their half of the
-ledger stays empty.
+log line saying so. Imported wallets add their own rows, one per token
+transfer (§7.7); they are ledger rows, not statement lines, and get no Beleg.
 
 **Receipts are valued at the ECB reference rate** (Frankfurter, per business
 day) for the day the chain says the money arrived. The ECB fixes once a day
@@ -685,8 +803,8 @@ receivable difference and the gain or loss, gas and who paid it. The PDF is
 produced in-process (`bookkeeping/pdf.ts`, Helvetica, WinAnsi, no
 dependency).
 
-**Monthly export (LIVE).** Business dashboard → Books → Accountant export:
-prepare a month (issues the Belege), then download a **Lexware Office
+**Monthly export (LIVE).** Business dashboard → Books:
+issue a month's Belege, then download a **Lexware Office
 bank-import CSV** (the help centre's `Bankimport-Vorlage.csv`: seven columns,
 semicolon, `DD.MM.YYYY`, decimal comma, ISO-8859-1, CSV-injection guarded,
 the Beleg code in Zusatzinfo) and a **ZIP of the Belege** named
@@ -704,12 +822,12 @@ sweep ceremony (one user-signed swap of the leftovers), and the "asks for the
 rest" step on an underpaid link. The store rows and the statement line for a
 sweep exist; nothing writes a sweep yet.
 
-### 8.4 Connectors to external accounting software — GetMyInvoices BUILT, unproven live
+### 8.4 Connectors to external accounting software — GetMyInvoices BUILT, one live push
 
 | target | what exists |
 |---|---|
 | Lexware Office CSV | **BUILT.** The bank-import CSV above. Whether the accountant wants this, MT940 or CAMT is open. |
-| GetMyInvoices | **BUILT, unit-tested against a fake, never uploaded to.** Per-org API key, verified against `GET /account` before it is stored (AES-256-GCM, purpose `getmyinvoices`, never returned). Push a month's Belege to `POST /documents` with the Beleg code as document number, amounts, `paymentStatus: Paid`, `paidAt` = the receipt's block date, and the tx hashes as tags and note; idempotent by a `GET /documents?documentNumberFilter=` lookup first. Their OpenAPI (v3, Sep 2026) also has `POST /bankAccounts/{uid}/transactions`, so bank lines *could* go in by API onto a custom bank account; the client has the call, no route uses it. `npm run gmi:smoke` is read-only against a real key. Only `GET /account` and `GET /bankAccounts` have been called on the real account. |
+| GetMyInvoices | **BUILT, unit-tested against a fake; one live push (2026-10-03, Zoldenburg UG account, fake data, documents deleted after).** Per-org API key, verified against `GET /account` before it is stored (AES-256-GCM, purpose `getmyinvoices`, never returned). Push a month's Belege to `POST /documents` with the Beleg code as document number, amounts, `paymentStatus: Paid`, `paidAt` = the receipt's block date, and the tx hashes as tags and note; idempotent by a `GET /documents?documentNumberFilter=` lookup first. Uploads have their own timeout (`GETMYINVOICES_UPLOAD_TIMEOUT_MS`, 120 s; reads keep 20 s): their `POST /documents` takes 10 s for a tiny PDF and past 20 s for a real Beleg, and an aborted upload still lands, without its tags. An upload that times out is looked up again by number, never re-sent blind: found is "uploaded" with tags possibly missing, not found is "unknown" (push again; the lookup dedupes). Their OpenAPI (v3, Sep 2026) also has `POST /bankAccounts/{uid}/transactions`, so bank lines *could* go in by API onto a custom bank account; the client has the call, no route uses it. `npm run gmi:smoke` is read-only against a real key. On the real account, `GET /account`, `GET /bankAccounts`, `GET` and `POST /documents` and `DELETE /documents/{uid}` (which answers 415 without `content-type: application/json` and a `{}` body; the client has `deleteDocument` for scripts, no route uses it) have been called. |
 | Xero / QuickBooks | **NOT BUILT.** The capability is now labelled for the GetMyInvoices connector. |
 | DATEV | **NOT BUILT.** |
 | sevDesk | **OUT OF REPO.** A separate sibling project mirrors Monerium orders into sevDesk. It is not wired here. |
@@ -736,14 +854,16 @@ go (Lexware CSV, a GetMyInvoices bank account, MT940 or CAMT).
 | URL | who | what |
 |---|---|---|
 | `/` | public | Marketing landing page |
-| `/app` | account holder | Consumer PWA with onboarding, home, send, activity, payment page and links, documents, profile, recovery and card. Installable, and works offline for the shell. |
-| `/business` | org member | Org dashboard: overview, accounts, payments, invoices, Shopify, contacts, wallets, transactions, assets, chart of accounts, members, settings |
+| `/app` | account holder | The person's own account: onboarding, home, send, activity, payment page and links, contacts, a Profile tab (name, editable until Monerium verifies it; Zold tag; account, security, settings; the way into Zold Business), plan, documents, recovery settings and card. Invoices, books, approvals, members and every company are in `/business`. A company login opening `/app` is sent to `/business`, except for its sign-in, Monerium and receipt-share screens. From 1024px it has a sidebar, a wide home, payment details in a drawer and a search (Cmd or Ctrl K) over the payments and contacts already loaded. Installable, and works offline for the shell. |
+| `/guardian` | account holder (signed in) | Choose who can move the account to a new phone: Zoldenburg (our team checks the person's ID) or the person's own Google or Apple login (a Turnkey wallet). One at a time; adding or removing either is approved with the passkey. Security → Recovery links here. |
+| `/recovery` | someone who lost their phone (no session) | Get the account back on a new phone, for every guardian: email, a new passkey, the guardian's step (codes, Zoldenburg's ID check, or the Google/Apple login), the waiting period, then sign in. The sign-in screen's "Recover your account" opens it; old `/app#recover` links redirect here. |
+| `/business` | org member | The organisation's dashboard, on a desktop and a phone (under 1024px: a top bar with the organisation and Menu, and a tab bar of the space's main screens): a sidebar (Home, Approvals, Send, Get paid, Invoices, Contacts, Books, Members, the accounts list, Coming soon, Settings) and search (Cmd or Ctrl K) over contacts, payment runs and invoices. Approvals reviews in a drawer and sends one approved run at a time; Books holds the month's lines with category, memo and Beleg, the exports, the chart of accounts, assets, wallets and every transaction; Get paid holds the bank details; Settings is one tile per area (Organisation, Invoicing profile, Connections with Shopify and the accounting tools, Members and access, Plan), each its own screen; for a company login, in its own company only (an account there spends from its Safe, or it owns the company and no account spends from anyone else's), Settings → Access shows who can sign for the company's Safe and who can recover it, read from the chain on each visit, with every change made in the app; no one else sees it. A guardian on chain that Zold did not set up is listed with a warning. With no guardian, Access warns that Zoldenburg UG cannot recover the account (and a banner says so until the login has answered the question); nothing is blocked; Accounts → Statements and documents issues the backing member's statements, balance confirmations, proofs of ownership and receipts; Coming soon lists what the organisation cannot do yet; the invoice editor draws the invoice as paper beside the form. A balance shows only to the member whose own account a company account spends from |
 | `/pay/<handle>` | payer | Payment page |
 | `/pay/<handle>/<code>` | payer | Payment link, which also serves as the payer's receipt |
 | `/r/<slug>` | anyone with the link | Redacted transfer receipt |
 | `/v/<code>` | anyone with the code | Verified account document |
 | `/invoice/<token>` | supplier / customer | Invoice-Me form, or an issued invoice sheet |
-| `/admin` | operator | Read-only console |
+| `/admin` | operator | Operator dashboard (read-only except recovery signing) |
 | Shopify Thank-you and Order-status blocks | buyer | Payment instructions with live status |
 
 ---
@@ -755,7 +875,7 @@ the GitBook rather than let the product imply otherwise.
 
 ---
 
-## 12. GitBook drift — what to fix in `docs/gitbook/`
+## 12. GitBook drift — what to fix in the zold-docs repo
 
 Each item is a statement in the current GitBook or product copy that the code
 does not support.
@@ -774,8 +894,8 @@ does not support.
 | `docs/business-accounts.md` (role table) | Owner may delete the org | No delete route exists, by design. |
 | `business/accounts-and-currencies.md` | USD accounts "through Bridge" | The currency registry names **Iron** as the USD/GBP provider. Bridge appears in code only as the cash-rail transfer seam. |
 | `business/bulk-payments.md` | CSV destination "an IBAN, or a wallet address"; Payments → New draft → Import CSV | The importer produces wallet lines only (`chainId: 0`), and wallet lines are refused from an issued account. There is no Import CSV button in `/business`. The API parses and returns lines but does not create a draft. |
-| `business/imported-wallets.md` | "its balance shown"; history and backfill on Premium/Business | Nothing reads an imported wallet's balance or history. `sync.status` stays `pending` forever. |
-| `business/payments-and-approvals.md` | Send from the business dashboard | Send from `/business` does not yet produce the passkey assertion a Safe debit needs. There is no reject or re-point UI. |
+| `business/imported-wallets.md` | "its balance shown"; history and backfill on Premium/Business | No balance is shown. History is booked as ERC-20 transfers only on chains the deployment has an RPC for, which today is none; backfill is Business only. |
+| `business/payments-and-approvals.md` | Send from the business dashboard | Send from `/business` does not yet produce the passkey assertion a Safe debit needs. A reviewer can send a run back with a reason; there is no re-point UI. |
 | `get-paid/payment-page.md` | QR on the page | The QR image route is currently unreachable: it is shadowed by the payment-link route (see the technical doc). |
 | `add-money/crypto-deposit.md` and app copy | Converted "at the live mid rate on arrival" | Converted on passkey approval, at the venue's rate, checked against the mid. |
 | `landing.html` | "Live on Base" | Base Sepolia only. (The "custodial in practice" footnote was fixed in PR #193.) |

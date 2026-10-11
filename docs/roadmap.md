@@ -2,6 +2,10 @@
 
 Linked from `AGENTS.md`.
 
+- **Wallet tier**: the Safe and every crypto feature without KYC, for
+  residences Monerium does not serve too; fiat rails keep their partner's KYC.
+  Scope, owner decisions and PR order: `docs/wallet-tier.md`.
+
 0. **Payout partners**: dLocal (stablecoin-funded payouts, 60+ markets) and
    Yellow Card (Africa, settles natively in USDC). Not engaged. Pin down
    settlement currency, prefunding, fees/FX, recipient KYC ownership, caps.
@@ -22,5 +26,15 @@ Linked from `AGENTS.md`.
    EEA issuer channel (Dec 2025), Kulipa is dead, and Exodus now owns Baanx and
    Monavate. Proposal only; nothing card-side is built.
 
+Before going public: domain and trademark clearance for "Zold" in fintech.
+
 Parked deliberately: NEAR Intents, Metastable, Flexa/AMP (wrong market).
+
+Parked until wanted: an AI assistant in the business console ("ask a question
+or give a command", as Mercury's Command does). No language model runs in the
+product, so an empty prompt box would promise something that does not exist.
+Search (⌘K) stays the command surface; it may offer real actions next to its
+results. Picking this up means choosing a model provider, what data it may
+read, and which actions it may prepare (never send: a payment still needs the
+user's signature).
 

@@ -45,6 +45,9 @@ export function requiredBankFields(currency: CurrencyCode): string[] {
   ) as string[];
 }
 
+/** A text field from the body, or "" when it is anything but a string. */
+const text = (v: unknown) => (typeof v === "string" ? v : "");
+
 export function validateBankAccount(raw: unknown): Omit<ContactBankAccount, "id"> {
   const input = (raw && typeof raw === "object" ? raw : {}) as Partial<ContactBankAccount>;
   const currency = input.currency;
@@ -55,13 +58,13 @@ export function validateBankAccount(raw: unknown): Omit<ContactBankAccount, "id"
       ).join(", ")}.`,
     );
   }
-  const holderName = (input.holderName ?? "").trim();
+  const holderName = text(input.holderName).trim();
   if (holderName.length < 2) {
     throw new ContactError(
       "The account holder's name is required — on the bank rails the name is part of the payout identity, not a label.",
     );
   }
-  const country = (input.country ?? "").trim().toUpperCase();
+  const country = text(input.country).trim().toUpperCase();
   if (!/^[A-Z]{2}$/.test(country)) {
     throw new ContactError("Country must be an ISO 3166-1 alpha-2 code, e.g. DE.");
   }
@@ -70,7 +73,7 @@ export function validateBankAccount(raw: unknown): Omit<ContactBankAccount, "id"
     currency,
     country,
     holderName,
-    label: input.label?.trim() || undefined,
+    label: text(input.label).trim() || undefined,
   };
 
   for (const field of requiredBankFields(currency)) {
@@ -127,13 +130,6 @@ export function validateBankAccount(raw: unknown): Omit<ContactBankAccount, "id"
     }
     out.mobile = mobile;
   }
-  if (currency === "INR") {
-    const vpa = String(input.vpa).trim();
-    if (!/^[\w.\-]{2,64}@[A-Za-z]{2,32}$/.test(vpa)) {
-      throw new ContactError("A UPI id looks like name@bank.");
-    }
-    out.vpa = vpa;
-  }
 
   return out;
 }
@@ -151,7 +147,7 @@ export function validateWallet(raw: unknown): Omit<ContactWallet, "id"> {
   return {
     chainId,
     address: address.toLowerCase() as `0x${string}`,
-    label: input.label?.trim() || undefined,
+    label: text(input.label).trim() || undefined,
   };
 }
 
@@ -174,7 +170,6 @@ export function destinationFingerprint(
     bank.iban ??
     bank.accountNumber ??
     bank.mobile ??
-    bank.vpa ??
     "";
   return `bank:${bank.currency}:${bank.country}:${id}:${bank.holderName}`;
 }

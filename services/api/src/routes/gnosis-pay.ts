@@ -30,6 +30,7 @@ import {
 } from "../adapters/gnosis-pay.js";
 import type { SessionResolver } from "./org-context.js";
 import { can } from "../domain/segments.js";
+import { recordServerError } from "../http/error-log.js";
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 
@@ -47,7 +48,9 @@ const PROVENANCE = {
     "in permissionless mode, so every figure is a snapshot, not a live balance.",
 };
 
-function fail(res: express.Response, err: unknown) {
+/** A Gnosis Pay refusal is passed on in their words. Anything else is ours:
+ *  logged with its detail under a reference, and answered without it. */
+function fail(req: express.Request, res: express.Response, err: unknown) {
   if (err instanceof GnosisPayError) {
     // Pass their status through EXCEPT for auth: a 401 from Gnosis Pay means
     // the user's session with THEM expired, not that our session is invalid,
@@ -58,7 +61,12 @@ function fail(res: express.Response, err: unknown) {
       ...(err.status === 401 || err.status === 403 ? { reauth: true } : {}),
     });
   }
-  return res.status(500).json({ error: String((err as any)?.message ?? err) });
+  const { ref } = recordServerError(err, req);
+  return res.status(500).json({
+    error: `Something went wrong on our side reading your Gnosis Pay account; if it happens again, quote ${ref}.`,
+    code: "INTERNAL",
+    ref,
+  });
 }
 
 /** The JWT rides in a dedicated header, never a cookie and never the body:
@@ -138,7 +146,7 @@ export function createGnosisPayRouter(requireSession: SessionResolver): express.
       });
       res.json({ message, cookie, chainId: GNOSIS_PAY.siweChainId });
     } catch (err) {
-      return fail(res, err);
+      return fail(req, res, err);
     }
   });
 
@@ -162,7 +170,7 @@ export function createGnosisPayRouter(requireSession: SessionResolver): express.
       const { token } = await verifyAndProfile(message, signature, cookie, user.id, signedBy);
       res.json({ token, ...PROVENANCE, connected: store.findUser(user.id)?.gnosisPay ?? null });
     } catch (err) {
-      return fail(res, err);
+      return fail(req, res, err);
     }
   });
 
@@ -200,7 +208,7 @@ export function createGnosisPayRouter(requireSession: SessionResolver): express.
         balances,
       });
     } catch (err) {
-      return fail(res, err);
+      return fail(req, res, err);
     }
   });
 
@@ -212,7 +220,7 @@ export function createGnosisPayRouter(requireSession: SessionResolver): express.
       const transactions = await listTransactions(jwt);
       res.json({ ...PROVENANCE, asOf: new Date().toISOString(), transactions });
     } catch (err) {
-      return fail(res, err);
+      return fail(req, res, err);
     }
   });
 

@@ -30,15 +30,19 @@
  *   transfer belongs with a compliance provider.
  */
 import { randomUUID } from "node:crypto";
+import { usdToken } from "../usd-token.js";
 import { CHAIN_ID, CRYPTO_IN } from "../config.js";
 import { store, type CryptoDeposit, type User } from "../store.js";
+import { describeCause } from "../http/log-cause.js";
 import { abis, addrs, eur, usd, publicClient } from "../chain.js";
 import { balanceAfterWrite } from "../liquidity.js";
 import { safeDebitBlocker } from "../orchestrator.js";
+import { walletBlocker } from "../domain/wallet-tier.js";
 import { midRates, referenceRate } from "../rates.js";
 import { attributeDepositToRequest, noteDepositSettled } from "../routes/payment-requests.js";
 import { buildCryptoSettlement, settlementUpdate } from "../domain/invoices.js";
 import { writeStatementLines } from "../bookkeeping/writer.js";
+import { readLogWindow } from "../log-range.js";
 
 /** The ERC-20 event, declared here rather than pulled from the mock's ABI —
  *  the real USDC emits the same signature and this path must not depend on our
@@ -72,8 +76,9 @@ interface WatchedAddress {
  *   page entry wins: opting it into auto-convert is the owner's instruction.
  * - Direct Safe funding is recorded for all accounts, approved or not. A
  *   pending account's Safe can already receive, and skipping it moves the
- *   cursor past the transfer for good. Page auto-convert stays approved-only
- *   because conversion is a credit decision.
+ *   cursor past the transfer for good. Page auto-convert is watched for any
+ *   account walletBlocker lets through: conversion is a swap the user signs
+ *   from their own Safe, not a fiat rail.
  */
 function watchedAddresses(): WatchedAddress[] {
   const seen = new Set<string>();
@@ -86,7 +91,7 @@ function watchedAddresses(): WatchedAddress[] {
       seen.add(key);
       out.push({ user, address, source });
     };
-    if (user.kycStatus === "approved" && user.paymentPage?.autoConvert && user.paymentPage.depositAddress) {
+    if (!walletBlocker(user) && user.paymentPage?.autoConvert && user.paymentPage.depositAddress) {
       add(user.paymentPage.depositAddress, "payment-page");
     }
     // A payment REQUEST (pay link) is an explicit ask for money at the page
@@ -184,13 +189,24 @@ export function settlementTarget(user: User): "EURE" | "USDC" {
  * settlement currency, cannot.
  */
 export function depositConversionBlocker(user: User, deposit: CryptoDeposit): string | null {
-  if (deposit.token !== "USDC") return "only USDC deposits can be converted";
+  if (deposit.token !== "USDC") return `only ${usdToken().symbol} deposits can be converted`;
   if (deposit.holding === "converted") return "this deposit has already been converted to EURe";
+  if (deposit.holding === "unconfirmed") {
+    return "a conversion of this deposit was sent and may still land — it has to be checked on chain before it can be converted again";
+  }
   if (deposit.holding === "none") return "this deposit is already in your settlement currency, so there is nothing to convert";
-  if (user.kycStatus !== "approved") return "your account is not approved for settlement yet";
+  // Refused after the swap executed (it delivered nothing, or less than the
+  // floor): that USDC is spent, and a second swap would spend other USDC.
+  // Only a refusal before or without an executed swap can be retried.
+  if (deposit.holding === "refused" && deposit.txs.some((t) => t.step === "safe.swap(usdc->eure)")) {
+    return "a swap of this deposit went through and is under review — it cannot be converted again";
+  }
+  const identity = walletBlocker(user);
+  if (identity) return identity;
   const amountUsdc = deposit.amountUsdc ?? 0;
   if (amountUsdc < CRYPTO_IN.minUsdc) {
-    return `${amountUsdc} USDC is below the ${CRYPTO_IN.minUsdc} USDC floor — converting it would cost more than it delivers`;
+    const sym = usdToken().symbol;
+    return `${amountUsdc} ${sym} is below the ${CRYPTO_IN.minUsdc} ${sym} floor — converting it would cost more than it delivers`;
   }
   /**
    * No Safe, nothing to sign with. safeDebitBlocker is the same check the send
@@ -199,7 +215,7 @@ export function depositConversionBlocker(user: User, deposit: CryptoDeposit): st
   const safeBlocker = safeDebitBlocker(user);
   if (safeBlocker) {
     return (
-      `${safeBlocker}. Your ${deposit.amountUsdc ?? 0} USDC is still yours at ${user.address} — ` +
+      `${safeBlocker}. Your ${deposit.amountUsdc ?? 0} ${usdToken().symbol} is still yours at ${user.address} — ` +
       "it simply cannot be converted until the account can sign."
     );
   }
@@ -225,7 +241,7 @@ export async function heldUsdcBlocker(user: User, deposit: CryptoDeposit): Promi
   })) as bigint;
   if (have >= need) return null;
   return (
-    `your account holds ${usd.fromUnits(have)} USDC, less than the ${usd.fromUnits(need)} USDC this ` +
+    `your account holds ${usd.fromUnits(have)} ${usdToken().symbol}, less than the ${usd.fromUnits(need)} ${usdToken().symbol} this ` +
     "deposit brought in — it may have been spent. Nothing was prepared."
   );
 }
@@ -383,6 +399,10 @@ export function recordInvoiceSettlement(deposit: CryptoDeposit): void {
  */
 let scanning = false;
 
+/** Whether the scan is keeping up, for /api/health. No error text: an RPC
+ *  error can carry the RPC URL, and some providers put the key in it. */
+export const cryptoInScan: { lastOkAt?: string; failingSince?: string } = {};
+
 export async function pollCryptoDepositsOnce(): Promise<number> {
   if (!CRYPTO_IN.enabled) return 0;
   /**
@@ -399,15 +419,30 @@ export async function pollCryptoDepositsOnce(): Promise<number> {
   if (scanning) return 0;
   scanning = true;
   try {
-    return await scanCryptoDeposits();
+    // Several windows per tick, so a backlog (an outage, a fresh deploy)
+    // catches up in minutes rather than one window every pollMs.
+    let found = 0;
+    try {
+      for (let w = 0; w < CRYPTO_IN.windowsPerTick; w++) {
+        const r = await scanCryptoDeposits();
+        found += r.found;
+        if (!r.more) break;
+      }
+    } catch (err) {
+      cryptoInScan.failingSince ??= new Date().toISOString();
+      throw err;
+    }
+    cryptoInScan.lastOkAt = new Date().toISOString();
+    delete cryptoInScan.failingSince;
+    return found;
   } finally {
     scanning = false;
   }
 }
 
-async function scanCryptoDeposits(): Promise<number> {
+async function scanCryptoDeposits(): Promise<{ found: number; more: boolean }> {
   const watched = watchedAddresses();
-  if (watched.length === 0) return 0;
+  if (watched.length === 0) return { found: 0, more: false };
   const cursorKey = `${CHAIN_ID}:safe-funding-v1`;
 
   /**
@@ -421,22 +456,33 @@ async function scanCryptoDeposits(): Promise<number> {
    */
   const head = await publicClient.getBlockNumber({ cacheTime: 0 });
   const safeHead = head - BigInt(CRYPTO_IN.confirmations);
-  if (safeHead < 0n) return 0;
+  if (safeHead < 0n) return { found: 0, more: false };
 
   // A fresh install looks back one bounded window so a just-finished deposit
   // can still appear in Activity after the scanner deploys or restarts.
   const cursor = store.cryptoDepositCursor(cursorKey);
   if (cursor === undefined) {
-    const lookback = CRYPTO_IN.maxBlockSpan;
+    // Read later in windows of maxBlockSpan, so it can be longer than one.
+    const lookback = CRYPTO_IN.firstLookbackBlocks;
     store.setCryptoDepositCursor(cursorKey, safeHead > lookback ? safeHead - lookback : 0n);
-    return 0;
+    return { found: 0, more: false };
   }
-  if (safeHead <= cursor) return 0;
+  if (safeHead <= cursor) return { found: 0, more: false };
 
+  // Both tokens over one window, so the cursor moves past blocks read for both.
   const fromBlock = cursor + 1n;
-  const toBlock = safeHead - fromBlock + 1n > CRYPTO_IN.maxBlockSpan
-    ? fromBlock + CRYPTO_IN.maxBlockSpan - 1n
-    : safeHead;
+  const tokens = [
+    { token: "EURE" as const, address: addrs().eure },
+    { token: "USDC" as const, address: addrs().usdc },
+  ];
+  const { toBlock, result: logsByToken } = await readLogWindow(fromBlock, safeHead, CRYPTO_IN.maxBlockSpan, (from, to) =>
+    Promise.all(tokens.map((t) => publicClient.getLogs({
+      address: t.address,
+      event: TRANSFER_EVENT,
+      args: { to: watched.map((x) => x.address) },
+      fromBlock: from,
+      toBlock: to,
+    }))));
 
   const byAddress = new Map<string, WatchedAddress[]>();
   for (const item of watched) {
@@ -444,17 +490,8 @@ async function scanCryptoDeposits(): Promise<number> {
     byAddress.set(key, [...(byAddress.get(key) ?? []), item]);
   }
   const fresh: CryptoDeposit[] = [];
-  for (const token of [
-    { token: "EURE" as const, address: addrs().eure },
-    { token: "USDC" as const, address: addrs().usdc },
-  ]) {
-    const logs = await publicClient.getLogs({
-      address: token.address,
-      event: TRANSFER_EVENT,
-      args: { to: watched.map((x) => x.address) },
-      fromBlock,
-      toBlock,
-    });
+  for (const [i, token] of tokens.entries()) {
+    const logs = logsByToken[i];
 
     // Block times for the window, one call per distinct block. The chain's
     // timestamp is when the money actually arrived; detection is a couple of
@@ -517,6 +554,7 @@ async function scanCryptoDeposits(): Promise<number> {
           logIndex,
           amountUnits: value.toString(),
           ...(/^0x[0-9a-f]{40}$/.test(from) ? { from: from as `0x${string}` } : {}),
+          ...(log.blockNumber != null && blockTimes.has(log.blockNumber) ? { arrivedAt: blockTimes.get(log.blockNumber) } : {}),
           ...(token.token === "EURE" ? { amountEur: eur.fromWei(value), creditedEur: eur.fromWei(value) } : {}),
           ...(token.token === "USDC"
             ? {
@@ -544,7 +582,7 @@ async function scanCryptoDeposits(): Promise<number> {
     try {
       attributeDepositToRequest(deposit);
     } catch (err: any) {
-      console.error(`crypto-in: could not attribute deposit ${deposit.id} to a request: ${err?.message ?? err}`);
+      console.error(`crypto-in: could not attribute deposit ${deposit.id} to a request: ${describeCause(err)}`);
     }
   }
 
@@ -554,11 +592,11 @@ async function scanCryptoDeposits(): Promise<number> {
       settleOnArrival(deposit);
     } catch (err: any) {
       // Left without settledAt, so the next sweep writes it.
-      console.error(`crypto-in: could not settle deposit ${deposit.id}: ${err?.message ?? err}`);
+      console.error(`crypto-in: could not settle deposit ${deposit.id}: ${describeCause(err)}`);
     }
   }
   if (fresh.length) writeStatementLines();
-  return fresh.length;
+  return { found: fresh.length, more: toBlock < safeHead };
 }
 
 /**
@@ -577,7 +615,7 @@ export async function sweepPendingCryptoDeposits(): Promise<number> {
       settleOnArrival(d);
       n++;
     } catch (err: any) {
-      console.error(`crypto-in: could not settle deposit ${d.id}: ${err?.message ?? err}`);
+      console.error(`crypto-in: could not settle deposit ${d.id}: ${describeCause(err)}`);
     }
   }
   if (n) writeStatementLines();
@@ -585,12 +623,19 @@ export async function sweepPendingCryptoDeposits(): Promise<number> {
 }
 
 export function startCryptoDepositPoller() {
+  // One tick at a time: a slow partner or RPC must not stack a second pass
+  // over the same rows on top of the first.
+  let busy = false;
   const tick = async () => {
+    if (busy) return;
+    busy = true;
     try {
       await sweepPendingCryptoDeposits();
       await pollCryptoDepositsOnce();
     } catch (err: any) {
-      console.error(`crypto-in poll failed: ${err?.message ?? err}`);
+      console.error(`crypto-in poll failed: ${describeCause(err)}`);
+    } finally {
+      busy = false;
     }
   };
   void tick();

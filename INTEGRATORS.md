@@ -112,7 +112,6 @@ These are **wallet private keys and secrets we create**. This is the part Baer f
 | `DEPLOY_RAMP_KEY` | Credits deposits | **Hot** |
 | `STELLAR_TREASURY_SECRET` | Holds the payout float | **Hot — holds funds** |
 | `MONERIUM_TOKEN_ENCRYPTION_KEY` | Encrypts user OAuth tokens at rest | ≥32 chars, app refuses to start without it |
-| `KYC_OPERATOR_TOKEN` | Approves KYC decisions | Required in production |
 
 **Where this stands re: Baer's Safe question**
 
@@ -129,7 +128,7 @@ Recommended: move the hot keys to a KMS or signer service (AWS KMS, GCP KMS, Tur
 The app **refuses to start** in production without these. Not opinions — hard failures in `config.ts`:
 
 ```
-KYC_OPERATOR_TOKEN                required
+KYC_OPERATOR_TOKEN                must NOT be set: the operator signs in with a passkey
 ALLOW_PLAINTEXT_STORE=1           must explicitly acknowledge the JSON store isn't production storage
 MONERIUM_WEBHOOK_SECRET           required (whsec_ format, ≥24 bytes) when Monerium is configured
 MONERIUM_TOKEN_ENCRYPTION_KEY     required, ≥32 chars

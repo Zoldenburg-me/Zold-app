@@ -9,10 +9,15 @@
      opens the account rather than the marketing page. -->
 <link rel="manifest" href="/manifest.webmanifest" />
 <meta name="theme-color" content="#08080b" />
+<meta name="mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="Zold" />
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+<!-- Dark before any stylesheet arrives: an installed app otherwise opens on
+     a white page while tokens.css loads. -->
+<meta name="color-scheme" content="dark" />
+<style>html, body { background: #08080b; }</style>
 <link rel="stylesheet" href="/vendor/fonts/text.css" />
 <!-- Material Symbols, as the design specifies. display=block so an icon never
      flashes as its ligature text before the font arrives. -->
@@ -33,6 +38,10 @@
   <div id="offline-bar" class="hidden" role="status" aria-live="polite">You’re offline. Balances and quotes can’t be refreshed.</div>
   <!-- Screen-reader announcements (announce() in app/core.js). -->
   <div id="sr-announce" class="sr-only" role="status" aria-live="polite"></div>
+  <!-- A recovery under way on this account, or a check that failed: above
+       every app screen, the redesigned and the older ones (app/phone-home.js
+       phRecBarSync). Empty and hidden otherwise. -->
+  <div id="ph-recbar" class="z-recbar" hidden></div>
 
   <!-- ============ sign-in and onboarding ============
        One screen at a time, rendered by app/onboarding.js from the account's
@@ -125,8 +134,8 @@
       <div class="m-screen" id="m-share-screen">
         <div class="m-sheadrow"><button class="m-backbtn" data-mback="detail" aria-label="Back"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:24px">arrow_back</span></button></div>
         <div style="padding:4px 0 2px">
-          <div style="font-size:14.5px;font-weight:600;letter-spacing:-.01em">Share receipt</div>
-          <div style="font-size:12px;line-height:1.5;color:var(--m-dim);margin-top:4px">Pick what recipients see. Everything else stays sealed.</div>
+          <h1 style="font-size:22px;font-weight:600;letter-spacing:-.01em;margin:0">Share receipt</h1>
+          <p style="font-size:14px;line-height:1.5;color:var(--m-dim);margin:6px 0 0">Pick what the person with the link sees. Everything else stays off the link.</p>
         </div>
         <div id="m-share-groups"></div>
         <div id="m-share-toggles"></div>
@@ -137,69 +146,6 @@
         <div class="m-note warn hidden" id="m-share-err"></div>
       </div>
 
-      <!-- ================= Profile ================= -->
-      <div class="m-screen" id="m-profile-screen">
-        <div class="m-sheadrow"><button class="m-backbtn" data-mback="more" aria-label="Back"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:24px">arrow_back</span></button></div>
-        <div class="m-title">Settings</div>
-        <div class="m-idcard">
-          <div class="av" id="m-pf-initials">—</div>
-          <div style="flex:1;min-width:0">
-            <div class="n" id="m-pf-name">—</div>
-            <div class="e" id="m-pf-email">—</div>
-          </div>
-          <span class="m-tag" id="m-pf-kyc">—</span>
-        </div>
-        <button class="m-optrow" id="m-pf-plus" style="margin-top:8px">
-          <span class="material-symbols-rounded ic" aria-hidden="true">stars</span>
-          <span class="tx"><span class="t">Zold Plus</span><span class="d" id="m-pf-plus-sub">Coming soon</span></span>
-          <span class="material-symbols-rounded ch" aria-hidden="true">chevron_right</span>
-        </button>
-
-        <div class="m-seclabel">Account</div>
-        <div class="m-rows" id="m-pf-account"></div>
-        <!-- Your OWN Monerium app credentials, for testing against your own
-             account. Follows the `monerium` capability like every other
-             Monerium control. -->
-        <button class="m-optrow" id="m-pf-monerium" style="margin-top:8px">
-          <span class="material-symbols-rounded ic" aria-hidden="true">vpn_key</span>
-          <span class="tx"><span class="t">Monerium keys</span><span class="d" id="m-pf-monerium-sub">Not connected</span></span>
-          <span class="material-symbols-rounded ch" aria-hidden="true">chevron_right</span>
-        </button>
-
-        <button class="m-optrow" id="m-pf-links" style="margin-top:8px">
-          <span class="material-symbols-rounded ic" aria-hidden="true">request_quote</span>
-          <span class="tx"><span class="t">Payment links</span><span class="d" id="m-pf-links-sub">Ask for an amount by link</span></span>
-          <span class="material-symbols-rounded ch" aria-hidden="true">chevron_right</span>
-        </button>
-
-        <div class="m-seclabel">Security</div>
-        <div class="m-rows" id="m-pf-security"></div>
-        <div class="error hidden" role="alert" id="m-pf-sec-err"></div>
-        <button class="m-optrow" id="m-pf-documents" style="margin-top:8px">
-          <span class="material-symbols-rounded ic" aria-hidden="true">description</span>
-          <span class="tx"><span class="t">Statements &amp; documents</span><span class="d">Statement, balance confirmation, proof of ownership</span></span>
-          <span class="material-symbols-rounded ch" aria-hidden="true">chevron_right</span>
-        </button>
-        <!-- Advanced features: off by default, remembered per browser. Reveals
-             the Signers & rules screen (app/signers.js). -->
-        <button class="m-optrow" id="m-pf-advanced" role="switch" aria-checked="false" style="margin-top:8px">
-          <span class="material-symbols-rounded ic" aria-hidden="true">tune</span>
-          <span class="tx"><span class="t">Enable advanced features</span><span class="d" id="m-pf-advanced-sub">Second owner, cosigner rules, spending limits</span></span>
-          <span class="m-switch" aria-hidden="true"></span>
-        </button>
-        <button class="m-optrow hidden" id="m-pf-signers" style="margin-top:8px">
-          <span class="material-symbols-rounded ic" aria-hidden="true">admin_panel_settings</span>
-          <span class="tx"><span class="t">Signers &amp; rules</span><span class="d">Passkey, second owner, cosigner rules</span></span>
-          <span class="material-symbols-rounded ch" aria-hidden="true">chevron_right</span>
-        </button>
-        <button class="m-optrow" id="m-pf-recovery" style="margin-top:8px">
-          <span class="material-symbols-rounded ic" aria-hidden="true">health_and_safety</span>
-          <span class="tx"><span class="t">Recovery</span><span class="d" id="m-pf-recovery-sub">Not set up</span></span>
-          <span class="material-symbols-rounded ch" aria-hidden="true">chevron_right</span>
-        </button>
-
-        <button class="m-cta" id="m-pf-signout" style="background:transparent;border:1px solid var(--m-line-strong);color:var(--m-pink);min-height:48px;font-size:14px">Sign out</button>
-      </div>
 
 <!-- ================= Statements & documents =================
            Every document is a frozen, signed snapshot under a verification
@@ -212,11 +158,11 @@
         <div id="m-doc-body" style="margin-top:24px"></div>
       </div>
 
-      <!-- ================= Signers & rules (advanced) =================
+      <!-- ================= Signers & rules =================
            The Safe's owners, threshold and Allowance-module spending limits,
            read from the chain on every visit. Changes are passkey-signed. -->
       <div class="m-screen" id="m-signers-screen">
-        <div class="m-sheadrow"><button class="m-backbtn" data-mback="profile" aria-label="Back to profile"><span class="material-symbols-rounded" style="font-size:24px" aria-hidden="true">arrow_back</span></button></div>
+        <div class="m-sheadrow"><button class="m-backbtn" data-mback="profile" aria-label="Back"><span class="material-symbols-rounded" style="font-size:24px" aria-hidden="true">arrow_back</span></button></div>
         <div class="m-h1">Signers &amp; rules</div>
         <div class="m-lede">Who can sign for your smart account, and what they need. Read live from the chain.</div>
         <div id="m-sg-body" style="margin-top:24px"></div>
@@ -302,6 +248,7 @@
         </div>
         <div class="row2 hidden" id="funding-actions" style="margin-top:1rem">
           <button class="ghost" id="btn-finish-safe">Finish smart wallet</button>
+          <button class="ghost hidden" id="btn-finish-import">Finish bringing in your Safe</button>
           <button id="btn-monerium-dashboard">Verify with Monerium</button>
         </div>
         <div class="hint hidden" id="funding-action-hint"></div>
@@ -329,20 +276,6 @@
         <div class="error hidden" role="alert" id="dep-err"></div>
       </div>
 
-      <div class="card" id="crypto-card">
-        <h2>Crypto in</h2>
-        <div class="detail" style="border-top:none; margin-top:0; padding-top:0">
-          <span class="k">PAYMENT PAGE AUTO-SETTLEMENT</span>
-          <button id="btn-autoconvert" class="togglebtn" aria-label="Payment page auto-settlement" aria-pressed="false">off</button>
-        </div>
-        <div class="hint">
-          Only payments sent to your payment page address are settled automatically. Normal transfers
-          to your smart account stay where they land.
-        </div>
-        <div id="crypto-list"></div>
-        <div class="error hidden" role="alert" id="crypto-err"></div>
-      </div>
-
       <div class="card" id="paylink-card">
         <h2>Payment page</h2>
         <div class="row2">
@@ -352,11 +285,6 @@
           </div>
           <button id="btn-handle">Claim</button>
         </div>
-        <label>Settle incoming payments as</label>
-        <select id="settlement-asset">
-          <option value="EURE">EUR(e)</option>
-          <option value="USDC">USDC</option>
-        </select>
         <div class="detail" id="paylink-row" style="display:none">
           <span class="k">YOUR LINK</span>
           <span class="v" id="paylink">—</span>
@@ -368,9 +296,9 @@
           <button class="copybtn" data-copy="payaddr" aria-label="Copy payment page address">copy</button>
         </div>
         <div class="hint">
-          A page anyone can open to pay you in USDC today — no account needed on their side. It uses
-          a page-specific public address, so auto-settlement applies to page payments, not every
-          transfer into your smart account.
+          A page anyone can open to pay you in digital dollars (USDC), without an account of their
+          own. It has its own address, so your main currency applies to payments to the page, not to
+          every transfer into your account.
         </div>
         <div class="error hidden" role="alert" id="handle-err"></div>
         <button class="ghost wide" id="btn-links" style="margin-top:.6rem">Payment links — ask for an amount</button>
@@ -549,6 +477,15 @@
 <script src="/app/send.js"></script>
 <script src="/app/signers.js"></script>
 <script src="/app/phone.js"></script>
+<script src="/app/phone-home.js"></script>
+<script src="/app/phone-activity.js"></script>
+<script src="/app/phone-send.js"></script>
+<script src="/app/phone-add.js"></script>
+<script src="/app/phone-getpaid.js"></script>
+<script src="/app/phone-more.js"></script>
+<script src="/app/settings.js"></script>
+<script src="/app/desktop.js"></script>
+<script src="/app/errors.js"></script>
 <script src="/app/pwa.js"></script>
 <script src="/app/main.js"></script>
 <script src="/cookie-notice.js" defer></script>

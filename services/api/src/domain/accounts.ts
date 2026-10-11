@@ -16,7 +16,7 @@
  * boolean.
  */
 
-import { MONERIUM, moneriumOAuthEnabled } from "../config.js";
+import { dataEncryptionProblem } from "../config/data-keys.js";
 import type {
   Account,
   AccountIdentifier,
@@ -85,10 +85,11 @@ const CURRENCIES: CurrencyDefinition[] = [
     ],
     provider: "monerium",
     tokenised: true,
-    // Open when a user can bring a Monerium account: by OAuth (an OAuth client
-    // id) or with their own API keys (needs the encryption key that stores the
-    // secret). App-level credentials alone open nothing for a user any more.
-    mode: () => (moneriumOAuthEnabled() || Boolean(MONERIUM.tokenEncryptionKey) ? "live" : false),
+    // Open when a user can bring a Monerium account. Either way (OAuth tokens
+    // or their own API keys) the credential is stored under the data key
+    // ring, so without it there is no way in; app-level credentials alone
+    // open nothing for a user.
+    mode: () => (dataEncryptionProblem() === null ? "live" : false),
     token: {
       symbol: "EURe",
       issuer: "Monerium EMI ehf — an e-money institution licensed by the Central Bank of Iceland",
@@ -106,7 +107,7 @@ const CURRENCIES: CurrencyDefinition[] = [
         "e-money token under MiCA, not a collateral-backed peg. That difference is the reason this " +
         "column exists: it is what separates EURe from ZCHF, and neither label tells you on its own.",
     },
-    needs: "a Monerium connection path (MONERIUM_OAUTH_CLIENT_ID and/or MONERIUM_TOKEN_ENCRYPTION_KEY)",
+    needs: "a data encryption key (DATA_ENCRYPTION_KEYS) to store Monerium credentials",
   },
   {
     code: "USD",
@@ -225,20 +226,6 @@ const CURRENCIES: CurrencyDefinition[] = [
       "seam — supports only USDC and EURC for EEA users under MiCA, so cNGN cannot move through it " +
       "for a European entity at all.",
   },
-  {
-    code: "INR",
-    name: "Indian rupee",
-    symbol: "₹",
-    decimals: 2,
-    railName: "UPI",
-    identifierFields: ["vpa"],
-    countries: ["IN"],
-    provider: "dlocal",
-    tokenised: false,
-    mode: () => false as const,
-    needs:
-      "an Indian payout partner (dLocal is the candidate). A UPI rail without one would be a mock minting its own reference numbers, which is not to be built.",
-  },
 ];
 
 export const CURRENCY_REGISTRY: Record<CurrencyCode, CurrencyDefinition> =
@@ -266,8 +253,8 @@ export interface CurrencyAvailability {
   /**
    * A settlement token that exists for this currency, shown even when the rail
    * is closed. `heldByUs` is the field that stops this being a claim: it is
-   * false for every token we do not custody, so a client rendering a token can
-   * never imply a balance.
+   * true only for a token we custody on a rail that is open, so a client
+   * rendering a token can never imply a balance.
    */
   token?: {
     symbol: string;
@@ -296,7 +283,7 @@ export function currencyAvailability(): CurrencyAvailability[] {
       ...(mode === false ? { needs: c.needs } : {}),
       // Shown whether or not the rail is open: a currency with a liquid token
       // but no account is a different state from one with no token at all.
-      ...(c.token ? { token: { ...c.token, heldByUs: c.tokenised } } : {}),
+      ...(c.token ? { token: { ...c.token, heldByUs: c.tokenised && mode !== false } } : {}),
     };
   });
 }
@@ -346,11 +333,14 @@ export function accountIsSpendable(account: Account): {
     };
   }
   if (account.status !== "active") {
+    // An EUR account without an IBAN gives the current reason, not the
+    // wording stored when it was opened.
+    const why = account.currency === "EUR" && !account.backingUserId
+      ? "No IBAN is connected to this account yet, so nothing can be sent from it"
+      : account.gate?.reason.replace(/\.$/, "");
     return {
       ok: false,
-      reason: `This ${def.name} account is ${account.status}${
-        account.gate ? ` — ${account.gate.reason}` : ""
-      }.`,
+      reason: `This ${def.name} account is ${account.status}${why ? ` — ${why}` : ""}.`,
     };
   }
   return { ok: true };

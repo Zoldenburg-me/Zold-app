@@ -18,12 +18,14 @@ import path from "node:path";
 import express from "express";
 
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-plan-")), "db.json");
-const OPERATOR = "operator-token-for-plan-test-0123456789";
-process.env.KYC_OPERATOR_TOKEN = OPERATOR;
 
 const { initStore, store } = await import("../services/api/src/store.js");
 const { createOrgRouter } = await import("../services/api/src/routes/orgs.js");
 const { createAdminRouter } = await import("../services/api/src/routes/admin.js");
+const { createOperatorGate } = await import("../services/api/src/operators/gate.js");
+const { createOperatorAuthRouter } = await import("../services/api/src/routes/operator-auth.js");
+const { OPERATOR: OPERATOR_CONFIG, SECURITY } = await import("../services/api/src/config.js");
+const { operatorKit } = await import("./_operator.js");
 
 initStore();
 const now = new Date().toISOString();
@@ -36,6 +38,8 @@ store.addMember({ id: "m_p", orgId: "org_p", userId: "u_owner", email: "", role:
 
 const app = express();
 app.use(express.json());
+app.use("/api/admin", createOperatorGate());
+app.use("/api", createOperatorAuthRouter());
 const requireSession = (req: any, res: any) => {
   const id = req.header("x-user");
   if (id) return { userId: id };
@@ -47,6 +51,7 @@ app.use("/api", createAdminRouter());
 const server = app.listen(0, "127.0.0.1");
 await new Promise<void>((r) => server.once("listening", () => r()));
 const API = `http://127.0.0.1:${(server.address() as any).port}`;
+const kit = await operatorKit({ base: API, origin: OPERATOR_CONFIG.adminOrigin, rpId: SECURITY.rpId, dataDir: path.dirname(process.env.TRANSF_DB_PATH!) });
 const call = async (p: string, body: unknown, headers: Record<string, string>) => {
   const res = await fetch(`${API}${p}`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
   return { status: res.status, data: (await res.json().catch(() => ({}))) as any };
@@ -75,20 +80,20 @@ await check("downgrading to the free plan stays open", async () => {
   assert.equal(r.status, 200);
   assert.equal(store.findOrganisation("org_p")!.plan, "starter");
 });
-await check("the operator route refuses without the operator token", async () => {
+await check("the operator route refuses without an operator session", async () => {
   assert.equal((await call("/api/admin/orgs/org_b/plan", { plan: "business" }, asOwner)).status, 401);
   assert.equal((await call("/api/admin/orgs/org_b/plan", { plan: "business" }, { authorization: "Bearer wrong-token-of-sufficient-length-00" })).status, 401);
   assert.equal(store.findOrganisation("org_b")!.plan, "starter");
 });
 await check("the operator can grant a paid plan, and it supersedes a running trial", async () => {
-  const r = await call("/api/admin/orgs/org_b/plan", { plan: "business" }, { authorization: `Bearer ${OPERATOR}` });
-  assert.equal(r.status, 200, JSON.stringify(r.data));
+  const r = await kit.call("POST", "/api/admin/orgs/org_b/plan", { plan: "business" });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
   const org = store.findOrganisation("org_b")!;
   assert.equal(org.plan, "business");
   assert.ok(org.trial?.endedAt, "the trial is ended, not stacked");
 });
 await check("the operator cannot grant a plan the org type cannot hold", async () => {
-  const r = await call("/api/admin/orgs/org_b/plan", { plan: "premium" }, { authorization: `Bearer ${OPERATOR}` });
+  const r = await kit.call("POST", "/api/admin/orgs/org_b/plan", { plan: "premium" });
   assert.equal(r.status, 400);
 });
 

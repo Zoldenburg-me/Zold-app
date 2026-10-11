@@ -29,6 +29,11 @@ export interface ShopifyConnection {
   /** custom-app: the Admin API id of our orders/create subscription, so
    *  disconnecting can remove it. */
   webhookSubscriptionId?: string;
+  /** custom-app: the key the order-confirmation email signs the order id
+   *  with (`hmac_sha256` in the template's Liquid), so the email link proves
+   *  the reader got the email. Encrypted at rest, purpose `shopify-link`;
+   *  it crosses the API only inside the template shown to the org. */
+  orderLinkSecretEnc?: string;
   /** The last payment session Shopify sent, for the dashboard. */
   lastSessionAt?: string;
   updatedAt: string;

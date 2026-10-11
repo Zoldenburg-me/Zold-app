@@ -87,12 +87,26 @@ const regChallenge = issueChallenge("register");
 const attObj = enc(new Map<string, any>([
   ["fmt", "none"],
   ["attStmt", new Map()],
-  ["authData", authDataBytes(0x41, 0, credId, cose)],
+  ["authData", authDataBytes(0x45, 0, credId, cose)],
 ]));
 const reg = verifyRegistration(bufToB64url(attObj), clientData("webauthn.create", regChallenge), RP_ID, [ORIGIN]);
 assert.equal(reg.credentialId, bufToB64url(credId));
 assert.equal(reg.key.alg, "ES256");
 console.log("1. registration verifies, COSE key extracted");
+
+// 1b. a passkey enrolled on a touch alone (no UV) is refused
+{
+  const touchOnly = enc(new Map<string, any>([
+    ["fmt", "none"],
+    ["attStmt", new Map()],
+    ["authData", authDataBytes(0x41, 0, credId, cose)],
+  ]));
+  assert.throws(
+    () => verifyRegistration(bufToB64url(touchOnly), clientData("webauthn.create", issueChallenge("register")), RP_ID, [ORIGIN]),
+    /user verification required to register/,
+  );
+  console.log("1b. registration without user verification rejected");
+}
 
 // 2. good assertion
 const login = async (
@@ -104,9 +118,8 @@ const login = async (
 ) => {
   const ch = challenge ?? issueChallenge(purpose, opts.binding);
   const cdj = clientData("webauthn.get", ch);
-  // UP only for login; a step-up must also carry UV (0x04), which is what the
-  // verifier requires for anything that binds a key or moves money.
-  const ad = authDataBytes(opts.flags ?? (purpose === "step_up" ? 0x05 : 0x01), count);
+  // UP + UV: the verifier requires UV for every purpose, login included.
+  const ad = authDataBytes(opts.flags ?? 0x05, count);
   const data = Buffer.concat([ad, sha256(b64urlToBuf(cdj))]);
   const raw = Buffer.from(await webcrypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, pair.privateKey, data));
   const der = rawToDer(raw);
@@ -139,7 +152,7 @@ console.log("4. unknown challenge rejected");
 {
   const ch = issueChallenge("login");
   const cdj = clientData("webauthn.get", ch);
-  const ad = authDataBytes(0x01, 5);
+  const ad = authDataBytes(0x05, 5);
   const data = Buffer.concat([ad, sha256(b64urlToBuf(cdj))]);
   const raw = Buffer.from(await webcrypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, pair.privateKey, data));
   await assert.rejects(
@@ -153,7 +166,7 @@ console.log("4. unknown challenge rejected");
 {
   const ch = issueChallenge("login");
   const cdj = bufToB64url(Buffer.from(JSON.stringify({ type: "webauthn.get", challenge: ch, origin: "https://evil.example" })));
-  const ad = authDataBytes(0x01, 9);
+  const ad = authDataBytes(0x05, 9);
   const data = Buffer.concat([ad, sha256(b64urlToBuf(cdj))]);
   const raw = Buffer.from(await webcrypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, pair.privateKey, data));
   await assert.rejects(
@@ -194,4 +207,10 @@ console.log("4. unknown challenge rejected");
   console.log("9. step-up challenges are bound to their account");
 }
 
-console.log("\nWEBAUTHN SELF-TEST PASSED — 9/9");
+// 10. a login without user verification gets no session
+{
+  await assert.rejects(() => login(16, false, undefined, "login", { flags: 0x01 }), /user verification required/);
+  console.log("10. login requires the user-verification flag");
+}
+
+console.log("\nWEBAUTHN SELF-TEST PASSED — 11/11");

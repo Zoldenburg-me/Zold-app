@@ -107,7 +107,12 @@ Order in `server.ts`:
    two buckets. **auth** (20/min) covers `/passkey*`, `/webauthn/challenge`,
    `/recovery*`, `/r/`, `/v/`, `/pay/<h>/<code>`, `/shopify/`, `/admin*`,
    `/invoice-links/`, `POST …/monerium/api-keys` and `POST /users`. **general**
-   (300/min) covers everything else. Matching uses the mount-relative path.
+   (300/min) covers everything else. `/admin*` with a live operator passkey
+   session has its own **operator** bucket
+   per operator (`OPERATOR_RATE_LIMIT_PER_MIN`, 300/min): the dashboard's
+   refresh loop alone sends about 16 a minute; a wrong bearer stays on auth. `/service/*` with a valid checkout-service credential has
+   its own **service** bucket (`SERVICE_RATE_LIMIT_PER_MIN`, 120/min); a
+   wrong one stays on auth. Matching uses the mount-relative path.
 6. The page router serves the HTML routes, then `express.static(public)`. It
    is mounted before any `/api` router.
 7. Routers are mounted at `/api`. Mount order matters: the payment-request
@@ -135,9 +140,14 @@ With in-memory pending executions, an unknown state must not keep signing.
 - `requireUserSession(req, res, userId)` adds a check that the session user is
   the path user. Org routes use `resolveOrg`, which checks session plus
   **active** membership and returns 404 otherwise.
-- The operator uses `KYC_OPERATOR_TOKEN` (at least 24 characters) as a bearer,
-  compared in constant time. If it is unset the console answers 503 (fails
-  closed). It is never a user session.
+- The operator is a named record (`operators/`). Every `/api/admin` route
+  passes one gate (`operators/gate.ts`) mounted ahead of every admin router:
+  Cloudflare Access (always off the local stack, checked by the server from
+  `Cf-Access-Jwt-Assertion`), then an operator passkey session (`zop_`, 8 h,
+  30 min idle) whose email equals the Access identity, then a fresh passkey
+  approval for every non-GET, bound to its method, path and body. Operator
+  passkeys verify against `ADMIN_ORIGIN` only. There is no shared operator
+  token, and an operator session is never a user session.
 
 ### 4.2 The three independent checks
 
@@ -160,13 +170,21 @@ sets are cumulative (`domain/roles.ts:39-86`). `transfers.read` and
   owner must be P-256.
 - Challenges are 32 random bytes, single-use, with a 5-minute TTL and at most
   50k held in memory. Each is bound to a **purpose** (`register` / `login` /
-  `step_up`) and optionally to a user or `recovery:<id>`.
+  `step_up`) and optionally to a user or `recovery:<id>`. A `step_up` is bound
+  to the user AND one action from `STEP_UP_ACTIONS` (routes/auth.ts:
+  `passkey.replace`, `monerium.connect`, `monerium.disconnect`,
+  `authorizer.bind`, `org.payment-review.off`, `org.invoice-iban.change`,
+  `safe.import`), and only the route making that change accepts it.
+  `safe.import` is also bound to its target (`stepUpBinding(user, action,
+  target)`): `/safe/import/prepare` issues it for one Safe's address, owners
+  and threshold, and `/webauthn/challenge` refuses to issue it.
 - Registration checks type, challenge, origin allowlist, rpIdHash and the UP
-  flag. **Attestation statements are not verified**, so any authenticator is
-  accepted.
-- Assertion requires UV only for `step_up` and for challenges the server
-  computed itself (Safe op hashes, SafeMessages). Login uses UV "preferred".
-  The sign counter must advance once it is non-zero.
+  and UV flags. **Attestation statements are not verified**, so any
+  authenticator that verifies its user is accepted.
+- Every assertion requires UV: login, `step_up`, and challenges the server
+  computed itself (Safe op hashes, SafeMessages). A security key with no PIN
+  or biometric can neither register nor sign in. The sign counter must
+  advance once it is non-zero.
 - `verifyAssertionForChallenge` compares `clientData.challenge` with a
   server-computed hash: a UserOp EIP-712 hash or a SafeMessage hash. That is
   how "the passkey signed *this* debit" is proven server-side before the
@@ -197,9 +215,11 @@ sets are cumulative (`domain/roles.ts:39-86`). `transfers.read` and
 - The Safe is deployed as the `initCode` of its first UserOperation. The
   bundler and paymaster default to `https://api.candide.dev/public/v3/<chainId>`
   with an ERC-7677 paymaster, so the user needs no gas. The passkey signs
-  `getUserOperationEip712Hash(op, chainId)`. `submitPasskeySafeOperation`
+  `getUserOperationEip712Hash(op, chainId)`. `submitPasskeySafeOperationWithReceipt`
   attaches the passkey assertion, sends the op, and
-  **blocks the HTTP request until the op is included**.
+  **blocks the HTTP request until the op is included**. Every caller checks the
+  receipt: a reverted op is refused, and an op sent but not confirmed
+  (`SafeOperationUncertainError`) is never recorded as done.
 - EIP-1271 messages (`signMessageAsPasskeySafe`) are used for the Monerium
   link declaration, the Monerium redeem order, the Candide SIWE registration,
   and proof-of-ownership documents.
@@ -271,15 +291,58 @@ proxy (`passkeyAccountAddress`), not the shared signer (`isInit: !deployed`).
 | fallbackHandler | 4337 module |
 
 Such a Safe depends only on the EOA, so its address can be mined before any
-passkey exists. Zold has no path that adopts one: `accountForPlan` accepts a
-stored address only for a recovered Safe (`recoveredAt`).
+passkey exists. Zold adopts one through the import routes (§5.1.2):
+`accountForPlan` builds the account from the stored address for an imported
+Safe (`importedAt`) as for a recovered one (`recoveredAt`).
+
+#### 5.1.2 Importing an existing Safe (`routes/safe-import.ts`, `wallet/safe-import.ts`, `wallet/safe-tx-builder.ts`)
+
+- `POST /users/:id/safe/import/prepare {address}` checks that the account may
+  still switch (a passkey; its own planned Safe not active, not deployed and
+  empty) and the Safe's shape, and returns owners, threshold, the passkey's
+  verifier, and each owner change (`add`, `swap`) with its Safe{Wallet}
+  Transaction Builder file (`txBuilder: {fileName, json}`). Once the verifier
+  is an owner (threshold 1, at most one other owner) it also returns
+  `otherOwners` and `approval: {challenge, rpId}`, a `safe.import` step-up
+  challenge bound to the address, owners and threshold it read; before that,
+  `approval` is null. It stores nothing.
+- `POST /users/:id/safe/import/confirm {address, stepUp}` reads the chain
+  again, runs the shape and owner checks, then verifies the step-up against
+  the Safe as read (401 `STEP_UP_REQUIRED` / `STEP_UP_INVALID`, 403
+  `STEP_UP_CREDENTIAL`) before relaying or writing anything. It deploys the
+  verifier from the deployer if it has no code, reads again, refuses 409
+  `SAFE_CHANGED` if the owners or threshold moved, and binds the account
+  (`passkeySafe.status` `active`, `importedAt`). 201 with the user.
+- The Transaction Builder file is built once, in `wallet/safe-tx-builder.ts`;
+  `npm run safe:import-tx` writes the same bytes for the same input
+  (`safe-import:test` compares them). The browser only downloads it.
+- `capabilities().safeImport` is false under the harness, where both routes
+  answer `NO_CHAIN`.
+- Onboarding (`public/app/onboarding.js`): for a company account with
+  `caps.safeImport`, `obCreateAccount` stops after the passkey at
+  `b-safe-choice` instead of deploying. "Open a new account" deploys as
+  before; "Use our company's existing Safe" runs `b-import-address` (prepare)
+  → `b-import-sign` (download, or to/value/data) → `b-import-confirm`
+  (check: `prepare` again until it names an approval; then the screen shows
+  the other owner and "Approve with Face ID" spends the challenge on confirm;
+  any failure drops the approval and the next click checks again). Zold never collects or relays the owner's
+  signature; no wallet connection is built.
+- `localStorage["zold-safe-import"]` `{userId, address}` marks an import
+  started on this device. While it is set, `finishPasskeySafeSetup` refuses
+  to deploy and Home offers "Finish bringing in your Safe" instead of
+  "Finish smart wallet". It is per device: `prepare` stores nothing, so the
+  server cannot know an owner change is on its way. Every screen that reads
+  the flag calls `prepare` again.
+- An imported Safe is not offered recovery: onboarding skips the step and
+  Security says it is not available, because enabling a recovery module has
+  never run on one. The recovery routes do not refuse it yet.
 
 ### 5.2 Device key (`public/device.js`)
 
 - A secp256k1 key is generated in the browser and stored in
   `localStorage["zold-device-key"]`. It is wrapped with AES-GCM under
-  HKDF(WebAuthn PRF output, salt `"zoll/device-key/v1"`) where PRF exists, and
-  stored as a plaintext hex key where it does not. **Do not rename the salt**:
+  HKDF(WebAuthn PRF output, salt `"zoll/device-key/v1"`) where PRF exists.
+  **Do not rename the salt**:
   it is a KDF input.
 - It is bound once through `POST /users/:id/authorizer` with a passkey
   step-up. Binding is trust-on-first-use and there is no rotation route.
@@ -314,12 +377,43 @@ stateDiagram-v2
   PAYOUT_FUNDING_PENDING --> PAYOUT_FUNDED: Stellar payment sent
   PAYOUT_FUNDED --> PAID: anchor completed
   DEBITED --> MANUAL_REVIEW: redeem outcome unknown (5xx/timeout)
+  DEBITED --> MANUAL_REVIEW: stranded after an outbound call
   FAILED --> REFUNDED: compensateTransfer
-  FAILED --> MANUAL_REVIEW: duplicate / funds at Bridge / reverse swap failed
+  FAILED --> MANUAL_REVIEW: duplicate / funds at Bridge / reverse swap failed / outbound outcome unknown
+  MANUAL_REVIEW --> REFUNDED: operator resolution
+  MANUAL_REVIEW --> PAID: operator resolution
+  MANUAL_REVIEW --> FAILED: operator resolution
 ```
 
-`store.updateTransfer` refuses to move a `PAID` or `REFUNDED` transfer to any
-other state. It drops the `state` field and logs.
+`store.updateTransfer` refuses to move a `PAID`, `REFUNDED` or `MANUAL_REVIEW`
+transfer, or one an operator resolved, to any other state. It drops the
+`state` field and logs.
+
+The only way out of MANUAL_REVIEW is `store.resolveTransferReview`, behind
+`POST /api/admin/transfers/:id/resolve-review` (operator bearer token, body
+`{state: REFUNDED|PAID|FAILED, note, evidence?, amountEur?}`, note 20–2000 characters; the
+Transactions view's Resolve button). It moves no money: the operator has
+already acted on chain or at the partner. PAID settles linked pay links,
+invoices and Shopify orders, so it is refused (409) unless `evidence` names a
+payout the transfer recorded as carried out: `sepa.orderId` while the order
+state read back from Monerium (`sepa.state`) is `processed` (a placed order is
+not enough; the redeem poller keeps reading the order of a transfer in
+review), the destination tx Bridge reported (`bridge.xyz.destination_tx` step;
+the plan field `pickup.bridgeDestinationTxHash` is not accepted), or
+`pickup.anchorPaymentHash` (`transfers/review-evidence.ts`). REFUNDED needs
+`amountEur` (0 up to `safeMovedEur`, else 400) and `evidence` (the refund tx
+hash or partner reference); it writes `transfer.refund` (`recoveredFrom:
+"operator-resolved"`, deductions = what was not returned), so the app and the
+statement show the refund. A tx-hash evidence must be one no transfer, crypto
+deposit, sweep or ledger line holds yet (else 409: it would hide a real EURe
+arrival, take a debit line's link, or count for two transfers); it is recorded
+as the `operator.refund` step the statement links to the reversal line. A
+partner reference stays in `reviewResolution.evidence` only. It records
+`transfer.reviewResolution` (`state`, `note`, `by` = `operatorLabel`, `at`,
+`previousError`, `evidence`) and an `operator.transfer_review_resolved` audit
+entry, once per transfer. User-facing transfer routes omit
+`reviewResolution` (`transfers/user-transfer.ts`). A resolved transfer is
+never compensated or swept, whatever state it holds.
 
 ### 6.2 Quote → build → authorize → execute
 
@@ -365,9 +459,32 @@ router receives injected and never rebuilds.
 ### 6.3 Compensation (`orchestrator.ts:382-622`)
 
 - `failAndCompensate` writes FAILED. It escalates to **MANUAL_REVIEW** on a
-  duplicate-debit error or once any `bridge.xyz.deposit.*` step exists.
+  duplicate-debit error or once the USDC reached Bridge
+  (`bridge.xyz.deposit.transfer`, `.funded` or `destination_tx`).
   Otherwise it compensates.
-- `compensateTransfer`:
+- An outbound call that may move money records an intent step first:
+  `safe.refundTransfer.pending` (refund or reverse swap),
+  `monerium.redeem.pending` (settled by `.placed` or `.refused`) and
+  `bridge.xyz.deposit.pending`. An intent without a settling step after its
+  last occurrence means the money may have moved, and the transfer goes to
+  MANUAL_REVIEW, never a refund.
+- The two chain writes (refund, Bridge deposit) also settle on a definite
+  failure, through `writeAndWait`'s hooks: `<step>.not-sent` only when the
+  write threw before any hash with an error that proves the node refused it
+  before acceptance (`writeDefinitelyRefused`: viem's InsufficientFunds,
+  ExecutionReverted, IntrinsicGas*, FeeCap*, TipAboveFeeCap, NonceTooHigh,
+  TransactionTypeNotSupported, or a local account/chain/serialisation error),
+  and `<step>.reverted` with the hash when the receipt reverted. Nothing
+  moved, so compensation may retry. A bare RPC error (-32603, -1,
+  LimitExceeded: viem's transport retries the send on these), a transport
+  error, a timeout, a nonce-too-low/"already known" reply, an unknown error,
+  or any error after a hash exists settles nothing. After five refunds that
+  were not-sent or reverted, compensation stops retrying and moves the
+  transfer to MANUAL_REVIEW with that reason (`MAX_REFUND_ATTEMPTS`).
+  A reverted Bridge deposit is not a `FUNDS_AT_BRIDGE_STEPS` step.
+- `compensateTransfer` runs once per transfer at a time (an in-process set);
+  a second call during a running one returns the transfer as it stands. It
+  leaves a MANUAL_REVIEW transfer alone.
   - If no input moved, it records a zero refund.
   - If the funds are un-swapped, it returns `min(refund, moved)` EURe to the
     Safe. The `safe.refundTransfer` step is recorded *before* REFUNDED is
@@ -378,10 +495,11 @@ router receives injected and never rebuilds.
 - SEPA: a Monerium **4xx** refunds the fee. A **timeout or 5xx** goes to
   MANUAL_REVIEW ("redeem outcome unknown").
 - Sweeps:
-  - `sweepStrandedTransfers` runs at boot and every 5 min. It re-fails
-    DEBITED/SWAPPED/BRIDGED transfers that are stale (more than 10 min) and
-    not executing, and sends to MANUAL_REVIEW a CREATED transfer whose
-    authorisation was claimed more than 10 min ago.
+  - `sweepStrandedTransfers` runs at boot and every 5 min and skips any
+    transfer being executed or compensated. It re-fails DEBITED/SWAPPED/BRIDGED
+    transfers that are stale (more than 10 min), or sends them to MANUAL_REVIEW
+    when an outbound intent is unsettled, and sends to MANUAL_REVIEW a CREATED
+    transfer whose authorisation was claimed more than 10 min ago.
   - `sweepAnchorPayouts` runs every 30 s.
 
 ### 6.4 Invariants encoded here
@@ -473,9 +591,9 @@ There is no CCTP code. Only the on-ledger Stellar payment half has ever run
 | Credentials | Three sources, resolved in `adapters/monerium-connection.ts`: the user's **own API keys** (client credentials), the user's **OAuth tokens**, or **app credentials** from env (only for accounts the app provisioned). |
 | OAuth | Authorization Code + PKCE S256. `state` is 24 random bytes. It is **bound to the browser** by an HttpOnly `zold_monerium_connect` nonce cookie (`Path=/api/monerium/oauth`, 10 min, SameSite=Lax), and the server stores the nonce's SHA-256. Refresh uses the same client id, de-duplicated per user. |
 | API keys | Validated for shape, then **verified against Monerium before storing**. On success Zold reads context, profiles, IBANs and addresses. An address-matched IBAN approves immediately. |
-| Secrets at rest | AES-256-GCM (`crypto-at-rest.ts`) keyed on `MONERIUM_TOKEN_ENCRYPTION_KEY` (also used for Shopify tokens under a domain-separated key). Access and refresh tokens and the API secret are encrypted. With no key, the route answers 503 and never stores plaintext. |
+| Secrets at rest | AES-256-GCM v2 (`crypto-at-rest.ts`, `stored-secrets.ts`) under `DATA_ENCRYPTION_KEYS`: access and refresh tokens and the API secret, each bound to the user row. Rows written before v2 still read under `MONERIUM_TOKEN_ENCRYPTION_KEY` until `npm run reencrypt` moves them. With no key, the route answers 503 and never stores plaintext. |
 | IBAN activation | The passkey signs the SafeMessage of `LINK_MESSAGE`. The server assembles the passkey's EIP-1271 signature and calls `POST /addresses` then `POST /ibans`. It **only accepts the IBAN whose address is the user's Safe**. It never unlinks, because a wrongly-bound address is "burned" at Monerium (verified live). |
-| Deposits | `pollDepositsOnce` every 15 s over the app's profiles and each own-credential user's profile. `mirrorOrder` records processed `issue` orders. The EURe itself is minted straight into the Safe. Each order is also offered to pay-link attribution (code in memo) and invoice attribution (invoice number in memo). |
+| Deposits | `pollDepositsOnce` every 15 s over the app's profiles and each own-credential user's profile. `mirrorOrder` records processed `issue` orders; it claims the order id before its first await, so the poller and a webhook recording the same order at once credit it once (the second caller gets `unavailable`, and a webhook answers it 503). A Monerium `/tokens` lookup that fails for any reason but a 400 or 404 is also `unavailable`, so the delivery is retried rather than read as "no EURe on this chain". The EURe itself is minted straight into the Safe. Each order is also offered to pay-link attribution (code in memo) and invoice attribution (invoice number in memo). |
 | Webhook | `POST /api/webhooks/monerium`. It verifies a Standard Webhooks HMAC (`webhook-id.timestamp.body`, `whsec_` key, 300 s tolerance) and de-duplicates by `webhook-id`. It **trusts only the order id** and re-reads that order from Monerium on the app client. Production requires the secret. |
 | Reconciler | Every 15 min it compares Monerium's processed issue orders with the mirrored ids and reports `UNMIRRORED` / `PHANTOM`. **It reports, never repairs.** It does not look at transfers, Bridge, redeems or balances. |
 
@@ -494,7 +612,9 @@ flowchart LR
   SET -->|USDC otherwise| HELD[holding: held]
   WAIT & HELD -->|convert/prepare → passkey → convert| SWAP[Safe batch: approve + venue call<br/>Safe → Safe, fee 0]
   SWAP -->|measured EURe delta ≥ minOut| CONV[holding: converted<br/>+ realisedGainEur, disposal line]
-  SWAP -->|shortfall / bundler error| REF[holding: refused<br/>USDC still held, retry allowed]
+  SWAP -->|reverted, or refused before submit| REF[holding: refused<br/>USDC still held, retry allowed]
+  SWAP -->|executed, under minOut| REV[holding: refused<br/>USDC spent, not offered again]
+  SWAP -->|sent, inclusion unconfirmed| UNC[holding: unconfirmed<br/>not offered again]
 ```
 
 - The watched set is every user's Safe, plus each payment-page deposit
@@ -534,7 +654,10 @@ flowchart LR
   (`migrateCryptoDepositHolding` in `store/db.ts`): CONVERTED keeps
   `updatedAt` as `settledAt`; DETECTED and REFUSED stay unsettled so the sweep
   settles them once; REFUSED becomes `refused` only when a swap was tried,
-  otherwise `held`.
+  otherwise `held`; UNCONFIRMED becomes `unconfirmed`.
+- A `refused` row whose swap executed (it delivered nothing, or under the
+  floor) is not offered again: that USDC is spent. A refusal before submit, or
+  a reverted swap, can be retried. `unconfirmed` is never offered again.
 - Not handled: an exact-output conversion's disposal line books the whole
   receipt value as disposed of (no route uses exact output yet); a swap that
   delivers under `minOut` is `refused` with its EURe unbooked.
@@ -602,14 +725,26 @@ flowchart LR
   from the `shopify-shop-domain` header.
 - **Payee**: the backing user of the org's EUR account, or else the
   installer. That user must have a payment page.
-- **Buyer lookup**:
-  - `GET /api/shopify/orders/:shop/:orderId` is CORS `*` and no-store. It is
-    polled by the extension every 4 s.
-  - `…/pay` is a 302 to the pay page, for the confirmation-email Liquid link.
+- **Buyer lookup**: order ids are per-store sequences, so each order route
+  also needs proof that the caller is the buyer. Without it, the answer is the
+  same whether the order exists or not.
+  - `GET /api/shopify/orders/:shop/:orderId?t=<checkout token>` is CORS `*`
+    and no-store. The extension polls it every 4 s. The orders webhook
+    stores the SHA-256 of the order's `checkout_token`, and `t` must hash to
+    it. It returns the pay-page projection and the pay page's URL.
+  - `…/pay?b=<sig>` is a 302 to the pay page, for the confirmation-email
+    link. Each store's template has its domain written in, so the email
+    needs only `{{ id }}`. `b` is `{{ id | hmac_sha256: key }}`, using a per-shop key
+    (`orderLinkSecretEnc`, encryption purpose `shopify-link`) that is created
+    the first time the org view shows that store's `payLinkTemplate`.
+    **Unverified:** whether Shopify's notification Liquid supports
+    `hmac_sha256` (its email-variables reference does not list it). Shopify
+    documents that the extension's `checkoutToken` matches the order's
+    `checkout_token`; no real store has exercised either.
   - `/return/:code` and `/cancel/:code` redirect back to the store.
 - **Extension** (`shopify-app/extensions/zold-pay`): targets
-  `purchase.thank-you.block.render` and
-  `customer-account.order-status.block.render`, with `network_access` and a
+  `purchase.thank-you.block.render` only (the order-status page has no
+  checkout token and cannot tell a Zold order from a card one), with `network_access` and a
   single `api_base` setting. It renders the amount, exact USDC, address, an
   EIP-681 QR, and live status. **It has never been built with the Shopify
   CLI, and `client_id` is a placeholder.**
@@ -657,9 +792,13 @@ flowchart LR
   credentials: `GET /profiles/:id` for `kind` and `state`,
   and the `GET /profiles?kind=` list for `name`, since the sandbox's
   single-profile answer has no name. Kind and name never come from the client.
-  Checked at adoption (`POST /accounts` with adoption, `/fund`), at re-check
+  The account list's `adoption` hint judges only the stored profile's kind;
+  its stored state can predate Monerium's approval, so the live check at
+  adoption decides that. Checked at adoption (`POST /accounts` with adoption, `/fund`), at re-check
   (`/profile-check`) and at execution. Refusals: `MONERIUM_PROFILE_KIND_MISMATCH`,
-  `MONERIUM_PROFILE_NOT_APPROVED`, `MONERIUM_PROFILE_NOT_FOUND` (the login
+  `MONERIUM_PROFILE_NOT_APPROVED` (unless the profile is `pending` and a live
+  `GET /ibans` lists an approved IBAN on it paying into the backing Safe, the
+  same fact that approves the user in `/app`), `MONERIUM_PROFILE_NOT_FOUND` (the login
   cannot see the id; Monerium answers 403), `MONERIUM_NOT_CONNECTED` (409),
   and `MONERIUM_UNREACHABLE` (503, fail closed, nothing written). A pass is
   recorded on `Account.moneriumProfile` (`id`, `kind`, `name`, `checkedAt`),
@@ -673,9 +812,12 @@ flowchart LR
   the check reads `needs_check` and no row is rewritten. On the hardhat
   harness a user with no Monerium profile stands in with one of the needed
   kind.
-- Personal orgs are created by `migrateUsersToOrganisations()` **at DB load
-  only**. A user created after the process started has no personal org until
-  the next restart or an explicit `POST /api/orgs`.
+- A person has at most one personal org, and a company login none (its Safe
+  is the company's): `POST /api/orgs` answers 409 `PERSONAL_ORG_EXISTS` /
+  `PERSONAL_ORG_COMPANY_LOGIN`. Signup creates none; `/business` asks a
+  person without one to create it (banner, switcher row, prefilled empty
+  state). `migrateUsersToOrganisations()` still creates one **at DB load**
+  for any user with no membership at all.
 
 ### 13.2 Drafts (`domain/drafts.ts`, `routes/business/drafts.ts`, `routes/business/state.ts`)
 
@@ -705,8 +847,10 @@ flowchart LR
 
 ### 13.3 Invoicing (`domain/invoices.ts`, `domain/invoicing.ts`, `domain/jurisdictions.ts`)
 
-- The invoice state machine is in `domain/invoices.ts:31-38`. Outgoing
-  invoices are written directly in SUBMITTED at issue. DELETED is a soft
+- The invoice state machine is in `domain/invoices.ts` (`TRANSITIONS`).
+  Outgoing invoices typed into the editor are written directly in SUBMITTED
+  at issue (`routes/business/issue-outgoing.ts`, the one issue path); one
+  made from wallet receipts is a DRAFT until it is issued. DELETED is a soft
   state. `syncInvoicePayment` *writes* PAYING → PAID or back to SUBMITTED from
   the linked draft and transfer.
 - Arithmetic uses integer cents. VAT is rounded once per rate bucket and
@@ -720,6 +864,62 @@ flowchart LR
 - Invoice-Me links use a 32-byte token (SHA-256 stored) and an optional
   password (scrypt N=2^15 with a policy check), limited to 10 failures per
   15 min per link.
+- **Invoices from wallet receipts** (`domain/income-invoices.ts`,
+  `routes/business/income-invoices.ts`). A contact's `payerRule` holds the
+  service description, the recipient and the tax line the organisation chose
+  (read through `draftFrom`, nothing defaulted), saved with the addresses the
+  payer sends from. `planIncomeDrafts` is pure: for one calendar month in
+  `org.reporting.timeZone` it takes the inbound wallet rows, names the payer
+  (`payerOf`: the contact sync named while it still lists the address, else
+  the one contact that lists it now), and per contact with a rule builds one
+  DRAFT invoice with one line per receipt (`line.receipt`: row id, block
+  time, token, quantity, transaction, EUR cents) and one `wallet-receipt`
+  settlement per row (`ref` `ledger:<entryId>`). The draft's total is the sum
+  of the rows' `fiatValue`. A row is eligible only with a positive EUR
+  `fiatValue` and a transaction hash, and not when tagged or typed internal,
+  unlisted or needs-valuation. An eligible row is drafted only while the
+  imported wallet it arrived in is proven (§13.5, `walletProof`); otherwise
+  it is excluded with the reason (not proven, lapsed, or the wallet no longer
+  imported). Every other inbound wallet row of the month is
+  accounted for: in the draft's `fromReceipts.excluded` with the reason,
+  counted under `withoutRule` or `withoutContact` (valued and `unvalued`),
+  under `alreadyInvoiced`, or under `onOtherDrafts`. A row held by a
+  non-deleted invoice that the run does not rebuild is never taken again; a
+  run rebuilds only DRAFTs of contacts that still have a rule, and writes
+  nothing over an invoice past DRAFT. The id is
+  `inv_rcpt_` + sha256(org, contact, month, sequence), where the sequence
+  counts that payer-month's invoices that are no longer drafts, so a receipt
+  arriving after the month was issued gets a further draft. A draft holds 200
+  lines (`MAX_RECEIPT_LINES`); the rest are listed as excluded until it is
+  issued. With a VAT rate the receipts are the gross: `netLinesFor` finds a
+  net total whose net plus VAT, rounded once as `computeTotals` rounds it,
+  equals the receipts, and sets `mismatchCents` when none exists. The run
+  stores on each draft what the imported wallets' sync state leaves uncertain
+  (`syncWarnings`: not synced, last synced before the month ended, booked
+  from after the month began, transfers skipped). Read and write happen with
+  nothing awaited between, inside `store.batched`.
+- **Issuing a draft** (`POST …/income-invoices/:id/issue`) first refuses
+  with 409, writing nothing, when a wallet any line came from is not proven,
+  then asks each such wallet's chain about its stored proof: 503 when it
+  cannot be asked, and a refusal lapses the proof and answers 409. It then
+  plans the month
+  again and refuses with 409, replacing the stored draft, when the rows it
+  bills, their amounts or descriptions, or the rule's `updatedAt` are not the
+  ones the stored draft showed. It refuses 422 for a draft with no lines or
+  with `mismatchCents`, and 409 for one with `syncWarnings` until the request
+  carries `acceptWarnings`. It then calls `issueOutgoing` with the rule's
+  template and the draft's lines: the same `draftFrom`, VIES lookup,
+  `checkCompliance`, warning acceptance and number series as the editor. The
+  request supplies only `acceptWarnings`, `language` and optionally `number`.
+  The issue date is the day of issue, the supply period is the month, and
+  there is no due date. `issueOutgoing` refuses when the computed gross is not
+  the receipts' sum, when the draft's `updatedAt` or state changed across its
+  awaits, and (`stillIssuable`, run with nothing awaited before the write)
+  when a billed wallet stopped being proven or a billed row's EUR value
+  changed meanwhile. The draft becomes SUBMITTED in place and `settlementUpdate`
+  closes it PAID from the settlements it carries. A DRAFT is refused by
+  payment-link creation, by the deposit-link route and by the invoice-link
+  route; `supplierView` passes only a line's printed columns.
 
 ### 13.4 Account documents (`documents.ts`, `routes/documents.ts`)
 
@@ -727,7 +927,10 @@ flowchart LR
   The digest is signed with EIP-191 as `"Zold account document <CODE> —
   content digest <digest>"` using `DOCUMENT_SIGNING_KEY`. Production needs
   that key; elsewhere the orchestrator key is used.
-- The optional Safe attestation (EIP-1271) is held beside the snapshot.
+- The optional Safe attestation (EIP-1271) is held beside the snapshot and
+  checked by `wallet/signature-check.ts`, the one verifier for signed
+  messages (also used by the wallet ownership proof). On the hardhat harness
+  the document skips it and says so.
 - Every `GET /api/v/:code` re-checks the signature and digest and the revoked
   flag, re-reads the balance at the stored block, re-runs the statement
   reconciliation, and verifies the Safe signature.
@@ -739,12 +942,114 @@ flowchart LR
 - Rule specificity: contact (40), then asset+wallet (30), then wallet (20),
   then asset (10), then default (0), with +1 for an explicit direction.
   `applyRules` skips rows a human categorised (`accountCodeAuto === false`).
-- FIFO lots per asset, disposals, and `shortfalls` for unmatched outflows.
-  The monthly balance is per month × source × chain × asset. The CSV writer
+- **Cost basis** (`computeCostBasis`, `positions`, `realisedByMonth`). FIFO,
+  pooled across the org's imported wallets, per holding: `chainId:token` for
+  a wallet row, so two contracts sharing a symbol never share lots, the asset
+  for anything else. Quantities are exact (decimal strings read into
+  integers at the holding's finest scale), money is integer EUR cents, and a
+  partly used lot's cost is split half up with the last piece taking the
+  remainder. Not lots: EURe (e-money, by tag or symbol) and fiat assets on
+  account rows (the statement lines). An unlisted token is `quantityOnly`.
+  Where a transfer's other side is, is decided from the wallets and accounts
+  the org has NOW (`ownWallets`, `ownAccounts`), not from the `internal` tag
+  sync wrote from the wallets imported then: between imported wallets it
+  moves nothing; to the org's Zold account, or tagged internal to an address
+  that is neither, it consumes lots at cost into `moved` (`to`), and from
+  one it opens a lot with no known cost. A lot from a row with no EUR value has no
+  cost. A disposal's `realisedCents` is proceeds minus cost and is ABSENT,
+  with `notMeasurable` saying why, when the row has no value, a lot it used
+  has no cost, or it sold beyond the booked lots (`shortfall`). A swap is a
+  disposal and an acquisition at their own values, not paired; the disposal
+  lists the transaction's other rows (`sameTransaction`). `positions` and
+  `realisedByMonth` sum only measured gains and count the rest; a sum with
+  nothing measured is absent, and so is the cost of a holding none of whose
+  units has a known cost. Rows whose amount is not a decimal or whose time
+  does not parse are listed in `unreadable`.
+- The monthly balance is per month × source × chain × asset. The CSV writer
   guards against formula injection and uses CRLF.
 - **`bookkeeping/writer.ts` fills the ledger** through `store.addLedgerEntries`:
   one EUR statement line per economic event (product-architecture §8.3).
-  Imported wallets never sync, so they contribute no rows.
+- **`wallet-sync/sync.ts` adds the imported wallets' rows** (`source.kind:
+  "wallet"`, keyed `wallet:<chainId>:<address>:<tx>:<logIndex>`: the address,
+  not the wallet row, so removing and re-importing an address books nothing
+  twice). Per wallet a cursor walks windows of at most
+  `WALLET_SYNC.maxBlockSpan` (halved while the RPC refuses a range as too
+  large; a single block still refused for its result count is counted in
+  `sync.skipped`, named in `lastSkipReason` and passed, so one stuffed block
+  cannot hold the cursor, while a rate limit holds the window),
+  `windowsPerTick` per poll, `confirmations` behind the head, and is
+  written with its window's rows. An RPC error, a token read that fails in
+  transport, or a price feed / ECB outage HOLDS the window: nothing is
+  written, the cursor stays, and the wallet shows the reason with every URL
+  removed (`publicSyncError`; an RPC URL carries its key). The first run
+  starts at the head, or at the first block of `sync.from`. `getLogs` is
+  topic-filtered on the wallet as `to` and as `from`, across all tokens,
+  decoded `strict` (NFT transfers drop out). A token whose `decimals()`
+  reverts is counted in `sync.skipped`, not booked. A counterparty that is
+  another of the org's imported wallets or Zold accounts on that chain makes
+  the row `internal_transfer`, which no default rule books. The org's own Zold
+  account cannot be imported (409) and is not synced. The RPC's chain id is
+  checked against the wallet's every run.
+- **Token class** (`wallet-sync/token-class.ts`, `token-lists.ts`): EURe by
+  Monerium's contract address per chain (`EMONEY_TOKENS`, plus the app
+  chain's deployment) is e-money, booked at par, tagged `e-money`, and
+  `computeCostBasis` opens no lot for it. USDC/USDT by address and any token
+  on a curated list (`WALLET_SYNC.tokenLists`: Uniswap's and CoinGecko's per
+  chain, refreshed daily, a stale copy kept through an outage) is a listed
+  virtual asset. Anything else is unlisted and books nothing (anyone can
+  deploy a token and send it to any wallet); `unlisted_token` rows exist only
+  from before that rule. A list that has never loaded holds the window;
+  nothing is called unlisted because a host was down. A wallet whose
+  organisation's books reach `CEILINGS.ledgerRowsPerOrg` pauses with its
+  cursor kept. One person owns at most `CEILINGS.businessOrgsPerUser` (20)
+  business orgs (`POST /orgs` answers 409 `LIMIT_REACHED`), so the per-org
+  ceilings bound the file rather than one org.
+- **Valuation** (`wallet-sync/valuation.ts`): a USD stablecoin recognised by
+  contract address (`USD_STABLECOINS`) is 1 USD; anything else is DefiLlama's
+  USD price by chain and address at the block time, refused below
+  `minPriceConfidence` or further than `priceSearchWidthSec` from the block.
+  Both go through the ECB USD rate for the block's day. A price that does not
+  exist (no feed name, no point, low or missing confidence) books
+  the row unvalued with `needs-valuation`, and the asset becomes
+  `SYMBOL@chain:address`.
+- **Revaluation** (`wallet-sync/revalue.ts`). The one way an unvalued wallet
+  row gains a value: `valueTransfer` again for its chain, token, quantity
+  and block time, with `fresh` so the hour's cached refusal is not the
+  answer. It writes `fiatValue`, `fiatRate`, the feed's symbol as `asset`,
+  the `revalued` tag, a note and `valuation` (source, ECB day, when, who,
+  the previous asset), then re-applies the rules. Refused for a row that is
+  not a wallet row, already valued, e-money or unlisted, or held by an
+  invoice past DRAFT. The request carries no price. Sync's "Not valued" note
+  is replaced; a note a person wrote is kept. The bulk route takes 10 rows
+  per call in id order and pages with `after`/`next`, so rows the feed still
+  cannot price do not hold back the rest.
+- **Ownership proof** (`domain/wallet-ownership.ts`,
+  `wallet-sync/ownership.ts`, routes in `routes/orgs.ts`). A challenge
+  (random id, 72 h) names the org (legal name and id), the checksummed
+  address and the chain id; it is stored on the wallet row, one at a time,
+  and spent by the proof it produces (the write re-reads the row inside
+  `store.batched`). The check uses only `WALLET_SYNC.rpcs[wallet.chainId]`,
+  requires the node to report that chain id, and goes through
+  `checkSignedMessage`: code at the address means an `eth_call` of
+  `isValidSignature(hashMessage(text), signature)` whose whole first return
+  word must be the magic value followed by zeros (a contract echoing its
+  calldata is no yes); a revert (code 3, or revert data) is a refusal, a
+  node's error without revert data is not. No code or an EIP-7702
+  delegation means ECDSA, except on a re-check of an EIP-1271 proof, which is
+  then `unverified`. An ERC-6492 wrapper goes to viem's validator while the
+  wallet is undeployed, where only a valid answer counts, and is unwrapped
+  once it is deployed. The code is read first, so a node that fails is
+  `unverified` rather than an ECDSA fallback. The org name in the text is
+  folded to one line. Signatures are at most 8 KiB. The proof routes, the
+  revalue routes and the receipt-draft issue are in the partner rate bucket. An empty signature is a Safe
+  that signed the message on chain. `ownership` keeps the text and
+  signature; a re-check the chain refuses sets `lapsed` (owner signatures
+  stop verifying after an owner change; a message signed on chain does
+  not), one it cannot ask changes nothing. Every attempt writes a
+  `wallet.ownership_checked` audit entry. Removing a wallet deletes its row
+  and its proof; its rows stay and read as unproven until the address is
+  imported again, when rows whose id is that address's row id are pointed at
+  the new wallet.
 
 ---
 
@@ -817,6 +1122,8 @@ overlap guards make that safe.
   server-supplied `submitTo` cannot redirect the bearer token.
 - Capabilities come from `GET /api/health`. They default to *closed* if that
   call fails, and a control is drawn only where the API would accept it.
+- A company account's onboarding branches after the passkey: a new Safe, or
+  an existing one brought in (§5.1.2).
 - `sw.js` (`zold-shell-v4`) handles requests as follows:
   - `/api/*` is network-only, with a synthetic 503 offline.
   - Navigations are network-first. Only SHELL paths are stored, so credential
@@ -851,7 +1158,7 @@ only self-hosted fonts.
 | **Ledger writer** — BUILT (`bookkeeping/statement.ts` pure projection, `bookkeeping/writer.ts` store-touching) | attached: `mirrorOrder` and the Monerium poll loops (`keepIssueFacts` → `noteMoneriumIssue`), `settleConvertedDeposit`, the crypto scan and its sweep, `pollRedeemOrdersOnce` on PAID, and a 60 s sweep in `server.ts` that covers REFUNDED from compensation | keys per event (`statement.key`); `applyRules` on insert; `mergeStatementLines` refreshes facts only and never touches `accountCode`; an org is found through `Account.backingUserId`; a USDC deposit is a receipt line (`:held`) on arrival and a disposal line (`:disposal`, realised gain or loss) on conversion; a USDC receipt with no ECB rate produces no line, and its later conversion books the proceeds once (`:converted`); `mergeStatementLines` adds no `:held`/`:disposal` beside an existing `:converted`. To add an event: a draft in `statement.ts` with a stable key, and a Beleg block in `bookkeeping/beleg.ts` |
 | **Beleg** — BUILT (`bookkeeping/beleg.ts`, `issue.ts`, `pdf.ts`) | `issueBelegForLine`; `/v/:code` verifies via `belegStillAgrees`; `/v/:code/beleg.pdf` | a `StoredDocument` of kind `beleg` with `orgId`; one per line, the code written back onto `statement.documentCode` |
 | **Monthly export** — BUILT (`routes/business/bookkeeping-export.ts`, `bookkeeping/lexware.ts`, `zip.ts`) | `POST /:orgId/bookkeeping/export/:month/prepare`, then the CSV and ZIP GETs | `export.ledger` + `reports.run` to prepare, `ledger.read` to download; MT940/CAMT would be a sibling of `lexware.ts` |
-| **Accounting connector** — GetMyInvoices BUILT (`adapters/getmyinvoices.ts`, `routes/business/integrations.ts`) | `POST /:orgId/integrations/getmyinvoices` (verify + store), `…/push` (a month's Belege), `…/bank-accounts` (read) | key encrypted with purpose `getmyinvoices` under `MONERIUM_TOKEN_ENCRYPTION_KEY`; plan capability `integrations.accounting` plus a 409 without a key; uploads idempotent on the document number; `POST /bankAccounts/{uid}/transactions` exists in their spec and in the client, unused by any route |
+| **Accounting connector** — GetMyInvoices BUILT (`adapters/getmyinvoices.ts`, `routes/business/integrations.ts`) | `POST /:orgId/integrations/getmyinvoices` (verify + store), `…/push` (a month's Belege), `…/bank-accounts` (read) | key encrypted with purpose `getmyinvoices` under `DATA_ENCRYPTION_KEYS` (v2, bound to the org); plan capability `integrations.accounting` plus a 409 without a key; uploads idempotent on the document number, with their own timeout (`GETMYINVOICES.UPLOAD_TIMEOUT_MS`, 120 s; reads 20 s); an upload with no answer (status 0 or 5xx) is looked up again by number and reported `uploaded` + `verifiedAfterTimeout`/`tagsMayBeMissing` or `unknown`, never `failed` and never re-sent; `POST /bankAccounts/{uid}/transactions` exists in their spec and in the client, unused by any route |
 | **Exact-output conversion** — venue half BUILT (`LiquidityProvider.safeExactOutputPlan`, dex only; `prepareExactDepositConversion` in `liquidity.ts`) | a `convert/prepare?mode=exact` on the deposit route, and a sweep route that writes `ConversionSweep` rows | fail closed on venues without the method (LI.FI's reverse quote is not exact output); the ceiling is the quoted input plus `DEX_SLIPPAGE_BPS`; the leftover is `CryptoDeposit.leftoverUnits` |
 | **Accountant transaction feed** | an org-scoped `GET /api/orgs/:orgId/transactions` checking `transfers.read` | the backing user's transfers and deposits projected through an allowlist; the permission already exists in every role |
 | **New currency** | an entry in `domain/accounts.ts` with a real `mode()` | nothing is live without a contracted partner (rule 2) |
@@ -870,7 +1177,7 @@ only self-hosted fonts.
   id. On a real chain it holds only EURe and USDC, and `scripts/deploy.ts`
   deploys nothing there.
 - **`assertProductionConfig`** runs when `NODE_ENV=production` or
-  `TRANSF_PRODUCTION=1` (`config.ts:330-454`). It refuses to boot on any of
+  `TRANSF_PRODUCTION=1` (`config/production.ts`). It refuses to boot on any of
   the following:
   - Operator token: missing.
   - Harness settings: `KYC_AUTO_APPROVE` or `LOCAL_HARNESS` set, or any dead
@@ -888,6 +1195,8 @@ only self-hosted fonts.
     secrets.
   - WebAuthn: no explicit https `WEBAUTHN_ORIGINS`.
   - Proxy: no `TRUSTED_PROXY_HOPS`.
+  - Links: no https `TRANSF_PUBLIC_URL` (absolute links are never built from
+    the Host header in production).
 
 | environment | chain | Monerium | db | notes |
 |---|---|---|---|---|
@@ -903,10 +1212,10 @@ in per-origin localStorage, so accounts do not move between origins.
 
 The testnet deployment runs on [Akash](https://akash.network), paid from the
 Akash Console's managed wallet. There is no image registry: the container
-starts from `node:22`, clones this repository at a pinned commit, runs
-`npm ci` and `hardhat compile` (the ABIs are read at import, and
-`contracts/artifacts/` is not committed), writes `deployments.json` from an
-environment variable, and starts the API next to `cloudflared`.
+starts from `node:22`, clones this repository, checks out the tip of the
+`production` branch (runtime files and prebuilt ABIs only), runs
+`npm ci --omit=dev`, writes `deployments.json` from an environment variable,
+and starts the API next to `cloudflared`.
 
 - **Ingress is the tunnel, not the provider.** `cloudflared` dials out to
   Cloudflare, so DNS and TLS stay in Cloudflare and the lease can move to
@@ -922,10 +1231,17 @@ environment variable, and starts the API next to `cloudflared`.
   operator keys, the token-encryption key) and the database are readable
   there. Acceptable for a testnet with the Monerium sandbox; not a model for
   real money. The Akash account's own API key is never passed in.
+- **A merge to main deploys itself.** The `production` workflow runs
+  `npm run check`, rebuilds `production` from the merged commit and pushes
+  it. The container asks GitHub for `refs/heads/production` every two
+  minutes; when it moves, it copies `/data/db.json` to `/data/backups/`,
+  stops the API, checks the new commit out and starts it (about a minute
+  without the API). A commit that does not answer `/api/health` within three
+  minutes is rolled back to the previous one and skipped. Nothing on GitHub
+  holds an Akash credential: the lease pulls, nobody pushes to it.
 - **The database lives and dies with the lease.** Closing it deletes every
-  account, and passkeys and Safes created there cannot be moved. Shipping new
-  code means a new lease pinned to a new commit, and so an empty database,
-  unless the volume is carried over by hand.
+  account, and passkeys and Safes created there cannot be moved. A deploy
+  keeps the lease and its `/data` volume.
 - **Deploying sends the secrets, so the operator runs it.** The SDL is
   generated from `.env` on the operator's machine and never committed.
   Provider bids expire within minutes, so creating the deployment and
@@ -988,9 +1304,11 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 |---|---|
 | `POST /users` (A) | Signup: segment decided, pending account, session. |
 | `GET/DELETE /session` (S) | Read or revoke the session. |
-| `POST /webauthn/challenge` (A) | `login` needs no session. `register` and `step_up` need one. |
-| `POST /users/:id/passkey` (U) | Register a passkey. Needs a step-up if one already exists. |
+| `POST /webauthn/challenge` (A) | `login` needs no session. `register` and `step_up` need one; `step_up` also needs `action` (400 without a known one, and for `safe.import`, which `prepare` issues). |
+| `POST /users/:id/passkey` (U) | Register a passkey. Needs a step-up if one already exists, and then revokes the user's other sessions. |
 | `POST /users/:id/passkey-safe/deployment[/:requestId]` (U) | Prepare, then submit, the Safe deploy. |
+| `POST /users/:id/safe/import/prepare` (U) | Check a Safe for import; owner changes and Transaction Builder files. Stores nothing. |
+| `POST /users/:id/safe/import/confirm` (U + step-up) | Bind the account to an existing Safe the passkey's verifier already owns. The step-up is the one `prepare` issued for that Safe's address, owners and threshold. |
 | `POST /passkey/login` (A) | Passkey sign-in. |
 | `GET /users/:id` (U) | Account read. |
 | `GET /users/:id/kyc` (U) | Account read. |
@@ -1032,23 +1350,42 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 
 | | |
 |---|---|
-| `POST /users/:id/monerium/connect/start` (U, segment) | Start OAuth. |
+| `POST /users/:id/monerium/connect/start` (U, segment) | Start OAuth. Needs a step-up when the account carries a Monerium identity (`carriesMoneriumIdentity`: a connection, an IBAN, approval, or any recorded profile), so only a brand-new account's first connection is session-only. |
 | `GET /monerium/oauth/callback` (state + cookie) | OAuth return. |
 | `GET /users/:id/monerium/accounts` (U) | Refresh and read the snapshot. |
 | `POST /users/:id/monerium/link-signature/start` (U) | Challenge for activation, or for a move with `{purpose: "move-iban", iban}` (bound to that IBAN, single use). |
-| `POST /users/:id/monerium/activate` (U) | Link address and request IBAN. 409 `IBAN_EXISTS_ELSEWHERE` (with `existing: {iban, address, chain, profileId}`) when Monerium answers 304 because the profile's one IBAN pays another address; 409 `IBAN_EXISTS_UNRESOLVED` when that IBAN cannot be pinned to exactly one. |
+| `POST /users/:id/monerium/activate` (U) | Link address and request IBAN. Only with the passkey assertion over a pending link-signature request; a finished signature in the body is refused. The challenge is the Safe hash of Monerium's constant ownership message, so only the sign counter tells a replayed assertion from a fresh one. 409 `IBAN_EXISTS_ELSEWHERE` when Monerium answers 304 and the profile's IBANs pay other addresses: `choices: [{iban, address, chain, profileId}]` lists every IBAN on the profile the Safe is linked under, and `existing` is set only when there is exactly one; the user picks, nothing is preselected. 409 `IBAN_EXISTS_UNRESOLVED` when no profile or no IBAN on it can be read. |
 | `POST /users/:id/monerium/move-iban` (U, passkey, typed `MOVE`) | Move the user's existing IBAN to the Safe: own connection only, IBAN must be on the profile the Safe is linked under; links the Safe, `PATCH /ibans/{iban}`, approves only if the re-read shows the IBAN on the Safe, else `iban_pending`. Records `moneriumIbanMoves`. 409 `IBAN_NOT_ON_PROFILE` / `ADDRESS_NOT_ON_PROFILE`. |
-| `DELETE /users/:id/monerium/connect` (U) | Forget the connection. |
-| `POST /users/:id/monerium/api-keys` (U, A) | Connect own keys. |
-| `DELETE /users/:id/monerium/api-keys` (U) | Remove own keys. |
+| `DELETE /users/:id/monerium/connect` (U + step-up) | Forget the connection; revokes the user's other sessions. |
+| `POST /users/:id/monerium/api-keys` (U, A) | Connect own keys. On an account that carries a Monerium identity it needs a step-up and revokes the user's other sessions. |
+| `DELETE /users/:id/monerium/api-keys` (U + step-up) | Remove own keys; revokes the user's other sessions. |
 | `POST /webhooks/monerium` (HMAC) | Webhook. |
+
+**Checkout service** (`routes/service-checkout.ts`, `checkout-service.ts`)
+
+| | |
+|---|---|
+| `GET /service/checkout/transfers/:id` (checkout credential) | The pay-with-zold checkout service reads one transfer. Served only for a SEPA transfer whose reference carries `ZP` + 12 hex standing alone; any other id, existing or not, is the same 404. The body is the allowlist `{id, state, rail, receiveEur, recipientIban, reference, updatedAt}`, `no-store`; `recipientIban` is only its last four characters (`…3000`). Every authenticated read writes a `service.checkout_transfer_read` audit row (credential id, transfer id, served or not_found). 503 until a credential is issued, 401 for a wrong one. A valid credential has its own rate bucket (`SERVICE_RATE_LIMIT_PER_MIN`, 120); a wrong one counts on the auth bucket. |
+| `POST /admin/service-credentials/checkout/rotate` (operator, A) | Issue a `zsc_` token, returned once; the store keeps its SHA-256 only. Every earlier checkout credential stops `CHECKOUT_SERVICE_ROTATION_OVERLAP_SEC` (24 h) later, never later than a past rotation set; `{"revokePrevious": true}` (JSON only; a form body is 415, a non-boolean 400) ends them at once, for a leaked one. Audited as `service.credential_rotated` with `revokedPrevious`. |
+| Webhook out (optional) | With `CHECKOUT_WEBHOOK_URL` and `CHECKOUT_WEBHOOK_SECRET` (`whsec_`, ≥24 bytes; https outside localhost), a state change on a checkout transfer POSTs `{transferId}` signed with Standard Webhooks. One `webhook-id` per delivery across retries (the receiver dedupes on it), a fresh unix-seconds timestamp per attempt (the receiver applies its replay window), backoff ×4 from `CHECKOUT_WEBHOOK_RETRY_BASE_MS` up to `CHECKOUT_WEBHOOK_MAX_ATTEMPTS`. Retries live in memory; the service re-reads through the GET and must not depend on the webhook. |
+
+Settings (`config/checkout-service.ts`; a bad webhook URL or secret refuses startup):
+
+| Variable | Default | |
+|---|---|---|
+| `SERVICE_RATE_LIMIT_PER_MIN` | 120 | Requests per minute per IP with a valid credential. |
+| `CHECKOUT_SERVICE_ROTATION_OVERLAP_SEC` | 86400 | How long earlier credentials keep working after a rotation. |
+| `CHECKOUT_WEBHOOK_URL` | unset (no webhook) | https, no userinfo; plain http only to localhost outside production. |
+| `CHECKOUT_WEBHOOK_SECRET` | — | Required with the URL: `whsec_<base64>`, at least 24 bytes. |
+| `CHECKOUT_WEBHOOK_RETRY_BASE_MS` | 5000 | First retry delay; each later one ×4. |
+| `CHECKOUT_WEBHOOK_MAX_ATTEMPTS` | 6 | Attempts per delivery, the first included. |
 
 **Crypto in**
 
 | | |
 |---|---|
 | `GET /users/:id/crypto-deposits` (U) | Deposit list with `settledAt`, `holding` and `convertBlocker` per row. |
-| `POST /users/:id/crypto-deposits/:d/convert/prepare` (U) | Convert: checks the Safe's USDC, returns the quote and `expiresAt`. |
+| `POST /users/:id/crypto-deposits/:d/convert/prepare` (U) | Price one conversion after checking the Safe still holds the USDC: `expectedEur`, `minEur`, and `expiresAt` (the end of the signing window). |
 | `POST /users/:id/crypto-deposits/:d/convert` (U + passkey) | Convert. |
 | `POST /users/:id/crypto-deposits/:d/invoice` (U + member) | Link a deposit to an invoice. |
 | `POST /users/:id/auto-convert` (U) | Toggle auto-convert. |
@@ -1073,7 +1410,7 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | | |
 |---|---|
 | `GET /users/:id/documents` (U) | Document list. |
-| `POST /users/:id/documents/{receipt, statement, balance, ownership[/:r]}` (U) | Create a document. |
+| `POST /users/:id/documents/{receipt, statement, balance, ownership[/:r]}` (U) | Create a document. Balance and ownership only for an approved account (409 `ACCOUNT_NOT_VERIFIED`). The holder name is Monerium's (`users/verified-name.ts`) or carries `nameSource: "self-declared"`, which the page and the ownership text state. |
 | `DELETE /users/:id/documents/:code` (U) | Revoke. |
 | `GET /v/:code` (A) | Public document with live verification. |
 | `GET /v/:code/beleg.pdf` (A) | A Beleg as PDF bytes. |
@@ -1096,6 +1433,7 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | `GET/PATCH /:orgId` (M, P(org.update)) | Read or update the org. |
 | `GET /:orgId/plan` (M) | Plan. |
 | `POST /:orgId/plan[/trial]` (M, P(org.billing)) | Downgrade, or start the trial. A paid plan answers 402 `PAID_PLAN_NEEDS_GRANT`. |
+| `POST /:orgId/payment-review` (P(payments.policy): owners) | `{ required }`. Off needs a fresh passkey step-up (`stepUp`) and works on every plan; on needs C(transfers.approvals). Audited as `org.payment_review_changed`. A plan change away from review records the policy as kept (`domain/payment-review.ts`). |
 | `GET /:orgId/members` (M) | Member list. |
 | `POST /:orgId/members` (C(members.manage), P(members.invite)) | Invite. |
 | `PATCH /:orgId/members/:m` (C(members.manage), P(members.update)) | Change role or status. |
@@ -1103,18 +1441,23 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | `GET/POST /:orgId/accounts` (P(accounts.read / accounts.open)) | List or open accounts. |
 | `POST /:orgId/accounts/:a/fund` (P(accounts.open)) | Adopt a funded account. The caller's Monerium profile must be `corporate` for a business org, `personal` for a personal one (§13.1). |
 | `POST /:orgId/accounts/:a/profile-check` (P(accounts.open)) | Re-read the backing user's Monerium profile and record it if it passes. |
+| `GET/POST /:orgId/payment-requests` (P(invoices.read / invoices.manage)) | List or create the org's payment links. Creating needs the caller's Safe to back the org's account (403 `NOT_THE_PAYEE`). |
 | `GET/POST/PATCH/DELETE /:orgId/contacts[/:c]` (P(contacts.*)) | Address book. |
-| `GET/POST/DELETE /:orgId/wallets[/:w]` (P(wallets.*)) | Imported wallets. |
+| `GET/POST/DELETE /:orgId/wallets[/:w]` (P(wallets.*)) | Imported wallets. POST takes an optional `syncFrom` day (YYYY-MM-DD, not in the future), which needs `ledger.historicalSync`; without it the wallet is booked from the import on. GET adds `proofState` (`proven`, `lapsed`, `unproven`). |
+| `POST /:orgId/wallets/:w/ownership/challenge` (C(wallets.manage), P(wallets.manage)) | Issue the wallet's ownership challenge, replacing a pending one (§13.5). |
+| `POST /:orgId/wallets/:w/ownership` (C(wallets.manage), P(wallets.manage)) | Prove the wallet: `{ challengeId, signature? }`. 409 not the current challenge, 410 expired, 422 refused by the chain, 503 not verified. |
+| `POST /:orgId/wallets/:w/ownership/recheck` (C(wallets.manage), P(wallets.manage)) | Check the stored proof again; a refusal makes it `lapsed`, 503 changes nothing. |
 
 **Drafts** (`/orgs`)
 
 | | |
 |---|---|
 | `GET/POST /:orgId/drafts` (P(drafts.read / create)) | List or create drafts. |
-| `GET/PATCH /:orgId/drafts/:d` (P(drafts.read / create)) | Read or edit a draft. |
-| `POST /:orgId/drafts/:d/submit` (C(transfers.approvals)) | Submit for review. |
-| `POST /:orgId/drafts/:d/review` (C(transfers.approvals), four eyes) | Approve or reject. |
-| `POST /:orgId/drafts/:d/execute` (P(transfers.execute), backing user) | Execute. |
+| `GET/PATCH /:orgId/drafts/:d` (P(drafts.read / create)) | Read or edit a draft. Editing a waiting or approved draft returns it to DRAFT and clears its review. |
+| `POST /:orgId/drafts/:d/submit` (review policy on, or C(transfers.approvals)) | Submit for review. |
+| `POST /:orgId/drafts/:d/review` (PENDING_REVIEW, four eyes) | Approve or reject. No plan check: a waiting draft stays reviewable after a downgrade. |
+| `POST /:orgId/drafts/:d/cancel` (P(drafts.create) or P(drafts.review)) | Cancel before execution starts: kept as CANCELLED, invoices it was paying are released. 409 from EXECUTING on. |
+| `POST /:orgId/drafts/:d/execute` (P(transfers.execute), backing user) | Execute. Sends only REVIEWED while the review policy is on; refused if the draft was written while it was being planned. |
 | `POST /:orgId/drafts/import-csv` (C(transfers.bulkCsv)) | Parse CSV lines. |
 
 **Invoices** (`/orgs`)
@@ -1125,7 +1468,10 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | `DELETE /:orgId/invoices/:i` (C(invoices)) | Soft delete. |
 | `POST /:orgId/invoices/:i/{pay, reconcile}` (C(invoices)) | Pay via a draft, or reconcile by hand. |
 | `GET/PATCH /:orgId/invoicing/profile` (C(invoices)) | Invoicing profile. |
-| `POST /:orgId/invoicing/{check, issue}` (C(invoices)) | Compliance dry run, or issue. |
+| `POST /:orgId/invoicing/{check, issue}` (C(invoices)) | Compliance dry run, or issue. `language` (`de`/`en`) and `dueDate` may be set per invoice; the profile's language and payment terms are the defaults. |
+| `PUT/DELETE /:orgId/contacts/:c/payer-rule` (C(invoices), P(invoices.manage)) | Set or remove a contact's payer rule; PUT may carry `wallets`, saved with it. |
+| `POST /:orgId/income-invoices/run` (C(invoices), P(invoices.manage)) | Collect a month's wallet receipts into draft invoices. `{ month: "YYYY-MM" }`, not a future month. |
+| `POST /:orgId/income-invoices/:i/issue` (C(invoices), P(invoices.manage)) | Issue a draft made from receipts. |
 | `GET /invoice-links/:token` (A) | Supplier side. |
 | `POST /invoice-links/:token/submit` (A) | Supplier side. |
 
@@ -1137,7 +1483,10 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | `POST /:orgId/account-rules[/apply]` (C(coa.rules)) | Add a rule, or re-run rules. |
 | `GET /:orgId/ledger` (C(ledger.transactions)) | Ledger. |
 | `PATCH /:orgId/ledger/:e` (C(ledger.transactions)) | Categorise a ledger row. |
-| `GET /:orgId/assets` (C(assets.costBasis)) | Assets and cost basis. |
+| `GET /:orgId/assets` (C(assets.costBasis), P(ledger.read)) | Holdings per token with their lots, disposals, moves to the Zold account, shortfalls, quantity-only tokens, unvalued rows and each wallet's proof state. |
+| `GET /:orgId/reports/realised-gains` (C(assets.costBasis), P(ledger.read)) | Measured gains and losses per month in the reporting time zone, with every disposal. |
+| `POST /:orgId/ledger/:e/revalue` (C(ledger.transactions), P(ledger.categorise)) | Ask the price feed again for an unvalued wallet row. 409 not revaluable, 422 still no price, 503 feed or ECB down. |
+| `POST /:orgId/ledger/revalue` (C(ledger.transactions), P(ledger.categorise)) | The same for every unvalued wallet row, 100 per call. |
 | `GET /:orgId/reports/monthly-balance` (C(reports.monthlyBalance)) | Monthly balance report. |
 | `GET /:orgId/export/ledger.csv` (C(export.ledger)) | Ledger CSV. |
 | `GET /:orgId/bookkeeping/statement[?month=]` (C(ledger.transactions)) | Statement lines: one per economic event, with links and Beleg codes. |
@@ -1149,7 +1498,7 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | `GET /:orgId/integrations` (org.read) | Connector state; never a key. |
 | `POST/DELETE /:orgId/integrations/getmyinvoices` (C(integrations.accounting), org.update) | Verify and store, or remove, the org's GetMyInvoices key. |
 | `GET /:orgId/integrations/getmyinvoices/bank-accounts` (C(integrations.accounting)) | Their bank accounts, read only. |
-| `POST /:orgId/integrations/getmyinvoices/push` (C(integrations.accounting), reports.run) | Push a month's Belege; idempotent on the document number. |
+| `POST /:orgId/integrations/getmyinvoices/push` (C(integrations.accounting), reports.run) | Push a month's Belege; idempotent on the document number. Per line: `uploaded`, `exists`, `unknown` (no answer, not found after), `no-beleg` or `failed` (refused). |
 
 **Shopify**
 
@@ -1161,12 +1510,16 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | `GET /shopify/callback` (HMAC + state) | OAuth return. |
 | `POST /shopify/{payment, refund, capture, void}` (HMAC) | Payments-app sessions. |
 | `POST /shopify/webhooks/orders` (HMAC) | Custom-app order webhooks. |
-| `GET /shopify/orders/:shop/:orderId[/pay]` | Buyer lookup. |
+| `GET /shopify/orders/:shop/:orderId[/pay]` | Buyer lookup; needs the checkout token (`t`) or the email signature (`b`). |
 | `GET /shopify/{return, cancel}/:code` | Redirect back to the store. |
 
 **Operator**
 
 | | |
 |---|---|
-| `GET /admin/{stats, users, transactions}` (operator token, A) | Read-only console. |
-| `POST /admin/orgs/:orgId/plan` (operator token, A) | Grant a plan. The only way onto a paid plan while there is no billing. |
+| `GET /admin/{stats, overview, issues, users, transactions, errors}` (operator, A) | Dashboard reads; derived views in `src/admin/`. |
+| `GET /admin/users/:id` (operator, A) | One account: projection, onboarding stage, transactions, recoveries, issues, audit. |
+| `GET /admin/users/:id/monerium[?live=1]` (operator, A) | What Zold stored from Monerium; `live=1` also reads Monerium on the account's own connection (refused without one), stores nothing, audits the read. |
+| `GET /admin/monerium[?live=1]` (operator, A) | Deployment-wide Monerium view; `live=1` checks the app credentials. |
+| `GET /admin/recoveries` (operator, A) | Zoldenburg requests and guardian enrolments. Each request's account carries `moneriumProfileHistory`, every Monerium profile it recorded (append-only, store.updateUser). |
+| `POST /admin/orgs/:orgId/plan` (operator, A) | Grant a plan. The only way onto a paid plan while there is no billing. |

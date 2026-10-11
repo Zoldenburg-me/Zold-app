@@ -8,6 +8,7 @@
  * Run: npm run pay:test
  */
 import assert from "node:assert/strict";
+import { readFileSync, readdirSync } from "node:fs";
 import * as jsqrModule from "jsqr";
 
 /** jsqr ships CommonJS, so the callable is the default under Node ESM. */
@@ -21,6 +22,7 @@ import {
   normaliseDisplayName,
   normaliseHandle,
   paymentUri,
+  publicOrgPayee,
   publicPayee,
 } from "../services/api/src/pay.js";
 import { dataModuleOrder, qrMatrix, qrSvg } from "../services/api/src/qr.js";
@@ -68,6 +70,7 @@ const user: any = {
     supportedTokens: [
       { chainId: 31337, symbol: "USDC", address: CHAIN.token.address, decimals: 6 },
     ],
+    routesReadAt: new Date().toISOString(),
     settlementAsset: "EURE",
     autoConvert: true,
     createdAt: new Date().toISOString(),
@@ -88,7 +91,7 @@ check("too short, too long, and bad characters are refused", () => {
   throws(() => normaliseHandle("ab"), /3 and 30/);
   throws(() => normaliseHandle("a".repeat(31)), /3 and 30/);
   throws(() => normaliseHandle("has space"), /lowercase letters/);
-  throws(() => normaliseHandle("emoji🙂"), /lowercase letters/);
+  throws(() => normaliseHandle("emoji🙂"), /latin letters/);
   throws(() => normaliseHandle("under_score"), /lowercase letters/);
 });
 
@@ -104,6 +107,30 @@ check("a handle cannot look like an address", () => {
 check("route names are reserved, so a handle cannot phish one", () => {
   for (const h of ["api", "pay", "settings", "login", "admin", "zold"]) {
     throws(() => normaliseHandle(h), /reserved/);
+  }
+});
+
+check("letters from other alphabets are refused, so a look-alike cannot pass the lists", () => {
+  for (const h of ["zоld", "αlice", "ｚｏｌｄ", "müller"]) {
+    throws(() => normaliseHandle(h), /latin letters/);
+  }
+});
+
+check("zold, support and admin are refused inside a longer handle, digit look-alikes too", () => {
+  for (const h of ["zold-support", "zoldpay", "my-zold", "helpdesk-support", "siteadmin", "z0ld", "adm1n", "5upport", "z-o-l-d"]) {
+    throws(() => normaliseHandle(h), /cannot contain/);
+  }
+});
+
+check("partner and well-known names are refused", () => {
+  for (const h of ["monerium", "monerium-eur", "gnosispay", "vitalik", "vitalik-eth", "v1talik", "satoshi-nakamoto", "elon-musk", "iron", "iron-pay", "lifi", "safe-wallet"]) {
+    throws(() => normaliseHandle(h), /cannot contain/);
+  }
+});
+
+check("short partner names only match as a whole word, so ordinary words still work", () => {
+  for (const h of ["ironing", "amplifier", "basement", "safety-first", "harmony", "muskrat", "alice"]) {
+    assert.equal(normaliseHandle(h), h);
   }
 });
 
@@ -131,6 +158,13 @@ check("the public projection returns exactly the expected payment-page keys", ()
     "supportedTokens",
     "token",
   ]);
+});
+
+check("a token list not read from the forwarder's routes is not served", () => {
+  // Pages claimed before the list came from Candide stored EURe + USDC, and
+  // Candide forwards only what its routes list.
+  const p = publicPayee({ ...user, paymentPage: { ...user.paymentPage!, routesReadAt: undefined } }, CHAIN);
+  assert.equal(p.supportedTokens, undefined);
 });
 
 check("and leaks no account data — this is the security-relevant one", () => {
@@ -272,6 +306,49 @@ check("the QR served by the payment page decodes, at its rendered size", () => {
   assert.equal(jsQR(px, span, span)?.data, addr, "decodes at 4px per module");
 });
 
+check("no <img> in the app points at a signed-in route (an image request carries no bearer header)", () => {
+  // /api/users/:id/address/qr.svg answers only with the session; the wallet
+  // screen fetches it and shows a blob URL instead.
+  const dir = new URL("../services/api/public/app/", import.meta.url);
+  for (const f of readdirSync(dir).filter((n) => n.endsWith(".js"))) {
+    const src = readFileSync(new URL(f, dir), "utf8");
+    assert.ok(!/<img[^>]*src="\/api\/users\//.test(src), `${f} renders an <img> from /api/users/`);
+  }
+  assert.ok(readFileSync(new URL("phone-add.js", dir), "utf8").includes("phLoadWalletQr"), "the wallet QR is loaded with the session");
+});
+
+check("transfer timelines hide intent and outcome steps, and show only real tx hashes", () => {
+  // app/send.js holds the rule both renderers use (send.js, phone-activity.js).
+  const dir = new URL("../services/api/public/app/", import.meta.url);
+  const src = readFileSync(new URL("send.js", dir), "utf8");
+  const lines = src.split("\n").filter((l) => /^const (INTERNAL_STEP|txStepShown|isTxHash) =/.test(l));
+  assert.equal(lines.length, 3, "send.js defines INTERNAL_STEP, txStepShown and isTxHash");
+  const { txStepShown, isTxHash } = new Function(`${lines.join("\n")}; return { txStepShown, isTxHash };`)();
+  for (const step of [
+    "monerium.redeem.pending", "monerium.redeem.placed", "monerium.redeem.refused",
+    "safe.refundTransfer.pending", "bridge.xyz.deposit.pending", "safe.debit.unconfirmed",
+    "safe.swap(usdc->eure).unconfirmed", "safe.swap(usdc->eure).reverted", "monerium.redeem.not-sent",
+  ]) assert.equal(txStepShown({ step, hash: "0x" }), false, `${step} is hidden`);
+  for (const step of ["safe.transfer(orchestrator)", "safe.transfer(fee)", "safe.refundTransfer", "bridge.xyz.deposit.transfer", "liquidity.lifi.eure-usdc"]) {
+    assert.equal(txStepShown({ step, hash: "0x" }), true, `${step} is shown`);
+  }
+  assert.equal(isTxHash(`0x${"ab".repeat(32)}`), true);
+  for (const h of ["0x", "ord_123", "0xa8af216C328AAa6a384DD422c4eA005cEd7F73f1", undefined]) assert.equal(isTxHash(h), false, `${h} is not a tx hash`);
+  const activity = readFileSync(new URL("phone-activity.js", dir), "utf8");
+  assert.ok(activity.includes("txStepShown(x) && isTxHash(x.hash)"), "phone details list only shown steps with real hashes");
+});
+
+check("the wallet screen shows an unconfirmed conversion as being checked, never offered again", () => {
+  const src = readFileSync(new URL("../services/api/public/app/phone-add.js", import.meta.url), "utf8");
+  assert.ok(/d\.holding === "unconfirmed" && d\.token === "USDC"/.test(src), "unconfirmed deposits are listed");
+  assert.ok(src.includes('Z.tag("CHECKING")'), "they carry the CHECKING tag the activity rows use");
+  assert.ok(/waiting = \(deps \|\| \[\]\)\.filter\(\(d\) => d\.holding === "awaiting_approval"/.test(src), "waiting deposits get a Convert button");
+  assert.ok(/held = \(deps \|\| \[\]\)\.filter\(\(d\) => d\.holding === "held"/.test(src), "held deposits get one too, unless the server names a blocker");
+  assert.ok(/const phConvertible = \(d\) =>\s*\(d\.holding === "awaiting_approval" \|\| d\.holding === "held"\) && !d\.convertBlocker/.test(src),
+    "refused and unconfirmed are never offered for conversion");
+  assert.ok(src.includes("SAFE_OP_UNCONFIRMED") && src.includes("SAFE_OP_REVERTED"), "the check screen words the server's codes");
+});
+
 check("a QR of an address round-trips back to the same string", () => {
   const addr = "0xa8af216C328AAa6a384DD422c4eA005cEd7F73f1";
   assert.equal(readBack(qrMatrix(addr)), addr);
@@ -319,6 +396,58 @@ check("the SVG is self-contained and includes a quiet zone", () => {
   assert.match(svg, /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg"/);
   assert.match(svg, new RegExp(`viewBox="0 0 ${modules + 8} ${modules + 8}"`));
   assert.ok(!/https?:\/\/(?!www\.w3\.org)/.test(svg), "no external references");
+});
+
+
+// ── An organisation's page: bank details only, under the company's name ──
+
+const orgFull: any = {
+  id: "org_1", name: "Lindner Holzbau", legalName: "Lindner Holzbau GmbH", taxId: "DE298451736",
+  email: "office@example.com", plan: "business", memberIds: ["m1"],
+  paymentPage: { handle: "lindnerholzbau", createdAt: "2026-10-03T00:00:00Z", updatedAt: "2026-10-03T00:00:00Z" },
+};
+const orgAccount: any = {
+  id: "acc_1", currency: "EUR", status: "active", backingUserId: "u1", label: "Operating",
+  identifier: { iban: "DE89 3704 0044 0532 0133 10", bic: "EAPFESM2XXX" },
+};
+
+check("an organisation's page carries the holder Monerium names and the account's bank details", () => {
+  const p = publicOrgPayee(orgFull, orgAccount, "LINDNER HOLZBAU GMBH");
+  assert.deepEqual(p, {
+    kind: "organisation", handle: "lindnerholzbau", displayName: "Lindner Holzbau GmbH",
+    bank: { holder: "LINDNER HOLZBAU GMBH", holderVerified: true, iban: "DE89370400440532013310", bic: "EAPFESM2XXX" },
+  });
+});
+
+check("without a name from Monerium the holder is the organisation's own, marked unverified", () => {
+  for (const missing of [undefined, "", "  "]) {
+    const p = publicOrgPayee(orgFull, orgAccount, missing);
+    assert.equal(p.bank.holder, "Lindner Holzbau GmbH");
+    assert.equal(p.bank.holderVerified, false);
+  }
+});
+
+check("the organisation projection leaks no member, backing account, tax id or email", () => {
+  const json = JSON.stringify(publicOrgPayee(orgFull, orgAccount));
+  for (const secret of ["u1", "acc_1", "m1", "DE298451736", "office@example.com", "backingUserId", "Operating"]) {
+    assert.ok(!json.includes(secret), `leaked ${secret}`);
+  }
+});
+
+check("an unknown BIC is left out, not guessed", () => {
+  const p = publicOrgPayee(orgFull, { identifier: { iban: "DE89370400440532013310" } });
+  assert.equal("bic" in p.bank, false);
+});
+
+check("a display name the organisation chose wins over its legal name", () => {
+  const p = publicOrgPayee({ ...orgFull, paymentPage: { ...orgFull.paymentPage, displayName: "Lindner Holzbau" } }, orgAccount);
+  assert.equal(p.displayName, "Lindner Holzbau");
+  assert.equal(p.bank.holder, "Lindner Holzbau GmbH");
+});
+
+check("no page or no IBAN is refused rather than half-rendered", () => {
+  throws(() => publicOrgPayee({ name: "X" }, orgAccount), /no payment page/);
+  throws(() => publicOrgPayee(orgFull, { identifier: {} }), /no payment page/);
 });
 
 console.log(`\nPAY PAGE TEST PASSED — ${n} checks`);

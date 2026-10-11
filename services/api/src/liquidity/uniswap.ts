@@ -11,6 +11,7 @@
  * onto the quote so execution cannot drift to another.
  */
 import { encodeFunctionData } from "viem";
+import { usdToken } from "../usd-token.js";
 import { LIQUIDITY } from "../config.js";
 import { addrs, eur, orchestratorAddress, orchestratorWallet, publicClient, usd, writeAndWait } from "../chain.js";
 import { assertPriceSane, bestPool, erc20Abi, quoteExactInputSingle, quoteExactOutputSingle, rate6dp, routerAbi } from "../dex.js";
@@ -42,7 +43,7 @@ export class DexLiquidityProvider implements LiquidityProvider {
     const pool = await bestPool(tokenIn, tokenOut);
     if (!pool) {
       throw new Error(
-        `no EURe/USDC pool with liquidity at fee tiers [${LIQUIDITY.DEX_FEE_TIERS.join(", ")}] on this chain. ` +
+        `no EURe/${usdToken().symbol} pool with liquidity at fee tiers [${LIQUIDITY.DEX_FEE_TIERS.join(", ")}] on this chain. ` +
           `Refusing rather than settling elsewhere. On a testnet run \`npm run dex:setup\` to seed one.`,
       );
     }
@@ -187,7 +188,7 @@ export class DexLiquidityProvider implements LiquidityProvider {
     if (amountOut <= 0n) throw new Error("dex exact-output quote requires a positive amount");
     const { tokenIn, tokenOut, inName, outName } = this.tokens(side);
     const pool = await bestPool(tokenIn, tokenOut);
-    if (!pool) throw new Error("no EURe/USDC pool with liquidity on this chain — refusing rather than settling elsewhere");
+    if (!pool) throw new Error(`no EURe/${usdToken().symbol} pool with liquidity on this chain — refusing rather than settling elsewhere`);
     const quotedIn = await quoteExactOutputSingle({ tokenIn, tokenOut, amountOut, fee: pool.fee });
     const amountInMaximum = (quotedIn * (10_000n + LIQUIDITY.DEX_SLIPPAGE_BPS)) / 10_000n;
     if (amountInMaximum > maxAmountIn) {
