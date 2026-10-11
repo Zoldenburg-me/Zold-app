@@ -71,6 +71,8 @@ for sol in contracts/src/*.sol; do n="$(basename "$sol" .sol)"; mkdir -p "contra
   writeFileSync(path.join(repo, "contracts/src/A.sol"), "contract A {}\n");
   writeFileSync(path.join(repo, "tsconfig.json"), "{}\n");
   writeFileSync(path.join(repo, "package.json"), JSON.stringify({ name: "z", devDependencies: { tsx: "1" } }));
+  mkdirSync(path.join(repo, "services/api/src/operators"), { recursive: true });
+  writeFileSync(path.join(repo, "services/api/src/operators/enrol-cli.ts"), "// enrol\n");
   const m1 = commitFile("services/api/src/server.ts", "v1\n");
   const m2 = commitFile("services/api/src/server.ts", "v2\n");
   git("push", "-q", "origin", "main");
@@ -104,6 +106,10 @@ for sol in contracts/src/*.sol; do n="$(basename "$sol" .sol)"; mkdir -p "contra
     const head = localProduction();
     check("on top of the production it found", git("rev-parse", `${head}^`) === seed);
     check("and names its source", git("log", "-1", "--format=%B", head).includes(`Source: ${m3}`));
+    // The operator's enrolment runs on the host, from what production keeps.
+    const scripts = JSON.parse(git("show", `${head}:package.json`)).scripts;
+    check("it keeps the operator enrolment command", scripts["operator:enrol"] === "tsx services/api/src/operators/enrol-cli.ts", JSON.stringify(scripts));
+    check("and the file it runs", git("ls-tree", "--name-only", head, "services/api/src/operators/enrol-cli.ts") !== "");
   }
   console.log(`\nproduction branch: ${passed}/${passed} checks passed`);
 } finally {

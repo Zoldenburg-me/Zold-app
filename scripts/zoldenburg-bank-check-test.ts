@@ -21,11 +21,9 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 
-const OPERATOR = "op-token-for-the-bank-check-test";
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(os.tmpdir(), "zold-rbank-")), "db.json");
 process.env.RECOVERY_IBAN_HMAC_KEY = "k".repeat(40);
 process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS = `0x${"9".repeat(40)}`;
-process.env.KYC_OPERATOR_TOKEN = OPERATOR;
 
 const express = (await import("express")).default;
 const { store } = await import("../services/api/src/store.js");

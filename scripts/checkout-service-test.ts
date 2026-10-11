@@ -30,7 +30,8 @@ import { readFileSync, rmSync } from "node:fs";
 import { createServer, type IncomingHttpHeaders } from "node:http";
 import type { AddressInfo } from "node:net";
 
-const OPERATOR = "operator-token-for-the-checkout-test-0123";
+/** Stands for the operator in `rotate`: the change goes through the kit. */
+const OPERATOR = "operator";
 const HOOK_SECRET = "whsec_" + Buffer.from("checkout-webhook-test-secret-32b").toString("base64");
 const SERVICE_LIMIT = 40;
 const AUTH_LIMIT = 30;
@@ -54,7 +55,6 @@ const receiver = createServer((req, res) => {
 await new Promise<void>((r) => receiver.listen(0, "127.0.0.1", r));
 const receiverUrl = `http://127.0.0.1:${(receiver.address() as AddressInfo).port}/zold-hook`;
 
-process.env.KYC_OPERATOR_TOKEN = OPERATOR;
 process.env.SERVICE_RATE_LIMIT_PER_MIN = String(SERVICE_LIMIT);
 process.env.AUTH_RATE_LIMIT_PER_MIN = String(AUTH_LIMIT);
 process.env.CHECKOUT_SERVICE_ROTATION_OVERLAP_SEC = "3600";
@@ -150,7 +150,7 @@ await check("no credential issued answers 503", async () => {
   const r = await get("t-ok", "anything");
   assert.equal(r.status, 503);
 });
-await check("rotation without the operator token is refused", async () => {
+await check("rotation without an operator session is refused", async () => {
   assert.equal((await rotate()).status, 401);
   assert.equal((await rotate("not-the-operator-token-xxxxxxxx")).status, 401);
 });

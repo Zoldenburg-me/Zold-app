@@ -77,7 +77,7 @@ Production mode is `NODE_ENV=production` or `TRANSF_PRODUCTION=1`. The source
 of truth is `assertProductionConfig` in `services/api/src/config/production.ts`, which
 refuses to start on any failure. The checks that concern the wallet:
 
-- An operator enrolled with a passkey (`npm run operator:enrol`); recovery approvals need it. `KYC_OPERATOR_TOKEN` opens the console read-only.
+- An operator enrolled with a passkey (`npm run operator:enrol`); the console and recovery approvals need it.
 - `MONERIUM_WEBHOOK_SECRET` set whenever Monerium credentials are configured.
 - `CANDIDE_RECOVERY_MODULE_ADDRESS` is not the 3-minute test module.
 - Hosted (a public URL, or not the local stack): `WEBAUTHN_ORIGINS` explicit,

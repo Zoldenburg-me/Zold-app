@@ -8,7 +8,7 @@
 import { CHAIN_ID, IS_PRODUCTION, IS_REAL_MONEY_CHAIN, LOOKS_LOCAL, PUBLIC_URL, REAL_MONEY_CHAINS } from "./env.js";
 import { MONERIUM, moneriumOAuthEnabled, moneriumSandboxEnabled } from "./monerium.js";
 import { dataKeyProblems } from "./data-keys.js";
-import { KYC, RECOVERY, RECOVERY_MODULE_3_MINUTES, SECURITY } from "./security.js";
+import { RECOVERY, RECOVERY_MODULE_3_MINUTES, SECURITY } from "./security.js";
 import { anchorModeEnabled, BRIDGE, isMoneyGramAnchorDomain, STELLAR, STELLAR_TESTNET_PASSPHRASE } from "./cash-rail.js";
 
 const LOOKS_HOSTED = Boolean(PUBLIC_URL) || !LOOKS_LOCAL;
@@ -45,9 +45,11 @@ function validateMoneriumWebhookSecret(value: string) {
   }
 }
 
-/** The operator path exists, and no test-only switch is set. */
+/** No test-only switch and no removed setting is set. */
 function checkRuntimeFlags(fail: Fail) {
-  if (!KYC.operatorToken) fail("KYC_OPERATOR_TOKEN is required in production");
+  // The shared operator token is gone: a value left on the host is a secret
+  // nobody rotates. The operator signs in with a passkey (operators/).
+  if (process.env.KYC_OPERATOR_TOKEN) fail("KYC_OPERATOR_TOKEN no longer exists — the operator signs in with a passkey (npm run operator:enrol); unset it");
   if (process.env.KYC_AUTO_APPROVE === "1") fail("KYC_AUTO_APPROVE=1 is forbidden in production");
   if (process.env.LOCAL_HARNESS === "1") fail("LOCAL_HARNESS=1 is forbidden in production");
   // The break-glass that lets an external RPC run on hardhat's public keys:

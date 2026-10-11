@@ -26,7 +26,7 @@ json → securityHeaders → originPolicy → /api rate limit → pages → rout
 | /api | routes/recovery-turnkey-requests.ts | recovery with that guardian: /recovery/turnkey/requests (+/:id/passkey, /digest, /signature, /finalize; per-request secret), /users/:id/recovery/turnkey/requests (+/:rid/cancel) |
 | /api | routes/safe-signers.ts, safe-import.ts | owners, threshold, spending limits, import |
 | /api | routes/shopify.ts | install/callback, payments app hooks, order pay pages |
-| /api/admin | operators/gate.ts (middleware) | ahead of every admin route: Cloudflare Access, operator passkey session or read-only token, a fresh approval per change, audit |
+| /api/admin | operators/gate.ts (middleware) | ahead of every admin route: Cloudflare Access, operator passkey session, a fresh approval per change, audit |
 | /api | routes/operator-auth.ts | /admin/auth/*: enrolment, login, step-up challenge, add passkey, logout, me |
 | /api | routes/email-verification.ts, faucet.ts, admin.ts | codes, testnet faucet, operator stats |
 | /api/orgs | routes/orgs.ts (27) | orgs, plans, members, invites, accounts, contacts, wallets and their ownership proof (challenge, prove, re-check) |

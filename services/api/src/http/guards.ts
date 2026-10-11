@@ -1,14 +1,13 @@
 /**
  * The checks a route runs before it does anything: KYC state, segment
- * capability, custody readiness, the daily cap, and the operator token.
+ * capability, custody readiness, the daily cap, and the operator.
  *
  * These are the enforcing checks; the UI hiding a button does not stop a
  * crafted request. They sit beside the session module so every route shares
  * them.
  */
 import type express from "express";
-import { timingSafeEqual } from "node:crypto";
-import { HARNESS, KYC } from "../config.js";
+import { HARNESS } from "../config.js";
 import { auditEntry } from "../audit.js";
 import { can, type Segment } from "../domain/segments.js";
 import { dailyCapUsage } from "../orchestrator.js";
@@ -117,25 +116,11 @@ export async function assertDailyCap(
   return true;
 }
 
-export const LEGACY_PRINCIPAL_ID = "legacy-token";
-
-/** The shared operator token, compared in constant time; false when none is
- *  set. It opens admin reads only (operators/gate.ts). */
-export function isLegacyOperatorToken(token: string | undefined): boolean {
-  const expected = KYC.operatorToken;
-  if (!expected || !token) return false;
-  const a = Buffer.from(expected);
-  const b = Buffer.from(token);
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
-/** The rate-limit key of the operator calling (the shared token or a live
- *  passkey session), or undefined. The limiter's question only; the gate
- *  decides what the caller may do. */
+/** The rate-limit key of the operator calling (a live passkey session), or
+ *  undefined. The limiter's question only; the gate decides what the caller
+ *  may do. */
 export function operatorBucketId(req: express.Request): string | undefined {
-  const token = bearerToken(req);
-  if (isLegacyOperatorToken(token)) return LEGACY_PRINCIPAL_ID;
-  const found = operatorSessionFor(token);
+  const found = operatorSessionFor(bearerToken(req));
   return "refused" in found ? undefined : found.operator.id;
 }
 
@@ -152,7 +137,7 @@ export function requireOperator(req: express.Request, res: express.Response): bo
   return true;
 }
 
-/** Who did it, for a stored row: `operator:<id>`, or `operator:legacy-token`. */
+/** Who did it, for a stored row: `operator:<id>`. */
 export function operatorLabel(req: express.Request): string {
   return `operator:${operatorOf(req)?.id ?? "unknown"}`;
 }

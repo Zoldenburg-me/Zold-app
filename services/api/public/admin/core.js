@@ -12,8 +12,7 @@
  *
  * Three security details. The operator signs in with a passkey; the session
  * token lives in sessionStorage so it does not outlive the tab, and every
- * change asks the passkey again, bound to that exact request. The shared
- * operator token still opens the dashboard read-only. Every value from the
+ * change asks the passkey again, bound to that exact request. Every value from the
  * API is escaped, and rows carry ids for delegated listeners — never an inline
  * handler built from row data, since a signup name containing a quote can
  * close a JS string (stored XSS next to that session).
@@ -146,12 +145,10 @@ function dist(obj, toneOf = () => 'plain') {
 
 /* ---------- API ---------- */
 
-const tokenInput = document.getElementById('operatorToken');
 const authPill = document.getElementById('authPill');
 const authText = document.getElementById('authText');
-/** The last token the server refused. The background refresh does not resend
- *  it; a password manager that fills the field would otherwise get a 401
- *  every 15 seconds. */
+/** The last session the server refused. The background refresh does not
+ *  resend it. */
 let rejectedToken = null;
 
 /** The operator's passkey session, for this tab only. */
@@ -170,10 +167,10 @@ function setAuth(state) {
   authPill.className = `auth ${state === 'ok' ? 'ok' : state === 'bad' ? 'bad' : ''}`;
   authText.textContent = state === 'bad' ? 'Unauthorized'
     : state !== 'ok' ? 'Signed out'
-    : operatorSession ? (operatorName || 'Signed in') : 'Read-only token';
+    : operatorName || 'Signed in';
 }
 
-/** Stale rows under a dead token read as live ops data: drop them. */
+/** Stale rows under a dead session read as live ops data: drop them. */
 function clearData() {
   S.overview = null; S.users = []; S.txs = []; S.issues = []; S.serverErrors = []; S.monerium = null; S.userCache = {};
   S.recoveries = { enabled: false, requests: [], enrolments: [] };
@@ -195,12 +192,11 @@ async function approveChange(path, method, bodyText) {
 }
 
 async function api(path, options = {}) {
-  const token = operatorSession || tokenInput.value.trim();
+  const token = operatorSession;
   if (!token) { setAuth('none'); throw new ApiError(401, 'Sign in with your operator passkey.'); }
   const method = (options.method || 'GET').toUpperCase();
   const approval = {};
   if (method !== 'GET' && !path.startsWith('/api/admin/auth/')) {
-    if (!operatorSession) throw new ApiError(403, 'Sign in with your operator passkey to make a change: the operator token only reads.');
     approval['X-Operator-Step-Up'] = await approveChange(path, method, options.body);
   }
   const res = await fetch(path, {
@@ -209,10 +205,9 @@ async function api(path, options = {}) {
   });
   const data = await res.json().catch(() => ({}));
   if (res.status === 401) {
-    // An ended passkey session falls back to the token, if one is entered. An
-    // Access refusal leaves the session alone: signing in to Access again is
-    // enough. main.js redraws the sign-in controls on the event.
-    const ended = operatorSession && token === operatorSession && data.code === 'OPERATOR_SIGN_IN';
+    // An Access refusal leaves the session alone: signing in to Access again
+    // is enough. main.js redraws the sign-in controls on the event.
+    const ended = token === operatorSession && data.code === 'OPERATOR_SIGN_IN';
     if (ended) {
       setOperatorSession('');
       operatorName = '';

@@ -105,7 +105,7 @@
     "admin:test": "tsx scripts/admin-dashboard-test.ts",
     "operator:test": "tsx scripts/operator-auth-test.ts",
     "admin:ui:test": "tsx scripts/admin-ui-test.ts",
-    "operator:enrol": "tsx scripts/operator-enrol.ts",
+    "operator:enrol": "tsx services/api/src/operators/enrol-cli.ts",
     "review-resolution:test": "tsx scripts/review-resolution-test.ts",
     "draft:test": "tsx scripts/draft-execution-test.ts",
     "draft:failure:test": "tsx scripts/draft-batch-failure-test.ts",

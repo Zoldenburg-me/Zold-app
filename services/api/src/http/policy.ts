@@ -270,7 +270,7 @@ function partnerBucket(req: express.Request): "p" | "d" | undefined {
 function primaryBucket(req: express.Request, path: string): [string, number] {
   if (path.startsWith("/shopify/")) return ["s", SECURITY.shopifyRateLimitPerMin];
   if (path.startsWith("/admin")) {
-    // Keyed per operator: the shared token and each operator count apart.
+    // Keyed per operator: each operator counts apart.
     const operator = operatorBucketId(req);
     if (operator) return [`o:${operator}`, SECURITY.operatorRateLimitPerMin];
   }
@@ -290,8 +290,8 @@ export const apiRateLimit: express.RequestHandler = (req, res, next) => {
   const path = req.path.toLowerCase();
   // Shopify's calls arrive from Shopify's shared addresses and each carries a
   // 256-bit HMAC, so it is not a guess; its own bucket keeps real merchant
-  // volume off the 20/min one. A valid operator token is not a guess either;
-  // a wrong one stays on the credential bucket.
+  // volume off the 20/min one. A live operator session is not a guess either;
+  // an unknown bearer stays on the credential bucket.
   const [primary, perMin] = primaryBucket(req, path);
   const ok = rateLimit(`${primary}:${ip}`, perMin);
   if (!ok) return res.status(429).json({ error: "rate limited — slow down" });

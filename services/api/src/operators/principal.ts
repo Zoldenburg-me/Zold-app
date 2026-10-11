@@ -6,12 +6,10 @@
 import type express from "express";
 
 export interface OperatorPrincipal {
-  /** The operator's id, or "legacy-token" for the read-only shared token. */
   id: string;
   name: string;
-  legacy: boolean;
-  /** The passkey session's id; absent for the legacy token. */
-  sessionId?: string;
+  /** The passkey session the request came with. */
+  sessionId: string;
 }
 
 const principals = new WeakMap<express.Request, OperatorPrincipal>();

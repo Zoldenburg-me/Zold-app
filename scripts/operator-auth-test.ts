@@ -1,7 +1,7 @@
 /**
  * The operator path: Cloudflare Access, passkey enrolment and sign-in, a
- * fresh approval for every change, the read-only shared token, and an audit
- * row naming the operator.
+ * fresh approval for every change, an audit row naming the operator, and no
+ * shared token.
  *
  * Offline: in-process express with Access configured against a local stub
  * that serves its signing keys, a throwaway db, and a software passkey.
@@ -12,16 +12,20 @@
 import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdtempSync, existsSync } from "node:fs";
+import { mkdtempSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { webcrypto } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
 
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const dataDir = mkdtempSync(path.join(tmpdir(), "zold-operator-"));
 process.env.TRANSF_DB_PATH = path.join(dataDir, "db.json");
-const TOKEN = "operator-token-for-operator-auth-test-0123";
-process.env.KYC_OPERATOR_TOKEN = TOKEN;
+// Set, to show the variable opens nothing.
+const OLD_TOKEN = "operator-token-for-operator-auth-test-0123";
+process.env.KYC_OPERATOR_TOKEN = OLD_TOKEN;
 const ADMIN = "http://admin.test";
 process.env.ADMIN_ORIGIN = ADMIN;
 const TEAM = "zold-test.cloudflareaccess.com";
@@ -121,8 +125,9 @@ await check("without an Access token nothing under /api/admin answers, the cerem
   }
 });
 await check("the email header alone is not an identity", async () => {
-  const r = await req("GET", "/api/admin/users", undefined, { "cf-access-jwt-assertion": "", "cf-access-authenticated-user-email": OWNER, authorization: `Bearer ${TOKEN}` });
+  const r = await req("GET", "/api/admin/users", undefined, { "cf-access-jwt-assertion": "", "cf-access-authenticated-user-email": OWNER });
   assert.equal(r.status, 401);
+  assert.equal(r.body.code, "ACCESS_REQUIRED");
 });
 await check("a token for another application, another team, expired, unsigned or naming no person is refused", async () => {
   const other = await webcrypto.subtle.generateKey(RSA, true, ["sign", "verify"]);
@@ -137,38 +142,41 @@ await check("a token for another application, another team, expired, unsigned or
     "not-a-jwt",
   ];
   for (const jwt of bad) {
-    const r = await req("GET", "/api/admin/users", undefined, { "cf-access-jwt-assertion": jwt, authorization: `Bearer ${TOKEN}` });
+    const r = await req("GET", "/api/admin/users", undefined, { "cf-access-jwt-assertion": jwt });
     assert.equal(r.status, 401, jwt.slice(0, 40));
     assert.equal(r.body.code, "ACCESS_REQUIRED", jwt.slice(0, 40));
   }
 });
 
+// Past Access, a request with no operator session is asked to sign in: that
+// answer is how these checks see Access let a request through.
+const passedAccess = (r: { status: number; body: any }) => r.status === 401 && r.body.code === "OPERATOR_SIGN_IN";
 await check("a not-before in the future is refused, beyond a minute of clock skew", async () => {
   const now = Math.floor(Date.now() / 1000);
-  const future = await req("GET", "/api/admin/users", undefined, { "cf-access-jwt-assertion": await accessJwt({ nbf: now + 3600 }), authorization: `Bearer ${TOKEN}` });
-  assert.equal(future.status, 401);
-  const skew = await req("GET", "/api/admin/users", undefined, { "cf-access-jwt-assertion": await accessJwt({ nbf: now + 30 }), authorization: `Bearer ${TOKEN}` });
-  assert.equal(skew.status, 200);
+  const future = await req("GET", "/api/admin/users", undefined, { "cf-access-jwt-assertion": await accessJwt({ nbf: now + 3600 }) });
+  assert.equal(future.body.code, "ACCESS_REQUIRED");
+  const skew = await req("GET", "/api/admin/users", undefined, { "cf-access-jwt-assertion": await accessJwt({ nbf: now + 30 }) });
+  assert.ok(passedAccess(skew), JSON.stringify(skew.body));
 });
 await check("unknown key ids fetch the keys at most once a minute, and a key outage refuses with 503", async () => {
   const before = certFetches;
-  for (let i = 0; i < 10; i++) await req("GET", "/api/admin/users", undefined, { "cf-access-jwt-assertion": await accessJwt({}, { kid: `forged-${i}` }), authorization: `Bearer ${TOKEN}` });
+  for (let i = 0; i < 10; i++) await req("GET", "/api/admin/users", undefined, { "cf-access-jwt-assertion": await accessJwt({}, { kid: `forged-${i}` }) });
   assert.ok(certFetches - before <= 1, `${certFetches - before} fetches for ten forged key ids`);
   certsDown = true;
   forgetAccessKeysForTests();
   try {
-    const r = await req("GET", "/api/admin/users", undefined, { authorization: `Bearer ${TOKEN}` });
+    const r = await req("GET", "/api/admin/users");
     assert.equal(r.status, 503);
     assert.equal(r.body.code, "ACCESS_REQUIRED");
   } finally {
     certsDown = false;
     forgetAccessKeysForTests();
   }
-  assert.equal((await req("GET", "/api/admin/users", undefined, { authorization: `Bearer ${TOKEN}` })).status, 200, "back once the keys are");
+  assert.ok(passedAccess(await req("GET", "/api/admin/users")), "back once the keys are");
 });
 await check("a hosted deployment refuses the dashboard until it has an https admin origin of its own and Access", async () => {
   const { SECURITY } = await import("../services/api/src/config.js");
-  const read = () => req("GET", "/api/admin/users", undefined, { authorization: `Bearer ${TOKEN}` });
+  const read = () => req("GET", "/api/admin/users");
   const HTTPS_ADMIN = "https://admin.zold.example";
   const cases: [string, Record<string, unknown>][] = [
     ["no explicit admin origin", { hardened: true, adminOrigin: HTTPS_ADMIN, adminOriginExplicit: false }],
@@ -186,33 +194,52 @@ await check("a hosted deployment refuses the dashboard until it has an https adm
   } finally {
     SECURITY.origins.splice(SECURITY.origins.indexOf("https://zold.example"), 1);
   }
-  assert.equal((await withSetting({ hardened: true, adminOrigin: HTTPS_ADMIN }, read)).status, 200, "ready");
+  assert.ok(passedAccess(await withSetting({ hardened: true, adminOrigin: HTTPS_ADMIN }, read)), "ready");
   const noJwt = await withSetting({ hardened: true, adminOrigin: HTTPS_ADMIN }, () =>
-    req("GET", "/api/admin/users", undefined, { authorization: `Bearer ${TOKEN}`, "cf-access-jwt-assertion": "" }));
-  assert.equal(noJwt.status, 401, "hardened: Access is required");
+    req("GET", "/api/admin/users", undefined, { "cf-access-jwt-assertion": "" }));
+  assert.equal(noJwt.body.code, "ACCESS_REQUIRED", "hardened: Access is required");
 });
 
-console.log("the shared operator token");
-await check("reads still work with it, behind Access", async () => {
-  const r = await req("GET", "/api/admin/users", undefined, { authorization: `Bearer ${TOKEN}` });
-  assert.equal(r.status, 200, JSON.stringify(r.body));
-});
-await check("it makes no change, whatever the spelling of the path", async () => {
-  for (const p of ["/api/admin/test/echo", "/api/ADMIN/test/echo", "/api/admin/test/echo/"]) {
-    const r = await req("POST", p, { x: 1 }, { authorization: `Bearer ${TOKEN}` });
-    assert.equal(r.status, 403, p);
-    assert.equal(r.body.code, "OPERATOR_TOKEN_READ_ONLY");
+console.log("no shared token");
+await check("the old KYC_OPERATOR_TOKEN value is an unknown bearer: no read, change, live read or ceremony", async () => {
+  const as = { authorization: `Bearer ${OLD_TOKEN}` };
+  for (const [m, p] of [
+    ["GET", "/api/admin/users"], ["GET", "/api/admin/monerium?live=1"], ["POST", "/api/admin/test/echo"],
+    ["POST", "/api/admin/auth/step-up/challenge"], ["POST", "/api/admin/auth/passkeys/challenge"], ["GET", "/api/admin/auth/me"],
+  ]) {
+    const r = await req(m, p, m === "POST" ? {} : undefined, as);
+    assert.equal(r.status, 401, `${m} ${p}`);
+    assert.equal(r.body.code, "OPERATOR_SIGN_IN", `${m} ${p}`);
   }
 });
-await check("it asks no partner: a live Monerium read needs a passkey session", async () => {
-  const r = await req("GET", "/api/admin/monerium?live=1", undefined, { authorization: `Bearer ${TOKEN}` });
-  assert.equal(r.status, 403);
-});
-await check("each read with it is audited as the legacy token", async () => {
-  assert.ok(store.auditFor(undefined, 50).some((e) => e.kind === "operator.request" && e.data.operator === "operator:legacy-token"));
+await check("production refuses to start with KYC_OPERATOR_TOKEN set", async () => {
+  const boot = (extra: Record<string, string>) => spawnSync(process.execPath, ["--import", "tsx", "-e", 'await import("./services/api/src/config.js")'], {
+    cwd: ROOT, encoding: "utf8", env: { ...process.env, TRANSF_PRODUCTION: "1", ...extra },
+  });
+  const set = boot({ KYC_OPERATOR_TOKEN: OLD_TOKEN });
+  assert.notEqual(set.status, 0);
+  assert.match(set.stderr, /KYC_OPERATOR_TOKEN no longer exists/);
+  assert.ok(!set.stderr.includes(OLD_TOKEN), "the value is never printed");
+  // Empty is unset: the other production checks still refuse this test env,
+  // but not over the token.
+  assert.doesNotMatch(boot({ KYC_OPERATOR_TOKEN: "" }).stderr, /KYC_OPERATOR_TOKEN/);
 });
 
 console.log("enrolment");
+await check("npm run operator:enrol writes a single-use enrolment next to the store and prints the link once", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "zold-enrol-cli-"));
+  const r = spawnSync(process.execPath, ["--import", "tsx", "services/api/src/operators/enrol-cli.ts", "--name", "Owner", "--email", OWNER], {
+    cwd: ROOT, encoding: "utf8", env: { ...process.env, TRANSF_DB_PATH: path.join(dir, "db.json") },
+  });
+  assert.equal(r.status, 0, r.stderr);
+  const link = /(\S+\/admin#enrol=([A-Za-z0-9_-]+))/.exec(r.stdout);
+  assert.ok(link && link[1].startsWith(ADMIN), r.stdout);
+  const written = JSON.parse(readFileSync(path.join(dir, "operator-enrolment.json"), "utf8"));
+  assert.equal(written.email, OWNER);
+  assert.ok(!JSON.stringify(written).includes(link![2]), "only the token's hash is stored");
+  const usage = spawnSync(process.execPath, ["--import", "tsx", "services/api/src/operators/enrol-cli.ts"], { cwd: ROOT, encoding: "utf8" });
+  assert.equal(usage.status, 2);
+});
 await check("no open enrolment, a wrong token or an expired one opens nothing", async () => {
   assert.equal((await req("POST", "/api/admin/auth/enrol/challenge", { token: "nothing-open" })).status, 403);
   writeEnrolment(dataDir, "Owner", OWNER);
@@ -336,8 +363,6 @@ await check("an approval is asked only for a change, on an admin path, with no q
   assert.equal((await ask({ method: "GET", path: "/api/admin/users" })).status, 400);
   assert.equal((await ask({ method: "POST", path: "/api/users/u1/email/code" })).status, 400);
   assert.equal((await ask({ method: "POST", path: "/api/admin/test/echo?x=1" })).status, 400);
-  assert.equal((await ask({ method: "POST", path: "/api/admin/test/echo" }, { authorization: `Bearer ${TOKEN}` })).status, 403, "the read-only token asks for none");
-  assert.equal((await req("POST", "/api/admin/auth/passkeys/challenge", {}, { authorization: `Bearer ${TOKEN}` })).status, 403);
 });
 await check("a passkey is never registered twice, and an operator holds at most the limit", async () => {
   const twice = await SoftPasskey.create();

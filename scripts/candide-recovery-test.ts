@@ -41,7 +41,8 @@ const MODULE = "0x949d01d424bE050D09C16025dd007CB59b3A8c66"; // Candide's 3-minu
 const GUARDIAN = "0x00000000000000000000000000000000C0FFEE01";
 const OTP = "246810";
 const EMAIL = "recover.me@example.com";
-const OPERATOR = `op-${randomBytes(16).toString("hex")}`;
+/** Stands for the operator in `call`: the request goes through the kit. */
+const OPERATOR = "operator";
 const PHONE_RAW = "+49 151 1234567";
 const PHONE = "+491511234567";
 
@@ -233,10 +234,10 @@ const stub = createServer((req, res) => {
 
 let opKit: OperatorKit | undefined;
 async function call(pathname: string, body?: any, method?: string, bearer = token, extra: Record<string, string> = {}) {
-  // A change made with the operator token goes through an operator passkey
-  // session and a fresh approval; the token itself opens reads only.
-  if (bearer === OPERATOR && (method ?? (body ? "POST" : "GET")) !== "GET") {
-    if (!opKit) throw new Error(`an operator change (${pathname}) before the operator kit is enrolled`);
+  // The operator calls through a passkey session; a change gets a fresh
+  // approval.
+  if (bearer === OPERATOR) {
+    if (!opKit) throw new Error(`an operator call (${pathname}) before the operator kit is enrolled`);
     const r = await opKit.call(method ?? "POST", pathname, body ?? {});
     return { status: r.status, data: r.body, text: JSON.stringify(r.body) };
   }
@@ -305,7 +306,6 @@ try {
     RECOVERY_SWEEP_MS: "3600000",
     LOCAL_HARNESS: "1",
     KYC_AUTO_APPROVE: "1",
-    KYC_OPERATOR_TOKEN: OPERATOR,
   };
   let api = bg(process.execPath, [bin("tsx"), "services/api/src/server.ts"], apiEnv);
   const waitForApi = async () => {
@@ -780,7 +780,7 @@ try {
     const blocked = await call("/api/recovery/candide", { email: EMAIL }, undefined, "");
     assert.equal(blocked.status, 409, JSON.stringify(blocked.data));
     assert.equal(blocked.data.code, "RECOVERY_IN_PROGRESS");
-    // Only the operator token sees or rejects Candide requests; a user session is not enough.
+    // Only an operator session sees or rejects Candide requests; a user session is not enough.
     assert.equal((await call("/api/admin/recoveries/candide", undefined, "GET")).status, 401);
     const list = await call("/api/admin/recoveries/candide", undefined, "GET", OPERATOR);
     assert.equal(list.status, 200, JSON.stringify(list.data));

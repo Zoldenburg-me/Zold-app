@@ -108,7 +108,7 @@ Order in `server.ts`:
    `/recovery*`, `/r/`, `/v/`, `/pay/<h>/<code>`, `/shopify/`, `/admin*`,
    `/invoice-links/`, `POST …/monerium/api-keys` and `POST /users`. **general**
    (300/min) covers everything else. `/admin*` with a live operator passkey
-   session, or the read-only operator token, has its own **operator** bucket
+   session has its own **operator** bucket
    per operator (`OPERATOR_RATE_LIMIT_PER_MIN`, 300/min): the dashboard's
    refresh loop alone sends about 16 a minute; a wrong bearer stays on auth. `/service/*` with a valid checkout-service credential has
    its own **service** bucket (`SERVICE_RATE_LIMIT_PER_MIN`, 120/min); a
@@ -146,8 +146,8 @@ With in-memory pending executions, an unknown state must not keep signing.
   `Cf-Access-Jwt-Assertion`), then an operator passkey session (`zop_`, 8 h,
   30 min idle) whose email equals the Access identity, then a fresh passkey
   approval for every non-GET, bound to its method, path and body. Operator
-  passkeys verify against `ADMIN_ORIGIN` only. `KYC_OPERATOR_TOKEN` opens
-  reads only. Neither is ever a user session.
+  passkeys verify against `ADMIN_ORIGIN` only. There is no shared operator
+  token, and an operator session is never a user session.
 
 ### 4.2 The three independent checks
 
