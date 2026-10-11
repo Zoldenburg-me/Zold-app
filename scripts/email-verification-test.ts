@@ -24,11 +24,13 @@ const inbox: string[] = [];
 let smtpDown = false;
 // Refuse the recipient the way real servers do, quoting the address back.
 let smtpRejectRcpt = false;
+// Hold the greeting this long, so concurrent requests overlap in the send.
+let smtpDelayMs = 0;
 const smtp = net.createServer((sock) => {
   if (smtpDown) return sock.end("421 down\r\n");
   let data = false;
   let buf = "";
-  sock.write("220 fake ESMTP\r\n");
+  setTimeout(() => sock.write("220 fake ESMTP\r\n"), smtpDelayMs);
   sock.on("data", (chunk) => {
     buf += chunk.toString("utf8");
     let i: number;
@@ -214,6 +216,21 @@ await t("five sends an hour at most", async () => {
   }
   const r = await post("/users/bo/email/code", "bo");
   assert.equal(r.body.code, "EMAIL_CODE_LIMIT");
+});
+
+await t("six requests at once send one mail; the rest wait", async () => {
+  mk("cy", "cy@example.com");
+  const before = inbox.length;
+  smtpDelayMs = 500;
+  let rs;
+  try { rs = await Promise.all(Array.from({ length: 6 }, () => post("/users/cy/email/code", "cy"))); }
+  finally { smtpDelayMs = 0; }
+  assert.deepEqual(rs.map((r) => r.status).sort(), [200, 429, 429, 429, 429, 429], JSON.stringify(rs.map((r) => r.body)));
+  for (const r of rs.filter((r) => r.status === 429)) assert.equal(r.body.code, "EMAIL_CODE_WAIT");
+  assert.equal(inbox.length - before, 1, "one mail");
+  assert.equal(store.findUser("cy")!.emailCode!.sentAt.length, 1, "every mail sent is counted");
+  back("cy", 61_000);
+  assert.equal((await post("/users/cy/email/code", "cy")).status, 200, "the next minute's request goes through");
 });
 
 await t("signup: with verification on, only a confirmed email holds the address", () => {
