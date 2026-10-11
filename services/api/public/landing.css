@@ -1,12 +1,10 @@
 /*
  * The landing page. Loaded after tokens.css and site.css (which keep the
  * shared nav, footer, buttons, legal pages and 404), and only by landing.html.
- * Instrument Serif comes from vendor/fonts/text.css.
  *
- * The look: a silk-wave hero, word-by-word reveals, Instrument Serif italic
- * for "you own." in the hero only (a deliberate exception, design/ui-v2/
- * RULES.md section 3), hairline surfaces, grain, animated graphic panels and
- * the narwhal.
+ * The look: a plain hero, one typeface (Inter), hairline surfaces, grain,
+ * a few graphic panels and the narwhal. Headings are there when the section
+ * is; nothing fades in word by word.
  *
  * Restraint: pink once per screen (a button, or the one thing the section is
  * about), mono only for real data (an IBAN, a link), warm soft text.
@@ -16,29 +14,20 @@
  * appears only where it means money in. Labels on pink are dark (--z-bg), as
  * in site.css: white on pink fails AA at these sizes.
  *
- * Motion: the wave, the incoming-payments ticker and the typed link loop;
- * everything else plays once. The hero's Pause motion button stops all of it
+ * Motion: the typed link, the currency word and the narwhal loop; everything
+ * else plays once. The hero's Pause motion button stops all of it
  * (html.l-paused), and prefers-reduced-motion turns it off.
  */
 .l-page {
-  --l-serif: "Instrument Serif", Georgia, serif;
   --l-max: 1240px;
   --l-raised: #0e0d11;
   --l-line: color-mix(in srgb, var(--z-text) 10%, transparent);
   --l-line-faint: color-mix(in srgb, var(--z-text) 5%, transparent);
   --l-surface: color-mix(in srgb, var(--z-text) 2%, transparent);
-  --l-pink-deep: #b0106a;
-  --l-pink-dark: #7d1050;
   --l-pink-night: #1a0610;
-  --l-pink-mist: #ffd3ea;
   /* Restraint pass: slightly warm, softer text than the app's cool white. */
   --l-ink: #f1ebee;
   --l-body: #a39ba1;
-  /* wave.js reads these four as hex: keep them resolving to plain colours */
-  --l-art-b: var(--z-pink-soft);
-  --l-art-c: var(--z-surface);
-  --l-art-d: var(--l-pink-dark);
-  --l-art-ridge: #fbeef6;
   --l-ease: cubic-bezier(.4, 0, .2, 1);
   --l-spring: cubic-bezier(.34, 1.32, .64, 1);
   --l-glass-shadow: 0 8px 32px rgba(0,0,0,.12), 0 2px 16px rgba(0,0,0,.08), inset 0 1px 0 rgba(255,255,255,.3), inset 0 -1px 0 rgba(0,0,0,.05);
@@ -59,7 +48,6 @@
 .l-section { position: relative; padding: clamp(80px, 10vw, 120px) 0; }
 .l-center { text-align: center; }
 .l-h2 { margin: 0; font-size: clamp(32px, 4.4vw, 52px); line-height: 1.08; font-weight: 400; letter-spacing: -.035em; color: var(--z-heading); text-wrap: balance; }
-/* Italic serif emphasis: 1.1 line height so descenders (y, g, p, ?) are not clipped. */
 .l-lede { margin: 20px 0 0; max-width: 52ch; font-size: clamp(16px, 1.5vw, 19px); line-height: 1.45; color: var(--z-dim); }
 .l-center .l-lede { margin-left: auto; margin-right: auto; }
 .l-small { margin: 14px 0 0; font-size: 13px; color: var(--z-dim); }
@@ -77,40 +65,13 @@
   backdrop-filter: blur(24px) saturate(.7) brightness(1.4) contrast(1.1); -webkit-backdrop-filter: blur(24px) saturate(.7) brightness(1.4) contrast(1.1); }
 .l-btn--glass:hover { color: var(--z-heading); background: linear-gradient(135deg, rgba(255,255,255,.11), rgba(255,255,255,.07) 50%, rgba(0,0,0,.035)); }
 
-/* ---------- word reveal: blur 10px, transparent, 10px down -> rest, staggered ---------- */
-/* Quick on purpose: a light blur, and the stagger is capped so even the long
-   Get paid list is fully in within about 0.8 s. */
-[data-reveal] .w { display: inline-block; filter: blur(4px); opacity: 0; transform: translateY(6px);
-  transition: filter .5s var(--l-ease), opacity .5s var(--l-ease), transform .5s var(--l-ease); transition-delay: min(calc(var(--i) * 28ms), 300ms); }
-[data-reveal].in .w { filter: none; opacity: 1; transform: none; }
-/* Hidden until motion.js has split the words; shown after 3s if it never runs.
-   Without JS the <noscript> block in landing.html shows everything at once. */
-.l-js [data-reveal]:not([data-split]) { opacity: 0; animation: l-show 0s 3s forwards; }
-@keyframes l-show { to { opacity: 1; } }
-
 /* ---------- hero ---------- */
-.l-hero { position: relative; min-height: min(100svh, 880px); display: flex; align-items: center; padding: 96px 0 280px; overflow: clip; isolation: isolate; }
-.l-hero > .l-wrap { width: 100%; }
-/* However the wave moves, the pink button never sits on pink: on a phone the
-   wave is a band under the copy that fades out at its top; on a wide screen it
-   is tall and fades out on the left, where the copy is. */
-.l-wave { position: absolute; left: 0; right: 0; bottom: 0; width: 100%; height: 380px; z-index: -1; filter: blur(6px) saturate(.85); opacity: .5; transform: scale(1.06);
-  -webkit-mask-image: linear-gradient(transparent 25%, #000 60%); mask-image: linear-gradient(transparent 25%, #000 60%); }
-@media (min-width: 761px) {
-  .l-wave { height: 72%; -webkit-mask-image: linear-gradient(to right, transparent 34%, #000 68%); mask-image: linear-gradient(to right, transparent 34%, #000 68%); }
-}
-.l-hero::after { content: ""; position: absolute; inset: auto 0 0; height: 120px; background: linear-gradient(transparent, var(--z-bg)); z-index: -1; }
-.l-chip { position: relative; display: inline-flex; flex-wrap: wrap; align-items: center; gap: 10px; min-height: 40px; margin: 0 0 48px; padding: 5px 16px 5px 5px; border-radius: 40px; overflow: hidden;
-  background: linear-gradient(rgba(255,255,255,.08) -100%, rgba(255,255,255,.05) 100%); border: 1px solid var(--l-line-faint); font-size: 13.5px; }
-.l-chip::before { content: ""; position: absolute; inset: 0; opacity: .25; pointer-events: none;
-  background: conic-gradient(from 40deg, rgba(255,255,255,.15), rgba(255,255,255,0) 72deg, rgba(255,255,255,.06) 172deg, rgba(255,255,255,0) 270deg, rgba(255,255,255,.15)); }
-.l-chip b { position: relative; font: 500 13px/1 var(--z-font); color: var(--l-ink); padding: 8px 12px; border-radius: 26px; background: var(--l-line-faint); border: 1px solid color-mix(in srgb, var(--z-text) 12%, transparent); }
-.l-chip__test { position: relative; display: inline-flex; align-items: center; gap: 8px; color: var(--z-amber); }
-/* On a narrow screen the chip wraps to two lines: soften the pill, keep the dot inside. */
-@media (max-width: 480px) { .l-chip { border-radius: 22px; padding-right: 14px; } .l-chip__test { padding: 2px 0 4px 8px; } }
-.l-chip__test::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--z-amber); }
-.l-hero h1 { margin: 0; font-size: clamp(46px, 7.4vw, 96px); line-height: .92; font-weight: 400; letter-spacing: -.05em; color: var(--l-ink); }
-.l-hero h1 em { display: block; margin-top: .06em; font: italic 400 1.08em/1.12 var(--l-serif); letter-spacing: -.015em; color: var(--l-ink); }
+.l-hero { position: relative; padding: 144px 0 112px; }
+/* One plain line, not a badge: the test-mode half is removed by site.js on a real-money chain. */
+.l-status { margin: 0 0 28px; font-size: 14px; color: var(--l-body); }
+.l-status__test { color: var(--z-amber); }
+.l-status__test::before { content: " · "; color: var(--l-body); }
+.l-hero h1 { margin: 0; max-width: 13ch; font-size: clamp(44px, 6.6vw, 84px); line-height: 1; font-weight: 500; letter-spacing: -.045em; color: var(--l-ink); }
 .l-hero__sub { margin: 26px 0 0; max-width: 34ch; font-size: clamp(17px, 1.9vw, 21px); line-height: 1.45; color: var(--l-body); }
 .l-hero__cta { margin-top: 32px; }
 .l-hero__cta.l-actions { justify-content: flex-start; }
@@ -124,7 +85,7 @@
 
 /* Rotating currency word. Only euro is live; the others carry Soon while on
    screen, and reduced motion freezes on euro. */
-.s-cur, [data-reveal] .s-cur.w { display: inline-grid; color: inherit; }
+.s-cur { display: inline-grid; color: inherit; }
 .s-cur > span { grid-area: 1 / 1; position: relative; opacity: 0; animation: zcur 10s infinite; }
 .s-cur > span:nth-child(1) { animation-delay: -.4s; }
 .s-cur > span:nth-child(2) { animation-delay: 2.1s; }
@@ -162,15 +123,14 @@
 .l-tag--neutral { color: var(--z-text); background: var(--z-surface); border-color: var(--z-line-strong); }
 .l-tag--pink { color: var(--z-pink-soft); background: var(--l-pink-night); border-color: color-mix(in srgb, var(--z-pink) 40%, var(--l-pink-night)); }
 
-/* ticker: incoming payments scroll up; rows are rendered twice so -50% loops */
-.l-panel--ticker { background: transparent; border: 0; -webkit-mask-image: linear-gradient(transparent, #fff 18%, #fff 82%, transparent); mask-image: linear-gradient(transparent, #fff 18%, #fff 82%, transparent); }
-.l-ticker { list-style: none; margin: 0; padding: 0 14px; animation: l-tick 26s linear infinite; }
-.l-panel--ticker:hover .l-ticker { animation-play-state: paused; }
-@keyframes l-tick { to { transform: translateY(-50%); } }
-.l-row { display: flex; align-items: center; gap: 14px; height: 54px; padding: 5px; border-radius: 60px; background: var(--l-surface); margin-bottom: 10px; }
-.l-row__ico { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; flex: none; background: var(--z-mint-tint); color: var(--z-mint); }
+/* incoming payments: a still statement, read like the account screen */
+.l-panel--rows { background: transparent; border: 0; }
+.l-rows { list-style: none; margin: 0; padding: 0 4px; }
+.l-row { display: flex; align-items: center; gap: 14px; height: 60px; border-bottom: 1px solid var(--l-line-faint); }
+.l-row:last-child { border-bottom: 0; }
+.l-row__ico { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; flex: none; background: var(--z-mint-tint); color: var(--z-mint); }
 .l-row__ico--out { background: color-mix(in srgb, var(--z-text) 4%, transparent); color: var(--z-dim); }
-.l-row__ico i { font-size: 18px; }
+.l-row__ico i { font-size: 16px; }
 .l-row__nm { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .l-row__nm b { font-size: 14.5px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .l-row__nm small { font-size: 12px; color: var(--z-dim); }
@@ -336,7 +296,6 @@
 
 @media (prefers-reduced-motion: reduce) {
   .l-page *, .l-page *::before, .l-page *::after { animation: none !important; transition: none !important; }
-  [data-reveal] .w, .l-js [data-reveal]:not([data-split]) { filter: none; opacity: 1; transform: none; }
   .l-lat__bars div, .l-who > div { transform: none !important; opacity: 1 !important; }
   .s-cur > span { opacity: 0; }
   .s-cur > span:first-child { opacity: 1; }
