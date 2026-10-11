@@ -23,6 +23,7 @@ const scripts = [
   "authorize:test",
   "country:policy:test",
   "recovery:test",
+  "recovery:remove:test",
   "recovery:candide:test",
   "turnkey:test",
   "turnkey-page:test",

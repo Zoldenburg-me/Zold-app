@@ -57,6 +57,7 @@ import {
   submitPasskeySafeOperationWithReceipt,
   webauthnOwnerFromJwk,
   type PasskeySafeDeploymentPlan,
+  type RecoveryModuleState,
 } from "../wallet/candide.js";
 import { b64urlToBuf, bufToB64url, issueChallenge, verifyRegistration } from "../webauthn.js";
 import { ADDRESS_RE } from "../domain/contacts.js";
@@ -65,6 +66,8 @@ import { enrolmentView, zoldenburgArmed } from "../recovery/zoldenburg-enrolment
 
 export interface ZoldenburgRecoveryDeps {
   requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
+  /** The module's guardians and pending recovery, read from the chain. Tests stage a pending one. */
+  readState?: (plan: PasskeySafeDeploymentPlan) => Promise<RecoveryModuleState>;
 }
 
 const CEREMONY_TTL_MS = 5 * 60_000;
@@ -117,6 +120,16 @@ function activePlan(user: User): PasskeySafeDeploymentPlan {
   }
   if (!user.passkey?.publicKey) throw new ZoldenburgRecoveryError("a verified passkey is required first", 409, "NO_PASSKEY");
   return plan as PasskeySafeDeploymentPlan;
+}
+
+/**
+ * May Zoldenburg be removed now? Checked when the op is prepared AND again
+ * right before it is submitted. Revoking a guardian does not end a recovery
+ * the module already holds (verified against the deployed module in
+ * scripts/recovery-module-fork-test.ts), so a pending one is cancelled first.
+ */
+function assertCanRemove(state: RecoveryModuleState): void {
+  if (state.pending) throw new ZoldenburgRecoveryError("a recovery is pending on this account — cancel it first", 409, "RECOVERY_PENDING");
 }
 
 const moduleFor = (user: User) =>
@@ -266,6 +279,7 @@ export async function sweepZoldenburgRecoveries(now = new Date()): Promise<numbe
 
 export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
   const router = express.Router();
+  const readState = deps.readState ?? readRecoveryState;
   const wrap =
     (fn: (req: express.Request, res: express.Response) => Promise<unknown>) =>
     (req: express.Request, res: express.Response, next: express.NextFunction) =>
@@ -345,10 +359,8 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       const plan = activePlan(user);
       const r = user.passkeySafe?.recovery;
       if (!r || r.status !== "active") return res.status(409).json({ error: "Zoldenburg is not a guardian on this account", code: "NOT_GUARDIAN" });
-      const state = await readRecoveryState(plan);
-      if (state.pending) {
-        return res.status(409).json({ error: "a recovery is pending on this account — cancel it first", code: "RECOVERY_PENDING" });
-      }
+      const state = await readState(plan);
+      assertCanRemove(state);
       const tx = await zoldenburgGuardianRemoveTransaction(plan.address, r.moduleAddress, r.guardianAddress, state.guardians);
       const prepared = await prepareSafeSetupOperation(plan, [tx]);
       prune();
@@ -375,7 +387,11 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       let plan;
       try {
         plan = activePlan(user);
+        // A recovery can start between preparing the removal and the passkey
+        // approving it; check again before it is submitted.
+        if (pending.kind === "remove") assertCanRemove(await readState(plan));
       } catch (err) {
+        pendingOps.delete(req.params.requestId);
         return fail(res, err);
       }
       if (!(await checkOpAssertion(user, req.body, pending.challenge, res))) return;

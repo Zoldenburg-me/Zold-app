@@ -56,6 +56,7 @@
     "final-state:test": "tsx scripts/final-state-test.ts",
     "authorize:test": "tsx scripts/authorize-claim-test.ts",
     "recovery:test": "tsx scripts/zoldenburg-recovery-test.ts",
+    "recovery:remove:test": "tsx scripts/zoldenburg-remove-test.ts",
     "recovery:candide:test": "tsx scripts/candide-recovery-test.ts",
     "turnkey:test": "tsx scripts/turnkey-guardian-test.ts",
     "turnkey-page:test": "tsx scripts/turnkey-guardian-page-test.ts",
