@@ -42,7 +42,8 @@ or `{ html, bind(box) }`.
 ## Other pages
 index/landing (website) · imprint.html · pay.html, pay-request.html (payment page) ·
 invoice.html (supplier link) · document.html (/v verify) · receipt.html (/r) ·
-admin.html · faucet.html · legal, privacy, partner-terms · 404
+admin.html · faucet.html · legal, privacy, partner-terms · 404 ·
+guardian.html + guardian/*.js (ES modules, own CSP, loads vendor/turnkey.js; says "Not available" until `TURNKEY_GUARDIANS=1`)
 
 ## Shopify
 shopify-app/extensions/zold-pay — thank-you page block pointing at /api/shopify/orders.

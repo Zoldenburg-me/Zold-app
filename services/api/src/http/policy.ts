@@ -102,6 +102,13 @@ export const ADMIN_CONTENT_SECURITY_POLICY = CONTENT_SECURITY_POLICY.replace("sc
  * the production host is confirmed to serve HTTPS (docs/security-hardening.md,
  * Phase 0).
  */
+/**
+ * /guardian: the app's policy without inline script. The page drives a
+ * guardian login and a passkey approval, so only its own module files may
+ * run there; /app keeps 'unsafe-inline' for its classic scripts.
+ */
+export const GUARDIAN_PAGE_CSP = CONTENT_SECURITY_POLICY.replace("script-src 'self' 'unsafe-inline'", "script-src 'self'");
+
 export const STRICT_TRANSPORT_SECURITY = "max-age=300; includeSubDomains";
 
 export function securityHeadersFor(production: boolean): express.RequestHandler {
@@ -220,7 +227,9 @@ function isAuthRoute(req: express.Request): boolean {
     (path.endsWith("/monerium/api-keys") && req.method === "POST") ||
     (path === "/users" && req.method === "POST") ||
     // A 6-digit code is a guessable credential; sending one spends mail.
-    /^\/users\/[^/]+\/email\/(code|verify)$/.test(path)
+    /^\/users\/[^/]+\/email\/(code|verify)$/.test(path) ||
+    // The 1 € enrolment code is a credential, and a check spends a Monerium call.
+    /^\/users\/[^/]+\/recovery\/zoldenburg\/enrolment(\/|$)/.test(path)
   );
 }
 

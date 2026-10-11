@@ -53,7 +53,7 @@ function zoldWarnHtml() {
 async function renderRecoveryScreen() {
   const el = $("m-rc-body");
   const row = (k, v) => `<div class="m-row"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`;
-  if (!caps.emailSmsRecovery && !caps.zoldenburgRecovery) {
+  if (!caps.emailSmsRecovery && !caps.zoldenburgRecovery && !caps.turnkeyGuardians) {
     el.innerHTML = `<div class="m-rows">${row("Status", "Unavailable")}</div>
       <div class="m-lede" style="font-size:13px;margin-top:16px">This deployment has no recovery guardian configured, so nothing here can be promised. Nothing is set up on your account.</div>
       <div style="margin-top:16px">${zoldWarnHtml()}</div>`;
@@ -70,9 +70,19 @@ async function renderRecoveryScreen() {
       <div style="margin-top:16px">${zoldWarnHtml()}</div>`;
     return;
   }
-  el.innerHTML = `<div id="m-rz"></div><div id="m-rc-candide"></div><div class="m-err hidden" role="alert" id="m-rc-err" style="margin-top:12px"></div>`;
+  el.innerHTML = `<div id="m-rz"></div><div id="m-rc-candide"></div><div id="m-rc-turnkey"></div><div class="m-err hidden" role="alert" id="m-rc-err" style="margin-top:12px"></div>`;
   if (caps.zoldenburgRecovery) await renderZoldenburgSection($("m-rz"));
+  if (caps.turnkeyGuardians) renderTurnkeySection($("m-rc-turnkey"));
   if (caps.emailSmsRecovery) await renderCandideSection($("m-rc-candide"));
+}
+
+/** Google or Apple login as a guardian: set up on its own page (/guardian),
+ *  which says plainly that recovering with it is not built yet. */
+function renderTurnkeySection(el) {
+  el.innerHTML = `
+    <div class="m-seclabel" style="margin-top:24px">Your Google or Apple login <span class="m-tag soon">Not yet run</span></div>
+    <div class="m-lede" style="font-size:13px">Make your own Google or Apple login a guardian of this account. Built, not yet run on a live deployment. Recovering with it is not built yet, so it cannot recover this account until then.</div>
+    <a class="m-cta" href="/guardian" style="margin-top:12px;display:inline-flex">Set up on the guardian page</a>`;
 }
 
 let zoldScreen = null; // last GET /recovery/zoldenburg
@@ -86,7 +96,9 @@ async function renderZoldenburgSection(el) {
   const grace = graceText(z.gracePeriodSeconds);
   const pending = z.onChain?.pendingRecovery;
   const asked = (z.requests || []).filter((r) => r.status === "PASSKEY_PENDING" || r.status === "REVIEW_PENDING");
-  const status = z.active ? "Active" : z.choice?.choice === "declined" ? `Not set up — declined ${new Date(z.choice.at).toLocaleDateString()}` : "Not set up";
+  // "Active" only when Zoldenburg may sign for this account; on a server
+  // where the bank check is not open, it may sign for nobody.
+  const status = z.active ? (z.enrolment?.armed ? "Active" : z.enrolment?.available ? "Added — confirm your bank account" : "Added — not usable on this server yet") : z.choice?.choice === "declined" ? `Not set up — declined ${new Date(z.choice.at).toLocaleDateString()}` : "Not set up";
   el.innerHTML = `
     ${pending ? `<div class="rec-warn" role="alert">
         <div class="rec-warn-title"><span aria-hidden="true">⚠</span> A recovery of this account is under way</div>
@@ -98,13 +110,14 @@ async function renderZoldenburgSection(el) {
         <p>Reference <b translate="no">${esc(r.zoldenburg?.reference || "")}</b>, ${esc(new Date(r.requestedAt).toLocaleString())}. Nothing has been signed yet. If this was not you, cancel it.</p>
       </div>
       <button class="m-cta" data-rz-cancel="${esc(r.id)}" style="margin-top:12px">It wasn't me — cancel this request</button>`).join("")}
-    <div class="m-seclabel" style="margin-top:${pending || asked.length ? 24 : 0}px">Zoldenburg recovery</div>
+    <div class="m-seclabel" id="m-rz-head" style="margin-top:${pending || asked.length ? 24 : 0}px">Zoldenburg recovery</div>
     <div class="m-rows">
       ${row("Status", status)}
       ${row("Waiting period", grace)}
       ${z.active && z.guardianAddress ? row("Guardian", `Zoldenburg · ${z.guardianAddress.slice(0, 10)}…`) : ""}
     </div>
     ${z.active ? `
+      ${zoldEnrolHtml(z.enrolment)}
       <div class="m-lede" style="font-size:13px;margin-top:12px">If you lose your passkey, choose "Recover your account" on the sign-in page, create a new passkey there and contact Zoldenburg support with the reference it shows. We check you against the identity Monerium verified before signing. The recovery then waits ${esc(grace)}, and this passkey can cancel it until then.</div>
       <button class="m-link" id="m-rz-remove" style="margin-top:12px">Remove Zoldenburg as guardian</button>`
     : `
@@ -120,6 +133,7 @@ async function renderZoldenburgSection(el) {
   };
   const cancel = $("m-rc-cancel");
   if (cancel) cancel.onclick = recoveryCancelOnChain;
+  zoldEnrolBind();
   el.querySelectorAll("[data-rz-cancel]").forEach((b) => {
     b.onclick = async () => {
       clearErr("m-rc-err");
@@ -130,17 +144,113 @@ async function renderZoldenburgSection(el) {
   });
 }
 
+/* ---------- Finishing Zoldenburg recovery: 1 € from the user's bank ----------
+   Until a payment with the code arrives from an account in the user's name,
+   Zoldenburg may not sign a recovery for them (the guardian is on chain but
+   not armed). The code is shown once, when issued, and kept only in this
+   variable: the API stores its hash. */
+let zoldEnrolIssued = null; // { userId, code, memo, payTo, codeIssuedAt } from the last POST
+
+function zoldEnrolHtml(e) {
+  if (!e) return "";
+  const row = (k, v) => `<div class="m-row"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`;
+  const date = (iso) => new Date(iso).toLocaleDateString();
+  if (!e.available) {
+    return `<div class="m-lede" style="font-size:13px;margin-top:12px">Zoldenburg cannot sign a recovery for this account yet: the last step, 1 € from your own bank, is not open on this server.</div>`;
+  }
+  const check = e.lastCheck ? `<div class="m-lede" style="font-size:13px;margin-top:8px" role="status">${esc(e.lastCheck.reason)}</div>` : "";
+  // Only the code this account holds open now: a code issued since on
+  // another device, or one for another sign-in in this tab, is dead.
+  const issued = zoldEnrolIssued && zoldEnrolIssued.userId === user.id && zoldEnrolIssued.codeIssuedAt === e.codeIssuedAt ? zoldEnrolIssued : null;
+  const waiting = e.codeIssuedAt ? `
+    ${issued ? `<div class="m-rows" style="margin-top:12px">
+        ${row("To", issued.payTo.iban || "")}
+        ${row("Name", issued.payTo.name || "")}
+        ${row("Amount", `at least ${e.minimumEur} €`)}
+        <div class="m-row"><span class="k">Reference</span><span class="v" translate="no"><b>${esc(issued.memo)}</b></span></div>
+      </div>
+      <button class="m-link" id="m-rz-en-copy" style="margin-top:8px">Copy reference</button>`
+    : `<div class="m-lede" style="font-size:13px;margin-top:8px">Code issued ${esc(date(e.codeIssuedAt))}, valid until ${esc(date(e.codeExpiresAt))}. If you have sent it, we pick it up on our own. Lost the code? Get a new one.</div>`}
+    ${check}
+    <button class="m-cta" id="m-rz-en-check" style="margin-top:12px">I sent it — check now</button>
+    <button class="m-link" id="m-rz-en-new" style="margin-top:8px">Get a new code</button>` : "";
+  if (e.armed) {
+    return `<div class="m-rows" style="margin-top:12px">${row("Your bank account", `ending ${e.bankAccountLast4} · ${date(e.enrolledAt)}`)}</div>
+      <div class="m-lede" style="font-size:13px;margin-top:8px">A recovery needs 1 € again from this same account.</div>
+      ${waiting || `<button class="m-link" id="m-rz-en-new" style="margin-top:8px">Changed banks? Use another account</button>`}`;
+  }
+  // The 1 € goes to the user's own IBAN: no IBAN yet, nothing to send to.
+  const ibanReady = kycApproved(user) && user?.iban;
+  return `<div class="rec-warn" style="margin-top:16px">
+      <div class="rec-warn-title"><span aria-hidden="true">⚠</span> One step left: confirm your bank account</div>
+      <p>Move ${esc(e.minimumEur)} € from your own bank account to your Zold IBAN, with a code we give you as the reference. It is your money: it lands in your Zold balance, and nothing is charged.</p>
+      <p>This tells us which bank account is yours. Until then Zoldenburg cannot sign a recovery for you, and if you ever need one, you confirm it with 1 € from the same account. We keep a fingerprint of that account and its last 4 characters, not the IBAN.</p>
+    </div>
+    ${!ibanReady
+      ? `<div class="m-lede" style="font-size:13px;margin-top:12px">Your Zold IBAN comes first: once Monerium has verified you and issued it, this step opens here.</div>`
+      : waiting || `<button class="m-cta" id="m-rz-en-new" style="margin-top:12px">Show my transfer details</button>`}`;
+}
+
+function zoldEnrolBind() {
+  const fresh = $("m-rz-en-new");
+  if (fresh) fresh.onclick = async () => {
+    clearErr("m-rc-err");
+    fresh.disabled = true;
+    try {
+      const stepUp = await passkeyStepUp("recovery.enrolment");
+      zoldEnrolIssued = { ...(await api(`/api/users/${user.id}/recovery/zoldenburg/enrolment`, { stepUp })), userId: user.id };
+      mobileNav("recovery");
+    } catch (e) { showErr("m-rc-err", e); fresh.disabled = false; }
+  };
+  const copy = $("m-rz-en-copy");
+  if (copy) copy.onclick = async () => {
+    try { await navigator.clipboard.writeText(zoldEnrolIssued.memo); copy.textContent = "Copied"; }
+    catch { copy.textContent = "Copy failed: select it above"; }
+  };
+  const check = $("m-rz-en-check");
+  if (check) check.onclick = async () => {
+    clearErr("m-rc-err");
+    check.disabled = true;
+    try {
+      const v = await api(`/api/users/${user.id}/recovery/zoldenburg/enrolment/check`, {});
+      if (v.armed && !v.codeIssuedAt) {
+        zoldEnrolIssued = null;
+        renderUser(await api(`/api/users/${user.id}`));
+      }
+      mobileNav("recovery");
+    } catch (e) { showErr("m-rc-err", e); check.disabled = false; }
+  };
+}
+
 /* One passkey-signed guardian change: prepare, sign, submit, re-render. */
 async function zoldenburgRun(path, body, btn) {
+  // aria-disabled, not disabled: a disabled button drops focus to the page,
+  // and the progress text below is then never read out.
+  if (btn.getAttribute("aria-disabled") === "true") return;
   clearErr("m-rc-err");
-  btn.disabled = true;
+  btn.setAttribute("aria-disabled", "true");
+  const label = btn.textContent;
   try {
     const prep = await api(path, body);
-    if (prep.challenge) await api(prep.submitTo, await passkeySignPrepared(prep));
+    if (prep.challenge) {
+      const signed = await passkeySignPrepared(prep);
+      // The passkey is done; the chain is not. Say so, or the button looks
+      // dead for the half minute the operation takes and invites a second try.
+      btn.textContent = path.endsWith("/remove") ? "Removing Zoldenburg from your wallet… up to a minute" : "Adding Zoldenburg to your wallet… up to a minute";
+      Z.announce(btn.textContent);
+      await api(prep.submitTo, signed);
+    }
     renderUser(await api(`/api/users/${user.id}`));
-    mobileNav("recovery");
+    // This screen, redrawn and awaited: the button is gone with it, so focus
+    // goes to the section rather than back to the top of the page.
+    await renderRecoveryScreen();
+    const head = $("m-rz-head");
+    if (head) { head.setAttribute("tabindex", "-1"); head.focus({ preventScroll: true }); }
   } catch (e) { showErr("m-rc-err", e); }
-  finally { btn.disabled = false; }
+  finally {
+    btn.removeAttribute("aria-disabled");
+    btn.textContent = label;
+  }
 }
 
 async function renderCandideSection(el) {

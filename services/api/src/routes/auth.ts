@@ -70,6 +70,7 @@ export const STEP_UP_ACTIONS = [
   "org.payment-review.off",
   "org.invoice-iban.change",
   "safe.import",
+  "recovery.enrolment",
 ] as const;
 export type StepUpAction = (typeof STEP_UP_ACTIONS)[number];
 const isStepUpAction = (v: unknown): v is StepUpAction => STEP_UP_ACTIONS.includes(v as StepUpAction);

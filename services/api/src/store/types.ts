@@ -46,7 +46,23 @@ export interface User {
    *  empty while the transfer is in flight (the synchronous claim that stops a
    *  second call from paying twice). */
   faucet?: { grantedEur: number; txHash: string; at: string };
-    /**
+  /**
+   * The 1 € check that arms Zoldenburg as guardian
+   * (recovery/zoldenburg-enrolment.ts). `code` is open until a matching
+   * payment arrives; only its hash is kept. The enrolled account is kept as
+   * an HMAC (`keyId` names the key) and its last 4 characters, never the
+   * IBAN or the payer's name. Never in a public projection.
+   */
+  zoldenburgEnrolment?: {
+    code?: { hash: string; issuedAt: string; expiresAt: string };
+    bankAccountHmac?: string;
+    keyId?: string;
+    bankAccountLast4?: string;
+    orderId?: string;
+    enrolledAt?: string;
+    lastCheck?: { at: string; outcome: "waiting" | "mismatch" | "unreadable"; reason: string };
+  };
+  /**
    * Passkey Safe state. The passkey is the only owner (threshold 1).
    */
   passkeySafe?: {
@@ -94,6 +110,21 @@ export interface User {
       guardianOpHash?: string;
       activatedAt?: string;
     };
+    /**
+     * Turnkey guardians (routes/recovery-turnkey.ts): an account in a Turnkey
+     * sub-org whose only root user is the person. `created` means the Turnkey
+     * wallet exists and nothing more; `active` only once the module's
+     * guardian list on chain includes `address`. No ID token, no email.
+     */
+    socialGuardians?: {
+      kind: "self-social";
+      address: `0x${string}`;
+      turnkeySubOrgId: string;
+      status: "created" | "active";
+      createdAt: string;
+      /** When the module was seen listing `address`. */
+      activeAt?: string;
+    }[];
     createdAt: string;
     previousAddress?: `0x${string}`;
     /** Set once a recovery replaced the owner: the Safe keeps its address but
