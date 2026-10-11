@@ -328,7 +328,7 @@
     const skip = e.target.closest(".z-skip");
     if (skip) {
       e.preventDefault();
-      const target = document.getElementById(skip.getAttribute("href").slice(1));
+      const target = document.getElementById((skip.getAttribute("href") || "#main").slice(1));
       if (target) {
         if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
         target.focus();

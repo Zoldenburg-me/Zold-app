@@ -66,11 +66,11 @@ function phChecklist(u) {
   const zoldUnarmed = safe.recovery?.status === "active" && caps.zoldenburgEnrolment && !u.zoldenburgArmed && approved && u.iban;
   if (zoldUnarmed && !open && !phBannerHidden(phEnrolBannerKey(u))) {
     return `<div class="z-banner" role="note">${Z.icon("shield")}<span>One step left for recovery: confirm your bank account by moving 1 € to yourself. Nothing is charged. <a href="#recovery-settings">Confirm</a></span>
-      <button type="button" class="z-iconbtn z-iconbtn--bare" id="ph-rec-x" data-hide-key="${esc(phEnrolBannerKey(u))}" aria-label="Hide this">${Z.icon("close")}</button></div>`;
+      <button type="button" class="z-iconbtn z-iconbtn--bare" id="ph-rec-x" data-hide-key="${esc(phEnrolBannerKey(u))}" aria-label="Hide this reminder">${Z.icon("close")}</button></div>`;
   }
   if (!recoveryOn && (recoveryOffered || declined) && !open && !phRecoveryBannerHidden(u)) {
     return `<div class="z-banner" role="note">${Z.icon("shield")}<span>Recovery isn’t set up. If you lose this phone, no one can get you back in. <a href="#recovery-settings">Set up</a></span>
-      <button type="button" class="z-iconbtn z-iconbtn--bare" id="ph-rec-x" aria-label="Hide this">${Z.icon("close")}</button></div>`;
+      <button type="button" class="z-iconbtn z-iconbtn--bare" id="ph-rec-x" aria-label="Hide this reminder">${Z.icon("close")}</button></div>`;
   }
   return phChecklistCard("Finish setting up", items);
 }

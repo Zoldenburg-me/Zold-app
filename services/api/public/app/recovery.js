@@ -110,7 +110,7 @@ async function renderZoldenburgSection(el) {
         <p>Reference <b translate="no">${esc(r.zoldenburg?.reference || "")}</b>, ${esc(new Date(r.requestedAt).toLocaleString())}. Nothing has been signed yet. If this was not you, cancel it.</p>
       </div>
       <button class="m-cta" data-rz-cancel="${esc(r.id)}" style="margin-top:12px">It wasn't me — cancel this request</button>`).join("")}
-    <div class="m-seclabel" style="margin-top:${pending || asked.length ? 24 : 0}px">Zoldenburg recovery</div>
+    <div class="m-seclabel" id="m-rz-head" style="margin-top:${pending || asked.length ? 24 : 0}px">Zoldenburg recovery</div>
     <div class="m-rows">
       ${row("Status", status)}
       ${row("Waiting period", grace)}
@@ -224,8 +224,11 @@ function zoldEnrolBind() {
 
 /* One passkey-signed guardian change: prepare, sign, submit, re-render. */
 async function zoldenburgRun(path, body, btn) {
+  // aria-disabled, not disabled: a disabled button drops focus to the page,
+  // and the progress text below is then never read out.
+  if (btn.getAttribute("aria-disabled") === "true") return;
   clearErr("m-rc-err");
-  btn.disabled = true;
+  btn.setAttribute("aria-disabled", "true");
   const label = btn.textContent;
   try {
     const prep = await api(path, body);
@@ -234,17 +237,19 @@ async function zoldenburgRun(path, body, btn) {
       // The passkey is done; the chain is not. Say so, or the button looks
       // dead for the half minute the operation takes and invites a second try.
       btn.textContent = path.endsWith("/remove") ? "Removing Zoldenburg from your wallet… up to a minute" : "Adding Zoldenburg to your wallet… up to a minute";
-      btn.setAttribute("aria-busy", "true");
-      Z.announce?.(btn.textContent);
+      Z.announce(btn.textContent);
       await api(prep.submitTo, signed);
     }
     renderUser(await api(`/api/users/${user.id}`));
-    mobileNav("recovery");
+    // This screen, redrawn and awaited: the button is gone with it, so focus
+    // goes to the section rather than back to the top of the page.
+    await renderRecoveryScreen();
+    const head = $("m-rz-head");
+    if (head) { head.setAttribute("tabindex", "-1"); head.focus({ preventScroll: true }); }
   } catch (e) { showErr("m-rc-err", e); }
   finally {
-    btn.disabled = false;
+    btn.removeAttribute("aria-disabled");
     btn.textContent = label;
-    btn.removeAttribute("aria-busy");
   }
 }
 

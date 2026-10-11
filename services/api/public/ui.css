@@ -9,9 +9,10 @@
 .z-ic { font-family: 'Material Symbols Rounded'; font-weight: normal; font-style: normal; font-size: 20px; line-height: 1; letter-spacing: normal; text-transform: none; display: inline-block; white-space: nowrap; font-feature-settings: 'liga'; -webkit-font-smoothing: antialiased; flex: none; }
 
 .z-skip { position: absolute; left: var(--z-space-4); top: -60px; z-index: 300; padding: 10px 14px; border-radius: var(--z-radius-sm); background: var(--z-pink); color: var(--z-bg); font-weight: 600; font-size: 14px; }
-/* Keyboard focus only: focus handed back after a dialog or a re-render must
-   not leave a pink button over the page. */
-.z-skip:focus-visible { top: var(--z-space-3); color: var(--z-bg); }
+/* Shown whenever it has focus, keyboard or not (switch and voice users
+   focus it other ways). A click hands focus to the content and blurs it
+   (ui.js), so it does not stay over the page. */
+.z-skip:focus, .z-skip:focus-visible { top: var(--z-space-3); color: var(--z-bg); }
 /* Where the skip link lands: focus moves there, no ring around the page. */
 main#main:focus:not(:focus-visible) { outline: none; }
 
