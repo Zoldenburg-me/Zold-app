@@ -22,6 +22,8 @@ import { createAuthRouter } from "./routes/auth.js";
 import { createTransferRouter } from "./routes/transfers.js";
 import { createMoneriumWebhookRouter } from "./routes/monerium-webhook.js";
 import { createCheckoutServiceRouter } from "./routes/service-checkout.js";
+import { createServiceMerchantRouter } from "./routes/service-merchant.js";
+import { createMerchantLinkRouter } from "./routes/merchant-links.js";
 import { startCheckoutWebhook } from "./checkout-webhook.js";
 import { createMoneriumRouter } from "./routes/monerium.js";
 import { createAdminRouter } from "./routes/admin.js";
@@ -208,6 +210,9 @@ app.use("/api", createDocumentsRouter({ requireUserSession }));
 app.use("/api", createPaymentRequestRouter(requireUserSession));
 app.use("/api", createShopifyRouter(requireSession));
 onPaymentRequestPaid(resolveShopifyRequest);
+// Merchant links: an org's consent that the checkout service opens requests
+// for one Shopify store; the checkout holds everything Shopify-facing.
+app.use("/api", createMerchantLinkRouter(requireSession));
 
 
 
@@ -255,6 +260,9 @@ app.use("/api", createMoneriumWebhookRouter());
 // The pay-with-zold checkout service: reads its own SEPA transfers with a
 // credential the operator rotates. Its own auth, never a user session.
 app.use("/api", createCheckoutServiceRouter());
+// The same service, for merchant links: exchange a link code, open and read
+// the requests of its linked stores.
+app.use("/api", createServiceMerchantRouter());
 // Last: nothing above claimed the path.
 app.use(notFound());
 

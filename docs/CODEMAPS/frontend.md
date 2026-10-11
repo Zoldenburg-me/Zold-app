@@ -23,7 +23,7 @@ Screens: onboarding into #ob-root; phone screens into #ph-root; desktop fills PH
 main.js → screens.js (Approvals, Contacts, Members, Invoices, Books)
         → invoice.js (editor + paper) → shell.js boot
 home.js   Home (needs-you, in/out, accounts, latest statement lines)
-send.js · getpaid.js · apps.js (Shopify) · books-overview.js (in/out, by category)
+send.js · getpaid.js · apps.js (Shopify: merchant links when available, else in-core) · books-overview.js (in/out, by category)
 settings.js  grouped menu; access.js + access-model.js = Settings → Access
           (signers and recovery of the company login's Safe, read from chain)
 core.js   shared state (org, me, view, cap(), api())

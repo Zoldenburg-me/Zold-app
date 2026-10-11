@@ -33,6 +33,10 @@
  *  - Sale only. `kind: authorization` (manual capture) is refused with a
  *    merchant-readable reason; a chain transfer from the buyer's own wallet
  *    cannot be held and captured.
+ *  - A shop linked through the checkout service (merchant-links.ts) is the
+ *    checkout's: its requests carry `source.linkId`, this file neither marks
+ *    them paid nor lists them, and a shop is either linked or connected
+ *    here, never both.
  *  - Refunds are manual. A refund session is acknowledged and then rejected
  *    with a merchant message; the merchant pays the buyer back from Zold (the
  *    buyer's address is on the deposit record). Don't auto-refund to the
@@ -123,7 +127,7 @@ function pruneDeliveries(now: number) {
  *  delivery of the same order or session waits for the first one's request
  *  instead of opening a second. */
 const opening = new Map<string, Promise<PaymentRequest>>();
-function openOnce(key: string, open: () => Promise<PaymentRequest>): Promise<PaymentRequest> {
+export function openOnce(key: string, open: () => Promise<PaymentRequest>): Promise<PaymentRequest> {
   const running = opening.get(key);
   if (running) return running;
   const p = open().finally(() => opening.delete(key));
@@ -137,8 +141,9 @@ type PendingInstall = { orgId: string; shop: string; payeeUserId: string; instal
 const pendingInstalls = new Map<string, PendingInstall>();
 
 const CONNECTED_ELSEWHERE = "this store is connected to a different organisation";
+const LINKED_THROUGH_CHECKOUT = "this store is linked through the Zold checkout — disconnect it there first";
 
-type InstallRefusal = { code: "SHOP_CONNECTED_ELSEWHERE" | "INSTALLER_NOT_ALLOWED"; error: string };
+type InstallRefusal = { code: "SHOP_CONNECTED_ELSEWHERE" | "SHOP_LINKED_THROUGH_CHECKOUT" | "INSTALLER_NOT_ALLOWED"; error: string };
 
 /** The reason this install may not write the shop's connection, or
  *  undefined when it may. A connection belongs to one org; only that org's
@@ -147,6 +152,7 @@ type InstallRefusal = { code: "SHOP_CONNECTED_ELSEWHERE" | "INSTALLER_NOT_ALLOWE
 function installRefusal(p: PendingInstall): InstallRefusal | undefined {
   const existing = store.findShopifyConnectionByShop(p.shop);
   if (existing && existing.orgId !== p.orgId) return { code: "SHOP_CONNECTED_ELSEWHERE", error: CONNECTED_ELSEWHERE };
+  if (store.activeMerchantLinkForShop(p.shop)) return { code: "SHOP_LINKED_THROUGH_CHECKOUT", error: LINKED_THROUGH_CHECKOUT };
   const member = store.findOrganisation(p.orgId) ? store.memberFor(p.orgId, p.installerId) : undefined;
   if (!member || member.status !== "active" || !roleCan(member.role, "org.update")) {
     return { code: "INSTALLER_NOT_ALLOWED", error: "whoever started this install can no longer connect stores for the organisation — start again from the dashboard" };
@@ -228,8 +234,9 @@ export function publicConnection(c: ShopifyConnection) {
 }
 
 /** Whose payment page a store pays into: the org's EUR account's backing
- *  user when there is one, else the installer. Must have a payment page. */
-function payeeFor(orgId: string, installerId: string): { user?: User; reason?: string } {
+ *  user when there is one, else the installer. Must have a payment page.
+ *  The same rule for a merchant link (merchant-links.ts). */
+export function payeeFor(orgId: string, installerId: string): { user?: User; reason?: string } {
   const eurAccount = store.accountsOf(orgId).find((a) => a.currency === "EUR" && a.backingUserId);
   const user = store.findUser(eurAccount?.backingUserId ?? installerId);
   if (!user) return { reason: "no account to receive into" };
@@ -242,6 +249,8 @@ function payeeFor(orgId: string, installerId: string): { user?: User; reason?: s
 /** Tell Shopify a paid checkout request is paid. Idempotent; records the
  *  outcome on the request so the sweep can retry a failure. */
 export async function resolveShopifyRequest(r: PaymentRequest): Promise<void> {
+  // The checkout service marks a linked shop's order paid, with its own token.
+  if (r.source.linkId) return;
   if (r.source.kind !== "shopify" || r.source.resolvedAt || r.state !== "PAID") return;
   if (!r.source.shop || (!r.source.sessionGid && !r.source.orderGid)) return;
   const connection = store.findShopifyConnectionByShop(r.source.shop);
@@ -280,6 +289,36 @@ export async function resolveShopifyRequest(r: PaymentRequest): Promise<void> {
   }
 }
 
+/** The org's dashboard row for a Shopify request: core's own and a merchant
+ *  link's are listed with the same fields. */
+export function shopifyRequestRow(r: PaymentRequest, base: string) {
+  return {
+    id: r.id,
+    code: displayCode(r.code),
+    url: `${base}/pay/${encodeURIComponent(r.handle)}/${displayCode(r.code)}`,
+    shop: r.source.shop,
+    sessionId: r.source.externalId,
+    orderName: r.source.orderName,
+    orderGid: r.source.orderGid,
+    amountEur: r.amountEur,
+    state: effectiveState(r),
+    test: r.test,
+    payments: r.payments,
+    resolvedAt: r.source.resolvedAt,
+    resolveError: r.source.resolveError,
+    createdAt: r.createdAt,
+    paidAt: r.paidAt,
+  };
+}
+
+/** Shopify requests matching `keep`, newest first, at most 100. */
+export function newestShopifyRequests(keep: (r: PaymentRequest) => boolean): PaymentRequest[] {
+  return store.paymentRequests
+    .filter((r) => r.source.kind === "shopify" && keep(r))
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+    .slice(0, 100);
+}
+
 export function createShopifyRouter(requireSession: SessionResolver): express.Router {
   const router = express.Router();
 
@@ -296,27 +335,9 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       const connections = store.shopifyConnectionsForOrg(ctx.org.id);
       const shops = new Set(connections.map((c) => c.shop));
       const base = baseUrlFor(req);
-      const requests = store.paymentRequests
-        .filter((r) => r.source.kind === "shopify" && r.source.shop && shops.has(r.source.shop))
-        .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
-        .slice(0, 100)
-        .map((r) => ({
-          id: r.id,
-          code: displayCode(r.code),
-          url: `${base}/pay/${encodeURIComponent(r.handle)}/${displayCode(r.code)}`,
-          shop: r.source.shop,
-          sessionId: r.source.externalId,
-          orderName: r.source.orderName,
-          orderGid: r.source.orderGid,
-          amountEur: r.amountEur,
-          state: effectiveState(r),
-          test: r.test,
-          payments: r.payments,
-          resolvedAt: r.source.resolvedAt,
-          resolveError: r.source.resolveError,
-          createdAt: r.createdAt,
-          paidAt: r.paidAt,
-        }));
+      // A linked shop's requests are listed by the merchant-links route.
+      const requests = newestShopifyRequests((r) => !r.source.linkId && Boolean(r.source.shop && shops.has(r.source.shop)))
+        .map((r) => shopifyRequestRow(r, base));
       res.json({
         ...shopifyAvailable(),
         mode: SHOPIFY.mode,
@@ -361,6 +382,9 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       const existing = store.findShopifyConnectionByShop(shop);
       if (existing && existing.orgId !== ctx.org.id) {
         return res.status(409).json({ error: CONNECTED_ELSEWHERE, code: "SHOP_CONNECTED_ELSEWHERE" });
+      }
+      if (store.activeMerchantLinkForShop(shop)) {
+        return res.status(409).json({ error: LINKED_THROUGH_CHECKOUT, code: "SHOP_LINKED_THROUGH_CHECKOUT" });
       }
       const payee = payeeFor(ctx.org.id, ctx.userId);
       if (!payee.user) return res.status(409).json({ error: payee.reason });
@@ -681,7 +705,9 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
     if (!isValidShopDomain(shop) || !gid) return undefined;
     // The shop in the URL is part of the key: order ids are per-store
     // sequences, so the same number names a different order at every store.
-    return { shop, orderId: gid.split("/").pop()!, request: store.findPaymentRequestBySource("shopify", gid, shop) };
+    // A linked shop's orders are read through the checkout service, not here.
+    const found = store.findPaymentRequestBySource("shopify", gid, shop);
+    return { shop, orderId: gid.split("/").pop()!, request: found && !found.source.linkId ? found : undefined };
   };
 
   /**
@@ -755,6 +781,9 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       if (!r) return res.status(404).send("no such checkout");
       const page = `${base}/pay/${encodeURIComponent(r.handle)}/${displayCode(r.code)}`;
       if (r.state !== "PAID") return res.redirect(page);
+      // A linked shop: the checkout marks the order paid; the buyer goes to
+      // the order's status page.
+      if (r.source.linkId) return res.redirect(externalHttpUrl(r.source.orderStatusUrl) ?? page);
       let fresh = store.findPaymentRequest(r.id)!;
       if (!fresh.source.resolvedAt) {
         try {

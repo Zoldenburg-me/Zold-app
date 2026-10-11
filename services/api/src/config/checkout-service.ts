@@ -8,8 +8,32 @@ import { envNumber, IS_PRODUCTION } from "./env.js";
  * Its bearer credential is not configured here: an operator issues and rotates
  * it (POST /api/admin/service-credentials/checkout/rotate), and the store
  * keeps only its hash.
+ *
+ * CHECKOUT_SERVICE_ORIGIN is the service's public origin. Merchant links
+ * (merchant-links.ts) send a store's install there; unset, they are off.
  */
+function checkoutOrigin(): string {
+  const raw = process.env.CHECKOUT_SERVICE_ORIGIN?.trim() ?? "";
+  if (!raw) return "";
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    throw new Error("CHECKOUT_SERVICE_ORIGIN is not a URL");
+  }
+  if (u.username || u.password) throw new Error("CHECKOUT_SERVICE_ORIGIN must not carry credentials");
+  if ((u.pathname !== "/" && u.pathname !== "") || u.search || u.hash) {
+    throw new Error("CHECKOUT_SERVICE_ORIGIN must be an origin only (scheme, host, port), e.g. https://checkout.example");
+  }
+  const local = u.hostname === "127.0.0.1" || u.hostname === "localhost";
+  if (u.protocol !== "https:" && !(u.protocol === "http:" && local && !IS_PRODUCTION)) {
+    throw new Error("CHECKOUT_SERVICE_ORIGIN must be https (plain http only to localhost outside production)");
+  }
+  return u.origin;
+}
+
 export const CHECKOUT_SERVICE = (() => {
+  const origin = checkoutOrigin();
   const webhookUrl = process.env.CHECKOUT_WEBHOOK_URL?.trim() ?? "";
   const webhookSecret = process.env.CHECKOUT_WEBHOOK_SECRET?.trim() ?? "";
   if (webhookUrl) {
@@ -41,5 +65,7 @@ export const CHECKOUT_SERVICE = (() => {
     /** First retry delay; each later one is four times the last. */
     webhookRetryBaseMs: envNumber("CHECKOUT_WEBHOOK_RETRY_BASE_MS", 5_000, { min: 1 }),
     webhookMaxAttempts: envNumber("CHECKOUT_WEBHOOK_MAX_ATTEMPTS", 6, { min: 1, integer: true }),
+    /** The service's public origin (no trailing slash), or "" when unset. */
+    origin,
   };
 })();
