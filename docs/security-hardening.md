@@ -285,67 +285,79 @@ location.
 
 ### 1.5 The operator
 
-The operator path is one shared bearer, `KYC_OPERATOR_TOKEN`, checked by
-`requireOperator` (`http/guards.ts`) on 22 routes under `/api/admin/*`: 11
-GET and 11 POST, among them executing and finalising recoveries, resolving
-reviews, granting plans and rotating service credentials. Its audit label is a hash of the token, so it names no person;
-a plan grant records no one, and a recovery's `reviewedBy` and a review's
-`resolution.by` are fields, not audit rows. The dashboard keeps the token in
-sessionStorage.
-
-The replacement, agreed with the owner: one named operator (the owner) with
-two passkeys, a primary and a backup.
+One named operator (the owner) runs the admin dashboard, with two passkeys,
+a primary and a backup. Every `/api/admin` route, in whichever router
+declares it, passes one gate (`operators/gate.ts`) that server.ts mounts
+ahead of them all.
 
 - **Operators** are their own records (id, name, email, passkeys,
-  `disabledAt`); disabling is a read-time filter. The first operator is
-  enrolled by a host-side script that prints a single-use link valid for 15
-  minutes; the token sits in the URL fragment, is posted, and only its hash
-  is stored. Redeeming it needs the Access identity to match the operator's
-  email. Only an operator, after a fresh passkey check, adds another passkey
-  or operator.
-- **Its own origin.** `/admin` is served at `admin.zoldhq.com`, and an
-  operator assertion verifies against that origin only, so a script on the
-  user app cannot ask for an operator passkey. Operator credentials sit in a
-  store user login never searches.
+  `disabledAt`); disabling is a read-time filter. `npm run operator:enrol`,
+  run on the host, writes a single-use enrolment next to the store (the
+  token's hash, 15 minutes) and prints a link whose token rides in the URL
+  fragment. Redeeming it needs the Access identity to match the enrolled
+  email; the file is deleted on success. The same script is the way back in
+  when every passkey is lost. Adding a second passkey needs a fresh approval
+  from the first.
+- **Its own origin.** With `ADMIN_ORIGIN` set, `/admin` is served there only,
+  that host serves nothing of the user app (`adminHostPolicy`, which also
+  refuses any path that could change under decoding, and sends a CSP with no
+  inline script), the origin
+  is allowed only on `/api/admin`, and every operator ceremony verifies
+  against it alone, so a script on the user app can neither reach the
+  operator's session nor ask for the operator's passkey. Operator
+  credentials sit in a store user login never searches.
 - **Its own ceremonies** under `/api/admin/auth/*`, with purposes
-  `operator_login`, `operator_step_up` and `operator_enrol`, and bindings
-  prefixed `op:` so no user challenge can stand in for one. User
-  verification is required.
+  `operator_login`, `operator_step_up` and `operator_enrol` and bindings
+  prefixed `op:`; user verification is required.
 - **Its own session**: a `zop_` bearer in its own store (hash only), 8 hours,
   30 minutes idle. A user session on `/api/admin/*` is refused, and an
   operator session on a user route.
-- **A fresh passkey for every change.** One admin middleware, ahead of every
-  admin router, decides by HTTP method: each non-GET needs an
-  `operator_step_up` assertion bound to the route, the target and a hash of
-  the request body, so an approval for one action cannot be replayed with
-  other values. Executing a Zoldenburg recovery needs it too, besides the
-  guardian's hardware-wallet signature. Paths are lowercased before the
-  check, as Express matches them.
-- **An audit row per action**, reads included: operator id and name, route,
-  target and outcome, in the append-only log. `reviewedBy` and
-  `resolution.by` hold the operator id; rows written before keep the token
-  hash.
-- **Cloudflare Access as a second gate** on `admin.zoldhq.com`, through an
-  identity provider that requires a hardware key, with a policy naming the
-  operator's email. The server checks `Cf-Access-Jwt-Assertion` on every
-  admin request: RS256, issuer = the team domain, audience = the application
-  tag (`CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD`), expiry, an email that
-  matches the operator's; a service token without an email is refused, the
-  email header alone is never trusted, and key refetches are bounded.
-  Production refuses admin routes while either value is unset.
-- **Rate limits** per operator, not per IP; failed logins and step-ups count
-  toward a lockout.
+- **A fresh passkey for every change.** The gate decides by HTTP method: each
+  non-GET needs an approval bound to the operator, method, path (case
+  included, a trailing slash not) and a hash of the body, and carries no
+  query string, so an approval for one action cannot be replayed with other
+  values. Executing a Zoldenburg recovery needs it besides the guardian's
+  hardware-wallet signature. Each refused approval writes
+  `operator.step_up_refused`; the tenth in 15 minutes ends that session, not
+  the operator's others.
+- **An audit row per action**: every change and every live partner read
+  (`?live=1`), and each other read of a path once per operator in ten
+  minutes (the dashboard refreshes itself), as
+  `operator.request` with the operator's id and name; reads of an account
+  are filed under that account. Stored `reviewedBy` and `resolution.by`
+  hold `operator:<id>`; rows written before hold the old token hash.
+- **Cloudflare Access as a second gate**, checked by the server on every
+  admin request from `Cf-Access-Jwt-Assertion`: RS256, issuer = the team
+  domain, audience = the application tag (`CF_ACCESS_TEAM_DOMAIN`,
+  `CF_ACCESS_AUD`), expiry, and an email, which for a passkey session must
+  equal the operator's. A service
+  token without an email is refused, the email header alone is never
+  trusted, and unknown key ids refetch the keys at most once a minute.
+  Every deployment but the local hardhat stack (zoldhq.com included) answers
+  503 on every admin route until `ADMIN_ORIGIN` (https, not one of
+  `WEBAUTHN_ORIGINS`) and both Access values are set.
+- **Rate limits** per operator; failed sign-ins lock an address for 15
+  minutes after ten.
+- `KYC_OPERATOR_TOKEN` opens reads only, behind Access, never a live partner
+  read (`?live=1`), and its reads are audited as `operator:legacy-token`.
 
-Order:
-1. PR A: everything above. The token still works, for GET only and only
-   behind Access, and each use writes an `operator:legacy-token` audit row.
-2. PR B, within days of A: production refuses to start with
-   `KYC_OPERATOR_TOKEN` set, and the token code goes.
+`npm run operator:test` covers each refusal with a software passkey and a
+local Access key server; nothing here has run against Cloudflare Access.
 
 Still open:
-- The Access application, the identity provider and the `admin.zoldhq.com`
-  tunnel route are set up by the owner in Cloudflare.
-- All of 1.5 above is a plan; none of it is built.
+- The owner sets up the Access application (identity provider with a
+  hardware key, a policy naming the owner's email), the `admin.zoldhq.com`
+  tunnel route, and `ADMIN_ORIGIN`, `CF_ACCESS_TEAM_DOMAIN` and
+  `CF_ACCESS_AUD` on the lease. Until then zoldhq.com answers 503 on admin
+  routes.
+- PR B: production refuses to start with `KYC_OPERATOR_TOKEN` set, and the
+  token code goes.
+- The audit log is the plain JSON store: append-only by code, not tamper
+  evident (Phase 2), with no retention period. `operator.request` rows name
+  the user an operator read; how long they are kept is a question for
+  counsel, and the GDPR data map has no entry yet for operator access
+  control (the operator's name, email and passkeys, Cloudflare Access and
+  its identity provider).
 
 ## Phase 2: a real database
 
