@@ -327,6 +327,7 @@ async function mirrorOrder(order: MoneriumOrder): Promise<MirrorOutcome> {
 }
 
 async function mintLocalTestEure(to: `0x${string}`, amountEur: number, ref: string) {
+  if (!deployerWallet) throw new Error("the harness mint needs the local chain's deployer");
   await writeAndWait(deployerWallet, {
     address: addrs().eure,
     abi: abis.MockToken,

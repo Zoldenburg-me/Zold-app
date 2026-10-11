@@ -86,7 +86,7 @@ try {
   const balanceOf = async (who: `0x${string}`) =>
     eur.fromWei((await publicClient.readContract({ address: addrs().eure, abi: abis.MockToken, functionName: "balanceOf", args: [who] })) as bigint);
   const mintToFaucet = (amount: number) =>
-    writeAndWait(deployerWallet, { address: addrs().eure, abi: abis.MockToken, functionName: "mint", args: [faucetAddress, eur.toWei(amount)] });
+    writeAndWait(deployerWallet!, { address: addrs().eure, abi: abis.MockToken, functionName: "mint", args: [faucetAddress, eur.toWei(amount)] });
 
   function addUser(name: string, opts: { address?: `0x${string}`; deployed?: boolean } = {}) {
     const user = {
@@ -106,13 +106,13 @@ try {
   console.log("2/6 a deployed Safe gets exactly the grant, from the faucet wallet…");
   check("faucet is enabled on a local chain with a key and a grant", faucetEnabled());
   check("/api/health advertises the grant", capabilities().faucetEur === 50);
-  check("the faucet wallet is not the deployer", faucetAddress.toLowerCase() !== deployerWallet.account.address.toLowerCase());
+  check("the faucet wallet is not the deployer", faucetAddress.toLowerCase() !== deployerWallet!.account.address.toLowerCase());
   await mintToFaucet(60);
-  const deployerBefore = await balanceOf(deployerWallet.account.address);
+  const deployerBefore = await balanceOf(deployerWallet!.account.address);
   const alice = addUser("Faucet Alice");
   const a1 = await faucetFundSafe(alice.id);
   check("50 EURe arrived at the Safe", a1.ok && (await balanceOf(alice.address)) === 50);
-  check("it came out of the faucet wallet", (await balanceOf(faucetAddress)) === 10 && (await balanceOf(deployerWallet.account.address)) === deployerBefore);
+  check("it came out of the faucet wallet", (await balanceOf(faucetAddress)) === 10 && (await balanceOf(deployerWallet!.account.address)) === deployerBefore);
   const rec = store.findUser(alice.id)?.faucet;
   check("the grant is recorded with its tx hash", rec?.grantedEur === 50 && /^0x[0-9a-f]{64}$/i.test(rec?.txHash ?? ""));
 
@@ -160,7 +160,7 @@ try {
   check("a zero address is never funded", !z.ok && store.findUser(zero.id)?.faucet === undefined);
 
   console.log("5b/6 the public drip: any address, chosen token, limits…");
-  await writeAndWait(deployerWallet, { address: addrs().usdc, abi: abis.MockToken, functionName: "mint", args: [faucetAddress, 100_000_000n] }); // 100 USDC
+  await writeAndWait(deployerWallet!, { address: addrs().usdc, abi: abis.MockToken, functionName: "mint", args: [faucetAddress, 100_000_000n] }); // 100 USDC
   await mintToFaucet(1000);
   const usdcOf = async (who: `0x${string}`) =>
     Number((await publicClient.readContract({ address: addrs().usdc, abi: abis.MockToken, functionName: "balanceOf", args: [who] })) as bigint) / 1e6;

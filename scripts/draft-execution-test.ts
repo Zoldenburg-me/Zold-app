@@ -157,7 +157,7 @@ try {
   // a real chain), from hardhat account 0, the token's owner.
   const { abis, addrs, eur, deployerWallet, writeAndWait } = await import("../services/api/src/chain.js");
   const mintLocalEure = (to: `0x${string}`, amount: number) =>
-    writeAndWait(deployerWallet, {
+    writeAndWait(deployerWallet!, {
       address: addrs().eure,
       abi: abis.MockToken,
       functionName: "mint",

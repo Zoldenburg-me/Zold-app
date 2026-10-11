@@ -13,7 +13,8 @@
 import { reviewHeldOnPlanChange } from "../domain/payment-review.js";
 import express from "express";
 import { wrap } from "./util.js";
-import { abis, addrs, deployerWallet, eur, orchestratorAddress, publicClient } from "../chain.js";
+import { orchestratorAddress, publicClient } from "../chain.js";
+import { relayWallet } from "../recovery/recovered-passkey.js";
 import { safeMovedEur } from "../orchestrator.js";
 import { publicUser } from "../users/public-user.js";
 import {
@@ -155,43 +156,24 @@ function adminFunding(deposit: CryptoDeposit) {
 
 
 /**
- * Deployer float for the ops dashboard: the address that pays deployments and
- * verifier setups, and runs dry silently. 60s cache: the dashboard polls every
- * 10s and two RPC reads per tick would be rude.
- */
-let deployerFloatCache: { at: number; value: { address: string; eur: number; eth: number } } | null = null;
-async function deployerFloat() {
-  if (deployerFloatCache && Date.now() - deployerFloatCache.at < 60_000) return deployerFloatCache.value;
-  const address = deployerWallet.account.address;
-  const [eth, eure] = await Promise.all([
-    publicClient.getBalance({ address }),
-    publicClient.readContract({
-      address: addrs().eure,
-      abi: abis.MockToken,
-      functionName: "balanceOf",
-      args: [address],
-    }) as Promise<bigint>,
-  ]);
-  const value = { address, eur: eur.fromWei(eure), eth: Number(eth) / 1e18 };
-  deployerFloatCache = { at: Date.now(), value };
-  return value;
-}
-
-/**
  * Gas balances of every EOA that sends transactions for the platform. Each is
  * a distinct outage when dry, and the errors do not say which wallet is empty:
- * a dry orchestrator fails swaps and the fee leg; a dry deployer fails Safe
- * verifier deployments. Name them, so the dashboard can too.
+ * a dry orchestrator fails swaps and the fee leg; a dry relay fails Safe
+ * verifier deployments and recovery relays. Name them, so the dashboard can
+ * too.
  */
+export function operatorWallets(): { role: string; address: `0x${string}` }[] {
+  return [
+    { role: "orchestrator (swaps, fees)", address: orchestratorAddress },
+    { role: "relay (recovery gas)", address: relayWallet().account.address },
+  ];
+}
+
 let operatorGasCache: { at: number; value: { role: string; address: string; eth: number }[] } | null = null;
 async function operatorGas() {
   if (operatorGasCache && Date.now() - operatorGasCache.at < 60_000) return operatorGasCache.value;
-  const wallets: { role: string; address: `0x${string}` }[] = [
-    { role: "orchestrator (swaps, fees)", address: orchestratorAddress },
-    { role: "deployer (gas)", address: deployerWallet.account.address },
-  ];
   const value = await Promise.all(
-    wallets
+    operatorWallets()
       .filter((w) => /^0x[0-9a-fA-F]{40}$/.test(w.address))
       .map(async (w) => ({
         role: w.role,
@@ -225,7 +207,6 @@ export function createAdminRouter() {
         activeSafes,
         totalTransfers,
         totalVolumeEur,
-        deployer: await deployerFloat().catch(() => null),
         operatorGas: await operatorGas().catch(() => null),
       });
     }),
@@ -338,7 +319,6 @@ export function createAdminRouter() {
       if (!requireOperator(req, res)) return;
       res.json({
         ...overview(),
-        deployer: await deployerFloat().catch(() => null),
         operatorGas: await operatorGas().catch(() => null),
       });
     }),

@@ -380,7 +380,7 @@ try {
 
   console.log("3/4 a USDC deposit of the quoted amount pays it…");
   const mintUsdc = (to: `0x${string}`, amountUsdc: number) =>
-    writeAndWait(deployerWallet, { address: addrs().usdc, abi: abis.MockToken, functionName: "mint", args: [to, BigInt(Math.round(amountUsdc * 1e6))] });
+    writeAndWait(deployerWallet!, { address: addrs().usdc, abi: abis.MockToken, functionName: "mint", args: [to, BigInt(Math.round(amountUsdc * 1e6))] });
   await pollCryptoDepositsOnce(); // establishes the cursor
   await mintUsdc(owner, q25.amountUsdc);
   const n = await pollCryptoDepositsOnce();

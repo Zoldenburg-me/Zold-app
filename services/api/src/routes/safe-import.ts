@@ -208,7 +208,7 @@ export function createSafeImportRouter(deps: SafeImportDeps) {
           verifier,
           verifierDeployed,
           alreadyOwner,
-          // Any key may send this; confirm also sends it from the deployer if needed.
+          // Any key may send this; confirm also sends it from the relay key if needed.
           deployVerifier: deploy ? tx(deploy) : null,
           ownerChange: alreadyOwner ? null : changes,
           approval,

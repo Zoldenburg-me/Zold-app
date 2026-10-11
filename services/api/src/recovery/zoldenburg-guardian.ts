@@ -8,7 +8,7 @@
  * against the identity Monerium verified, and signs the recovery on the
  * hardware wallet. The API never holds the guardian key: it hands the
  * operator EIP-712 typed data, checks the returned signature against the
- * digest the MODULE computes, and relays it from the deployer key, which has
+ * digest the MODULE computes, and relays it from the relay key, which has
  * no authority of its own.
  *
  * What this means, said plainly because the onboarding warning repeats it:
@@ -244,7 +244,7 @@ export const zoldenburgChain = {
     );
     return { txHash: await sendAndConfirm(tx, "execute the recovery") };
   },
-  /** After the grace period anyone may finalise; the deployer pays the gas. */
+  /** After the grace period anyone may finalise; the relay key pays the gas. */
   async relayFinalize(moduleAddress: `0x${string}`, safeAddress: `0x${string}`): Promise<{ txHash: `0x${string}` }> {
     if (HARNESS.enabled) return { txHash: `0x${"f1".repeat(32)}` };
     const tx = new SocialRecoveryModule(moduleAddress).createFinalizeRecoveryMetaTransaction(safeAddress);
