@@ -118,7 +118,8 @@ export const SECURITY = {
   moneriumWebhookSecret: process.env.MONERIUM_WEBHOOK_SECRET ?? "",
   /** How far a signed webhook timestamp may be from now before we refuse it.
    *  Guards replay of a captured delivery we never received, which delivery-id
-   *  dedupe cannot catch. 0 disables the check. */
+   *  dedupe cannot catch. There is no off switch: anything but a positive
+   *  number refuses to start (below). */
   webhookToleranceSec: Number(process.env.MONERIUM_WEBHOOK_TOLERANCE_SEC ?? 300),
   /** Simple per-IP rate limits (requests per minute). */
   rateLimitPerMin: Number(process.env.RATE_LIMIT_PER_MIN ?? 300),
@@ -139,3 +140,9 @@ export const SECURITY = {
    *  stack is the one place a stack trace helps more than it leaks. */
   exposeInternalErrors: process.env.NODE_ENV !== "production" && LOOKS_LOCAL,
 };
+
+// Number("") is 0 and Number("5m") is NaN, and neither is a window. Refuse to
+// start rather than run the Monerium webhook without replay protection.
+if (!(Number.isFinite(SECURITY.webhookToleranceSec) && SECURITY.webhookToleranceSec > 0)) {
+  throw new Error("MONERIUM_WEBHOOK_TOLERANCE_SEC must be a positive number of seconds; unset it for the 300 s default");
+}

@@ -15,14 +15,15 @@ export const DEFAULT_TOLERANCE_SEC = 300;
  * The signed timestamp is what stops a captured delivery being replayed years
  * later. Delivery-id dedupe only rejects ids already seen, so it does nothing
  * for a capture the receiver never got. Accepts both the ISO-8601 and the
- * unix-seconds forms. A tolerance of 0 disables the check.
+ * unix-seconds forms. A tolerance that is not a positive number refuses every
+ * delivery: a misread setting must not switch replay protection off.
  */
 export function withinReplayWindow(
   timestamp: string,
   toleranceSec = DEFAULT_TOLERANCE_SEC,
   now = Date.now(),
 ): boolean {
-  if (!toleranceSec) return true;
+  if (!(Number.isFinite(toleranceSec) && toleranceSec > 0)) return false;
   const asNumber = Number(timestamp);
   const sentMs = Number.isFinite(asNumber) && timestamp.trim() !== ""
     ? asNumber * 1000

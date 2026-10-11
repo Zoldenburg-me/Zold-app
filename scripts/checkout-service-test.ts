@@ -16,7 +16,8 @@
  *   7. a state change on a checkout transfer POSTs {transferId}, Standard
  *      Webhooks signed, retried under one webhook-id; nothing else is sent
  *   8. a wrong credential counts on the auth bucket, not the service one
- *   9. config refuses a webhook URL or secret it could not use safely
+ *   9. config refuses a webhook URL or secret it could not use safely, and a
+ *      Monerium replay tolerance that is not a positive number
  *
  * Run: npm run checkout-service:test
  */
@@ -74,7 +75,7 @@ const { OPERATOR: OPERATOR_CONFIG, SECURITY } = await import("../services/api/sr
 const { operatorKit } = await import("./_operator.js");
 const { checkoutCredentialFor, isCheckoutTransfer } = await import("../services/api/src/checkout-service.js");
 const { startCheckoutWebhook } = await import("../services/api/src/checkout-webhook.js");
-const { verifyStandardWebhook } = await import("../services/api/src/http/standard-webhooks.js");
+const { verifyStandardWebhook, withinReplayWindow } = await import("../services/api/src/http/standard-webhooks.js");
 
 initStore();
 startCheckoutWebhook();
@@ -336,7 +337,29 @@ await check("the verifier accepts any one good signature in a list, and nothing 
   assert.equal(v(`${bad} v1,short`), false);
   assert.equal(v(""), false);
   assert.equal(v(good, { raw: Buffer.from(JSON.stringify({ transferId: "t-other" })) }), false);
-  assert.equal(v(good, { now: Date.now() - 301_000 }), false, "a timestamp from the future");
+  const sentMs = Number(ts) * 1000;
+  assert.equal(v(good, { now: sentMs + 299_000 }), true, "a timestamp inside the window");
+  assert.equal(v(good, { now: sentMs - 301_000 }), false, "a timestamp too far in the future");
+  assert.equal(v(good, { now: sentMs + 301_000 }), false, "a timestamp too far in the past");
+  assert.equal(v(good, { now: sentMs + 300_000 }), true, "a timestamp exactly at the tolerance, past");
+  assert.equal(v(good, { now: sentMs + 300_001 }), false, "a timestamp 1 ms past the tolerance, past");
+  assert.equal(v(good, { now: sentMs - 300_000 }), true, "a timestamp exactly at the tolerance, future");
+  assert.equal(v(good, { now: sentMs - 300_001 }), false, "a timestamp 1 ms past the tolerance, future");
+  assert.equal(v(good, { now: sentMs + 10_000, toleranceSec: 10 }), true, "an explicit tolerance, at its edge");
+  assert.equal(v(good, { now: sentMs + 10_001, toleranceSec: 10 }), false, "an explicit tolerance, 1 ms past");
+  for (const toleranceSec of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.equal(v(good, { now: sentMs, toleranceSec }), false, `tolerance ${toleranceSec} refuses rather than disabling the window`);
+  }
+});
+await check("the replay window reads both timestamp forms and refuses anything else", () => {
+  const sentMs = Date.UTC(2026, 9, 11, 12, 0, 0);
+  const iso = new Date(sentMs).toISOString();
+  assert.equal(withinReplayWindow(String(sentMs / 1000), 300, sentMs + 1_000), true);
+  assert.equal(withinReplayWindow(iso, 300, sentMs + 1_000), true);
+  assert.equal(withinReplayWindow(iso, 300, sentMs + 301_000), false);
+  for (const junk of ["", "   ", "not-a-time", "Infinity"]) {
+    assert.equal(withinReplayWindow(junk, 300, sentMs), false, `timestamp ${JSON.stringify(junk)}`);
+  }
 });
 await check("no delivery for a non-checkout transfer or a patch without a state change", async () => {
   deliveries.length = 0;
@@ -393,6 +416,26 @@ for (const [label, url, secret] of [
     assert.match(r.stderr, /CHECKOUT_WEBHOOK_(URL|SECRET)/);
   });
 }
+const securityModule = new URL("../services/api/src/config/security.ts", import.meta.url).pathname;
+const loadSecurity = (tolerance: string | undefined) => {
+  const env = { ...process.env, MONERIUM_WEBHOOK_TOLERANCE_SEC: tolerance };
+  if (tolerance === undefined) delete env.MONERIUM_WEBHOOK_TOLERANCE_SEC;
+  return spawnSync(tsx, ["-e", `import(${JSON.stringify(securityModule)}).then((m) => console.log(m.SECURITY.webhookToleranceSec)).catch((e) => { console.error(e.message); process.exit(1); })`], {
+    env,
+    encoding: "utf8",
+  });
+};
+for (const tolerance of ["", "0", "-5", "5m", "Infinity"]) {
+  await check(`config refuses MONERIUM_WEBHOOK_TOLERANCE_SEC=${JSON.stringify(tolerance)}`, () => {
+    const r = loadSecurity(tolerance);
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /MONERIUM_WEBHOOK_TOLERANCE_SEC/);
+  });
+}
+await check("an unset MONERIUM_WEBHOOK_TOLERANCE_SEC is 300 s, and a positive one is kept", () => {
+  assert.equal(loadSecurity(undefined).stdout.trim(), "300");
+  assert.equal(loadSecurity("120").stdout.trim(), "120");
+});
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
