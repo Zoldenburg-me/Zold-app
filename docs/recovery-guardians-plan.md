@@ -183,9 +183,9 @@ required, in either order:
 
 **1 € from the enrolled account.**
 - A recovery code (separate from the enrolment code, same credential rules)
-  is shown on the recovery page. The page shows the Zold IBAN and the
-  enrolled account by their last 4 only: whoever holds the request has no
-  session, and the real owner has the Zold IBAN saved as a payee.
+  is shown on the recovery page. The page shows no digits of the Zold IBAN
+  or the enrolled account: anyone who knows the account's email can start a
+  request, and the real owner sent the enrolment 1 € to that IBAN.
 - Same poller; the order must carry the code, and HMAC(payer IBAN) must equal
   the enrolled hash, and the payer name must match the Monerium name.
 - If the Monerium connection cannot be read (e.g. the refresh token expired),

@@ -38,6 +38,10 @@ type BankCheck = NonNullable<NonNullable<RecoveryRequest["zoldenburg"]>["bankChe
 /** Requests whose second 1 € is still looked for. */
 const CHECKED_STATUS = "REVIEW_PENDING";
 
+/** Each code costs the owner's Monerium connection a read, so a request
+ *  gets a bounded number of them. */
+export const RECOVERY_BANK = { maxCodes: 5 };
+
 const sameHex = (a: string, b: string) =>
   a.length === b.length && timingSafeEqual(Buffer.from(a, "hex"), Buffer.from(b, "hex"));
 
@@ -54,10 +58,9 @@ export function judgeRecoveryOrder(o: MoneriumOrderLike, user: User, profileName
     return { ok: false, reason: "This account never confirmed a bank account for recovery, so no payment can prove it is yours." };
   }
   if (!sameHex(bankAccountHmac(verdict.iban), e.bankAccountHmac)) {
-    return {
-      ok: false,
-      reason: `The payment came from a different bank account. Send it from the account you confirmed when you set up recovery, the one ending ${e.bankAccountLast4 ?? "in the 4 characters shown"}.`,
-    };
+    // No digits of the enrolled account: whoever reads this may know no
+    // more than the account's email.
+    return { ok: false, reason: "The payment came from a different bank account. Send it from the account you confirmed when you set up recovery." };
   }
   return verdict;
 }
@@ -68,13 +71,27 @@ export function bankCheckPassed(r: RecoveryRequest, user: User | undefined): boo
   return Boolean(user && zoldenburgArmed(user) && b?.passedAt && b.enrolledAt === user.zoldenburgEnrolment?.enrolledAt);
 }
 
+/** May this request be given another code? */
+export const canIssueRecoveryBankCode = (r: RecoveryRequest) =>
+  (r.zoldenburg?.bankCheck?.codesIssued ?? 0) < RECOVERY_BANK.maxCodes;
+
 /** Issue a code for this request, replacing any open one. The plain code is
- *  returned once. The caller refuses a request whose check already passed. */
+ *  returned once. The caller refuses a request whose check already passed,
+ *  or that has had its codes. */
 export function issueRecoveryBankCode(r: RecoveryRequest, now = new Date()): { code: string; memo: string } {
   const { code, hash } = newEnrolmentCode("recovery");
   const fresh = store.findRecoveryRequest(r.id)!;
+  const before = fresh.zoldenburg?.bankCheck;
   store.updateRecoveryRequest(r.id, {
-    zoldenburg: { ...fresh.zoldenburg, bankCheck: { code: { hash, issuedAt: now.toISOString() } } },
+    zoldenburg: {
+      ...fresh.zoldenburg,
+      bankCheck: {
+        code: { hash, issuedAt: now.toISOString() },
+        ...(before?.code ? { earlierCodes: [...(before.earlierCodes ?? []), before.code] } : {}),
+        codesIssued: (before?.codesIssued ?? 0) + 1,
+        ...(before?.lastReadAt ? { lastReadAt: before.lastReadAt } : {}),
+      },
+    },
   });
   return { code, memo: memoFor(code) };
 }
@@ -111,6 +128,8 @@ export async function checkRecoveryBankPayment(
     });
     return outcome;
   };
+  // The throttle's clock, set before Monerium is asked.
+  store.updateRecoveryRequest(requestId, { zoldenburg: { ...r.zoldenburg, bankCheck: { ...r.zoldenburg!.bankCheck, lastReadAt: now.toISOString() } } });
   try {
     if (!zoldenburgArmed(user)) {
       return record("mismatch", "This account never confirmed a bank account for Zoldenburg recovery, so Zoldenburg cannot recover it.");
@@ -122,7 +141,11 @@ export async function checkRecoveryBankPayment(
       console.warn(`recovery ${requestId}: could not read orders for ${user.id}: ${describeCause(err)}`);
       return record("unreadable", "We could not read the account's payments at Monerium. We will try again; if this stays, contact support.");
     }
-    const found = ordersCarrying(orders, user, code, "recovery");
+    const codes = [code, ...(r.zoldenburg!.bankCheck!.earlierCodes ?? [])];
+    const seen = new Set<string>();
+    const found = codes
+      .flatMap((c) => ordersCarrying(orders, user, c, "recovery"))
+      .filter((o) => !seen.has(o.id) && Boolean(seen.add(o.id)));
     if (!found.length) return record("waiting", "No payment with your code has arrived yet. A bank transfer can take a working day.");
     let name: string | undefined;
     try {
@@ -141,7 +164,8 @@ export async function checkRecoveryBankPayment(
       const fresh = stillOpen();
       if (!fresh) return "no_code";
       // The code is spent: the pass replaces it.
-      const passed: BankCheck = { passedAt: now.toISOString(), orderId: o.id, enrolledAt: user.zoldenburgEnrolment!.enrolledAt };
+      const { codesIssued, lastReadAt } = fresh.zoldenburg!.bankCheck!;
+      const passed: BankCheck = { codesIssued, lastReadAt, passedAt: now.toISOString(), orderId: o.id, enrolledAt: user.zoldenburgEnrolment!.enrolledAt };
       store.updateRecoveryRequest(requestId, { zoldenburg: { ...fresh.zoldenburg, bankCheck: passed } });
       console.log(`RECOVERY: ${requestId} passed the 1 € check from the enrolled account (order ${o.id})`);
       return "passed";
@@ -169,20 +193,19 @@ export async function sweepRecoveryBankChecks(reads: EnrolmentReads = moneriumRe
 }
 
 /**
- * What the person recovering sees. They hold the request's secret but no
- * session, so the account's IBANs appear only as their last 4 characters:
- * the real owner has the Zold IBAN saved as a payee from enrolment.
+ * What the person recovering sees. They hold the request's secret, which
+ * anyone who knows the account's email can get, so nothing of either IBAN
+ * appears: the real owner knows their bank account, sent the enrolment 1 €
+ * to their Zold IBAN, and Monerium shows it to them.
  */
 export function bankCheckView(r: RecoveryRequest, user: User | undefined) {
   const b = r.zoldenburg?.bankCheck;
-  const e = user?.zoldenburgEnrolment;
   return {
     minimumEur: ENROLMENT.minimumEur,
     passed: bankCheckPassed(r, user),
+    canIssueCode: !bankCheckPassed(r, user) && canIssueRecoveryBankCode(r),
     ...(b?.passedAt ? { passedAt: b.passedAt } : {}),
     ...(b?.code ? { codeIssuedAt: b.code.issuedAt } : {}),
     ...(b?.code && b.lastCheck ? { lastCheck: b.lastCheck } : {}),
-    ...(e?.bankAccountLast4 ? { fromLast4: e.bankAccountLast4 } : {}),
-    ...(user?.iban ? { toLast4: user.iban.replace(/\s+/g, "").slice(-4) } : {}),
   };
 }

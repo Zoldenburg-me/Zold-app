@@ -2129,22 +2129,25 @@ function rcBankStep(r) {
   const issued = rcBankIssued && rcBankIssued.id === r.id && rcBankIssued.codeIssuedAt === b.codeIssuedAt ? rcBankIssued : null;
   const details = issued
     ? `${Z.kv([
-        { key: "From", value: b.fromLast4 ? `Your bank account ending ${b.fromLast4}` : "Your bank account" },
-        { key: "To", value: b.toLast4 ? `Your Zold IBAN ending ${b.toLast4}` : "Your Zold IBAN" },
+        { key: "From", value: "The bank account you set up recovery with" },
+        { key: "To", value: "Your Zold IBAN" },
         { key: "Amount", value: `At least ${b.minimumEur} €` },
       ])}
       <div class="z-card" id="rc-bank-ref" tabindex="-1">${Z.copyRow({ label: "Reference", value: issued.memo, mono: true })}</div>`
     : b.codeIssuedAt
-      ? `<p class="z-screen__fine">You got a reference on ${esc(rcWhenText(new Date(b.codeIssuedAt)))}. If you sent the 1 € with it, we pick it up on our own. Lost it? Get a new one.</p>`
+      ? `<p class="z-screen__fine">You got a reference on ${esc(rcWhenText(new Date(b.codeIssuedAt)))}. If you sent the 1 € with it, we pick it up on our own. Lost it? Get a new one: a transfer you already sent with an earlier reference still counts.</p>`
       : "";
   const check = b.codeIssuedAt && b.lastCheck ? Z.note({ icon: "info", text: b.lastCheck.reason, role: "status" }) : "";
+  const more = b.canIssueCode
+    ? `<button type="button" class="z-link-btn" id="btn-rc-bank-code">Get a new reference</button>`
+    : `<p class="z-screen__fine">No more references for this recovery. Use the last one, or email support@zoldhq.com.</p>`;
   const actions = b.codeIssuedAt
-    ? `${Z.button({ variant: "primary", full: true, label: "I sent it — check now", id: "btn-rc-bank-check" })}
-       <button type="button" class="z-link-btn" id="btn-rc-bank-code">Get a new reference</button>`
+    ? `${Z.button({ variant: "primary", full: true, label: "I sent it — check now", id: "btn-rc-bank-check" })}${more}`
     : Z.button({ variant: "primary", full: true, label: "Show my transfer details", id: "btn-rc-bank-code" });
   return `<div class="z-group">
       <div class="z-group__head"><h2 class="z-eyebrow">Move 1 € to yourself</h2></div>
-      ${Z.note({ icon: "account_balance", text: `Send at least ${b.minimumEur} € from the bank account you used when you set up recovery${b.fromLast4 ? ` (ending ${b.fromLast4})` : ""} to your Zold IBAN. It is your own money and lands in your Zold balance; nothing is charged. Your Zold IBAN is saved as a payee in your bank from that first transfer, and your Monerium account shows it too.` })}
+      ${Z.note({ icon: "account_balance", text: `Send at least ${b.minimumEur} € from the bank account you used when you set up recovery to your Zold IBAN. It is your own money and lands in your Zold balance; Zold charges nothing. Your Zold IBAN is in your bank’s record of that first transfer, and in your Monerium account.` })}
+      ${Z.note({ icon: "warning", tone: "a", text: "Only send this if you started this recovery yourself. Nobody from Zold or Zoldenburg will ask you to send it." })}
       ${details}
       ${check}
       <div class="z-stack">${actions}</div>
@@ -2159,7 +2162,6 @@ OB["recover/zoldenburg"] = {
     const ref = r.zoldenburg?.reference || "";
     const checked = RC_ZOLD_SIGNING.includes(r.status);
     const paid = checked || Boolean(r.bankCheck?.passed);
-    const from = r.bankCheck?.fromLast4;
     const mail = `mailto:support@zoldhq.com?subject=${encodeURIComponent(`Account recovery ${ref}`)}`;
     return `${obBackHead("recover", rcBeta())}
       <main id="main" class="z-screen__main z-screen__main--tight">
@@ -2168,7 +2170,7 @@ OB["recover/zoldenburg"] = {
         ${paid ? "" : rcBankStep(r)}
         ${rcTimeline([
           { t: "Face ID or fingerprint set up", d: "On this phone", done: true },
-          { t: "1 € from your bank account", d: paid ? "Done" : esc(from ? `From the account ending ${from}` : "From the account you set up recovery with"), done: paid },
+          { t: "1 € from your bank account", d: paid ? "Done" : "From the account you set up recovery with", done: paid },
           { t: "ID check by Zoldenburg", d: checked ? "Done" : "Email support@zoldhq.com with your reference", done: checked },
           { t: "Waiting period", d: `${esc(rcGrace(r))}. Your old phone can cancel it`, done: false },
           { t: "Your account is on this phone", d: "Sign in and pay as usual", done: false },

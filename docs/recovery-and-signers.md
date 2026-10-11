@@ -61,8 +61,12 @@ Planned guardian kinds (Didit + 1 € check, Turnkey, trusted people):
   HMAC equals the enrolled one under the key in use and the payer's name
   matches the Monerium name, read live; an unreadable Monerium leaves it open.
   A recovery code's purpose is in its hash, so an enrolment code never
-  passes it. The pass records the enrolment it matched: a re-enrolment voids
-  it. The person sees both IBANs by their last 4 only. Until it passes,
+  passes it. A request gets at most 5 codes; a transfer sent with an earlier
+  one still counts, and a new code does not reset the 30 s Monerium read
+  throttle. The pass records the enrolment it matched: a re-enrolment voids
+  it. The person sees no digits of either IBAN, because anyone who knows the
+  account's email can start a request. An owner who closed the enrolled bank
+  account cannot pass this check. Until it passes,
   `sign-request`, `execute` and `sync` answer 409 `BANK_CHECK_PENDING`, and
   /admin shows signing as locked. There is no override. The Didit ID check
   is the next check this gate gets.

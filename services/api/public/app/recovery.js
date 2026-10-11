@@ -523,15 +523,22 @@ function rcFollow() {
   const wait = until ? Math.min(60000, Math.max(2000, until.getTime() - Date.now() + 1000)) : 60000;
   rcTimer = setTimeout(async () => {
     if (!obScreen?.startsWith("recover/") || rcState?.id !== r.id) return;
+    const seq = rcBankSeq;
     try {
       const next = await rcApi(`/api/recovery/${rcMode}/${r.id}`);
       if (rcState?.id !== r.id) return;
+      // A 1 € call answered while this read was out: its answer is newer.
+      if (seq !== rcBankSeq) return rcFollow();
+      const prev = rcState;
       rcState = next;
       if (rcRouteFor(next) !== obScreen || (next.status !== r.status)) return rcShow();
-      // The 1 € can arrive while the request stays in review.
-      if (Boolean(next.bankCheck?.passed) !== Boolean(r.bankCheck?.passed)) {
+      // The 1 € step changes while the request stays in review: it passes,
+      // or the sweep records a new answer. Redraw only then, so the screen
+      // does not jump under the person on every poll.
+      const was = prev.bankCheck || {}, now = next.bankCheck || {};
+      if (Boolean(now.passed) !== Boolean(was.passed) || now.lastCheck?.at !== was.lastCheck?.at || now.codeIssuedAt !== was.codeIssuedAt) {
         obRender({ focus: false });
-        if (next.bankCheck?.passed) Z.announce("Your 1 € arrived. That check is done.");
+        if (now.passed && !was.passed) Z.announce("Your 1 € arrived. That check is done.");
       }
     } catch (e) {
       // 410: the request expired while this phone waited. The body is the
@@ -663,6 +670,9 @@ async function recoverConfirmCode(btn) {
    request it belongs to. The server keeps only its hash, so after a reload
    the screen offers a new code instead. */
 let rcBankIssued = null;
+/* Counts the 1 € calls, so a poll that was already out when one answered
+   does not put the older state back. */
+let rcBankSeq = 0;
 
 /** 1 € step: a reference for the transfer from the enrolled bank account. */
 async function recoverBankCode(btn) {
@@ -671,6 +681,7 @@ async function recoverBankCode(btn) {
   Z.setLoading(btn, true);
   try {
     const { code: _code, memo, ...r } = await rcApi(`/api/recovery/zoldenburg/${rcState.id}/bank-code`, {});
+    rcBankSeq++;
     rcBankIssued = { id: r.id, codeIssuedAt: r.bankCheck?.codeIssuedAt, memo };
     rcState = r;
     obRender({ focus: false });
@@ -687,6 +698,7 @@ async function recoverBankCheck(btn) {
   Z.setLoading(btn, true);
   try {
     rcState = await rcApi(`/api/recovery/zoldenburg/${rcState.id}/bank-check`, {});
+    rcBankSeq++;
     obRender({ focus: false });
     const b = rcState.bankCheck || {};
     Z.announce(b.passed ? "Your 1 € arrived. That check is done." : b.lastCheck?.reason || "Your 1 € has not arrived yet.");
