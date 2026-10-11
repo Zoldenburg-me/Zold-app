@@ -18,7 +18,7 @@
  * caller writes. A page marks the spot with <!--zold:abs-->; without a public
  * url, og:image falls back to a relative path and canonical is left out.
  *
- * The website pages (landing, imprint, legal notes, partner terms, cookies, 404) share one nav and one
+ * The website pages (landing, comparisons, imprint, legal notes, partner terms, cookies, 404) share one nav and one
  * footer, kept in ../../site/ and filled in at <!--zold:site-nav--> and
  * <!--zold:site-footer--> so they are not six copies that drift apart.
  */
@@ -35,9 +35,12 @@ const pub = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../publi
 const site = path.join(pub, "../site");
 const base = PUBLIC_URL.replace(/\/+$/, "");
 
-/** The pages search engines are invited to: the landing and the legal pages.
- *  Everything else is an app screen or a credential-bearing link. */
-const INDEXABLE = ["/", "/imprint", "/legal", "/partner-terms", "/privacy"];
+/** Side-by-side pages, one per provider, served from public/compare/. */
+const COMPARISONS = ["qonto", "revolut-business", "holyheld"];
+
+/** The pages search engines are invited to: the landing, the comparisons and
+ *  the legal pages. Everything else is an app screen or a credential-bearing link. */
+const INDEXABLE = ["/", ...COMPARISONS.map((c) => `/compare/${c}`), "/imprint", "/legal", "/partner-terms", "/privacy"];
 
 const attr = (s: string) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 
@@ -102,6 +105,8 @@ export function createPageRouter() {
   router.get("/legal", page("legal.html", "/legal"));
   router.get("/partner-terms", page("partner-terms.html", "/partner-terms"));
   router.get("/privacy", page("privacy.html", "/privacy"));
+  for (const c of COMPARISONS) router.get(`/compare/${c}`, page(`compare/${c}.html`, `/compare/${c}`));
+  router.get(["/compare", "/compare/"], (_req, res) => res.redirect(302, `/compare/${COMPARISONS[0]}`));
 
   router.get("/robots.txt", (_req, res) => {
     const lines = [
