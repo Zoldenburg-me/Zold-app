@@ -16,7 +16,7 @@ import { IndexedDbStamper } from "../vendor/turnkey.js";
 import { startLogin } from "../guardian/oauth.js";
 import { providerButtons } from "../guardian/providers.js";
 import { finishApprove } from "./approve.js";
-import { bankStepChanged, bankStepHtml, issuedFor, keepIssued } from "./bank-step.js";
+import { bankStepChanged, bankStepHtml, checkAnswerText, issuedFor, keepIssued } from "./bank-step.js";
 import {
   EMAIL_KEY, SECRET_KEY, TICKET_KEY, currentAuth, endedText, finalizeAfter, requestPath, saveFor, savedFor, screenFor, startRecovery,
 } from "./flow.js";
@@ -45,6 +45,9 @@ function leftText(ms) {
   return `${m}m`;
 }
 
+/** Polls in a row that may fail before the page says it cannot reach Zold. */
+const POLL_MISSES_SHOWN = 3;
+
 async function boot() {
   // A login coming back carries its ID token in the fragment: out of the
   // address bar and history before anything else.
@@ -55,7 +58,9 @@ async function boot() {
   const caps = health?.capabilities ?? {};
 
   // `gen` counts renders: a poll that started before the latest one drops its answer.
-  const s = { email: "", mode: "", request: null, notice: "", error: "", timer: null, gen: 0 };
+  // `misses` counts polls in a row that could not reach Zold; `bankNote` is
+  // the answer to the last "check now" click.
+  const s = { email: "", mode: "", request: null, notice: "", error: "", timer: null, gen: 0, misses: 0, bankNote: "" };
   try { s.email = sessionStorage.getItem(EMAIL_KEY) || ""; } catch { /* storage blocked */ }
   const secret = () => savedFor(localStorage, SECRET_KEY, s.email);
   const ticket = () => savedFor(localStorage, TICKET_KEY, s.email);
@@ -86,6 +91,16 @@ async function boot() {
   };
   const busy = (btn, on) => { if (btn) { btn.toggleAttribute("aria-busy", on); btn.disabled = on; } };
 
+  /* Say, or stop saying, that the page cannot reach Zold. Its own element,
+     outside the screens: a redraw does not hide it, and it never touches a
+     real error in #r-err. */
+  const net = document.getElementById("r-net");
+  const unreachable = (on) => {
+    if (!net) return;
+    net.textContent = on ? "We can’t reach Zold right now. We keep trying; your recovery is not affected." : "";
+    net.hidden = !on;
+  };
+
   /* Re-read the request while it waits: every minute, or just after the waiting period. */
   const follow = () => {
     const r = s.request;
@@ -101,8 +116,16 @@ async function boot() {
         if (e?.status === 410 && e.body?.status) { s.request = e.body; return show(); }
         // Gone, or no longer this browser's: stop asking.
         if (e?.status === 404) { s.request = { status: "GONE", error: "This recovery can’t continue from this browser. Start again." }; return show(); }
+        // Anything else: keep asking, and after a few misses say so, or the
+        // page goes on promising to pick the payment up while it cannot.
+        console.warn(`recovery: could not read the request (${e?.status || e?.message || e})`);
+        if (++s.misses >= POLL_MISSES_SHOWN) unreachable(true);
       }
       if (gen !== s.gen) return;
+      if (next && s.misses) {
+        unreachable(false);
+        s.misses = 0;
+      }
       if (next) {
         const changed = next.status !== r.status;
         // The 1 € step moves while the request stays in review: redraw it
@@ -110,7 +133,8 @@ async function boot() {
         const stepMoved = !changed && s.mode === "zoldenburg" && bankStepChanged(s.request, next);
         s.request = next;
         if (changed) return show();
-        if (stepMoved) redraw();
+        // A click's answer is for that moment: the next read replaces it.
+        if (stepMoved || s.bankNote) { s.bankNote = ""; redraw(); }
       }
       tick();
       follow();
@@ -221,7 +245,7 @@ async function boot() {
       <h1 tabindex="-1">Let’s confirm it’s you</h1>
       <p>Two checks: 1 € from your own bank account, and our team checks you against the ID you gave Monerium. Then your account moves to this phone.</p>
       ${ref ? `<p class="r-ref">Your reference <b translate="no">${esc(ref)}</b></p>` : ""}
-      ${bankStepHtml(s.request, issuedFor(sessionStorage, s.request))}
+      ${bankStepHtml(s.request, issuedFor(sessionStorage, s.request), s.bankNote)}
       <p class="r-err" id="r-err" role="alert"${s.error ? "" : " hidden"}>${esc(s.error)}</p>
       ${paid ? "<h2>Then: email us</h2>" : "<h2>And: email us</h2>"}
       <div class="r-actions"><a class="z-btn${paid ? " z-btn--primary" : ""}" href="${esc(mail)}">Email support</a></div>
@@ -289,6 +313,7 @@ async function boot() {
         try {
           const { code: _code, memo, ...request } = await api(requestPath("zoldenburg", s.request.id, "/bank-code"), {}, auth());
           keepIssued(sessionStorage, { ...request, memo });
+          s.bankNote = "";
           s.request = request;
           s.error = "";
           clearTimeout(s.timer);
@@ -301,15 +326,26 @@ async function boot() {
       el.querySelector('[data-bank="check"]')?.addEventListener("click", async (e) => {
         const btn = e.currentTarget;
         busy(btn, true);
+        const gen = s.gen;
         try {
-          s.request = await api(requestPath("zoldenburg", s.request.id, "/bank-check"), {}, auth());
+          const { check, ...request } = await api(requestPath("zoldenburg", s.request.id, "/bank-check"), {}, auth());
+          // A poll moved the page on (a status change) while this was out:
+          // its screen is newer than this answer.
+          if (gen !== s.gen) return;
+          s.request = request;
+          s.bankNote = request.bankCheck?.passed ? "" : checkAnswerText({ ...request, check });
           s.error = "";
           clearTimeout(s.timer);
           s.gen++;
           redraw();
           el.querySelector(s.request.bankCheck?.passed ? "h1" : '[data-bank="check"]')?.focus();
           follow();
-        } catch (err) { busy(btn, false); fail(err); }
+        } catch (err) {
+          // Expired while the person waited: the answer is the request, ended.
+          if (err?.status === 410 && err.body?.status) { s.request = err.body; return show(); }
+          busy(btn, false);
+          fail(err);
+        }
       });
     },
     wait: () => {

@@ -85,12 +85,18 @@ guardian built behind `TURNKEY_GUARDIANS`: `recovery-guardians-plan.md`.
   the enrolled bank account to the Zold IBAN
   (`recovery/zoldenburg-bank-check.ts`). It passes only when the payer IBAN's
   HMAC equals the enrolled one under the key in use and the payer's name
-  matches the Monerium name, read live; an unreadable Monerium leaves it open.
+  matches the Monerium name, read live. An unreadable Monerium, an account
+  without a Monerium profile id, an account not armed at that moment, or any
+  error inside the check is recorded as `unreadable` and leaves it open; it
+  never passes on a failed read. The person sees one text for all of these;
+  /admin shows the cause. A programming error (TypeError and kin) is thrown,
+  not recorded.
   A recovery code's purpose is in its hash, so an enrolment code never
-  passes it. A request gets at most 5 codes; a transfer sent with an earlier
+  passes it. A request gets at most 5 codes, and an operator can give them
+  back (`/admin/recoveries/:id/bank-reset`); a transfer sent with an earlier
   one still counts, and a new code does not reset the 30 s Monerium read
   throttle. The pass records the enrolment it matched: a re-enrolment voids
-  it. The person sees no digits of either IBAN, because anyone who knows the
+  it, and /admin shows the pass as no longer counting. The person sees no digits of either IBAN, because anyone who knows the
   account's email can start a request. An owner who closed the enrolled bank
   account cannot pass this check. Until it passes,
   `sign-request`, `execute` and `sync` answer 409 `BANK_CHECK_PENDING`, and

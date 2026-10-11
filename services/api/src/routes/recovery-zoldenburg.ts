@@ -70,6 +70,7 @@ import { ENROLMENT, enrolmentAvailable, enrolmentView, zoldenburgArmed } from ".
 import {
   bankCheckPassed,
   bankCheckView,
+  RECOVERY_BANK,
   canIssueRecoveryBankCode,
   checkRecoveryBankPayment,
   issueRecoveryBankCode,
@@ -201,6 +202,11 @@ async function screenState(user: User) {
  * (whether it was relayed here or executed in Safe Cover); owners already
  * equal to them means it was finalised elsewhere.
  */
+/** The request's zoldenburg block as stored now. A write after a chain read
+ *  spreads this, not a copy taken before the read, so a 1 € check that
+ *  passed meanwhile is not put back. */
+const zoldenburgNow = (id: string) => store.findRecoveryRequest(id)!.zoldenburg!;
+
 export async function syncZoldenburgFromChain(request: RecoveryRequest, now = new Date()): Promise<RecoveryRequest> {
   const z = request.zoldenburg;
   if (!z?.newOwners?.length || !["REVIEW_PENDING", "GRACE_PERIOD"].includes(request.status)) return request;
@@ -215,7 +221,7 @@ export async function syncZoldenburgFromChain(request: RecoveryRequest, now = ne
       return store.updateRecoveryRequest(request.id, {
         status: "GRACE_PERIOD",
         factors: { ...request.factors, kyc: "passed", manualReview: "passed" },
-        zoldenburg: { ...z, executedAt: z.executedAt ?? now.toISOString(), finalizeAfter: executeAfter.toISOString() },
+        zoldenburg: { ...zoldenburgNow(request.id), executedAt: z.executedAt ?? now.toISOString(), finalizeAfter: executeAfter.toISOString() },
       });
     }
   }
@@ -231,7 +237,7 @@ function bindAndFinish(request: RecoveryRequest, user: User, now: Date, txHash: 
   return store.updateRecoveryRequest(request.id, {
     status: "FINALIZED",
     finalizedAt: now.toISOString(),
-    zoldenburg: { ...z, ...(txHash ? { finalizeTxHash: txHash } : {}), finalizeError: undefined },
+    zoldenburg: { ...zoldenburgNow(request.id), ...(txHash ? { finalizeTxHash: txHash } : {}), finalizeError: undefined },
   });
 }
 
@@ -262,7 +268,7 @@ export async function finalizeZoldenburgRecovery(request: RecoveryRequest, now =
   }
   if (!sameSet(owners, z.newOwners)) {
     return store.updateRecoveryRequest(request.id, {
-      zoldenburg: { ...z, finalizeAttempts: (z.finalizeAttempts ?? 0) + 1, finalizeError: finalizeError ?? "the Safe's owners do not show the recovered set yet" },
+      zoldenburg: { ...zoldenburgNow(request.id), finalizeAttempts: (zoldenburgNow(request.id).finalizeAttempts ?? 0) + 1, finalizeError: finalizeError ?? "the Safe's owners do not show the recovered set yet" },
     });
   }
   return bindAndFinish(request, user, now, txHash);
@@ -681,9 +687,21 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
     wrap(async (req, res) => {
       const request = requestFor(req, res);
       if (!request) return;
-      const last = request.zoldenburg?.bankCheck?.lastReadAt;
-      if (!last || Date.now() - Date.parse(last) >= ENROLMENT.checkEveryMs) await checkRecoveryBankPayment(request.id);
-      res.json(askView(store.findRecoveryRequest(request.id)!));
+      const last = Date.parse(request.zoldenburg?.bankCheck?.lastReadAt ?? "");
+      const next = Number.isFinite(last) ? last + ENROLMENT.checkEveryMs : 0;
+      // What this click did, so the page says that and not an older answer:
+      // `recent` asked nothing (the last read is under checkEveryMs old);
+      // `reason` only when this click recorded one.
+      const now = new Date();
+      let check: { outcome: string; nextCheckAt?: string; reason?: string };
+      if (now.getTime() >= next) {
+        const outcome = await checkRecoveryBankPayment(request.id, undefined, now);
+        const lc = store.findRecoveryRequest(request.id)!.zoldenburg?.bankCheck?.lastCheck;
+        check = { outcome, ...(lc?.at === now.toISOString() ? { reason: lc.reason } : {}) };
+      } else {
+        check = { outcome: "recent", nextCheckAt: new Date(next).toISOString() };
+      }
+      res.json({ ...askView(store.findRecoveryRequest(request.id)!), check });
     }),
   );
 
@@ -743,9 +761,15 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       bankCheck: {
         passed: bankCheckPassed(r, user),
         passedAt: z?.bankCheck?.passedAt,
+        // Passed once, no longer counts: the owner re-enrolled, or the
+        // account is not armed any more.
+        voided: Boolean(z?.bankCheck?.passedAt) && !bankCheckPassed(r, user),
         orderId: z?.bankCheck?.orderId,
         codeIssuedAt: z?.bankCheck?.code?.issuedAt,
         lastCheck: z?.bankCheck?.code ? z.bankCheck.lastCheck : undefined,
+        lastReadAt: z?.bankCheck?.lastReadAt,
+        codesIssued: z?.bankCheck?.codesIssued ?? 0,
+        maxCodes: RECOVERY_BANK.maxCodes,
       },
       safeCoverLink:
         !refusalFor(r) && z?.newOwners?.length && r.status === "REVIEW_PENDING"
@@ -937,8 +961,9 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
         reviewedBy: operatorLabel(req),
         reviewReason: note,
         factors: { ...r.factors, kyc: "passed", manualReview: "passed" },
+        // Read again after the chain calls above, as in syncZoldenburgFromChain.
         zoldenburg: {
-          ...r.zoldenburg,
+          ...zoldenburgNow(r.id),
           recoveryHash: digest,
           executeTxHash: txHash,
           executedAt: now.toISOString(),
@@ -979,6 +1004,24 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       if (!r) return;
       if (r.status !== "GRACE_PERIOD") return res.status(409).json({ error: `recovery is ${r.status}` });
       res.json(adminView(await finalizeZoldenburgRecovery(r)));
+    }),
+  );
+
+  /** Give the person their references back, after support has spoken with
+   *  them. The codes already issued stay valid; the Monerium read throttle
+   *  is untouched. */
+  router.post(
+    "/admin/recoveries/:id/bank-reset",
+    wrap(async (req, res) => {
+      const r = adminRequest(req, res);
+      if (!r) return;
+      if (r.status !== "REVIEW_PENDING") return res.status(409).json({ error: `recovery is ${r.status}` });
+      const b = r.zoldenburg?.bankCheck;
+      if (b?.passedAt && bankCheckPassed(r, store.findUser(r.userId))) return res.status(409).json({ error: "the 1 € check has passed", code: "ALREADY_PASSED" });
+      if (!b || !(b.codesIssued ?? 0)) return res.status(409).json({ error: "no references were issued for this recovery", code: "NOTHING_TO_RESET" });
+      const updated = store.updateRecoveryRequest(r.id, { zoldenburg: { ...r.zoldenburg, bankCheck: { ...b, codesIssued: 0 } } });
+      console.log(`RECOVERY: ${r.id} references reset by ${operatorLabel(req)} (had ${b.codesIssued})`);
+      res.json(adminView(updated));
     }),
   );
 

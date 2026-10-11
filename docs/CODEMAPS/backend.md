@@ -20,7 +20,7 @@ json → securityHeaders → originPolicy → /api rate limit → pages → rout
 | /api | routes/documents.ts | receipt/statement/balance/ownership docs, /v/:code verify |
 | /api | routes/receipt-shares.ts | share a transfer receipt, /r/:slug |
 | /api | routes/recovery-candide.ts | email/SMS guardian channels, recovery flow |
-| /api | routes/recovery-zoldenburg.ts | Zoldenburg guardian + /admin/recoveries; the recovery 1 €: /recovery/zoldenburg/:id/bank-code (+ /bank-check), checked in recovery/zoldenburg-bank-check.ts |
+| /api | routes/recovery-zoldenburg.ts | Zoldenburg guardian + /admin/recoveries; the recovery 1 €: /recovery/zoldenburg/:id/bank-code (+ /bank-check), /admin/recoveries/:id/bank-reset, checked in recovery/zoldenburg-bank-check.ts |
 | /api | routes/recovery-zoldenburg-enrolment.ts | the 1 € that arms Zoldenburg: /users/:id/recovery/zoldenburg/enrolment (+ /check) |
 | /api | routes/recovery-turnkey.ts | Turnkey guardian sub-orgs: /recovery/turnkey/users/:id/guardians (+ /:subOrgId/add and /remove, /ops/:requestId: the passkey ops that add or remove it on chain), /recovery/turnkey/login (404 until `TURNKEY_GUARDIANS=1`) |
 | /api | routes/recovery-turnkey-requests.ts | recovery with that guardian: /recovery/turnkey/requests (+/:id/passkey, /digest, /signature, /finalize; per-request secret), /users/:id/recovery/turnkey/requests (+/:rid/cancel) |
