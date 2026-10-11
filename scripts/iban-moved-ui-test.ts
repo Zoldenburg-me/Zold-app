@@ -151,4 +151,41 @@ await t("a pending account waiting for its first IBAN shows no move-back warning
   assert.doesNotMatch(flat(run("PH.home.html()")), /moved to another app/);
 });
 
+/* Approved, IBAN gone, and no record of where (a move back Monerium had not
+   confirmed): the account must be offered "Switch on", never an ID check. */
+const switchedOff = { ...base, iban: "", monerium: { ...base.monerium, method: "api_keys", connectedAt: "2026-10-10T10:00:00Z" },
+  funding: { mode: "sandbox", status: "iban_pending", moneriumProfileId: "p1", detail: "Monerium accepted moving it but does not show it here yet" } };
+
+await t("approved without an IBAN: Home and the desktop card say Switch on your IBAN, not Verify your identity", () => {
+  setUser(switchedOff);
+  assert.equal(run("ibanSwitchedOff(user)"), true);
+  const home = flat(run("PH.home.html()"));
+  assert.match(home, /isn’t switched on for this account/);
+  assert.match(home, /Switch on/);
+  assert.doesNotMatch(home, /Verify your identity/);
+  assert.doesNotMatch(home, /Follows your verification/);
+  const desk = flat(run("phDeskBalance(user)"));
+  assert.match(desk, /Switch on your IBAN/);
+  assert.doesNotMatch(desk, /Verify your identity/);
+  const details = flat(run("phDetailsBody(user, null)"));
+  assert.match(details, /Switch on your IBAN/);
+});
+
+await t("approved without an IBAN: the button opens Switch on your IBAN, and the developer keys screen opens", () => {
+  setUser(switchedOff);
+  run(`__went = []; obShow = () => {}; obGo = (n) => { __went.push(n); };`);
+  run(`enterKycReview("x")`);
+  assert.equal(run("JSON.stringify(__went)"), JSON.stringify(["activate"]));
+  run(`caps = { ...caps, moneriumApiKeys: true }`);
+  assert.equal(run(`obGuard("monerium-keys")`), "monerium-keys");
+});
+
+await t("an approved account with its IBAN still bounces off the keys screen; a moved-away one is not 'switched off'", () => {
+  setUser(active);
+  run(`caps = { ...caps, moneriumApiKeys: true }`);
+  assert.notEqual(run(`obGuard("monerium-keys")`), "monerium-keys");
+  setUser(movedAway);
+  assert.equal(run("ibanSwitchedOff(user)"), false);
+});
+
 console.log(`\nIBAN MOVED UI TEST PASSED — ${pass}/${pass}`);

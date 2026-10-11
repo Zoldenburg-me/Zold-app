@@ -66,7 +66,11 @@ export async function checkConnection() {
  *  theirs, whatever address it pays. */
 export async function findIban(address: string, user?: User): Promise<string | undefined> {
   const res = await (user ? moneriumClientFor(user) : getClient()).ibans();
-  const list = Array.isArray(res) ? res : (res?.ibans ?? []);
+  return ownIbanIn(Array.isArray(res) ? res : (res?.ibans ?? []), address, user);
+}
+
+/** The IBAN in `list` that pays into `address` on our chain, on the user's profile. */
+function ownIbanIn(list: any[], address: string, user?: User): string | undefined {
   const profileId = user ? (user.monerium?.profileId ?? user.funding?.moneriumProfileId) : undefined;
   const hit = list.find(
     (i: any) =>
@@ -214,11 +218,57 @@ export function confirmedMoves(user: User, iban: string): User["moneriumIbanMove
   return moves.map((m, i) => (i === idx ? { ...m, confirmedAt: new Date().toISOString() } : m));
 }
 
+/**
+ * Where an approved, pending account's IBAN pays now, when Monerium lists it
+ * paying another address or chain. The IBAN looked for is the one the user
+ * last asked to move here, else the one already recorded as elsewhere, else
+ * the connected profile's only IBAN (a Monerium profile has one). Listed more
+ * than once, or not at all, is no verdict. A pending account that was never
+ * approved is activation's business, not this notice's.
+ */
+export function pendingIbanElsewhere(user: User, ibans: any[]): User["moneriumIbanElsewhere"] | undefined {
+  if (user.kycStatus !== "approved" || user.iban) return undefined;
+  const profileId = user.monerium?.profileId ?? user.funding?.moneriumProfileId;
+  const onProfile = ibans.filter((i: any) =>
+    typeof i?.iban === "string" && !(profileId && typeof i.profile === "string" && i.profile !== profileId));
+  const asked = [...(user.moneriumIbanMoves ?? [])].reverse().find((m) => !m.confirmedAt)?.iban;
+  const only = new Set(onProfile.map((i: any) => normalizeIban(i.iban)));
+  const wanted = asked ?? user.moneriumIbanElsewhere?.iban ?? (only.size === 1 ? [...only][0] : undefined);
+  if (!wanted) return undefined;
+  const target = normalizeIban(wanted);
+  const hits = onProfile.filter((i: any) => normalizeIban(i.iban) === target);
+  if (hits.length !== 1 || !hits[0].address || paysInto(hits[0], user.address)) return undefined;
+  const hit = hits[0];
+  return {
+    iban: target,
+    address: String(hit.address),
+    chain: typeof hit.chain === "string" ? hit.chain : "",
+    ...(typeof hit.profile === "string" ? { profileId: hit.profile } : {}),
+    seenAt: new Date().toISOString(),
+  };
+}
+
 /** Re-check a user whose IBAN was still pending. */
 export async function refreshPendingIban(user: User): Promise<User> {
   if (user.funding?.status !== "iban_pending") return user;
   try {
-    const iban = await findIban(user.address, user);
+    const list = ibanList(await moneriumClientFor(user).ibans());
+    const iban = ownIbanIn(list, user.address, user);
+    if (!iban) {
+      // Not here: say where it is, so the app offers moving it back. Written
+      // only when the place changed, so the poller does not rewrite the row.
+      const away = pendingIbanElsewhere(user, list);
+      const was = user.moneriumIbanElsewhere;
+      if (away && (was?.iban !== away.iban || was?.address.toLowerCase() !== away.address.toLowerCase() || was?.chain !== away.chain)) {
+        store.audit(auditEntry(
+          "partner.iban_moved_elsewhere",
+          { partner: "monerium", ibanLast4: away.iban.slice(-4), toAddress: away.address, toChain: away.chain },
+          user.id,
+        ));
+        return store.updateUser(user.id, { moneriumIbanElsewhere: away });
+      }
+      return user;
+    }
     if (iban) {
       // A move (PATCH /ibans) that Monerium has now carried out: record it
       // and take the IBAN off whichever account it used to pay.
