@@ -46,6 +46,7 @@ import {
   zoldenburgGuardianSetupTransactions,
   zoldenburgRecoveryEnabled,
 } from "../recovery/zoldenburg-guardian.js";
+import { hostedGuardianBlocked, ONE_GUARDIAN_MESSAGE } from "../recovery/one-guardian.js";
 import {
   CANDIDE,
   assertRecoveryModuleDeployed,
@@ -134,6 +135,11 @@ function assertCanRemove(state: RecoveryModuleState): void {
 
 const moduleFor = (user: User) =>
   (user.passkeySafe?.recovery?.moduleAddress ?? user.passkeySafe?.candideRecovery?.moduleAddress ?? CANDIDE.recoveryModuleAddress) as `0x${string}`;
+
+/** One guardian at a time (recovery/one-guardian.ts). */
+function assertNoOtherGuardian(user: User, guardians: readonly string[]) {
+  if (hostedGuardianBlocked(user, guardians)) throw new ZoldenburgRecoveryError(ONE_GUARDIAN_MESSAGE, 409, "OTHER_GUARDIAN");
+}
 
 /** Is Zoldenburg's CURRENT guardian the one recorded as active on this Safe? */
 export function hasZoldenburgGuardian(user: User): boolean {
@@ -316,12 +322,18 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
         return res.status(400).json({ error: "confirm that you read how Zoldenburg recovery works", code: "NOT_ACKNOWLEDGED" });
       }
       const plan = activePlan(user);
+      // One guardian at a time: at threshold 1 Zoldenburg and a Google/Apple
+      // login could each recover the account alone, and nothing collects two
+      // signatures yet. Checked on the store first, then on the chain below,
+      // and again right before the op is submitted.
+      assertNoOtherGuardian(user, []);
       const moduleAddress = moduleFor(user);
       await assertRecoveryModuleDeployed(moduleAddress);
       // Read THIS module, whatever the stored plan says about Zoldenburg.
       const state = await readRecoveryState(
         { ...plan, recovery: { moduleAddress, guardianAddress: guardian, threshold: 1, status: "planned" } } as PasskeySafeDeploymentPlan,
       );
+      assertNoOtherGuardian(user, state.guardians);
       const now = new Date().toISOString();
       if (!HARNESS.enabled && state.guardians.some((g) => g.toLowerCase() === guardian.toLowerCase())) {
         const updated = store.updateUser(user.id, {
@@ -395,6 +407,20 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
         return fail(res, err);
       }
       if (!(await checkOpAssertion(user, req.body, pending.challenge, res))) return;
+      if (pending.kind === "add") {
+        // A Google/Apple guardian added since this op was prepared would sit
+        // beside Zoldenburg at threshold 1.
+        const zold = zoldenburgGuardianAddress()!;
+        const onChain = await readRecoveryState(
+          { ...plan, recovery: { moduleAddress: moduleFor(user), guardianAddress: zold, threshold: 1, status: "planned" } } as PasskeySafeDeploymentPlan,
+        );
+        try {
+          assertNoOtherGuardian(user, onChain.guardians);
+        } catch (err) {
+          pendingOps.delete(req.params.requestId);
+          throw err;
+        }
+      }
       const op = await submitPasskeySafeOperationWithReceipt(plan, pending.userOperation, toAssertion(req.body));
       pendingOps.delete(req.params.requestId);
       if (op.success === false) {
