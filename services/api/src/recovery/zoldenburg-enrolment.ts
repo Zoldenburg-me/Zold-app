@@ -149,14 +149,18 @@ export interface EnrolmentReads {
 const profileIdOf = (u: User) => u.monerium?.profileId ?? u.funding?.moneriumProfileId;
 
 /** The reads, given how to reach Monerium; tests hand in fakes. A response
- *  in neither known shape throws rather than reading as "no orders yet". */
+ *  in neither known shape throws rather than reading as "no orders yet", and
+ *  so does an account with no Monerium profile id: without it Monerium
+ *  answers with its default profile's orders, which may not be this one's. */
 export function moneriumReadsWith(
   clientFor: (user: User) => { orders(profile?: string): Promise<unknown> },
   readProfile: (user: User, profileId: string) => Promise<{ name?: string }>,
 ): EnrolmentReads {
   return {
     async orders(user) {
-      const res: any = await clientFor(user).orders(profileIdOf(user));
+      const id = profileIdOf(user);
+      if (!id) throw new Error("the account has no Monerium profile id");
+      const res: any = await clientFor(user).orders(id);
       if (Array.isArray(res)) return res;
       if (Array.isArray(res?.orders)) return res.orders;
       throw new Error("Monerium answered the order list in an unknown shape");
