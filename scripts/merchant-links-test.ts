@@ -24,7 +24,7 @@ import "./_test-env.js";
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
 import { createServer } from "node:http";
@@ -200,20 +200,32 @@ await check("with origin, credential and data key the capability is on and names
 });
 const tsx = new URL("../node_modules/.bin/tsx", import.meta.url).pathname;
 const linksModule = new URL("../services/api/src/merchant-links.ts", import.meta.url).pathname;
-const availabilityWith = (origin: string) => spawnSync(tsx, ["-e",
-  `import(${JSON.stringify(linksModule)}).then((m) => console.log(JSON.stringify(m.merchantLinksAvailable()))).catch((e) => { console.error(e.message); process.exit(1); })`], {
-  env: { ...process.env, CHECKOUT_SERVICE_ORIGIN: origin }, encoding: "utf8",
+/** A fresh process per origin, since config is read at import. Async on
+ *  purpose: spawnSync froze the event loop past the API server's 5 s
+ *  keep-alive, and the next request then reused a socket the server was
+ *  closing ("fetch failed" on slow CI runners). */
+const availabilityWith = (origin: string) => new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+  const child = spawn(tsx, ["-e",
+    `import(${JSON.stringify(linksModule)}).then((m) => console.log(JSON.stringify(m.merchantLinksAvailable()))).catch((e) => { console.error(e.message); process.exit(1); })`], {
+    env: { ...process.env, CHECKOUT_SERVICE_ORIGIN: origin },
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8").on("data", (c: string) => (stdout += c));
+  child.stderr.setEncoding("utf8").on("data", (c: string) => (stderr += c));
+  child.on("error", reject);
+  child.on("close", (status) => resolve({ status, stdout, stderr }));
 });
-await check("CHECKOUT_SERVICE_ORIGIN unset: merchant links are off", () => {
-  const r = availabilityWith("");
+await check("CHECKOUT_SERVICE_ORIGIN unset: merchant links are off", async () => {
+  const r = await availabilityWith("");
   assert.equal(r.status, 0, r.stderr);
   const out = JSON.parse(r.stdout.trim().split("\n").pop()!);
   assert.equal(out.available, false);
   assert.match(out.reason, /CHECKOUT_SERVICE_ORIGIN/);
 });
 for (const [label, origin] of [["plain http to a remote host", "http://checkout.example"], ["a path", "https://checkout.example/app"], ["credentials", "https://u:p@checkout.example"]] as const) {
-  await check(`config refuses CHECKOUT_SERVICE_ORIGIN with ${label}`, () => {
-    const r = availabilityWith(origin);
+  await check(`config refuses CHECKOUT_SERVICE_ORIGIN with ${label}`, async () => {
+    const r = await availabilityWith(origin);
     assert.notEqual(r.status, 0);
     assert.match(r.stderr, /CHECKOUT_SERVICE_ORIGIN/);
   });
