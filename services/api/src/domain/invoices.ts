@@ -222,19 +222,28 @@ export function payableEur(invoice: Invoice): number | undefined {
  * Every value comes from the deposit record. Nothing is recomputed from a rate
  * feed at read time: a rate read later is not the one that applied.
  *
+ * Written on arrival, and rewritten under the same ref when the asset is
+ * later converted. `amountEur` is what the payment was worth when it arrived
+ * (the receivable it discharged) and does not change on conversion; the
+ * conversion block and the realised gain are added beside it. Only when the
+ * receipt could not be valued does the measured conversion stand in.
+ *
  * The conversion block appears only once the asset has been converted. Without
  * it the invoice reads as "paid, asset still held", which is a real balance
  * sheet position.
  */
 export function buildCryptoSettlement(deposit: CryptoDeposit): CryptoInvoiceSettlement {
   const received = deposit.token === "USDC" ? deposit.amountUsdc ?? 0 : deposit.amountEur ?? 0;
-  const converted = deposit.state === "CONVERTED" && deposit.settlementAsset === "EURE";
+  const converted = deposit.token === "USDC" && deposit.holding === "converted";
   /**
    * The venue's spread against the independent mid, in euro: the only fee
    * figure we can state. Needs both rates and is absent otherwise. Don't infer
    * it from the receipt-to-credit difference, which also contains market
    * movement.
    */
+  // The swap that converted it: the chain's record, else the executed step.
+  // Never a reverted or unconfirmed attempt, whose steps also say usdc->eure.
+  const conversionTx = deposit.conversion?.txHash ?? deposit.txs.filter((t) => t.step === "safe.swap(usdc->eure)").at(-1)?.hash;
   const spreadEur =
     converted && deposit.rate && deposit.midRate && deposit.amountUsdc
       ? Math.round((deposit.amountUsdc / deposit.midRate - deposit.amountUsdc / deposit.rate) * 100) / 100
@@ -243,7 +252,7 @@ export function buildCryptoSettlement(deposit: CryptoDeposit): CryptoInvoiceSett
     method: "crypto",
     ref: `deposit:${deposit.id}`,
     depositId: deposit.id,
-    amountEur: deposit.creditedEur ?? deposit.receipt?.amountEur ?? 0,
+    amountEur: deposit.receipt?.amountEur ?? deposit.creditedEur ?? 0,
     receivedAsset: deposit.token,
     receivedAmount: received,
     receiptTxHash: deposit.txHash,
@@ -259,9 +268,7 @@ export function buildCryptoSettlement(deposit: CryptoDeposit): CryptoInvoiceSett
     ...(converted
       ? {
           conversion: {
-            ...(deposit.txs.find((t) => t.step.includes("usdc->eure"))?.hash
-              ? { txHash: deposit.txs.find((t) => t.step.includes("usdc->eure"))!.hash }
-              : {}),
+            ...(conversionTx ? { txHash: conversionTx } : {}),
             ...(deposit.provider ? { venue: deposit.provider } : {}),
             ...(deposit.rate ? { rate: deposit.rate } : {}),
             ...(deposit.midRate ? { midRate: deposit.midRate } : {}),

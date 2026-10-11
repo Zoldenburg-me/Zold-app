@@ -385,7 +385,7 @@ await check("a deposit recorded twice by overlapping scans is stored once", () =
     amountUsdc: 1,
     settlementAsset: "USDC" as const,
     paymentAddress: "0x0000000000000000000000000000000000000001" as `0x${string}`,
-    state: "DETECTED" as const,
+    holding: "awaiting_approval" as const,
     txs: [],
     detectedAt: iso(0),
     updatedAt: iso(0),

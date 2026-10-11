@@ -537,7 +537,7 @@ export function attributeDepositToRequest(deposit: CryptoDeposit): PaymentReques
   if ((deposit.paymentAddress ?? "").toLowerCase() !== page.depositAddress.toLowerCase()) return undefined;
   const match = matchDepositToRequests(deposit, store.paymentRequestsForUser(user.id));
   if (!match) return undefined;
-  const settled = deposit.state === "CONVERTED";
+  const settled = !!deposit.settledAt;
   const saved = record(match.request, {
     method: "crypto",
     ref: `deposit:${deposit.id}`,
@@ -548,8 +548,7 @@ export function attributeDepositToRequest(deposit: CryptoDeposit): PaymentReques
     amountUsdc: deposit.amountUsdc,
     txHash: deposit.txHash,
     kind: match.kind,
-    ...(settled && deposit.creditedEur !== undefined ? { settledEur: deposit.creditedEur, settledAsset: "EURE" } : {}),
-    ...(settled && deposit.settlementAsset === "USDC" ? { settledEur: deposit.receipt?.amountEur, settledAsset: "USDC" } : {}),
+    ...(settled ? heldAs(deposit) : {}),
     at: deposit.receipt?.blockTimestamp ?? deposit.detectedAt,
   });
   /**
@@ -565,22 +564,21 @@ export function attributeDepositToRequest(deposit: CryptoDeposit): PaymentReques
   return saved;
 }
 
-/** A matched deposit was converted (or settled as USDC): write what the payee
- *  actually holds onto the payment row. */
+/** What the payee holds from a settled deposit: USDC at its receipt value,
+ *  or the EURe it was converted to. */
+function heldAs(deposit: CryptoDeposit): { settledEur?: number; settledAsset: "USDC" | "EURE" } {
+  return deposit.settlementAsset === "USDC"
+    ? { settledEur: deposit.receipt?.amountEur, settledAsset: "USDC" }
+    : { settledEur: deposit.creditedEur, settledAsset: "EURE" };
+}
+
+/** A matched deposit settled on arrival, or was later converted: write what
+ *  the payee holds now onto its payment row, in place. */
 export function noteDepositSettled(deposit: CryptoDeposit): void {
-  if (!deposit.paymentRequestId || deposit.state !== "CONVERTED") return;
+  if (!deposit.paymentRequestId || !deposit.settledAt) return;
   const r = store.findPaymentRequest(deposit.paymentRequestId);
   if (!r) return;
-  const payments = r.payments.map((p) =>
-    p.depositId === deposit.id
-      ? {
-          ...p,
-          ...(deposit.settlementAsset === "USDC"
-            ? { settledEur: deposit.receipt?.amountEur, settledAsset: "USDC" as const }
-            : { settledEur: deposit.creditedEur, settledAsset: "EURE" as const }),
-        }
-      : p,
-  );
+  const payments = r.payments.map((p) => (p.depositId === deposit.id ? { ...p, ...heldAs(deposit) } : p));
   store.updatePaymentRequest(r.id, { payments });
 }
 

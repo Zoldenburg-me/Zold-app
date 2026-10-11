@@ -60,7 +60,7 @@ await check("a processed issue order is one SEPA-in line with the bank facts and
   const inp = base();
   inp.paymentRequests = [req()];
   inp.issueOrders = [{ orderId: "ord-1", userId: "u_1", amountEur: 119, counterpartyName: "Kunde AG", counterpartyIban: "DE89370400440532013000", memo: "ABCDE-FGHJK-MNPQR Rechnung", processedAt: "2026-09-03T09:00:00.000Z", recordedAt: "2026-09-03T09:05:00.000Z" }];
-  inp.deposits = [{ id: "d-mint", userId: "u_1", chainId: 31337, token: "EURE", txHash: H(1), logIndex: 0, amountUnits: "119000000000000000000", from: `0x${"00".repeat(20)}` as any, amountEur: 119, creditedEur: 119, state: "CONVERTED", settlementAsset: "EURE", txs: [], detectedAt: "2026-09-03T09:01:00.000Z", updatedAt: "2026-09-03T09:01:00.000Z" }];
+  inp.deposits = [{ id: "d-mint", userId: "u_1", chainId: 31337, token: "EURE", txHash: H(1), logIndex: 0, amountUnits: "119000000000000000000", from: `0x${"00".repeat(20)}` as any, amountEur: 119, creditedEur: 119, holding: "none", settledAt: "2026-09-03T09:01:00.000Z", settlementAsset: "EURE", txs: [], detectedAt: "2026-09-03T09:01:00.000Z", updatedAt: "2026-09-03T09:01:00.000Z" }];
   const lines = projectStatementLines(inp, "2026-09-26T00:00:00.000Z");
   assert.equal(lines.length, 1, JSON.stringify(lines));
   const s = lines[0].statement!;
@@ -149,7 +149,7 @@ await check("a fee-only refund nets to zero: the fee out and the fee back", () =
 const usdcDeposit = (over: any = {}) => ({
   id: "d-1", userId: "u_1", chainId: 31337, token: "USDC", txHash: H(5), logIndex: 3, amountUnits: "137000000", amountUsdc: 137, from: `0x${"bb".repeat(20)}`,
   receipt: { amountEur: 120.14, rate: 1.1403, rateProvider: "ecb via api.frankfurter.dev", rateAsOf: "2026-09-10", ratedAt: "2026-09-10T10:00:00.000Z", blockTimestamp: "2026-09-10T09:58:00.000Z" },
-  state: "CONVERTED", settlementAsset: "EURE", creditedEur: 119.62, provider: "dex", rate: 1.1452, midRate: 1.1403, realisedGainEur: -0.52,
+  holding: "converted", settledAt: "2026-09-10T10:00:00.000Z", settlementAsset: "EURE", creditedEur: 119.62, provider: "dex", rate: 1.1452, midRate: 1.1403, realisedGainEur: -0.52,
   conversion: { userOpHash: H(6), txHash: H(7), blockNumber: 12, at: "2026-09-10T10:02:00.000Z", amountInUnits: "137000000", gasCostWei: "1200", gasPaidBy: "sponsored" },
   paymentRequestId: "pr_1",
   txs: [{ step: "safe.swap(usdc->eure)", hash: H(7) }, { step: "userOperation", hash: H(6) }],
@@ -157,43 +157,106 @@ const usdcDeposit = (over: any = {}) => ({
   ...over,
 });
 
-await check("a converted USDC deposit is one line at the credited euro amount, dated by the chain, labelled unexecuted while no swap has moved real money", () => {
+await check("a converted USDC deposit is a receipt line and a disposal line: the income once, then the realised gain", () => {
   const inp = base();
   inp.paymentRequests = [req()];
   inp.deposits = [usdcDeposit() as any];
   const lines = projectStatementLines(inp);
-  assert.equal(lines.length, 1);
-  const s = lines[0].statement!;
-  assert.equal(s.event, "crypto_converted");
-  assert.equal(s.amountCents, 11962, "credited, not the receipt value and not the quote");
-  assert.equal(s.bookingDate, "2026-09-10");
-  assert.equal(s.valueDate, "2026-09-10");
-  assert.equal(lines[0].at, "2026-09-10T10:02:00.000Z", "value date is the conversion's block time");
-  assert.equal(s.reference, "RE-2026-0042");
-  assert.deepEqual(s.links.txHashes, [H(5), H(7)], "receipt tx first, then the conversion's chain tx — never only the userOp hash");
-  assert.equal(s.links.userOpHash, H(6));
-  assert.equal(s.counterparty.address, `0x${"bb".repeat(20)}`);
-  assert.equal(s.unexecuted, true);
+  assert.equal(lines.length, 2);
+  const held = lines.find((l) => l.statement!.key === "deposit:d-1:held")!;
+  const disposal = lines.find((l) => l.statement!.key === "deposit:d-1:disposal")!;
+  assert.equal(held.statement!.event, "crypto_held");
+  assert.equal(held.statement!.amountCents, 12014, "the receipt at its ECB value, not the credited EURe");
+  assert.equal(held.txType, "invoice_payment");
+  assert.equal(held.at, "2026-09-10T09:58:00.000Z", "the receipt is dated by the chain's block time");
+  assert.deepEqual(held.statement!.links.txHashes, [H(5)]);
+  assert.equal(held.statement!.unexecuted, undefined, "a receipt is not a swap figure");
+  assert.equal(disposal.statement!.event, "crypto_disposal");
+  assert.equal(disposal.statement!.amountCents, -52, "credited minus the receipt value");
+  assert.equal(disposal.txType, "realised_loss", "never a second invoice_payment; a loss books as an expense");
+  assert.equal(disposal.at, "2026-09-10T10:02:00.000Z", "the disposal is dated by the conversion's block time");
+  assert.deepEqual(disposal.statement!.links.txHashes, [H(7)], "the conversion's chain tx — never only the userOp hash");
+  assert.equal(disposal.statement!.links.userOpHash, H(6));
+  assert.match(disposal.note!, /book value €120\.14 at receipt\) for €119\.62 EURe via dex/);
+  assert.equal(held.statement!.reference, "RE-2026-0042");
+  assert.equal(disposal.statement!.reference, "RE-2026-0042", "both lines name the invoice");
+  assert.equal(held.statement!.counterparty.address, `0x${"bb".repeat(20)}`);
+  assert.equal(held.statement!.amountCents + disposal.statement!.amountCents, 11962, "together they are the EURe that arrived");
+  assert.equal(disposal.statement!.unexecuted, true);
   inp.swapsHaveExecuted = true;
-  assert.equal(projectStatementLines(inp)[0].statement!.unexecuted, undefined);
+  assert.equal(projectStatementLines(inp).find((l) => l.statement!.key === "deposit:d-1:disposal")!.statement!.unexecuted, undefined);
 });
 
-await check("a USDC deposit held unconverted is a line at its ECB value on receipt; with no rate there is NO line", () => {
+await check("a zero gain still books the disposal, at 0.00", () => {
   const inp = base();
-  inp.deposits = [usdcDeposit({ id: "d-h", settlementAsset: "USDC", creditedEur: undefined, creditedUsdc: 137, conversion: undefined, provider: undefined, rate: undefined, txs: [] }) as any];
+  inp.deposits = [usdcDeposit({ creditedEur: 120.14, realisedGainEur: 0 }) as any];
+  const d = projectStatementLines(inp).find((l) => l.statement!.key === "deposit:d-1:disposal")!;
+  assert.equal(d.statement!.amountCents, 0);
+  assert.equal(d.txType, "realised_gain");
+});
+
+await check("a USDC deposit held unconverted is one receipt line at its ECB value; with no rate there is NO line", () => {
+  const inp = base();
+  inp.deposits = [usdcDeposit({ id: "d-h", holding: "held", settlementAsset: "USDC", creditedEur: undefined, creditedUsdc: 137, conversion: undefined, provider: undefined, rate: undefined, realisedGainEur: undefined, txs: [] }) as any];
   const lines = projectStatementLines(inp);
   assert.equal(lines.length, 1);
   assert.equal(lines[0].statement!.event, "crypto_held");
   assert.equal(lines[0].statement!.amountCents, 12014);
   assert.match(lines[0].note!, /ECB reference rate of 2026-09-10/);
-  inp.deposits = [usdcDeposit({ id: "d-nr", settlementAsset: "USDC", creditedEur: undefined, receipt: undefined, conversion: undefined, txs: [] }) as any];
+  inp.deposits = [usdcDeposit({ id: "d-w", holding: "awaiting_approval", settlementAsset: "USDC", creditedEur: undefined, conversion: undefined, txs: [] }) as any];
+  assert.deepEqual(projectStatementLines(inp).map((l) => l.statement!.key), ["deposit:d-w:held"], "waiting for a signature is still paid");
+  inp.deposits = [usdcDeposit({ id: "d-nr", holding: "held", settlementAsset: "USDC", creditedEur: undefined, receipt: undefined, conversion: undefined, txs: [] }) as any];
   assert.equal(projectStatementLines(inp).length, 0, "no rate, no value, no line");
+});
+
+await check("an unsettled deposit has no line yet", () => {
+  const inp = base();
+  inp.deposits = [usdcDeposit({ settledAt: undefined, holding: "awaiting_approval", creditedEur: undefined, conversion: undefined, txs: [] }) as any];
+  assert.equal(projectStatementLines(inp).length, 0);
+});
+
+await check("converted with no receipt value: ONE payment line at the measured proceeds", () => {
+  const inp = base();
+  inp.deposits = [usdcDeposit({ receipt: undefined, realisedGainEur: undefined }) as any];
+  const lines = projectStatementLines(inp);
+  assert.equal(lines.length, 1);
+  const s = lines[0].statement!;
+  assert.equal(s.key, "deposit:d-1:converted");
+  assert.equal(s.event, "crypto_converted");
+  assert.equal(s.amountCents, 11962);
+  assert.equal(lines[0].txType, "invoice_payment");
+  assert.deepEqual(s.links.txHashes, [H(5), H(7)]);
+  assert.match(lines[0].note!, /no ECB reference rate/);
+});
+
+await check("a partial fill books its own disposal; the rest's disposal follows, and the lines sum to what arrived", () => {
+  const inp = base();
+  const p1 = { creditedEur: 32.3, receiptPortionEur: 32.44, provider: "dex", rate: 1.1452, conversion: { txHash: H(30), at: "2026-09-10T10:01:00.000Z", amountInUnits: "37000000" } };
+  inp.deposits = [usdcDeposit({ holding: "held", creditedEur: undefined, conversion: undefined, partials: [p1], txs: [{ step: "safe.swap(usdc->eure)", hash: H(30) }] }) as any];
+  const held = projectStatementLines(inp).map((l) => l.statement!);
+  assert.deepEqual(held.map((x) => [x.key, x.amountCents]), [["deposit:d-1:held", 12014], ["deposit:d-1:disposal:p1", -14]]);
+  assert.deepEqual(held[1].links.txHashes, [H(30)]);
+
+  inp.deposits = [usdcDeposit({ partials: [p1], conversion: { ...usdcDeposit().conversion, amountInUnits: "100000000" },
+    txs: [{ step: "safe.swap(usdc->eure)", hash: H(30) }] }) as any];
+  const all = projectStatementLines(inp).map((l) => l.statement!);
+  assert.deepEqual(all.map((x) => x.key), ["deposit:d-1:held", "deposit:d-1:disposal:p1", "deposit:d-1:disposal"]);
+  assert.equal(all.reduce((n, x) => n + x.amountCents, 0), 11962, "the receipt and both disposals are the EURe that arrived");
+  assert.ok(!all[2].links.txHashes.includes(H(30)), "the partial's swap is on its own line, not the final one");
+});
+
+await check("a deposit already booked as one :converted line gets no receipt or disposal line beside it", () => {
+  const inp = base();
+  const legacy = projectStatementLines({ ...inp, deposits: [usdcDeposit({ receipt: undefined }) as any] });
+  inp.deposits = [usdcDeposit() as any];
+  const { toAdd } = mergeStatementLines(legacy, projectStatementLines(inp));
+  assert.equal(toAdd.length, 0, "the income would be counted twice");
 });
 
 await check("EURe sent from another wallet is one line dated by the block; a mint, a swap's output and a refund are not lines of their own", () => {
   const inp = base();
   const eure = (over: any) => ({ userId: "u_1", chainId: 31337, token: "EURE", logIndex: 0, amountUnits: "100000000000000000000", amountEur: 100, creditedEur: 100,
-    settlementAsset: "EURE", state: "CONVERTED", txs: [], detectedAt: "2026-10-03T16:00:00.000Z", updatedAt: "2026-10-03T16:00:00.000Z", ...over });
+    settlementAsset: "EURE", holding: "none", settledAt: "2026-10-03T16:00:00.000Z", txs: [], detectedAt: "2026-10-03T16:00:00.000Z", updatedAt: "2026-10-03T16:00:00.000Z", ...over });
   inp.deposits = [
     eure({ id: "e-wallet", txHash: H(20), from: `0x${"22".repeat(20)}`, arrivedAt: "2026-10-02T23:50:26.000Z" }),
     eure({ id: "e-mint", txHash: H(21), from: `0x${"00".repeat(20)}` }),
@@ -237,7 +300,7 @@ await check("the projection is deterministic and month filtering goes by value d
   const a = projectStatementLines(inp, "x");
   const b = projectStatementLines(inp, "x");
   assert.deepEqual(a, b);
-  assert.deepEqual(linesInMonth(a, "2026-09").map((l) => l.statement!.key), ["deposit:d-1:converted"]);
+  assert.deepEqual(linesInMonth(a, "2026-09").map((l) => l.statement!.key), ["deposit:d-1:disposal", "deposit:d-1:held"]);
   assert.deepEqual(linesInMonth(a, "2026-08").map((l) => l.statement!.key), ["monerium:issue:o-1"]);
 });
 
@@ -256,7 +319,7 @@ await check("merging a projection into itself changes nothing; a changed fact is
   assert.equal(toAdd.length, 0);
   assert.equal(toUpdate.length, 1);
   assert.equal(toUpdate[0].patch.accountCode, undefined, "the patch never touches the account code");
-  assert.deepEqual(toUpdate[0].patch.statement!.links.txHashes, [H(5), H(7)]);
+  assert.deepEqual(toUpdate[0].patch.statement!.links.txHashes, [H(7)]);
   assert.equal(toUpdate[0].patch.statement!.documentCode, "ABCDEFGHJKMNPQR", "the Beleg code survives a refresh");
 });
 
@@ -314,26 +377,27 @@ await check("lines from before the Safe's books start are not written", () => {
   store.addAccount({ id: "acc_imp", orgId: "org_imp", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: SAFE2, backingUserId: "u_imp", backedSince: "2026-09-10T10:03:00.000Z", createdAt: now, updatedAt: now });
   store.addCryptoDeposit(usdcDeposit({ id: "d-old", userId: "u_imp", txHash: H(40), paymentRequestId: undefined }) as any);
   writeStatementLinesFor(store.findUser("u_imp")!);
-  assert.equal(store.ledgerOf("org_imp").length, 0, "the line is at 10:02 (its conversion), before the books start at 10:03");
+  assert.equal(store.ledgerOf("org_imp").length, 0, "the receipt (09:58) and the disposal (10:02) are both before the books start at 10:03");
   store.updateAccount("acc_imp", { backedSince: "2026-09-10T09:00:00.000Z" });
   writeStatementLinesFor(store.findUser("u_imp")!);
-  assert.equal(store.ledgerOf("org_imp").length, 1);
+  assert.equal(store.ledgerOf("org_imp").length, 2, "the receipt and the disposal");
 });
 
-await check("first run writes the line with a rule-mapped code; a second run adds nothing", () => {
+await check("first run writes the receipt and the disposal with rule-mapped codes; a second run adds nothing", () => {
   const r1 = writeStatementLines();
-  assert.equal(r1.added, 1);
-  const row = store.ledgerOf("org_1")[0];
-  assert.equal(row.statement!.key, "deposit:d-1:converted");
+  assert.equal(r1.added, 2);
+  const row = store.ledgerOf("org_1").find((e) => e.statement!.key === "deposit:d-1:held")!;
+  assert.ok(row, "the receipt line");
+  assert.ok(store.ledgerOf("org_1").find((e) => e.statement!.key === "deposit:d-1:disposal"), "the disposal line");
   assert.equal(row.accountCodeAuto, true, "a default rule mapped it");
   assert.ok(row.accountCode, "invoice_payment maps to a default account");
   const r2 = writeStatementLines();
   assert.deepEqual(r2, { added: 0, updated: 0 });
-  assert.equal(store.ledgerOf("org_1").length, 1);
+  assert.equal(store.ledgerOf("org_1").length, 2);
 });
 
 await check("a human's account code survives a later fact change; the Monerium issue snapshot is recorded once", () => {
-  const row = store.ledgerOf("org_1")[0];
+  const row = store.ledgerOf("org_1").find((e) => e.statement!.key === "deposit:d-1:held")!;
   store.updateLedgerEntry(row.id, { accountCode: "4100", accountCodeAuto: false });
   const rec = noteMoneriumIssue({ id: "ord-9", kind: "issue", amount: "20.00", address: SAFE, memo: "hello", meta: { state: "processed", processedAt: "2026-09-12T08:00:00.000Z" }, counterpart: { identifier: { iban: "DE02120300000000202051" }, details: { name: "Kunde AG" } } }, user);
   assert.ok(rec);
@@ -341,8 +405,8 @@ await check("a human's account code survives a later fact change; the Monerium i
   const r = writeStatementLines();
   assert.equal(r.added, 1);
   const rows = store.ledgerOf("org_1");
-  assert.equal(rows.length, 2);
-  assert.equal(rows.find((e) => e.statement!.key === "deposit:d-1:converted")!.accountCode, "4100");
+  assert.equal(rows.length, 3);
+  assert.equal(rows.find((e) => e.statement!.key === "deposit:d-1:held")!.accountCode, "4100");
   const sepa = rows.find((e) => e.statement!.key === "monerium:issue:ord-9")!;
   assert.equal(sepa.statement!.counterparty.iban, "DE02120300000000202051");
   assert.equal(sepa.amount, "20.00");

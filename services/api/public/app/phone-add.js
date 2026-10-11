@@ -67,7 +67,7 @@ function phFaucetCard() {
 
 PH["add/wallet"] = {
   title: "From a crypto wallet",
-  live: () => JSON.stringify([phCache.deposits?.map((d) => `${d.id}:${d.state}`), user?.paymentPage?.handle, phCache.settlementAsset, phCache.autoConvert]),
+  live: () => JSON.stringify([phCache.deposits?.map((d) => `${d.id}:${d.holding}:${d.creditedUsdc}:${d.convertBlocker ? 1 : 0}`), user?.paymentPage?.handle, phCache.settlementAsset, phCache.autoConvert]),
   html() {
     const u = user || {};
     const page = u.paymentPage || {};
@@ -75,12 +75,14 @@ PH["add/wallet"] = {
     // and one screen never shows two addresses (or a QR of another one).
     const address = u.passkeySafe?.status === "active" ? u.address : "";
     const deps = phCache.deposits;
-    const waiting = (deps || []).filter((d) => d.state === "DETECTED" && d.token === "USDC");
-    // Refused, or sent with no confirmed result (UNCONFIRMED: the swap may
+    const waiting = (deps || []).filter((d) => d.holding === "awaiting_approval" && d.token === "USDC");
+    // Held: kept as dollars, convertible any time the server says it can be.
+    const held = (deps || []).filter((d) => d.holding === "held" && d.token === "USDC");
+    // Refused, or sent with no confirmed result (unconfirmed: the swap may
     // still land). Neither gets a Convert button: a second try could spend
     // other USDC in the account.
-    const refused = (deps || []).filter((d) => d.state === "REFUSED" && d.token === "USDC");
-    const checking = (deps || []).filter((d) => d.state === "UNCONFIRMED" && d.token === "USDC");
+    const refused = (deps || []).filter((d) => d.holding === "refused" && d.token === "USDC");
+    const checking = (deps || []).filter((d) => d.holding === "unconfirmed" && d.token === "USDC");
     const asset = phCache.settlementAsset || page.settlementAsset;
     const autoConvert = phCache.autoConvert ?? page.autoConvert;
     const change = page.handle ? ` <a href="#settings/currency/wallet">Change</a>` : "";
@@ -99,9 +101,13 @@ PH["add/wallet"] = {
         : "Your main currency is euro, so we ask before converting dollars."}${change}` })}
       ${deps === null ? Z.skeletonRows(1, "Loading payments…") : Z.listGroup({
         label: "Waiting to convert",
-        rows: waiting.map((d) => `<div class="z-row">${Z.iconTile({ icon: "currency_exchange", tone: "m" })}<span class="z-row__main"><span class="z-row__title z-fig">${esc(Z.formatMoney(d.amountUsdc ?? 0, usdSym()))}</span><span class="z-row__sub">Arrived ${esc(phDay(d.detectedAt))}${d.receipt ? ` · worth ${esc(phEur(d.receipt.amountEur))} then` : ""}</span></span><span class="z-row__right"><a class="z-btn z-btn--primary z-btn--sm" href="${phHref("convert", d.id)}" aria-label="Convert ${esc(Z.formatMoney(d.amountUsdc ?? 0, usdSym()))}">Convert</a></span></div>`),
+        rows: waiting.map((d) => `<div class="z-row">${Z.iconTile({ icon: "currency_exchange", tone: "m" })}<span class="z-row__main"><span class="z-row__title z-fig">${esc(Z.formatMoney(phHeldUsdc(d), usdSym()))}</span><span class="z-row__sub">Arrived ${esc(phDay(d.detectedAt))}${d.receipt ? ` · worth ${esc(phEur(d.receipt.amountEur))} then` : ""}</span></span><span class="z-row__right">${d.convertBlocker ? "" : `<a class="z-btn z-btn--primary z-btn--sm" href="${phHref("convert", d.id)}" aria-label="Convert ${esc(Z.formatMoney(phHeldUsdc(d), usdSym()))}">Convert</a>`}</span></div>`),
         empty: { text: "Nothing waiting. Payments show up here within a minute of arriving." },
       })}
+      ${held.length ? Z.listGroup({
+        label: "Kept as dollars",
+        rows: held.map((d) => `<div class="z-row">${Z.iconTile({ icon: "currency_exchange" })}<span class="z-row__main"><span class="z-row__title z-fig">${esc(Z.formatMoney(phHeldUsdc(d), usdSym()))}</span><span class="z-row__sub">Arrived ${esc(phDay(d.detectedAt))}${d.receipt ? ` · worth ${esc(phEur(d.receipt.amountEur))} then` : ""}</span></span><span class="z-row__right">${d.convertBlocker ? "" : `<a class="z-btn z-btn--secondary z-btn--sm" href="${phHref("convert", d.id)}" aria-label="Convert ${esc(Z.formatMoney(phHeldUsdc(d), usdSym()))}">Convert</a>`}</span></div>`),
+      }) : ""}
       ${refused.length ? Z.listGroup({
         label: "Not converted",
         rows: refused.map((d) => Z.row({
@@ -165,17 +171,16 @@ async function phLoadDeposits() {
    Digital dollars to euros
    --------------------------------------------------------------------------
    What the API does, and so what these screens may say:
-   - Nothing converts without the holder's Face ID or fingerprint. The poller
-     spots a payment to the page and leaves it waiting (DETECTED) only when
-     the page settles in euros and "ask me" (autoConvert) is on.
-   - Otherwise the poller settles the payment as USDC, and a payment settled
-     as USDC cannot be converted through this route later. That includes
-     payments already waiting when the setting changes.
+   - Nothing converts without the holder's Face ID or fingerprint. Every
+     payment is settled on arrival. A dollar payment to a euro account is then
+     waiting (awaiting_approval) when "ask me" (autoConvert) is on, and held
+     otherwise; both can be converted later. Turning "ask me" off moves
+     waiting payments to held. On a USDC page there is nothing to convert.
    - The price is a quote with a floor (minEur). What arrives is measured
      (creditedEur) and is the only euro figure called "arrived".
    - "Your dollars didn't move" is said only for a refusal the server gave
      before it submitted anything. A 502, a 503 (also what the service worker
-     answers offline), a lost connection or an UNCONFIRMED deposit (sent, the
+     answers offline), a lost connection or an unconfirmed deposit (sent, the
      API answered SAFE_OP_UNCONFIRMED) can each hide a swap that landed, so
      those say "not confirmed" and never offer the payment again.
    ========================================================================== */
@@ -198,7 +203,7 @@ function phCurrencyWords(page) {
 
 PH["settings/currency"] = {
   title: "Main currency",
-  live: () => JSON.stringify([user?.paymentPage?.settlementAsset, user?.paymentPage?.autoConvert, phCache.deposits?.filter((d) => d.state === "DETECTED").length]),
+  live: () => JSON.stringify([user?.paymentPage?.settlementAsset, user?.paymentPage?.autoConvert, phCache.deposits?.filter((d) => d.holding === "awaiting_approval").length]),
   html(from) {
     const page = user?.paymentPage;
     const back = from === "wallet" ? "add/wallet" : "settings";
@@ -211,7 +216,7 @@ PH["settings/currency"] = {
     const usdc = page.settlementAsset === "USDC";
     const pending = phCache.currencyPending;       // a "keep" choice waiting for confirmation
     const ask = pending ? false : !!page.autoConvert;
-    const waiting = (phCache.deposits || []).filter((d) => d.state === "DETECTED").length;
+    const waiting = (phCache.deposits || []).filter((d) => d.holding === "awaiting_approval").length;
     const choice = (name, value, checked, title, text) =>
       `<label class="z-choice"><input type="radio" name="${name}" value="${value}"${checked ? " checked" : ""}><span class="z-choice__main"><span class="z-choice__title">${esc(title)}</span><span class="z-choice__text">${esc(text)}</span></span></label>`;
     const waitingWord = waiting === 1 ? "1 payment is" : `${waiting} payments are`;
@@ -232,7 +237,7 @@ PH["settings/currency"] = {
         </div>
       </fieldset>`}
       ${pending ? `<div class="z-confirm" role="group" aria-labelledby="ph-cur-warn">
-          ${Z.note({ tone: "a", icon: "warning", html: `<span id="ph-cur-warn">${esc(waitingWord)} waiting to convert. ${waiting === 1 ? "It stays" : "They stay"} as ${usdSym()} too, and can’t be converted here later.</span>` })}
+          ${Z.note({ tone: "a", icon: "warning", html: `<span id="ph-cur-warn">${esc(waitingWord)} waiting to convert. ${waiting === 1 ? "It stays" : "They stay"} as ${usdSym()} too. You can still convert ${waiting === 1 ? "it" : "them"} from your wallet later.</span>` })}
           <div class="z-pair">${Z.button({ label: "Cancel", id: "ph-cur-cancel" })}${Z.button({ variant: "primary", label: "Keep as dollars", id: "ph-cur-confirm" })}</div>
         </div>` : ""}
       <p class="z-err" id="ph-cur-err" role="alert" hidden></p>
@@ -274,7 +279,7 @@ PH["settings/currency"] = {
         el.hidden = false;
       }
     };
-    const waiting = () => (phCache.deposits || []).filter((d) => d.state === "DETECTED").length;
+    const waiting = () => (phCache.deposits || []).filter((d) => d.holding === "awaiting_approval").length;
     root.querySelectorAll('input[name="main"]').forEach((i) => {
       i.onchange = () => {
         if (i.value === "USDC" && waiting() > 0) { phCache.currencyPending = "USDC"; return phRender(); }
@@ -294,18 +299,27 @@ PH["settings/currency"] = {
   },
 };
 
+/* Waiting to convert, or kept as dollars, and the server sees nothing
+   stopping it (convertBlocker). Refused and unconfirmed are never offered. */
+/* What is still to convert: all of it, or what a partial fill left. */
+const phHeldUsdc = (d) => d.creditedUsdc ?? d.amountUsdc ?? 0;
+
+const phConvertible = (d) =>
+  (d.holding === "awaiting_approval" || d.holding === "held") && !d.convertBlocker;
+
 /* Review the price for one payment, and approve it. */
 PH.convert = {
   title: "Convert to euros",
-  live: (id) => { const d = phDeposit(id); return `${phCache.deposits === null}|${d?.state}|${phConv.id === id ? phConv.prep?.challenge || phConv.error || "" : ""}`; },
+  live: (id) => { const d = phDeposit(id); return `${phCache.deposits === null}|${d?.holding}|${phConv.id === id ? phConv.prep?.challenge || phConv.error || "" : ""}`; },
   html(id) {
     const top = phTop("Convert to euros", "add/wallet", Z.tag("Beta"));
     if (phCache.deposits === null) return `${top}${phMain(Z.skeletonRows(3, "Loading the payment…"))}`;
     const d = phDeposit(id);
-    if (!d || d.token !== "USDC" || d.state !== "DETECTED") {
+    if (!d || d.token !== "USDC" || !phConvertible(d)) {
       const text = !d ? "We can’t find this payment in your account."
-        : d.state === "CONVERTED" ? (d.settlementAsset === "EURE" ? "This payment is already converted." : `This payment was kept as ${usdSym()}.`)
-          : d.state === "UNCONFIRMED" ? "A conversion of this payment was sent and its result isn’t confirmed yet. We’re checking it, so it can’t be converted again. Nothing to do for now."
+        : d.holding === "converted" ? "This payment is already converted."
+          : d.holding === "none" ? `This payment was kept as ${usdSym()}.`
+          : d.holding === "unconfirmed" ? "A conversion of this payment was sent and its result isn’t confirmed yet. We’re checking it, so it can’t be converted again. Nothing to do for now."
             : "This payment isn’t waiting to convert.";
       return `${top}${phMain(`${Z.note({ text })}${Z.button({ variant: "primary", full: true, label: "Back to your wallet", href: "#add/wallet" })}`)}`;
     }
@@ -344,8 +358,8 @@ PH.convert = {
       return;
     }
     const d = phDeposit(id);
-    if (d?.state === "CONVERTED" && d.settlementAsset === "EURE") return phGo("convert/done", id, { replace: true });
-    if (!d || d.state !== "DETECTED") return;
+    if (d?.holding === "converted") return phGo("convert/done", id, { replace: true });
+    if (!d || !phConvertible(d)) return;
     if (!phConv.pricing && (phConv.id !== id || (!phConv.prep && !phConv.error))) phPrice(id);
     const retry = root.querySelector("#ph-conv-retry");
     if (retry) retry.onclick = () => phPrice(id, retry);
@@ -437,7 +451,7 @@ async function phConvert(id, btn, errEl) {
     await phLoadDeposits();
     renderUser(user);
     const d = phDeposit(id) || out.deposit;
-    phGo(d?.state === "CONVERTED" && d.settlementAsset === "EURE" ? "convert/done" : "convert/check", id, { replace: true });
+    phGo(d?.holding === "converted" ? "convert/done" : "convert/check", id, { replace: true });
   } catch (e) {
     phConv.prep = null;
     // SAFE_OP_UNCONFIRMED: sent, may still land. SAFE_OP_REVERTED: included
@@ -459,12 +473,12 @@ async function phConvert(id, btn, errEl) {
 /* Converted: what arrived, measured, never the price that was shown. */
 PH["convert/done"] = {
   title: "Converted to euros",
-  live: (id) => `${phCache.deposits === null}|${phDeposit(id)?.state}`,
+  live: (id) => `${phCache.deposits === null}|${phDeposit(id)?.holding}`,
   html(id) {
     const d = phDeposit(id);
     const top = Z.topbar({ srTitle: "Converted to euros", back: { href: "#home", label: "Back to Home" } });
     if (phCache.deposits === null) return `${top}${phMain(Z.skeletonRows(3, "Loading the payment…"))}`;
-    if (!d || d.state !== "CONVERTED" || d.settlementAsset !== "EURE" || typeof d.creditedEur !== "number") {
+    if (!d || d.holding !== "converted" || typeof d.creditedEur !== "number") {
       return `${top}${phMain(`${Z.note({ text: "This payment isn’t converted to euros." })}${Z.button({ variant: "primary", full: true, label: "Back to your wallet", href: "#add/wallet" })}`)}`;
     }
     const shown = phConv.priced?.id === id ? phConv.priced : null;
@@ -507,7 +521,7 @@ PH["convert/refused"] = {
     return `${top}${phMain(`
       <span class="z-tile z-tile--a z-tile--lg" aria-hidden="true">${Z.icon("currency_exchange")}</span>
       <div class="z-intro"><h2 class="z-title">Nothing was converted</h2><p class="z-sub">${esc(lede)}</p></div>
-      ${d ? `<div class="z-card z-held"><p class="z-held__main"><span class="z-held__label">Still in your account</span><span class="z-held__fig z-fig">${esc(phUsdc(d.amountUsdc))}</span></p>${Z.iconTile({ icon: "account_balance_wallet" })}</div>` : ""}
+      ${d ? `<div class="z-card z-held"><p class="z-held__main"><span class="z-held__label">Still in your account</span><span class="z-held__fig z-fig">${esc(phUsdc(phHeldUsdc(d)))}</span></p>${Z.iconTile({ icon: "account_balance_wallet" })}</div>` : ""}
       <details class="z-disclose"><summary>Technical details${Z.icon("expand_more")}</summary>${Z.kv([{ key: "Payment ID", value: id, mono: true }])}</details>
     `)}${phFoot(`${Z.button({ variant: "primary", full: true, icon: "refresh", label: "Get a new price", id: "ph-conv-new" })}<a class="z-link-btn" href="#add/wallet">Keep as dollars for now</a>`)}`;
   },
@@ -521,11 +535,11 @@ PH["convert/refused"] = {
 /* Submitted, but the outcome is not known. Says nothing about the dollars. */
 PH["convert/check"] = {
   title: "Conversion not confirmed",
-  live: (id) => `${phCache.deposits === null}|${phDeposit(id)?.state}`,
+  live: (id) => `${phCache.deposits === null}|${phDeposit(id)?.holding}`,
   html(id) {
     const d = phDeposit(id);
     const code = phConv.outcome?.id === id ? phConv.outcome.code : null;
-    const checking = d?.state === "UNCONFIRMED" || (!d && code === "SAFE_OP_UNCONFIRMED");
+    const checking = d?.holding === "unconfirmed" || (!d && code === "SAFE_OP_UNCONFIRMED");
     const reverted = !checking && code === "SAFE_OP_REVERTED";
     const lede = checking
       ? "Your approval was sent, and its result isn’t confirmed yet. We’re checking it, so this payment isn’t offered for conversion again. Nothing to do: your balance shows the outcome once it’s clear. If it stays unclear, write to support@zoldhq.com."
@@ -542,7 +556,7 @@ PH["convert/check"] = {
   bind(root, id) {
     const d = phDeposit(id);
     // The swap landed after all: say so with the measured figure.
-    if (d?.state === "CONVERTED" && d.settlementAsset === "EURE") return phGo("convert/done", id, { replace: true });
+    if (d?.holding === "converted") return phGo("convert/done", id, { replace: true });
     if (phCache.deposits === null) phLoadDeposits().then(() => { if (phRoute?.name === "convert/check") phRender(); });
   },
 };

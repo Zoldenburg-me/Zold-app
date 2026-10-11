@@ -23,7 +23,7 @@ process.env.TRANSF_CHAIN_ID = "31337";
 const { initStore, store } = await import("../services/api/src/store.js");
 const { writeStatementLines } = await import("../services/api/src/bookkeeping/writer.js");
 const { issueBelegForLine } = await import("../services/api/src/bookkeeping/issue.js");
-const { belegFileName, belegLines, belegPdf, belegStillAgrees, buildBeleg, UNEXECUTED_NOTE } = await import("../services/api/src/bookkeeping/beleg.js");
+const { belegFileName, belegLines, belegPdf, belegStillAgrees, belegTitle, buildBeleg, UNEXECUTED_NOTE } = await import("../services/api/src/bookkeeping/beleg.js");
 const { verifyZoldAttestation, snapshotDigest } = await import("../services/api/src/documents.js");
 const { winAnsi } = await import("../services/api/src/bookkeeping/pdf.js");
 
@@ -50,7 +50,7 @@ store.addPaymentRequest({
 const deposit: any = {
   id: "d-1", userId: "u_1", chainId: 31337, token: "USDC", txHash: H(5), logIndex: 3, amountUnits: "137000000", amountUsdc: 137, from: `0x${"bb".repeat(20)}`,
   receipt: { amountEur: 120.14, rate: 1.1403, rateProvider: "ecb via api.frankfurter.dev", rateAsOf: "2026-09-10", ratedAt: "2026-09-10T10:00:00.000Z", blockTimestamp: "2026-09-10T09:58:00.000Z" },
-  state: "CONVERTED", settlementAsset: "EURE", creditedEur: 119.62, provider: "dex", rate: 1.1452, midRate: 1.1403, realisedGainEur: -0.52,
+  holding: "converted", settledAt: "2026-09-10T10:00:00.000Z", settlementAsset: "EURE", creditedEur: 119.62, provider: "dex", rate: 1.1452, midRate: 1.1403, realisedGainEur: -0.52,
   conversion: { userOpHash: H(6), txHash: H(7), blockNumber: 12, at: "2026-09-10T10:02:00.000Z", amountInUnits: "136500000", gasCostWei: "1200", gasPaidBy: "safe-token" },
   leftoverUnits: "500000",
   paymentRequestId: "pr_1",
@@ -59,12 +59,26 @@ const deposit: any = {
 };
 store.addCryptoDeposit(deposit);
 writeStatementLines();
-const line = store.ledgerOf("org_1").find((e) => e.statement?.key === "deposit:d-1:converted")!;
-assert.ok(line, "the writer produced the line");
+const line = store.ledgerOf("org_1").find((e) => e.statement?.key === "deposit:d-1:disposal")!;
+assert.ok(line, "the writer produced the disposal line");
+const receiptLine = store.ledgerOf("org_1").find((e) => e.statement?.key === "deposit:d-1:held")!;
+assert.ok(receiptLine, "the writer produced the receipt line");
 
 console.log("\nSnapshot");
 
-await check("a USDC-paid invoice's Beleg carries every fact the accountant needs", () => {
+await check("the receipt line's Beleg is the receipt alone: value on arrival, no conversion", () => {
+  const snap = buildBeleg(receiptLine, { holder: { name: "Zoldenburg UG", addressLines: [], safeAddress: SAFE, chainId: 31337, accountSince: now }, deposit, paymentRequest: store.findPaymentRequest("pr_1") });
+  assert.equal(snap.line.event, "crypto_held");
+  assert.equal(snap.line.amountCents, 12014);
+  assert.equal(snap.receipt!.valueEur, 120.14);
+  assert.equal(snap.conversion, undefined, "the disposal has its own line and its own Beleg");
+  assert.equal(belegTitle(snap), "USDC received");
+  // Converting later does not change what arrived.
+  assert.equal(belegStillAgrees(snap, { entry: receiptLine, deposit }).ok, true);
+  assert.equal(belegStillAgrees(snap, { entry: receiptLine, deposit: { ...deposit, holding: "held" } }).ok, true);
+});
+
+await check("a USDC-paid invoice's disposal Beleg carries every fact the accountant needs", () => {
   const snap = buildBeleg(line, { holder: { name: "Zoldenburg UG", addressLines: ["DE"], iban: user.iban, safeAddress: SAFE, chainId: 31337, accountSince: now }, deposit, paymentRequest: store.findPaymentRequest("pr_1") });
   assert.equal(snap.kind, "beleg");
   assert.deepEqual(snap.invoice, { number: "RE-2026-0042", source: "external" });
@@ -85,6 +99,8 @@ await check("a USDC-paid invoice's Beleg carries every fact the accountant needs
   assert.equal(snap.conversion!.leftoverUsdc, 0.5);
   assert.equal(snap.conversion!.receivableDifferenceEur, 0.62, "credited minus the invoice amount");
   assert.equal(snap.conversion!.gainEur, -0.52, "credited minus the value at receipt");
+  assert.equal(snap.line.amountCents, -52, "the disposal line is the realised gain");
+  assert.equal(belegTitle(snap), "Held USDC converted to EURe (disposal)");
   assert.deepEqual(snap.gas, { costWei: "1200", paidBy: "safe-token" });
   assert.equal(snap.unexecutedNote, UNEXECUTED_NOTE, "rule 2: labelled until a swap has moved real money");
 });
@@ -154,6 +170,9 @@ await check("re-verification checks the records the Beleg was built from", () =>
   const r = belegStillAgrees(snap, { entry, deposit: corrected as any });
   assert.equal(r.ok, false);
   assert.match(r.detail, /credited amount differs/);
+  const unconverted = belegStillAgrees(snap, { entry, deposit: { ...store.cryptoDeposits[0], holding: "refused" } as any });
+  assert.equal(unconverted.ok, false);
+  assert.match(unconverted.detail, /now refused/);
   assert.match(belegStillAgrees(snap, { entry: undefined, deposit: store.cryptoDeposits[0] }).detail, /no longer exists/);
 });
 

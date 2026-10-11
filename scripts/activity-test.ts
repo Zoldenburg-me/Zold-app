@@ -40,7 +40,8 @@ const deposit = (over: Partial<CryptoDeposit> = {}): CryptoDeposit => ({
   arrivedAt: "2026-10-01T10:00:30.000Z",
   amountEur: 120,
   creditedEur: 120,
-  state: "CREDITED",
+  holding: "none",
+  settledAt: "2026-10-01T10:01:00.000Z",
   settlementAsset: "EURE",
   detectedAt: "2026-10-01T10:01:00.000Z",
   updatedAt: "2026-10-01T10:01:00.000Z",
@@ -121,7 +122,7 @@ check("EURe from a wallet and any USDC stay crypto deposits", () => {
 });
 
 check("a mint the watcher refused is not relabelled", () => {
-  const rows = buildActivity({ transfers: [], deposits: [deposit({ state: "REFUSED" } as any)], issues: [] });
+  const rows = buildActivity({ transfers: [], deposits: [deposit({ holding: "refused" })], issues: [] });
   assert.equal(rows[0].kind, "funding");
 });
 
