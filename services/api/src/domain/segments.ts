@@ -14,11 +14,13 @@
  *                         IN servable; we decline anyway).
  *   4. EU full          - allow list, minus card-prohibited regions.
  *   5. On-chain, no card- whoever Monerium will serve.
- *   6. Unsupported      - nobody will serve this residence.
+ *   6. Wallet only      - a known residence no fiat partner serves, minus the
+ *                         wallet deny list (docs/wallet-tier.md).
+ *   7. Unsupported      - an unknown code, or a residence on the deny list.
  *
- * (6) is separate from sanctions: Monerium prohibits some residences that carry
- * no sanction (Nigeria among them), and BLOCKED_SANCTIONED would misdescribe
- * them. The UI copy for it says only what Zold cannot offer.
+ * (6) and (7) are separate from sanctions: Monerium prohibits some residences
+ * that carry no sanction (Nigeria among them), and BLOCKED_SANCTIONED would
+ * misdescribe them. The UI copy for (7) says only what Zold cannot offer.
  *
  * The reason code is internal: written to the audit log, never rendered, so
  * it does not tell someone which answer to change.
@@ -30,8 +32,10 @@ import {
   isEuFullResidence,
   isSanctioned,
   isUsTerritory,
+  isWalletDenied,
   moneriumWillServe,
 } from "./residency.js";
+import { moneriumResidencyTier } from "../country-policy.js";
 import { normaliseCountryCode } from "../country-policy.js";
 
 export type Segment =
@@ -40,7 +44,8 @@ export type Segment =
   | "BLOCKED_UNSUPPORTED"
   | "EU_FULL"
   | "IN_COLLECTIONS"
-  | "ONCHAIN_NO_CARD";
+  | "ONCHAIN_NO_CARD"
+  | "WALLET_ONLY";
 
 /** Every partner call sits behind one of these. Derived from the segment and
  *  never set directly, so a capability cannot drift from the path. */
@@ -119,7 +124,9 @@ export class SegmentInputError extends Error {}
 const CAPABILITIES: Record<Segment, Capability[]> = {
   EU_FULL: ["monerium", "gnosis_pay", "safe", "card", "onchain_balance"],
   ONCHAIN_NO_CARD: ["monerium", "safe", "onchain_balance"],
-  IN_COLLECTIONS: ["xflow_collections"],
+  // The wallet needs no partner. Collections stay gated (IN_COLLECTIONS_GATE).
+  IN_COLLECTIONS: ["xflow_collections", "safe", "onchain_balance"],
+  WALLET_ONLY: ["safe", "onchain_balance"],
   BLOCKED_US: [],
   BLOCKED_SANCTIONED: [],
   BLOCKED_UNSUPPORTED: [],
@@ -233,7 +240,15 @@ export function resolveSegment(input: SegmentInput): SegmentDecision {
     );
   }
 
-  // 6. Nobody will serve this residence. Not a sanction, and never labelled as
+  // 6. No fiat partner serves this residence, but the wallet needs none. A
+  //    code missing from the issuer's table is not a country we know, so it
+  //    falls through to (7) rather than being quietly allowed.
+  if (moneriumResidencyTier(residence) !== null) {
+    if (isWalletDenied(residence)) return decide("BLOCKED_UNSUPPORTED", "wallet_denied_residence");
+    return decide("WALLET_ONLY", "no_partner_for_residence");
+  }
+
+  // 7. Nobody will serve this residence. Not a sanction, and never labelled as
   //    one.
-  return decide("BLOCKED_UNSUPPORTED", "no_partner_for_residence");
+  return decide("BLOCKED_UNSUPPORTED", "unknown_residence");
 }
