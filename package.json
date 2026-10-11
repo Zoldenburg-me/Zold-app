@@ -23,6 +23,7 @@
     "safe-funded:test": "tsx scripts/safe-funded-recovery-test.ts",
     "recovery:fork:test": "tsx scripts/recovery-module-fork-test.ts",
     "crypto:test": "tsx scripts/crypto-at-rest-test.ts",
+    "crypto-deposit:test": "tsx scripts/crypto-deposit-test.ts",
     "crypto-in-getlogs:test": "tsx scripts/crypto-in-getlogs-test.ts",
     "convert:test": "tsx scripts/convert-deposit-test.ts",
     "safe-op-uncertain:test": "tsx scripts/safe-op-uncertain-test.ts",
