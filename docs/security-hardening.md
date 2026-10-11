@@ -22,7 +22,8 @@ Who we defend against, in the order they are likely:
 5. **A third party's breach**: Monerium, the SMTP provider, Cloudflare,
    GitHub, the domain registrar.
 6. **Agents with a shell** in this repo: they can read any file the user can.
-7. **The operator**: one static bearer token opens the admin dashboard.
+7. **The operator**: the admin dashboard reads every account and starts
+   Zoldenburg recoveries (1.5).
 
 The question to ask of every item: **if this database is dumped, or this
 host's disk and environment are read, what does the attacker hold?** The
@@ -341,17 +342,21 @@ ahead of them all.
   production refuses to start with `KYC_OPERATOR_TOKEN` set.
 
 `npm run operator:test` covers each refusal with a software passkey and a
-local Access key server; nothing here has run against Cloudflare Access.
+local Access key server.
 
-The Access application for `admin.zoldhq.com` exists: one policy allowing
-the owner's email, 8-hour sessions, sign-in by Cloudflare's one-time PIN.
+`admin.zoldhq.com` is live: a proxied DNS record and a route on the
+zoldhq.com tunnel, and an Access application with one policy allowing the
+owner's email, 8-hour sessions and sign-in by Cloudflare's one-time PIN. The
+lease sets `ADMIN_ORIGIN`, `CF_ACCESS_TEAM_DOMAIN` and `CF_ACCESS_AUD`;
+`zoldhq.com/admin` redirects there and the admin API on zoldhq.com answers
+401 `ACCESS_REQUIRED`. The owner is enrolled with two passkeys, through
+Access.
 
 Still open:
 - An identity provider that requires a hardware key, in place of the
   one-time PIN, which proves only control of the inbox.
-- The `admin.zoldhq.com` DNS record and tunnel route, and `ADMIN_ORIGIN`,
-  `CF_ACCESS_TEAM_DOMAIN` and `CF_ACCESS_AUD` on the lease, then the
-  owner's enrolment. Until then zoldhq.com answers 503 on admin routes.
+- `KYC_OPERATOR_TOKEN` is still in the lease's environment; nothing reads
+  it, and the lease does not run in production mode, which would refuse it.
 - The audit log is the plain JSON store: append-only by code, not tamper
   evident (Phase 2), with no retention period. `operator.request` rows name
   the user an operator read; how long they are kept is a question for
