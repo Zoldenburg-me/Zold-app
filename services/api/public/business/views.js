@@ -191,7 +191,7 @@ RENDER.assets = async () => {
         <details style="padding:0 16px 12px"><summary>${p.lots.length} lot${p.lots.length === 1 ? "" : "s"}</summary>
           <div class="z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Acquired</th><th scope="col">Wallet</th><th scope="col" class="z-tbl__num">Quantity</th><th scope="col" class="z-tbl__num">Left</th><th scope="col" class="z-tbl__num">Cost</th><th scope="col">Transaction</th></tr></thead><tbody>${p.lots.map(lotRow).join("")}</tbody></table></div></details>
       </section>`).join("")
-    : `<div class="z-card"><p class="empty">No token with lots yet. A listed token a wallet receives opens one; EURe and tokens on no list do not.</p></div>`;
+    : `<div class="z-card"><p class="empty">No token with lots yet. A listed token a wallet receives opens one; euros and tokens on no list do not.</p></div>`;
   const quantityOnly = d.quantityOnly.length
     ? `<h2 class="zb-h2" style="margin:28px 0 6px">Tokens on no list</h2><p class="zb-hint" style="margin-bottom:12px">Counted, never valued: anyone can send any token to a wallet.</p>
       <div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Token</th><th scope="col" class="z-tbl__num">Held</th><th scope="col" class="z-tbl__num">Transfers</th></tr></thead><tbody>${d.quantityOnly.map((q) => `<tr><td>${holdingCell(q)}</td><td class="z-tbl__num">${esc(q.quantity)}</td><td class="z-tbl__num">${q.entryIds.length}</td></tr>`).join("")}</tbody></table></div>`
@@ -225,7 +225,7 @@ META.gains = () => ({ title: "Realised gains", sub: "Per month, the EUR value of
 RENDER.gains = async () => {
   if (!cap("assets.costBasis").allowed) return gateHtml("assets.costBasis");
   const d = await api(`/api/orgs/${org.id}/reports/realised-gains`);
-  if (!d.disposals.length) return `<div class="z-card"><p class="empty">No token with lots has left your wallets yet. EURe is money and a token on no list is only counted, so neither makes a gain or a loss.</p></div>${booksNotes(d.notes)}`;
+  if (!d.disposals.length) return `<div class="z-card"><p class="empty">No token with lots has left your wallets yet. Euros are money and a token on no list is only counted, so neither makes a gain or a loss.</p></div>${booksNotes(d.notes)}`;
   const months = `<div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Month</th><th scope="col" class="z-tbl__num">Gains</th><th scope="col" class="z-tbl__num">Losses</th><th scope="col" class="z-tbl__num">Net</th><th scope="col" class="z-tbl__num">Not measurable</th></tr></thead><tbody>${[...d.months].reverse().map((m) => `<tr>
       <td>${esc(m.month)}</td><td class="z-tbl__num">${cents(m.gainsCents)}</td><td class="z-tbl__num">${cents(m.lossesCents)}</td>
       <td class="z-tbl__num">${signedCents(m.realisedCents)}</td><td class="z-tbl__num">${m.unmeasured || ""}</td></tr>`).join("")}</tbody></table></div>`;
@@ -380,7 +380,7 @@ RENDER.documents = async () => {
       ${secondary("Proof of ownership", 'data-act="doc-ownership"', "verified_user")}` : ""}
     </div>
     <p class="desc" style="margin-top:12px">${letters
-      ? "The proof of ownership asks for your Face ID or fingerprint: the account itself signs it, which shows you control it."
+      ? "The proof of ownership asks for your Face ID or fingerprint: the account itself confirms it, which shows you control it."
       : "Balance confirmations and proofs of ownership are issued once Monerium has verified you and your IBAN is active."}</p></section>`;
   const issued = docs.length
     ? table([["Document"], ["Details"], ["Issued"], [""]], docs.map((d) => `<tr>

@@ -92,7 +92,7 @@ PH.settings = {
     const plus = u.privacyBundle && u.privacyBundle.status !== "canceled";
     const account = [
       Z.row({ lead: Z.iconTile({ icon: "person" }), title: "Account", sub: [ownAccountName(u), u.email].filter(Boolean).join(" · "), href: "#account-details" }),
-      Z.row({ lead: Z.iconTile({ icon: "shield_lock" }), title: "Security", sub: "Recovery, sign-in, who can sign and spend", right: checks ? Z.tag(`${checks} to check`, "amber") : "", href: "#security" }),
+      Z.row({ lead: Z.iconTile({ icon: "shield_lock" }), title: "Security", sub: "Recovery, sign-in, who can approve and spend", right: checks ? Z.tag(`${checks} to check`, "amber") : "", href: "#security" }),
       Z.row({ lead: Z.iconTile({ icon: "currency_exchange" }), title: "Currency and auto-convert", sub: phCurrencyWords(u.paymentPage), href: "#settings/currency" }),
       Z.row({ lead: Z.iconTile({ icon: "description" }), title: "Documents", sub: "Statements and verifiable documents", href: "#documents" }),
     ];
@@ -128,13 +128,13 @@ async function phLoadSigners() {
 
 function phSignerRows() {
   const s = phCache.signers;
-  if (s === undefined) return Z.skeletonRows(3, "Reading your account’s signers…");
+  if (s === undefined) return Z.skeletonRows(3, "Reading who approves payments…");
   // The reason comes from a chain read and names internals; the screen says
   // what failed and where the full view is.
   if (s.error) {
     return Z.listGroup({ rows: [
       `<div class="z-row z-row--empty"><span>We couldn’t read who approves payments right now.</span><button type="button" class="z-link-btn" id="ph-sg-retry">Try again</button></div>`,
-      Z.row({ lead: Z.iconTile({ icon: "key" }), title: "Who approves payments", sub: "Owners, signatures and spending limits", href: "#signers" }),
+      Z.row({ lead: Z.iconTile({ icon: "key" }), title: "Who approves payments", sub: "Approvers, approvals and spending limits", href: "#signers" }),
     ] });
   }
   const owners = s.owners || [];
@@ -146,7 +146,7 @@ function phSignerRows() {
   if (phCache.orgs === null) phLoadOrgs().then(() => { if (phRoute?.name === "security") phRender(); });
   const offerSpenders = spenders > 0 || (phCache.orgs || []).some((o) => o.type === "business");
   return `<ul class="z-list z-card">${[
-    Z.row({ lead: Z.iconTile({ icon: "draw" }), title: "Signatures needed", sub: sig, href: "#signers" }),
+    Z.row({ lead: Z.iconTile({ icon: "draw" }), title: "Approvals needed", sub: sig, href: "#signers" }),
     ...(offerSpenders ? [Z.row({ lead: Z.iconTile({ icon: "person_add" }), title: "People who can spend from your account",
       sub: spenders ? `${spenders} ${spenders === 1 ? "person" : "people"} · ${limits.length} limit${limits.length === 1 ? "" : "s"}` : "None", href: "#signers" })] : []),
   ].map((r) => `<li>${r}</li>`).join("")}</ul>`;
@@ -167,7 +167,7 @@ PH.security = {
       recoveryRows.push(Z.row({
         lead: Z.iconTile({ icon: "settings_backup_restore" }),
         title: "Recovery",
-        sub: r.zoldUnarmed ? phZoldUnarmedText(u, r) : r.zold ? "Zoldenburg is your guardian" : r.social ? "Your Google or Apple login is your guardian" : r.codes ? "Codes to your email or phone" : r.pending ? "Set up, not on your account yet" : "Not set up. A lost phone means a lost account.",
+        sub: r.zoldUnarmed ? phZoldUnarmedText(u, r) : r.zold ? "Zoldenburg recovery" : r.social ? "Your Google or Apple login is your recovery helper" : r.codes ? "Codes to your email or phone" : r.pending ? "Set up, not on your account yet" : "Not set up. A lost phone means a lost account.",
         right: Z.tag(r.on ? "Active" : r.zoldUnarmed ? (phZoldCanFinish(u) ? "1 step left" : "Not finished") : r.pending ? "Waiting" : "Off", r.on ? "mint" : r.zoldUnarmed ? "amber" : undefined),
         href: recoveryAction.href,
       }));
@@ -187,12 +187,12 @@ PH.security = {
       : Z.row({
         lead: Z.iconTile({ icon: "smartphone" }),
         title: "Payment key",
-        sub: phKey === undefined ? "Checking this phone…" : keyHere ? (phKey.protection === "none" ? "On this phone, not encrypted" : "On this phone, encrypted by your passkey") : "On another device",
+        sub: phKey === undefined ? "Checking this phone…" : keyHere ? (phKey.protection === "none" ? "On this phone, not encrypted" : "On this phone, encrypted by your Face ID or fingerprint") : "On another device",
         right: keyHere ? Z.tag(phKey.protection === "none" ? "Not encrypted" : "This device", phKey.protection === "none" ? "amber" : "pink") : "",
         chevron: false,
       });
     return `${phSecurityTop()}${phMain(`
-      ${phKeyUnprotected() ? Z.note({ tone: "a", text: "Your payment key is stored unencrypted in this browser: the passkey here can’t encrypt it. The key signs what a payment is (amount and payee). On its own it moves nothing: every payment also needs your Face ID or fingerprint, which your account checks on the chain. Someone with a copy could still sign payment terms. Don’t use Zold in this browser on a shared computer, and remove extensions you don’t trust." }) : ""}
+      ${phKeyUnprotected() ? Z.note({ tone: "a", text: "Your payment key is stored unencrypted in this browser: Face ID or fingerprint here can’t encrypt it. The key vouches for what a payment is (amount and payee). On its own it moves nothing: every payment also needs your Face ID or fingerprint, which your account checks. Someone with a copy could still vouch for payment terms. Don’t use Zold in this browser on a shared computer, and remove extensions you don’t trust." }) : ""}
       ${recoveryRows.length ? Z.listGroup({ label: "Recovery", action: recoveryAction, rows: recoveryRows }) : ""}
       ${Z.listGroup({ label: "Sign-in and keys", rows: [
         Z.row({ lead: Z.iconTile({ icon: "fingerprint" }), title: "Face ID or fingerprint", sub: u.passkey?.createdAt ? `Signs you in and approves payments. Added ${phDay(u.passkey.createdAt)} ${new Date(u.passkey.createdAt).getFullYear()}` : "Not set up", right: Z.tag(u.passkey?.credentialId ? "Active" : "Off", u.passkey?.credentialId ? "mint" : undefined), chevron: false }),

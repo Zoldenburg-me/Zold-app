@@ -31,7 +31,7 @@ PH.add = {
       try {
         const r = await api(`/api/users/${user.id}/faucet`, {});
         if (r.user) user = r.user;
-        Z.announce(`${phEur(r.grantedEur)} test EURe sent.`);
+        Z.announce(`${phEur(r.grantedEur)} test euros sent.`);
         phRender();
       } catch (e) {
         err.textContent = e?.message || "The test faucet could not send.";
@@ -56,11 +56,11 @@ function phFaucetCard() {
     ? Z.note({ icon: "water_drop", html: `More test tokens (${esc(tokens.join(", "))}), for this account or a payer’s wallet: <a href="/faucet?address=${encodeURIComponent(user.address)}" target="_blank" rel="noopener">open the faucet</a>` })
     : "";
   if (!grant || user.faucet?.txHash) {
-    return `${grant ? Z.note({ icon: "science", text: `This account received its ${phEur(user.faucet.grantedEur)} of test EURe.` }) : ""}${more}`;
+    return `${grant ? Z.note({ icon: "science", text: `This account received its ${phEur(user.faucet.grantedEur)} of test euros.` }) : ""}${more}`;
   }
   return `<div class="z-card">
-      ${Z.row({ lead: Z.iconTile({ icon: "science", tone: "p" }), title: "Test EURe", sub: `${phEur(grant)} to try the app with. Test chain only, not real money.`, right: Z.tag("Testnet") })}
-      ${Z.button({ variant: "primary", full: true, label: `Get ${phEur(grant)} test EURe`, id: "ph-faucet" })}
+      ${Z.row({ lead: Z.iconTile({ icon: "science", tone: "p" }), title: "Test euros", sub: `${phEur(grant)} to try the app with. For testing only, not real money.`, right: Z.tag("Testnet") })}
+      ${Z.button({ variant: "primary", full: true, label: `Get ${phEur(grant)} test euros`, id: "ph-faucet" })}
       <p class="z-err" id="ph-faucet-err" role="alert" hidden></p>
     </div>${more}`;
 }
