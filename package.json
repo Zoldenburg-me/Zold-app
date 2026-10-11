@@ -40,6 +40,7 @@
     "safe-import:ui:test": "tsx scripts/safe-import-ui-test.ts",
     "recovery-alert:ui:test": "tsx scripts/recovery-alert-ui-test.ts",
     "passkey-prompt:test": "tsx scripts/passkey-prompt-test.ts",
+    "offline-bar:test": "tsx scripts/offline-bar-test.ts",
     "execution:test": "tsx scripts/safe-execution-test.ts",
     "gas:test": "tsx scripts/safe-gas-test.ts",
     "faucet:test": "tsx scripts/faucet-test.ts",
