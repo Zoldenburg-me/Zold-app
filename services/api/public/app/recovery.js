@@ -84,15 +84,19 @@ function renderGuardianSection(el) {
   // Zoldenburg on the Safe but its 1 € bank check not done: no operator may
   // sign for it yet (the bank step is on /guardian).
   const unarmed = zold && !user.zoldenburgArmed;
+  // The same three cases as the Security row (settings.js phZoldUnarmedText).
+  const canFinish = caps.zoldenburgEnrolment && kycApproved(user) && Boolean(user.iban);
   const who = zold ? "Zoldenburg" : social ? "Your Google or Apple login" : "";
   const text = unarmed
-    ? "Zoldenburg is added. One step left: confirm your bank account by moving 1 € to yourself."
+    ? (!caps.zoldenburgEnrolment ? "Zoldenburg is added. The last step, confirming your bank account, isn’t open yet."
+      : canFinish ? "Zoldenburg is added. One step left: confirm your bank account by moving 1 € to yourself."
+      : "Zoldenburg is added. Your Zold IBAN comes first, then you confirm your bank account.")
     : who ? `${who} can move your account to a new phone if you lose this one.`
     : "Lose your phone, keep your account: choose Zoldenburg or your own Google or Apple login to help you move Zold to a new phone.";
   el.innerHTML = `
     <div class="m-seclabel">Your guardian</div>
     <div class="m-lede" style="font-size:13px">${esc(text)}</div>
-    <a class="m-cta" href="/guardian" style="margin-top:12px;display:inline-flex">${unarmed ? "Finish on the guardian page" : who ? "Manage your guardian" : "Choose your guardian"}</a>`;
+    <a class="m-cta" href="/guardian" style="margin-top:12px;display:inline-flex">${unarmed && canFinish ? "Finish on the guardian page" : who ? "Manage your guardian" : "Choose your guardian"}</a>`;
 }
 
 async function renderCandideSection(el) {
