@@ -198,13 +198,17 @@ the guardian key.
 
 ### Name match
 
-Monerium gives one `name` string; Didit gives first and last name. Normalise
-both (Unicode NFKD, strip diacritics, ß→ss, lower case, hyphens and
-apostrophes to spaces, collapse spaces), tokenise, and require that every
-Didit last-name token and the first Didit first-name token appear in the
-Monerium tokens. Anything else is a mismatch. The same function serves the
-SEPA payer name. Unit-test it with married names, middle names, and
-transliterations; it errs toward mismatch.
+Built as `domain/name-match.ts`, shared by the SEPA payer check and (next)
+Didit. Monerium gives one `name` string; Didit gives first and last name; a
+bank gives one string or both. Normalise (Unicode NFKD, strip diacritics,
+ß→ss, lower case; an umlaut matches both spellings), split into words whose
+hyphenated parts stay together, and drop titles, suffixes and single
+letters. Monerium's name needs two words left. A one-string payer must hold
+every part of Monerium's first and last word; a split name must have its
+first given name and its whole last name among Monerium's parts. A second
+person ("und", "&"; "or"/"y" between two full names) or a company suffix
+never matches. It errs toward mismatch; the tests cover married names,
+middle names, initials, titles and transliterations.
 
 ### Didit facts this relies on (docs, 2026-10-09)
 
@@ -225,24 +229,83 @@ sample documents only.
   only to create sub-orgs and to start logins (`oauth_login`, `init_otp`,
   `verify_otp`, `otp_login`). We do not use Turnkey's Auth Proxy, so the
   invariant below sits in our code where a test can see it.
+- **Built (offline-tested, never called Turnkey, Google or Apple):**
+  `config/turnkey.ts`, `wallet/turnkey.ts`, `routes/recovery-turnkey.ts`,
+  the `/guardian` page (`public/guardian.html`, `public/guardian/*.js`) and
+  `vendor/turnkey.js`; `turnkey:test` and `turnkey-page:test`.
+  `TURNKEY_GUARDIANS=1` switches it on and then needs both secrets plus
+  `TURNKEY_OAUTH_CLIENT_IDS`: our Google web client id (ends in
+  `.apps.googleusercontent.com`) and Apple services id, not secret, both
+  with `https://<host>/guardian` registered as the redirect URI.
+  `capabilities()` publishes `turnkeyGuardians` and `turnkeyLogins`.
+  Adding works end to end in code: login, sub-org, then the passkey op
+  `addGuardianWithThreshold(address, 1)`; the row turns `active` only when
+  the module lists the address. While any other guardian is on the Safe the
+  add is refused (`OTHER_GUARDIAN`), because threshold 2 with no route that
+  collects two signatures would leave Zoldenburg unable to recover alone.
+  Not built: email OTP, the approval page, signature collection and relay.
 - **Every sub-org is created with exactly one root user, the person, at root
   quorum threshold 1, and no API key of ours.** One builder function makes
-  the payload and asserts this; a source-grep test fails on any use of
-  delegated access or any `apiKeys` in that payload. Parent orgs have read
-  access only to sub-orgs and cannot sign with or delete their wallets.
+  the payload (`ACTIVITY_TYPE_CREATE_SUB_ORGANIZATION_V8`: `rootUsers[]` with
+  `apiKeys: []`, one OAuth provider or email, `rootQuorumThreshold: 1`, one
+  Ethereum wallet account) and asserts this; a source-grep test fails on any
+  use of delegated access or any `apiKeys` in that payload.
+- **What the parent can do (Turnkey docs, checked 2026-10-10):** read-only
+  visibility into sub-orgs ([sub-organizations](https://docs.turnkey.com/features/sub-organizations));
+  it "cannot sign transactions or modify policies within them" and "can
+  initiate auth and recovery flows" ([embedded WaaS](https://docs.turnkey.com/solutions/embedded-wallets/embedded-waas));
+  a parent credential "cannot stamp sub-org activities on its own"
+  ([migration guide](https://docs.turnkey.com/reference/migration-guide)); it
+  cannot delete a sub-org without its participation. Export is a sub-org
+  activity, so the parent cannot export either; no page says so in those
+  words. The isolation is a configuration, not a property: Turnkey's own
+  embedded-WaaS example makes the platform the sub-org's root, and
+  [delegated access](https://docs.turnkey.com/concepts/policies/delegated-access-overview)
+  adds a business API key inside the sub-org. Both are what the builder and
+  the grep forbid. The parent starting a login does not let it finish one:
+  the OAuth nonce and the OTP verification token are bound to the browser's
+  key.
 - **Login methods:** Google, Apple, email OTP. Never an OIDC issuer we run
   (Auth0, Cognito, …): we could mint its tokens. The OAuth nonce is bound to a
   client-generated key (`sha256(publicKey)`), so our backend cannot reuse the
   token.
 - **Signing:** the API sends the `ExecuteRecovery` digest it computed; the
-  browser signs it with `sign_raw_payload` (hex payload, no extra hash). The
-  API recovers the address, requires it to be a guardian on chain, normalises
-  `v` as today, and stores the signature on the request. The Turnkey session
-  is ended right after.
-- **Frontend:** `public/app/*.js` are classic scripts with no bundler. Ship a
-  pinned, prebuilt Turnkey browser bundle under `public/vendor/` (as
-  `secp256k1.js` is), or run the guardian pages as a small separate ES-module
-  page. Decide when building; record the hash.
+  browser calls `signRawPayload` on `@turnkey/http` with
+  `encoding: PAYLOAD_ENCODING_HEXADECIMAL`, `hashFunction: HASH_FUNCTION_NO_OP`,
+  which signs "the supplied digest without an additional hashing step"
+  for secp256k1 keys ([raw payload signing](https://docs.turnkey.com/api-reference/overview/raw-payload-signing),
+  checked 2026-10-10). Not `@turnkey/core`'s `signMessage`: it adds the
+  Ethereum message prefix and keccak by default. Turnkey returns `r`, `s`,
+  `v` with `v` as the recovery id 0/1 (its own `@turnkey/viem` maps 0 → 27),
+  so the API normalises `v` to 27/28 as today, recovers the address, requires
+  it to be a guardian on chain, and stores the signature on the request. A
+  sub-org policy that denies NO_OP signing (Turnkey ships one as an example)
+  would block this; we set no policies. The Turnkey session is ended right
+  after.
+- **Multiple signatures (verified 2026-10-10):** the deployed module on Base
+  Sepolia (`0x949d…8c66`, verified source, `VERSION = "0.0.1"`) requires
+  `multiConfirmRecovery` signatures in strictly ascending signer-address order
+  (`require(value.signer > lastSigner, "SM: duplicate signers/invalid
+  ordering")`); each is checked with OpenZeppelin `SignatureChecker` against
+  the recovery hash at the current nonce. abstractionkit 0.4.0's
+  `createMultiConfirmRecoveryMetaTransaction` sorts the pairs that way and
+  throws on a duplicate signer, so collected signatures go through it
+  unchanged.
+- **Frontend:** Turnkey publishes no prebuilt browser bundle; every
+  `@turnkey/*` package ships unbundled CJS and ESM with bare imports.
+  `public/vendor/turnkey.js` is `@turnkey/indexed-db-stamper` 1.3.11 alone,
+  bundled as an ES module by esbuild 0.28.1 (`npm run vendor:turnkey`,
+  37,373 bytes, sha256
+  `b90a8c4816add1e5cb4b8b5d343d375f29ae5418e5f8c52ba98aa29a0c6456d6`);
+  `turnkey-page:test` rebuilds it and fails on any difference.
+  `@turnkey/http` is not bundled: it pulls in X.509, ASN.1 and a DI container
+  (636 KB) for one POST, so the page sends its stamped `sign_raw_payload`
+  itself. The key is an unextractable P-256 key in IndexedDB
+  (`crypto.subtle.generateKey`). Only `/guardian` loads it: an ES-module page
+  with its own CSP (no inline script, `GUARDIAN_PAGE_CSP`), so the classic
+  `app/*.js` scripts never do. Logins are full-page redirects that return
+  the ID token in the URL fragment (Google `id_token`, Apple `code id_token`
+  with no scope), with a one-time state in sessionStorage.
 - **Residual risk, stated in the UI copy and here:** while a guardian is
   logged in, our own served JavaScript holds their session key. A compromised
   zoldhq.com could make a logged-in guardian sign. The threshold, the grace
@@ -336,9 +399,26 @@ New personal data, all to go into the Art. 30 map:
 | a friend's email (invite open only) | invite record, encrypted as a new `stored-secrets.ts` site | deleted on accept, expiry or removal |
 | a trusted person's login | Turnkey only (processor) | their sub-org |
 
-Processors to add: Didit (DPA in their Business Terms), Turnkey (DPA and data
-residency not yet confirmed). Biometric processing rests on explicit consent
-(Art. 9(2)(a)), collected each time.
+Processors to add: Didit (DPA in their Business Terms) and Turnkey. Biometric
+processing rests on explicit consent (Art. 9(2)(a)), collected each time.
+
+**Turnkey in writing (checked 2026-10-10):**
+- No public DPA. The site's legal pages are privacy, terms and cookies only;
+  `/legal/dpa` and similar return 404, and the
+  [trust center](https://trust.turnkey.com/resources) lists none. A DPA has
+  to be requested (info@turnkey.com) and signed before a real user's login
+  goes to Turnkey.
+- The [privacy policy](https://www.turnkey.com/legal/privacy) (updated
+  2026-06-29) says Turnkey acts "as a processor" for a business customer's
+  end users, and transfers rely on EU Standard Contractual Clauses. It also
+  says data goes "directly to us in the United States" and may be stored
+  "anywhere in the world". It does not mention the EU-US Data Privacy
+  Framework.
+- The [trust center](https://trust.turnkey.com/) lists SOC 2 Type II and
+  GDPR, processing in us-east-1, eu-central-1 (Frankfurt) and ap-southeast-1,
+  and subprocessors AWS, Cloudflare, Google Workspace and Grafana Labs.
+  Nothing says a customer can pin to the EU region. That is a question for
+  the DPA request.
 
 ## Invariants this adds (move into `recovery-and-signers.md` when built)
 
@@ -368,14 +448,11 @@ residency not yet confirmed). Biometric processing rests on explicit consent
 - Monerium refresh-token lifetime: can we still read a user's orders weeks
   after their last login? If not, the 1 € recovery check needs another read
   path (partner webhooks).
-- SocialRecoveryModule: signature ordering in `multiConfirmRecovery` for
-  N > 1 on the deployed version ("0.0.1" hashing).
 - Didit: which liveness a default workflow uses (passive is free, active is
   paid); whether the decision can omit image URLs; the sub-processor list in
   writing.
-- Turnkey: DPA and EU processing; that the parent can never export a
-  sub-org's key; whether `@turnkey/viem` signs typed data in the browser
-  (not needed if we sign the raw digest).
+- Turnkey: a signed DPA, and whether processing can be pinned to
+  eu-central-1 (see *Data and GDPR*).
 - Production grace period: 3 days, or 7 once trusted people exist.
 - What a user does when the name or bank check fails (no override exists).
 
@@ -383,8 +460,9 @@ residency not yet confirmed). Biometric processing rests on explicit consent
 
 1. Phase 0 alerts: the banner is built; the mail transport behind its flag
    is next.
-2. Phase 1 enrolment 1 € check, then the recovery-time Didit + 1 € checks and
-   the operator gate.
+2. Phase 1: the enrolment 1 € check and the operator's refusal to sign for an
+   unenrolled account are built (`recovery/zoldenburg-enrolment.ts`). Next:
+   the recovery-time Didit + 1 € checks, gating the sign button on both.
 3. Phase 2 Turnkey integration + own social guardian.
 4. Phase 3 friend invites (screen, mail, reminders) + the n-of-m rule and UI.
 5. Phase 4 removal of the Candide hosted guardian (can run in parallel with 2).

@@ -168,6 +168,8 @@ function obNextAfterAccount(u = user) {
   if (!u) return "auth";
   if (!u.passkey || needsPasskeySafeSetup(u)) return obSetupScreen(u);
   if (emailConfirmPending(u)) return "email";
+  // No Monerium in this segment: the app's Home names the gate instead.
+  if (!segmentHas(u, "monerium")) return null;
   if (zoldenburgChoicePending(u)) return "recovery";
   if (u.kycStatus === "rejected") return "monerium";
   if (kycApproved(u)) return null;
@@ -1312,6 +1314,12 @@ async function obCreateAccount(btn) {
       obClearDraft();
       return obGo(obSetupScreen(user), { replace: true });
     }
+    if (!needsPasskeySafeSetup(user)) {
+      obSetup = null;
+      obClearDraft();
+      const next = obNextAfterAccount();
+      return next ? obGo(next, { replace: true }) : obFinish();
+    }
     await obOpenOwnSafe(btn);
   } catch (e) {
     obSetupFailed(e);
@@ -2454,7 +2462,7 @@ async function activatePasskeySafe() {
 }
 
 async function finishPasskeySafeSetup(extraMs = 45000) {
-  if (!user?.passkeySafe || user.passkeySafe.status === "active") return;
+  if (!needsPasskeySafeSetup(user)) return;
   // Deploying now would end the import started on this device for good.
   // "Use a new account instead" clears the flag first.
   if (safeImportFlag()) throw new Error("you started bringing in your company’s existing Safe. Finish that, or choose a new account instead");

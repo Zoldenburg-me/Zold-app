@@ -6,6 +6,7 @@
  * Extracted from server.ts so /api/health is not the reason this lives in a
  * 3,800-line file.
  */
+import { TURNKEY } from "./config.js";
 import { EMAIL_VERIFICATION, ENS_GATEWAY, ENS_LOOKUP, FORWARDING, HARNESS, MONERIUM, SHOPIFY, TESTNET_FAUCET, moneriumOAuthEnabled } from "./config.js";
 import { moneriumApiKeysAvailable, moneriumEnvironment } from "./adapters/monerium-connection.js";
 import { cashRailOpen } from "./orchestrator.js";
@@ -14,6 +15,8 @@ import { dripTokens, faucetEnabled } from "./faucet.js";
 import { shopifyAvailable } from "./routes/shopify.js";
 import { candideRecoveryEnabled } from "./recovery/candide-guardian.js";
 import { zoldenburgRecoveryEnabled } from "./recovery/zoldenburg-guardian.js";
+import { enrolmentAvailable } from "./recovery/enrolment-key.js";
+import { turnkeyGuardiansEnabled } from "./wallet/turnkey.js";
 
 /**
  * What this deployment can do, so the browser only offers actions the server
@@ -54,6 +57,16 @@ export function capabilities() {
     /** May a user add Zoldenburg as their recovery guardian, and may a lost
      *  device ask Zoldenburg to recover it? Needs the guardian address. */
     zoldenburgRecovery: zoldenburgRecoveryEnabled(),
+    /** May a user finish Zoldenburg recovery with 1 € from their bank? Needs
+     *  RECOVERY_IBAN_HMAC_KEY. Without it the operator can sign for nobody. */
+    zoldenburgEnrolment: zoldenburgRecoveryEnabled() && enrolmentAvailable(),
+    /** May a user make their own Google or Apple login a recovery guardian
+     *  (a Turnkey wallet)? Off until TURNKEY_GUARDIANS=1, which waits for
+     *  the recovery alerts; no screen offers it yet. */
+    turnkeyGuardians: turnkeyGuardiansEnabled(),
+    /** The OAuth client ids /guardian logs in with (not secrets: every login
+     *  URL carries them), or null while the switch is off. */
+    turnkeyLogins: turnkeyGuardiansEnabled() ? { google: TURNKEY.googleClientId, apple: TURNKEY.appleClientId } : null,
     /** May a new company login bring in an existing Safe instead of
      *  deploying one (routes/safe-import.ts)? Needs a real chain: under the
      *  local harness both import routes answer NO_CHAIN. Whether one account

@@ -34,6 +34,25 @@ Planned guardian kinds (Didit + 1 € check, Turnkey, trusted people):
   A signature's v of 0/1 is normalised to 27/28 before relaying (the module's
   ECDSA check would revert on 0/1). Admin → Recoveries → "Test guardian
   wallet" proves the Shell → wallet → API path without touching a Safe.
+- **Zoldenburg signs only for an ARMED account.** Adding the guardian on
+  chain is not enough: the user also sends at least 1 € from a bank account
+  in their own name to their Zold IBAN, with a code from Security → Recovery
+  as the reference (`recovery/zoldenburg-enrolment.ts`). The payer's name
+  must match the Monerium profile name, read live (`domain/name-match.ts`),
+  and a payment from the Zold IBAN itself is refused. Only an HMAC of the
+  payer's IBAN (`RECOVERY_IBAN_HMAC_KEY`), its last 4 characters and the
+  order id are kept. Titles and initials are not name parts; a one-word
+  Monerium name, a joint account ("und", "&") or a company payer never
+  matches. Until then /admin/recoveries refuses
+  `sign-request`, `execute` and `sync` (409 `NOT_ARMED`) and shows no Safe
+  Cover link. A new code needs a passkey step-up every time; a failed
+  re-enrolment leaves the old account armed; adding or removing the guardian
+  drops the enrolment, and an account is armed only while Zoldenburg's
+  current guardian is active on it; a new HMAC key disarms every account
+  until it pays again. **The gate binds the admin console, not the guardian
+  key:** a signature made outside /admin (Safe Cover, by hand) still reaches
+  the chain, and the sweep follows the chain to finalisation, so the
+  operator rule is never to sign for an unarmed account.
 - **A recovery's new credential lives on the RecoveryRequest** until the chain
   confirms the new owner, so whoever holds the OTP channels cannot sign in or
   spend during the grace period.
