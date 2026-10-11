@@ -199,6 +199,49 @@ await check("refreshPendingIban does not attach an IBAN that pays this address o
   assert.equal(after.funding?.status, "iban_pending");
 });
 
+await check("an approved pending account with no record says where its IBAN pays now (the move back that never landed)", async () => {
+  const u = addUser(11);
+  // A move back accepted but not confirmed: no IBAN, pending, no elsewhere record.
+  store.updateUser(u.id, { iban: "", funding: { mode: "sandbox", status: "iban_pending", moneriumProfileId: PROFILE, detail: "Monerium accepted moving it but does not show it here yet" } });
+  ibansOf.set(u.token, [listed(u.iban, OTHER)]);
+  const after = await refreshPendingIban(store.findUser(u.id)!);
+  assert.equal(after.iban, "");
+  assert.equal(after.moneriumIbanElsewhere?.iban, u.iban);
+  assert.equal(after.moneriumIbanElsewhere?.address, OTHER);
+  assert.equal((publicUser(after) as any).moneriumIbanElsewhere.address, OTHER, "the app offers Move IBAN back");
+  const audits = () => store.auditFor(u.id, 50).filter((e) => e.kind === "partner.iban_moved_elsewhere").length;
+  assert.equal(audits(), 1);
+  await refreshPendingIban(store.findUser(u.id)!);
+  assert.equal(audits(), 1, "the poller does not rewrite an unchanged place");
+  ibansOf.set(u.token, [listed(u.iban, u.address)]);
+  const back = await refreshPendingIban(store.findUser(u.id)!);
+  assert.equal(back.iban, u.iban);
+  assert.equal(back.moneriumIbanElsewhere, undefined);
+});
+
+await check("of several IBANs on the profile, the one the user asked to move here is named", async () => {
+  const u = addUser(12);
+  const asked = "DE89370400440532013099";
+  store.updateUser(u.id, {
+    iban: "",
+    funding: { mode: "sandbox", status: "iban_pending", moneriumProfileId: PROFILE },
+    moneriumIbanMoves: [{ iban: asked, profileId: PROFILE, fromAddress: OTHER, fromChain: "base", toAddress: u.address, toChain: "base", requestedAt: now }],
+  } as any);
+  ibansOf.set(u.token, [listed(u.iban, OTHER), listed(asked, OTHER)]);
+  assert.equal((await refreshPendingIban(store.findUser(u.id)!)).moneriumIbanElsewhere?.iban, asked);
+});
+
+await check("several IBANs and no move asked for, or an account never approved: nothing is named", async () => {
+  const u = addUser(13);
+  store.updateUser(u.id, { iban: "", funding: { mode: "sandbox", status: "iban_pending", moneriumProfileId: PROFILE } });
+  ibansOf.set(u.token, [listed(u.iban, OTHER), listed("DE89370400440532013098", OTHER)]);
+  assert.equal((await refreshPendingIban(store.findUser(u.id)!)).moneriumIbanElsewhere, undefined);
+  const p = addUser(14);
+  store.updateUser(p.id, { iban: "", kycStatus: "pending", funding: { mode: "sandbox", status: "iban_pending", moneriumProfileId: PROFILE } });
+  ibansOf.set(p.token, [listed(p.iban, OTHER)]);
+  assert.equal((await refreshPendingIban(store.findUser(p.id)!)).moneriumIbanElsewhere, undefined, "activation offers the move for a new account");
+});
+
 console.log("\nOrganisation accounts");
 
 await check("an org account backed by the user drops the IBAN with the user's (the row stays) and gets it back", async () => {

@@ -159,6 +159,9 @@ function phDeskBalance(u) {
       </div>`
     : ibanMovedAway(u)
     ? `<div class="z-dhome__ids z-dhome__ids--none">${ibanMovedAwayHtml("ph-iban-back")}</div>`
+    : ibanSwitchedOff(u)
+    ? `<div class="z-dhome__ids z-dhome__ids--none"><p class="z-sub">${esc(IBAN_SWITCHED_OFF)}</p>
+        ${Z.button({ label: "Switch on your IBAN", id: "ph-det-verify", className: "z-btn--sm" })}</div>`
     : `<div class="z-dhome__ids z-dhome__ids--none"><p class="z-sub">Your IBAN appears here once Monerium has verified you and issued it.</p>
         ${Z.button({ label: "Verify your identity", id: "ph-det-verify", className: "z-btn--sm" })}</div>`;
   return `<section class="z-card z-dhome__bal">
