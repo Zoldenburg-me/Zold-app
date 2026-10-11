@@ -69,6 +69,7 @@ export type AuditKind =
   | "service.checkout_transfer_read"
   /** The checkout service called a merchant-link route: which credential,
    *  which link, and the outcome. Never the link code or secret. */
+  | "service.merchant_link_preview"
   | "service.merchant_link_exchange"
   | "service.merchant_link_read"
   | "service.merchant_request_create"
