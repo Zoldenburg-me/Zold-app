@@ -12,10 +12,11 @@
  * passkey added; it is the way back in when every passkey is lost.
  *
  * Run it with the deployment's environment (TRANSF_DB_PATH, ADMIN_ORIGIN), so
- * the file lands in the store the API reads.
+ * the file lands in the store the API reads. It lives under services/api/src
+ * because the production branch keeps nothing else.
  */
-import { OPERATOR } from "../services/api/src/config.js";
-import { ENROLMENT_FILE, startEnrolment } from "../services/api/src/operators/enrolment.js";
+import { OPERATOR } from "../config.js";
+import { ENROLMENT_FILE, startEnrolment } from "./enrolment.js";
 
 const args = process.argv.slice(2);
 const flag = (name: string) => {

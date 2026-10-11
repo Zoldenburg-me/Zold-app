@@ -77,6 +77,7 @@ const fs = require("fs");
 const p = JSON.parse(fs.readFileSync("package.json", "utf8"));
 const tsx = p.devDependencies?.tsx;
 if (!tsx) throw new Error("package.json has no tsx devDependency");
+if (!fs.existsSync("services/api/src/operators/enrol-cli.ts")) throw new Error("services/api/src/operators/enrol-cli.ts is missing: production could not enrol an operator");
 const out = {
   name: p.name,
   license: p.license,
@@ -84,7 +85,8 @@ const out = {
   private: true,
   description: p.description,
   type: p.type,
-  scripts: { start: "tsx services/api/src/server.ts" },
+  // The operator's enrolment runs on the host (operators/enrol-cli.ts).
+  scripts: { start: "tsx services/api/src/server.ts", "operator:enrol": "tsx services/api/src/operators/enrol-cli.ts" },
   dependencies: { ...p.dependencies, tsx },
 };
 if (p.overrides) out.overrides = p.overrides;
