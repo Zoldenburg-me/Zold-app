@@ -21,6 +21,7 @@
     "stellar:check": "tsx scripts/stellar-check.ts",
     "webauthn:selftest": "tsx scripts/webauthn-selftest.ts",
     "safe-funded:test": "tsx scripts/safe-funded-recovery-test.ts",
+    "recovery:fork:test": "tsx scripts/recovery-module-fork-test.ts",
     "crypto:test": "tsx scripts/crypto-at-rest-test.ts",
     "convert:test": "tsx scripts/convert-deposit-test.ts",
     "safe-op-uncertain:test": "tsx scripts/safe-op-uncertain-test.ts",
