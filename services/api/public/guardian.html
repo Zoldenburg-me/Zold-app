@@ -24,9 +24,12 @@
   .g-steps li { margin: 6px 0; }
   @media (max-width: 480px) {
     .g-actions { flex-direction: column; }
-    .g-actions .z-btn { width: 100%; justify-content: center; }
+    .g-actions .z-btn { width: 100%; justify-content: center; box-sizing: border-box; }
   }
   .g-ok { color: var(--z-mint, inherit); }
+  .g-step { font-size: 17px; margin: 16px 0 0; }
+  .g-why { margin: 0 0 16px; }
+  .g-why summary { cursor: pointer; color: var(--z-pink-link, inherit); font-size: 14px; }
   .g-err { color: var(--z-red, #c0392b); }
   .g-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 </style>
