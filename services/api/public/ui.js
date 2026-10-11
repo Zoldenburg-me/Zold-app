@@ -308,6 +308,18 @@
     if (trigger && document.contains(trigger)) trigger.focus();
   }
 
+  /* ---- The passkey prompt, named for this device ---------------------- */
+
+  /* A touch screen is a phone or tablet, where the passkey prompt is Face ID
+     or a fingerprint. A computer's may be Touch ID, Windows Hello, its
+     password, a phone by QR code or a security key, so there it is named for
+     what it is: a passkey. Every user-visible string that names the prompt
+     goes through these, read at render time (a window can change pointer). */
+  const onPhone = () => !!window.matchMedia?.("(pointer: coarse)").matches;
+  const byDevice = (phone, computer) => (onPhone() ? phone : computer);
+  /** "your …" / "with your …": Face ID or fingerprint on a phone, passkey on a computer. */
+  const passkeyName = () => byDevice("Face ID or fingerprint", "passkey");
+
   /* ---- Wiring (listeners only; nothing runs at load) ----------------- */
 
   let live = null;
@@ -375,5 +387,6 @@
     field, select, countries, setFieldError, focusFirstError,
     row, soonRow, listGroup, skeletonRows, avatar, iconTile, formatMoney, amount, note, kv, groupIban, copyRow,
     testModePill, bottomNav, skipLink, overlay, openOverlay, closeOverlay, announce,
+    onPhone, byDevice, passkeyName,
   });
 })();

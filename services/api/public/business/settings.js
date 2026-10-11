@@ -67,8 +67,8 @@ function approvalsSection() {
   const sub = on
     ? "Every payment needs a second person to approve it. Whoever drafts a payment can’t approve it, whatever their role, and editing someone’s draft makes you its drafter."
     : planHasIt
-      ? "Review is off: a payment is saved, then sent with Face ID or fingerprint, without a second approval."
-      : "On your plan a payment is saved, then sent with Face ID or fingerprint. A second approval comes with a paid plan.";
+      ? "Review is off: a payment is saved, then sent with the sender’s passkey, without a second approval."
+      : "On your plan a payment is saved, then sent with the sender’s passkey. A second approval comes with a paid plan.";
   const notes = [
     on && !planHasIt ? "Your plan no longer includes review. It stays on until an owner turns it off, so nobody can start sending alone just because the plan changed." : "",
     pr.source === "owner" && pr.changedAt ? `${on ? "Turned on" : "Turned off"} by an owner on ${day(pr.changedAt)}.` : "",

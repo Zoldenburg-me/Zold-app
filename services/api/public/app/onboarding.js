@@ -279,17 +279,11 @@ function obShowErr(e, id = "ob-err") {
 }
 const obClearErr = (id = "ob-err") => $(id)?.classList.add("hidden");
 
-/* A phone's prompt is Face ID or a fingerprint. A computer's may be Touch ID,
-   Windows Hello, its password, a phone by QR code or a security key, so there
-   it is named for what it makes: a passkey. */
-const obOnPhone = () => !!window.matchMedia?.("(pointer: coarse)").matches;
-
 /* A cancelled Face ID prompt is the user's choice, not a fault: say so plainly. */
 function obMessage(e) {
-  // A touch screen is a phone or tablet, where the prompt is Face ID or a
-  // fingerprint; on a computer it may be Touch ID, Windows Hello, a phone by
-  // QR code or a security key, so it is named for what it is: a passkey.
-  const phone = obOnPhone();
+  // Named for this device: Face ID or fingerprint on a phone, a passkey on a
+  // computer (ui.js, Z.onPhone).
+  const phone = Z.onPhone();
   // Before the names: Chromium refuses a second open prompt as InvalidStateError.
   if (passkeyPending(e)) {
     return phone
@@ -443,11 +437,11 @@ OB.auth = {
   html: () => `${obBrand()}
     <main id="main" class="z-screen__main z-screen__main--center">
       <span class="z-mark" aria-hidden="true">▽</span>
-      ${obIntro("Welcome to Zold", "Sign in with Face ID or your fingerprint, or open a new account.")}
+      ${obIntro("Welcome to Zold", Z.byDevice("Sign in with Face ID or your fingerprint, or open a new account.", "Sign in with your passkey, or open a new account."))}
       ${obAlert("auth-err")}
     </main>
     <div class="z-screen__foot">
-      ${Z.button({ variant: "primary", full: true, icon: "passkey", label: "Sign in with Face ID", id: "link-signin" })}
+      ${Z.button({ variant: "primary", full: true, icon: "passkey", label: Z.byDevice("Sign in with Face ID", "Sign in with a passkey"), id: "link-signin" })}
       ${Z.button({ variant: "secondary", full: true, label: "Create an account", id: "btn-create" })}
       <p class="z-screen__alt" id="recover-link-row"${caps.emailSmsRecovery || caps.zoldenburgRecovery || caps.turnkeyGuardians ? "" : " hidden"}>New phone, or lost this one? <a href="/recovery">Recover your account</a></p>
     </div>
@@ -654,13 +648,13 @@ OB["p-passkey"] = {
   html: () => `${obProgress(6, 6, "Sign-in", user?.id ? null : "p-review")}
     <main id="main" class="z-screen__main">
       <span class="z-mark z-mark--icon" aria-hidden="true">${Z.icon("passkey")}</span>
-      ${obOnPhone()
+      ${Z.onPhone()
         ? obIntro("Set up Face ID or fingerprint", "It creates a sign-in key that never leaves this phone.")
         : obIntro("Set up sign-in on this computer", "Your browser will ask to create a passkey. Approve it with Touch ID, your computer’s password, your phone or a security key. No face or fingerprint needed.")}
       <ul class="z-points">
         <li>${Z.icon("lock")}<span>It’s the only key to your account. Zold never sees it.</span></li>
         <li>${Z.icon("password")}<span>No Zold password to remember or leak.</span></li>
-        <li>${Z.icon("restore")}<span>Set up recovery next, in case you lose this ${obOnPhone() ? "phone" : "device"}.</span></li>
+        <li>${Z.icon("restore")}<span>Set up recovery next, in case you lose this ${Z.onPhone() ? "phone" : "device"}.</span></li>
       </ul>
       ${obSetupSteps()}
       ${obAlert()}
@@ -805,13 +799,13 @@ OB["b-passkey"] = {
   html: () => `${obProgress(7, 7, "Sign-in", user?.id ? null : "b-review")}
     <main id="main" class="z-screen__main">
       <span class="z-mark z-mark--icon" aria-hidden="true">${Z.icon("passkey")}</span>
-      ${obIntro("Set up the company’s first approver", obOnPhone()
+      ${obIntro("Set up the company’s first approver", Z.onPhone()
         ? `This phone becomes the first approver for ${esc(obCompany())}.`
         : `This computer becomes the first approver for ${esc(obCompany())}. Your browser will ask to create a passkey: approve it with Touch ID, your computer’s password, your phone or a security key.`)}
       <ul class="z-points">
         <li>${Z.icon("lock")}<span>Company payments you draft need a teammate’s approval. Zold can’t approve any.</span></li>
         <li>${Z.icon("group_add")}<span>Invite teammates and give each a role after the account opens.</span></li>
-        <li>${Z.icon("restore")}<span>Set up recovery next, in case you lose this ${obOnPhone() ? "phone" : "device"}.</span></li>
+        <li>${Z.icon("restore")}<span>Set up recovery next, in case you lose this ${Z.onPhone() ? "phone" : "device"}.</span></li>
       </ul>
       ${obSetupSteps()}
       ${obAlert()}
@@ -838,7 +832,7 @@ function obImportSentence(e) {
   const chain = obImport?.prepared ? obChainName(obImport.prepared.chainId) : "the network Zold uses";
   const s = {
     NO_CHAIN: "This Zold server can’t bring in a Safe.",
-    NO_PASSKEY: "Set up Face ID sign-in on this phone first.",
+    NO_PASSKEY: Z.byDevice("Set up Face ID sign-in on this phone first.", "Set up passkey sign-in on this device first."),
     SAFE_ACTIVE: "This login already has its own account, so it can’t take a second one.",
     BAD_ADDRESS: "That isn’t a Safe address. It starts with 0x, followed by 40 letters and digits.",
     OWN_PLAN: "That’s the new account Zold prepared for you, not your company’s existing Safe.",
@@ -857,7 +851,7 @@ function obImportSentence(e) {
     VERIFIER_NOT_OWNER: "The owner change isn’t on the network yet. Wait a minute after sending it, then try again.",
     VERIFIER_NO_CODE: "Zold couldn’t finish setting up this phone’s approval key yet. Try again in a minute.",
     VERIFIER_PENDING: "This phone’s approval key is still being set up. Try again in a minute.",
-    STEP_UP_REQUIRED: "Approve with Face ID to bring in this Safe.",
+    STEP_UP_REQUIRED: `Approve with your ${Z.passkeyName()} to bring in this Safe.`,
     STEP_UP_CREDENTIAL: "That approval came from a different sign-in. Approve with the one this login uses.",
     STEP_UP_INVALID: "That approval didn’t match the Safe as the network shows it now, or it expired. Check the Safe again and approve.",
     SAFE_CHANGED: "The Safe’s owners changed after you approved. Check the Safe again and approve it as it is now.",
@@ -912,11 +906,11 @@ OB["b-safe-choice"] = {
   title: "Business: choose the account",
   html: () => `${obBackHead(null)}
     <main id="main" class="z-screen__main z-screen__main--tight">
-      ${obIntro("Where should the money sit?", `Your Face ID sign-in is saved. Choose the account ${esc(obCompany())} uses in Zold.`)}
+      ${obIntro("Where should the money sit?", `Your ${Z.byDevice("Face ID", "passkey")} sign-in is saved. Choose the account ${esc(obCompany())} uses in Zold.`)}
       <form class="z-form z-form--tight" id="ob-form" novalidate>
         <fieldset class="z-form z-form--tight" style="border:0;margin:0;padding:0;min-width:0">
           <legend class="z-sr">Which account</legend>
-          ${obChoiceHtml("safe-choice", "new", "Open a new account", "Zold sets up a new account for the company. One more Face ID approval.", true)}
+          ${obChoiceHtml("safe-choice", "new", "Open a new account", `Zold sets up a new account for the company. One more approval with your ${Z.passkeyName()}.`, true)}
           ${obChoiceHtml("safe-choice", "import", "Use our company’s existing Safe", "You already have a Safe, owned by a wallet such as a Ledger. Its owner adds this phone as an owner. No money moves.", false)}
         </fieldset>
       </form>
@@ -1094,7 +1088,7 @@ OB["b-import-confirm"] = {
     return `${obBackHead(p && !p.alreadyOwner ? "b-import-sign" : "b-import-address")}
     <main id="main" class="z-screen__main z-screen__main--tight">
       ${obIntro(ready ? "Approve bringing in your Safe" : "Finish bringing in your Safe", ready
-        ? "Check the owners, then approve with Face ID. Zold makes the Safe this company’s account only with that approval."
+        ? `Check the owners, then approve with your ${Z.passkeyName()}. Zold makes the Safe this company’s account only with that approval.`
         : "Once the owner change is on the network, Zold checks the Safe and asks for your approval.")}
       ${p ? obSafeSummary(p) : Z.skeletonRows(2, "Checking your Safe…")}
       ${ready ? obImportOwnersNote(p) : ""}
@@ -1102,7 +1096,7 @@ OB["b-import-confirm"] = {
       ${obAlert()}
     </main>
     <div class="z-screen__foot">
-      ${Z.button({ variant: "primary", full: true, label: ready ? "Approve with Face ID" : retry ? "Check again" : "I’ve sent it", id: "btn-import-confirm" })}
+      ${Z.button({ variant: "primary", full: true, label: ready ? Z.byDevice("Approve with Face ID", "Approve with your passkey") : retry ? "Check again" : "I’ve sent it", id: "btn-import-confirm" })}
       ${obNewAccountLink()}
     </div>`;
   },
@@ -1238,10 +1232,10 @@ function obSetupSteps() {
     const word = done ? "done" : st === "is-fail" ? "did not finish" : st === "is-now" ? "in progress" : "next";
     return `<li class="${st}">${Z.icon(ic)}<span>${label}<span class="z-sr">, ${word}</span></span></li>`;
   };
-  const phone = obOnPhone();
+  const phone = Z.onPhone();
   return `<ul class="z-steps" aria-live="polite">${row(0, phone ? "Face ID sign-in on this phone" : "Sign-in on this device", keyDone)}${row(1, phone ? "Your account, approved with Face ID" : "Your account, approved on this device", !!user?.passkey && !needsPasskeySafeSetup(user) && !!user?.passkeySafe)}</ul>`;
 }
-const obPasskeyLabel = () => obOnPhone()
+const obPasskeyLabel = () => Z.onPhone()
   ? (user?.passkey ? "Finish with Face ID" : "Set up Face ID")
   : (user?.passkey ? "Finish setting up" : "Set up sign-in");
 
@@ -1267,7 +1261,7 @@ async function obCreateAccount(btn) {
   obClearErr();
   if (!window.PublicKeyCredential) {
     // No passkey, no account: nothing an account without one could hold.
-    return obShowErr(new Error("This browser can’t set up Face ID or fingerprint sign-in. Open Zold in Safari or Chrome to create an account."));
+    return obShowErr(new Error(`This browser can’t set up ${Z.passkeyName()} sign-in. Open Zold in Safari or Chrome to create an account.`));
   }
   Z.setLoading(btn, true);
   try {
@@ -1338,7 +1332,7 @@ function obRerenderSteps() {
    the account's next step. Throws; the caller says what failed. */
 async function obOpenOwnSafe(btn) {
   obSetup = { step: 1, state: "now" }; obRerenderSteps();
-  btn.querySelector("span:last-child").textContent = obOnPhone() ? "Approve with Face ID again" : "Approve again";
+  btn.querySelector("span:last-child").textContent = Z.onPhone() ? "Approve with Face ID again" : "Approve again";
   await finishPasskeySafeSetup();
   obSetup = null;
   // Only the hardhat harness auto-approves; a real account goes on to
@@ -1355,7 +1349,7 @@ function obSetupFailed(e) {
   if (obSetup) obSetup.state = "fail";
   obRerenderSteps();
   obShowErr(obSetup?.step === 1
-    ? new Error(`Your ${obOnPhone() ? "Face ID sign-in" : "sign-in"} is saved, but setting up the account didn’t finish (${obMessage(e).replace(/\.$/, "")}). Try again; nothing needs setting up twice.`)
+    ? new Error(`Your ${Z.onPhone() ? "Face ID sign-in" : "sign-in"} is saved, but setting up the account didn’t finish (${obMessage(e).replace(/\.$/, "")}). Try again; nothing needs setting up twice.`)
     : e);
 }
 
@@ -1397,7 +1391,7 @@ OB.blocked = {
 async function obSignIn(btn) {
   if (Z.isDisabled(btn)) return;
   obClearErr("auth-err");
-  if (!window.PublicKeyCredential) return obShowErr(new Error("This browser can’t use Face ID or fingerprint sign-in. Open Zold in Safari or Chrome."), "auth-err");
+  if (!window.PublicKeyCredential) return obShowErr(new Error(`This browser can’t use ${Z.passkeyName()} sign-in. Open Zold in Safari or Chrome.`), "auth-err");
   Z.setLoading(btn, true);
   try {
     const { challenge } = await api("/api/webauthn/challenge", { purpose: "login" });
@@ -1619,13 +1613,13 @@ OB["recovery-email"] = {
     <main id="main" class="z-screen__main">
       ${obIntro("Recovery by email", obRecOtp
         ? `Enter the code sent to ${esc(obRecOtp.target)}.`
-        : `We’ll register ${esc(user.email)} for recovery codes. It takes two Face ID approvals.`)}
+        : `We’ll register ${esc(user.email)} for recovery codes. It takes two approvals with your ${Z.passkeyName()}.`)}
       ${obRecOtp ? `<form class="z-form" id="ob-form" novalidate>${Z.field({ id: "rec-code", name: "one-time-code", label: "Code", autocomplete: "one-time-code", inputmode: "numeric", maxlength: 10, spellcheck: false })}</form>`
         : `${Z.note({ icon: "info", text: "Someone who controls your mailbox could start a recovery too. The waiting period is what lets you stop it from this phone." })}`}
       ${obAlert()}
     </main>
     <div class="z-screen__foot">
-      ${obRecOtp ? obSubmit("Confirm") : Z.button({ variant: "primary", full: true, icon: "fingerprint", label: "Register with Face ID", id: "btn-rec-register" })}
+      ${obRecOtp ? obSubmit("Confirm") : Z.button({ variant: "primary", full: true, icon: "fingerprint", label: Z.byDevice("Register with Face ID", "Register with your passkey"), id: "btn-rec-register" })}
       ${obRecOtp ? `<button type="button" class="z-link-btn" id="btn-rec-restart">Start over</button>` : `<a class="z-link-btn" href="#recovery">Choose another way</a>`}
     </div>`,
   bind: (root) => {
@@ -1666,7 +1660,7 @@ OB["recovery-email"] = {
           obRecoveryDone = "email";
           return obGo("recovery", { replace: true });
         }
-        throw new Error("Your email is registered, but the last Face ID approval didn’t finish. You can finish it in Security.");
+        throw new Error(`Your email is registered, but the last approval with your ${Z.passkeyName()} didn’t finish. You can finish it in Security.`);
       } catch (e2) {
         // Five wrong codes end the registration server-side; the way on is to start over.
         obShowErr(e2);
@@ -1703,7 +1697,7 @@ OB.monerium = {
         <ul>
           <li>Takes a few minutes with your ID at hand.</li>
           <li>You can use Zold as a wallet while the check runs, or without it.</li>
-          <li>Your IBAN switches on with one Face ID approval.</li>
+          <li>Your IBAN switches on with one approval with your ${Z.passkeyName()}.</li>
         </ul>
       </div>
       ${any ? "" : Z.note({ tone: "a", text: "Monerium can’t be connected on this version of Zold yet, so no IBAN can be issued here." })}
@@ -1782,7 +1776,7 @@ OB.activate = {
       ${obAlert()}
     </main>
     <div class="z-screen__foot z-screen__foot--quiet">
-      ${user?.iban ? "" : Z.button({ variant: "primary", full: true, icon: "fingerprint", label: "Switch on with Face ID", id: "btn-kyc-activate" })}
+      ${user?.iban ? "" : Z.button({ variant: "primary", full: true, icon: "fingerprint", label: Z.byDevice("Switch on with Face ID", "Switch on with your passkey"), id: "btn-kyc-activate" })}
       <button type="button" class="z-link-btn" id="btn-kyc-refresh">Check again</button>
       <button type="button" class="z-link-btn z-link-btn--small" id="btn-kyc-reconnect">Not your login? Use a different Monerium account</button>
       ${user?.monerium?.method === "api_keys" ? "" : `<p class="z-sub" style="font-size:12px;text-align:center;margin:4px 0 0">Sign out at Monerium first, or it signs you back in to the same login.</p>`}
@@ -1895,7 +1889,7 @@ function obIbanReadyHtml() {
 function obIbanWaitHtml(w) {
   const steps = [
     { t: "Signed in", d: "At our partner, Monerium.", done: true },
-    { t: "IBAN requested", d: "Approved with your Face ID.", done: true },
+    { t: "IBAN requested", d: `Approved with your ${Z.byDevice("Face ID", "passkey")}.`, done: true },
     { t: w.idCheck ? "Your ID is checked" : "Your IBAN is issued",
       d: w.idCheck ? "Usually minutes, sometimes a day or two." : "Usually within minutes.", done: false },
     { t: "IBAN on your dashboard", d: "Share it and get paid by bank transfer.", done: false },
@@ -1981,7 +1975,7 @@ function obWelcomeCards() {
   const plain = (icon, label, text) => `<div class="z-tour__row"><span>${label}</span>${Z.iconTile({ icon, tone: "p" })}</div><div class="z-tour__value z-tour__value--text">${text}</div>`;
   return [
     { card: `<div class="z-tour__row"><span>Your IBAN</span>${ibanCard.tag}</div>${ibanCard.value}<span class="z-tour__row">${ibanCard.note}</span>`, title: ibanCard.title, sub: ibanCard.sub },
-    { card: plain("fingerprint", "Every payment", "Approved with your Face ID"), title: "Only you can move your money.", sub: "Each payment asks for your Face ID or fingerprint, for one amount to one recipient. Zold can’t send anything on its own." },
+    { card: plain("fingerprint", "Every payment", `Approved with your ${Z.byDevice("Face ID", "passkey")}`), title: "Only you can move your money.", sub: `Each payment asks for your ${Z.passkeyName()}, for one amount to one recipient. Zold can’t send anything on its own.` },
     { card: plain("account_balance", "Bank transfers", "Any IBAN in Europe"), title: "Pay by bank transfer.", sub: "You see the amount and any fee before you approve." },
     { card: plain("link", "Payment links", "Share a link, get paid"), title: "Get paid with a link.", sub: "Share a payment link or your IBAN. The money arrives in your own account." },
   ];
@@ -2195,7 +2189,7 @@ function offerIbanMove(choices, profileId) {
         input.disabled = true;
       } catch (e) {
         status.classList.add("hidden");
-        errEl.textContent = e.name === "NotAllowedError" ? "Face ID was cancelled." : e.message;
+        errEl.textContent = e.name === "NotAllowedError" ? Z.byDevice("Face ID was cancelled.", "The passkey prompt was cancelled.") : e.message;
         errEl.classList.remove("hidden");
         dlg.querySelectorAll('input[name="m-mv-iban"]').forEach((r) => { r.disabled = false; });
         go.disabled = !ready();
