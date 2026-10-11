@@ -27,7 +27,7 @@ json → securityHeaders → originPolicy → /api rate limit → pages → rout
 | /api | routes/safe-signers.ts, safe-import.ts | owners, threshold, spending limits, import |
 | /api | routes/shopify.ts | install/callback, payments app hooks, order pay pages |
 | /api | routes/merchant-links.ts | POST/GET/DELETE /orgs/:orgId/merchant-links (issue a link code, list, revoke) |
-| /api | routes/service-merchant.ts | /service/merchant/links/exchange, links/:id, links/:id/payment-requests[/:id[/cancel]] (checkout-service credential) |
+| /api | routes/service-merchant.ts | /service/merchant/links/preview, links/exchange (preview first), links/:id, links/:id/payment-requests[/:id[/cancel]] (checkout-service credential) |
 | /api/admin | operators/gate.ts (middleware) | ahead of every admin route: Cloudflare Access, operator passkey session, a fresh approval per change, audit |
 | /api | routes/operator-auth.ts | /admin/auth/*: enrolment, login, step-up challenge, add passkey, logout, me |
 | /api | routes/email-verification.ts, faucet.ts, admin.ts | codes, testnet faucet, operator stats |

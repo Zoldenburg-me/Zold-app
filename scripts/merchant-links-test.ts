@@ -160,7 +160,12 @@ const ORDER = (id: number) => `gid://shopify/Order/${id}`;
 const issue = (o: any, u: any, shop = SHOP) => call("POST", `/api/orgs/${o.id}/merchant-links`, { body: { integration: "shopify", shop }, user: u.id });
 const codeOf = (installUrl: string) => new URL(installUrl).searchParams.get("link")!;
 let token = "";
-const exchange = (code: string, shop = SHOP, bearer = token) => call("POST", "/api/service/merchant/links/exchange", { body: { code, shop }, bearer });
+const preview = (code: string, shop = SHOP, bearer = token) => call("POST", "/api/service/merchant/links/preview", { body: { code, shop }, bearer });
+/** Exchange without a preview first: what a checkout that skipped the
+ *  confirmation screen would send. */
+const rawExchange = (code: string, shop = SHOP, bearer = token) => call("POST", "/api/service/merchant/links/exchange", { body: { code, shop }, bearer });
+/** The checkout's normal order: preview (the admin confirms), then exchange. */
+const exchange = async (code: string, shop = SHOP, bearer = token) => { await preview(code, shop, bearer); return rawExchange(code, shop, bearer); };
 const create = (linkId: string, body: unknown, bearer = token) => call("POST", `/api/service/merchant/links/${linkId}/payment-requests`, { body, bearer });
 
 console.log("availability");
@@ -249,6 +254,39 @@ await check("a code exchanged for another shop is refused, and is spent by that 
   assert.equal(again.status, 404, "the code survived a failed exchange");
 });
 let link: any;
+await check("preview describes the code without spending it: shop, org name, payee handle and display name, expiry; no secret or id", async () => {
+  const code = codeOf((await issue(org, owner)).body.installUrl);
+  const a = await preview(code);
+  assert.equal(a.status, 200, JSON.stringify(a.body));
+  assert.equal(a.cache, "no-store");
+  assert.deepEqual(Object.keys(a.body).sort(), ["expiresAt", "orgName", "payeeDisplayName", "payeeHandle", "shop"]);
+  assert.equal(a.body.shop, SHOP);
+  assert.equal(a.body.orgName, org.name);
+  assert.equal(a.body.payeeHandle, "keycard");
+  assert.equal(a.body.payeeDisplayName, "Ada Owner");
+  const s = JSON.stringify(a.body);
+  for (const leak of [org.id, owner.id, "linkSecret", "zlc_"]) assert.ok(!s.includes(leak), `leaked ${leak}`);
+  const b = await preview(code);
+  assert.equal(b.status, 200, "a second preview still finds the code");
+  assert.equal((await rawExchange(code)).status, 200, "preview then exchange works");
+});
+await check("preview of an unknown code, or for another shop, is 404 LINK_CODE_INVALID; a wrong bearer 401", async () => {
+  const code = codeOf((await issue(org, owner)).body.installUrl);
+  const other = await preview(code, "other-store.myshopify.com");
+  assert.equal(other.status, 404);
+  assert.equal(other.body.code, "LINK_CODE_INVALID");
+  assert.equal((await preview("zlc_" + "A".repeat(43))).body.code, "LINK_CODE_INVALID");
+  assert.equal((await preview(code, SHOP, "zsc_wrong")).status, 401);
+  assert.equal((await preview(code)).status, 200, "a mismatched preview does not spend the code");
+});
+await check("exchange of a code never previewed is 409 LINK_NOT_CONFIRMED, and the code is spent", async () => {
+  const code = codeOf((await issue(org, owner)).body.installUrl);
+  const r = await rawExchange(code);
+  assert.equal(r.status, 409);
+  assert.equal(r.body.code, "LINK_NOT_CONFIRMED");
+  assert.equal((await preview(code)).status, 404, "spent");
+  assert.equal((await exchange(code)).status, 404);
+});
 await check("a fresh code exchanges once: {linkId, shop, orgName, payeeHandle, linkSecret}; the second use is LINK_CODE_INVALID", async () => {
   const code = codeOf((await issue(org, owner)).body.installUrl);
   const r = await exchange(code);
@@ -283,9 +321,13 @@ await check("a second consent for the same org and shop reuses the link and keep
 });
 await check("an installer demoted after the code was issued is refused at exchange (409 INSTALLER_NOT_ALLOWED)", async () => {
   const code = codeOf((await issue(org, admin)).body.installUrl);
+  assert.equal((await preview(code)).status, 200);
   store.updateMember(adminMember.id, { role: "viewer" } as any);
   try {
-    const r = await exchange(code);
+    const p = await preview(code);
+    assert.equal(p.status, 409, "preview asks the same re-checks");
+    assert.equal(p.body.code, "INSTALLER_NOT_ALLOWED");
+    const r = await rawExchange(code);
     assert.equal(r.status, 409);
     assert.equal(r.body.code, "INSTALLER_NOT_ALLOWED");
   } finally {
@@ -301,16 +343,18 @@ const SHOP2 = "race-store.myshopify.com";
 await check("a shop linked elsewhere between issue and exchange is refused at exchange", async () => {
   const mine = codeOf((await issue(org, owner, SHOP2)).body.installUrl);
   const theirs = codeOf((await issue(org2, owner2, SHOP2)).body.installUrl);
+  assert.equal((await preview(mine, SHOP2)).status, 200);
   assert.equal((await exchange(theirs, SHOP2)).status, 200);
-  const r = await exchange(mine, SHOP2);
+  const r = await rawExchange(mine, SHOP2);
   assert.equal(r.status, 409);
   assert.equal(r.body.code, "SHOP_LINKED_ELSEWHERE");
 });
 const SHOP3 = "core-store.myshopify.com";
 await check("a shop connected in core is refused at issue and at exchange (409 SHOP_CONNECTED_IN_CORE)", async () => {
   const code = codeOf((await issue(org, owner, SHOP3)).body.installUrl);
+  assert.equal((await preview(code, SHOP3)).status, 200);
   store.addShopifyConnection({ id: randomUUID(), orgId: org.id, shop: SHOP3, payeeUserId: owner.id, accessTokenEnc: "x", scope: "read_orders", mode: "custom-app", installedByUserId: owner.id, installedAt: now, updatedAt: now });
-  const atExchange = await exchange(code, SHOP3);
+  const atExchange = await rawExchange(code, SHOP3);
   assert.equal(atExchange.status, 409);
   assert.equal(atExchange.body.code, "SHOP_CONNECTED_IN_CORE");
   const atIssue = await issue(org, owner, SHOP3);
@@ -605,7 +649,7 @@ await check("an owner revokes: revokedAt and revokedBy set, {linkId} announced, 
   assert.ok(store.findMerchantLink(link.linkId), "a revoked link is kept");
 });
 await check("a link code issued before the revoke cannot be exchanged after it", async () => {
-  const r = await exchange(preRevokeCode);
+  const r = await rawExchange(preRevokeCode);
   assert.equal(r.status, 404);
   assert.equal(r.body.code, "LINK_CODE_INVALID");
   assert.equal(store.activeMerchantLinkForShop(SHOP), undefined);
@@ -640,7 +684,7 @@ console.log("audit");
 await check("every service call is audited with its credential and outcome, never a code, secret or token", () => {
   const rows = store.auditFor(undefined, 5000).filter((a) => a.kind.startsWith("service.merchant_"));
   const kinds = new Set(rows.map((a) => a.kind));
-  for (const k of ["service.merchant_link_exchange", "service.merchant_link_read", "service.merchant_request_create", "service.merchant_request_read", "service.merchant_request_cancel"]) {
+  for (const k of ["service.merchant_link_preview", "service.merchant_link_exchange", "service.merchant_link_read", "service.merchant_request_create", "service.merchant_request_read", "service.merchant_request_cancel"]) {
     assert.ok(kinds.has(k as any), `no ${k}`);
   }
   assert.ok(rows.every((a) => a.data.credentialId && a.data.outcome));

@@ -11,9 +11,11 @@
  *
  * The consent travels as a link code: `zlc_` + 256 random bits, one use,
  * 15 minutes, held in memory as its SHA-256 and bound to the org, the shop,
- * the payee and the member who asked. The checkout exchanges it once the
- * merchant has approved the app at Shopify, and every check the code was
- * issued under is asked again then.
+ * the payee and the member who asked. The checkout first previews it (which
+ * does not spend it) to show the shop's admin which organisation and account
+ * the store would pay, and exchanges it only once the admin has confirmed: a
+ * code never previewed is refused at exchange. Every check the code was
+ * issued under is asked again at both.
  *
  * A shop is either linked here or connected in routes/shopify.ts, never both:
  * each side refuses a shop the other holds.
@@ -78,12 +80,14 @@ export function linkRefusal(orgId: string, shop: string, installerId: string): M
 
 // ── Link codes ───────────────────────────────────────────────────────────
 
-interface PendingLink {
+export interface PendingLink {
   orgId: string;
   shop: string;
   payeeUserId: string;
   installerId: string;
   expiresAt: number;
+  /** Set once the checkout has shown the code's org and payee (preview). */
+  previewedAt?: number;
 }
 
 /** sha256(code) → the consent it carries. In memory on purpose: a code that
@@ -115,8 +119,26 @@ export function issueLinkCode(p: Omit<PendingLink, "expiresAt">, now = Date.now(
  * worth one exchange. Undefined when unknown, expired, or issued for another
  * shop.
  */
+const validCode = (code: unknown): code is string => typeof code === "string" && /^zlc_[A-Za-z0-9_-]{43}$/.test(code);
+
+/** Read a code without spending it. Undefined when unknown, expired, or
+ *  issued for another shop. */
+export function peekLinkCode(code: unknown, shop: string, now = Date.now()): PendingLink | undefined {
+  if (!validCode(code)) return undefined;
+  const p = pendingLinks.get(codeHash(code));
+  if (!p || p.expiresAt <= now || p.shop !== shop) return undefined;
+  return p;
+}
+
+/** Record that the checkout showed this code's org and payee. */
+export function markLinkCodePreviewed(code: string, now = Date.now()): void {
+  const key = codeHash(code);
+  const p = pendingLinks.get(key);
+  if (p) pendingLinks.set(key, { ...p, previewedAt: now });
+}
+
 export function consumeLinkCode(code: unknown, shop: string, now = Date.now()): PendingLink | undefined {
-  if (typeof code !== "string" || !/^zlc_[A-Za-z0-9_-]{43}$/.test(code)) return undefined;
+  if (!validCode(code)) return undefined;
   const key = codeHash(code);
   const p = pendingLinks.get(key);
   pendingLinks.delete(key);
