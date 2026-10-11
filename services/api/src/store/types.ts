@@ -426,7 +426,8 @@ export const OPERATOR_REFUND_STEP = "operator.refund";
 export interface ReviewResolution {
   state: ReviewResolutionState;
   note: string;
-  /** operatorLabel(): a hash of the operator token, never the token. */
+  /** operatorLabel(): `operator:<id>`; rows resolved before operator
+   *  passkeys hold a hash of the shared token that opened them. */
   by: string;
   at: string;
   /** The transfer's error when it was resolved: why it was in review. */

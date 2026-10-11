@@ -18,8 +18,6 @@ import path from "node:path";
 import express from "express";
 
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-plan-")), "db.json");
-const OPERATOR = "operator-token-for-plan-test-0123456789";
-process.env.KYC_OPERATOR_TOKEN = OPERATOR;
 
 const { initStore, store } = await import("../services/api/src/store.js");
 const { createOrgRouter } = await import("../services/api/src/routes/orgs.js");

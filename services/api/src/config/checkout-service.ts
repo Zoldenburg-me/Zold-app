@@ -30,7 +30,7 @@ export const CHECKOUT_SERVICE = (() => {
   }
   return {
     /** Requests per minute per IP with a valid credential. A wrong one counts
-     *  on the auth bucket, like a wrong operator token. */
+     *  on the auth bucket, like an unknown operator bearer. */
     rateLimitPerMin: envNumber("SERVICE_RATE_LIMIT_PER_MIN", 120, { min: 1, integer: true }),
     /** How long the previous credential keeps working after a rotation, so the
      *  service can be redeployed with the new one without a gap. */

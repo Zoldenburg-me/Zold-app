@@ -37,10 +37,9 @@ So nobody rebuilds it:
   tokens and GetMyInvoices keys are AES-256-GCM encrypted
   (`crypto-at-rest.ts`), and writing them refuses without a key.
 - Production config refuses dev keys off a local RPC (`config/keys.ts`), a
-  short operator token, and a JSON store unless `ALLOW_PLAINTEXT_STORE=1`
-  acknowledges it.
-- The operator token is compared with `timingSafeEqual`; webhooks (Monerium,
-  Shopify) are HMAC-checked.
+  `KYC_OPERATOR_TOKEN` left set, and a JSON store unless
+  `ALLOW_PLAINTEXT_STORE=1` acknowledges it.
+- Webhooks (Monerium, Shopify) are HMAC-checked.
 - CSP, `X-Frame-Options: DENY`, `nosniff`, `no-referrer` (`http/policy.ts`);
   rate buckets for auth, documents, partners, operator.
 - SMTP refuses a server that cannot do TLS in production (`adapters/mailer.ts`).
@@ -101,7 +100,7 @@ and metadata only, never values.
 | Tier | What | Examples | Target home |
 |------|------|----------|-------------|
 | 1. Moves money on-chain | private keys | `DEPLOY_*_KEY` / `ORCHESTRATOR_KEY` / `RAMP_KEY`, `FAUCET_KEY`, `STELLAR_TREASURY_SECRET`, `ENS_GATEWAY_KEY` (signs where every handle resolves, so whoever holds it redirects payments to handles), `ENS_DEPLOYER_KEY` (script only) | Stored in the self-hosted Bitwarden (1.4). Keys that only an operator uses, such as deployer and contract admin, live on a hardware wallet and are never online. Keys the server signs with automatically (orchestrator, ramp, faucet) still have to be in process memory to sign, so on mainnet they hold small balances and narrow contract roles. A signer that never releases the key (an HSM) is the later step. |
-| 2. Opens a partner or our identity | API secrets, signing secrets | `MONERIUM_CLIENT_SECRET`, `MONERIUM_WEBHOOK_SECRET`, `CHECKOUT_WEBHOOK_SECRET`, `SHOPIFY_API_SECRET`, `DOCUMENT_SIGNING_KEY`, `MG_CLIENT_DOMAIN_SIGNING_SECRET`, `KYC_OPERATOR_TOKEN`, `CLOUDFLARE_TUNNEL_TOKEN`, `SMTP_PASS`, `BRIDGE/LIFI/BEBOP/CANDIDE/GETMYINVOICES` keys, RPC and bundler URLs that carry a key in the path | Bitwarden, fetched at start and never written to the host's disk. Rotate every 90 days and on any staff or host change. |
+| 2. Opens a partner or our identity | API secrets, signing secrets | `MONERIUM_CLIENT_SECRET`, `MONERIUM_WEBHOOK_SECRET`, `CHECKOUT_WEBHOOK_SECRET`, `SHOPIFY_API_SECRET`, `DOCUMENT_SIGNING_KEY`, `MG_CLIENT_DOMAIN_SIGNING_SECRET`, `CLOUDFLARE_TUNNEL_TOKEN`, `SMTP_PASS`, `BRIDGE/LIFI/BEBOP/CANDIDE/GETMYINVOICES` keys, RPC and bundler URLs that carry a key in the path | Bitwarden, fetched at start and never written to the host's disk. Rotate every 90 days and on any staff or host change. |
 | 3. Decrypts stored data | data-encryption roots, blind index key | `DATA_ENCRYPTION_KEYS`, `BLIND_INDEX_KEY`, `MONERIUM_TOKEN_ENCRYPTION_KEY` (v1) | Bitwarden; the roots derive the per-purpose data keys (1.2). |
 
 A configured URL is printed through `urlForLog` (origin only). An error's
@@ -338,26 +337,26 @@ ahead of them all.
   `WEBAUTHN_ORIGINS`) and both Access values are set.
 - **Rate limits** per operator; failed sign-ins lock an address for 15
   minutes after ten.
-- `KYC_OPERATOR_TOKEN` opens reads only, behind Access, never a live partner
-  read (`?live=1`), and its reads are audited as `operator:legacy-token`.
+- **No shared token.** The passkey session is the only way in, and
+  production refuses to start with `KYC_OPERATOR_TOKEN` set.
 
 `npm run operator:test` covers each refusal with a software passkey and a
 local Access key server; nothing here has run against Cloudflare Access.
 
+The Access application for `admin.zoldhq.com` exists: one policy allowing
+the owner's email, 8-hour sessions, sign-in by Cloudflare's one-time PIN.
+
 Still open:
-- The owner sets up the Access application (identity provider with a
-  hardware key, a policy naming the owner's email), the `admin.zoldhq.com`
-  tunnel route, and `ADMIN_ORIGIN`, `CF_ACCESS_TEAM_DOMAIN` and
-  `CF_ACCESS_AUD` on the lease. Until then zoldhq.com answers 503 on admin
-  routes.
-- PR B: production refuses to start with `KYC_OPERATOR_TOKEN` set, and the
-  token code goes.
+- An identity provider that requires a hardware key, in place of the
+  one-time PIN, which proves only control of the inbox.
+- The `admin.zoldhq.com` DNS record and tunnel route, and `ADMIN_ORIGIN`,
+  `CF_ACCESS_TEAM_DOMAIN` and `CF_ACCESS_AUD` on the lease, then the
+  owner's enrolment. Until then zoldhq.com answers 503 on admin routes.
 - The audit log is the plain JSON store: append-only by code, not tamper
   evident (Phase 2), with no retention period. `operator.request` rows name
   the user an operator read; how long they are kept is a question for
-  counsel, and the GDPR data map has no entry yet for operator access
-  control (the operator's name, email and passkeys, Cloudflare Access and
-  its identity provider).
+  counsel, and the GDPR data map's entry for operator access control is a
+  draft until then.
 
 ## Phase 2: a real database
 

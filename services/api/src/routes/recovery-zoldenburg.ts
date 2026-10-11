@@ -13,7 +13,7 @@
  * new credential waits on the request, and the starting browser holds a
  * per-request secret every by-id route requires.
  *
- * REVIEW (`/admin/recoveries*`, operator token): an operator checks the person
+ * REVIEW (`/admin/recoveries*`, operator passkey): an operator checks the person
  * against the identity Monerium verified and signs as guardian from a hardware
  * wallet — in Safe Cover, or here via eth_signTypedData_v4 with the API
  * relaying. The request moves to GRACE_PERIOD only when the CHAIN shows the

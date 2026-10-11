@@ -7,7 +7,7 @@
  * 2. Cloudflare Access, where configured (always when hosted): the signed
  *    identity of the person in front of the browser.
  * 3. The caller: an operator passkey session, whose email must equal the
- *    Access identity; or the shared operator token, for reads only.
+ *    Access identity. There is no other way in.
  * 4. Every request that is not a read needs a fresh passkey approval bound to
  *    that exact request (operators/step-up.ts). The method decides, here, so a
  *    new admin route cannot forget it.
@@ -20,7 +20,6 @@
 import type express from "express";
 import { OPERATOR, SECURITY } from "../config.js";
 import { auditEntry } from "../audit.js";
-import { isLegacyOperatorToken, LEGACY_PRINCIPAL_ID } from "../http/guards.js";
 import { recordFailure, tooManyFailures } from "../http/policy.js";
 import { bearerToken } from "../http/sessions.js";
 import { store } from "../store.js";
@@ -112,26 +111,7 @@ async function admit(req: express.Request, res: express.Response): Promise<boole
     return false;
   }
 
-  const bearer = bearerToken(req);
-  if (isLegacyOperatorToken(bearer)) {
-    if (!READS.has(req.method)) {
-      res.status(403).json({
-        error: "the operator token is read-only: sign in with your operator passkey to make a change",
-        code: "OPERATOR_TOKEN_READ_ONLY",
-      });
-      return false;
-    }
-    if (req.query.live !== undefined) {
-      res.status(403).json({ error: "a live partner read needs an operator passkey session", code: "OPERATOR_TOKEN_READ_ONLY" });
-      return false;
-    }
-    const who: OperatorPrincipal = { id: LEGACY_PRINCIPAL_ID, name: "operator token", legacy: true };
-    setOperator(req, who);
-    auditOnFinish(req, res, who);
-    return true;
-  }
-
-  const found = operatorSessionFor(bearer);
+  const found = operatorSessionFor(bearerToken(req));
   if ("refused" in found) {
     res.status(401).json({ error: found.refused, code: "OPERATOR_SIGN_IN" });
     return false;
@@ -162,7 +142,7 @@ async function admit(req: express.Request, res: express.Response): Promise<boole
     }
   }
   store.touchOperatorSession(session.id);
-  const who: OperatorPrincipal = { id: operator.id, name: operator.name, legacy: false, sessionId: session.id };
+  const who: OperatorPrincipal = { id: operator.id, name: operator.name, sessionId: session.id };
   setOperator(req, who);
   auditOnFinish(req, res, who);
   return true;

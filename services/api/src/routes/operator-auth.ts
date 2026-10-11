@@ -150,7 +150,7 @@ export function createOperatorAuthRouter() {
    *  the same body to this route and to the change itself. */
   router.post("/admin/auth/step-up/challenge", (req, res) => {
     const who = operatorOf(req);
-    const operator = who && !who.legacy ? store.findOperator(who.id) : undefined;
+    const operator = who ? store.findOperator(who.id) : undefined;
     if (!operator) return res.status(401).json({ error: "operator sign-in required", code: "OPERATOR_SIGN_IN" });
     const method = String(req.body?.method ?? "").toUpperCase();
     const path = String(req.body?.path ?? "");
@@ -167,7 +167,7 @@ export function createOperatorAuthRouter() {
 
   router.post("/admin/auth/passkeys/challenge", (req, res) => {
     const who = operatorOf(req);
-    const operator = who && !who.legacy ? store.findOperator(who.id) : undefined;
+    const operator = who ? store.findOperator(who.id) : undefined;
     if (!operator) return res.status(401).json({ error: "operator sign-in required", code: "OPERATOR_SIGN_IN" });
     const challenge = issueChallenge("operator_enrol", `op:add:${operator.id}`);
     res.json(creationOptions(challenge, operator.id, operator.name, operator.email, operator.credentials.map((c) => c.credentialId)));
@@ -177,7 +177,7 @@ export function createOperatorAuthRouter() {
    *  approval from one of the operator's existing passkeys. */
   router.post("/admin/auth/passkeys", (req, res) => {
     const who = operatorOf(req);
-    const operator = who && !who.legacy ? store.findOperator(who.id) : undefined;
+    const operator = who ? store.findOperator(who.id) : undefined;
     if (!operator) return res.status(401).json({ error: "operator sign-in required", code: "OPERATOR_SIGN_IN" });
     if (operator.credentials.length >= OPERATOR.maxPasskeys) {
       return res.status(409).json({ error: `an operator holds at most ${OPERATOR.maxPasskeys} passkeys`, code: "PASSKEY_LIMIT" });
@@ -202,17 +202,16 @@ export function createOperatorAuthRouter() {
 
   router.post("/admin/auth/logout", (req, res) => {
     const who = operatorOf(req);
-    if (who?.sessionId) store.revokeOperatorSession(who.sessionId);
+    if (who) store.revokeOperatorSession(who.sessionId);
     res.json({ ok: true });
   });
 
   router.get("/admin/auth/me", (req, res) => {
     const who = operatorOf(req);
     if (!who) return res.status(401).json({ error: "operator sign-in required", code: "OPERATOR_SIGN_IN" });
-    if (who.legacy) return res.json({ legacy: true, name: who.name });
     const operator = store.findOperator(who.id);
     if (!operator) return res.status(401).json({ error: "operator sign-in required", code: "OPERATOR_SIGN_IN" });
-    res.json({ legacy: false, operator: publicOperator(operator) });
+    res.json({ operator: publicOperator(operator) });
   });
 
   return router;
