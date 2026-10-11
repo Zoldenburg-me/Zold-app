@@ -204,7 +204,8 @@ sets are cumulative (`domain/roles.ts:39-86`). `transfers.read` and
 - **New Safes are 1-of-1**: the passkey is the only owner (PR #193). No
   allowance module is installed.
 - **Gas** (`SAFE_GAS_PAYMENT`, `wallet/candide.ts` `payGas`): `sponsored`
-  (Candide paymaster, default), `native` (the Safe's ETH, no paymaster; the
+  (Candide paymaster, default; a private gas policy on the API key applies
+  only when `CANDIDE_SPONSORSHIP_POLICY_ID` names it), `native` (the Safe's ETH, no paymaster; the
   balance is checked before the passkey signs), or `token` (Candide's token
   paymaster, USDC by default on 8453). Every abstractionkit request carries
   `partnerTimeout()`. `npm run preflight` checks the chosen mode live.

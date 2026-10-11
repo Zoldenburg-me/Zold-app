@@ -163,7 +163,7 @@ try {
     info(e.message.replace(/ — send some to .*/, "").replace(/^the Safe/, "a real Safe"));
   } else if (CANDIDE.gas.mode === "sponsored") {
     fail(`the paymaster would not sponsor: ${errMsg(e)}`);
-    info("fix: SAFE_GAS_PAYMENT=native (Safe pays ETH), =token (Safe pays USDC), or a Candide API key with a funded gas policy");
+    info("fix: SAFE_GAS_PAYMENT=native (Safe pays ETH), =token (Safe pays USDC), or a funded gas policy on the Candide API key, named in CANDIDE_SPONSORSHIP_POLICY_ID");
   } else {
     fail(`could not build a ${CANDIDE.gas.mode}-paid op: ${errMsg(e)}`);
   }
