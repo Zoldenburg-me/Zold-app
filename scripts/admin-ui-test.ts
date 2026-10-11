@@ -5,7 +5,7 @@
  *
  * - a change asks the server for a bound challenge, has the passkey sign it,
  *   and sends the answer with the change; a read or a ceremony asks nothing;
- * - with only the read-only token, a change is refused before any request;
+ * - signed out, nothing is sent;
  * - a 401 OPERATOR_SIGN_IN ends the session and says so; a 401 from Access
  *   leaves the session alone.
  *
@@ -30,7 +30,7 @@ const storage = () => {
   return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, String(v)), removeItem: (k: string) => void m.delete(k) };
 };
 
-const elements: Record<string, any> = { operatorToken: { value: "" }, authPill: { className: "" }, authText: { textContent: "" } };
+const elements: Record<string, any> = { authPill: { className: "" }, authText: { textContent: "" } };
 interface Call { path: string; method: string; headers: Record<string, string>; body?: string }
 const calls: Call[] = [];
 let answer: (c: Call) => { status: number; body: unknown } = () => ({ status: 200, body: {} });
@@ -95,12 +95,11 @@ await check("a read and a ceremony ask for no approval", async () => {
   assert.ok(calls.every((c) => !("X-Operator-Step-Up" in c.headers)));
 });
 
-await check("with only the read-only token, a change is refused before any request", async () => {
+await check("signed out, neither a read nor a change is sent", async () => {
   run("setOperatorSession('')");
-  elements.operatorToken.value = "read-only-token-for-the-ui-test-0123";
-  await assert.rejects(run("api('/api/admin/orgs/o1/plan', { method: 'POST', body: '{}' })"), (e: any) => e.status === 403);
+  await assert.rejects(run("api('/api/admin/users')"), (e: any) => e.status === 401);
+  await assert.rejects(run("api('/api/admin/orgs/o1/plan', { method: 'POST', body: '{}' })"), (e: any) => e.status === 401);
   assert.equal(calls.length, 0);
-  elements.operatorToken.value = "";
 });
 
 await check("a 401 from Access leaves the passkey session alone", async () => {

@@ -16,7 +16,7 @@
  * The person also proves they hold the bank account the owner enrolled: a
  * second 1 € from it, with a recovery code (recovery/zoldenburg-bank-check.ts).
  *
- * REVIEW (`/admin/recoveries*`, operator token): an operator checks the person
+ * REVIEW (`/admin/recoveries*`, operator passkey): an operator checks the person
  * against the identity Monerium verified and signs as guardian from a hardware
  * wallet — in Safe Cover, or here via eth_signTypedData_v4 with the API
  * relaying. The request moves to GRACE_PERIOD only when the CHAIN shows the

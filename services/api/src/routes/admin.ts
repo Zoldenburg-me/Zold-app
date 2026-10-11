@@ -424,7 +424,7 @@ export function createAdminRouter() {
     "/admin/transactions",
     wrap(async (req, res) => {
       if (!requireOperator(req, res)) return;
-      // Paginated, newest first: one leaked operator token should not dump the
+      // Paginated, newest first: one stolen operator session should not dump the
       // whole ops ledger in a single request.
       const asInt = (v: unknown, fallback: number) => {
         const n = Number(v);

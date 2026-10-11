@@ -19,8 +19,6 @@ process.env.PARTNER_RATE_LIMIT_PER_MIN = "30";
 process.env.DOCUMENT_RATE_LIMIT_PER_MIN = "10";
 process.env.SHOPIFY_RATE_LIMIT_PER_MIN = "600";
 process.env.OPERATOR_RATE_LIMIT_PER_MIN = "300";
-const OPERATOR = "operator-token-for-rate-limit-tests-0123";
-process.env.KYC_OPERATOR_TOKEN = OPERATOR;
 rmSync(process.env.TRANSF_DB_PATH!, { force: true });
 
 const express = (await import("express")).default;
@@ -31,6 +29,7 @@ const { apiRateLimit, clientKey, securityHeaders, securityHeadersFor } = await i
 const { createInvoiceLinkRouter } = await import("../services/api/src/routes/business/invoice-links.js");
 const { publicUser } = await import("../services/api/src/users/public-user.js");
 const { persist } = await import("../services/api/src/store/db.js");
+const { issueOperatorSession } = await import("../services/api/src/operators/sessions.js");
 
 initStore();
 let failed = 0;
@@ -118,14 +117,15 @@ await check("Shopify's signed calls are not on the 20/min credential bucket", as
   for (let i = 0; i < 25; i++) last = (await fetch(`${base}/api/shopify/payment`, { method: "POST" })).status;
   assert.equal(last, 200);
 });
-await check("a valid operator token has its own bucket: the dashboard's refresh loop is not the 20/min one", async () => {
+await check("a live operator session has its own bucket: the dashboard's refresh loop is not the 20/min one", async () => {
   // The challenge test above has already spent this IP's credential bucket.
-  const auth = { authorization: `Bearer ${OPERATOR}` };
+  store.addOperator({ id: "op_rate", name: "Rate Operator", email: "rate@example.com", createdAt: new Date().toISOString(), credentials: [] });
+  const auth = { authorization: `Bearer ${issueOperatorSession("op_rate")}` };
   const statuses = [];
   for (let i = 0; i < 40; i++) statuses.push((await fetch(`${base}/api/admin/overview`, { headers: auth })).status);
   assert.deepEqual([...new Set(statuses)], [200]);
 });
-await check("a wrong operator token stays on the credential bucket", async () => {
+await check("an unknown operator bearer stays on the credential bucket", async () => {
   const r = await fetch(`${base}/api/admin/overview`, { headers: { authorization: "Bearer guess-guess-guess-guess-guess" } });
   assert.equal(r.status, 429);
 });

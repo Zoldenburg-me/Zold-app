@@ -98,7 +98,7 @@ flowchart LR
 | **Payer** | A public link, with no account. | `/pay/<handle>` and `/pay/<handle>/<code>`. |
 | **Supplier** | A one-time Invoice-Me link, optionally password-protected. | `/invoice/<token>`, to fill in and submit an invoice. |
 | **Receipt/document reader** | A slug or a verification code. | `/r/<slug>` for a redacted receipt, `/v/<code>` for a verified document. |
-| **Operator** | A named operator's passkey at `ADMIN_ORIGIN`, behind Cloudflare Access; `KYC_OPERATOR_TOKEN` reads only. | The admin console: users, transactions, recoveries. Its changes (review resolutions, recovery steps, plan grants, credential rotation) each need a fresh passkey approval and write an audit row naming the operator. |
+| **Operator** | A named operator's passkey at `ADMIN_ORIGIN`, behind Cloudflare Access. | The admin console: users, transactions, recoveries. Its changes (review resolutions, recovery steps, plan grants, credential rotation) each need a fresh passkey approval and write an audit row naming the operator. |
 
 ---
 

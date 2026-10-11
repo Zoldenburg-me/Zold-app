@@ -23,8 +23,6 @@ import { createHash, webcrypto } from "node:crypto";
 import { rmSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 
-const OPERATOR = "operator-token-for-identity-tests-0123456";
-process.env.KYC_OPERATOR_TOKEN = OPERATOR;
 process.env.MONERIUM_OAUTH_CLIENT_ID = "identity-test-client";
 process.env.MONERIUM_TOKEN_ENCRYPTION_KEY = "identity-test-token-encryption-key-32b";
 process.env.MONERIUM_BASE_URL = "http://127.0.0.1:9";
@@ -38,6 +36,7 @@ const { createMoneriumRouter } = await import("../services/api/src/routes/moneri
 const { createDocumentsRouter } = await import("../services/api/src/routes/documents.js");
 const { createZoldenburgRecoveryRouter } = await import("../services/api/src/routes/recovery-zoldenburg.js");
 const { createOperatorGate } = await import("../services/api/src/operators/gate.js");
+const { issueOperatorSession } = await import("../services/api/src/operators/sessions.js");
 const { publicUser } = await import("../services/api/src/users/public-user.js");
 const { publicDocument } = await import("../services/api/src/documents.js");
 
@@ -223,7 +222,8 @@ await check("every Monerium profile the account held is kept, in order, and show
     requestedAt: now, expiresAt: now, recoveryDelayHours: 0, guardianAddress: `0x${"d".repeat(40)}`, recoveryModuleAddress: `0x${"e".repeat(40)}`,
     factors: { kyc: "pending", otp: "pending", liveness: "pending", manualReview: "pending" },
   } as any);
-  const r = await call("GET", "/api/admin/recoveries", OPERATOR);
+  store.addOperator({ id: "op_identity", name: "Identity Operator", email: "identity@example.com", createdAt: now, credentials: [] });
+  const r = await call("GET", "/api/admin/recoveries", issueOperatorSession("op_identity"));
   assert.equal(r.status, 200, r.text);
   const row = r.data.requests.find((x: any) => x.id === "rec-identity");
   assert.deepEqual(row.account.moneriumProfileHistory.map((h: any) => h.profileId), ["profile-1", "profile-2"]);
