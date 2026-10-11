@@ -29,11 +29,14 @@
         <div class="top-right">
           <span class="updated" id="updatedAt" aria-live="polite"></span>
           <button type="button" class="btn ghost" id="refreshBtn">Refresh</button>
-          <label class="token">
-            <span class="z-sr">Operator token</span>
-            <input type="password" id="operatorToken" placeholder="Operator token" autocomplete="off" spellcheck="false" data-bwignore data-1p-ignore data-lpignore="true" data-form-type="other">
+          <button type="button" class="btn" id="signInBtn">Sign in with passkey</button>
+          <button type="button" class="btn ghost" id="addPasskeyBtn" hidden>Add passkey</button>
+          <button type="button" class="btn ghost" id="signOutBtn" hidden>Sign out</button>
+          <label class="token" id="tokenLabel">
+            <span class="z-sr">Read-only operator token</span>
+            <input type="password" id="operatorToken" placeholder="Read-only token" autocomplete="off" spellcheck="false" data-bwignore data-1p-ignore data-lpignore="true" data-form-type="other">
           </label>
-          <span class="auth" id="authPill" role="status" aria-live="polite"><span class="dot"></span><span id="authText">No token</span></span>
+          <span class="auth" id="authPill" role="status" aria-live="polite"><span class="dot"></span><span id="authText">Signed out</span></span>
         </div>
       </header>
       <main id="view" tabindex="-1"></main>
@@ -52,6 +55,7 @@
 
   <div class="tip" id="chartTip" role="tooltip" hidden></div>
 
+  <script src="/admin/passkey.js"></script>
   <script src="/admin/core.js"></script>
   <script src="/admin/overview.js"></script>
   <script src="/admin/users.js"></script>

@@ -936,6 +936,41 @@ export interface ServiceCredential {
   expiresAt?: string;
 }
 
+/** A passkey an operator signs in and approves changes with. Never a user's:
+ *  operator credentials live only here, and user login never searches them. */
+export interface OperatorCredential {
+  credentialId: string;
+  key: { jwk: JsonWebKey; alg: "ES256" | "RS256" };
+  signCount: number;
+  /** The owner's name for it ("YubiKey, desk"); not a secret. */
+  label: string;
+  createdAt: string;
+  lastUsedAt?: string;
+}
+
+/** A named operator of the admin dashboard. Disabling is a read-time filter:
+ *  the record and its audit rows stay. */
+export interface Operator {
+  id: string;
+  name: string;
+  /** Must equal the Cloudflare Access identity on every admin request. */
+  email: string;
+  createdAt: string;
+  disabledAt?: string;
+  credentials: OperatorCredential[];
+}
+
+/** An operator's session: only the token's hash is stored, as for users. */
+export interface OperatorSession {
+  id: string;
+  operatorId: string;
+  tokenHash: string;
+  createdAt: string;
+  lastUsedAt: string;
+  expiresAt: string;
+  revokedAt?: string;
+}
+
 export interface Session {
   id: string;
   userId: string;
