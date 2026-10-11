@@ -12,7 +12,7 @@
 import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdtempSync, existsSync } from "node:fs";
+import { mkdtempSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { webcrypto } from "node:crypto";
@@ -226,6 +226,20 @@ await check("production refuses to start with KYC_OPERATOR_TOKEN set", async () 
 });
 
 console.log("enrolment");
+await check("npm run operator:enrol writes a single-use enrolment next to the store and prints the link once", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "zold-enrol-cli-"));
+  const r = spawnSync(process.execPath, ["--import", "tsx", "services/api/src/operators/enrol-cli.ts", "--name", "Owner", "--email", OWNER], {
+    cwd: ROOT, encoding: "utf8", env: { ...process.env, TRANSF_DB_PATH: path.join(dir, "db.json") },
+  });
+  assert.equal(r.status, 0, r.stderr);
+  const link = /(\S+\/admin#enrol=([A-Za-z0-9_-]+))/.exec(r.stdout);
+  assert.ok(link && link[1].startsWith(ADMIN), r.stdout);
+  const written = JSON.parse(readFileSync(path.join(dir, "operator-enrolment.json"), "utf8"));
+  assert.equal(written.email, OWNER);
+  assert.ok(!JSON.stringify(written).includes(link![2]), "only the token's hash is stored");
+  const usage = spawnSync(process.execPath, ["--import", "tsx", "services/api/src/operators/enrol-cli.ts"], { cwd: ROOT, encoding: "utf8" });
+  assert.equal(usage.status, 2);
+});
 await check("no open enrolment, a wrong token or an expired one opens nothing", async () => {
   assert.equal((await req("POST", "/api/admin/auth/enrol/challenge", { token: "nothing-open" })).status, 403);
   writeEnrolment(dataDir, "Owner", OWNER);
