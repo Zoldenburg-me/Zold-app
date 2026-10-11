@@ -101,6 +101,19 @@ async function check(label: string, fn: () => unknown | Promise<unknown>) {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const until = async (fn: () => boolean, ms = 3000) => { const t0 = Date.now(); while (!fn() && Date.now() - t0 < ms) await sleep(20); return fn(); };
 
+/** The install cookie each started install set, by its state: the browser
+ *  that started an install sends it back on that install's callback. A test
+ *  that passes its own `cookie` header (even empty) plays another browser. */
+const installCookies = new Map<string, string>();
+const installCookieFor = (p: string, headers: Record<string, string> = {}): Record<string, string> => {
+  if (!p.startsWith("/api/shopify/callback?") || "cookie" in headers) return {};
+  const c = installCookies.get(new URLSearchParams(p.split("?")[1]).get("state") ?? "");
+  return c ? { cookie: c } : {};
+};
+const keepInstallCookie = (res: Response, body: any) => {
+  const m = /zold_shopify_install=([^;]+)/.exec(res.headers.get("set-cookie") ?? "");
+  if (m && typeof body?.authorizeUrl === "string") installCookies.set(new URL(body.authorizeUrl).searchParams.get("state") ?? "", `zold_shopify_install=${m[1]}`);
+};
 async function call(method: string, p: string, opts: { body?: unknown; user?: string; bearer?: string } = {}) {
   const res = await fetch(`${API}${p}`, {
     method,
@@ -109,12 +122,14 @@ async function call(method: string, p: string, opts: { body?: unknown; user?: st
       ...(opts.body !== undefined ? { "content-type": "application/json" } : {}),
       ...(opts.user ? { "x-user": opts.user } : {}),
       ...(opts.bearer ? { authorization: `Bearer ${opts.bearer}` } : {}),
+      ...installCookieFor(p),
     },
     body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
   });
   const text = await res.text();
   let body: any = {};
   try { body = JSON.parse(text); } catch { body = { text }; }
+  keepInstallCookie(res, body);
   return { status: res.status, body, location: res.headers.get("location") ?? "", cache: res.headers.get("cache-control") ?? "" };
 }
 

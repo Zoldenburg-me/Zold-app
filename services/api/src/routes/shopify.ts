@@ -45,7 +45,8 @@
 import { wrap } from "./util.js";
 import express from "express";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { PAYMENT_REQUESTS, SHOPIFY } from "../config.js";
+import { IS_PRODUCTION, PAYMENT_REQUESTS, PUBLIC_URL, SHOPIFY } from "../config.js";
+import { cookieValue } from "../http/sessions.js";
 import { store, type User } from "../store.js";
 import { EncryptionUnavailableError } from "../crypto-at-rest.js";
 import { dataEncryptionProblem } from "../config/data-keys.js";
@@ -137,7 +138,14 @@ export function openOnce(key: string, open: () => Promise<PaymentRequest>): Prom
 
 /** Pending installs: our nonce → who started it. In memory on purpose; an
  *  install that outlives a restart simply starts again. */
-type PendingInstall = { orgId: string; shop: string; payeeUserId: string; installerId: string; expiresAt: number };
+/** Pending installs carry the hash of a nonce whose cookie went to the
+ *  browser that started the install. Only that browser can finish it: without
+ *  this, a member of any org could start an install for a store they do not
+ *  own and send the Shopify approval link to its admin, whose approval would
+ *  then connect the store to the sender's org. */
+type PendingInstall = { orgId: string; shop: string; payeeUserId: string; installerId: string; expiresAt: number; nonceHash: string };
+const INSTALL_COOKIE = "zold_shopify_install";
+const INSTALL_TTL_MS = 15 * 60_000;
 const pendingInstalls = new Map<string, PendingInstall>();
 
 const CONNECTED_ELSEWHERE = "this store is connected to a different organisation";
@@ -389,8 +397,14 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       const payee = payeeFor(ctx.org.id, ctx.userId);
       if (!payee.user) return res.status(409).json({ error: payee.reason });
       const state = randomBytes(24).toString("base64url");
+      const nonce = randomBytes(24).toString("base64url");
       for (const [k, v] of pendingInstalls) if (v.expiresAt < Date.now()) pendingInstalls.delete(k);
-      pendingInstalls.set(state, { orgId: ctx.org.id, shop, payeeUserId: payee.user.id, installerId: ctx.userId, expiresAt: Date.now() + 15 * 60_000 });
+      pendingInstalls.set(state, { orgId: ctx.org.id, shop, payeeUserId: payee.user.id, installerId: ctx.userId, expiresAt: Date.now() + INSTALL_TTL_MS, nonceHash: sha256Hex(nonce) });
+      res.setHeader(
+        "set-cookie",
+        `${INSTALL_COOKIE}=${nonce}; Path=/api/shopify/callback; Max-Age=${INSTALL_TTL_MS / 1000}; HttpOnly; SameSite=Lax` +
+          (IS_PRODUCTION || PUBLIC_URL.startsWith("https://") ? "; Secure" : ""),
+      );
       const redirectUri = `${baseUrlFor(req)}/api/shopify/callback`;
       res.json({ shop, authorizeUrl: authorizeUrl(shop, redirectUri, state), payeeHandle: payee.user.paymentPage!.handle });
     }),
@@ -409,7 +423,15 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       if (!pending || pending.expiresAt < Date.now() || pending.shop !== shop || !isValidShopDomain(shop)) {
         return back({ error: "this install was not started from Zold, or it has expired — start again from the dashboard" });
       }
+      const nonce = cookieValue(req, INSTALL_COOKIE);
+      if (!nonce || !sameHex(sha256Hex(nonce), pending.nonceHash)) {
+        // Not the browser that started it. That browser's install stays
+        // pending; this one learns nothing about it and connects nothing.
+        console.error(`shopify: install callback for ${shop} came back to a browser that did not start it; refused`);
+        return back({ error: "finish connecting the store in the browser where you started it, from the Zold dashboard", code: "INSTALL_OTHER_BROWSER" });
+      }
       pendingInstalls.delete(String(q.state));
+      res.append("set-cookie", `${INSTALL_COOKIE}=; Path=/api/shopify/callback; Max-Age=0; HttpOnly; SameSite=Lax`);
       const refuse = (r: InstallRefusal) => {
         console.error(`shopify: install callback for ${shop} refused (${r.code}): org ${pending.orgId}, installer ${pending.installerId}`);
         return back({ error: r.error, code: r.code });
