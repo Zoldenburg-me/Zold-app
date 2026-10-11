@@ -37,6 +37,6 @@ age_identity() {
   if [[ -n "${AGE_IDENTITY_FILE:-}" ]]; then
     cat "$AGE_IDENTITY_FILE"
   else
-    security find-generic-password -s "$AGE_KEYCHAIN_SERVICE" -a "$USER" -w
+    security find-generic-password -s "$AGE_KEYCHAIN_SERVICE" -a "${USER:-$(id -un)}" -w
   fi
 }
