@@ -2,6 +2,27 @@
  * Connecting a Monerium account with your OWN API keys, plus the mobile
  * screens' event wiring.
  */
+/* ---------- Monerium: an IBAN moved away ---------- */
+/* Monerium lists the account's IBAN paying into another address: someone
+   moved it there from another app or from Monerium's own site, and the API
+   took it off this account (user.moneriumIbanElsewhere says where it went).
+   Bank payments to it no longer reach this account until it is moved back. */
+const IBAN_MOVED_AWAY = {
+  title: "Your IBAN was moved to another app.",
+  sub: "Payments to it no longer reach this account.",
+  action: "Move IBAN back to Zold",
+};
+function ibanMovedAway(u = user) {
+  return !!u && kycApproved(u) && !u.iban && u.funding?.status === "iban_pending" && !!u.moneriumIbanElsewhere?.iban;
+}
+/* The warning and the button that moves it back. The button is wired by
+   phBindIbanBack (app/phone-home.js). */
+function ibanMovedAwayHtml(id) {
+  return `${Z.note({ tone: "a", role: "status", html: `<strong>${esc(IBAN_MOVED_AWAY.title)}</strong> ${esc(IBAN_MOVED_AWAY.sub)}` })}
+    ${Z.button({ variant: "primary", full: true, label: IBAN_MOVED_AWAY.action, id })}
+    <p class="z-err" id="${esc(id)}-err" role="alert" hidden></p>`;
+}
+
 /* ---------- Monerium: your own API keys ---------- */
 function renderMoneriumScreen() {
   const el = $("m-mon-body");
@@ -25,6 +46,7 @@ function renderMoneriumScreen() {
   if (keys) {
     const funding = u.funding || {};
     const needsIban = kycApproved(u) && !u.iban && funding.mode === "sandbox";
+    const movedAway = ibanMovedAway(u);
     el.innerHTML = `
       <div class="m-rows">
         ${row("Status", "Connected")}
@@ -34,10 +56,12 @@ function renderMoneriumScreen() {
         ${row("Environment", `${keys.environment} · ${keys.host}`)}
         ${row("Verified", when(keys.verifiedAt))}
         ${m.profileId ? row("Profile", m.profileId) : ""}
-        ${row("IBAN", u.iban || "Not issued yet")}
+        ${row("IBAN", u.iban || (movedAway ? "Moved to another app" : "Not issued yet"))}
       </div>
-      <div class="m-lede" style="font-size:13px;margin-top:16px">${esc(funding.detail || "Deposits to this account and SEPA payouts from it run on these keys.")}</div>
-      ${needsIban ? `<button class="m-cta" id="m-mon-activate" style="margin-top:16px">Get your IBAN</button>` : ""}
+      <div class="m-lede" style="font-size:13px;margin-top:16px">${esc(movedAway
+        ? `${IBAN_MOVED_AWAY.title} ${IBAN_MOVED_AWAY.sub}`
+        : funding.detail || "Deposits to this account and SEPA payouts from it run on these keys.")}</div>
+      ${needsIban ? `<button class="m-cta" id="m-mon-activate" style="margin-top:16px">${movedAway ? IBAN_MOVED_AWAY.action : "Get your IBAN"}</button>` : ""}
       <button class="m-link" id="m-mon-refresh" style="margin-top:12px">Refresh accounts</button>
       <button class="m-link" id="m-mon-remove" style="margin-top:12px">Remove keys</button>
       <div class="m-err hidden" role="alert" id="m-mon-err" style="margin-top:12px"></div>
@@ -260,9 +284,12 @@ function renderFundingActions(u = user) {
   $("btn-finish-safe").classList.toggle("hidden", !showSafe);
   $("btn-finish-import").classList.toggle("hidden", !importing);
   $("btn-monerium-dashboard").classList.toggle("hidden", !showActivate);
-  $("btn-monerium-dashboard").textContent = "Get your IBAN";
+  const movedAway = ibanMovedAway(u);
+  $("btn-monerium-dashboard").textContent = movedAway ? IBAN_MOVED_AWAY.action : "Get your IBAN";
   hint.classList.toggle("hidden", !(showSafe || showActivate || importing));
-  hint.textContent = importing
+  hint.textContent = movedAway && showActivate
+    ? `${IBAN_MOVED_AWAY.title} ${IBAN_MOVED_AWAY.sub}`
+    : importing
     ? "Once your Safe’s owner has added this phone, finish bringing the Safe in."
     : showSafe
     ? "Finish setting up your account first, then get your IBAN."
@@ -436,7 +463,8 @@ function renderShellPages() {
   if (!user) return;
   $("send-card")?.classList.toggle("hidden", activeView !== "dashboard" || !kycApproved(user));
   $("acct-balance").innerHTML = `<span class="cur">€</span>${fmt(user.balanceEur ?? 0)}`;
-  $("acct-iban").textContent = user.iban || "Not issued yet";
+  const movedAway = ibanMovedAway(user);
+  $("acct-iban").textContent = user.iban || (movedAway ? "Moved to another app" : "Not issued yet");
   const plannedSafe = needsPasskeySafeSetup(user) ? user.passkeySafe?.address : null;
   $("acct-address").textContent = plannedSafe ? `planned ${shortAddr(plannedSafe)} — not set up yet` : (user.address || "—");
   document.querySelector('[data-copy="acct-address"]')?.classList.toggle("hidden", !!plannedSafe);
@@ -447,7 +475,9 @@ function renderShellPages() {
   $("acct-kyc-chip").textContent = (user.kycStatus || "approved").toUpperCase();
   $("acct-kyc-chip").className = user.kycStatus === "approved" ? "chip ok" : user.kycStatus === "rejected" ? "chip err" : "chip review";
   const funding = user.funding || {};
-  $("acct-funding").textContent = user.iban || funding.detail || `${funding.mode || "sandbox"} · ${funding.status || "active"}`;
+  $("acct-funding").textContent = user.iban
+    || (movedAway ? `${IBAN_MOVED_AWAY.title} ${IBAN_MOVED_AWAY.sub}` : funding.detail)
+    || `${funding.mode || "sandbox"} · ${funding.status || "active"}`;
   $("acct-funding-chip").textContent = (funding.status || "ACTIVE").toUpperCase();
   $("acct-funding-chip").className = funding.status === "error" ? "chip err" : funding.status === "active" || user.iban ? "chip ok" : "chip pend";
   $("acct-authorizer").textContent = user.authorizerAddress || "Registered when you send from this browser.";
