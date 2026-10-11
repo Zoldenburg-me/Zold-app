@@ -19,6 +19,15 @@
   .r-note { font-size: 13px; color: var(--z-dim); }
   .r-err { color: var(--z-red, #e5484d); margin: 12px 0 0; }
   .r-ref b { font-family: ui-monospace, monospace; letter-spacing: 0.04em; }
+  h2 { font-size: 17px; margin: 28px 0 8px; }
+  .r-warn { font-size: 14px; padding: 10px 12px; border-radius: 12px; background: var(--z-amber-tint); border: 1px solid var(--z-amber-border); }
+  .r-done { font-weight: 600; }
+  .r-list { list-style: none; padding: 0; margin: 16px 0 0; border: 1px solid var(--z-line-strong, #444); border-radius: 12px; }
+  .r-list li { display: flex; justify-content: space-between; gap: 12px; padding: 10px 14px; }
+  .r-list li + li { border-top: 1px solid var(--z-line-strong, #444); }
+  .r-list span { color: var(--z-dim); }
+  .r-list b { text-align: right; overflow-wrap: anywhere; }
+  #r-bank-ref { font-family: ui-monospace, monospace; letter-spacing: 0.04em; }
   @media (max-width: 480px) {
     .r-actions { flex-direction: column; }
     .r-actions .z-btn { width: 100%; justify-content: center; }
