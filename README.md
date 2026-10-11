@@ -1,23 +1,69 @@
-![Zold](assets/readme-banner.png)
+<p align="center">
+  <a href="https://zoldhq.com"><img src="assets/readme/hero.svg" width="100%" alt="Zold, the euro account you own. Nothing moves without your yes."></a>
+</p>
+
+<p align="center">
+  <a href="https://zoldhq.com"><b>zoldhq.com</b></a> &nbsp;·&nbsp;
+  <a href="https://github.com/Zoldenburg-me/zold-docs"><b>User docs</b></a> &nbsp;·&nbsp;
+  <a href="SECURITY.md"><b>Security</b></a> &nbsp;·&nbsp;
+  <a href="https://github.com/Zoldenburg-me"><b>Built by Zoldenburg</b></a>
+</p>
+
+<br>
 
 # Zold
 
-**Nothing moves without your yes.** Zold is a euro account for people and
-businesses whose money crosses borders, built by Zoldenburg.
+**Nothing moves without your yes.** Zold is the euro account you own, for
+people and businesses whose money crosses borders. A person approves each of
+their own transfers, and nobody else can: not a scammer, not an app employee,
+not Zold. In a company, no one person can say yes alone.
 
-- **For a person:** only you can approve a transfer, with your face or
-  fingerprint, for that exact amount and recipient. Zold can't approve one.
-- **For a company:** no one person can empty the account. A payer prepares, a
+<p align="center">
+  <img src="assets/readme/proofs.svg" width="100%" alt="One idea, three proofs. For a person: only you can send it. Every transfer waits for your face or fingerprint, for that exact amount and recipient. Lose your phone, not your money. For a company: no one person can empty the account. One prepares, another approves, the bookkeeper sorts but can't send. Your accountant gets the books, not the keys. For everyone: no rate, no asterisk. Zold doesn't lend your euros out, so there's no rate to advertise and none to quietly cut. Fees are shown before you approve.">
+</p>
+
+- **For a person: only you can send it.** Every transfer waits for your face
+  or fingerprint, for that exact amount and recipient. Zold can't approve one.
+- **For a company: no one person can empty the account.** A payer prepares, a
   second person approves, the bookkeeper sorts but can't send, and the
   accountant gets the books, not the keys.
-- **No rate, no asterisk:** Zold doesn't lend your euros out, so it pays no
-  interest on them. They are e-money, backed one-for-one, in your name.
+- **For everyone: no rate, no asterisk.** Zold doesn't lend your euros out, so
+  it pays no interest on them. They are e-money, backed one-for-one, in your
+  name. Opening an account and bank transfers are free, and any fee is shown
+  before you approve.
 
-**Under the hood.** The IBAN comes from Monerium. Bank transfers arrive as EURe
-(Monerium's regulated euro e-money token) in a Safe smart account on Base. A
-passkey on your device, which is what Face ID or fingerprint unlocks, is that
-Safe's only owner. Every payment is a user operation you sign at send time; the
-server can prepare a debit but holds no key that can make or block one.
+### Who else has a role
+
+The promise covers transfers. Two other parties can act on an account, and we
+name them:
+
+- **Zoldenburg recovery, if you turn it on.** It can move your account to a new
+  phone after checking that it's you. It can never send money, and your old
+  phone can cancel during the waiting period.
+- **Monerium**, which issues your euros, can freeze them where the law
+  requires.
+
+Card taps on the Gnosis Pay card don't ask for your face or fingerprint. The
+card has its own account, and the "only you" promise does not extend to it.
+
+**Yours, even without us, on one condition.** Add a backup key you keep
+yourself, such as a hardware wallet, and you can reach your money with free,
+open tools even if Zold is gone. Without one, your face or fingerprint login
+works only on zoldhq.com.
+
+<br>
+
+## The stack is the receipt
+
+<p align="center">
+  <img src="assets/readme/transfer-flow.svg" width="100%" alt="How a transfer happens. 1 Prepare: Zold builds the transfer with the amount and recipient fixed in it (POST /api/transfers). 2 Approve: your face or fingerprint approves that exact transfer on your phone (passkey, WebAuthn). 3 Enforce: your account runs only what you approved (Safe user operation on Base). 4 Pay out: euros reach the recipient's bank with no Zold fee (Monerium redeem, SEPA). The server can prepare a transfer but holds no key that can approve or block one.">
+</p>
+
+The IBAN comes from Monerium. Bank transfers arrive as EURe (Monerium's
+regulated euro e-money token) in a Safe smart account on Base. A passkey on
+your device, which is what Face ID or fingerprint unlocks, is that Safe's only
+owner. Every payment is a user operation you sign at send time; the server can
+prepare a debit but holds no key that can make or block one.
 
 Anything a user reads tells that story in plain words (approve, your account,
 your face or fingerprint, euros). Passkey, Safe, EURe, chain and gas stay in
@@ -27,6 +73,10 @@ works" page. The word list is in
 
 Product documentation for users lives in the
 [zold-docs](https://github.com/Zoldenburg-me/zold-docs) repository.
+
+<p align="center">
+  <img src="assets/readme/statement.svg" width="100%" alt="A bank account asks you to trust the bank. Zold asks for your yes. Zold can't approve a transfer for you.">
+</p>
 
 ## Status
 
@@ -173,8 +223,15 @@ Stellar testnet suites. Each suite also runs alone (`npm run fx:test`,
 
 ## Names
 
-**Zold** is the app. **Zoldenburg** is the company.
+**Zold** is the app. **Zoldenburg** is the company. The **narwhal** is the
+mascot; the mark is the hollow downward triangle.
 
 ## License
 
 [Apache-2.0](LICENSE). Security policy: [SECURITY.md](SECURITY.md).
+
+<br>
+
+<p align="center">
+  <a href="https://zoldhq.com"><img src="assets/readme/footer.svg" width="100%" alt="Zold, built by Zoldenburg in München"></a>
+</p>
