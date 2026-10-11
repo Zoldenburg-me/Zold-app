@@ -178,7 +178,18 @@ export function createPageRouter() {
   /** A shared receipt. */
   router.get("/r/:slug", page("receipt.html"));
 
-  router.use(express.static(pub));
+  // The app's own code revalidates on every load (a 304 when unchanged). The
+  // pages that load it are never cached, so a longer browser cache, such as
+  // the 4 h Cloudflare gives a response that names none, pairs a new page
+  // with old scripts and styles until it runs out. Pinned vendor files,
+  // fonts and images keep the default.
+  router.use(express.static(pub, {
+    setHeaders(res, file) {
+      if (/\.(?:m?js|css|html|webmanifest)$/.test(file) && !file.includes(`${path.sep}vendor${path.sep}`)) {
+        res.setHeader("cache-control", "no-cache");
+      }
+    },
+  }));
 
   return router;
 }

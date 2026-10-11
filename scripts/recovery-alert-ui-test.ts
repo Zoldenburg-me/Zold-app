@@ -409,10 +409,11 @@ await t("an unconfirmed Zoldenburg is finished on /guardian, and the recovery sc
   const section = (u: string) => run(`user = ${u}; var __el = { innerHTML: "" }; renderGuardianSection(__el); __el.innerHTML`);
   const ready = section(unarmedUser());
   assert.match(ready, /One step left: confirm your bank account/);
-  assert.match(ready, /href="\/guardian"[^>]*>Finish on the guardian page/);
+  assert.match(ready, /href="\/guardian"[^>]*>Confirm my bank account/);
   const noIban = section(unarmedUser(", iban: null"));
   assert.match(noIban, /Your Zold IBAN comes first/);
-  assert.doesNotMatch(noIban, /Finish on the guardian page/);
+  assert.doesNotMatch(noIban, /Confirm my bank account/);
+  assert.match(noIban, /class="m-cta" href="#monerium-settings"[^>]*>Get my Zold IBAN/, "no IBAN: the button gets it");
   run(`caps = { ...caps, zoldenburgEnrolment: false }`);
   assert.match(section(unarmedUser()), /isn’t open yet/);
   run(`caps = { ...caps, zoldenburgEnrolment: true }`);
