@@ -88,6 +88,14 @@ function renderRecoveryList(root) {
       ], 'No account has made a recovery choice yet.')}</section>`;
 }
 
+/* Why a 1 € check could not run. The person sees one text for all of them. */
+const RV_CAUSE = {
+  not_armed: 'the account is not armed: no enrolled bank account under the current key, or Zoldenburg is not its guardian',
+  monerium_orders: 'its Monerium orders could not be read: connection gone, no profile id, or Monerium down',
+  monerium_profile: 'the Monerium profile name could not be read',
+  error: 'an error inside the check; see the server log',
+};
+
 function renderRecoveryDetail(root, id, message) {
   const r = (S.recoveries.requests || []).find((x) => x.id === id);
   if (!r) { root.innerHTML = `<a class="back" href="#/recoveries">← All recoveries</a><div class="note">No Zoldenburg recovery with this id.</div>`; return; }
@@ -142,7 +150,7 @@ function renderRecoveryDetail(root, id, message) {
             : bank.codeIssuedAt
               ? `<b>not yet</b> · code issued ${esc(fmtWhen(bank.codeIssuedAt))}`
               : '<b>not yet</b> · the person has not asked for transfer details', true)}
-        ${bank.lastCheck && !bank.passed ? fact('Last check', `${esc(bank.lastCheck.outcome)} · ${esc(fmtWhen(bank.lastCheck.at))} (${esc(fmtAgo(bank.lastCheck.at))}) · ${esc(bank.lastCheck.reason)}`, true) : ''}
+        ${bank.lastCheck && !bank.passed ? fact('Last check', `${esc(bank.lastCheck.outcome)}${bank.lastCheck.cause ? ` (${esc(RV_CAUSE[bank.lastCheck.cause] || bank.lastCheck.cause)})` : ''} · ${esc(fmtWhen(bank.lastCheck.at))} (${esc(fmtAgo(bank.lastCheck.at))}) · ${esc(bank.lastCheck.reason)}`, true) : ''}
         ${!bank.passed ? fact('References used', `${esc(bank.codesIssued ?? 0)} of ${esc(bank.maxCodes ?? 5)}${(bank.codesIssued ?? 0) >= (bank.maxCodes ?? 5) ? ' · the person can get no more' : ''}`) : ''}
       </div>
       ${!bank.passed && bank.codesIssued ? `<div class="actions"><button type="button" class="btn sm" data-rv="bank-reset">Give the person their references back</button></div>` : ''}
