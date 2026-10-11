@@ -150,7 +150,9 @@ async function importKey(k: StoredKey) {
 // ---------------------------------------------------------------------------
 // challenges (in-memory, single-use, 5 min TTL)
 
-export type ChallengePurpose = "register" | "login" | "step_up";
+/** The operator purposes are their own, so no user challenge can stand in for
+ *  an operator ceremony and no operator challenge for a user one. */
+export type ChallengePurpose = "register" | "login" | "step_up" | "operator_enrol" | "operator_login" | "operator_step_up";
 
 const challenges = new Map<string, { purpose: ChallengePurpose; binding?: string; exp: number }>();
 const CHALLENGE_TTL_MS = 5 * 60_000;
@@ -246,9 +248,10 @@ export function verifyRegistration(
   rpId: string,
   origins: string[],
   binding?: string,
+  purpose: ChallengePurpose = "register",
 ): RegistrationResult {
   const clientDataJSON = b64urlToBuf(clientDataJSONB64);
-  checkClientData(clientDataJSON, "webauthn.create", origins, "register", binding);
+  checkClientData(clientDataJSON, "webauthn.create", origins, purpose, binding);
   const att = cborDecode(b64urlToBuf(attestationObjectB64)).value as Map<string, any>;
   const authData = parseAuthData(Buffer.from(att.get("authData")));
   if (!authData.rpIdHash.equals(sha256(rpId))) throw new Error("webauthn: rpId mismatch");

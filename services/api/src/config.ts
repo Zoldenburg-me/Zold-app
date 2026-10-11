@@ -12,6 +12,7 @@
 export * from "./config/env.js";
 export * from "./config/monerium.js";
 export * from "./config/security.js";
+export * from "./config/operator.js";
 // Named, not *: cash-rail.ts also exports a helper only production.ts uses.
 export { anchorModeEnabled, BRIDGE, STELLAR, STELLAR_PUBLIC_PASSPHRASE, STELLAR_TESTNET_PASSPHRASE } from "./config/cash-rail.js";
 import "./config/production.js";
