@@ -656,7 +656,7 @@ OB["p-passkey"] = {
       <span class="z-mark z-mark--icon" aria-hidden="true">${Z.icon("passkey")}</span>
       ${obOnPhone()
         ? obIntro("Set up Face ID or fingerprint", "It creates a sign-in key that never leaves this phone.")
-        : obIntro("Create a passkey", "Approve it with Touch ID, your computer’s password, your phone or a security key. No face or fingerprint needed.")}
+        : obIntro("Set up sign-in on this computer", "Your browser will ask to create a passkey. Approve it with Touch ID, your computer’s password, your phone or a security key. No face or fingerprint needed.")}
       <ul class="z-points">
         <li>${Z.icon("lock")}<span>It’s the only key to your account. Zold never sees it.</span></li>
         <li>${Z.icon("password")}<span>No Zold password to remember or leak.</span></li>
@@ -807,7 +807,7 @@ OB["b-passkey"] = {
       <span class="z-mark z-mark--icon" aria-hidden="true">${Z.icon("passkey")}</span>
       ${obIntro("Set up the company’s first approver", obOnPhone()
         ? `This phone becomes the first approver for ${esc(obCompany())}.`
-        : `Your passkey makes you the first approver for ${esc(obCompany())}. Approve it with Touch ID, your computer’s password, your phone or a security key.`)}
+        : `This computer becomes the first approver for ${esc(obCompany())}. Your browser will ask to create a passkey: approve it with Touch ID, your computer’s password, your phone or a security key.`)}
       <ul class="z-points">
         <li>${Z.icon("lock")}<span>Company payments you draft need a teammate’s approval. Zold can’t approve any.</span></li>
         <li>${Z.icon("group_add")}<span>Invite teammates and give each a role after the account opens.</span></li>
@@ -847,7 +847,7 @@ function obImportSentence(e) {
     PLAN_HAS_FUNDS: "Money has already arrived at the new account Zold prepared for this login, so it can’t switch to another Safe.",
     RPC_FAILED: "Zold couldn’t read the network just now. Nothing was changed. Try again in a minute.",
     NO_CODE: `There’s no Safe at that address on ${chain}. Check the address, and that the Safe is on ${chain}.`,
-    WRONG_SINGLETON: "This Safe is a version Zold can’t sign for. Zold works with Safe version 1.4.1 set up for ERC-4337.",
+    WRONG_SINGLETON: "This Safe is a version Zold can’t work with. Zold works with Safe version 1.4.1 set up for ERC-4337.",
     MODULE_4337_DISABLED: "This Safe isn’t set up for the kind of payments Zold sends (its ERC-4337 module is off).",
     WRONG_FALLBACK_HANDLER: "This Safe isn’t set up for the kind of payments Zold sends (its fallback handler isn’t the ERC-4337 module).",
     EXTRA_MODULES: "This Safe has other modules switched on. Remove them in Safe{Wallet} under Settings → Modules, then try again.",
@@ -855,10 +855,10 @@ function obImportSentence(e) {
     THRESHOLD_NOT_ONE: "This Safe needs more than one approval per payment. Zold collects only this phone’s approval, so lower it to 1 in Safe{Wallet} first.",
     TOO_MANY_OWNERS: "This Safe has more owners than Zold allows: this phone plus at most one of your own wallets. Remove the others in Safe{Wallet} first.",
     VERIFIER_NOT_OWNER: "The owner change isn’t on the network yet. Wait a minute after sending it, then try again.",
-    VERIFIER_NO_CODE: "Zold couldn’t set up this phone’s signer on the network yet. Try again in a minute.",
-    VERIFIER_PENDING: "This phone’s signer is still being set up on the network. Try again in a minute.",
+    VERIFIER_NO_CODE: "Zold couldn’t finish setting up this phone’s approval key yet. Try again in a minute.",
+    VERIFIER_PENDING: "This phone’s approval key is still being set up. Try again in a minute.",
     STEP_UP_REQUIRED: "Approve with Face ID to bring in this Safe.",
-    STEP_UP_CREDENTIAL: "That approval came from another passkey. Approve with the one this login uses.",
+    STEP_UP_CREDENTIAL: "That approval came from a different sign-in. Approve with the one this login uses.",
     STEP_UP_INVALID: "That approval didn’t match the Safe as the network shows it now, or it expired. Check the Safe again and approve.",
     SAFE_CHANGED: "The Safe’s owners changed after you approved. Check the Safe again and approve it as it is now.",
   }[e?.code];
@@ -956,7 +956,7 @@ OB["b-import-address"] = {
         ${Z.field({ id: "safe-addr", name: "safe-address", label: "Safe address", autocomplete: "off", value: obImport?.address || "", maxlength: 42, placeholder: "0x…", spellcheck: false })}
       </form>
       ${p ? obSafeSummary(p) : ""}
-      ${p?.alreadyOwner ? Z.note({ icon: "check_circle", text: "This phone is already an owner of the Safe. Nothing needs signing; finish on the next screen." }) : ""}
+      ${p?.alreadyOwner ? Z.note({ icon: "check_circle", text: "This phone is already an owner of the Safe. Nothing needs approving; finish on the next screen." }) : ""}
       ${obAlert()}
     </main>
     <div class="z-screen__foot">${p ? Z.button({ variant: "primary", full: true, label: "Yes, continue", id: "btn-import-next" }) : ""}${obSubmit(p ? "Check another address" : "Check this Safe").replace("z-btn--primary", p ? "z-btn--secondary" : "z-btn--primary")}${obNewAccountLink()}</div>`;
@@ -1032,7 +1032,7 @@ OB["b-import-sign"] = {
         ${Z.copyRow({ label: "To", value: c.to, mono: true })}
         ${Z.copyRow({ label: "Value", value: c.value, mono: true })}
         ${Z.copyRow({ label: "Data", value: c.data, display: `${c.data.slice(0, 26)}…`, mono: true })}
-        ${p.deployVerifier ? `<p class="z-sub" style="margin-top:8px">The file also sets up this phone’s signer on the network first. Sent another way, Zold sets that up itself when you finish.</p>` : ""}
+        ${p.deployVerifier ? `<p class="z-sub" style="margin-top:8px">The file also sets up this phone’s approval key first. Sent another way, Zold sets that up itself when you finish.</p>` : ""}
       </details>
       ${obAlert()}
     </main>
@@ -1239,11 +1239,11 @@ function obSetupSteps() {
     return `<li class="${st}">${Z.icon(ic)}<span>${label}<span class="z-sr">, ${word}</span></span></li>`;
   };
   const phone = obOnPhone();
-  return `<ul class="z-steps" aria-live="polite">${row(0, phone ? "Face ID sign-in on this phone" : "A passkey on this device", keyDone)}${row(1, phone ? "Your account, approved with Face ID" : "Your account, approved with your passkey", !!user?.passkey && !needsPasskeySafeSetup(user) && !!user?.passkeySafe)}</ul>`;
+  return `<ul class="z-steps" aria-live="polite">${row(0, phone ? "Face ID sign-in on this phone" : "Sign-in on this device", keyDone)}${row(1, phone ? "Your account, approved with Face ID" : "Your account, approved on this device", !!user?.passkey && !needsPasskeySafeSetup(user) && !!user?.passkeySafe)}</ul>`;
 }
 const obPasskeyLabel = () => obOnPhone()
   ? (user?.passkey ? "Finish with Face ID" : "Set up Face ID")
-  : (user?.passkey ? "Finish with your passkey" : "Create passkey");
+  : (user?.passkey ? "Finish setting up" : "Set up sign-in");
 
 function obSignupBody() {
   const company = obDraft.type === "company";
@@ -1338,7 +1338,7 @@ function obRerenderSteps() {
    the account's next step. Throws; the caller says what failed. */
 async function obOpenOwnSafe(btn) {
   obSetup = { step: 1, state: "now" }; obRerenderSteps();
-  btn.querySelector("span:last-child").textContent = obOnPhone() ? "Approve with Face ID again" : "Approve with your passkey again";
+  btn.querySelector("span:last-child").textContent = obOnPhone() ? "Approve with Face ID again" : "Approve again";
   await finishPasskeySafeSetup();
   obSetup = null;
   // Only the hardhat harness auto-approves; a real account goes on to
@@ -1355,7 +1355,7 @@ function obSetupFailed(e) {
   if (obSetup) obSetup.state = "fail";
   obRerenderSteps();
   obShowErr(obSetup?.step === 1
-    ? new Error(`Your ${obOnPhone() ? "Face ID sign-in" : "passkey"} is saved, but setting up the account didn’t finish (${obMessage(e).replace(/\.$/, "")}). Try again; nothing needs setting up twice.`)
+    ? new Error(`Your ${obOnPhone() ? "Face ID sign-in" : "sign-in"} is saved, but setting up the account didn’t finish (${obMessage(e).replace(/\.$/, "")}). Try again; nothing needs setting up twice.`)
     : e);
 }
 
@@ -1510,7 +1510,7 @@ OB.recovery = {
     if (obRecoveryDone) {
       return `${obAfterProgress("recovery", "Recovery")}
       <main id="main" class="z-screen__main">
-        ${obIntro(obRecoveryDone === "zoldenburg" ? "Zoldenburg is your guardian" : obRecoveryDone === "email" ? "Recovery by email is on" : "Recovery skipped",
+        ${obIntro(obRecoveryDone === "zoldenburg" ? "Zoldenburg recovery is on" : obRecoveryDone === "email" ? "Recovery by email is on" : "Recovery skipped",
           obRecoveryDone === "zoldenburg" ? "If you lose this phone, tap Recover your account on the sign-in screen. The move waits, and this phone can cancel it."
             : obRecoveryDone === "email" ? `A code to ${esc(user.email)} and a waiting period can move this account to a new phone.`
               : "You can set up recovery later in Security.")}
@@ -1519,7 +1519,7 @@ OB.recovery = {
     }
     const opts = [];
     if (caps.emailSmsRecovery && user?.email) opts.push(["email", `Email code ${Z.tag("Recommended", "pink")}${Z.tag("Beta")}`, "A code to your email starts recovery. You can cancel it while it waits."]);
-    if (caps.zoldenburgRecovery) opts.push(["zoldenburg", `Add Zoldenburg as a guardian ${Z.tag("Beta")}`, `Only with an ID Monerium verified. Zoldenburg can’t send your money. A move to a new phone waits <span id="rec-grace">${esc(obGrace || "several days")}</span>, and you can cancel it.`]);
+    if (caps.zoldenburgRecovery) opts.push(["zoldenburg", `Add Zoldenburg recovery ${Z.tag("Beta")}`, `Only with an ID Monerium verified. Zoldenburg can’t send your money. A move to a new phone waits <span id="rec-grace">${esc(obGrace || "several days")}</span>, and you can cancel it.`]);
     opts.push(["skip", "Skip for now", "No one can recover this account."]);
     return `${obAfterProgress("recovery", "Recovery")}
     <main id="main" class="z-screen__main z-screen__main--tight">
@@ -1532,7 +1532,7 @@ OB.recovery = {
         </fieldset>
         <p class="z-err" id="rec-choice-err" hidden></p>
         <div id="rec-skip" class="z-form z-form--tight" hidden>
-          ${Z.note({ tone: "a", icon: "warning", text: "Lose this device and only your EURe can be recovered, from Monerium under Icelandic e-money law. Other assets are lost." })}
+          ${Z.note({ tone: "a", icon: "warning", text: "Lose this device and only your euros can be recovered, from Monerium under Icelandic e-money law. Other assets are lost." })}
           <label class="z-check" for="c-skip"><input id="c-skip" type="checkbox" aria-describedby="c-skip-err"><span>I understand. Skip recovery for now.</span></label>
           <p class="z-err" id="c-skip-err" hidden></p>
         </div>
@@ -1600,10 +1600,10 @@ function obCustodySheet(trigger) {
   document.body.insertAdjacentHTML("beforeend", Z.overlay({
     id: "ob-custody", title: "You control this account",
     body: `<div class="z-sheet__body">
-      <p class="z-sub">Your passkey is the only owner. Zold can’t move your money.</p>
+      <p class="z-sub">Only you can approve payments. Zold can’t move your money.</p>
       <p class="z-sub">So no one can reset your access. Without recovery, a lost phone is a lost account.</p>
       <p class="z-sub">Recovery moves the account to a new phone after a wait you can cancel.</p>
-      <p class="z-sub">Monerium, the issuer, can still freeze EURe under the law.</p>
+      <p class="z-sub">Monerium, the issuer, can still freeze your euros under the law.</p>
     </div>`,
   }));
   Z.openOverlay("ob-custody", trigger);
@@ -2091,7 +2091,7 @@ async function issueAppIban() {
     activated = await offerIbanMove(choices, profileId);
     if (!activated) {
       renderUser(await api(`/api/users/${user.id}`));
-      throw new Error("Your IBAN was not moved, so it still pays into the other wallet. Press Activate IBAN again when you are ready to move it.");
+      throw new Error("Your IBAN was not moved, so it still pays into the other account. Press Get your IBAN again when you are ready to move it.");
     }
   }
   renderUser(activated);

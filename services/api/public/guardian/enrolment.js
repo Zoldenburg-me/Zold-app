@@ -70,6 +70,6 @@ export function checkEnrolment({ api, userId }) {
  * code shown here is spent; anything else keeps it.
  */
 export function afterCheck(v, issued) {
-  if (v?.armed && !v.codeIssuedAt) return { issued: null, message: { ok: true, text: "Your bank account is confirmed. Zoldenburg is your guardian." } };
+  if (v?.armed && !v.codeIssuedAt) return { issued: null, message: { ok: true, text: "Your bank account is confirmed. Zoldenburg recovery is on." } };
   return { issued, message: null };
 }

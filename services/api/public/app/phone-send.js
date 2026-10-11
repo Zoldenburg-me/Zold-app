@@ -33,7 +33,7 @@ function phSendBlocked(u = user) {
   if (!HAS("onchain_balance")) return { text: "Sending is not part of this account.", action: null };
   // Send is a bank transfer today; sending to a crypto wallet is not built.
   if (!bankOffered(u) && !kycApproved(u)) return { text: "Sending here is a bank transfer, and this account has no bank account. Sending to a crypto wallet isn’t built yet.", action: null };
-  if (!kycApproved(u) || !u?.iban) return { text: "Sending opens once Monerium has verified you and your IBAN is active.", action: { id: "ph-send-verify", label: "Verify with Monerium" } };
+  if (!kycApproved(u) || !u?.iban) return { text: "Sending opens once Monerium has verified you and your IBAN is active.", action: { id: "ph-send-verify", label: "Verify your identity" } };
   return null;
 }
 
@@ -287,7 +287,7 @@ async function phSubmit(btn, errEl) {
     }
     const expected = dev.destinationCommitment("sepa", { iban: recipient.recipientIban, name: recipient.recipientName });
     if (created.authorization.typedData.message.destination.toLowerCase() !== expected.toLowerCase()) {
-      throw new Error("The payment terms name a different recipient from the one you entered. Nothing was signed.");
+      throw new Error("The payment terms name a different recipient from the one you entered. Nothing was approved.");
     }
     const signature = await dev.signTypedData(created.authorization.typedData, credId());
     const execution = await safeExecutionAssertion(created.authorization);

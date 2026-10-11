@@ -37,7 +37,7 @@ function renderMoneriumScreen() {
         ${row("IBAN", u.iban || "Not issued yet")}
       </div>
       <div class="m-lede" style="font-size:13px;margin-top:16px">${esc(funding.detail || "Deposits to this account and SEPA payouts from it run on these keys.")}</div>
-      ${needsIban ? `<button class="m-cta" id="m-mon-activate" style="margin-top:16px">Activate IBAN with passkey</button>` : ""}
+      ${needsIban ? `<button class="m-cta" id="m-mon-activate" style="margin-top:16px">Get your IBAN</button>` : ""}
       <button class="m-link" id="m-mon-refresh" style="margin-top:12px">Refresh accounts</button>
       <button class="m-link" id="m-mon-remove" style="margin-top:12px">Remove keys</button>
       <div class="m-err hidden" role="alert" id="m-mon-err" style="margin-top:12px"></div>
@@ -78,7 +78,7 @@ function renderMoneriumScreen() {
     <div class="m-err hidden" role="alert" id="m-mon-err" style="margin-top:12px"></div>
     <div class="m-lede" style="font-size:12px;margin-top:20px;color:var(--m-dim)">
       Zold verifies the pair against Monerium before storing anything, encrypts the secret at rest and never returns it.
-      Your Monerium account, its profile and its IBANs stay yours; Zold links its smart account under that profile and asks
+      Your Monerium account, its profile and its IBANs stay yours; Zold links your account address under that profile and asks
       Monerium for an IBAN bound to it. Deposits and SEPA payouts on this account then run on your keys.
       ${m?.method === "oauth" ? "This account is connected by OAuth today; connecting keys replaces that connection." : ""}
     </div>`;
@@ -155,7 +155,7 @@ function renderFundCard() {
   const hint = $("fund-real-hint");
   if (!hint) return;
   hint.textContent = user?.iban
-    ? "Transfer euros to the IBAN above from any bank. They arrive as balance here once Monerium has minted them to your wallet."
+    ? "Transfer euros to the IBAN above from any bank. They arrive as balance here once Monerium has added them to your account."
     : "Your IBAN appears here once your Monerium account is connected and the IBAN is activated.";
 }
 
@@ -260,16 +260,16 @@ function renderFundingActions(u = user) {
   $("btn-finish-safe").classList.toggle("hidden", !showSafe);
   $("btn-finish-import").classList.toggle("hidden", !importing);
   $("btn-monerium-dashboard").classList.toggle("hidden", !showActivate);
-  $("btn-monerium-dashboard").textContent = "Activate IBAN";
+  $("btn-monerium-dashboard").textContent = "Get your IBAN";
   hint.classList.toggle("hidden", !(showSafe || showActivate || importing));
   hint.textContent = importing
     ? "Once your Safe’s owner has added this phone, finish bringing the Safe in."
     : showSafe
-    ? "Finish the smart wallet first, then activate the app IBAN."
+    ? "Finish setting up your account first, then get your IBAN."
     : showActivate
       ? hasConnectedMonerium(u)
-        ? "Your Monerium account is connected. Activate the app IBAN with your passkey."
-        : "Approve IBAN issuance with your passkey — one confirmation links your wallet to Monerium."
+        ? "Your Monerium account is connected. Get your IBAN with one approval on this device."
+        : "Get your IBAN with one approval on this device. It links your account to Monerium."
       : "";
 }
 
@@ -319,10 +319,10 @@ function renderRecoveryInfo() {
   const safe = user?.passkeySafe;
   btn.textContent = "Manage";
   btn.disabled = !safe || safe.status !== "active" || (!caps.zoldenburgRecovery && !caps.emailSmsRecovery);
-  el.textContent = !caps.zoldenburgRecovery && !caps.emailSmsRecovery ? "No recovery guardian on this deployment."
-    : safe?.recovery?.status === "active" ? "Zoldenburg is your recovery guardian."
+  el.textContent = !caps.zoldenburgRecovery && !caps.emailSmsRecovery ? "No recovery helper on this deployment."
+    : safe?.recovery?.status === "active" ? "Zoldenburg recovery is on."
       : safe?.candideRecovery?.guardianStatus === "active" ? "Email/SMS recovery is on."
-        : "No guardian — Zoldenburg UG cannot recover this account if you lose your passkey.";
+        : "No recovery helper — Zoldenburg UG cannot recover this account if you lose this device.";
 }
 
 function startRecoveryRequest() {
@@ -438,11 +438,11 @@ function renderShellPages() {
   $("acct-balance").innerHTML = `<span class="cur">€</span>${fmt(user.balanceEur ?? 0)}`;
   $("acct-iban").textContent = user.iban || "Not issued yet";
   const plannedSafe = needsPasskeySafeSetup(user) ? user.passkeySafe?.address : null;
-  $("acct-address").textContent = plannedSafe ? `planned ${shortAddr(plannedSafe)} — not deployed` : (user.address || "—");
+  $("acct-address").textContent = plannedSafe ? `planned ${shortAddr(plannedSafe)} — not set up yet` : (user.address || "—");
   document.querySelector('[data-copy="acct-address"]')?.classList.toggle("hidden", !!plannedSafe);
   $("acct-owner").textContent = user.passkeySafe?.status === "active"
-    ? "passkey"
-    : "passkey setup required";
+    ? "You approve every payment"
+    : "Setup not finished";
   $("acct-kyc").textContent = kycCopy(user.kycStatus, user)[1];
   $("acct-kyc-chip").textContent = (user.kycStatus || "approved").toUpperCase();
   $("acct-kyc-chip").className = user.kycStatus === "approved" ? "chip ok" : user.kycStatus === "rejected" ? "chip err" : "chip review";
@@ -451,15 +451,15 @@ function renderShellPages() {
   $("acct-funding-chip").textContent = (funding.status || "ACTIVE").toUpperCase();
   $("acct-funding-chip").className = funding.status === "error" ? "chip err" : funding.status === "active" || user.iban ? "chip ok" : "chip pend";
   $("acct-authorizer").textContent = user.authorizerAddress || "Registered when you send from this browser.";
-  $("set-passkey").textContent = user.passkey ? `Credential ${user.passkey.credentialId.slice(0, 16)}…` : "No passkey on this account yet.";
+  $("set-passkey").textContent = user.passkey ? `Credential ${user.passkey.credentialId.slice(0, 16)}…` : "Not set up on this account yet.";
   $("set-device").textContent = user.authorizerAddress ? `Bound to ${user.authorizerAddress.slice(0, 10)}…${user.authorizerAddress.slice(-6)}` : "Not bound yet.";
   const safe = user.passkeySafe;
   $("set-wallet-policy").textContent = !safe
-    ? "Passkey Safe not planned yet."
+    ? "Not set up yet."
     : safe.importedAt
       // An imported Safe may keep the owner's own wallet as a second owner.
-      ? "Your company’s Safe, brought into Zold · your passkey is an owner and signs every movement Zold makes. Any other owner is your own wallet."
-      : `Passkey-only Safe · you are its only owner and sign every movement with your passkey.`;
+      ? "Your company’s Safe, brought into Zold · you approve every payment Zold makes. Any other approver is your own wallet."
+      : `You are the only approver · every payment needs your approval.`;
   renderRecoveryInfo();
   $("set-privacy-live").textContent = privacyCatalog
     ? `Kokio ${privacyCatalog.fulfillment.kokio}; Mysterium ${privacyCatalog.fulfillment.mysterium}.`
