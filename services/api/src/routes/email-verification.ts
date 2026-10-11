@@ -30,6 +30,10 @@ function confirmedElsewhere(user: User): boolean {
   return !!user.email && store.usersByEmail(user.email).some((u) => u.id !== user.id && !!u.emailVerifiedAt);
 }
 
+/** Addresses a code mail is going to right now. A send is recorded only once
+ *  the mail is out, so a request in that window would pass the wait. */
+const sending = new Set<string>();
+
 const IN_USE = {
   error: "Another account already confirmed this email. Sign in to that account, or recover it if you lost the device.",
   code: "EMAIL_IN_USE",
@@ -62,6 +66,11 @@ export function createEmailVerificationRouter(deps: EmailVerificationDeps) {
       if (user.emailVerifiedAt) return res.status(409).json({ error: "this email is already confirmed", code: "EMAIL_VERIFIED" });
       if (confirmedElsewhere(user)) return res.status(409).json(IN_USE);
 
+      const to = user.email.trim().toLowerCase();
+      if (sending.has(to)) {
+        const wait = Math.ceil(EMAIL_VERIFICATION.resendAfterMs / 1000);
+        return res.status(429).json({ error: `Wait ${wait} seconds before asking for another code.`, code: "EMAIL_CODE_WAIT", retryAfterSeconds: wait });
+      }
       const now = Date.now();
       const sentLastHour = (u: User) => (u.emailCode?.sentAt ?? []).filter((t) => now - Date.parse(t) < 3600_000);
       const recent = sentLastHour(user);
@@ -78,6 +87,7 @@ export function createEmailVerificationRouter(deps: EmailVerificationDeps) {
       }
 
       const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
+      sending.add(to);
       try {
         await sendVerificationCode(user.email, code);
       } catch (err: any) {
@@ -86,6 +96,9 @@ export function createEmailVerificationRouter(deps: EmailVerificationDeps) {
         console.error(`email verification: sending to ${user.id} failed: ${err?.code ?? "error"}${err?.responseCode ? ` (SMTP ${err.responseCode})` : ""}`);
         // Nothing is stored: the previous code, if any, still stands.
         return res.status(502).json({ error: "The email could not be sent just now. Try again in a minute.", code: "MAIL_UNAVAILABLE" });
+      } finally {
+        // The write below runs in this same turn, so no request sees the gap.
+        sending.delete(to);
       }
       const sentAt = new Date(now).toISOString();
       store.updateUser(user.id, {
