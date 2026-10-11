@@ -160,13 +160,16 @@ PH.security = {
     const u = user || {};
     const r = phRecovery(u);
     const recoveryRows = [];
+    // The row goes where the group's action goes: tapping "Not finished"
+    // should finish it, not only the small link beside the heading.
+    const recoveryAction = r.zoldUnarmed && phZoldCanFinish(u) ? { href: "/guardian", label: "Finish" } : { href: "#recovery-settings", label: r.on || r.zold ? "Change" : "Set up" };
     if (r.offered || r.on || r.cr) {
       recoveryRows.push(Z.row({
         lead: Z.iconTile({ icon: "settings_backup_restore" }),
         title: "Recovery",
         sub: r.zoldUnarmed ? phZoldUnarmedText(u, r) : r.zold ? "Zoldenburg is your guardian" : r.social ? "Your Google or Apple login is your guardian" : r.codes ? "Codes to your email or phone" : r.pending ? "Set up, not on your account yet" : "Not set up. A lost phone means a lost account.",
         right: Z.tag(r.on ? "Active" : r.zoldUnarmed ? (phZoldCanFinish(u) ? "1 step left" : "Not finished") : r.pending ? "Waiting" : "Off", r.on ? "mint" : r.zoldUnarmed ? "amber" : undefined),
-        chevron: false,
+        href: recoveryAction.href,
       }));
       for (const c of r.cr?.channels || []) {
         recoveryRows.push(Z.row({
@@ -190,7 +193,7 @@ PH.security = {
       });
     return `${phSecurityTop()}${phMain(`
       ${phKeyUnprotected() ? Z.note({ tone: "a", text: "Your payment key is stored unencrypted in this browser: the passkey here can’t encrypt it. The key signs what a payment is (amount and payee). On its own it moves nothing: every payment also needs your Face ID or fingerprint, which your account checks on the chain. Someone with a copy could still sign payment terms. Don’t use Zold in this browser on a shared computer, and remove extensions you don’t trust." }) : ""}
-      ${recoveryRows.length ? Z.listGroup({ label: "Recovery", action: r.zoldUnarmed && phZoldCanFinish(u) ? { href: "/guardian", label: "Finish" } : { href: "#recovery-settings", label: r.on || r.zold ? "Change" : "Set up" }, rows: recoveryRows }) : ""}
+      ${recoveryRows.length ? Z.listGroup({ label: "Recovery", action: recoveryAction, rows: recoveryRows }) : ""}
       ${Z.listGroup({ label: "Sign-in and keys", rows: [
         Z.row({ lead: Z.iconTile({ icon: "fingerprint" }), title: "Face ID or fingerprint", sub: u.passkey?.createdAt ? `Signs you in and approves payments. Added ${phDay(u.passkey.createdAt)} ${new Date(u.passkey.createdAt).getFullYear()}` : "Not set up", right: Z.tag(u.passkey?.credentialId ? "Active" : "Off", u.passkey?.credentialId ? "mint" : undefined), chevron: false }),
         keyRow,
