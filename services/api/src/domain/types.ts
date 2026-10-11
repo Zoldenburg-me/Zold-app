@@ -980,8 +980,14 @@ export type StatementEvent =
   | "sepa_in"
   | "sepa_out"
   | "sepa_out_reversal"
+  /** USDC converted when its receipt could not be valued: the payment at
+   *  the measured proceeds. */
   | "crypto_converted"
+  /** USDC received: the payment at its ECB value on arrival. */
   | "crypto_held"
+  /** Held USDC converted to EURe: the realised gain or loss against the
+   *  receipt value. */
+  | "crypto_disposal"
   | "eure_in"
   | "sweep";
 

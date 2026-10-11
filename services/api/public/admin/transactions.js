@@ -6,7 +6,7 @@ let txQuery = '';
 
 const TX_FILTERS = {
   all: ['All', () => true],
-  attention: ['Needs attention', (t) => ATTENTION_STATES.includes(t.state) || isStale(t)],
+  attention: ['Needs attention', (t) => ATTENTION_STATES.includes(txStatus(t)) || isStale(t)],
   inflight: ['In flight', isInflight],
   sepa: ['SEPA', (t) => t.kind === 'transfer' && t.rail === 'sepa'],
   cash: ['Cash', (t) => t.kind === 'transfer' && t.rail === 'cash'],
@@ -24,7 +24,7 @@ function renderTxs(root) {
   const q = txQuery.toLowerCase();
   const [, pass] = TX_FILTERS[txFilter];
   const rows = S.txs.filter((t) => pass(t) && (!q || [
-    t.id, t.state, t.rail, t.kind, t.user?.name, t.user?.id, t.user?.safeAddress, t.txHash, t.lastHash, t.error, t.statusDetail,
+    t.id, txStatus(t), t.rail, t.kind, t.user?.name, t.user?.id, t.user?.safeAddress, t.txHash, t.lastHash, t.error, t.statusDetail,
     t.payout?.orderId, t.payout?.referenceCode, t.liquidity?.provider,
   ].filter(Boolean).join(' ').toLowerCase().includes(q)));
   const count = (k) => S.txs.filter(TX_FILTERS[k][1]).length;

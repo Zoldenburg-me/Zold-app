@@ -365,19 +365,33 @@ it does:
 
 - Zold scans Base for EURe and USDC `Transfer` logs into every user's Safe
   and into payment-page addresses. It waits 2 confirmations and gives each
-  USDC deposit an EUR value at arrival from the live mid-rate. That value is
-  the tax cost basis. If there is no rate, there is no value, and Zold never
-  guesses one.
-- **The auto-convert setting** (`paymentPage.autoConvert`) decides whether an
-  incoming USDC deposit *waits to become euros* or *settles as USDC*.
-- **Zold never swaps on its own.** With auto-convert on, a deposit stays
-  **"Awaiting approval"** until the account holder taps *Convert to euro* and
-  signs with their passkey. The swap then runs from the user's own Safe back
-  into it, through LI.FI or Uniswap. It is refused if the venue rate is more
-  than 100 bps off the mid, and the credited EURe is measured, not quoted.
-  Realised gain or loss against the arrival value is recorded.
-- With auto-convert off, or the settlement asset set to USDC, the deposit is
-  marked settled as USDC.
+  USDC deposit an EUR value at arrival from the ECB reference rate of that
+  day. That value is the tax cost basis. If there is no rate, there is no
+  value, and Zold never guesses one.
+- **Every deposit is settled on arrival**: the invoice it pays is marked paid
+  at that arrival value, the pay link records it, and the books get the
+  receipt line. None of this waits for a conversion.
+- **What happens to the USDC is a separate state** (`holding`). The settlement
+  currency is the payment page's (`EURE` by default, and for a Safe with no
+  page). USDC on a USDC-settling page has nothing to convert. Otherwise it is
+  either **waiting to convert** (auto-convert on: the app asks for the passkey)
+  or **held** (auto-convert off, or the account cannot sign yet), and a held
+  deposit can be converted at any time. Switching auto-convert off turns
+  waiting deposits into held ones.
+- **Zold never swaps on its own.** Every conversion needs the account
+  holder's passkey. The swap runs from the user's own Safe back into it,
+  through LI.FI or Uniswap. Before quoting, Zold checks the Safe still holds
+  the deposit's USDC; the price holds for the passkey window and the app is
+  told when it ends. The swap is refused if the venue rate is more than
+  100 bps off the mid, and the credited EURe is measured, not quoted. A swap
+  refused before it was sent, or reverted on chain, leaves the USDC held, and
+  it can be retried. A swap that went through but delivered under the floor
+  is under review and not offered again, and so is one that was sent with no
+  confirmed result: either may have spent the USDC.
+- Converting later rewrites the invoice and pay-link records in place with
+  the conversion and the realised gain; it never settles the invoice again.
+- Only USDC → EURe exists. There is no EURe → USDC swap for accounts that
+  settle in USDC, and a Monerium EURe mint is never "held".
 
 **No swap has ever executed on a real venue.** The mobile crypto screen's
 wording ("converted at the live mid rate on arrival") is inaccurate and should
@@ -718,9 +732,17 @@ written by compensation or an event a crash cut short still gets its line.
 | SEPA in (Monerium issue order, processed) | +amount, counterparty name and IBAN, memo | `monerium:issue:<orderId>` |
 | SEPA out (transfer PAID or PAYOUT_SUBMITTED) | −payout, plus a −fee line when a fee was taken | `transfer:<id>:payout`, `:fee` |
 | SEPA out REFUNDED with money returned | −debit and a +reversal; the deduction is the net | `transfer:<id>:debit`, `:refund` |
-| USDC deposit converted to EURe | +credited EUR (measured), dated by the conversion's block | `deposit:<id>:converted` |
-| USDC deposit held unconverted | +EUR value at the ECB reference rate on the receipt day; **no rate, no line** | `deposit:<id>:held` |
+| USDC received (on arrival, converted later or not) | +EUR value at the ECB reference rate on the receipt day, as the payment; **no rate, no line** | `deposit:<id>:held` |
+| held USDC converted to EURe | the disposal: credited EUR (measured) − the receipt value, as a realised gain or loss, dated by the conversion's block | `deposit:<id>:disposal` |
+| USDC converted when its receipt had no rate | +credited EUR (measured), as the payment; the only line for that deposit | `deposit:<id>:converted` |
 | monthly sweep of exact-output leftovers | +credited EUR, "Kursdifferenz / Restbeträge" | `sweep:<id>` |
+
+The account is one euro clearing account, and held USDC sits in it at its
+value on arrival, so the receipt line is the income and the disposal line
+moves the account by exactly the gain or loss: the income is counted once. A
+zero gain still gets a 0.00 disposal line, as the record of the exchange. A
+deposit that already has a `:converted` line gets no receipt or disposal
+line beside it. These lines have not been reviewed by a Steuerberater.
 
 Each line carries booking date and value date, the signed amount in cents,
 the counterparty, a payment reference (the external invoice number when the

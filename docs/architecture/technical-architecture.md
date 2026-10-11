@@ -604,15 +604,17 @@ There is no CCTP code. Only the on-ledger Stellar payment half has ever run
 ```mermaid
 flowchart LR
   LOG[ERC-20 Transfer logs<br/>EURe + USDC on CHAIN_ID] --> SCAN[scanCryptoDeposits<br/>head − confirmations, ≤5000 blocks]
-  SCAN -->|to = user Safe, or EURe| CONV1[CryptoDeposit CONVERTED<br/>direct funding]
-  SCAN -->|USDC to page address| DET[CryptoDeposit DETECTED<br/>receipt value @ mid]
-  DET --> ATTR[attributeDepositToRequest]
-  DET -->|autoConvert off or settles USDC| CONV2[CONVERTED as USDC]
-  DET -->|autoConvert on| WAIT[DETECTED: awaiting passkey]
-  WAIT -->|convert/prepare → passkey → convert| SWAP[Safe batch: approve + venue call<br/>Safe → Safe, fee 0]
-  SWAP -->|measured EURe delta ≥ minOut| CONV3[CONVERTED + realisedGainEur]
-  SWAP -->|shortfall / bundler error / reverted| REF[REFUSED]
-  SWAP -->|sent, inclusion unconfirmed| UNC[UNCONFIRMED<br/>not offered again]
+  SCAN --> REC[CryptoDeposit recorded<br/>USDC: receipt value @ ECB rate]
+  REC --> ATTR[attributeDepositToRequest]
+  ATTR --> SET[settleOnArrival: settledAt<br/>invoice + pay link + receipt line]
+  SET -->|EURe, or USDC on a USDC page| NONE[holding: none]
+  SET -->|USDC, autoConvert on, convertible| WAIT[holding: awaiting_approval]
+  SET -->|USDC otherwise| HELD[holding: held]
+  WAIT & HELD -->|convert/prepare → passkey → convert| SWAP[Safe batch: approve + venue call<br/>Safe → Safe, fee 0]
+  SWAP -->|measured EURe delta ≥ minOut| CONV[holding: converted<br/>+ realisedGainEur, disposal line]
+  SWAP -->|reverted, or refused before submit| REF[holding: refused<br/>USDC still held, retry allowed]
+  SWAP -->|executed, under minOut| REV[holding: refused<br/>USDC spent, not offered again]
+  SWAP -->|sent, inclusion unconfirmed| UNC[holding: unconfirmed<br/>not offered again]
 ```
 
 - The watched set is every user's Safe, plus each payment-page deposit
@@ -626,9 +628,39 @@ flowchart LR
 - The conversion venue must implement `safeSwapPlan`. Otherwise the answer is
   503, never a fallback. The rate is checked against the mid before submit and
   again at settle.
-- `sweepPendingCryptoDeposits` re-runs every tick. It rewrites each DETECTED
-  row, and if auto-convert is switched off it settles pending deposits as
-  USDC.
+- **Settled and holding are separate fields.** `settledAt` is set once, on
+  arrival, by `settleOnArrival`: `recordInvoiceSettlement` (the invoice's
+  settlement row carries the receipt value as `amountEur`),
+  `noteDepositSettled`, and the statement writer's receipt line.
+  `holding` is `none | held | awaiting_approval | converted | refused`; the
+  settlement currency is `paymentPage.settlementAsset ?? "EURE"`.
+  `settlementAsset` on the deposit is what the money is held as now.
+- A conversion (`settleConvertedDeposit`) sets `holding: converted`,
+  `creditedEur`, `realisedGainEur` and `conversion`, and rewrites the invoice
+  and pay-link rows under the same `deposit:<id>` ref. `withSettlement`
+  replaces by ref, so an invoice is never settled twice and its paid amount
+  does not change.
+- `depositConversionBlocker` refuses only `converted`, `none`, non-USDC,
+  unapproved accounts, the 1 USDC floor and `safeDebitBlocker`. `convert/prepare`
+  then reads the Safe's USDC `balanceOf` and answers 409 when it is below the
+  deposit's amount (per deposit, not summed across held deposits), and returns
+  `expiresAt` (prepare time + `AUTH_WINDOW_SEC`).
+- `POST /users/:id/auto-convert` with `enabled: false` moves
+  `awaiting_approval` rows to `held`; enabling leaves held rows alone.
+- `sweepPendingCryptoDeposits` runs every tick but only settles rows without
+  `settledAt` (a crash between recording and settling), each once. Held,
+  waiting and refused rows are never re-run.
+- Rows written with the single `state` field are migrated on load
+  (`migrateCryptoDepositHolding` in `store/db.ts`): CONVERTED keeps
+  `updatedAt` as `settledAt`; DETECTED and REFUSED stay unsettled so the sweep
+  settles them once; REFUSED becomes `refused` only when a swap was tried,
+  otherwise `held`; UNCONFIRMED becomes `unconfirmed`.
+- A `refused` row whose swap executed (it delivered nothing, or under the
+  floor) is not offered again: that USDC is spent. A refusal before submit, or
+  a reverted swap, can be retried. `unconfirmed` is never offered again.
+- Not handled: an exact-output conversion's disposal line books the whole
+  receipt value as disposed of (no route uses exact output yet); a swap that
+  delivers under `minOut` is `refused` with its EURe unbooked.
 
 ---
 
@@ -1067,7 +1099,7 @@ flowchart LR
 | `sweepAnchorPayouts` | boot + 30 s | refresh Stellar anchor payouts |
 | `reconcile` | 10 s after boot, then 15 min | Monerium drift report (log only) |
 | Monerium poller | 15 s | deposits → mirror + attribution; redeems → PAID/FAILED; pending IBANs |
-| Crypto-in poller | 15 s | scan logs → deposits → attribution → conversion bookkeeping |
+| Crypto-in poller | 15 s | settle unsettled rows; scan logs → deposits → attribution → settlement on arrival |
 
 `setInterval` ticks do not wait for the previous tick. Idempotency keys and
 overlap guards make that safe.
@@ -1123,7 +1155,7 @@ only self-hosted fonts.
 
 | to add | attach at | constraints already in the code |
 |---|---|---|
-| **Ledger writer** — BUILT (`bookkeeping/statement.ts` pure projection, `bookkeeping/writer.ts` store-touching) | attached: `mirrorOrder` and the Monerium poll loops (`keepIssueFacts` → `noteMoneriumIssue`), `settleConvertedDeposit` and the crypto scan, `pollRedeemOrdersOnce` on PAID, and a 60 s sweep in `server.ts` that covers REFUNDED from compensation | keys per event (`statement.key`); `applyRules` on insert; `mergeStatementLines` refreshes facts only and never touches `accountCode`; an org is found through `Account.backingUserId`; a USDC receipt with no ECB rate produces no line. To add an event: a draft in `statement.ts` with a stable key, and a Beleg block in `bookkeeping/beleg.ts` |
+| **Ledger writer** — BUILT (`bookkeeping/statement.ts` pure projection, `bookkeeping/writer.ts` store-touching) | attached: `mirrorOrder` and the Monerium poll loops (`keepIssueFacts` → `noteMoneriumIssue`), `settleConvertedDeposit`, the crypto scan and its sweep, `pollRedeemOrdersOnce` on PAID, and a 60 s sweep in `server.ts` that covers REFUNDED from compensation | keys per event (`statement.key`); `applyRules` on insert; `mergeStatementLines` refreshes facts only and never touches `accountCode`; an org is found through `Account.backingUserId`; a USDC deposit is a receipt line (`:held`) on arrival and a disposal line (`:disposal`, realised gain or loss) on conversion; a USDC receipt with no ECB rate produces no line, and its later conversion books the proceeds once (`:converted`); `mergeStatementLines` adds no `:held`/`:disposal` beside an existing `:converted`. To add an event: a draft in `statement.ts` with a stable key, and a Beleg block in `bookkeeping/beleg.ts` |
 | **Beleg** — BUILT (`bookkeeping/beleg.ts`, `issue.ts`, `pdf.ts`) | `issueBelegForLine`; `/v/:code` verifies via `belegStillAgrees`; `/v/:code/beleg.pdf` | a `StoredDocument` of kind `beleg` with `orgId`; one per line, the code written back onto `statement.documentCode` |
 | **Monthly export** — BUILT (`routes/business/bookkeeping-export.ts`, `bookkeeping/lexware.ts`, `zip.ts`) | `POST /:orgId/bookkeeping/export/:month/prepare`, then the CSV and ZIP GETs | `export.ledger` + `reports.run` to prepare, `ledger.read` to download; MT940/CAMT would be a sibling of `lexware.ts` |
 | **Accounting connector** — GetMyInvoices BUILT (`adapters/getmyinvoices.ts`, `routes/business/integrations.ts`) | `POST /:orgId/integrations/getmyinvoices` (verify + store), `…/push` (a month's Belege), `…/bank-accounts` (read) | key encrypted with purpose `getmyinvoices` under `DATA_ENCRYPTION_KEYS` (v2, bound to the org); plan capability `integrations.accounting` plus a 409 without a key; uploads idempotent on the document number, with their own timeout (`GETMYINVOICES.UPLOAD_TIMEOUT_MS`, 120 s; reads 20 s); an upload with no answer (status 0 or 5xx) is looked up again by number and reported `uploaded` + `verifiedAfterTimeout`/`tagsMayBeMissing` or `unknown`, never `failed` and never re-sent; `POST /bankAccounts/{uid}/transactions` exists in their spec and in the client, unused by any route |
@@ -1352,8 +1384,8 @@ Settings (`config/checkout-service.ts`; a bad webhook URL or secret refuses star
 
 | | |
 |---|---|
-| `GET /users/:id/crypto-deposits` (U) | Deposit list. |
-| `POST /users/:id/crypto-deposits/:d/convert/prepare` (U) | Price one conversion: `expectedEur`, `minEur`, and `expiresAt` (the end of the signing window). |
+| `GET /users/:id/crypto-deposits` (U) | Deposit list with `settledAt`, `holding` and `convertBlocker` per row. |
+| `POST /users/:id/crypto-deposits/:d/convert/prepare` (U) | Price one conversion after checking the Safe still holds the USDC: `expectedEur`, `minEur`, and `expiresAt` (the end of the signing window). |
 | `POST /users/:id/crypto-deposits/:d/convert` (U + passkey) | Convert. |
 | `POST /users/:id/crypto-deposits/:d/invoice` (U + member) | Link a deposit to an invoice. |
 | `POST /users/:id/auto-convert` (U) | Toggle auto-convert. |

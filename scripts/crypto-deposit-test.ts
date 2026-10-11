@@ -2,14 +2,14 @@
  * Crypto in — USDC arriving at a payment page settles into the user's Safe.
  *
  * Detection runs against a real chain: USDC moves on-chain to a watched
- * address and the poller reads the Transfer log. Conversion settles EURe into
- * the Safe.
+ * address and the poller reads the Transfer log. Every deposit settles on
+ * arrival; a USDC one is then held, or waits for the passkey, until converted.
  *
  * The swap itself cannot run here: it is a user-signed batch out of the
  * user's Safe, which needs Candide's bundler and paymaster, and hardhat has
- * neither. So these seed the input (USDC arrived, row DETECTED), drive the
- * poller, then call settleConvertedDeposit directly with EURe minted into the
- * Safe to stand in for the landed batch.
+ * neither. So these seed the input (USDC arrived, row not yet settled), drive
+ * settlement, then call settleConvertedDeposit directly with EURe minted into
+ * the Safe to stand in for the landed batch.
  *
  * Seed the input, never the output of the step under test: a fixture that
  * already carries the result lets an early return skip the code under test.
@@ -72,7 +72,7 @@ const check = (label: string, cond: boolean, detail = "") => {
 };
 
 try {
-  console.log("1/9 chain + deploy…");
+  console.log("1/11 chain + deploy…");
   bg(process.execPath, [bin("hardhat"), "node", "--port", "8552"]);
   await waitRpc();
   const dep = spawnSync(process.execPath, [bin("tsx"), "scripts/deploy.ts"], {
@@ -86,9 +86,10 @@ try {
   const { initStore, store } = await import("../services/api/src/store.js");
   const { abis, addrs, eur, usd, publicClient, writeAndWait, deployerWallet } =
     await import("../services/api/src/chain.js");
-  const { convertDeposit, pollCryptoDepositsOnce, settleConvertedDeposit } = await import(
-    "../services/api/src/adapters/crypto-deposits.js"
-  );
+  const {
+    depositConversionBlocker, heldUsdcBlocker, pollCryptoDepositsOnce, settleConvertedDeposit,
+    settleOnArrival, sweepPendingCryptoDeposits,
+  } = await import("../services/api/src/adapters/crypto-deposits.js");
   initStore();
   const cursorKey = "31337:safe-funding-v1";
 
@@ -183,8 +184,8 @@ try {
   /** The state a completed sweep leaves: tokens with the orchestrator, the
    *  step on the deposit's own record. */
   /**
-   * Seed a deposit in the state the POLLER would leave it: USDC has arrived at
-   * the user's own address and the row is DETECTED. Deliberately no sweep row
+   * Seed a deposit in the state the POLLER records it before settlement: USDC
+   * has arrived at the user's own address and nothing has been settled. Deliberately no sweep row
    * and nothing at the orchestrator — seeding the output of the step under
    * test is what hid a dead code path here for months.
    */
@@ -203,16 +204,16 @@ try {
       logIndex: 0,
       amountUnits: usd.toUnits(amountUsdc).toString(),
       amountUsdc,
-      settlementAsset: user.paymentPage.settlementAsset,
+      settlementAsset: "USDC",
       paymentAddress: user.paymentPage.depositAddress,
-      state: "DETECTED",
+      holding: "awaiting_approval",
       txs: [],
       detectedAt: now,
       updatedAt: now,
     });
   }
 
-  console.log("2/9 nobody opted in — the chain is not even read…");
+  console.log("2/11 nobody opted in — the chain is not even read…");
   {
     const before = store.cryptoDepositCursor(cursorKey);
     const n = await pollCryptoDepositsOnce();
@@ -220,7 +221,7 @@ try {
     check("and no cursor is written", store.cryptoDepositCursor(cursorKey) === before);
   }
 
-  console.log("3/9 a real inbound transfer is detected and attributed…");
+  console.log("3/11 a real inbound transfer is detected and attributed…");
   const ann = addUser("Crypto Ann");
   // The first poll only establishes the cursor: transfers from before the
   // account opted in are deliberately not swept up.
@@ -232,10 +233,11 @@ try {
     const d = store.cryptoDeposits.find((x) => x.userId === ann.id)!;
     check("attributed to the right account", d.userId === ann.id);
     check("100 USDC recorded from the log", d.amountUsdc === 100, `${d.amountUsdc}`);
-    // No Safe is deployed locally, so this is the honest refusal — the money
-    // is still the user's, at the destination address.
-    check("an undeployed Safe is refused, not converted", d.state === "REFUSED", d.state);
-    // The refusal comes from safeDebitBlocker, the check the send path uses,
+    check("it is settled on arrival", Boolean(d.settledAt));
+    // No Safe is deployed locally, so it cannot ask for a signature: it is
+    // held, and the money is still the user's at the destination address.
+    check("an undeployed Safe holds it rather than asking for a signature", d.holding === "held", d.holding);
+    // The reason comes from safeDebitBlocker, the check the send path uses,
     // so both paths agree on what is spendable. The assertion checks intent:
     // it names a Safe problem and says the money has not moved.
     check(
@@ -246,7 +248,7 @@ try {
     check("nothing was settled", (await safeBalanceOf(ann.address)) === 0);
   }
 
-  console.log("4/9 a ready deposit parks for a signature, then settles what ARRIVED…");
+  console.log("4/11 a ready deposit parks for a signature, then settles what ARRIVED…");
   const bo = addUser("Crypto Bo", { withSafe: true });
   {
     /**
@@ -254,8 +256,8 @@ try {
      * poller can only park the deposit; the crediting logic lives in
      * settleConvertedDeposit, which is exercised directly here.
      */
-    const parked = await convertDeposit(await seedReadyDeposit(bo, 100));
-    check("the poller parks it rather than claiming to convert", parked.state === "DETECTED", parked.state);
+    const parked = settleOnArrival(await seedReadyDeposit(bo, 100));
+    check("it settles on arrival and waits for the signature", Boolean(parked.settledAt) && parked.holding === "awaiting_approval", parked.holding);
     check(
       "and says a passkey signature is what is missing",
       /passkey/i.test(parked.reason ?? ""),
@@ -272,7 +274,8 @@ try {
       { provider: "fx-swapper", rate: BigInt(Math.round(MID * 1e6)), minOut: eur.toWei(80) },
       before, [...parked.txs, { step: "safe.swap(usdc->eure)", hash: `0x${"22".repeat(32)}` }],
     );
-    check("it settles once the swap has landed", d.state === "CONVERTED", `${d.state} (${d.reason ?? ""})`);
+    check("it is converted once the swap has landed", d.holding === "converted" && d.settlementAsset === "EURE", `${d.holding} (${d.reason ?? ""})`);
+    check("the held USDC figure is cleared, the received one kept", d.creditedUsdc === undefined && d.amountUsdc === 100);
     check(
       "the credit is the euro value that ARRIVED, not the dollar number",
       d.creditedEur! > 87 && d.creditedEur! < 89,
@@ -293,12 +296,13 @@ try {
     check("the balance is spendable in the Safe", Math.abs(bal - 87.88) < 0.001, `EUR ${bal}`);
   }
 
-  console.log("5/9 the same deposit is never credited twice…");
+  console.log("5/11 the same deposit is never credited twice…");
   {
-    const d = store.cryptoDeposits.find((x) => x.userId === bo.id && x.state === "CONVERTED")!;
+    const d = store.cryptoDeposits.find((x) => x.userId === bo.id && x.holding === "converted")!;
     const balBefore = await safeBalanceOf(bo.address);
-    const again = await convertDeposit(d);
-    check("converting an already-converted deposit is a no-op", again.state === "CONVERTED");
+    const again = settleOnArrival(d);
+    check("settling a converted deposit again is a no-op", again.holding === "converted" && again.settledAt === d.settledAt);
+    check("and the blocker refuses a second conversion", /already been converted/.test(depositConversionBlocker(store.findUser(bo.id)!, d) ?? ""));
     check("the balance did not move", (await safeBalanceOf(bo.address)) === balBefore, `€${balBefore}`);
 
     // Catch up first: step 4 minted EURe into Bo's Safe to stand in for the
@@ -316,11 +320,11 @@ try {
     check("and no duplicate row appears", store.cryptoDeposits.length === countBefore);
   }
 
-  console.log("6/9 dust is left alone, direct Safe funding is only recorded…");
+  console.log("6/11 dust is left alone, direct Safe funding is only recorded…");
   {
     const dusty = addUser("Dusty", { withSafe: true });
-    const d = await convertDeposit(await seedReadyDeposit(dusty, 0.25));
-    check("a sub-floor deposit is refused", d.state === "REFUSED", d.state);
+    const d = settleOnArrival(await seedReadyDeposit(dusty, 0.25));
+    check("a sub-floor deposit is settled and held, not queued for a signature", d.holding === "held" && Boolean(d.settledAt), d.holding);
     check("and says why in words", /floor/.test(d.reason ?? ""), d.reason ?? "");
     check("nothing was credited for it", !d.creditedEur);
 
@@ -329,17 +333,17 @@ try {
     await pollCryptoDepositsOnce();
     const direct = store.cryptoDeposits.find((x) => x.userId === optedOut.id);
     check(
-      "an opted-out account records direct USDC without converting it",
-      direct?.state === "CONVERTED" && direct.creditedUsdc === 50 && direct.settlementAsset === "USDC",
+      "an opted-out account settles direct USDC on arrival and holds it",
+      Boolean(direct?.settledAt) && direct!.holding === "held" && direct!.creditedUsdc === 50 && direct!.settlementAsset === "USDC",
       JSON.stringify(direct),
     );
     check("and keeps a zero EUR balance", (await safeBalanceOf(optedOut.address)) === 0);
   }
 
-  console.log("7/9 a venue price off the market is refused…");
+  console.log("7/11 a venue price off the market is refused…");
   {
     const cass = addUser("Cass", { withSafe: true });
-    const parked = await convertDeposit(await seedReadyDeposit(cass, 100));
+    const parked = settleOnArrival(await seedReadyDeposit(cass, 100));
     const before = eur.toWei(await safeBalanceOf(cass.address));
     await mintEure(cass.address, 87.88);
     // The rate the batch filled at is 1.1379; tell the feed the market is 1.40.
@@ -361,17 +365,18 @@ try {
     check("and the reason names the drift", /bps from the live mid/.test(reason), reason);
   }
 
-  console.log("8/9 a USDC-settled page does not turn the payment into euros…");
+  console.log("8/11 a USDC-settled page does not turn the payment into euros…");
   {
     const dana = addUser("Crypto Dana", { settlementAsset: "USDC" });
     const seeded = await seedReadyDeposit(dana, 25);
-    const d = await convertDeposit(seeded);
-    check("it records the USDC settlement target", d.state === "CONVERTED" && d.settlementAsset === "USDC", d.state);
+    const d = settleOnArrival(seeded);
+    check("it is settled with nothing to convert", Boolean(d.settledAt) && d.holding === "none" && d.settlementAsset === "USDC", d.holding);
+    check("and the blocker says so", /already in your settlement currency/.test(depositConversionBlocker(dana, d) ?? ""));
     check("it does not credit euro balance", (await safeBalanceOf(dana.address)) === 0);
     check("the USDC amount is recorded", d.creditedUsdc === 25, `${d.creditedUsdc}`);
   }
 
-  console.log("9/9 a direct EURe transfer to the Safe appears as funding activity…");
+  console.log("9/11 a direct EURe transfer to the Safe appears as funding activity…");
   {
     const eva = addUser("Crypto Eva", { autoConvert: false });
     await sendEure(eva.address, 30);
@@ -379,9 +384,48 @@ try {
     const d = store.cryptoDeposits.find((x) => x.userId === eva.id);
     check(
       "30 EURe was recorded from the chain log",
-      d?.token === "EURE" && d.amountEur === 30 && d.creditedEur === 30 && d.state === "CONVERTED",
+      d?.token === "EURE" && d.amountEur === 30 && d.creditedEur === 30 && d.holding === "none" && Boolean(d.settledAt),
       JSON.stringify(d),
     );
+  }
+
+  console.log("10/11 held USDC converts later; spent USDC is refused before a quote…");
+  {
+    const hal = addUser("Held Hal", { withSafe: true, autoConvert: false });
+    await sendUsdc(hal.paymentPage.depositAddress, 40);
+    await pollCryptoDepositsOnce();
+    const held = store.cryptoDeposits.find((x) => x.userId === hal.id)!;
+    check("with auto-convert off it is settled and held, no signature asked", held.holding === "held" && Boolean(held.settledAt) && !held.reason, `${held.holding} ${held.reason ?? ""}`);
+    check("a held deposit has no blocker", depositConversionBlocker(store.findUser(hal.id)!, held) === null);
+    check("and the Safe still holds its USDC", (await heldUsdcBlocker(store.findUser(hal.id)!, held)) === null);
+    const before = eur.toWei(await safeBalanceOf(hal.address));
+    await mintEure(hal.address, 35.1);
+    const settledAt = held.settledAt;
+    const d = await settleConvertedDeposit(
+      held, store.findUser(hal.id)!,
+      { provider: "fx-swapper", rate: BigInt(Math.round(MID * 1e6)), minOut: eur.toWei(34) },
+      before, [{ step: "safe.swap(usdc->eure)", hash: `0x${"33".repeat(32)}` }],
+    );
+    check("converted later, at the measured delta", d.holding === "converted" && Math.abs(d.creditedEur! - 35.1) < 0.001, `${d.holding} ${d.creditedEur}`);
+    check("its settlement time is the arrival, not the conversion", d.settledAt === settledAt);
+
+    // Seeded without moving USDC: the Safe holds only Hal's 40 (the stand-in
+    // swap above minted EURe and burned nothing), less than this 60, as if spent.
+    const spent = settleOnArrival(await seedReadyDeposit(hal, 60));
+    const why = await heldUsdcBlocker(store.findUser(hal.id)!, spent);
+    check("a deposit whose USDC is no longer in the Safe is refused in words", /holds 40 USDC, less than the 60 USDC/.test(why ?? "") && /may have been spent/.test(why ?? ""), why ?? "none");
+  }
+
+  console.log("11/11 the sweep settles what was missed, once, and leaves held deposits alone…");
+  {
+    const gil = addUser("Sweep Gil", { withSafe: true });
+    const missed = await seedReadyDeposit(gil, 12);
+    const n = await sweepPendingCryptoDeposits();
+    const after = store.cryptoDeposits.find((x) => x.id === missed.id)!;
+    check("an unsettled row is settled by the sweep", n === 1 && Boolean(after.settledAt) && after.holding === "awaiting_approval", `${n} ${after.holding}`);
+    const stamp = after.updatedAt;
+    const again = await sweepPendingCryptoDeposits();
+    check("a second sweep touches nothing", again === 0 && store.cryptoDeposits.find((x) => x.id === missed.id)!.updatedAt === stamp);
   }
 
   console.log(`\ncrypto deposits: ${passed}/${passed} checks passed`);

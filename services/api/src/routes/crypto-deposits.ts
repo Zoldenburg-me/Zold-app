@@ -1,9 +1,10 @@
 /**
  * Crypto in: what arrived at the payment page, and turning it into euros.
  *
- * The poller detects and does not sign. It runs with nobody present, so a
- * deposit stays detected until the holder authorises the conversion. A
- * missing signature is not a fault and must not be recorded as one.
+ * The poller detects and settles, and does not sign. It runs with nobody
+ * present, so a USDC deposit stays held (or awaiting approval) until the holder
+ * authorises the conversion, which they may do at any time. A missing
+ * signature is not a fault and must not be recorded as one.
  *
  * Non-custodial: the conversion batch approves the venue and swaps out of the
  * user's own Safe, delivering EURe back into it. The orchestrator is not in
@@ -18,8 +19,10 @@ import { prepareDepositConversion } from "../liquidity.js";
 import {
   assertRateSane,
   depositConversionBlocker,
+  heldUsdcBlocker,
   recordInvoiceSettlement,
   settleConvertedDeposit,
+  settlementTarget,
 } from "../adapters/crypto-deposits.js";
 import { store, type CryptoDeposit, type User } from "../store.js";
 import { custodyBlockerBeforeFunding, requireCapability } from "../http/guards.js";
@@ -144,10 +147,9 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
       if (invoice.state === "DRAFT") return res.status(409).json({ error: "That invoice is a draft and has not been issued." });
 
       const linked = store.updateCryptoDeposit(deposit.id, { invoiceId: invoice.id });
-      // Already converted? Then the whole thread is known now and belongs on the
-      // invoice immediately, rather than waiting for a conversion that happened
-      // before the link existed.
-      if (linked.state === "CONVERTED") recordInvoiceSettlement(linked);
+      // Already settled (it arrived before the link existed)? Then it belongs on
+      // the invoice now; the settlement will not be written again on arrival.
+      if (linked.settledAt) recordInvoiceSettlement(linked);
       const after = store.invoices.find((i) => i.id === invoice.id)!;
       res.json({
         deposit: store.cryptoDeposits.find((d) => d.id === deposit.id),
@@ -175,6 +177,8 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
       if (safeBlocker) return res.status(409).json({ error: safeBlocker });
 
       try {
+        const spent = await heldUsdcBlocker(user, deposit);
+        if (spent) return res.status(409).json({ error: spent });
         const swap = await prepareDepositConversion(
           user.address as `0x${string}`,
           BigInt(deposit.amountUnits),
@@ -308,13 +312,13 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
         if (err instanceof SafeOperationUncertainError) {
           console.error(`convert: Safe operation ${err.userOpHash} unconfirmed:`, describeCause(err.cause));
           store.updateCryptoDeposit(deposit.id, {
-            state: "UNCONFIRMED",
+            holding: "unconfirmed",
             reason: `${reason} — check the operation before converting again`,
             txs: [...deposit.txs, { step: "safe.swap(usdc->eure).unconfirmed", hash: err.userOpHash }],
           });
           return res.status(502).json({ error: reason, code: "SAFE_OP_UNCONFIRMED", userOpHash: err.userOpHash });
         }
-        store.updateCryptoDeposit(deposit.id, { state: "REFUSED", reason });
+        store.updateCryptoDeposit(deposit.id, { holding: "refused", reason });
         return res.status(502).json({ error: reason });
       }
       // Included but reverted: the chain undid the swap, so nothing moved and
@@ -322,7 +326,7 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
       if (submitted.success !== true) {
         const reason = `the swap ${submitted.userOpHash ?? ""} was included but reverted — nothing was converted`;
         store.updateCryptoDeposit(deposit.id, {
-          state: "REFUSED",
+          holding: "refused",
           reason,
           txs: [...deposit.txs, { step: "safe.swap(usdc->eure).reverted", hash: submitted.txHash ?? submitted.userOpHash ?? "0x" }],
         });
@@ -368,6 +372,16 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
       const updated = store.updateUser(user.id, {
         paymentPage: { ...page, autoConvert: enabled, updatedAt: new Date().toISOString() },
       });
+      // Off: nothing waits for a signature any more; the USDC is held and can
+      // still be converted by hand. On: deposits already held stay held
+      // ("convert any time") rather than all asking at once.
+      if (!enabled) {
+        for (const d of store.cryptoDeposits) {
+          if (d.userId === user.id && d.holding === "awaiting_approval") {
+            store.updateCryptoDeposit(d.id, { holding: "held", reason: undefined });
+          }
+        }
+      }
       res.json({ ...publicUser(updated), ...(await accountBalances(updated.address).catch(() => ({}))) });
     }),
   );
@@ -380,11 +394,16 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
       if (!requireUserSession(req, res, user.id)) return;
       res.json({
         autoConvert: !!user.paymentPage?.autoConvert,
-        settlementAsset: user.paymentPage?.settlementAsset ?? "USDC",
+        settlementAsset: settlementTarget(user),
         depositAddress: user.paymentPage?.depositAddress,
+        // `holding` says what to list: awaiting_approval is "waiting to
+        // convert", held and refused are "held, convert any time", and
+        // convertBlocker (null when convertible) says why not. The chain
+        // balance is checked at prepare, not here.
         deposits: store.cryptoDeposits
           .filter((d) => d.userId === user.id)
-          .sort((a, b) => b.detectedAt.localeCompare(a.detectedAt)),
+          .sort((a, b) => b.detectedAt.localeCompare(a.detectedAt))
+          .map((d) => ({ ...d, convertBlocker: depositConversionBlocker(user, d) })),
       });
     }),
   );
