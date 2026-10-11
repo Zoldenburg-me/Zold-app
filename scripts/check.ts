@@ -84,6 +84,7 @@ const scripts = [
   "security:test",
   "crypto:test",
   "crypto-deposit:test",
+  "crypto-in-getlogs:test",
   "org-migration:test",
   "production-branch:test",
   "identity:test",
