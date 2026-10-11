@@ -14,7 +14,7 @@
  * Seed the input, never the output of the step under test: a fixture that
  * already carries the result lets an early return skip the code under test.
  *
- * Run: npm run crypto:test
+ * Run: npm run crypto-deposit:test
  */
 // Must be first: pins the chain/keys before config.js reads the environment.
 import "./_local-chain.js";
@@ -72,7 +72,7 @@ const check = (label: string, cond: boolean, detail = "") => {
 };
 
 try {
-  console.log("1/11 chain + deploy…");
+  console.log("1/12 chain + deploy…");
   bg(process.execPath, [bin("hardhat"), "node", "--port", "8552"]);
   await waitRpc();
   const dep = spawnSync(process.execPath, [bin("tsx"), "scripts/deploy.ts"], {
@@ -83,11 +83,12 @@ try {
   assert.equal(dep.status, 0, "deploy failed");
   rmSync(process.env.TRANSF_DB_PATH!, { force: true });
 
+  const { encodeFunctionData } = await import("viem");
   const { initStore, store } = await import("../services/api/src/store.js");
   const { abis, addrs, eur, usd, publicClient, writeAndWait, deployerWallet } =
     await import("../services/api/src/chain.js");
   const {
-    depositConversionBlocker, heldUsdcBlocker, pollCryptoDepositsOnce, settleConvertedDeposit,
+    assertRateSane, depositConversionBlocker, heldUsdcBlocker, pollCryptoDepositsOnce, settleConvertedDeposit,
     settleOnArrival, sweepPendingCryptoDeposits,
   } = await import("../services/api/src/adapters/crypto-deposits.js");
   initStore();
@@ -114,6 +115,9 @@ try {
        *  undeployed case for real — this is for the cases about deposit
        *  handling, where Safe deployment is not what is under test. */
       withSafe?: boolean;
+      /** A forwarder page: payers pay this address, and a second hop moves
+       *  the money on to the Safe. Defaults to the Safe itself (local-safe). */
+      depositAddress?: `0x${string}`;
     } = {},
   ) {
     const owner = `0x${randomBytes(20).toString("hex")}` as `0x${string}`;
@@ -133,10 +137,10 @@ try {
       kycStatus: opts.kyc ?? "approved",
       paymentPage: {
         handle: name.toLowerCase().replace(/\s+/g, "-"),
-        depositAddress: owner,
+        depositAddress: opts.depositAddress ?? owner,
         recipientAddress: owner,
         forwarder: {
-          provider: "local-safe",
+          provider: opts.depositAddress ? "candide" : "local-safe",
           recipient: owner,
           destinationChainId: 31337,
           sourceChainIds: [31337],
@@ -181,6 +185,28 @@ try {
       args: [to, eur.toWei(amount)],
     });
 
+  /** A transfer sent BY an address no test key controls: the forwarder's
+   *  second hop, page address to Safe. Hardhat impersonates the sender. */
+  const rpc = (method: string, params: unknown[]) =>
+    fetch(RPC, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+    }).then((r) => r.json()).then((j: any) => {
+      if (j.error) throw new Error(`${method}: ${j.error.message}`);
+      return j.result;
+    });
+  async function forwardUsdc(from: `0x${string}`, to: `0x${string}`, amount: number) {
+    await rpc("hardhat_impersonateAccount", [from]);
+    await rpc("hardhat_setBalance", [from, "0xDE0B6B3A7640000"]);
+    const hash = await rpc("eth_sendTransaction", [{
+      from,
+      to: addrs().usdc,
+      data: encodeFunctionData({ abi: abis.MockToken, functionName: "transfer", args: [to, usd.toUnits(amount)] }),
+    }]);
+    await publicClient.waitForTransactionReceipt({ hash });
+  }
+
   /** The state a completed sweep leaves: tokens with the orchestrator, the
    *  step on the deposit's own record. */
   /**
@@ -213,7 +239,7 @@ try {
     });
   }
 
-  console.log("2/11 nobody opted in — the chain is not even read…");
+  console.log("2/12 nobody opted in — the chain is not even read…");
   {
     const before = store.cryptoDepositCursor(cursorKey);
     const n = await pollCryptoDepositsOnce();
@@ -221,7 +247,7 @@ try {
     check("and no cursor is written", store.cryptoDepositCursor(cursorKey) === before);
   }
 
-  console.log("3/11 a real inbound transfer is detected and attributed…");
+  console.log("3/12 a real inbound transfer is detected and attributed…");
   const ann = addUser("Crypto Ann");
   // The first poll only establishes the cursor: transfers from before the
   // account opted in are deliberately not swept up.
@@ -248,7 +274,7 @@ try {
     check("nothing was settled", (await safeBalanceOf(ann.address)) === 0);
   }
 
-  console.log("4/11 a ready deposit parks for a signature, then settles what ARRIVED…");
+  console.log("4/12 a ready deposit parks for a signature, then settles what ARRIVED…");
   const bo = addUser("Crypto Bo", { withSafe: true });
   {
     /**
@@ -296,7 +322,7 @@ try {
     check("the balance is spendable in the Safe", Math.abs(bal - 87.88) < 0.001, `EUR ${bal}`);
   }
 
-  console.log("5/11 the same deposit is never credited twice…");
+  console.log("5/12 the same deposit is never credited twice…");
   {
     const d = store.cryptoDeposits.find((x) => x.userId === bo.id && x.holding === "converted")!;
     const balBefore = await safeBalanceOf(bo.address);
@@ -320,7 +346,7 @@ try {
     check("and no duplicate row appears", store.cryptoDeposits.length === countBefore);
   }
 
-  console.log("6/11 dust is left alone, direct Safe funding is only recorded…");
+  console.log("6/12 dust is left alone, direct Safe funding is only recorded…");
   {
     const dusty = addUser("Dusty", { withSafe: true });
     const d = settleOnArrival(await seedReadyDeposit(dusty, 0.25));
@@ -340,32 +366,48 @@ try {
     check("and keeps a zero EUR balance", (await safeBalanceOf(optedOut.address)) === 0);
   }
 
-  console.log("7/11 a venue price off the market is refused…");
+  console.log("7/12 a venue price off the market is refused before the swap…");
   {
-    const cass = addUser("Cass", { withSafe: true });
-    const parked = settleOnArrival(await seedReadyDeposit(cass, 100));
-    const before = eur.toWei(await safeBalanceOf(cass.address));
-    await mintEure(cass.address, 87.88);
-    // The rate the batch filled at is 1.1379; tell the feed the market is 1.40.
+    // The convert route runs assertRateSane BEFORE it submits the signed swap
+    // (routes/crypto-deposits.ts). That is where a mispriced venue is stopped.
+    const venue = BigInt(Math.round(MID * 1e6));
+    const ok = await assertRateSane(venue);
+    check("a rate at the mid passes", Math.abs(ok.venue - MID) < 1e-6 && ok.mid === MID, `${ok.venue} vs ${ok.mid}`);
+
+    // Tell the feed the market is 1.40 while the venue still fills at 1.1379.
     pinMid(1.4);
-    let refused = false;
-    let reason = "";
     try {
-      await settleConvertedDeposit(
+      let reason = "";
+      try {
+        await assertRateSane(venue);
+      } catch (err: any) {
+        reason = String(err?.message ?? err);
+      }
+      check("a rate far off the mid is refused", reason !== "", "it passed");
+      check("and the reason names the drift", /bps from the live mid/.test(reason), reason);
+
+      // After the swap the EURe is already in the Safe: refusing then would
+      // lose the record of a swap that happened. It is recorded, mid and all.
+      const cass = addUser("Cass", { withSafe: true });
+      const parked = settleOnArrival(await seedReadyDeposit(cass, 100));
+      const before = eur.toWei(await safeBalanceOf(cass.address));
+      await mintEure(cass.address, 87.88);
+      const d = await settleConvertedDeposit(
         parked, store.findUser(cass.id)!,
-        { provider: "fx-swapper", rate: BigInt(Math.round(MID * 1e6)), minOut: eur.toWei(80) },
+        { provider: "fx-swapper", rate: venue, minOut: eur.toWei(80) },
         before, parked.txs,
       );
-    } catch (err: any) {
-      refused = true;
-      reason = String(err?.message ?? err);
+      check(
+        "a swap that already landed is recorded with the mid it was checked against",
+        d.holding === "converted" && d.midRate === 1.4 && Math.abs(d.rate! - MID) < 1e-6,
+        `${d.holding} rate=${d.rate} mid=${d.midRate}`,
+      );
+    } finally {
+      pinMid(MID);
     }
-    pinMid(MID);
-    check("a rate far off the mid is refused", refused, reason || "it settled anyway");
-    check("and the reason names the drift", /bps from the live mid/.test(reason), reason);
   }
 
-  console.log("8/11 a USDC-settled page does not turn the payment into euros…");
+  console.log("8/12 a USDC-settled page does not turn the payment into euros…");
   {
     const dana = addUser("Crypto Dana", { settlementAsset: "USDC" });
     const seeded = await seedReadyDeposit(dana, 25);
@@ -376,7 +418,7 @@ try {
     check("the USDC amount is recorded", d.creditedUsdc === 25, `${d.creditedUsdc}`);
   }
 
-  console.log("9/11 a direct EURe transfer to the Safe appears as funding activity…");
+  console.log("9/12 a direct EURe transfer to the Safe appears as funding activity…");
   {
     const eva = addUser("Crypto Eva", { autoConvert: false });
     await sendEure(eva.address, 30);
@@ -389,7 +431,7 @@ try {
     );
   }
 
-  console.log("10/11 held USDC converts later; spent USDC is refused before a quote…");
+  console.log("10/12 held USDC converts later; spent USDC is refused before a quote…");
   {
     const hal = addUser("Held Hal", { withSafe: true, autoConvert: false });
     await sendUsdc(hal.paymentPage.depositAddress, 40);
@@ -416,7 +458,7 @@ try {
     check("a deposit whose USDC is no longer in the Safe is refused in words", /holds 40 USDC, less than the 60 USDC/.test(why ?? "") && /may have been spent/.test(why ?? ""), why ?? "none");
   }
 
-  console.log("11/11 the sweep settles what was missed, once, and leaves held deposits alone…");
+  console.log("11/12 the sweep settles what was missed, once, and leaves held deposits alone…");
   {
     const gil = addUser("Sweep Gil", { withSafe: true });
     const missed = await seedReadyDeposit(gil, 12);
@@ -426,6 +468,29 @@ try {
     const stamp = after.updatedAt;
     const again = await sweepPendingCryptoDeposits();
     check("a second sweep touches nothing", again === 0 && store.cryptoDeposits.find((x) => x.id === missed.id)!.updatedAt === stamp);
+  }
+
+  console.log("12/12 a forwarder page with auto-convert off records the payment once…");
+  {
+    // Seen on a live page: auto-convert off, no open payment request, payment
+    // to the forwarder address. The page was not watched, and the forwarder's
+    // second hop into the Safe is skipped as already recorded — so it was
+    // recorded nowhere.
+    const page = `0x${randomBytes(20).toString("hex")}` as `0x${string}`;
+    const fay = addUser("Forward Fay", { withSafe: true, autoConvert: false, depositAddress: page });
+    await sendUsdc(page, 20);
+    await pollCryptoDepositsOnce();
+    await forwardUsdc(page, fay.address, 20);
+    await pollCryptoDepositsOnce();
+    const rows = store.cryptoDeposits.filter((x) => x.userId === fay.id);
+    check("the payment is recorded exactly once", rows.length === 1, `${rows.length} rows`);
+    const d = rows[0];
+    check(
+      "at the page address it was paid to, settled and held as USDC",
+      d?.paymentAddress?.toLowerCase() === page.toLowerCase() && d.amountUsdc === 20 &&
+        Boolean(d.settledAt) && d.holding === "held",
+      JSON.stringify(d),
+    );
   }
 
   console.log(`\ncrypto deposits: ${passed}/${passed} checks passed`);

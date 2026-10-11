@@ -618,17 +618,18 @@ flowchart LR
   SWAP -->|sent, inclusion unconfirmed| UNC[holding: unconfirmed<br/>not offered again]
 ```
 
-- The watched set is every user's Safe, plus each payment-page deposit
-  address that is approved with auto-convert on, or that has an open crypto
-  pay link.
+- The watched set is every user's Safe plus every payment-page deposit
+  address, whatever its auto-convert setting. The second-hop skip below
+  depends on it: an unwatched page would record its payment nowhere.
 - The cursor is `${CHAIN_ID}:safe-funding-v1`. It advances only after every
   log in the window is recorded. `(txHash, logIndex)` is the identity, and an
   overlap guard stops concurrent ticks.
 - There is no sender screening. The forwarder's second hop (page address to
   Safe) is skipped to avoid double counting.
 - The conversion venue must implement `safeSwapPlan`. Otherwise the answer is
-  503, never a fallback. The rate is checked against the mid before submit and
-  again at settle.
+  503, never a fallback. The rate is checked against the mid before submit
+  (`assertRateSane`). After the swap lands, `settleConvertedDeposit` records
+  the mid and does not refuse: the EURe is already in the Safe.
 - **Settled and holding are separate fields.** `settledAt` is set once, on
   arrival, by `settleOnArrival`: `recordInvoiceSettlement` (the invoice's
   settlement row carries the receipt value as `amountEur`),
