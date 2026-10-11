@@ -293,6 +293,7 @@
 .l-faq details[open] { border-color: var(--z-line-strong); }
 .l-faq summary { min-height: 64px; display: flex; align-items: center; justify-content: space-between; gap: 16px; cursor: pointer; list-style: none; font-size: 17px; font-weight: 500; letter-spacing: -.015em; color: var(--z-heading); }
 .l-faq summary::-webkit-details-marker { display: none; }
+.l-faq p a { color: var(--z-heading); text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
 .l-faq summary i { font-size: 18px; color: var(--z-dim); flex-shrink: 0; }
 .l-faq summary .ph-minus, .l-faq details[open] summary .ph-plus { display: none; }
 .l-faq details[open] summary .ph-minus { display: inline-block; }
