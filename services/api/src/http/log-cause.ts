@@ -52,6 +52,47 @@ export function describeError(err: unknown): string {
   return [describeCause(err), ...frames.map((f) => `    ${redactUrls(f.slice(0, MAX_LOGGED))}`)].join("\n");
 }
 
+/**
+ * An error's text for matching against a pattern, never for a log line, a row
+ * or a response: it is the raw message, a URL and its key included.
+ */
+export function errorText(err: unknown): string {
+  const e = err as { shortMessage?: unknown; message?: unknown; details?: unknown } | null | undefined;
+  return [e?.shortMessage, e?.message, e?.details].filter((t) => typeof t === "string").join(" ") || String(err ?? "");
+}
+
+function originOrPlaceholder(url: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return "<url>";
+  }
+}
+
+/**
+ * An error's own words, for a stored row or a response body: the first line
+ * of its short message, without the error's name, with every URL, network
+ * target and IP address replaced. Dotted words stay, so a field path such as
+ * `counterpart.identifier.iban` still says which field failed; a key-bearing
+ * host appears in a URL or after a network error code, and both are replaced.
+ * `keepHosts` cuts each URL to its origin instead, for a message that must
+ * name an origin to be fixable (a WebAuthn origin mismatch).
+ */
+export function redactedMessage(err: unknown, opts: { keepHosts?: boolean } = {}): string {
+  if (err === undefined || err === null) return "unknown error";
+  const e = err as { shortMessage?: unknown; message?: unknown };
+  const text =
+    typeof err !== "object" ? String(err)
+    : typeof e.shortMessage === "string" ? e.shortMessage
+    : typeof e.message === "string" ? e.message
+    : String(err);
+  const line = (text.split("\n").find((l) => l.trim()) ?? "").slice(0, MAX_LOGGED);
+  const out = opts.keepHosts
+    ? line.replace(URL_PATTERN, originOrPlaceholder)
+    : line.replace(URL_PATTERN, "<url>").replace(NET_TARGET_PATTERN, "$1 <host>").replace(IP_PATTERN, "<host>");
+  return out.trim() || "unknown error";
+}
+
 /** One line safe to show the caller: URLs removed, hosts kept (a WebAuthn
  *  origin mismatch has to name the origin to be fixable). */
 export function shortErrorForClient(err: unknown): string {

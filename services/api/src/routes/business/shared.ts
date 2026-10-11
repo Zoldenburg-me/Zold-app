@@ -33,6 +33,7 @@ import {
 } from "../../domain/invoicing.js";
 import { createQuote } from "../../fx.js";
 import { midRates } from "../../rates.js";
+import { redactedMessage } from "../../http/log-cause.js";
 
 export const str = (v: unknown): string | undefined =>
   typeof v === "string" && v.trim() ? v.trim() : undefined;
@@ -298,7 +299,7 @@ export async function withConversion(draft: InvoiceDraft): Promise<InvoiceDraft>
 
 export const badRequest = (res: express.Response, err: unknown) => {
   if (err instanceof DraftError || err instanceof InvoiceError || err instanceof CoaError) {
-    res.status(400).json({ error: (err as Error).message });
+    res.status(400).json({ error: redactedMessage(err) });
     return true;
   }
   return false;

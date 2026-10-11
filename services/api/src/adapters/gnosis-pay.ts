@@ -23,6 +23,7 @@
  * status (connected address, Safe address, KYC state) is stored.
  */
 import { GNOSIS_PAY } from "../config.js";
+import { redactedMessage } from "../http/log-cause.js";
 
 export interface GnosisPayNonce {
   nonce: string;
@@ -92,7 +93,7 @@ async function gpFetch(
     if (err?.name === "AbortError" || err?.name === "TimeoutError") {
       throw new GnosisPayError(`Gnosis Pay did not answer within ${GNOSIS_PAY.timeoutMs}ms`, 504);
     }
-    throw new GnosisPayError(`Gnosis Pay unreachable: ${err?.message ?? err}`, 502);
+    throw new GnosisPayError(`Gnosis Pay unreachable: ${redactedMessage(err)}`, 502);
   }
 }
 

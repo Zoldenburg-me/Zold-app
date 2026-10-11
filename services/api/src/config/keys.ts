@@ -1,4 +1,5 @@
 import { RPC_URL, USING_LOCAL_RPC } from "./env.js";
+import { urlForLog } from "../http/log-safe.js";
 
 // Hardhat's well-known dev accounts — public knowledge, fine on 31337 only.
 const DEV_KEYS = {
@@ -29,7 +30,7 @@ function operatorKey(role: "deployer" | "orchestrator" | "ramp"): `0x${string}` 
   }
   if (!USING_LOCAL_RPC && process.env.ALLOW_DEV_KEYS_ON_EXTERNAL_RPC !== "1") {
     throw new Error(
-      `refusing to hold the ${role} role with hardhat's public development key on ${RPC_URL} — ` +
+      `refusing to hold the ${role} role with hardhat's public development key on ${urlForLog(RPC_URL)} — ` +
         `set ${upper}_KEY (or DEPLOY_${upper}_KEY) to a key this deployment actually controls`,
     );
   }

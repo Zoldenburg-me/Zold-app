@@ -9,7 +9,12 @@
 .z-ic { font-family: 'Material Symbols Rounded'; font-weight: normal; font-style: normal; font-size: 20px; line-height: 1; letter-spacing: normal; text-transform: none; display: inline-block; white-space: nowrap; font-feature-settings: 'liga'; -webkit-font-smoothing: antialiased; flex: none; }
 
 .z-skip { position: absolute; left: var(--z-space-4); top: -60px; z-index: 300; padding: 10px 14px; border-radius: var(--z-radius-sm); background: var(--z-pink); color: var(--z-bg); font-weight: 600; font-size: 14px; }
-.z-skip:focus { top: var(--z-space-3); color: var(--z-bg); }
+/* Shown whenever it has focus, keyboard or not (switch and voice users
+   focus it other ways). A click hands focus to the content and blurs it
+   (ui.js), so it does not stay over the page. */
+.z-skip:focus, .z-skip:focus-visible { top: var(--z-space-3); color: var(--z-bg); }
+/* Where the skip link lands: focus moves there, no ring around the page. */
+main#main:focus:not(:focus-visible) { outline: none; }
 
 /* ---- Button --------------------------------------------------------- */
 .z-btn {
@@ -524,6 +529,12 @@ a.z-switch:hover { border-color: var(--z-line-hover); color: var(--z-text); }
 .z-banner:hover { color: var(--z-text); border-color: var(--z-amber); }
 .z-banner > .z-ic:first-child { font-size: 20px; color: var(--z-amber); }
 .z-banner > span:not(.z-ic) { flex: 1; }
+/* A recovery under way: on top of every app screen (app/phone-home.js). */
+.z-recbar { max-width: 600px; margin: 0 auto; padding: var(--z-space-3) var(--z-space-4) 0; }
+.z-recbar[hidden], .z-recbar:empty { display: none; }
+.z-banner--alert { border-color: var(--z-pink-border); background: var(--z-pink-tint); }
+.z-banner--alert > .z-ic:first-child { color: var(--z-pink-soft); }
+.z-banner > .z-btn { flex: none; }
 .z-cols { display: grid; grid-template-columns: 1fr 1fr; gap: var(--z-space-2); }
 .z-cols > .z-field { min-width: 0; }
 .z-input--num { text-align: right; font-variant-numeric: tabular-nums; }
@@ -631,6 +642,13 @@ button.z-switch:hover { border-color: var(--z-line-hover); }
    screen keeps its phone column, centred in the space.
    ========================================================================== */
 .z-side { display: none; }
+/* The pay card's controls fill a phone; in the desktop column they would be
+   a 600px pill and a 600px button. Sized to their content there. */
+@media (min-width: 1024px) {
+  .z-paycard .z-seg { align-self: center; width: 100%; max-width: 320px; }
+  .z-paycard .z-seg label { min-height: 36px; }
+  .z-paycard .z-btn--full { align-self: center; width: auto; min-width: 240px; padding-inline: var(--z-space-5); }
+}
 @media (min-width: 1024px) {
   #ph-root { display: grid; grid-template-columns: 256px minmax(0, 1fr); align-items: start; max-width: none; margin: 0; }
   #ph-root::before { left: 256px; }
@@ -786,3 +804,8 @@ html:has(#ob-root [data-screen^="state-"]) #offline-bar { display: none; }
    clock. Where the inset is 0 (a desktop browser) none of this shows. */
 body { padding-top: env(safe-area-inset-top, 0px); }
 body::before { content: ""; position: fixed; inset: 0 0 auto; z-index: 210; height: env(safe-area-inset-top, 0px); background: var(--z-bg); pointer-events: none; }
+
+/* "Continue with Google / Apple": quiet buttons with the provider's mark, one per row. */
+.z-providers { display: grid; gap: var(--z-space-3); margin: 24px 0; }
+.z-provider { width: 100%; gap: 12px; font-weight: 500; background: var(--z-surface); }
+.z-provider__mark { width: 20px; height: 20px; flex: none; }

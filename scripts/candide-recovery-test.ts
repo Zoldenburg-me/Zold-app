@@ -26,6 +26,7 @@ import { createServer } from "node:http";
 import { rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { operatorKit, type OperatorKit } from "./_operator.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const API_PORT = Number(process.env.TRANSF_API_PORT ?? 3041);
@@ -230,7 +231,15 @@ const stub = createServer((req, res) => {
   });
 });
 
+let opKit: OperatorKit | undefined;
 async function call(pathname: string, body?: any, method?: string, bearer = token, extra: Record<string, string> = {}) {
+  // A change made with the operator token goes through an operator passkey
+  // session and a fresh approval; the token itself opens reads only.
+  if (bearer === OPERATOR && (method ?? (body ? "POST" : "GET")) !== "GET") {
+    if (!opKit) throw new Error(`an operator change (${pathname}) before the operator kit is enrolled`);
+    const r = await opKit.call(method ?? "POST", pathname, body ?? {});
+    return { status: r.status, data: r.body, text: JSON.stringify(r.body) };
+  }
   const headers: Record<string, string> = { ...extra };
   if (body) headers["content-type"] = "application/json";
   if (bearer) headers.authorization = `Bearer ${bearer}`;
@@ -308,6 +317,7 @@ try {
   };
   await waitForApi();
 
+  opKit = await operatorKit({ base: API, origin: API, rpId: "localhost", dataDir: path.dirname(process.env.TRANSF_DB_PATH!) });
   const health = await call("/api/health");
   assert.equal(health.data.capabilities?.emailSmsRecovery, true, "capability must be published when the service URL is set");
 

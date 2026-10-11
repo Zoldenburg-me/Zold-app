@@ -35,6 +35,9 @@ import type {
   ConversionSweep,
   CryptoDeposit,
   MoneriumIssueRecord,
+  Operator,
+  OperatorCredential,
+  OperatorSession,
   PaymentRequest,
   Quote,
   ReceiptShare,
@@ -47,6 +50,7 @@ import type {
   Transfer,
   User,
 } from "./store/types.js";
+import { describeCause } from "./http/log-cause.js";
 
 export * from "./store/types.js";
 export { initStore } from "./store/db.js";
@@ -72,7 +76,7 @@ function announceStateChange(t: Transfer, from: Transfer["state"]) {
     try {
       listener(t, from);
     } catch (err) {
-      console.error(`store: transfer state listener failed for ${t.id}: ${(err as Error).message}`);
+      console.error(`store: transfer state listener failed for ${t.id}: ${describeCause(err)}`);
     }
   }
 }
@@ -665,6 +669,88 @@ export const store = {
     // authenticated request re-serialised the entire store per call, which grows
     // with the number of users and transfers — a self-amplifying cost. Minute
     // granularity is enough to see an idle session.
+    const now = Date.now();
+    if (now - Date.parse(s.lastUsedAt) < 60_000) return s;
+    s.lastUsedAt = new Date(now).toISOString();
+    persist();
+    return s;
+  },
+  get operators() {
+    return db.operators;
+  },
+  findOperator(id: string) {
+    return db.operators.find((o) => o.id === id);
+  },
+  /** Emails are compared case-insensitively; they are stored lowercase. */
+  findOperatorByEmail(email: string) {
+    const e = email.trim().toLowerCase();
+    return db.operators.find((o) => o.email === e);
+  },
+  /** Operator credentials only: a user's passkey is never found here. */
+  findOperatorCredential(credentialId: string): { operator: Operator; credential: OperatorCredential } | undefined {
+    for (const operator of db.operators) {
+      const credential = operator.credentials.find((c) => c.credentialId === credentialId);
+      if (credential) return { operator, credential };
+    }
+    return undefined;
+  },
+  addOperator(o: Operator) {
+    if (db.operators.some((x) => x.email === o.email)) throw new Error("an operator with that email exists");
+    db.operators.push({ ...o, email: o.email.trim().toLowerCase() });
+    persist();
+    return db.operators[db.operators.length - 1];
+  },
+  addOperatorCredential(operatorId: string, credential: OperatorCredential) {
+    const o = db.operators.find((x) => x.id === operatorId);
+    if (!o) throw new Error(`unknown operator ${operatorId}`);
+    if (db.operators.some((x) => x.credentials.some((c) => c.credentialId === credential.credentialId))) {
+      throw new Error("that passkey is already registered");
+    }
+    o.credentials = [...o.credentials, credential];
+    persist();
+    return o;
+  },
+  /** The sign counter and last use, after a verified assertion. */
+  recordOperatorCredentialUse(operatorId: string, credentialId: string, signCount: number) {
+    const o = db.operators.find((x) => x.id === operatorId);
+    const c = o?.credentials.find((x) => x.credentialId === credentialId);
+    if (!o || !c) throw new Error(`unknown operator credential ${credentialId}`);
+    o.credentials = o.credentials.map((x) =>
+      x.credentialId === credentialId ? { ...x, signCount, lastUsedAt: new Date().toISOString() } : x,
+    );
+    persist();
+  },
+  disableOperator(id: string) {
+    const o = db.operators.find((x) => x.id === id);
+    if (!o) throw new Error(`unknown operator ${id}`);
+    o.disabledAt ??= new Date().toISOString();
+    for (const s of db.operatorSessions) if (s.operatorId === id && !s.revokedAt) s.revokedAt = o.disabledAt;
+    persist();
+    return o;
+  },
+  addOperatorSession(s: OperatorSession) {
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    db.operatorSessions = db.operatorSessions.filter((x) => {
+      const dead = x.revokedAt ? Date.parse(x.revokedAt) : Date.parse(x.expiresAt);
+      return !(Number.isFinite(dead) && dead < cutoff);
+    });
+    db.operatorSessions.push(s);
+    persist();
+  },
+  findOperatorSessionByTokenHash(tokenHash: string) {
+    return db.operatorSessions.find((s) => s.tokenHash === tokenHash);
+  },
+  revokeOperatorSession(id: string) {
+    const s = db.operatorSessions.find((x) => x.id === id);
+    if (!s) throw new Error(`unknown operator session ${id}`);
+    s.revokedAt ??= new Date().toISOString();
+    persist();
+    return s;
+  },
+  /** Minute granularity, as for user sessions: the idle limit is 30 minutes. */
+  touchOperatorSession(id: string) {
+    const s = db.operatorSessions.find((x) => x.id === id);
+    if (!s) throw new Error(`unknown operator session ${id}`);
     const now = Date.now();
     if (now - Date.parse(s.lastUsedAt) < 60_000) return s;
     s.lastUsedAt = new Date(now).toISOString();

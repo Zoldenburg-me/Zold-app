@@ -6,7 +6,7 @@
  * leak or be lost on the next render.
  */
 import {
-  $, api, esc, invoiceInputListener, org, orgs, readRecovery, setInvoiceInputListener, ensureMe, setOrg,
+  $, api, esc, invoiceInputListener, org, orgs, readRecovery, recoveryPending, recoveryUnknown, setInvoiceInputListener, ensureMe, setOrg,
   setOrgs, setTestMode, setUsdSymbol, setView, toast, token, view,
 } from "./core.js";
 import { KNOWN, planBanner, refreshSide, renderNav, setMenu } from "./nav.js";
@@ -71,7 +71,7 @@ export async function render({ focus = false } = {}) {
   const mine = ++seq;
   renderNav();
   refreshSide().catch(() => { /* the sidebar keeps what it had */ });
-  $("#plan-banner").innerHTML = planBanner();
+  paintBanner();
   const meta = (META[view] ?? META.overview)();
   $("#view-title").textContent = meta.title;
   $("#view-sub").textContent = meta.sub || "";
@@ -145,6 +145,47 @@ function only(sel) {
   }
 }
 
+/* A recovery started while this page is open must show without a reload:
+   read again every minute and whenever the tab comes back, and redraw the
+   banner only when what it says changed. */
+const RECOVERY_READ_MS = 60000;
+let recoveryReadAt = 0;
+/* The banner row, redrawn only when its text changes, so a minute's read
+   never resets a button someone is about to press. */
+let recoveryAnnounced = "";
+function paintBanner() {
+  const el = $("#plan-banner");
+  if (!org || !el) return;
+  const html = planBanner();
+  if (el.dataset.sig === html) return;
+  el.dataset.sig = html;
+  el.innerHTML = html;
+  // A recovery warning that newly appears is read out once.
+  const urgent = recoveryPending ? "pending" : recoveryUnknown ? "unknown" : "";
+  if (urgent && urgent !== recoveryAnnounced) window.Z.announce(el.querySelector(".banner.warn")?.textContent || "");
+  recoveryAnnounced = urgent;
+}
+/* One read at a time, so an older answer never lands after a newer one. */
+let recoveryRun = null;
+function readRecoveryNow() {
+  if (recoveryRun) return recoveryRun;
+  recoveryReadAt = Date.now();
+  recoveryRun = readRecovery().then(paintBanner).catch(() => { /* readRecovery itself fails closed */ })
+    .finally(() => { recoveryRun = null; });
+  return recoveryRun;
+}
+let watching = false;
+/** Exported for scripts/recovery-alert-ui-test.ts; boot() starts it. */
+export function watchRecovery() {
+  if (watching) return;
+  watching = true;
+  readRecoveryNow();
+  setInterval(() => { if (!document.hidden) readRecoveryNow(); }, RECOVERY_READ_MS);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && Date.now() - recoveryReadAt > 15000) readRecoveryNow();
+  });
+}
+
 export async function boot() {
   // Test mode follows the chain (GET /api/health realMoney), as in the app.
   api("/api/health").then((h) => { setTestMode(!h.realMoney); setUsdSymbol(h.capabilities?.usdToken?.symbol); renderNav(); }).catch(() => { /* no pill */ });
@@ -159,8 +200,8 @@ export async function boot() {
   const session = ensureMe().then((u) => {
     renderNav();
     // The personal-space banner needs to know who this is.
-    if (org && $("#plan-banner")) $("#plan-banner").innerHTML = planBanner();
-    readRecovery().then(() => { if (org && $("#plan-banner")) $("#plan-banner").innerHTML = planBanner(); }).catch(() => { /* no banner */ });
+    paintBanner();
+    watchRecovery();
     return u;
   }).catch(() => null);
   setOrgs(list.organisations);

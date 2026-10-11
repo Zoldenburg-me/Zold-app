@@ -42,7 +42,10 @@ or `{ html, bind(box) }`.
 ## Other pages
 index/landing (website) · imprint.html · pay.html, pay-request.html (payment page) ·
 invoice.html (supplier link) · document.html (/v verify) · receipt.html (/r) ·
-admin.html · faucet.html · legal, privacy, partner-terms · 404
+admin.html · faucet.html · legal, privacy, partner-terms · 404 ·
+guardian.html + guardian/*.js (/guardian: choose Zoldenburg or a Google/Apple login; enrolment.js is Zoldenburg's 1 € bank step) ·
+recovery.html + recovery/*.js (/recovery: the lost-device flow for every guardian, bank-step.js the
+Zoldenburg recovery 1 €; /app#recover redirects here) — ES modules with their own CSP, the only pages that load vendor/turnkey.js
 
 ## Shopify
 shopify-app/extensions/zold-pay — thank-you page block pointing at /api/shopify/orders.

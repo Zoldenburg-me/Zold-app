@@ -12,6 +12,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { createServer } from "node:net";
+import { urlForLog } from "../services/api/src/http/log-safe.js";
 
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const scripts = [
@@ -22,7 +23,11 @@ const scripts = [
   "authorize:test",
   "country:policy:test",
   "recovery:test",
+  "recovery:remove:test",
   "recovery:candide:test",
+  "turnkey:test",
+  "turnkey-page:test",
+  "turnkey-recovery:test",
   "documents:test",
   "paylinks:test",
   "shopify:test",
@@ -53,6 +58,9 @@ const scripts = [
   "lifi:test",
   "forwarder:test",
   "email:test",
+  "recovery-alerts:test",
+  "enrolment:test",
+  "recovery-bank:test",
   "best:test",
   "webhook:test",
   "checkout-service:test",
@@ -65,6 +73,7 @@ const scripts = [
   "final-state:test",
   "business:test",
   "business:access:test",
+  "recovery-alert:ui:test",
   "draft:test",
   "draft:failure:test",
   "payment-review:test",
@@ -76,6 +85,8 @@ const scripts = [
   "identity:test",
   "plan:test",
   "admin:test",
+  "operator:test",
+  "admin:ui:test",
   "review-resolution:test",
   "invoicing:test",
   "async-errors:test",
@@ -101,7 +112,7 @@ const scripts = [
   "exact-output:test",
   "gmi:test",
 ];
-const liveScripts = ["anchor:test", "travelrule:test", "trustline:test"];
+const liveScripts = ["anchor:test", "travelrule:test", "trustline:test", "recovery:fork:test"];
 if (process.env.CHECK_LIVE === "1") scripts.push(...liveScripts);
 
 async function freePort(): Promise<number> {
@@ -133,7 +144,7 @@ const env = {
   TRANSF_RATES_STUB_PORT: ratesStubPort,
 };
 
-console.log(`check ports: api=${env.TRANSF_API_PORT} rpc=${env.TRANSF_RPC_URL} stub=${env.TRANSF_STUB_PORT} rates=${env.TRANSF_RATES_STUB_PORT}`);
+console.log(`check ports: api=${env.TRANSF_API_PORT} rpc=${urlForLog(env.TRANSF_RPC_URL)} stub=${env.TRANSF_STUB_PORT} rates=${env.TRANSF_RATES_STUB_PORT}`);
 
 for (const script of scripts) {
   const r = spawnSync(npm, ["run", script], { stdio: "inherit", env });

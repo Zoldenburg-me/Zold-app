@@ -13,6 +13,9 @@
  * new credential waits on the request, and the starting browser holds a
  * per-request secret every by-id route requires.
  *
+ * The person also proves they hold the bank account the owner enrolled: a
+ * second 1 € from it, with a recovery code (recovery/zoldenburg-bank-check.ts).
+ *
  * REVIEW (`/admin/recoveries*`, operator token): an operator checks the person
  * against the identity Monerium verified and signs as guardian from a hardware
  * wallet — in Safe Cover, or here via eth_signTypedData_v4 with the API
@@ -26,7 +29,7 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypt
 import { CHAIN_ID, HARNESS, RECOVERY, SECURITY } from "../config.js";
 import { store, type RecoveryRequest, type User } from "../store.js";
 import { operatorLabel, requireOperator } from "../http/guards.js";
-import { describeCause, describeError, shortErrorForClient } from "../http/log-cause.js";
+import { describeCause, describeError, shortErrorForClient, redactedMessage } from "../http/log-cause.js";
 import { publicRecoveryRequest } from "../recovery.js";
 import { recoveryEnrolment } from "../admin/onboarding.js";
 import { bindRecoveredPasskey, deployVerifierForOwner } from "../recovery/recovered-passkey.js";
@@ -46,6 +49,7 @@ import {
   zoldenburgGuardianSetupTransactions,
   zoldenburgRecoveryEnabled,
 } from "../recovery/zoldenburg-guardian.js";
+import { hostedGuardianBlocked, ONE_GUARDIAN_MESSAGE } from "../recovery/one-guardian.js";
 import {
   CANDIDE,
   assertRecoveryModuleDeployed,
@@ -57,13 +61,24 @@ import {
   submitPasskeySafeOperationWithReceipt,
   webauthnOwnerFromJwk,
   type PasskeySafeDeploymentPlan,
+  type RecoveryModuleState,
 } from "../wallet/candide.js";
 import { b64urlToBuf, bufToB64url, issueChallenge, verifyRegistration } from "../webauthn.js";
 import { ADDRESS_RE } from "../domain/contacts.js";
 import { checkOpAssertion } from "../http/passkey-assertion.js";
+import { ENROLMENT, enrolmentAvailable, enrolmentView, zoldenburgArmed } from "../recovery/zoldenburg-enrolment.js";
+import {
+  bankCheckPassed,
+  bankCheckView,
+  canIssueRecoveryBankCode,
+  checkRecoveryBankPayment,
+  issueRecoveryBankCode,
+} from "../recovery/zoldenburg-bank-check.js";
 
 export interface ZoldenburgRecoveryDeps {
   requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
+  /** The module's guardians and pending recovery, read from the chain. Tests stage a pending one. */
+  readState?: (plan: PasskeySafeDeploymentPlan) => Promise<RecoveryModuleState>;
 }
 
 const CEREMONY_TTL_MS = 5 * 60_000;
@@ -118,11 +133,26 @@ function activePlan(user: User): PasskeySafeDeploymentPlan {
   return plan as PasskeySafeDeploymentPlan;
 }
 
+/**
+ * May Zoldenburg be removed now? Checked when the op is prepared AND again
+ * right before it is submitted. Revoking a guardian does not end a recovery
+ * the module already holds (verified against the deployed module in
+ * scripts/recovery-module-fork-test.ts), so a pending one is cancelled first.
+ */
+function assertCanRemove(state: RecoveryModuleState): void {
+  if (state.pending) throw new ZoldenburgRecoveryError("a recovery is pending on this account — cancel it first", 409, "RECOVERY_PENDING");
+}
+
 const moduleFor = (user: User) =>
   (user.passkeySafe?.recovery?.moduleAddress ?? user.passkeySafe?.candideRecovery?.moduleAddress ?? CANDIDE.recoveryModuleAddress) as `0x${string}`;
 
+/** One guardian at a time (recovery/one-guardian.ts). */
+function assertNoOtherGuardian(user: User, guardians: readonly string[]) {
+  if (hostedGuardianBlocked(user, guardians)) throw new ZoldenburgRecoveryError(ONE_GUARDIAN_MESSAGE, 409, "OTHER_GUARDIAN");
+}
+
 /** Is Zoldenburg's CURRENT guardian the one recorded as active on this Safe? */
-function hasZoldenburgGuardian(user: User): boolean {
+export function hasZoldenburgGuardian(user: User): boolean {
   const g = zoldenburgGuardianAddress();
   const r = user.passkeySafe?.recovery;
   return Boolean(g && r?.status === "active" && r.guardianAddress.toLowerCase() === g.toLowerCase());
@@ -140,6 +170,7 @@ async function screenState(user: User) {
     gracePeriodSeconds: recoveryGracePeriodSeconds(moduleAddress),
     choice: user.passkeySafe?.recoveryChoice ?? null,
     active: hasZoldenburgGuardian(user),
+    enrolment: enrolmentView(user),
     requests: store
       .recoveryRequestsForUser(user.id)
       .filter((r) => r.mode === "zoldenburg" && (OPEN as readonly string[]).includes(r.status))
@@ -155,7 +186,7 @@ async function screenState(user: User) {
         pendingRecovery: state.pending,
       };
     } catch (err: any) {
-      out.onChainError = String(err?.message ?? err).slice(0, 200);
+      out.onChainError = redactedMessage(err).slice(0, 200);
     }
   }
   return out;
@@ -220,13 +251,13 @@ export async function finalizeZoldenburgRecovery(request: RecoveryRequest, now =
     txHash = (await zoldenburgChain.relayFinalize(request.recoveryModuleAddress, request.safeAddress)).txHash;
   } catch (err: any) {
     // Safe Cover (or anyone) may have finalised already; the owner read decides.
-    finalizeError = String(err?.message ?? err).slice(0, 200);
+    finalizeError = redactedMessage(err).slice(0, 200);
   }
   let owners: string[] = [];
   if (HARNESS.enabled) owners = finalizeError ? [] : z.newOwners;
   else {
     try { owners = await safeOwners(request.safeAddress); } catch (err: any) {
-      finalizeError = `${finalizeError ? `${finalizeError}; ` : ""}could not read Safe owners: ${String(err?.message ?? err).slice(0, 120)}`;
+      finalizeError = `${finalizeError ? `${finalizeError}; ` : ""}could not read Safe owners: ${redactedMessage(err).slice(0, 120)}`;
     }
   }
   if (!sameSet(owners, z.newOwners)) {
@@ -264,6 +295,7 @@ export async function sweepZoldenburgRecoveries(now = new Date()): Promise<numbe
 
 export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
   const router = express.Router();
+  const readState = deps.readState ?? readRecoveryState;
   const wrap =
     (fn: (req: express.Request, res: express.Response) => Promise<unknown>) =>
     (req: express.Request, res: express.Response, next: express.NextFunction) =>
@@ -300,12 +332,18 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
         return res.status(400).json({ error: "confirm that you read how Zoldenburg recovery works", code: "NOT_ACKNOWLEDGED" });
       }
       const plan = activePlan(user);
+      // One guardian at a time: at threshold 1 Zoldenburg and a Google/Apple
+      // login could each recover the account alone, and nothing collects two
+      // signatures yet. Checked on the store first, then on the chain below,
+      // and again right before the op is submitted.
+      assertNoOtherGuardian(user, []);
       const moduleAddress = moduleFor(user);
       await assertRecoveryModuleDeployed(moduleAddress);
       // Read THIS module, whatever the stored plan says about Zoldenburg.
       const state = await readRecoveryState(
         { ...plan, recovery: { moduleAddress, guardianAddress: guardian, threshold: 1, status: "planned" } } as PasskeySafeDeploymentPlan,
       );
+      assertNoOtherGuardian(user, state.guardians);
       const now = new Date().toISOString();
       if (!HARNESS.enabled && state.guardians.some((g) => g.toLowerCase() === guardian.toLowerCase())) {
         const updated = store.updateUser(user.id, {
@@ -314,6 +352,8 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
             recovery: { moduleAddress, guardianAddress: guardian, threshold: 1, status: "active", enabledAt: user.passkeySafe?.recovery?.enabledAt ?? now },
             recoveryChoice: { choice: "zoldenburg", at: now },
           },
+          // Added again: a new 1 € arms it, not one from an earlier time.
+          zoldenburgEnrolment: undefined,
         });
         return res.json(await screenState(updated));
       }
@@ -341,10 +381,8 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       const plan = activePlan(user);
       const r = user.passkeySafe?.recovery;
       if (!r || r.status !== "active") return res.status(409).json({ error: "Zoldenburg is not a guardian on this account", code: "NOT_GUARDIAN" });
-      const state = await readRecoveryState(plan);
-      if (state.pending) {
-        return res.status(409).json({ error: "a recovery is pending on this account — cancel it first", code: "RECOVERY_PENDING" });
-      }
+      const state = await readState(plan);
+      assertCanRemove(state);
       const tx = await zoldenburgGuardianRemoveTransaction(plan.address, r.moduleAddress, r.guardianAddress, state.guardians);
       const prepared = await prepareSafeSetupOperation(plan, [tx]);
       prune();
@@ -371,10 +409,28 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       let plan;
       try {
         plan = activePlan(user);
+        // A recovery can start between preparing the removal and the passkey
+        // approving it; check again before it is submitted.
+        if (pending.kind === "remove") assertCanRemove(await readState(plan));
       } catch (err) {
+        pendingOps.delete(req.params.requestId);
         return fail(res, err);
       }
       if (!(await checkOpAssertion(user, req.body, pending.challenge, res))) return;
+      if (pending.kind === "add") {
+        // A Google/Apple guardian added since this op was prepared would sit
+        // beside Zoldenburg at threshold 1.
+        const zold = zoldenburgGuardianAddress()!;
+        const onChain = await readRecoveryState(
+          { ...plan, recovery: { moduleAddress: moduleFor(user), guardianAddress: zold, threshold: 1, status: "planned" } } as PasskeySafeDeploymentPlan,
+        );
+        try {
+          assertNoOtherGuardian(user, onChain.guardians);
+        } catch (err) {
+          pendingOps.delete(req.params.requestId);
+          throw err;
+        }
+      }
       const op = await submitPasskeySafeOperationWithReceipt(plan, pending.userOperation, toAssertion(req.body));
       pendingOps.delete(req.params.requestId);
       if (op.success === false) {
@@ -390,6 +446,8 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
             recovery: { moduleAddress, guardianAddress: guardian, threshold: 1, status: "active", enabledAt: now, opHash: op.userOpHash ?? undefined },
             recoveryChoice: { choice: "zoldenburg", at: now },
           },
+          // Added again: a new 1 € arms it, not one from an earlier time.
+          zoldenburgEnrolment: undefined,
         });
         // Confirm on the chain, not on the op's say-so.
         if (!HARNESS.enabled) {
@@ -403,7 +461,12 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
         return res.json({ ...(await screenState(updated)), txHash: op.txHash, userOpHash: op.userOpHash });
       }
       const { recovery: _gone, ...rest } = user.passkeySafe!;
-      const updated = store.updateUser(user.id, { passkeySafe: { ...rest, recoveryChoice: { choice: "declined", at: now } } as User["passkeySafe"] });
+      // The enrolled bank account goes with the guardian (recovery-guardians-plan,
+      // Data and GDPR): adding Zoldenburg again means sending 1 € again.
+      const updated = store.updateUser(user.id, {
+        passkeySafe: { ...rest, recoveryChoice: { choice: "declined", at: now } } as User["passkeySafe"],
+        zoldenburgEnrolment: undefined,
+      });
       console.log(`RECOVERY: ${user.id} removed Zoldenburg as guardian (${op.userOpHash})`);
       res.json({ ...(await screenState(updated)), txHash: op.txHash, userOpHash: op.userOpHash });
     }),
@@ -471,6 +534,12 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
     }
     return r;
   };
+
+  /** A request as the person recovering sees it, with the 1 € check. */
+  const askView = (r: RecoveryRequest) => ({
+    ...publicRecoveryRequest(r),
+    bankCheck: bankCheckView(r, store.findUser(r.userId)),
+  });
 
   router.post(
     "/recovery/zoldenburg",
@@ -543,7 +612,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       try {
         reg = verifyRegistration(attestation, clientDataJSON, SECURITY.rpId, SECURITY.origins, `recovery:${request.id}`);
       } catch (err: any) {
-        return res.status(400).json({ error: String(err?.message ?? err) });
+        return res.status(400).json({ error: redactedMessage(err) });
       }
       if (reg.credentialId !== credentialId) return res.status(400).json({ error: "credentialId does not match attestation" });
       if (reg.key.alg !== "ES256") return res.status(400).json({ error: "the new passkey must be a P-256 (ES256) credential to own a Safe" });
@@ -568,7 +637,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
         },
       });
       console.log(`RECOVERY: ${request.id} (${updated.zoldenburg?.reference}) awaiting operator review for ${user.id}`);
-      res.json(publicRecoveryRequest(updated));
+      res.json(askView(updated));
     }),
   );
 
@@ -578,7 +647,43 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       let request = requestFor(req, res);
       if (!request) return;
       request = await syncZoldenburgFromChain(request).catch(() => request!);
-      res.json(publicRecoveryRequest(request));
+      res.json(askView(request));
+    }),
+  );
+
+  /** A recovery code for the second 1 €. Each call replaces the open code;
+   *  the plain code is in this answer only. */
+  router.post(
+    "/recovery/zoldenburg/:id/bank-code",
+    wrap(async (req, res) => {
+      const request = requestFor(req, res);
+      if (!request) return;
+      if (request.status !== "REVIEW_PENDING") return res.status(409).json({ ...askView(request), error: `recovery is ${request.status}` });
+      const user = store.findUser(request.userId);
+      if (!enrolmentAvailable()) return res.status(503).json({ error: "This check cannot run on this server yet. Contact support.", code: "ENROLMENT_UNAVAILABLE" });
+      if (!user || !zoldenburgArmed(user)) {
+        return res.status(409).json({ error: "This check is not available for this account. Contact support@zoldhq.com.", code: "NOT_ARMED" });
+      }
+      if (bankCheckPassed(request, user)) return res.status(409).json({ ...askView(request), error: "The 1 € check has already passed.", code: "ALREADY_PASSED" });
+      if (!canIssueRecoveryBankCode(request)) {
+        return res.status(429).json({ ...askView(request), error: "No more references for this recovery. Use the last one, or contact support@zoldhq.com.", code: "TOO_MANY_CODES" });
+      }
+      const { code, memo } = issueRecoveryBankCode(request);
+      res.status(201).json({ ...askView(store.findRecoveryRequest(request.id)!), code, memo });
+    }),
+  );
+
+  /** Look for the second 1 € now. Monerium is asked at most every
+   *  checkEveryMs per request, however many codes were issued; a faster
+   *  click gets the last answer. */
+  router.post(
+    "/recovery/zoldenburg/:id/bank-check",
+    wrap(async (req, res) => {
+      const request = requestFor(req, res);
+      if (!request) return;
+      const last = request.zoldenburg?.bankCheck?.lastReadAt;
+      if (!last || Date.now() - Date.parse(last) >= ENROLMENT.checkEveryMs) await checkRecoveryBankPayment(request.id);
+      res.json(askView(store.findRecoveryRequest(request.id)!));
     }),
   );
 
@@ -625,11 +730,50 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
             iban: user.iban,
           }
         : null,
+      // The 1 € check (recovery/zoldenburg-enrolment.ts). Not armed: no
+      // signing here and no Safe Cover link.
+      enrolment: user
+        ? {
+            armed: zoldenburgArmed(user),
+            bankAccountLast4: user.zoldenburgEnrolment?.bankAccountLast4,
+            enrolledAt: user.zoldenburgEnrolment?.enrolledAt,
+          }
+        : { armed: false },
+      // The second 1 €, from the enrolled account (recovery/zoldenburg-bank-check.ts).
+      bankCheck: {
+        passed: bankCheckPassed(r, user),
+        passedAt: z?.bankCheck?.passedAt,
+        orderId: z?.bankCheck?.orderId,
+        codeIssuedAt: z?.bankCheck?.code?.issuedAt,
+        lastCheck: z?.bankCheck?.code ? z.bankCheck.lastCheck : undefined,
+      },
       safeCoverLink:
-        z?.newOwners?.length && r.status === "REVIEW_PENDING"
+        !refusalFor(r) && z?.newOwners?.length && r.status === "REVIEW_PENDING"
           ? safeCoverRecoveryLink({ safeAddress: r.safeAddress, newOwners: z.newOwners, newThreshold: z.newThreshold ?? 1 })
           : null,
     };
+  };
+
+  /**
+   * Why the operator may not sign for this request, or null. Every check
+   * must have passed; there is no override. The enrolment 1 € armed the
+   * account, and this request's 1 € came from the same bank account.
+   */
+  const refusalFor = (r: RecoveryRequest): { error: string; code: string } | null => {
+    const user = store.findUser(r.userId);
+    if (!user || !zoldenburgArmed(user)) {
+      return {
+        error: "this account never finished Zoldenburg enrolment (the 1 € from their bank), so Zoldenburg may not sign for it",
+        code: "NOT_ARMED",
+      };
+    }
+    if (!bankCheckPassed(r, user)) {
+      return {
+        error: "the person has not yet sent 1 € from the bank account enrolled for this account, so Zoldenburg may not sign",
+        code: "BANK_CHECK_PENDING",
+      };
+    }
+    return null;
   };
 
   const adminRequest = (req: express.Request, res: express.Response): RecoveryRequest | undefined => {
@@ -661,6 +805,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
           email: u.email,
           safeAddress: u.passkeySafe!.address,
           ...recoveryEnrolment(u),
+          armed: zoldenburgArmed(u),
         }));
       res.json({
         enabled: zoldenburgRecoveryEnabled(),
@@ -731,6 +876,8 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       const r = adminRequest(req, res);
       if (!r) return;
       if (r.status !== "REVIEW_PENDING") return res.status(409).json({ error: `recovery is ${r.status}` });
+      const refusal = refusalFor(r);
+      if (refusal) return res.status(409).json(refusal);
       const guardian = assertZoldenburgRecoveryEnabled();
       if (r.guardianAddress.toLowerCase() !== guardian.toLowerCase()) {
         return res.status(409).json({ error: `this Safe's guardian is ${r.guardianAddress}, not the configured ${guardian}`, code: "GUARDIAN_CHANGED" });
@@ -747,6 +894,8 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       if (!r) return;
       if (r.status !== "REVIEW_PENDING") return res.status(409).json({ error: `recovery is ${r.status}` });
       if (Date.now() >= Date.parse(r.expiresAt)) return res.status(410).json({ error: "this request expired — the person must start again" });
+      const refusal = refusalFor(r);
+      if (refusal) return res.status(409).json(refusal);
       const note = typeof req.body?.reviewNote === "string" ? req.body.reviewNote.trim().slice(0, 500) : "";
       if (note.length < 10) {
         return res.status(400).json({ error: "record how the person was verified (at least a sentence) before signing", code: "NO_REVIEW_NOTE" });
@@ -809,6 +958,11 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
     wrap(async (req, res) => {
       const r = adminRequest(req, res);
       if (!r) return;
+      // A signature made outside /admin (Safe Cover, or by hand) is not
+      // recorded as a review while a check is missing. The sweep still
+      // follows the chain, so the owner's warning stays true.
+      const refusal = r.status === "REVIEW_PENDING" ? refusalFor(r) : null;
+      if (refusal) return res.status(409).json(refusal);
       let updated = await syncZoldenburgFromChain(r);
       if (updated.status === "GRACE_PERIOD" && r.status === "REVIEW_PENDING") {
         const note = typeof req.body?.reviewNote === "string" ? req.body.reviewNote.trim().slice(0, 500) : "";

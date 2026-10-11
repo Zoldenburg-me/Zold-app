@@ -30,6 +30,7 @@ import { MONERIUM, RPC_URL, moneriumSandboxEnabled } from "../services/api/src/c
 import { MoneriumClient } from "../services/api/src/adapters/monerium-client.js";
 import { initStore, store, type User } from "../services/api/src/store.js";
 import { redeemToIban } from "../services/api/src/adapters/monerium-sandbox.js";
+import { urlForLog } from "../services/api/src/http/log-safe.js";
 
 // The configured chain, never a hardcoded testnet: reading balances elsewhere
 // reports "the mint did not land" against the wrong ledger.
@@ -58,7 +59,7 @@ if (!moneriumSandboxEnabled()) {
 // A real redeem is placed below. Against production that is real money to
 // Monerium's sample IBAN, so the proof runs against the sandbox only.
 if (!/monerium\.dev/.test(MONERIUM.baseUrl)) {
-  console.error(`REFUSING: MONERIUM_BASE_URL is ${MONERIUM.baseUrl}; this proof places a redeem and runs only against api.monerium.dev.`);
+  console.error(`REFUSING: MONERIUM_BASE_URL is ${urlForLog(MONERIUM.baseUrl)}; this proof places a redeem and runs only against api.monerium.dev.`);
   process.exit(1);
 }
 
@@ -105,7 +106,7 @@ async function onChainEure(addr: `0x${string}`, token: { address: `0x${string}`;
 const orderList = (res: any) => (Array.isArray(res) ? res : (res?.orders ?? []));
 const stateOf = (o: any) => o?.meta?.state ?? o?.state ?? "unknown";
 
-console.log(`\nEUR corridor proof — ${MONERIUM.baseUrl} (chain: ${MONERIUM.chain})\n`);
+console.log(`\nEUR corridor proof — ${urlForLog(MONERIUM.baseUrl)} (chain: ${MONERIUM.chain})\n`);
 
 initStore();
 const token = await eureToken();
