@@ -221,14 +221,16 @@ function render(el, { caps, zold, guardians, message, issued = null, ibanReady =
   const zoldCard = caps.zoldenburgRecovery ? `
     <section class="g-card">
       <h2 class="g-sub" id="g-zold-head" tabindex="-1">Zoldenburg</h2>
-      <p>Our team checks it’s you against the ID you gave Monerium, then moves your account to your new phone.</p>
       ${zoldOn
-        ? `${zold.enrolment?.armed ? `<p class="g-ok">Your guardian</p>` : `<p>Added to your wallet.</p>`}
+        ? `${zold.enrolment?.armed ? `<p class="g-ok">Your guardian</p>` : `<p class="g-ok">Added to your wallet.</p>`}
           ${enrolmentHtml(zold.enrolment, { issued, ibanReady })}
-          <div class="g-actions"><button type="button" class="z-btn" data-zold="remove">Remove</button></div>`
+          <p class="g-note">If you lose your phone, our team checks it’s you against the ID you gave Monerium, then moves your account to your new phone.</p>
+          <div class="g-actions"><button type="button" class="z-link-btn" data-zold="remove">Remove Zoldenburg</button></div>`
         : social.length
-          ? `<p class="g-note">One guardian at a time: remove your backup login to choose Zoldenburg.</p>`
-          : `<div class="g-actions"><button type="button" class="z-btn z-btn--primary" data-zold="add">Choose Zoldenburg</button></div>`}
+          ? `<p>Our team checks it’s you against the ID you gave Monerium, then moves your account to your new phone.</p>
+            <p class="g-note">One guardian at a time: remove your backup login to choose Zoldenburg.</p>`
+          : `<p>Our team checks it’s you against the ID you gave Monerium, then moves your account to your new phone.</p>
+            <div class="g-actions"><button type="button" class="z-btn z-btn--primary" data-zold="add">Choose Zoldenburg</button></div>`}
     </section>` : "";
 
   const buttons = providerButtons(caps, "Add");
