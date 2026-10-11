@@ -129,7 +129,7 @@ is the only defence. Before any new guardian kind ships:
 - Email alone is not enough: whoever controls the inbox may be the attacker
   and delete it. The banner on the device the owner still holds matters most.
   Web push is not built and is out of scope.
-- The production module stays 3 days unless decided otherwise (open item).
+- The production grace period is 3 days, the same as Candide's default.
 
 ## Phase 1 — Zoldenburg guardian: Didit + 1 € checks
 
@@ -193,10 +193,32 @@ required, in either order:
 
 **Operator.** /admin → Recoveries shows both checks with their evidence (match
 yes/no, last 4 of the account, Didit outcome and deletion). The sign button is
-disabled unless both passed; there is no override in the UI. A mismatch ends
-the self-service path; what happens then (e.g. a support process) is an open
-item. The operator still signs from the Keycard; the API still never holds
-the guardian key.
+disabled unless both passed; there is no override in the UI. The operator
+still signs from the Keycard; the API still never holds the guardian key.
+
+**When the Didit check fails.** Three cases:
+
+1. The check didn't work (blurry photo, liveness fail, abandoned or expired
+   session): the user retries on the same request, at most 3 Didit sessions.
+   The recovery page says what went wrong. A 3rd failure is case 3.
+2. The name on the ID is not the Monerium name: not retryable through Didit.
+   The user updates their name with Monerium, then retries. Monerium stays
+   the only identity source; the operator makes no name judgement.
+3. Signs of an attacker (face mismatch, a fraud or tamper flag, or 3 failed
+   attempts): the request becomes refused and the operator can never sign
+   it. The recovery page shows a neutral "We couldn't verify you. This
+   recovery has stopped." The owner gets an email saying an attempt failed
+   the ID check and nothing changed. New Zoldenburg requests for that
+   account are blocked for 7 days.
+
+No manual override by support, ever. A legitimate owner's way back is their
+other guardians (Phases 2/3) or their own second owner; funds stay in the
+Safe. The guardian screen says this when Zoldenburg is someone's only
+guardian.
+
+**Request lifetime.** A recovery request holds for 14 days. Until the
+recovery 1 € arrives it has a shorter lifetime (length to be set), and the
+owner's alert email carries a link that cancels the request.
 
 ### Name match
 
@@ -448,6 +470,8 @@ processing rests on explicit consent (Art. 9(2)(a)), collected each time.
   and the 1 € check both passed for this request. Fail closed on any read error.
 - We store no ID data, no biometrics and no full IBAN for recovery.
 - With two or more guardians, the threshold is at least 2.
+- A request refused by the Didit check can never be signed, and blocks new
+  Zoldenburg requests for that account for 7 days.
 
 ## Tests
 
@@ -471,8 +495,6 @@ processing rests on explicit consent (Art. 9(2)(a)), collected each time.
   writing.
 - Turnkey: a signed DPA, and whether processing can be pinned to
   eu-central-1 (see *Data and GDPR*).
-- Production grace period: 3 days, or 7 once trusted people exist.
-- What a user does when the name or bank check fails (no override exists).
 
 ## Order of PRs
 
