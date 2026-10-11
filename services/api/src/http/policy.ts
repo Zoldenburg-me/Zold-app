@@ -94,6 +94,19 @@ export const CONTENT_SECURITY_POLICY = [
 export const ADMIN_CONTENT_SECURITY_POLICY = CONTENT_SECURITY_POLICY.replace("script-src 'self' 'unsafe-inline'", "script-src 'self'");
 
 /**
+ * /guardian and /recovery: the app's policy without inline script. They drive
+ * a passkey approval, a Google/Apple login and a Turnkey signature, so only
+ * their own module files may run there, and they alone may reach Turnkey's
+ * API (the origin, when the switch is on). /app keeps 'unsafe-inline' for its
+ * classic scripts and connect-src 'self'.
+ */
+export function guardianPageCsp(turnkeyOrigin?: string): string {
+  return CONTENT_SECURITY_POLICY
+    .replace("script-src 'self' 'unsafe-inline'", "script-src 'self'")
+    .replace("connect-src 'self'", turnkeyOrigin ? `connect-src 'self' ${turnkeyOrigin}` : "connect-src 'self'");
+}
+
+/**
  * HTTPS only, on every subdomain. Production only: a laptop on
  * http://localhost must not pin itself to HTTPS.
  *
@@ -102,13 +115,6 @@ export const ADMIN_CONTENT_SECURITY_POLICY = CONTENT_SECURITY_POLICY.replace("sc
  * the production host is confirmed to serve HTTPS (docs/security-hardening.md,
  * Phase 0).
  */
-/**
- * /guardian: the app's policy without inline script. The page drives a
- * guardian login and a passkey approval, so only its own module files may
- * run there; /app keeps 'unsafe-inline' for its classic scripts.
- */
-export const GUARDIAN_PAGE_CSP = CONTENT_SECURITY_POLICY.replace("script-src 'self' 'unsafe-inline'", "script-src 'self'");
-
 export const STRICT_TRANSPORT_SECURITY = "max-age=300; includeSubDomains";
 
 export function securityHeadersFor(production: boolean): express.RequestHandler {

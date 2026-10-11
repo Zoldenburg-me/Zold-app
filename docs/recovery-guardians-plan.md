@@ -231,19 +231,38 @@ sample documents only.
   invariant below sits in our code where a test can see it.
 - **Built (offline-tested, never called Turnkey, Google or Apple):**
   `config/turnkey.ts`, `wallet/turnkey.ts`, `routes/recovery-turnkey.ts`,
-  the `/guardian` page (`public/guardian.html`, `public/guardian/*.js`) and
-  `vendor/turnkey.js`; `turnkey:test` and `turnkey-page:test`.
+  the `/guardian` page (choosing Zoldenburg or a Google/Apple login,
+  `public/guardian.html`, `public/guardian/*.js`), the `/recovery` page (the
+  whole lost-device flow for every guardian, `public/recovery.html`,
+  `public/recovery/*.js`) and `vendor/turnkey.js`; recovery with it in `recovery/turnkey-recovery.ts`
+  and `routes/recovery-turnkey-requests.ts`; `turnkey:test`,
+  `turnkey-page:test` and `turnkey-recovery:test`.
   `TURNKEY_GUARDIANS=1` switches it on and then needs both secrets plus
   `TURNKEY_OAUTH_CLIENT_IDS`: our Google web client id (ends in
   `.apps.googleusercontent.com`) and Apple services id, not secret, both
-  with `https://<host>/guardian` registered as the redirect URI.
-  `capabilities()` publishes `turnkeyGuardians` and `turnkeyLogins`.
+  with `https://<host>/guardian` and `https://<host>/recovery` registered
+  as redirect URIs.
+  `capabilities()` publishes `turnkeyGuardians`, `turnkeyLogins` and
+  `turnkeyApi`.
   Adding works end to end in code: login, sub-org, then the passkey op
   `addGuardianWithThreshold(address, 1)`; the row turns `active` only when
   the module lists the address. While any other guardian is on the Safe the
   add is refused (`OTHER_GUARDIAN`), because threshold 2 with no route that
   collects two signatures would leave Zoldenburg unable to recover alone.
-  Not built: email OTP, the approval page, signature collection and relay.
+  Removing it is the same passkey op (`revokeGuardianWithThreshold`); the
+  row goes when the module no longer lists the address. A Google/Apple
+  guardian is never on the Safe beside another (the rule:
+  `recovery-and-signers.md`).
+  Recovering works end to end in code: on the new device /recovery falls
+  through to a `turnkey` request (new passkey held on it), logs in with the
+  Google/Apple login, gets a Turnkey session bound to a fresh key, signs the
+  digest the API recomputed from the module, and the API checks the signer
+  is the guardian recorded on the request, the module still lists it at
+  threshold 1 with no other recovery pending and the owner's alert mail
+  sent (no mail, no relay), then relays
+  `multiConfirmRecovery` (execute). Grace period, finalise, sweep, the alert
+  email, the banner and the owner's cancel cover the mode. Not built: email
+  OTP, signature collection from several guardians (Phase 3).
 - **Every sub-org is created with exactly one root user, the person, at root
   quorum threshold 1, and no API key of ours.** One builder function makes
   the payload (`ACTIVITY_TYPE_CREATE_SUB_ORGANIZATION_V8`: `rootUsers[]` with
@@ -301,12 +320,13 @@ sample documents only.
   `@turnkey/http` is not bundled: it pulls in X.509, ASN.1 and a DI container
   (636 KB) for one POST, so the page sends its stamped `sign_raw_payload`
   itself. The key is an unextractable P-256 key in IndexedDB
-  (`crypto.subtle.generateKey`). Only `/guardian` loads it: an ES-module page
-  with its own CSP (no inline script, `GUARDIAN_PAGE_CSP`), so the classic
+  (`crypto.subtle.generateKey`). Only `/guardian` and `/recovery` load it:
+  ES-module pages with their own CSP (no inline script, connect-src adds only
+  Turnkey's API: `guardianPageCsp`), so the classic
   `app/*.js` scripts never do. Logins are full-page redirects that return
   the ID token in the URL fragment (Google `id_token`, Apple `code id_token`
   with no scope), with a one-time state in sessionStorage.
-- **Residual risk, stated in the UI copy and here:** while a guardian is
+- **Residual risk:** while a guardian is
   logged in, our own served JavaScript holds their session key. A compromised
   zoldhq.com could make a logged-in guardian sign. The threshold, the grace
   period and Phase 0 alerts are the defence.
@@ -425,11 +445,7 @@ processing rests on explicit consent (Art. 9(2)(a)), collected each time.
 - The operator cannot sign for the Zoldenburg guardian unless the Didit check
   and the 1 € check both passed for this request. Fail closed on any read error.
 - We store no ID data, no biometrics and no full IBAN for recovery.
-- Every Turnkey sub-org has exactly one root user, the person, and no key of
-  ours; no delegated access.
 - With two or more guardians, the threshold is at least 2.
-- Every collected signature is checked against the digest recomputed from the
-  module and against the guardian list on chain.
 
 ## Tests
 

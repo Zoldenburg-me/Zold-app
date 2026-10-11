@@ -50,6 +50,9 @@ import { createZoldenburgRecoveryRouter, sweepZoldenburgRecoveries } from "./rou
 import { createZoldenburgEnrolmentRouter } from "./routes/recovery-zoldenburg-enrolment.js";
 import { ENROLMENT, enrolmentAvailable, sweepEnrolments } from "./recovery/zoldenburg-enrolment.js";
 import { createTurnkeyGuardianRouter } from "./routes/recovery-turnkey.js";
+import { createTurnkeyRecoveryRouter } from "./routes/recovery-turnkey-requests.js";
+import { sweepTurnkeyRecoveries } from "./recovery/turnkey-recovery.js";
+import { turnkeyGuardiansEnabled } from "./wallet/turnkey.js";
 import { sweepOwnerAlerts } from "./recovery/owner-alerts.js";
 import { mailAvailable } from "./adapters/mailer.js";
 import { zoldenburgRecoveryEnabled } from "./recovery/zoldenburg-guardian.js";
@@ -238,6 +241,9 @@ app.use("/api", createZoldenburgEnrolmentRouter({ requireUserSession }));
 // Turnkey guardians: the user's own Google or Apple login as a guardian
 // wallet. 404 on every route until TURNKEY_GUARDIANS=1.
 app.use("/api", createTurnkeyGuardianRouter({ requireUserSession }));
+// Recovering with that guardian: the lost device starts a request, the
+// guardian signs on /guardian, the API relays; same 404 while the switch is off.
+app.use("/api", createTurnkeyRecoveryRouter({ requireUserSession }));
 // Sessions and passkeys: the WebAuthn ceremonies, and the passkey Safe whose
 // owner those credentials are.
 app.use("/api", createAuthRouter({ requireUserSession }));
@@ -319,6 +325,15 @@ if (zoldenburgRecoveryEnabled()) {
       .catch((e) => console.error(`recovery sweep failed: ${describeCause(e)}`));
   setTimeout(runZoldenburgSweep, 5_000).unref();
   setInterval(runZoldenburgSweep, RECOVERY.sweepMs).unref();
+}
+// Turnkey-guardian recoveries: expire, pick up executions, finalize after the wait.
+if (turnkeyGuardiansEnabled()) {
+  const runTurnkeySweep = () =>
+    sweepTurnkeyRecoveries()
+      .then((n) => n && console.log(`recovery sweep: finalized ${n} Turnkey-guardian recover${n === 1 ? "y" : "ies"}`))
+      .catch((e) => console.error(`recovery sweep failed: ${describeCause(e)}`));
+  setTimeout(runTurnkeySweep, 5_000).unref();
+  setInterval(runTurnkeySweep, RECOVERY.sweepMs).unref();
 }
 // Open 1 € enrolment codes: look for their payment at Monerium.
 if (zoldenburgRecoveryEnabled() && enrolmentAvailable()) {

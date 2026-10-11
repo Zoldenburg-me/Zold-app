@@ -8,8 +8,9 @@
  * state is a one-time random value kept in sessionStorage for ten minutes, so
  * a token handed to this page by anyone else's link is refused.
  *
- * Pure: no DOM, no storage of its own. scripts/turnkey-guardian-page-test.ts
- * imports it.
+ * Shared by /guardian (adding the login) and /recovery (approving with it).
+ * No DOM: the storage, key and navigation are handed in, so
+ * scripts/turnkey-guardian-page-test.ts can run it.
  */
 export const OAUTH_STATE_KEY = "zold-guardian-oauth";
 export const RETURN_WINDOW_MS = 10 * 60_000;
@@ -70,4 +71,22 @@ export function readReturn(hash, storedJson, now) {
   const idToken = params.get("id_token");
   if (!idToken) return { ok: false, reason: "The login came back without an ID token. Start again." };
   return { ok: true, provider: stored.provider, idToken };
+}
+
+const PROVIDER_NAMES = { google: "Google", apple: "Apple" };
+
+/**
+ * Leave for the provider: a fresh browser key, its hash as the nonce, a
+ * one-time state. The login comes back to `returnPath` on this origin.
+ */
+export async function startLogin(provider, { stamper, storage, origin, logins, go, returnPath = "/guardian", now = Date.now }) {
+  const clientId = logins?.[provider];
+  if (!clientId) throw new Error(`${PROVIDER_NAMES[provider] ?? provider} login is not set up on this deployment`);
+  await stamper.init();
+  await stamper.resetKeyPair();
+  const publicKey = stamper.getPublicKey();
+  if (!publicKey) throw new Error("this browser could not make a key; try another browser");
+  const state = newState();
+  storage.setItem(OAUTH_STATE_KEY, JSON.stringify({ state, provider, at: now() }));
+  go(authorizeUrl(provider, { clientId, redirectUri: `${origin}${returnPath}`, nonce: await nonceFor(publicKey), state }));
 }

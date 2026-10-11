@@ -104,7 +104,7 @@ run(`api = (p) => __api(p); phRender = () => __render(); phGo = (n) => __go(n); 
   user = { id: "u1", passkeySafe: { status: "active" } };`);
 
 const route = (name: string) => run(`phRoute = { name: ${JSON.stringify(name)}, arg: null }`);
-const setCaps = (z: boolean, c: boolean) => run(`caps = { ...caps, zoldenburgRecovery: ${z}, emailSmsRecovery: ${c} }`);
+const setCaps = (z: boolean, c: boolean, tk = false) => run(`caps = { ...caps, zoldenburgRecovery: ${z}, emailSmsRecovery: ${c}, turnkeyGuardians: ${tk} }`);
 const reset = () => {
   run(`phRec = null; phRecReadAt = 0; phRecAnnounced = ""; phRecOpened = ""; sessionStorage.clear()`);
   bar.innerHTML = ""; bar.dataset = {}; bar.hidden = true;
@@ -168,9 +168,33 @@ await t("a deployment with only email/SMS recovery reads the Candide route alone
   assert.match(bar.innerHTML, /Someone is moving your account/);
 });
 
+const tkRequest = (status = "REVIEW_PENDING", id = "tk1") => ({ id, mode: "turnkey", status, requestedAt: "2026-10-10T08:00:00Z", turnkey: {} });
+const tOk = (over: any = {}) => ({ requests: [], onChain: { pendingRecovery: null, guardians: [] }, ...over });
+
+await t("a deployment with only Google/Apple guardians reads the Turnkey route alone, and shows an open request", async () => {
+  route("send");
+  setCaps(false, false, true);
+  answers = { "/recovery/turnkey/requests": tOk({ requests: [tkRequest()] }) };
+  await check();
+  assert.deepEqual(calls, ["/api/users/u1/recovery/turnkey/requests"]);
+  assert.equal(state().request?.id, "tk1");
+  assert.match(state().method, /Google or Apple guardian/);
+  assert.match(bar.innerHTML, /Nothing has been signed yet/);
+});
+
+await t("a recovery on chain found through the Turnkey route shows the strip", async () => {
+  route("send");
+  setCaps(true, false, true);
+  answers = { "/recovery/zoldenburg": zOk(), "/recovery/turnkey/requests": tOk({ requests: [tkRequest("GRACE_PERIOD")], onChain: { pendingRecovery: chain, guardians: [] } }) };
+  await check();
+  assert.ok(state().chain);
+  assert.match(state().method, /Google or Apple guardian/);
+  assert.match(bar.innerHTML, /Someone is moving your account/);
+});
+
 await t("couldn't check, never none: every way a read can fail", async () => {
   route("send");
-  const cases: [string, boolean, boolean, Record<string, any>][] = [
+  const cases = [
     ["Zoldenburg route down", true, false, { "/recovery/zoldenburg": new Error("503") }],
     ["Zoldenburg chain read failed (guardian or not)", true, false, { "/recovery/zoldenburg": { active: false, requests: [], onChainError: "rpc down" } }],
     ["Zoldenburg answer without its chain reading", true, false, { "/recovery/zoldenburg": { active: true, requests: [] } }],
@@ -178,10 +202,13 @@ await t("couldn't check, never none: every way a read can fail", async () => {
     ["Candide chain read failed", false, true, { "/recovery/candide": cOk({ onChain: { error: "rpc down" } }) }],
     ["Candide active without its chain reading", false, true, { "/recovery/candide": cOk({ onChain: undefined }) }],
     ["one route fine, the other down", true, true, { "/recovery/zoldenburg": zOk(), "/recovery/candide": new Error("503") }],
-  ];
-  for (const [name, z, c, a] of cases) {
+    ["Turnkey route down", false, false, { "/recovery/turnkey/requests": new Error("503") }, true],
+    ["Turnkey chain read failed", false, false, { "/recovery/turnkey/requests": { requests: [], onChainError: "rpc down" } }, true],
+    ["Turnkey answer without its chain reading", false, false, { "/recovery/turnkey/requests": { requests: [] } }, true],
+  ] as [string, boolean, boolean, Record<string, any>, boolean?][];
+  for (const [name, z, c, a, tk] of cases) {
     run(`phRec = null`); bar.dataset = {};
-    setCaps(z, c);
+    setCaps(z, c, Boolean(tk));
     answers = a;
     await check();
     assert.equal(state().failed, true, name);
@@ -377,15 +404,21 @@ await t("Security never says Active for a Zoldenburg guardian whose bank account
   assert.match(run(`phZoldUnarmedText(${unarmedUser()}, { codes: true })`), /^Codes to your email or phone\./);
 });
 
-await t("no 'Show my transfer details' before the IBAN is active, and none while Monerium is still checking", () => {
-  const card = (u: string) => run(`user = ${u}; zoldEnrolHtml({ available: true, armed: false, minimumEur: 1 })`);
-  const noIban = card(unarmedUser(", iban: null"));
-  assert.doesNotMatch(noIban, /Show my transfer details|m-rz-en-new/);
+await t("an unconfirmed Zoldenburg is finished on /guardian, and the recovery screen says the same three cases as Security", () => {
+  run(`caps = { ...caps, zoldenburgEnrolment: true }`);
+  const section = (u: string) => run(`user = ${u}; var __el = { innerHTML: "" }; renderGuardianSection(__el); __el.innerHTML`);
+  const ready = section(unarmedUser());
+  assert.match(ready, /One step left: confirm your bank account/);
+  assert.match(ready, /href="\/guardian"[^>]*>Finish on the guardian page/);
+  const noIban = section(unarmedUser(", iban: null"));
   assert.match(noIban, /Your Zold IBAN comes first/);
-  assert.doesNotMatch(card(unarmedUser(', kycStatus: "pending"')), /Show my transfer details/);
-  const ready = card(unarmedUser());
-  assert.match(ready, /Show my transfer details/);
-  assert.match(ready, /nothing is charged/i, "reads as the user's own money, not a fee");
+  assert.doesNotMatch(noIban, /Finish on the guardian page/);
+  run(`caps = { ...caps, zoldenburgEnrolment: false }`);
+  assert.match(section(unarmedUser()), /isn’t open yet/);
+  run(`caps = { ...caps, zoldenburgEnrolment: true }`);
+  // Home's banner and Security's "Finish" link go to /guardian, not to this screen.
+  assert.match(readFileSync(path.join(PUB, "app/phone-home.js"), "utf8"), /One step left for recovery[^`]*href="\/guardian">Confirm/);
+  assert.match(readFileSync(path.join(PUB, "app/settings.js"), "utf8"), /phZoldCanFinish\(u\) \? \{ href: "\/guardian", label: "Finish" \}/);
 });
 
 await t("the skip link moves focus to the content and never changes the hash", async () => {
@@ -405,35 +438,6 @@ await t("the skip link moves focus to the content and never changes the hash", a
   assert.ok(main.focused);
   assert.equal(main.attrs.tabindex, "-1");
   assert.ok(blurred, "it does not stay over the page");
-});
-
-await t("adding the guardian: after the passkey the button says it is working, stays focusable, and refuses a second click", async () => {
-  const btn: any = { textContent: "Add Zoldenburg as guardian", attrs: {} as Record<string, string>,
-    getAttribute(k: string) { return this.attrs[k] ?? null; }, setAttribute(k: string, v: string) { this.attrs[k] = v; }, removeAttribute(k: string) { delete this.attrs[k]; } };
-  let during: any = null, again = 0;
-  answers = {
-    "/recovery/zoldenburg": { challenge: "c", credentialId: "k", submitTo: "/api/users/u1/recovery/zoldenburg/ops/x" },
-    "/ops/x": async () => {
-      during = { text: btn.textContent, busy: btn.getAttribute("aria-disabled") };
-      // A second click while the operation runs does nothing.
-      const n = calls.length;
-      await ctx.__run2();
-      again = calls.length - n;
-      return {};
-    },
-    "/users/u1": { id: "u1" },
-  };
-  ctx.__btn = btn;
-  run(`passkeySignPrepared = async () => ({}); renderUser = () => {}; renderRecoveryScreen = async () => {};
-    __run2 = () => zoldenburgRun("/api/users/u1/recovery/zoldenburg", { acknowledged: true }, __btn)`);
-  await run(`zoldenburgRun("/api/users/u1/recovery/zoldenburg", { acknowledged: true }, __btn)`);
-  assert.ok(during, "the operation was submitted (no error swallowed)");
-  assert.match(during.text, /^Adding Zoldenburg to your wallet…/);
-  assert.equal(during.busy, "true");
-  assert.equal(again, 0);
-  assert.ok(announced.some((m) => /^Adding Zoldenburg to your wallet/.test(m)), "read out, not only drawn");
-  assert.equal(btn.textContent, "Add Zoldenburg as guardian");
-  assert.equal(btn.getAttribute("aria-disabled"), null);
 });
 
 // ------------------------------------------------------------ /business ----
