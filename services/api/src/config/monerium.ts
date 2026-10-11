@@ -21,6 +21,11 @@ export const MONERIUM = {
   // How often to poll for incoming EURe issue orders (webhooks need a public
   // URL; polling works for local dev).
   pollMs: Number(process.env.MONERIUM_POLL_MS ?? 15_000),
+  // How often, at most, one user's stored IBAN is re-read at Monerium to
+  // confirm it still pays into their Safe (verifyIbanBinding), from the
+  // poller and from GET /users/:id. GET /users/:id/monerium/accounts reads
+  // the IBAN list anyway and compares on every call.
+  ibanCheckMs: envNumber("MONERIUM_IBAN_CHECK_MS", 300_000, { min: 0 }),
   // Our own ceiling on reads (GET) from Monerium, every caller in this process
   // together; writes skip it (adapters/monerium-limit.ts). No published limit; 40/s
   // ran clean on the sandbox (200 calls in 5 s, all 200, 2026-10-04).

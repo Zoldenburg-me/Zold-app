@@ -345,6 +345,20 @@ export interface User {
    */
   moneriumProfileHistory?: { profileId: string; at?: string }[];
   /**
+   * Where Monerium says this account's IBAN pays now, when a re-read found it
+   * pointing at another address or chain (verifyIbanBinding): it was moved at
+   * Monerium, from another app or Monerium's own site. Written together with
+   * clearing `iban`; cleared when the IBAN is attributed to this Safe again.
+   * The app offers moving it back from it.
+   */
+  moneriumIbanElsewhere?: {
+    iban: string;
+    address: string;
+    chain: string;
+    profileId?: string;
+    seenAt: string;
+  };
+  /**
    * IBANs the user moved to this Safe from another address at Monerium
    * (PATCH /ibans/{iban}), newest last, so support can see where an IBAN paid
    * before. `confirmedAt` is set only once Monerium's own list shows the IBAN

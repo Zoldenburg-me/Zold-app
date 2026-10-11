@@ -19,7 +19,8 @@
 import { MONERIUM, moneriumSandboxEnabled } from "../config.js";
 import { store, type User } from "../store.js";
 import { MoneriumApiError, MoneriumClient, type MoneriumOrder } from "./monerium-client.js";
-import { moneriumAppClient, moneriumClientFor, usersWithOwnCredentials } from "./monerium-connection.js";
+import { hasOwnMoneriumCredentials, moneriumAppClient, moneriumClientFor, usersWithOwnCredentials } from "./monerium-connection.js";
+import { auditEntry } from "../audit.js";
 import { HARNESS } from "../config.js";
 import { abis, addrs, deployerWallet, eur, writeAndWait } from "../chain.js";
 import { keccak256, toHex } from "viem";
@@ -69,19 +70,104 @@ export async function findIban(address: string, user?: User): Promise<string | u
   const profileId = user ? (user.monerium?.profileId ?? user.funding?.moneriumProfileId) : undefined;
   const hit = list.find(
     (i: any) =>
-      String(i.address ?? "").toLowerCase() === address.toLowerCase() &&
+      paysInto(i, address) &&
       i.iban &&
       !(profileId && typeof i.profile === "string" && i.profile !== profileId),
   );
   return hit?.iban;
 }
 
+/**
+ * Does Monerium's IBAN record `i` pay into `address` on our chain? Monerium
+ * links one address on several chains, and mirrorOrder records only issues on
+ * MONERIUM.chain, so an IBAN pointed at this address on another chain does
+ * not fund this account. A record without a chain is taken on the address.
+ */
+export function paysInto(i: any, address: string): boolean {
+  return (
+    String(i?.address ?? "").toLowerCase() === address.toLowerCase() &&
+    (!i?.chain || i.chain === MONERIUM.chain)
+  );
+}
+
+const ibanList = (res: any): any[] => (Array.isArray(res) ? res : (res?.ibans ?? []));
+
+/**
+ * Compare the IBAN this account stores with Monerium's list of the user's
+ * IBANs (`ibans`, read on their own credentials). When Monerium lists it
+ * paying into another address or chain, someone moved it at Monerium: take
+ * it off this account, say where it went, and keep that for the app to offer
+ * moving it back. funding goes to iban_pending, so a move back is picked up
+ * by refreshPendingIban.
+ *
+ * Fails closed: the IBAN missing from the list, or listed more than once, is
+ * no verdict and changes nothing. Only an active account with an IBAN is
+ * checked.
+ */
+export function applyIbanBinding(user: User, ibans: any[]): User {
+  if (user.funding?.status !== "active" || !user.iban) return user;
+  const target = normalizeIban(user.iban);
+  const hits = ibans.filter((i: any) => typeof i?.iban === "string" && normalizeIban(i.iban) === target);
+  if (hits.length !== 1) return user;
+  const hit = hits[0];
+  if (!hit.address || paysInto(hit, user.address)) return user;
+  const address = String(hit.address);
+  const chain = typeof hit.chain === "string" ? hit.chain : "";
+  const short = `${address.slice(0, 6)}…${address.slice(-4)}`;
+  const onChain = chain && chain !== MONERIUM.chain ? ` on ${chain}` : "";
+  const updated = store.updateUser(user.id, {
+    iban: "",
+    funding: {
+      ...user.funding,
+      status: "iban_pending",
+      detail: `IBAN ending ${target.slice(-4)} now pays into another address at Monerium (${short}${onChain}); it no longer pays into this account`,
+    },
+    moneriumIbanElsewhere: {
+      iban: target,
+      address,
+      chain,
+      ...(typeof hit.profile === "string" ? { profileId: hit.profile } : {}),
+      seenAt: new Date().toISOString(),
+    },
+  });
+  store.audit(auditEntry(
+    "partner.iban_moved_elsewhere",
+    { partner: "monerium", ibanLast4: target.slice(-4), toAddress: address, toChain: chain },
+    user.id,
+  ));
+  console.warn(`monerium: IBAN …${target.slice(-4)} of ${user.id} now pays into ${short} (${chain || "no chain"}); cleared`);
+  return updated;
+}
+
+/** When each user's IBAN was last re-read by verifyIbanBinding. */
+const ibanCheckedAt = new Map<string, number>();
+
+/**
+ * Re-read the user's IBANs at Monerium on their own credentials and apply
+ * applyIbanBinding. At most once per MONERIUM.ibanCheckMs per user. A read
+ * that fails changes nothing.
+ */
+export async function verifyIbanBinding(user: User): Promise<User> {
+  if (user.funding?.status !== "active" || !user.iban || !hasOwnMoneriumCredentials(user)) return user;
+  const last = ibanCheckedAt.get(user.id);
+  if (last !== undefined && Date.now() - last < MONERIUM.ibanCheckMs) return user;
+  ibanCheckedAt.set(user.id, Date.now());
+  let ibans: any[];
+  try {
+    ibans = ibanList(await moneriumClientFor(user).ibans());
+  } catch (err: any) {
+    console.warn(`monerium: could not re-read the IBAN of ${user.id}: ${describeCause(err)}`);
+    return user;
+  }
+  // The read is an await: take the row as it is now.
+  return applyIbanBinding(store.findUser(user.id) ?? user, ibans);
+}
+
 /** The BIC Monerium lists for this user's IBAN, or undefined when Monerium
  *  lists none for it. Read on the user's own credentials, as findIban is. */
 export async function findIbanBic(user: User): Promise<string | undefined> {
   if (!user.iban) return undefined;
-  const res = await moneriumClientFor(user).ibans();
-  const list = Array.isArray(res) ? res : (res?.ibans ?? []);
+  const list = ibanList(await moneriumClientFor(user).ibans());
   const target = normalizeIban(user.iban);
   const hit = list.find((i: any) => typeof i?.iban === "string" && normalizeIban(i.iban) === target);
   const bic = typeof hit?.bic === "string" ? hit.bic.toUpperCase().replace(/\s+/g, "") : "";
@@ -147,6 +233,7 @@ export async function refreshPendingIban(user: User): Promise<User> {
       return store.updateUser(user.id, {
         iban,
         funding: { ...user.funding, status: "active", detail: undefined },
+        moneriumIbanElsewhere: undefined,
         ...(user.moneriumIbanMoves ? { moneriumIbanMoves: confirmedMoves(user, iban) } : {}),
         ...(approve
           ? {
@@ -527,6 +614,7 @@ export function startDepositPoller() {
       await pollRedeemOrdersOnce();
       for (const u of store.users) {
         if (u.funding?.status === "iban_pending") await refreshPendingIban(u);
+        else if (u.funding?.status === "active" && u.iban) await verifyIbanBinding(u);
       }
     } catch (err: any) {
       console.error(`monerium poll failed: ${describeCause(err)}`);
