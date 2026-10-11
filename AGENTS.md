@@ -184,9 +184,7 @@ the current authorizer can rotate a device key.
 ## Environment
 
 - Ports 3000 (API/UI), 8545 (chain); contract tests pick a free port.
-- No `gh` CLI, no brew. `origin` is SSH and pushes without a token. Opening
-  PRs via the REST API needs a PAT the user mints per session (HTTPS username
-  `tonyzil`, not `x-access-token`); tell the user to revoke it after.
+- No `gh` CLI, no brew. `origin` is SSH and pushes without a token.
 - Node lives in-project: `export PATH="$PWD/.toolchain/node-v22.17.0-darwin-arm64/bin:$PATH"`.
   arm64 only; on Intel see `docs/running-locally.md`.
 - Browser-pane and new-page checks: `docs/running-locally.md`.
