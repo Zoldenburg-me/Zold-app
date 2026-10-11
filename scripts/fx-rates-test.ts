@@ -10,13 +10,17 @@
 import "./_test-env.js";
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
+import { spawn } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 const PORT = Number(process.env.TRANSF_RATES_STUB_PORT ?? 8549);
 process.env.TRANSF_RATES_URL = `http://127.0.0.1:${PORT}/rates`;
 process.env.TRANSF_RATES_TTL_MS = "500";
 process.env.TRANSF_RATES_TIMEOUT_MS = "1500";
 
-let mode: "ok" | "500" | "garbage" | "missing" | "hang" | "wrongbase" = "ok";
+let mode: "ok" | "500" | "403" | "garbage" | "missing" | "hang" | "wrongbase" = "ok";
 let hits = 0;
 const LIVE = { USD: 1.1379, INR: 109.87, KES: 147.53 };
 
@@ -27,6 +31,7 @@ const stub: Server = createServer(async (req, res) => {
     res.end(typeof body === "string" ? body : JSON.stringify(body));
   };
   if (mode === "500") return send(500, { error: "upstream down" });
+  if (mode === "403") return send(403, { error: "invalid key" });
   if (mode === "garbage") return send(200, "not json at all");
   if (mode === "missing") return send(200, { base: "EUR", rates: { USD: 1.1379 } });
   if (mode === "hang") return; // never responds -> client timeout
@@ -142,6 +147,47 @@ try {
     process.env.TRANSF_RATES_FIXED = JSON.stringify({ USD: 1.1, INR: 100 }); // no KES
     await assert.rejects(() => rates.eurPer("KES"), /missing a valid KES/);
     delete process.env.TRANSF_RATES_FIXED;
+  });
+
+  await t("GET /api/rates never shows an anonymous caller the configured feed URL", async () => {
+    // A keyed feed carries its key in the path; the API must not repeat it.
+    mode = "403";
+    hits = 0;
+    const apiPort = 20000 + Math.floor(Math.random() * 9000);
+    const rpcPort = 50000 + Math.floor(Math.random() * 9000);
+    const dataDir = mkdtempSync(path.join(os.tmpdir(), "fx-rates-api-"));
+    // The API reads the chain at boot; a bare node is enough for this route.
+    const chain = spawn(process.execPath, [path.resolve("node_modules/.bin/hardhat"), "node", "--port", String(rpcPort)], { stdio: "ignore" });
+    const api = spawn(process.execPath, [path.resolve("node_modules/.bin/tsx"), "services/api/src/server.ts"], {
+      stdio: "ignore",
+      env: {
+        ...process.env,
+        TRANSF_API_PORT: String(apiPort),
+        PORT: String(apiPort),
+        TRANSF_CHAIN_ID: "31337",
+        LOCAL_HARNESS: "1",
+        TRANSF_DB_PATH: path.join(dataDir, "db.json"),
+        TRANSF_RPC_URL: `http://127.0.0.1:${rpcPort}`,
+        TRANSF_RATES_URL: `http://127.0.0.1:${PORT}/v6/KEYSECRET/latest/EUR`,
+      },
+    });
+    try {
+      let res: Response | undefined;
+      for (const s = Date.now(); !res; ) {
+        try { res = await fetch(`http://127.0.0.1:${apiPort}/api/rates`); } catch {}
+        if (!res && Date.now() - s > 60_000) throw new Error("API did not come up");
+        if (!res) await new Promise((r) => setTimeout(r, 300));
+      }
+      const text = await res.text();
+      assert.equal(res.status, 503, text);
+      assert.ok(hits > 0, "the API never asked the feed, so the refusal path did not run");
+      assert.ok(!text.includes("KEYSECRET"), `configured feed URL in the public body: ${text}`);
+    } finally {
+      api.kill("SIGTERM");
+      chain.kill("SIGTERM");
+      rmSync(dataDir, { recursive: true, force: true });
+      mode = "ok";
+    }
   });
 
   console.log(`\nFX RATES TEST PASSED — ${pass}/${pass}: rates are live, and a dead feed refuses instead of quoting stale`);
