@@ -59,6 +59,7 @@ const scripts = [
   "email:test",
   "recovery-alerts:test",
   "enrolment:test",
+  "recovery-bank:test",
   "best:test",
   "webhook:test",
   "checkout-service:test",

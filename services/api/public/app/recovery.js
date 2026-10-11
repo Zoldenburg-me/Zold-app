@@ -528,6 +528,11 @@ function rcFollow() {
       if (rcState?.id !== r.id) return;
       rcState = next;
       if (rcRouteFor(next) !== obScreen || (next.status !== r.status)) return rcShow();
+      // The 1 € can arrive while the request stays in review.
+      if (Boolean(next.bankCheck?.passed) !== Boolean(r.bankCheck?.passed)) {
+        obRender({ focus: false });
+        if (next.bankCheck?.passed) Z.announce("Your 1 € arrived. That check is done.");
+      }
     } catch (e) {
       // 410: the request expired while this phone waited. The body is the
       // request, now EXPIRED, so the email step can say so.
@@ -652,6 +657,42 @@ async function recoverConfirmCode(btn) {
     Z.setFieldError(input, obMessage(e));
     input.focus();
   } finally { if (btn.isConnected) Z.setLoading(btn, false); }
+}
+
+/* The recovery code this browser was handed for the 1 € step, and the
+   request it belongs to. The server keeps only its hash, so after a reload
+   the screen offers a new code instead. */
+let rcBankIssued = null;
+
+/** 1 € step: a reference for the transfer from the enrolled bank account. */
+async function recoverBankCode(btn) {
+  if (Z.isDisabled(btn)) return;
+  obClearErr("rc-err");
+  Z.setLoading(btn, true);
+  try {
+    const { code: _code, memo, ...r } = await rcApi(`/api/recovery/zoldenburg/${rcState.id}/bank-code`, {});
+    rcBankIssued = { id: r.id, codeIssuedAt: r.bankCheck?.codeIssuedAt, memo };
+    rcState = r;
+    obRender({ focus: false });
+    $("rc-bank-ref")?.focus();
+    Z.announce("Your transfer details are shown. Use the reference exactly as written.");
+  } catch (e) { obShowErr(e, "rc-err"); }
+  finally { if (btn.isConnected) Z.setLoading(btn, false); }
+}
+
+/** 1 € step: look for the transfer now, rather than wait for the sweep. */
+async function recoverBankCheck(btn) {
+  if (Z.isDisabled(btn)) return;
+  obClearErr("rc-err");
+  Z.setLoading(btn, true);
+  try {
+    rcState = await rcApi(`/api/recovery/zoldenburg/${rcState.id}/bank-check`, {});
+    obRender({ focus: false });
+    const b = rcState.bankCheck || {};
+    Z.announce(b.passed ? "Your 1 € arrived. That check is done." : b.lastCheck?.reason || "Your 1 € has not arrived yet.");
+    $(b.passed ? "main" : "btn-rc-bank-check")?.focus();
+  } catch (e) { obShowErr(e, "rc-err"); }
+  finally { if (btn.isConnected) Z.setLoading(btn, false); }
 }
 
 /** Waiting step, once the period is over: finish now rather than wait for Zold's sweep. */

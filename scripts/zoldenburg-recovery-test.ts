@@ -349,6 +349,19 @@ async function armInDb(userId: string) {
   writeFileSync(dbPath, JSON.stringify(db), { mode: 0o600 });
   await startApi();
 }
+/** Record the second 1 € as passed for this request, matched against the
+ *  enrolment in the db, the way recovery/zoldenburg-bank-check.ts does.
+ *  zoldenburg-bank-check-test.ts covers how a real one gets there. */
+async function passBankCheckInDb(recoveryId: string) {
+  await stopApi();
+  const dbPath = process.env.TRANSF_DB_PATH!;
+  const db = JSON.parse(readFileSync(dbPath, "utf8"));
+  const r = db.recoveryRequests.find((x: any) => x.id === recoveryId);
+  const u = db.users.find((x: any) => x.id === r.userId);
+  r.zoldenburg.bankCheck = { passedAt: new Date().toISOString(), orderId: "harness-recovery-order", enrolledAt: u.zoldenburgEnrolment.enrolledAt };
+  writeFileSync(dbPath, JSON.stringify(db), { mode: 0o600 });
+  await startApi();
+}
 async function stopApi() {
   if (!api || api.exitCode !== null) return;
   const exited = new Promise((r) => api!.once("exit", r));
@@ -523,6 +536,21 @@ try {
     assert.equal(row.enrolment.bankAccountLast4, "3000");
     assert.ok(!JSON.stringify(row).includes("bankAccountHmac"));
   });
+
+  await t("armed, but the operator still cannot sign until the person's 1 € from that account arrives", async () => {
+    const sr = await op(`/api/admin/recoveries/${recoveryId}/sign-request`);
+    assert.equal(sr.status, 409, JSON.stringify(sr.data));
+    assert.equal(sr.data.code, "BANK_CHECK_PENDING");
+    const person = await rc(`/api/recovery/zoldenburg/${recoveryId}`);
+    assert.equal(person.status, 200, JSON.stringify(person.data));
+    assert.equal(person.data.bankCheck.passed, false);
+    assert.equal(person.data.bankCheck.fromLast4, "3000");
+    const code = await rc(`/api/recovery/zoldenburg/${recoveryId}/bank-code`, {});
+    assert.equal(code.status, 201, JSON.stringify(code.data));
+    assert.match(code.data.memo, /^ZOLD /);
+  });
+
+  await passBankCheckInDb(recoveryId);
 
   await t("/admin/recoveries needs the operator token; a user session is not enough", async () => {
     assert.equal((await call("/api/admin/recoveries")).status, 401);

@@ -52,7 +52,20 @@ Planned guardian kinds (Didit + 1 € check, Turnkey, trusted people):
   until it pays again. **The gate binds the admin console, not the guardian
   key:** a signature made outside /admin (Safe Cover, by hand) still reaches
   the chain, and the sweep follows the chain to finalisation, so the
-  operator rule is never to sign for an unarmed account.
+  operator rule is never to sign while a check is missing.
+- **Each recovery needs a second 1 € from the enrolled account.** The
+  recovery page (`/recovery/zoldenburg/:id/bank-code`, request secret
+  required) issues a recovery code; the person sends at least 1 € with it from
+  the enrolled bank account to the Zold IBAN
+  (`recovery/zoldenburg-bank-check.ts`). It passes only when the payer IBAN's
+  HMAC equals the enrolled one under the key in use and the payer's name
+  matches the Monerium name, read live; an unreadable Monerium leaves it open.
+  A recovery code's purpose is in its hash, so an enrolment code never
+  passes it. The pass records the enrolment it matched: a re-enrolment voids
+  it. The person sees both IBANs by their last 4 only. Until it passes,
+  `sign-request`, `execute` and `sync` answer 409 `BANK_CHECK_PENDING`, and
+  /admin shows signing as locked. There is no override. The Didit ID check
+  is the next check this gate gets.
 - **A recovery's new credential lives on the RecoveryRequest** until the chain
   confirms the new owner, so whoever holds the OTP channels cannot sign in or
   spend during the grace period.

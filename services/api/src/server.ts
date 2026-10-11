@@ -49,6 +49,7 @@ import { createCandideRecoveryRouter, sweepCandideRecoveries } from "./routes/re
 import { createZoldenburgRecoveryRouter, sweepZoldenburgRecoveries } from "./routes/recovery-zoldenburg.js";
 import { createZoldenburgEnrolmentRouter } from "./routes/recovery-zoldenburg-enrolment.js";
 import { ENROLMENT, enrolmentAvailable, sweepEnrolments } from "./recovery/zoldenburg-enrolment.js";
+import { sweepRecoveryBankChecks } from "./recovery/zoldenburg-bank-check.js";
 import { createTurnkeyGuardianRouter } from "./routes/recovery-turnkey.js";
 import { sweepOwnerAlerts } from "./recovery/owner-alerts.js";
 import { mailAvailable } from "./adapters/mailer.js";
@@ -312,11 +313,13 @@ if (zoldenburgRecoveryEnabled()) {
   setTimeout(runZoldenburgSweep, 5_000).unref();
   setInterval(runZoldenburgSweep, RECOVERY.sweepMs).unref();
 }
-// Open 1 € enrolment codes: look for their payment at Monerium.
+// Open 1 € codes, at enrolment and at recovery: look for their payment at Monerium.
 if (zoldenburgRecoveryEnabled() && enrolmentAvailable()) {
   const runEnrolments = () =>
     sweepEnrolments()
       .then((n) => n && console.log(`enrolment sweep: armed ${n} account${n === 1 ? "" : "s"}`))
+      .then(() => sweepRecoveryBankChecks())
+      .then((n) => n && console.log(`recovery 1 € sweep: ${n} request${n === 1 ? "" : "s"} passed`))
       .catch((e) => console.error(`enrolment sweep failed: ${describeCause(e)}`));
   setInterval(runEnrolments, ENROLMENT.pollMs).unref();
 }
