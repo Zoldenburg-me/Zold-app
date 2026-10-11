@@ -71,6 +71,8 @@ These deviations are decided. Do not undo them, and do not add new ones without 
 
 Users see everyday words. Technical terms live only in "Technical details" sections, legal pages, developer settings and the one safety warning noted below.
 
+The story every screen serves is **"Nothing moves without your yes."** A person approves each transfer; in a company no one person approves alone; Zold can approve nothing. Write security copy as approval, never as technology.
+
 | Never shown in app UI | Say instead |
 |---|---|
 | passkey, create passkey | Face ID or fingerprint, set up Face ID, sign-in on this phone |
@@ -79,6 +81,10 @@ Users see everyday words. Technical terms live only in "Technical details" secti
 | USDC (bare) | digital dollars (USDC). After the first mention on a screen, USDC alone is fine. |
 | Safe, smart account | your account |
 | signers, threshold, multisig | who approves payments, approvals needed |
+| sign, signature (for a payment) | approve, approval |
+| self-custody, non-custodial | only you can move it, in your name, not ours |
+| second owner, own key | backup key |
+| guardian, recovery module | Zoldenburg recovery, move your account to a new phone |
 | on-chain address | crypto wallet address |
 | Base, Base Sepolia, chain, gas, UserOperation | leave out. Test mode says "Test mode, no real money". |
 | slippage, mid rate, minOut | "at least €X, or nothing converts", "rate" |
@@ -88,7 +94,8 @@ Users see everyday words. Technical terms live only in "Technical details" secti
 
 - "Only USDC on the Base network" on the receive screen. A wrong network loses money, so this warning stays precise.
 - "API key" in accounting connections and developer settings.
-- The landing FAQ may explain the term once: "the passkey on your device, the same kind of sign-in as Face ID or Touch ID".
+- The user docs' "How Zold works" page and the legal notes name the stack (passkey, Safe, EURe, Base). The landing page does not.
+- Never write that every payment needs Face ID: card taps don't. Say "every transfer".
 
 **Copy style:**
 

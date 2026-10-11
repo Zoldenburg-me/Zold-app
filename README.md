@@ -2,14 +2,28 @@
 
 # Zold
 
-A self-custodial euro account for people and businesses whose money crosses
-borders. Built and operated by Zoldenburg.
+**Nothing moves without your yes.** Zold is a euro account for people and
+businesses whose money crosses borders, built by Zoldenburg.
 
-You get a euro IBAN through Monerium. Bank transfers arrive as EURe (Monerium's
-regulated euro e-money token) in a Safe smart account on Base whose owner is a
-passkey on your device, and that passkey is its only owner. Every payment is a
-user operation you sign at send time; the server can prepare a debit but holds
-no key that can make or block one.
+- **For a person:** only you can approve a transfer, with your face or
+  fingerprint, for that exact amount and recipient. Zold can't approve one.
+- **For a company:** no one person can empty the account. A payer prepares, a
+  second person approves, the bookkeeper sorts but can't send, and the
+  accountant gets the books, not the keys.
+- **No rate, no asterisk:** Zold doesn't lend your euros out, so it pays no
+  interest on them. They are e-money, backed one-for-one, in your name.
+
+**Under the hood.** The IBAN comes from Monerium. Bank transfers arrive as EURe
+(Monerium's regulated euro e-money token) in a Safe smart account on Base. A
+passkey on your device, which is what Face ID or fingerprint unlocks, is that
+Safe's only owner. Every payment is a user operation you sign at send time; the
+server can prepare a debit but holds no key that can make or block one.
+
+Anything a user reads tells that story in plain words (approve, your account,
+your face or fingerprint, euros). Passkey, Safe, EURe, chain and gas stay in
+this README, the developer docs, the legal notes and the user docs' "How Zold
+works" page. The word list is in
+[design/ui-v2/RULES.md](design/ui-v2/RULES.md#5-words-plain-language).
 
 Product documentation for users lives in the
 [zold-docs](https://github.com/Zoldenburg-me/zold-docs) repository.
