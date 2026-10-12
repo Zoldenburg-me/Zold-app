@@ -531,6 +531,11 @@ RENDER["invoicing-settings"] = async () => {
   const f = (id, label, value, extra = "") => `<label for="${id}">${label}</label><input id="${id}" name="${id}" autocomplete="off" value="${esc(value ?? "")}" ${extra} />`;
   const sug = d.suggested || {};
   const de = j.ruleSet === "DE";
+  // Examples only for the shapes Zold knows: the issuer's EU format, a German
+  // Steuernummer. Outside the EU the number is taken as written, so none.
+  const vatExample = j.ruleSet === "GENERIC" ? ""
+    : Object.values(ref.vatIdFormats || {}).find((x) => x.country === j.country && x.prefix !== "XI")?.example || "";
+  const idExample = (ex) => `spellcheck="false"${ex ? ` placeholder="${esc(ex)}…"` : ""}`;
   return jurisdictionBanner(j, d.disclaimer, d.notVerified) + `
   ${card(org.type === "business" ? "Your company" : "You", "Printed at the top of every invoice. The country decides which invoicing rules apply.",
     `<div class="grid g2"><div>
@@ -551,8 +556,8 @@ RENDER["invoicing-settings"] = async () => {
         ? "Art. 226 of the VAT Directive requires your full name, address and VAT number on every invoice."
         : `Almost every country requires your full name, address and a tax number on an invoice. Zold doesn’t know which one ${j.countryName} wants: add it as your own rule if these don’t fit.`),
     `<div class="grid g2"><div>
-        ${f("i-vatid", de ? "USt-IdNr." : "VAT ID", p.vatId, 'placeholder="DE123456789…"')}
-        ${f("i-taxno", de ? "Steuernummer" : "Tax number", p.taxNumber, 'placeholder="123/456/78901…"')}
+        ${f("i-vatid", de ? "USt-IdNr." : "VAT ID", p.vatId, idExample(vatExample))}
+        ${f("i-taxno", de ? "Steuernummer" : "Tax number", p.taxNumber, idExample(de ? "123/456/78901" : ""))}
         <label for="i-rate">Usual VAT rate</label>
         ${ref.vatRates
           ? `<select id="i-rate" name="i-rate">${ref.vatRates.map((r) => `<option value="${r}" ${p.defaultVatRate === r ? "selected" : ""}>${r} %</option>`).join("")}</select>`
