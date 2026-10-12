@@ -22,10 +22,9 @@ import {
   checkCompliance,
   invoiceDueDate,
   invoiceLanguage,
+  issuerTaxIdProblem,
   normaliseVatId,
   reasonForRuleSet,
-  taxNumberLooksValid,
-  vatIdLooksValid,
   } from "../../domain/invoicing.js";
 import { EU_MEMBER_STATES, validateCustomReason } from "../../domain/jurisdictions.js";
 import { VAT_ID_FORMATS, vatIdShape } from "../../domain/vat-ids.js";
@@ -115,25 +114,19 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
     const next = { ...(ctx.org.invoicing ?? {}) } as NonNullable<Organisation["invoicing"]>;
     let ibanChange: { oldLast4: string | null; newLast4: string | null } | undefined;
 
+    // Checked by the issuer's country: a German Steuernummer is no shape for a
+    // Gabonese NIF. The app saves the address before this, so the country is current.
+    const { ruleSet } = jurisdictionOf(ctx.org);
     if (typeof b.vatId === "string") {
-      const v = normaliseVatId(b.vatId);
-      if (v && !vatIdLooksValid(v)) {
-        return res.status(400).json({
-          error: `${b.vatId} does not look like a VAT ID. A German one is DE followed by nine digits.`,
-          field: "vatId",
-        });
-      }
-      next.vatId = v || undefined;
+      const problem = issuerTaxIdProblem("vatId", b.vatId, ruleSet);
+      if (problem) return res.status(400).json({ error: problem, field: "vatId" });
+      // An EU number is stored normalised; one Zold has no format for, as written.
+      next.vatId = (ruleSet === "GENERIC" ? b.vatId.trim() : normaliseVatId(b.vatId)) || undefined;
     }
     if (typeof b.taxNumber === "string") {
-      const t = b.taxNumber.trim();
-      if (t && !taxNumberLooksValid(t)) {
-        return res.status(400).json({
-          error: `${t} does not look like a Steuernummer (10 to 13 digits).`,
-          field: "taxNumber",
-        });
-      }
-      next.taxNumber = t || undefined;
+      const problem = issuerTaxIdProblem("taxNumber", b.taxNumber, ruleSet);
+      if (problem) return res.status(400).json({ error: problem, field: "taxNumber" });
+      next.taxNumber = b.taxNumber.trim() || undefined;
     }
     if (typeof b.smallBusiness === "boolean") next.smallBusiness = b.smallBusiness;
     if (b.defaultVatRate !== undefined) {
