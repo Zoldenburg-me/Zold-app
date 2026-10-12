@@ -9,7 +9,9 @@ Say this plainly rather than letting the surface imply otherwise:
   The orchestrator, ramp and relay keys are the testnet deployment's, not
   keys held for real customers. Monerium production issued the owner's IBAN
   for their Safe on their own production API keys (client credentials, not
-  OAuth). No bank transfer has come in on it and no SEPA payout has left.
+  OAuth). One bank transfer has come in on it: the owner's 1 € for the
+  Zoldenburg recovery enrolment, minted into the Safe as 1 EURe (read back
+  on chain 2026-10-12, 0.8914 → 1.8914 EURe). No SEPA payout has left.
 - **No ENS name has resolved through a live resolver.** The OffchainResolver
   and the gateway pass end to end on local hardhat (`test:contracts`). The
   resolver is deployed on Sepolia (`docs/ens.md`; read back on-chain
@@ -99,10 +101,14 @@ Say this plainly rather than letting the surface imply otherwise:
 - **No Zoldenburg recovery has run on chain**: no guardian added, no relayed
   signature, no finalisation, and Safe Cover has not been used against a Zold
   Safe. `recovery:test` runs the flow under the harness only.
-- **No 1 € enrolment has armed an account.** No Monerium order has been
-  matched to a code (`enrolment:test` runs against stub orders).
-  `RECOVERY_IBAN_HMAC_KEY` must be set on a deployment before any account
-  there can arm; until then the operator can sign for nobody.
+- **One real 1 € enrolment has been paid, and whether it armed the account
+  is not checked here.** The owner's euro reached their Safe on Base
+  mainnet (above); matching it to the code, the live name match and the
+  armed state are in the lease's records, which nothing outside the lease
+  reads (there is no mainnet admin). `enrolment:test` runs the matching
+  against stub orders. `RECOVERY_IBAN_HMAC_KEY` must be set on a deployment
+  before any account there can arm; until then the operator can sign for
+  nobody.
 - **No recovery-time 1 € has passed.** `recovery-bank:test` runs the check
   against stub orders; the person's screen was looked at with staged state
   only. No Didit ID check exists yet: today the operator's signature needs
