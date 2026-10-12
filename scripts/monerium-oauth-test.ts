@@ -408,7 +408,7 @@ try {
 
   console.log("3/3 driving the connect flow…");
 
-  const created = await call("/api/users", { name: "Existing Monerium User", email: "existing@example.com", country: "DE" });
+  const created = await call("/api/users", { name: "Erika Mustermann", email: "existing@example.com", country: "DE" });
   assert.equal(created.status, 201);
   const userId = created.data.id;
   token = created.data.sessionToken;
