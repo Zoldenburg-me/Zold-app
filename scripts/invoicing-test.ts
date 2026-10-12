@@ -27,8 +27,10 @@ import {
   formatInvoiceNumber,
   fromCents,
   invoiceDueDate,
+  FOREIGN_TAX_ID_MAX,
   invoiceLanguage,
   isEuCountry,
+  issuerTaxIdProblem,
   normaliseInvoiceCurrency,
   normaliseVatId,
   taxNumberLooksValid,
@@ -388,6 +390,33 @@ check("German VAT IDs are DE + 9 digits; others are shape-checked", () => {
 check("a Steuernummer is 10 to 13 digits, punctuation ignored", () => {
   assert.equal(taxNumberLooksValid("123/456/78901"), true);
   assert.equal(taxNumberLooksValid("12345"), false);
+});
+
+check("the issuer's own tax IDs are checked by the issuer's country", () => {
+  // Germany: an EU VAT ID and a Steuernummer.
+  assert.equal(issuerTaxIdProblem("vatId", "DE123456789", "DE"), undefined);
+  assert.match(issuerTaxIdProblem("vatId", "DE12345", "DE")!, /DE123456789/);
+  assert.match(issuerTaxIdProblem("vatId", "GB123456789", "DE")!, /not an EU VAT ID/);
+  assert.match(issuerTaxIdProblem("taxNumber", "12345", "DE")!, /Steuernummer/);
+  // Another member state: its own number, and no German Steuernummer rule.
+  assert.equal(issuerTaxIdProblem("vatId", "FR12345678901", "EU"), undefined);
+  assert.equal(issuerTaxIdProblem("taxNumber", "123456789", "EU"), undefined, "an Austrian Steuernummer is 9 digits");
+  // Gabon: no format Zold knows, so taken as written.
+  assert.equal(issuerTaxIdProblem("vatId", "202301234567 A", "GENERIC"), undefined);
+  assert.equal(issuerTaxIdProblem("taxNumber", "NIF 2023 0123 4567", "GENERIC"), undefined);
+  assert.match(issuerTaxIdProblem("vatId", "x".repeat(FOREIGN_TAX_ID_MAX + 1), "GENERIC")!, /at most/);
+  assert.match(issuerTaxIdProblem("vatId", "123\n456", "GENERIC")!, /one line/);
+  assert.equal(issuerTaxIdProblem("vatId", "  ", "DE"), undefined, "empty clears the field");
+});
+
+check("a Gabonese issuer's tax ID draws no 'not a VAT ID' warning", () => {
+  const ga = checkCompliance(
+    draft({ issuer: { ...issuer, country: "GA", vatId: "202301234567 A" } }),
+    jurisdictionFor("GA"),
+  );
+  assert.equal(ga.warnings.find((w) => w.field === "issuer.vatId"), undefined);
+  const de = checkCompliance(draft({ issuer: { ...issuer, vatId: "DE12345" } }), jurisdictionFor("DE"));
+  assert.ok(de.warnings.some((w) => w.field === "issuer.vatId"), "a German issuer's typo is still caught");
 });
 
 check("EU membership drives the reverse-charge warnings", () => {
