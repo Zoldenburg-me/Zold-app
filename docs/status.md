@@ -4,8 +4,13 @@ Read before claiming anything works end to end. Linked from `AGENTS.md`.
 
 Say this plainly rather than letting the surface imply otherwise:
 
-- **No mainnet deploy.** No 8453 entry in `deployments.json`; needs funded
-  operator keys the user holds.
+- **Mainnet has one user, the owner** (app.zoldhq.com, behind Cloudflare
+  Access; technical-architecture §18.1). Its operator keys are not yet keys held for
+  real customers. Monerium production issued the owner's IBAN
+  for their Safe on their own production API keys (client credentials, not
+  OAuth). One bank transfer has come in on it: the owner's 1 € for the
+  Zoldenburg recovery enrolment, minted into the Safe as 1 EURe (read back
+  on chain 2026-10-12, 0.8914 → 1.8914 EURe). No SEPA payout has left.
 - **No ENS name has resolved through a live resolver.** The OffchainResolver
   and the gateway pass end to end on local hardhat (`test:contracts`). The
   resolver is deployed on Sepolia (`docs/ens.md`; read back on-chain
@@ -14,14 +19,20 @@ Say this plainly rather than letting the surface imply otherwise:
   ENS's OffchainDNSResolver has never run. No wallet or ENS client has
   resolved a name. `/api/ens/lookup` has never been called against a real
   ENS RPC.
-- **No real money has moved through a swap.** No dex/LI.FI/RFQ/CoW swap has
-  executed; no Base Sepolia send has exercised execution → debit.
-- **Converting held USDC has never run.** Settle-on-arrival, the holding
-  states, the spent-USDC check and the conversion's bookkeeping are tested on
-  hardhat with a stand-in for the swap (EURe minted into the Safe, the USDC
-  left in place); the prepare → passkey → convert path has not run against a
-  bundler. The receipt and disposal statement lines have not been reviewed by
-  a Steuerberater.
+- **One real swap has run: 1 USDC to EURe in the owner's Safe on Base
+  mainnet (2026-10-11).** Read back on chain 2026-10-12, before the 1 €
+  below arrived: the Safe held 0 USDC and 0.8914 EURe. Which venue filled it and the gas it used are in
+  the deposit's record on the lease, not checked here. No swap for a send
+  has run, and no send has exercised execution → debit on either chain.
+- **Converting held USDC has run once, on mainnet** (the swap above): a
+  1 USDC payment to the owner's payment page with "ask me to convert" on,
+  then prepare → passkey → convert through Candide's bundler with sponsored
+  gas. The swap's EURe output reaches the Safe as a Transfer like any
+  other; Activity, the books and the watcher leave out a recorded
+  conversion's transaction, so it is not a second payment. A partial fill, a refusal
+  and an unconfirmed conversion have run only on hardhat. Automatic
+  conversion with "ask me" off has never run. The receipt and disposal
+  statement lines have not been reviewed by a Steuerberater.
 - **The cash rail has never opened.** Bridge live mode is entirely unexercised,
   CCTP has never executed live, and the anchor-attribution half of the Stellar
   payout has never run — only the on-ledger payment half is proven (tx
@@ -31,9 +42,10 @@ Say this plainly rather than letting the surface imply otherwise:
   `GET /api/service/checkout/transfers/:id`, credential rotation and the
   signed state-change webhook have run only in `checkout-service:test`; no
   credential has been issued on zoldhq.com.
-- **No real Monerium production OAuth app is registered**, and no real
-  client-credentials token has been used. The OAuth cookie binding and the
-  refresh client-id change are unproven against the real server.
+- **No Monerium production OAuth app is registered.** The only production
+  credentials used are the owner's own API keys (above). The OAuth cookie
+  binding and the refresh client-id change are unproven against the real
+  server.
 - **Moving an existing Monerium IBAN** (`POST /users/:id/monerium/move-iban`,
   `PATCH /ibans/{iban}`) has run only against the fake Monerium in the
   oauth/apikeys suites, never against Monerium's real sandbox. Whether the
@@ -88,10 +100,14 @@ Say this plainly rather than letting the surface imply otherwise:
 - **No Zoldenburg recovery has run on chain**: no guardian added, no relayed
   signature, no finalisation, and Safe Cover has not been used against a Zold
   Safe. `recovery:test` runs the flow under the harness only.
-- **No 1 € enrolment has armed an account.** No Monerium order has been
-  matched to a code (`enrolment:test` runs against stub orders).
-  `RECOVERY_IBAN_HMAC_KEY` must be set on a deployment before any account
-  there can arm; until then the operator can sign for nobody.
+- **One real 1 € enrolment has been paid, and whether it armed the account
+  is not checked here.** The owner's euro reached their Safe on Base
+  mainnet (above); matching it to the code, the live name match and the
+  armed state are in the lease's records, which nothing outside the lease
+  reads (there is no mainnet admin). `enrolment:test` runs the matching
+  against stub orders. `RECOVERY_IBAN_HMAC_KEY` must be set on a deployment
+  before any account there can arm; until then the operator can sign for
+  nobody.
 - **No recovery-time 1 € has passed.** `recovery-bank:test` runs the check
   against stub orders; the person's screen was looked at with staged state
   only. No Didit ID check exists yet: today the operator's signature needs
@@ -106,10 +122,12 @@ Say this plainly rather than letting the surface imply otherwise:
   neither the Google/Apple option on /guardian nor the recovery fallback on
   /recovery shows. The /recovery page itself (all guardians) has never
   driven a real recovery. No DPA with Turnkey is signed.
-- **No Candide forwarder has forwarded a deposit.** Candide routes nothing on
-  testnets, so zoldhq.com's payment pages show the Safe itself; the
-  multi-chain token list, minimums and TTL renewal run only against a stub
-  (`forwarder:test`, `paylinks:test`).
+- **One Candide forward has run, on the same chain.** On 2026-10-11 the
+  owner paid 1 USDC on Base to their app.zoldhq.com payment page's forwarding
+  address, and it reached their Safe (the conversion above spent it there).
+  No forward from another chain has run, and the minimums and TTL renewal
+  run only against a stub (`forwarder:test`, `paylinks:test`). Candide routes
+  nothing on testnets, so zoldhq.com's payment pages show the Safe itself.
 - **Importing an existing Safe** (`routes/safe-import.ts`,
   `npm run safe:import-tx`) has run only on Base Sepolia, with a throwaway
   EOA and a software P-256 key standing in for the passkey (2026-09-30, two

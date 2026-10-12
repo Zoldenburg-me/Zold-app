@@ -1225,7 +1225,7 @@ only self-hosted fonts.
 | `npm run dev` | hardhat 31337 (spawned) | chain `sepolia` names | `data/db.dev.json`, wiped | the fx-swapper venue; no Safe deploy |
 | tests (`npm run check`) | hardhat on free ports | stubs | tmp | 40 offline suites; `draft`, `crypto`, `convert` and `safe-funded` run separately |
 | **zoldhq.com (current)** | Base Sepolia 84532 | sandbox, `basesepolia` | `TRANSF_DB_PATH` on the Akash lease's persistent volume | one container on an Akash lease: the API plus `cloudflared` (a dashboard-managed Cloudflare Tunnel); the API binds 127.0.0.1; `RP_ID=zoldhq.com`; `NODE_ENV` is deliberately not production, because it would fail the checks above |
-| mainnet | Base 8453 | production | — | never deployed |
+| **app.zoldhq.com** | Base 8453 | production, `base` | `TRANSF_DB_PATH` on its own lease's volume | the same container shape on a second lease with its own tunnel; behind Cloudflare Access (one-time PIN, the owner's email only); `RP_ID=app.zoldhq.com`; real money; gas sponsored through the owner's Candide policy (`CANDIDE_SPONSORSHIP_POLICY_ID`) |
 
 `RP_ID` is a one-way door: passkeys are bound to it, and the device key lives
 in per-origin localStorage, so accounts do not move between origins.
