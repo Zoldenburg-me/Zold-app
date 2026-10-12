@@ -4,7 +4,7 @@
  * company. Pure rules in services/api/src/users/display-name.ts.
  */
 import assert from "node:assert/strict";
-import { cleanName, nameChange, sameName } from "../services/api/src/users/display-name.js";
+import { cleanName, cleanPersonName, nameChange, sameName } from "../services/api/src/users/display-name.js";
 
 let failed = 0;
 const check = (name: string, fn: () => void) => {
@@ -14,7 +14,7 @@ const check = (name: string, fn: () => void) => {
 const person = { accountType: "individual" as const, kycStatus: "pending" as const };
 
 check("a person not yet verified may change their name, trimmed and with spaces collapsed", () => {
-  assert.deepEqual(nameChange(person, "  Miri   tester 123 "), { name: "Miri tester 123" });
+  assert.deepEqual(nameChange(person, "  Miri   tester "), { name: "Miri tester" });
 });
 
 check("a verified person's name is locked", () => {
@@ -82,6 +82,28 @@ check("emoji and pictographic symbols are refused", () => {
   }
   assert.equal("code" in nameChange(person, "Z😄") && (nameChange(person, "Z😄") as any).code, "NAME_INVALID");
   assert.equal(cleanName("Acme & Co. 24 GmbH"), "Acme & Co. 24 GmbH");
+});
+
+check("a person's name is letters, spaces, apostrophes, hyphens and periods; a company's may hold more", () => {
+  for (const bad of ["Anna & Bo", "Miri 123", "Bo_B", "Bo@home", "Bo (Ana)", "Bo, Ana", "Bo/Ana", "#1 Bo", "...", "- -"]) {
+    const r = nameChange(person, bad);
+    assert.equal("code" in r && r.code, "NAME_INVALID", JSON.stringify(bad));
+  }
+  for (const ok of ["J. R. R. Tolkien", "Martin Luther King Jr.", "D’Angelo", "Jean-Luc Picard", "Nguyễn Văn An", "Ægir", "Mx Bridge", "Elon Lindner"]) {
+    assert.deepEqual(nameChange(person, ok), { name: ok }, ok);
+  }
+  assert.equal(cleanName("Müller & Söhne 24 GmbH"), "Müller & Söhne 24 GmbH");
+});
+
+check("a person's name may not read as Zold staff or Monerium", () => {
+  for (const bad of ["Zold Support", "zold", "Zoldenburg Team", "Monerium Desk", "Admin", "Customer Support", "Zold-Staff", "Anna O'Zold"]) {
+    const r = cleanPersonName(bad, { min: 1, max: 120 });
+    assert.equal("code" in r && r.code, "NAME_RESERVED", bad);
+  }
+  assert.deepEqual(cleanPersonName("Marco Zoldan"), { name: "Marco Zoldan" });
+  const r = nameChange(person, "Zold Support");
+  assert.equal("status" in r && r.status, 400);
+  assert.equal("code" in r && r.code, "NAME_RESERVED");
 });
 
 check("a lone surrogate is not text and is refused", () => {
