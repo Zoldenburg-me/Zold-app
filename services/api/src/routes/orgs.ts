@@ -50,7 +50,7 @@ import { newChallenge, parseSignature, publicWallet } from "../domain/wallet-own
 import { verifyOwnership } from "../wallet-sync/ownership.js";
 import { walletEntryId } from "../domain/wallet-transfers.js";
 import { accountProfileStanding } from "../domain/monerium-profile.js";
-import { cleanName, sameName } from "../users/display-name.js";
+import { cleanName, cleanPersonName, sameName } from "../users/display-name.js";
 import { adoptionHint, auditProfileCheck, checkBackingProfile, profileWait } from "../adapters/monerium-profile.js";
 import { emailLooksValid } from "../domain/email.js";
 import { CEILINGS, ceilingRefusal } from "../domain/ceilings.js";
@@ -485,10 +485,9 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     }
     // Optional, and shown on Members until they accept: the person name rule.
     const rawName = req.body?.name;
-    const inviteName = typeof rawName === "string" && rawName.trim() ? cleanName(rawName, { min: 1, max: 120 }) : undefined;
-    if (inviteName === null) {
-      return res.status(400).json({ code: "NAME_INVALID", error: "The name needs 1 to 120 characters, without hidden or control characters." });
-    }
+    const checkedInvite = typeof rawName === "string" && rawName.trim() ? cleanPersonName(rawName, { min: 1, max: 120 }) : undefined;
+    if (checkedInvite && "code" in checkedInvite) return res.status(400).json(checkedInvite);
+    const inviteName = checkedInvite?.name;
     // Only an owner may mint another owner; otherwise an admin could promote
     // themselves past the person who pays the bill.
     if (role === "owner" && ctx.member.role !== "owner") {
