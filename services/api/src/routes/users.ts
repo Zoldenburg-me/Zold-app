@@ -22,7 +22,7 @@ import { resolveSegment, type Segment } from "../domain/segments.js";
 import { store, type User } from "../store.js";
 import { requireKycApproved } from "../http/guards.js";
 import { publicUser, withSession } from "../users/public-user.js";
-import { cleanName, nameChange } from "../users/display-name.js";
+import { cleanPersonName, nameChange } from "../users/display-name.js";
 import { findIbanBic, refreshPendingIban, verifyIbanBinding } from "../adapters/monerium-sandbox.js";
 import { normalizeIban } from "../sepa.js";
 import { emailHeldBy, emailLooksValid } from "../domain/email.js";
@@ -95,10 +95,9 @@ export function createUserRouter(deps: UserDeps) {
       }
       // The same rule as a later rename (users/display-name.ts); a company
       // signup's representative may have a longer name than a person's own.
-      const signupName = cleanName(name, { min: 1, max: 120 });
-      if (signupName === null) {
-        return res.status(400).json({ code: "NAME_INVALID", error: "Enter the name using letters, spaces, apostrophes or hyphens, up to 120 characters." });
-      }
+      const checkedName = cleanPersonName(name, { min: 1, max: 120 });
+      if ("code" in checkedName) return res.status(400).json(checkedName);
+      const signupName = checkedName.name;
       /**
        * Email is required as a channel, not an identity (identity is
        * Monerium's; the passkey is the login). It lets the account be found
