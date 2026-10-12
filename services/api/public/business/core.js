@@ -140,6 +140,22 @@ export function maskIban(iban) {
   return s.length > 12 ? `${s.slice(0, 4)} ${s.slice(4, 8)} •••• ${s.slice(-4)}` : Z.groupIban(s);
 }
 
+/** The signed-in login's own Safe once it is deployed: the address that
+ *  receives EURe and the balance GET /api/session read from the chain. It
+ *  exists before any Monerium IBAN does, so it is shown without one. For a
+ *  company login this Safe is the company's. */
+export const ownSafe = () =>
+  me?.address && me.passkeySafe?.status === "active"
+    ? { address: me.address, balanceEur: typeof me.balanceEur === "number" ? me.balanceEur : null, company: me.accountType === "company" }
+    : null;
+
+/** The Safe's address in full with a Copy button: one wrong character loses
+ *  the money, so it is never shortened. */
+export const safeAddressHtml = (s) => `<div class="zb-safe-addr">
+    <span class="z-mono" translate="no">${esc(s.address)}</span>
+    <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="copy-text" data-text="${esc(s.address)}" data-said="Address copied">${Z.icon("content_copy")}<span>Copy</span></button></div>
+  <p class="zb-hint">Send only EURe${testMode === true ? " on Base Sepolia, the test network" : testMode === false ? " on Base" : ""} to this address.</p>`;
+
 /* What each role may do, as the API's permission table has it. */
 export const ROLE_WORD = { owner: "Owner", admin: "Admin", payer: "Payer", accountant: "Accountant", viewer: "Viewer" };
 export const ROLE_CAN = {

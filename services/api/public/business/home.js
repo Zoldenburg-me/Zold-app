@@ -10,7 +10,7 @@
  *   without Books gets no chart, never a row of zeros.
  * - Money out is Sent, never Paid: the bank's confirmation is not on a line.
  */
-import { $, Z, api, cap, esc, eur, gateHtml, maskIban, me, org, roleCan, ensureMe, view, when, ymd } from "./core.js";
+import { $, Z, api, cap, esc, eur, gateHtml, maskIban, me, org, ownSafe, roleCan, ensureMe, safeAddressHtml, view, when, ymd } from "./core.js";
 import { META, RENDER } from "./views.js";
 import { side, waitingForMe } from "./nav.js";
 import { invAmount, loadMembers, memberName } from "./screens.js";
@@ -86,16 +86,19 @@ const bigEur = (v) => {
   return m ? `${esc(m[1])}<span class="zb-h-cents">${esc(m[2])}</span>` : esc(t);
 };
 
-/** Only the account backed by YOUR own account has a figure (RULES §4). */
+/** Only YOUR own Safe has a figure (RULES §4): through the account it backs,
+ *  or on its own before any IBAN is connected, with its address. */
 function balanceCard(accounts, lines) {
   const mine = accounts.find((a) => a.status === "active" && a.backingUserId && me && a.backingUserId === me.id);
-  const fig = mine && typeof me.balanceEur === "number";
+  const safe = ownSafe();
+  const fig = (mine || safe) && typeof me.balanceEur === "number";
   const other = !mine && accounts.find((a) => a.backingUserId);
+  const label = mine ? `${mine.label || mine.currency} balance` : safe?.company ? "Company Zold account" : "Your Zold account";
   const head = fig
-    ? `<span class="zb-h-bal__label">${esc(mine.label || mine.currency)} balance</span><span class="zb-h-bal__fig">${bigEur(me.balanceEur)}</span>`
+    ? `<span class="zb-h-bal__label">${esc(label)}</span><span class="zb-h-bal__fig">${bigEur(me.balanceEur)}</span>`
     : `<span class="zb-h-bal__label">Balance</span><p class="zb-hint">${other ? `Only ${esc(other.backingMemberName || "the member who backs it")} sees this account’s balance.` : "No account is connected yet."}</p>`;
   return `<section class="z-card zb-side-card zb-h-bal" aria-labelledby="home-bal"><h2 id="home-bal" class="z-sr">Balance and money in and out</h2>
-    <div class="zb-h-bal__head">${head}</div>
+    <div class="zb-h-bal__head">${head}${safe ? safeAddressHtml(safe) : ""}</div>
     ${lines ? `<div id="hm-flow">${flowCard(lines)}</div>` : ""}</section>`;
 }
 

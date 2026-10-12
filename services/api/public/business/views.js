@@ -10,7 +10,7 @@
  * so a screen is added by naming it and the shell dispatches without knowing
  * what exists. Every renderer reads the live `org` from core.js.
  */
-import { $, Z, api, cap, countrySelect, day, esc, eur, gateHtml, maskIban, me, org, plain, roleCan, ymd } from "./core.js";
+import { $, Z, api, cap, countrySelect, day, ensureMe, esc, eur, gateHtml, maskIban, me, org, ownSafe, plain, roleCan, safeAddressHtml, ymd } from "./core.js";
 
 export const RENDER = {};
 export const META = {};
@@ -49,7 +49,8 @@ META.accounts = () => ({
 });
 
 RENDER.accounts = async () => {
-  const { accounts, currencies, adoption, profileWait, mayManageAccounts } = await api(`/api/orgs/${org.id}/accounts`);
+  // The Zold account card needs the session; the shell may not have it yet.
+  const [{ accounts, currencies, adoption, profileWait, mayManageAccounts }] = await Promise.all([api(`/api/orgs/${org.id}/accounts`), ensureMe().catch(() => null)]);
   const who = org.type === "business" ? "the company profile" : "your profile";
   const waitHtml = profileWait
     ? `${Z.tag("Waiting for Monerium", "amber")} Monerium had ${who} as ${esc(plain(profileWait.state))} on ${esc(new Date(profileWait.at).toLocaleString())}.`
@@ -91,9 +92,17 @@ RENDER.accounts = async () => {
       <td>${esc(plain(c.railName))}</td>
       <td>${c.token ? `<span class="z-mono">${esc(plain(c.token.symbol))}</span> ${Z.tag(c.token.heldByUs ? "Held" : "Not held")}` : '<span class="z-dim">None</span>'}</td>
       <td>${c.available ? Z.tag("Available", "mint") : `<span title="${esc(plain(c.needs))}">${Z.tag("Soon")}</span>`}</td></tr>`);
-  return `${accounts.length
+  const safe = ownSafe();
+  const safeCard = safe ? `<section class="z-card zb-acard" aria-labelledby="acc-safe">
+      <div class="zb-acard__head">
+        <div><b class="zb-acard__name" id="acc-safe">${safe.company ? "Company Zold account" : "Your Zold account"}</b><span class="zb-acard__cur">EURe</span></div>
+        ${safe.balanceEur === null ? "" : `<b>${esc(eur(safe.balanceEur))}</b>`}
+      </div>
+      <div class="zb-acard__iban"><span class="z-eyebrow">Address</span>${safeAddressHtml(safe)}</div>
+    </section>` : "";
+  return `${safeCard ? `<div class="zb-acards" style="margin-bottom:16px">${safeCard}</div>` : ""}${accounts.length
       ? `<div class="zb-acards">${cards.join("")}</div>`
-      : `<div class="z-card"><p class="empty">No accounts yet.</p></div>`}
+      : `<div class="z-card"><p class="empty">No bank account yet.</p></div>`}
     <h2 class="zb-h2" style="margin:28px 0 6px">Currencies</h2>
     <p class="zb-hint" style="margin-bottom:12px">Currencies Zold supports.</p>
     <div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Currency</th><th scope="col">Network</th><th scope="col">Settles in</th><th scope="col">Status</th></tr></thead><tbody>${cur.join("")}</tbody></table></div>`;
