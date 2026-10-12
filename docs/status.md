@@ -5,8 +5,8 @@ Read before claiming anything works end to end. Linked from `AGENTS.md`.
 Say this plainly rather than letting the surface imply otherwise:
 
 - **Mainnet has one user, the owner** (app.zoldhq.com, behind Cloudflare
-  Access; technical-architecture §18.1). The orchestrator, ramp and relay keys are the testnet deployment's, not
-  keys held for real customers. Monerium production issued the owner's IBAN
+  Access; technical-architecture §18.1). Its operator keys are not yet keys held for
+  real customers. Monerium production issued the owner's IBAN
   for their Safe on their own production API keys (client credentials, not
   OAuth). One bank transfer has come in on it: the owner's 1 € for the
   Zoldenburg recovery enrolment, minted into the Safe as 1 EURe (read back
