@@ -4,9 +4,8 @@ Read before claiming anything works end to end. Linked from `AGENTS.md`.
 
 Say this plainly rather than letting the surface imply otherwise:
 
-- **Mainnet has one user, the owner.** app.zoldhq.com runs Base mainnet and
-  Monerium production behind Cloudflare Access; nobody else can reach it.
-  The orchestrator, ramp and relay keys are the testnet deployment's, not
+- **Mainnet has one user, the owner** (app.zoldhq.com, behind Cloudflare
+  Access; technical-architecture §18.1). The orchestrator, ramp and relay keys are the testnet deployment's, not
   keys held for real customers. Monerium production issued the owner's IBAN
   for their Safe on their own production API keys (client credentials, not
   OAuth). One bank transfer has come in on it: the owner's 1 € for the
@@ -21,16 +20,16 @@ Say this plainly rather than letting the surface imply otherwise:
   resolved a name. `/api/ens/lookup` has never been called against a real
   ENS RPC.
 - **One real swap has run: 1 USDC to EURe in the owner's Safe on Base
-  mainnet (2026-10-11).** Read back on chain 2026-10-12: the Safe holds
-  0 USDC and 0.8914 EURe. Which venue filled it and the gas it used are in
+  mainnet (2026-10-11).** Read back on chain 2026-10-12, before the 1 €
+  below arrived: the Safe held 0 USDC and 0.8914 EURe. Which venue filled it and the gas it used are in
   the deposit's record on the lease, not checked here. No swap for a send
   has run, and no send has exercised execution → debit on either chain.
 - **Converting held USDC has run once, on mainnet** (the swap above): a
   1 USDC payment to the owner's payment page with "ask me to convert" on,
   then prepare → passkey → convert through Candide's bundler with sponsored
-  gas. The swap's EURe output reached the Safe as a Transfer, and the
-  watcher recorded it as a second payment received until the scanner learnt
-  to skip a recorded conversion's transaction; a partial fill, a refusal
+  gas. The swap's EURe output reaches the Safe as a Transfer like any
+  other; Activity, the books and the watcher leave out a recorded
+  conversion's transaction, so it is not a second payment. A partial fill, a refusal
   and an unconfirmed conversion have run only on hardhat. Automatic
   conversion with "ask me" off has never run. The receipt and disposal
   statement lines have not been reviewed by a Steuerberater.
