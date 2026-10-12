@@ -76,6 +76,14 @@ check("a joiner stands only between two visible characters, so no name is drawn 
   assert.equal(cleanName("क्‍ष"), "क्‍ष");
 });
 
+check("emoji and pictographic symbols are refused", () => {
+  for (const bad of ["Z😄", "Anna ❤", "Anna ❤️", "👍🏽 Bo", "Bo 🇩🇪", "Bo 1️⃣", "Acme™", "★ Bo", "Bo 👨‍👩‍👧"]) {
+    assert.equal(cleanName(bad, { min: 1, max: 120 }), null, JSON.stringify(bad));
+  }
+  assert.equal("code" in nameChange(person, "Z😄") && (nameChange(person, "Z😄") as any).code, "NAME_INVALID");
+  assert.equal(cleanName("Acme & Co. 24 GmbH"), "Acme & Co. 24 GmbH");
+});
+
 check("a lone surrogate is not text and is refused", () => {
   for (const bad of ["A\ud800b", "Ab\udc00", "\ud83d"]) assert.equal(cleanName(bad, { min: 1 }), null, JSON.stringify(bad));
 });

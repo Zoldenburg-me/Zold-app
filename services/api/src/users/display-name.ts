@@ -26,6 +26,11 @@ const MAX = 80;
 // characters: on their own, at an end or beside a space they draw nothing.
 // A lone surrogate (Cs) is not text and does not survive printing.
 const FORBIDDEN = /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}<>]/u;
+// Emoji and pictographs: a name is printed on payment pages, receipts and
+// invoices, and Monerium's name check compares against an ID document. Covers
+// pictographs and other symbols, skin-tone modifiers, flag letters, enclosing
+// marks (keycaps) and the emoji variation selectors.
+const PICTOGRAPHIC = /[\p{Extended_Pictographic}\p{So}\p{Emoji_Modifier}\p{Regional_Indicator}\p{Me}\ufe0e\ufe0f]/u;
 const JOINERS = /[\u200c\u200d]/g;
 const LOOSE_JOINER = /(?:^|[\s\u200c\u200d])[\u200c\u200d]|[\u200c\u200d](?=$|[\s\u200c\u200d])/u;
 
@@ -41,7 +46,7 @@ const settle = (s: string) => s.normalize("NFC").trim().replace(/\s+/g, " ");
 export function cleanName(raw: unknown, { min = MIN, max = MAX }: { min?: number; max?: number } = {}): string | null {
   if (typeof raw !== "string") return null;
   const nfc = raw.normalize("NFC");
-  if (FORBIDDEN.test(nfc.replace(JOINERS, ""))) return null;
+  if (FORBIDDEN.test(nfc.replace(JOINERS, "")) || PICTOGRAPHIC.test(nfc)) return null;
   const name = settle(nfc);
   if (LOOSE_JOINER.test(name)) return null;
   const length = [...name].length;
