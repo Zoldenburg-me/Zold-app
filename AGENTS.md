@@ -43,10 +43,10 @@ THREE RULES OVERRIDE CONVENIENCE:
 
 - **Chain**: `TRANSF_CHAIN_ID` selects it; default **8453 (Base mainnet)**.
   `deployments.json` is keyed by chain id; on a real chain it holds only EURe
-  and USDC. **No 8453 entry yet.**
-  The running deployment is **Base Sepolia (84532)** + Monerium sandbox at
-  zoldhq.com on an Akash lease (technical-architecture §18.1): closing the
-  lease deletes every tester's account.
+  and USDC. zoldhq.com runs **Base Sepolia (84532)** + Monerium sandbox;
+  app.zoldhq.com runs **Base mainnet** + Monerium production, owner only
+  behind Cloudflare Access. Each is an Akash lease (technical-architecture
+  §18.1): closing one deletes its accounts.
 - **Identity is Monerium's.** Onboarding: account (email required) → passkey
   (no skip) → Safe deployed → recovery enrolment → the gate offers OAuth *or*
   your own Monerium API keys → "Activate IBAN with passkey". `POST /api/users`
