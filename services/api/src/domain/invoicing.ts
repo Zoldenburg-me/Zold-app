@@ -376,6 +376,36 @@ export function taxNumberLooksValid(v: string): boolean {
   return /^\d{10,13}$/.test(v.replace(/[\s./-]/g, ""));
 }
 
+/** The longest identifier taken as written, for a country Zold has no format for. */
+export const FOREIGN_TAX_ID_MAX = 40;
+
+/**
+ * Why the issuer's own VAT ID or tax number cannot be saved under this rule
+ * set, or undefined when it can. Only shapes Zold knows are checked: an EU VAT
+ * ID under DE and EU, a Steuernummer under DE. Anywhere else (a Gabonese NIF,
+ * an Indian GSTIN) Zold has no format, so the value is taken as written.
+ */
+export function issuerTaxIdProblem(
+  field: "vatId" | "taxNumber",
+  value: string,
+  ruleSet: RuleSetId,
+): string | undefined {
+  const v = value.trim();
+  if (!v) return undefined;
+  if (field === "vatId" && ruleSet !== "GENERIC") {
+    const shape = vatIdShape(v);
+    if (!shape.ok) return shape.reason;
+    return shape.vies ? undefined : `${v} is not an EU VAT ID. An EU business invoices with its member state's number.`;
+  }
+  if (field === "taxNumber" && ruleSet === "DE") {
+    return taxNumberLooksValid(v) ? undefined : `${v} does not look like a Steuernummer (10 to 13 digits).`;
+  }
+  if (v.length > FOREIGN_TAX_ID_MAX || /[\u0000-\u001f\u007f]/.test(v)) {
+    return `${field === "vatId" ? "A VAT ID" : "A tax number"} is at most ${FOREIGN_TAX_ID_MAX} characters on one line.`;
+  }
+  return undefined;
+}
+
 const EU_COUNTRIES = new Set([
   "AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR", "HU",
   "IE", "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK", "SI", "ES", "SE",
@@ -937,7 +967,8 @@ export function checkCompliance(
       );
     }
   }
-  if (has(draft.issuer.vatId) && !vatIdLooksValid(draft.issuer.vatId!)) {
+  // Outside the EU Zold knows no format for the issuer's identifier.
+  if (jur.ruleSet !== "GENERIC" && has(draft.issuer.vatId) && !vatIdLooksValid(draft.issuer.vatId!)) {
     add("warning", "issuer.vatId", `${draft.issuer.vatId} does not look like a VAT ID.`);
   }
   if (has(draft.recipient.vatId)) {
