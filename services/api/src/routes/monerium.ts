@@ -27,7 +27,7 @@ import {
   moneriumOAuthEnabled,
   moneriumSandboxEnabled,
 } from "../config.js";
-import { accountBalances } from "../chain.js";
+import { shownBalances } from "../chain.js";
 import { auditEntry } from "../audit.js";
 import { store, type User } from "../store.js";
 import { cookieValue, revokeOtherSessions } from "../http/sessions.js";
@@ -827,7 +827,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         },
         monerium: { ...user.monerium!, profileId, ...snapshot },
       });
-      const balances = await accountBalances(updated.address).catch(() => ({ balanceEur: 0, safeBalanceEur: 0 }));
+      const balances = await shownBalances(updated.address);
       res.json({ ...publicUser(updated), ...balances });
     }),
   );
@@ -1036,7 +1036,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         { partner: "monerium", profileId: ibanProfile, ibanLast4: requested.slice(-4), fromChain: move.fromChain, confirmed },
         user.id,
       ));
-      const balances = await accountBalances(updated.address).catch(() => ({ balanceEur: 0, safeBalanceEur: 0 }));
+      const balances = await shownBalances(updated.address);
       res.json({ ...publicUser(updated), ...balances });
     }),
   );
@@ -1175,7 +1175,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         user.id,
       ));
       if (replacing) revokeOtherSessions(user.id, session.id);
-      const balances = await accountBalances(updated.address).catch(() => ({ balanceEur: 0, safeBalanceEur: 0 }));
+      const balances = await shownBalances(updated.address);
       res.status(201).json({ ...publicUser(updated), ...balances });
     }),
   );

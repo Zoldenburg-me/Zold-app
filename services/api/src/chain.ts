@@ -21,7 +21,7 @@ import {
 } from "./config.js";
 import type { PayoutRail } from "./store.js";
 import { urlForLog } from "./http/log-safe.js";
-import { errorText } from "./http/log-cause.js";
+import { describeCause, errorText } from "./http/log-cause.js";
 
 /**
  * The viem chain we talk to, resolved from TRANSF_CHAIN_ID.
@@ -373,6 +373,22 @@ export async function accountBalances(user: `0x${string}`): Promise<{
     balanceEur: safeBalanceEur,
     safeBalanceEur,
   };
+}
+
+/**
+ * The balances a response shows. A failed chain read leaves them out, so the
+ * client draws no figure rather than €0.00 for a funded Safe.
+ */
+export async function shownBalances(user: `0x${string}`): Promise<{
+  balanceEur?: number;
+  safeBalanceEur?: number;
+}> {
+  try {
+    return await accountBalances(user);
+  } catch (err) {
+    console.warn(`[balances] chain read failed, balance left out: ${describeCause(err)}`);
+    return {};
+  }
 }
 
 /**

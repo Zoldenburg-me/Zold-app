@@ -246,6 +246,31 @@ assert.equal(m.isCompanyLogin(null), false);
   assert.equal(m.isOwnCompanyOrg(login, { ...own, type: "personal" }, []), false);
 }
 
+// ── the login's own Safe, and where it is shown ─────────────────────────────
+
+{
+  const safe = { status: "active" };
+  const company = { id: "c1", accountType: "company", address: "0xc1", passkeySafe: safe, balanceEur: 100 };
+  const person = { id: "u2", accountType: "individual", address: "0xu2", passkeySafe: safe, balanceEur: 7 };
+  const biz = { id: "o1", type: "business", role: "owner" };
+  const mine = { id: "p1", type: "personal", role: "owner" };
+  // The company it is: its Safe is the company's account.
+  assert.deepEqual(m.ownSafeHere(company, biz, []), { address: "0xc1", balanceEur: 100, company: true });
+  // Another company it joined, or one that spends from someone else's Safe: nothing.
+  assert.equal(m.ownSafeHere(company, { ...biz, role: "admin" }, [{ backingUserId: "u9" }]), null, "invited elsewhere");
+  assert.equal(m.ownSafeHere(company, biz, [{ backingUserId: "u9" }]), null, "owner, someone else's Safe");
+  // A person: in their own personal space, and nowhere else.
+  assert.deepEqual(m.ownSafeHere(person, mine, []), { address: "0xu2", balanceEur: 7, company: false });
+  assert.equal(m.ownSafeHere(person, biz, []), null, "a person in a business");
+  assert.equal(m.ownSafeHere(person, { ...mine, role: "admin" }, []), null);
+  // No Safe deployed, or accounts unread: nothing.
+  assert.equal(m.ownSafeHere({ ...company, passkeySafe: { status: "pending" } }, biz, []), null);
+  assert.equal(m.ownSafeHere(company, biz, null), null);
+  // A balance the server could not read is unknown, never zero.
+  const { balanceEur: _, ...unread } = company;
+  assert.equal(m.ownSafeHere(unread, biz, []).balanceEur, null);
+}
+
 // ── where changes are made ──────────────────────────────────────────────────
 
 assert.equal(m.APP_LINKS.signers, "/app?from=business#signers");
