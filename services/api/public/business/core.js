@@ -7,7 +7,7 @@
  * `org` and the few places that reassign call a setter.
  */
 import { render } from "./shell.js";
-import { isCompanyLogin, readGuardians, recoveryStatus } from "./access-model.js";
+import { isCompanyLogin, ownSafeHere, readGuardians, recoveryStatus } from "./access-model.js";
 
 export const $ = (s) => document.querySelector(s);
 export const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -140,14 +140,10 @@ export function maskIban(iban) {
   return s.length > 12 ? `${s.slice(0, 4)} ${s.slice(4, 8)} •••• ${s.slice(-4)}` : Z.groupIban(s);
 }
 
-/** The signed-in login's own Safe once it is deployed: the address that
- *  receives EURe and the balance GET /api/session read from the chain. It
- *  exists before any Monerium IBAN does, so it is shown without one. For a
- *  company login this Safe is the company's. */
-export const ownSafe = () =>
-  me?.address && me.passkeySafe?.status === "active"
-    ? { address: me.address, balanceEur: typeof me.balanceEur === "number" ? me.balanceEur : null, company: me.accountType === "company" }
-    : null;
+/** The signed-in login's own Safe, where the open organisation may show it
+ *  (ownSafeHere). It exists before any Monerium IBAN does, so it is shown
+ *  without one. `accounts` is the organisation's GET .../accounts. */
+export const ownSafe = (accounts) => ownSafeHere(me, org, accounts);
 
 /** The Safe's address in full with a Copy button: one wrong character loses
  *  the money, so it is never shortened. */
@@ -279,6 +275,19 @@ export function ensureMe() {
   if (me) return Promise.resolve(me);
   mePromise ??= api("/api/session").then((u) => { me = u; return u; }, (e) => { mePromise = null; throw e; });
   return mePromise;
+}
+/** The session read again, for a view that shows the Safe's balance: the
+ *  chain moves while the page is open, so the cached read is not reused. A
+ *  failed read keeps who is signed in and drops the figure it cannot vouch for. */
+export async function refreshMe() {
+  if (!me) return ensureMe();
+  try {
+    me = await api("/api/session");
+  } catch {
+    const { balanceEur: _b, safeBalanceEur: _s, ...rest } = me;
+    me = rest;
+  }
+  return me;
 }
 export const setTestMode = (v) => { testMode = v; };
 export const setUsdSymbol = (s) => { if (typeof s === "string" && /^[A-Za-z0-9.]{1,11}$/.test(s)) usdSymbol = s; };

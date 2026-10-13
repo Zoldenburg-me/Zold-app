@@ -10,7 +10,7 @@
  * so a screen is added by naming it and the shell dispatches without knowing
  * what exists. Every renderer reads the live `org` from core.js.
  */
-import { $, Z, api, cap, countrySelect, day, ensureMe, esc, eur, gateHtml, maskIban, me, org, ownSafe, plain, roleCan, safeAddressHtml, ymd } from "./core.js";
+import { $, Z, api, cap, countrySelect, day, esc, eur, gateHtml, maskIban, me, org, ownSafe, plain, refreshMe, roleCan, safeAddressHtml, ymd } from "./core.js";
 
 export const RENDER = {};
 export const META = {};
@@ -49,8 +49,8 @@ META.accounts = () => ({
 });
 
 RENDER.accounts = async () => {
-  // The Zold account card needs the session; the shell may not have it yet.
-  const [{ accounts, currencies, adoption, profileWait, mayManageAccounts }] = await Promise.all([api(`/api/orgs/${org.id}/accounts`), ensureMe().catch(() => null)]);
+  // The Zold account card needs the session, read again for a balance that moved.
+  const [{ accounts, currencies, adoption, profileWait, mayManageAccounts }] = await Promise.all([api(`/api/orgs/${org.id}/accounts`), refreshMe().catch(() => null)]);
   const who = org.type === "business" ? "the company profile" : "your profile";
   const waitHtml = profileWait
     ? `${Z.tag("Waiting for Monerium", "amber")} Monerium had ${who} as ${esc(plain(profileWait.state))} on ${esc(new Date(profileWait.at).toLocaleString())}.`
@@ -92,11 +92,11 @@ RENDER.accounts = async () => {
       <td>${esc(plain(c.railName))}</td>
       <td>${c.token ? `<span class="z-mono">${esc(plain(c.token.symbol))}</span> ${Z.tag(c.token.heldByUs ? "Held" : "Not held")}` : '<span class="z-dim">None</span>'}</td>
       <td>${c.available ? Z.tag("Available", "mint") : `<span title="${esc(plain(c.needs))}">${Z.tag("Soon")}</span>`}</td></tr>`);
-  const safe = ownSafe();
+  const safe = ownSafe(accounts);
   const safeCard = safe ? `<section class="z-card zb-acard" aria-labelledby="acc-safe">
       <div class="zb-acard__head">
         <div><b class="zb-acard__name" id="acc-safe">${safe.company ? "Company Zold account" : "Your Zold account"}</b><span class="zb-acard__cur">EURe</span></div>
-        ${safe.balanceEur === null ? "" : `<b>${esc(eur(safe.balanceEur))}</b>`}
+        ${safe.balanceEur === null ? '<span class="z-dim">Balance unavailable</span>' : `<b>${esc(eur(safe.balanceEur))}</b>`}
       </div>
       <div class="zb-acard__iban"><span class="z-eyebrow">Address</span>${safeAddressHtml(safe)}</div>
     </section>` : "";

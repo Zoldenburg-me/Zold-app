@@ -10,7 +10,7 @@
  *   without Books gets no chart, never a row of zeros.
  * - Money out is Sent, never Paid: the bank's confirmation is not on a line.
  */
-import { $, Z, api, cap, esc, eur, gateHtml, maskIban, me, org, ownSafe, roleCan, ensureMe, safeAddressHtml, view, when, ymd } from "./core.js";
+import { $, Z, api, cap, esc, eur, gateHtml, maskIban, me, org, ownSafe, refreshMe, roleCan, safeAddressHtml, view, when, ymd } from "./core.js";
 import { META, RENDER } from "./views.js";
 import { side, waitingForMe } from "./nav.js";
 import { invAmount, loadMembers, memberName } from "./screens.js";
@@ -87,16 +87,20 @@ const bigEur = (v) => {
 };
 
 /** Only YOUR own Safe has a figure (RULES §4): through the account it backs,
- *  or on its own before any IBAN is connected, with its address. */
-function balanceCard(accounts, lines) {
+ *  or on its own before any IBAN is connected, with its address. Only where
+ *  this organisation may show it (ownSafe); `read` is false when the accounts
+ *  could not be read, and then nothing is said about the Safe. */
+function balanceCard(accounts, lines, read) {
   const mine = accounts.find((a) => a.status === "active" && a.backingUserId && me && a.backingUserId === me.id);
-  const safe = ownSafe();
+  const safe = read ? ownSafe(accounts) : null;
   const fig = (mine || safe) && typeof me.balanceEur === "number";
   const other = !mine && accounts.find((a) => a.backingUserId);
   const label = mine ? `${mine.label || mine.currency} balance` : safe?.company ? "Company Zold account" : "Your Zold account";
   const head = fig
     ? `<span class="zb-h-bal__label">${esc(label)}</span><span class="zb-h-bal__fig">${bigEur(me.balanceEur)}</span>`
-    : `<span class="zb-h-bal__label">Balance</span><p class="zb-hint">${other ? `Only ${esc(other.backingMemberName || "the member who backs it")} sees this account’s balance.` : "No account is connected yet."}</p>`;
+    : mine || safe
+      ? `<span class="zb-h-bal__label">${esc(label)}</span><p class="zb-hint">The balance could not be read just now. Reload to try again.</p>`
+      : `<span class="zb-h-bal__label">Balance</span><p class="zb-hint">${other ? `Only ${esc(other.backingMemberName || "the member who backs it")} sees this account’s balance.` : "No account is connected yet."}</p>`;
   return `<section class="z-card zb-side-card zb-h-bal" aria-labelledby="home-bal"><h2 id="home-bal" class="z-sr">Balance and money in and out</h2>
     <div class="zb-h-bal__head">${head}${safe ? safeAddressHtml(safe) : ""}</div>
     ${lines ? `<div id="hm-flow">${flowCard(lines)}</div>` : ""}</section>`;
@@ -223,14 +227,14 @@ META.overview = () => ({ title: greeting(), sub: "", actions: "" });
 
 RENDER.overview = async () => {
   const books = cap("ledger.transactions").allowed;
-  // The greeting and the balance need the session; the shell may not have it yet.
+  // The greeting and the balance need the session, read again for a balance that moved.
   const [acc, dr, inv, , st] = await Promise.allSettled([
     api(`/api/orgs/${org.id}/accounts`),
     cap("transfers.drafts").allowed ? api(`/api/orgs/${org.id}/drafts`) : Promise.resolve({ drafts: [] }),
     cap("invoices").allowed ? api(`/api/orgs/${org.id}/invoices`) : Promise.resolve(null),
     loadMembers(),
     books ? api(`/api/orgs/${org.id}/bookkeeping/statement`) : Promise.resolve(null),
-    ensureMe(),
+    refreshMe(),
   ]);
   const accounts = acc.status === "fulfilled" ? acc.value.accounts : [];
   const runs = dr.status === "fulfilled" ? dr.value.drafts : [];
@@ -261,7 +265,7 @@ RENDER.overview = async () => {
   }
 
   const html = `<div id="hm-root"><div class="zb-h-actions">${headerActions(waitingForMe(runs).length)}</div>
-    <div class="zb-h-top">${balanceCard(accounts, lines)}${accountsCard(accounts)}</div>
+    <div class="zb-h-top">${balanceCard(accounts, lines, acc.status === "fulfilled")}${accountsCard(accounts)}</div>
     ${attention({ waiting: waitingForMe(runs), invoices, lines, accounts })}
     ${cards.length ? `<div class="zb-grid2">${cards.join("")}</div>` : ""}
     ${lines && months.length ? `<section class="zb-h-section" id="hm-move" aria-labelledby="home-move">${movement(lines, months)}</section>` : ""}
