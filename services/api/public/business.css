@@ -504,3 +504,6 @@ dialog .desc, dialog .zb-hint { font-size: 14.5px; color: var(--z-dim); }
 
 /* Settings → Access: a Safe address wraps rather than widening the card on a phone. */
 .zb-access__addr { overflow-wrap: anywhere; }
+/* A Safe address in full: it wraps on a phone rather than being shortened. */
+.zb-safe-addr { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 4px; }
+.zb-safe-addr .z-mono { font-size: 15px; color: var(--z-heading); overflow-wrap: anywhere; min-width: 0; }
