@@ -429,7 +429,7 @@ check("EU membership drives the reverse-charge warnings", () => {
 
 check("invoice numbers template the year, and pad", () => {
   const n = formatInvoiceNumber(DEFAULT_SERIES, new Date("2026-08-30T00:00:00Z"));
-  assert.equal(n, "RE-2026-0001");
+  assert.equal(n, "INV-2026-0001");
   assert.equal(
     formatInvoiceNumber({ prefix: "{YY}{MM}-", next: 42, padding: 3 }, new Date("2026-03-05T00:00:00Z")),
     "2603-042",
@@ -718,10 +718,12 @@ check("an EU issuer is told the euro figure is not its own national conversion โ
   assert.ok(!pl.errors.some((e) => /ยง 16 Abs. 6/.test(e.legalBasis ?? "")), "no German paragraph at a Polish entity");
 });
 
-check("an invoice's language is its own choice, falling back to the profile, then German", () => {
+check("an invoice's language is its own choice, falling back to the profile, then the issuer's country", () => {
   assert.equal(invoiceLanguage("en", "de"), "en");
   assert.equal(invoiceLanguage(undefined, "en"), "en");
-  assert.equal(invoiceLanguage("", undefined), "de");
+  assert.equal(invoiceLanguage("", undefined, "DE"), "de");
+  assert.equal(invoiceLanguage("", undefined, "PL"), "en");
+  assert.equal(invoiceLanguage("", undefined), "en");
   assert.throws(() => invoiceLanguage("fr", "de"), InvoiceComplianceError);
 });
 

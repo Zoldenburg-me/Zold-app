@@ -97,6 +97,7 @@ const scripts = [
   "admin:ui:test",
   "review-resolution:test",
   "invoicing:test",
+  "invoicing-profile:test",
   "async-errors:test",
   "input-errors:test",
   "vat:test",

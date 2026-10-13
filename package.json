@@ -118,6 +118,7 @@
     "draft:test": "tsx scripts/draft-execution-test.ts",
     "draft:failure:test": "tsx scripts/draft-batch-failure-test.ts",
     "invoicing:test": "tsx scripts/invoicing-test.ts",
+    "invoicing-profile:test": "tsx scripts/invoicing-profile-test.ts",
     "async-errors:test": "tsx scripts/async-errors-test.ts",
     "input-errors:test": "tsx scripts/input-errors-test.ts",
     "vat:test": "tsx scripts/vat-test.ts",

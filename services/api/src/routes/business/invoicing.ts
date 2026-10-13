@@ -15,15 +15,12 @@ import express from "express";
 import { store } from "../../store.js";
 import {
   DEFAULT_DISPLAY,
-  DEFAULT_SERIES,
   EXEMPTION_REASONS,
   InvoiceComplianceError,
   SETTLEMENT_CURRENCY,
   checkCompliance,
   invoiceDueDate,
   invoiceLanguage,
-  issuerTaxIdProblem,
-  normaliseVatId,
   reasonForRuleSet,
   } from "../../domain/invoicing.js";
 import { EU_MEMBER_STATES, validateCustomReason } from "../../domain/jurisdictions.js";
@@ -32,13 +29,15 @@ import { cachedVatCheck, checkVatId } from "../../adapters/vies.js";
 import { ibanChecksumValid, normaliseIban } from "../../domain/contacts.js";
 import type { Organisation } from "../../domain/types.js";
 import { issueOutgoing } from "./issue-outgoing.js";
+import { payLinkForInvoice } from "./invoice-pay-link.js";
+import { baseUrlFor } from "../payment-requests.js";
 import { requireCapability, requirePermission, type OrgContext } from "../org-context.js";
 import { verifyPasskeyStepUp } from "../auth.js";
 import { wrap } from "../util.js";
 import { auditEntry } from "../../audit.js";
 import {
-  accountBankOf, customReasonsOf, draftDueDate, draftFrom, invoiceBankOf, issuerParty, issuerSuggestions,
-  jurisdictionOf, withConversion, } from "./shared.js";
+  accountBankOf, customReasonsOf, draftDueDate, draftFrom, invoiceBankOf, issuerIdentityFrom, issuerParty,
+  issuerSuggestions, jurisdictionOf, languageOf, seriesOf, withConversion, } from "./shared.js";
 import { redactedMessage } from "../../http/log-cause.js";
 
 /** Resolving the org and the caller's role for a request — injected so this
@@ -64,7 +63,8 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
       profile: {
         ...inv,
         display: { ...DEFAULT_DISPLAY, ...(inv.display ?? {}) },
-        numberSeries: inv.numberSeries ?? DEFAULT_SERIES,
+        numberSeries: seriesOf(ctx.org),
+        language: languageOf(ctx.org),
         customReasons: custom,
       },
       // Prefill: who the issuer is, straight off the organisation, and what
@@ -114,20 +114,12 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
     const next = { ...(ctx.org.invoicing ?? {}) } as NonNullable<Organisation["invoicing"]>;
     let ibanChange: { oldLast4: string | null; newLast4: string | null } | undefined;
 
-    // Checked by the issuer's country: a German Steuernummer is no shape for a
-    // Gabonese NIF. The app saves the address before this, so the country is current.
-    const { ruleSet } = jurisdictionOf(ctx.org);
-    if (typeof b.vatId === "string") {
-      const problem = issuerTaxIdProblem("vatId", b.vatId, ruleSet);
-      if (problem) return res.status(400).json({ error: problem, field: "vatId" });
-      // An EU number is stored normalised; one Zold has no format for, as written.
-      next.vatId = (ruleSet === "GENERIC" ? b.vatId.trim() : normaliseVatId(b.vatId)) || undefined;
-    }
-    if (typeof b.taxNumber === "string") {
-      const problem = issuerTaxIdProblem("taxNumber", b.taxNumber, ruleSet);
-      if (problem) return res.status(400).json({ error: problem, field: "taxNumber" });
-      next.taxNumber = b.taxNumber.trim() || undefined;
-    }
+    // The business profile's fields, checked by the issuer's country (a German
+    // Steuernummer is no shape for a Gabonese NIF) by the same code the
+    // business profile saves through.
+    const identity = issuerIdentityFrom(b, ctx.org.address?.country);
+    if (!identity.ok) return res.status(400).json({ error: identity.error, field: identity.field });
+    Object.assign(next, identity.patch);
     if (typeof b.smallBusiness === "boolean") next.smallBusiness = b.smallBusiness;
     if (b.defaultVatRate !== undefined) {
       // Any plausible percentage: 19 is German, 23 Polish, 25 Swedish. WHICH
@@ -140,7 +132,7 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
           .json({ error: `${b.defaultVatRate} is not a VAT percentage.`, field: "defaultVatRate" });
       } else next.defaultVatRate = rate;
     }
-    for (const k of ["registerCourt", "registerNumber", "managingDirector", "paymentTermsNote", "footerNote"] as const) {
+    for (const k of ["paymentTermsNote", "footerNote"] as const) {
       if (typeof b[k] === "string") next[k] = b[k].trim() || undefined;
     }
     if (typeof b.paymentTermsDays === "number" && b.paymentTermsDays >= 0) {
@@ -169,15 +161,16 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
       };
     }
     if (b.numberSeries && typeof b.numberSeries === "object") {
-      const prefix = String(b.numberSeries.prefix ?? DEFAULT_SERIES.prefix);
-      const nextNo = Number(b.numberSeries.next ?? DEFAULT_SERIES.next);
+      const fallback = seriesOf(ctx.org);
+      const prefix = String(b.numberSeries.prefix ?? fallback.prefix);
+      const nextNo = Number(b.numberSeries.next ?? fallback.next);
       if (!Number.isInteger(nextNo) || nextNo < 1) {
         return res.status(400).json({ error: "The next invoice number must be a positive integer." });
       }
       next.numberSeries = {
         prefix,
         next: nextNo,
-        padding: Math.min(10, Math.max(1, Number(b.numberSeries.padding ?? DEFAULT_SERIES.padding))),
+        padding: Math.min(10, Math.max(1, Number(b.numberSeries.padding ?? fallback.padding))),
       };
     }
     if (b.display && typeof b.display === "object") {
@@ -230,7 +223,7 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
       // keystroke and never asks VIES itself (POST …/vat-check does).
       const known = draft.recipient.vatId ? cachedVatCheck(draft.recipient.vatId) : undefined;
       if (known) draft.recipientVatCheck = known;
-      const language = invoiceLanguage(req.body?.language, ctx.org.invoicing?.language);
+      const language = invoiceLanguage(req.body?.language, languageOf(ctx.org));
       const dueDate = invoiceDueDate(req.body?.dueDate, draft.issueDate!, draftDueDate(ctx.org, draft.issueDate!));
       const report = checkCompliance(draft, jurisdictionOf(ctx.org), customReasonsOf(ctx.org));
       res.json({
@@ -271,16 +264,25 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
     res.json({ shape, check });
   });
 
-  /** Issue an outgoing invoice (issue-outgoing.ts). */
-  r.post("/:orgId/invoicing/issue", async (req, res) => {
+  /**
+   * Issue an outgoing invoice (issue-outgoing.ts), then make the payment link
+   * its Pay button opens (invoice-pay-link.ts). The invoice link is the one
+   * thing the customer is sent; `payment` says whether it can be paid from
+   * there or shows bank details only, and why.
+   */
+  r.post("/:orgId/invoicing/issue", wrap(async (req, res) => {
     const ctx = ctxOf(req, res);
     if (!ctx) return;
     if (!requireCapability(ctx, res, "invoices")) return;
     if (!requirePermission(ctx, res, "invoices.manage")) return;
 
     const answer = await issueOutgoing(ctx, req.body ?? {});
-    res.status(answer.status).json(answer.body);
-  });
+    const issuedId = answer.status === 201 ? (answer.body.invoice as { id?: string } | undefined)?.id : undefined;
+    const issued = issuedId ? store.findInvoice(issuedId) : undefined;
+    if (!issued) return res.status(answer.status).json(answer.body);
+    const payment = await payLinkForInvoice(ctx, issued, baseUrlFor(req));
+    res.status(201).json({ ...answer.body, payment });
+  }));
 
   // ── Chart of accounts ─────────────────────────────────────────────────────
 

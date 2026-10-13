@@ -14,6 +14,7 @@ import { requireCapability, requirePermission } from "../org-context.js";
 import { PaymentRequestError, ownerPaymentRequest, validateCreate } from "../../payment-requests.js";
 import { baseUrlFor, createPaymentRequest, orgsBackedBy } from "../payment-requests.js";
 import type { OrgRoutes } from "./invoicing.js";
+import { openLinkFor } from "./invoice-pay-link.js";
 
 export function createPaymentLinkRoutes(deps: OrgRoutes): express.Router {
   const { ctxOf } = deps;
@@ -52,6 +53,10 @@ export function createPaymentLinkRoutes(deps: OrgRoutes): express.Router {
         code: "NOT_THE_PAYEE",
       });
     }
+    // An invoice has one open link: the one its Pay button already opens.
+    const invoiceId = typeof req.body?.invoiceId === "string" ? req.body.invoiceId.trim() : "";
+    const open = invoiceId ? openLinkFor({ id: invoiceId, orgId: ctx.org.id }) : undefined;
+    if (open) return res.status(200).json(ownerPaymentRequest(open, baseUrlFor(req)));
     try {
       const input = validateCreate(req.body, user);
       const link = await createPaymentRequest(user, input, { kind: "app" }, ctx.org.id);

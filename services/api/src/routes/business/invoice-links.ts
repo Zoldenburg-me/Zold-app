@@ -23,6 +23,7 @@ import {
 import { passwordMatches } from "../../domain/passwords.js";
 import { forgetFailure, recordFailure, tooManyFailures } from "../../http/policy.js";
 import { invoiceBankOf, parsePayTo } from "./shared.js";
+import { openLinkPath } from "./invoice-pay-link.js";
 import type { Invoice } from "../../domain/types.js";
 
 /** Wrong passwords one link absorbs, from any number of addresses, per window. */
@@ -70,25 +71,29 @@ export function createInvoiceLinkRouter(): express.Router {
     store.findOrganisation(invoice.orgId)?.name ?? "";
 
   /**
-   * Bank details and footer come from the ISSUING org, and only for an invoice
-   * it issued. An incoming invoice must not leak our bank details to the
-   * supplier who filled it in.
+   * Bank details, footer and payment link come from the ISSUING org, and only
+   * for an invoice it issued. An incoming invoice must not leak our bank
+   * details to the supplier who filled it in. The footer's labels are in the
+   * invoice's language, not German by default.
    */
   const issuerExtras = (invoice: Invoice) => {
     if (invoice.direction !== "outgoing") return undefined;
     const org = store.findOrganisation(invoice.orgId);
+    const director = invoice.issued?.language === "de" ? "Geschäftsführung" : "Managing director";
     const footerNote = [
       org?.invoicing?.footerNote,
-      org?.invoicing?.registerCourt && org?.invoicing?.registerNumber
-        ? `${org.invoicing.registerCourt} ${org.invoicing.registerNumber}`
-        : undefined,
-      org?.invoicing?.managingDirector
-        ? `Geschäftsführer: ${org.invoicing.managingDirector}`
-        : undefined,
+      [org?.invoicing?.registerCourt, org?.invoicing?.registerNumber].filter(Boolean).join(" ") || undefined,
+      org?.invoicing?.managingDirector ? `${director}: ${org.invoicing.managingDirector}` : undefined,
     ]
       .filter(Boolean)
       .join(" · ");
-    return { bank: org ? invoiceBankOf(org) : undefined, footerNote: footerNote || undefined };
+    return {
+      bank: org ? invoiceBankOf(org) : undefined,
+      footerNote: footerNote || undefined,
+      // The customer holding the invoice link is the one its payment link was
+      // made for; a settled invoice has nothing left to pay.
+      payPath: invoice.state === "PAID" || invoice.state === "RECONCILED" ? undefined : openLinkPath(invoice),
+    };
   };
 
   r.get("/:token", async (req, res) => {

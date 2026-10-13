@@ -56,6 +56,7 @@ import { emailLooksValid } from "../domain/email.js";
 import { CEILINGS, ceilingRefusal } from "../domain/ceilings.js";
 import { paymentReviewRequired, reviewHeldOnPlanChange } from "../domain/payment-review.js";
 import { verifyPasskeyStepUp } from "./auth.js";
+import { issuerIdentityFrom } from "./business/shared.js";
 
 const INVITE_TTL_MS = 3 * 24 * 60 * 60 * 1000; // Gnosis expired invites at 3 days
 /** An organisation's name and legal name, in characters. */
@@ -314,6 +315,17 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
         }
       }
       patch.address = next;
+    }
+    // The business profile is where the issuer's tax and registration details
+    // are kept; invoices read them from here. Checked by the country this same
+    // save leaves the organisation in.
+    const identity = issuerIdentityFrom(b, patch.address?.country ?? ctx.org.address?.country);
+    if (!identity.ok) return res.status(400).json({ error: identity.error, field: identity.field });
+    if (Object.keys(identity.patch).length) {
+      patch.invoicing = { ...ctx.org.invoicing, ...identity.patch };
+      // The free-text tax id typed at signup stands in until these are set;
+      // once they are, it would only come back as a second, stale number.
+      if ("vatId" in identity.patch || "taxNumber" in identity.patch) patch.taxId = undefined;
     }
     if (b.reporting && typeof b.reporting === "object") {
       const next = { ...ctx.org.reporting };
