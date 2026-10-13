@@ -16,7 +16,7 @@ import { wrap } from "./util.js";
 import { randomUUID } from "node:crypto";
 import { CHAIN_ID, EMAIL_VERIFICATION, HARNESS, SECURITY } from "../config.js";
 import { emailHeldBy } from "../domain/email.js";
-import { accountBalances } from "../chain.js";
+import { accountBalances, shownBalances } from "../chain.js";
 import { store, type User } from "../store.js";
 import { rateLimit } from "../http/policy.js";
 import { requireSession, revokeOtherSessions, tokenHash } from "../http/sessions.js";
@@ -147,7 +147,7 @@ export function createAuthRouter(deps: AuthDeps) {
       if (!session) return;
       const user = store.findUser(session.userId);
       if (!user) return res.status(404).json({ error: "session user not found" });
-      const balances = await accountBalances(user.address).catch(() => ({ balanceEur: 0, safeBalanceEur: 0 }));
+      const balances = await shownBalances(user.address);
       res.json({ ...publicUser(user), ...balances });
     }),
   );
@@ -441,7 +441,7 @@ export function createAuthRouter(deps: AuthDeps) {
       // Minted before the next await, so a recovery that lands during it
       // revokes this session too.
       const session = withSession(user);
-      const balances = await accountBalances(user.address).catch(() => ({ balanceEur: 0, safeBalanceEur: 0 }));
+      const balances = await shownBalances(user.address);
       res.json({ ...session, ...balances });
     }),
   );

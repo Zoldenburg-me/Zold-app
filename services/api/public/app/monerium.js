@@ -471,7 +471,8 @@ function switchView(view) {
 function renderShellPages() {
   if (!user) return;
   $("send-card")?.classList.toggle("hidden", activeView !== "dashboard" || !kycApproved(user));
-  $("acct-balance").innerHTML = `<span class="cur">€</span>${fmt(user.balanceEur ?? 0)}`;
+  const bal = knownBalance(user);
+  $("acct-balance").innerHTML = bal === null ? esc(UNREAD_BALANCE) : `<span class="cur">€</span>${fmt(bal)}`;
   const movedAway = ibanMovedAway(user);
   $("acct-iban").textContent = user.iban || (movedAway ? "Moved to another app" : "Not issued yet");
   const plannedSafe = needsPasskeySafeSetup(user) ? user.passkeySafe?.address : null;

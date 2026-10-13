@@ -1170,7 +1170,7 @@ OB["b-import-confirm"] = {
    fresh deployment, and never a deployment of the account's own Safe. */
 function obImportDone(bound) {
   clearSafeImportFlag();
-  renderUser({ ...bound, balanceEur: bound.balanceEur ?? 0, safeBalanceEur: bound.safeBalanceEur ?? 0 });
+  renderUser(bound);
   obImport = null;
   obClearDraft();
   const next = obNextAfterAccount();
