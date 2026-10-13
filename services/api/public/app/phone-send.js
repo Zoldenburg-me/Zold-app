@@ -149,6 +149,20 @@ function phQuoteRows(q, payee) {
   ]);
 }
 
+/* What the amount screen says is available, and why an amount is refused
+   before pricing. An unread balance refuses every amount: it cannot be
+   checked, and €0.00 would be a guess. */
+const phAvailableText = () => {
+  const bal = knownBalance(user);
+  return bal === null ? `${UNREAD_BALANCE}. Reload to try again.` : `Available ${phEur(bal)}`;
+};
+function phAmountRefusal(n) {
+  const bal = knownBalance(user);
+  if (bal === null) return { label: UNREAD_BALANCE, error: "Your balance could not be read just now, so this amount cannot be checked. Reload to try again." };
+  if (n > bal) return { label: "More than your balance", error: `You have ${phEur(bal)}.` };
+  return null;
+}
+
 PH["send/amount"] = {
   title: "Amount",
   // Redraw once, when a payee named in the URL is found in the loaded history.
@@ -165,7 +179,7 @@ PH["send/amount"] = {
         <label for="ph-amount" class="z-amount-in__label">You send</label>
         <div class="z-amount-in__box"><span class="z-amount-in__cur" aria-hidden="true">€</span>
           <input id="ph-amount" name="amount" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00…" value="${esc(phSend.amount)}" aria-describedby="ph-amount-hint ph-amount-err"></div>
-        <p class="z-hint z-fig" id="ph-amount-hint">Available ${esc(phEur(user?.balanceEur ?? 0))}</p>
+        <p class="z-hint z-fig" id="ph-amount-hint">${esc(phAvailableText())}</p>
         <p class="z-err" id="ph-amount-err" role="alert" hidden></p>
       </div>
       <div id="ph-quote" aria-live="polite">${phQuoteRows(null, payee)}</div>
@@ -195,7 +209,8 @@ PH["send/amount"] = {
       const n = parseEurInput(typed);
       if (!(n > 0)) { setNext("Enter an amount", false); showErr(eurInputError(typed)); return; }
       if (phSendBlocked()) { setNext("Sending is not open yet", false); return; }
-      if (n > (user?.balanceEur ?? 0)) { setNext("More than your balance", false); showErr(`You have ${phEur(user?.balanceEur ?? 0)}.`); return; }
+      const refusal = phAmountRefusal(n);
+      if (refusal) { setNext(refusal.label, false); showErr(refusal.error); return; }
       setNext("Pricing…", false);
       try {
         const q = await api("/api/quotes", { userId: user.id, rail: "sepa", sendEur: n });

@@ -166,7 +166,7 @@ function phDeskBalance(u) {
     : `<div class="z-dhome__ids z-dhome__ids--none"><p class="z-sub">Your IBAN appears here once Monerium has verified you and issued it.</p>
         ${Z.button({ label: "Verify your identity", id: "ph-det-verify", className: "z-btn--sm" })}</div>`;
   return `<section class="z-card z-dhome__bal">
-    ${phBalance(u.balanceEur ?? u.safeBalanceEur ?? 0, "Balance")}
+    ${phBalance(knownBalance(u), "Balance")}
     <div class="z-dhome__acts">
       ${Z.button({ variant: "primary", icon: "arrow_outward", label: "Send", href: "#send" })}
       ${Z.button({ icon: "add", label: "Add money", href: "#add" })}

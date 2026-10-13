@@ -51,6 +51,7 @@ const scripts = [
   "passkey-prompt:test",
   "offline-bar:test",
   "iban-moved:ui:test",
+  "unread-balance:ui:test",
   "money-in:ui:test",
   "execution:test",
   "gas:test",
