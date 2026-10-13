@@ -35,6 +35,20 @@ export function isOwnCompanyOrg(me, org, accounts) {
   return org.role === "owner" && !accounts.some((a) => a.backingUserId);
 }
 
+/**
+ * The login's own Safe, where this organisation may show it: in the company
+ * the login IS (isOwnCompanyOrg), or in a person's own personal space.
+ * Anywhere else it is not this organisation's account, so null. The balance
+ * is null when GET /api/session could not read the chain.
+ */
+export function ownSafeHere(me, org, accounts) {
+  if (!me?.address || me.passkeySafe?.status !== "active") return null;
+  const company = isOwnCompanyOrg(me, org, accounts);
+  const personal = !isCompanyLogin(me) && org?.type === "personal" && org.role === "owner";
+  if (!company && !personal) return null;
+  return { address: me.address, balanceEur: typeof me.balanceEur === "number" ? me.balanceEur : null, company };
+}
+
 const lower = (a) => String(a || "").toLowerCase();
 
 /**

@@ -7,7 +7,7 @@
  * `org` and the few places that reassign call a setter.
  */
 import { render } from "./shell.js";
-import { isCompanyLogin, readGuardians, recoveryStatus } from "./access-model.js";
+import { isCompanyLogin, ownSafeHere, readGuardians, recoveryStatus } from "./access-model.js";
 
 export const $ = (s) => document.querySelector(s);
 export const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -140,6 +140,18 @@ export function maskIban(iban) {
   return s.length > 12 ? `${s.slice(0, 4)} ${s.slice(4, 8)} •••• ${s.slice(-4)}` : Z.groupIban(s);
 }
 
+/** The signed-in login's own Safe, where the open organisation may show it
+ *  (ownSafeHere). It exists before any Monerium IBAN does, so it is shown
+ *  without one. `accounts` is the organisation's GET .../accounts. */
+export const ownSafe = (accounts) => ownSafeHere(me, org, accounts);
+
+/** The Safe's address in full with a Copy button: one wrong character loses
+ *  the money, so it is never shortened. */
+export const safeAddressHtml = (s) => `<div class="zb-safe-addr">
+    <span class="z-mono" translate="no">${esc(s.address)}</span>
+    <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="copy-text" data-text="${esc(s.address)}" data-said="Address copied">${Z.icon("content_copy")}<span>Copy</span></button></div>
+  <p class="zb-hint">Send only EURe${testMode === true ? " on Base Sepolia, the test network" : testMode === false ? " on Base" : ""} to this address.</p>`;
+
 /* What each role may do, as the API's permission table has it. */
 export const ROLE_WORD = { owner: "Owner", admin: "Admin", payer: "Payer", accountant: "Accountant", viewer: "Viewer" };
 export const ROLE_CAN = {
@@ -263,6 +275,19 @@ export function ensureMe() {
   if (me) return Promise.resolve(me);
   mePromise ??= api("/api/session").then((u) => { me = u; return u; }, (e) => { mePromise = null; throw e; });
   return mePromise;
+}
+/** The session read again, for a view that shows the Safe's balance: the
+ *  chain moves while the page is open, so the cached read is not reused. A
+ *  failed read keeps who is signed in and drops the figure it cannot vouch for. */
+export async function refreshMe() {
+  if (!me) return ensureMe();
+  try {
+    me = await api("/api/session");
+  } catch {
+    const { balanceEur: _b, safeBalanceEur: _s, ...rest } = me;
+    me = rest;
+  }
+  return me;
 }
 export const setTestMode = (v) => { testMode = v; };
 export const setUsdSymbol = (s) => { if (typeof s === "string" && /^[A-Za-z0-9.]{1,11}$/.test(s)) usdSymbol = s; };
