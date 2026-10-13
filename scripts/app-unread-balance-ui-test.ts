@@ -114,4 +114,11 @@ await t("send: an unread balance is not 'Available €0.00', and no amount is pr
   assert.match(run("phAvailableText()"), /Available €12\.50/);
 });
 
+await t("an unread balance has no hide/show toggle; a read one keeps it", () => {
+  setUser(unread);
+  assert.doesNotMatch(flat(run("PH.home.html()")), /id="ph-hide"/);
+  setUser(funded);
+  assert.match(flat(run("PH.home.html()")), /id="ph-hide"/);
+});
+
 console.log(`\n${pass} passed`);

@@ -25,7 +25,7 @@ function phBalance(value, label) {
     : `<span class="z-balance__fig${long ? " z-balance__fig--long" : ""}"><span class="z-balance__cur">€</span>${esc(whole)}<span class="z-balance__cents">${esc(cents)}</span></span>`;
   return `<section class="z-balance" aria-labelledby="ph-bal-label">
     <div class="z-balance__head"><h2 class="z-balance__label" id="ph-bal-label">${esc(label)}</h2>
-      <button type="button" class="z-iconbtn z-iconbtn--bare" id="ph-hide" aria-pressed="${phHidden}" aria-label="${phHidden ? "Show balance" : "Hide balance"}">${Z.icon(phHidden ? "visibility_off" : "visibility")}</button></div>
+      ${value === null ? "" : `<button type="button" class="z-iconbtn z-iconbtn--bare" id="ph-hide" aria-pressed="${phHidden}" aria-label="${phHidden ? "Show balance" : "Hide balance"}">${Z.icon(phHidden ? "visibility_off" : "visibility")}</button>`}</div>
     <p class="z-fig">${fig}</p>${value === null ? `<p class="z-hint">It could not be read just now. Reload to try again.</p>` : ""}
   </section>`;
 }
@@ -160,7 +160,8 @@ PH.home = {
       `)}`;
   },
   bind(root) {
-    root.querySelector("#ph-hide").onclick = () => {
+    const hide = root.querySelector("#ph-hide"); // absent while the balance is unread
+    if (hide) hide.onclick = () => {
       phHidden = !phHidden;
       try { localStorage.setItem("zold-hide-balance", phHidden ? "1" : "0"); } catch { /* hidden for this visit */ }
       phRender();
