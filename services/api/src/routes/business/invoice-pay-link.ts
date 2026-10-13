@@ -23,6 +23,7 @@ import {
 import { createPaymentRequest, orgsBackedBy } from "../payment-requests.js";
 import type { Invoice } from "../../domain/types.js";
 import type { OrgContext } from "../org-context.js";
+import { redactedMessage } from "../../http/log-cause.js";
 
 const DAY_MS = 24 * 60 * 60_000;
 /** How long after its due date an invoice can still be paid by its link. */
@@ -87,6 +88,13 @@ export async function payLinkForInvoice(ctx: OrgContext, invoice: Invoice, baseU
     return { ok: true, url: ownerPaymentRequest(link, baseUrl).url, amountEur: link.amountEur, reused: false };
   } catch (err) {
     if (err instanceof PaymentRequestError) return { ok: false, code: "REFUSED", reason: err.message };
-    throw err;
+    // The invoice is already issued and numbered: a 500 here would invite a
+    // retry that issues it twice. Say so and log; the button can be added later.
+    console.error(`invoice pay link: ${invoice.id}: ${redactedMessage(err)}`);
+    return {
+      ok: false,
+      code: "ERROR",
+      reason: "The Pay button could not be added just now. Add it later with Payment link in the invoice list.",
+    };
   }
 }

@@ -317,7 +317,9 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       patch.address = next;
     }
     // The business profile is where the issuer's tax and registration details
-    // are kept; invoices read them from here. Checked by the country this same
+    // are kept; invoices read them from here. They are company facts, so they
+    // take org.update like the name and address, not the invoices plan (the
+    // signup tax id they replace never did). Checked by the country this same
     // save leaves the organisation in.
     const identity = issuerIdentityFrom(b, patch.address?.country ?? ctx.org.address?.country);
     if (!identity.ok) return res.status(400).json({ error: identity.error, field: identity.field });
