@@ -26,6 +26,12 @@ let txFilter = "all";
 let contacts = JSON.parse(localStorage.getItem("zoll-contacts") || "[]");
 
 const fmt = (n, dp = 2) => Number(n).toLocaleString("en", { minimumFractionDigits: dp, maximumFractionDigits: dp });
+/* The balance the server read from the chain, or null: a failed read leaves
+   the fields out (shownBalances, chain.ts), and an unread balance is never
+   drawn as €0.00. */
+const knownBalance = (u) =>
+  typeof u?.balanceEur === "number" ? u.balanceEur : typeof u?.safeBalanceEur === "number" ? u.safeBalanceEur : null;
+const UNREAD_BALANCE = "Balance unavailable";
 /* Anything that reaches an innerHTML template goes through this first. Some of
    it is typed by the user (recipient names), and some arrives from a payout
    partner (anchor error text, anchor URLs) — neither is markup. */

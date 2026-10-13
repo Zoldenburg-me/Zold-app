@@ -11,9 +11,10 @@ function renderUser(u) {
   }
   user = u;
   renderKycState(u);
-  $("balance").innerHTML = `<span class="cur">€</span>${fmt(u.balanceEur ?? 0)}`;
-  $("safe-balance").textContent = `€${fmt(u.safeBalanceEur ?? 0)}`;
-  $("vault-balance").textContent = `€${fmt(u.balanceEur ?? u.safeBalanceEur ?? 0)}`;
+  const bal = knownBalance(u);
+  $("balance").innerHTML = bal === null ? esc(UNREAD_BALANCE) : `<span class="cur">€</span>${fmt(bal)}`;
+  $("safe-balance").textContent = typeof u.safeBalanceEur === "number" ? `€${fmt(u.safeBalanceEur)}` : UNREAD_BALANCE;
+  $("vault-balance").textContent = bal === null ? UNREAD_BALANCE : `€${fmt(bal)}`;
   const plannedSafe = needsPasskeySafeSetup(u) ? u.passkeySafe?.address : null;
   $("address").textContent = plannedSafe ? `planned ${shortAddr(plannedSafe)} — finish setting up your account` : u.address;
   document.querySelector('[data-copy="address"]')?.classList.toggle("hidden", !!plannedSafe);
