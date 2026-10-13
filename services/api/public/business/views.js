@@ -10,7 +10,7 @@
  * so a screen is added by naming it and the shell dispatches without knowing
  * what exists. Every renderer reads the live `org` from core.js.
  */
-import { $, Z, api, cap, countrySelect, day, esc, eur, gateHtml, maskIban, me, org, ownSafe, plain, refreshMe, roleCan, safeAddressHtml, ymd } from "./core.js";
+import { $, Z, api, cap, countrySelect, day, esc, eur, gateHtml, issuerFieldNames, issuerIds, maskIban, me, org, ownSafe, plain, refreshMe, roleCan, safeAddressHtml, ymd } from "./core.js";
 
 export const RENDER = {};
 export const META = {};
@@ -441,11 +441,28 @@ RENDER.soon = async () => {
 
 const settingsBack = () => linkBtn("Settings", "settings", "arrow_back");
 
-META.organisation = () => ({ title: "Organisation", sub: "Printed on every invoice you issue. The country decides which invoicing rules apply.", actions: `${settingsBack()}${primary("Save", 'data-act="save-org"')}` });
+META.organisation = () => ({ title: "Business profile", sub: "Who you are on every invoice you issue. The country decides which invoicing rules apply.", actions: `${settingsBack()}${primary("Save", 'data-act="save-org"')}` });
+
+/* The fields invoices print about the issuer: one place, read by the
+   invoicing profile and every invoice. Labels follow the country. */
+function issuerFieldsHtml(country) {
+  const n = issuerFieldNames(country);
+  const ids = issuerIds(org);
+  const d = org.issuerDetails || {};
+  const inp = (id, label, value, ex) => `<div><label for="${id}">${esc(label)} <span class="desc">(optional)</span></label><input id="${id}" name="${id}" autocomplete="off" spellcheck="false" value="${esc(value || "")}"${ex ? ` placeholder="${esc(ex)}…"` : ""} /></div>`;
+  return `<div id="s-issuer">
+      <h3 class="z-eyebrow" style="margin:18px 0 6px">Tax registration</h3>
+      <p class="desc" style="margin:0 0 6px">Most countries require at least one of these on an invoice. A number Zold has no format for is printed as you write it.</p>
+      <div class="grid g2">${inp("s-vatid", n.vatId, ids.vatId, n.vatEx)}${inp("s-taxno", n.taxNumber, ids.taxNumber, n.taxEx)}</div>
+      <h3 class="z-eyebrow" style="margin:18px 0 6px">Company registration</h3>
+      <div class="grid g2">${inp("s-court", n.court, d.registerCourt, n.courtEx)}${inp("s-reg", n.regNo, d.registerNumber, n.regEx)}</div>
+      <div class="grid g2">${inp("s-gf", n.director, d.managingDirector, "")}</div>
+    </div>`;
+}
 
 RENDER.organisation = async () => {
   const reporting = cap("settings.reportingCurrency").allowed;
-  return `<form class="card" id="org-form" onsubmit="return false">
+  return { html: `<form class="card" id="org-form" onsubmit="return false">
       <div class="grid g2">
         <div><label for="s-name">Name</label><input id="s-name" name="organization" autocomplete="organization" value="${esc(org.name)}"${org.type === "personal"
           ? ' readonly aria-describedby="s-name-hint" /><p class="zb-hint" id="s-name-hint">Your personal space is named after you. Change your name in the Zold app, under Profile.</p>' : " />"}</div>
@@ -460,13 +477,19 @@ RENDER.organisation = async () => {
         <div><label for="s-city">City</label><input id="s-city" name="city" autocomplete="address-level2" value="${esc(org.address?.city || "")}" /></div>
         <div><label for="s-country">Country</label>${countrySelect("s-country", org.address?.country)}</div>
       </div>
-      <div class="grid g2">
-        <div><label for="s-tax">Tax ID</label><input id="s-tax" name="tax" autocomplete="off" value="${esc(org.taxId || "")}" /></div>
+      ${issuerFieldsHtml(org.address?.country)}
+      <div class="grid g2" style="margin-top:12px">
         <div><label for="s-notify">Notification email</label><input id="s-notify" name="email" type="email" autocomplete="email" spellcheck="false" value="${esc(org.notificationEmail || "")}" /></div>
+        <div><label for="s-currency">Reporting currency${reporting ? "" : ' <span class="desc">(in a paid plan)</span>'}</label>
+          <input id="s-currency" name="currency" autocomplete="off" value="${esc(org.reporting.currency)}" style="max-width:140px"${reporting ? "" : " disabled"} /></div>
       </div>
-      <label for="s-currency">Reporting currency${reporting ? "" : ' <span class="desc">(in a paid plan)</span>'}</label>
-      <input id="s-currency" name="currency" autocomplete="off" value="${esc(org.reporting.currency)}" style="max-width:140px"${reporting ? "" : " disabled"} />
-    </form>`;
+    </form>`,
+  // The field names follow the country as it is picked; what was typed stays.
+  bind: () => $("#s-country")?.addEventListener("change", (e) => {
+    const typed = Object.fromEntries(["s-vatid", "s-taxno", "s-court", "s-reg", "s-gf"].map((id) => [id, $("#" + id)?.value ?? ""]));
+    $("#s-issuer").outerHTML = issuerFieldsHtml(e.target.value);
+    for (const [id, v] of Object.entries(typed)) $("#" + id).value = v;
+  }) };
 };
 
 META.plan = () => ({ title: "Plan", sub: "Zold takes no payments yet: a paid plan comes with the trial, or Zold grants it. Switching down pauses features and deletes nothing.", actions: settingsBack() });
@@ -539,34 +562,32 @@ RENDER["invoicing-settings"] = async () => {
   const on = (k) => (p.display?.[k] !== false ? "checked" : "");
   const f = (id, label, value, extra = "") => `<label for="${id}">${label}</label><input id="${id}" name="${id}" autocomplete="off" value="${esc(value ?? "")}" ${extra} />`;
   const sug = d.suggested || {};
-  const de = j.ruleSet === "DE";
-  // Examples only for the shapes Zold knows: the issuer's EU format, a German
-  // Steuernummer. Outside the EU the number is taken as written, so none.
-  const vatExample = j.ruleSet === "GENERIC" ? ""
-    : Object.values(ref.vatIdFormats || {}).find((x) => x.country === j.country && x.prefix !== "XI")?.example || "";
-  const idExample = (ex) => `spellcheck="false"${ex ? ` placeholder="${esc(ex)}…"` : ""}`;
+  const names = issuerFieldNames(iss.country);
+  const a = org.address || {};
+  const editProfile = linkBtn("Edit", "organisation", "edit");
+  const missing = [
+    !(iss.addressLine && iss.city && iss.country) ? "an address" : "",
+    !(iss.vatId || iss.taxNumber) ? "a tax number" : "",
+  ].filter(Boolean);
+  const issuerRows = [
+    ["Name", iss.name], ["Address", [a.line1, a.line2, [a.postalCode, a.city].filter(Boolean).join(" ")].filter(Boolean).join(", ")],
+    ["Country", j.countryName], [names.vatId, iss.vatId], [names.taxNumber, iss.taxNumber],
+    ["Registration", [p.registerCourt, p.registerNumber].filter(Boolean).join(" ")], [names.director, p.managingDirector],
+  ].filter(([, v]) => v);
   return jurisdictionBanner(j, d.disclaimer, d.notVerified) + `
-  ${card(org.type === "business" ? "Your company" : "You", "Printed at the top of every invoice. The country decides which invoicing rules apply.",
-    `<div class="grid g2"><div>
-        ${f("i-legal", org.type === "business" ? "Registered name" : "Name on invoices", org.legalName || sug.name || org.name,)}
-        ${!org.legalName && sug.source === "monerium" ? '<p class="desc" style="margin-top:6px">Filled in from your Monerium profile. Check it matches the register, then save.</p>' : ""}
-        <label for="i-country">Country</label>${countrySelect("i-country", org.address?.country)}
-      </div><div>
-        ${f("i-addr1", "Street and number", org.address?.line1, 'placeholder="Gartenstraße 11…"')}
-        ${f("i-addr2", "Address line 2 (optional)", org.address?.line2)}
-        <div style="display:grid;grid-template-columns:120px 1fr;gap:12px">
-          <div>${f("i-zip", "Postcode", org.address?.postalCode, 'spellcheck="false"')}</div>
-          <div>${f("i-city", "City", org.address?.city)}</div>
-        </div>
-      </div></div>`)}
-  ${card("Your details on an invoice", esc(j.ruleSet === "DE"
-      ? "§ 14 Abs. 4 UStG requires your full name, address and either a Steuernummer or a USt-IdNr. on every invoice."
+  ${card("From your business profile", esc(j.ruleSet === "DE"
+      ? "Printed at the top of every invoice. § 14 Abs. 4 UStG requires your full name, address and either a Steuernummer or a USt-IdNr."
       : j.ruleSet === "EU"
-        ? "Art. 226 of the VAT Directive requires your full name, address and VAT number on every invoice."
-        : `Almost every country requires your full name, address and a tax number on an invoice. Zold doesn’t know which one ${j.countryName} wants: add it as your own rule if these don’t fit.`),
+        ? `Printed at the top of every invoice. Art. 226 of the VAT Directive requires your full name, address and VAT number; ${j.countryName}’s own additions aren’t checked.`
+        : `Printed at the top of every invoice. Almost every country requires your full name, address and a tax number. Zold doesn’t know which one ${j.countryName || "your country"} wants: add it as your own rule if these don’t fit.`),
+    `<dl class="zb-set-rows">${issuerRows.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>
+     ${missing.length ? `<div class="zb-note zb-note--a" style="margin-top:10px">${Z.icon("badge")}<span>Your business profile has no ${esc(missing.join(" and no "))} yet. Invoices need ${missing.length > 1 ? "them" : "it"}.</span></div>` : ""}
+     ${!org.legalName && sug.source === "monerium" ? `<p class="desc" style="margin-top:8px">Your Monerium profile names you ${esc(sug.name)}. Add it as the legal name in your business profile if that is what the register says.</p>` : ""}`,
+    editProfile)}
+  ${card("Tax and numbering", "Defaults for new invoices. Each invoice can change them.",
     `<div class="grid g2"><div>
-        ${f("i-vatid", de ? "USt-IdNr." : "VAT ID", p.vatId, idExample(vatExample))}
-        ${f("i-taxno", de ? "Steuernummer" : "Tax number", p.taxNumber, idExample(de ? "123/456/78901" : ""))}
+        <label for="i-lang">Invoice language</label>
+        <select id="i-lang" name="i-lang"><option value="en"${p.language !== "de" ? " selected" : ""}>English</option><option value="de"${p.language === "de" ? " selected" : ""}>Deutsch</option></select>
         <label for="i-rate">Usual VAT rate</label>
         ${ref.vatRates
           ? `<select id="i-rate" name="i-rate">${ref.vatRates.map((r) => `<option value="${r}" ${p.defaultVatRate === r ? "selected" : ""}>${r} %</option>`).join("")}</select>`
@@ -576,25 +597,23 @@ RENDER["invoicing-settings"] = async () => {
           <span><b>${j.ruleSet === "DE" ? "Kleinunternehmer (§ 19 UStG)" : "Small business scheme"}</b>New invoices don’t charge VAT, and charging it is refused.${j.ruleSet === "DE" ? " The § 19 note is printed." : " You supply the note your country requires."}</span></label>
       </div><div>
         ${f("i-terms-days", "Days to pay", p.paymentTermsDays, 'type="number" min="0" inputmode="numeric"')}
-        ${f("i-terms", "Payment terms note", p.paymentTermsNote, 'placeholder="Zahlbar innerhalb von 14 Tagen ohne Abzug…"')}
+        ${f("i-terms", "Payment terms note", p.paymentTermsNote, `placeholder="${esc(p.language === "de" ? "Zahlbar innerhalb von 14 Tagen ohne Abzug" : "Payable within 14 days")}…"`)}
         <label for="i-prefix">Invoice number series</label>
-        <div style="display:flex;gap:8px"><input id="i-prefix" name="i-prefix" autocomplete="off" value="${esc(p.numberSeries.prefix)}" placeholder="RE-{YYYY}-…" />
+        <div style="display:flex;gap:8px"><input id="i-prefix" name="i-prefix" autocomplete="off" value="${esc(p.numberSeries.prefix)}" placeholder="INV-{YYYY}-…" />
           <label for="i-next" class="z-sr">Next number</label><input id="i-next" name="i-next" autocomplete="off" type="number" min="1" inputmode="numeric" value="${esc(p.numberSeries.next)}" style="width:110px" /></div>
         <p class="desc" style="margin-top:6px">Next: <b>${esc(p.numberSeries.prefix.replace("{YYYY}", new Date().getFullYear()))}${String(p.numberSeries.next).padStart(p.numberSeries.padding, "0")}</b>. A number is used once; it doesn’t have to be gapless${esc(j.ruleSet === "DE" ? " (§ 14 Abs. 4 Nr. 4 UStG)" : j.ruleSet === "EU" ? " (Art. 226(2) VAT Directive)" : "")}.</p>
       </div></div>`)}
-  ${card("Bank details and footer", "Shown on the invoice when the matching block is switched on below.",
+  ${card("Bank details and footer", "Shown on the invoice when the matching block is switched on below. Customers can also pay with the Pay button on the invoice.",
     `<div class="grid g2"><div>
         ${f("i-bank-holder", "Account holder", p.bank?.holder, d.accountBank ? `placeholder="${esc(d.accountBank.holder)}…"` : "")}
         ${f("i-bank-iban", "IBAN", p.bank?.iban, `spellcheck="false"${d.accountBank ? ` placeholder="${esc(Z.groupIban(d.accountBank.iban))}…"` : ""}`)}
         ${bankNote(p.bank?.iban, d.accountBank)}
         ${f("i-bank-bic", "BIC", p.bank?.bic, 'spellcheck="false"')}
       </div><div>
-        ${f("i-court", de ? "Amtsgericht" : "Register court", p.registerCourt, 'placeholder="Amtsgericht Kassel…"')}
-        ${f("i-reg", de ? "Registernummer" : "Register number", p.registerNumber, 'placeholder="HRB 12345…"')}
-        ${f("i-gf", de ? "Geschäftsführer" : "Managing director", p.managingDirector)}
-      </div></div>
-      ${f("i-footer", "Footer note", p.footerNote)}`)}
-  ${card("What appears on the invoice", "Optional blocks only. Everything § 14 UStG requires is always printed: a switch that can produce an invalid invoice is worse than no switch.",
+        ${f("i-footer", "Footer note", p.footerNote)}
+        <p class="desc" style="margin-top:6px">Printed with your company registration from the business profile.</p>
+      </div></div>`)}
+  ${card("What appears on the invoice", `Optional blocks only. Everything ${esc(j.ruleSet === "DE" ? "§ 14 UStG" : j.ruleSet === "EU" ? "the VAT Directive" : "Zold checks")} requires is always printed: a switch that can produce an invalid invoice is worse than no switch.`,
     `<div class="grid g3">${ref.displayOptions.map((k) => `<label class="zb-check" style="margin:4px 0"><input type="checkbox" data-display="${esc(k)}" ${on(k)} /><span style="color:var(--z-text)">${esc(k.replace(/([A-Z])/g, " $1").toLowerCase())}</span></label>`).join("")}</div>`)}
   ${card("Your own rules", `For anything ${esc(j.countryName)} requires that Zold doesn’t encode. The note you write is printed on the invoice word for word; Zold doesn’t check it.`,
     (p.customReasons ?? []).length

@@ -148,12 +148,13 @@ export function validateLines(input: unknown): { lines: InvoiceLine[]; total: st
 export function supplierView(
   invoice: Invoice,
   payorName: string,
-  /** Issuer extras that belong on a printed invoice: where to pay, and the
-   *  registration footer German invoices commonly carry. Passed in rather than
-   *  read here so this module stays free of the store. */
+  /** Issuer extras that belong on a printed invoice: where to pay, the
+   *  registration footer, and the open payment link the Pay button opens.
+   *  Passed in rather than read here so this module stays free of the store. */
   issuerExtras?: {
     bank?: { holder?: string; iban?: string; bic?: string; bankName?: string };
     footerNote?: string;
+    payPath?: string;
   },
 ) {
   return {
@@ -169,7 +170,11 @@ export function supplierView(
      */
     issued: invoice.issued,
     ...(invoice.issued && issuerExtras
-      ? { bank: issuerExtras.bank, footerNote: issuerExtras.footerNote }
+      ? {
+          bank: issuerExtras.bank,
+          footerNote: issuerExtras.footerNote,
+          ...(issuerExtras.payPath ? { payPath: issuerExtras.payPath } : {}),
+        }
       : {}),
     supplier: invoice.supplier,
     // The printed columns only: a line's `receipt` names a ledger row and is

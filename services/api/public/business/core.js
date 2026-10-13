@@ -19,6 +19,37 @@ export const countrySelect = (id, current) =>
   `<select id="${id}" name="country" autocomplete="country">${Z.countries(current).map((o) =>
     `<option value="${esc(o.value)}"${o.value === (current || "") ? " selected" : ""}${o.disabled ? " disabled" : ""}>${esc(o.label)}</option>`).join("")}</select>`;
 
+/* The issuer's tax identifiers, as the business profile keeps them. Until
+   they are set, the tax id typed at signup stands in, sorted the way the
+   server sorts it (country letters first: a VAT ID). */
+export function issuerIds(o) {
+  const d = o?.issuerDetails || {};
+  if (d.vatId || d.taxNumber) return { vatId: d.vatId || "", taxNumber: d.taxNumber || "" };
+  const signup = String(o?.taxId || "").trim();
+  return /^[A-Za-z]{2}\s*[0-9A-Za-z]/.test(signup)
+    ? { vatId: signup.replace(/\s+/g, "").toUpperCase(), taxNumber: "" }
+    : { vatId: "", taxNumber: signup };
+}
+
+const EU = new Set(["AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR", "HU", "IE", "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK", "SI", "ES", "SE"]);
+
+/* What the issuer's tax and registration fields are called where it sits.
+   German names only for a German entity; outside the EU, Zold has no format
+   for the number, so it names the field plainly and gives no example. */
+export function issuerFieldNames(country) {
+  const c = String(country || "").toUpperCase();
+  if (c === "DE") {
+    return { vatId: "USt-IdNr.", taxNumber: "Steuernummer", vatEx: "DE123456789", taxEx: "123/456/78901",
+      court: "Registergericht", courtEx: "Amtsgericht Kassel", regNo: "Handelsregisternummer", regEx: "HRB 12345", director: "Geschäftsführung" };
+  }
+  if (EU.has(c)) {
+    return { vatId: "VAT ID", taxNumber: "National tax number", vatEx: "", taxEx: "",
+      court: "Company register", courtEx: "", regNo: "Registration number", regEx: "", director: "Managing director" };
+  }
+  return { vatId: "VAT, GST or sales tax number", taxNumber: "Tax ID", vatEx: "", taxEx: "",
+    court: "Company register", courtEx: "", regNo: "Registration number", regEx: "", director: "Managing director" };
+}
+
 export let token = localStorage.getItem("zold-session") || localStorage.getItem("zoll-session");
 export let invoiceInputListener = null;
 export let orgs = [];

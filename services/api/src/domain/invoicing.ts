@@ -1045,7 +1045,23 @@ export interface NumberSeries {
   padding: number;
 }
 
-export const DEFAULT_SERIES: NumberSeries = { prefix: "RE-{YYYY}-", next: 1, padding: 4 };
+export const DEFAULT_SERIES: NumberSeries = { prefix: "INV-{YYYY}-", next: 1, padding: 4 };
+
+/** Where an invoice is a "Rechnung" and is written in German by default. */
+const GERMAN_SPEAKING = new Set(["DE", "AT", "CH", "LI"]);
+
+/** The series an org starts with, from the issuer's country. Saved on the
+ *  first issue, so a later change of default never renumbers anyone. */
+export function defaultSeriesFor(country?: string): NumberSeries {
+  return GERMAN_SPEAKING.has(String(country ?? "").toUpperCase())
+    ? { ...DEFAULT_SERIES, prefix: "RE-{YYYY}-" }
+    : DEFAULT_SERIES;
+}
+
+/** The language an org's invoices are written in until it picks one. */
+export function defaultInvoiceLanguage(country?: string): "de" | "en" {
+  return GERMAN_SPEAKING.has(String(country ?? "").toUpperCase()) ? "de" : "en";
+}
 
 /**
  * Render the next number. §14 Abs. 4 Nr. 4 requires a number that is unique
@@ -1064,10 +1080,10 @@ export function formatInvoiceNumber(series: NumberSeries, when: Date): string {
 
 /**
  * The language one invoice is written in: the one chosen for it, else the
- * profile's, else German.
+ * profile's, else the issuer country's default.
  */
-export function invoiceLanguage(chosen: unknown, profile: "de" | "en" | undefined): "de" | "en" {
-  if (chosen === undefined || chosen === null || chosen === "") return profile ?? "de";
+export function invoiceLanguage(chosen: unknown, profile: "de" | "en" | undefined, country?: string): "de" | "en" {
+  if (chosen === undefined || chosen === null || chosen === "") return profile ?? defaultInvoiceLanguage(country);
   if (chosen === "de" || chosen === "en") return chosen;
   throw new InvoiceComplianceError(`Invoices are written in German (de) or English (en), not "${String(chosen)}".`);
 }

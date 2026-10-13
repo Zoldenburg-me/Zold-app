@@ -18,13 +18,15 @@ import {
 } from "../../domain/jurisdictions.js";
 import type { Invoice, InvoiceParty, Organisation } from "../../domain/types.js";
 import {
-  DEFAULT_SERIES,
   EXEMPTION_REASONS,
   InvoiceComplianceError,
   SETTLEMENT_CURRENCY,
   computeTotals,
   convertTotals,
+  defaultInvoiceLanguage,
+  defaultSeriesFor,
   formatInvoiceNumber,
+  issuerTaxIdProblem,
   normaliseInvoiceCurrency,
   normaliseVatId,
   type ExemptionReasonId,
@@ -121,6 +123,56 @@ export function issuerSuggestions(org: Organisation, callerId: string): { name?:
  */
 export const jurisdictionOf = (org: Organisation) => jurisdictionFor(org.address?.country);
 
+/** The number series this org issues from: its own once saved or used,
+ *  else the default for its country. */
+export const seriesOf = (org: Organisation) => org.invoicing?.numberSeries ?? defaultSeriesFor(org.address?.country);
+
+/** The language this org's invoices are written in unless one is chosen. */
+export const languageOf = (org: Organisation): "de" | "en" =>
+  org.invoicing?.language ?? defaultInvoiceLanguage(org.address?.country);
+
+/** The business profile's fields that every invoice prints. */
+export type IssuerIdentity = Pick<
+  NonNullable<Organisation["invoicing"]>,
+  "vatId" | "taxNumber" | "registerCourt" | "registerNumber" | "managingDirector"
+>;
+
+const REGISTRATION_TEXT_MAX = 120;
+
+/**
+ * The identity fields a request body sets, checked by the issuer's country.
+ *
+ * The business profile (PATCH /orgs/:id) and the invoicing API both write them
+ * through here, into one place (`org.invoicing`), so the two screens cannot
+ * hold different numbers. Only the keys present in the body are returned; an
+ * empty string clears one.
+ */
+export function issuerIdentityFrom(
+  body: Record<string, unknown>,
+  country: string | undefined,
+): { ok: true; patch: Partial<IssuerIdentity> } | { ok: false; error: string; field: string } {
+  const { ruleSet } = jurisdictionFor(country);
+  const patch: Partial<IssuerIdentity> = {};
+  for (const field of ["vatId", "taxNumber"] as const) {
+    const raw = body[field];
+    if (typeof raw !== "string") continue;
+    const problem = issuerTaxIdProblem(field, raw, ruleSet);
+    if (problem) return { ok: false, error: problem, field };
+    // An EU number is stored normalised; one Zold has no format for, as written.
+    patch[field] = (field === "vatId" && ruleSet !== "GENERIC" ? normaliseVatId(raw) : raw.trim()) || undefined;
+  }
+  for (const field of ["registerCourt", "registerNumber", "managingDirector"] as const) {
+    const raw = body[field];
+    if (typeof raw !== "string") continue;
+    const v = raw.trim();
+    if (v.length > REGISTRATION_TEXT_MAX || /[\u0000-\u001f\u007f]/.test(v)) {
+      return { ok: false, error: `This is at most ${REGISTRATION_TEXT_MAX} characters on one line.`, field };
+    }
+    patch[field] = v || undefined;
+  }
+  return { ok: true, patch };
+}
+
 export const customReasonsOf = (org: Organisation): CustomExemptionReason[] =>
   (org.invoicing?.customReasons ?? []) as CustomExemptionReason[];
 
@@ -210,7 +262,7 @@ export function draftFrom(org: Organisation, body: Record<string, any>): Invoice
   }
 
   const issueDate = str(body.issueDate) ?? new Date().toISOString().slice(0, 10);
-  const series = inv.numberSeries ?? DEFAULT_SERIES;
+  const series = seriesOf(org);
 
   const recipient: InvoiceParty = {
     name: str(body.recipient?.name),
