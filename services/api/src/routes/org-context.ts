@@ -118,6 +118,14 @@ export function publicOrg(org: Organisation, member?: Member) {
     name: org.name,
     legalName: org.legalName,
     taxId: org.taxId,
+    // What invoices print about the issuer, edited on the business profile.
+    issuerDetails: {
+      vatId: org.invoicing?.vatId,
+      taxNumber: org.invoicing?.taxNumber,
+      registerCourt: org.invoicing?.registerCourt,
+      registerNumber: org.invoicing?.registerNumber,
+      managingDirector: org.invoicing?.managingDirector,
+    },
     email: org.email,
     address: org.address,
     plan: org.plan,

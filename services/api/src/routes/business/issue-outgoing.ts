@@ -14,7 +14,6 @@ import { randomUUID } from "node:crypto";
 import { store } from "../../store.js";
 import {
   DEFAULT_DISPLAY,
-  DEFAULT_SERIES,
   InvoiceComplianceError,
   SETTLEMENT_CURRENCY,
   checkCompliance,
@@ -28,7 +27,7 @@ import { checkVatId } from "../../adapters/vies.js";
 import { assertTransition, newLinkToken, ownerInvoiceView, settlementUpdate } from "../../domain/invoices.js";
 import type { Invoice } from "../../domain/types.js";
 import type { OrgContext } from "../org-context.js";
-import { customReasonsOf, draftDueDate, draftFrom, jurisdictionOf, str, withConversion } from "./shared.js";
+import { customReasonsOf, draftDueDate, draftFrom, jurisdictionOf, languageOf, seriesOf, str, withConversion } from "./shared.js";
 
 export interface IssueAnswer {
   status: number;
@@ -60,7 +59,7 @@ export async function issueOutgoing(
     draft = await withConversion(draftFrom(ctx.org, body));
     // Chosen per invoice; the profile's language and payment terms are the
     // defaults.
-    language = invoiceLanguage(body.language, ctx.org.invoicing?.language);
+    language = invoiceLanguage(body.language, languageOf(ctx.org));
     // An invoice for money already received has nothing falling due.
     dueDate = fromDraft
       ? undefined
@@ -103,7 +102,7 @@ export async function issueOutgoing(
     }
   }
 
-  const series = ctx.org.invoicing?.numberSeries ?? DEFAULT_SERIES;
+  const series = seriesOf(ctx.org);
   // §14 Abs. 4 Nr. 4: one number, once. A caller may supply its own number,
   // so uniqueness is checked against what this org has issued rather than
   // assumed from the series.
@@ -151,7 +150,8 @@ export async function issueOutgoing(
       issuer: draft.issuer,
       recipient: draft.recipient,
       vatTreatment: draft.treatment,
-      vatNote: vatNoteFor(draft.treatment, language),
+      // The org's own rules carry their note; without them it would print blank.
+      vatNote: vatNoteFor(draft.treatment, language, customReasonsOf(ctx.org)),
       netCents: report.totals.netCents,
       vatCents: report.totals.vatCents,
       grossCents: report.totals.grossCents,

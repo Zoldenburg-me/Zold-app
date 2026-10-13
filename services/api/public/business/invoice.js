@@ -11,7 +11,8 @@
  *
  * "Save draft" keeps the draft in this browser only; nothing is sent until
  * "Create and share". There is no repeat-monthly invoice in the API, so the
- * editor offers none. Zold sends no emails: the link is shared by you.
+ * editor offers none. Zold sends no emails: the link is shared by you, and it
+ * opens the invoice with its Pay button.
  */
 import { $, Z, api, countrySelect, esc, org } from "./core.js";
 import { META, RENDER, jurisdictionBanner } from "./views.js";
@@ -114,7 +115,8 @@ RENDER["invoice-new"] = async () => {
   const p = d.profile;
   invoiceDraft ??= storedDraft() || {
     lines: [{ description: "", quantity: "1", unitPriceNet: "" }],
-    language: p.language === "en" ? "en" : "de",
+    // The profile's language, which defaults from the issuer's country.
+    language: p.language === "de" ? "de" : "en",
     issueDate: today(),
     supplyDate: today(),
     dueDate: plusDays(today(), Number.isFinite(p.paymentTermsDays) ? p.paymentTermsDays : 14),
@@ -137,17 +139,18 @@ RENDER["invoice-new"] = async () => {
   ];
   const r = invoiceDraft.recipient || {};
   const missing = [
-    !(d.issuer.addressLine && d.issuer.postalCode && d.issuer.city && d.issuer.country) ? "your address" : "",
+    !(d.issuer.addressLine && d.issuer.city && d.issuer.country) ? "your address" : "",
     !(d.issuer.taxNumber || d.issuer.vatId) ? "a tax number" : "",
   ].filter(Boolean);
+  const de = d.jurisdiction.ruleSet === "DE";
   const f = (id, label, value, extra = "") => `<div><label for="${id}">${label}</label><input id="${id}" name="${id}" autocomplete="off" value="${esc(value ?? "")}" ${extra} /></div>`;
 
   const html = `<div class="zb-editor">
     <form class="zb-editor__form" id="inv-form" novalidate onsubmit="return false">
-      ${missing.length ? `<div class="zb-note zb-note--a" style="margin-bottom:6px">${Z.icon("badge")}<span>Your invoicing profile is missing ${esc(missing.join(" and "))}. Add it once and it goes on every invoice. <a href="?view=invoicing-settings" data-view-link="invoicing-settings">Invoicing profile</a></span></div>` : ""}
+      ${missing.length ? `<div class="zb-note zb-note--a" style="margin-bottom:6px">${Z.icon("badge")}<span>Your business profile is missing ${esc(missing.join(" and "))}. Add it once and it goes on every invoice. <a href="?view=organisation" data-view-link="organisation">Business profile</a></span></div>` : ""}
       <div class="zb-row zb-row--2">
-        <div><label for="inv-r-name">Customer</label><input id="inv-r-name" name="customer" autocomplete="off" value="${esc(r.name || "")}" placeholder="Café Ostwind…" list="inv-contacts" /></div>
-        <div><label for="inv-lang">Language</label><select id="inv-lang" name="language"><option value="de"${invoiceDraft.language !== "en" ? " selected" : ""}>Deutsch</option><option value="en"${invoiceDraft.language === "en" ? " selected" : ""}>English</option></select></div>
+        <div><label for="inv-r-name">Customer</label><input id="inv-r-name" name="customer" autocomplete="off" value="${esc(r.name || "")}" placeholder="Customer or company name…" list="inv-contacts" /></div>
+        <div><label for="inv-lang">Language</label><select id="inv-lang" name="language"><option value="en"${invoiceDraft.language !== "de" ? " selected" : ""}>English</option><option value="de"${invoiceDraft.language === "de" ? " selected" : ""}>Deutsch</option></select></div>
       </div>
       ${contacts.length ? `<datalist id="inv-contacts">${contacts.map((c) => `<option value="${esc(c.name)}"></option>`).join("")}</datalist>` : ""}
       <label class="zb-check" style="margin:10px 0 4px"><input type="checkbox" id="inv-r-biz" data-act="inv-biz" ${r.isBusiness ? "checked" : ""} />
@@ -158,9 +161,9 @@ RENDER["invoice-new"] = async () => {
           <p class="zb-hint" id="inv-vat-status" aria-live="polite" style="margin-top:6px"></p></div>` : ""}
       </div>
       <div class="zb-row zb-row--3">
-        ${f("inv-r-addr", "Street and number", r.addressLine, 'placeholder="Lindenstraße 4…"')}
-        ${f("inv-r-zip", "Postcode", r.postalCode, 'inputmode="numeric" placeholder="34117…"')}
-        ${f("inv-r-city", "City", r.city, 'placeholder="Kassel…"')}
+        ${f("inv-r-addr", "Street and number", r.addressLine)}
+        ${f("inv-r-zip", "Postcode", r.postalCode, 'spellcheck="false"')}
+        ${f("inv-r-city", "City", r.city)}
       </div>
       <div class="zb-row zb-row--3">
         ${f("inv-issue", "Invoice date", invoiceDraft.issueDate || today(), 'type="date"')}
@@ -169,7 +172,7 @@ RENDER["invoice-new"] = async () => {
       </div>
       <fieldset><legend>Lines</legend>
         <div id="inv-lines">${invoiceDraft.lines.map((l, i) => `<div class="zb-row zb-row--line">
-          <div><label for="inv-l${i}-d" class="${i ? "z-sr" : ""}">Description</label><input id="inv-l${i}-d" name="line${i}-description" data-li="${i}" data-lf="description" autocomplete="off" value="${esc(l.description)}" placeholder="Eichenregal, Maßanfertigung…" /></div>
+          <div><label for="inv-l${i}-d" class="${i ? "z-sr" : ""}">Description</label><input id="inv-l${i}-d" name="line${i}-description" data-li="${i}" data-lf="description" autocomplete="off" value="${esc(l.description)}" placeholder="What you delivered…" /></div>
           <div><label for="inv-l${i}-q" class="${i ? "z-sr" : ""}">Qty</label><input id="inv-l${i}-q" name="line${i}-quantity" data-li="${i}" data-lf="quantity" inputmode="decimal" autocomplete="off" value="${esc(l.quantity)}" /></div>
           <div><label for="inv-l${i}-p" class="${i ? "z-sr" : ""}">Net price</label><input id="inv-l${i}-p" name="line${i}-price" data-li="${i}" data-lf="unitPriceNet" inputmode="decimal" autocomplete="off" value="${esc(l.unitPriceNet)}" placeholder="0.00…" /></div>
           <div>${invoiceDraft.lines.length > 1 ? `<button type="button" class="z-iconbtn" data-act="inv-del-line" data-i="${i}" aria-label="Remove line ${i + 1}">${Z.icon("close")}</button>` : ""}</div>
@@ -183,7 +186,7 @@ RENDER["invoice-new"] = async () => {
         </div>
         <div id="inv-suggest" aria-live="polite"></div>
         <div class="zb-seg" role="group" aria-label="VAT">
-          <button type="button" class="zb-pill" data-act="inv-vat-mode" data-mode="standard" aria-current="${v.kind === "standard"}"${p.smallBusiness ? ' aria-disabled="true" title="Kleinunternehmer: turn it off in the invoicing profile first"' : ""}>Charge VAT</button>
+          <button type="button" class="zb-pill" data-act="inv-vat-mode" data-mode="standard" aria-current="${v.kind === "standard"}"${p.smallBusiness ? ` aria-disabled="true" title="${de ? "Kleinunternehmer" : "Small business scheme"}: turn it off in the invoicing profile first"` : ""}>Charge VAT</button>
           <button type="button" class="zb-pill" data-act="inv-vat-mode" data-mode="exempt" aria-current="${v.kind === "exempt"}">Don’t charge VAT</button>
         </div>
         ${v.kind === "standard"
@@ -193,7 +196,7 @@ RENDER["invoice-new"] = async () => {
           : `<label for="inv-reason">Why not</label>
              <select id="inv-reason" name="reason">${reasons.map((x) => `<option value="${esc(x.id)}" ${v.reason === x.id ? "selected" : ""}>${esc(x.label)}: ${esc(x.legalBasis)}</option>`).join("")}</select>
              <p class="zb-hint" style="margin-top:6px">${esc(reasons.find((x) => x.id === v.reason)?.hint || "")}</p>
-             ${v.reason === "other" ? `<label for="inv-note">Exemption and legal basis</label><input id="inv-note" name="note" autocomplete="off" value="${esc(v.note || "")}" placeholder="Steuerfrei nach § 4 Nr. … UStG…" />` : ""}`}
+             ${v.reason === "other" ? `<label for="inv-note">Exemption and legal basis</label><input id="inv-note" name="note" autocomplete="off" value="${esc(v.note || "")}" placeholder="${de ? "Steuerfrei nach § 4 Nr. … UStG" : "The exemption and the law it rests on"}…" />` : ""}`}
       </fieldset>
       <details class="zb-more" style="margin-top:16px"><summary style="cursor:pointer;font-weight:600">More: currency, order number</summary>
         <div class="zb-row zb-row--2">
@@ -208,7 +211,7 @@ RENDER["invoice-new"] = async () => {
         <button type="button" class="z-btn z-btn--primary" data-act="inv-issue">${Z.icon("ios_share")}<span>Create and share</span></button>
         <button type="button" class="z-link-btn" data-act="inv-cancel">Cancel</button>
       </div>
-      <p class="zb-hint" style="margin-top:12px">You share the invoice link yourself. Zold doesn’t send emails. A saved draft stays in this browser.</p>
+      <p class="zb-hint" style="margin-top:12px">You get one link to send: it opens the invoice, with a Pay button when your account can take payments. Zold doesn’t send emails. A saved draft stays in this browser.</p>
       ${jurisdictionBanner(d.jurisdiction, d.disclaimer, d.notVerified)}
     </form>
     <div class="zb-editor__paper" id="inv-paper" aria-live="polite"><div class="zb-paper"><p>Add a customer and a line to see the invoice.</p></div></div>
@@ -229,7 +232,7 @@ export function readInvoiceEditor() {
     vatId: isBusiness ? ($("#inv-r-vat") ? val("inv-r-vat") : before.vatId || "") : "",
     isBusiness,
   };
-  invoiceDraft.language = val("inv-lang") === "en" ? "en" : "de";
+  invoiceDraft.language = val("inv-lang") === "de" ? "de" : "en";
   invoiceDraft.issueDate = val("inv-issue");
   invoiceDraft.supplyDate = val("inv-supply");
   invoiceDraft.dueDate = val("inv-due") || undefined;
@@ -259,11 +262,11 @@ const PAPER = {
   de: { invoice: "Rechnung", date: "Rechnungsdatum", supply: "Leistung", due: "Fällig", item: "Position", qty: "Menge", unit: "Einzelpreis", amount: "Betrag", net: "Netto", vat: "USt.", total: "Gesamt", taxNo: "St.-Nr.", vatId: "USt-IdNr.", pay: "Bitte überweisen an IBAN", ref: "Verwendungszweck", missing: "[fehlt]" },
   en: { invoice: "Invoice", date: "Invoice date", supply: "Service", due: "Due", item: "Item", qty: "Qty", unit: "Unit price", amount: "Amount", net: "Net", vat: "VAT", total: "Total", taxNo: "Tax no.", vatId: "VAT ID", pay: "Please transfer to IBAN", ref: "Reference", missing: "[missing]" },
 };
-const pMoney = (cents, cur, lang) => new Intl.NumberFormat(lang === "en" ? "en-IE" : "de-DE", { style: "currency", currency: cur || "EUR" }).format(cents / 100);
+const pMoney = (cents, cur, lang) => new Intl.NumberFormat(lang === "de" ? "de-DE" : "en-GB", { style: "currency", currency: cur || "EUR" }).format(cents / 100);
 const pDate = (s, lang) => {
   const d = new Date(`${String(s || "").slice(0, 10)}T12:00:00`);
   if (Number.isNaN(d.getTime())) return "";
-  return lang === "en"
+  return lang !== "de"
     ? new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" }).format(d)
     : new Intl.DateTimeFormat("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" }).format(d);
 };
@@ -271,7 +274,7 @@ const addr = (x) => [x?.addressLine, [x?.postalCode, x?.city].filter(Boolean).jo
 
 function paper(check) {
   const pv = check.preview || {};
-  const lang = pv.language === "en" ? "en" : "de";
+  const lang = pv.language === "de" ? "de" : "en";
   const t = PAPER[lang];
   const cur = pv.currency || "EUR";
   const money = (c) => pMoney(c, cur, lang);
