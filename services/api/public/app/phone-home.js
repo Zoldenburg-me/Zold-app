@@ -13,18 +13,20 @@
 let phHidden = (() => { try { return localStorage.getItem("zold-hide-balance") === "1"; } catch { return false; } })();
 
 function phBalance(value, label) {
-  const s = phEur(value);                       // "€2,318.47"
+  const s = value === null ? "" : phEur(value); // "€2,318.47"; null is unread
   const m = /^€([\d,]+)(\.\d{2})$/.exec(s);
   const whole = m ? m[1] : s.replace("€", "");
   const cents = m ? m[2] : "";
   const long = (whole + cents).length > 9;
-  const fig = phHidden
+  const fig = value === null
+    ? `<span class="z-balance__fig z-balance__fig--long">${esc(UNREAD_BALANCE)}</span>`
+    : phHidden
     ? `<span class="z-balance__fig" aria-label="Balance hidden"><span class="z-balance__cur" aria-hidden="true">€</span><span aria-hidden="true">••••</span></span>`
     : `<span class="z-balance__fig${long ? " z-balance__fig--long" : ""}"><span class="z-balance__cur">€</span>${esc(whole)}<span class="z-balance__cents">${esc(cents)}</span></span>`;
   return `<section class="z-balance" aria-labelledby="ph-bal-label">
     <div class="z-balance__head"><h2 class="z-balance__label" id="ph-bal-label">${esc(label)}</h2>
       <button type="button" class="z-iconbtn z-iconbtn--bare" id="ph-hide" aria-pressed="${phHidden}" aria-label="${phHidden ? "Show balance" : "Hide balance"}">${Z.icon(phHidden ? "visibility_off" : "visibility")}</button></div>
-    <p class="z-fig">${fig}</p>
+    <p class="z-fig">${fig}</p>${value === null ? `<p class="z-hint">It could not be read just now. Reload to try again.</p>` : ""}
   </section>`;
 }
 
@@ -138,7 +140,7 @@ PH.home = {
         ${gate ? Z.note({ tone: "a", html: `<strong>${esc(gate.reason)}</strong> ${esc(gate.needs)} <a href="mailto:support@zoldhq.com">Ask us about it</a>` }) : ""}
         ${refused}
         ${ibanMovedAway(u) ? ibanMovedAwayHtml("ph-iban-back") : ""}
-        ${phBalance(u.balanceEur ?? u.safeBalanceEur ?? 0, "Balance")}
+        ${phBalance(knownBalance(u), "Balance")}
         <a class="z-card z-acctrow" href="#account-details">${Z.icon("account_balance", "z-acctrow__ic")}<span class="z-acctrow__label">Account details</span>${ibanRight}${Z.icon("chevron_right", "z-row__chev")}</a>
         <div class="z-actions">
           ${Z.button({ variant: "primary", icon: "arrow_outward", label: "Send", href: "#send" })}
