@@ -3,7 +3,7 @@
  * chosen section on the right. Organisation, Who approves payments, Monerium
  * and Plan open in place; the other entries are their own screens.
  */
-import { Z, api, cap, day, ensureMe, esc, me, org, plain, reviewOn, ROLE_CAN, ROLE_WORD } from "./core.js";
+import { Z, api, cap, day, ensureMe, esc, issuerFieldNames, issuerIds, me, org, plain, reviewOn, ROLE_CAN, ROLE_WORD } from "./core.js";
 import { META, RENDER } from "./views.js";
 import { isOwnCompanyOrg } from "./access-model.js";
 
@@ -17,7 +17,7 @@ function menu(accounts) {
   const here = (id, label) => `<button type="button" class="zb-set-menu__item" data-ss="${id}"${ss.sec === id ? ' aria-current="true"' : ""}>${esc(label)}</button>`;
   const away = (v, label) => `<a class="zb-set-menu__item" href="?view=${v}" data-view-link="${v}">${esc(label)}${Z.icon("arrow_forward", "zb-set-menu__out")}</a>`;
   const groups = [
-    ["Company", [here("org", "Organisation"), cap("invoices").allowed ? away("invoicing-settings", "Invoicing profile") : "", here("plan", "Plan")]],
+    ["Company", [here("org", "Business profile"), cap("invoices").allowed ? away("invoicing-settings", "Invoicing profile") : "", here("plan", "Plan")]],
     ["Team", [away("members", "Members and access"), here("approvals", "Who approves payments")]],
     ["Account", [here("monerium", "Monerium"), isOwnCompanyOrg(me, org, accounts)
       ? away("access", "Access")
@@ -42,8 +42,13 @@ function orgSection() {
   const address = [a.line1, a.line2, [a.postalCode, a.city].filter(Boolean).join(" ")].filter(Boolean).join(", ");
   const country = a.country ? (new Intl.DisplayNames(["en"], { type: "region" }).of(a.country) || a.country) : "";
   const edit = `<a class="z-btn z-btn--secondary z-btn--sm" href="?view=organisation" data-view-link="organisation">Edit</a>`;
-  return section("Organisation", "Printed on every invoice you issue. The country decides which invoicing rules apply.",
-    rows([["Name", org.name], ["Legal name", org.legalName], ["Address", address], ["Country", country], ["Tax ID", org.taxId, true], ["Notification email", org.notificationEmail]])
+  const ids = issuerIds(org);
+  const names = issuerFieldNames(a.country);
+  const d = org.issuerDetails || {};
+  return section("Business profile", "Who you are on every invoice you issue. The country decides which invoicing rules apply.",
+    rows([["Name", org.name], ["Legal name", org.legalName], ["Address", address], ["Country", country],
+      [names.vatId, ids.vatId, true], [names.taxNumber, ids.taxNumber, true],
+      ["Registration", [d.registerCourt, d.registerNumber].filter(Boolean).join(" ")], ["Notification email", org.notificationEmail]])
     + (address ? "" : `<p class="zb-hint">No address yet. Invoices need one.</p>`), edit);
 }
 

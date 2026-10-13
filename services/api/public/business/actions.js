@@ -673,7 +673,13 @@ export const ACTIONS = {
       setView("invoices");
       await render();
       // After any dialog that led here has closed.
-      setTimeout(() => linkDialog(`Invoice ${r.invoice.issued.number} is ready`, "Send your customer this link. It shows the invoice and how to pay it. It’s shown once: copy it now.", location.origin + r.linkPath), 0);
+      // One link to send: the invoice, with a Pay button when a payment link
+      // could be made for it. When it could not, say why rather than hide it.
+      const pay = r.payment;
+      const how = pay?.ok
+        ? `It opens the invoice with a Pay button${typeof pay.amountEur === "number" ? ` for ${eur(pay.amountEur)}` : ""}, and the invoice is marked paid when the money arrives.`
+        : `It opens the invoice with your bank details. There’s no Pay button on it: ${plain(pay?.reason || "no payment link could be made.")}`;
+      setTimeout(() => linkDialog(`Invoice ${r.invoice.issued.number} is ready`, `Send your customer this link. ${how} It’s shown once: copy it now.`, location.origin + r.linkPath), 0);
     };
     try {
       await issue(false);
@@ -717,17 +723,8 @@ export const ACTIONS = {
   },
   async "save-invoicing"() {
     const val = (id) => $("#" + id)?.value?.trim() ?? "";
-    // Who the issuer is lives on the organisation; sent only when changed, so
-    // a member who may manage invoices but not the organisation can still
-    // save the rest.
-    const a = org.address || {};
-    const issuer = {
-      legalName: val("i-legal"),
-      address: { line1: val("i-addr1"), line2: val("i-addr2"), postalCode: val("i-zip"), city: val("i-city"), country: val("i-country") },
-    };
-    if (!issuer.address.country) throw new Error("Choose your country: it decides which invoicing rules apply.");
-    const changed = issuer.legalName !== (org.legalName || "") ||
-      ["line1", "line2", "postalCode", "city", "country"].some((k) => issuer.address[k] !== (a[k] || ""));
+    // Who the issuer is (name, address, tax and registration numbers) is the
+    // business profile's, saved there; this saves only how invoices are made.
     const display = {};
     document.querySelectorAll("[data-display]").forEach((el) => { display[el.dataset.display] = el.checked; });
     // A new payout IBAN takes an owner or admin and a passkey approval. It is
@@ -735,17 +732,15 @@ export const ACTIONS = {
     const current = await api(`/api/orgs/${org.id}/invoicing/profile`);
     const typedIban = val("i-bank-iban").replace(/\s+/g, "").toUpperCase();
     const stepUp = typedIban !== (current.profile.bank?.iban || "") ? await passkeyStepUp("org.invoice-iban.change") : undefined;
-    if (changed) await api(`/api/orgs/${org.id}`, { method: "PATCH", body: issuer });
     await api(`/api/orgs/${org.id}/invoicing/profile`, {
       method: "PATCH",
       body: {
-        vatId: val("i-vatid"), taxNumber: val("i-taxno"),
+        language: val("i-lang") === "de" ? "de" : "en",
         smallBusiness: $("#i-klein")?.checked === true,
         defaultVatRate: $("#i-rate")?.value ? Number($("#i-rate").value) : undefined,
         paymentTermsDays: val("i-terms-days") ? Number(val("i-terms-days")) : undefined,
         paymentTermsNote: val("i-terms"),
-        registerCourt: val("i-court"), registerNumber: val("i-reg"),
-        managingDirector: val("i-gf"), footerNote: val("i-footer"),
+        footerNote: val("i-footer"),
         bank: { holder: val("i-bank-holder"), iban: val("i-bank-iban"), bic: val("i-bank-bic") },
         numberSeries: { prefix: val("i-prefix"), next: Number(val("i-next") || 1), padding: 4 },
         display,
@@ -753,7 +748,6 @@ export const ACTIONS = {
       },
     });
     toast("Invoicing profile saved.");
-    if (changed) await loadOrg(org.id);
   },
   "collect-receipts": () => {
     const ym = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
@@ -926,7 +920,9 @@ export const ACTIONS = {
   async "save-org"() {
     const body = {
       name: $("#s-name").value, legalName: $("#s-legal").value,
-      taxId: $("#s-tax").value, notificationEmail: $("#s-notify").value,
+      vatId: $("#s-vatid").value, taxNumber: $("#s-taxno").value,
+      registerCourt: $("#s-court").value, registerNumber: $("#s-reg").value, managingDirector: $("#s-gf").value,
+      notificationEmail: $("#s-notify").value,
       address: {
         line1: $("#s-addr1").value, line2: $("#s-addr2").value,
         postalCode: $("#s-zip").value, city: $("#s-city").value,
