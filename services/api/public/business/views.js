@@ -102,7 +102,7 @@ RENDER.accounts = async () => {
     </section>` : "";
   return `${safeCard ? `<div class="zb-acards" style="margin-bottom:16px">${safeCard}</div>` : ""}${accounts.length
       ? `<div class="zb-acards">${cards.join("")}</div>`
-      : `<div class="z-card"><p class="empty">No bank account yet.</p></div>`}
+      : `<div class="z-card"><p class="empty">No IBAN connected yet.</p></div>`}
     <h2 class="zb-h2" style="margin:28px 0 6px">Currencies</h2>
     <p class="zb-hint" style="margin-bottom:12px">Currencies Zold supports.</p>
     <div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Currency</th><th scope="col">Network</th><th scope="col">Settles in</th><th scope="col">Status</th></tr></thead><tbody>${cur.join("")}</tbody></table></div>`;
