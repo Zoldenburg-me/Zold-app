@@ -14,7 +14,7 @@ import { requireCapability, requirePermission } from "../org-context.js";
 import { PaymentRequestError, ownerPaymentRequest, validateCreate } from "../../payment-requests.js";
 import { baseUrlFor, createPaymentRequest, orgsBackedBy } from "../payment-requests.js";
 import type { OrgRoutes } from "./invoicing.js";
-import { openLinkFor } from "./invoice-pay-link.js";
+import { openLinkFor, withInvoiceLinkLock } from "./invoice-pay-link.js";
 
 export function createPaymentLinkRoutes(deps: OrgRoutes): express.Router {
   const { ctxOf } = deps;
@@ -54,13 +54,19 @@ export function createPaymentLinkRoutes(deps: OrgRoutes): express.Router {
       });
     }
     // An invoice has one open link: the one its Pay button already opens.
+    // Returned as is, with `reused: true`: the amount and methods asked for
+    // now are not applied to it.
     const invoiceId = typeof req.body?.invoiceId === "string" ? req.body.invoiceId.trim() : "";
-    const open = invoiceId ? openLinkFor({ id: invoiceId, orgId: ctx.org.id }) : undefined;
-    if (open) return res.status(200).json(ownerPaymentRequest(open, baseUrlFor(req)));
-    try {
+    const make = async () => {
+      const open = invoiceId ? openLinkFor({ id: invoiceId, orgId: ctx.org.id }) : undefined;
+      if (open) return { status: 200, body: { ...ownerPaymentRequest(open, baseUrlFor(req)), reused: true } };
       const input = validateCreate(req.body, user);
       const link = await createPaymentRequest(user, input, { kind: "app" }, ctx.org.id);
-      res.status(201).json(ownerPaymentRequest(link, baseUrlFor(req)));
+      return { status: 201, body: { ...ownerPaymentRequest(link, baseUrlFor(req)), reused: false } };
+    };
+    try {
+      const out = invoiceId ? await withInvoiceLinkLock({ id: invoiceId, orgId: ctx.org.id }, make) : await make();
+      res.status(out.status).json(out.body);
     } catch (err) {
       if (err instanceof PaymentRequestError) return res.status(err.status).json({ error: err.message });
       throw err;

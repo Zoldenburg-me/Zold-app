@@ -57,7 +57,30 @@ export function linkExpiry(dueDate: string | undefined, now = new Date()): strin
   return new Date(now.getTime() + lifetime).toISOString();
 }
 
+/**
+ * One link at a time per invoice, in this process. Finding no open link and
+ * creating one are split by an await; two requests at once would each make
+ * one. Callers run find-then-create inside this, and re-check inside it.
+ */
+const invoiceLocks = new Map<string, Promise<unknown>>();
+export async function withInvoiceLinkLock<T>(invoice: Pick<Invoice, "id" | "orgId">, fn: () => Promise<T>): Promise<T> {
+  const key = `${invoice.orgId}:${invoice.id}`;
+  const prev = invoiceLocks.get(key) ?? Promise.resolve();
+  const run = prev.catch(() => undefined).then(fn);
+  const tail = run.catch(() => undefined);
+  invoiceLocks.set(key, tail);
+  try {
+    return await run;
+  } finally {
+    if (invoiceLocks.get(key) === tail) invoiceLocks.delete(key);
+  }
+}
+
 export async function payLinkForInvoice(ctx: OrgContext, invoice: Invoice, baseUrl: string): Promise<InvoicePayLink> {
+  return withInvoiceLinkLock(invoice, () => payLinkUnlocked(ctx, invoice, baseUrl));
+}
+
+async function payLinkUnlocked(ctx: OrgContext, invoice: Invoice, baseUrl: string): Promise<InvoicePayLink> {
   const existing = openLinkFor(invoice);
   if (existing) {
     return { ok: true, url: ownerPaymentRequest(existing, baseUrl).url, amountEur: existing.amountEur, reused: true };

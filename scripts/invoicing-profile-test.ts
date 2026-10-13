@@ -159,6 +159,24 @@ await check("the tax id typed at signup stands in until the business profile set
   assert.equal(after.data.issuer.taxNumber, "SIREN 303 265 045");
 });
 
+addOrg("org_clear", "FR", { taxId: "FR40303265045" });
+await check("clearing the profile's numbers leaves the signup tax id standing", async () => {
+  const r = await call("PATCH", "/api/orgs/org_clear", "u_owner", { vatId: "", taxNumber: "" });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(store.findOrganisation("org_clear")!.taxId, "FR40303265045");
+});
+
+addOrg("org_move", "GA", { invoicing: { vatId: "GA-NIF 123456 X" } });
+await check("moving country re-checks a stored VAT ID the save does not replace", async () => {
+  const r = await call("PATCH", "/api/orgs/org_move", "u_owner", { address: { line1: "1 Rue", postalCode: "75001", city: "Paris", country: "FR" } });
+  assert.equal(r.status, 400, JSON.stringify(r.data));
+  assert.equal(r.data.field, "vatId");
+  assert.equal(store.findOrganisation("org_move")!.address?.country, "GA", "nothing is saved");
+  const ok = await call("PATCH", "/api/orgs/org_move", "u_owner", { address: { line1: "1 Rue", postalCode: "75001", city: "Paris", country: "FR" }, vatId: "FR40303265045" });
+  assert.equal(ok.status, 200, JSON.stringify(ok.data));
+  assert.equal(store.findOrganisation("org_move")!.invoicing?.vatId, "FR40303265045");
+});
+
 await check("a payer, who may manage invoices but not the organisation, cannot edit the business profile", async () => {
   const r = await call("PATCH", "/api/orgs/org_ga", "u_payer", { vatId: "X" });
   assert.equal(r.status, 403, JSON.stringify(r.data));
@@ -194,6 +212,7 @@ store.addAccount({
 } as any);
 let token = "";
 let invoiceId = "";
+let unlinkedInvoiceId = "";
 await check("with the payee's own account behind it, issuing makes the invoice's payment link", async () => {
   const r = await call("POST", "/api/orgs/org_pay/invoicing/issue", "u_owner", invoiceFor("FR"));
   assert.equal(r.status, 201, JSON.stringify(r.data));
@@ -217,6 +236,7 @@ await check("the invoice link shows the Pay button, and the payment link is the 
 await check("asking for the invoice's payment link again returns the open one, never a second", async () => {
   const r = await call("POST", "/api/orgs/org_pay/payment-requests", "u_owner", { invoiceId, methods: ["bank"] });
   assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.reused, true, "the caller is told the link is the existing one");
   assert.equal(store.paymentRequests.filter((p) => p.invoiceId === invoiceId).length, 1);
 });
 
@@ -225,6 +245,17 @@ await check("a member whose account does not back the org gets the invoice and t
   assert.equal(r.status, 201, JSON.stringify(r.data));
   assert.equal(r.data.payment.ok, false);
   assert.equal(r.data.payment.code, "NOT_THE_PAYEE");
+  unlinkedInvoiceId = r.data.invoice.id;
+});
+
+await check("two requests at once for an invoice's link make one link, not two", async () => {
+  const [a, b] = await Promise.all([
+    call("POST", "/api/orgs/org_pay/payment-requests", "u_owner", { invoiceId: unlinkedInvoiceId, methods: ["bank"] }),
+    call("POST", "/api/orgs/org_pay/payment-requests", "u_owner", { invoiceId: unlinkedInvoiceId, methods: ["bank"] }),
+  ]);
+  assert.deepEqual([a.status, b.status].sort(), [200, 201], JSON.stringify([a.data, b.data]));
+  assert.deepEqual([a.data.reused, b.data.reused].sort(), [false, true]);
+  assert.equal(store.paymentRequests.filter((p) => p.invoiceId === unlinkedInvoiceId).length, 1);
 });
 
 await check("a paid invoice shows no Pay button", async () => {

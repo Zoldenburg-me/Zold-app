@@ -321,13 +321,30 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     // take org.update like the name and address, not the invoices plan (the
     // signup tax id they replace never did). Checked by the country this same
     // save leaves the organisation in.
-    const identity = issuerIdentityFrom(b, patch.address?.country ?? ctx.org.address?.country);
+    const nextCountry = patch.address?.country ?? ctx.org.address?.country;
+    const identity = issuerIdentityFrom(b, nextCountry);
     if (!identity.ok) return res.status(400).json({ error: identity.error, field: identity.field });
+    // A country change re-checks the numbers already stored that this save
+    // does not replace: a German VAT ID kept on a French entity would print.
+    if (patch.address && patch.address.country !== ctx.org.address?.country) {
+      for (const field of ["vatId", "taxNumber"] as const) {
+        const stored = ctx.org.invoicing?.[field];
+        if (field in identity.patch || typeof stored !== "string" || !stored) continue;
+        const again = issuerIdentityFrom({ [field]: stored }, nextCountry);
+        if (!again.ok) {
+          return res.status(400).json({
+            error: `${again.error} The stored number does not fit the new country: correct or clear it in the same save.`,
+            field,
+          });
+        }
+      }
+    }
     if (Object.keys(identity.patch).length) {
       patch.invoicing = { ...ctx.org.invoicing, ...identity.patch };
       // The free-text tax id typed at signup stands in until these are set;
-      // once they are, it would only come back as a second, stale number.
-      if ("vatId" in identity.patch || "taxNumber" in identity.patch) patch.taxId = undefined;
+      // once one is, it would only come back as a second, stale number.
+      // Clearing them leaves it standing: it may be the only number there is.
+      if (identity.patch.vatId || identity.patch.taxNumber) patch.taxId = undefined;
     }
     if (b.reporting && typeof b.reporting === "object") {
       const next = { ...ctx.org.reporting };
