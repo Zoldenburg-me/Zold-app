@@ -98,6 +98,10 @@ export interface StatementLine {
 export interface StatementSnapshot {
   kind: "statement";
   holder: HolderBlock;
+  /** The Monerium environment the issuer data came through, recorded at
+   *  issue so the printout points at the portal the holder's account is on.
+   *  Absent on statements issued before it was recorded. */
+  moneriumEnvironment?: "sandbox" | "production" | "custom";
   period: { from: string; to: string };
   opening: { amountEur: number; number: number; hash?: string; at: string } | null;
   closing: { amountEur: number; number: number; hash?: string; at: string } | null;
