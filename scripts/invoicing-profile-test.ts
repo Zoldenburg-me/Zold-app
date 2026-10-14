@@ -227,6 +227,28 @@ await check("with the payee's own account behind it, issuing makes the invoice's
   assert.ok(Date.parse(link.expiresAt) - Date.now() > 29 * 86_400_000, "the link outlives the default week");
 });
 
+await check("a foreign-currency invoice carries its euro restatement — or refuses when no feed has the rate", async () => {
+  // The reference feed pinned, as the offline harness runs it: USD converts,
+  // GBP is a currency no feed here publishes.
+  process.env.TRANSF_RATES_FIXED = JSON.stringify({ USD: 1.14, KES: 147.53 });
+  try {
+    const ok = await call("POST", "/api/orgs/org_pay/invoicing/issue", "u_owner", { ...invoiceFor("FR"), currency: "USD" });
+    assert.equal(ok.status, 201, JSON.stringify(ok.data));
+    const conv = ok.data.invoice.issued.conversion;
+    assert.equal(ok.data.invoice.issued.currency, "USD");
+    assert.equal(conv.to, "EUR");
+    assert.equal(conv.rate, 1.14);
+    assert.equal(conv.grossCents, 10351, "118 USD at 1.14 restated per bucket, not off the total");
+    // And the Pay button asks for the euro amount, not the dollar figure.
+    assert.equal(ok.data.payment.amountEur, 103.51, JSON.stringify(ok.data.payment));
+    const refused = await call("POST", "/api/orgs/org_pay/invoicing/issue", "u_owner", { ...invoiceFor("FR"), currency: "GBP" });
+    assert.equal(refused.status, 422, JSON.stringify(refused.data));
+    assert.match(refused.data.error, /has not been issued/);
+  } finally {
+    delete process.env.TRANSF_RATES_FIXED;
+  }
+});
+
 await check("the invoice link shows the Pay button, and the payment link is the one made at issue", async () => {
   const view = await call("GET", `/api/invoice-links/${token}`);
   assert.equal(view.status, 200);

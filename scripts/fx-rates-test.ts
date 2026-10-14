@@ -56,6 +56,8 @@ try {
     assert.equal(usd, LIVE.USD);
     const kes = await rates.eurPer("KES");
     assert.equal(kes, LIVE.KES);
+    // Not a currency a quote settles — an invoice's euro restatement needs it.
+    assert.equal(await rates.eurPer("INR"), LIVE.INR);
     // 139.86 is what a hardcoded 1.08 * 129.5 would produce. If that number
     // comes out of the quote engine, the feed is not wired in.
     assert.ok(
