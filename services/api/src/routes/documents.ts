@@ -19,7 +19,7 @@ import { CHAIN_ID, HARNESS, SECURITY } from "../config.js";
 import { store, type Transfer, type User } from "../store.js";
 import { abis, addrs, eur, publicClient } from "../chain.js";
 import { checkSignedMessage, type SignatureCheck } from "../wallet/signature-check.js";
-import { moneriumClientFor, moneriumLiveFor } from "../adapters/monerium-connection.js";
+import { moneriumClientFor, moneriumEnvironment, moneriumLiveFor } from "../adapters/monerium-connection.js";
 import { safeMessageHash, signMessageAsPasskeySafe, type PasskeySafeDeploymentPlan } from "../wallet/candide.js";
 import { b64urlToBuf, bufToB64url, verifyAssertionForChallenge } from "../webauthn.js";
 import {
@@ -143,6 +143,7 @@ export async function buildStatement(user: User, from: Date, to: Date): Promise<
   return {
     kind: "statement",
     holder,
+    moneriumEnvironment: moneriumEnvironment(),
     period: { from: from.toISOString(), to: to.toISOString() },
     opening,
     closing,

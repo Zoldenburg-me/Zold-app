@@ -47,7 +47,7 @@
   .head .zold b { color: var(--acc); }
   .head .right { text-align: right; font-size: 12px; color: var(--ink-soft); line-height: 1.6; }
   .holder { margin-top: 28px; display: flex; justify-content: space-between; gap: 24px; flex-wrap: wrap; }
-  .addr { line-height: 1.6; } .addr .who { font-weight: 600; text-transform: uppercase; }
+  .addr { line-height: 1.6; overflow-wrap: anywhere; } .addr .who { font-weight: 600; text-transform: uppercase; }
   .meta { font-size: 12px; min-width: 260px; }
   .meta div { display: flex; justify-content: space-between; gap: 18px; padding: 2px 0; border-bottom: .5px solid var(--rule); }
   .meta .k { color: var(--ink-soft); } .meta .v { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; }
@@ -170,6 +170,25 @@ function signatures(doc) {
   </div>`;
 }
 
+// The issuer's own portal for this statement. The snapshot records the
+// Monerium environment at issue; statements from before it was recorded fall
+// back to the chain (8453 is the production deployment, test chains the
+// sandbox). A custom issuer host has no public portal to name.
+function moneriumPortal(env, chainId) {
+  if (env === "production") return "monerium.app";
+  if (env === "sandbox") return "monerium.dev";
+  if (env) return "";
+  return chainId === 8453 ? "monerium.app" : "monerium.dev";
+}
+function statementLegal(s) {
+  const lines = ["Balances are read from the Base ledger at the stated blocks. Transfer data is provided by the e-money issuer, Monerium."];
+  if (s.holder.iban) {
+    const portal = moneriumPortal(s.moneriumEnvironment, s.holder.chainId);
+    lines.push(`The IBAN is issued by Monerium; your verified name and address, and the issuer's own record of this account, are in your Monerium account${portal ? ` at ${portal}` : ""}.`);
+  }
+  return lines;
+}
+
 function render(doc) {
   const s = doc.snapshot;
   if (s.kind === "receipt") {
@@ -194,10 +213,7 @@ function render(doc) {
         ? `This statement does not fully reconcile: ${esc(s.reconciliation.note || "")}. The opening and closing balances are read from the chain; the lines are what the issuer and Zold recorded, so a movement is missing from the lines, not from the balances.`
         : "The balances could not be read from the chain, so these lines could not be checked against them."}</div>`) +
       (s.sources.monerium !== "ok" ? `<div class="note">Counterparty names and memos are unavailable for this statement (${esc(s.sources.monerium)}); lines carry the ledger data only.</div>` : "") +
-      signatures(doc) + legal(doc, [
-        "Balances are read from the Base ledger at the stated blocks. Transfer data is provided by the e-money issuer, Monerium.",
-        "The IBAN is issued by Monerium; your verified name and address, and the issuer's own record of this account, are in your Monerium account at monerium.app.",
-      ]);
+      signatures(doc) + legal(doc, statementLegal(s));
   }
   if (s.kind === "balance") {
     return head(doc, "Balance confirmation", "Zold account document") + holder(s.holder) +
