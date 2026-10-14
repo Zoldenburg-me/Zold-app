@@ -5,7 +5,9 @@ description: Remove change-log narration from comments, docs, AGENTS.md and note
 
 # Prune history narration
 
-Plain markdown so any agent can follow it.
+Plain markdown so any agent can follow it. In Claude Code the `tidy-context`
+skill applies the same rule to memory and context files; where the two differ,
+the Keep list below wins in this repo.
 
 ## The rule
 
