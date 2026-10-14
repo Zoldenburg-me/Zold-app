@@ -60,7 +60,8 @@ await t("a statement's printed address is typed per visit, marked self-declared,
   assert.equal(script.match(/fetch\(/g)?.length, 1, "the only request is the GET of the public document");
   assert.match(script, /fetch\(`\/api\/v\/\$\{encodeURIComponent\(code\)\}`, \{ headers/);
   assert.match(script, /Address as the holder entered it, not verified and not part of the signed document/);
-  assert.match(script, /official account statement for this IBAN, with your verified address, is issued by Monerium/);
+  assert.match(script, /const addressFrom = \(text\) => String\(text\)\.split\("\\n"\)\.map\(\(l\) => l\.trim\(\)\)\.filter\(Boolean\)/, "every typed line prints: no silent truncation");
+  assert.match(script, /The IBAN is issued by Monerium; your verified name and address, and the issuer's own record of this account, are in your Monerium account at monerium\.app\./);
   assert.deepEqual(docs.holderBlock({ ...({} as any), country: "de", address: `0x${"1".repeat(40)}`, name: "A", createdAt: "x" }).addressLines, ["DE"]);
 });
 
