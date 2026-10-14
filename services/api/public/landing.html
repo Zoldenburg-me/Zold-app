@@ -21,7 +21,7 @@
 <link rel="stylesheet" href="/site.css" />
 <link rel="stylesheet" href="/landing.css" />
 <!-- html.l-js holds things back until they scroll into view; without JS, show them. -->
-<noscript><style>.l-js .l-rv { opacity: 1; transform: none; }</style></noscript>
+<noscript><style>.l-js .l-rv { opacity: 1; transform: none; } .l-js .l-ch:not(.is-on) > * { opacity: 1; }</style></noscript>
 <script src="/landing/motion.js" defer></script>
 <script src="/landing/narwhal.js" defer></script>
 </head>
@@ -42,7 +42,7 @@
     </div>
     <figure class="l-hero__stage">
       <div class="l-device l-device--hero"><img src="/landing/img/home-active.jpg" width="412" height="900" fetchpriority="high" alt="The Zold home screen: a balance of €2,318.47, Send, Add money and Request buttons, and a payment to Anna Schmidt arriving." /></div>
-      <figcaption class="s-sr">Sample account, for illustration.</figcaption>
+      <figcaption class="l-cap l-hero__cap">Sample account, for illustration.</figcaption>
     </figure>
     <button class="l-motion" type="button" aria-pressed="false" hidden>Pause motion</button>
   </section>
@@ -103,14 +103,14 @@
       <h2 class="l-h2 l-rv">A card for everyday life.</h2>
       <p class="l-lede l-rv">Pay in shops, online and abroad. Add it to Apple Pay or Google Pay and tap.</p>
       <div class="l-tabs l-rv" data-tabs>
-        <div class="l-tabs__list" role="tablist" aria-label="The card">
-          <button type="button" role="tab" id="card-t0" aria-controls="card-p0" aria-selected="true"><i class="ph ph-credit-card" aria-hidden="true"></i>Ready right away</button>
-          <button type="button" role="tab" id="card-t1" aria-controls="card-p1" aria-selected="false" tabindex="-1"><i class="ph ph-shield-check" aria-hidden="true"></i>Freeze it in one tap</button>
-          <button type="button" role="tab" id="card-t2" aria-controls="card-p2" aria-selected="false" tabindex="-1"><i class="ph ph-sparkle" aria-hidden="true"></i>Metal, if you like</button>
+        <div class="l-tabs__list" aria-label="The card">
+          <button type="button" id="card-t0" aria-controls="card-p0"><i class="ph ph-credit-card" aria-hidden="true"></i>Ready right away</button>
+          <button type="button" id="card-t1" aria-controls="card-p1"><i class="ph ph-shield-check" aria-hidden="true"></i>Freeze it in one tap</button>
+          <button type="button" id="card-t2" aria-controls="card-p2"><i class="ph ph-sparkle" aria-hidden="true"></i>Metal, if you like</button>
         </div>
-        <p class="l-tabs__panel" role="tabpanel" id="card-p0" aria-labelledby="card-t0">Your virtual card is there the moment your account opens.</p>
-        <p class="l-tabs__panel" role="tabpanel" id="card-p1" aria-labelledby="card-t1">Unfreeze it just as fast.</p>
-        <p class="l-tabs__panel" role="tabpanel" id="card-p2" aria-labelledby="card-t2">A physical card on request.</p>
+        <p class="l-tabs__panel" id="card-p0" aria-labelledby="card-t0">Your virtual card is there the moment your account opens.</p>
+        <p class="l-tabs__panel" id="card-p1" aria-labelledby="card-t1">Unfreeze it just as fast.</p>
+        <p class="l-tabs__panel" id="card-p2" aria-labelledby="card-t2">A physical card on request.</p>
       </div>
     </div>
   </section>
@@ -230,6 +230,7 @@
       <h2 class="l-rv">Your account is a few taps away.</h2>
       <div class="l-launch__stage" aria-hidden="true">
         <div class="l-device l-device--launch"><img src="/landing/img/home-active.jpg" width="412" height="900" loading="lazy" decoding="async" alt="" /></div>
+        <p class="l-cap">Sample account, for illustration.</p>
       </div>
       <div class="l-launch__side l-rv">
         <ol>

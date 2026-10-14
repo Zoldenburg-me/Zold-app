@@ -48,7 +48,13 @@
 
   /* ---- card switcher ---- */
   document.querySelectorAll("[data-tabs]").forEach(function (box) {
-    var tabs = Array.prototype.slice.call(box.querySelectorAll('[role="tab"]'));
+    // Roles are added here, so without JS the markup stays a plain list.
+    box.querySelector(".l-tabs__list").setAttribute("role", "tablist");
+    var tabs = Array.prototype.slice.call(box.querySelectorAll("[aria-controls]"));
+    tabs.forEach(function (t) {
+      t.setAttribute("role", "tab");
+      document.getElementById(t.getAttribute("aria-controls")).setAttribute("role", "tabpanel");
+    });
     function select(i, focus) {
       tabs.forEach(function (t, j) {
         var on = i === j;

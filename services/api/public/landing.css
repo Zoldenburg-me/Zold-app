@@ -102,6 +102,8 @@
   box-shadow: inset 0 1.5px 0 rgba(255,190,225,.55), 0 -24px 90px rgba(237,24,141,.32), 0 -2px 24px rgba(255,160,210,.25); }
 .l-hero__stage::after { content: ""; position: absolute; z-index: 0; left: 50%; top: 20%; width: 900px; height: 520px; transform: translateX(-50%); pointer-events: none;
   background: radial-gradient(50% 50% at 50% 70%, rgba(237,24,141,.22), transparent 70%); }
+/* Sits on the horizon, above the planet, so the sample label stays visible. */
+.l-hero__cap { position: absolute; z-index: 3; left: 0; right: 0; bottom: 12px; margin: 0; }
 @media (max-width: 640px) { .l-hero__stage { height: 300px; } .l-device--hero { height: 560px; } }
 /* Pause motion: stops the narwhal (WCAG 2.2.2). Shown by motion.js. */
 .l-motion { position: absolute; right: 24px; bottom: 20px; z-index: 3; min-height: 44px; padding: 0 16px; border-radius: var(--z-radius-pill); cursor: pointer;
