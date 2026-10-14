@@ -31,6 +31,7 @@ import {
   normaliseVatId,
   type ExemptionReasonId,
   type InvoiceDraft,
+  type InvoiceLanguage,
   type VatTreatment,
 } from "../../domain/invoicing.js";
 import { createQuote } from "../../fx.js";
@@ -128,7 +129,7 @@ export const jurisdictionOf = (org: Organisation) => jurisdictionFor(org.address
 export const seriesOf = (org: Organisation) => org.invoicing?.numberSeries ?? defaultSeriesFor(org.address?.country);
 
 /** The language this org's invoices are written in unless one is chosen. */
-export const languageOf = (org: Organisation): "de" | "en" =>
+export const languageOf = (org: Organisation): InvoiceLanguage =>
   org.invoicing?.language ?? defaultInvoiceLanguage(org.address?.country);
 
 /** The business profile's fields that every invoice prints. */

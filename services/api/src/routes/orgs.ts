@@ -59,6 +59,18 @@ import { verifyPasskeyStepUp } from "./auth.js";
 import { issuerIdentityFrom } from "./business/shared.js";
 
 const INVITE_TTL_MS = 3 * 24 * 60 * 60 * 1000; // Gnosis expired invites at 3 days
+
+/** The reporting time zone must be one Intl can format in — a bad name
+ *  surfaces months later, inside the month math, so it is refused at the door. */
+function timeZoneLooksValid(tz: unknown): tz is string {
+  if (typeof tz !== "string" || !tz.trim() || tz.length > 64) return false;
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
 /** An organisation's name and legal name, in characters. */
 const ORG_NAME_MAX = 120;
 /** A contact's (payee's) name, in characters. */
@@ -156,7 +168,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     const session = requireSession(req, res);
     if (!session) return;
 
-    const { name, type, country, legalName, taxId, email } = req.body ?? {};
+    const { name, type, country, legalName, taxId, email, timeZone } = req.body ?? {};
     const orgType: OrgType = type === "business" ? "business" : "personal";
     // Printed on invoices and documents: the same rule as a person's name.
     const orgName = cleanName(name, { min: 2, max: ORG_NAME_MAX });
@@ -171,6 +183,11 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       return res
         .status(400)
         .json({ error: "Country must be an ISO 3166-1 alpha-2 code, e.g. DE." });
+    }
+    if (timeZone !== undefined && !timeZoneLooksValid(timeZone)) {
+      return res
+        .status(400)
+        .json({ error: `"${String(timeZone)}" is not a time zone. Use an IANA name like Europe/Berlin.`, field: "timeZone" });
     }
 
     /**
@@ -210,9 +227,12 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       plan: "starter",
       reporting: {
         // Reporting currency follows the local currency where we know it, so a
-        // German business does not start out reporting in something else.
+        // German business does not start out reporting in something else. The
+        // time zone comes from the caller's browser — a zone named wrong fails
+        // inside the month math, so it is checked now, and an absent one keeps
+        // the old default.
         currency: suggestedCurrency({ address: { country: country.toUpperCase() } }),
-        timeZone: "Europe/Berlin",
+        timeZone: (timeZone as string) ?? "Europe/Berlin",
         costBasisMethod: "FIFO",
       },
       verifications: {},
@@ -348,7 +368,12 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     }
     if (b.reporting && typeof b.reporting === "object") {
       const next = { ...ctx.org.reporting };
-      if (typeof b.reporting.timeZone === "string") next.timeZone = b.reporting.timeZone;
+      if (b.reporting.timeZone !== undefined) {
+        if (!timeZoneLooksValid(b.reporting.timeZone)) {
+          return res.status(400).json({ error: `"${String(b.reporting.timeZone)}" is not a time zone. Use an IANA name like Europe/Berlin.`, field: "timeZone" });
+        }
+        next.timeZone = b.reporting.timeZone;
+      }
       // Reporting currency is a paid feature — Gnosis reserved it for Business.
       if (
         typeof b.reporting.currency === "string" &&
