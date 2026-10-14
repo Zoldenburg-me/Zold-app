@@ -4,29 +4,28 @@ For every agent here; Claude Code loads it via `CLAUDE.md`.
 
 ## Start here
 
-This file is the map and the invariants, and it is loaded into every session.
+The map and the invariants, loaded into every session.
 **Budget: 12,000 characters** (`wc -m AGENTS.md`). Only what almost every task
 needs goes here; everything else goes in `docs/` with a one-line pointer. Over
 budget: replace or move something, do not append.
 
 Read when the task touches it:
-- `docs/status.md` — **what has never run** (no mainnet, no real swap, no cash
-  rail, no on-chain recovery). Read before saying anything works.
+- `docs/status.md` — **what has never run** (mainnet: owner only, one swap, no
+  SEPA payout; no cash rail; no on-chain recovery). Read before saying anything works.
 - `docs/running-locally.md` — dev vs api, preflight, local funding and KYC
-  gate, tests, the production branch.
+  gate, tests, the production branch, browser-pane checks.
 - `docs/recovery-and-signers.md` — second owner, Zoldenburg guardian, recovery.
 - `docs/roadmap.md` — current milestone, agreed priority, parked ideas.
 - `docs/architecture/` — product (what exists) and technical (how).
 - `docs/CODEMAPS/` — routes, modules, data, deps.
 - `docs/security-hardening.md` — secrets, keys, Postgres, mail; its Rules bind.
+- `docs/agents/tooling.md` — ECC, Ponytail, hooks: which rule wins.
 
 ## How to write in this repo (comments, docs, this file, notes)
 
-Write what is true now. When a fact changes, overwrite the line; never add an
-"update", "retired (date)", "used to" or "superseded" note beside it — history
-goes in the commit message. Past tense only for old data or code that still
-exists, a guard against a return, or a one-clause reason. Dates only on
-verified observations. Cleanup: `docs/agents/prune-history.md`.
+Write what is true now: overwrite a changed fact, never annotate it ("update",
+"retired (date)", "used to"); history goes in the commit message. Exceptions
+and cleanup: `docs/agents/prune-history.md`.
 
 THREE RULES OVERRIDE CONVENIENCE:
 1. **main is PR-merge only. Only `scripts/build-production-branch.sh` writes
@@ -166,11 +165,20 @@ Each of these was a bug once.
   host without a processing agreement. Staging is never under the passkey
   domain.
 
-**Two strings keep the old "zoll" spelling on purpose** — do not finish the
-rename. `PRF_SALT = "zoll/device-key/v1"` is an *input* to key derivation, so a
-new spelling makes every wrapped device key undecryptable; the `zoll-device-key`
-/ `zoll-session` localStorage slots are read once and migrated forward, and only
-the current authorizer can rotate a device key.
+**Keep the "zoll" spelling in two places**: `PRF_SALT = "zoll/device-key/v1"`
+is a key-derivation input (renaming it makes every wrapped device key
+undecryptable), and the `zoll-device-key` / `zoll-session` localStorage slots
+are read once and migrated forward. Only the current authorizer rotates a
+device key.
+
+## Change size
+
+The smallest complete change: a house helper, then the standard library, then
+an installed dependency; nothing "for later". Finish what it breaks: callers,
+tests, the grep suites. Never cut validation, a fail-closed refusal,
+compensation or an invariant. Money, identity, a parser or a route gets a test.
+`shortcut: <limit>, <when to upgrade>` marks a known limit, never on a money
+path. Where ECC or Ponytail disagrees with this file, this file wins.
 
 ## Running and testing
 
@@ -179,7 +187,6 @@ the current authorizer can rotate a device key.
   it cannot deploy a passkey Safe (no bundler). Never point it at the live
   accounts in `data/db.json`. `npm run api` uses `TRANSF_CHAIN_ID` and keeps
   its db. Run `npm run preflight` before any mainnet deploy.
-- Details: `docs/running-locally.md`.
 
 ## Environment
 
@@ -187,22 +194,19 @@ the current authorizer can rotate a device key.
 - No `gh` CLI, no brew. `origin` is SSH and pushes without a token.
 - Node lives in-project: `export PATH="$PWD/.toolchain/node-v22.17.0-darwin-arm64/bin:$PATH"`.
   arm64 only; on Intel see `docs/running-locally.md`.
-- Browser-pane and new-page checks: `docs/running-locally.md`.
 
 ## Naming
 
 - **Zoldenburg** = the company / infra brand (B2B, legal, footer).
-- **Zold** = the consumer app. **Zoll** survives only in the two strings above.
+- **Zold** = the consumer app. **Zoll** only in the two strings above.
 - **Narwhal** = mascot. No narwhal emoji exists; the UI uses 🦄.
 - Repo dir on disk is still `transF`; do NOT rewrite absolute paths in
   `.claude/launch.json`. GitHub repo rename is pending.
 
 ## Multi-agent workflow
 
-More than one agent commits here.
-
 - Branch prefix: `x/*`. **Never push to a branch another agent created.**
-- main is PR-merge only. Before merging, confirm the PR head SHA equals the
+- Before merging, confirm the PR head SHA equals the
   commit you last pushed; after merging, grep the tree — "merged: true" is not
   proof (a PR once dropped a pushed commit).
 - Start every session with `git fetch`; expect main to have moved mid-session.
@@ -210,8 +214,7 @@ More than one agent commits here.
 
 ## Style
 
-- Prose without AI-marketing jargon: what is real vs simulated, specifics over
-  adjectives, shortcuts stated openly.
-- Honest assessments, not cheerleading. Say what is mocked.
+- Specifics over adjectives, no marketing jargon, no cheerleading. Say what is
+  mocked and which shortcuts were taken.
 - **A user-visible change gets a PR on `Zoldenburg-me/zold-docs`** (GitBook)
   in the same task; its `AGENTS.md` sets the voice.
