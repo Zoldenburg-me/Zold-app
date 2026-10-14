@@ -8,22 +8,19 @@
  * Three rule sets:
  *
  *   DE       statutory  - German paragraphs are encoded and enforced.
- *   EU       directive  - the VAT Directive baseline every member state shares
- *                         (Art. 226 particulars, Art. 196 reverse charge,
- *                         Art. 138 intra-community, Art. 146 export). National
- *                         additions are not encoded; none of the other 26 sets
- *                         has been verified.
- *   GENERIC  structural - internal coherence only: both parties, a number,
- *                         dates, and arithmetic that adds up. No tax law is
- *                         checked. India's GST, US sales tax, UK VAT and
+ *   EU       unsupported- the member state's national rules are not encoded.
+ *                         Only the issuing profile, the unique number and what
+ *                         is printed on the document are checked; the invoice
+ *                         goes out on the issuer's own verification.
+ *   GENERIC  unsupported- same as EU. India's GST, US sales tax, UK VAT and
  *                         everything else land here.
  *
- * Every report says which one ran, so "valid" never claims more coverage than
- * we have.
+ * Every report says which one ran, and the non-DE reports say "not
+ * supported", so "valid" never claims more coverage than we have.
  *
  * There is no per-country VAT rate table: rates change by statute and we have
- * not checked them. An org sets its own rates; outside Germany we only check
- * that a rate is a plausible percentage.
+ * not checked them. An org sets its own rates; only a German invoice gets a
+ * plausibility warning on a rate that matches nothing encoded.
  */
 
 /** ISO 3166-1 alpha-2 for the 27 EU member states. Membership is stable enough

@@ -200,13 +200,15 @@ export async function issueOutgoing(
   // pointing at an invoice that was never issued. The language is resolved the
   // same way: once an invoice has been issued under the country's default, it
   // is saved on the org, so a later move of country doesn't silently flip the
-  // language new invoices are written in.
+  // language new invoices are written in. The default frozen is the country's,
+  // not this invoice's: a one-off override — say a customer's payer rule —
+  // stays on its own invoice.
   if (!numberSupplied || !ctx.org.invoicing?.language) {
     store.updateOrganisation(ctx.org.id, {
       invoicing: {
         ...(ctx.org.invoicing ?? {}),
         ...(numberSupplied ? {} : { numberSeries: { ...series, next: series.next + 1 } }),
-        ...(ctx.org.invoicing?.language ? {} : { language }),
+        ...(ctx.org.invoicing?.language ? {} : { language: languageOf(ctx.org) }),
       },
     });
   }

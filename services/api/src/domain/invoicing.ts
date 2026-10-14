@@ -770,6 +770,28 @@ export function checkCompliance(
   }
 
   /**
+   * Settled in euro, in every jurisdiction: a foreign-currency invoice needs
+   * its euro restatement before it goes out, or the Pay button would charge
+   * the face amount as euros. The conversion is computed before this runs;
+   * an unavailable rate feed refuses the invoice rather than collecting
+   * wrong.
+   */
+  const currency = draft.currency ?? SETTLEMENT_CURRENCY;
+  if (currency !== SETTLEMENT_CURRENCY) {
+    if (!draft.conversion) {
+      add(
+        "error",
+        "currency",
+        `This invoice is written in ${currency}, so the tax amount must also be shown in ` +
+          `${SETTLEMENT_CURRENCY} — and no rate was available to work it out. It has not been issued.`,
+        basis("§ 16 Abs. 6 UStG", "Art. 230 VAT Directive"),
+      );
+    } else if (draft.conversion.from !== currency) {
+      add("error", "currency", `The ${SETTLEMENT_CURRENCY} restatement was computed from ${draft.conversion.from}, not ${currency}.`);
+    }
+  }
+
+  /**
    * What is printed is checked everywhere, unsupported jurisdiction or not:
    * an exempt invoice must name a reason that belongs to this jurisdiction's
    * rule set — a Polish issuer cannot cite a German paragraph — must print a
@@ -869,45 +891,6 @@ function checkGermanContent(
 ): void {
   const { totals, regime, smallBusiness, notVerified, add } = ctx;
   const basis = (de: string, _eu?: string) => de;
-  /**
-   * Foreign currency: the tax amount must also be stated in euro.
-   *
-   * § 16 Abs. 6 UStG for a German issuer. Omitting it costs the recipient their
-   * input-tax deduction, so it is an error like any other § 14 field. The
-   * restatement is computed before this runs; this checks it arrived, so an
-   * unavailable rate feed stops the invoice.
-   *
-   * Under EU the euro figure is shown, but each non-euro member state's own
-   * conversion rule is not encoded, so it is reported as a gap. Under GENERIC
-   * no tax claim is made.
-   */
-  const currency = draft.currency ?? SETTLEMENT_CURRENCY;
-  if (currency !== SETTLEMENT_CURRENCY) {
-    if (!draft.conversion) {
-      add(
-        "error",
-        "currency",
-        `This invoice is written in ${currency}, so the tax amount must also be shown in ` +
-          `${SETTLEMENT_CURRENCY} — and no rate was available to work it out. It has not been issued.`,
-        basis("§ 16 Abs. 6 UStG", "Art. 230 VAT Directive"),
-      );
-    } else if (draft.conversion.from !== currency) {
-      add("error", "currency", `The ${SETTLEMENT_CURRENCY} restatement was computed from ${draft.conversion.from}, not ${currency}.`);
-    }
-  }
-
-  if (!has(draft.issueDate)) {
-    add("error", "issueDate", "The issue date is required.", basis("§ 14 Abs. 4 Nr. 3 UStG", "Art. 226(1) VAT Directive"));
-  }
-  if (!draft.lines.length || draft.lines.some((l) => !has(l.description))) {
-    add(
-      "error",
-      "lines",
-      "Every line needs the quantity and the customary description of what was supplied.",
-      basis("§ 14 Abs. 4 Nr. 5 UStG", "Art. 226(6) VAT Directive"),
-    );
-  }
-
   if (!has(draft.issueDate)) {
     add("error", "issueDate", "The issue date is required.", basis("§ 14 Abs. 4 Nr. 3 UStG", "Art. 226(1) VAT Directive"));
   }
