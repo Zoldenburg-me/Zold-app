@@ -94,13 +94,15 @@ console.log("\nDefaults follow the issuer's country");
 await check("German-speaking issuers start in German with RE-, everyone else in English with INV-", () => {
   assert.equal(defaultInvoiceLanguage("DE"), "de");
   assert.equal(defaultInvoiceLanguage("AT"), "de");
-  assert.equal(defaultInvoiceLanguage("FR"), "en");
+  assert.equal(defaultInvoiceLanguage("FR"), "fr");
+  assert.equal(defaultInvoiceLanguage("ES"), "es");
   assert.equal(defaultInvoiceLanguage("GA"), "en");
   assert.equal(defaultInvoiceLanguage(undefined), "en");
   assert.equal(defaultSeriesFor("DE").prefix, "RE-{YYYY}-");
   assert.equal(defaultSeriesFor("IN").prefix, "INV-{YYYY}-");
-  assert.equal(invoiceLanguage("", undefined, "FR"), "en");
-  assert.equal(invoiceLanguage(undefined, "de", "FR"), "de", "a language the org chose wins over its country");
+  assert.equal(invoiceLanguage("", undefined), "en");
+  assert.equal(invoiceLanguage(undefined, "de"), "de", "a language the org chose wins");
+  assert.equal(invoiceLanguage("fr", "de"), "fr", "an invoice can be written in French");
 });
 
 addOrg("org_ga", "GA");

@@ -1371,6 +1371,8 @@ async function obEnsureOrg() {
     legalName: obDraft.legalName,
     country: obDraft.incorp,
     email: obDraft.email,
+    // Monthly reports run in this zone; the settings screen can change it.
+    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
   });
 }
 

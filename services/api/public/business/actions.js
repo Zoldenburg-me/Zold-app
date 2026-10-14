@@ -681,16 +681,29 @@ export const ACTIONS = {
         : `It opens the invoice with your bank details. There’s no Pay button on it: ${plain(pay?.reason || "no payment link could be made.")}`;
       setTimeout(() => linkDialog(`Invoice ${r.invoice.issued.number} is ready`, `Send your customer this link. ${how} It’s shown once: copy it now.`, location.origin + r.linkPath), 0);
     };
-    try {
-      await issue(false);
-    } catch (e) {
-      if (e.status === 409 && e.warnings?.length) {
-        dialog("Issue it with these warnings?", `<ul class="desc" style="margin:8px 0 0 18px">${e.warnings.map((w) => `<li>${esc(w.message)}</li>`).join("")}</ul>
-          <p class="desc" style="margin-top:12px">Your acceptance is recorded on the invoice.</p>`, () => issue(true), { okLabel: "Issue anyway" });
-        return "keep";
+    const tryIssue = async (acceptWarnings) => {
+      try {
+        await issue(acceptWarnings);
+      } catch (e) {
+        if (e.status === 409 && e.warnings?.length) {
+          dialog("Issue it with these warnings?", `<ul class="desc" style="margin:8px 0 0 18px">${e.warnings.map((w) => `<li>${esc(w.message)}</li>`).join("")}</ul>
+            <p class="desc" style="margin-top:12px">Your acceptance is recorded on the invoice.</p>`, () => tryIssue(true), { okLabel: "Issue anyway" });
+          return;
+        }
+        throw e;
       }
-      throw e;
+    };
+    // Outside Germany no invoicing rules are encoded: issuing is the issuer's
+    // own verification, said to their face once before the invoice goes out.
+    const jur = invoiceDraft._jur;
+    if (jur && jur.ruleSet !== "DE") {
+      dialog(`${jur.countryName}: invoicing rules not supported`,
+        `<p class="desc">Zold checked only that this invoice names you, your address and a unique number — nothing in it is verified against ${esc(jur.countryName)}’s invoicing or tax law.</p>
+         <p class="desc" style="margin-top:10px">It goes out exactly as you wrote it: the number, both parties’ details, the amounts and the tax line are yours to verify — with your accountant where you have one.</p>`,
+        () => tryIssue(false), { okLabel: "I verified it — issue" });
+      return "keep";
     }
+    await tryIssue(false);
     return "keep";
   },
   "add-custom-reason": () => dialog("Add your own rule",
@@ -735,7 +748,7 @@ export const ACTIONS = {
     await api(`/api/orgs/${org.id}/invoicing/profile`, {
       method: "PATCH",
       body: {
-        language: val("i-lang") === "de" ? "de" : "en",
+        language: val("i-lang") || "en",
         smallBusiness: $("#i-klein")?.checked === true,
         defaultVatRate: $("#i-rate")?.value ? Number($("#i-rate").value) : undefined,
         paymentTermsDays: val("i-terms-days") ? Number(val("i-terms-days")) : undefined,
@@ -930,7 +943,11 @@ export const ACTIONS = {
       },
     };
     const cur = $("#s-currency");
-    if (cur && !cur.disabled && cur.value !== org.reporting.currency) body.reporting = { currency: cur.value };
+    const tz = $("#s-tz");
+    const reporting = {};
+    if (cur && !cur.disabled && cur.value !== org.reporting.currency) reporting.currency = cur.value;
+    if (tz && tz.value.trim() && tz.value.trim() !== org.reporting.timeZone) reporting.timeZone = tz.value.trim();
+    if (Object.keys(reporting).length) body.reporting = reporting;
     await api(`/api/orgs/${org.id}`, { method: "PATCH", body });
     toast("Saved.");
     await loadOrg(org.id);

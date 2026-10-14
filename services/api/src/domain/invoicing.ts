@@ -226,7 +226,7 @@ export function reasonForRuleSet(r: ExemptionReason, ruleSet: RuleSetId) {
 
 export function vatNoteFor(
   t: VatTreatment,
-  lang: "de" | "en" = "de",
+  lang: InvoiceLanguage = "de",
   /** Reasons the org defined for a country we do not encode. */
   customReasons: CustomExemptionReason[] = [],
 ): string {
@@ -705,9 +705,10 @@ const has = (v?: unknown) => typeof v === "string" && v.trim() !== "";
  */
 export function checkCompliance(
   draft: InvoiceDraft,
-  /** Resolved from the ISSUER's country. Defaults to Germany only because that
-   *  is the one rule set encoded to statute; pass the real one. */
-  jur: JurisdictionProfile = jurisdictionFor(draft.issuer.country ?? "DE"),
+  /** Resolved from the ISSUER's country. A caller that passes nothing gets the
+   *  jurisdiction of the issuer the draft names — never Germany by default;
+   *  an issuer with no country gets GENERIC's structural checks. */
+  jur: JurisdictionProfile = jurisdictionFor(draft.issuer.country),
   /** Rules the org added for a country we do not encode. */
   customReasons: CustomExemptionReason[] = [],
 ): ComplianceReport {
@@ -747,6 +748,128 @@ export function checkCompliance(
       : "standard";
 
   /**
+   * The only checks that run in every jurisdiction: the issuing profile and
+   * the unique number. § 33 UStDV exempts Germany's small invoices from the
+   * number; anywhere else nothing more is checked, because no other country's
+   * rules are encoded — `ok` then means "the document names its issuer and a
+   * number", and the report says the jurisdiction is unsupported.
+   */
+  if (!has(draft.issuer.name)) {
+    add("error", "issuer.name", "Your full business name is required.", basis("§ 14 Abs. 4 Nr. 1 UStG", "Art. 226(5) VAT Directive"));
+  }
+  if (!has(draft.issuer.addressLine) || !has(draft.issuer.city)) {
+    add("error", "issuer.address", "Your full address is required.", basis("§ 14 Abs. 4 Nr. 1 UStG", "Art. 226(5) VAT Directive"));
+  }
+  if (!has(draft.number) && (jur.ruleSet !== "DE" || regime !== "kleinbetrag")) {
+    add(
+      "error",
+      "number",
+      "A sequential invoice number is required, and it must be unique.",
+      basis("§ 14 Abs. 4 Nr. 4 UStG", "Art. 226(2) VAT Directive"),
+    );
+  }
+
+  /**
+   * What is printed is checked everywhere, unsupported jurisdiction or not:
+   * an exempt invoice must name a reason that belongs to this jurisdiction's
+   * rule set — a Polish issuer cannot cite a German paragraph — must print a
+   * reason note rather than a blank line, and must honour a custom rule's own
+   * declared requirements, since a custom rule is exactly how an unsupported
+   * country supplies its rules.
+   */
+  if (draft.treatment.kind === "exempt") {
+    const exempt = draft.treatment;
+    const custom = customReasons.find((c) => c.id === exempt.reason);
+    const builtIn = EXEMPTION_REASONS[exempt.reason as ExemptionReasonId];
+    if (!custom && !builtIn) {
+      add("error", "treatment", `"${exempt.reason}" is not a known exemption reason.`);
+    } else if (!custom && !jur.reasons.includes(exempt.reason)) {
+      add(
+        "error",
+        "treatment",
+        `${reasonForRuleSet(builtIn, jur.ruleSet).label} is not part of the ${jur.countryName} rule set. ` +
+          `Available here: ${jur.reasons.join(", ")}. Add your own rule if your country needs something else.`,
+      );
+    }
+    if (!has(vatNoteFor(exempt, "de", customReasons))) {
+      add(
+        "error",
+        "treatment.note",
+        "An exempt invoice must state the reason on the document. Write it out.",
+        basis("§ 14 Abs. 4 Nr. 8 UStG", "Art. 226(11) VAT Directive"),
+      );
+    }
+    if (custom?.requiresRecipientVatId === true && !(draft.recipient.vatId ?? "").trim()) {
+      add(
+        "error",
+        "recipient.vatId",
+        `${custom.label} requires the customer's tax identifier on the invoice.`,
+        custom.legalBasis,
+      );
+    }
+  }
+  // A named gap, not a check: the euro restatement is computed, but the
+  // member state's own conversion rule is not encoded.
+  if ((draft.currency ?? SETTLEMENT_CURRENCY) !== SETTLEMENT_CURRENCY && jur.ruleSet === "EU") {
+    notVerified.push(
+      `conversion into a non-euro member state's own currency — only the ${SETTLEMENT_CURRENCY} ` +
+        "restatement is computed, and national conversion rules are not encoded",
+    );
+  }
+
+  // Only Germany's rules are encoded. Everywhere else the invoice is issued
+  // on the issuer's own verification, flagged "not supported" on the report.
+  if (jur.ruleSet === "DE") {
+    checkGermanContent(draft, jur, customReasons, { totals, regime, smallBusiness, notVerified, add });
+  }
+
+
+  const errors = issues.filter((i) => i.severity === "error");
+  const warnings = issues.filter((i) => i.severity === "warning");
+  const suggestion = suggestTreatment(draft, jur);
+  return {
+    ...(suggestion ? { suggestion } : {}),
+    regime,
+    // Carried on every result so the caller can say how far the check went.
+    // `ok: true` under GENERIC means "the document is coherent", not "this is
+    // a valid invoice in your country" — and only this block distinguishes them.
+    jurisdiction: {
+      country: jur.country,
+      countryName: jur.countryName,
+      ruleSet: jur.ruleSet,
+      verification: jur.verification,
+      basis: jur.basis,
+      notVerified,
+    },
+    issues,
+    errors,
+    warnings,
+    ok: errors.length === 0,
+    totals,
+  };
+}
+
+
+/**
+ * The § 14 UStG content rules — the only jurisdiction Zold encodes. Runs only
+ * for a German issuer; everywhere else checkCompliance stops at the issuing
+ * profile and the number, and the report says the rules are unsupported.
+ */
+function checkGermanContent(
+  draft: InvoiceDraft,
+  jur: JurisdictionProfile,
+  customReasons: CustomExemptionReason[],
+  ctx: {
+    totals: InvoiceTotals;
+    regime: ComplianceReport["regime"];
+    smallBusiness: boolean;
+    notVerified: string[];
+    add: (severity: IssueSeverity, field: string, message: string, legalBasis?: string) => void;
+  },
+): void {
+  const { totals, regime, smallBusiness, notVerified, add } = ctx;
+  const basis = (de: string, _eu?: string) => de;
+  /**
    * Foreign currency: the tax amount must also be stated in euro.
    *
    * § 16 Abs. 6 UStG for a German issuer. Omitting it costs the recipient their
@@ -771,21 +894,8 @@ export function checkCompliance(
     } else if (draft.conversion.from !== currency) {
       add("error", "currency", `The ${SETTLEMENT_CURRENCY} restatement was computed from ${draft.conversion.from}, not ${currency}.`);
     }
-    if (jur.ruleSet === "EU") {
-      notVerified.push(
-        `conversion into a non-euro member state's own currency — only the ${SETTLEMENT_CURRENCY} ` +
-          "restatement is computed, and national conversion rules are not encoded",
-      );
-    }
   }
 
-  // ── Always required, in every regime ─────────────────────────────────────
-  if (!has(draft.issuer.name)) {
-    add("error", "issuer.name", "Your full business name is required.", basis("§ 14 Abs. 4 Nr. 1 UStG", "Art. 226(5) VAT Directive"));
-  }
-  if (!has(draft.issuer.addressLine) || !has(draft.issuer.city)) {
-    add("error", "issuer.address", "Your full address is required.", basis("§ 14 Abs. 4 Nr. 1 UStG", "Art. 226(5) VAT Directive"));
-  }
   if (!has(draft.issueDate)) {
     add("error", "issueDate", "The issue date is required.", basis("§ 14 Abs. 4 Nr. 3 UStG", "Art. 226(1) VAT Directive"));
   }
@@ -798,21 +908,25 @@ export function checkCompliance(
     );
   }
 
-  // ── Full §14 content, unless §33 UStDV applies ───────────────────────────
+  if (!has(draft.issueDate)) {
+    add("error", "issueDate", "The issue date is required.", basis("§ 14 Abs. 4 Nr. 3 UStG", "Art. 226(1) VAT Directive"));
+  }
+  if (!draft.lines.length || draft.lines.some((l) => !has(l.description))) {
+    add(
+      "error",
+      "lines",
+      "Every line needs the quantity and the customary description of what was supplied.",
+      basis("§ 14 Abs. 4 Nr. 5 UStG", "Art. 226(6) VAT Directive"),
+    );
+  }
+
+  // ── Full §14 content, unless § 33 UStDV applies ───────────────────────────
   if (regime !== "kleinbetrag") {
     if (!has(draft.recipient.name)) {
       add("error", "recipient.name", "The customer's full name is required.", basis("§ 14 Abs. 4 Nr. 1 UStG", "Art. 226(5) VAT Directive"));
     }
     if (!has(draft.recipient.addressLine) || !has(draft.recipient.city)) {
       add("error", "recipient.address", "The customer's full address is required.", basis("§ 14 Abs. 4 Nr. 1 UStG", "Art. 226(5) VAT Directive"));
-    }
-    if (!has(draft.number)) {
-      add(
-        "error",
-        "number",
-        "A sequential invoice number is required, and it must be unique.",
-        basis("§ 14 Abs. 4 Nr. 4 UStG", "Art. 226(2) VAT Directive"),
-      );
     }
     if (!has(draft.supplyDate) && !draft.supplyPeriod) {
       add(
@@ -825,23 +939,15 @@ export function checkCompliance(
     // §34a UStDV gives Kleinunternehmer their own reduced content rules, but a
     // supplier identifier is still how the customer's accountant books it.
     if (!has(draft.issuer.vatId) && !has(draft.issuer.taxNumber)) {
-      // Under GENERIC this can only be a warning. Most countries want some tax
-      // identifier, but we do not know which — an Indian entity has a GSTIN,
-      // not a USt-IdNr., and demanding ours would be the German leak again.
-      const severity: IssueSeverity =
-        jur.ruleSet === "GENERIC" || smallBusiness ? "warning" : "error";
       add(
-        severity,
+        smallBusiness ? "warning" : "error",
         "issuer.taxId",
-        jur.ruleSet === "GENERIC"
-          ? `No tax identifier shown. ${jur.countryName} very likely requires one, but Zold does ` +
-            "not know which — add it as a custom field."
-          : smallBusiness
-            ? "No Steuernummer or USt-IdNr. shown. § 34a UStDV relaxes this for Kleinunternehmer, but most customers expect one."
-            : "Your tax number or VAT ID is required.",
+        smallBusiness
+          ? "No Steuernummer or USt-IdNr. shown. § 34a UStDV relaxes this for Kleinunternehmer, but most customers expect one."
+          : "Your tax number or VAT ID is required.",
         smallBusiness
           ? basis("§ 34a UStDV")
-          : basis("§ 14 Abs. 4 Nr. 2 UStG", "Art. 226(3) VAT Directive"),
+          : basis("§ 14 Abs. 4 Nr. 2 UStG"),
       );
     }
   }
@@ -850,7 +956,7 @@ export function checkCompliance(
   if (draft.treatment.kind === "standard") {
     // Only Germany's permitted rates are encoded, because they are the only
     // ones we have checked. Elsewhere the org sets the rate it charges.
-    if (jur.ruleSet === "DE" && !DE_RATES.includes(draft.treatment.rate as never)) {
+    if (!DE_RATES.includes(draft.treatment.rate as never)) {
       add(
         "error",
         "treatment",
@@ -872,20 +978,8 @@ export function checkCompliance(
     const exempt = draft.treatment;
     const custom = customReasons.find((c) => c.id === exempt.reason);
     const builtIn = EXEMPTION_REASONS[exempt.reason as ExemptionReasonId];
-    if (!custom && !builtIn) {
-      add("error", "treatment", `"${exempt.reason}" is not a known exemption reason.`);
-    } else if (!custom && !jur.reasons.includes(exempt.reason)) {
-      // Offering German paragraphs to a Swedish entity is the whole mistake
-      // this rewrite exists to fix; refuse rather than print it.
-      add(
-        "error",
-        "treatment",
-        `${reasonForRuleSet(builtIn, jur.ruleSet).label} is not part of the ${jur.countryName} rule set. ` +
-          `Available here: ${jur.reasons.join(", ")}. Add your own rule if your country needs something else.`,
-      );
-    }
-    // Label and citation resolved for the rule set in force, so a Polish entity
-    // is told "Art. 196 VAT Directive", not "§ 3a Abs. 2 UStG".
+    // Reason validity and the printed note are checked for every jurisdiction
+    // in checkCompliance; here the reason's German-specific requirements.
     const shown = builtIn ? reasonForRuleSet(builtIn, jur.ruleSet) : undefined;
     const reason = custom
       ? {
@@ -895,15 +989,6 @@ export function checkCompliance(
           requiresRecipientVatId: custom.requiresRecipientVatId === true,
         }
       : shown;
-    const note = vatNoteFor(draft.treatment, "de", customReasons);
-    if (!has(note)) {
-      add(
-        "error",
-        "treatment.note",
-        "An exempt invoice must state the reason on the document. Write it out.",
-        basis("§ 14 Abs. 4 Nr. 8 UStG", "Art. 226(11) VAT Directive"),
-      );
-    }
     if (reason?.requiresIssuerVatId && !vatIdLooksValid(draft.issuer.vatId ?? "")) {
       add(
         "error",
@@ -968,7 +1053,7 @@ export function checkCompliance(
     }
   }
   // Outside the EU Zold knows no format for the issuer's identifier.
-  if (jur.ruleSet !== "GENERIC" && has(draft.issuer.vatId) && !vatIdLooksValid(draft.issuer.vatId!)) {
+  if (has(draft.issuer.vatId) && !vatIdLooksValid(draft.issuer.vatId!)) {
     add("warning", "issuer.vatId", `${draft.issuer.vatId} does not look like a VAT ID.`);
   }
   if (has(draft.recipient.vatId)) {
@@ -1006,31 +1091,8 @@ export function checkCompliance(
       basis("§ 14 Abs. 4 Nr. 10 UStG", "Art. 226(10a) VAT Directive"),
     );
   }
-
-  const errors = issues.filter((i) => i.severity === "error");
-  const warnings = issues.filter((i) => i.severity === "warning");
-  const suggestion = suggestTreatment(draft, jur);
-  return {
-    ...(suggestion ? { suggestion } : {}),
-    regime,
-    // Carried on every result so the caller can say how far the check went.
-    // `ok: true` under GENERIC means "the document is coherent", not "this is
-    // a valid invoice in your country" — and only this block distinguishes them.
-    jurisdiction: {
-      country: jur.country,
-      countryName: jur.countryName,
-      ruleSet: jur.ruleSet,
-      verification: jur.verification,
-      basis: jur.basis,
-      notVerified,
-    },
-    issues,
-    errors,
-    warnings,
-    ok: errors.length === 0,
-    totals,
-  };
 }
+
 
 function reasonLabel(id: ExemptionReasonId): string {
   return EXEMPTION_REASONS[id].label;
@@ -1058,9 +1120,15 @@ export function defaultSeriesFor(country?: string): NumberSeries {
     : DEFAULT_SERIES;
 }
 
-/** The language an org's invoices are written in until it picks one. */
-export function defaultInvoiceLanguage(country?: string): "de" | "en" {
-  return GERMAN_SPEAKING.has(String(country ?? "").toUpperCase()) ? "de" : "en";
+/** The language an org's invoices are written in until it picks one:
+ *  German-speaking countries invoice in German, France in French, Spain in
+ *  Spanish; everywhere else defaults to English — the languages Zold typesets. */
+export function defaultInvoiceLanguage(country?: string): InvoiceLanguage {
+  const c = String(country ?? "").toUpperCase();
+  if (GERMAN_SPEAKING.has(c)) return "de";
+  if (c === "FR") return "fr";
+  if (c === "ES") return "es";
+  return "en";
 }
 
 /**
@@ -1079,13 +1147,22 @@ export function formatInvoiceNumber(series: NumberSeries, when: Date): string {
 // ── Per-invoice language and due date ──────────────────────────────────────
 
 /**
- * The language one invoice is written in: the one chosen for it, else the
- * profile's, else the issuer country's default.
+ * The languages an invoice can be written in; the selects offer nothing else.
+ * Each needs its own label table (the invoice page's and the editor's), so the
+ * set is small on purpose.
  */
-export function invoiceLanguage(chosen: unknown, profile: "de" | "en" | undefined, country?: string): "de" | "en" {
-  if (chosen === undefined || chosen === null || chosen === "") return profile ?? defaultInvoiceLanguage(country);
-  if (chosen === "de" || chosen === "en") return chosen;
-  throw new InvoiceComplianceError(`Invoices are written in German (de) or English (en), not "${String(chosen)}".`);
+export const INVOICE_LANGUAGES = ["de", "en", "fr", "es"] as const;
+export type InvoiceLanguage = (typeof INVOICE_LANGUAGES)[number];
+
+/**
+ * The language one invoice is written in: the one chosen for it, else the
+ * profile's. A language Zold cannot typeset falls back to English rather than
+ * refusing — the document can always be rendered.
+ */
+export function invoiceLanguage(chosen: unknown, profile: InvoiceLanguage | undefined): InvoiceLanguage {
+  if (chosen === undefined || chosen === null || chosen === "") return profile ?? "en";
+  const s = String(chosen) as InvoiceLanguage;
+  return (INVOICE_LANGUAGES as readonly string[]).includes(s) ? s : "en";
 }
 
 /**
