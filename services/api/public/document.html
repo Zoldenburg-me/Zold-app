@@ -74,6 +74,11 @@
   .foot { margin-top: 12px; font-size: 10px; color: var(--ink-soft); display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   .foot .code { font-family: ui-monospace, Menlo, monospace; letter-spacing: .06em; color: var(--ink); }
   .err { color: var(--red); padding: 2rem 0; }
+  .addr-panel { padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border); background: var(--panel); margin-bottom: 1.1rem; display: grid; gap: 6px; }
+  .addr-panel[hidden] { display: none; }
+  .addr-panel label { font-weight: 600; }
+  .addr-panel .d { color: var(--muted); font-size: 12.5px; }
+  .addr-panel textarea { width: 100%; resize: vertical; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border2); background: var(--bg); color: var(--text); font: inherit; }
   @media (max-width: 640px) { body { padding: 1rem .6rem 4rem; } .head .right { text-align: left; } table { font-size: 11.5px; } td, th { padding: 6px 4px; } }
   button:focus-visible, a:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
   @media print {
@@ -81,7 +86,7 @@
     /* Red/green amounts and the amber reconciliation note carry meaning, so
        keep their colour even when the browser drops backgrounds. */
     .note, .neg, .pos { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .topbar, .verdict { display: none; }
+    .topbar, .verdict, .addr-panel { display: none; }
     .sheet { box-shadow: none; border-radius: 0; padding: 14mm; font-size: 11.5px; }
     @page { size: A4; margin: 10mm; }
   }
@@ -94,6 +99,11 @@
     <div class="actions"><button class="ghost" id="btn-print">Print / save as PDF</button></div>
   </div>
   <div class="verdict wait" id="verdict" role="status" aria-live="polite"><div class="dot"></div><div><div class="t">Checking this document…</div><div class="d">Re-verifying the signature and re-reading the chain.</div></div></div>
+  <div class="addr-panel" id="addr-panel" hidden>
+    <label for="addr-input">Your address on this printout</label>
+    <textarea id="addr-input" rows="3" maxlength="240" autocomplete="street-address" placeholder="Street and number&#10;Postcode and city&#10;Country"></textarea>
+    <div class="d">Optional. It appears only on this page and its printout, marked as entered by you. Zold does not send or store it, and it is not part of the signed document, so you type it again each time.</div>
+  </div>
   <div class="sheet" id="sheet"><div class="sub">Loading…</div></div>
 </div>
 <script>
@@ -104,6 +114,10 @@ const day = (iso) => { const d = new Date(iso); return Number.isNaN(d.getTime())
 const ibanFmt = (s) => String(s || "").replace(/\s/g, "").replace(/(.{4})/g, "$1 ").trim();
 const short = (a) => a ? `${a.slice(0, 8)}…${a.slice(-6)}` : "—";
 const code = location.pathname.split("/").pop();
+// The holder's postal address for a statement printout. Page memory only:
+// never fetched, never stored, never in the signed snapshot.
+let typedAddress = [];
+const addressFrom = (text) => String(text).split("\n").map((l) => l.trim().slice(0, 80)).filter(Boolean).slice(0, 4);
 
 function head(doc, title, sub) {
   return `<div class="head">
@@ -111,7 +125,10 @@ function head(doc, title, sub) {
     <div class="right"><h1 style="margin:0;font-size:inherit;font-weight:700">${esc(title)}</h1><div>Generated ${esc(day(doc.createdAt))}</div><div>Verification ${esc(code)}</div></div>
   </div>`;
 }
-function holder(h, extra = []) {
+function holder(h, extra = [], typed = []) {
+  const address = typed.length
+    ? `${typed.map((l) => `<div>${esc(l)}</div>`).join("")}<div class="sub">Address as the holder entered it, not verified and not part of the signed document</div>`
+    : h.addressLines.map((l) => `<div>${esc(l)}</div>`).join("");
   const rows = [
     ...(h.iban ? [["IBAN", ibanFmt(h.iban)]] : []),
     ...(h.bic ? [["BIC", h.bic]] : []),
@@ -121,7 +138,7 @@ function holder(h, extra = []) {
     ...extra,
   ];
   return `<div class="holder">
-    <div class="addr"><div class="who">${esc(h.name)}</div>${h.nameSource === "self-declared" ? `<div class="sub">Name as the holder entered it, not verified by Monerium</div>` : ""}${h.operatedBy ? `<div>Operated by ${esc(h.operatedBy)}</div>` : ""}${h.addressLines.map((l) => `<div>${esc(l)}</div>`).join("")}</div>
+    <div class="addr"><div class="who">${esc(h.name)}</div>${h.nameSource === "self-declared" ? `<div class="sub">Name as the holder entered it, not verified by Monerium</div>` : ""}${h.operatedBy ? `<div>Operated by ${esc(h.operatedBy)}</div>` : ""}${address}</div>
     <div class="meta">${rows.map(([k, v]) => `<div><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`).join("")}</div>
   </div>`;
 }
@@ -164,7 +181,7 @@ function render(doc) {
   if (s.kind === "statement") {
     const bal = (b) => b ? `${eur(b.amountEur)} (block ${b.number}, ${when(b.at)})` : "unavailable";
     return head(doc, "Account statement", `Statement period ${day(s.period.from)} to ${day(s.period.to)}`) +
-      holder(s.holder, [["Opening balance", s.opening ? eur(s.opening.amountEur) : "—"], ["Closing balance", s.closing ? eur(s.closing.amountEur) : "—"]]) +
+      holder(s.holder, [["Opening balance", s.opening ? eur(s.opening.amountEur) : "—"], ["Closing balance", s.closing ? eur(s.closing.amountEur) : "—"]], typedAddress) +
       (s.lines.length ? `<table>${TABLE_HEAD}<tbody>${lineRows(s.lines)}</tbody></table>` : `<div class="prose sub">No movements in this period.</div>`) +
       `<div class="totals">
         <div><span>Opening balance</span><span>${esc(bal(s.opening))}</span></div>
@@ -176,7 +193,10 @@ function render(doc) {
         ? `This statement does not fully reconcile: ${esc(s.reconciliation.note || "")}. The opening and closing balances are read from the chain; the lines are what the issuer and Zold recorded, so a movement is missing from the lines, not from the balances.`
         : "The balances could not be read from the chain, so these lines could not be checked against them."}</div>`) +
       (s.sources.monerium !== "ok" ? `<div class="note">Counterparty names and memos are unavailable for this statement (${esc(s.sources.monerium)}); lines carry the ledger data only.</div>` : "") +
-      signatures(doc) + legal(doc, ["Balances are read from the Base ledger at the stated blocks. Transfer data is provided by the e-money issuer, Monerium."]);
+      signatures(doc) + legal(doc, [
+        "Balances are read from the Base ledger at the stated blocks. Transfer data is provided by the e-money issuer, Monerium.",
+        "The official account statement for this IBAN, with your verified address, is issued by Monerium: request it from your Monerium account at monerium.app.",
+      ]);
   }
   if (s.kind === "balance") {
     return head(doc, "Balance confirmation", "Zold account document") + holder(s.holder) +
@@ -257,6 +277,13 @@ document.getElementById("btn-print").onclick = () => window.print();
     document.title = `${doc.kind === "statement" ? "Account statement" : doc.kind === "receipt" ? "Transfer receipt" : doc.kind === "balance" ? "Balance confirmation" : doc.kind === "beleg" ? "Beleg" : "Proof of ownership"} · Zold`;
     document.getElementById("sheet").innerHTML = render(doc);
     verdict(doc);
+    if (doc.snapshot.kind === "statement") {
+      document.getElementById("addr-panel").hidden = false;
+      document.getElementById("addr-input").oninput = (e) => {
+        typedAddress = addressFrom(e.target.value);
+        document.getElementById("sheet").innerHTML = render(doc);
+      };
+    }
   } catch (e) {
     document.getElementById("sheet").innerHTML = `<div class="err">${esc(e.message)}</div>`;
     const el = document.getElementById("verdict");
