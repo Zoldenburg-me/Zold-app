@@ -686,8 +686,11 @@ export const ACTIONS = {
         await issue(acceptWarnings);
       } catch (e) {
         if (e.status === 409 && e.warnings?.length) {
-          dialog("Issue it with these warnings?", `<ul class="desc" style="margin:8px 0 0 18px">${e.warnings.map((w) => `<li>${esc(w.message)}</li>`).join("")}</ul>
-            <p class="desc" style="margin-top:12px">Your acceptance is recorded on the invoice.</p>`, () => tryIssue(true), { okLabel: "Issue anyway" });
+          // Defer past the current dialog's close: this can run inside the
+          // "not supported" dialog's submit, and showModal() on an open
+          // dialog throws.
+          setTimeout(() => dialog("Issue it with these warnings?", `<ul class="desc" style="margin:8px 0 0 18px">${e.warnings.map((w) => `<li>${esc(w.message)}</li>`).join("")}</ul>
+            <p class="desc" style="margin-top:12px">Your acceptance is recorded on the invoice.</p>`, () => tryIssue(true), { okLabel: "Issue anyway" }), 0);
           return;
         }
         throw e;

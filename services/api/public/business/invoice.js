@@ -287,7 +287,9 @@ function paper(check) {
   const totals = check.totals || pv.totals;
   const reason = invoiceDraft.vat.kind === "exempt"
     ? [...(profile.reference.exemptionReasons || []), ...(profile.reference.customReasons || [])].find((x) => x.id === invoiceDraft.vat.reason) : null;
-  const vatNote = reason ? (lang === "en" && reason.invoiceNoteEn ? reason.invoiceNoteEn : reason.invoiceNote) : "";
+  // Matches vatNoteFor: German text under de, English under every other
+  // language; an org's own rule has the one note it was written with.
+  const vatNote = reason ? (lang === "de" ? reason.invoiceNote : (reason.invoiceNoteEn ?? reason.invoiceNote)) : "";
   const bank = profile.invoiceBank;
   const lines = invoiceDraft.lines;
   const qty = (q) => String(q || "").replace(".", lang === "en" ? "." : ",");
