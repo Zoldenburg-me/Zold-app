@@ -17,7 +17,7 @@ guardian built behind `TURNKEY_GUARDIANS`: `recovery-guardians-plan.md`.
   (`0xAA46…091C`); Zold only sets them and never spends through one.
 - **Zoldenburg is a recovery guardian only by the user's choice**, made in
   Security (one passkey-signed op). Signup does not offer it. Deployment adds
-  a guardian only when the user logged in with Google or Apple at signup
+  a guardian only when the user logged in with Google, Apple or an email code at signup
   (`self-social`, where `TURNKEY_GUARDIANS` is on); skipping it records
   nothing, and Home keeps a reminder that recovery is off. It never blocks
   the IBAN or deposits. A lost device asks with a new

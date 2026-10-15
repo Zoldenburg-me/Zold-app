@@ -49,8 +49,8 @@ visit):
 | `self-social` | Turnkey sub-org, root = the user | log in with Google/Apple/email on the recovery page |
 | `trusted-person` | Turnkey sub-org, root = that person | log in from the approval link the user sends them |
 
-**The four choices** in Security. Signup offers only the Google or Apple
-login, before the passkey; the Safe's deployment operation adds it.
+**The four choices** in Security. Signup offers only the Google, Apple or
+email-code login, before the passkey; the Safe's deployment operation adds it.
 
 1. **No recovery.** Allowed; the user ticks the existing warning that only
    EURe is reclaimable from Monerium. `recoveryChoice` records it.
@@ -256,14 +256,17 @@ sample documents only.
   invariant below sits in our code where a test can see it.
 - **Built (offline-tested, never called Turnkey, Google or Apple):**
   `config/turnkey.ts`, `wallet/turnkey.ts`, `routes/recovery-turnkey.ts`,
-  the `/guardian` page (choosing Zoldenburg or a Google/Apple login,
+  the `/guardian` page (choosing Zoldenburg, a Google/Apple login, an
+  email or a recovery passkey,
   `public/guardian.html`, `public/guardian/*.js`), the `/recovery` page (the
   whole lost-device flow for every guardian, `public/recovery.html`,
   `public/recovery/*.js`) and `vendor/turnkey.js`; recovery with it in `recovery/turnkey-recovery.ts`
   and `routes/recovery-turnkey-requests.ts`; `turnkey:test`,
   `turnkey-page:test` and `turnkey-recovery:test`.
-  `TURNKEY_GUARDIANS=1` switches it on and then needs both secrets plus
-  `TURNKEY_OAUTH_CLIENT_IDS`: our Google web client id (ends in
+  `TURNKEY_GUARDIANS=1` switches it on and then needs
+  `TURNKEY_ORGANIZATION_ID` and `TURNKEY_API_PRIVATE_KEY`. Email and passkey
+  logins need nothing more. `TURNKEY_OAUTH_CLIENT_IDS` (optional, no button
+  without it): our Google web client id (ends in
   `.apps.googleusercontent.com`) and Apple services id, not secret, both
   with `https://<host>/guardian`, `https://<host>/recovery` and
   `https://<host>/app` (the signup login) registered as redirect URIs.
@@ -286,8 +289,23 @@ sample documents only.
   threshold 1 with no other recovery pending and the owner's alert mail
   sent (no mail, no relay), then relays
   `multiConfirmRecovery` (execute). Grace period, finalise, sweep, the alert
-  email, the banner and the owner's cancel cover the mode. Not built: email
-  OTP, signature collection from several guardians (Phase 3).
+  email, the banner and the owner's cancel cover the mode. Not built:
+  signature collection from several guardians (Phase 3).
+- **Email and passkey logins (built, offline-tested, never called Turnkey).**
+  Email: Turnkey emails a code (`INIT_OTP_V3`); the browser seals it to
+  Turnkey's enclave with a fresh key (`encryptOtpCodeToBundle`), so the API
+  relays a bundle it cannot read; `VERIFY_OTP_V2` answers a verification
+  token bound to that key, which the API checks against Turnkey's published
+  key (`verifyOtpVerificationToken`) and our organisation id. Adding makes a
+  sub-org whose only root login is that email (Turnkey then holds it).
+  Logging in (`OTP_LOGIN_V2`) needs the browser key's signature over the
+  token's use, built as Turnkey's SDK builds it, so the API cannot log in as
+  the guardian. Passkey: a new WebAuthn credential on our domain, whose
+  attestation is the sub-org's only root login; at recovery one prompt picks
+  it (the API finds its sub-org by credential id) and a second stamps the
+  signing request. It must survive the phone: a security key or a passkey
+  saved on another device. Signup offers the email (the address just
+  typed), not the passkey, which would be made on the phone at risk.
 - **Every sub-org is created with exactly one root user, the person, at root
   quorum threshold 1, and no API key of ours.** One builder function makes
   the payload (`ACTIVITY_TYPE_CREATE_SUB_ORGANIZATION_V8`: `rootUsers[]` with
@@ -337,10 +355,12 @@ sample documents only.
   unchanged.
 - **Frontend:** Turnkey publishes no prebuilt browser bundle; every
   `@turnkey/*` package ships unbundled CJS and ESM with bare imports.
-  `public/vendor/turnkey.js` is `@turnkey/indexed-db-stamper` 1.3.11 alone,
-  bundled as an ES module by esbuild 0.28.1 (`npm run vendor:turnkey`,
-  37,373 bytes, sha256
-  `b90a8c4816add1e5cb4b8b5d343d375f29ae5418e5f8c52ba98aa29a0c6456d6`);
+  `public/vendor/turnkey.js` is `@turnkey/indexed-db-stamper` 1.3.11,
+  `@turnkey/webauthn-stamper` 0.6.0 and `encryptOtpCodeToBundle` from
+  `@turnkey/crypto` 2.13.2 (its `dist/turnkey.mjs`, not the main entry,
+  which adds 600 KB of X.509), bundled as an ES module by esbuild 0.28.1
+  (`npm run vendor:turnkey`, 175,893 bytes, sha256
+  `9f6ca40b083ce917ab567c43446066617de6df2c54022c96470c333bf1f9aec2`);
   `turnkey-page:test` rebuilds it and fails on any difference.
   `@turnkey/http` is not bundled: it pulls in X.509, ASN.1 and a DI container
   (636 KB) for one POST, so the page sends its stamped `sign_raw_payload`

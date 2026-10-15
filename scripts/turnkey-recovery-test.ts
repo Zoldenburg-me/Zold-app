@@ -120,7 +120,14 @@ app.use(express.json());
 let mailOn = true;
 const ownerAlerted = (r: any) => mailOn && Boolean(r.ownerAlerts?.requested);
 const markAlerted = (rid: string) => store.updateRecoveryRequest(rid, { ownerAlerts: { requested: new Date().toISOString() } });
-app.use("/api", createTurnkeyRecoveryRouter({ requireUserSession, enabled: () => switchOn, chain, ownerAlerted }));
+const activityReads: { subOrgId: string; activityId: string }[] = [];
+const turnkey = () => ({
+  async signActivity(subOrgId: string, activityId: string) {
+    activityReads.push({ subOrgId, activityId });
+    return { id: activityId, status: "ACTIVITY_STATUS_COMPLETED" };
+  },
+});
+app.use("/api", createTurnkeyRecoveryRouter({ requireUserSession, enabled: () => switchOn, chain, ownerAlerted, turnkey }));
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => res.status(500).json({ error: String(err?.message ?? err) }));
 const server = app.listen(0, "127.0.0.1");
 await new Promise((r) => server.once("listening", r));
@@ -219,6 +226,17 @@ try {
   });
 
   console.log("signing");
+
+  await check("a pending signature is read in the request's own guardian sub-org, behind its secret", async () => {
+    activityReads.length = 0;
+    const r = await call("GET", `/recovery/turnkey/requests/${id}/activity/act-1`, undefined, auth());
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.activity.status, "ACTIVITY_STATUS_COMPLETED");
+    assert.deepEqual(activityReads, [{ subOrgId: store.findRecoveryRequest(id)!.turnkey!.guardianSubOrgId, activityId: "act-1" }]);
+    assert.equal((await call("GET", `/recovery/turnkey/requests/${id}/activity/act-1`)).status, 404, "no secret, no read");
+    assert.equal((await call("GET", `/recovery/turnkey/requests/${id}/activity/a.b`, undefined, auth())).status, 400);
+    assert.equal(activityReads.length, 1);
+  });
 
   let digest = "" as Hex;
   await check("the digest is the module's ExecuteRecovery hash for the new owner", async () => {
