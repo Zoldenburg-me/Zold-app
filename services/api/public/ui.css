@@ -148,7 +148,7 @@ a.z-row:focus-visible { outline-offset: -2px; border-radius: var(--z-radius-card
 .z-kv dt { flex: none; font-size: 14px; color: var(--z-dim); }
 .z-kv dt small { display: block; margin-top: 2px; font-size: 12.5px; }
 .z-kv dd { margin: 0; min-width: 0; font-size: 14px; text-align: right; font-variant-numeric: tabular-nums; color: var(--z-text); overflow-wrap: anywhere; }
-.z-kv .is-strong dd { font-size: 18px; font-weight: 600; color: var(--z-pink); }
+.z-kv .is-strong dd { font-size: 18px; font-weight: 600; color: var(--z-pink-link); }
 
 .z-copy { display: flex; align-items: center; gap: var(--z-space-3); padding: 10px 6px 10px 14px; }
 .z-copy__main { flex: 1; min-width: 0; }
@@ -586,7 +586,7 @@ button.z-switch:hover { border-color: var(--z-line-hover); }
 .z-row--btn { border: 0; background: none; transition: background-color .15s ease; }
 .z-row--btn:hover { background: var(--z-ghost); }
 .z-row--btn:focus-visible { outline-offset: -2px; border-radius: var(--z-radius-card); }
-.z-row--btn[aria-current="true"] .z-row__right { color: var(--z-pink); }
+.z-row--btn[aria-current="true"] .z-row__right { color: var(--z-pink-link); }
 /* The company's name at the top of its Home opens the switcher. */
 .z-apphead__switch { display: flex; align-items: center; gap: var(--z-space-3); flex: 1; min-width: 0; min-height: var(--z-touch); margin: 0 -8px; padding: 4px 8px; border: 0; border-radius: var(--z-radius-note); background: none; font: inherit; text-align: left; color: var(--z-text); cursor: pointer; }
 .z-apphead__switch:hover { background: var(--z-ghost); }
