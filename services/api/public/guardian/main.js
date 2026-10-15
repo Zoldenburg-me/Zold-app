@@ -241,7 +241,8 @@ function render(el, { caps, zold, guardians, message, issued = null, ibanReady =
   const emailForm = !logins.email ? "" : otp
     ? `<form id="g-otp" novalidate><label for="g-otp-code">Code sent to ${esc(otp.to)}</label>
         <input id="g-otp-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required>
-        <div class="g-actions"><button class="z-btn z-btn--primary" id="g-otp-go">Add this email</button></div></form>`
+        <div class="g-actions"><button class="z-btn z-btn--primary" id="g-otp-go">Add this email</button>
+        <button type="button" class="z-btn" id="g-otp-new">Send a new code</button></div></form>`
     : `<form id="g-mail" novalidate><label for="g-mail-addr">Or an email address</label>
         <input id="g-mail-addr" type="email" autocomplete="email" autocapitalize="off" required>
         <div class="g-actions"><button class="z-btn" id="g-mail-go">Send a code</button></div></form>`;
@@ -377,6 +378,9 @@ async function boot() {
         await stamper.clear().catch(() => {});
       }
     });
+    // A code that expired or was mistyped: back to the email form for another.
+    const fresh = el.querySelector("#g-otp-new");
+    if (fresh) fresh.addEventListener("click", busyThen(fresh, async () => { otp = null; return null; }));
     el.querySelectorAll("[data-finish]").forEach((b) => {
       b.addEventListener("click", busyThen(b, async () => {
         const r = await finishAdd(guardians.find((x) => x.turnkeySubOrgId === b.dataset.finish), env);

@@ -407,6 +407,17 @@ await check("sign_raw_payload: a pending activity is polled through get_activity
   assert.deepEqual(tf.calls[1].body, { organizationId: "sub-1", activityId: "act-2" });
 });
 
+await check("sign_raw_payload: with pollActivity, a pending activity is read through it and stamped once", async () => {
+  const st = stampingStamper();
+  const tf = turnkeyFetch([{ body: { activity: { id: "act-3", status: "ACTIVITY_STATUS_PENDING" } } }]);
+  const polled: string[] = [];
+  const sig = await signer.signRawPayload({ stamper: st, baseUrl: "https://t", organizationId: "sub-1", signWith: "0xG", payload: DIGEST, fetchImpl: tf.fn, sleep: async () => {},
+    pollActivity: async (id: string) => { polled.push(id); return completed; } });
+  assert.equal(sig.v, "01");
+  assert.deepEqual(polled, ["act-3"]);
+  assert.equal(st.stamped.length, 1, "a passkey stamper prompts once");
+});
+
 await check("sign_raw_payload: failed, rejected, refused, endless or malformed answers throw", async () => {
   const run = (answers: any[], payload = DIGEST) =>
     signer.signRawPayload({ stamper: stampingStamper(), baseUrl: "https://t", organizationId: "o", signWith: "0xG", payload, fetchImpl: turnkeyFetch(answers).fn, sleep: async () => {}, poll: { tries: 2, delayMs: 0 } });
@@ -756,6 +767,22 @@ await check("a recovery passkey comes back in Turnkey's attestation shape", asyn
   const r = await logins.createGuardianPasskey({ credentials, rpId: "zoldhq.com", random: bytes });
   assert.equal(r.challenge, Buffer.from(bytes(32)).toString("base64url"));
   assert.deepEqual(r.attestation, { credentialId: "AQI", clientDataJson: "Aw", attestationObject: "BA", transports: ["AUTHENTICATOR_TRANSPORT_INTERNAL", "AUTHENTICATOR_TRANSPORT_HYBRID"] });
+});
+
+await check("a passkey proves itself with a stamped whoami on the parent org", async () => {
+  const stamper = { stamp: async (body: string) => ({ stampHeaderName: "X-Stamp-Webauthn", stampHeaderValue: JSON.stringify({ credentialId: "cred-9", body }) }) };
+  const r = await logins.passkeyWhoami(stamper, "org-parent");
+  assert.equal(r.credentialId, "cred-9");
+  assert.equal(r.whoami.body, JSON.stringify({ organizationId: "org-parent" }));
+  assert.equal(JSON.parse(r.whoami.stamp).body, r.whoami.body, "the stamp covers exactly the body relayed");
+});
+
+await check("approving: a pending signature is polled through the API with the login's sub-org", async () => {
+  const seen: any[] = [];
+  const api = async (p: string, body?: any) => { seen.push([p, body]); return p.endsWith("/digest") ? { digest: `0x${"11".repeat(32)}` } : { status: "GRACE_PERIOD" }; };
+  await approve.approveWith({ stamper: {}, api, recovery: { requestId: "r1", secret: "s" }, turnkeyApi: "https://t",
+    login: async () => ({ subOrgId: "sub-1", address: "0xabc" }), sign: async (o: any) => { await o.pollActivity("act-1"); return { r: "1", s: "2", v: "0" }; } });
+  assert.ok(seen.some(([p, b]) => p === "/api/recovery/turnkey/activity" && b.subOrgId === "sub-1" && b.activityId === "act-1"));
 });
 
 await check("approving with a passkey: its stamper has no key to clear, and that is fine", async () => {

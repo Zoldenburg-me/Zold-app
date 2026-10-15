@@ -301,6 +301,12 @@ export interface TurnkeyGuardianClient {
   /** A session, only with the browser key's signature over the token's use:
    *  we relay it, and cannot make one ourselves. */
   otpLogin(subOrgId: string, verificationToken: string, publicKey: string, clientSignature: ClientSignature): Promise<string>;
+  /** A whoami the person's passkey stamped, relayed: Turnkey checks the
+   *  assertion and names the sub-org that passkey belongs to. */
+  passkeySubOrg(body: string, stamp: string): Promise<string>;
+  /** A sign_raw_payload activity in a guardian's sub-org, read with our
+   *  parent key, so a passkey is not asked again on every poll. */
+  signActivity(subOrgId: string, activityId: string): Promise<{ id: string; status: string; result?: { signRawPayloadResult?: { r: string; s: string; v: string } } }>;
 }
 
 export type ClientSignature = { publicKey: string; scheme: "CLIENT_SIGNATURE_SCHEME_API_P256"; message: string; signature: string };
@@ -417,6 +423,24 @@ export function turnkeyClient(): TurnkeyGuardianClient {
       const session = activity.result.otpLoginResult?.session;
       if (!session) throw new TurnkeyGuardianError("Turnkey returned no session", 502, "TURNKEY_FAILED");
       return session;
+    },
+    async passkeySubOrg(body, stamp) {
+      const r = await fetch(`${TURNKEY.baseUrl}/public/v1/query/whoami`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "X-Stamp-Webauthn": stamp },
+        body,
+        signal: AbortSignal.timeout(15_000),
+      });
+      const data = (await r.json().catch(() => ({}))) as { organizationId?: string };
+      if (r.status === 401 || r.status === 403) throw new TurnkeyGuardianError("Turnkey did not accept that passkey", 404, "NO_GUARDIAN");
+      if (!r.ok || typeof data.organizationId !== "string") throw new TurnkeyGuardianError(`Turnkey whoami failed (${r.status})`, 502, "TURNKEY_FAILED");
+      return data.organizationId;
+    },
+    async signActivity(subOrgId, activityId) {
+      // Its status and a signature, if it holds one; nothing else of the activity.
+      const { activity } = await http.getActivity({ organizationId: subOrgId, activityId });
+      const out = activity.result?.signRawPayloadResult;
+      return { id: activity.id, status: activity.status, ...(out ? { result: { signRawPayloadResult: { r: out.r, s: out.s, v: out.v } } } : {}) };
     },
   };
   return client;

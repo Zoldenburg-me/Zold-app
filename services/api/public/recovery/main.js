@@ -13,7 +13,7 @@
  * carries the request's secret.
  */
 import { IndexedDbStamper, WebauthnStamper, encryptOtpCodeToBundle } from "../vendor/turnkey.js";
-import { emailCodeToToken, emailLoginSignature, pickPasskey, sendEmailCode } from "../guardian/logins.js";
+import { emailCodeToToken, emailLoginSignature, passkeyWhoami, sendEmailCode } from "../guardian/logins.js";
 import { startLogin } from "../guardian/oauth.js";
 import { providerButtons } from "../guardian/providers.js";
 import { byDevice, passkeyName } from "../guardian/device-words.js";
@@ -260,7 +260,8 @@ async function boot() {
         ? `<form id="r-tk-code" novalidate>
             <label for="r-tk-otp">Code sent to ${esc(s.otp.to)}</label>
             <input id="r-tk-otp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required>
-            <div class="r-actions"><button class="z-btn z-btn--primary" id="r-tk-confirm">Confirm</button></div>
+            <div class="r-actions"><button class="z-btn z-btn--primary" id="r-tk-confirm">Confirm</button>
+              <button type="button" class="z-btn" id="r-tk-new">Send a new code</button></div>
           </form>`
         : `<form id="r-tk-email" novalidate>
             <label for="r-tk-addr">Or your backup email</label>
@@ -324,13 +325,13 @@ async function boot() {
       el.querySelector("#r-tk-passkey")?.addEventListener("click", async (e) => {
         const btn = e.currentTarget;
         busy(btn, true);
-        // Two prompts: which passkey (so the API can name its sub-org), then
-        // that passkey stamps the signing request to Turnkey.
+        // Two prompts: the passkey proves which it is (Turnkey names its
+        // sub-org), then that passkey stamps the signing request.
         const stamper = new WebauthnStamper({ rpId: location.hostname, userVerification: "required" });
         const result = await approveWith({ stamper, api, recovery, turnkeyApi: caps.turnkeyApi, login: async () => {
-          const credentialId = await pickPasskey();
+          const { whoami, credentialId } = await passkeyWhoami(stamper, caps.turnkeyOrg);
           stamper.allowCredentials = [{ type: "public-key", id: b64urlToBytes(credentialId) }];
-          return api("/api/recovery/turnkey/login", { credentialId });
+          return api("/api/recovery/turnkey/login", { whoami });
         } });
         busy(btn, false);
         approved(result);
@@ -344,6 +345,8 @@ async function boot() {
         try { s.otp = { ...(await sendEmailCode(api, to)), to }; s.error = ""; redraw(); el.querySelector("#r-tk-otp")?.focus(); }
         catch (err) { busy(btn, false); fail(err); }
       });
+      // A code that expired or was mistyped: back to the email form for another.
+      el.querySelector("#r-tk-new")?.addEventListener("click", () => { s.otp = null; s.error = ""; redraw(); });
       el.querySelector("#r-tk-code")?.addEventListener("submit", async (e) => {
         e.preventDefault();
         const btn = el.querySelector("#r-tk-confirm");

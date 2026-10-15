@@ -68,9 +68,11 @@ export async function createGuardianPasskey({ credentials = navigator.credential
   };
 }
 
-/** Which passkey the person picks, so the API can name its sub-org: one
- *  prompt over a random challenge that nothing else uses. */
-export async function pickPasskey({ credentials = navigator.credentials, rpId = location.hostname, random = (n) => crypto.getRandomValues(new Uint8Array(n)) } = {}) {
-  const cred = await credentials.get({ publicKey: { challenge: random(32), rpId, userVerification: "required", timeout: 120_000 } });
-  return b64url(cred.rawId);
+/** Which passkey, proven: the person's passkey stamps a whoami on our parent
+ *  org, the API relays it, and Turnkey names that passkey's sub-org. The
+ *  stamp also says which credential answered, so signing asks for it alone. */
+export async function passkeyWhoami(stamper, organizationId) {
+  const body = JSON.stringify({ organizationId });
+  const { stampHeaderValue } = await stamper.stamp(body);
+  return { whoami: { body, stamp: stampHeaderValue }, credentialId: JSON.parse(stampHeaderValue).credentialId };
 }

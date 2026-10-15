@@ -377,6 +377,17 @@ const stub: import("../services/api/src/wallet/turnkey.js").TurnkeyGuardianClien
     calls.push({ op: "login", arg: { subOrgId, publicKey } });
     return `session-for-${subOrgId}`;
   },
+  // Stands in for Turnkey checking the assertion: the stamp names its credential.
+  async passkeySubOrg(body, stamp) {
+    calls.push({ op: "whoami", arg: { body, stamp } });
+    const s = subOrgs.get(`pk:${JSON.parse(stamp).credentialId}`);
+    if (!s) throw new (await import("../services/api/src/wallet/turnkey.js")).TurnkeyGuardianError("Turnkey did not accept that passkey", 404, "NO_GUARDIAN");
+    return s.id;
+  },
+  async signActivity(subOrgId, activityId) {
+    calls.push({ op: "activity", arg: { subOrgId, activityId } });
+    return { id: activityId, status: "ACTIVITY_STATUS_COMPLETED", result: { signRawPayloadResult: { r: "1", s: "2", v: "00" } } };
+  },
 };
 
 // The Safe side: the module's state as the chain would report it, and the
@@ -896,11 +907,29 @@ try {
     const created = calls.find((c) => c.op === "create")!.arg as any;
     assert.equal(created.rootUsers[0].authenticators[0].attestation.credentialId, "cred-1");
     assert.deepEqual(created.rootUsers[0].authenticators[0].attestation.transports, ["AUTHENTICATOR_TRANSPORT_USB"]);
-    const login = await call("POST", "/login", { credentialId: "cred-1" });
+    const whoami = (credentialId: string) => ({ body: JSON.stringify({ organizationId: "org-parent-test" }), stamp: JSON.stringify({ credentialId, signature: "sig" }) });
+    const login = await call("POST", "/login", { whoami: whoami("cred-1") });
     assert.equal(login.status, 200);
     assert.equal(login.body.session, undefined, "the passkey stamps its own requests");
     assert.equal(login.body.address, r.body.guardian.address);
-    assert.equal((await call("POST", "/login", { credentialId: "unknown" })).status, 404);
+    assert.equal((await call("POST", "/login", { whoami: whoami("unknown") })).status, 404);
+    assert.equal((await call("POST", "/login", { credentialId: "cred-1" })).status, 400, "a bare credential id names no guardian");
+    assert.equal((await call("POST", "/login", { whoami: { ...whoami("cred-1"), body: JSON.stringify({ organizationId: "other" }) } })).status, 400);
+  });
+  await check("passkey attestation fields are size-capped before Turnkey sees them", async () => {
+    calls.length = 0;
+    const big = { ...ATTESTATION, credentialId: "cred-big", attestationObject: "a".repeat(16385) };
+    const r = await call("POST", "/users/u_key/guardians", { passkey: { challenge: "ch", attestation: big } }, "u_key");
+    assert.equal(r.status, 400);
+    assert.equal((await call("POST", "/users/u_key/guardians", { passkey: { challenge: "c".repeat(257), attestation: ATTESTATION } }, "u_key")).status, 400);
+    assert.ok(!calls.some((c) => c.op === "create"));
+  });
+  await check("a pending signature is read through the API, for one sub-org activity", async () => {
+    const r = await call("POST", "/activity", { subOrgId: "sub-1", activityId: "act-1" });
+    assert.equal(r.status, 200);
+    assert.equal(r.body.activity.result.signRawPayloadResult.v, "00");
+    assert.equal((await call("POST", "/activity", { subOrgId: "org-parent-test", activityId: "act-1" })).status, 400, "never our parent org");
+    assert.equal((await call("POST", "/activity", { subOrgId: "sub/1", activityId: "act-1" })).status, 400);
   });
 } finally {
   server.close();
@@ -937,7 +966,7 @@ await check("the only apiKeys in a sub-org payload is the empty list", () => {
 await check("the backend uses only the Turnkey calls and activity types it needs: no signing, keys, users, policies or quorum", () => {
   const w = code("wallet/turnkey.ts");
   const methods = new Set([...w.matchAll(/\bhttp\.(\w+)/g)].map((m) => m[1]));
-  assert.deepEqual([...methods].sort(), ["createSubOrganization", "getOrganization", "getSubOrgIds", "getWalletAccounts", "getWallets", "initOtp", "oauthLogin", "otpLogin", "verifyOtp"]);
+  assert.deepEqual([...methods].sort(), ["createSubOrganization", "getActivity", "getOrganization", "getSubOrgIds", "getWalletAccounts", "getWallets", "initOtp", "oauthLogin", "otpLogin", "verifyOtp"]);
   const activities = new Set([...turnkeyFiles.map(code).join("\n").matchAll(/ACTIVITY_TYPE_\w+/g)].map((m) => m[0]));
   assert.deepEqual([...activities].sort(), ["ACTIVITY_TYPE_CREATE_SUB_ORGANIZATION_V8", "ACTIVITY_TYPE_INIT_OTP_V3", "ACTIVITY_TYPE_OAUTH_LOGIN", "ACTIVITY_TYPE_OTP_LOGIN_V2", "ACTIVITY_TYPE_VERIFY_OTP_V2"]);
 });
@@ -947,10 +976,10 @@ await check("@turnkey/* is imported by wallet/turnkey.ts alone", () => {
   assert.deepEqual(importers.map((p) => path.relative(SRC, p)), ["wallet/turnkey.ts"]);
 });
 
-await check("the only other network call in the Turnkey code reads the providers' published keys", () => {
+await check("the only other network calls in the Turnkey code read the providers' published keys and relay a passkey's whoami", () => {
   assert.doesNotMatch(code("routes/recovery-turnkey.ts") + code("config/turnkey.ts"), /\bfetch\s*\(/);
   const fetches = [...code("wallet/turnkey.ts").matchAll(/\bfetch\s*\(([^,)]*)/g)].map((m) => m[1].trim());
-  assert.deepEqual(fetches, ["JWKS_URLS[provider]"]);
+  assert.deepEqual(fetches, ["JWKS_URLS[provider]", "`${TURNKEY.baseUrl}/public/v1/query/whoami`"]);
 });
 
 await check("wallet/turnkey.ts is the only file that creates a sub-org, and only through the builder", () => {
