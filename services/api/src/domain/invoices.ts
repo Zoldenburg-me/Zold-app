@@ -139,6 +139,46 @@ export function validateLines(input: unknown): { lines: InvoiceLine[]; total: st
 }
 
 /**
+ * What the customer's copy of an issued invoice carries: an allowlist, so a
+ * field added to `issued` stays the issuer's until it is named here. Left out
+ * on purpose: acceptedWarnings (the issuer's compliance and receipt-sync
+ * warnings, which can name the org's other wallets), recipientVatCheck (the
+ * issuer's VIES proof), and the jurisdiction's check details. invoice.html
+ * draws everything that is kept.
+ */
+function printedIssued(d: NonNullable<Invoice["issued"]>) {
+  return {
+    number: d.number,
+    issueDate: d.issueDate,
+    supplyDate: d.supplyDate,
+    supplyPeriod: d.supplyPeriod,
+    issuer: d.issuer,
+    recipient: d.recipient,
+    vatTreatment: d.vatTreatment,
+    vatNote: d.vatNote,
+    netCents: d.netCents,
+    vatCents: d.vatCents,
+    grossCents: d.grossCents,
+    buckets: d.buckets,
+    currency: d.currency,
+    conversion: d.conversion,
+    purchaseOrder: d.purchaseOrder,
+    paymentTerms: d.paymentTerms,
+    notes: d.notes,
+    display: d.display,
+    customFields: d.customFields,
+    language: d.language,
+    recipientIsBusiness: d.recipientIsBusiness,
+    supplyKind: d.supplyKind,
+    jurisdiction: d.jurisdiction && {
+      country: d.jurisdiction.country,
+      countryName: d.jurisdiction.countryName,
+      ruleSet: d.jurisdiction.ruleSet,
+    },
+  };
+}
+
+/**
  * What the supplier sees through the link.
  *
  * An allowlist, not a delete-list: a field added to Invoice later must be
@@ -162,13 +202,8 @@ export function supplierView(
     direction: invoice.direction ?? "incoming",
     state: invoice.state,
     payor: { name: payorName },
-    /**
-     * The issued document, for an outgoing invoice. Safe to expose in full:
-     * every field is printed on the invoice the customer already holds.
-     * Internal ids, member ids and link hashes stay out, as in the rest of
-     * this view.
-     */
-    issued: invoice.issued,
+    /** The issued document, for an outgoing invoice: the printed fields only. */
+    issued: invoice.issued && printedIssued(invoice.issued),
     ...(invoice.issued && issuerExtras
       ? {
           bank: issuerExtras.bank,
