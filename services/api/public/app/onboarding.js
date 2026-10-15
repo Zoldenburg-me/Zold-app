@@ -296,6 +296,12 @@ const obDraft = (() => {
   try { return { ...empty, ...JSON.parse(sessionStorage.getItem(OB_DRAFT_KEY) || "{}") }; } catch { return empty; }
 })();
 function obSaveDraft(patch) {
+  // An email code or login proves the address it went to: a new address
+  // needs a new code, or the guardian would be the old inbox.
+  if ("email" in patch && patch.email !== obDraft.email && (obSocialOtp || obSocial?.provider === "email")) {
+    obSocialOtp = null;
+    obDiscardSocial();
+  }
   Object.assign(obDraft, patch);
   // Only answers held in memory alone are lost on a reload: saved ones come
   // back, so "Leave site?" asks only when the save failed (private mode).
@@ -631,7 +637,7 @@ OB["b-about"] = {
    Chosen before the passkey. The deployment the passkey approves adds it to
    the account (routes/auth.ts), so it costs no extra approval. The ID token
    lives in memory only: a reload loses it and this screen asks again. */
-let obSocial = null; // { provider, idToken, publicKey } or { provider: "email", verificationToken } once a login is done
+let obSocial = null; // { provider, idToken, publicKey } or { provider: "email", verificationToken, email } once a login is done
 let obSocialOtp = null; // the email code on its way: { otpId, otpEncryptionTargetBundle }
 let obSocialError = null;
 const obSocialOffered = () => !!(caps.turnkeyGuardians && (caps.turnkeyLogins?.google || caps.turnkeyLogins?.apple || caps.turnkeyLogins?.email));
@@ -659,6 +665,7 @@ function obSocialScreen(p) {
     </main>
     <div class="z-screen__foot z-screen__foot--quiet">
       ${obSocialOtp ? obSubmit("Confirm") : `<div class="z-providers" id="ob-social-btns">${caps.turnkeyLogins?.email ? Z.button({ variant: "secondary", full: true, icon: "mail", label: "Use my email", id: "btn-social-email" }) : ""}</div>`}
+      ${obSocialOtp ? `<button type="button" class="z-link-btn" id="btn-social-resend">Send a new code</button>` : ""}
       <button type="button" class="z-link-btn" id="btn-social-skip">Skip for now</button>
     </div>`,
     bind: (root) => {
@@ -672,7 +679,13 @@ function obSocialScreen(p) {
       const mail = root.querySelector("#btn-social-email");
       if (mail) mail.onclick = () => obSocialEmailSend(mail);
       if (obSocialOtp) obBindForm(root, () => obSocialEmailConfirm(root, p));
-      root.querySelector("#btn-social-skip").onclick = () => { obSaveDraft({ social: "skip" }); obGo(`${p}-passkey`); };
+      const resend = root.querySelector("#btn-social-resend");
+      if (resend) resend.onclick = () => { obSocialOtp = null; obRender({ focus: false }); };
+      root.querySelector("#btn-social-skip").onclick = () => {
+        obDiscardSocial();
+        obSaveDraft({ social: "skip" });
+        obGo(`${p}-passkey`);
+      };
     },
   };
 }
@@ -706,7 +719,7 @@ async function obSocialEmailConfirm(root, p) {
     const verificationToken = await emailCodeToToken({ api, stamper, encrypt: encryptOtpCodeToBundle, otp: obSocialOtp, code });
     // The key only bound the token; adding the guardian needs the token alone.
     stamper.clear().catch(() => {});
-    obSocial = { provider: "email", verificationToken };
+    obSocial = { provider: "email", verificationToken, email: obDraft.email };
     obSocialOtp = null;
     obGo(`${p}-passkey`);
   } catch (e) {
@@ -748,26 +761,34 @@ async function obSocialReturn() {
     const publicKey = stamper.getPublicKey();
     if (!publicKey) { obSocialError = "That login timed out in this browser. Try again."; return; }
     obSocial = { provider: back.provider, idToken: back.idToken, publicKey };
+    obSaveDraft({ social: null });
     history.replaceState(null, "", `${location.pathname}${location.search}#${p}-passkey`);
   } catch (e) {
     obSocialError = obMessage(e);
   }
 }
 
+function obDiscardSocial() {
+  obSocial = null;
+  import("/vendor/turnkey.js").then(({ IndexedDbStamper }) => new IndexedDbStamper().clear()).catch(() => {});
+}
+
 /* Record the login on the new account before the deployment, which then adds
    it. One try: a failure leaves the account without it, and Home's recovery
    reminder offers it again. */
 async function obAddSocialGuardian() {
+  if (obDraft.social === "skip") {
+    obDiscardSocial();
+    return;
+  }
   const login = obSocial;
   if (!login || !user?.id) return;
-  obSocial = null;
+  obDiscardSocial();
   try {
     await api(`/api/recovery/turnkey/users/${user.id}/guardians`, login.verificationToken
       ? { verificationToken: login.verificationToken }
       : { oidcToken: login.idToken, publicKey: login.publicKey });
   } catch { /* Home says recovery is not set up */ }
-  // The key only bound this one token.
-  import("/vendor/turnkey.js").then(({ IndexedDbStamper }) => new IndexedDbStamper().clear()).catch(() => {});
 }
 
 const obRecoveryPoint = () => `<li>${Z.icon("restore")}<span>${obSocial
@@ -893,7 +914,7 @@ OB["b-safe-choice"] = {
         <fieldset class="z-form z-form--tight" style="border:0;margin:0;padding:0;min-width:0">
           <legend class="z-sr">Which account</legend>
           ${obChoiceHtml("safe-choice", "new", "Open a new account", `Zold sets up a new account for the company. One more approval with your ${Z.passkeyName()}.`, true)}
-          ${obChoiceHtml("safe-choice", "import", "Use our company’s existing Safe", "You already have a Safe, owned by a wallet such as a Ledger. Its owner adds this phone as an owner. No money moves.", false)}
+          ${obChoiceHtml("safe-choice", "import", "Use our company’s existing Safe", `You already have a Safe, owned by a wallet such as a Ledger. Its owner adds this phone as an owner. No money moves.${obSocial ? ` Your ${obSocialName()} can’t be added to an existing Safe.` : ""}`, false)}
         </fieldset>
       </form>
       ${obSetupSteps()}
@@ -904,7 +925,10 @@ OB["b-safe-choice"] = {
     obBindForm(root, async () => {
       const btn = root.querySelector("#btn-next");
       if (Z.isDisabled(btn)) return;
-      if (root.querySelector('input[name="safe-choice"]:checked')?.value === "import") return obGo("b-import-address");
+      if (root.querySelector('input[name="safe-choice"]:checked')?.value === "import") {
+        obDiscardSocial();
+        return obGo("b-import-address");
+      }
       obClearErr();
       clearSafeImportFlag();
       obImport = null;
