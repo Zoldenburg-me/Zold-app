@@ -441,6 +441,10 @@ RENDER.soon = async () => {
 
 const settingsBack = () => linkBtn("Settings", "settings", "arrow_back");
 
+/* The languages an invoice can be written in — mirrors INVOICE_LANGUAGES in
+   domain/invoicing.ts. Anything outside the set resolves to English. */
+export const INVOICE_LANGUAGE_OPTIONS = [["en", "English"], ["de", "Deutsch"], ["fr", "Français"], ["es", "Español"]];
+
 META.organisation = () => ({ title: "Business profile", sub: "Who you are on every invoice you issue. The country decides which invoicing rules apply.", actions: `${settingsBack()}${primary("Save", 'data-act="save-org"')}` });
 
 /* The fields invoices print about the issuer: one place, read by the
@@ -482,6 +486,9 @@ RENDER.organisation = async () => {
         <div><label for="s-notify">Notification email</label><input id="s-notify" name="email" type="email" autocomplete="email" spellcheck="false" value="${esc(org.notificationEmail || "")}" /></div>
         <div><label for="s-currency">Reporting currency${reporting ? "" : ' <span class="desc">(in a paid plan)</span>'}</label>
           <input id="s-currency" name="currency" autocomplete="off" value="${esc(org.reporting.currency)}" style="max-width:140px"${reporting ? "" : " disabled"} /></div>
+        <div><label for="s-tz">Reporting time zone <span class="desc">(monthly reports run in it)</span></label>
+          <input id="s-tz" name="timezone" list="z-tz" autocomplete="off" value="${esc(org.reporting.timeZone)}" />
+          <datalist id="z-tz">${(Intl.supportedValuesOf ? Intl.supportedValuesOf("timeZone") : []).map((z) => `<option value="${esc(z)}"></option>`).join("")}</datalist></div>
       </div>
     </form>`,
   // The field names follow the country as it is picked; what was typed stays.
@@ -530,8 +537,8 @@ RENDER.plan = async () => {
 export function jurisdictionBanner(j, disclaimer, notVerified) {
   const what = {
     statutory: ["Rules encoded to statute", "Active"],
-    directive: ["EU baseline only: national rules aren’t encoded", "Beta"],
-    structural: ["No tax rules applied: structural checks only", "Waiting"],
+    directive: ["Not supported: only your profile and the invoice number are checked", "Not supported"],
+    structural: ["Not supported: only your profile and the invoice number are checked", "Not supported"],
   }[j.verification] || [j.verification, "Draft"];
   return `<details class="card zb-juris"><summary style="cursor:pointer;display:flex;justify-content:space-between;gap:12px;align-items:center;list-style:none">
       <span><b>${esc(j.countryName)}</b> <span class="desc">${esc(what[0])}</span></span>${Z.icon("expand_more")}</summary>
@@ -587,7 +594,7 @@ RENDER["invoicing-settings"] = async () => {
   ${card("Tax and numbering", "Defaults for new invoices. Each invoice can change them.",
     `<div class="grid g2"><div>
         <label for="i-lang">Invoice language</label>
-        <select id="i-lang" name="i-lang"><option value="en"${p.language !== "de" ? " selected" : ""}>English</option><option value="de"${p.language === "de" ? " selected" : ""}>Deutsch</option></select>
+        <select id="i-lang" name="i-lang">${INVOICE_LANGUAGE_OPTIONS.map(([v, l]) => `<option value="${v}"${p.language === v ? " selected" : ""}>${l}</option>`).join("")}</select>
         <label for="i-rate">Usual VAT rate</label>
         ${ref.vatRates
           ? `<select id="i-rate" name="i-rate">${ref.vatRates.map((r) => `<option value="${r}" ${p.defaultVatRate === r ? "selected" : ""}>${r} %</option>`).join("")}</select>`

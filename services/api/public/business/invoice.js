@@ -15,7 +15,7 @@
  * opens the invoice with its Pay button.
  */
 import { $, Z, api, countrySelect, esc, org } from "./core.js";
-import { META, RENDER, jurisdictionBanner } from "./views.js";
+import { INVOICE_LANGUAGE_OPTIONS, META, RENDER, jurisdictionBanner } from "./views.js";
 
 export let invoiceDraft = null;
 export const setInvoiceDraft = (v) => { invoiceDraft = v; };
@@ -116,7 +116,7 @@ RENDER["invoice-new"] = async () => {
   invoiceDraft ??= storedDraft() || {
     lines: [{ description: "", quantity: "1", unitPriceNet: "" }],
     // The profile's language, which defaults from the issuer's country.
-    language: p.language === "de" ? "de" : "en",
+    language: p.language || "en",
     issueDate: today(),
     supplyDate: today(),
     dueDate: plusDays(today(), Number.isFinite(p.paymentTermsDays) ? p.paymentTermsDays : 14),
@@ -128,6 +128,8 @@ RENDER["invoice-new"] = async () => {
       : { kind: "standard", rate: p.defaultVatRate ?? (d.jurisdiction.ruleSet === "DE" ? 19 : "") },
   };
   const v = invoiceDraft.vat;
+  // The issue action reads this to gate the "rules not supported" disclaimer.
+  invoiceDraft._jur = d.jurisdiction;
   invoiceDraft._reasons = d.reference.exemptionReasons.map((r) => r.id);
   invoiceDraft._defaultRate = p.defaultVatRate ?? (d.jurisdiction.ruleSet === "DE" ? 19 : "");
   const reasons = [
@@ -150,7 +152,7 @@ RENDER["invoice-new"] = async () => {
       ${missing.length ? `<div class="zb-note zb-note--a" style="margin-bottom:6px">${Z.icon("badge")}<span>Your business profile is missing ${esc(missing.join(" and "))}. Add it once and it goes on every invoice. <a href="?view=organisation" data-view-link="organisation">Business profile</a></span></div>` : ""}
       <div class="zb-row zb-row--2">
         <div><label for="inv-r-name">Customer</label><input id="inv-r-name" name="customer" autocomplete="off" value="${esc(r.name || "")}" placeholder="Customer or company name…" list="inv-contacts" /></div>
-        <div><label for="inv-lang">Language</label><select id="inv-lang" name="language"><option value="en"${invoiceDraft.language !== "de" ? " selected" : ""}>English</option><option value="de"${invoiceDraft.language === "de" ? " selected" : ""}>Deutsch</option></select></div>
+        <div><label for="inv-lang">Language</label><select id="inv-lang" name="language">${INVOICE_LANGUAGE_OPTIONS.map(([v, l]) => `<option value="${v}"${invoiceDraft.language === v ? " selected" : ""}>${l}</option>`).join("")}</select></div>
       </div>
       ${contacts.length ? `<datalist id="inv-contacts">${contacts.map((c) => `<option value="${esc(c.name)}"></option>`).join("")}</datalist>` : ""}
       <label class="zb-check" style="margin:10px 0 4px"><input type="checkbox" id="inv-r-biz" data-act="inv-biz" ${r.isBusiness ? "checked" : ""} />
@@ -232,7 +234,7 @@ export function readInvoiceEditor() {
     vatId: isBusiness ? ($("#inv-r-vat") ? val("inv-r-vat") : before.vatId || "") : "",
     isBusiness,
   };
-  invoiceDraft.language = val("inv-lang") === "de" ? "de" : "en";
+  invoiceDraft.language = val("inv-lang") || "en";
   invoiceDraft.issueDate = val("inv-issue");
   invoiceDraft.supplyDate = val("inv-supply");
   invoiceDraft.dueDate = val("inv-due") || undefined;
@@ -261,20 +263,21 @@ export const invoiceBody = () => Object.fromEntries(Object.entries(invoiceDraft)
 const PAPER = {
   de: { invoice: "Rechnung", date: "Rechnungsdatum", supply: "Leistung", due: "Fällig", item: "Position", qty: "Menge", unit: "Einzelpreis", amount: "Betrag", net: "Netto", vat: "USt.", total: "Gesamt", taxNo: "St.-Nr.", vatId: "USt-IdNr.", pay: "Bitte überweisen an IBAN", ref: "Verwendungszweck", missing: "[fehlt]" },
   en: { invoice: "Invoice", date: "Invoice date", supply: "Service", due: "Due", item: "Item", qty: "Qty", unit: "Unit price", amount: "Amount", net: "Net", vat: "VAT", total: "Total", taxNo: "Tax no.", vatId: "VAT ID", pay: "Please transfer to IBAN", ref: "Reference", missing: "[missing]" },
+  fr: { invoice: "Facture", date: "Date de facture", supply: "Prestation", due: "Échéance", item: "Désignation", qty: "Qté", unit: "Prix unitaire", amount: "Montant", net: "Net HT", vat: "TVA", total: "Total TTC", taxNo: "N° fiscal", vatId: "N° TVA", pay: "Veuillez virer à l’IBAN", ref: "Référence", missing: "[manquant]" },
+  es: { invoice: "Factura", date: "Fecha de factura", supply: "Servicio", due: "Vencimiento", item: "Concepto", qty: "Cant.", unit: "Precio unitario", amount: "Importe", net: "Base", vat: "IVA", total: "Total", taxNo: "NIF", vatId: "NIF-IVA", pay: "Por favor, transfiera al IBAN", ref: "Referencia", missing: "[falta]" },
 };
-const pMoney = (cents, cur, lang) => new Intl.NumberFormat(lang === "de" ? "de-DE" : "en-GB", { style: "currency", currency: cur || "EUR" }).format(cents / 100);
+const PAPER_LOCALES = { de: "de-DE", en: "en-GB", fr: "fr-FR", es: "es-ES" };
+const pMoney = (cents, cur, lang) => new Intl.NumberFormat(PAPER_LOCALES[lang] || "en-GB", { style: "currency", currency: cur || "EUR" }).format(cents / 100);
 const pDate = (s, lang) => {
   const d = new Date(`${String(s || "").slice(0, 10)}T12:00:00`);
   if (Number.isNaN(d.getTime())) return "";
-  return lang !== "de"
-    ? new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" }).format(d)
-    : new Intl.DateTimeFormat("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" }).format(d);
+  return new Intl.DateTimeFormat(PAPER_LOCALES[lang] || "en-GB", { day: "numeric", month: lang === "de" ? "2-digit" : "short", year: "numeric" }).format(d);
 };
 const addr = (x) => [x?.addressLine, [x?.postalCode, x?.city].filter(Boolean).join(" ")].filter(Boolean).join(", ");
 
 function paper(check) {
   const pv = check.preview || {};
-  const lang = pv.language === "de" ? "de" : "en";
+  const lang = PAPER[pv.language] ? pv.language : "en";
   const t = PAPER[lang];
   const cur = pv.currency || "EUR";
   const money = (c) => pMoney(c, cur, lang);
@@ -284,10 +287,12 @@ function paper(check) {
   const totals = check.totals || pv.totals;
   const reason = invoiceDraft.vat.kind === "exempt"
     ? [...(profile.reference.exemptionReasons || []), ...(profile.reference.customReasons || [])].find((x) => x.id === invoiceDraft.vat.reason) : null;
-  const vatNote = reason ? (lang === "en" && reason.invoiceNoteEn ? reason.invoiceNoteEn : reason.invoiceNote) : "";
+  // Matches vatNoteFor: German text under de, English under every other
+  // language; an org's own rule has the one note it was written with.
+  const vatNote = reason ? (lang === "de" ? reason.invoiceNote : (reason.invoiceNoteEn ?? reason.invoiceNote)) : "";
   const bank = profile.invoiceBank;
   const lines = invoiceDraft.lines;
-  const qty = (q) => String(q || "").replace(".", lang === "de" ? "," : ".");
+  const qty = (q) => String(q || "").replace(".", lang === "en" ? "." : ",");
   // translate="no": a browser translating the document would change what the
   // customer is billed for.
   return `<article class="zb-paper" lang="${lang}" translate="no" aria-label="${esc(`${t.invoice} ${pv.number || ""}`)}">

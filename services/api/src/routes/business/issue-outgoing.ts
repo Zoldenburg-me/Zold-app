@@ -21,6 +21,7 @@ import {
   invoiceDueDate,
   invoiceLanguage,
   vatNoteFor,
+  type InvoiceLanguage,
 } from "../../domain/invoicing.js";
 import { vatIdShape } from "../../domain/vat-ids.js";
 import { checkVatId } from "../../adapters/vies.js";
@@ -52,7 +53,7 @@ export async function issueOutgoing(
   // `fromDraft.updatedAt` is whatever the row says by then.
   const draftReadAt = fromDraft?.updatedAt;
   let draft;
-  let language: "de" | "en";
+  let language: InvoiceLanguage;
   let dueDate: string | undefined;
   let report;
   try {
@@ -196,10 +197,19 @@ export async function issueOutgoing(
 
   // Burn the number only once the invoice exists: §14 Abs. 4 Nr. 4 wants each
   // number assigned once, and advancing before the write would leave a gap
-  // pointing at an invoice that was never issued.
-  if (!numberSupplied) {
+  // pointing at an invoice that was never issued. The language is resolved the
+  // same way: once an invoice has been issued under the country's default, it
+  // is saved on the org, so a later move of country doesn't silently flip the
+  // language new invoices are written in. The default frozen is the country's,
+  // not this invoice's: a one-off override — say a customer's payer rule —
+  // stays on its own invoice.
+  if (!numberSupplied || !ctx.org.invoicing?.language) {
     store.updateOrganisation(ctx.org.id, {
-      invoicing: { ...(ctx.org.invoicing ?? {}), numberSeries: { ...series, next: series.next + 1 } },
+      invoicing: {
+        ...(ctx.org.invoicing ?? {}),
+        ...(numberSupplied ? {} : { numberSeries: { ...series, next: series.next + 1 } }),
+        ...(ctx.org.invoicing?.language ? {} : { language: languageOf(ctx.org) }),
+      },
     });
   }
 

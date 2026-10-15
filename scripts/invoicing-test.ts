@@ -470,7 +470,7 @@ check("outside the EU nothing is claimed — structural checks only", () => {
   assert.equal(j.inEu, false);
   assert.deepEqual(j.reasons.sort(), ["export_third_country", "other"]);
   assert.match(j.notVerified.join(" "), /GSTIN/, "India's actual requirements are named");
-  assert.match(j.disclaimer, /does not encode the tax rules/);
+  assert.match(j.disclaimer, /does not support/);
 });
 
 check("an unknown country still resolves, and promises nothing", () => {
@@ -718,13 +718,15 @@ check("an EU issuer is told the euro figure is not its own national conversion �
   assert.ok(!pl.errors.some((e) => /§ 16 Abs. 6/.test(e.legalBasis ?? "")), "no German paragraph at a Polish entity");
 });
 
-check("an invoice's language is its own choice, falling back to the profile, then the issuer's country", () => {
+check("an invoice's language is its own choice, falling back to the profile, then English", () => {
   assert.equal(invoiceLanguage("en", "de"), "en");
+  assert.equal(invoiceLanguage("fr", "de"), "fr");
+  assert.equal(invoiceLanguage("es", "en"), "es");
   assert.equal(invoiceLanguage(undefined, "en"), "en");
-  assert.equal(invoiceLanguage("", undefined, "DE"), "de");
-  assert.equal(invoiceLanguage("", undefined, "PL"), "en");
+  assert.equal(invoiceLanguage("", "de"), "de");
   assert.equal(invoiceLanguage("", undefined), "en");
-  assert.throws(() => invoiceLanguage("fr", "de"), InvoiceComplianceError);
+  // Anything outside the four written languages resolves to English.
+  assert.equal(invoiceLanguage("it", "de"), "en");
 });
 
 check("a typed due date wins over payment terms, and cannot precede the invoice or be no date at all", () => {
