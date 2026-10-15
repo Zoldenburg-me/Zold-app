@@ -299,11 +299,12 @@ export function createAuthRouter(deps: AuthDeps) {
         });
       }
       if (deployment.challenge === "0x") {
-        const updated = store.updateUser(user.id, {
+        // An earlier "unconfirmed" deployment may have landed with the guardian.
+        const updated = await markSignupGuardian(store.updateUser(user.id, {
           address: user.passkeySafe.address,
           wallet: { type: "candide-safe", deployed: true },
           passkeySafe: activatePasskeySafePlan(user.passkeySafe),
-        });
+        }));
         return res.json(publicUser(updated));
       }
       prunePendingPasskeySafeDeployments();
