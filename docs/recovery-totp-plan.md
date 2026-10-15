@@ -92,7 +92,8 @@ secret is deleted.
 ## Costs and limits
 
 - **Our own rules change on purpose.** `wallet/turnkey.ts` refuses any sub-org
-  that is not one root user, threshold 1, `apiKeys: []`, and
+  that is not one root user, threshold 1, no API key but the person's own
+  15-minute login session, and
   `turnkey-guardian-test.ts` greps for "no delegated access". These become:
   - "threshold 1 with one person, or threshold 2 with the person and exactly
     the Zold co-signer";
