@@ -66,19 +66,10 @@ function enterKycReview(_name) {
   obGo(obNextAfterAccount() || (activate ? "activate" : "monerium"), { replace: true });
 }
 
-/* Home's "Confirm your email" row: the code screen, then back to wherever
-   the account is. */
+/* Home's "Confirm your email" row: the code screen, then back to Home. */
 function enterEmailConfirm() {
-  obEmailSkipped = false;
   obShow();
   obGo("email", { replace: true });
-}
-
-/* Is the account's email still to be confirmed on this visit? "Do this later"
-   holds until the app is reopened; Home keeps a row for it meanwhile. */
-let obEmailSkipped = false;
-function emailConfirmPending(u = user) {
-  return !!(caps.emailVerification && u?.email && !u.emailVerifiedAt && !obEmailSkipped);
 }
 
 /* ==========================================================================
@@ -1397,7 +1388,6 @@ OB.email = {
     if (!obEmailSent) send();
     root.querySelector("#btn-em-resend").onclick = send;
     root.querySelector("#btn-em-later").onclick = () => {
-      obEmailSkipped = true;
       const next = obNextAfterAccount();
       return next ? obGo(next) : obFinish();
     };
@@ -2143,7 +2133,8 @@ async function resumeSession(capabilitiesLoaded) {
   await obSocialReturn();
   // A return from Monerium's sign-in lands on /app?monerium=connected.
   const qs = new URLSearchParams(location.search);
-  if (qs.has("monerium")) {
+  const fromMonerium = qs.has("monerium");
+  if (fromMonerium) {
     qs.delete("monerium");
     history.replaceState(null, "", `${location.pathname}${qs.size ? `?${qs}` : ""}${location.hash}`);
   }
@@ -2157,6 +2148,8 @@ async function resumeSession(capabilitiesLoaded) {
     renderUser(u);
     await capabilitiesLoaded;
     const next = obNextAfterAccount();
+    // Back from Monerium's sign-in: the activate step (or why it refused).
+    if (!next && fromMonerium && bankOffered(user) && !kycApproved(user) && !ibanWait(user)) return enterKycReview();
     // "Do this later" on the Monerium step opened the app: a reload on an app
     // screen stays in the app, whose Home offers the step again. An IBAN that
     // is requested waits on Monerium, not on the person: Home, not the gate.
