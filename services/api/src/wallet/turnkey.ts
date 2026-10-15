@@ -432,7 +432,8 @@ export function turnkeyClient(): TurnkeyGuardianClient {
         signal: AbortSignal.timeout(15_000),
       });
       const data = (await r.json().catch(() => ({}))) as { organizationId?: string };
-      if (r.status === 401 || r.status === 403) throw new TurnkeyGuardianError("Turnkey did not accept that passkey", 404, "NO_GUARDIAN");
+      // Any refusal, e.g. the person picked their Zold sign-in passkey instead.
+      if (r.status >= 400 && r.status < 500) throw new TurnkeyGuardianError("Turnkey did not accept that passkey", 404, "NO_GUARDIAN");
       if (!r.ok || typeof data.organizationId !== "string") throw new TurnkeyGuardianError(`Turnkey whoami failed (${r.status})`, 502, "TURNKEY_FAILED");
       return data.organizationId;
     },

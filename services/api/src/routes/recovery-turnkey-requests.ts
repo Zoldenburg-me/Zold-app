@@ -13,6 +13,8 @@
  *   request until the chain shows it as owner.
  * - GET  /recovery/turnkey/requests/:id[/digest]: status; the digest the
  *   guardian signs, recomputed from the module (the digest alone).
+ * - GET  /recovery/turnkey/requests/:id/activity/:activityId: a pending
+ *   signing activity, read in the request's guardian sub-org;
  * - POST /recovery/turnkey/requests/:id/signature {r,s,v}: Turnkey's answer;
  *   checked and relayed (multiConfirmRecovery, execute). The wait starts.
  * - POST /recovery/turnkey/requests/:id/finalize: after the wait.
@@ -40,7 +42,7 @@ import {
   type TurnkeyRecoveryChain,
 } from "../recovery/turnkey-recovery.js";
 import { passkeyAccountAddress, recoveryGracePeriodSeconds, webauthnOwnerFromJwk, type PasskeySafeDeploymentPlan } from "../wallet/candide.js";
-import { TurnkeyGuardianError, turnkeyGuardiansEnabled } from "../wallet/turnkey.js";
+import { TurnkeyGuardianError, turnkeyClient, turnkeyGuardiansEnabled, type TurnkeyGuardianClient } from "../wallet/turnkey.js";
 import { issueChallenge, verifyRegistration } from "../webauthn.js";
 import { wrap } from "./util.js";
 
@@ -51,6 +53,8 @@ export interface TurnkeyRecoveryDeps {
   chain?: TurnkeyRecoveryChain;
   /** Was the owner emailed about this request? (recovery/owner-alerts.ts) */
   ownerAlerted?: (r: RecoveryRequest) => boolean;
+  /** Turnkey, or a stand-in under test. */
+  turnkey?: () => Pick<TurnkeyGuardianClient, "signActivity">;
 }
 
 /**
@@ -130,6 +134,7 @@ export function createTurnkeyRecoveryRouter({
   enabled = turnkeyGuardiansEnabled,
   chain = turnkeyRecoveryChain,
   ownerAlerted = ownerWasAlerted,
+  turnkey = turnkeyClient,
 }: TurnkeyRecoveryDeps) {
   const router = express.Router();
   const off = (_req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -282,6 +287,25 @@ export function createTurnkeyRecoveryRouter({
         // The sub-org and the address to sign with come from the guardian's
         // own login (/recovery/turnkey/login), not from here.
         res.json({ digest });
+      } catch (err) {
+        fail(res, err);
+      }
+    }),
+  );
+
+  /** The guardian's signing activity that Turnkey left pending, read with our
+   *  key in this request's guardian sub-org, so a passkey guardian is
+   *  prompted once, not on every poll. */
+  router.get(
+    "/recovery/turnkey/requests/:id/activity/:activityId",
+    wrap(async (req, res) => {
+      const request = requestFor(req, res);
+      if (!request) return;
+      try {
+        const subOrgId = request.turnkey?.guardianSubOrgId;
+        if (request.status !== "REVIEW_PENDING" || !subOrgId) throw new TurnkeyGuardianError(`recovery is ${request.status}`, 409, "NOT_WAITING");
+        if (!/^[\w-]{1,64}$/.test(req.params.activityId)) throw new TurnkeyGuardianError("activityId required", 400, "BAD_ACTIVITY");
+        res.json({ activity: await turnkey().signActivity(subOrgId, req.params.activityId) });
       } catch (err) {
         fail(res, err);
       }

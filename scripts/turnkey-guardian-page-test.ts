@@ -777,12 +777,12 @@ await check("a passkey proves itself with a stamped whoami on the parent org", a
   assert.equal(JSON.parse(r.whoami.stamp).body, r.whoami.body, "the stamp covers exactly the body relayed");
 });
 
-await check("approving: a pending signature is polled through the API with the login's sub-org", async () => {
+await check("approving: a pending signature is polled through the API, under the recovery request", async () => {
   const seen: any[] = [];
   const api = async (p: string, body?: any) => { seen.push([p, body]); return p.endsWith("/digest") ? { digest: `0x${"11".repeat(32)}` } : { status: "GRACE_PERIOD" }; };
   await approve.approveWith({ stamper: {}, api, recovery: { requestId: "r1", secret: "s" }, turnkeyApi: "https://t",
     login: async () => ({ subOrgId: "sub-1", address: "0xabc" }), sign: async (o: any) => { await o.pollActivity("act-1"); return { r: "1", s: "2", v: "0" }; } });
-  assert.ok(seen.some(([p, b]) => p === "/api/recovery/turnkey/activity" && b.subOrgId === "sub-1" && b.activityId === "act-1"));
+  assert.ok(seen.some(([p]) => p === "/api/recovery/turnkey/requests/r1/activity/act-1"), "under the request, behind its secret");
 });
 
 await check("approving with a passkey: its stamper has no key to clear, and that is fine", async () => {

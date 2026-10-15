@@ -341,6 +341,29 @@ let createGate: Promise<void> = Promise.resolve();
 const subOrgs = new Map<string, { id: string; address: `0x${string}` }>(); // by login: OIDC subject, email:…, pk:…
 const subjectOf = (t: string) => JSON.parse(Buffer.from(t.split(".")[1], "base64url").toString()).sub as string;
 const loginKey = (filterType: string, value: string) => (filterType === "EMAIL" ? `email:${value}` : filterType === "CREDENTIAL_ID" ? `pk:${value}` : subjectOf(value));
+await check("the passkey whoami is relayed to Turnkey as stamped, and any refusal is not a guardian", async () => {
+  const real = globalThis.fetch;
+  const seen: { url: string; init: any }[] = [];
+  let answer = { status: 200, body: { organizationId: "sub-9" } as any };
+  globalThis.fetch = (async (url: string, init: any) => {
+    seen.push({ url, init });
+    return new Response(JSON.stringify(answer.body), { status: answer.status });
+  }) as any;
+  try {
+    const body = JSON.stringify({ organizationId: "org-parent-test" });
+    assert.equal(await tk.turnkeyClient().passkeySubOrg(body, "stamp-json"), "sub-9");
+    assert.match(seen[0].url, /\/public\/v1\/query\/whoami$/);
+    assert.equal(seen[0].init.headers["X-Stamp-Webauthn"], "stamp-json");
+    assert.equal(seen[0].init.body, body, "relayed byte for byte, or the stamp no longer covers it");
+    answer = { status: 404, body: { message: "authenticator not found" } };
+    await assert.rejects(tk.turnkeyClient().passkeySubOrg(body, "s"), (e: any) => e.code === "NO_GUARDIAN");
+    answer = { status: 500, body: {} };
+    await assert.rejects(tk.turnkeyClient().passkeySubOrg(body, "s"), (e: any) => e.code === "TURNKEY_FAILED");
+  } finally {
+    globalThis.fetch = real;
+  }
+});
+
 const stub: import("../services/api/src/wallet/turnkey.js").TurnkeyGuardianClient = {
   async subOrgIds(filterType, value) {
     calls.push({ op: "find", arg: filterType === "OIDC_TOKEN" ? value : `${filterType}:${value}` });
@@ -923,13 +946,6 @@ try {
     assert.equal(r.status, 400);
     assert.equal((await call("POST", "/users/u_key/guardians", { passkey: { challenge: "c".repeat(257), attestation: ATTESTATION } }, "u_key")).status, 400);
     assert.ok(!calls.some((c) => c.op === "create"));
-  });
-  await check("a pending signature is read through the API, for one sub-org activity", async () => {
-    const r = await call("POST", "/activity", { subOrgId: "sub-1", activityId: "act-1" });
-    assert.equal(r.status, 200);
-    assert.equal(r.body.activity.result.signRawPayloadResult.v, "00");
-    assert.equal((await call("POST", "/activity", { subOrgId: "org-parent-test", activityId: "act-1" })).status, 400, "never our parent org");
-    assert.equal((await call("POST", "/activity", { subOrgId: "sub/1", activityId: "act-1" })).status, 400);
   });
 } finally {
   server.close();
