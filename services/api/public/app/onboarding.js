@@ -631,10 +631,11 @@ OB["b-about"] = {
    Chosen before the passkey. The deployment the passkey approves adds it to
    the account (routes/auth.ts), so it costs no extra approval. The ID token
    lives in memory only: a reload loses it and this screen asks again. */
-let obSocial = null; // { provider, idToken, publicKey } once a login came back
+let obSocial = null; // { provider, idToken, publicKey } or { provider: "email", verificationToken } once a login is done
+let obSocialOtp = null; // the email code on its way: { otpId, otpEncryptionTargetBundle }
 let obSocialError = null;
-const obSocialOffered = () => !!(caps.turnkeyGuardians && (caps.turnkeyLogins?.google || caps.turnkeyLogins?.apple));
-const obSocialName = () => ({ google: "Google", apple: "Apple" })[obSocial?.provider] || "Google or Apple";
+const obSocialOffered = () => !!(caps.turnkeyGuardians && (caps.turnkeyLogins?.google || caps.turnkeyLogins?.apple || caps.turnkeyLogins?.email));
+const obSocialName = () => ({ google: "Google login", apple: "Apple login", email: "email" })[obSocial?.provider] || "login";
 const obDevice = () => (Z.onPhone() ? "phone" : "device");
 
 function obSocialScreen(p) {
@@ -645,16 +646,19 @@ function obSocialScreen(p) {
     html: () => `${obSignupProgress(`${p}-social`, "Recovery", `${p}-about`)}
     <main id="main" class="z-screen__main">
       <span class="z-mark z-mark--icon" aria-hidden="true">${Z.icon("restore")}</span>
-      ${obIntro("Add a way back in", `Lose this ${obDevice()}, keep your account: your Google or Apple login can move it to a new one.`)}
+      ${obIntro("Add a way back in", `Lose this ${obDevice()}, keep your account: your Google or Apple login, or a code to your email, can move it to a new one.`)}
       <ul class="z-points">
         <li>${Z.icon("lock")}<span>It can’t send your money. Only your ${Z.passkeyName()} approves payments.</span></li>
         <li>${Z.icon("schedule")}<span>A move to a new ${obDevice()} waits first, and this one can cancel it.</span></li>
         <li>${Z.icon("key")}<span>The login stays yours alone. Zold never holds its key.</span></li>
       </ul>
+      ${obSocialOtp ? `<form class="z-form" id="ob-form" novalidate>
+        ${Z.field({ id: "ob-otp", name: "code", label: `Code sent to ${obDraft.email}`, inputmode: "numeric", autocomplete: "one-time-code", maxlength: 6, spellcheck: false, placeholder: "123456…" })}
+      </form>` : ""}
       ${obAlert()}
     </main>
     <div class="z-screen__foot z-screen__foot--quiet">
-      <div class="z-providers" id="ob-social-btns"></div>
+      ${obSocialOtp ? obSubmit("Confirm") : `<div class="z-providers" id="ob-social-btns">${caps.turnkeyLogins?.email ? Z.button({ variant: "secondary", full: true, icon: "mail", label: "Use my email", id: "btn-social-email" }) : ""}</div>`}
       <button type="button" class="z-link-btn" id="btn-social-skip">Skip for now</button>
     </div>`,
     bind: (root) => {
@@ -662,15 +666,54 @@ function obSocialScreen(p) {
       import("/guardian/providers.js").then(({ providerButtons }) => {
         const slot = root.querySelector("#ob-social-btns");
         if (!slot) return;
-        slot.innerHTML = providerButtons(caps, "Continue");
+        slot.insertAdjacentHTML("afterbegin", providerButtons(caps, "Continue"));
         slot.querySelectorAll("[data-start]").forEach((b) => { b.onclick = () => obSocialStart(b.dataset.start, b); });
       }).catch(obShowErr);
+      const mail = root.querySelector("#btn-social-email");
+      if (mail) mail.onclick = () => obSocialEmailSend(mail);
+      if (obSocialOtp) obBindForm(root, () => obSocialEmailConfirm(root, p));
       root.querySelector("#btn-social-skip").onclick = () => { obSaveDraft({ social: "skip" }); obGo(`${p}-passkey`); };
     },
   };
 }
 OB["p-social"] = obSocialScreen("p");
 OB["b-social"] = obSocialScreen("b");
+
+/* A code to the email on the screen before: Turnkey sends it, and the code is
+   sealed in this browser (guardian/logins.js), so our API never reads it. */
+async function obSocialEmailSend(btn) {
+  if (Z.isDisabled(btn)) return;
+  obClearErr();
+  Z.setLoading(btn, true);
+  try {
+    const { sendEmailCode } = await import("/guardian/logins.js");
+    obSocialOtp = await sendEmailCode(api, obDraft.email);
+    obRender({ focus: false });
+    $("ob-otp")?.focus();
+  } catch (e) {
+    Z.setLoading(btn, false);
+    obShowErr(e);
+  }
+}
+async function obSocialEmailConfirm(root, p) {
+  const btn = root.querySelector("#btn-next");
+  obClearErr();
+  Z.setLoading(btn, true);
+  try {
+    const [{ emailCodeToToken }, { IndexedDbStamper, encryptOtpCodeToBundle }] = await Promise.all([import("/guardian/logins.js"), import("/vendor/turnkey.js")]);
+    const stamper = new IndexedDbStamper();
+    const code = root.querySelector("#ob-otp").value.replace(/\s/g, "");
+    const verificationToken = await emailCodeToToken({ api, stamper, encrypt: encryptOtpCodeToBundle, otp: obSocialOtp, code });
+    // The key only bound the token; adding the guardian needs the token alone.
+    stamper.clear().catch(() => {});
+    obSocial = { provider: "email", verificationToken };
+    obSocialOtp = null;
+    obGo(`${p}-passkey`);
+  } catch (e) {
+    Z.setLoading(btn, false);
+    obShowErr(e);
+  }
+}
 
 /* Leave for Google or Apple; the answer comes back to /app (obSocialReturn). */
 async function obSocialStart(provider, btn) {
@@ -719,14 +762,16 @@ async function obAddSocialGuardian() {
   if (!login || !user?.id) return;
   obSocial = null;
   try {
-    await api(`/api/recovery/turnkey/users/${user.id}/guardians`, { oidcToken: login.idToken, publicKey: login.publicKey });
+    await api(`/api/recovery/turnkey/users/${user.id}/guardians`, login.verificationToken
+      ? { verificationToken: login.verificationToken }
+      : { oidcToken: login.idToken, publicKey: login.publicKey });
   } catch { /* Home says recovery is not set up */ }
   // The key only bound this one token.
   import("/vendor/turnkey.js").then(({ IndexedDbStamper }) => new IndexedDbStamper().clear()).catch(() => {});
 }
 
 const obRecoveryPoint = () => `<li>${Z.icon("restore")}<span>${obSocial
-  ? `Your ${obSocialName()} login is added in the same approval, so it can move the account to a new ${obDevice()}.`
+  ? `Your ${obSocialName()} is added in the same approval, so it can move the account to a new ${obDevice()}.`
   : `Set up recovery from Home, in case you lose this ${obDevice()}.`}</span></li>`;
 
 OB["b-passkey"] = {

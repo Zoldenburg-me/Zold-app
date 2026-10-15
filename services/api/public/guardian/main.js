@@ -1,7 +1,8 @@
 /**
  * /guardian: choose who can help you get your account back if you lose your
  * phone — Zoldenburg (our team checks your ID) or your own Google or Apple
- * login (a Turnkey wallet only that login can use). One at a time: nothing
+ * login, email address or recovery passkey (a Turnkey wallet only that login
+ * can use; guardian/logins.js). One at a time: nothing
  * collects two approvals yet, and at threshold 1 either alone could move the
  * account; the API refuses the combination (OTHER_GUARDIAN) as well.
  *
@@ -13,7 +14,8 @@
  * An ES module of its own under a CSP without inline script (routes/pages.ts),
  * so the Turnkey code never loads into /app.
  */
-import { IndexedDbStamper } from "../vendor/turnkey.js";
+import { IndexedDbStamper, encryptOtpCodeToBundle } from "../vendor/turnkey.js";
+import { createGuardianPasskey, emailCodeToToken, sendEmailCode } from "./logins.js";
 import { OAUTH_STATE_KEY, readReturn, startLogin } from "./oauth.js";
 import { providerButtons } from "./providers.js";
 import { afterCheck, checkEnrolment, enrolmentHtml, issueEnrolmentCode } from "./enrolment.js";
@@ -214,7 +216,7 @@ const HOW = `
     <li>Your account moves to the new phone after a short waiting period. Your old phone gets a heads-up and can stop it.</li>
   </ul>`;
 
-function render(el, { caps, zold, guardians, message, issued = null, ibanReady = false }) {
+function render(el, { caps, zold, guardians, message, issued = null, ibanReady = false, otp = null }) {
   const social = guardians.filter((g) => g.status === "active");
   const zoldOn = Boolean(zold?.active);
   const shortAddr = (a) => `${a.slice(0, 8)}…${a.slice(-6)}`;
@@ -234,20 +236,28 @@ function render(el, { caps, zold, guardians, message, issued = null, ibanReady =
             <div class="g-actions"><button type="button" class="z-btn z-btn--primary" data-zold="add">Choose Zoldenburg</button></div>`}
     </section>` : "";
 
-  const buttons = providerButtons(caps, "Add");
+  const logins = caps.turnkeyLogins || {};
+  const buttons = `${providerButtons(caps, "Add")}${logins.passkey ? `<button type="button" class="z-btn z-provider" data-add="passkey"><span>Add a recovery passkey</span></button>` : ""}`;
+  const emailForm = !logins.email ? "" : otp
+    ? `<form id="g-otp" novalidate><label for="g-otp-code">Code sent to ${esc(otp.to)}</label>
+        <input id="g-otp-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required>
+        <div class="g-actions"><button class="z-btn z-btn--primary" id="g-otp-go">Add this email</button></div></form>`
+    : `<form id="g-mail" novalidate><label for="g-mail-addr">Or an email address</label>
+        <input id="g-mail-addr" type="email" autocomplete="email" autocapitalize="off" required>
+        <div class="g-actions"><button class="z-btn" id="g-mail-go">Send a code</button></div></form>`;
   const rows = guardians.map((g) => `<li><span translate="no">${esc(shortAddr(g.address))}</span>
       ${g.status === "active"
         ? `<span class="g-ok">Your recovery helper</span><button type="button" class="z-btn" data-remove="${esc(g.turnkeySubOrgId)}">Remove</button>`
         : `<span>Almost there</span><button type="button" class="z-btn" data-finish="${esc(g.turnkeySubOrgId)}">Finish</button>`}</li>`).join("");
   const loginCard = caps.turnkeyGuardians ? `
     <section class="g-card">
-      <h2 class="g-sub" id="g-login-head" tabindex="-1">Your Google or Apple login</h2>
-      <p>Approve the move with a login you already have. It stays yours alone: Zold never holds its key.</p>
+      <h2 class="g-sub" id="g-login-head" tabindex="-1">Your own backup login</h2>
+      <p>Approve the move with your Google or Apple login, an email address or a recovery passkey. It stays yours alone: Zold never holds its key.</p>
       ${rows ? `<ul class="g-list">${rows}</ul>` : ""}
       ${social.length ? ""
         : zoldOn ? `<p class="g-note">One recovery helper at a time: remove Zoldenburg to use your Google or Apple login.</p>`
-          : buttons ? `<div class="z-providers">${buttons}</div>` : ""}
-      <p class="g-note">Tip: pick a login with a different email from your Zold account, and turn on two-step sign-in for it.</p>
+          : `${buttons ? `<div class="z-providers">${buttons}</div>` : ""}${emailForm}`}
+      <p class="g-note">Tip: pick a login with a different email from your Zold account, and turn on two-step sign-in for it. A recovery passkey must survive losing this phone: use a security key, or save it on another device.</p>
     </section>` : "";
 
   el.innerHTML = `
@@ -301,6 +311,8 @@ async function boot() {
 
   // The last enrolment code issued in this page: shown until it is used or replaced.
   let issued = null;
+  // An email code on its way to a new backup email: {otpId, otpEncryptionTargetBundle, to}.
+  let otp = null;
   // One action at a time on the whole page, across redraws.
   const pageLock = { busy: false };
   const ibanReady = me.kycStatus === "approved" && Boolean(me.iban);
@@ -314,7 +326,7 @@ async function boot() {
       caps.turnkeyGuardians ? api(`/api/recovery/turnkey/users/${me.id}/guardians`) : { guardians: [] },
     ]);
     const guardians = social?.guardians ?? [];
-    render(el, { caps, zold, guardians, message, issued, ibanReady });
+    render(el, { caps, zold, guardians, message, issued, ibanReady, otp });
     // The redraw replaces the clicked button: focus goes to its card's heading,
     // not to the top of the page, and the outcome is read out.
     const busyThen = (b, fn) => oneAtATime(b, async () => {
@@ -337,6 +349,33 @@ async function boot() {
           return { ok: false, text: e.message };
         }
       }));
+    });
+    const added = async (body) => {
+      const r = await finishAdd((await api(`/api/recovery/turnkey/users/${me.id}/guardians`, body)).guardian, env);
+      return r.step === "done" ? { ok: true, text: "Done. Your backup login now protects your account." } : { ok: false, text: r.reason };
+    };
+    el.querySelectorAll('[data-add="passkey"]').forEach((b) => b.addEventListener("click", busyThen(b, async () => added({ passkey: await createGuardianPasskey() }))));
+    const onSubmit = (id, btnId, fn) => {
+      const form = el.querySelector(id);
+      if (!form) return;
+      const run = busyThen(form.querySelector(btnId), fn);
+      form.addEventListener("submit", (e) => { e.preventDefault(); run(); });
+    };
+    onSubmit("#g-mail", "#g-mail-go", async () => {
+      const to = el.querySelector("#g-mail-addr").value.trim();
+      otp = { ...(await sendEmailCode(api, to)), to };
+      return { ok: true, text: `We sent a 6-digit code to ${to}.` };
+    });
+    onSubmit("#g-otp", "#g-otp-go", async () => {
+      const code = el.querySelector("#g-otp-code").value.replace(/\s/g, "");
+      const stamper = new IndexedDbStamper();
+      try {
+        const verificationToken = await emailCodeToToken({ api, stamper, encrypt: encryptOtpCodeToBundle, otp, code });
+        otp = null;
+        return await added({ verificationToken });
+      } finally {
+        await stamper.clear().catch(() => {});
+      }
     });
     el.querySelectorAll("[data-finish]").forEach((b) => {
       b.addEventListener("click", busyThen(b, async () => {
