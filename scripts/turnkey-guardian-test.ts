@@ -292,6 +292,7 @@ const baseUser = (id: string, extra: Record<string, unknown> = {}) => ({
 });
 store.addUser(baseUser("u_ok", { passkeySafe: { address: addr("a"), status: "active", threshold: 1, passkeyPublicKey: pk, createdAt: now } }) as any);
 store.addUser(baseUser("u_nosafe") as any);
+store.addUser(baseUser("u_planned", { passkeySafe: { address: addr("d"), status: "planned", threshold: 1, passkeyPublicKey: pk, createdAt: now } }) as any);
 store.addUser(baseUser("u_twin", { address: addr("c"), passkeySafe: { address: addr("c"), status: "active", threshold: 1, passkeyPublicKey: pk, createdAt: now } }) as any);
 store.addUser(baseUser("u_imported", { passkeySafe: { address: addr("b"), status: "active", threshold: 1, passkeyPublicKey: pk, createdAt: now, importedAt: now } }) as any);
 
@@ -461,6 +462,13 @@ try {
     assert.equal(r.status, 200, JSON.stringify(r.body));
     assert.deepEqual(calls.map((c) => c.op), ["find", "address"]);
     assert.equal(store.findUser("u_ok")!.passkeySafe!.socialGuardians!.length, 1);
+  });
+
+  await check("at signup a planned Safe records the login: the deployment adds it", async () => {
+    const r = await call("POST", "/users/u_planned/guardians", addBody(), "u_planned");
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    assert.equal(r.body.guardian.status, "created");
+    assert.equal(store.findUser("u_planned")!.passkeySafe!.socialGuardians!.length, 1);
   });
 
   await check("the owner can list their guardians", async () => {

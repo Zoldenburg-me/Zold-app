@@ -49,7 +49,8 @@ visit):
 | `self-social` | Turnkey sub-org, root = the user | log in with Google/Apple/email on the recovery page |
 | `trusted-person` | Turnkey sub-org, root = that person | log in from the approval link the user sends them |
 
-**The four choices** on the Recovery screen (onboarding step 3 and Security):
+**The four choices** in Security. Signup offers only the Google or Apple
+login, before the passkey; the Safe's deployment operation adds it.
 
 1. **No recovery.** Allowed; the user ticks the existing warning that only
    EURe is reclaimable from Monerium. `recoveryChoice` records it.
@@ -264,8 +265,8 @@ sample documents only.
   `TURNKEY_GUARDIANS=1` switches it on and then needs both secrets plus
   `TURNKEY_OAUTH_CLIENT_IDS`: our Google web client id (ends in
   `.apps.googleusercontent.com`) and Apple services id, not secret, both
-  with `https://<host>/guardian` and `https://<host>/recovery` registered
-  as redirect URIs.
+  with `https://<host>/guardian`, `https://<host>/recovery` and
+  `https://<host>/app` (the signup login) registered as redirect URIs.
   `capabilities()` publishes `turnkeyGuardians`, `turnkeyLogins` and
   `turnkeyApi`.
   Adding works end to end in code: login, sub-org, then the passkey op
@@ -344,10 +345,12 @@ sample documents only.
   `@turnkey/http` is not bundled: it pulls in X.509, ASN.1 and a DI container
   (636 KB) for one POST, so the page sends its stamped `sign_raw_payload`
   itself. The key is an unextractable P-256 key in IndexedDB
-  (`crypto.subtle.generateKey`). Only `/guardian` and `/recovery` load it:
-  ES-module pages with their own CSP (no inline script, connect-src adds only
-  Turnkey's API: `guardianPageCsp`), so the classic
-  `app/*.js` scripts never do. Logins are full-page redirects that return
+  (`crypto.subtle.generateKey`). Only `/guardian` and `/recovery` open a
+  Turnkey session or sign: ES-module pages with their own CSP (no inline
+  script, connect-src adds only Turnkey's API: `guardianPageCsp`). `/app`
+  imports the stamper on the signup login screen alone, to make the key the
+  login's nonce binds to and hand the token to our API; its connect-src is
+  `'self'`, so it cannot reach Turnkey, and the key is cleared after. Logins are full-page redirects that return
   the ID token in the URL fragment (Google `id_token`, Apple `code id_token`
   with no scope), with a one-time state in sessionStorage.
 - **Residual risk:** while a guardian is

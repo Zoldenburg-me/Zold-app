@@ -46,9 +46,9 @@ THREE RULES OVERRIDE CONVENIENCE:
   app.zoldhq.com runs **Base mainnet** + Monerium production, owner only
   behind Cloudflare Access. Each is an Akash lease (technical-architecture
   §18.1): closing one deletes its accounts.
-- **Identity is Monerium's.** Onboarding: account (email required) → passkey
-  (no skip) → Safe deployed → recovery enrolment → the gate offers OAuth *or*
-  your own Monerium API keys → "Activate IBAN with passkey". `POST /api/users`
+- **Identity is Monerium's.** Signup: about you (email required) → Google/
+  Apple guardian or skip → passkey (no skip) → Safe deployed with it → Home's
+  checklist: Monerium OAuth *or* API keys → "Activate IBAN". `POST /api/users`
   always creates `pending` with no IBAN; only an address-matched IBAN approves.
 - **Rails**: SEPA (Monerium redeem, non-custodial for the principal, fee €0) is
   open. The **cash rail is CLOSED** unless `cashRailOpen()` — quotes answer 503

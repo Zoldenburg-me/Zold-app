@@ -54,11 +54,12 @@ function jsonRpcServer(handler: Handler): Promise<{ url: string; server: Server 
 const ZERO32 = `0x${"0".repeat(64)}`;
 let ethBalance = "0x0";
 let rpcHangs = false;
-const rpc = await jsonRpcServer((method) => {
+const rpc = await jsonRpcServer((method, params) => {
   if (rpcHangs && method !== "eth_getCode") return HANG;
   switch (method) {
     case "eth_chainId": return "0x14a34";
-    case "eth_getCode": return "0x"; // not deployed: every op is a deployment
+    // Not deployed: every op is a deployment. The recovery module has code.
+    case "eth_getCode": return String(params[0]).toLowerCase() === CANDIDE.recoveryModuleAddress.toLowerCase() ? "0x6080" : "0x";
     case "eth_getBalance": return ethBalance;
     case "eth_call": return ZERO32; // EntryPoint nonce 0
     case "eth_gasPrice": return "0x3b9aca00";
@@ -191,6 +192,13 @@ try {
     await preparePasskeySafeDeployment(plan);
     assert.deepEqual(paymasterCalls[0], { sponsorshipPolicyId: "sp_base_1" });
     (CANDIDE as any).gas = { mode: "sponsored" };
+  });
+  await check("a guardian chosen at signup rides the deployment op", async () => {
+    const guardian = "0x00000000000000000000000000000000000000a1";
+    const r = await preparePasskeySafeDeployment(plan, guardian);
+    assert.ok(String((r.userOperation as any).callData).toLowerCase().includes(guardian.slice(2)), "the op adds that guardian");
+    const none = await preparePasskeySafeDeployment(plan);
+    assert.ok(!String((none.userOperation as any).callData).toLowerCase().includes(guardian.slice(2)));
   });
   // Candide's own wording, as its Base mainnet endpoint answered (Sep 2026).
   const refuse = (message: string) => {

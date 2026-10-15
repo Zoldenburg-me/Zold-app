@@ -7,7 +7,8 @@
  *   owner logged in with Google or Apple in this browser; find or create the
  *   sub-org for that login and record its address. `created` is not a
  *   guardian: only the passkey-signed addGuardianWithThreshold makes it one,
- *   and only the chain says it happened.
+ *   and only the chain says it happened. At signup the Safe is not deployed
+ *   yet, and the deployment operation carries that add.
  * - POST /recovery/turnkey/users/:id/guardians/:subOrgId/add: prepares the
  *   passkey op that puts that address on the Safe's recovery module
  *   (addGuardianWithThreshold, threshold 1, enabling the module first if the
@@ -211,8 +212,10 @@ export function createTurnkeyGuardianRouter({
       if (!user) return res.status(404).json({ error: "user not found" });
       if (!requireUserSession(req, res, user.id)) return;
       const safe = user.passkeySafe;
-      if (!safe || safe.status !== "active") {
-        return res.status(409).json({ error: "a guardian needs your own deployed Safe", code: "NO_SAFE" });
+      // A planned Safe is enough: at signup the login comes before the Safe,
+      // and the deployment adds the guardian (routes/auth.ts).
+      if (!safe) {
+        return res.status(409).json({ error: "a guardian needs your own Safe", code: "NO_SAFE" });
       }
       if (safe.importedAt) {
         return res.status(409).json({ error: "an imported Safe is not offered a recovery guardian", code: "IMPORTED_SAFE" });
