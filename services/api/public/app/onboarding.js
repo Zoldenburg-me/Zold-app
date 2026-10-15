@@ -665,7 +665,11 @@ function obSocialScreen(p) {
         slot.innerHTML = providerButtons(caps, "Continue");
         slot.querySelectorAll("[data-start]").forEach((b) => { b.onclick = () => obSocialStart(b.dataset.start, b); });
       }).catch(obShowErr);
-      root.querySelector("#btn-social-skip").onclick = () => { obSaveDraft({ social: "skip" }); obGo(`${p}-passkey`); };
+      root.querySelector("#btn-social-skip").onclick = () => {
+        obDiscardSocial();
+        obSaveDraft({ social: "skip" });
+        obGo(`${p}-passkey`);
+      };
     },
   };
 }
@@ -705,24 +709,32 @@ async function obSocialReturn() {
     const publicKey = stamper.getPublicKey();
     if (!publicKey) { obSocialError = "That login timed out in this browser. Try again."; return; }
     obSocial = { provider: back.provider, idToken: back.idToken, publicKey };
+    obSaveDraft({ social: null });
     history.replaceState(null, "", `${location.pathname}${location.search}#${p}-passkey`);
   } catch (e) {
     obSocialError = obMessage(e);
   }
 }
 
+function obDiscardSocial() {
+  obSocial = null;
+  import("/vendor/turnkey.js").then(({ IndexedDbStamper }) => new IndexedDbStamper().clear()).catch(() => {});
+}
+
 /* Record the login on the new account before the deployment, which then adds
    it. One try: a failure leaves the account without it, and Home's recovery
    reminder offers it again. */
 async function obAddSocialGuardian() {
+  if (obDraft.social === "skip") {
+    obDiscardSocial();
+    return;
+  }
   const login = obSocial;
   if (!login || !user?.id) return;
-  obSocial = null;
+  obDiscardSocial();
   try {
     await api(`/api/recovery/turnkey/users/${user.id}/guardians`, { oidcToken: login.idToken, publicKey: login.publicKey });
   } catch { /* Home says recovery is not set up */ }
-  // The key only bound this one token.
-  import("/vendor/turnkey.js").then(({ IndexedDbStamper }) => new IndexedDbStamper().clear()).catch(() => {});
 }
 
 const obRecoveryPoint = () => `<li>${Z.icon("restore")}<span>${obSocial
@@ -848,7 +860,7 @@ OB["b-safe-choice"] = {
         <fieldset class="z-form z-form--tight" style="border:0;margin:0;padding:0;min-width:0">
           <legend class="z-sr">Which account</legend>
           ${obChoiceHtml("safe-choice", "new", "Open a new account", `Zold sets up a new account for the company. One more approval with your ${Z.passkeyName()}.`, true)}
-          ${obChoiceHtml("safe-choice", "import", "Use our company’s existing Safe", "You already have a Safe, owned by a wallet such as a Ledger. Its owner adds this phone as an owner. No money moves.", false)}
+          ${obChoiceHtml("safe-choice", "import", "Use our company’s existing Safe", `You already have a Safe, owned by a wallet such as a Ledger. Its owner adds this phone as an owner. No money moves.${obSocial ? ` Your ${obSocialName()} recovery login can’t be added to an existing Safe.` : ""}`, false)}
         </fieldset>
       </form>
       ${obSetupSteps()}
@@ -859,7 +871,10 @@ OB["b-safe-choice"] = {
     obBindForm(root, async () => {
       const btn = root.querySelector("#btn-next");
       if (Z.isDisabled(btn)) return;
-      if (root.querySelector('input[name="safe-choice"]:checked')?.value === "import") return obGo("b-import-address");
+      if (root.querySelector('input[name="safe-choice"]:checked')?.value === "import") {
+        obDiscardSocial();
+        return obGo("b-import-address");
+      }
       obClearErr();
       clearSafeImportFlag();
       obImport = null;

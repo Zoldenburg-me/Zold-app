@@ -70,8 +70,8 @@ export function capabilities() {
      *  RECOVERY_IBAN_HMAC_KEY. Without it the operator can sign for nobody. */
     zoldenburgEnrolment: zoldenburgRecoveryEnabled() && enrolmentAvailable(),
     /** May a user make their own Google or Apple login a recovery guardian
-     *  (a Turnkey wallet)? Off until TURNKEY_GUARDIANS=1, which waits for
-     *  the recovery alerts; no screen offers it yet. */
+     *  (a Turnkey wallet)? Signup and /guardian offer it when
+     *  TURNKEY_GUARDIANS=1, which waits for the recovery alerts. */
     turnkeyGuardians: turnkeyGuardiansEnabled(),
     /** The OAuth client ids /guardian logs in with (not secrets: every login
      *  URL carries them), or null while the switch is off. */
