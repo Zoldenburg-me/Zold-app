@@ -163,12 +163,13 @@ export function supplierView(
     state: invoice.state,
     payor: { name: payorName },
     /**
-     * The issued document, for an outgoing invoice. Safe to expose in full:
-     * every field is printed on the invoice the customer already holds.
+     * The issued document, for an outgoing invoice, minus acceptedWarnings:
+     * those are the issuer's own compliance and receipt-sync warnings (they
+     * can name the org's other wallets) and are not printed on the invoice.
      * Internal ids, member ids and link hashes stay out, as in the rest of
      * this view.
      */
-    issued: invoice.issued,
+    issued: invoice.issued && (({ acceptedWarnings: _w, ...printed }) => printed)(invoice.issued),
     ...(invoice.issued && issuerExtras
       ? {
           bank: issuerExtras.bank,
