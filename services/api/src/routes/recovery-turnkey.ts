@@ -397,22 +397,6 @@ export function createTurnkeyGuardianRouter({
     }),
   );
 
-  /** A guardian's signing activity that Turnkey left pending: read with our
-   *  key, so a passkey guardian is prompted once, not on every poll. */
-  router.post(
-    "/recovery/turnkey/activity",
-    wrap(async (req, res) => {
-      try {
-        const { subOrgId, activityId } = req.body ?? {};
-        const id = (v: unknown) => typeof v === "string" && /^[\w-]{1,64}$/.test(v);
-        if (!id(subOrgId) || !id(activityId) || subOrgId === TURNKEY.organizationId) throw new TurnkeyGuardianError("subOrgId and activityId required", 400, "BAD_ACTIVITY");
-        res.json({ activity: await client().signActivity(subOrgId, activityId) });
-      } catch (e) {
-        sendError(res, e);
-      }
-    }),
-  );
-
   router.post(
     "/recovery/turnkey/login",
     wrap(async (req, res) => {
