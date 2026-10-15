@@ -783,7 +783,7 @@ export function checkCompliance(
         "error",
         "currency",
         `This invoice is written in ${currency}, so the tax amount must also be shown in ` +
-          `${SETTLEMENT_CURRENCY} — and no rate was available to work it out. It has not been issued.`,
+          `${SETTLEMENT_CURRENCY} — and no rate was available to work it out.`,
         basis("§ 16 Abs. 6 UStG", "Art. 230 VAT Directive"),
       );
     } else if (draft.conversion.from !== currency) {
