@@ -50,7 +50,10 @@ export async function approveWith({ stamper, login, api, recovery, turnkeyApi, s
   try {
     const who = await login();
     const { digest } = await api(path("/digest"), undefined, withSecret);
-    const signature = await sign({ stamper, baseUrl: turnkeyApi, organizationId: who.subOrgId, signWith: who.address, payload: digest });
+    // A pending activity is read through the API: polled with a passkey's
+    // stamper, every poll would be another prompt.
+    const pollActivity = (activityId) => api("/api/recovery/turnkey/activity", { subOrgId: who.subOrgId, activityId });
+    const signature = await sign({ stamper, baseUrl: turnkeyApi, organizationId: who.subOrgId, signWith: who.address, payload: digest, pollActivity });
     const request = await api(path("/signature"), signature, withSecret);
     return { step: "approved", request };
   } catch (e) {

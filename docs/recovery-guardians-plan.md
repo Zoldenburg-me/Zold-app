@@ -49,8 +49,8 @@ visit):
 | `self-social` | Turnkey sub-org, root = the user | log in with Google/Apple/email on the recovery page |
 | `trusted-person` | Turnkey sub-org, root = that person | log in from the approval link the user sends them |
 
-**The four choices** in Security. Signup offers only the Google or Apple
-login, before the passkey; the Safe's deployment operation adds it.
+**The four choices** in Security. Signup offers only the Google, Apple or
+email-code login, before the passkey; the Safe's deployment operation adds it.
 
 1. **No recovery.** Allowed; the user ticks the existing warning that only
    EURe is reclaimable from Monerium. `recoveryChoice` records it.

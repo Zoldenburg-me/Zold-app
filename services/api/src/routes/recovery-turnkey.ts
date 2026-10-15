@@ -28,7 +28,7 @@
 import express from "express";
 import { randomUUID } from "node:crypto";
 import type { MetaTransaction } from "abstractionkit";
-import { SECURITY } from "../config.js";
+import { SECURITY, TURNKEY } from "../config.js";
 import { store } from "../store.js";
 import type { User } from "../store/types.js";
 import { checkOpAssertion } from "../http/passkey-assertion.js";
@@ -397,11 +397,27 @@ export function createTurnkeyGuardianRouter({
     }),
   );
 
+  /** A guardian's signing activity that Turnkey left pending: read with our
+   *  key, so a passkey guardian is prompted once, not on every poll. */
+  router.post(
+    "/recovery/turnkey/activity",
+    wrap(async (req, res) => {
+      try {
+        const { subOrgId, activityId } = req.body ?? {};
+        const id = (v: unknown) => typeof v === "string" && /^[\w-]{1,64}$/.test(v);
+        if (!id(subOrgId) || !id(activityId) || subOrgId === TURNKEY.organizationId) throw new TurnkeyGuardianError("subOrgId and activityId required", 400, "BAD_ACTIVITY");
+        res.json({ activity: await client().signActivity(subOrgId, activityId) });
+      } catch (e) {
+        sendError(res, e);
+      }
+    }),
+  );
+
   router.post(
     "/recovery/turnkey/login",
     wrap(async (req, res) => {
       try {
-        const { oidcToken, publicKey, verificationToken, clientSignature, credentialId } = req.body ?? {};
+        const { oidcToken, publicKey, verificationToken, clientSignature, whoami } = req.body ?? {};
         const turnkey = client();
         const one = async (filter: Parameters<TurnkeyGuardianClient["subOrgIds"]>) => {
           const ids = await turnkey.subOrgIds(...filter);
@@ -410,9 +426,16 @@ export function createTurnkeyGuardianRouter({
           return ids[0];
         };
         // A passkey signs its own requests to Turnkey: no session to hand out.
-        if (credentialId !== undefined) {
-          if (typeof credentialId !== "string" || !credentialId || credentialId.length > 1024) throw new TurnkeyGuardianError("credentialId required", 400, "BAD_PASSKEY");
-          const subOrgId = await one(["CREDENTIAL_ID", credentialId]);
+        // It proves itself with a stamped whoami on our parent org, which
+        // Turnkey answers with the passkey's sub-org; a bare credential id
+        // would name the guardian to anyone who knew it.
+        if (whoami !== undefined) {
+          const { body, stamp } = whoami ?? {};
+          if (typeof body !== "string" || typeof stamp !== "string" || !stamp || stamp.length > 8192 || body !== JSON.stringify({ organizationId: TURNKEY.organizationId })) {
+            throw new TurnkeyGuardianError("a passkey-stamped whoami required", 400, "BAD_PASSKEY");
+          }
+          const subOrgId = await turnkey.passkeySubOrg(body, stamp);
+          if (subOrgId === TURNKEY.organizationId) throw new TurnkeyGuardianError("this login is not a guardian", 404, "NO_GUARDIAN");
           return res.json({ subOrgId, address: await turnkey.walletAddress(subOrgId) });
         }
         if (verificationToken !== undefined) {
@@ -447,7 +470,8 @@ async function guardianLogin(body: any, jwks: JwksSource, otpTokens: OtpTokenChe
   if (body.passkey !== undefined) {
     const { challenge, attestation } = body.passkey ?? {};
     const id = attestation?.credentialId;
-    if (typeof challenge !== "string" || typeof id !== "string" || !id || typeof attestation.clientDataJson !== "string" || typeof attestation.attestationObject !== "string") {
+    const sized = (v: unknown, max: number) => typeof v === "string" && v.length > 0 && v.length <= max;
+    if (!sized(challenge, 256) || !sized(id, 1024) || !sized(attestation.clientDataJson, 4096) || !sized(attestation.attestationObject, 16384)) {
       throw new TurnkeyGuardianError("passkey challenge and attestation required", 400, "BAD_PASSKEY");
     }
     const transports = Array.isArray(attestation.transports) ? attestation.transports.filter((t: unknown) => typeof t === "string" && /^AUTHENTICATOR_TRANSPORT_[A-Z]+$/.test(t)) : [];
