@@ -809,3 +809,8 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; z-index: 210; heig
 .z-providers { display: grid; gap: var(--z-space-3); margin: 24px 0; }
 .z-provider { width: 100%; gap: 12px; font-weight: 500; background: var(--z-surface); }
 .z-provider__mark { width: 20px; height: 20px; flex: none; }
+/* Round marks with the name under them (the onboarding recovery step). */
+.z-providers--round { align-self: stretch; grid-template-columns: repeat(auto-fit, 88px); justify-content: center; gap: var(--z-space-6); }
+.z-providers--round .z-btn { flex-direction: column; width: auto; min-height: 0; padding: 0; gap: var(--z-space-2); border: 0; background: none; font-size: 13.5px; font-weight: 500; }
+.z-providers--round .z-btn > :first-child { box-sizing: border-box; display: grid; place-items: center; width: 56px; height: 56px; padding: 17px; border: 1px solid var(--z-line-strong); border-radius: 50%; background: var(--z-surface); font-size: 22px; transition: border-color .15s ease; }
+.z-providers--round .z-btn:hover > :first-child { border-color: var(--z-line-hover); }
