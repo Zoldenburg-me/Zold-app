@@ -11,7 +11,7 @@ Everything the screens are built from. The values are in `tokens/tokens.json` an
 | Landing | fluid, designed at 1440 and 390 | Sticky nav 64px, sections with clamp() padding, content max about 1200px; single column under 760px |
 | Legal pages | max text width about 72ch | Same nav and footer as the landing |
 
-Background glow: on phone screens there is one radial pink glow behind the top (`hero-glow` token). Nothing else glows except the primary button.
+Nothing glows: no radial behind the top of a screen and no shadow under the primary button (ARK).
 
 | Breakpoint | Changes |
 |---|---|
@@ -42,18 +42,18 @@ The props below describe the contract, not a framework. The app is vanilla JS (`
 
 | Component | Variants and props | Spec | States |
 |---|---|---|---|
-| **Button** | `primary`, `secondary`, `quiet`; `icon`, `full` | Pill (radius 999), height 56 (primary) or 52 (secondary), padding 0 22, 16px 600. Primary: `--z-pink` fill plus `primary-glow`. Secondary: `--z-ghost` fill, 1px `--z-line-strong` | Hover: primary `--z-pink-hover`, secondary border `--z-line-hover`. Active: translateY(1px). Focus: ring. Disabled: ghost fill, dim text, no glow, `aria-disabled` plus a reason nearby. Loading: spinner before the label, label kept |
-| **Icon button** | `aria-label` required | 44×44, radius 999, ghost fill, 1px line-strong, 20 to 22px icon | Same as secondary |
+| **Button** | `primary`, `secondary`, `quiet`; `icon`, `full` | 6px radius (`--z-radius-control`), height 56 (primary) or 52 (secondary), padding 0 22, 16px 600. Primary: `--z-pink` fill, near-black `--z-bg` text. Secondary: `--z-ghost` fill, 1px `--z-line-strong` | Hover: primary `--z-pink-hover`, secondary border `--z-line-hover`. Active: translateY(1px). Focus: ring. Disabled: ghost fill, dim text, no glow, `aria-disabled` plus a reason nearby. Loading: spinner before the label, label kept |
+| **Icon button** | `aria-label` required | 44×44, 6px radius, ghost fill, 1px line-strong, 20 to 22px icon | Same as secondary |
 | **Top bar** | `title`, `back`, `right` | Height 60, 16px gutter, 44px back button with a -10px left offset, h1 17/600 | Title may be empty (then a hidden h1 elsewhere) |
 | **Large title** | `title`, `sub` | h1 32/600, sub 15/1.55 dim, 6px gap | |
 | **Progress (onboarding)** | `step`, `of`, `label`, `back` | Back plus "Step i of n · Label" 13px dim; bar of n segments 3px high, 4px gap, pink when done, `--z-line` when not | `role=progressbar` with aria values |
 | **Field** | `label`, `name`, `type`, `autocomplete`, `hint`, `optional` | Label 14/500, 8px gap, input height 52, radius 12, fill `--z-field`, 1px line-strong, 16px text, placeholder ends with "…" | Focus: pink ring. Error: 1px amber border, message 13px amber below with `aria-describedby`, focus moves to the first error |
 | **Select** | same as Field | Same box, chevron at the right 12px, `appearance: none` | |
-| **Yes/No** | `name`, `question` | Fieldset card, legend REQUIRED (eyebrow), two pill radios 48 high | Checked: pink radio |
+| **Yes/No** | `name`, `question` | Fieldset card, legend REQUIRED (eyebrow), two radios 48 high, 6px radius | Checked: pink radio |
 | **Check row** | `id`, `html` | Card with 20px checkbox (accent pink), 14/1.5 text, whole row is the label | |
 | **Radio card group** | `legend`, options with title and sub | Fieldset, eyebrow legend, card with rows 14px padding, 20px radio, title 15/500, sub 13 dim (see Currency-Settings) | |
 | **Segmented control** | `name`, `items`, `active` | Pill track 4px padding, items 38 high, active pink fill white text | `role=radiogroup`, `aria-checked` |
-| **Filter pills** | `items`, `active`, `counts` | Height 36, pill, ghost; active pink tint, pink border, #ffd6ec text; counts at .7 opacity | `aria-pressed` |
+| **Filter pills** | `items`, `active`, `counts` | Height 36, 6px radius, ghost; active pink tint, pink border, #ffd6ec text; counts at .7 opacity | `aria-pressed` |
 | **Search** | `placeholder` | Pill 48 high, 20px search icon, `type=search`, `name=q` | Desktop: ⌘K opens the Search dialog |
 | **List group** | `label`, `action`, `rows` | Optional eyebrow row (min height 32) with a 44px action link; card container, rows split by 1px `--z-line` | Empty: one row with the empty message and one action |
 | **List row** | `lead`, `title`, `sub`, `right`, `href` | Min height 64, padding 10 14, gap 12; title one line with ellipsis; right column stacks amount and tag | Link rows get a chevron; disabled (Soon) rows opacity .55 and no link |

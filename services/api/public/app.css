@@ -71,8 +71,8 @@
   select option { color: var(--text); }
   select:focus { outline: none; border-color: var(--acc); box-shadow: 0 0 0 3px rgba(237, 24, 141, 0.15); }
   button {
-    padding: .6rem 1.1rem; border-radius: 8px; border: 0; cursor: pointer;
-    font-weight: 600; font-size: .88rem; color: #fff; background: var(--acc);
+    padding: .6rem 1.1rem; border-radius: var(--z-radius-control); border: 0; cursor: pointer;
+    font-weight: 600; font-size: .88rem; color: var(--z-bg); background: var(--acc);
     font-family: var(--font);
     transition: filter .15s, opacity .15s, transform .1s;
   }
@@ -153,7 +153,7 @@
   }
   .userpill .avatar {
     width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; flex: none;
-    background: var(--acc); font-weight: 700; font-size: .78rem; color: #fff;
+    background: var(--acc); font-weight: 700; font-size: .78rem; color: var(--z-bg);
   }
   .nav { display: grid; gap: .1rem; }
   .nav a {
@@ -171,7 +171,7 @@
   .topbar h1 { font-size: 1.1rem; color: var(--acc); font-weight: 700; }
   .search {
     flex: 1; max-width: 430px; margin: 0 auto; display: flex; align-items: center; gap: .5rem;
-    background: var(--panel2); border: 1px solid var(--border); border-radius: 999px;
+    background: var(--panel2); border: 1px solid var(--border); border-radius: var(--z-radius-control);
     padding: .48rem 1rem; color: var(--faint); font-size: .84rem;
   }
   .net-chip { font-size: .75rem; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: .38rem .85rem; background: var(--panel2); }
