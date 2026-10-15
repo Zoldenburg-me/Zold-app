@@ -35,7 +35,7 @@ const ctx: any = {
   PublicKeyCredential: function PublicKeyCredential() {},
   matchMedia: () => ({ matches: false }),
   navigator: { userAgent: "test", language: "en", maxTouchPoints: 0 },
-  location: { pathname: "/app", search: "", hash: "", assign() {}, replace() {} },
+  location: { pathname: "/app", search: "", hash: "", assign(u: string) { (this as any).__to = u; }, replace() {} },
   history: { state: null, replaceState() {}, pushState() {}, back() {} },
   localStorage: store(),
   sessionStorage: store(),
@@ -244,7 +244,7 @@ await check("confirm: check, then approve with the passkey after the other owner
   await handlers.confirm.onclick({ currentTarget: btn });
   assert.equal(run("user.passkeySafe.address"), SAFE);
   assert.equal(run("safeImportFlag()"), null);
-  assert.equal(screen(), "monerium", "an imported Safe skips the recovery step");
+  assert.equal(run("location.__to"), "/business", "set up: the company's desk, whose checklist has the rest");
   assert.ok(!deployed());
 });
 await check("confirm: an owner already, but a Safe Zold can't bind, says why and offers no approval", async () => {
@@ -290,14 +290,13 @@ await check("Use a new account instead clears the flag and returns to the choice
   assert.equal(screen(), "b-safe-choice");
   assert.ok(!deployed());
 });
-await check("recovery: offered to a Safe Zold deployed, held back from an imported one", () => {
-  setCaps({ zoldenburgRecovery: true, emailSmsRecovery: true });
+await check("once the Safe is live signup is over: recovery, email and Monerium are Home's checklist", () => {
+  setCaps({ zoldenburgRecovery: true, emailSmsRecovery: true, emailVerification: true });
   setUser(company({ passkeySafe: { address: PLAN, status: "active" } }));
-  assert.equal(run("obNextAfterAccount()"), "recovery");
+  assert.equal(run("obNextAfterAccount()"), null);
   setUser(company({ passkeySafe: { address: SAFE, status: "active", importedAt: "2026-10-01T00:00:00Z" } }));
-  assert.equal(run("obNextAfterAccount()"), "monerium");
-  assert.notEqual(run('obGuard("recovery")'), "recovery");
-  assert.notEqual(run('obGuard("recovery-email")'), "recovery-email");
+  assert.equal(run("obNextAfterAccount()"), null);
+  assert.equal(run("OB.recovery"), undefined, "no recovery step in signup");
 });
 
 await check("a segment without a Safe (India collections) never asks to deploy one", async () => {
@@ -315,6 +314,36 @@ await check("a segment without a Safe (India collections) never asks to deploy o
   assert.equal(run("needsPasskeySafeSetup()"), true);
   setUser(company({ accountType: "individual" }));
   assert.equal(run("needsPasskeySafeSetup()"), true);
+});
+
+const js = (code: string) => JSON.parse(JSON.stringify(run(code)));
+await check("signup: type, about you, the Google/Apple login where offered, the passkey", () => {
+  setUser(null);
+  run(`Object.assign(obDraft, { type: "individual", given: "Mira", family: "Z", email: "m@example.test", country: "DE", usPerson: false, terms: true, social: null }); obSocial = null`);
+  setCaps({ turnkeyGuardians: false, turnkeyLogins: null });
+  assert.deepEqual(js("obSignupSteps()"), ["account-type", "p-about", "p-passkey"]);
+  assert.equal(run('obGuard("p-passkey")'), "p-passkey");
+  setCaps({ turnkeyGuardians: true, turnkeyLogins: { google: "client-id" } });
+  assert.deepEqual(js("obSignupSteps()"), ["account-type", "p-about", "p-social", "p-passkey"]);
+  assert.equal(run('obGuard("p-passkey")'), "p-social", "the login is chosen or skipped first");
+  run('obDraft.social = "skip"');
+  assert.equal(run('obGuard("p-passkey")'), "p-passkey");
+  run('obDraft.social = null; obSocial = { provider: "google", idToken: "t", publicKey: "k" }');
+  assert.equal(run('obGuard("p-passkey")'), "p-passkey");
+  run("obDraft.terms = false");
+  assert.equal(run('obGuard("p-passkey")'), "p-about", "unanswered: back to the one screen about you");
+  run("obSocial = null; obClearDraft()");
+});
+await check("the login is recorded on the new account before the deployment, once", async () => {
+  setCaps({ turnkeyGuardians: true, turnkeyLogins: { google: "client-id" } });
+  setUser(company({ accountType: "individual" }));
+  run('obSocial = { provider: "google", idToken: "tok", publicKey: "pk" }');
+  await run("obAddSocialGuardian()");
+  assert.deepEqual(calls.map((c) => c.path), ["/api/recovery/turnkey/users/u-co/guardians"]);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0].body)), { oidcToken: "tok", publicKey: "pk" });
+  assert.equal(run("obSocial"), null);
+  await run("obAddSocialGuardian()");
+  assert.equal(calls.length, 1, "no second try with a spent token");
 });
 
 console.log(`safe-import-ui: ${pass} ok`);

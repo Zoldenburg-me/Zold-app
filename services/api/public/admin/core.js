@@ -66,9 +66,9 @@ const chip = (v) => (v ? `<span class="chip" translate="no">${esc(v)}</span>` : 
 const fact = (k, v, raw) => `<div><div class="k">${esc(k)}</div><div class="v">${raw ? (v || '—') : esc(v ?? '—')}</div></div>`;
 const empty = (cols, text) => `<tr><td class="empty" colspan="${cols}">${esc(text)}</td></tr>`;
 
-const STEPS = ['account', 'passkey', 'safe', 'recovery', 'monerium', 'iban'];
+const STEPS = ['account', 'passkey', 'safe', 'monerium', 'iban'];
 const STEP_LABEL = {
-  account: 'Account', passkey: 'Passkey', safe: 'Safe', recovery: 'Recovery choice',
+  account: 'Account', passkey: 'Passkey', safe: 'Safe',
   monerium: 'Monerium', iban: 'IBAN', active: 'Active',
 };
 /** The stage is the first step NOT done: "at Monerium" means waiting there. */
