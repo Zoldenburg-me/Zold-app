@@ -169,11 +169,11 @@ sequenceDiagram
   Z-->>B: segment decided · session token · kycStatus=pending
   B->>B: 2. create passkey (P-256)
   B->>Z: register passkey → Safe address planned
-  B->>Z: 3. prepare Safe deployment
+  B->>Z: 3. (optional) the Google/Apple login from the screen before the passkey → recorded as guardian once the account exists
+  B->>Z: 4. prepare Safe deployment (adds that guardian, if any)
   Z->>C: UserOperation (sponsored)
   B->>B: passkey signs UserOp hash
-  B->>Z: submit → Safe deployed
-  B->>Z: 4. (optional) email/SMS recovery enrolment
+  B->>Z: submit → Safe deployed → Home and its checklist
   B->>M: 5. connect Monerium (OAuth) — or paste own API keys
   B->>Z: 6. "Activate IBAN": passkey signs Monerium's ownership declaration as the Safe
   Z->>M: link address + request IBAN
@@ -196,10 +196,13 @@ sequenceDiagram
    an owner in Safe{Wallet}, optionally staying as the company's own second
    owner (1 of 2), and Zold binds the Safe once the chain shows it
    (technical-architecture §5.1.2).
-4. **Recovery** is offered where the deployment has `zoldenburgRecovery`
-   (Zoldenburg as guardian; skipping needs an acknowledged warning) and/or
-   `emailSmsRecovery`, except on an imported Safe, where it has never run.
-5. **Monerium gate.** The user connects by OAuth (PKCE) *or* pastes their own
+4. **Recovery** is not a signup step. Where `turnkeyGuardians` is on, the
+   screen before the passkey offers the user's own Google or Apple login, and
+   the deployment of step 3 adds it as guardian with no extra approval.
+   Zoldenburg (`zoldenburgRecovery`) and email/SMS (`emailSmsRecovery`) are
+   chosen in Security. Without any, Home shows a reminder; nothing is
+   blocked. Never on an imported Safe, where it has never run.
+5. **Monerium gate**, opened from Home's checklist, like the email code. The user connects by OAuth (PKCE) *or* pastes their own
    Monerium API keys. There is no white-label path: Zold never creates a
    Monerium profile for anyone.
 6. **Activate IBAN.** The passkey signs Monerium's "I hereby declare that I am
@@ -275,7 +278,7 @@ These are *per-user partner* capabilities. They are separate from the
 | mode | status | how it works |
 |---|---|---|
 | **Email/SMS guardian (Candide)** | BUILT, UNPROVEN (stub service only) | Candide becomes a Safe guardian (threshold 1). Lost device: a new passkey is created, an OTP is verified on every registered channel, and Candide executes the recovery on chain. After a grace period (3 days in production) the new passkey becomes the Safe's only owner; a legacy co-signer is not carried over. The old device can veto during the grace period. |
-| **Zoldenburg guardian** | BUILT, UNPROVEN (harness only) | Opt-in at onboarding or in Profile; skipping shows that Zoldenburg UG then cannot recover the account and only EURe is reclaimable from Monerium. A lost device registers a new passkey and quotes a reference to support; an operator checks the person against Monerium's KYC and signs as guardian from a hardware wallet (admin → Recoveries, or Safe Cover). After the grace period the new passkey is the only owner; the old device can cancel until then. |
+| **Zoldenburg guardian** | BUILT, UNPROVEN (harness only) | Opt-in in Profile → Security; declining there shows that Zoldenburg UG then cannot recover the account and only EURe is reclaimable from Monerium. A lost device registers a new passkey and quotes a reference to support; an operator checks the person against Monerium's KYC and signs as guardian from a hardware wallet (admin → Recoveries, or Safe Cover). After the grace period the new passkey is the only owner; the old device can cancel until then. |
 
 The new credential lives on the recovery request, not the user, until the
 chain confirms the new owner. Whoever holds the OTP channels therefore cannot
@@ -631,8 +634,8 @@ realises nothing. Zold asserts no tax treatment.
 `/admin` is a dashboard with six sections, each with its own path
 (`/admin/recoveries` etc.): **Overview** (counts, the onboarding funnel, 14-day
 signups and transfers, operator gas, newest issues); **Users** (filtered by
-onboarding stage — the first of account → passkey → Safe → recovery choice →
-Monerium → IBAN not done — and one account in full); **Monerium** (the
+onboarding stage — the first of account → passkey → Safe → Monerium → IBAN
+not done; recovery is optional and shown apart — and one account in full); **Monerium** (the
 deployment's Monerium settings, every connected account and its profile state,
 company accounts backed by a profile, incoming issue and outgoing redeem
 orders, the partner audit trail); **Transactions**; **Recoveries** (every

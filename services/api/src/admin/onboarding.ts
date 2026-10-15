@@ -8,7 +8,8 @@
  */
 import type { User } from "../store.js";
 
-export const ONBOARDING_STEPS = ["account", "passkey", "safe", "recovery", "monerium", "iban"] as const;
+// Recovery is not a stage: it is optional, and recoveryEnrolment shows it.
+export const ONBOARDING_STEPS = ["account", "passkey", "safe", "monerium", "iban"] as const;
 export type OnboardingStep = (typeof ONBOARDING_STEPS)[number];
 
 export function safeIsLive(u: User): boolean {
@@ -47,12 +48,10 @@ export function moneriumProfileState(u: User): string | undefined {
 }
 
 export function onboardingOf(u: User) {
-  const enrol = recoveryEnrolment(u);
   const done: Record<OnboardingStep, boolean> = {
     account: true,
     passkey: Boolean(u.passkey || u.passkeySafe?.passkeyPublicKey),
     safe: safeIsLive(u),
-    recovery: enrol.zoldenburg !== "not_asked" || enrol.candide?.status === "active",
     monerium: Boolean(u.monerium?.connectedAt),
     iban: u.kycStatus === "approved" && Boolean(u.iban),
   };

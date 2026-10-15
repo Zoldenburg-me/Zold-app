@@ -34,6 +34,7 @@ import {
   CANDIDE,
   SafeOperationUncertainError,
   preparePasskeySafeDeployment,
+  readRecoveryState,
   submitPasskeySafeOperationWithReceipt,
   type SubmittedOperation,
 } from "../wallet/candide.js";
@@ -285,7 +286,7 @@ export function createAuthRouter(deps: AuthDeps) {
        */
       let deployment: Awaited<ReturnType<typeof preparePasskeySafeDeployment>>;
       try {
-        deployment = await preparePasskeySafeDeployment(user.passkeySafe);
+        deployment = await preparePasskeySafeDeployment(user.passkeySafe, signupGuardian(user)?.address);
       } catch (err: any) {
         const mismatch = BigInt(CHAIN_ID) !== BigInt(CANDIDE.chainId);
         return res.status(mismatch ? 409 : 502).json({
@@ -298,11 +299,12 @@ export function createAuthRouter(deps: AuthDeps) {
         });
       }
       if (deployment.challenge === "0x") {
-        const updated = store.updateUser(user.id, {
+        // An earlier "unconfirmed" deployment may have landed with the guardian.
+        const updated = await markSignupGuardian(store.updateUser(user.id, {
           address: user.passkeySafe.address,
           wallet: { type: "candide-safe", deployed: true },
           passkeySafe: activatePasskeySafePlan(user.passkeySafe),
-        });
+        }));
         return res.json(publicUser(updated));
       }
       prunePendingPasskeySafeDeployments();
@@ -383,6 +385,7 @@ export function createAuthRouter(deps: AuthDeps) {
         wallet: { type: "candide-safe", deployed: true, deployOpHash: opHash ?? undefined },
         passkeySafe: activatePasskeySafePlan(user.passkeySafe),
       });
+      updated = await markSignupGuardian(updated);
       // The Safe can be linked to Monerium now, but the link signature is a
       // passkey ceremony the client drives next. Until this patch, an account
       // whose deploy happened after KYC approval kept the stale pre-deploy
@@ -447,4 +450,32 @@ export function createAuthRouter(deps: AuthDeps) {
   );
 
   return router;
+}
+
+/** The Google/Apple guardian recorded before the Safe existed (signup), which
+ *  the deployment adds. Never on an imported Safe: it was not deployed here. */
+function signupGuardian(user: User) {
+  if (user.passkeySafe?.importedAt) return undefined;
+  return user.passkeySafe?.socialGuardians?.find((g) => g.status === "created");
+}
+
+/** After the deployment: that guardian is active only if the module lists it.
+ *  A failed read leaves it `created`, and /guardian finishes it. */
+async function markSignupGuardian(user: User): Promise<User> {
+  const guardian = signupGuardian(user);
+  if (!guardian || !user.passkeySafe) return user;
+  try {
+    const { guardians } = await readRecoveryState(user.passkeySafe);
+    if (!guardians.some((g) => g.toLowerCase() === guardian.address.toLowerCase())) return user;
+  } catch (err) {
+    console.error(`safe deploy: guardian check failed: ${describeCause(err)}`);
+    return user;
+  }
+  const activeAt = new Date().toISOString();
+  return store.updateUser(user.id, {
+    passkeySafe: {
+      ...user.passkeySafe,
+      socialGuardians: user.passkeySafe.socialGuardians!.map((g) => (g === guardian ? { ...g, status: "active" as const, activeAt } : g)),
+    },
+  });
 }

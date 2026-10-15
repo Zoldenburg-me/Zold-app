@@ -131,7 +131,7 @@ await check("onboarding stage names the first step not done", async () => {
   const by = Object.fromEntries(users.map((u: any) => [u.id, u]));
   assert.equal(by.u_live.onboarding.stage, "active");
   assert.equal(by.u_live.recoveryEnrolment.zoldenburg, "active");
-  assert.equal(by.u_hollow.onboarding.stage, "recovery", "no recovery choice yet");
+  assert.equal(by.u_hollow.onboarding.stage, "iban", "connected, not approved; recovery is optional and no stage");
 });
 
 await check("the issues feed carries the failed transfer and the Monerium refusal", async () => {
