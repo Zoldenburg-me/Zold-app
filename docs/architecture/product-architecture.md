@@ -169,7 +169,7 @@ sequenceDiagram
   Z-->>B: segment decided · session token · kycStatus=pending
   B->>B: 2. create passkey (P-256)
   B->>Z: register passkey → Safe address planned
-  B->>Z: 3. (optional) the Google/Apple login, taken before step 1 → guardian recorded
+  B->>Z: 3. (optional) the Google/Apple login from the screen before the passkey → recorded as guardian once the account exists
   B->>Z: 4. prepare Safe deployment (adds that guardian, if any)
   Z->>C: UserOperation (sponsored)
   B->>B: passkey signs UserOp hash
