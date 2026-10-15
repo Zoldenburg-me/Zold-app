@@ -63,7 +63,7 @@ img { max-width: 100%; }
 .s-btn:hover { background: var(--z-pink-hover); color: var(--z-bg); }
 .s-btn:active { transform: translateY(1px); }
 .s-btn--lg { height: 52px; }
-.s-btn--sm { height: 36px; padding: 0 18px; font-size: 13.5px; box-shadow: 0 6px 22px color-mix(in srgb, var(--z-pink) 35%, transparent); }
+.s-btn--sm { height: 36px; padding: 0 18px; font-size: 13.5px; }
 .s-btn--ghost { background: var(--z-ghost); border: 1px solid var(--z-line-strong); color: var(--z-text); font-weight: 500; box-shadow: none; padding: 0 24px; transition: border-color var(--z-ease); }
 .s-btn--ghost:hover { background: var(--z-ghost); border-color: var(--z-line-hover); color: var(--z-text); }
 

@@ -52,9 +52,9 @@ The props below describe the contract, not a framework. The app is vanilla JS (`
 | **Yes/No** | `name`, `question` | Fieldset card, legend REQUIRED (eyebrow), two radios 48 high, 6px radius | Checked: pink radio |
 | **Check row** | `id`, `html` | Card with 20px checkbox (accent pink), 14/1.5 text, whole row is the label | |
 | **Radio card group** | `legend`, options with title and sub | Fieldset, eyebrow legend, card with rows 14px padding, 20px radio, title 15/500, sub 13 dim (see Currency-Settings) | |
-| **Segmented control** | `name`, `items`, `active` | Pill track 4px padding, items 38 high, active pink fill white text | `role=radiogroup`, `aria-checked` |
+| **Segmented control** | `name`, `items`, `active` | 6px track (`--z-radius-control`), 4px padding, items 44 high, active pink fill with near-black text | `role=radiogroup`, `aria-checked` |
 | **Filter pills** | `items`, `active`, `counts` | Height 36, 6px radius, ghost; active pink tint, pink border, #ffd6ec text; counts at .7 opacity | `aria-pressed` |
-| **Search** | `placeholder` | Pill 48 high, 20px search icon, `type=search`, `name=q` | Desktop: ⌘K opens the Search dialog |
+| **Search** | `placeholder` | 48 high, 6px radius, 20px search icon, `type=search`, `name=q` | Desktop: ⌘K opens the Search dialog |
 | **List group** | `label`, `action`, `rows` | Optional eyebrow row (min height 32) with a 44px action link; card container, rows split by 1px `--z-line` | Empty: one row with the empty message and one action |
 | **List row** | `lead`, `title`, `sub`, `right`, `href` | Min height 64, padding 10 14, gap 12; title one line with ellipsis; right column stacks amount and tag | Link rows get a chevron; disabled (Soon) rows opacity .55 and no link |
 | **Avatar** | `initials`, `tone n/p/m`, `size` | Rounded square radius 6, 40px, 13/600 initials; photo variant is round with a 1px pink ring (landing only) | `aria-hidden` (the name is next to it) |
@@ -65,7 +65,7 @@ The props below describe the contract, not a framework. The app is vanilla JS (`
 | **Note** | tone a/n/p, icon | Radius 14, padding 12 14, 19px icon, 13.5/1.5 text; tint fill and border per tone | |
 | **Key-value table** | rows, strong | Card, rows 12 14, key 14 dim, value right-aligned 14 tabular; optional hint under the key | Used on review, result and detail screens |
 | **Copy row** | label, value, mono | Label 12.5 dim over the value; 44px copy button with an `aria-label` | After copy: icon turns into a check for 1.5s, `aria-live` "Copied" |
-| **Sheet** | content, close | Bottom, radius 20 20 0 0, fill `--z-sheet`, `shadow-sheet`, 40×4 grabber; scrim `--z-scrim` with a 2px blur | Focus trap, Esc, return focus; on desktop it becomes a drawer |
+| **Sheet** | content, close | Bottom, radius 20 20 0 0, fill `--z-sheet`, `shadow-sheet`, 40×4 grabber; scrim `--z-scrim`, no blur | Focus trap, Esc, return focus; on desktop it becomes a drawer |
 | **Dialog** | content | Centred, 16px side inset, radius 20, `shadow-dialog` | Same as Sheet |
 | **Bottom nav** | items, active | Height 76, 5 items, icon over a label, active pink; badge count on Approvals | `aria-current="page"`; hidden at ≥1024 |
 | **Sidebar (desktop)** | org, items, accounts | 256px, org switcher card, search with ⌘K hint, nav rows 44 high, active pink tint; test-mode pill pinned at the bottom | |
