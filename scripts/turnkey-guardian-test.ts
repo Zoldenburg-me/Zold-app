@@ -268,9 +268,15 @@ const person = { userId: "user-1", apiKeys: [] };
 await check("a found sub-org with the person alone at quorum 1 passes", () => {
   tk.assertFoundSubOrg({ users: [person], rootQuorum: { threshold: 1, userIds: ["user-1"] } });
 });
+await check("a found sub-org passes with the 15-minute session key the person's own login adds", () => {
+  tk.assertFoundSubOrg({ users: [{ userId: "user-1", apiKeys: [{ expirationSeconds: "900", credential: { type: "CREDENTIAL_TYPE_LOGIN" } }] }], rootQuorum: { threshold: 1, userIds: ["user-1"] } });
+});
 for (const [label, org] of [
   ["a second user", { users: [person, { userId: "user-2", apiKeys: [] }], rootQuorum: { threshold: 1, userIds: ["user-1"] } }],
   ["an API key on the person", { users: [{ userId: "user-1", apiKeys: [{}] }], rootQuorum: { threshold: 1, userIds: ["user-1"] } }],
+  ["an API key that lasts longer than a login", { users: [{ userId: "user-1", apiKeys: [{ expirationSeconds: "901", credential: { type: "CREDENTIAL_TYPE_LOGIN" } }] }], rootQuorum: { threshold: 1, userIds: ["user-1"] } }],
+  ["a short-lived key that is not a login session", { users: [{ userId: "user-1", apiKeys: [{ expirationSeconds: "900", credential: { type: "CREDENTIAL_TYPE_API_KEY_P256" } }] }], rootQuorum: { threshold: 1, userIds: ["user-1"] } }],
+  ["a session key beside a standing one", { users: [{ userId: "user-1", apiKeys: [{ expirationSeconds: "900", credential: { type: "CREDENTIAL_TYPE_LOGIN" } }, {}] }], rootQuorum: { threshold: 1, userIds: ["user-1"] } }],
   ["quorum 2", { users: [person], rootQuorum: { threshold: 2, userIds: ["user-1"] } }],
   ["a root quorum naming someone else", { users: [person], rootQuorum: { threshold: 1, userIds: ["user-9"] } }],
   ["no root quorum", { users: [person] }],

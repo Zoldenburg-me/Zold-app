@@ -40,7 +40,9 @@ guardian built behind `TURNKEY_GUARDIANS`: `recovery-guardians-plan.md`.
   Every sub-org we create has exactly one root user, the person, at root
   quorum 1, with no API key, no authenticator of ours and no delegated
   access; one builder asserts it and a source grep fails on anything else. A
-  sub-org found by login is checked for the same shape. A signature is
+  sub-org found by login is checked for the same shape, except that it may
+  hold the person's own login session keys (`CREDENTIAL_TYPE_LOGIN`, at most
+  15 minutes, bound to their browser key). A signature is
   relayed only from the guardian recorded on the request when it started,
   over the digest recomputed from the module (refused unless the module's
   own `getRecoveryHash` agrees), while the module still lists that guardian
