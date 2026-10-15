@@ -29,7 +29,7 @@ import { proofStateOf } from "../../domain/wallet-ownership.js";
 import { verifyOwnership } from "../../wallet-sync/ownership.js";
 import { auditEntry } from "../../audit.js";
 import { ContactError, validateWallet } from "../../domain/contacts.js";
-import { InvoiceComplianceError } from "../../domain/invoicing.js";
+import { INVOICE_LANGUAGES, InvoiceComplianceError } from "../../domain/invoicing.js";
 import { newLinkToken, ownerInvoiceView } from "../../domain/invoices.js";
 import type { ContactWallet, Invoice, Organisation, PayerRule } from "../../domain/types.js";
 import { randomUUID } from "node:crypto";
@@ -89,8 +89,8 @@ function payerRuleFrom(org: Organisation, raw: unknown, memberId: string, now: s
       throw new PayerRuleError(`The recipient's ${field} is text of at most ${RECIPIENT_FIELD_MAX} characters.`);
     }
   }
-  if (body.language !== undefined && body.language !== "de" && body.language !== "en") {
-    throw new PayerRuleError('Invoices are written in German ("de") or English ("en").');
+  if (body.language !== undefined && !(INVOICE_LANGUAGES as readonly string[]).includes(String(body.language))) {
+    throw new PayerRuleError(`Invoices are written in ${INVOICE_LANGUAGES.map((l) => `"${l}"`).join(", ")} — the languages Zold can typeset.`);
   }
   const notes = str(body.notes);
   if (notes && notes.length > NOTES_MAX) throw new PayerRuleError(`Notes are limited to ${NOTES_MAX} characters.`);

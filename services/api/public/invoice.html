@@ -165,7 +165,7 @@ async function api(path, opts = {}) {
 }
 
 // Numbers and dates are written the way the invoice's language writes them.
-const LOCALES = { de: "de-DE", en: "en-GB" };
+const LOCALES = { de: "de-DE", en: "en-GB", fr: "fr-FR", es: "es-ES" };
 const money = (cents, currency = "EUR", locale = "en-GB") =>
   new Intl.NumberFormat(locale, { style: "currency", currency }).format((cents ?? 0) / 100);
 const date = (iso, locale = "en-GB") =>
@@ -189,6 +189,22 @@ const L = {
         from: "From", to: "To",
         converted: "Rate of exchange:", payIn: "Payable in",
         convBasis: "The tax amount is also stated in euro, as § 16 Abs. 6 UStG requires." },
+  fr: { invoice: "Facture", number: "Numéro de facture", issueDate: "Date de facture",
+        supplyDate: "Date de livraison", supplyPeriod: "Période de prestation", vatId: "N° de TVA",
+        taxNumber: "Numéro fiscal", description: "Désignation", qty: "Qté", unit: "Prix unitaire",
+        rate: "TVA", amount: "Montant", net: "Net HT", vat: "TVA", gross: "Total TTC",
+        terms: "Conditions de paiement", bank: "Coordonnées bancaires", po: "N° de commande", due: "Échéance",
+        from: "Émetteur", to: "Destinataire",
+        converted: "Taux de change :", payIn: "Payable en",
+        convBasis: "Le montant de la taxe est également indiqué en euros, conformément au § 16 Abs. 6 UStG." },
+  es: { invoice: "Factura", number: "Número de factura", issueDate: "Fecha de factura",
+        supplyDate: "Fecha de prestación", supplyPeriod: "Período de prestación", vatId: "NIF-IVA",
+        taxNumber: "NIF", description: "Descripción", qty: "Cant.", unit: "Precio unitario",
+        rate: "IVA", amount: "Importe", net: "Base imponible", vat: "IVA", gross: "Total",
+        terms: "Condiciones de pago", bank: "Datos bancarios", po: "N.º de pedido", due: "Vencimiento",
+        from: "Emisor", to: "Destinatario",
+        converted: "Tipo de cambio:", payIn: "Pagadero en",
+        convBasis: "El importe del impuesto también se indica en euros, conforme al § 16 Abs. 6 UStG." },
 };
 
 // The country is printed unless it is the issuer's own: a cross-border
@@ -202,7 +218,7 @@ const addressOf = (p, home) => [
 /** Render an issued invoice as the printable document. */
 function renderIssued(inv) {
   const d = inv.issued;
-  const sheetLang = d.language === "en" ? "en" : "de";
+  const sheetLang = L[d.language] ? d.language : "en";
   const t = L[sheetLang];
   const loc = LOCALES[sheetLang];
   const home = d.issuer?.country;
@@ -288,16 +304,16 @@ function renderIssued(inv) {
     <div class="totals"><table>
       <tr><td>${esc(lab("net"))}</td><td class="num">${amount(d.netCents, cur)}</td></tr>
       ${(d.buckets ?? []).filter((b) => b.rate > 0).map((b) =>
-        `<tr><td>${esc(lab("vat"))} ${b.rate} % ${esc(bilingual ? "auf / on" : sheetLang === "de" ? "auf" : "on")} ${amount(b.netCents, cur)}</td>
+        `<tr><td>${esc(lab("vat"))} ${b.rate} % ${esc(bilingual ? "auf / on" : { de: "auf", fr: "sur", es: "sobre" }[sheetLang] || "on")} ${amount(b.netCents, cur)}</td>
              <td class="num">${amount(b.vatCents, cur)}</td></tr>`).join("")}
       <tr class="grand"><td>${esc(lab("gross"))}</td><td class="num">${amount(d.grossCents, cur)}</td></tr>
       ${conv ? `
       <tr class="conv"><td colspan="2">${esc(lab("converted"))} 1 ${esc(conv.to)} = ${esc(conv.rate.toLocaleString(loc, { maximumFractionDigits: 6 }))} ${esc(conv.from)}
         <span class="basis">${esc(conv.rateProvider)}${conv.rateAsOf && conv.rateAsOf !== "unknown" ? `, ${esc(conv.rateAsOf)}` : ""}</span></td></tr>
       ${(conv.buckets ?? []).filter((b) => b.rate > 0).map((b) =>
-        `<tr><td>${esc(lab("vat"))} ${b.rate} % ${esc(bilingual ? "in / in" : "in")} ${esc(conv.to)}</td>
+        `<tr><td>${esc(lab("vat"))} ${b.rate} % ${esc(bilingual ? "in / in" : sheetLang === "de" ? "in" : "en")} ${esc(conv.to)}</td>
              <td class="num">${amount(b.vatCents, conv.to)}</td></tr>`).join("")}
-      <tr><td>${esc(lab("gross"))} ${esc(bilingual ? "in / in" : "in")} ${esc(conv.to)}</td><td class="num">${amount(conv.grossCents, conv.to)}</td></tr>
+      <tr><td>${esc(lab("gross"))} ${esc(bilingual ? "in / in" : sheetLang === "de" ? "in" : "en")} ${esc(conv.to)}</td><td class="num">${amount(conv.grossCents, conv.to)}</td></tr>
       ` : ""}
     </table></div>
     ${conv ? `<div class="vat-note"><div>${esc(lab("payIn"))} ${amount(conv.grossCents, conv.to)}.</div>
@@ -455,7 +471,7 @@ function renderSubmitted(inv) {
 function render(inv) {
   if (inv.issued) {
     const settled = inv.state === "PAID" || inv.state === "RECONCILED";
-    document.title = `${inv.issued.number} · ${L[inv.issued.language === "en" ? "en" : "de"].invoice}`;
+    document.title = `${inv.issued.number} · ${(L[inv.issued.language] || L.en).invoice}`;
     $("#actions").innerHTML = `${!settled && inv.payPath ? `<a class="pay-btn" href="${esc(inv.payPath)}">Pay</a> ` : ""}<button class="ghost" onclick="window.print()">Print / PDF</button>`;
     $("#content").innerHTML = renderIssued(inv);
     return;

@@ -94,13 +94,15 @@ console.log("\nDefaults follow the issuer's country");
 await check("German-speaking issuers start in German with RE-, everyone else in English with INV-", () => {
   assert.equal(defaultInvoiceLanguage("DE"), "de");
   assert.equal(defaultInvoiceLanguage("AT"), "de");
-  assert.equal(defaultInvoiceLanguage("FR"), "en");
+  assert.equal(defaultInvoiceLanguage("FR"), "fr");
+  assert.equal(defaultInvoiceLanguage("ES"), "es");
   assert.equal(defaultInvoiceLanguage("GA"), "en");
   assert.equal(defaultInvoiceLanguage(undefined), "en");
   assert.equal(defaultSeriesFor("DE").prefix, "RE-{YYYY}-");
   assert.equal(defaultSeriesFor("IN").prefix, "INV-{YYYY}-");
-  assert.equal(invoiceLanguage("", undefined, "FR"), "en");
-  assert.equal(invoiceLanguage(undefined, "de", "FR"), "de", "a language the org chose wins over its country");
+  assert.equal(invoiceLanguage("", undefined), "en");
+  assert.equal(invoiceLanguage(undefined, "de"), "de", "a language the org chose wins");
+  assert.equal(invoiceLanguage("fr", "de"), "fr", "an invoice can be written in French");
 });
 
 addOrg("org_ga", "GA");
@@ -223,6 +225,28 @@ await check("with the payee's own account behind it, issuing makes the invoice's
   invoiceId = r.data.invoice.id;
   const link = store.paymentRequests.find((p) => p.invoiceId === invoiceId)!;
   assert.ok(Date.parse(link.expiresAt) - Date.now() > 29 * 86_400_000, "the link outlives the default week");
+});
+
+await check("a foreign-currency invoice carries its euro restatement — or refuses when no feed has the rate", async () => {
+  // The reference feed pinned, as the offline harness runs it: USD converts,
+  // GBP is a currency no feed here publishes.
+  process.env.TRANSF_RATES_FIXED = JSON.stringify({ USD: 1.14, KES: 147.53 });
+  try {
+    const ok = await call("POST", "/api/orgs/org_pay/invoicing/issue", "u_owner", { ...invoiceFor("FR"), currency: "USD" });
+    assert.equal(ok.status, 201, JSON.stringify(ok.data));
+    const conv = ok.data.invoice.issued.conversion;
+    assert.equal(ok.data.invoice.issued.currency, "USD");
+    assert.equal(conv.to, "EUR");
+    assert.equal(conv.rate, 1.14);
+    assert.equal(conv.grossCents, 10351, "118 USD at 1.14 restated per bucket, not off the total");
+    // And the Pay button asks for the euro amount, not the dollar figure.
+    assert.equal(ok.data.payment.amountEur, 103.51, JSON.stringify(ok.data.payment));
+    const refused = await call("POST", "/api/orgs/org_pay/invoicing/issue", "u_owner", { ...invoiceFor("FR"), currency: "GBP" });
+    assert.equal(refused.status, 422, JSON.stringify(refused.data));
+    assert.match(refused.data.error, /has not been issued/);
+  } finally {
+    delete process.env.TRANSF_RATES_FIXED;
+  }
 });
 
 await check("the invoice link shows the Pay button, and the payment link is the one made at issue", async () => {
