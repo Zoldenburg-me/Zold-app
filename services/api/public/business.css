@@ -247,7 +247,7 @@ h2.zb-conn__group--first { margin-top: 0; }
 @media (max-width: 1199px) { .zb-editor { grid-template-columns: minmax(0, 1fr); } .zb-editor__paper { position: static; } }
 
 /* The invoice as paper (the reference's white page). */
-.zb-paper { padding: 40px 44px; border-radius: var(--z-radius-md); background: var(--z-heading); color: var(--z-bg); font-size: 13px; line-height: 1.5; }
+.zb-paper { padding: 40px 44px; border-radius: var(--z-radius-card); background: var(--z-heading); color: var(--z-bg); font-size: 13px; line-height: 1.5; }
 .zb-paper p { margin: 0; }
 .zb-paper__head { display: flex; justify-content: space-between; gap: var(--z-space-4); }
 .zb-paper__who { font-size: 15px; font-weight: 600; }
@@ -300,7 +300,7 @@ h2.zb-conn__group--first { margin-top: 0; }
 
 /* The one native modal (core.js dialog()), drawn as a v2 dialog. */
 dialog { width: calc(100% - 32px); max-width: 480px; max-height: 92dvh; margin: auto; padding: var(--z-space-6); border-radius: var(--z-radius-sheet); border: 1px solid var(--z-line); background: var(--z-sheet); color: var(--z-text); box-shadow: var(--z-shadow-dialog); }
-dialog::backdrop { background: var(--z-scrim); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); }
+dialog::backdrop { background: var(--z-scrim); }
 dialog h2 { margin: 0 0 6px; font: 600 22px/1.25 var(--z-font); letter-spacing: -.03em; color: var(--z-heading); }
 dialog .desc, dialog .zb-hint { font-size: 14.5px; color: var(--z-dim); }
 .dlg-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; margin-top: var(--z-space-6); }
