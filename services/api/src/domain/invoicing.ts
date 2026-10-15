@@ -307,11 +307,14 @@ export function computeTotals(
     if (!Number.isFinite(qty) || qty <= 0) {
       throw new InvoiceComplianceError(`Line ${i + 1} has an unusable quantity.`);
     }
-    const unitCents = toCents(line.unitPriceNet);
-    if (unitCents < 0) {
+    const unitPrice = Number(line.unitPriceNet);
+    if (!Number.isFinite(unitPrice)) throw new InvoiceComplianceError(`"${line.unitPriceNet}" is not an amount.`);
+    if (unitPrice < 0) {
       throw new InvoiceComplianceError(`Line ${i + 1} has a negative unit price.`);
     }
-    const netCents = Math.round(unitCents * qty);
+    // Round once, after multiplying: a sub-cent unit price (10000 × €0.004)
+    // must not be rounded to whole cents first. toPrecision(15) drops float noise.
+    const netCents = Math.round(Number((unitPrice * qty * 100).toPrecision(15)));
     // When exempt, every line is 0% whatever the line says. The treatment
     // belongs to the invoice; a stray line rate would be a §14c error.
     const appliedRate: VatRate = treatment.kind === "exempt" ? 0 : (line.vatRate ?? treatment.rate);
