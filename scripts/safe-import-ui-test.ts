@@ -345,5 +345,13 @@ await check("the login is recorded on the new account before the deployment, onc
   await run("obAddSocialGuardian()");
   assert.equal(calls.length, 1, "no second try with a spent token");
 });
+await check("an email login made at signup is handed over as its verification token alone", async () => {
+  setUser(company({ accountType: "individual" }));
+  run('obSocial = { provider: "email", verificationToken: "vt" }');
+  await run("obAddSocialGuardian()");
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0].body)), { verificationToken: "vt" });
+  setCaps({ turnkeyGuardians: true, turnkeyLogins: { email: true } });
+  assert.equal(run("obSocialOffered()"), true, "email alone is enough to offer the screen");
+});
 
 console.log(`safe-import-ui: ${pass} ok`);

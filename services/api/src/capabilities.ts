@@ -75,7 +75,7 @@ export function capabilities() {
     turnkeyGuardians: turnkeyGuardiansEnabled(),
     /** The OAuth client ids /guardian logs in with (not secrets: every login
      *  URL carries them), or null while the switch is off. */
-    turnkeyLogins: turnkeyGuardiansEnabled() ? { google: TURNKEY.googleClientId, apple: TURNKEY.appleClientId } : null,
+    turnkeyLogins: turnkeyGuardiansEnabled() ? { google: TURNKEY.googleClientId, apple: TURNKEY.appleClientId, email: true, passkey: true } : null,
     /** Turnkey's API, which /guardian alone calls to sign a recovery. */
     turnkeyApi: turnkeyGuardiansEnabled() ? TURNKEY.baseUrl : null,
     /** May a new company login bring in an existing Safe instead of

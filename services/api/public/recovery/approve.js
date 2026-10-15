@@ -1,5 +1,6 @@
 /**
- * The Google/Apple step of a recovery, back from the login on /recovery: a
+ * The guardian step of a recovery on /recovery. For Google/Apple, back from
+ * the login: a
  * Turnkey session for the guardian's sub-org bound to the browser key, the
  * digest the API recomputed from the module, Turnkey signs it with that key,
  * the API checks and relays it, and the key is dropped whatever happens.
@@ -14,7 +15,7 @@ import { signRawPayload } from "../guardian/turnkey-sign.js";
  * there is no login to handle.
  */
 export async function finishApprove(env) {
-  const { hash, storage, stripHash, stamper, api, recovery, turnkeyApi, sign = signRawPayload, now = Date.now } = env;
+  const { hash, storage, stripHash, stamper, api, now = Date.now } = env;
   stripHash();
   let storedState = null;
   try {
@@ -25,22 +26,38 @@ export async function finishApprove(env) {
   }
   const back = readReturn(hash, storedState, now());
   if (!back) return null;
+  if (!back.ok) {
+    await stamper.clear().catch(() => {});
+    return { step: "error", reason: back.reason };
+  }
+  return approveWith({ ...env, login: async () => {
+    await stamper.init();
+    const publicKey = stamper.getPublicKey();
+    if (!publicKey) throw new Error("That login timed out in this browser. Try again.");
+    return api("/api/recovery/turnkey/login", { oidcToken: back.idToken, publicKey });
+  } });
+}
+
+/**
+ * Any guardian login, then the same three steps: the API's digest, the
+ * guardian's signature from Turnkey (stamped by `stamper`: the browser key
+ * for Google, Apple or email, the passkey itself for a passkey), and the API
+ * checks and relays it. `login()` answers {subOrgId, address}.
+ */
+export async function approveWith({ stamper, login, api, recovery, turnkeyApi, sign = signRawPayload }) {
   const withSecret = { "x-recovery-secret": recovery.secret };
   const path = (suffix = "") => `/api/recovery/turnkey/requests/${encodeURIComponent(recovery.requestId)}${suffix}`;
   try {
-    if (!back.ok) return { step: "error", reason: back.reason };
-    await stamper.init();
-    const publicKey = stamper.getPublicKey();
-    if (!publicKey) return { step: "error", reason: "That login timed out in this browser. Try again." };
-    const login = await api("/api/recovery/turnkey/login", { oidcToken: back.idToken, publicKey });
+    const who = await login();
     const { digest } = await api(path("/digest"), undefined, withSecret);
-    const signature = await sign({ stamper, baseUrl: turnkeyApi, organizationId: login.subOrgId, signWith: login.address, payload: digest });
+    const signature = await sign({ stamper, baseUrl: turnkeyApi, organizationId: who.subOrgId, signWith: who.address, payload: digest });
     const request = await api(path("/signature"), signature, withSecret);
     return { step: "approved", request };
   } catch (e) {
-    if (e?.code === "WRONG_SIGNER") return { step: "error", reason: "That’s a different Google or Apple account. Log in with your backup login." };
-    return { step: "error", reason: e.message };
+    if (e?.code === "WRONG_SIGNER") return { step: "error", reason: "That’s a different login from your backup login. Use the one you set up." };
+    if (e?.code === "NO_GUARDIAN") return { step: "error", reason: "That isn’t your backup login. Use the one you set up." };
+    return { step: "error", reason: e?.name === "NotAllowedError" ? "The passkey prompt was cancelled. Try again." : e.message };
   } finally {
-    await stamper.clear().catch(() => {});
+    await stamper.clear?.().catch(() => {});
   }
 }
