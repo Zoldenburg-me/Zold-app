@@ -292,6 +292,22 @@ await check("the invoice link leaves out the warnings the issuer accepted", asyn
   assert.doesNotMatch(JSON.stringify(view.data), /Treasury cold wallet/);
 });
 
+await check("the invoice link carries only the printed fields of the issued document", async () => {
+  const inv = store.findInvoice(invoiceId)!;
+  const issued = {
+    ...inv.issued!,
+    internalMemo: "issuer-only memo",
+    recipientVatCheck: { vatId: "DE123456789", status: "valid" as const, checkedAt: "2026-10-01T00:00:00Z", requestIdentifier: "VIES-REQ-1" },
+  };
+  store.updateInvoice(invoiceId, { issued });
+  const view = await call("GET", `/api/invoice-links/${token}`);
+  assert.equal(view.status, 200);
+  assert.equal(view.data.invoice.issued.number, inv.issued!.number);
+  assert.equal("internalMemo" in view.data.invoice.issued, false);
+  assert.equal("recipientVatCheck" in view.data.invoice.issued, false);
+  assert.doesNotMatch(JSON.stringify(view.data), /issuer-only memo|VIES-REQ-1/);
+});
+
 await check("a paid invoice shows no Pay button", async () => {
   store.updateInvoice(invoiceId, { state: "PAID" });
   const view = await call("GET", `/api/invoice-links/${token}`);
