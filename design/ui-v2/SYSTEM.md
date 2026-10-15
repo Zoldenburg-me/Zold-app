@@ -47,7 +47,7 @@ The props below describe the contract, not a framework. The app is vanilla JS (`
 | **Top bar** | `title`, `back`, `right` | Height 60, 16px gutter, 44px back button with a -10px left offset, h1 17/600 | Title may be empty (then a hidden h1 elsewhere) |
 | **Large title** | `title`, `sub` | h1 32/600, sub 15/1.55 dim, 6px gap | |
 | **Progress (onboarding)** | `step`, `of`, `label`, `back` | Back plus "Step i of n · Label" 13px dim; bar of n segments 3px high, 4px gap, pink when done, `--z-line` when not | `role=progressbar` with aria values |
-| **Field** | `label`, `name`, `type`, `autocomplete`, `hint`, `optional` | Label 14/500, 8px gap, input height 52, radius 12, fill `--z-field`, 1px line-strong, 16px text, placeholder ends with "…" | Focus: pink ring. Error: 1px amber border, message 13px amber below with `aria-describedby`, focus moves to the first error |
+| **Field** | `label`, `name`, `type`, `autocomplete`, `hint`, `optional` | Label 14/500, 8px gap, input height 52, radius 6, fill `--z-field`, 1px line-strong, 16px text, placeholder ends with "…" | Focus: pink ring. Error: 1px amber border, message 13px amber below with `aria-describedby`, focus moves to the first error |
 | **Select** | same as Field | Same box, chevron at the right 12px, `appearance: none` | |
 | **Yes/No** | `name`, `question` | Fieldset card, legend REQUIRED (eyebrow), two radios 48 high, 6px radius | Checked: pink radio |
 | **Check row** | `id`, `html` | Card with 20px checkbox (accent pink), 14/1.5 text, whole row is the label | |
@@ -57,16 +57,16 @@ The props below describe the contract, not a framework. The app is vanilla JS (`
 | **Search** | `placeholder` | Pill 48 high, 20px search icon, `type=search`, `name=q` | Desktop: ⌘K opens the Search dialog |
 | **List group** | `label`, `action`, `rows` | Optional eyebrow row (min height 32) with a 44px action link; card container, rows split by 1px `--z-line` | Empty: one row with the empty message and one action |
 | **List row** | `lead`, `title`, `sub`, `right`, `href` | Min height 64, padding 10 14, gap 12; title one line with ellipsis; right column stacks amount and tag | Link rows get a chevron; disabled (Soon) rows opacity .55 and no link |
-| **Avatar** | `initials`, `tone n/p/m`, `size` | Rounded square radius 12, 40px, 13/600 initials; photo variant is round with a 1px pink ring (landing only) | `aria-hidden` (the name is next to it) |
-| **Icon tile** | `icon`, `tone n/p/a/m`, `size` | 40px radius 12, tinted fill and border per tone | |
+| **Avatar** | `initials`, `tone n/p/m`, `size` | Rounded square radius 6, 40px, 13/600 initials; photo variant is round with a 1px pink ring (landing only) | `aria-hidden` (the name is next to it) |
+| **Icon tile** | `icon`, `tone n/p/a/m`, `size` | 40px radius 6, tinted fill and border per tone | |
 | **Tag (status pill)** | tones: dim, pink, mint, amber | 10/600 uppercase, padding 2 8, radius 999, tint fill, 1px tone border | Word list: see "Status words" below |
 | **Amount** | value | 14.5/600 tabular; money in mint with "+", money out text colour with "−" | |
 | **Balance** | value, label | Label 14 dim plus a hide button (44px, eye icon); figure in display type | Hidden: "••••" with the same width |
 | **Note** | tone a/n/p, icon | Radius 14, padding 12 14, 19px icon, 13.5/1.5 text; tint fill and border per tone | |
 | **Key-value table** | rows, strong | Card, rows 12 14, key 14 dim, value right-aligned 14 tabular; optional hint under the key | Used on review, result and detail screens |
 | **Copy row** | label, value, mono | Label 12.5 dim over the value; 44px copy button with an `aria-label` | After copy: icon turns into a check for 1.5s, `aria-live` "Copied" |
-| **Sheet** | content, close | Bottom, radius 24 24 0 0, fill `--z-sheet`, `shadow-sheet`, 40×4 grabber; scrim `--z-scrim` with a 2px blur | Focus trap, Esc, return focus; on desktop it becomes a drawer |
-| **Dialog** | content | Centred, 16px side inset, radius 24, `shadow-dialog` | Same as Sheet |
+| **Sheet** | content, close | Bottom, radius 20 20 0 0, fill `--z-sheet`, `shadow-sheet`, 40×4 grabber; scrim `--z-scrim` with a 2px blur | Focus trap, Esc, return focus; on desktop it becomes a drawer |
+| **Dialog** | content | Centred, 16px side inset, radius 20, `shadow-dialog` | Same as Sheet |
 | **Bottom nav** | items, active | Height 76, 5 items, icon over a label, active pink; badge count on Approvals | `aria-current="page"`; hidden at ≥1024 |
 | **Sidebar (desktop)** | org, items, accounts | 256px, org switcher card, search with ⌘K hint, nav rows 44 high, active pink tint; test-mode pill pinned at the bottom | |
 | **Timeline** | steps: done, now, todo | 28px markers: done mint check, now pink with a 6px halo, todo ghost; 26px step gap | Payment progress and recovery |
