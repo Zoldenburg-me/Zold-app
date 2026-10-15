@@ -282,6 +282,16 @@ await check("two requests at once for an invoice's link make one link, not two",
   assert.equal(store.paymentRequests.filter((p) => p.invoiceId === unlinkedInvoiceId).length, 1);
 });
 
+await check("the invoice link leaves out the warnings the issuer accepted", async () => {
+  const inv = store.findInvoice(invoiceId)!;
+  store.updateInvoice(invoiceId, { issued: { ...inv.issued!, acceptedWarnings: ["receipts: Treasury cold wallet is not synced"] } });
+  const view = await call("GET", `/api/invoice-links/${token}`);
+  assert.equal(view.status, 200);
+  assert.ok(view.data.invoice.issued.number, "the issued document is still there");
+  assert.equal("acceptedWarnings" in view.data.invoice.issued, false);
+  assert.doesNotMatch(JSON.stringify(view.data), /Treasury cold wallet/);
+});
+
 await check("a paid invoice shows no Pay button", async () => {
   store.updateInvoice(invoiceId, { state: "PAID" });
   const view = await call("GET", `/api/invoice-links/${token}`);
