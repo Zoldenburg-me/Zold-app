@@ -353,5 +353,55 @@ await check("an email login made at signup is handed over as its verification to
   setCaps({ turnkeyGuardians: true, turnkeyLogins: { email: true } });
   assert.equal(run("obSocialOffered()"), true, "email alone is enough to offer the screen");
 });
+await check("changing the signup email drops the email login and code made for the old one", async () => {
+  run('obDraft.email = "old@example.test"; obSocial = { provider: "email", verificationToken: "vt", email: "old@example.test" }; obSocialOtp = { otpId: "o" }');
+  run('obSaveDraft({ email: "new@example.test" })');
+  assert.equal(run("obSocial"), null);
+  assert.equal(run("obSocialOtp"), null);
+  run('obSocial = { provider: "google", idToken: "tok", publicKey: "pk" }');
+  run('obSaveDraft({ email: "newer@example.test" })');
+  assert.equal(run("obSocial.provider"), "google", "a Google login does not depend on the email");
+});
+await check("signup: skipping after a login then using the passkey adds no guardian", async () => {
+  setCaps({ turnkeyGuardians: true, turnkeyLogins: { google: "client-id" } });
+  setUser(null);
+  run(`Object.assign(obDraft, {
+    type: "company", given: "Mira", family: "Z", email: "m@example.test", country: "DE",
+    usPerson: false, companyUsNexus: false, legalName: "Example", incorp: "DE",
+    terms: true, authorised: true, social: null,
+  }); obSocial = { provider: "google", idToken: "tok", publicKey: "pk" }`);
+  const skip: any = {};
+  run("OB['b-social'].bind")({ querySelector: (sel: string) => sel === "#btn-social-skip" ? skip : null });
+  skip.onclick();
+  assert.equal(run("obDraft.social"), "skip");
+  assert.equal(run("obSocial"), null);
+  assert.equal(screen(), "b-passkey");
+  setUser(company());
+  await run("obAddSocialGuardian()");
+  assert.deepEqual(calls.map((c) => c.path), []);
+});
+await check("import: choosing the existing Safe discards the recovery login without a guardian POST", async () => {
+  setCaps({ safeImport: true, turnkeyGuardians: true, turnkeyLogins: { google: "client-id" } });
+  setUser(company());
+  run('obSocial = { provider: "google", idToken: "tok", publicKey: "pk" }');
+  assert.match(run("OB['b-safe-choice'].html()"), /Your Google login can’t be added to an existing Safe\./);
+  const handlers: Record<string, any> = {};
+  const form = { addEventListener: (event: string, handler: any) => { handlers[event] = handler; } };
+  const btn = { disabled: false, getAttribute: () => null };
+  const root = {
+    querySelector: (sel: string) => {
+      if (sel === "#ob-form") return form;
+      if (sel === "#btn-next") return btn;
+      if (sel === 'input[name="safe-choice"]:checked') return { value: "import" };
+      return null;
+    },
+  };
+  run("OB['b-safe-choice'].bind")(root);
+  handlers.submit({ preventDefault() {} });
+  assert.equal(screen(), "b-import-address");
+  assert.equal(run("obSocial"), null);
+  await run("obAddSocialGuardian()");
+  assert.deepEqual(calls.map((c) => c.path), []);
+});
 
 console.log(`safe-import-ui: ${pass} ok`);
