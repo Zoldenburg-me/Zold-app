@@ -32,7 +32,7 @@
   }
   ::selection { background: rgba(237, 24, 141, 0.35); }
   ::-webkit-scrollbar { width: 10px; }
-  ::-webkit-scrollbar-thumb { background: #2c2c33; border-radius: 99px; }
+  ::-webkit-scrollbar-thumb { background: #3a3833; border-radius: 99px; }
   ::-webkit-scrollbar-track { background: transparent; }
 
   .hidden { display: none !important; }
