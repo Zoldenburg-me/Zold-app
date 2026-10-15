@@ -281,6 +281,8 @@ function paper(check) {
   const t = PAPER[lang];
   const cur = pv.currency || "EUR";
   const money = (c) => pMoney(c, cur, lang);
+  // The unit price is not rounded to cents; the server rounds only the line net.
+  const unitMoney = (p) => new Intl.NumberFormat(PAPER_LOCALES[lang] || "en-GB", { style: "currency", currency: cur || "EUR", maximumFractionDigits: 6 }).format(Number(p || 0));
   const iss = profile.issuer || {};
   const rec = invoiceDraft.recipient || {};
   const taxId = iss.taxNumber ? [t.taxNo, iss.taxNumber] : iss.vatId ? [t.vatId, iss.vatId] : [t.vatId, null];
@@ -308,7 +310,7 @@ function paper(check) {
       ${pv.dueDate ? `<p><span>${esc(t.due)}</span>${esc(pDate(pv.dueDate, lang))}</p>` : ""}
     </div>
     <table><thead><tr><th scope="col">${esc(t.item)}</th><th scope="col">${esc(t.qty)}</th><th scope="col">${esc(t.unit)}</th><th scope="col">${esc(t.amount)}</th></tr></thead>
-      <tbody>${(totals?.lines || []).map((l, i) => `<tr><td>${esc(l.description || lines[i]?.description || "")}</td><td>${esc(qty(lines[i]?.quantity ?? l.quantity))}</td><td>${esc(money(Math.round(Number(lines[i]?.unitPriceNet || 0) * 100)))}</td><td>${esc(money(l.netCents))}</td></tr>`).join("")}</tbody></table>
+      <tbody>${(totals?.lines || []).map((l, i) => `<tr><td>${esc(l.description || lines[i]?.description || "")}</td><td>${esc(qty(lines[i]?.quantity ?? l.quantity))}</td><td>${esc(unitMoney(lines[i]?.unitPriceNet))}</td><td>${esc(money(l.netCents))}</td></tr>`).join("")}</tbody></table>
     <div class="zb-paper__sum">
       ${totals?.vatCents ? `<div><span>${esc(t.net)}</span><span>${esc(money(totals.netCents))}</span></div>${(totals.buckets || []).filter((b) => b.rate > 0).map((b) => `<div><span>${esc(t.vat)} ${b.rate} %</span><span>${esc(money(b.vatCents))}</span></div>`).join("")}` : ""}
       <div class="is-total"><span>${esc(t.total)}</span><span>${esc(money(totals?.grossCents || 0))}</span></div>

@@ -89,6 +89,19 @@ check("VAT is computed in integer cents", () => {
   assert.equal(fromCents(11900), "119.00");
 });
 
+check("a sub-cent unit price is rounded once, after the quantity", () => {
+  for (const [quantity, unitPriceNet, net, vat, gross] of [
+    ["10000", "0.004", 4000, 760, 4760],
+    ["10000", "0.006", 6000, 1140, 7140],
+    ["41.5", "1.789", 7424, 1411, 8835],
+  ] as const) {
+    const t = computeTotals([{ description: "x", quantity, unitPriceNet }], { kind: "standard", rate: 19 });
+    assert.equal(t.lines[0].netCents, net, `${quantity} × ${unitPriceNet}`);
+    assert.equal(t.vatCents, vat, `${quantity} × ${unitPriceNet} VAT`);
+    assert.equal(t.grossCents, gross, `${quantity} × ${unitPriceNet} gross`);
+  }
+});
+
 check("19% on 1000.00 is exactly 190.00", () => {
   const t = computeTotals(
     [{ description: "x", quantity: "10", unitPriceNet: "100.00" }],
