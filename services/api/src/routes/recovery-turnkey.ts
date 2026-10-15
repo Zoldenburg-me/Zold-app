@@ -28,7 +28,7 @@
 import express from "express";
 import { randomUUID } from "node:crypto";
 import type { MetaTransaction } from "abstractionkit";
-import { SECURITY } from "../config.js";
+import { SECURITY, TURNKEY } from "../config.js";
 import { store } from "../store.js";
 import type { User } from "../store/types.js";
 import { checkOpAssertion } from "../http/passkey-assertion.js";
@@ -47,6 +47,11 @@ import { b64urlToBuf } from "../webauthn.js";
 import {
   TurnkeyGuardianError,
   buildGuardianSubOrg,
+  verifiedGuardianEmail,
+  verifyOtpVerificationToken,
+  type ClientSignature,
+  type OtpTokenCheck,
+  type GuardianLogin,
   fetchJwks,
   turnkeyClient,
   turnkeyGuardiansEnabled,
@@ -64,6 +69,8 @@ export interface TurnkeyGuardianDeps {
   enabled?: () => boolean;
   /** Google's and Apple's signing keys, or a stand-in under test. */
   jwks?: JwksSource;
+  /** Turnkey's check of an email verification token, or a stand-in under test. */
+  otpTokens?: OtpTokenCheck;
   /** The Safe's module and the bundler, or a stand-in under test. */
   safeOps?: TurnkeyGuardianSafeOps;
 }
@@ -162,6 +169,7 @@ export function createTurnkeyGuardianRouter({
   client = turnkeyClient,
   enabled = turnkeyGuardiansEnabled,
   jwks = fetchJwks,
+  otpTokens = verifyOtpVerificationToken,
   safeOps = chainSafeOps,
 }: TurnkeyGuardianDeps) {
   const router = express.Router();
@@ -228,14 +236,13 @@ export function createTurnkeyGuardianRouter({
       };
       try {
         lock(`user:${user.id}`);
-        const { oidcToken, publicKey } = req.body ?? {};
-        const login = await verifyGuardianOidcToken(oidcToken, publicKey, jwks);
-        lock(`login:${login.issuer}|${login.subject}`);
+        const { login, filter, identity } = await guardianLogin(req.body ?? {}, jwks, otpTokens);
+        lock(identity);
         const turnkey = client();
-        const ids = await turnkey.subOrgIdsForOidcToken(oidcToken);
+        const ids = await turnkey.subOrgIds(...filter);
         if (ids.length > 1) throw new TurnkeyGuardianError("this login has more than one guardian sub-org", 409, "AMBIGUOUS");
         const found = ids.length === 1 ? { subOrgId: ids[0], address: await turnkey.walletAddress(ids[0]) } : undefined;
-        const { subOrgId, address } = found ?? (await turnkey.createSubOrg(buildGuardianSubOrg({ oidcToken, providerName: login.providerName })));
+        const { subOrgId, address } = found ?? (await turnkey.createSubOrg(buildGuardianSubOrg(login)));
 
         const fresh = store.findUser(user.id)!;
         const current = fresh.passkeySafe!;
@@ -359,18 +366,73 @@ export function createTurnkeyGuardianRouter({
     }),
   );
 
+  /** Turnkey emails a 6-digit code: to add an email guardian (also at
+   *  signup, before the account exists) or to approve a recovery with one. */
+  router.post(
+    "/recovery/turnkey/email/code",
+    wrap(async (req, res) => {
+      try {
+        const email = String(req.body?.email ?? "").trim().toLowerCase();
+        if (!EMAIL_RE.test(email) || email.length > 254) throw new TurnkeyGuardianError("enter an email address", 400, "BAD_EMAIL");
+        res.json(await client().initEmailOtp(email));
+      } catch (e) {
+        sendError(res, e);
+      }
+    }),
+  );
+
+  /** The code, encrypted in the browser to Turnkey's enclave, for a token. */
+  router.post(
+    "/recovery/turnkey/email/verify",
+    wrap(async (req, res) => {
+      try {
+        const { otpId, encryptedOtpBundle } = req.body ?? {};
+        if (typeof otpId !== "string" || typeof encryptedOtpBundle !== "string" || !otpId || encryptedOtpBundle.length > 8192) {
+          throw new TurnkeyGuardianError("otpId and encryptedOtpBundle required", 400, "BAD_OTP");
+        }
+        res.json({ verificationToken: await client().verifyEmailOtp(otpId, encryptedOtpBundle) });
+      } catch (e) {
+        sendError(res, e);
+      }
+    }),
+  );
+
   router.post(
     "/recovery/turnkey/login",
     wrap(async (req, res) => {
       try {
-        const { oidcToken, publicKey } = req.body ?? {};
-        await verifyGuardianOidcToken(oidcToken, publicKey, jwks);
+        const { oidcToken, publicKey, verificationToken, clientSignature, whoami } = req.body ?? {};
         const turnkey = client();
-        const ids = await turnkey.subOrgIdsForOidcToken(oidcToken);
-        if (ids.length === 0) throw new TurnkeyGuardianError("this login is not a guardian", 404, "NO_GUARDIAN");
-        if (ids.length > 1) throw new TurnkeyGuardianError("this login has more than one guardian sub-org", 409, "AMBIGUOUS");
-        const session = await turnkey.oauthLogin(ids[0], oidcToken, publicKey);
-        res.json({ session, subOrgId: ids[0], address: await turnkey.walletAddress(ids[0]) });
+        const one = async (filter: Parameters<TurnkeyGuardianClient["subOrgIds"]>) => {
+          const ids = await turnkey.subOrgIds(...filter);
+          if (ids.length === 0) throw new TurnkeyGuardianError("this login is not a guardian", 404, "NO_GUARDIAN");
+          if (ids.length > 1) throw new TurnkeyGuardianError("this login has more than one guardian sub-org", 409, "AMBIGUOUS");
+          return ids[0];
+        };
+        // A passkey signs its own requests to Turnkey: no session to hand out.
+        // It proves itself with a stamped whoami on our parent org, which
+        // Turnkey answers with the passkey's sub-org; a bare credential id
+        // would name the guardian to anyone who knew it.
+        if (whoami !== undefined) {
+          const { body, stamp } = whoami ?? {};
+          if (typeof body !== "string" || typeof stamp !== "string" || !stamp || stamp.length > 8192 || body !== JSON.stringify({ organizationId: TURNKEY.organizationId })) {
+            throw new TurnkeyGuardianError("a passkey-stamped whoami required", 400, "BAD_PASSKEY");
+          }
+          const subOrgId = await turnkey.passkeySubOrg(body, stamp);
+          if (subOrgId === TURNKEY.organizationId) throw new TurnkeyGuardianError("this login is not a guardian", 404, "NO_GUARDIAN");
+          return res.json({ subOrgId, address: await turnkey.walletAddress(subOrgId) });
+        }
+        if (verificationToken !== undefined) {
+          const { email, publicKey: key } = await verifiedGuardianEmail(verificationToken, otpTokens);
+          if (!isClientSignature(clientSignature, key)) throw new TurnkeyGuardianError("the browser key's signature is missing", 400, "BAD_OTP_TOKEN");
+          const subOrgId = await one(["EMAIL", email]);
+          const session = await turnkey.otpLogin(subOrgId, verificationToken, key, clientSignature);
+          return res.json({ session, subOrgId, address: await turnkey.walletAddress(subOrgId) });
+        }
+        await verifyGuardianOidcToken(oidcToken, publicKey, jwks);
+        const subOrgId = await one(["OIDC_TOKEN", oidcToken]);
+        const session = await turnkey.oauthLogin(subOrgId, oidcToken, publicKey);
+        res.json({ session, subOrgId, address: await turnkey.walletAddress(subOrgId) });
       } catch (e) {
         sendError(res, e);
       }
@@ -379,6 +441,34 @@ export function createTurnkeyGuardianRouter({
 
   return router;
 }
+
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
+/** The add route's body as one login: an ID token, an email verification
+ *  token, or a new passkey. `identity` locks parallel adds of the same one. */
+async function guardianLogin(body: any, jwks: JwksSource, otpTokens: OtpTokenCheck): Promise<{ login: GuardianLogin; filter: Parameters<TurnkeyGuardianClient["subOrgIds"]>; identity: string }> {
+  if (body.verificationToken !== undefined) {
+    const { email } = await verifiedGuardianEmail(body.verificationToken, otpTokens);
+    return { login: { kind: "email", email }, filter: ["EMAIL", email], identity: `email:${email}` };
+  }
+  if (body.passkey !== undefined) {
+    const { challenge, attestation } = body.passkey ?? {};
+    const id = attestation?.credentialId;
+    const sized = (v: unknown, max: number) => typeof v === "string" && v.length > 0 && v.length <= max;
+    if (!sized(challenge, 256) || !sized(id, 1024) || !sized(attestation.clientDataJson, 4096) || !sized(attestation.attestationObject, 16384)) {
+      throw new TurnkeyGuardianError("passkey challenge and attestation required", 400, "BAD_PASSKEY");
+    }
+    const transports = Array.isArray(attestation.transports) ? attestation.transports.filter((t: unknown) => typeof t === "string" && /^AUTHENTICATOR_TRANSPORT_[A-Z]+$/.test(t)) : [];
+    const clean = { credentialId: id, clientDataJson: attestation.clientDataJson, attestationObject: attestation.attestationObject, transports };
+    return { login: { kind: "passkey", challenge, attestation: clean }, filter: ["CREDENTIAL_ID", id], identity: `passkey:${id}` };
+  }
+  const login = await verifyGuardianOidcToken(body.oidcToken, body.publicKey, jwks);
+  return { login: { kind: "oidc", oidcToken: body.oidcToken, providerName: login.providerName }, filter: ["OIDC_TOKEN", body.oidcToken], identity: `login:${login.issuer}|${login.subject}` };
+}
+
+/** Signed by the key the verification token is bound to (Turnkey checks the signature). */
+const isClientSignature = (sig: any, key: string): sig is ClientSignature =>
+  !!sig && sig.publicKey === key && sig.scheme === "CLIENT_SIGNATURE_SCHEME_API_P256" && typeof sig.message === "string" && typeof sig.signature === "string";
 
 /** Our refusals keep their status; anything from Turnkey is a 502. The log
  *  names the error's type and code only: a Turnkey error may echo the

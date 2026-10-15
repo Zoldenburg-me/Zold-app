@@ -47,7 +47,7 @@ THREE RULES OVERRIDE CONVENIENCE:
   behind Cloudflare Access. Each is an Akash lease (technical-architecture
   §18.1): closing one deletes its accounts.
 - **Identity is Monerium's.** Signup: about you (email required) → Google/
-  Apple guardian or skip → passkey (no skip) → Safe deployed with it → Home's
+  Apple/email guardian or skip → passkey (no skip) → Safe deployed with it → Home's
   checklist: Monerium OAuth *or* API keys → "Activate IBAN". `POST /api/users`
   always creates `pending` with no IBAN; only an address-matched IBAN approves.
 - **Rails**: SEPA (Monerium redeem, non-custodial for the principal, fee €0) is

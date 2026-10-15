@@ -114,13 +114,14 @@ Say this plainly rather than letting the surface imply otherwise:
   the armed account and the recovery 1 €, plus their own check of the person.
 - **No Candide recovery service has been called** (stub only); no on-chain
   guardian add, execute or finalise, no real OTP.
-- **Turnkey has never been called, and no Google or Apple login has come
-  back to `/guardian` or `/recovery`.** Adding such a guardian and recovering with one run
+- **Turnkey has never been called: no Google or Apple login has come back
+  to `/guardian`, `/recovery` or signup, no email code has been sent, and no
+  recovery passkey made.** Adding such a guardian and recovering with one run
   only against stubs (`turnkey:test`, `turnkey-page:test`,
   `turnkey-recovery:test`); no sub-org, login, guardian add, Turnkey
   signature or relayed recovery exists. `TURNKEY_GUARDIANS` is off, so
-  neither the Google/Apple option on /guardian nor the recovery fallback on
-  /recovery shows. The /recovery page itself (all guardians) has never
+  neither these options on /guardian and signup nor the recovery fallback
+  on /recovery shows. The /recovery page itself (all guardians) has never
   driven a real recovery. No DPA with Turnkey is signed.
 - **One Candide forward has run, on the same chain.** On 2026-10-11 the
   owner paid 1 USDC on Base to their app.zoldhq.com payment page's forwarding

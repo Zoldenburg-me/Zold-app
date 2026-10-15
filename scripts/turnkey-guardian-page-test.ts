@@ -3,7 +3,8 @@
  *
  *  - vendor/turnkey.js is exactly what the pinned sources build (esbuild,
  *    @turnkey/indexed-db-stamper), its SHA-256 is the one recorded in the
- *    plan, it exports the stamper alone and makes no network call;
+ *    plan, it exports the two stampers and the OTP encryption alone and
+ *    makes no network call;
  *  - /guardian is served with a stricter CSP than the app (no inline
  *    script), never cached, and kept out of robots; its HTML has no inline
  *    script; /app's CSP is unchanged;
@@ -42,6 +43,7 @@ const oauth = await import(pathToFileURL(path.join(PUB, "guardian/oauth.js")).hr
 const approve = await import(pathToFileURL(path.join(PUB, "recovery/approve.js")).href);
 const flow = await import(pathToFileURL(path.join(PUB, "recovery/flow.js")).href);
 const page = await import(pathToFileURL(path.join(PUB, "guardian/main.js")).href);
+const logins = await import(pathToFileURL(path.join(PUB, "guardian/logins.js")).href);
 
 let failed = 0;
 let passed = 0;
@@ -71,14 +73,14 @@ await check("its SHA-256 is the one recorded in docs/recovery-guardians-plan.md"
   assert.ok(plan.includes(sha256(committed)), `record ${sha256(committed)} in the plan`);
 });
 
-await check("its banner names the version package-lock pins", () => {
+await check("its banner names the versions package-lock pins", () => {
   const lock = JSON.parse(readFileSync(path.join(ROOT, "package-lock.json"), "utf8"));
-  const v = lock.packages["node_modules/@turnkey/indexed-db-stamper"].version;
-  assert.ok(committed.startsWith(`/*! Zold vendor bundle: @turnkey/indexed-db-stamper@${v},`), committed.slice(0, 120));
+  const pins = ["@turnkey/indexed-db-stamper", "@turnkey/webauthn-stamper", "@turnkey/crypto"].map((p) => `${p}@${lock.packages[`node_modules/${p}`].version}`);
+  assert.ok(committed.startsWith(`/*! Zold vendor bundle: ${pins.join(", ")},`), committed.slice(0, 200));
 });
 
-await check("it exports the IndexedDB stamper alone and makes no network call", () => {
-  assert.match(committed.trimEnd(), /export \{\s*IndexedDbStamper\s*\};$/);
+await check("it exports the two stampers and the OTP encryption alone, and makes no network call", () => {
+  assert.match(committed.trimEnd(), /export \{\s*IndexedDbStamper,\s*WebauthnStamper,\s*encryptOtpCodeToBundle\s*\};$/);
   assert.doesNotMatch(committed, /\bfetch\s*\(|XMLHttpRequest|WebSocket|sendBeacon/);
 });
 
@@ -405,6 +407,17 @@ await check("sign_raw_payload: a pending activity is polled through get_activity
   assert.deepEqual(tf.calls[1].body, { organizationId: "sub-1", activityId: "act-2" });
 });
 
+await check("sign_raw_payload: with pollActivity, a pending activity is read through it and stamped once", async () => {
+  const st = stampingStamper();
+  const tf = turnkeyFetch([{ body: { activity: { id: "act-3", status: "ACTIVITY_STATUS_PENDING" } } }]);
+  const polled: string[] = [];
+  const sig = await signer.signRawPayload({ stamper: st, baseUrl: "https://t", organizationId: "sub-1", signWith: "0xG", payload: DIGEST, fetchImpl: tf.fn, sleep: async () => {},
+    pollActivity: async (id: string) => { polled.push(id); return completed; } });
+  assert.equal(sig.v, "01");
+  assert.deepEqual(polled, ["act-3"]);
+  assert.equal(st.stamped.length, 1, "a passkey stamper prompts once");
+});
+
 await check("sign_raw_payload: failed, rejected, refused, endless or malformed answers throw", async () => {
   const run = (answers: any[], payload = DIGEST) =>
     signer.signRawPayload({ stamper: stampingStamper(), baseUrl: "https://t", organizationId: "o", signWith: "0xG", payload, fetchImpl: turnkeyFetch(answers).fn, sleep: async () => {}, poll: { tries: 2, delayMs: 0 } });
@@ -607,7 +620,7 @@ await check("approve: a login that is not the request's guardian is refused by t
   };
   const r = await approve.finishApprove(t.env);
   assert.equal(r.step, "error");
-  assert.match(r.reason, /different Google or Apple account/);
+  assert.match(r.reason, /different login from your backup login/);
   assert.ok(t.log.includes(`sign sub-OTHER 0xO ${DIGEST}`), "it signs with the login's own key, which the API refuses");
   assert.ok(t.stamper.calls.includes("clear"));
 });
@@ -720,6 +733,63 @@ await check("a guardian change: a dismissed passkey or a refusal changes nothing
   const refused = await page.runPasskeyOp("/p", {}, { api: async () => { throw new Error("remove your backup login first — one guardian at a time"); }, passkeyGet: async () => ({}) });
   assert.equal(refused.ok, false);
   assert.match(refused.reason, /one guardian at a time/);
+});
+
+console.log("email and passkey logins");
+
+await check("the email login signature is Turnkey's own message, signed raw by the token's key", async () => {
+  const token = `h.${Buffer.from(JSON.stringify({ id: "tok-1", public_key: "02ab", contact: "m@example.com" })).toString("base64url")}.s`;
+  const signed: unknown[] = [];
+  const sig = await logins.emailLoginSignature({ sign: async (m: string, f: string) => (signed.push([m, f]), "r||s") }, token);
+  const message = '{"login":{"publicKey":"02ab"},"tokenId":"tok-1","type":"USAGE_TYPE_LOGIN"}';
+  assert.deepEqual(signed, [[message, "raw"]]);
+  assert.deepEqual(sig, { publicKey: "02ab", scheme: "CLIENT_SIGNATURE_SCHEME_API_P256", message, signature: "r||s" });
+});
+
+await check("an email code is sealed with a fresh key, and only the sealed bundle reaches our API", async () => {
+  const posted: any[] = [];
+  const stamper = { init: async () => {}, resetKeyPair: async () => {}, getPublicKey: () => "03cd" };
+  const api = async (p: string, body: any) => (posted.push([p, body]), { verificationToken: "tok" });
+  await assert.rejects(logins.emailCodeToToken({ api, stamper, encrypt: async () => "x", otp: {}, code: "12a456" }), /6 digits/);
+  const tok = await logins.emailCodeToToken({ api, stamper, encrypt: async (code: string, target: string, key: string) => `sealed(${code},${target},${key})`, otp: { otpId: "o1", otpEncryptionTargetBundle: "T" }, code: "123456" });
+  assert.equal(tok, "tok");
+  assert.deepEqual(posted, [["/api/recovery/turnkey/email/verify", { otpId: "o1", encryptedOtpBundle: "sealed(123456,T,03cd)" }]]);
+  assert.ok(!JSON.stringify(posted).includes('"123456"'), "the plain code is never sent");
+});
+
+await check("a recovery passkey comes back in Turnkey's attestation shape", async () => {
+  const bytes = (n: number) => new Uint8Array(n).fill(7);
+  const credentials = { create: async (o: any) => {
+    assert.equal(o.publicKey.rp.id, "zoldhq.com");
+    assert.deepEqual(o.publicKey.pubKeyCredParams, [{ type: "public-key", alg: -7 }]);
+    return { rawId: new Uint8Array([1, 2]).buffer, response: { clientDataJSON: new Uint8Array([3]).buffer, attestationObject: new Uint8Array([4]).buffer, getTransports: () => ["internal", "hybrid", "smoke-signal"] } };
+  } };
+  const r = await logins.createGuardianPasskey({ credentials, rpId: "zoldhq.com", random: bytes });
+  assert.equal(r.challenge, Buffer.from(bytes(32)).toString("base64url"));
+  assert.deepEqual(r.attestation, { credentialId: "AQI", clientDataJson: "Aw", attestationObject: "BA", transports: ["AUTHENTICATOR_TRANSPORT_INTERNAL", "AUTHENTICATOR_TRANSPORT_HYBRID"] });
+});
+
+await check("a passkey proves itself with a stamped whoami on the parent org", async () => {
+  const stamper = { stamp: async (body: string) => ({ stampHeaderName: "X-Stamp-Webauthn", stampHeaderValue: JSON.stringify({ credentialId: "cred-9", body }) }) };
+  const r = await logins.passkeyWhoami(stamper, "org-parent");
+  assert.equal(r.credentialId, "cred-9");
+  assert.equal(r.whoami.body, JSON.stringify({ organizationId: "org-parent" }));
+  assert.equal(JSON.parse(r.whoami.stamp).body, r.whoami.body, "the stamp covers exactly the body relayed");
+});
+
+await check("approving: a pending signature is polled through the API, under the recovery request", async () => {
+  const seen: any[] = [];
+  const api = async (p: string, body?: any) => { seen.push([p, body]); return p.endsWith("/digest") ? { digest: `0x${"11".repeat(32)}` } : { status: "GRACE_PERIOD" }; };
+  await approve.approveWith({ stamper: {}, api, recovery: { requestId: "r1", secret: "s" }, turnkeyApi: "https://t",
+    login: async () => ({ subOrgId: "sub-1", address: "0xabc" }), sign: async (o: any) => { await o.pollActivity("act-1"); return { r: "1", s: "2", v: "0" }; } });
+  assert.ok(seen.some(([p]) => p === "/api/recovery/turnkey/requests/r1/activity/act-1"), "under the request, behind its secret");
+});
+
+await check("approving with a passkey: its stamper has no key to clear, and that is fine", async () => {
+  const api = async (p: string) => (p.endsWith("/digest") ? { digest: `0x${"11".repeat(32)}` } : { status: "GRACE_PERIOD" });
+  const r = await approve.approveWith({ stamper: {}, api, recovery: { requestId: "r1", secret: "s" }, turnkeyApi: "https://api.turnkey.com",
+    login: async () => ({ subOrgId: "sub-1", address: "0xabc" }), sign: async () => ({ r: "1", s: "2", v: "0" }) });
+  assert.deepEqual(r, { step: "approved", request: { status: "GRACE_PERIOD" } });
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
