@@ -316,13 +316,18 @@ export type ClientSignature = { publicKey: string; scheme: "CLIENT_SIGNATURE_SCH
  * checked on what Turnkey reports: one user, who is the whole root quorum at
  * threshold 1, with no API key. The person's own passkeys are theirs to add.
  */
-export function assertFoundSubOrg(org: { users?: { userId: string; apiKeys?: unknown[] }[]; rootQuorum?: { threshold: number; userIds: string[] } }) {
+export function assertFoundSubOrg(org: { users?: { userId: string; apiKeys?: { expirationSeconds?: string; credential?: { type?: string } }[] }[]; rootQuorum?: { threshold: number; userIds: string[] } }) {
   const fail = (why: string): never => {
     throw new TurnkeyGuardianError(`guardian sub-org refused: ${why}`, 409, "SUB_ORG_SHAPE");
   };
   const users = org.users ?? [];
   if (users.length !== 1) fail(`it has ${users.length} users, expected the person alone`);
-  if ((users[0].apiKeys ?? []).length !== 0) fail("it holds an API key");
+  // A guardian's own login (oauthLogin/otpLogin) adds a session key bound to
+  // the person's browser key that expires within LOGIN_SECONDS. Anything
+  // standing or longer is a key someone else could hold.
+  const session = (k: { expirationSeconds?: string; credential?: { type?: string } }) =>
+    k.credential?.type === "CREDENTIAL_TYPE_LOGIN" && /^\d+$/.test(k.expirationSeconds ?? "") && Number(k.expirationSeconds) <= Number(LOGIN_SECONDS);
+  if (!(users[0].apiKeys ?? []).every(session)) fail("it holds an API key");
   const q = org.rootQuorum;
   if (!q || q.threshold !== 1 || q.userIds.length !== 1 || q.userIds[0] !== users[0].userId) fail("its root quorum is not the person alone");
 }
