@@ -67,7 +67,7 @@
     ok.type = "button";
     ok.textContent = "Got it";
     ok.style.cssText =
-      "flex:none;height:36px;padding:0 18px;border:0;border-radius:999px;background:#ed188d;color:#08080b;" +
+      "flex:none;height:36px;padding:0 18px;border:0;border-radius:6px;background:#ed188d;color:#0b0b0c;" +
       "font:600 13px Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;cursor:pointer";
     // Where keyboard focus was before it entered the notice, so dismissing it
     // can hand focus back instead of dropping it on <body> with the box gone.

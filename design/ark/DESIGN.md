@@ -64,7 +64,7 @@ ARK is a visual direction for Zold: old money, quiet wealth. Picture a black cha
 
 ARK replaces the **look** of UI v2 (colours, type, texture, shapes). It does not replace what the screens say or do. `design/ui-v2/RULES.md` sections 4 (honesty), 5 (words), 7 (interaction and accessibility) and 8 (definition of done) still bind every ARK screen, and the repo's `AGENTS.md` wins over both. The screen inventory is still `design/ui-v2/SCREENS.md`, and the component contracts are still `design/ui-v2/SYSTEM.md`; this file only restyles them.
 
-ARK is a proposal. The shipped app still uses the UI v2 tokens (`--z-*`, pink accent). Nothing here is in `tokens.css`.
+The shipped app carries the ARK dark colours, radii and the no-glow rule through the UI v2 tokens (`--z-*` in `tokens.css`). The ARK components below (account plate, action row, hidable sidebar, stacking activity table, Zold name) and the light theme are not built yet.
 
 ## Brand and mood
 
