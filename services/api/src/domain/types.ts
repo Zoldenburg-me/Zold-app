@@ -9,6 +9,8 @@
  * See docs/business-accounts.md for the mapping from Gnosis Business.
  */
 
+import type { InvoiceLanguage } from "./invoicing.js";
+
 export type OrgType = "personal" | "business";
 
 /** Monerium's profile kinds (GET /profiles `kind`). */
@@ -145,7 +147,7 @@ export interface Organisation {
     display?: Partial<Record<string, boolean>>;
     /** Extra label/value rows the issuer wants on every invoice. */
     customFields?: { label: string; value: string }[];
-    language?: "de" | "en";
+    language?: InvoiceLanguage;
   };
   /**
    * Accounting connectors. The credential is encrypted at rest and never
@@ -450,7 +452,7 @@ export interface PayerRule {
   recipient: InvoiceParty;
   recipientIsBusiness?: boolean;
   supplyKind?: "services" | "goods";
-  language?: "de" | "en";
+  language?: InvoiceLanguage;
   notes?: string;
   updatedAt: string;
   updatedByMemberId: string;
@@ -823,7 +825,7 @@ export interface Invoice {
     notes?: string;
     display?: Record<string, boolean>;
     customFields?: { label: string; value: string }[];
-    language?: "de" | "en";
+    language?: InvoiceLanguage;
     /** Compliance warnings accepted at issue, kept for the audit trail. */
     acceptedWarnings?: string[];
     /** Business or private customer, and goods or services, as declared. */

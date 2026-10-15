@@ -222,6 +222,7 @@ export async function boot() {
             name: $("#new-org-name").value,
             type: $("#new-org-type").value,
             country: $("#new-org-country").value,
+            timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
           },
         });
         location.reload();

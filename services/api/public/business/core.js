@@ -261,7 +261,7 @@ export function setPersonalLater() {
  *  (actions.js "create-personal"), never from one tap. It is named after the
  *  person and follows their name; what they typed is the name on invoices. */
 export async function createPersonalOrg({ legalName, country, email }) {
-  const r = await api("/api/orgs", { method: "POST", body: { type: "personal", name: me.name || legalName, legalName, country, ...(email ? { email } : {}) } });
+  const r = await api("/api/orgs", { method: "POST", body: { type: "personal", name: me.name || legalName, legalName, country, ...(email ? { email } : {}), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone } });
   try { localStorage.setItem("zold-org", r.organisation.id); } catch { /* opens the first org */ }
   location.reload();
 }

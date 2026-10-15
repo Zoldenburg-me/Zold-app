@@ -185,7 +185,8 @@ function phPersonalSheet(trigger) {
     Z.setLoading(btn, true);
     try {
       const r = await api("/api/orgs", { type: "personal", name: user.name || name.value.trim(), legalName: name.value.trim(),
-        country: country.value, ...(email.value.trim() ? { email: email.value.trim() } : {}) });
+        country: country.value, ...(email.value.trim() ? { email: email.value.trim() } : {}),
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone });
       try { localStorage.setItem("zold-org", r.organisation.id); } catch { /* opens the first org */ }
       location.assign("/business");
     } catch (err) {
