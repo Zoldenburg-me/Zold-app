@@ -151,6 +151,23 @@ try {
     delete process.env.TRANSF_RATES_FIXED;
   });
 
+  await t("a sub-cent SEPA amount is rounded to cents once, at the quote", async () => {
+    const dataDir = mkdtempSync(path.join(os.tmpdir(), "fx-subcent-"));
+    process.env.TRANSF_DB_PATH = path.join(dataDir, "db.json");
+    try {
+      const { createQuote } = await import("../services/api/src/fx.js");
+      // Unrounded, 100.004 left €0.004 as a "fee" and 100.006 paid out €100.01.
+      for (const [sent, cents] of [[100.004, 100], [100.006, 100.01]]) {
+        const q = await createQuote("subcent-user", { rail: "sepa", sendEur: sent });
+        assert.equal(q.sendEur, cents, `sendEur for ${sent}`);
+        assert.equal(q.receiveEur, cents, `receiveEur for ${sent}`);
+      }
+    } finally {
+      delete process.env.TRANSF_DB_PATH;
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
   await t("GET /api/rates never shows an anonymous caller the configured feed URL", async () => {
     // A keyed feed carries its key in the path; the API must not repeat it.
     mode = "403";
