@@ -45,7 +45,7 @@
 import { wrap } from "./util.js";
 import express from "express";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { IS_PRODUCTION, PAYMENT_REQUESTS, PUBLIC_URL, SHOPIFY } from "../config.js";
+import { IS_PRODUCTION, PAYMENT_REQUESTS, PUBLIC_URL, RESOLVE_MAX_ATTEMPTS, SHOPIFY } from "../config.js";
 import { cookieValue } from "../http/sessions.js";
 import { store, type User } from "../store.js";
 import { EncryptionUnavailableError } from "../crypto-at-rest.js";
@@ -254,19 +254,33 @@ export function payeeFor(orgId: string, installerId: string): { user?: User; rea
   return { user };
 }
 
+// One resolve per request at a time: a sweep and a buyer's return visit share
+// it, so they cannot both spend the last attempt, and the buyer waits for it.
+const resolving = new Map<string, Promise<void>>();
+
 /** Tell Shopify a paid checkout request is paid. Idempotent; records the
  *  outcome on the request so the sweep can retry a failure. */
-export async function resolveShopifyRequest(r: PaymentRequest): Promise<void> {
+export function resolveShopifyRequest(r: PaymentRequest): Promise<void> {
+  const inFlight = resolving.get(r.id);
+  if (inFlight) return inFlight;
+  const run = resolveOnce(store.findPaymentRequest(r.id) ?? r).finally(() => resolving.delete(r.id));
+  resolving.set(r.id, run);
+  return run;
+}
+
+async function resolveOnce(r: PaymentRequest): Promise<void> {
   // The checkout service marks a linked shop's order paid, with its own token.
   if (r.source.linkId) return;
   if (r.source.kind !== "shopify" || r.source.resolvedAt || r.state !== "PAID") return;
   if (!r.source.shop || (!r.source.sessionGid && !r.source.orderGid)) return;
   const connection = store.findShopifyConnectionByShop(r.source.shop);
-  const attempts = (r.source.resolveAttempts ?? 0) + 1;
   if (!connection) {
-    store.updatePaymentRequest(r.id, { source: { ...r.source, resolveAttempts: attempts, resolveError: "the store is no longer connected" } });
+    // Not an attempt: nothing was sent, and a reconnect should find the budget intact.
+    const resolveError = "the store is no longer connected";
+    if (r.source.resolveError !== resolveError) store.updatePaymentRequest(r.id, { source: { ...r.source, resolveError } });
     return;
   }
+  const attempts = (r.source.resolveAttempts ?? 0) + 1;
   try {
     if (r.source.orderGid) {
       // custom-app: the merchant's "Mark as paid", then the facts on the order.
@@ -292,7 +306,12 @@ export async function resolveShopifyRequest(r: PaymentRequest): Promise<void> {
     });
     console.log(`shopify: resolved session for ${displayCode(r.code)} at ${connection.shop}`);
   } catch (err: any) {
-    store.updatePaymentRequest(r.id, { source: { ...r.source, resolveAttempts: attempts, resolveError: redactedMessage(err).slice(0, 300) } });
+    const resolveError = redactedMessage(err).slice(0, 300);
+    store.updatePaymentRequest(r.id, { source: { ...r.source, resolveAttempts: attempts, resolveError } });
+    // The sweep stops here; the row keeps the error for the dashboard, and this line is the alert.
+    if (attempts === RESOLVE_MAX_ATTEMPTS) {
+      console.error(`shopify: gave up telling ${connection.shop} that ${displayCode(r.code)} is paid after ${attempts} attempts: ${resolveError}`);
+    }
     throw err;
   }
 }

@@ -10,12 +10,13 @@ import { wrap } from "./util.js";
 import { usdToken } from "../usd-token.js";
 import express from "express";
 import { randomUUID } from "node:crypto";
-import { CHAIN_ID, IS_PRODUCTION, MONERIUM, PAYMENT_REQUESTS, PUBLIC_URL } from "../config.js";
+import { CHAIN_ID, IS_PRODUCTION, MONERIUM, PAYMENT_REQUESTS, PUBLIC_URL, RESOLVE_MAX_ATTEMPTS } from "../config.js";
 import { store, type CryptoDeposit, type User } from "../store.js";
 import {
   buildBankSettlement,
   orderNamesInvoice,
   payableEur,
+  settlementRef,
   settlementUpdate,
   type MoneriumOrderLike,
 } from "../domain/invoices.js";
@@ -507,10 +508,11 @@ function record(r: PaymentRequest, payment: Parameters<typeof applyPayment>[1]):
   // `r` is usually the live store row, which updatePaymentRequest mutates in
   // place — so remember whether it was already PAID before writing.
   const wasPaid = r.state === "PAID";
-  const { request, added } = applyPayment(r, payment);
+  const { request, added, merged } = applyPayment(r, payment);
   if (!added) {
-    // applyPayment may have enriched an existing row in place.
-    return store.updatePaymentRequest(r.id, { payments: r.payments });
+    // A twin was enriched in place and needs writing; a payment already on the
+    // row writes nothing, or every poll rewrites the db.
+    return merged ? store.updatePaymentRequest(r.id, { payments: r.payments }) : r;
   }
   const saved = store.updatePaymentRequest(r.id, {
     payments: request.payments,
@@ -603,6 +605,8 @@ function recordBankSettlement(
 ): void {
   const invoice = store.invoices.find((i) => i.id === invoiceId);
   if (!invoice) return;
+  // Already booked: the poll re-sees it every pass and must not rewrite the db.
+  if (invoice.settlements?.some((x) => settlementRef(x) === `monerium:${order.id}`)) return;
   store.updateInvoice(invoice.id, settlementUpdate(invoice, buildBankSettlement(order, matchedOn)));
 }
 
@@ -659,6 +663,12 @@ export function attributeMoneriumOrder(order: any): PaymentRequest | undefined {
   if (!user) return undefined;
   for (const r of store.paymentRequestsForUser(user.id)) {
     if (r.state !== "OPEN" && r.state !== "PAID") continue;
+    // The poller re-sees every order: one already on this request writes
+    // nothing, bar an invoice settlement a crash left unwritten.
+    if (order.id && r.payments.some((p) => p.orderId === order.id)) {
+      if (r.invoiceId) recordBankSettlement(r.invoiceId, order, "payment-link");
+      return r;
+    }
     const payment = matchMoneriumOrder(order, r, user.address);
     if (payment) {
       const saved = record(r, payment);
@@ -700,6 +710,7 @@ export async function sweepPaymentRequests(now = new Date()): Promise<{ expired:
   for (const r of store.paymentRequests) {
     // A merchant link's request is the checkout service's to settle.
     if (r.state === "PAID" && r.source.kind !== "app" && r.source.kind !== "api" && !r.source.resolvedAt && !r.source.linkId) {
+      if ((r.source.resolveAttempts ?? 0) >= RESOLVE_MAX_ATTEMPTS) continue;
       for (const hook of paidHooks) {
         try {
           await hook(r);
