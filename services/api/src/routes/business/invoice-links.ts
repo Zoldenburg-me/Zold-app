@@ -23,7 +23,7 @@ import {
 import { passwordMatches } from "../../domain/passwords.js";
 import { forgetFailure, recordFailure, tooManyFailures } from "../../http/policy.js";
 import { invoiceBankOf, parsePayTo } from "./shared.js";
-import { openLinkPath } from "./invoice-pay-link.js";
+import { openLinkPath, payLinkLapsed } from "./invoice-pay-link.js";
 import type { Invoice } from "../../domain/types.js";
 
 /** Wrong passwords one link absorbs, from any number of addresses, per window. */
@@ -87,12 +87,14 @@ export function createInvoiceLinkRouter(): express.Router {
     ]
       .filter(Boolean)
       .join(" · ");
+    const settled = invoice.state === "PAID" || invoice.state === "RECONCILED";
     return {
       bank: org ? invoiceBankOf(org) : undefined,
       footerNote: footerNote || undefined,
       // The customer holding the invoice link is the one its payment link was
       // made for; a settled invoice has nothing left to pay.
-      payPath: invoice.state === "PAID" || invoice.state === "RECONCILED" ? undefined : openLinkPath(invoice),
+      payPath: settled ? undefined : openLinkPath(invoice),
+      payLinkLapsed: settled ? undefined : payLinkLapsed(invoice) || undefined,
     };
   };
 

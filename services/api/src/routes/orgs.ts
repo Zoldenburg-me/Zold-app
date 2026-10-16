@@ -56,7 +56,7 @@ import { emailLooksValid } from "../domain/email.js";
 import { CEILINGS, ceilingRefusal } from "../domain/ceilings.js";
 import { paymentReviewRequired, reviewHeldOnPlanChange } from "../domain/payment-review.js";
 import { verifyPasskeyStepUp } from "./auth.js";
-import { issuerIdentityFrom } from "./business/shared.js";
+import { clearsSignupTaxId, issuerIdentityFrom } from "./business/shared.js";
 
 const INVITE_TTL_MS = 3 * 24 * 60 * 60 * 1000; // Gnosis expired invites at 3 days
 /** An organisation's name and legal name, in characters. */
@@ -341,10 +341,10 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     }
     if (Object.keys(identity.patch).length) {
       patch.invoicing = { ...ctx.org.invoicing, ...identity.patch };
-      // The free-text tax id typed at signup stands in until these are set;
-      // once one is, it would only come back as a second, stale number.
-      // Clearing them leaves it standing: it may be the only number there is.
-      if (identity.patch.vatId || identity.patch.taxNumber) patch.taxId = undefined;
+      // The signup tax id stands in until these are saved, and the form shows
+      // it in their place: saving them, even empty, replaces it. A cleared
+      // field must not print the old number again.
+      if (clearsSignupTaxId(identity.patch) && typeof b.taxId !== "string") patch.taxId = undefined;
     }
     if (b.reporting && typeof b.reporting === "object") {
       const next = { ...ctx.org.reporting };

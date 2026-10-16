@@ -27,6 +27,7 @@ const { createInvoicingRoutes } = await import("../services/api/src/routes/busin
 const { createPaymentLinkRoutes } = await import("../services/api/src/routes/business/payment-links.js");
 const { createInvoiceLinkRouter } = await import("../services/api/src/routes/business/invoice-links.js");
 const { linkExpiry } = await import("../services/api/src/routes/business/invoice-pay-link.js");
+const { createPaymentRequest } = await import("../services/api/src/routes/payment-requests.js");
 const { defaultInvoiceLanguage, defaultSeriesFor, invoiceLanguage } = await import("../services/api/src/domain/invoicing.js");
 
 let passed = 0;
@@ -160,10 +161,43 @@ await check("the tax id typed at signup stands in until the business profile set
 });
 
 addOrg("org_clear", "FR", { taxId: "FR40303265045" });
-await check("clearing the profile's numbers leaves the signup tax id standing", async () => {
+await check("clearing the numbers the form showed clears them: the signup tax id does not print again", async () => {
   const r = await call("PATCH", "/api/orgs/org_clear", "u_owner", { vatId: "", taxNumber: "" });
   assert.equal(r.status, 200, JSON.stringify(r.data));
-  assert.equal(store.findOrganisation("org_clear")!.taxId, "FR40303265045");
+  assert.equal(store.findOrganisation("org_clear")!.taxId, undefined);
+  const p = await call("GET", "/api/orgs/org_clear/invoicing/profile", "u_owner");
+  assert.equal(p.data.issuer.vatId, undefined);
+  assert.equal(p.data.issuer.taxNumber, undefined);
+});
+
+addOrg("org_badsignup", "FR", { taxId: "DE123456789" });
+await check("a signup tax id that fails the country's check is neither printed nor offered in the form", async () => {
+  const p = await call("GET", "/api/orgs/org_badsignup/invoicing/profile", "u_owner");
+  assert.equal(p.data.issuer.vatId, undefined, "a German VAT ID does not print for a French entity");
+  const r = await call("PATCH", "/api/orgs/org_badsignup", "u_owner", { name: "Org renamed" });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.organisation.issuerDetails.vatId, undefined);
+});
+
+addOrg("org_prefix", "DE", { invoicing: { vatId: "DE123456789" } });
+await check("an EU VAT ID must be the issuer's own country's", async () => {
+  const r = await call("PATCH", "/api/orgs/org_prefix", "u_owner", { vatId: "FR40303265045" });
+  assert.equal(r.status, 400, JSON.stringify(r.data));
+  assert.equal(r.data.field, "vatId");
+  const moved = await call("PATCH", "/api/orgs/org_prefix", "u_owner", { address: { line1: "1 Rue", postalCode: "75001", city: "Paris", country: "FR" } });
+  assert.equal(moved.status, 400, "a stored DE VAT ID does not survive a move to France");
+  assert.equal(moved.data.field, "vatId");
+  const prof = await call("PATCH", "/api/orgs/org_prefix/invoicing/profile", "u_owner", { vatId: "ATU12345678" });
+  assert.equal(prof.status, 400, "the invoicing profile checks the same");
+});
+
+addOrg("org_move_tax", "DE", { invoicing: { taxNumber: "12/345/67890" } });
+await check("moving country re-checks a stored tax number the save does not replace", async () => {
+  const r = await call("PATCH", "/api/orgs/org_move_tax", "u_owner", { address: { line1: "1 Rue", postalCode: "75001", city: "Paris", country: "FR" } });
+  assert.equal(r.status, 200, "a German Steuernummer is still one line of digits under EU rules");
+  const back = await call("PATCH", "/api/orgs/org_move_tax", "u_owner", { address: { line1: "1 Str", postalCode: "10115", city: "Berlin", country: "DE" }, taxNumber: "12" });
+  assert.equal(back.status, 400, JSON.stringify(back.data));
+  assert.equal(back.data.field, "taxNumber");
 });
 
 addOrg("org_move", "GA", { invoicing: { vatId: "GA-NIF 123456 X" } });
@@ -213,6 +247,7 @@ store.addAccount({
 let token = "";
 let invoiceId = "";
 let unlinkedInvoiceId = "";
+let unlinkedToken = "";
 await check("with the payee's own account behind it, issuing makes the invoice's payment link", async () => {
   const r = await call("POST", "/api/orgs/org_pay/invoicing/issue", "u_owner", invoiceFor("FR"));
   assert.equal(r.status, 201, JSON.stringify(r.data));
@@ -246,6 +281,7 @@ await check("a member whose account does not back the org gets the invoice and t
   assert.equal(r.data.payment.ok, false);
   assert.equal(r.data.payment.code, "NOT_THE_PAYEE");
   unlinkedInvoiceId = r.data.invoice.id;
+  unlinkedToken = r.data.linkToken;
 });
 
 await check("two requests at once for an invoice's link make one link, not two", async () => {
@@ -256,6 +292,39 @@ await check("two requests at once for an invoice's link make one link, not two",
   assert.deepEqual([a.status, b.status].sort(), [200, 201], JSON.stringify([a.data, b.data]));
   assert.deepEqual([a.data.reused, b.data.reused].sort(), [false, true]);
   assert.equal(store.paymentRequests.filter((p) => p.invoiceId === unlinkedInvoiceId).length, 1);
+});
+
+await check("no route makes a second open link for an invoice, even outside the lock", async () => {
+  const owner = store.findUser("u_owner")!;
+  await assert.rejects(
+    createPaymentRequest(owner, { invoiceId: unlinkedInvoiceId, methods: ["bank"], expiresAt: linkExpiry(undefined) }, { kind: "app" }, "org_pay"),
+    (err: any) => err.status === 409,
+  );
+  assert.equal(store.paymentRequests.filter((p) => p.invoiceId === unlinkedInvoiceId).length, 1);
+});
+
+await check("a throw while making the Pay button still answers 201 for the issued invoice", async () => {
+  // The user lookup sits before the old try/catch; issuing itself does not use it.
+  const findUser = store.findUser;
+  (store as any).findUser = () => { throw new Error("malformed user row"); };
+  const before = store.invoices.length;
+  const r = await call("POST", "/api/orgs/org_pay/invoicing/issue", "u_owner", invoiceFor("FR")).finally(() => {
+    (store as any).findUser = findUser;
+  });
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  assert.equal(r.data.payment.ok, false);
+  assert.equal(r.data.payment.code, "ERROR");
+  assert.ok(!/malformed user/.test(JSON.stringify(r.data)), "the cause is logged, not sent");
+  assert.equal(store.invoices.length, before + 1, "the invoice is issued once");
+});
+
+await check("an unpaid invoice whose link expired says so instead of losing the Pay button silently", async () => {
+  const link = store.paymentRequests.find((p) => p.invoiceId === unlinkedInvoiceId)!;
+  link.expiresAt = new Date(Date.now() - 1000).toISOString();
+  const view = await call("GET", `/api/invoice-links/${unlinkedToken}`);
+  assert.equal(view.status, 200);
+  assert.equal(view.data.invoice.payPath, undefined);
+  assert.equal(view.data.invoice.payLinkLapsed, true);
 });
 
 await check("a paid invoice shows no Pay button", async () => {

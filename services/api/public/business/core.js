@@ -19,16 +19,11 @@ export const countrySelect = (id, current) =>
   `<select id="${id}" name="country" autocomplete="country">${Z.countries(current).map((o) =>
     `<option value="${esc(o.value)}"${o.value === (current || "") ? " selected" : ""}${o.disabled ? " disabled" : ""}>${esc(o.label)}</option>`).join("")}</select>`;
 
-/* The issuer's tax identifiers, as the business profile keeps them. Until
-   they are set, the tax id typed at signup stands in, sorted the way the
-   server sorts it (country letters first: a VAT ID). */
+/* The issuer's tax identifiers as invoices print them. The server fills in
+   the signup tax id until the profile names one, and only if it passes. */
 export function issuerIds(o) {
   const d = o?.issuerDetails || {};
-  if (d.vatId || d.taxNumber) return { vatId: d.vatId || "", taxNumber: d.taxNumber || "" };
-  const signup = String(o?.taxId || "").trim();
-  return /^[A-Za-z]{2}\s*[0-9A-Za-z]/.test(signup)
-    ? { vatId: signup.replace(/\s+/g, "").toUpperCase(), taxNumber: "" }
-    : { vatId: "", taxNumber: signup };
+  return { vatId: d.vatId || "", taxNumber: d.taxNumber || "" };
 }
 
 const EU = new Set(["AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR", "HU", "IE", "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK", "SI", "ES", "SE"]);

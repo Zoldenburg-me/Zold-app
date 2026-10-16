@@ -16,6 +16,7 @@ import { store } from "../store.js";
 import { can, capabilityMatrix, effectivePlan, limitsFor, type CapabilityId } from "../domain/plans.js";
 import { roleCan, type Permission } from "../domain/roles.js";
 import { paymentReviewRequired } from "../domain/payment-review.js";
+import { issuerTaxIds } from "../domain/invoicing.js";
 import type { Member, Organisation } from "../domain/types.js";
 
 export interface OrgContext {
@@ -118,10 +119,10 @@ export function publicOrg(org: Organisation, member?: Member) {
     name: org.name,
     legalName: org.legalName,
     taxId: org.taxId,
-    // What invoices print about the issuer, edited on the business profile.
+    // What invoices print about the issuer, edited on the business profile;
+    // the signup tax id fills in until then, only if it passes the check.
     issuerDetails: {
-      vatId: org.invoicing?.vatId,
-      taxNumber: org.invoicing?.taxNumber,
+      ...issuerTaxIds(org),
       registerCourt: org.invoicing?.registerCourt,
       registerNumber: org.invoicing?.registerNumber,
       managingDirector: org.invoicing?.managingDirector,
