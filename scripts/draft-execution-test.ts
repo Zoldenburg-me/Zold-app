@@ -416,6 +416,13 @@ try {
     assert.equal(subCent.after.draft.state, "REVIEWED", "nothing was created");
   });
 
+  // Execution sends each line in cents, so the total a reviewer approves must
+  // be the sum of the rounded lines: 0.006 + 0.006 is 0.01 + 0.01, not 0.01.
+  const halfCents = await preflight([line(contact, "0.006"), line(secondContact, "0.006")]);
+  check("the review total is the sum of the lines as they are sent", () => {
+    assert.equal(halfCents.after.totals.EUR, "0.02", JSON.stringify(halfCents.after.totals));
+  });
+
   const overdraft = await preflight([line(contact, "700.00"), line(secondContact, "700.00")]);
   check("lines that each fit but overdraw TOGETHER are caught as a total", () => {
     assert.equal(overdraft.r.status, 400);
