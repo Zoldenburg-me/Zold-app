@@ -80,6 +80,8 @@ export interface ZoldenburgRecoveryDeps {
   requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
   /** The module's guardians and pending recovery, read from the chain. Tests stage a pending one. */
   readState?: (plan: PasskeySafeDeploymentPlan) => Promise<RecoveryModuleState>;
+  /** Moves a request to what the chain shows. Tests stage an execution made elsewhere. */
+  sync?: typeof syncZoldenburgFromChain;
 }
 
 const CEREMONY_TTL_MS = 5 * 60_000;
@@ -312,6 +314,7 @@ export async function sweepZoldenburgRecoveries(now = new Date(), sync = syncZol
 export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
   const router = express.Router();
   const readState = deps.readState ?? readRecoveryState;
+  const sync = deps.sync ?? syncZoldenburgFromChain;
   const wrap =
     (fn: (req: express.Request, res: express.Response) => Promise<unknown>) =>
     (req: express.Request, res: express.Response, next: express.NextFunction) =>
@@ -549,16 +552,21 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       return undefined;
     }
     const expired = (x: RecoveryRequest) => ["PASSKEY_PENDING", "REVIEW_PENDING"].includes(x.status) && Date.now() >= Date.parse(x.expiresAt);
-    if (expired(r) && !relaying.has(r.id)) {
+    if (expired(r) && relaying.has(r.id)) {
+      // Neither expired nor open: its signature is being relayed now.
+      res.status(409).json({ error: "this recovery is being signed right now — try again in a moment", code: "BEING_SIGNED" });
+      return undefined;
+    }
+    if (expired(r)) {
       // Ask the chain before expiring, as the sweep does. An unreadable chain
       // stores nothing; the sweep tries again.
-      try { r = await syncZoldenburgFromChain(r); } catch (err) {
+      try { r = await sync(r); } catch (err) {
         console.error(`recovery ${r.id}: chain read before expiry failed: ${describeCause(err)}`);
         res.status(503).json({ error: "could not read the recovery module — try again shortly", code: "CHAIN_UNREADABLE" });
         return undefined;
       }
     }
-    if (expired(r) && !relaying.has(r.id)) {
+    if (expired(r)) {
       res.status(410).json({ ...publicRecoveryRequest(store.updateRecoveryRequest(r.id, { status: "EXPIRED" })), error: "this recovery expired — start again" });
       return undefined;
     }
@@ -956,9 +964,12 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       // else is refused here rather than by a reverted transaction.
       const { td, digest } = await typedDataFor(r);
       const signature = await assertGuardianSignature(digest, req.body?.signature, guardian);
-      // Read again after the awaits above: the owner may have cancelled meanwhile.
-      const status = store.findRecoveryRequest(r.id)?.status;
-      if (status !== "REVIEW_PENDING") return res.status(409).json({ error: `recovery is ${status}` });
+      // Read again after the awaits above: the owner may have cancelled, or a
+      // re-enrolment voided the 1 € check, meanwhile.
+      const current = store.findRecoveryRequest(r.id)!;
+      if (current.status !== "REVIEW_PENDING") return res.status(409).json({ error: `recovery is ${current.status}` });
+      const refusalNow = refusalFor(current);
+      if (refusalNow) return res.status(409).json(refusalNow);
       if (relaying.has(r.id)) return res.status(409).json({ error: "this recovery is already being signed", code: "BUSY" });
       relaying.add(r.id);
       try {
@@ -1065,6 +1076,9 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       if (!r) return;
       if (!["PASSKEY_PENDING", "REVIEW_PENDING"].includes(r.status)) {
         return res.status(409).json({ error: `recovery is ${r.status} — once executed only the owner's passkey can cancel it` });
+      }
+      if (relaying.has(r.id)) {
+        return res.status(409).json({ error: "this recovery is being signed right now — once on chain only the owner's passkey can cancel it", code: "BEING_SIGNED" });
       }
       const reason = typeof req.body?.reason === "string" ? req.body.reason.trim().slice(0, 500) : "";
       if (!reason) return res.status(400).json({ error: "give a reason — the person sees it" });
