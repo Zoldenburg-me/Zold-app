@@ -388,17 +388,47 @@ export const FOREIGN_TAX_ID_MAX = 40;
  * ID under DE and EU, a Steuernummer under DE. Anywhere else (a Gabonese NIF,
  * an Indian GSTIN) Zold has no format, so the value is taken as written.
  */
+/**
+ * The tax identifiers an invoice prints for its issuer. The business profile's
+ * when it names one; until then the tax id typed at signup stands in, sorted by
+ * shape (country letters first: a VAT ID) and only if it passes the same check
+ * the profile does, so an unchecked number never prints.
+ */
+export function issuerTaxIds(org: {
+  taxId?: string;
+  address?: { country?: string };
+  invoicing?: { vatId?: string; taxNumber?: string };
+}): { vatId?: string; taxNumber?: string } {
+  const inv = org.invoicing;
+  if (inv?.vatId || inv?.taxNumber) return { vatId: inv.vatId, taxNumber: inv.taxNumber };
+  const signup = org.taxId?.trim();
+  if (!signup) return {};
+  const field = /^[A-Za-z]{2}\s*[0-9A-Za-z]/.test(signup) ? "vatId" : "taxNumber";
+  const value = field === "vatId" ? signup.replace(/\s+/g, "").toUpperCase() : signup;
+  const country = org.address?.country;
+  if (issuerTaxIdProblem(field, value, jurisdictionFor(country).ruleSet, country)) return {};
+  return { [field]: value };
+}
+
 export function issuerTaxIdProblem(
   field: "vatId" | "taxNumber",
   value: string,
   ruleSet: RuleSetId,
+  country?: string,
 ): string | undefined {
   const v = value.trim();
   if (!v) return undefined;
   if (field === "vatId" && ruleSet !== "GENERIC") {
     const shape = vatIdShape(v);
     if (!shape.ok) return shape.reason;
-    return shape.vies ? undefined : `${v} is not an EU VAT ID. An EU business invoices with its member state's number.`;
+    if (!shape.vies) return `${v} is not an EU VAT ID. An EU business invoices with its member state's number.`;
+    // A German VAT ID on a French entity is someone else's number. Greece's prefix is EL.
+    const c = country?.toUpperCase();
+    const expected = c === "GR" ? "EL" : c;
+    if (expected && shape.prefix !== expected) {
+      return `${v} is a VAT ID from another country. An entity in ${c} invoices with a VAT ID starting ${expected}.`;
+    }
+    return undefined;
   }
   if (field === "taxNumber" && ruleSet === "DE") {
     return taxNumberLooksValid(v) ? undefined : `${v} does not look like a Steuernummer (10 to 13 digits).`;

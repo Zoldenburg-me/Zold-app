@@ -37,7 +37,7 @@ import { verifyPasskeyStepUp } from "../auth.js";
 import { wrap } from "../util.js";
 import { auditEntry } from "../../audit.js";
 import {
-  accountBankOf, customReasonsOf, draftDueDate, draftFrom, invoiceBankOf, issuerIdentityFrom, issuerParty,
+  accountBankOf, clearsSignupTaxId, customReasonsOf, draftDueDate, draftFrom, invoiceBankOf, issuerIdentityFrom, issuerParty,
   issuerSuggestions, jurisdictionOf, languageOf, seriesOf, withConversion, } from "./shared.js";
 import { redactedMessage } from "../../http/log-cause.js";
 
@@ -200,7 +200,10 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
         .filter((f: { label: string }) => f.label);
     }
 
-    const org = store.updateOrganisation(ctx.org.id, { invoicing: next });
+    const org = store.updateOrganisation(ctx.org.id, {
+      invoicing: next,
+      ...(clearsSignupTaxId(identity.patch) ? { taxId: undefined } : {}),
+    });
     if (ibanChange) {
       store.audit(auditEntry("org.invoice_iban_changed", { orgId: org.id, memberId: ctx.member.id, ...ibanChange }, ctx.userId));
     }
