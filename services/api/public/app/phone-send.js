@@ -264,7 +264,7 @@ PH["send/review"] = {
         { key: "Price valid until", value: phFull(q.expiresAt) },
       ])}</details>
       <p class="z-err" id="ph-rev-err" role="alert" hidden></p>
-    `)}${phFoot(Z.button({ variant: "primary", full: true, icon: "fingerprint", label: Z.byDevice("Approve with Face ID", "Approve with your passkey"), id: "ph-approve" }) + Z.button({ variant: "secondary", full: true, label: "Change amount", href: "#send/amount" }))}`;
+    `)}${phFoot(Z.button({ variant: "primary", full: true, icon: "fingerprint", label: Z.byDevice("Approve with Face ID", "Approve with biometrics"), id: "ph-approve" }) + Z.button({ variant: "secondary", full: true, label: "Change amount", href: "#send/amount" }))}`;
   },
   bind(root) {
     const b = root.querySelector("#ph-approve");

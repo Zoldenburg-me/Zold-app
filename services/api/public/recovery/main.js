@@ -226,7 +226,7 @@ async function boot() {
       <h1 tabindex="-1">${byDevice("Set up this phone", "Set up this device")}</h1>
       <p>${byDevice("Add Face ID or fingerprint sign-in on this phone.", "Add passkey sign-in on this device.")} It becomes the way you approve everything on your account.</p>
       <p class="r-err" id="r-err" role="alert" hidden></p>
-      <div class="r-actions"><button type="button" class="z-btn z-btn--primary" id="r-passkey">${byDevice("Set up Face ID", "Set up a passkey")}</button></div>`,
+      <div class="r-actions"><button type="button" class="z-btn z-btn--primary" id="r-passkey">${byDevice("Set up Face ID", "Set up biometrics")}</button></div>`,
     codes: () => {
       const r = s.request;
       const a = r.candide?.auths?.[currentAuth(r)];
@@ -288,7 +288,7 @@ async function boot() {
     },
     done: () => `
       <h1 tabindex="-1">Welcome back</h1>
-      <p>${byDevice("Your account is on this phone. Sign in with Face ID or fingerprint, and you’re all set.", "Your account is on this device. Sign in with your passkey, and you’re all set.")}</p>
+      <p>${byDevice("Your account is on this phone. Sign in with Face ID or fingerprint, and you’re all set.", "Your account is on this device. Sign in with biometrics, and you’re all set.")}</p>
       <div class="r-actions"><a class="z-btn z-btn--primary" href="/app">Sign in</a></div>`,
   };
 

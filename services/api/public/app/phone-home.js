@@ -389,7 +389,7 @@ PH["recovery-alert"] = {
       <p class="z-sub">If this wasn’t you, cancel now. Nothing moves while you decide, and your money stays in your account.</p>
       <div class="z-alert hidden" role="alert" id="ph-rec-err"></div>
     `, "z-app__main--state")
-      + phFoot(`${Z.button({ variant: "primary", full: true, icon: chain ? "passkey" : "block", label: chain ? Z.byDevice("Cancel with Face ID", "Cancel with your passkey") : "Cancel the request", id: "ph-rec-cancel" })}
+      + phFoot(`${Z.button({ variant: "primary", full: true, icon: chain ? "passkey" : "block", label: chain ? Z.byDevice("Cancel with Face ID", "Cancel with biometrics") : "Cancel the request", id: "ph-rec-cancel" })}
         ${Z.button({ variant: "secondary", full: true, label: "It was me", id: "ph-rec-mine" })}
         <p class="z-screen__fine z-screen__fine--flush">“It was me” only hides this on this phone. ${chain ? "The move goes ahead." : "The request stays open."}</p>`);
   },

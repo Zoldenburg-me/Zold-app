@@ -421,11 +421,11 @@ OB.auth = {
   html: () => `${obBrand()}
     <main id="main" class="z-screen__main z-screen__main--center">
       <span class="z-mark" aria-hidden="true">▽</span>
-      ${obIntro("Welcome to Zold", Z.byDevice("Sign in with Face ID or your fingerprint, or open a new account.", "Sign in with your passkey, or open a new account."))}
+      ${obIntro("Welcome to Zold", Z.byDevice("Sign in with Face ID or your fingerprint, or open a new account.", "Sign in with biometrics, or open a new account."))}
       ${obAlert("auth-err")}
     </main>
     <div class="z-screen__foot">
-      ${Z.button({ variant: "primary", full: true, icon: "passkey", label: Z.byDevice("Sign in with Face ID", "Sign in with a passkey"), id: "link-signin" })}
+      ${Z.button({ variant: "primary", full: true, icon: "passkey", label: Z.byDevice("Sign in with Face ID", "Sign in with biometrics"), id: "link-signin" })}
       ${Z.button({ variant: "secondary", full: true, label: "Create an account", id: "btn-create" })}
       <p class="z-screen__alt" id="recover-link-row"${caps.emailSmsRecovery || caps.zoldenburgRecovery || caps.turnkeyGuardians ? "" : " hidden"}>New phone, or lost this one? <a href="/recovery">Recover your account</a></p>
     </div>
@@ -571,7 +571,7 @@ OB["p-passkey"] = {
       <span class="z-mark z-mark--icon" aria-hidden="true">${Z.icon("passkey")}</span>
       ${Z.onPhone()
         ? obIntro("Set up Face ID or fingerprint", "It creates a sign-in key that never leaves this phone.")
-        : obIntro("Set up sign-in on this computer", "Your browser will ask to create a passkey. Approve it with Touch ID, your computer’s password, your phone or a security key. No face or fingerprint needed.")}
+        : obIntro("Set up biometric sign-in", "Your browser will ask to save a passkey. Approve it with Touch ID or Windows Hello. A computer without either offers your phone or a security key instead.")}
       <ul class="z-points">
         <li>${Z.icon("lock")}<span>It’s the only key to your account. Zold never sees it.</span></li>
         <li>${Z.icon("password")}<span>No Zold password to remember or leak.</span></li>
@@ -1102,7 +1102,7 @@ OB["b-import-confirm"] = {
       ${obAlert()}
     </main>
     <div class="z-screen__foot">
-      ${Z.button({ variant: "primary", full: true, label: ready ? Z.byDevice("Approve with Face ID", "Approve with your passkey") : retry ? "Check again" : "I’ve sent it", id: "btn-import-confirm" })}
+      ${Z.button({ variant: "primary", full: true, label: ready ? Z.byDevice("Approve with Face ID", "Approve with biometrics") : retry ? "Check again" : "I’ve sent it", id: "btn-import-confirm" })}
       ${obNewAccountLink()}
     </div>`;
   },
@@ -1243,7 +1243,7 @@ function obSetupSteps() {
 }
 const obPasskeyLabel = () => Z.onPhone()
   ? (user?.passkey ? "Finish with Face ID" : "Set up Face ID")
-  : (user?.passkey ? "Finish setting up" : "Set up sign-in");
+  : (user?.passkey ? "Finish with biometrics" : "Set up biometrics");
 
 function obSignupBody() {
   const company = obDraft.type === "company";
@@ -1337,7 +1337,7 @@ function obRerenderSteps() {
    the account's next step. Throws; the caller says what failed. */
 async function obOpenOwnSafe(btn) {
   obSetup = { step: 1, state: "now" }; obRerenderSteps();
-  btn.querySelector("span:last-child").textContent = Z.onPhone() ? "Approve with Face ID again" : "Approve again";
+  btn.querySelector("span:last-child").textContent = Z.byDevice("Approve with Face ID again", "Approve with biometrics again");
   await obAddSocialGuardian();
   await finishPasskeySafeSetup();
   obSetup = null;
@@ -1587,7 +1587,7 @@ OB.activate = {
       ${obAlert()}
     </main>
     <div class="z-screen__foot z-screen__foot--quiet">
-      ${user?.iban ? "" : Z.button({ variant: "primary", full: true, icon: "fingerprint", label: Z.byDevice("Switch on with Face ID", "Switch on with your passkey"), id: "btn-kyc-activate" })}
+      ${user?.iban ? "" : Z.button({ variant: "primary", full: true, icon: "fingerprint", label: Z.byDevice("Switch on with Face ID", "Switch on with biometrics"), id: "btn-kyc-activate" })}
       <button type="button" class="z-link-btn" id="btn-kyc-refresh">Check again</button>
       <button type="button" class="z-link-btn z-link-btn--small" id="btn-kyc-reconnect">Not your login? Use a different Monerium account</button>
       ${user?.monerium?.method === "api_keys" ? "" : `<p class="z-sub" style="font-size:12px;text-align:center;margin:4px 0 0">Sign out at Monerium first, or it signs you back in to the same login.</p>`}

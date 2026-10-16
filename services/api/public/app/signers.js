@@ -27,7 +27,7 @@ async function signersRun(path, body, errId, btn) {
   btn.textContent = "Preparing…";
   try {
     const prepared = await api(path, body);
-    btn.textContent = `Approve with your ${Z.passkeyName()}…`;
+    btn.textContent = Z.byDevice("Approve with Face ID…", "Approve with biometrics…");
     const sig = await passkeySignPrepared(prepared);
     btn.textContent = "Finishing…";
     signersState = await api(prepared.submitTo, sig);
