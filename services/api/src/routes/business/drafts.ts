@@ -17,7 +17,7 @@ import express from "express";
 import { randomUUID } from "node:crypto";
 import { store } from "../../store.js";
 import { FX, railFeeEur } from "../../config.js";
-import { createQuote } from "../../fx.js";
+import { createQuote, roundEur } from "../../fx.js";
 import { MONERIUM_NOT_CONNECTED, moneriumLiveFor } from "../../adapters/monerium-connection.js";
 import { accountBalances } from "../../chain.js";
 import { CURRENCY_REGISTRY, accountIsSpendable } from "../../domain/accounts.js";
@@ -443,7 +443,7 @@ export function createDraftRoutes(
         });
         continue;
       }
-      const sendEur = Number(line.amount);
+      const sendEur = roundEur(Number(line.amount));
       // createQuote refuses these too, but refusing here keeps the whole batch
       // atomic instead of failing halfway through.
       const sepaFee = railFeeEur("sepa");
@@ -451,8 +451,8 @@ export function createDraftRoutes(
         problems.push({
           lineId: line.id,
           reason: sepaFee > 0
-            ? `€${line.amount} does not exceed the €${sepaFee} fee, so nothing would arrive.`
-            : `€${line.amount} is not a positive amount.`,
+            ? `€${sendEur.toFixed(2)} does not exceed the €${sepaFee} fee, so nothing would arrive.`
+            : `€${sendEur.toFixed(2)} is not a positive amount.`,
         });
         continue;
       }

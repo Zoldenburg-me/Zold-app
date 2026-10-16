@@ -9,7 +9,7 @@ import express from "express";
 import { wrap } from "./util.js";
 import { FX, SECURITY, railFeeEur } from "../config.js";
 import { ibanChecksumValid, normaliseIban } from "../domain/contacts.js";
-import { createQuote, isExpired } from "../fx.js";
+import { createQuote, isExpired, roundEur } from "../fx.js";
 import { SEPA_REMITTANCE_MAX } from "../sepa.js";
 import {
   cashRailOpen,
@@ -83,7 +83,7 @@ export function createTransferRouter(deps: TransferDeps) {
       if (rail === "sepa" && !moneriumLiveFor(user)) {
         return res.status(409).json(MONERIUM_NOT_CONNECTED);
       }
-      const amount = Number(sendEur);
+      const amount = roundEur(Number(sendEur));
       const railFee = railFeeEur(rail);
       if (!(amount > railFee)) {
         return res.status(400).json({ error: railFee > 0 ? `amount must exceed the €${railFee} fee` : "amount must be positive" });
