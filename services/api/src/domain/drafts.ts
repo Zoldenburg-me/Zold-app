@@ -17,6 +17,7 @@ import type {
   DraftState,
 } from "./types.js";
 import { redactedMessage } from "../http/log-cause.js";
+import { fromCents, toCents } from "./invoicing.js";
 
 export class DraftError extends Error {}
 
@@ -181,14 +182,16 @@ export function currentFingerprint(
   );
 }
 
-/** Sum per asset, for the review screen. Strings in, strings out. */
+/** Sum per asset, for the review screen. Strings in, strings out. Each line
+ *  is rounded to cents first, as execution sends it, so the approved total is
+ *  the total debited. */
 export function totalsByAsset(draft: DraftPayment): Record<string, string> {
   const totals: Record<string, number> = {};
   for (const line of draft.lines) {
-    totals[line.asset] = (totals[line.asset] ?? 0) + Number(line.amount);
+    totals[line.asset] = (totals[line.asset] ?? 0) + toCents(line.amount);
   }
   return Object.fromEntries(
-    Object.entries(totals).map(([asset, n]) => [asset, n.toFixed(2)]),
+    Object.entries(totals).map(([asset, cents]) => [asset, fromCents(cents)]),
   );
 }
 

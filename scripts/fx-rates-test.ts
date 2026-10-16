@@ -15,6 +15,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+// No chain is used in-process, but config refuses hardhat's dev key on a real
+// chain's RPC, so pin the local one the way _local-chain.ts does.
+process.env.TRANSF_CHAIN_ID = "31337";
+process.env.TRANSF_RPC_URL ??= "http://127.0.0.1:8545";
+
 const PORT = Number(process.env.TRANSF_RATES_STUB_PORT ?? 8549);
 process.env.TRANSF_RATES_URL = `http://127.0.0.1:${PORT}/rates`;
 process.env.TRANSF_RATES_TTL_MS = "500";
@@ -149,6 +154,23 @@ try {
     process.env.TRANSF_RATES_FIXED = JSON.stringify({ USD: 1.1, INR: 100 }); // no KES
     await assert.rejects(() => rates.eurPer("KES"), /missing a valid KES/);
     delete process.env.TRANSF_RATES_FIXED;
+  });
+
+  await t("a sub-cent SEPA amount is rounded to cents once, at the quote", async () => {
+    const dataDir = mkdtempSync(path.join(os.tmpdir(), "fx-subcent-"));
+    process.env.TRANSF_DB_PATH = path.join(dataDir, "db.json");
+    try {
+      const { createQuote } = await import("../services/api/src/fx.js");
+      // Unrounded, 100.004 left €0.004 as a "fee" and 100.006 paid out €100.01.
+      for (const [sent, cents] of [[100.004, 100], [100.006, 100.01]]) {
+        const q = await createQuote("subcent-user", { rail: "sepa", sendEur: sent });
+        assert.equal(q.sendEur, cents, `sendEur for ${sent}`);
+        assert.equal(q.receiveEur, cents, `receiveEur for ${sent}`);
+      }
+    } finally {
+      delete process.env.TRANSF_DB_PATH;
+      rmSync(dataDir, { recursive: true, force: true });
+    }
   });
 
   await t("GET /api/rates never shows an anonymous caller the configured feed URL", async () => {

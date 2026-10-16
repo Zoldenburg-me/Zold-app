@@ -60,7 +60,7 @@ export async function createQuote(userId: string, req: QuoteRequest): Promise<Qu
   };
 
   let quote: Quote;
-  const sendEur = req.sendEur ?? 0;
+  const sendEur = roundEur(req.sendEur ?? 0);
   const fee = railFeeEur(req.rail);
   const convertible = sendEur - fee;
   if (convertible <= 0) throw new Error(fee > 0 ? `amount must exceed the €${fee} fee` : "amount must be positive");
@@ -97,6 +97,12 @@ export async function createQuote(userId: string, req: QuoteRequest): Promise<Qu
 
 export function isExpired(q: Quote): boolean {
   return Date.now() > Date.parse(q.expiresAt);
+}
+
+/** SEPA and quotes move whole cents: a sub-cent remainder became a phantom fee
+ *  or a rounded-up payout. Callers round with this BEFORE their own checks. */
+export function roundEur(x: number): number {
+  return round(x, 2);
 }
 
 function round(x: number, dp: number) {
