@@ -477,7 +477,8 @@ is business-shaped and the org is personal:
 ### 7.3 Members and roles — LIVE
 
 Three checks guard every org request: **session** (who), **member + role**
-(may they, here), and **plan capability** (did the org buy it). A non-member
+(may they, here), and **capability** (is the feature built, and part of
+this kind of org; no plan decides it). A non-member
 gets 404, not 403.
 
 | role | summary | can | cannot |
