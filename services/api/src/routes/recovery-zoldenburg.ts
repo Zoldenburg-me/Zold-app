@@ -274,21 +274,31 @@ export async function finalizeZoldenburgRecovery(request: RecoveryRequest, now =
   return bindAndFinish(request, user, now, txHash);
 }
 
-export async function sweepZoldenburgRecoveries(now = new Date()): Promise<number> {
+/** Requests whose guardian signature is being relayed now. The owner's cancel
+ *  and the expiry wait for it: either written meanwhile would leave a
+ *  recovery pending on chain under a closed row that nothing syncs again. */
+const relaying = new Set<string>();
+
+export async function sweepZoldenburgRecoveries(now = new Date(), sync = syncZoldenburgFromChain): Promise<number> {
   if (!zoldenburgRecoveryEnabled()) return 0;
   let n = 0;
   for (const r of [...store.recoveryRequests]) {
     if (r.mode !== "zoldenburg") continue;
+    // The store updates rows in place, so read the status before any write.
+    const before = r.status;
     try {
-      if (["PASSKEY_PENDING", "REVIEW_PENDING"].includes(r.status) && now >= new Date(r.expiresAt)) {
+      if (relaying.has(r.id)) continue;
+      // Ask the chain before expiring: a signature relayed outside /admin
+      // must still reach its grace period, or the owner is never alerted.
+      let cur = r.status === "REVIEW_PENDING" ? await sync(r, now) : r;
+      if (["PASSKEY_PENDING", "REVIEW_PENDING"].includes(cur.status) && now >= new Date(cur.expiresAt)) {
         store.updateRecoveryRequest(r.id, { status: "EXPIRED" });
         continue;
       }
-      let cur = r.status === "REVIEW_PENDING" ? await syncZoldenburgFromChain(r, now) : r;
       if (cur.status === "GRACE_PERIOD" && cur.zoldenburg?.finalizeAfter && now >= new Date(cur.zoldenburg.finalizeAfter)) {
         cur = await finalizeZoldenburgRecovery(cur, now);
       }
-      if (cur.status === "FINALIZED" && r.status !== "FINALIZED") n++;
+      if (cur.status === "FINALIZED" && before !== "FINALIZED") n++;
     } catch (err: any) {
       console.error(`recovery sweep: ${r.id}: ${describeCause(err)}`);
     }
@@ -514,6 +524,10 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       if (!["PASSKEY_PENDING", "REVIEW_PENDING"].includes(r.status)) {
         return res.status(409).json({ error: `recovery is ${r.status} — a started recovery is cancelled on chain with your passkey` });
       }
+      // Its signature is being relayed now: once on chain, the passkey cancels it.
+      if (relaying.has(r.id)) {
+        return res.status(409).json({ error: "this recovery is being signed right now — cancel it with your passkey in a moment", code: "BEING_SIGNED" });
+      }
       store.updateRecoveryRequest(r.id, { status: "CANCELED", canceledAt: new Date().toISOString(), cancelReason: "cancelled by the account owner" });
       res.json(await screenState(user));
     }),
@@ -528,13 +542,23 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
     return user && user.passkeySafe?.status === "active" && hasZoldenburgGuardian(user) ? user : undefined;
   };
 
-  const requestFor = (req: express.Request, res: express.Response): RecoveryRequest | undefined => {
-    const r = store.findRecoveryRequest(req.params.id);
+  const requestFor = async (req: express.Request, res: express.Response): Promise<RecoveryRequest | undefined> => {
+    let r = store.findRecoveryRequest(req.params.id);
     if (!r || r.mode !== "zoldenburg" || !secretMatches(r, presentedSecret(req))) {
       res.status(404).json({ error: "recovery not found" });
       return undefined;
     }
-    if (["PASSKEY_PENDING", "REVIEW_PENDING"].includes(r.status) && Date.now() >= Date.parse(r.expiresAt)) {
+    const expired = (x: RecoveryRequest) => ["PASSKEY_PENDING", "REVIEW_PENDING"].includes(x.status) && Date.now() >= Date.parse(x.expiresAt);
+    if (expired(r) && !relaying.has(r.id)) {
+      // Ask the chain before expiring, as the sweep does. An unreadable chain
+      // stores nothing; the sweep tries again.
+      try { r = await syncZoldenburgFromChain(r); } catch (err) {
+        console.error(`recovery ${r.id}: chain read before expiry failed: ${describeCause(err)}`);
+        res.status(503).json({ error: "could not read the recovery module — try again shortly", code: "CHAIN_UNREADABLE" });
+        return undefined;
+      }
+    }
+    if (expired(r) && !relaying.has(r.id)) {
       res.status(410).json({ ...publicRecoveryRequest(store.updateRecoveryRequest(r.id, { status: "EXPIRED" })), error: "this recovery expired — start again" });
       return undefined;
     }
@@ -604,7 +628,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
   router.post(
     "/recovery/zoldenburg/:id/passkey",
     wrap(async (req, res) => {
-      const request = requestFor(req, res);
+      const request = await requestFor(req, res);
       if (!request) return;
       if (request.status !== "PASSKEY_PENDING") return res.status(409).json({ ...publicRecoveryRequest(request), error: `recovery is ${request.status}` });
       const user = store.findUser(request.userId);
@@ -650,7 +674,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
   router.get(
     "/recovery/zoldenburg/:id",
     wrap(async (req, res) => {
-      let request = requestFor(req, res);
+      let request = await requestFor(req, res);
       if (!request) return;
       request = await syncZoldenburgFromChain(request).catch(() => request!);
       res.json(askView(request));
@@ -662,7 +686,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
   router.post(
     "/recovery/zoldenburg/:id/bank-code",
     wrap(async (req, res) => {
-      const request = requestFor(req, res);
+      const request = await requestFor(req, res);
       if (!request) return;
       if (request.status !== "REVIEW_PENDING") return res.status(409).json({ ...askView(request), error: `recovery is ${request.status}` });
       const user = store.findUser(request.userId);
@@ -685,7 +709,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
   router.post(
     "/recovery/zoldenburg/:id/bank-check",
     wrap(async (req, res) => {
-      const request = requestFor(req, res);
+      const request = await requestFor(req, res);
       if (!request) return;
       const last = Date.parse(request.zoldenburg?.bankCheck?.lastReadAt ?? "");
       const next = Number.isFinite(last) ? last + ENROLMENT.checkEveryMs : 0;
@@ -708,7 +732,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
   router.post(
     "/recovery/zoldenburg/:id/finalize",
     wrap(async (req, res) => {
-      const request = requestFor(req, res);
+      const request = await requestFor(req, res);
       if (!request) return;
       if (request.status === "FINALIZED") return res.json(publicRecoveryRequest(request));
       if (request.status !== "GRACE_PERIOD") return res.status(409).json({ ...publicRecoveryRequest(request), error: `recovery is ${request.status}` });
@@ -932,48 +956,57 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       // else is refused here rather than by a reverted transaction.
       const { td, digest } = await typedDataFor(r);
       const signature = await assertGuardianSignature(digest, req.body?.signature, guardian);
-      const { txHash } = await zoldenburgChain.relayRecovery(td, guardian, signature);
-      const now = new Date();
-      // Harness-only, as in the Candide flow: a test cannot wait for even the
-      // 3-minute module, and HARNESS is false on every real-money chain.
-      const simulatedGrace = HARNESS.enabled ? Number(process.env.RECOVERY_SIMULATED_GRACE_SECONDS ?? "") : NaN;
-      const grace = Number.isFinite(simulatedGrace) && simulatedGrace >= 0
-        ? simulatedGrace
-        : recoveryGracePeriodSeconds(r.recoveryModuleAddress) ?? 0;
-      let finalizeAfter = new Date(now.getTime() + grace * 1000);
-      if (!HARNESS.enabled) {
-        const user = store.findUser(r.userId)!;
-        const state = await readRecoveryState(user.passkeySafe as PasskeySafeDeploymentPlan);
-        if (!state.pending || !sameSet(state.pending.newOwners, r.zoldenburg!.newOwners!)) {
-          return res.status(502).json({ error: `the transaction ${txHash} was included but the module shows no matching recovery — check the chain` });
-        }
-        finalizeAfter = new Date(state.pending.executeAfter * 1000);
-      }
-      let verifierDeployTxHash: string | undefined;
+      // Read again after the awaits above: the owner may have cancelled meanwhile.
+      const status = store.findRecoveryRequest(r.id)?.status;
+      if (status !== "REVIEW_PENDING") return res.status(409).json({ error: `recovery is ${status}` });
+      if (relaying.has(r.id)) return res.status(409).json({ error: "this recovery is already being signed", code: "BUSY" });
+      relaying.add(r.id);
       try {
-        const owner = webauthnOwnerFromJwk(r.zoldenburg!.newPasskey!.publicKey.jwk);
-        if (owner) verifierDeployTxHash = await deployVerifierForOwner(owner);
-      } catch (err: any) {
-        console.error(`recovery ${r.id}: verifier deploy failed (will matter at first use): ${describeCause(err)}`);
+        const { txHash } = await zoldenburgChain.relayRecovery(td, guardian, signature);
+        const now = new Date();
+        // Harness-only, as in the Candide flow: a test cannot wait for even the
+        // 3-minute module, and HARNESS is false on every real-money chain.
+        const simulatedGrace = HARNESS.enabled ? Number(process.env.RECOVERY_SIMULATED_GRACE_SECONDS ?? "") : NaN;
+        const grace = Number.isFinite(simulatedGrace) && simulatedGrace >= 0
+          ? simulatedGrace
+          : recoveryGracePeriodSeconds(r.recoveryModuleAddress) ?? 0;
+        let finalizeAfter = new Date(now.getTime() + grace * 1000);
+        if (!HARNESS.enabled) {
+          const user = store.findUser(r.userId)!;
+          const state = await readRecoveryState(user.passkeySafe as PasskeySafeDeploymentPlan);
+          if (!state.pending || !sameSet(state.pending.newOwners, r.zoldenburg!.newOwners!)) {
+            return res.status(502).json({ error: `the transaction ${txHash} was included but the module shows no matching recovery — check the chain` });
+          }
+          finalizeAfter = new Date(state.pending.executeAfter * 1000);
+        }
+        let verifierDeployTxHash: string | undefined;
+        try {
+          const owner = webauthnOwnerFromJwk(r.zoldenburg!.newPasskey!.publicKey.jwk);
+          if (owner) verifierDeployTxHash = await deployVerifierForOwner(owner);
+        } catch (err: any) {
+          console.error(`recovery ${r.id}: verifier deploy failed (will matter at first use): ${describeCause(err)}`);
+        }
+        const updated = store.updateRecoveryRequest(r.id, {
+          status: "GRACE_PERIOD",
+          reviewedBy: operatorLabel(req),
+          reviewReason: note,
+          factors: { ...r.factors, kyc: "passed", manualReview: "passed" },
+          // Read again after the chain calls above, as in syncZoldenburgFromChain.
+          zoldenburg: {
+            ...zoldenburgNow(r.id),
+            recoveryHash: digest,
+            executeTxHash: txHash,
+            executedAt: now.toISOString(),
+            gracePeriodSeconds: grace,
+            finalizeAfter: finalizeAfter.toISOString(),
+            ...(verifierDeployTxHash ? { verifierDeployTxHash } : {}),
+          },
+        });
+        console.log(`RECOVERY: ${r.id} signed by ${operatorLabel(req)} and executed (${txHash}); finalizable after ${finalizeAfter.toISOString()}`);
+        res.json(adminView(updated));
+      } finally {
+        relaying.delete(r.id);
       }
-      const updated = store.updateRecoveryRequest(r.id, {
-        status: "GRACE_PERIOD",
-        reviewedBy: operatorLabel(req),
-        reviewReason: note,
-        factors: { ...r.factors, kyc: "passed", manualReview: "passed" },
-        // Read again after the chain calls above, as in syncZoldenburgFromChain.
-        zoldenburg: {
-          ...zoldenburgNow(r.id),
-          recoveryHash: digest,
-          executeTxHash: txHash,
-          executedAt: now.toISOString(),
-          gracePeriodSeconds: grace,
-          finalizeAfter: finalizeAfter.toISOString(),
-          ...(verifierDeployTxHash ? { verifierDeployTxHash } : {}),
-        },
-      });
-      console.log(`RECOVERY: ${r.id} signed by ${operatorLabel(req)} and executed (${txHash}); finalizable after ${finalizeAfter.toISOString()}`);
-      res.json(adminView(updated));
     }),
   );
 
