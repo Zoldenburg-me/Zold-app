@@ -605,6 +605,8 @@ function recordBankSettlement(
 ): void {
   const invoice = store.invoices.find((i) => i.id === invoiceId);
   if (!invoice) return;
+  // Already booked: the poll re-sees it every pass and must not rewrite the db.
+  if (invoice.settlements?.some((x) => settlementRef(x) === `monerium:${order.id}`)) return;
   store.updateInvoice(invoice.id, settlementUpdate(invoice, buildBankSettlement(order, matchedOn)));
 }
 
@@ -664,10 +666,7 @@ export function attributeMoneriumOrder(order: any): PaymentRequest | undefined {
     // The poller re-sees every order: one already on this request writes
     // nothing, bar an invoice settlement a crash left unwritten.
     if (order.id && r.payments.some((p) => p.orderId === order.id)) {
-      const invoice = r.invoiceId ? store.invoices.find((i) => i.id === r.invoiceId) : undefined;
-      if (invoice && invoice.state !== "DELETED" && !invoice.settlements?.some((x) => settlementRef(x) === `monerium:${order.id}`)) {
-        recordBankSettlement(invoice.id, order, "payment-link");
-      }
+      if (r.invoiceId) recordBankSettlement(r.invoiceId, order, "payment-link");
       return r;
     }
     const payment = matchMoneriumOrder(order, r, user.address);
