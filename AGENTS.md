@@ -131,7 +131,7 @@ Each of these was a bug once.
   editing someone's draft lines makes you the drafter.
 - **Gating is a read-time filter, NEVER a write-time delete.** Nothing in
   `store.ts` deletes an org, account, invoice or ledger row; no such method
-  exists. A trial is a grant with an end date, not a plan change.
+  exists. Every feature is free: no plan, no trial.
 - **INVALID_DATA**: a draft line's payee fingerprint is recomputed at review AND
   at execution. The gap between approval and execution is where an address-book
   edit lands.

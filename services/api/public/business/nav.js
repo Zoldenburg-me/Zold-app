@@ -1,6 +1,6 @@
 /**
- * The sidebar (design canvas "Desktop: Banking and Books") and the plan
- * banner.
+ * The sidebar (design canvas "Desktop: Banking and Books") and the banner
+ * row.
  *
  * Two spaces behind one switch. Banking: Home, Approvals, Send, Get paid,
  * Invoices, Contacts, Members, Apps, then the ACCOUNTS list, Coming soon and
@@ -80,7 +80,7 @@ matchMedia("(min-width: 1024px)").addEventListener("change", (e) => {
 /** Which nav item an older view belongs to. */
 export const PARENT = {
   ledger: "books", assets: "books", gains: "books",
-  shopify: "apps", "invoice-new": "invoices", "invoicing-settings": "settings", organisation: "settings", plan: "settings", access: "settings", accounts: "accounts",
+  shopify: "apps", "invoice-new": "invoices", "invoicing-settings": "settings", organisation: "settings", access: "settings", accounts: "accounts",
 };
 /** Every view id the router accepts, including those without a nav item. */
 export const KNOWN = new Set([...VIEWS.map((v) => v.id), ...Object.keys(PARENT), "settings", "soon"]);
@@ -94,11 +94,11 @@ export function spaceOf(v) {
   return lastSpace;
 }
 
-/* A plan limit keeps the entry, with a lock; a feature this kind of org can
-   never have (a business-only entry in a personal org) leaves it out. */
+/* An unbuilt feature keeps its entry; a feature this kind of org can never
+   have (a business-only entry in a personal org) leaves it out. */
 function shown(v) {
   const verdict = v.capability ? cap(v.capability) : { allowed: true };
-  return !v.capability || verdict.allowed || verdict.requiresPlan || verdict.unavailable;
+  return !v.capability || verdict.allowed || verdict.unavailable;
 }
 
 /* What the sidebar shows beside the nav: the org's accounts, and how many
@@ -131,7 +131,7 @@ function link(it, active) {
   const href = it.href || `?view=${encodeURIComponent(it.id)}`;
   return `<a class="z-side__link" href="${esc(href)}"${it.href ? "" : ` data-view="${esc(it.id)}"`}${here ? ' aria-current="page"' : ""}>${Z.icon(it.icon)}<span>${esc(it.label)}</span>`
     + `${it.badge ? `<span class="z-side__badge"><span class="z-sr">, </span>${esc(it.badge)}<span class="z-sr"> waiting for you</span></span>` : ""}`
-    + `${locked ? `${Z.icon("lock", "z-side__out")}<span class="z-sr"> (not in your plan)</span>` : ""}`
+    + `${locked ? `${Z.icon("lock", "z-side__out")}<span class="z-sr"> (not available)</span>` : ""}`
     + `${it.out ? `${Z.icon("open_in_new", "z-side__out")}<span class="z-sr"> (the app)</span>` : ""}</a>`;
 }
 
@@ -161,7 +161,7 @@ export function renderNav() {
   const tabs = TABS[space].map((id) => items.find((it) => it.id === id)).filter(Boolean);
   $("#tabs").innerHTML = `<nav class="z-bnav zb-tabs" aria-label="Quick" style="grid-template-columns:repeat(${tabs.length + 1},1fr)">${tabs.map((it) =>
     `<a href="?view=${esc(it.id)}" data-view="${esc(it.id)}"${it.id === active ? ' aria-current="page"' : ""}>${Z.icon(it.icon)}<span>${esc(it.id === "overview" ? "Home" : it.label)}</span>`
-    + `${it.capability && !cap(it.capability).allowed ? `${Z.icon("lock", "zb-tabs__lock")}<span class="z-sr"> (not in your plan)</span>` : ""}`
+    + `${it.capability && !cap(it.capability).allowed ? `${Z.icon("lock", "zb-tabs__lock")}<span class="z-sr"> (not available)</span>` : ""}`
     + `${it.badge ? `<span class="z-bnav__badge"><span class="z-sr">, </span>${esc(it.badge)}<span class="z-sr"> waiting for you</span></span>` : ""}</a>`).join("")}
     <button type="button" data-menu${TABS[space].includes(active) ? "" : ' aria-current="page"'}>${Z.icon("menu")}<span>Menu</span></button></nav>`;
   $("#nav").setAttribute("aria-label", space === "books" ? "Books" : "Main");
@@ -263,20 +263,5 @@ function recoveryBanner() {
 
 export function planBanner() {
   if (!org) return "";
-  return recoveryBanner() + personalBanner() + planNotice();
-}
-
-function planNotice() {
-  const t = org.trial;
-  if (t && !t.endedAt && new Date(t.endsAt) > new Date()) {
-    const days = Math.ceil((new Date(t.endsAt) - new Date()) / 86400000);
-    return `<div class="banner info">${Z.icon("hourglass_top")}<span>Trial of <b>${esc(t.grantsPlan)}</b>: ${days} day${days === 1 ? "" : "s"} left.
-      When it ends you go back to ${esc(org.plan)}. Nothing is deleted.</span></div>`;
-  }
-  if (org.plan === "starter" && org.type !== "personal") {
-    return `<div class="banner warn">${Z.icon("info")}<span>You’re on <b>Starter</b>: payouts, contacts and history.
-      ${org.trial ? "Your trial has been used." : "One 30-day trial is available."}</span>
-      ${org.trial || org.role !== "owner" ? "" : `<button class="z-btn z-btn--secondary z-btn--sm" data-act="trial">Start trial</button>`}</div>`;
-  }
-  return "";
+  return recoveryBanner() + personalBanner();
 }

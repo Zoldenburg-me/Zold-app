@@ -6,9 +6,8 @@
  * returns, so a crash cannot leave a change only in memory.
  *
  * Nothing deletes: there is no method to remove an organisation, account,
- * invoice or ledger row. Plan gating is a read-time filter. A downgraded org
- * keeps its chart of accounts, tags and history and the API just does not serve
- * them, which holds only while no delete path exists. Don't add one.
+ * invoice or ledger row. Feature gating is a read-time filter, which holds
+ * only while no delete path exists. Don't add one.
  *
  * The row shapes are in ./store/types.ts and the file-backed database in
  * ./store/db.ts; both are re-exported here.
@@ -895,8 +894,8 @@ export const store = {
   //
   // Reads return live rows; every write goes through here so a single atomic
   // persist covers the whole file. Deliberately NO delete for organisations,
-  // accounts, invoices or ledger entries: plan downgrades and archival must not
-  // be reachable by a code path that removes rows (see plans.ts rule 1).
+  // accounts, invoices or ledger entries: archival must not be reachable by a
+  // code path that removes rows (see plans.ts).
 
   get organisations() {
     return db.organisations;

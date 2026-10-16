@@ -210,15 +210,14 @@ const OP_KEY = `${ARBITRUM}:${OP}`;
 
 console.log("\nWho may read and revalue");
 
-await check("the three checks: no membership is 404, a plan without cost basis is 402, a viewer may read but not revalue", async () => {
+await check("no membership is 404, an org with no plan reads cost basis, a viewer may read but not revalue", async () => {
   assert.equal((await call("GET", "/org_1/assets", undefined, "u_outsider")).status, 404);
-  assert.equal((await call("GET", "/org_free/assets")).status, 402);
-  assert.equal((await call("GET", "/org_free/reports/realised-gains")).status, 402);
+  assert.equal((await call("GET", "/org_free/assets")).status, 200);
+  assert.equal((await call("GET", "/org_free/reports/realised-gains")).status, 200);
   assert.equal((await call("GET", "/org_1/assets", undefined, "u_viewer")).status, 200);
   assert.equal((await call("GET", "/org_1/reports/realised-gains", undefined, "u_viewer")).status, 200);
   assert.equal((await call("POST", "/org_1/ledger/op_in/revalue", {}, "u_viewer")).status, 403);
   assert.equal((await call("POST", "/org_1/ledger/op_in/revalue", {}, "u_outsider")).status, 404);
-  assert.equal((await call("POST", "/org_free/ledger/op_in/revalue", {})).status, 402);
   assert.equal((await call("POST", "/org_1/ledger/revalue", {}, "u_viewer")).status, 403);
 });
 

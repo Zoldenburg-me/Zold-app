@@ -2,9 +2,8 @@
  * The chart of accounts, categorisation rules, the ledger, positions and
  * export.
  *
- * Gating is a read-time filter, not a delete. A downgraded org keeps its
- * chart of accounts, rules and history; the API refuses to serve them until
- * an upgrade. Nothing here may delete on downgrade.
+ * Gating is a read-time filter, not a delete. Nothing here deletes an org's
+ * chart of accounts, rules or history.
  */
 import express from "express";
 import { randomUUID } from "node:crypto";
@@ -25,7 +24,7 @@ import { revaluable, revalueEntry } from "../../wallet-sync/revalue.js";
 import { CHAIN_ID } from "../../config.js";
 import { wrap } from "../util.js";
 import { requireCapability, requirePermission, type OrgContext } from "../org-context.js";
-import { limitsFor } from "../../domain/plans.js";
+import { LIMITS } from "../../domain/plans.js";
 import {
   badRequest, } from "./shared.js";
 
@@ -314,7 +313,7 @@ export function createBookkeepingRoutes(deps: OrgRoutes): express.Router {
     if (!requireCapability(ctx, res, "reports.monthlyBalance")) return;
     if (!requirePermission(ctx, res, "reports.run")) return;
 
-    const months = limitsFor(ctx.org).reportMonths;
+    const months = LIMITS.reportMonths;
     const earliest = new Date();
     earliest.setMonth(earliest.getMonth() - months);
     const floor = earliest.toISOString().slice(0, 7);

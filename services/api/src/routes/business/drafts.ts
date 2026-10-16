@@ -37,7 +37,7 @@ import { paymentReference } from "../../domain/invoices.js";
 import type { DraftPayment, DraftState } from "../../domain/types.js";
 import { requireCapability, requirePermission, type OrgContext } from "../org-context.js";
 import { paymentReviewRequired } from "../../domain/payment-review.js";
-import { limitsFor } from "../../domain/plans.js";
+import { LIMITS } from "../../domain/plans.js";
 import {
   badRequest, type TransferFactory,
 } from "./shared.js";
@@ -190,8 +190,8 @@ export function createDraftRoutes(
     const ctx = ctxOf(req, res);
     if (!ctx) return;
     if (!requirePermission(ctx, res, "drafts.create")) return;
-    // Submitting is possible wherever review is: the plan includes it, or the
-    // org's policy still requires it after a downgrade.
+    // Submitting is possible wherever review is: a business org, or one whose
+    // policy requires it.
     if (!paymentReviewRequired(ctx.org) && !requireCapability(ctx, res, "transfers.approvals")) return;
 
     const draft = store.findDraft(String(req.params.draftId));
@@ -227,9 +227,9 @@ export function createDraftRoutes(
   r.post("/:orgId/drafts/:draftId/review", (req, res) => {
     const ctx = ctxOf(req, res);
     if (!ctx) return;
-    // No plan check: a draft waiting for review was put there when review
-    // applied, and it stays reviewable after a downgrade or after review is
-    // turned off. The state machine only lets PENDING_REVIEW be reviewed.
+    // No capability check: a draft waiting for review was put there when review
+    // applied, and it stays reviewable after review is turned off. The state
+    // machine only lets PENDING_REVIEW be reviewed.
 
     const draft = store.findDraft(String(req.params.draftId));
     if (!draft || draft.orgId !== ctx.org.id) {
@@ -494,10 +494,9 @@ export function createDraftRoutes(
     }
 
     // ── Claim, then create ────────────────────────────────────────────────
-    // Which states may be sent from is the org's review policy, not the plan
-    // of the day: an org that requires review sends only REVIEWED drafts,
-    // after a downgrade too. One without review has no review step, so it
-    // sends from DRAFT. A draft waiting for review is never sent until it is
+    // Which states may be sent from is the org's review policy: an org that
+    // requires review sends only REVIEWED drafts. One without review has no
+    // review step, so it sends from DRAFT. A draft waiting for review is never sent until it is
     // reviewed, even if review has since been turned off.
     const reviewRequired = paymentReviewRequired(ctx.org);
     const claimable: DraftState[] = reviewRequired ? ["REVIEWED"] : ["DRAFT", "REVIEWED"];
@@ -674,7 +673,7 @@ export function createDraftRoutes(
         store.ledgerOf(ctx.org.id).flatMap((e) => e.tags),
       );
       const result = importCsv(req.body, mapping, {
-        maxRows: limitsFor(ctx.org).bulkCsvRows,
+        maxRows: LIMITS.bulkCsvRows,
         knownTags,
       });
       res.json({

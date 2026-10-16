@@ -1,6 +1,6 @@
 /**
- * Settings from design/ui-v2 (build step 7): Settings, Security, Plan and
- * Coming soon. Recovery, documents, signers and Monerium keys are still the
+ * Settings from design/ui-v2 (build step 7): Settings, Security and Coming
+ * soon. Recovery, documents, signers and Monerium keys are still the
  * older #dashboard screens; these rows open them by route.
  *
  * Declarations only: phone.js draws these through the PH registry, and
@@ -11,8 +11,6 @@
  *   without hardware protection (no PRF), as device.js reports it.
  * - There is no list of devices: the API knows one sign-in (the passkey) and
  *   whether this browser holds the payment key. Nothing more is drawn.
- * - Plan has no upgrade button: paid plans are not on sale. The one trial is
- *   offered while it is unused, to whoever may start it (an owner).
  * - Coming soon lists only what this deployment really can't do yet.
  */
 
@@ -60,23 +58,6 @@ function phSecurityChecks() {
   return (phKeyUnprotected() ? 1 : 0) + (r.offered && !r.on ? 1 : 0);
 }
 
-/* The account the plan belongs to: the company the phone acts for, or the
-   personal one. */
-const phPlanOrg = () => phPersonalOrg();
-const phPlanName = (id) => ({ starter: "Starter", premium: "Premium", business: "Business" }[id] || id);
-function phTrialLeft(org) {
-  const t = org?.trial;
-  if (!t?.endsAt || t.endedAt) return 0;
-  const ms = Date.parse(t.endsAt) - Date.now();
-  return ms > 0 ? Math.ceil(ms / 86400000) : 0;
-}
-function phPlanWords(org) {
-  if (!org) return "";
-  const left = phTrialLeft(org);
-  if (left) return `${phPlanName(org.trial.grantsPlan)} trial, ${left === 1 ? "1 day" : `${left} days`} left`;
-  return org.plan === "starter" ? "Starter, free" : phPlanName(org.effectivePlan || org.plan);
-}
-
 /* ==========================================================================
    Settings
    ========================================================================== */
@@ -84,7 +65,7 @@ function phPlanWords(org) {
 PH.settings = {
   title: "Settings",
   live: () => JSON.stringify([user?.name, user?.email, user?.monerium?.method, user?.paymentPage?.settlementAsset, user?.paymentPage?.autoConvert,
-    phKey?.protection, phSecurityChecks(), phCache.orgs?.map((o) => `${o.id}:${o.plan}:${o.trial?.endsAt}`), user?.privacyBundle?.status]),
+    phKey?.protection, phSecurityChecks(), user?.privacyBundle?.status]),
   html() {
     const u = user || {};
     const checks = phSecurityChecks();
@@ -98,20 +79,16 @@ PH.settings = {
     ];
     // Accounting software connects to a space in Zold Business, not here.
     const connections = HAS("monerium") ? [Z.row({ lead: Z.iconTile({ icon: "account_balance" }), title: "Monerium", sub: mon, href: "#monerium-settings" })] : [];
-    const plan = [
-      Z.row({ lead: Z.iconTile({ icon: "workspace_premium" }), title: "Plan", sub: phCache.orgs === null ? "Loading…" : phPlanWords(phPlanOrg()) || "No plan", href: "#plan" }),
-      ...(plus ? [Z.row({ lead: Z.iconTile({ icon: "stars" }), title: "Zold Plus", sub: "Privacy Bundle active", href: "#plus" })] : []),
-    ];
+    const plusRow = plus ? Z.listGroup({ rows: [Z.row({ lead: Z.iconTile({ icon: "stars" }), title: "Zold Plus", sub: "Privacy Bundle active", href: "#plus" })] }) : "";
     return `${phTop("Settings", "more")}${phMain(`
       ${Z.listGroup({ rows: account })}
       ${connections.length ? `<section class="z-group"><h2 class="z-eyebrow">Connections</h2>${Z.listGroup({ rows: connections })}</section>` : ""}
-      ${Z.listGroup({ rows: plan })}
+      ${plusRow}
       ${Z.button({ full: true, icon: "logout", label: "Sign out", id: "ph-signout" })}
     `)}`;
   },
   bind(root) {
     phLoadKey("settings");
-    if (phCache.orgs === null) phLoadOrgs().then(() => { if (phRoute?.name === "settings") phRender(); });
     root.querySelector("#ph-signout").onclick = () => $("btn-signout").click();
   },
 };
@@ -210,71 +187,6 @@ PH.security = {
 };
 
 /* ==========================================================================
-   Plan
-   ========================================================================== */
-
-async function phLoadPlans(type) {
-  try { phCache.plans[type] = (await api(`/api/orgs/plans?type=${encodeURIComponent(type)}`)).plans || []; }
-  catch { phCache.plans[type] = []; }
-}
-
-PH.plan = {
-  title: "Plan",
-  live: () => JSON.stringify([phCache.orgs?.map((o) => `${o.id}:${o.plan}:${o.effectivePlan}:${o.trial?.endsAt}`), Object.keys(phCache.plans)]),
-  html() {
-    const org = phPlanOrg();
-    if (phCache.orgs === null || (org && !phCache.plans[org.type])) return `${phTop("Plan", "settings")}${phMain(Z.skeletonRows(2, "Loading your plan…"))}`;
-    if (!org) return `${phTop("Plan", "settings")}${phMain(Z.note({ tone: "a", text: "We couldn’t load your plan. Try again later." }))}`;
-    const plans = phCache.plans[org.type] || [];
-    const current = plans.find((p) => p.id === org.plan);
-    const paid = org.type === "business" ? "business" : "premium";
-    const upgrade = plans.find((p) => p.id === paid);
-    const left = phTrialLeft(org);
-    const ended = org.trial && !left;
-    const owner = org.role === "owner";
-    const card = (p, head, tag, extra = "") => `<section class="z-card z-plan${tag ? "" : " z-plan--offer"}" aria-labelledby="ph-plan-${esc(p.id)}">
-      <div class="z-plan__head"><span>${esc(head)}</span>${tag || ""}</div>
-      <h2 class="z-plan__name" id="ph-plan-${esc(p.id)}">${esc(p.name)}${p.id === "starter" ? ' <span class="z-plan__price">free</span>' : ""}</h2>
-      <p class="z-plan__blurb">${esc(phPlain(p.blurb))}</p>${extra}</section>`;
-    const who = org.type === "business" ? org.name : "your personal account";
-    const trialCard = !upgrade || org.plan === paid ? ""
-      : left ? card(upgrade, `Trial for ${who}`, Z.tag(`${left === 1 ? "1 day" : `${left} days`} left`, "pink"),
-        `<p class="z-hint">Ends ${esc(phFull(org.trial.endsAt))}. Then paid features pause and nothing is deleted.</p>`)
-        : ended ? card(upgrade, "Trial used", "", `<p class="z-hint">The trial ended ${esc(phDay(org.trial.endedAt || org.trial.endsAt))}. Paid plans aren’t on sale during the beta; paid features are paused and nothing was deleted.</p>`)
-          : card(upgrade, "Try it free for 30 days", "", `<p class="z-hint">Paid plans aren’t on sale during the beta. When the trial ends, paid features pause and nothing is deleted.</p>`);
-    const offer = upgrade && !org.trial && org.plan !== paid;
-    return `${phTop("Plan", "settings")}${phMain(`
-      ${current ? card(current, "Current plan", Z.tag("Active", "mint")) : ""}
-      ${trialCard}
-      <p class="z-err" id="ph-plan-err" role="alert" hidden></p>
-    `)}${offer ? phFoot(owner
-      ? Z.button({ variant: "primary", full: true, label: "Start 30-day trial", id: "ph-plan-trial" })
-      : Z.button({ variant: "primary", full: true, label: "Start 30-day trial", disabledReason: "Only an owner can start the trial." })) : ""}`;
-  },
-  bind(root) {
-    if (phCache.orgs === null) { phLoadOrgs().then(() => { if (phRoute?.name === "plan") phRender(); }); return; }
-    const org = phPlanOrg();
-    if (org && !phCache.plans[org.type]) { phLoadPlans(org.type).then(() => { if (phRoute?.name === "plan") phRender(); }); return; }
-    const b = root.querySelector("#ph-plan-trial");
-    if (b) b.onclick = async () => {
-      if (Z.isDisabled(b)) return;
-      Z.setLoading(b, true);
-      try {
-        await api(`/api/orgs/${encodeURIComponent(org.id)}/plan/trial`, {});
-        phCache.orgs = null;
-        await phLoadOrgs();
-        phRender();
-        Z.announce("Trial started");
-      } catch (e) {
-        Z.setLoading(b, false);
-        const err = $("ph-plan-err");
-        err.textContent = phPlain(e.message); err.hidden = false;
-      }
-    };
-  },
-};
-
-/* ==========================================================================
    Coming soon
    ========================================================================== */
 
@@ -286,12 +198,11 @@ async function phLoadSoon() {
 
 PH.soon = {
   title: "Coming soon",
-  live: () => JSON.stringify([user?.iban, user?.kycStatus, caps.cashRail, phCache.soon?.length, phCache.orgs?.map((o) => o.effectivePlan), user?.privacyBundle?.status]),
+  live: () => JSON.stringify([user?.iban, user?.kycStatus, caps.cashRail, phCache.soon?.length, user?.privacyBundle?.status]),
   html() {
     const u = user || {};
     const soonTile = Z.iconTile({ icon: "hourglass_top", tone: "a" });
     const later = (phCache.soon || []).filter((c) => !c.available && c.code !== "EUR").map((c) => c.code);
-    const personal = phPersonalOrg();
     const rows = [
       ...(!(u.iban && kycApproved(u)) && !bankOffered(u)
         ? [Z.row({ lead: soonTile, title: "IBAN", sub: u.kycStatus === "rejected" ? "Our banking partner can’t onboard you at the moment" : "Not available where you live yet", soon: true })]
@@ -303,9 +214,6 @@ PH.soon = {
       ...(later.length ? [Z.row({ lead: soonTile, title: "Accounts in other currencies", sub: `${later.length > 1 ? `${later.slice(0, -1).join(", ")} and ${later.at(-1)}` : later[0]}: waiting on an account provider`, soon: true })] : []),
       Z.row({ lead: soonTile, title: "More countries", sub: "Bank transfers reach Europe only, for now", soon: true }),
       Z.row({ lead: soonTile, title: "Sending to a crypto wallet", sub: "Not built yet", soon: true }),
-      ...(personal && !phCan(personal, "invoices")
-        ? [`<a class="z-row" href="#plan">${soonTile}<span class="z-row__main"><span class="z-row__title">Premium features</span><span class="z-row__sub">Trial only during the beta</span></span><span class="z-row__right"><span class="z-btn z-btn--secondary z-btn--sm" aria-hidden="true">Plan</span></span></a>`]
-        : []),
       ...(!(u.privacyBundle && u.privacyBundle.status !== "canceled") ? [Z.row({ lead: soonTile, title: "Zold Plus", sub: "Card, VPN and eSIM in one plan, not on sale yet", href: "#plus" })] : []),
     ];
     return `${phTop("Coming soon", "more")}${phMain(`
@@ -315,7 +223,6 @@ PH.soon = {
   },
   bind(root) {
     if (phCache.soon === null) phLoadSoon();
-    if (phCache.orgs === null) phLoadOrgs().then(() => { if (phRoute?.name === "soon") phRender(); });
     const iban = root.querySelector("#ph-soon-iban");
     if (iban) iban.onclick = () => enterKycReview(user?.name || "Account");
   },

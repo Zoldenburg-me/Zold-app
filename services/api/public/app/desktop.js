@@ -37,7 +37,7 @@ const phMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent |
 function phSideActive(name) {
   if (name === "contacts") return "contacts";
   if (name === "soon") return "soon";
-  if (["more", "settings", "security", "plan", "settings/currency"].includes(name)) return "settings";
+  if (["more", "settings", "security", "settings/currency"].includes(name)) return "settings";
   if (name === "in") return "activity";
   if (/^(tx|send)/.test(name)) return name.startsWith("tx") ? "activity" : "send";
   if (/^(get-paid|link)/.test(name)) return "get-paid";

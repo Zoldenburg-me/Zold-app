@@ -103,11 +103,11 @@ export async function api(path, opts = {}) {
 /** Can the current org use this capability? Mirrors the server's verdict. */
 export const cap = (id) => org?.capabilities?.[id] ?? { allowed: false, label: id };
 /** Whether a payment needs a second person's approval before it is sent: the
- *  org's own policy, which outlives a downgrade (domain/payment-review.ts). */
+ *  org's own policy (domain/payment-review.ts). */
 export const reviewOn = () => Boolean(org?.paymentReview?.required);
 
 /**
- * Render an upgrade / unavailable prompt in place of the feature.
+ * Render why a feature is refused, in place of the feature.
  * Never hides the nav entry — a hidden feature reads as a missing one.
  */
 export function gateHtml(id) {
@@ -115,14 +115,10 @@ export function gateHtml(id) {
   if (v.unavailable) {
     return `<div class="gate"><h3>${esc(v.label)} ${Z.tag("Soon")}</h3>
       <p>${esc(v.unavailable)}</p>
-      <div class="needs">Not a plan limit: this isn’t built yet.</div></div>`;
+      <div class="needs">This isn’t built yet.</div></div>`;
   }
-  const plans = (v.requiresPlan || []).join(" or ");
   return `<div class="gate"><h3>${esc(v.label)}</h3>
-    <p>${esc(v.upgradeHint || v.reason || "")}</p>
-    ${plans ? `<div class="zb-actions">${org.trial ? "" : `<button class="z-btn z-btn--primary z-btn--sm" data-act="trial">Start 30-day trial</button>`}
-      <button class="z-btn z-btn--secondary z-btn--sm" data-act="upgrade" data-plan="${esc(v.requiresPlan[0])}">Choose ${esc(plans)}</button></div>` : ""}
-    ${plans ? "" : `<div class="needs">${esc(v.reason || "")}</div>`}</div>`;
+    <div class="needs">${esc(v.reason || "")}</div></div>`;
 }
 
 // ── navigation ─────────────────────────────────────────────────────────────

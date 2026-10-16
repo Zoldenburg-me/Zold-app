@@ -41,7 +41,7 @@
 let phRoute = null;            // { name, arg }
 let phSig = "";                // what the open screen was drawn from, for the poll
 const phCache = { deposits: null, links: null, methods: null, orgs: null, contacts: null, bic: undefined, bicFor: "", currencyPending: null,
-  plans: {}, signers: undefined, soon: null, walletQr: null };
+  signers: undefined, soon: null, walletQr: null };
 
 /* A link into Zold Business: it opens the organisation it last had, so a
    link for one names it first (see the click listener below). */
@@ -245,7 +245,7 @@ const phFirst = (name) => String(name || "").trim().split(/\s+/)[0] || "";
 /* Server text in the app's voice: no dashes or arrows, curly apostrophes. */
 const phPlain = (s) => String(s || "").replace(/\s*[—–]\s*/g, ", ").replace(/\s*→\s*/g, ", then ").replace(/(\w)'(\w)/g, "$1’$2");
 const phEur = (n) => Z.formatMoney(n ?? 0, "EUR");
-/* The plan check, as the organisation read reports it. */
+/* The capability check, as the organisation read reports it. */
 const phCan = (org, cap) => org?.capabilities?.[cap]?.allowed === true;
 const phPersonalOrg = () => (phCache.orgs || []).find((o) => o.type === "personal") || null;
 async function phLoadOrgs() {

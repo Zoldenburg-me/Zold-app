@@ -457,24 +457,22 @@ exist.
   per-capability verification states. An org is never deleted, and no route
   exists to delete one.
 
-### 7.2 Plans and capabilities — LIVE (no billing)
+### 7.2 Capabilities — LIVE, all free
 
-| plan | org types | adds |
-|---|---|---|
-| **Starter** (free) | personal, business | One account, send and receive, contacts, history, receipts. Business orgs get members (up to 3). |
-| **Premium** (paid) | personal only | Multi-currency accounts (5), tagged ledger, export, cost basis, monthly report, invoices. |
-| **Business** (paid) | business only | Premium, plus up to 50 members, four-eyes approvals, bulk CSV (500 rows), chart of accounts and rules, and "accounting integrations" (LABEL ONLY). |
+There are no plans, no trial and no billing. Every built feature is free for
+every organisation. A capability refuses only when it is not built, or when it
+is business-shaped and the org is personal:
 
-- **Gating is a read-time filter, never a delete.** A downgrade pauses
-  business features and keeps the data.
-- **A trial is a grant with an end date**: 30 days, one per org, ever.
-- **There is no billing.** An owner can start the trial or downgrade with a
-  click, but cannot switch onto a paid plan (402 `PAID_PLAN_NEEDS_GRANT`):
-  a paid plan is an operator grant (`POST /api/admin/orgs/:orgId/plan`), so
-  nothing is handed out as bought that nobody paid for.
-- `cards` is marked *unavailable* at every price. `integrations.accounting` is
-  **not** marked unavailable, so it reports as allowed on Business with nothing
-  behind it (§9.3).
+| capability | org types |
+|---|---|
+| Accounts in several currencies, send and receive, contacts, history, receipts, tagged ledger, export, cost basis, monthly report, invoices, reporting currency | personal, business |
+| Members, four-eyes approvals, bulk CSV, chart of accounts and rules, accounting connector | business only |
+
+- **Gating is a read-time filter, never a delete.**
+- Limits are the same for every org: 20 accounts, 50 members, 100 imported
+  wallets, 500 CSV rows, reports back 120 months. Crossing one refuses the
+  create (409) and hides nothing.
+- `cards` is marked *unavailable*.
 
 ### 7.3 Members and roles — LIVE
 
@@ -504,7 +502,7 @@ gets 404, not 403.
 | question | answer today |
 |---|---|
 | How does an accountant get access? | An owner or admin invites them with the role `accountant`. The accountant must create a full Zold account with the same email (passkey + Safe) and accept. There is no guest login, API key or share link. |
-| Which plan is needed? | A **business** org. Members only exist on business orgs. The books screens need Business (or a Business trial). On Starter every books screen returns 402. |
+| What does the org need? | A **business** org. Members and the chart of accounts only exist on business orgs. No plan is needed. |
 | Can they see transactions? | **Not the money movements themselves.** They see drafts (org-originated payments), invoices with their recorded settlements, and contacts. The ledger, which was meant to hold every transaction, **has no writer and is always empty** (§8.3). There is no org-level transfer feed: the `transfers.read` permission exists but no route checks it. The account's transfers live under the backing user's personal session. |
 | Can they move money? | No. They can prepare drafts, and someone with `drafts.review` must approve. Only the backing user can execute. |
 | Can they close an invoice? | No. Reconcile needs `invoices.manage`. |
@@ -557,14 +555,12 @@ stateDiagram-v2
 ```
 
 - **Review is the organisation's policy** (`domain/payment-review.ts`).
-  Switching it on needs a plan with approvals (Business, or its trial). Once
-  an organisation has had it, a lapsed trial or a downgrade keeps it on: a
-  plan change records `paymentReview` as kept, so nobody can send alone
-  because the plan changed. Only an owner turns it off, under Settings → Who
-  approves payments, with a fresh passkey approval; the change is audited.
-  A draft already waiting for review keeps waiting and stays reviewable after
-  a downgrade or after review is turned off; it is sent once someone reviews
-  it.
+  An owner of a business org turns it on or off under Settings → Who
+  approves payments; off takes a fresh passkey approval, and each change is
+  audited. Until an owner chooses, review is on for an org that stored the
+  business plan or its trial, and off for every other org. A draft already
+  waiting for review keeps waiting and stays reviewable after review is
+  turned off; it is sent once someone reviews it.
 - **A draft can be edited and cancelled until sending starts.** Editing a
   waiting or approved draft puts it back to DRAFT and clears its review; the
   editor becomes its drafter. Cancelling keeps the row as CANCELLED with who
@@ -585,7 +581,6 @@ stateDiagram-v2
 - Gaps found while reading:
   - The business dashboard's Send appears unable to complete a passkey-Safe
     send, because it does not produce the passkey assertion.
-  - On Starter and Premium the UI offers no way to send a draft.
   - Bulk-CSV lines are always wallet destinations, and those are refused from
     an issued account.
   - The draft drawer edits amounts and notes; there is no UI to re-point a
@@ -915,7 +910,7 @@ does not support.
 | `docs/business-accounts.md` (role table) | Owner may delete the org | No delete route exists, by design. |
 | `business/accounts-and-currencies.md` | USD accounts "through Bridge" | The currency registry names **Iron** as the USD/GBP provider. Bridge appears in code only as the cash-rail transfer seam. |
 | `business/bulk-payments.md` | CSV destination "an IBAN, or a wallet address"; Payments → New draft → Import CSV | The importer produces wallet lines only (`chainId: 0`), and wallet lines are refused from an issued account. There is no Import CSV button in `/business`. The API parses and returns lines but does not create a draft. |
-| `business/imported-wallets.md` | "its balance shown"; history and backfill on Premium/Business | No balance is shown. History is booked as ERC-20 transfers only on chains the deployment has an RPC for, which today is none; backfill is Business only. |
+| `business/imported-wallets.md` | "its balance shown"; history and backfill | No balance is shown. History is booked as ERC-20 transfers only on chains the deployment has an RPC for, which today is none. |
 | `business/payments-and-approvals.md` | Send from the business dashboard | Send from `/business` does not yet produce the passkey assertion a Safe debit needs. A reviewer can send a run back with a reason; there is no re-point UI. |
 | `get-paid/payment-page.md` | QR on the page | The QR image route is currently unreachable: it is shadowed by the payment-link route (see the technical doc). |
 | `add-money/crypto-deposit.md` and app copy | Converted "at the live mid rate on arrival" | Converted on passkey approval, at the venue's rate, checked against the mid. |

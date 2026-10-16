@@ -10,7 +10,6 @@
  * cannot act as the operator on their own account. It fails closed when no
  * token is configured.
  */
-import { reviewHeldOnPlanChange } from "../domain/payment-review.js";
 import express from "express";
 import { wrap } from "./util.js";
 import { orchestratorAddress, publicClient } from "../chain.js";
@@ -29,8 +28,6 @@ import {
 } from "../store.js";
 import { operatorLabel, requireOperator } from "../http/guards.js";
 import { recentServerErrors } from "../http/error-log.js";
-import { plansFor, trialIsActive } from "../domain/plans.js";
-import type { PlanId } from "../domain/types.js";
 import { onboardingOf, recoveryEnrolment } from "../admin/onboarding.js";
 import { issues, overview } from "../admin/overview.js";
 import { liveMonerium, moneriumOverview, storedMonerium } from "../admin/monerium.js";
@@ -210,31 +207,6 @@ export function createAdminRouter() {
         totalVolumeEur,
         operatorGas: await operatorGas().catch(() => null),
       });
-    }),
-  );
-
-  /**
-   * Grant an organisation a plan. Owners cannot buy a paid plan themselves —
-   * there is no billing — so a paid plan is an operator decision, made here.
-   * Like the owner's route, it only changes `plan`; nothing is deleted.
-   */
-  router.post(
-    "/admin/orgs/:orgId/plan",
-    wrap(async (req, res) => {
-      if (!requireOperator(req, res)) return;
-      const org = store.findOrganisation(String(req.params.orgId));
-      if (!org) return res.status(404).json({ error: "organisation not found" });
-      const plan = String(req.body?.plan ?? "");
-      const allowed: string[] = plansFor(org.type).map((p) => p.id);
-      if (!allowed.includes(plan)) {
-        return res.status(400).json({ error: `A ${org.type} organisation can hold ${allowed.join(" or ")}.` });
-      }
-      const updated = store.updateOrganisation(org.id, {
-        plan: plan as PlanId,
-        ...reviewHeldOnPlanChange(org, plan as PlanId),
-        ...(trialIsActive(org) ? { trial: { ...org.trial!, endedAt: new Date().toISOString() } } : {}),
-      });
-      res.json({ id: updated.id, plan: updated.plan, trial: updated.trial });
     }),
   );
 

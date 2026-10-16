@@ -110,12 +110,11 @@ export async function render({ focus = false } = {}) {
     }
   } catch (e) {
     if (mine !== seq) return;
-    // A 402 here means the plan gate fired server-side. Show the same prompt
-    // rather than an error, so the two agree.
-    box.innerHTML = e.status === 402 || e.status === 409
+    // A 409 here means the feature gate fired server-side. Show the same
+    // prompt rather than an error, so the two agree.
+    box.innerHTML = e.status === 409
       ? `<div class="gate"><h3>${esc(e.capability || "Not available")}</h3>
-         <p>${esc(e.error)}</p>${e.requiresPlan && !org.trial
-           ? `<div class="zb-actions"><button class="z-btn z-btn--primary z-btn--sm" data-act="trial">Start 30-day trial</button></div>` : ""}</div>`
+         <p>${esc(e.error)}</p></div>`
       : e.status === 403
         ? `<div class="gate"><h3>Not for your role</h3><p>${esc(e.error || "Your role in this organisation can’t open this.")}</p></div>`
         : `<div class="banner warn">${window.Z.icon("warning")}<span>${esc(e.message)}</span></div>`;
