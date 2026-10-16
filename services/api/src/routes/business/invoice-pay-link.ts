@@ -48,6 +48,14 @@ export function openLinkPath(invoice: Pick<Invoice, "id" | "orgId">): string | u
   return link ? `/pay/${encodeURIComponent(link.handle)}/${displayCode(link.code)}` : undefined;
 }
 
+/** The invoice had a link and it ran out: the page says so instead of the
+ *  Pay button silently going missing. */
+export function payLinkLapsed(invoice: Pick<Invoice, "id" | "orgId">): boolean {
+  return !openLinkFor(invoice) && store.paymentRequests.some(
+    (p) => p.invoiceId === invoice.id && p.orgId === invoice.orgId && !p.test && effectiveState(p) === "EXPIRED",
+  );
+}
+
 /** Open until well after the invoice falls due: a link that dies before the
  *  customer pays leaves them a Pay button that does nothing. */
 export function linkExpiry(dueDate: string | undefined, now = new Date()): string {
@@ -61,6 +69,10 @@ export function linkExpiry(dueDate: string | undefined, now = new Date()): strin
  * One link at a time per invoice, in this process. Finding no open link and
  * creating one are split by an await; two requests at once would each make
  * one. Callers run find-then-create inside this, and re-check inside it.
+ * createPaymentRequest also refuses a second open link, so a caller outside
+ * the lock gets a 409, not a second link.
+ * shortcut: one process per db (one Akash lease); move the lock into the
+ * store if the API ever runs more than once against the same data.
  */
 const invoiceLocks = new Map<string, Promise<unknown>>();
 export async function withInvoiceLinkLock<T>(invoice: Pick<Invoice, "id" | "orgId">, fn: () => Promise<T>): Promise<T> {
@@ -76,8 +88,20 @@ export async function withInvoiceLinkLock<T>(invoice: Pick<Invoice, "id" | "orgI
   }
 }
 
+/** Never throws: the invoice is already issued and numbered, and a 500 here
+ *  would invite a retry that issues it twice. Say so and log instead. */
 export async function payLinkForInvoice(ctx: OrgContext, invoice: Invoice, baseUrl: string): Promise<InvoicePayLink> {
-  return withInvoiceLinkLock(invoice, () => payLinkUnlocked(ctx, invoice, baseUrl));
+  try {
+    return await withInvoiceLinkLock(invoice, () => payLinkUnlocked(ctx, invoice, baseUrl));
+  } catch (err) {
+    if (err instanceof PaymentRequestError) return { ok: false, code: "REFUSED", reason: err.message };
+    console.error(`invoice pay link: ${ctx.org.id}/${invoice.id}: ${redactedMessage(err)}`);
+    return {
+      ok: false,
+      code: "ERROR",
+      reason: "The Pay button could not be added just now. Add it later with Payment link in the invoice list.",
+    };
+  }
 }
 
 async function payLinkUnlocked(ctx: OrgContext, invoice: Invoice, baseUrl: string): Promise<InvoicePayLink> {
@@ -105,19 +129,7 @@ async function payLinkUnlocked(ctx: OrgContext, invoice: Invoice, baseUrl: strin
   if (!methods.length) {
     return { ok: false, code: "NO_METHOD", reason: "No way to get paid is set up on this account yet. The invoice shows your bank details instead." };
   }
-  try {
-    const input = validateCreate({ invoiceId: invoice.id, methods, expiresAt: linkExpiry(invoice.dueDate) }, user);
-    const link = await createPaymentRequest(user, input, { kind: "app" }, ctx.org.id);
-    return { ok: true, url: ownerPaymentRequest(link, baseUrl).url, amountEur: link.amountEur, reused: false };
-  } catch (err) {
-    if (err instanceof PaymentRequestError) return { ok: false, code: "REFUSED", reason: err.message };
-    // The invoice is already issued and numbered: a 500 here would invite a
-    // retry that issues it twice. Say so and log; the button can be added later.
-    console.error(`invoice pay link: ${invoice.id}: ${redactedMessage(err)}`);
-    return {
-      ok: false,
-      code: "ERROR",
-      reason: "The Pay button could not be added just now. Add it later with Payment link in the invoice list.",
-    };
-  }
+  const input = validateCreate({ invoiceId: invoice.id, methods, expiresAt: linkExpiry(invoice.dueDate) }, user);
+  const link = await createPaymentRequest(user, input, { kind: "app" }, ctx.org.id);
+  return { ok: true, url: ownerPaymentRequest(link, baseUrl).url, amountEur: link.amountEur, reused: false };
 }

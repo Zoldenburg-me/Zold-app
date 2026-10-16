@@ -231,6 +231,12 @@ export async function createPaymentRequest(
   let amountEur = input.amountEur;
   if (input.invoiceId) {
     const invoice = assertInvoiceCollectable(input.invoiceId, orgId, user);
+    // One open link per invoice, whichever route asks: no await lies between
+    // this check and the insert below, so two calls cannot both pass it.
+    const alreadyOpen = !input.test && store.paymentRequests.some(
+      (p) => p.invoiceId === invoice.id && p.orgId === invoice.orgId && !p.test && effectiveState(p) === "OPEN",
+    );
+    if (alreadyOpen) throw new PaymentRequestError("that invoice already has an open payment link", 409);
     const due = payableEur(invoice);
     if (due === undefined) {
       throw new PaymentRequestError("that invoice has no issued amount to collect", 409);

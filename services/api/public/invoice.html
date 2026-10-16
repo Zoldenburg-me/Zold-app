@@ -338,6 +338,7 @@ function renderIssued(inv) {
     <h2>${esc(settled ? "Paid" : "Awaiting payment")}</h2>
     ${pay ? `<p style="margin:.6rem 0 1rem"><a class="pay-btn" href="${esc(pay)}">Pay ${esc(amount(conv ? conv.grossCents : d.grossCents, conv ? conv.to : cur))}</a></p>
       <div class="note">You choose how to pay on the next page. This invoice is marked paid when the money arrives.</div>` : ""}
+    ${!settled && !pay && inv.payLinkLapsed ? `<div class="note">The Pay link for this invoice has expired. ${inv.bank ? "You can still pay by bank transfer to the details on the invoice, or ask" : "Ask"} ${esc(d.issuer?.name || "the issuer")} for a new link.</div>` : ""}
     <div class="note">${esc(complianceNote(d.jurisdiction))} Zold is not a tax
       adviser — whether a supply is exempt, and which exemption applies, is the issuer's determination.${d.jurisdiction?.ruleSet === "DE" ? `
       Zold does not yet produce an EN 16931 e-invoice (XRechnung / ZUGFeRD).` : ""}</div>

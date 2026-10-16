@@ -27,6 +27,7 @@ import {
   defaultSeriesFor,
   formatInvoiceNumber,
   issuerTaxIdProblem,
+  issuerTaxIds,
   normaliseInvoiceCurrency,
   normaliseVatId,
   type ExemptionReasonId,
@@ -50,20 +51,15 @@ export const str = (v: unknown): string | undefined =>
  * name, because the legal entity is what the tax office matches.
  */
 export function issuerParty(org: Organisation): InvoiceParty {
-  // The tax id given when the organisation was created stands in until the
-  // invoicing profile names one: VAT-ID-shaped (country letters first) is a
-  // VAT ID, anything else a national tax number.
-  const inv = org.invoicing;
-  const signupTaxId = !inv?.vatId && !inv?.taxNumber ? org.taxId?.trim() : undefined;
-  const signupIsVatId = Boolean(signupTaxId && /^[A-Za-z]{2}\s*[0-9A-Za-z]/.test(signupTaxId));
+  const ids = issuerTaxIds(org);
   return {
     name: org.legalName || org.name,
     addressLine: [org.address?.line1, org.address?.line2].filter(Boolean).join(", ") || undefined,
     postalCode: org.address?.postalCode,
     city: org.address?.city,
     country: org.address?.country,
-    vatId: inv?.vatId ?? (signupIsVatId ? signupTaxId!.replace(/\s+/g, "").toUpperCase() : undefined),
-    taxNumber: inv?.taxNumber ?? (signupTaxId && !signupIsVatId ? signupTaxId : undefined),
+    vatId: ids.vatId,
+    taxNumber: ids.taxNumber,
     email: org.email,
   };
 }
@@ -140,6 +136,11 @@ export type IssuerIdentity = Pick<
 
 const REGISTRATION_TEXT_MAX = 120;
 
+/** A save that names either tax identifier replaces the signup tax id that
+ *  stood in for them (the profile form shows it in their place). */
+export const clearsSignupTaxId = (patch: Partial<IssuerIdentity>): boolean =>
+  "vatId" in patch || "taxNumber" in patch;
+
 /**
  * The identity fields a request body sets, checked by the issuer's country.
  *
@@ -157,7 +158,7 @@ export function issuerIdentityFrom(
   for (const field of ["vatId", "taxNumber"] as const) {
     const raw = body[field];
     if (typeof raw !== "string") continue;
-    const problem = issuerTaxIdProblem(field, raw, ruleSet);
+    const problem = issuerTaxIdProblem(field, raw, ruleSet, country);
     if (problem) return { ok: false, error: problem, field };
     // An EU number is stored normalised; one Zold has no format for, as written.
     patch[field] = (field === "vatId" && ruleSet !== "GENERIC" ? normaliseVatId(raw) : raw.trim()) || undefined;
