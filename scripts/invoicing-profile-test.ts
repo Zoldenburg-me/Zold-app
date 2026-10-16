@@ -454,7 +454,7 @@ await check("an issue at 23:30 UTC on 31 December in Berlin is dated, and number
 });
 
 await check("an issue date that is not a calendar day is refused, never numbered NaN", async () => {
-  for (const issueDate of ["garbage", "2026-12-31T23:30:00+01:00", "2026-02-30x"]) {
+  for (const issueDate of ["garbage", "2026-12-31T23:30:00+01:00", "2026-02-30", "2026-13-01"]) {
     const r = await issueIn("org_num", { issueDate });
     assert.equal(r.status, 400, `${issueDate}: ${JSON.stringify(r.data)}`);
   }

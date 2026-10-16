@@ -277,7 +277,9 @@ export function draftFrom(org: Organisation, body: Record<string, any>, now = ne
   const issueDate = str(body.issueDate) ?? dayOf(now.toISOString(), org.reporting.timeZone);
   // A calendar day only: the number's year is read off it, and "NaN" or an
   // offset that moves the day must never reach an issued number.
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(issueDate) || Number.isNaN(Date.parse(issueDate))) {
+  // Round-tripped: Date reads 2026-02-30 as 2 March rather than refusing it.
+  const day = new Date(`${issueDate}T00:00:00Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(issueDate) || Number.isNaN(day.getTime()) || day.toISOString().slice(0, 10) !== issueDate) {
     throw new InvoiceComplianceError(`${issueDate} is not a date (YYYY-MM-DD).`);
   }
 
