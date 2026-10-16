@@ -227,17 +227,21 @@ const readLegacySlot = (bound) => {
   const blob = parseBlob(localStorage.getItem(KEY_SLOT));
   // A damaged or addressless record cannot be shown to be this account's key.
   if (!blob || !bound || blob.credentialId || blob.damaged) return null;
-  const address = blob.address ?? (typeof blob.key === "string" ? addressOf(blob.key) : null);
+  let address = blob.address;
+  try { address ??= addressOf(blob.key); } catch { return null; } // no key, or not hex
+
   return address?.toLowerCase() === bound.toLowerCase() ? { ...blob, address } : null;
 };
 
 /** This credential's key; `bound` (the account's authorizer address) lets an
- *  unscoped key from before per-credential slots be carried forward. */
+ *  unscoped key from before per-credential slots be carried forward. A
+ *  PRF-wrapped one is carried forward only once this credential has unwrapped
+ *  it (unlock): another passkey on the same account could never open it. */
 const readSlot = (credentialId, bound) => {
   const own = credentialId ? parseBlob(localStorage.getItem(slotFor(credentialId))) : null;
   if (own) return own;
   const legacy = readLegacySlot(bound);
-  if (legacy && credentialId) writeSlot(credentialId, legacy);
+  if (legacy && credentialId && legacy.protection !== "prf") writeSlot(credentialId, legacy);
   return legacy;
 };
 const writeSlot = (credentialId, blob) =>
@@ -297,6 +301,9 @@ export async function createKey(credentialId, { requirePrf = false, replaceDamag
  *  `bound` is the account's authorizer address, as readSlot takes it. */
 export async function deviceAddress(credentialId, { bound, ...options } = {}) {
   const blob = readSlot(credentialId, bound);
+  // A bound account's key is made only where it was bound; minting one here
+  // would just shadow it.
+  if (!blob && bound) throw new Error("this account's payment key is not in this browser — use the device it was set up on, or change the key there");
   if (!blob) return (await createKey(credentialId, options)).address;
   if (blob.damaged) throw new Error("the spending key stored in this browser is damaged");
   if (blob.address) return blob.address;
@@ -321,7 +328,9 @@ async function unlock(credentialId, bound) {
   });
   if (!secret) throw new Error(`your ${passkeyName()} is needed to approve this payment — the payment key stays locked without it`);
   try {
-    return await unwrapKey(blob, secret);
+    const privHex = await unwrapKey(blob, secret);
+    if (!blob.credentialId && credentialId) writeSlot(credentialId, blob); // legacy key, now proven this passkey's
+    return privHex;
   } catch {
     throw new Error(`could not unlock the payment key with this ${passkeyName()}`);
   }

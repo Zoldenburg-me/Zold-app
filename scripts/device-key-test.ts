@@ -263,15 +263,18 @@ await t("a legacy key is refused for an account bound to a different address", a
   assert.equal(slots.get(SLOT), undefined);
 });
 
-await t("a PRF-wrapped legacy key is carried forward with its address and stays wrapped", async () => {
+await t("a bound account with no key here is refused, and no stray key is minted", async () => {
   slots.clear();
-  slots.set("zold-device-key", JSON.stringify({ ...(await dev.wrapKey(LEGACY_PRIV, PRF_SECRET)), address: LEGACY_ADDR.toLowerCase() }));
-  assert.deepEqual(dev.keyStatus(CRED, LEGACY_ADDR), { present: true, protection: "prf" });
-  const copied = JSON.parse(slots.get(SLOT)!);
-  assert.equal(copied.credentialId, CRED);
-  assert.equal(copied.address, LEGACY_ADDR.toLowerCase());
-  assert.equal(copied.key, undefined);
-  assert.equal(await dev.unwrapKey(copied, PRF_SECRET), LEGACY_PRIV);
+  await assert.rejects(() => dev.deviceAddress(CRED, { bound: LEGACY_ADDR }), /not in this browser/);
+  slots.set("zold-device-key", "{not json");
+  await assert.rejects(() => dev.deviceAddress(CRED, { bound: LEGACY_ADDR }), /not in this browser/);
+  assert.equal(slots.get(SLOT), undefined);
+});
+
+await t("a malformed legacy key reads as absent", async () => {
+  slots.clear();
+  slots.set("zold-device-key", JSON.stringify({ v: 1, protection: "none", key: "not hex" }));
+  assert.equal(dev.keyStatus(CRED, LEGACY_ADDR).present, false);
 });
 
 await t("a damaged legacy record reads as absent for a bound account", async () => {
@@ -378,6 +381,26 @@ await t("two credentials with PRF keep two keys, and B's secret cannot unwrap A'
       assert.equal((await recoverAddress({ hash: viemDigest, signature: sigB })).toLowerCase(), b.address);
     },
   );
+});
+
+await t("a PRF-wrapped legacy key is carried forward only once this passkey unwraps it", async () => {
+  slots.clear();
+  slots.set("zold-device-key", JSON.stringify({ ...(await dev.wrapKey(LEGACY_PRIV, PRF_SECRET)), address: LEGACY_ADDR.toLowerCase() }));
+  assert.deepEqual(dev.keyStatus(CRED, LEGACY_ADDR), { present: true, protection: "prf" });
+  assert.equal(slots.get(SLOT), undefined, "copied before this passkey proved it can open it");
+  const prfAnswer = (secret: Uint8Array) => () => Promise.resolve({ getClientExtensionResults: () => ({ prf: { results: { first: secret.buffer } } }) });
+  // Another passkey on the same account: cannot open it, so nothing is copied.
+  await withAuthenticator(prfAnswer(new Uint8Array(32).fill(5)), async () => {
+    await assert.rejects(() => dev.signTypedData(TYPED_DATA, CRED, LEGACY_ADDR), /could not unlock/);
+  });
+  assert.equal(slots.get(SLOT), undefined);
+  await withAuthenticator(prfAnswer(PRF_SECRET), async () => {
+    const sig = await dev.signTypedData(TYPED_DATA, CRED, LEGACY_ADDR);
+    assert.equal(await recoverAddress({ hash: viemDigest, signature: sig }), LEGACY_ADDR);
+  });
+  const copied = JSON.parse(slots.get(SLOT)!);
+  assert.equal(copied.credentialId, CRED);
+  assert.equal(copied.key, undefined);
 });
 
 await t("a cancelled prompt at signing time keeps the key locked", async () => {
