@@ -201,6 +201,19 @@ let q25: import("../services/api/src/payment-requests.js").CryptoQuote;
   const s3 = pr.applyPayment(rPart, { ...tp!, ref: "a", amountEur: 30, kind: "partial" }, now);
   const s4 = pr.applyPayment(s3.request, { ...tp!, ref: "b", amountEur: 20, kind: "full" }, now);
   check("two partial payments that add up close the request", s3.request.state === "OPEN" && s4.request.state === "PAID");
+  const rHundred = mkReq({ amountEur: 100 });
+  const oA = pr.matchMoneriumOrder(order(rHundred.code, { id: "ord-A", amount: "50" }), rHundred, `0x${"ab".repeat(20)}`)!;
+  const s5 = pr.applyPayment(rHundred, oA, now);
+  const oB = pr.matchMoneriumOrder(order(rHundred.code, { id: "ord-B", amount: "50" }), s5.request, `0x${"ab".repeat(20)}`)!;
+  const s6 = pr.applyPayment(s5.request, oB, now);
+  check("two bank payments of the same amount on the same day are two payments, not twins",
+    s6.added && s6.request.payments.length === 2 && s6.request.state === "PAID" && pr.paidEur(s6.request) === 100);
+  const s7 = pr.applyPayment(s2.request, { ...tp!, ref: "y", transferId: "t-2" }, now);
+  check("two of our own equal transfers are two payments", s7.added && pr.paidEur(s7.request) === 50);
+  const orderFirst = pr.applyPayment(pr.applyPayment(mkReq(), p!, now).request, tp!, now);
+  check("our transfer arriving after its own Monerium order still merges onto that row",
+    !orderFirst.added && orderFirst.request.payments.length === 1 &&
+      orderFirst.request.payments[0].orderId === "ord-1" && orderFirst.request.payments[0].transferId === "t-1");
   check("an OPEN request past its date reads as EXPIRED without a write",
     pr.effectiveState(mkReq({ expiresAt: new Date(now.getTime() - 1).toISOString() }), now) === "EXPIRED" &&
       pr.effectiveState(mkReq(), now) === "OPEN");

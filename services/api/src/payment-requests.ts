@@ -522,7 +522,10 @@ export function applyPayment(
     (p) =>
       p.method === "bank" && payment.method === "bank" &&
       Math.abs(p.amountEur - payment.amountEur) < 0.011 &&
-      Math.abs(Date.parse(p.at) - Date.parse(payment.at)) < 24 * 60 * 60_000,
+      Math.abs(Date.parse(p.at) - Date.parse(payment.at)) < 24 * 60 * 60_000 &&
+      // Twins come from the two lenses, one each: a second order (or a second
+      // transfer) of the same amount is a second payment.
+      (payment.orderId ? !p.orderId : !p.transferId),
   );
   if (twin) {
     // Enrich rather than duplicate: the order carries the payer's name; our
