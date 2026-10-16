@@ -2114,9 +2114,13 @@ async function registerDeviceKey(u) {
   // A record that cannot be read is not this account's key if none is bound
   // yet, so it is replaced; with a key bound it may be that key, and device.js
   // refuses to write over it.
-  const replaceDamaged = !!dev.keyStatus().damaged && !u.authorizerAddress;
-  const { address, protection } = dev.keyStatus().present && !replaceDamaged
-    ? { address: await dev.deviceAddress(credId()), protection: dev.keyStatus().protection }
+  // Only a key already bound to this account is reused: another account's key
+  // in this browser is never bound here.
+  const bound = u.authorizerAddress;
+  const status = dev.keyStatus(credId(), bound);
+  const replaceDamaged = !!status.damaged && !bound;
+  const { address, protection } = status.present && !replaceDamaged
+    ? { address: await dev.deviceAddress(credId(), { bound }), protection: status.protection }
     : await dev.createKey(credId(), { replaceDamaged });
   const updated = await api(`/api/users/${u.id}/authorizer`, { address, stepUp: await passkeyStepUp("authorizer.bind") });
   if (updated.authorizerAddress) user = { ...user, authorizerAddress: updated.authorizerAddress };
