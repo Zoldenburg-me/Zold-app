@@ -571,7 +571,7 @@ OB["p-passkey"] = {
       <span class="z-mark z-mark--icon" aria-hidden="true">${Z.icon("passkey")}</span>
       ${Z.onPhone()
         ? obIntro("Set up Face ID or fingerprint", "It creates a sign-in key that never leaves this phone.")
-        : obIntro("Set up biometric sign-in", "Your browser will ask to save a passkey. Approve it with Touch ID or Windows Hello, or your computer’s password, your phone or a security key.")}
+        : obIntro("Set up biometric sign-in", "Your browser will ask to save a passkey. Approve it with Touch ID or Windows Hello. A computer without either offers your phone or a security key instead.")}
       <ul class="z-points">
         <li>${Z.icon("lock")}<span>It’s the only key to your account. Zold never sees it.</span></li>
         <li>${Z.icon("password")}<span>No Zold password to remember or leak.</span></li>
