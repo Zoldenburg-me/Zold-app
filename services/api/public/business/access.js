@@ -110,15 +110,15 @@ function roleSentence(role) {
   return `${first}${no ? ` Can’t ${no}.` : ""}`;
 }
 
-/* Second approval is Zold's rule, checked by Zold's API: the Safe itself
-   needs only the passkey, so the words never claim more. */
+/* Second approval is Zold's rule, checked by Zold's API, not by the Safe,
+   so the words never claim more. */
 function approvalsCard(members) {
   const on = reviewOn();
   const offered = cap("transfers.approvals").allowed;
   const pr = org.paymentReview || {};
   const v = approvalView(members, (r) => Boolean(ROLE_CAN[r]?.approve));
   const second = on
-    ? `<b>On.</b> A payment drafted in Zold Business isn’t sent until someone other than its drafter approves it, whatever their role. Editing someone’s draft makes you its drafter. This is a Zold rule. On chain the account needs only its passkey.`
+    ? `<b>On.</b> A payment drafted in Zold Business isn’t sent until someone other than its drafter approves it, whatever their role. Editing someone’s draft makes you its drafter. This is a Zold rule: Zold checks it, the account on chain does not.`
     : offered
       ? `<b>Off.</b> A payment is saved, then sent with the sender’s ${esc(Z.passkeyName())}, without a second approval.`
       : "A payment is saved, then sent with the sender’s passkey. A second approval is part of a business account.";
