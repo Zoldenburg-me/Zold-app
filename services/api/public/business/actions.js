@@ -1051,7 +1051,7 @@ export const ACTIONS = {
     const failures = [];
     for (const a of r.authorizations) {
       try {
-        const signature = await lib.signTypedData(a.authorization.typedData, credentialId);
+        const signature = await lib.signTypedData(a.authorization.typedData, credentialId, a.authorization.authorizer);
         // The debit itself is a Safe operation the passkey signs, then the
         // Monerium redeem order on a SEPA line, in that order, as the server
         // verifies them (authenticator counters rise with each ceremony).
