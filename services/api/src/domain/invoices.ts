@@ -195,6 +195,7 @@ export function supplierView(
     bank?: { holder?: string; iban?: string; bic?: string; bankName?: string };
     footerNote?: string;
     payPath?: string;
+    payLinkLapsed?: boolean;
   },
 ) {
   return {
@@ -209,6 +210,7 @@ export function supplierView(
           bank: issuerExtras.bank,
           footerNote: issuerExtras.footerNote,
           ...(issuerExtras.payPath ? { payPath: issuerExtras.payPath } : {}),
+          ...(issuerExtras.payLinkLapsed ? { payLinkLapsed: true } : {}),
         }
       : {}),
     supplier: invoice.supplier,
