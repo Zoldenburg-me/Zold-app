@@ -293,12 +293,12 @@ try {
   coarse = false;
 }
 
-// Sign-in and the shared names: Face ID on a phone, a passkey on a computer.
+// Sign-in and the shared names: Face ID on a phone, biometrics or a passkey on a computer.
 {
   coarse = false;
   const desk = run(`OB.auth.html()`);
   assert.doesNotMatch(desk, /Face ID|fingerprint/i, "sign-in on a computer");
-  assert.match(desk, /Sign in with a passkey/);
+  assert.match(desk, /Sign in with biometrics/);
   assert.equal(run("Z.passkeyName()"), "passkey");
   coarse = true;
   assert.match(run(`OB.auth.html()`), /Sign in with Face ID/, "sign-in on a phone");
