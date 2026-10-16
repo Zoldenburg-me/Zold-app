@@ -11,14 +11,15 @@ budget: replace or move something, do not append.
 
 Read when the task touches it:
 - `docs/status.md` — **what has never run** (mainnet: owner only, one swap, no
-  SEPA payout; no cash rail; no on-chain recovery). Read before saying anything works.
-- `docs/running-locally.md` — dev vs api, preflight, local funding and KYC
-  gate, tests, the production branch, browser-pane checks.
+  SEPA payout; no cash rail; no on-chain recovery). Read before claiming it works.
+- `docs/running-locally.md` — dev vs api, preflight, funding, KYC gate,
+  tests, production branch, browser.
+- `docs/wallets.md` — every wallet and its key holder.
 - `docs/recovery-and-signers.md` — second owner, Zoldenburg guardian, recovery.
 - `docs/roadmap.md` — current milestone, agreed priority, parked ideas.
-- `docs/architecture/` — product (what exists) and technical (how).
+- `docs/architecture/` — product (what) and technical (how).
 - `docs/CODEMAPS/` — routes, modules, data, deps.
-- `docs/security-hardening.md` — secrets, keys, Postgres, mail; its Rules bind.
+- `docs/security-hardening.md` — secrets, keys, Postgres, mail; Rules bind.
 - `docs/agents/tooling.md` — ECC, Ponytail, hooks: which rule wins.
 
 ## How to write in this repo (comments, docs, this file, notes)
