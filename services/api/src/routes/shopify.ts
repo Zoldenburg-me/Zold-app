@@ -254,20 +254,18 @@ export function payeeFor(orgId: string, installerId: string): { user?: User; rea
   return { user };
 }
 
-// One resolve per request at a time: a sweep and a buyer's return visit must
-// not both spend the last attempt.
-const resolving = new Set<string>();
+// One resolve per request at a time: a sweep and a buyer's return visit share
+// it, so they cannot both spend the last attempt, and the buyer waits for it.
+const resolving = new Map<string, Promise<void>>();
 
 /** Tell Shopify a paid checkout request is paid. Idempotent; records the
  *  outcome on the request so the sweep can retry a failure. */
-export async function resolveShopifyRequest(r: PaymentRequest): Promise<void> {
-  if (resolving.has(r.id)) return;
-  resolving.add(r.id);
-  try {
-    await resolveOnce(store.findPaymentRequest(r.id) ?? r);
-  } finally {
-    resolving.delete(r.id);
-  }
+export function resolveShopifyRequest(r: PaymentRequest): Promise<void> {
+  const inFlight = resolving.get(r.id);
+  if (inFlight) return inFlight;
+  const run = resolveOnce(store.findPaymentRequest(r.id) ?? r).finally(() => resolving.delete(r.id));
+  resolving.set(r.id, run);
+  return run;
 }
 
 async function resolveOnce(r: PaymentRequest): Promise<void> {
