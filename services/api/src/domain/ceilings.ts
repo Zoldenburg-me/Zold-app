@@ -1,6 +1,6 @@
 /**
- * Storage ceilings: how many rows one org or one user may create, whatever
- * the plan. Not product limits (those are plans.ts and answer 402): these sit
+ * Storage ceilings: how many rows one org or one user may create. Not the
+ * per-org limits (plans.ts LIMITS): these sit
  * far above any real use and exist because every row lives in one file that
  * is rewritten on each write, so an account looping on a create would slow
  * every request for everyone. Reaching one answers 409 LIMIT_REACHED.

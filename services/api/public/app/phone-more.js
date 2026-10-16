@@ -279,7 +279,7 @@ PH.more = {
     const you = [
       Z.row({ lead: Z.iconTile({ icon: "account_balance" }), title: "Account", sub: [u.iban && kycApproved(u) ? `IBAN •••• ${String(u.iban).replace(/\s+/g, "").slice(-4)}` : "", u.email].filter(Boolean).join(" · ") || "Details and email", href: "#account-details" }),
       Z.row({ lead: Z.iconTile({ icon: "shield_lock" }), title: "Security", sub: "Recovery, sign-in and this phone’s key", right: checks ? Z.tag(`${checks} to check`, "amber") : "", href: "#security" }),
-      Z.row({ lead: Z.iconTile({ icon: "settings" }), title: "Settings", sub: "Currency, connections, documents, plan", href: "#settings" }),
+      Z.row({ lead: Z.iconTile({ icon: "settings" }), title: "Settings", sub: "Currency, connections, documents", href: "#settings" }),
       Z.row({ lead: Z.iconTile({ icon: "contacts" }), title: "Contacts", sub: "People and companies you pay", href: "#contacts" }),
     ];
     const business = company || phPersonalOrg() || phCache.orgs === null
@@ -320,7 +320,7 @@ PH.more = {
 /* Reset the per-account caches (sign-out, a different account). */
 function phReset() {
   phCache.deposits = null; phCache.links = null; phCache.methods = null; phCache.orgs = null;
-  phCache.plans = {}; phCache.signers = undefined; phCache.soon = null;
+  phCache.signers = undefined; phCache.soon = null;
   ownCompanyOrg = null;
   phCache.contacts = null; phCache.bic = undefined; phCache.bicFor = ""; phCache.linksError = null;
   phSend = { payee: null, amount: "", reference: "", quote: null, transferId: null, error: null };

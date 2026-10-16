@@ -23,7 +23,7 @@ import {
 import { hashPassword, passwordProblem } from "../../domain/passwords.js";
 import { normaliseIban, validateBankAccount } from "../../domain/contacts.js";
 import { requireCapability, requirePermission, type OrgContext } from "../org-context.js";
-import { can } from "../../domain/plans.js";
+import { paymentReviewRequired } from "../../domain/payment-review.js";
 import {
   badRequest, } from "./shared.js";
 import {
@@ -229,7 +229,7 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
       invoice: ownerInvoiceView(updated),
       draft,
       contact,
-      note: can(ctx.org, "transfers.approvals").allowed
+      note: paymentReviewRequired(ctx.org)
         ? "A draft was created. A second person reviews it, then the account holder signs it."
         : "A draft was created. The account holder signs it to send.",
     });

@@ -322,7 +322,6 @@ function migrateUsersToOrganisations() {
       name: user.name || "Personal",
       email: user.email,
       address: user.country ? { country: user.country.toUpperCase() } : undefined,
-      plan: "starter",
       reporting: {
         currency: "EUR",
         timeZone: "Europe/Berlin",

@@ -1,7 +1,7 @@
 /**
  * The renderer registry, and the views without a module of their own:
  * Accounts, Wallets, Transactions, Assets, Chart of accounts, the month's
- * statement lines, Connections, Organisation, Plan and the invoicing profile.
+ * statement lines, Connections, Organisation and the invoicing profile.
  * The other screens (screens.js, home.js, getpaid.js, send.js, settings.js,
  * apps.js, invoice.js and the rest) register here.
  *
@@ -465,7 +465,6 @@ function issuerFieldsHtml(country) {
 }
 
 RENDER.organisation = async () => {
-  const reporting = cap("settings.reportingCurrency").allowed;
   return { html: `<form class="card" id="org-form" onsubmit="return false">
       <div class="grid g2">
         <div><label for="s-name">Name</label><input id="s-name" name="organization" autocomplete="organization" value="${esc(org.name)}"${org.type === "personal"
@@ -484,8 +483,8 @@ RENDER.organisation = async () => {
       ${issuerFieldsHtml(org.address?.country)}
       <div class="grid g2" style="margin-top:12px">
         <div><label for="s-notify">Notification email</label><input id="s-notify" name="email" type="email" autocomplete="email" spellcheck="false" value="${esc(org.notificationEmail || "")}" /></div>
-        <div><label for="s-currency">Reporting currency${reporting ? "" : ' <span class="desc">(in a paid plan)</span>'}</label>
-          <input id="s-currency" name="currency" autocomplete="off" value="${esc(org.reporting.currency)}" style="max-width:140px"${reporting ? "" : " disabled"} /></div>
+        <div><label for="s-currency">Reporting currency</label>
+          <input id="s-currency" name="currency" autocomplete="off" value="${esc(org.reporting.currency)}" style="max-width:140px" /></div>
         <div><label for="s-tz">Reporting time zone <span class="desc">(monthly reports run in it)</span></label>
           <input id="s-tz" name="timezone" list="z-tz" autocomplete="off" value="${esc(org.reporting.timeZone)}" />
           <datalist id="z-tz">${(Intl.supportedValuesOf ? Intl.supportedValuesOf("timeZone") : []).map((z) => `<option value="${esc(z)}"></option>`).join("")}</datalist></div>
@@ -497,25 +496,6 @@ RENDER.organisation = async () => {
     $("#s-issuer").outerHTML = issuerFieldsHtml(e.target.value);
     for (const [id, v] of Object.entries(typed)) $("#" + id).value = v;
   }) };
-};
-
-META.plan = () => ({ title: "Plan", sub: "Zold takes no payments yet: a paid plan comes with the trial, or Zold grants it. Switching down pauses features and deletes nothing.", actions: settingsBack() });
-
-RENDER.plan = async () => {
-  const plan = await api(`/api/orgs/${org.id}/plan`);
-  const owner = org.role === "owner";
-  const plans = plan.available.map((p) => {
-    const current = p.id === org.effectivePlan;
-    // There is no billing: a paid plan comes by trial or by asking Zold.
-    const free = p.price === "Free";
-    const act = p.id === org.plan ? Z.tag("Current")
-      : current ? Z.tag("On trial")
-        : free && owner ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="upgrade" data-plan="${esc(p.id)}">Switch to ${esc(p.name)}</button>`
-          : free ? "" : '<span class="desc">By trial, or ask Zold</span>';
-    return `<div class="zb-plan${current ? " is-current" : ""}"><div class="zb-plan__head"><b>${esc(p.name)}</b><span class="desc">${esc(p.price)}</span></div><p>${esc(p.blurb)}</p><div>${act}</div></div>`;
-  }).join("");
-  return `${plan.trialAvailable && owner ? `<div class="zb-actions" style="margin-bottom:16px"><button type="button" class="z-btn z-btn--primary" data-act="trial">Start the ${plan.trialDays}-day trial</button></div>` : ""}
-    <div class="grid g3">${plans}</div>`;
 };
 
 /* ==========================================================================

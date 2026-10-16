@@ -1,23 +1,20 @@
 /**
  * Settings (design canvas "Desk-Settings"): a grouped menu on the left, the
- * chosen section on the right. Organisation, Who approves payments, Monerium
- * and Plan open in place; the other entries are their own screens.
+ * chosen section on the right. Organisation, Who approves payments and
+ * Monerium open in place; the other entries are their own screens.
  */
 import { Z, api, cap, day, ensureMe, esc, issuerFieldNames, issuerIds, me, org, plain, reviewOn, ROLE_CAN, ROLE_WORD } from "./core.js";
 import { META, RENDER } from "./views.js";
 import { isOwnCompanyOrg } from "./access-model.js";
 
 const ss = { sec: "org" };
-const planName = (id) => `${id.charAt(0).toUpperCase()}${id.slice(1)}`;
-const onTrial = () => org.effectivePlan !== org.plan;
-
-META.settings = () => ({ title: "Settings", sub: `${org.name}, on the ${planName(org.effectivePlan)} plan${onTrial() ? " (trial)" : ""}.`, actions: "" });
+META.settings = () => ({ title: "Settings", sub: `${org.name}.`, actions: "" });
 
 function menu(accounts) {
   const here = (id, label) => `<button type="button" class="zb-set-menu__item" data-ss="${id}"${ss.sec === id ? ' aria-current="true"' : ""}>${esc(label)}</button>`;
   const away = (v, label) => `<a class="zb-set-menu__item" href="?view=${v}" data-view-link="${v}">${esc(label)}${Z.icon("arrow_forward", "zb-set-menu__out")}</a>`;
   const groups = [
-    ["Company", [here("org", "Business profile"), cap("invoices").allowed ? away("invoicing-settings", "Invoicing profile") : "", here("plan", "Plan")]],
+    ["Company", [here("org", "Business profile"), cap("invoices").allowed ? away("invoicing-settings", "Invoicing profile") : ""]],
     ["Team", [away("members", "Members and access"), here("approvals", "Who approves payments")]],
     ["Account", [here("monerium", "Monerium"), isOwnCompanyOrg(me, org, accounts)
       ? away("access", "Access")
@@ -66,22 +63,21 @@ function roleSentence(role) {
 
 function approvalsSection() {
   const on = reviewOn();
-  const planHasIt = cap("transfers.approvals").allowed;
+  const offered = cap("transfers.approvals").allowed;
   const pr = org.paymentReview || {};
   const owner = org.role === "owner";
   const sub = on
     ? "Every payment needs a second person to approve it. Whoever drafts a payment can’t approve it, whatever their role, and editing someone’s draft makes you its drafter."
-    : planHasIt
+    : offered
       ? "Review is off: a payment is saved, then sent with the sender’s passkey, without a second approval."
-      : "On your plan a payment is saved, then sent with the sender’s passkey. A second approval comes with a paid plan.";
+      : "A payment is saved, then sent with the sender’s passkey. A second approval is part of a business account.";
   const notes = [
-    on && !planHasIt ? "Your plan no longer includes review. It stays on until an owner turns it off, so nobody can start sending alone just because the plan changed." : "",
     pr.source === "owner" && pr.changedAt ? `${on ? "Turned on" : "Turned off"} by an owner on ${day(pr.changedAt)}.` : "",
     !on && pr.source === "owner" ? "Payments already waiting for review still wait until someone approves them." : "",
   ].filter(Boolean).map((t) => `<p class="zb-hint">${esc(t)}</p>`).join("");
   const action = !owner ? ""
     : on ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="review-off">Turn review off</button>`
-      : planHasIt ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="review-on">Turn review on</button>` : "";
+      : offered ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="review-on">Turn review on</button>` : "";
   const list = Object.keys(ROLE_WORD).map((r) => `<div><dt>${esc(ROLE_WORD[r])}</dt><dd>${esc(roleSentence(r))}</dd></div>`).join("");
   return section("Who approves payments", sub, `${notes}<dl class="zb-set-rows">${list}</dl>
     <p><a href="?view=members" data-view-link="members">Change someone’s role in Members</a></p>`, action);
@@ -102,24 +98,12 @@ function moneriumSection(accounts) {
     `<a class="z-btn z-btn--secondary z-btn--sm" href="?view=accounts" data-view-link="accounts">Accounts</a>`);
 }
 
-function planSection(plan) {
-  const t = org.trial;
-  const current = plan?.available.find((p) => p.id === org.effectivePlan);
-  const head = `<div class="zb-set-plan"><b>${esc(planName(org.effectivePlan))}</b>${onTrial() ? Z.tag("Trial") : ""}${onTrial() && t?.endsAt ? `<span class="desc">Until ${esc(day(t.endsAt))}</span>` : ""}</div>`;
-  const sub = onTrial()
-    ? "Zold takes no payments yet: a paid plan comes with the trial, or Zold grants it. When the trial ends, these features pause. Nothing is deleted."
-    : "Zold takes no payments yet: a paid plan comes with the trial, or Zold grants it. Switching down pauses features and deletes nothing.";
-  return section("Your plan", sub, `${head}${current ? `<p>${esc(current.blurb)}</p>` : ""}`,
-    `<a class="z-btn z-btn--secondary z-btn--sm" href="?view=plan" data-view-link="plan">Compare plans</a>`);
-}
-
 RENDER.settings = async () => {
   // The menu offers Access only to the company login in its own company, so
   // it waits for who that is and reads whose account backs this one.
-  const [acc, plan] = await Promise.allSettled([api(`/api/orgs/${org.id}/accounts`), api(`/api/orgs/${org.id}/plan`), ensureMe()]);
+  const [acc] = await Promise.allSettled([api(`/api/orgs/${org.id}/accounts`), ensureMe()]);
   const accounts = acc.status === "fulfilled" ? acc.value.accounts : null;
-  const planData = plan.status === "fulfilled" ? plan.value : null;
-  const SECTIONS = { org: orgSection, approvals: approvalsSection, monerium: () => moneriumSection(accounts), plan: () => planSection(planData) };
+  const SECTIONS = { org: orgSection, approvals: approvalsSection, monerium: () => moneriumSection(accounts) };
   return {
     html: `<div class="zb-set" id="set-root">${menu(accounts)}<div id="set-body">${SECTIONS[ss.sec]()}</div></div>`,
     bind(box) {
