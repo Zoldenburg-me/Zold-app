@@ -30,7 +30,17 @@ const slots = new Map<string, string>();
   setItem: (k: string, v: string) => slots.set(k, v),
   removeItem: (k: string) => slots.delete(k),
 };
-(globalThis as any).window = {};
+// Default: a WebAuthn browser whose authenticator answers without PRF. Tests
+// that need another answer swap `get` with withAuthenticator.
+const noPrf = () => Promise.resolve({ getClientExtensionResults: () => ({}) });
+(globalThis as any).window = { PublicKeyCredential: function () {} };
+const setGet = (get: (opts: any) => Promise<unknown>) =>
+  Object.defineProperty(globalThis, "navigator", { value: { credentials: { get } }, configurable: true, writable: true });
+setGet(noPrf);
+const withAuthenticator = async (get: (opts: any) => Promise<unknown>, fn: () => Promise<void>) => {
+  setGet(get);
+  try { await fn(); } finally { setGet(noPrf); }
+};
 (globalThis as any).btoa = (s: string) => Buffer.from(s, "binary").toString("base64");
 (globalThis as any).atob = (s: string) => Buffer.from(s, "base64").toString("binary");
 
@@ -141,7 +151,7 @@ await t("a PRF-wrapped key refuses to sign without the passkey", async () => {
     ...(await dev.wrapKey(priv, PRF_SECRET)),
     address: privateKeyToAccount(priv as `0x${string}`).address.toLowerCase(),
   }));
-  // No window.PublicKeyCredential here, so prfSecret() returns null — the
+  // The default authenticator answers without PRF, so prfSecret() returns null — the
   // same path a browser takes when the ceremony is cancelled or unavailable.
   await assert.rejects(
     () => dev.signTypedData(TYPED_DATA, CRED),
@@ -291,19 +301,28 @@ await t("a legacy record with neither key nor address reads as absent", async ()
   assert.equal(dev.keyStatus(CRED, LEGACY_ADDR).present, false);
 });
 
+await t("a browser without WebAuthn stores no key at all", async () => {
+  slots.clear();
+  const pkc = (globalThis as any).window.PublicKeyCredential;
+  delete (globalThis as any).window.PublicKeyCredential;
+  try {
+    await assert.rejects(() => dev.createKey(CRED), /cannot use passkeys/);
+    await assert.rejects(() => dev.deviceAddress(CRED), /cannot use passkeys/);
+  } finally {
+    (globalThis as any).window.PublicKeyCredential = pkc;
+  }
+  assert.equal(slots.size, 0);
+});
+
+await t("the PRF prompt allows as long as the app's other passkey prompts", async () => {
+  slots.clear();
+  let timeout = 0;
+  await withAuthenticator((opts) => { timeout = opts.publicKey.timeout; return noPrf(); }, async () => { await dev.createKey(CRED); });
+  assert.equal(timeout, 120000);
+});
+
 console.log("device key — a cancelled or timed-out passkey prompt:");
 const realSetTimeout = globalThis.setTimeout;
-const realNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
-const withAuthenticator = async (get: (opts: any) => Promise<unknown>, fn: () => Promise<void>) => {
-  (globalThis as any).window.PublicKeyCredential = function () {};
-  Object.defineProperty(globalThis, "navigator", { value: { credentials: { get } }, configurable: true, writable: true });
-  try {
-    await fn();
-  } finally {
-    delete (globalThis as any).window.PublicKeyCredential;
-    if (realNavigator) Object.defineProperty(globalThis, "navigator", realNavigator);
-  }
-};
 const CANCELLED = /cancelled or timed out\. Nothing was stored/;
 const unhandled: unknown[] = [];
 process.on("unhandledRejection", (e) => unhandled.push(e));

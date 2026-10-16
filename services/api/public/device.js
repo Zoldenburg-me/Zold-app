@@ -126,7 +126,8 @@ export function eip712Digest(typedData) {
 /**
  * Ask the authenticator to evaluate the PRF for our salt. Returns 32 bytes
  * that only this passkey can produce, or null when the ceremony succeeded but
- * the authenticator has no PRF support (or the browser has no WebAuthn).
+ * the authenticator has no PRF support. A browser with no WebAuthn throws
+ * NO_WEBAUTHN: no ceremony ran, so nothing says the key may go unprotected.
  * A cancelled, refused or timed-out ceremony THROWS PASSKEY_CANCELLED (the
  * browser's error as its cause): that says nothing about PRF support, so it
  * must not be read as "store the key unprotected".
@@ -134,9 +135,14 @@ export function eip712Digest(typedData) {
  * embedded browser view that ignores the abort and never resolves.
  */
 const PASSKEY_CANCELLED = "The passkey prompt was cancelled or timed out. Nothing was stored; try again.";
+const NO_WEBAUTHN = "This browser cannot use passkeys, so the payment key cannot be created or unlocked here.";
+/* Long enough for a Mac password, a security key or a phone by QR code, as
+   PASSKEY_TIMEOUT_MS in app/core.js. */
+const PRF_TIMEOUT_MS = 120000;
 
-async function prfSecret(credentialId, { timeoutMs = 15000 } = {}) {
-  if (!window.PublicKeyCredential || !credentialId) return null;
+async function prfSecret(credentialId, { timeoutMs = PRF_TIMEOUT_MS } = {}) {
+  if (!credentialId) return null;
+  if (!window.PublicKeyCredential) throw new Error(NO_WEBAUTHN);
   const abort = new AbortController();
   const timedOut = new Error("passkey timeout");
   let timer;
@@ -323,7 +329,7 @@ async function unlock(credentialId, bound) {
   if (blob.damaged) throw new Error("the spending key stored in this browser is damaged");
   if (blob.protection !== "prf") return blob.key;
   const secret = await prfSecret(credentialId).catch((e) => {
-    if (e.message === PASSKEY_CANCELLED) return null; // cancelled: same answer as absent
+    if (e.message === PASSKEY_CANCELLED || e.message === NO_WEBAUTHN) return null; // same answer as absent
     throw e;
   });
   if (!secret) throw new Error(`your ${passkeyName()} is needed to approve this payment — the payment key stays locked without it`);
