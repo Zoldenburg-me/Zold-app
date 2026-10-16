@@ -521,8 +521,6 @@ a.z-switch:hover { border-color: var(--z-line-hover); color: var(--z-text); }
 .z-held__fig { font-size: 18px; font-weight: 600; color: var(--z-heading); }
 
 /* ---------- Invoices (step 6) ---------- */
-.z-planchip { display: flex; align-items: center; gap: 10px; margin: 0; padding: 10px 14px; border-radius: var(--z-radius-pill); border: 1px solid var(--z-pink-border); background: var(--z-pink-tint); font-size: 13px; color: var(--z-text); }
-.z-planchip .z-ic { font-size: 18px; color: var(--z-pink); }
 .z-pill__n { margin-left: 4px; opacity: .7; }
 /* A warning that links to where it is fixed. */
 .z-banner { display: flex; align-items: center; gap: var(--z-space-3); padding: 12px 14px; border-radius: var(--z-radius-note); border: 1px solid var(--z-amber-border); background: var(--z-amber-tint); font-size: 13.5px; line-height: 1.45; color: var(--z-text); }
@@ -627,13 +625,6 @@ button.z-switch:hover { border-color: var(--z-line-hover); }
 .z-chip.is-off { border-color: var(--z-line-strong); background: none; color: var(--z-dim); text-decoration: line-through; }
 .z-member .z-copy { padding: 0 0 0 calc(38px + var(--z-space-3)); }
 
-/* Plan cards: the current one, and the trial on offer. */
-.z-plan { display: flex; flex-direction: column; gap: var(--z-space-2); padding: var(--z-space-4); }
-.z-plan--offer { border-color: var(--z-pink-border); background: linear-gradient(180deg, var(--z-pink-tint), transparent 60%), var(--z-card); }
-.z-plan__head { display: flex; align-items: center; justify-content: space-between; gap: var(--z-space-3); font-size: 13px; color: var(--z-dim); }
-.z-plan__name { margin: 0; font: 700 26px/1.2 var(--z-font); letter-spacing: -.02em; color: var(--z-heading); text-wrap: balance; }
-.z-plan__price { font-size: 15px; font-weight: 500; letter-spacing: 0; color: var(--z-dim); }
-.z-plan__blurb { margin: 0; font-size: 14px; line-height: 1.5; color: var(--z-text); }
 .z-invite { margin-top: var(--z-space-4); }
 
 /* ==========================================================================

@@ -2,7 +2,7 @@
  * The organisation-centric domain.
  *
  * A user is NOT an account: a business has several people and several
- * accounts, and a person with a premium plan has several currencies. So the
+ * accounts, and a person may have several currencies. So the
  * tenant is an Organisation, money hangs off Accounts, and a User is only a
  * login identity that may belong to many orgs.
  *
@@ -16,11 +16,9 @@ export type OrgType = "personal" | "business";
 /** Monerium's profile kinds (GET /profiles `kind`). */
 export type MoneriumProfileKind = "personal" | "corporate";
 
-/**
- * Personal orgs ladder starter -> premium; business orgs starter -> business.
- * `starter` is shared: it is the free, payouts-only floor for both, which is
- * what makes an upgrade a plan change rather than a migration.
- */
+/** Stored on some orgs and never written. Read only by
+ *  domain/payment-review.ts, for an org's default review policy; it grants no
+ *  feature, since every feature is free (domain/plans.ts). */
 export type PlanId = "starter" | "premium" | "business";
 
 export type CostBasisMethod = "FIFO";
@@ -78,18 +76,17 @@ export interface Organisation {
      *  (stellar/sep9.ts), never store the converted form. */
     country: string;
   };
-  plan: PlanId;
+  /** Never written; see PlanId. */
+  plan?: PlanId;
   /** The organisation's public page at /pay/:handle: bank transfer details of
    *  its euro account, under its own name. Handles share one namespace with
    *  users' pages, so a link never resolves to the wrong payee. */
   paymentPage?: { handle: string; displayName?: string; createdAt: string; updatedAt: string };
-  /** A trial is a grant with an end date, not a plan change: when it lapses the
-   *  org is back on `plan` with nothing deleted. One per org, ever. */
+  /** Never written; see PlanId. */
   trial?: {
     grantsPlan: PlanId;
     startedAt: string;
     endsAt: string;
-    /** Set when it lapses or is superseded by a real upgrade. */
     endedAt?: string;
   };
   reporting: {
@@ -171,9 +168,8 @@ export interface Organisation {
   };
   /**
    * Whether a payment run needs a second person's approval before it is sent.
-   * Absent, it follows the plan (domain/payment-review.ts). Once set it is the
-   * org's own policy: a lapsed trial or a downgrade leaves it as it is, and
-   * only an owner turns it off.
+   * Absent, domain/payment-review.ts decides. Once set it is the org's own
+   * policy, and only an owner changes it.
    */
   paymentReview?: {
     required: boolean;

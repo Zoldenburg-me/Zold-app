@@ -28,17 +28,8 @@ import {
   isCurrencyCode,
   suggestedCurrency,
 } from "../domain/accounts.js";
-import {
-  PLANS,
-  TRIAL_DAYS,
-  can,
-  effectivePlan,
-  limitsFor,
-  plansFor,
-  trialIsActive,
-  trialPlanFor,
-} from "../domain/plans.js";
-import { ROLES, type Account, type OrgType, type Organisation, type PlanId, type Role } from "../domain/types.js";
+import { LIMITS } from "../domain/plans.js";
+import { ROLES, type Account, type OrgType, type Organisation, type Role } from "../domain/types.js";
 import { ADDRESS_RE, ContactError, validateBankAccount, validateWallet } from "../domain/contacts.js";
 import { hashToken } from "../domain/invoices.js";
 import { emailIsProven, roleCan, wouldOrphanOrg } from "../domain/roles.js";
@@ -54,7 +45,7 @@ import { cleanName, cleanPersonName, sameName } from "../users/display-name.js";
 import { adoptionHint, auditProfileCheck, checkBackingProfile, profileWait } from "../adapters/monerium-profile.js";
 import { emailLooksValid } from "../domain/email.js";
 import { CEILINGS, ceilingRefusal } from "../domain/ceilings.js";
-import { paymentReviewRequired, reviewHeldOnPlanChange } from "../domain/payment-review.js";
+import { paymentReviewRequired } from "../domain/payment-review.js";
 import { verifyPasskeyStepUp } from "./auth.js";
 import { clearsSignupTaxId, issuerIdentityFrom } from "./business/shared.js";
 
@@ -146,11 +137,6 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     res.json({ currencies: currencyAvailability() });
   });
 
-  r.get("/plans", (req, res) => {
-    const type = (req.query.type === "business" ? "business" : "personal") as OrgType;
-    res.json({ plans: plansFor(type), trialDays: TRIAL_DAYS });
-  });
-
   // ── Organisations ─────────────────────────────────────────────────────────
 
   /** Every org this session can reach. The app's org switcher reads this. */
@@ -224,7 +210,6 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       taxId: typeof taxId === "string" ? taxId.trim() : undefined,
       email: typeof email === "string" ? email.trim() : undefined,
       address: { country: country.toUpperCase() },
-      plan: "starter",
       reporting: {
         // Reporting currency follows the local currency where we know it, so a
         // German business does not start out reporting in something else. The
@@ -388,106 +373,13 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     res.json({ organisation: publicOrg(store.updateOrganisation(ctx.org.id, patch), ctx.member) });
   });
 
-  // ── Plan and trial ────────────────────────────────────────────────────────
-
-  r.get("/:orgId/plan", (req, res) => {
-    const ctx = ctxOf(req, res);
-    if (!ctx) return;
-    res.json({
-      plan: ctx.org.plan,
-      effectivePlan: effectivePlan(ctx.org),
-      trial: ctx.org.trial,
-      trialAvailable: !ctx.org.trial,
-      trialDays: TRIAL_DAYS,
-      available: plansFor(ctx.org.type),
-    });
-  });
-
-  /**
-   * Start the one trial this org gets.
-   *
-   * A trial is a grant with an end date, not a plan change: `org.plan` is left
-   * alone so lapsing needs no migration and touches no data.
-   */
-  r.post("/:orgId/plan/trial", (req, res) => {
-    const ctx = ctxOf(req, res);
-    if (!ctx) return;
-    if (!requirePermission(ctx, res, "org.billing")) return;
-    if (ctx.org.trial) {
-      return res.status(409).json({
-        error: trialIsActive(ctx.org)
-          ? "This organisation is already on its trial."
-          : "This organisation has already used its trial. Each one gets a single 30-day trial.",
-        trial: ctx.org.trial,
-      });
-    }
-    const startedAt = new Date();
-    const endsAt = new Date(startedAt.getTime() + TRIAL_DAYS * 24 * 60 * 60 * 1000);
-    const org = store.updateOrganisation(ctx.org.id, {
-      trial: {
-        grantsPlan: trialPlanFor(ctx.org.type),
-        startedAt: startedAt.toISOString(),
-        endsAt: endsAt.toISOString(),
-      },
-    });
-    res.json({ organisation: publicOrg(org, ctx.member) });
-  });
-
-  /**
-   * Change plan.
-   *
-   * A downgrade deletes nothing: the chart of accounts, tags and history stay
-   * in the store and are just not served until the org upgrades again. No code
-   * path here may remove rows.
-   */
-  r.post("/:orgId/plan", (req, res) => {
-    const ctx = ctxOf(req, res);
-    if (!ctx) return;
-    if (!requirePermission(ctx, res, "org.billing")) return;
-
-    const plan = String(req.body?.plan ?? "");
-    const allowed: string[] = plansFor(ctx.org.type).map((p) => p.id);
-    if (!allowed.includes(plan)) {
-      return res.status(400).json({
-        error: `A ${ctx.org.type} organisation can hold ${allowed.join(" or ")}.`,
-      });
-    }
-    // There is no billing, so an owner cannot buy a paid plan here: a click
-    // that grants one is a paywall that charges nothing. Moving onto a paid
-    // plan is an operator grant (POST /api/admin/orgs/:orgId/plan); the
-    // 30-day trial is the self-serve way in. Downgrading stays open.
-    if (PLANS[plan as PlanId].price !== "Free" && plan !== ctx.org.plan) {
-      return res.status(402).json({
-        error: `${PLANS[plan as PlanId].name} is a paid plan and Zold takes no payments yet, so it cannot be switched on here. Start the trial, or ask Zold to grant it.`,
-        code: "PAID_PLAN_NEEDS_GRANT",
-      });
-    }
-    const org = store.updateOrganisation(ctx.org.id, {
-      plan: plan as Organisation["plan"],
-      ...reviewHeldOnPlanChange(ctx.org, plan as PlanId),
-      // A real plan change supersedes a running trial rather than stacking.
-      ...(trialIsActive(ctx.org)
-        ? { trial: { ...ctx.org.trial!, endedAt: new Date().toISOString() } }
-        : {}),
-    });
-    res.json({
-      organisation: publicOrg(org, ctx.member),
-      note:
-        plan === "starter"
-          ? "Business features are paused, not deleted. Your chart of accounts, tags and history are kept and return if you upgrade again."
-          : undefined,
-    });
-  });
-
   // ── Payment review policy ─────────────────────────────────────────────────
 
   /**
    * Turn payment review on or off for this organisation.
    *
    * Off removes a financial control, so it takes an owner and a fresh passkey
-   * approval, on any plan: a downgraded org must be able to make the choice
-   * the plan no longer makes for it. On is the paid feature, so it needs the
-   * plan. Drafts already waiting for review keep waiting either way.
+   * approval. Drafts already waiting for review keep waiting either way.
    */
   r.post("/:orgId/payment-review", wrap(async (req, res) => {
     const ctx = ctxOf(req, res);
@@ -501,7 +393,6 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     }
     const required: boolean = req.body.required;
     const was = paymentReviewRequired(ctx.org);
-    if (required && !was && !requireCapability(ctx, res, "transfers.approvals")) return;
     if (!required && was) {
       const user = store.findUser(ctx.userId);
       if (!user) return res.status(401).json({ error: "no such user" });
@@ -711,7 +602,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       currencies: currencyAvailability(),
       // What a second account would cost, so the UI can show the ceiling
       // before the user hits it rather than after.
-      canOpenMore: accounts.length < limitsFor(ctx.org).accounts,
+      canOpenMore: accounts.length < LIMITS.accounts,
     });
   });
 
@@ -949,12 +840,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     const ctx = ctxOf(req, res);
     if (!ctx) return;
     if (!requirePermission(ctx, res, "contacts.read")) return;
-    // A payer rule belongs to invoicing: without that capability it is left
-    // out of the answer, and stays on the row.
-    const showRules = can(ctx.org, "invoices").allowed;
-    res.json({
-      contacts: store.contactsOf(ctx.org.id).map((c) => (showRules ? c : { ...c, payerRule: undefined })),
-    });
+    res.json({ contacts: store.contactsOf(ctx.org.id) });
   });
 
   r.post("/:orgId/contacts", (req, res) => {
@@ -1030,7 +916,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
         }));
       }
       const saved = store.updateContact(contact.id, patch);
-      res.json({ contact: can(ctx.org, "invoices").allowed ? saved : { ...saved, payerRule: undefined } });
+      res.json({ contact: saved });
     } catch (err) {
       if (err instanceof ContactError) return res.status(400).json({ error: err.message });
       throw err;

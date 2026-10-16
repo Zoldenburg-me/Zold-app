@@ -304,7 +304,7 @@ await check("an approval for other values or another path is refused, and none i
   const forOne = await kit.stepUp("POST", "/api/admin/test/echo", { x: 1 });
   assert.equal((await req("POST", "/api/admin/test/echo", { x: 2 }, kit.headers(forOne))).status, 403, "other values");
   const forPath = await kit.stepUp("POST", "/api/admin/test/echo", { x: 1 });
-  assert.equal((await req("POST", "/api/admin/orgs/org_x/plan", { x: 1 }, kit.headers(forPath))).status, 403, "another path");
+  assert.equal((await req("POST", "/api/admin/transfers/t_x/resolve-review", { x: 1 }, kit.headers(forPath))).status, 403, "another path");
   const good = await kit.stepUp("POST", "/api/admin/test/echo", { x: 3 });
   assert.equal((await req("POST", "/api/admin/test/echo", { x: 3 }, kit.headers(good))).status, 200);
   assert.equal((await req("POST", "/api/admin/test/echo", { x: 3 }, kit.headers(good))).status, 403, "replayed");

@@ -216,7 +216,6 @@ Say this plainly rather than letting the surface imply otherwise:
   bridge to another chain reads as a sale and a purchase, and a swap as two
   unpaired legs. Whether any of that is how the disposals should be taxed is
   for the tax adviser.
-- **No billing is taken for paid plans.**
 - **PWA install on iOS is untested**: a home-screen web app may get storage
   separate from Safari, and the device key lives in localStorage — onboarding in
   Safari then installing could strand an account.

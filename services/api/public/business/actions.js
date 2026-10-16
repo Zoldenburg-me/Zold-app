@@ -398,16 +398,6 @@ export const ACTIONS = {
     async () => { await api(`/api/orgs/${org.id}/merchant-links/${el.dataset.id}`, { method: "DELETE" }); toast("Store disconnected."); }, { okLabel: "Disconnect" }),
   "shopify-disconnect": (el) => dialog("Disconnect this store?", `<p class="desc">Customers can no longer pick Zold at its checkout.</p>`,
     async () => { await api(`/api/orgs/${org.id}/shopify/${el.dataset.id}`, { method: "DELETE" }); toast("Store disconnected."); }, { okLabel: "Disconnect" }),
-  async upgrade(el) {
-    const r = await api(`/api/orgs/${org.id}/plan`, { method: "POST", body: { plan: el.dataset.plan } });
-    if (r.note) toast(r.note);
-    await loadOrg(org.id);
-  },
-  async trial() {
-    await api(`/api/orgs/${org.id}/plan/trial`, { method: "POST" });
-    toast("Trial started: 30 days.");
-    await loadOrg(org.id);
-  },
   "open-account": () => dialog("Open an account",
     `<label for="d-cur">Currency</label><select id="d-cur" name="currency">
       <option value="EUR">Euro: bank transfer</option><option value="USD">US dollar</option>
@@ -605,7 +595,7 @@ export const ACTIONS = {
   },
   invite: () => {
     const roles = Object.keys(ROLE_WORD).filter((r) => r !== "owner" || org.role === "owner");
-    const says = { viewer: "Viewer: sees everything, changes nothing", accountant: "Accountant: books and exports, no money", payer: "Payer: proposes and sends", admin: "Admin: proposes, approves, sends, invites", owner: "Owner: everything, including the plan" };
+    const says = { viewer: "Viewer: sees everything, changes nothing", accountant: "Accountant: books and exports, no money", payer: "Payer: proposes and sends", admin: "Admin: proposes, approves, sends, invites", owner: "Owner: everything, including turning review off" };
     dialog("Invite a member",
       `<p class="desc">Send the link yourself. Zold doesn’t send emails. It works once and ends in 3 days.</p>
        ${field("d-email", "Their email", 'type="email" spellcheck="false" autocomplete="email" placeholder="sara@lindner-holzbau.de…"')}

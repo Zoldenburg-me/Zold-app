@@ -153,7 +153,7 @@ export function createPageRouter() {
       res.sendFile(path.join(pub, "admin.html"));
     },
   );
-  /** The org dashboard — business and premium personal accounts. */
+  /** The org dashboard — business and personal accounts. */
   router.get(["/business", "/business/"], (_req, res) =>
     res.sendFile(path.join(pub, "business.html")),
   );

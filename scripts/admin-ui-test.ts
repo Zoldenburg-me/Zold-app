@@ -98,7 +98,7 @@ await check("a read and a ceremony ask for no approval", async () => {
 await check("signed out, neither a read nor a change is sent", async () => {
   run("setOperatorSession('')");
   await assert.rejects(run("api('/api/admin/users')"), (e: any) => e.status === 401);
-  await assert.rejects(run("api('/api/admin/orgs/o1/plan', { method: 'POST', body: '{}' })"), (e: any) => e.status === 401);
+  await assert.rejects(run("api('/api/admin/transfers/t1/resolve-review', { method: 'POST', body: '{}' })"), (e: any) => e.status === 401);
   assert.equal(calls.length, 0);
 });
 
