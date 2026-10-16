@@ -126,7 +126,7 @@ async function renderCandideSection(el) {
       ${row("New approver", esc(String(pending.newOwners?.[0] || "").slice(0, 12)) + "…")}
     </div>
     <div class="m-lede" style="font-size:13px;margin-top:8px">Someone passed the codes on every channel and started moving this account to a new phone. If that was not you, cancel it now — after the waiting period it cannot be undone.</div>
-    <button class="m-cta" id="m-rc-cancel" style="margin-top:12px">Cancel this recovery with your ${Z.passkeyName()}</button>` : ""}
+    <button class="m-cta" id="m-rc-cancel" style="margin-top:12px">${Z.byDevice("Cancel this recovery with Face ID", "Cancel this recovery with biometrics")}</button>` : ""}
     <div class="m-rows" style="margin-top:${pending ? 20 : 0}px">
       ${row("Status", status)}
       ${row("Waiting period", grace)}
@@ -140,7 +140,7 @@ async function renderCandideSection(el) {
     <div id="m-rc-add" style="margin-top:20px">
       <div class="m-seclabel">Add a channel</div>
       <div class="m-field"><label>Email or phone (+49…)</label><input id="m-rc-target" autocomplete="off" placeholder="name@example.com or +4915112345678"></div>
-      <button class="m-cta" id="m-rc-addbtn" style="margin-top:12px">Register with your ${Z.passkeyName()}</button>
+      <button class="m-cta" id="m-rc-addbtn" style="margin-top:12px">${Z.byDevice("Register with Face ID", "Register with biometrics")}</button>
     </div>
     <div class="m-lede" style="font-size:12px;margin-top:20px;color:var(--m-dim)">
       Candide holds the recovery helper key and approves a recovery only after a code is confirmed on EVERY channel here.
