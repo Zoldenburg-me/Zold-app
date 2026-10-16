@@ -226,13 +226,13 @@ await check("confirm: check, then approve with the passkey after the other owner
   assert.deepEqual(calls.map((c) => c.path), ["/api/users/u-co/safe/import/prepare"]);
   assert.equal(run("obImport.notYet"), true);
   assert.equal(screen(), "b-import-confirm");
-  assert.doesNotMatch(obRoot.innerHTML, /Approve with your passkey/);
+  assert.doesNotMatch(obRoot.innerHTML, /Approve with biometrics/);
   // On chain now: the check shows the other owner before anything is approved.
   const ready = prepared({ owners: [VERIFIER, EOA], otherOwners: [EOA], alreadyOwner: true, ownerChange: null, approval: { challenge: "Y2hhbGxlbmdl", rpId: "localhost" } });
   answer = () => ready;
   await handlers.confirm.onclick({ currentTarget: btn });
   assert.ok(!calls.some((c) => c.path.endsWith("/confirm")), "checking never confirms");
-  assert.match(obRoot.innerHTML, /Approve with your passkey/);
+  assert.match(obRoot.innerHTML, /Approve with biometrics/);
   assert.match(obRoot.innerHTML, new RegExp(`This Safe has another owner: <span[^>]*>${EOA}</span>`));
   run("passkeyAssertion = async (challenge) => ({ credentialId: 'cred', challenge })");
   answer = (p, body) => {
@@ -259,7 +259,7 @@ await check("confirm: an owner already, but a Safe Zold can't bind, says why and
   await handlers.confirm.onclick({ currentTarget: btn });
   assert.equal(run("__lastErr.message"), run('obImportSentence({ code: "THRESHOLD_NOT_ONE" })'));
   assert.equal(run("obImport.notYet"), true);
-  assert.doesNotMatch(obRoot.innerHTML, /Approve with your passkey/);
+  assert.doesNotMatch(obRoot.innerHTML, /Approve with biometrics/);
 });
 await check("confirm: a refused approval is dropped, and the next click checks again", async () => {
   setUser(company());
@@ -273,7 +273,7 @@ await check("confirm: a refused approval is dropped, and the next click checks a
   answer = () => { throw Object.assign(new Error("changed"), { code: "SAFE_CHANGED", status: 409 }); };
   await handlers.confirm.onclick({ currentTarget: btn });
   assert.equal(run("obImport.prepared.approval"), null);
-  assert.doesNotMatch(obRoot.innerHTML, /Approve with your passkey/);
+  assert.doesNotMatch(obRoot.innerHTML, /Approve with biometrics/);
   answer = () => prepared();
   calls.length = 0;
   await handlers.confirm.onclick({ currentTarget: btn });

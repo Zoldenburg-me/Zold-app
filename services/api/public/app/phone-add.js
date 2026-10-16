@@ -350,7 +350,7 @@ PH.convert = {
       <p class="z-err" id="ph-conv-err" role="alert" hidden></p>
     `)}${phFoot(`${expired
       ? Z.button({ variant: "primary", full: true, icon: "refresh", label: "Get a new price", id: "ph-conv-retry" })
-      : Z.button({ variant: "primary", full: true, icon: "fingerprint", label: Z.byDevice("Convert with Face ID", "Convert with your passkey"), id: "ph-conv-go" })}<a class="z-link-btn" href="#add/wallet">Keep as dollars for now</a>`)}`;
+      : Z.button({ variant: "primary", full: true, icon: "fingerprint", label: Z.byDevice("Convert with Face ID", "Convert with biometrics"), id: "ph-conv-go" })}<a class="z-link-btn" href="#add/wallet">Keep as dollars for now</a>`)}`;
   },
   bind(root, id) {
     if (phCache.deposits === null) {
