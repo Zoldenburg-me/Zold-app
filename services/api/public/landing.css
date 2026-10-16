@@ -15,7 +15,7 @@
  * Colour: pink is the one accent. Labels on pink are dark (--z-bg): white on
  * pink fails AA at these sizes.
  *
- * Shape: interactive things are pills (999px); surfaces are 24px, and a
+ * Shape: controls take the 6px control radius and tags stay pills; surfaces are 24px, and a
  * surface nested inside a padded one takes the outer radius minus the padding.
  * The phone frame is 44px around a 36px screen.
  *
@@ -72,7 +72,7 @@
   border: 1px solid var(--z-pink-border); box-shadow: 0 24px 60px rgba(237,24,141,.18), inset 0 1px 0 rgba(255,255,255,.18); }
 
 /* ---------- buttons: pills, as in the app ---------- */
-.l-btn { display: inline-flex; align-items: center; justify-content: center; min-height: 52px; padding: 0 26px; border-radius: var(--z-radius-pill); white-space: nowrap;
+.l-btn { display: inline-flex; align-items: center; justify-content: center; min-height: 52px; padding: 0 26px; border-radius: var(--z-radius-control); white-space: nowrap;
   background: var(--z-pink); color: var(--z-bg); font-size: 15px; font-weight: 600;
   transition: transform .4s var(--l-ease), background-color .2s ease, border-color .2s ease; }
 .l-btn:hover { color: var(--z-bg); background: var(--z-pink-hover); transform: translateY(-2px); }
@@ -106,7 +106,7 @@
 .l-hero__cap { position: absolute; z-index: 3; left: 0; right: 0; bottom: 12px; margin: 0; }
 @media (max-width: 640px) { .l-hero__stage { height: 300px; } .l-device--hero { height: 560px; } }
 /* Pause motion: stops the narwhal (WCAG 2.2.2). Shown by motion.js. */
-.l-motion { position: absolute; right: 24px; bottom: 20px; z-index: 3; min-height: 44px; padding: 0 16px; border-radius: var(--z-radius-pill); cursor: pointer;
+.l-motion { position: absolute; right: 24px; bottom: 20px; z-index: 3; min-height: 44px; padding: 0 16px; border-radius: var(--z-radius-control); cursor: pointer;
   font: 500 13px var(--z-font); color: var(--z-text); border: 1px solid var(--z-line-strong); background: color-mix(in srgb, var(--z-bg) 60%, transparent); transition: border-color .2s ease; }
 .l-motion:hover { border-color: var(--z-line-hover); }
 @media (max-width: 760px) { .l-motion { display: none; } }
@@ -149,8 +149,8 @@
 
 /* ---------- spend: icon, headline and a pill switcher ---------- */
 .l-tabs { margin: 48px auto 0; max-width: 760px; }
-.l-tabs__list { display: inline-flex; flex-wrap: wrap; justify-content: center; gap: 4px; padding: 6px; border-radius: var(--z-radius-pill); border: 1px solid var(--z-line-strong); background: color-mix(in srgb, var(--z-bg) 60%, transparent); }
-.l-tabs__list button { display: inline-flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 22px; border-radius: var(--z-radius-pill); border: 1px solid transparent; background: none; cursor: pointer;
+.l-tabs__list { display: inline-flex; flex-wrap: wrap; justify-content: center; gap: 4px; padding: 6px; border-radius: var(--z-radius-control); border: 1px solid var(--z-line-strong); background: color-mix(in srgb, var(--z-bg) 60%, transparent); }
+.l-tabs__list button { display: inline-flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 22px; border-radius: var(--z-radius-control); border: 1px solid transparent; background: none; cursor: pointer;
   font: 500 15px var(--z-font); color: var(--l-body); transition: color .2s ease, background-color .2s ease, border-color .2s ease; }
 .l-tabs__list button i { font-size: 19px; }
 .l-tabs__list button:hover { color: var(--z-heading); }
