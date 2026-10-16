@@ -18,9 +18,15 @@
 
 /* This browser's payment key: undefined until device.js answers. */
 let phKey;
+/* Whose key phKey describes: a recovery or first bind changes the answer. */
+let phKeyFor;
 function phLoadKey(name) {
-  if (phKey !== undefined) return;
+  const forWhom = `${credId()}|${user?.authorizerAddress ?? ""}`;
+  if (phKeyFor === forWhom) return;
+  phKeyFor = forWhom;
+  phKey = undefined;
   deviceLib.then((dev) => {
+    if (phKeyFor !== forWhom) return;
     try { phKey = dev.keyStatus(credId(), user?.authorizerAddress) || { present: false, protection: null }; } catch { phKey = { present: false, protection: null }; }
     if (phRoute?.name === name) phRender();
   });

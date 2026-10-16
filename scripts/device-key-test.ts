@@ -254,21 +254,64 @@ await t("a new account in the same browser never picks up the legacy key", async
   assert.equal(await dev.deviceAddress(CRED, { bound: LEGACY_ADDR }), LEGACY_ADDR.toLowerCase());
 });
 
+await t("a legacy key is refused for an account bound to a different address", async () => {
+  slots.clear();
+  slots.set("zold-device-key", JSON.stringify({ v: 1, protection: "none", key: LEGACY_PRIV, address: LEGACY_ADDR.toLowerCase() }));
+  const other = `0x${"44".repeat(20)}`;
+  assert.equal(dev.keyStatus(CRED, other).present, false);
+  await assert.rejects(() => dev.signTypedData(TYPED_DATA, CRED, other), /no device key/);
+  assert.equal(slots.get(SLOT), undefined);
+});
+
+await t("a PRF-wrapped legacy key is carried forward with its address and stays wrapped", async () => {
+  slots.clear();
+  slots.set("zold-device-key", JSON.stringify({ ...(await dev.wrapKey(LEGACY_PRIV, PRF_SECRET)), address: LEGACY_ADDR.toLowerCase() }));
+  assert.deepEqual(dev.keyStatus(CRED, LEGACY_ADDR), { present: true, protection: "prf" });
+  const copied = JSON.parse(slots.get(SLOT)!);
+  assert.equal(copied.credentialId, CRED);
+  assert.equal(copied.address, LEGACY_ADDR.toLowerCase());
+  assert.equal(copied.key, undefined);
+  assert.equal(await dev.unwrapKey(copied, PRF_SECRET), LEGACY_PRIV);
+});
+
+await t("a damaged legacy record reads as absent for a bound account", async () => {
+  slots.clear();
+  slots.set("zold-device-key", "{not json");
+  assert.deepEqual(dev.keyStatus(CRED, LEGACY_ADDR), { present: false, protection: null });
+  assert.equal(slots.get(SLOT), undefined);
+  assert.equal(slots.get("zold-device-key"), "{not json");
+});
+
+await t("a legacy record with neither key nor address reads as absent", async () => {
+  slots.clear();
+  slots.set("zold-device-key", JSON.stringify({ v: 1, protection: "prf", iv: "AA==", ct: "AA==" }));
+  assert.equal(dev.keyStatus(CRED, LEGACY_ADDR).present, false);
+});
+
 console.log("device key — a cancelled or timed-out passkey prompt:");
 const realSetTimeout = globalThis.setTimeout;
+const realNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
 const withAuthenticator = async (get: (opts: any) => Promise<unknown>, fn: () => Promise<void>) => {
   (globalThis as any).window.PublicKeyCredential = function () {};
   Object.defineProperty(globalThis, "navigator", { value: { credentials: { get } }, configurable: true, writable: true });
-  try { await fn(); } finally { delete (globalThis as any).window.PublicKeyCredential; }
+  try {
+    await fn();
+  } finally {
+    delete (globalThis as any).window.PublicKeyCredential;
+    if (realNavigator) Object.defineProperty(globalThis, "navigator", realNavigator);
+  }
 };
+const CANCELLED = /cancelled or timed out\. Nothing was stored/;
+const unhandled: unknown[] = [];
+process.on("unhandledRejection", (e) => unhandled.push(e));
 
 await t("cancel (NotAllowedError) rethrows and stores nothing", async () => {
   slots.clear();
   await withAuthenticator(
     () => Promise.reject(new DOMException("The operation was cancelled.", "NotAllowedError")),
     async () => {
-      await assert.rejects(() => dev.createKey(CRED), (e: any) => e.name === "NotAllowedError");
-      await assert.rejects(() => dev.deviceAddress(CRED), (e: any) => e.name === "NotAllowedError");
+      await assert.rejects(() => dev.createKey(CRED), (e: any) => CANCELLED.test(e.message) && e.cause?.name === "NotAllowedError");
+      await assert.rejects(() => dev.deviceAddress(CRED), CANCELLED);
     },
   );
   assert.equal(slots.size, 0);
@@ -280,14 +323,20 @@ await t("timeout aborts the pending prompt, rethrows and stores nothing", async 
   (globalThis as any).setTimeout = (fn: () => void) => realSetTimeout(fn, 0);
   try {
     await withAuthenticator(
-      (opts) => { signal = opts.signal; return new Promise(() => {}); }, // never resolves
-      async () => { await assert.rejects(() => dev.createKey(CRED), /passkey timeout/); },
+      // Like a browser: pending until aborted, then rejects with AbortError.
+      (opts) => {
+        signal = opts.signal;
+        return new Promise((_, rej) => opts.signal.addEventListener("abort", () => rej(new DOMException("aborted", "AbortError"))));
+      },
+      async () => { await assert.rejects(() => dev.createKey(CRED), CANCELLED); },
     );
   } finally {
     (globalThis as any).setTimeout = realSetTimeout;
   }
+  await new Promise((r) => realSetTimeout(r, 10));
   assert.equal(signal?.aborted, true);
   assert.equal(slots.size, 0);
+  assert.deepEqual(unhandled, [], "the aborted prompt's rejection went unhandled");
 });
 
 await t("an assertion that succeeds without PRF still stores the key unprotected", async () => {
@@ -308,6 +357,25 @@ await t("an assertion with PRF stores the key wrapped", async () => {
       assert.equal(protection, "prf");
       const sig = await dev.signTypedData(TYPED_DATA, CRED);
       assert.equal((await recoverAddress({ hash: viemDigest, signature: sig })).toLowerCase(), address);
+    },
+  );
+});
+
+await t("two credentials with PRF keep two keys, and B's secret cannot unwrap A's", async () => {
+  slots.clear();
+  const SECRET_B = new Uint8Array(32).fill(5);
+  const secretFor = (opts: any) => (Buffer.from(opts.publicKey.allowCredentials[0].id).toString() === "cred-a" ? PRF_SECRET : SECRET_B);
+  await withAuthenticator(
+    (opts) => Promise.resolve({ getClientExtensionResults: () => ({ prf: { results: { first: secretFor(opts).buffer } } }) }),
+    async () => {
+      const a = await dev.createKey(CRED);
+      const b = await dev.createKey(CRED_B);
+      assert.equal(a.protection, "prf");
+      assert.equal(b.protection, "prf");
+      assert.notEqual(a.address, b.address);
+      await assert.rejects(() => dev.unwrapKey(JSON.parse(slots.get(SLOT)!), SECRET_B));
+      const sigB = await dev.signTypedData(TYPED_DATA, CRED_B);
+      assert.equal((await recoverAddress({ hash: viemDigest, signature: sigB })).toLowerCase(), b.address);
     },
   );
 });

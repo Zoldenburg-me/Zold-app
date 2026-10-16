@@ -1046,7 +1046,8 @@ export const ACTIONS = {
     // The passkey that wraps this browser's device key, from the session:
     // nothing writes it to storage.
     const me = await api("/api/session");
-    const credentialId = me.passkey?.credentialId || undefined;
+    const credentialId = me.passkey?.credentialId;
+    if (!credentialId) throw new Error("This account has no passkey here, so nothing can be approved.");
     let signed = 0;
     const failures = [];
     for (const a of r.authorizations) {
