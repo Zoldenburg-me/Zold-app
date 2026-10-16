@@ -19,7 +19,8 @@ only way past it.
 `npm run preflight` asks every Candide endpoint the configured chain and gas
 mode depend on whether it will do its job — bundler, paymaster (with a
 throwaway deployment op, never signed), recovery module and service,
-forwarding — and exits 1 on any FAIL. `--chain 8453 --gas token` overrides.
+forwarding, and that every configured wallet is in `wallets.json`
+(`docs/wallets.md`) — and exits 1 on any FAIL. `--chain 8453 --gas token` overrides.
 
 `npm run dev` wiping its own db is why test accounts vanish between runs — and
 why the live accounts in `data/db.json` must never be exercised with it.

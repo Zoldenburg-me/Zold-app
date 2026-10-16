@@ -62,6 +62,7 @@ const scripts = [
   "dex:test",
   "lifi:test",
   "forwarder:test",
+  "wallet-register:test",
   "email:test",
   "recovery-alerts:test",
   "enrolment:test",

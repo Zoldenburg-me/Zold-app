@@ -1,0 +1,16 @@
+{
+  "8453": {
+    "0x2038A1179C4B9D7D04e7122017aD0FfD5FC7F364": {
+      "role": "Candide custodial withdrawer",
+      "env": ["CANDIDE_FORWARDING_CUSTODIAL_WITHDRAWER"],
+      "keyHolder": "unknown"
+    }
+  },
+  "84532": {
+    "0x222222225E82c7Fd29Ba508d4B43725AC5C6b8DC": {
+      "role": "testnet faucet and zUSD owner (the vanity account)",
+      "env": ["FAUCET_KEY"],
+      "keyHolder": "server"
+    }
+  }
+}
