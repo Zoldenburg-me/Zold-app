@@ -298,7 +298,7 @@ assert.equal(m.isCompanyLogin(null), false);
   const bound = { authorizerAddress: "0xa1" };
   assert.equal(m.deviceKeyView({}, { present: true, protection: "prf" }), "none", "no key bound to the account");
   assert.equal(m.deviceKeyView(bound, { present: false, protection: null }), "elsewhere");
-  assert.equal(m.deviceKeyView(bound, null), "elsewhere", "unread status is not a key here");
+  assert.equal(m.deviceKeyView(bound, null), "unknown", "an unread browser is never said to be not here");
   assert.equal(m.deviceKeyView(bound, { present: true, protection: "prf" }), "encrypted");
   assert.equal(m.deviceKeyView(bound, { present: true, protection: "none" }), "plain");
 }
