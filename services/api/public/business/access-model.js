@@ -145,12 +145,14 @@ export function approvalView(members, canApprove) {
 
 /**
  * This browser's payment key, as device.js keyStatus reports it: "none" (no
- * key bound to the account yet), "elsewhere" (bound, not in this browser),
+ * key bound to the account yet), "unknown" (this browser could not be read:
+ * never taken as not here), "elsewhere" (bound, not in this browser),
  * "encrypted" (wrapped by the passkey) or "plain" (stored unencrypted).
  */
 export function deviceKeyView(me, status) {
   if (!me?.authorizerAddress) return "none";
-  if (!status?.present) return "elsewhere";
+  if (!status) return "unknown";
+  if (!status.present) return "elsewhere";
   return status.protection === "none" ? "plain" : "encrypted";
 }
 

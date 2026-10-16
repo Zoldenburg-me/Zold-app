@@ -26,9 +26,10 @@ const addr = (a) => `<span class="z-mono zb-access__addr">${esc(a)}</span>`;
 /* This browser's payment key (device.js), the way the app's Security screen says it. */
 async function deviceKeyRow(me) {
   let status = null;
-  try { status = (await window.__deviceLib).keyStatus(me.passkey?.credentialId, me.authorizerAddress); } catch { /* unread: said as not here */ }
+  try { status = (await window.__deviceLib).keyStatus(me.passkey?.credentialId, me.authorizerAddress); } catch { /* unread: said as unknown */ }
   return {
     none: "Not set up yet",
+    unknown: "Couldn’t check this browser",
     elsewhere: "On another device",
     encrypted: `In this browser, encrypted by your ${esc(Z.passkeyName())}`,
     plain: `<b>In this browser, not encrypted.</b> Your ${esc(Z.passkeyName())} here can’t encrypt it. Don’t use Zold in this browser on a shared computer.`,
@@ -128,8 +129,8 @@ function approvalsCard(members) {
     ...Object.keys(ROLE_WORD).map((r) => [ROLE_WORD[r], esc(roleSentence(r))]),
   ].filter(([, x]) => x);
   const toggle = org.role !== "owner" ? ""
-    : on ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="review-off">Turn off</button>`
-      : offered ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="review-on">Turn on</button>` : "";
+    : on ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="review-off">Turn second approval off</button>`
+      : offered ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="review-on">Turn second approval on</button>` : "";
   const membersLink = cap("members.manage").allowed ? `<a class="z-btn z-btn--secondary z-btn--sm" href="?view=members" data-view-link="members">Members</a>` : "";
   return card("acc-pay", "Who approves payments", `${rows(list)}${notes}`, `<div class="zb-actions" style="margin-top:0">${toggle}${membersLink}</div>`);
 }
@@ -159,10 +160,11 @@ RENDER.access = async () => {
       bind: retry,
     };
   }
+  const yours = `<a class="z-btn z-btn--secondary z-btn--sm" href="/app?from=business#security">Your sign-in and recovery${Z.icon("open_in_new")}<span class="z-sr"> (the app)</span></a>`;
+  if (org.type === "personal") return stack([pay, card("acc-member", "Sign-in and recovery", `<p class="zb-hint">Your sign-in and recovery are in the app.</p>`, yours)]);
   if (!isOwnCompanyOrg(me, org, acc)) {
     return stack([pay, card("acc-member", "Sign-in and recovery", `<p>Only the company’s own sign-in can see and change who can sign for the company’s account and who can recover it. Ask the person who holds it.</p>
-      <p class="zb-hint">Your own sign-in and recovery are in the app.</p>`,
-      `<a class="z-btn z-btn--secondary z-btn--sm" href="/app?from=business#security">Your sign-in and recovery${Z.icon("open_in_new")}<span class="z-sr"> (the app)</span></a>`)]);
+      <p class="zb-hint">Your own sign-in and recovery are in the app.</p>`, yours)]);
   }
   const [a, keyRow] = await Promise.all([loadAccess(me, api), deviceKeyRow(me)]);
   if (a.noSafe) return stack([pay, card("acc-none", "No account yet", `<p class="zb-hint">This sign-in’s account isn’t set up yet, so there are no signers or recovery helpers to show. Finish setting it up in the app.</p>`, appBtn("Open the app", "/app"))]);
