@@ -42,7 +42,6 @@ These deviations are decided. Do not undo them, and do not add new ones without 
 | Skill rule | Zold choice | Why |
 |---|---|---|
 | Avoid Inter as default (4.1, 9.B) | Inter everywhere | This is the existing brand face on zoldhq.com and is self-hosted; redesign-preserve keeps brand assets (section 11). |
-| No outer glows (9.A) | A pink glow only under the ONE primary button and a faint hero radial | This is the live site's signature. Keep it on primary actions only; never glow cards, text or icons. |
 | No div-based fake product UI (9.E, 9.F) | Product mockups on the landing page (the transaction list, the payment-link and flow panels); the ones that show names or amounts are tagged "Illustration" | The copy brief required them. Replace them with real screenshots of the shipped app once it exists. |
 | Section numbering banned (9.F) | "01 02 03" on the three landing send steps | These are real ordered steps, not section eyebrows. Nowhere else. |
 
@@ -111,12 +110,12 @@ The story every screen serves is **"Nothing moves without your yes."** A person 
 
 ## 6. Layout and visual rules
 
-- **Use tokens only.** Every colour, radius, space and shadow comes from `tokens/tokens.css` (`--z-*`). No new hex values.
+- **Use tokens only.** Every colour, radius, space and shadow comes from `tokens/tokens.css` (`--z-*`). No new hex values. The values are the ARK direction (`design/ark/DESIGN.md`).
 - **Dark only for now.** Home-Light is an optional theme. If it is built, it is a full token remap, and a page is never half light, half dark (4.11).
 - **Colour limits:**
-  - Never pure black; `--z-bg` is #08080b.
-  - Text is never dimmer than `--z-dim` (#9a9aa5). #5b5b66 fails contrast and is banned for text.
-- **Pink limits:** one pink primary action per screen. Pink also appears as the focus ring, progress, selected pills and inline links. A second action is secondary (ghost with a border) or a quiet text link.
+  - Never pure black; `--z-bg` is #0b0b0c.
+  - Text is never dimmer than `--z-dim` (#9c9484). #5b5b66 fails contrast and is banned for text.
+- **Pink limits:** one pink primary action per screen, with near-black text (`--z-bg`): white on pink fails AA. Nothing glows: no shadow under the primary button and no hero radial. Pink also appears as the focus ring, progress, selected pills and inline links. A second action is secondary (ghost with a border) or a quiet text link.
 - **Status colours:** mint means money in or success, amber means warning or pending, pink means in progress.
 - **Phone layout:**
   - 16px side gutter, content in `<main>`, and the primary action pinned at the bottom (16px padding, 28px bottom).
@@ -126,7 +125,8 @@ The story every screen serves is **"Nothing moves without your yes."** A person 
   - Content padding is 28px 40px.
   - Details open in a right drawer. Confirmations open in a centred dialog.
 - **Cards and eyebrows:**
-  - Cards use the card gradient with a 1px `--z-line` border and 16px radius.
+  - Cards use the flat `--z-card` surface with a 1px `--z-line` border and 14px radius (`--z-radius-card`); sheets and dialogs take 20px (`--z-radius-sheet`).
+- **Radius:** controls (buttons, inputs, selects, segmented controls, filter pills, nav rows) take `--z-radius-control` (6px). Only tags, badges, progress tracks and round icons keep `--z-radius-pill`.
   - No three equal cards in a row (9.C). Use list groups, 2×2 grids or stacked lists.
   - Eyebrows (11px uppercase) only label list groups, and at most one per group. No section numbers.
 - **Icons:** Material Symbols Rounded in the app and Phosphor on the landing page. Never hand-drawn SVG icons. Never emoji in the UI.

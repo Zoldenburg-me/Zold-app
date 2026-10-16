@@ -2,7 +2,7 @@
  * Turnkey wallets for social recovery guardians (docs/recovery-guardians-plan.md,
  * Phase 2). A guardian is an Ethereum account in a Turnkey sub-organisation
  * whose only root user is the person: the user's own Google or Apple login
- * (`self-social`) or, later, someone they trust.
+ * (`self-social`), an email address, or a passkey; later, someone they trust.
  *
  * THE INVARIANT: every sub-org this API creates has exactly one root user,
  * the person, at root quorum 1, with no API key and no authenticator of ours
@@ -20,6 +20,7 @@
  */
 import { createECDH, createHash, createPublicKey, randomBytes, verify, type JsonWebKey } from "node:crypto";
 import { ApiKeyStamper } from "@turnkey/api-key-stamper";
+import { verifyOtpVerificationToken } from "@turnkey/crypto";
 import { TurnkeyClient, createActivityPoller, type TurnkeyApiTypes } from "@turnkey/http";
 import { getAddress, isAddress, recoverAddress, type Hex } from "viem";
 import { TURNKEY } from "../config.js";
@@ -59,17 +60,29 @@ const OIDC_ISSUERS: Record<string, OidcProvider> = {
 };
 type OidcProvider = "Google" | "Apple";
 
+type Attestation = GuardianSubOrgParams["rootUsers"][number]["authenticators"][number]["attestation"];
+
+/** How the person logs in to their guardian: exactly one of these. */
+export type GuardianLogin =
+  | { kind: "oidc"; oidcToken: string; providerName: OidcProvider }
+  /** An address Turnkey proved the person reads (a verification token). */
+  | { kind: "email"; email: string }
+  /** A passkey the person's browser made: Turnkey checks the attestation. */
+  | { kind: "passkey"; challenge: string; attestation: Attestation };
+
 /** The guardian sub-org for one login. The name is random: it carries no
- *  user id and no email, so Turnkey's records do not link it to an account. */
-export function buildGuardianSubOrg(args: { oidcToken: string; providerName: OidcProvider }): GuardianSubOrgParams {
+ *  user id, so Turnkey's records do not link it to an account. An email
+ *  login is the one case where Turnkey holds the person's email. */
+export function buildGuardianSubOrg(login: GuardianLogin): GuardianSubOrgParams {
   const params: GuardianSubOrgParams = {
     subOrganizationName: `zold-guardian-${randomBytes(16).toString("hex")}`,
     rootUsers: [
       {
         userName: "Guardian",
         apiKeys: [],
-        authenticators: [],
-        oauthProviders: [{ providerName: args.providerName, oidcToken: args.oidcToken }],
+        authenticators: login.kind === "passkey" ? [{ authenticatorName: "Recovery passkey", challenge: login.challenge, attestation: login.attestation }] : [],
+        oauthProviders: login.kind === "oidc" ? [{ providerName: login.providerName, oidcToken: login.oidcToken }] : [],
+        ...(login.kind === "email" ? { userEmail: login.email } : {}),
       },
     ],
     rootQuorumThreshold: 1,
@@ -96,13 +109,22 @@ export function assertPersonOnlySubOrg(p: GuardianSubOrgParams): GuardianSubOrgP
   if (!Array.isArray(p.rootUsers) || p.rootUsers.length !== 1) fail("exactly one root user, the person");
   if (p.rootQuorumThreshold !== 1) fail("root quorum must be 1");
   const [user] = p.rootUsers;
-  onlyKeys(user, ["userName", "apiKeys", "authenticators", "oauthProviders"], "root user");
+  onlyKeys(user, ["userName", "apiKeys", "authenticators", "oauthProviders", "userEmail"], "root user");
   if (!Array.isArray(user.apiKeys) || user.apiKeys.length !== 0) fail("no API key in a sub-org");
-  if (!Array.isArray(user.authenticators) || user.authenticators.length !== 0) fail("no authenticator from us");
-  if (!Array.isArray(user.oauthProviders) || user.oauthProviders.length !== 1) fail("exactly one login");
-  const [login] = user.oauthProviders;
-  onlyKeys(login, ["providerName", "oidcToken"], "login");
-  if (typeof login.oidcToken !== "string" || !login.oidcToken) fail("the login needs the person's ID token");
+  if (!Array.isArray(user.authenticators) || !Array.isArray(user.oauthProviders)) fail("authenticators and oauthProviders are lists");
+  const email = "userEmail" in user ? 1 : 0;
+  if (user.oauthProviders.length + user.authenticators.length + email !== 1) fail("exactly one login: Google or Apple, an email, or a passkey");
+  for (const login of user.oauthProviders) {
+    onlyKeys(login, ["providerName", "oidcToken"], "login");
+    if (typeof login.oidcToken !== "string" || !login.oidcToken) fail("the login needs the person's ID token");
+  }
+  for (const a of user.authenticators) {
+    onlyKeys(a, ["authenticatorName", "challenge", "attestation"], "passkey");
+    onlyKeys(a.attestation ?? {}, ["credentialId", "clientDataJson", "attestationObject", "transports"], "passkey attestation");
+    const { credentialId, clientDataJson, attestationObject } = a.attestation ?? ({} as Attestation);
+    if (![a.challenge, credentialId, clientDataJson, attestationObject].every((v) => typeof v === "string" && v)) fail("the passkey needs its challenge and attestation");
+  }
+  if (email && !(typeof user.userEmail === "string" && EMAIL_RE.test(user.userEmail))) fail("the email login needs an email address");
   if (!p.wallet) fail("one wallet");
   onlyKeys(p.wallet!, ["walletName", "accounts"], "wallet");
   if (!Array.isArray(p.wallet!.accounts) || p.wallet!.accounts.length !== 1) fail("exactly one wallet account");
@@ -114,6 +136,28 @@ export function assertPersonOnlySubOrg(p: GuardianSubOrgParams): GuardianSubOrgP
 
 // ---------------------------------------------------------------------------
 // The login token
+
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
+/**
+ * The email a Turnkey OTP verification token proves the person reads. The
+ * token is an ES256 JWT from Turnkey's enclave, checked against Turnkey's
+ * published key (`verifyOtpVerificationToken`), issued to our organisation.
+ * The code never reaches us: the browser encrypted it to the enclave.
+ */
+export type OtpTokenCheck = (jwt: string) => Promise<{ organization_id: string; verification_type: string; contact: string; public_key: string }>;
+export { verifyOtpVerificationToken };
+
+export async function verifiedGuardianEmail(verificationToken: unknown, verify: OtpTokenCheck = verifyOtpVerificationToken) {
+  const bad = (why: string): never => {
+    throw new TurnkeyGuardianError(`email code refused: ${why}`, 400, "BAD_OTP_TOKEN");
+  };
+  if (typeof verificationToken !== "string" || verificationToken.length > 4096) bad("not a verification token");
+  const claims = await verify(verificationToken as string).catch(() => bad("not signed by Turnkey, or expired"));
+  if (claims.organization_id !== TURNKEY.organizationId) bad("issued for another organisation");
+  if (!/email/i.test(claims.verification_type) || !EMAIL_RE.test(claims.contact)) bad("not an email code");
+  return { email: claims.contact.trim().toLowerCase(), publicKey: claims.public_key };
+}
 
 /** Turnkey binds an OIDC token to the browser's session key by its nonce:
  *  sha256 over the compressed public key's hex string. */
@@ -241,27 +285,49 @@ export async function recoverTurnkeySigner(digest: Hex, sig: { r: string; s: str
 
 /** What the routes need from Turnkey, so a test can stand in for it. */
 export interface TurnkeyGuardianClient {
-  /** Sub-orgs under our parent whose root logs in with this token's identity. */
-  subOrgIdsForOidcToken(oidcToken: string): Promise<string[]>;
+  /** Sub-orgs under our parent whose root logs in with this ID token's
+   *  identity, this email, or this passkey credential. */
+  subOrgIds(filterType: "OIDC_TOKEN" | "EMAIL" | "CREDENTIAL_ID", filterValue: string): Promise<string[]>;
   createSubOrg(params: GuardianSubOrgParams): Promise<{ subOrgId: string; address: `0x${string}` }>;
   /** The sub-org's one guardian account, after checking the sub-org's shape. */
   walletAddress(subOrgId: string): Promise<`0x${string}`>;
   /** A session for the person's own sub-org, bound to their browser key. */
   oauthLogin(subOrgId: string, oidcToken: string, publicKey: string): Promise<string>;
+  /** Turnkey emails the person a code; the browser encrypts it to the
+   *  enclave with `otpEncryptionTargetBundle`, so we never see it. */
+  initEmailOtp(email: string): Promise<{ otpId: string; otpEncryptionTargetBundle: string }>;
+  /** The encrypted code in, a verification token bound to the browser key out. */
+  verifyEmailOtp(otpId: string, encryptedOtpBundle: string): Promise<string>;
+  /** A session, only with the browser key's signature over the token's use:
+   *  we relay it, and cannot make one ourselves. */
+  otpLogin(subOrgId: string, verificationToken: string, publicKey: string, clientSignature: ClientSignature): Promise<string>;
+  /** A whoami the person's passkey stamped, relayed: Turnkey checks the
+   *  assertion and names the sub-org that passkey belongs to. */
+  passkeySubOrg(body: string, stamp: string): Promise<string>;
+  /** A sign_raw_payload activity in a guardian's sub-org, read with our
+   *  parent key, so a passkey is not asked again on every poll. */
+  signActivity(subOrgId: string, activityId: string): Promise<{ id: string; status: string; result?: { signRawPayloadResult?: { r: string; s: string; v: string } } }>;
 }
+
+export type ClientSignature = { publicKey: string; scheme: "CLIENT_SIGNATURE_SCHEME_API_P256"; message: string; signature: string };
 
 /**
  * A sub-org found by login rather than created here gets the invariant
  * checked on what Turnkey reports: one user, who is the whole root quorum at
  * threshold 1, with no API key. The person's own passkeys are theirs to add.
  */
-export function assertFoundSubOrg(org: { users?: { userId: string; apiKeys?: unknown[] }[]; rootQuorum?: { threshold: number; userIds: string[] } }) {
+export function assertFoundSubOrg(org: { users?: { userId: string; apiKeys?: { expirationSeconds?: string; credential?: { type?: string } }[] }[]; rootQuorum?: { threshold: number; userIds: string[] } }) {
   const fail = (why: string): never => {
     throw new TurnkeyGuardianError(`guardian sub-org refused: ${why}`, 409, "SUB_ORG_SHAPE");
   };
   const users = org.users ?? [];
   if (users.length !== 1) fail(`it has ${users.length} users, expected the person alone`);
-  if ((users[0].apiKeys ?? []).length !== 0) fail("it holds an API key");
+  // A guardian's own login (oauthLogin/otpLogin) adds a session key bound to
+  // the person's browser key that expires within LOGIN_SECONDS. Anything
+  // standing or longer is a key someone else could hold.
+  const session = (k: { expirationSeconds?: string; credential?: { type?: string } }) =>
+    k.credential?.type === "CREDENTIAL_TYPE_LOGIN" && /^\d+$/.test(k.expirationSeconds ?? "") && Number(k.expirationSeconds) <= Number(LOGIN_SECONDS);
+  if (!(users[0].apiKeys ?? []).every(session)) fail("it holds an API key");
   const q = org.rootQuorum;
   if (!q || q.threshold !== 1 || q.userIds.length !== 1 || q.userIds[0] !== users[0].userId) fail("its root quorum is not the person alone");
 }
@@ -289,8 +355,8 @@ export function turnkeyClient(): TurnkeyGuardianClient {
   );
   const organizationId = TURNKEY.organizationId;
   client = {
-    async subOrgIdsForOidcToken(oidcToken) {
-      const r = await http.getSubOrgIds({ organizationId, filterType: "OIDC_TOKEN", filterValue: oidcToken });
+    async subOrgIds(filterType, filterValue) {
+      const r = await http.getSubOrgIds({ organizationId, filterType, filterValue });
       return r.organizationIds ?? [];
     },
     async createSubOrg(params) {
@@ -329,6 +395,58 @@ export function turnkeyClient(): TurnkeyGuardianClient {
       const session = activity.result.oauthLoginResult?.session;
       if (!session) throw new TurnkeyGuardianError("Turnkey returned no session", 502, "TURNKEY_FAILED");
       return session;
+    },
+    async initEmailOtp(email) {
+      const activity = await createActivityPoller({ client: http, requestFn: http.initOtp })({
+        type: "ACTIVITY_TYPE_INIT_OTP_V3",
+        timestampMs: String(Date.now()),
+        organizationId,
+        parameters: { otpType: "OTP_TYPE_EMAIL", contact: email, appName: "Zold", otpLength: 6, alphanumeric: false },
+      });
+      const r = activity.result.initOtpResultV2;
+      if (!r?.otpId || !r.otpEncryptionTargetBundle) throw new TurnkeyGuardianError("Turnkey sent no code", 502, "TURNKEY_FAILED");
+      return { otpId: r.otpId, otpEncryptionTargetBundle: r.otpEncryptionTargetBundle };
+    },
+    async verifyEmailOtp(otpId, encryptedOtpBundle) {
+      const activity = await createActivityPoller({ client: http, requestFn: http.verifyOtp })({
+        type: "ACTIVITY_TYPE_VERIFY_OTP_V2",
+        timestampMs: String(Date.now()),
+        organizationId,
+        parameters: { otpId, encryptedOtpBundle },
+      });
+      const token = activity.result.verifyOtpResult?.verificationToken;
+      if (!token) throw new TurnkeyGuardianError("that code did not verify", 400, "BAD_OTP");
+      return token;
+    },
+    async otpLogin(subOrgId, verificationToken, publicKey, clientSignature) {
+      const activity = await createActivityPoller({ client: http, requestFn: http.otpLogin })({
+        type: "ACTIVITY_TYPE_OTP_LOGIN_V2",
+        timestampMs: String(Date.now()),
+        organizationId: subOrgId,
+        parameters: { verificationToken, publicKey, clientSignature, expirationSeconds: LOGIN_SECONDS, invalidateExisting: true },
+      });
+      const session = activity.result.otpLoginResult?.session;
+      if (!session) throw new TurnkeyGuardianError("Turnkey returned no session", 502, "TURNKEY_FAILED");
+      return session;
+    },
+    async passkeySubOrg(body, stamp) {
+      const r = await fetch(`${TURNKEY.baseUrl}/public/v1/query/whoami`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "X-Stamp-Webauthn": stamp },
+        body,
+        signal: AbortSignal.timeout(15_000),
+      });
+      const data = (await r.json().catch(() => ({}))) as { organizationId?: string };
+      // Any refusal, e.g. the person picked their Zold sign-in passkey instead.
+      if (r.status >= 400 && r.status < 500) throw new TurnkeyGuardianError("Turnkey did not accept that passkey", 404, "NO_GUARDIAN");
+      if (!r.ok || typeof data.organizationId !== "string") throw new TurnkeyGuardianError(`Turnkey whoami failed (${r.status})`, 502, "TURNKEY_FAILED");
+      return data.organizationId;
+    },
+    async signActivity(subOrgId, activityId) {
+      // Its status and a signature, if it holds one; nothing else of the activity.
+      const { activity } = await http.getActivity({ organizationId: subOrgId, activityId });
+      const out = activity.result?.signRawPayloadResult;
+      return { id: activity.id, status: activity.status, ...(out ? { result: { signRawPayloadResult: { r: out.r, s: out.s, v: out.v } } } : {}) };
     },
   };
   return client;

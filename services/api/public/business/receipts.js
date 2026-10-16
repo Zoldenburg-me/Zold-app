@@ -5,6 +5,7 @@
  * run or issue a draft are in actions.js.
  */
 import { $, Z, api, cap, dialog, esc, eur, org, toast } from "./core.js";
+import { INVOICE_LANGUAGE_OPTIONS } from "./views.js";
 
 const field = (id, label, extra = "") => `<label for="${id}">${label}</label><input id="${id}" name="${id}" autocomplete="off" ${extra} />`;
 
@@ -61,7 +62,7 @@ export async function payerRuleDialog(c) {
      ${field("pr-rate", 'VAT rate, % <span class="desc">(when you charge VAT)</span>', `inputmode="decimal" value="${esc(r?.vat.kind === "standard" ? r.vat.rate : "")}"`)}
      ${field("pr-note", 'Note printed on the invoice <span class="desc">(when the reason needs one)</span>', `value="${esc(r?.vat.kind === "exempt" ? r.vat.note || "" : "")}"`)}
      <label for="pr-lang">Language</label>
-     <select id="pr-lang" name="pr-lang"><option value="en"${r?.language === "de" ? "" : " selected"}>English</option><option value="de"${r?.language === "de" ? " selected" : ""}>German</option></select>
+     <select id="pr-lang" name="pr-lang">${INVOICE_LANGUAGE_OPTIONS.map(([v, l]) => `<option value="${v}"${r?.language === v ? " selected" : ""}>${l}</option>`).join("")}</select>
      <p class="desc" style="margin-top:12px">You choose the tax line; Zold doesn’t. How a payment from a DAO is taxed is a question for your Steuerberater.</p>`,
     async () => {
       const wallets = payerAddresses($("#pr-addr").value, c.wallets);

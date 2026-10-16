@@ -42,4 +42,7 @@ export const MONERIUM = {
 export const moneriumSandboxEnabled = () =>
   Boolean(MONERIUM.clientId && MONERIUM.clientSecret);
 
-export const moneriumOAuthEnabled = () => Boolean(MONERIUM.oauthClientId);
+// MONERIUM_OAUTH=off stops new OAuth connects (the app then offers only the
+// user's own API keys); accounts already connected by OAuth keep refreshing.
+export const moneriumOAuthEnabled = () =>
+  process.env.MONERIUM_OAUTH !== "off" && Boolean(MONERIUM.oauthClientId);

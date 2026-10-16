@@ -109,7 +109,7 @@ const googleClaims = (over: Record<string, unknown> = {}) => ({
 console.log("sub-org payload");
 
 await check("the builder makes one root user with an OAuth login and nothing of ours", () => {
-  const p = tk.buildGuardianSubOrg({ oidcToken: jwt(googleClaims()), providerName: "Google" });
+  const p = tk.buildGuardianSubOrg({ kind: "oidc", oidcToken: jwt(googleClaims()), providerName: "Google" });
   assert.equal(p.rootQuorumThreshold, 1);
   assert.equal(p.rootUsers.length, 1);
   const [u] = p.rootUsers;
@@ -128,13 +128,13 @@ await check("the builder makes one root user with an OAuth login and nothing of 
 });
 
 await check("the sub-org name carries no user id or email", () => {
-  const a = tk.buildGuardianSubOrg({ oidcToken: jwt(googleClaims()), providerName: "Google" });
-  const b = tk.buildGuardianSubOrg({ oidcToken: jwt(googleClaims()), providerName: "Google" });
+  const a = tk.buildGuardianSubOrg({ kind: "oidc", oidcToken: jwt(googleClaims()), providerName: "Google" });
+  const b = tk.buildGuardianSubOrg({ kind: "oidc", oidcToken: jwt(googleClaims()), providerName: "Google" });
   assert.match(a.subOrganizationName, /^zold-guardian-[0-9a-f]{32}$/);
   assert.notEqual(a.subOrganizationName, b.subOrganizationName);
 });
 
-const good = () => tk.buildGuardianSubOrg({ oidcToken: jwt(googleClaims()), providerName: "Google" });
+const good = () => tk.buildGuardianSubOrg({ kind: "oidc", oidcToken: jwt(googleClaims()), providerName: "Google" });
 const refused = (mutate: (p: ReturnType<typeof good>) => unknown, label: string) =>
   check(`the invariant refuses ${label}`, () => {
     const p = structuredClone(good());
@@ -150,13 +150,51 @@ await refused(
   "an API key",
 );
 await refused((p) => (p.rootUsers[0].apiKeys = undefined as any), "a missing apiKeys list");
-await refused((p) => p.rootUsers[0].authenticators.push({} as any), "an authenticator");
+await refused((p) => p.rootUsers[0].authenticators.push({} as any), "a passkey beside the Google login");
 await refused((p) => (p.rootUsers[0].oauthProviders = []), "a root user with no login");
 await refused((p) => p.rootUsers[0].oauthProviders.push(p.rootUsers[0].oauthProviders[0]), "two logins on one user");
 await refused((p) => (p.wallet!.accounts = [...p.wallet!.accounts, p.wallet!.accounts[0]]), "two wallet accounts");
 await refused((p) => (p.wallet = undefined), "no wallet");
 await refused((p) => ((p as any).delegatedAccess = true), "an unknown field");
-await refused((p) => (p.rootUsers[0].userEmail = "x@example.com"), "an email");
+await refused((p) => (p.rootUsers[0].userEmail = "x@example.com"), "an email beside the Google login");
+
+const ATTESTATION = { credentialId: "cred-1", clientDataJson: "cdj", attestationObject: "ao", transports: ["AUTHENTICATOR_TRANSPORT_USB" as const] };
+await check("an email login is the email alone: no OAuth, no passkey", () => {
+  const p = tk.buildGuardianSubOrg({ kind: "email", email: "mira@example.com" });
+  const [u] = p.rootUsers;
+  assert.equal(u.userEmail, "mira@example.com");
+  assert.deepEqual([u.oauthProviders, u.authenticators, u.apiKeys], [[], [], []]);
+});
+await check("a passkey login is the person's one passkey: no OAuth, no email", () => {
+  const p = tk.buildGuardianSubOrg({ kind: "passkey", challenge: "ch", attestation: ATTESTATION });
+  const [u] = p.rootUsers;
+  assert.equal(u.authenticators.length, 1);
+  assert.equal(u.authenticators[0].attestation.credentialId, "cred-1");
+  assert.deepEqual([u.oauthProviders, u.apiKeys, u.userEmail], [[], [], undefined]);
+});
+await check("the invariant refuses a passkey without its attestation, and a malformed email", () => {
+  const p = tk.buildGuardianSubOrg({ kind: "passkey", challenge: "ch", attestation: { ...ATTESTATION } });
+  (p.rootUsers[0].authenticators[0].attestation as any).attestationObject = "";
+  assert.throws(() => tk.assertPersonOnlySubOrg(p), /sub-org/);
+  assert.throws(() => tk.buildGuardianSubOrg({ kind: "email", email: "not-an-email" }), /sub-org/);
+});
+
+// Turnkey's email verification tokens: a stand-in for its signature check.
+const OTP_CLAIMS: Record<string, { organization_id: string; verification_type: string; contact: string; public_key: string }> = {
+  "tok-mira": { organization_id: "org-parent-test", verification_type: "OTP_TYPE_EMAIL", contact: "Mira@Example.com", public_key: BROWSER_KEY },
+  "tok-other-org": { organization_id: "someone-else", verification_type: "OTP_TYPE_EMAIL", contact: "x@example.com", public_key: BROWSER_KEY },
+};
+const otpTokens = async (t: string) => {
+  const c = OTP_CLAIMS[t];
+  if (!c) throw new Error("bad signature");
+  return c;
+};
+await check("an email token must be Turnkey's, for our organisation, for an email", async () => {
+  const ok = await tk.verifiedGuardianEmail("tok-mira", otpTokens);
+  assert.deepEqual(ok, { email: "mira@example.com", publicKey: BROWSER_KEY });
+  await assert.rejects(tk.verifiedGuardianEmail("forged", otpTokens), /BAD_OTP_TOKEN|refused/);
+  await assert.rejects(tk.verifiedGuardianEmail("tok-other-org", otpTokens), /another organisation/);
+});
 
 // ---------------------------------------------------------------------------
 console.log("OIDC token");
@@ -230,9 +268,15 @@ const person = { userId: "user-1", apiKeys: [] };
 await check("a found sub-org with the person alone at quorum 1 passes", () => {
   tk.assertFoundSubOrg({ users: [person], rootQuorum: { threshold: 1, userIds: ["user-1"] } });
 });
+await check("a found sub-org passes with the 15-minute session key the person's own login adds", () => {
+  tk.assertFoundSubOrg({ users: [{ userId: "user-1", apiKeys: [{ expirationSeconds: "900", credential: { type: "CREDENTIAL_TYPE_LOGIN" } }] }], rootQuorum: { threshold: 1, userIds: ["user-1"] } });
+});
 for (const [label, org] of [
   ["a second user", { users: [person, { userId: "user-2", apiKeys: [] }], rootQuorum: { threshold: 1, userIds: ["user-1"] } }],
   ["an API key on the person", { users: [{ userId: "user-1", apiKeys: [{}] }], rootQuorum: { threshold: 1, userIds: ["user-1"] } }],
+  ["an API key that lasts longer than a login", { users: [{ userId: "user-1", apiKeys: [{ expirationSeconds: "901", credential: { type: "CREDENTIAL_TYPE_LOGIN" } }] }], rootQuorum: { threshold: 1, userIds: ["user-1"] } }],
+  ["a short-lived key that is not a login session", { users: [{ userId: "user-1", apiKeys: [{ expirationSeconds: "900", credential: { type: "CREDENTIAL_TYPE_API_KEY_P256" } }] }], rootQuorum: { threshold: 1, userIds: ["user-1"] } }],
+  ["a session key beside a standing one", { users: [{ userId: "user-1", apiKeys: [{ expirationSeconds: "900", credential: { type: "CREDENTIAL_TYPE_LOGIN" } }, {}] }], rootQuorum: { threshold: 1, userIds: ["user-1"] } }],
   ["quorum 2", { users: [person], rootQuorum: { threshold: 2, userIds: ["user-1"] } }],
   ["a root quorum naming someone else", { users: [person], rootQuorum: { threshold: 1, userIds: ["user-9"] } }],
   ["no root quorum", { users: [person] }],
@@ -275,9 +319,9 @@ await check("the API public key is derived from the private key as compressed P-
   assert.match(tk.turnkeyApiPublicKey(), /^0[23][0-9a-f]{64}$/);
 });
 
-await check("capabilities() publishes the switch and the two login client ids", () => {
+await check("capabilities() publishes the switch, the two login client ids, email and passkey", () => {
   assert.equal(capabilities().turnkeyGuardians, true);
-  assert.deepEqual(capabilities().turnkeyLogins, { google: "google-client.apps.googleusercontent.com", apple: "com.zoldhq.signin" });
+  assert.deepEqual(capabilities().turnkeyLogins, { google: "google-client.apps.googleusercontent.com", apple: "com.zoldhq.signin", email: true, passkey: true });
 });
 
 // ---------------------------------------------------------------------------
@@ -292,17 +336,44 @@ const baseUser = (id: string, extra: Record<string, unknown> = {}) => ({
 });
 store.addUser(baseUser("u_ok", { passkeySafe: { address: addr("a"), status: "active", threshold: 1, passkeyPublicKey: pk, createdAt: now } }) as any);
 store.addUser(baseUser("u_nosafe") as any);
+store.addUser(baseUser("u_mail", { passkeySafe: { address: addr("5"), status: "active", threshold: 1, passkeyPublicKey: pk, createdAt: now } }) as any);
+store.addUser(baseUser("u_key", { passkeySafe: { address: addr("6"), status: "active", threshold: 1, passkeyPublicKey: pk, createdAt: now } }) as any);
+store.addUser(baseUser("u_planned", { passkeySafe: { address: addr("d"), status: "planned", threshold: 1, passkeyPublicKey: pk, createdAt: now } }) as any);
 store.addUser(baseUser("u_twin", { address: addr("c"), passkeySafe: { address: addr("c"), status: "active", threshold: 1, passkeyPublicKey: pk, createdAt: now } }) as any);
 store.addUser(baseUser("u_imported", { passkeySafe: { address: addr("b"), status: "active", threshold: 1, passkeyPublicKey: pk, createdAt: now, importedAt: now } }) as any);
 
 const calls: { op: string; arg?: unknown }[] = [];
 let createGate: Promise<void> = Promise.resolve();
-const subOrgs = new Map<string, { id: string; address: `0x${string}` }>(); // by OIDC subject
+const subOrgs = new Map<string, { id: string; address: `0x${string}` }>(); // by login: OIDC subject, email:…, pk:…
 const subjectOf = (t: string) => JSON.parse(Buffer.from(t.split(".")[1], "base64url").toString()).sub as string;
+const loginKey = (filterType: string, value: string) => (filterType === "EMAIL" ? `email:${value}` : filterType === "CREDENTIAL_ID" ? `pk:${value}` : subjectOf(value));
+await check("the passkey whoami is relayed to Turnkey as stamped, and any refusal is not a guardian", async () => {
+  const real = globalThis.fetch;
+  const seen: { url: string; init: any }[] = [];
+  let answer = { status: 200, body: { organizationId: "sub-9" } as any };
+  globalThis.fetch = (async (url: string, init: any) => {
+    seen.push({ url, init });
+    return new Response(JSON.stringify(answer.body), { status: answer.status });
+  }) as any;
+  try {
+    const body = JSON.stringify({ organizationId: "org-parent-test" });
+    assert.equal(await tk.turnkeyClient().passkeySubOrg(body, "stamp-json"), "sub-9");
+    assert.match(seen[0].url, /\/public\/v1\/query\/whoami$/);
+    assert.equal(seen[0].init.headers["X-Stamp-Webauthn"], "stamp-json");
+    assert.equal(seen[0].init.body, body, "relayed byte for byte, or the stamp no longer covers it");
+    answer = { status: 404, body: { message: "authenticator not found" } };
+    await assert.rejects(tk.turnkeyClient().passkeySubOrg(body, "s"), (e: any) => e.code === "NO_GUARDIAN");
+    answer = { status: 500, body: {} };
+    await assert.rejects(tk.turnkeyClient().passkeySubOrg(body, "s"), (e: any) => e.code === "TURNKEY_FAILED");
+  } finally {
+    globalThis.fetch = real;
+  }
+});
+
 const stub: import("../services/api/src/wallet/turnkey.js").TurnkeyGuardianClient = {
-  async subOrgIdsForOidcToken(t) {
-    calls.push({ op: "find", arg: t });
-    const s = subOrgs.get(subjectOf(t));
+  async subOrgIds(filterType, value) {
+    calls.push({ op: "find", arg: filterType === "OIDC_TOKEN" ? value : `${filterType}:${value}` });
+    const s = subOrgs.get(loginKey(filterType, value));
     return s ? [s.id] : [];
   },
   async createSubOrg(p) {
@@ -310,8 +381,21 @@ const stub: import("../services/api/src/wallet/turnkey.js").TurnkeyGuardianClien
     await createGate;
     const id = `sub-${subOrgs.size + 1}`;
     const address = addr(String(subOrgs.size + 1));
-    subOrgs.set(subjectOf(p.rootUsers[0].oauthProviders[0].oidcToken!), { id, address });
+    const u = p.rootUsers[0];
+    subOrgs.set(u.userEmail ? `email:${u.userEmail}` : u.authenticators[0] ? `pk:${u.authenticators[0].attestation.credentialId}` : subjectOf(u.oauthProviders[0].oidcToken!), { id, address });
     return { subOrgId: id, address };
+  },
+  async initEmailOtp(email) {
+    calls.push({ op: "otp", arg: email });
+    return { otpId: "otp-1", otpEncryptionTargetBundle: "target" };
+  },
+  async verifyEmailOtp(otpId, bundle) {
+    calls.push({ op: "verify", arg: { otpId, bundle } });
+    return "tok-mira";
+  },
+  async otpLogin(subOrgId, token, publicKey, sig) {
+    calls.push({ op: "otpLogin", arg: { subOrgId, token, publicKey, sig } });
+    return `session-for-${subOrgId}`;
   },
   async walletAddress(subOrgId) {
     calls.push({ op: "address", arg: subOrgId });
@@ -321,6 +405,17 @@ const stub: import("../services/api/src/wallet/turnkey.js").TurnkeyGuardianClien
   async oauthLogin(subOrgId, _oidcToken, publicKey) {
     calls.push({ op: "login", arg: { subOrgId, publicKey } });
     return `session-for-${subOrgId}`;
+  },
+  // Stands in for Turnkey checking the assertion: the stamp names its credential.
+  async passkeySubOrg(body, stamp) {
+    calls.push({ op: "whoami", arg: { body, stamp } });
+    const s = subOrgs.get(`pk:${JSON.parse(stamp).credentialId}`);
+    if (!s) throw new (await import("../services/api/src/wallet/turnkey.js")).TurnkeyGuardianError("Turnkey did not accept that passkey", 404, "NO_GUARDIAN");
+    return s.id;
+  },
+  async signActivity(subOrgId, activityId) {
+    calls.push({ op: "activity", arg: { subOrgId, activityId } });
+    return { id: activityId, status: "ACTIVITY_STATUS_COMPLETED", result: { signRawPayloadResult: { r: "1", s: "2", v: "00" } } };
   },
 };
 
@@ -378,7 +473,7 @@ const requireUserSession = (req: express.Request, res: express.Response, userId:
 };
 const app = express();
 app.use(express.json());
-app.use("/api", createTurnkeyGuardianRouter({ requireUserSession, client: () => stub, enabled: () => switchOn, jwks, safeOps }));
+app.use("/api", createTurnkeyGuardianRouter({ requireUserSession, client: () => stub, enabled: () => switchOn, jwks, otpTokens, safeOps }));
 app.use("/api", createZoldenburgRecoveryRouter({ requireUserSession }));
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   res.status(500).json({ error: String(err?.message ?? err) });
@@ -461,6 +556,13 @@ try {
     assert.equal(r.status, 200, JSON.stringify(r.body));
     assert.deepEqual(calls.map((c) => c.op), ["find", "address"]);
     assert.equal(store.findUser("u_ok")!.passkeySafe!.socialGuardians!.length, 1);
+  });
+
+  await check("at signup a planned Safe records the login: the deployment adds it", async () => {
+    const r = await call("POST", "/users/u_planned/guardians", addBody(), "u_planned");
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    assert.equal(r.body.guardian.status, "created");
+    assert.equal(store.findUser("u_planned")!.passkeySafe!.socialGuardians!.length, 1);
   });
 
   await check("the owner can list their guardians", async () => {
@@ -790,6 +892,67 @@ try {
     assert.equal(r.status, 400);
     assert.equal(calls.length, 0);
   });
+  console.log("email and passkey guardians");
+  await check("an email code: Turnkey sends it, and the code comes back encrypted for a token", async () => {
+    calls.length = 0;
+    assert.equal((await call("POST", "/email/code", { email: "nope" })).status, 400);
+    const sent = await call("POST", "/email/code", { email: " Mira@Example.com " });
+    assert.equal(sent.status, 200, JSON.stringify(sent.body));
+    assert.deepEqual(sent.body, { otpId: "otp-1", otpEncryptionTargetBundle: "target" });
+    const v = await call("POST", "/email/verify", { otpId: "otp-1", encryptedOtpBundle: "sealed" });
+    assert.deepEqual(v.body, { verificationToken: "tok-mira" });
+    assert.deepEqual(calls.map((c) => c.op), ["otp", "verify"]);
+    assert.equal(calls[0].arg, "mira@example.com");
+  });
+  await check("an email guardian: a Turnkey token makes a sub-org whose only login is that email", async () => {
+    calls.length = 0;
+    assert.equal((await call("POST", "/users/u_mail/guardians", { verificationToken: "forged" }, "u_mail")).status, 400);
+    const r = await call("POST", "/users/u_mail/guardians", { verificationToken: "tok-mira" }, "u_mail");
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    const created = calls.find((c) => c.op === "create")!.arg as any;
+    assert.equal(created.rootUsers[0].userEmail, "mira@example.com");
+    assert.deepEqual(created.rootUsers[0].oauthProviders, []);
+  });
+  await check("approving with the email needs the browser key's signature, which we only relay", async () => {
+    const noSig = await call("POST", "/login", { verificationToken: "tok-mira" });
+    assert.equal(noSig.status, 400);
+    const wrongKey = await call("POST", "/login", { verificationToken: "tok-mira", clientSignature: { publicKey: "02".padEnd(66, "b"), scheme: "CLIENT_SIGNATURE_SCHEME_API_P256", message: "m", signature: "s" } });
+    assert.equal(wrongKey.status, 400, "signed by another key than the token is bound to");
+    calls.length = 0;
+    const sig = { publicKey: BROWSER_KEY, scheme: "CLIENT_SIGNATURE_SCHEME_API_P256", message: "m", signature: "s" };
+    const r = await call("POST", "/login", { verificationToken: "tok-mira", clientSignature: sig });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    const login = calls.find((c) => c.op === "otpLogin")!.arg as any;
+    assert.equal(login.publicKey, BROWSER_KEY);
+    assert.deepEqual(login.sig, sig);
+    assert.match(r.body.session, /^session-for-/);
+  });
+  await check("a passkey guardian: the person's attestation is the only login; recovery gets no session", async () => {
+    calls.length = 0;
+    assert.equal((await call("POST", "/users/u_key/guardians", { passkey: { challenge: "ch" } }, "u_key")).status, 400);
+    const att = { ...ATTESTATION, transports: ["AUTHENTICATOR_TRANSPORT_USB", "<script>"] };
+    const r = await call("POST", "/users/u_key/guardians", { passkey: { challenge: "ch", attestation: att } }, "u_key");
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    const created = calls.find((c) => c.op === "create")!.arg as any;
+    assert.equal(created.rootUsers[0].authenticators[0].attestation.credentialId, "cred-1");
+    assert.deepEqual(created.rootUsers[0].authenticators[0].attestation.transports, ["AUTHENTICATOR_TRANSPORT_USB"]);
+    const whoami = (credentialId: string) => ({ body: JSON.stringify({ organizationId: "org-parent-test" }), stamp: JSON.stringify({ credentialId, signature: "sig" }) });
+    const login = await call("POST", "/login", { whoami: whoami("cred-1") });
+    assert.equal(login.status, 200);
+    assert.equal(login.body.session, undefined, "the passkey stamps its own requests");
+    assert.equal(login.body.address, r.body.guardian.address);
+    assert.equal((await call("POST", "/login", { whoami: whoami("unknown") })).status, 404);
+    assert.equal((await call("POST", "/login", { credentialId: "cred-1" })).status, 400, "a bare credential id names no guardian");
+    assert.equal((await call("POST", "/login", { whoami: { ...whoami("cred-1"), body: JSON.stringify({ organizationId: "other" }) } })).status, 400);
+  });
+  await check("passkey attestation fields are size-capped before Turnkey sees them", async () => {
+    calls.length = 0;
+    const big = { ...ATTESTATION, credentialId: "cred-big", attestationObject: "a".repeat(16385) };
+    const r = await call("POST", "/users/u_key/guardians", { passkey: { challenge: "ch", attestation: big } }, "u_key");
+    assert.equal(r.status, 400);
+    assert.equal((await call("POST", "/users/u_key/guardians", { passkey: { challenge: "c".repeat(257), attestation: ATTESTATION } }, "u_key")).status, 400);
+    assert.ok(!calls.some((c) => c.op === "create"));
+  });
 } finally {
   server.close();
 }
@@ -825,9 +988,9 @@ await check("the only apiKeys in a sub-org payload is the empty list", () => {
 await check("the backend uses only the Turnkey calls and activity types it needs: no signing, keys, users, policies or quorum", () => {
   const w = code("wallet/turnkey.ts");
   const methods = new Set([...w.matchAll(/\bhttp\.(\w+)/g)].map((m) => m[1]));
-  assert.deepEqual([...methods].sort(), ["createSubOrganization", "getOrganization", "getSubOrgIds", "getWalletAccounts", "getWallets", "oauthLogin"]);
+  assert.deepEqual([...methods].sort(), ["createSubOrganization", "getActivity", "getOrganization", "getSubOrgIds", "getWalletAccounts", "getWallets", "initOtp", "oauthLogin", "otpLogin", "verifyOtp"]);
   const activities = new Set([...turnkeyFiles.map(code).join("\n").matchAll(/ACTIVITY_TYPE_\w+/g)].map((m) => m[0]));
-  assert.deepEqual([...activities].sort(), ["ACTIVITY_TYPE_CREATE_SUB_ORGANIZATION_V8", "ACTIVITY_TYPE_OAUTH_LOGIN"]);
+  assert.deepEqual([...activities].sort(), ["ACTIVITY_TYPE_CREATE_SUB_ORGANIZATION_V8", "ACTIVITY_TYPE_INIT_OTP_V3", "ACTIVITY_TYPE_OAUTH_LOGIN", "ACTIVITY_TYPE_OTP_LOGIN_V2", "ACTIVITY_TYPE_VERIFY_OTP_V2"]);
 });
 
 await check("@turnkey/* is imported by wallet/turnkey.ts alone", () => {
@@ -835,10 +998,10 @@ await check("@turnkey/* is imported by wallet/turnkey.ts alone", () => {
   assert.deepEqual(importers.map((p) => path.relative(SRC, p)), ["wallet/turnkey.ts"]);
 });
 
-await check("the only other network call in the Turnkey code reads the providers' published keys", () => {
+await check("the only other network calls in the Turnkey code read the providers' published keys and relay a passkey's whoami", () => {
   assert.doesNotMatch(code("routes/recovery-turnkey.ts") + code("config/turnkey.ts"), /\bfetch\s*\(/);
   const fetches = [...code("wallet/turnkey.ts").matchAll(/\bfetch\s*\(([^,)]*)/g)].map((m) => m[1].trim());
-  assert.deepEqual(fetches, ["JWKS_URLS[provider]"]);
+  assert.deepEqual(fetches, ["JWKS_URLS[provider]", "`${TURNKEY.baseUrl}/public/v1/query/whoami`"]);
 });
 
 await check("wallet/turnkey.ts is the only file that creates a sub-org, and only through the builder", () => {

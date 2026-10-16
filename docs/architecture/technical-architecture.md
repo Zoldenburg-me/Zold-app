@@ -334,8 +334,8 @@ Safe (`importedAt`) as for a recovered one (`recoveredAt`).
   "Finish smart wallet". It is per device: `prepare` stores nothing, so the
   server cannot know an owner change is on its way. Every screen that reads
   the flag calls `prepare` again.
-- An imported Safe is not offered recovery: onboarding skips the step and
-  Security says it is not available, because enabling a recovery module has
+- An imported Safe is not offered recovery: its deployment adds no guardian
+  and Security says it is not available, because enabling a recovery module has
   never run on one. The recovery routes do not refuse it yet.
 
 ### 5.2 Device key (`public/device.js`)

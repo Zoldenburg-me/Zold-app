@@ -75,13 +75,14 @@ function parse(body: any, provider: string): MidRates {
   // frankfurter:     { date, base, rates: {...} }
   const rates = body?.rates;
   if (!rates || typeof rates !== "object") throw new Error("no rates object in response");
+  // Every fiat rate the feed carries — quoting requires USD/KES, but an
+  // invoice written in PLN or CHF needs its euro restatement too.
   const eur: Record<string, number> = {};
+  for (const [code, v] of Object.entries(rates)) {
+    if (typeof v === "number" && Number.isFinite(v) && v > 0) eur[code.toUpperCase()] = v;
+  }
   for (const code of REQUIRED) {
-    const v = rates[code];
-    if (typeof v !== "number" || !Number.isFinite(v) || v <= 0) {
-      throw new Error(`missing or invalid rate for ${code}`);
-    }
-    eur[code] = v;
+    if (!eur[code]) throw new Error(`missing or invalid rate for ${code}`);
   }
   const base = body?.base ?? body?.base_code;
   if (base && String(base).toUpperCase() !== "EUR") {

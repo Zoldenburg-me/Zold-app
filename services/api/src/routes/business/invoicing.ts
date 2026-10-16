@@ -16,6 +16,7 @@ import { store } from "../../store.js";
 import {
   DEFAULT_DISPLAY,
   EXEMPTION_REASONS,
+  INVOICE_LANGUAGES,
   InvoiceComplianceError,
   SETTLEMENT_CURRENCY,
   checkCompliance,
@@ -138,7 +139,9 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
     if (typeof b.paymentTermsDays === "number" && b.paymentTermsDays >= 0) {
       next.paymentTermsDays = Math.round(b.paymentTermsDays);
     }
-    if (b.language === "de" || b.language === "en") next.language = b.language;
+    if (typeof b.language === "string" && (INVOICE_LANGUAGES as readonly string[]).includes(b.language)) {
+      next.language = b.language as (typeof INVOICE_LANGUAGES)[number];
+    }
     if (b.bank && typeof b.bank === "object") {
       const iban = typeof b.bank.iban === "string" ? normaliseIban(b.bank.iban) : undefined;
       if (iban && !ibanChecksumValid(iban)) {

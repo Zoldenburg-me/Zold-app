@@ -1,7 +1,7 @@
 /**
- * Sign-in and onboarding (design/ui-v2 step 3): Auth, the install screens,
- * account type, the personal and business paths, Face ID set-up, the recovery
- * choice, Monerium and the welcome cards. Plus the passkey ceremonies every
+ * Sign-in and onboarding: Auth, the install screens, account type, one
+ * screen about you (or the company), the Google/Apple recovery login, Face ID
+ * set-up, then Home, whose checklist opens the email and Monerium screens. Plus the passkey ceremonies every
  * later screen uses (sign-in, account set-up, IBAN link, send approvals).
  *
  * One screen at a time is rendered into #ob-root from a template, so the page
@@ -50,10 +50,8 @@ function enterDashboard(name) {
   void handlePayDeepLink();
 }
 
-/* Onboarding is over (or put off): the welcome cards once for an account made
-   in this browser, then the company's desk or the personal home. */
+/* Onboarding is over (or put off): the company's desk or the personal home. */
 function obFinish() {
-  if (obWelcomeDue()) return obGo("welcome");
   if (user?.accountType === "company") return location.assign("/business");
   enterDashboard(user?.name || "Account");
 }
@@ -62,25 +60,16 @@ function obFinish() {
    dashboard's KYC banner, which opens the Monerium step from Home. */
 function enterKycReview(_name) {
   obShow();
-  // An approved account without its IBAN switches it on again; Home only
-  // offers this when nothing else is left to set up.
-  const off = ibanSwitchedOff(user) && hasConnectedMonerium(user) && !obNextAfterAccount();
-  obGo(off ? "activate" : obNextAfterAccount() || "monerium", { replace: true });
+  // A connected account activates (or switches back on) its IBAN; the rest
+  // connect Monerium first.
+  const activate = hasConnectedMonerium(user) && (!kycApproved(user) || ibanSwitchedOff(user));
+  obGo(obNextAfterAccount() || (activate ? "activate" : "monerium"), { replace: true });
 }
 
-/* Home's "Confirm your email" row: the code screen, then back to wherever
-   the account is. */
+/* Home's "Confirm your email" row: the code screen, then back to Home. */
 function enterEmailConfirm() {
-  obEmailSkipped = false;
   obShow();
   obGo("email", { replace: true });
-}
-
-/* Is the account's email still to be confirmed on this visit? "Do this later"
-   holds until the app is reopened; Home keeps a row for it meanwhile. */
-let obEmailSkipped = false;
-function emailConfirmPending(u = user) {
-  return !!(caps.emailVerification && u?.email && !u.emailVerifiedAt && !obEmailSkipped);
 }
 
 /* ==========================================================================
@@ -92,8 +81,6 @@ let obBlockedCode = null;
 /* An import of the company's existing Safe on this screen visit:
    { address, prepared, mode }. Nothing here is the truth; `prepare` is. */
 let obImport = null;
-/* Recovery choice made on this screen: shows its confirmation before moving on. */
-let obRecoveryDone = null;
 
 function obShow() {
   $("dashboard").style.display = "none";
@@ -121,11 +108,8 @@ function obGuard(name) {
   if (kind === "state") return errState && name === `state-${errState.kind}` ? name : "auth";
   if (kind === "after") {
     if (!signedUp) return "auth";
-    if (name === "welcome") return name;
     if (name === "email") return caps.emailVerification && user.email && !user.emailVerifiedAt ? name : obNextAfterAccount() || "monerium";
-    if (name === "recovery-email") return caps.emailSmsRecovery && user.passkeySafe?.status === "active" && recoveryOfferedFor() ? name : obNextAfterAccount() || "monerium";
     if (name === "monerium-keys") return caps.moneriumApiKeys && (!kycApproved(user) || !user.iban) ? name : obNextAfterAccount() || "monerium";
-    if (name === "recovery") return recoveryEnrolmentPending() || obRecoveryDone ? name : obNextAfterAccount() || "monerium";
     return name;
   }
   if (kind === "import") {
@@ -137,14 +121,14 @@ function obGuard(name) {
     return name;
   }
   // A link from the website straight to a path's first step picks the path.
-  if (!obDraft.type && (name === "p-name" || name === "b-entity")) obDraft.type = name === "b-entity" ? "company" : "individual";
+  if (!obDraft.type && (name === "p-about" || name === "b-about")) obDraft.type = name === "b-about" ? "company" : "individual";
   // Before the account: an account that exists goes to its own next step.
   if (signedUp && user.passkey && !needsPasskeySafeSetup(user)) return obNextAfterAccount() || "monerium";
   if (kind === "entry") return name;
   if (signedUp) return obSetupScreen(user);
   const path = name.startsWith("b-") ? "company" : "individual";
   if (obDraft.type !== path) return "account-type";
-  const order = path === "company" ? B_STEPS : P_STEPS;
+  const order = obSignupSteps(path);
   // The first earlier step that is not answered yet.
   for (const s of order) {
     if (s === name) return name;
@@ -161,19 +145,12 @@ function obSetupScreen(u) {
   return u.accountType === "company" ? "b-passkey" : "p-passkey";
 }
 
-/* Where an account that exists goes next. null: nothing left, open the app. */
+/* Where an account that exists goes next. null: the account is set up, open
+   the app; Home's checklist offers the email, Monerium and recovery steps. */
 function obNextAfterAccount(u = user) {
   if (!u) return "auth";
   if (!u.passkey || needsPasskeySafeSetup(u)) return obSetupScreen(u);
-  if (emailConfirmPending(u)) return "email";
-  // No Monerium in this segment: the app's Home names the gate instead.
-  if (!segmentHas(u, "monerium")) return null;
-  if (zoldenburgChoicePending(u)) return "recovery";
-  // A wallet account has no bank step to take: the app opens.
-  if (!bankOffered(u)) return null;
-  if (kycApproved(u)) return null;
-  if (hasConnectedMonerium(u)) return "activate";
-  return "monerium";
+  return null;
 }
 
 function obRender({ focus = false } = {}) {
@@ -187,7 +164,7 @@ function obRender({ focus = false } = {}) {
 
 /* Capabilities arrived after a screen that depends on them was drawn. */
 function obCapsChanged() {
-  if (obScreen && ["auth", "monerium", "recovery"].includes(obScreen) && !$("ob-root").contains(document.activeElement)) obRender();
+  if (obScreen && ["auth", "monerium"].includes(obScreen) && !$("ob-root").contains(document.activeElement)) obRender();
 }
 
 window.addEventListener("popstate", (e) => {
@@ -314,11 +291,17 @@ let obDraftTouched = false;
 const obDraft = (() => {
   const empty = {
     type: null, given: "", family: "", email: "", country: "", usPerson: null, companyUsNexus: null,
-    legalName: "", tradingName: "", incorp: "", terms: false, authorised: false,
+    legalName: "", tradingName: "", incorp: "", terms: false, authorised: false, social: null,
   };
   try { return { ...empty, ...JSON.parse(sessionStorage.getItem(OB_DRAFT_KEY) || "{}") }; } catch { return empty; }
 })();
 function obSaveDraft(patch) {
+  // An email code or login proves the address it went to: a new address
+  // needs a new code, or the guardian would be the old inbox.
+  if ("email" in patch && patch.email !== obDraft.email && (obSocialOtp || obSocial?.provider === "email")) {
+    obSocialOtp = null;
+    obDiscardSocial();
+  }
   Object.assign(obDraft, patch);
   // Only answers held in memory alone are lost on a reload: saved ones come
   // back, so "Leave site?" asks only when the save failed (private mode).
@@ -333,15 +316,6 @@ function obClearDraft() {
 const obFullName = () => `${obDraft.given} ${obDraft.family}`.replace(/\s+/g, " ").trim();
 const obCompany = () => obDraft.legalName || user?.orgName || "the company";
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
-
-/* The welcome cards are for an account made in this browser, shown once. */
-const OB_WELCOME_KEY = "zold-welcome-due";
-function obWelcomeDue() {
-  try { return !!user?.id && localStorage.getItem(OB_WELCOME_KEY) === user.id; } catch { return false; }
-}
-function obSetWelcomeDue(on) {
-  try { if (on) localStorage.setItem(OB_WELCOME_KEY, user.id); else localStorage.removeItem(OB_WELCOME_KEY); } catch {}
-}
 
 /* Every ISO 3166-1 alpha-2 country, not the ones we serve: which countries
    are served is the server's rule, and a filtered list is that rule shipped
@@ -414,17 +388,24 @@ function obCreateStart() {
    Screens
    ========================================================================== */
 
-const P_STEPS = ["account-type", "p-name", "p-email", "p-residence", "p-review", "p-passkey"];
-const B_STEPS = ["account-type", "b-entity", "b-registration", "b-you", "b-ownership", "b-review", "b-passkey"];
+/* Signup: who it is for, about you, the recovery login (where this deployment
+   offers Google or Apple), the passkey. The rest is Home's checklist. */
+function obSignupSteps(path = obDraft.type) {
+  const p = path === "company" ? "b" : "p";
+  return ["account-type", `${p}-about`, ...(obSocialOffered() ? [`${p}-social`] : []), `${p}-passkey`];
+}
+function obSignupProgress(name, label, back) {
+  const steps = obSignupSteps(name.startsWith("b-") ? "company" : "individual");
+  return obProgress(steps.indexOf(name) + 1, steps.length, label, back);
+}
 
-/* The steps after the account exists, numbered from what this deployment
-   offers: no recovery service, no recovery step. */
+/* The bank steps, opened from Home: connect Monerium, then activate. */
 function obAfterSteps() {
-  return [...(caps.emailVerification && !user?.emailVerifiedAt ? ["email"] : []), ...((caps.emailSmsRecovery || caps.zoldenburgRecovery) && !user?.passkeySafe?.importedAt ? ["recovery"] : []), ...(bankOffered() ? ["monerium", "activate"] : [])];
+  return bankOffered() ? ["monerium", "activate"] : [];
 }
 function obAfterProgress(name, label) {
   const steps = obAfterSteps();
-  const i = steps.indexOf(name === "recovery-email" ? "recovery" : name === "monerium-keys" ? "monerium" : name);
+  const i = steps.indexOf(name === "monerium-keys" ? "monerium" : name);
   // A screen outside the numbered steps (a wallet account's bank screen) has
   // no "step n of m" to show.
   if (i < 0) return obBackHead(null);
@@ -534,8 +515,8 @@ OB["account-type"] = {
     <main id="main" class="z-screen__main">
       ${obIntro("Who is this account for?", "We ask different questions for each. You can add the other kind later.")}
       <nav aria-label="Account type" class="z-form z-form--tight">
-        ${[["individual", "p-name", "person", "Personal", "An account in your own name.", "Own IBAN, sending and getting paid, payment links"],
-          ["company", "b-entity", "domain", "Business", "An account in your company’s name.", "Team approvals, invoices and books"]]
+        ${[["individual", "p-about", "person", "Personal", "An account in your own name.", "Own IBAN, sending and getting paid, payment links"],
+          ["company", "b-about", "domain", "Business", "An account in your company’s name.", "Team approvals, invoices and books"]]
           .map(([t, href, ic, title, text, more]) => `<a class="z-option" href="#${href}" data-type="${t}">${Z.iconTile({ icon: ic, tone: "p" })}<span class="z-option__main"><span class="z-option__title">${title}</span><span class="z-option__text">${text}</span><span class="z-option__more">${more}</span></span>${Z.icon("chevron_right")}</a>`).join("")}
       </nav>
     </main>
@@ -549,98 +530,35 @@ OB["account-type"] = {
 };
 
 /* ---- Personal ------------------------------------------------------------ */
-OB["p-name"] = {
+OB["p-about"] = {
   kind: "form",
-  title: "Personal: your name",
-  done: () => !!(obDraft.given.trim() && obDraft.family.trim()),
-  html: () => `${obProgress(2, 6, "About you", "account-type")}
+  title: "Personal: about you",
+  done: () => !!(obDraft.given.trim() && obDraft.family.trim() && EMAIL_RE.test(obDraft.email) && obDraft.country
+    && obDraft.usPerson !== null && obDraft.terms),
+  html: () => `${obSignupProgress("p-about", "About you", "account-type")}
     <main id="main" class="z-screen__main">
-      ${obIntro("What’s your name?", "Use the name on your ID, the same one you’ll give Monerium.")}
+      ${obIntro("About you", "Use the name on your ID, the same one you’ll give Monerium.")}
       <form class="z-form" id="ob-form" novalidate>
         ${Z.field({ id: "given", name: "given-name", label: "First and middle names", autocomplete: "given-name", value: obDraft.given, maxlength: 60, placeholder: "Miriam…" })}
         ${Z.field({ id: "family", name: "family-name", label: "Last name", autocomplete: "family-name", value: obDraft.family, maxlength: 60, placeholder: "Zoldenburg…" })}
-      </form>
-    </main>
-    <div class="z-screen__foot">${Z.button({ variant: "primary", full: true, label: "Continue", type: "submit", id: "btn-next" }).replace("<button", '<button form="ob-form"')}</div>`,
-  bind: (root) => obBindForm(root, () => {
-    const given = root.querySelector("#given"), family = root.querySelector("#family");
-    Z.setFieldError(given, given.value.trim() ? "" : "Enter your first name, as it is on your ID.");
-    Z.setFieldError(family, family.value.trim() ? "" : "Enter your last name, as it is on your ID.");
-    if (obFocusError(root)) return;
-    obSaveDraft({ given: given.value.trim(), family: family.value.trim() });
-    obGo("p-email");
-  }),
-};
-
-OB["p-email"] = {
-  kind: "form",
-  title: "Personal: your email",
-  done: () => EMAIL_RE.test(obDraft.email),
-  html: () => `${obProgress(3, 6, "Contact", "p-name")}
-    <main id="main" class="z-screen__main">
-      ${obIntro("Your email", "It’s how you get back in if you lose this phone. No newsletters.")}
-      <form class="z-form" id="ob-form" novalidate>
-        ${obEmailField(obDraft.email)}
-      </form>
-    </main>
-    <div class="z-screen__foot">${obSubmit()}</div>`,
-  bind: (root) => obBindForm(root, () => {
-    const email = obCheckEmail(root);
-    if (!email) return;
-    obSaveDraft({ email });
-    obGo("p-residence");
-  }),
-};
-
-OB["p-residence"] = {
-  kind: "form",
-  title: "Personal: where you live",
-  done: () => !!obDraft.country && obDraft.usPerson !== null,
-  html: () => `${obProgress(4, 6, "Residence", "p-email")}
-    <main id="main" class="z-screen__main">
-      ${obIntro("Where do you live?", "Your country decides which payment partner opens your account.")}
-      <form class="z-form" id="ob-form" novalidate>
+        ${obEmailField(obDraft.email, "Email", "Recovery and sign-in help find your account by it. No newsletters.")}
         ${obCountrySelect({ id: "country", name: "country", label: "Country of residence", autocomplete: "country", value: obDraft.country })}
         ${obYesNo("usPerson", "Are you a US citizen, a Green Card holder, or a US tax resident?", obDraft.usPerson)}
-      </form>
-    </main>
-    <div class="z-screen__foot">${obSubmit()}</div>`,
-  bind: (root) => obBindForm(root, () => {
-    const country = root.querySelector("#country");
-    const usPerson = obRadio(root, "usPerson");
-    Z.setFieldError(country, country.value ? "" : "Choose the country you live in.");
-    obSetQuestionError(root, "usPerson", usPerson === null ? "Answer yes or no." : "");
-    if (obFocusError(root)) return;
-    obSaveDraft({ country: country.value, usPerson });
-    obGo("p-review");
-  }),
-};
-
-OB["p-review"] = {
-  kind: "form",
-  title: "Personal: check and agree",
-  done: () => obDraft.terms,
-  html: () => `${obProgress(5, 6, "Agree", "p-residence")}
-    <main id="main" class="z-screen__main">
-      ${obIntro("Check and agree", "One last look before we make your account.")}
-      <form class="z-form" id="ob-form" novalidate>
-        <div class="z-group">
-          <div class="z-group__head"><h2 class="z-eyebrow">Your details</h2><a class="z-group__action" href="#p-name">Edit</a></div>
-          ${Z.kv([
-            { key: "Name", value: obFullName() },
-            { key: "Email", value: obDraft.email },
-            { key: "Lives in", value: countryName(obDraft.country) },
-            { key: "US person", value: obDraft.usPerson ? "Yes" : "No" },
-          ])}
-        </div>
         ${obTermsCheck()}
       </form>
     </main>
     <div class="z-screen__foot">${obSubmit()}</div>`,
   bind: (root) => obBindForm(root, () => {
-    if (!obCheckTerms(root)) return;
-    obSaveDraft({ terms: true });
-    obGo("p-passkey");
+    const given = root.querySelector("#given"), family = root.querySelector("#family"), country = root.querySelector("#country");
+    const usPerson = obRadio(root, "usPerson");
+    Z.setFieldError(given, given.value.trim() ? "" : "Enter your first name, as it is on your ID.");
+    Z.setFieldError(family, family.value.trim() ? "" : "Enter your last name, as it is on your ID.");
+    const email = obCheckEmail(root);
+    Z.setFieldError(country, country.value ? "" : "Choose the country you live in.");
+    obSetQuestionError(root, "usPerson", usPerson === null ? "Answer yes or no." : "");
+    if (obFocusError(root) || !email || !obCheckTerms(root)) return;
+    obSaveDraft({ given: given.value.trim(), family: family.value.trim(), email, country: country.value, usPerson, terms: true });
+    obGo(obSignupSteps()[2]);
   }),
 };
 
@@ -648,7 +566,7 @@ OB["p-passkey"] = {
   kind: "form",
   title: "Personal: set up sign-in",
   done: () => false,
-  html: () => `${obProgress(6, 6, "Sign-in", user?.id ? null : "p-review")}
+  html: () => `${obSignupProgress("p-passkey", "Sign-in", user?.id ? null : obSignupSteps("individual").at(-2))}
     <main id="main" class="z-screen__main">
       <span class="z-mark z-mark--icon" aria-hidden="true">${Z.icon("passkey")}</span>
       ${Z.onPhone()
@@ -657,7 +575,7 @@ OB["p-passkey"] = {
       <ul class="z-points">
         <li>${Z.icon("lock")}<span>It’s the only key to your account. Zold never sees it.</span></li>
         <li>${Z.icon("password")}<span>No Zold password to remember or leak.</span></li>
-        <li>${Z.icon("restore")}<span>Set up recovery next, in case you lose this ${Z.onPhone() ? "phone" : "device"}.</span></li>
+        ${obRecoveryPoint()}
       </ul>
       ${obSetupSteps()}
       ${obAlert()}
@@ -667,139 +585,221 @@ OB["p-passkey"] = {
 };
 
 /* ---- Business ------------------------------------------------------------ */
-OB["b-entity"] = {
+OB["b-about"] = {
   kind: "form",
-  title: "Business: company name",
-  done: () => obDraft.legalName.trim().length >= 2,
-  html: () => `${obProgress(2, 7, "Company", "account-type")}
+  title: "Business: the company and you",
+  done: () => !!(obDraft.legalName.trim().length >= 2 && obDraft.incorp && obDraft.given.trim() && EMAIL_RE.test(obDraft.email)
+    && obDraft.country && obDraft.companyUsNexus !== null && obDraft.usPerson !== null && obDraft.terms && obDraft.authorised),
+  html: () => `${obSignupProgress("b-about", "About the company", "account-type")}
     <main id="main" class="z-screen__main">
-      ${obIntro("What’s the company called?", "Exactly as registered, with the legal form.")}
+      ${obIntro("The company and you", "The company exactly as registered. You’ll be its first owner; add teammates after the account opens.")}
       <form class="z-form" id="ob-form" novalidate>
-        ${Z.field({ id: "legal-name", name: "organization", label: "Legal name", autocomplete: "organization", value: obDraft.legalName, maxlength: 120, placeholder: "Lindner Holzbau GmbH…" })}
+        ${Z.field({ id: "legal-name", name: "organization", label: "Legal name, with the legal form", autocomplete: "organization", value: obDraft.legalName, maxlength: 120, placeholder: "Lindner Holzbau GmbH…" })}
         ${Z.field({ id: "trading-name", name: "trading-name", label: "Trading name", optional: true, value: obDraft.tradingName, maxlength: 120, hint: "If customers know you by another name." })}
-      </form>
-    </main>
-    <div class="z-screen__foot">${obSubmit()}</div>`,
-  bind: (root) => obBindForm(root, () => {
-    const legal = root.querySelector("#legal-name");
-    Z.setFieldError(legal, legal.value.trim().length >= 2 ? "" : "Enter the company’s registered name.");
-    if (obFocusError(root)) return;
-    obSaveDraft({ legalName: legal.value.trim(), tradingName: root.querySelector("#trading-name").value.trim() });
-    obGo("b-registration");
-  }),
-};
-
-OB["b-registration"] = {
-  kind: "form",
-  title: "Business: registration",
-  done: () => !!obDraft.incorp,
-  html: () => `${obProgress(3, 7, "Registration", "b-entity")}
-    <main id="main" class="z-screen__main">
-      ${obIntro("Where is it registered?", "The country of the company’s register entry.")}
-      <form class="z-form" id="ob-form" novalidate>
         ${obCountrySelect({ id: "incorp", name: "incorporation-country", label: "Country of incorporation", value: obDraft.incorp })}
-      </form>
-    </main>
-    <div class="z-screen__foot">${obSubmit()}</div>`,
-  bind: (root) => obBindForm(root, () => {
-    const incorp = root.querySelector("#incorp");
-    Z.setFieldError(incorp, incorp.value ? "" : "Choose the country the company is registered in.");
-    if (obFocusError(root)) return;
-    obSaveDraft({ incorp: incorp.value });
-    obGo("b-you");
-  }),
-};
-
-OB["b-you"] = {
-  kind: "form",
-  title: "Business: about you",
-  done: () => !!(obDraft.given.trim() && EMAIL_RE.test(obDraft.email) && obDraft.country),
-  html: () => `${obProgress(4, 7, "About you", "b-registration")}
-    <main id="main" class="z-screen__main">
-      ${obIntro("And who are you?", "You’ll be the first owner. Add teammates after the account is open.")}
-      <form class="z-form" id="ob-form" novalidate>
         ${Z.field({ id: "b-name", name: "name", label: "Your full name", autocomplete: "name", value: obFullName(), maxlength: 120, placeholder: "Miriam Zoldenburg…" })}
         ${obCountrySelect({ id: "country", name: "country", label: "Where you live", autocomplete: "country", value: obDraft.country })}
-        ${obEmailField(obDraft.email, "Work email", "Used to recover access if you lose this phone.")}
-      </form>
-    </main>
-    <div class="z-screen__foot">${obSubmit()}</div>`,
-  bind: (root) => obBindForm(root, () => {
-    const name = root.querySelector("#b-name"), country = root.querySelector("#country");
-    Z.setFieldError(name, name.value.trim() ? "" : "Enter your full name.");
-    Z.setFieldError(country, country.value ? "" : "Choose the country you live in.");
-    const email = obCheckEmail(root);
-    if (obFocusError(root) || !email) return;
-    // One name field on this path; the API takes the full name as one string.
-    obSaveDraft({ given: name.value.trim(), family: "", country: country.value, email });
-    obGo("b-ownership");
-  }),
-};
-
-OB["b-ownership"] = {
-  kind: "form",
-  title: "Business: ownership questions",
-  done: () => obDraft.companyUsNexus !== null && obDraft.usPerson !== null,
-  html: () => `${obProgress(5, 7, "Ownership", "b-you")}
-    <main id="main" class="z-screen__main">
-      ${obIntro("Two required questions", "We need both answers before we can open a company account.")}
-      <form class="z-form" id="ob-form" novalidate>
+        ${obEmailField(obDraft.email, "Work email", "Recovery and sign-in help find your account by it.")}
         ${obYesNo("companyUsNexus", "Is the company incorporated in the US, or is any owner of 25% or more a US person?", obDraft.companyUsNexus)}
         ${obYesNo("usPerson", "Are you a US citizen, a Green Card holder, or a US tax resident?", obDraft.usPerson)}
-      </form>
-    </main>
-    <div class="z-screen__foot">${obSubmit()}</div>`,
-  bind: (root) => obBindForm(root, () => {
-    const nexus = obRadio(root, "companyUsNexus"), usPerson = obRadio(root, "usPerson");
-    obSetQuestionError(root, "companyUsNexus", nexus === null ? "Answer yes or no." : "");
-    obSetQuestionError(root, "usPerson", usPerson === null ? "Answer yes or no." : "");
-    if (obFocusError(root)) return;
-    obSaveDraft({ companyUsNexus: nexus, usPerson });
-    obGo("b-review");
-  }),
-};
-
-OB["b-review"] = {
-  kind: "form",
-  title: "Business: check and agree",
-  done: () => obDraft.terms && obDraft.authorised,
-  html: () => `${obProgress(6, 7, "Agree", "b-ownership")}
-    <main id="main" class="z-screen__main">
-      ${obIntro("Check and agree", `One last look before we open the account for ${esc(obCompany())}.`)}
-      <form class="z-form" id="ob-form" novalidate>
-        <div class="z-group">
-          <div class="z-group__head"><h2 class="z-eyebrow">Your details</h2><a class="z-group__action" href="#b-entity">Edit</a></div>
-          ${Z.kv([
-            { key: "Company", value: obDraft.legalName },
-            ...(obDraft.tradingName ? [{ key: "Trading name", value: obDraft.tradingName }] : []),
-            { key: "Registered in", value: countryName(obDraft.incorp) },
-            { key: "You", value: obFullName() },
-            { key: "Email", value: obDraft.email },
-            { key: "You live in", value: countryName(obDraft.country) },
-          ])}
-        </div>
-        <label class="z-check" for="c-authorised"><input id="c-authorised" name="authorised" type="checkbox"${obDraft.authorised ? " checked" : ""} aria-describedby="c-authorised-err"><span>I’m authorised to open an account for ${esc(obCompany())}.</span></label>
+        <label class="z-check" for="c-authorised"><input id="c-authorised" name="authorised" type="checkbox"${obDraft.authorised ? " checked" : ""} aria-describedby="c-authorised-err"><span>I’m authorised to open an account for this company.</span></label>
         <p class="z-err" id="c-authorised-err" hidden></p>
         ${obTermsCheck()}
       </form>
     </main>
     <div class="z-screen__foot">${obSubmit()}</div>`,
   bind: (root) => obBindForm(root, () => {
-    const auth = root.querySelector("#c-authorised");
-    const err = root.querySelector("#c-authorised-err");
-    if (!auth.checked) { err.textContent = "Confirm you may open an account for the company."; err.hidden = false; auth.setAttribute("aria-invalid", "true"); }
-    else { err.hidden = true; auth.removeAttribute("aria-invalid"); }
-    if (!obCheckTerms(root) || !auth.checked) { obFocusError(root); return; }
-    obSaveDraft({ terms: true, authorised: true });
-    obGo("b-passkey");
+    const legal = root.querySelector("#legal-name"), incorp = root.querySelector("#incorp");
+    const name = root.querySelector("#b-name"), country = root.querySelector("#country");
+    const nexus = obRadio(root, "companyUsNexus"), usPerson = obRadio(root, "usPerson");
+    const auth = root.querySelector("#c-authorised"), authErr = root.querySelector("#c-authorised-err");
+    Z.setFieldError(legal, legal.value.trim().length >= 2 ? "" : "Enter the company’s registered name.");
+    Z.setFieldError(incorp, incorp.value ? "" : "Choose the country the company is registered in.");
+    Z.setFieldError(name, name.value.trim() ? "" : "Enter your full name.");
+    Z.setFieldError(country, country.value ? "" : "Choose the country you live in.");
+    const email = obCheckEmail(root);
+    obSetQuestionError(root, "companyUsNexus", nexus === null ? "Answer yes or no." : "");
+    obSetQuestionError(root, "usPerson", usPerson === null ? "Answer yes or no." : "");
+    if (!auth.checked) { authErr.textContent = "Confirm you may open an account for the company."; authErr.hidden = false; auth.setAttribute("aria-invalid", "true"); }
+    else { authErr.hidden = true; auth.removeAttribute("aria-invalid"); }
+    if (obFocusError(root) || !email || !obCheckTerms(root)) return;
+    // One name field on this path; the API takes the full name as one string.
+    obSaveDraft({
+      legalName: legal.value.trim(), tradingName: root.querySelector("#trading-name").value.trim(), incorp: incorp.value,
+      given: name.value.trim(), family: "", country: country.value, email,
+      companyUsNexus: nexus, usPerson, authorised: true, terms: true,
+    });
+    obGo(obSignupSteps()[2]);
   }),
 };
+
+/* ---- Recovery login (Google or Apple) ---------------------------------------
+   Chosen before the passkey. The deployment the passkey approves adds it to
+   the account (routes/auth.ts), so it costs no extra approval. The ID token
+   lives in memory only: a reload loses it and this screen asks again. */
+let obSocial = null; // { provider, idToken, publicKey } or { provider: "email", verificationToken, email } once a login is done
+let obSocialOtp = null; // the email code on its way: { otpId, otpEncryptionTargetBundle }
+let obSocialError = null;
+const obSocialOffered = () => !!(caps.turnkeyGuardians && (caps.turnkeyLogins?.google || caps.turnkeyLogins?.apple || caps.turnkeyLogins?.email));
+const obSocialName = () => ({ google: "Google login", apple: "Apple login", email: "email" })[obSocial?.provider] || "login";
+const obDevice = () => (Z.onPhone() ? "phone" : "device");
+
+function obSocialScreen(p) {
+  return {
+    kind: "form",
+    title: "Recovery login",
+    done: () => !obSocialOffered() || !!obSocial || obDraft.social === "skip",
+    html: () => `${obSignupProgress(`${p}-social`, "Recovery", `${p}-about`)}
+    <main id="main" class="z-screen__main">
+      <span class="z-mark z-mark--icon" aria-hidden="true">${Z.icon("restore")}</span>
+      ${obIntro("Add a way back in", `Lose this ${obDevice()}, keep your account: your Google or Apple login, or a code to your email, can move it to a new one.`)}
+      <ul class="z-points">
+        <li>${Z.icon("lock")}<span>It can’t send your money. Only your ${Z.passkeyName()} approves payments.</span></li>
+        <li>${Z.icon("schedule")}<span>A move to a new ${obDevice()} waits first, and this one can cancel it.</span></li>
+        <li>${Z.icon("key")}<span>The login stays yours alone. Zold never holds its key.</span></li>
+      </ul>
+      ${obSocialOtp ? `<form class="z-form" id="ob-form" novalidate>
+        ${Z.field({ id: "ob-otp", name: "code", label: `Code sent to ${obDraft.email}`, inputmode: "numeric", autocomplete: "one-time-code", maxlength: 6, spellcheck: false, placeholder: "123456…" })}
+      </form>` : ""}
+      ${obAlert()}
+    </main>
+    <div class="z-screen__foot z-screen__foot--quiet">
+      ${obSocialOtp ? obSubmit("Confirm") : `<div class="z-providers z-providers--round" id="ob-social-btns">${caps.turnkeyLogins?.email ? Z.button({ variant: "secondary", icon: "mail", label: "Email", id: "btn-social-email" }) : ""}</div>`}
+      ${obSocialOtp ? `<button type="button" class="z-link-btn" id="btn-social-resend">Send a new code</button>` : ""}
+      <button type="button" class="z-link-btn" id="btn-social-skip">Skip for now</button>
+    </div>`,
+    bind: (root) => {
+      if (obSocialError) { obShowErr(new Error(obSocialError)); obSocialError = null; }
+      import("/guardian/providers.js").then(({ providerButtons }) => {
+        const slot = root.querySelector("#ob-social-btns");
+        if (!slot) return;
+        slot.insertAdjacentHTML("afterbegin", providerButtons(caps));
+        slot.querySelectorAll("[data-start]").forEach((b) => { b.onclick = () => obSocialStart(b.dataset.start, b); });
+      }).catch(obShowErr);
+      const mail = root.querySelector("#btn-social-email");
+      if (mail) mail.onclick = () => obSocialEmailSend(mail);
+      if (obSocialOtp) obBindForm(root, () => obSocialEmailConfirm(root, p));
+      const resend = root.querySelector("#btn-social-resend");
+      if (resend) resend.onclick = () => { obSocialOtp = null; obRender({ focus: false }); };
+      root.querySelector("#btn-social-skip").onclick = () => {
+        obDiscardSocial();
+        obSaveDraft({ social: "skip" });
+        obGo(`${p}-passkey`);
+      };
+    },
+  };
+}
+OB["p-social"] = obSocialScreen("p");
+OB["b-social"] = obSocialScreen("b");
+
+/* A code to the email on the screen before: Turnkey sends it, and the code is
+   sealed in this browser (guardian/logins.js), so our API never reads it. */
+async function obSocialEmailSend(btn) {
+  if (Z.isDisabled(btn)) return;
+  obClearErr();
+  Z.setLoading(btn, true);
+  try {
+    const { sendEmailCode } = await import("/guardian/logins.js");
+    obSocialOtp = await sendEmailCode(api, obDraft.email);
+    obRender({ focus: false });
+    $("ob-otp")?.focus();
+  } catch (e) {
+    Z.setLoading(btn, false);
+    obShowErr(e);
+  }
+}
+async function obSocialEmailConfirm(root, p) {
+  const btn = root.querySelector("#btn-next");
+  obClearErr();
+  Z.setLoading(btn, true);
+  try {
+    const [{ emailCodeToToken }, { IndexedDbStamper, encryptOtpCodeToBundle }] = await Promise.all([import("/guardian/logins.js"), import("/vendor/turnkey.js")]);
+    const stamper = new IndexedDbStamper();
+    const code = root.querySelector("#ob-otp").value.replace(/\s/g, "");
+    const verificationToken = await emailCodeToToken({ api, stamper, encrypt: encryptOtpCodeToBundle, otp: obSocialOtp, code });
+    // The key only bound the token; adding the guardian needs the token alone.
+    stamper.clear().catch(() => {});
+    obSocial = { provider: "email", verificationToken, email: obDraft.email };
+    obSocialOtp = null;
+    obGo(`${p}-passkey`);
+  } catch (e) {
+    Z.setLoading(btn, false);
+    obShowErr(e);
+  }
+}
+
+/* Leave for Google or Apple; the answer comes back to /app (obSocialReturn). */
+async function obSocialStart(provider, btn) {
+  if (Z.isDisabled(btn)) return;
+  obClearErr();
+  Z.setLoading(btn, true);
+  try {
+    const [{ startLogin }, { IndexedDbStamper }] = await Promise.all([import("/guardian/oauth.js"), import("/vendor/turnkey.js")]);
+    await startLogin(provider, { stamper: new IndexedDbStamper(), storage: sessionStorage, origin: location.origin, logins: caps.turnkeyLogins, go: (u) => location.assign(u), returnPath: "/app" });
+  } catch (e) {
+    Z.setLoading(btn, false);
+    obShowErr(e);
+  }
+}
+
+/* Back from Google or Apple: the ID token is in the fragment. Read it, strip
+   it at once, and go on to the passkey (or back to the choice, saying why). */
+async function obSocialReturn() {
+  const hash = location.hash;
+  if (!/[#&](state|id_token|error)=/.test(hash)) return;
+  const p = obDraft.type === "company" ? "b" : "p";
+  history.replaceState(null, "", `${location.pathname}${location.search}#${p}-social`);
+  try {
+    const [{ OAUTH_STATE_KEY, readReturn }, { IndexedDbStamper }] = await Promise.all([import("/guardian/oauth.js"), import("/vendor/turnkey.js")]);
+    let stored = null;
+    try { stored = sessionStorage.getItem(OAUTH_STATE_KEY); sessionStorage.removeItem(OAUTH_STATE_KEY); } catch { /* readReturn refuses it */ }
+    const back = readReturn(hash, stored, Date.now());
+    if (!back) return;
+    if (!back.ok) { obSocialError = back.reason; return; }
+    const stamper = new IndexedDbStamper();
+    await stamper.init();
+    const publicKey = stamper.getPublicKey();
+    if (!publicKey) { obSocialError = "That login timed out in this browser. Try again."; return; }
+    obSocial = { provider: back.provider, idToken: back.idToken, publicKey };
+    obSaveDraft({ social: null });
+    history.replaceState(null, "", `${location.pathname}${location.search}#${p}-passkey`);
+  } catch (e) {
+    obSocialError = obMessage(e);
+  }
+}
+
+function obDiscardSocial() {
+  obSocial = null;
+  import("/vendor/turnkey.js").then(({ IndexedDbStamper }) => new IndexedDbStamper().clear()).catch(() => {});
+}
+
+/* Record the login on the new account before the deployment, which then adds
+   it. One try: a failure leaves the account without it, and Home's recovery
+   reminder offers it again. */
+async function obAddSocialGuardian() {
+  if (obDraft.social === "skip") {
+    obDiscardSocial();
+    return;
+  }
+  const login = obSocial;
+  if (!login || !user?.id) return;
+  obDiscardSocial();
+  try {
+    await api(`/api/recovery/turnkey/users/${user.id}/guardians`, login.verificationToken
+      ? { verificationToken: login.verificationToken }
+      : { oidcToken: login.idToken, publicKey: login.publicKey });
+  } catch { /* Home says recovery is not set up */ }
+}
+
+const obRecoveryPoint = () => `<li>${Z.icon("restore")}<span>${obSocial
+  ? `Your ${obSocialName()} is added in the same approval, so it can move the account to a new ${obDevice()}.`
+  : `Set up recovery from Home, in case you lose this ${obDevice()}.`}</span></li>`;
 
 OB["b-passkey"] = {
   kind: "form",
   title: "Business: set up sign-in",
   done: () => false,
-  html: () => `${obProgress(7, 7, "Sign-in", user?.id ? null : "b-review")}
+  html: () => `${obSignupProgress("b-passkey", "Sign-in", user?.id ? null : obSignupSteps("company").at(-2))}
     <main id="main" class="z-screen__main">
       <span class="z-mark z-mark--icon" aria-hidden="true">${Z.icon("passkey")}</span>
       ${obIntro("Set up the company’s first approver", Z.onPhone()
@@ -808,7 +808,7 @@ OB["b-passkey"] = {
       <ul class="z-points">
         <li>${Z.icon("lock")}<span>Company payments you draft need a teammate’s approval. Zold can’t approve any.</span></li>
         <li>${Z.icon("group_add")}<span>Invite teammates and give each a role after the account opens.</span></li>
-        <li>${Z.icon("restore")}<span>Set up recovery next, in case you lose this ${Z.onPhone() ? "phone" : "device"}.</span></li>
+        ${obRecoveryPoint()}
       </ul>
       ${obSetupSteps()}
       ${obAlert()}
@@ -914,7 +914,7 @@ OB["b-safe-choice"] = {
         <fieldset class="z-form z-form--tight" style="border:0;margin:0;padding:0;min-width:0">
           <legend class="z-sr">Which account</legend>
           ${obChoiceHtml("safe-choice", "new", "Open a new account", `Zold sets up a new account for the company. One more approval with your ${Z.passkeyName()}.`, true)}
-          ${obChoiceHtml("safe-choice", "import", "Use our company’s existing Safe", "You already have a Safe, owned by a wallet such as a Ledger. Its owner adds this phone as an owner. No money moves.", false)}
+          ${obChoiceHtml("safe-choice", "import", "Use our company’s existing Safe", `You already have a Safe, owned by a wallet such as a Ledger. Its owner adds this phone as an owner. No money moves.${obSocial ? ` Your ${obSocialName()} can’t be added to an existing Safe.` : ""}`, false)}
         </fieldset>
       </form>
       ${obSetupSteps()}
@@ -925,7 +925,10 @@ OB["b-safe-choice"] = {
     obBindForm(root, async () => {
       const btn = root.querySelector("#btn-next");
       if (Z.isDisabled(btn)) return;
-      if (root.querySelector('input[name="safe-choice"]:checked')?.value === "import") return obGo("b-import-address");
+      if (root.querySelector('input[name="safe-choice"]:checked')?.value === "import") {
+        obDiscardSocial();
+        return obGo("b-import-address");
+      }
       obClearErr();
       clearSafeImportFlag();
       obImport = null;
@@ -1286,14 +1289,13 @@ async function obCreateAccount(btn) {
         }
         if (u.code === "EMAIL_IN_USE") {
           obEmailInUse = true;
-          return obGo(obDraft.type === "company" ? "b-you" : "p-email");
+          return obGo(obDraft.type === "company" ? "b-about" : "p-about");
         }
         throw new Error(u.error || `The account could not be created (HTTP ${res.status}).`);
       }
       u.balanceEur = 0;
       u.safeBalanceEur = 0;
       renderUser(u);
-      obSetWelcomeDue(true);
     }
     pendingInfo ||= { name: user.name, email: user.email };
     if (user.accountType === "company") await obEnsureOrg();
@@ -1336,10 +1338,11 @@ function obRerenderSteps() {
 async function obOpenOwnSafe(btn) {
   obSetup = { step: 1, state: "now" }; obRerenderSteps();
   btn.querySelector("span:last-child").textContent = Z.onPhone() ? "Approve with Face ID again" : "Approve again";
+  await obAddSocialGuardian();
   await finishPasskeySafeSetup();
   obSetup = null;
-  // Only the hardhat harness auto-approves; a real account goes on to
-  // recovery and Monerium.
+  // Only the hardhat harness auto-approves; a real account finds Monerium
+  // on Home's checklist.
   if (kycApproved(user) && !user.iban && (user.funding || {}).mode === "sandbox") {
     try { await issueAppIban(); } catch { /* retried from Home */ }
   }
@@ -1371,6 +1374,8 @@ async function obEnsureOrg() {
     legalName: obDraft.legalName,
     country: obDraft.incorp,
     email: obDraft.email,
+    // Monthly reports run in this zone; the settings screen can change it.
+    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
   });
 }
 
@@ -1416,30 +1421,6 @@ async function obSignIn(btn) {
   } finally { Z.setLoading(btn, false); }
 }
 
-/* ---- Recovery choice -------------------------------------------------------- */
-
-/* Has the user still to answer the Zoldenburg-guardian offer? Only where the
-   deployment has a guardian, the account is set up, and they neither added it
-   nor declined it. */
-function zoldenburgChoicePending(u = user) {
-  return !!(caps.zoldenburgRecovery && u?.passkeySafe?.status === "active" && recoveryOfferedFor(u)
-    && !u.passkeySafe.recoveryChoice && u.passkeySafe.recovery?.status !== "active"
-    // Recovery by email is the other answer to the same question.
-    && u.passkeySafe.candideRecovery?.guardianStatus !== "active");
-}
-
-/* Is there Candide (email) enrolment left? True only where the deployment has
-   the service, the account is set up and the guardian is not yet on it. */
-function candideEnrolmentPending(u = user) {
-  return !!(caps.emailSmsRecovery && u?.passkeySafe?.status === "active" && recoveryOfferedFor(u)
-    && u.passkeySafe.candideRecovery?.guardianStatus !== "active");
-}
-
-function recoveryEnrolmentPending(u = user) {
-  return zoldenburgChoicePending(u) || candideEnrolmentPending(u);
-}
-
-let obGrace = null;
 /* ---- Email ---------------------------------------------------------------
    A 6-digit code to the signup email. The first visit asks for one by
    itself; "Send a new code" respects the server's wait, which it states. */
@@ -1476,7 +1457,6 @@ OB.email = {
     if (!obEmailSent) send();
     root.querySelector("#btn-em-resend").onclick = send;
     root.querySelector("#btn-em-later").onclick = () => {
-      obEmailSkipped = true;
       const next = obNextAfterAccount();
       return next ? obGo(next) : obFinish();
     };
@@ -1496,178 +1476,6 @@ OB.email = {
         const next = obNextAfterAccount();
         return next ? obGo(next) : obFinish();
       } catch (e2) { obShowErr(e2); } finally { Z.setLoading(btn, false); }
-    });
-  },
-};
-
-OB.recovery = {
-  kind: "after",
-  title: "Recovery choice",
-  html: () => {
-    if (obRecoveryDone) {
-      return `${obAfterProgress("recovery", "Recovery")}
-      <main id="main" class="z-screen__main">
-        ${obIntro(obRecoveryDone === "zoldenburg" ? "Zoldenburg recovery is on" : obRecoveryDone === "email" ? "Recovery by email is on" : "Recovery skipped",
-          obRecoveryDone === "zoldenburg" ? "If you lose this phone, tap Recover your account on the sign-in screen. The move waits, and this phone can cancel it."
-            : obRecoveryDone === "email" ? `A code to ${esc(user.email)} and a waiting period can move this account to a new phone.`
-              : "You can set up recovery later in Security.")}
-      </main>
-      <div class="z-screen__foot">${Z.button({ variant: "primary", full: true, label: "Continue", id: "btn-rec-next" })}</div>`;
-    }
-    const opts = [];
-    if (caps.emailSmsRecovery && user?.email) opts.push(["email", `Email code ${Z.tag("Recommended", "pink")}${Z.tag("Beta")}`, "A code to your email starts recovery. You can cancel it while it waits."]);
-    if (caps.zoldenburgRecovery) opts.push(["zoldenburg", `Add Zoldenburg recovery ${Z.tag("Beta")}`, `Only with an ID Monerium verified. Zoldenburg can’t send your money. A move to a new phone waits <span id="rec-grace">${esc(obGrace || "several days")}</span>, and you can cancel it.`]);
-    opts.push(["skip", "Skip for now", "No one can recover this account."]);
-    return `${obAfterProgress("recovery", "Recovery")}
-    <main id="main" class="z-screen__main z-screen__main--tight">
-      ${obIntro("If you lose access", "You can change this later in Security.")}
-      <button type="button" class="z-link-btn z-link-btn--small" id="btn-rec-custody" style="align-self:flex-start;padding:0">${Z.icon("info")}You alone control this account</button>
-      <form class="z-form z-form--tight" id="ob-form" novalidate>
-        <fieldset class="z-form z-form--tight" style="border:0;margin:0;padding:0;min-width:0" aria-describedby="rec-choice-err">
-          <legend class="z-sr">How to get back in</legend>
-          ${opts.map(([v, t, d]) => `<label class="z-choice"><input type="radio" name="recovery" value="${v}"><span class="z-choice__main"><span class="z-choice__title">${t}</span><span class="z-choice__text">${d}</span></span></label>`).join("")}
-        </fieldset>
-        <p class="z-err" id="rec-choice-err" hidden></p>
-        <div id="rec-skip" class="z-form z-form--tight" hidden>
-          ${Z.note({ tone: "a", icon: "warning", text: "Lose this device and only your euros can be recovered, from Monerium under Icelandic e-money law. Other assets are lost." })}
-          <label class="z-check" for="c-skip"><input id="c-skip" type="checkbox" aria-describedby="c-skip-err"><span>I understand. Skip recovery for now.</span></label>
-          <p class="z-err" id="c-skip-err" hidden></p>
-        </div>
-      </form>
-      ${obAlert()}
-    </main>
-    <div class="z-screen__foot">${obSubmit()}</div>`;
-  },
-  bind: (root) => {
-    const next = root.querySelector("#btn-rec-next");
-    if (next) {
-      next.onclick = () => {
-        obRecoveryDone = null;
-        const n = obNextAfterAccount();
-        if (n) obGo(n, { replace: true }); else obFinish();
-      };
-      return;
-    }
-    const custody = root.querySelector("#btn-rec-custody");
-    custody.onclick = () => obCustodySheet(custody);
-    if (!obGrace && caps.zoldenburgRecovery) {
-      api(`/api/users/${user.id}/recovery/zoldenburg`)
-        .then((r) => { obGrace = graceText(r.gracePeriodSeconds); const g = $("rec-grace"); if (g) g.textContent = obGrace; })
-        .catch(() => { /* keep the generic wording */ });
-    }
-    const form = root.querySelector("#ob-form");
-    form.addEventListener("change", () => {
-      root.querySelector("#rec-choice-err").hidden = true;
-      root.querySelector("#rec-skip").hidden = obChoice(root) !== "skip";
-    });
-    form.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      obClearErr();
-      const choice = obChoice(root);
-      const err = root.querySelector("#rec-choice-err");
-      if (!choice) { err.textContent = "Choose how you’d get back in."; err.hidden = false; root.querySelector('input[name="recovery"]').focus(); return; }
-      const btn = root.querySelector("#btn-next");
-      if (choice === "email") return obGo("recovery-email");
-      if (choice === "skip") {
-        const ack = root.querySelector("#c-skip"), ackErr = root.querySelector("#c-skip-err");
-        if (!ack.checked) { ackErr.textContent = "Tick the box to skip recovery."; ackErr.hidden = false; ack.focus(); return; }
-      }
-      Z.setLoading(btn, true);
-      try {
-        if (choice === "zoldenburg") {
-          const prep = await api(`/api/users/${user.id}/recovery/zoldenburg`, { acknowledged: true });
-          if (prep.challenge) await api(prep.submitTo, await passkeySignPrepared(prep));
-        } else if (caps.zoldenburgRecovery) {
-          // The decline is recorded, so the offer is not made again.
-          await api(`/api/users/${user.id}/recovery/zoldenburg/decline`, { acknowledged: true });
-        }
-        renderUser(await api(`/api/users/${user.id}`));
-        obRecoveryDone = choice;
-        obRender({ focus: true });
-      } catch (e2) { obShowErr(e2); } finally { Z.setLoading(btn, false); }
-    });
-  },
-};
-const obChoice = (root) => root.querySelector('input[name="recovery"]:checked')?.value || null;
-
-/* Self-custody, said before the recovery choice: why no one can reset this
-   account, and what a guardian can and cannot do. */
-function obCustodySheet(trigger) {
-  document.getElementById("ob-custody")?.remove();
-  document.body.insertAdjacentHTML("beforeend", Z.overlay({
-    id: "ob-custody", title: "You control this account",
-    body: `<div class="z-sheet__body">
-      <p class="z-sub">Only you can approve payments. Zold can’t move your money.</p>
-      <p class="z-sub">So no one can reset your access. Without recovery, a lost phone is a lost account.</p>
-      <p class="z-sub">Recovery moves the account to a new phone after a wait you can cancel.</p>
-      <p class="z-sub">Monerium, the issuer, can still freeze your euros under the law.</p>
-    </div>`,
-  }));
-  Z.openOverlay("ob-custody", trigger);
-}
-
-/* Candide email enrolment: register (Face ID) -> code -> guardian (Face ID),
-   against the signup email. Candide sends the code; Zold sends nothing. */
-let obRecOtp = null; // { submitTo, target } while a code is outstanding
-OB["recovery-email"] = {
-  kind: "after",
-  title: "Recovery by email",
-  html: () => `${obAfterProgress("recovery-email", "Recovery")}
-    <main id="main" class="z-screen__main">
-      ${obIntro("Recovery by email", obRecOtp
-        ? `Enter the code sent to ${esc(obRecOtp.target)}.`
-        : `We’ll register ${esc(user.email)} for recovery codes. It takes two approvals with your ${Z.passkeyName()}.`)}
-      ${obRecOtp ? `<form class="z-form" id="ob-form" novalidate>${Z.field({ id: "rec-code", name: "one-time-code", label: "Code", autocomplete: "one-time-code", inputmode: "numeric", maxlength: 10, spellcheck: false })}</form>`
-        : `${Z.note({ icon: "info", text: "Someone who controls your mailbox could start a recovery too. The waiting period is what lets you stop it from this phone." })}`}
-      ${obAlert()}
-    </main>
-    <div class="z-screen__foot">
-      ${obRecOtp ? obSubmit("Confirm") : Z.button({ variant: "primary", full: true, icon: "fingerprint", label: Z.byDevice("Register with Face ID", "Register with your passkey"), id: "btn-rec-register" })}
-      ${obRecOtp ? `<button type="button" class="z-link-btn" id="btn-rec-restart">Start over</button>` : `<a class="z-link-btn" href="#recovery">Choose another way</a>`}
-    </div>`,
-  bind: (root) => {
-    const reg = root.querySelector("#btn-rec-register");
-    if (reg) reg.onclick = async () => {
-      if (Z.isDisabled(reg)) return;
-      obClearErr();
-      Z.setLoading(reg, true);
-      try {
-        const prep = await api(`/api/users/${user.id}/recovery/candide/channels`, { channel: "email", target: user.email });
-        const sent = await api(prep.submitTo, await passkeySignPrepared(prep));
-        obRecOtp = { submitTo: sent.submitTo, target: sent.target };
-        obRender({ focus: true });
-        $("rec-code")?.focus();
-      } catch (e) { obShowErr(e); } finally { Z.setLoading(reg, false); }
-    };
-    const restart = root.querySelector("#btn-rec-restart");
-    if (restart) restart.onclick = () => { obRecOtp = null; obRender({ focus: true }); };
-    const form = root.querySelector("#ob-form");
-    if (form) form.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      obClearErr();
-      const code = root.querySelector("#rec-code");
-      if (!code.value.trim()) { Z.setFieldError(code, "Enter the code."); code.focus(); return; }
-      const btn = root.querySelector("#btn-next");
-      Z.setLoading(btn, true);
-      try {
-        const r = await api(obRecOtp.submitTo, { otp: code.value.trim() });
-        obRecOtp = null;
-        user = { ...user, ...r, recovery: undefined, next: undefined };
-        if (r.next === "guardian") {
-          const prep = await api(`/api/users/${user.id}/recovery/candide/guardian`, {});
-          const done = prep.challenge ? await api(prep.submitTo, await passkeySignPrepared(prep)) : prep;
-          user = { ...user, ...done, recovery: undefined, status: undefined, opHash: undefined };
-        }
-        renderUser(await api(`/api/users/${user.id}`));
-        if (user.passkeySafe?.candideRecovery?.guardianStatus === "active") {
-          obRecoveryDone = "email";
-          return obGo("recovery", { replace: true });
-        }
-        throw new Error(`Your email is registered, but the last approval with your ${Z.passkeyName()} didn’t finish. You can finish it in Security.`);
-      } catch (e2) {
-        // Five wrong codes end the registration server-side; the way on is to start over.
-        obShowErr(e2);
-      } finally { Z.setLoading(btn, false); }
     });
   },
 };
@@ -1933,57 +1741,6 @@ async function obReconnect(btn) {
     obGo("monerium", { replace: true });
   } catch (e) { obShowErr(e); } finally { Z.setLoading(btn, false); }
 }
-
-/* ---- Welcome ------------------------------------------------------------------ */
-let obCard = 0;
-OB.welcome = {
-  kind: "after",
-  title: "Welcome",
-  html: () => {
-    const cards = obWelcomeCards();
-    const c = cards[obCard] || cards[0];
-    const last = obCard >= cards.length - 1;
-    return `<div class="z-screen__head"><div class="z-progress__head"><span class="z-sr">Card ${obCard + 1} of ${cards.length}</span><span><button type="button" class="z-link-btn" id="btn-welcome-skip">Skip</button></span></div></div>
-    <main id="main" class="z-screen__main z-screen__main--center" style="padding-left:24px;padding-right:24px">
-      <div class="z-card z-tour">${c.card}</div>
-      <div class="z-intro"><h1 class="z-title" tabindex="-1">${esc(c.title)}</h1><p class="z-sub">${esc(c.sub)}</p></div>
-      <div class="z-dots" aria-hidden="true">${cards.map((_, i) => `<span${i === obCard ? ' class="is-on"' : ""}></span>`).join("")}</div>
-    </main>
-    <div class="z-screen__foot">${Z.button({ variant: "primary", full: true, label: last ? "Go to Home" : "Next", id: "btn-welcome-next" })}</div>`;
-  },
-  bind: (root) => {
-    const done = () => { obCard = 0; obSetWelcomeDue(false); obFinish(); };
-    root.querySelector("#btn-welcome-skip").onclick = done;
-    root.querySelector("#btn-welcome-next").onclick = () => {
-      if (obCard >= obWelcomeCards().length - 1) return done();
-      obCard++;
-      obRender({ focus: true });
-    };
-  },
-};
-
-/* Card one says where the IBAN really is. Nothing shows digits the API has not
-   returned: an IBAN in review has none yet. */
-function obWelcomeCards() {
-  const iban = user?.iban;
-  const connected = hasConnectedMonerium(user) || kycApproved(user);
-  const ibanCard = iban
-    ? { tag: Z.tag("Ready", "mint"), value: `<div class="z-tour__value" translate="no">${esc(Z.groupIban(iban))}</div>`, note: "Issued by Monerium in your name",
-        title: "Your IBAN is ready.", sub: "Share it to get paid by bank transfer. You’ll find it on Home." }
-    : connected
-      ? { tag: Z.tag("In review"), value: `<div class="z-tour__value z-tour__value--text">Not issued yet</div>`, note: "Monerium is checking your ID",
-          title: "Your IBAN is on its way.", sub: "We’ll show it on Home the moment it’s approved. Until then you can look around." }
-      : { tag: Z.tag("Waiting"), value: `<div class="z-tour__value z-tour__value--text">Not connected yet</div>`, note: "Connect Monerium from Home",
-          title: "Get your IBAN when you’re ready.", sub: "It takes a few minutes with your ID at hand. Until then you can look around." };
-  const plain = (icon, label, text) => `<div class="z-tour__row"><span>${label}</span>${Z.iconTile({ icon, tone: "p" })}</div><div class="z-tour__value z-tour__value--text">${text}</div>`;
-  return [
-    { card: `<div class="z-tour__row"><span>Your IBAN</span>${ibanCard.tag}</div>${ibanCard.value}<span class="z-tour__row">${ibanCard.note}</span>`, title: ibanCard.title, sub: ibanCard.sub },
-    { card: plain("fingerprint", "Every payment", `Approved with your ${Z.byDevice("Face ID", "passkey")}`), title: "Only you can move your money.", sub: `Each payment asks for your ${Z.passkeyName()}, for one amount to one recipient. Zold can’t send anything on its own.` },
-    { card: plain("account_balance", "Bank transfers", "Any IBAN in Europe"), title: "Pay by bank transfer.", sub: "You see the amount and any fee before you approve." },
-    { card: plain("link", "Payment links", "Share a link, get paid"), title: "Get paid with a link.", sub: "Share a payment link or your IBAN. The money arrives in your own account." },
-  ];
-}
-
 
 /* Steps of a process, in the timeline shape payment progress uses. */
 function rcTimeline(steps) {
@@ -2442,9 +2199,11 @@ function obStart() {
 }
 
 async function resumeSession(capabilitiesLoaded) {
+  await obSocialReturn();
   // A return from Monerium's sign-in lands on /app?monerium=connected.
   const qs = new URLSearchParams(location.search);
-  if (qs.has("monerium")) {
+  const fromMonerium = qs.has("monerium");
+  if (fromMonerium) {
     qs.delete("monerium");
     history.replaceState(null, "", `${location.pathname}${qs.size ? `?${qs}` : ""}${location.hash}`);
   }
@@ -2458,6 +2217,8 @@ async function resumeSession(capabilitiesLoaded) {
     renderUser(u);
     await capabilitiesLoaded;
     const next = obNextAfterAccount();
+    // Back from Monerium's sign-in: the activate step (or why it refused).
+    if (!next && fromMonerium && bankOffered(user) && !kycApproved(user) && !ibanWait(user)) return enterKycReview();
     // "Do this later" on the Monerium step opened the app: a reload on an app
     // screen stays in the app, whose Home offers the step again. An IBAN that
     // is requested waits on Monerium, not on the person: Home, not the gate.

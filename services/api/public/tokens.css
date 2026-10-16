@@ -1,17 +1,18 @@
-/* Zold UI v2 tokens. A copy of design/ui-v2/tokens/tokens.css (generated from
-   tokens.json), plus --z-hero-glow, which tokens.json has and the CSS missed.
-   Keep all three in step. Loaded before every other stylesheet. */
+/* Zold UI v2 tokens, ARK values (design/ark/DESIGN.md). A copy of
+   design/ui-v2/tokens/tokens.css (generated from tokens.json). Keep all three
+   in step. Loaded before every other stylesheet. */
 :root {
   color-scheme: dark;
-  --z-bg: #08080b; --z-surface: #101014; --z-sunk: #0d0d11; --z-field: #0e0e12; --z-sheet: #111115;
-  --z-card: linear-gradient(180deg, #131317, #0d0d11); --z-ghost: rgba(255,255,255,.03);
-  --z-line: #232328; --z-line-strong: #2c2c33; --z-line-hover: #5a5a62;
-  --z-text: #ededf0; --z-heading: #fbf9fc; --z-dim: #9a9aa5;
+  --z-bg: #0b0b0c; --z-surface: #131314; --z-sunk: #101011; --z-field: #101011; --z-sheet: #1a1a1c;
+  --z-card: #131314; --z-ghost: rgba(237,230,214,.03);
+  --z-line: #2a2926; --z-line-strong: #3a3833; --z-line-hover: #5c574e;
+  --z-text: #ede6d6; --z-heading: #f6f1e7; --z-dim: #9c9484;
   --z-pink: #ed188d; --z-pink-hover: #ff2d9e; --z-pink-link: #f06bb4; --z-pink-link-hover: #ff8fc4;
   --z-pink-soft: #e8a9cd; --z-pink-tint: rgba(237,24,141,.08); --z-pink-border: rgba(237,24,141,.35);
-  --z-mint: #3dd68c; --z-mint-tint: rgba(61,214,140,.1); --z-mint-border: rgba(61,214,140,.28);
-  --z-amber: #f5a623; --z-amber-tint: rgba(245,166,35,.08); --z-amber-border: rgba(245,166,35,.32);
-  --z-scrim: rgba(4,4,6,.66);
+  --z-mint: #6fa585; --z-mint-tint: rgba(111,165,133,.1); --z-mint-border: rgba(111,165,133,.28);
+  --z-amber: #d98e4a; --z-amber-tint: rgba(217,142,74,.08); --z-amber-border: rgba(217,142,74,.32);
+  --z-red: #d27468;
+  --z-scrim: rgba(5,5,6,.7);
 
   --z-font: Inter, system-ui, sans-serif;
   --z-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
@@ -19,15 +20,13 @@
   --z-space-1: 4px; --z-space-2: 8px; --z-space-3: 12px; --z-space-4: 16px; --z-space-5: 20px;
   --z-space-6: 24px; --z-space-7: 28px; --z-space-8: 32px; --z-space-10: 40px; --z-space-12: 48px;
 
-  --z-radius-sm: 10px; --z-radius-md: 12px; --z-radius-note: 14px; --z-radius-card: 16px;
-  --z-radius-qr: 20px; --z-radius-sheet: 24px; --z-radius-pill: 999px;
+  --z-radius-control: 6px; --z-radius-sm: 6px; --z-radius-md: 6px; --z-radius-note: 14px; --z-radius-card: 14px;
+  --z-radius-qr: 20px; --z-radius-sheet: 20px; --z-radius-pill: 999px;
 
   --z-touch: 44px; --z-input-h: 52px; --z-button-h: 56px; --z-row-h: 64px; --z-topbar-h: 60px;
 
-  --z-shadow-primary: 0 10px 34px rgba(237,24,141,.4);
   --z-shadow-sheet: 0 -30px 80px rgba(0,0,0,.6);
   --z-shadow-dialog: 0 30px 80px rgba(0,0,0,.6);
-  --z-hero-glow: radial-gradient(60% 50% at 50% 30%, rgba(237,24,141,.22), rgba(237,24,141,.05) 55%, transparent 72%);
   --z-ease: .15s ease;
 }
 body { margin: 0; background: var(--z-bg); color: var(--z-text); font-family: var(--z-font); -webkit-font-smoothing: antialiased; }

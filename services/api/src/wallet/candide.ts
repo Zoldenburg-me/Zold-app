@@ -231,7 +231,7 @@ export function safeMessageHash(safeAddress: string, message: string): `0x${stri
   });
 }
 
-export async function preparePasskeySafeDeployment(plan: PasskeySafeDeploymentPlan): Promise<{
+export async function preparePasskeySafeDeployment(plan: PasskeySafeDeploymentPlan, signupGuardian?: `0x${string}`): Promise<{
   safeAddress: `0x${string}`;
   challenge: `0x${string}`;
   userOperation: UserOperationV9;
@@ -248,11 +248,19 @@ export async function preparePasskeySafeDeployment(plan: PasskeySafeDeploymentPl
   // NOT installed: nothing spends from the Safe except UserOperations the
   // user's own passkey signs, so there is no delegate to authorize and no
   // standing spend surface to bound.
-  const setup = [...passkeySafeRecoverySetupTransactions(plan)];
   // enableModule on an address with no code "succeeds" and records a recovery
   // that does not exist; refuse before the user signs anything.
-  if (setup.length && plan.recovery) await assertRecoveryModuleDeployed(plan.recovery.moduleAddress);
+  if (plan.recovery) await assertRecoveryModuleDeployed(plan.recovery.moduleAddress);
   const deployed = await isDeployed(account.accountAddress);
+  // The Google/Apple guardian chosen at signup rides the deployment, so it
+  // costs no second approval. First deployment only: on a Safe already on
+  // chain it may be listed, and adding it twice reverts the whole operation.
+  const moduleAddress = CANDIDE.recoveryModuleAddress as `0x${string}`;
+  const signup = signupGuardian && !deployed && !plan.recovery
+    ? recoveryGuardianSetupTransactions(plan.address, moduleAddress, signupGuardian, 1, false)
+    : [];
+  if (signup.length) await assertRecoveryModuleDeployed(moduleAddress);
+  const setup = [...passkeySafeRecoverySetupTransactions(plan), ...signup];
   if (deployed && !setup.length) {
     return {
       safeAddress: account.accountAddress as `0x${string}`,

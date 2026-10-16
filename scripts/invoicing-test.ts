@@ -89,6 +89,19 @@ check("VAT is computed in integer cents", () => {
   assert.equal(fromCents(11900), "119.00");
 });
 
+check("a sub-cent unit price is rounded once, after the quantity", () => {
+  for (const [quantity, unitPriceNet, net, vat, gross] of [
+    ["10000", "0.004", 4000, 760, 4760],
+    ["10000", "0.006", 6000, 1140, 7140],
+    ["41.5", "1.789", 7424, 1411, 8835],
+  ] as const) {
+    const t = computeTotals([{ description: "x", quantity, unitPriceNet }], { kind: "standard", rate: 19 });
+    assert.equal(t.lines[0].netCents, net, `${quantity} × ${unitPriceNet}`);
+    assert.equal(t.vatCents, vat, `${quantity} × ${unitPriceNet} VAT`);
+    assert.equal(t.grossCents, gross, `${quantity} × ${unitPriceNet} gross`);
+  }
+});
+
 check("19% on 1000.00 is exactly 190.00", () => {
   const t = computeTotals(
     [{ description: "x", quantity: "10", unitPriceNet: "100.00" }],
@@ -470,7 +483,7 @@ check("outside the EU nothing is claimed — structural checks only", () => {
   assert.equal(j.inEu, false);
   assert.deepEqual(j.reasons.sort(), ["export_third_country", "other"]);
   assert.match(j.notVerified.join(" "), /GSTIN/, "India's actual requirements are named");
-  assert.match(j.disclaimer, /does not encode the tax rules/);
+  assert.match(j.disclaimer, /does not support/);
 });
 
 check("an unknown country still resolves, and promises nothing", () => {
@@ -718,13 +731,15 @@ check("an EU issuer is told the euro figure is not its own national conversion �
   assert.ok(!pl.errors.some((e) => /§ 16 Abs. 6/.test(e.legalBasis ?? "")), "no German paragraph at a Polish entity");
 });
 
-check("an invoice's language is its own choice, falling back to the profile, then the issuer's country", () => {
+check("an invoice's language is its own choice, falling back to the profile, then English", () => {
   assert.equal(invoiceLanguage("en", "de"), "en");
+  assert.equal(invoiceLanguage("fr", "de"), "fr");
+  assert.equal(invoiceLanguage("es", "en"), "es");
   assert.equal(invoiceLanguage(undefined, "en"), "en");
-  assert.equal(invoiceLanguage("", undefined, "DE"), "de");
-  assert.equal(invoiceLanguage("", undefined, "PL"), "en");
+  assert.equal(invoiceLanguage("", "de"), "de");
   assert.equal(invoiceLanguage("", undefined), "en");
-  assert.throws(() => invoiceLanguage("fr", "de"), InvoiceComplianceError);
+  // Anything outside the four written languages resolves to English.
+  assert.equal(invoiceLanguage("it", "de"), "en");
 });
 
 check("a typed due date wins over payment terms, and cannot precede the invoice or be no date at all", () => {

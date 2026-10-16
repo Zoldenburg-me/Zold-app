@@ -4,7 +4,7 @@
  * One page for every guardian (recovery/flow.js picks it): email, a new
  * passkey made on this phone, then the guardian's step — codes by email/SMS,
  * Zoldenburg's 1 € from the person's bank and ID check (recovery/bank-step.js),
- * or the person's own Google/Apple login (signed here,
+ * or the person's own Google/Apple login, email or recovery passkey (signed here,
  * recovery/approve.js) — then the waiting period, during which the old phone
  * can stop it, then sign in.
  *
@@ -12,11 +12,12 @@
  * adds only Turnkey's API (routes/pages.ts). No Zold session: each call
  * carries the request's secret.
  */
-import { IndexedDbStamper } from "../vendor/turnkey.js";
+import { IndexedDbStamper, WebauthnStamper, encryptOtpCodeToBundle } from "../vendor/turnkey.js";
+import { emailCodeToToken, emailLoginSignature, passkeyWhoami, sendEmailCode } from "../guardian/logins.js";
 import { startLogin } from "../guardian/oauth.js";
 import { providerButtons } from "../guardian/providers.js";
 import { byDevice, passkeyName } from "../guardian/device-words.js";
-import { finishApprove } from "./approve.js";
+import { approveWith, finishApprove } from "./approve.js";
 import { bankStepChanged, bankStepHtml, checkAnswerText, issuedFor, keepIssued } from "./bank-step.js";
 import {
   EMAIL_KEY, SECRET_KEY, TICKET_KEY, currentAuth, endedText, finalizeAfter, requestPath, saveFor, savedFor, screenFor, startRecovery,
@@ -61,7 +62,8 @@ async function boot() {
   // `gen` counts renders: a poll that started before the latest one drops its answer.
   // `misses` counts polls in a row that could not reach Zold; `bankNote` is
   // the answer to the last "check now" click.
-  const s = { email: "", mode: "", request: null, notice: "", error: "", timer: null, gen: 0, misses: 0, bankNote: "" };
+  // `otp` is the backup email's code on its way: {otpId, otpEncryptionTargetBundle, to}.
+  const s = { email: "", mode: "", request: null, notice: "", error: "", timer: null, gen: 0, misses: 0, bankNote: "", otp: null };
   try { s.email = sessionStorage.getItem(EMAIL_KEY) || ""; } catch { /* storage blocked */ }
   const secret = () => savedFor(localStorage, SECRET_KEY, s.email);
   const ticket = () => savedFor(localStorage, TICKET_KEY, s.email);
@@ -253,11 +255,26 @@ async function boot() {
       <p class="r-note">Write from the email on your account and keep this page open.</p>`;
     },
     approve: () => {
+      const logins = caps.turnkeyLogins || {};
+      const email = !logins.email ? "" : s.otp
+        ? `<form id="r-tk-code" novalidate>
+            <label for="r-tk-otp">Code sent to ${esc(s.otp.to)}</label>
+            <input id="r-tk-otp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required>
+            <div class="r-actions"><button class="z-btn z-btn--primary" id="r-tk-confirm">Confirm</button>
+              <button type="button" class="z-btn" id="r-tk-new">Send a new code</button></div>
+          </form>`
+        : `<form id="r-tk-email" novalidate>
+            <label for="r-tk-addr">Or your backup email</label>
+            <input id="r-tk-addr" type="email" autocomplete="email" autocapitalize="off" required>
+            <div class="r-actions"><button class="z-btn" id="r-tk-send">Send a code</button></div>
+          </form>`;
       return `
       <h1 tabindex="-1">Log in to confirm it’s you</h1>
-      <p>Use the Google or Apple account you set as your backup login. Your Zold account then moves to this phone.</p>
+      <p>Use the backup login you set up: Google, Apple, your backup email or your recovery passkey. Your Zold account then moves to this phone.</p>
       <p class="r-err" id="r-err" role="alert"${s.error ? "" : " hidden"}>${esc(s.error)}</p>
-      <div class="z-providers">${providerButtons(caps, "Continue")}</div>`;
+      <div class="z-providers">${providerButtons(caps, "Continue")}
+        ${logins.passkey ? `<button type="button" class="z-btn z-provider" id="r-tk-passkey"><span>Use my recovery passkey</span></button>` : ""}</div>
+      ${email}`;
     },
     wait: () => {
       const until = finalizeAfter(s.request);
@@ -293,15 +310,59 @@ async function boot() {
         after(s.mode, await api(`/api/recovery/candide/${r.id}/otp`, { challengeId: r.candide.auths[currentAuth(r)].challengeId, otp: code }, auth()));
       } catch (err) { fail(err); } finally { busy(btn, false); }
     }),
-    approve: () => el.querySelectorAll("[data-start]").forEach((b) => b.addEventListener("click", async () => {
-      busy(b, true);
-      try {
-        await startLogin(b.dataset.start, {
-          stamper: new IndexedDbStamper(), storage: sessionStorage, origin: location.origin, logins: caps.turnkeyLogins,
-          returnPath: "/recovery", go: (u) => location.assign(u),
-        });
-      } catch (err) { busy(b, false); fail(err); }
-    })),
+    approve: () => {
+      el.querySelectorAll("[data-start]").forEach((b) => b.addEventListener("click", async () => {
+        busy(b, true);
+        try {
+          await startLogin(b.dataset.start, {
+            stamper: new IndexedDbStamper(), storage: sessionStorage, origin: location.origin, logins: caps.turnkeyLogins,
+            returnPath: "/recovery", go: (u) => location.assign(u),
+          });
+        } catch (err) { busy(b, false); fail(err); }
+      }));
+      const approved = (result) => (result.step === "approved" ? after(s.mode, result.request) : fail(new Error(result.reason)));
+      const recovery = { requestId: s.request.id, secret: secret() };
+      el.querySelector("#r-tk-passkey")?.addEventListener("click", async (e) => {
+        const btn = e.currentTarget;
+        busy(btn, true);
+        // Two prompts: the passkey proves which it is (Turnkey names its
+        // sub-org), then that passkey stamps the signing request.
+        const stamper = new WebauthnStamper({ rpId: location.hostname, userVerification: "required" });
+        const result = await approveWith({ stamper, api, recovery, turnkeyApi: caps.turnkeyApi, login: async () => {
+          const { whoami, credentialId } = await passkeyWhoami(stamper, caps.turnkeyOrg);
+          stamper.allowCredentials = [{ type: "public-key", id: b64urlToBytes(credentialId) }];
+          return api("/api/recovery/turnkey/login", { whoami });
+        } });
+        busy(btn, false);
+        approved(result);
+      });
+      el.querySelector("#r-tk-email")?.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const btn = el.querySelector("#r-tk-send");
+        const to = el.querySelector("#r-tk-addr").value.trim();
+        if (!to) return fail(new Error("Enter your backup email."));
+        busy(btn, true);
+        try { s.otp = { ...(await sendEmailCode(api, to)), to }; s.error = ""; redraw(); el.querySelector("#r-tk-otp")?.focus(); }
+        catch (err) { busy(btn, false); fail(err); }
+      });
+      // A code that expired or was mistyped: back to the email form for another.
+      el.querySelector("#r-tk-new")?.addEventListener("click", () => { s.otp = null; s.error = ""; redraw(); });
+      el.querySelector("#r-tk-code")?.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const btn = el.querySelector("#r-tk-confirm");
+        busy(btn, true);
+        const stamper = new IndexedDbStamper();
+        let token;
+        try {
+          token = await emailCodeToToken({ api, stamper, encrypt: encryptOtpCodeToBundle, otp: s.otp, code: el.querySelector("#r-tk-otp").value.replace(/\s/g, "") });
+        } catch (err) { busy(btn, false); return fail(err); }
+        const result = await approveWith({ stamper, api, recovery, turnkeyApi: caps.turnkeyApi,
+          login: async () => api("/api/recovery/turnkey/login", { verificationToken: token, clientSignature: await emailLoginSignature(stamper, token) }) });
+        s.otp = null;
+        if (result.step !== "approved") redraw();
+        approved(result);
+      });
+    },
     zoldenburg: () => {
       el.querySelector('[data-bank="copy"]')?.addEventListener("click", async (e) => {
         const btn = e.currentTarget;

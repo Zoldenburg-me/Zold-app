@@ -17,7 +17,7 @@ import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { createHash, randomBytes, webcrypto } from "node:crypto";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { rmSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createPublicClient, createWalletClient, http, parseUnits } from "viem";
@@ -51,6 +51,26 @@ await t("verification codes use the Crockford alphabet and normalise look-alikes
   assert.equal(docs.normaliseCode("0OIL1"), "00111");
   assert.ok(docs.isDocumentCode(code));
   assert.ok(!docs.isDocumentCode("too-short"));
+});
+
+await t("a statement's printed address is typed per visit, marked self-declared, and never leaves the page", () => {
+  const page = readFileSync(path.join(ROOT, "services/api/public/document.html"), "utf8");
+  const script = page.slice(page.indexOf("<script>"));
+  assert.doesNotMatch(script, /localStorage|sessionStorage|indexedDB|document\.cookie|sendBeacon|XMLHttpRequest/);
+  assert.equal(script.match(/fetch\(/g)?.length, 1, "the only request is the GET of the public document");
+  assert.match(script, /fetch\(`\/api\/v\/\$\{encodeURIComponent\(code\)\}`, \{ headers/);
+  assert.match(script, /Address as the holder entered it, not verified and not part of the signed document/);
+
+  // The page's own functions, exercised as shipped — not a copy pinned by regex.
+  const addressFrom = eval(`(text) => ${script.match(/const addressFrom = \(text\) => ([^;]+);/)?.[1]}`);
+  assert.deepEqual(addressFrom("Company\nAttention: Accounts\nBuilding 3\n123 Main Street\nBerlin 10115"),
+    ["Company", "Attention: Accounts", "Building 3", "123 Main Street", "Berlin 10115"], "a five-line address prints in full");
+  const statementLegal = eval(`${script.slice(script.indexOf("function moneriumPortal"), script.indexOf("function render"))}\nstatementLegal`);
+  assert.match(statementLegal({ holder: { iban: "DE001", chainId: 84532 }, moneriumEnvironment: "sandbox" })[1], /monerium\.dev/, "a sandbox statement points at the sandbox portal");
+  assert.match(statementLegal({ holder: { iban: "DE001", chainId: 8453 }, moneriumEnvironment: "production" })[1], /monerium\.app/, "a production statement points at monerium.app");
+  assert.match(statementLegal({ holder: { iban: "DE001", chainId: 84532 } })[1], /monerium\.dev/, "statements issued before the field follow the chain");
+  assert.equal(statementLegal({ holder: { chainId: 8453 } }).length, 1, "no IBAN, no claim that one was issued");
+  assert.deepEqual(docs.holderBlock({ ...({} as any), country: "de", address: `0x${"1".repeat(40)}`, name: "A", createdAt: "x" }).addressLines, ["DE"]);
 });
 
 await t("three sources merge without double-counting the same money", () => {

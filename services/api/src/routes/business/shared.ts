@@ -32,10 +32,11 @@ import {
   normaliseVatId,
   type ExemptionReasonId,
   type InvoiceDraft,
+  type InvoiceLanguage,
   type VatTreatment,
 } from "../../domain/invoicing.js";
 import { createQuote } from "../../fx.js";
-import { midRates } from "../../rates.js";
+import { midRates, referenceRate } from "../../rates.js";
 import { redactedMessage } from "../../http/log-cause.js";
 
 export const str = (v: unknown): string | undefined =>
@@ -124,7 +125,7 @@ export const jurisdictionOf = (org: Organisation) => jurisdictionFor(org.address
 export const seriesOf = (org: Organisation) => org.invoicing?.numberSeries ?? defaultSeriesFor(org.address?.country);
 
 /** The language this org's invoices are written in unless one is chosen. */
-export const languageOf = (org: Organisation): "de" | "en" =>
+export const languageOf = (org: Organisation): InvoiceLanguage =>
   org.invoicing?.language ?? defaultInvoiceLanguage(org.address?.country);
 
 /** The business profile's fields that every invoice prints. */
@@ -326,9 +327,11 @@ function lineInputs(raw: unknown): InvoiceDraft["lines"] {
  * Attach the settlement-currency restatement to a foreign-currency draft.
  *
  * The rate is fetched once, here, and frozen onto the document, so the euro
- * figure stays the one the customer was given. If the feed is unavailable the
- * conversion is left absent and `checkCompliance` refuses the invoice, since
- * § 16 Abs. 6 requires the euro tax amount.
+ * figure stays the one the customer was given. The source is the ECB
+ * reference rate — the same dated fixing the books use — with the live mid
+ * feed as backup for a currency the ECB does not publish. If neither has a
+ * rate the conversion is left absent and `checkCompliance` refuses the
+ * invoice, since § 16 Abs. 6 requires the euro tax amount.
  */
 export async function withConversion(draft: InvoiceDraft): Promise<InvoiceDraft> {
   const currency = draft.currency ?? SETTLEMENT_CURRENCY;
@@ -339,6 +342,12 @@ export async function withConversion(draft: InvoiceDraft): Promise<InvoiceDraft>
   } catch {
     // checkCompliance reports lines that do not compute.
     return draft;
+  }
+  try {
+    const ref = await referenceRate(currency);
+    return { ...draft, conversion: convertTotals(totals, currency, ref.rate, ref.provider, ref.asOf) };
+  } catch {
+    // ECB publishes ~30 currencies; the mid feed carries the rest.
   }
   try {
     const rates = await midRates();

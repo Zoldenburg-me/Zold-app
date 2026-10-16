@@ -76,10 +76,18 @@ export function createInvoiceLinkRouter(): express.Router {
    * details to the supplier who filled it in. The footer's labels are in the
    * invoice's language, not German by default.
    */
+  /** "Managing director" in each language an invoice can be written in. */
+  const DIRECTOR_LABEL: Record<string, string> = {
+    de: "Geschäftsführung",
+    en: "Managing director",
+    fr: "Directeur général",
+    es: "Director general",
+  };
+
   const issuerExtras = (invoice: Invoice) => {
     if (invoice.direction !== "outgoing") return undefined;
     const org = store.findOrganisation(invoice.orgId);
-    const director = invoice.issued?.language === "de" ? "Geschäftsführung" : "Managing director";
+    const director = DIRECTOR_LABEL[invoice.issued?.language ?? "en"] ?? DIRECTOR_LABEL.en;
     const footerNote = [
       org?.invoicing?.footerNote,
       [org?.invoicing?.registerCourt, org?.invoicing?.registerNumber].filter(Boolean).join(" ") || undefined,

@@ -23,7 +23,7 @@ json → securityHeaders → originPolicy → /api rate limit → pages → rout
 | /api | routes/recovery-zoldenburg.ts | Zoldenburg guardian + /admin/recoveries; the recovery 1 €: /recovery/zoldenburg/:id/bank-code (+ /bank-check), /admin/recoveries/:id/bank-reset, checked in recovery/zoldenburg-bank-check.ts |
 | /api | routes/recovery-zoldenburg-enrolment.ts | the 1 € that arms Zoldenburg: /users/:id/recovery/zoldenburg/enrolment (+ /check) |
 | /api | routes/recovery-turnkey.ts | Turnkey guardian sub-orgs: /recovery/turnkey/users/:id/guardians (+ /:subOrgId/add and /remove, /ops/:requestId: the passkey ops that add or remove it on chain), /recovery/turnkey/login (404 until `TURNKEY_GUARDIANS=1`) |
-| /api | routes/recovery-turnkey-requests.ts | recovery with that guardian: /recovery/turnkey/requests (+/:id/passkey, /digest, /signature, /finalize; per-request secret), /users/:id/recovery/turnkey/requests (+/:rid/cancel) |
+| /api | routes/recovery-turnkey-requests.ts | recovery with that guardian: /recovery/turnkey/requests (+/:id/passkey, /digest, /activity/:activityId, /signature, /finalize; per-request secret), /users/:id/recovery/turnkey/requests (+/:rid/cancel) |
 | /api | routes/safe-signers.ts, safe-import.ts | owners, threshold, spending limits, import |
 | /api | routes/shopify.ts | install/callback, payments app hooks, order pay pages |
 | /api | routes/merchant-links.ts | POST/GET/DELETE /orgs/:orgId/merchant-links (issue a link code, list, revoke) |

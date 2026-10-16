@@ -1,7 +1,10 @@
 /**
  * Builds services/api/public/vendor/turnkey.js, the one Turnkey file the
- * browser loads: @turnkey/indexed-db-stamper (an unextractable P-256 key in
- * IndexedDB that stamps a guardian's own requests), bundled as an ES module.
+ * browser loads, as an ES module: @turnkey/indexed-db-stamper (an
+ * unextractable P-256 key in IndexedDB that stamps a guardian's own
+ * requests), @turnkey/webauthn-stamper (a guardian passkey stamps its own),
+ * and @turnkey/crypto's encryptOtpCodeToBundle (an email code sealed to
+ * Turnkey's enclave, so our API never sees it).
  *
  * Not @turnkey/http: it pulls in X.509, ASN.1 and a DI container (636 KB) to
  * make one POST, so /guardian sends its stamped requests itself.
@@ -22,19 +25,25 @@ import { build, version as esbuildVersion } from "esbuild";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const TURNKEY_BUNDLE = path.join(ROOT, "services/api/public/vendor/turnkey.js");
-const PACKAGE = "@turnkey/indexed-db-stamper";
+export const PACKAGES = ["@turnkey/indexed-db-stamper", "@turnkey/webauthn-stamper", "@turnkey/crypto"];
+// @turnkey/crypto's main entry pulls in X.509 parsing (600 KB); this file of
+// it holds the OTP encryption alone.
+const ENTRY = `export { IndexedDbStamper } from "@turnkey/indexed-db-stamper";
+export { WebauthnStamper } from "@turnkey/webauthn-stamper";
+export { encryptOtpCodeToBundle } from "./node_modules/@turnkey/crypto/dist/turnkey.mjs";
+`;
 
 export async function buildTurnkeyBundle(): Promise<string> {
-  const { version } = JSON.parse(readFileSync(path.join(ROOT, "node_modules", PACKAGE, "package.json"), "utf8"));
+  const versions = PACKAGES.map((p) => `${p}@${JSON.parse(readFileSync(path.join(ROOT, "node_modules", p, "package.json"), "utf8")).version}`);
   const result = await build({
-    stdin: { contents: `export { IndexedDbStamper } from "${PACKAGE}";\n`, resolveDir: ROOT, sourcefile: "turnkey-entry.js", loader: "js" },
+    stdin: { contents: ENTRY, resolveDir: ROOT, sourcefile: "turnkey-entry.js", loader: "js" },
     absWorkingDir: ROOT,
     bundle: true,
     format: "esm",
     platform: "browser",
     target: "es2022",
     legalComments: "inline",
-    banner: { js: `/*! Zold vendor bundle: ${PACKAGE}@${version}, esbuild ${esbuildVersion}. Built by scripts/build-turnkey-bundle.ts; do not edit. */` },
+    banner: { js: `/*! Zold vendor bundle: ${versions.join(", ")}, esbuild ${esbuildVersion}. Built by scripts/build-turnkey-bundle.ts; do not edit. */` },
     write: false,
     logLevel: "warning",
   });

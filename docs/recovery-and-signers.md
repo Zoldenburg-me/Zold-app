@@ -15,11 +15,12 @@ guardian built behind `TURNKEY_GUARDIANS`: `recovery-guardians-plan.md`.
   drops the second owner and resets the threshold — but leaves Allowance-module
   delegates in place. Spending limits use Safe's AllowanceModule v0.1.1
   (`0xAA46…091C`); Zold only sets them and never spends through one.
-- **Zoldenburg is a recovery guardian only by the user's choice.** Deployment
-  adds no guardian; onboarding step 3 offers it (one passkey-signed op), and
-  skipping shows the warning that Zoldenburg UG then cannot recover the
-  account and only EURe is reclaimable from Monerium — the user must tick it,
-  and `recoveryChoice` records the answer. A lost device asks with a new
+- **Zoldenburg is a recovery guardian only by the user's choice**, made in
+  Security (one passkey-signed op). Signup does not offer it. Deployment adds
+  a guardian only when the user logged in with Google, Apple or an email code at signup
+  (`self-social`, where `TURNKEY_GUARDIANS` is on); skipping it records
+  nothing, and Home keeps a reminder that recovery is off. It never blocks
+  the IBAN or deposits. A lost device asks with a new
   passkey and a reference (`/recovery/zoldenburg`); an operator verifies the
   person against Monerium's KYC and signs from a HARDWARE WALLET (a Keycard
   Shell: air-gapped, QR only, held in MetaMask/Rabby as a QR account), either in
@@ -39,7 +40,9 @@ guardian built behind `TURNKEY_GUARDIANS`: `recovery-guardians-plan.md`.
   Every sub-org we create has exactly one root user, the person, at root
   quorum 1, with no API key, no authenticator of ours and no delegated
   access; one builder asserts it and a source grep fails on anything else. A
-  sub-org found by login is checked for the same shape. A signature is
+  sub-org found by login is checked for the same shape, except that it may
+  hold the person's own login session keys (`CREDENTIAL_TYPE_LOGIN`, at most
+  15 minutes, bound to their browser key). A signature is
   relayed only from the guardian recorded on the request when it started,
   over the digest recomputed from the module (refused unless the module's
   own `getRecoveryHash` agrees), while the module still lists that guardian
@@ -129,5 +132,5 @@ guardian built behind `TURNKEY_GUARDIANS`: `recovery-guardians-plan.md`.
   (`npm run safe:import-tx`, no key taken): `add` keeps the EOA as the user's
   own second owner (1 of 2), `swap` removes it. Zold never signs that change.
   An imported Safe is not offered a recovery guardian: enabling the module
-  has never run on one, so onboarding skips the step and Security says so.
+  has never run on one, so its deployment adds none and Security says so.
   The recovery routes do not refuse it yet.
