@@ -604,6 +604,17 @@ try {
   check("and it cannot be deleted", (() => { try { invDomain.assertDeletable(store.findInvoice(bankPaid)!); return false; } catch { return true; } })());
   const partly = mkInvoice({}, issuedSnapshot(5000, { number: "RE-2026-0778" }));
   routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: "ord-direct-half", memo: "RE-2026-0778" } as any);
+  {
+    const { updateInvoice } = store;
+    let invoiceWrites = 0;
+    store.updateInvoice = (...a: Parameters<typeof updateInvoice>) => (invoiceWrites++, updateInvoice(...a));
+    try {
+      routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: "ord-direct-half", memo: "RE-2026-0778" } as any);
+    } finally {
+      store.updateInvoice = updateInvoice;
+    }
+    check("re-seeing a credit already on a part-paid invoice writes nothing", invoiceWrites === 0, String(invoiceWrites));
+  }
   const partlyInv = store.findInvoice(partly)!;
   check("a credit short of the total leaves the invoice SUBMITTED and collectable for the rest",
     partlyInv.state === "SUBMITTED" && (partlyInv.settlements ?? []).length === 1, JSON.stringify({ state: partlyInv.state }));
@@ -701,6 +712,28 @@ try {
   check("the sweep books our own PAID payout carrying the code, and the link is PAID", swept.matched === 1 && r4.state === "PAID" && r4.payments[0].transferId === "t-paid", JSON.stringify(r4.payments));
   const merged = routes.attributeMoneriumOrder({ id: "ord-9", kind: "issue", amount: "40", address: owner, memo: `${live.body.code} invoice`, meta: { state: "processed", processedAt: nowIso }, counterpart: { details: { name: "Payer Ltd" } } });
   check("Monerium's view of the same credit merges onto that row instead of doubling it", merged!.payments.length === 1 && merged!.payments[0].payerName === "Payer Ltd" && merged!.payments[0].orderId === "ord-9");
+  {
+    // The poller re-sees every order every pass: one already on the row writes nothing.
+    const writes: string[] = [];
+    const { updatePaymentRequest, updateInvoice } = store;
+    store.updatePaymentRequest = (...a: Parameters<typeof updatePaymentRequest>) => (writes.push(`request ${a[0]}`), updatePaymentRequest(...a));
+    store.updateInvoice = (...a: Parameters<typeof updateInvoice>) => (writes.push(`invoice ${a[0]}`), updateInvoice(...a));
+    try {
+      const again = routes.attributeMoneriumOrder({ id: "ord-9", kind: "issue", amount: "40", address: owner, memo: `${live.body.code} invoice`, meta: { state: "processed", processedAt: nowIso }, counterpart: { details: { name: "Payer Ltd" } } });
+      await routes.sweepPaymentRequests();
+      check("a poll and a sweep over an already-recorded paid order write nothing", again?.id === live.body.id && writes.length === 0, writes.join(", "));
+      // A crash between the request write and the invoice write: the next poll heals the invoice, once.
+      const healed = mkInvoice({}, issuedSnapshot(4000, { number: "RE-2026-0999" }));
+      updatePaymentRequest(live.body.id, { invoiceId: healed });
+      const ord9 = { id: "ord-9", kind: "issue", amount: "40", address: owner, memo: `${live.body.code} invoice`, meta: { state: "processed", processedAt: nowIso }, counterpart: { details: { name: "Payer Ltd" } } };
+      routes.attributeMoneriumOrder(ord9);
+      routes.attributeMoneriumOrder(ord9);
+      check("an invoice settlement a crash left unwritten is written by the next poll, and only once",
+        writes.join(",") === `invoice ${healed}` && (store.findInvoice(healed)!.settlements?.[0] as any)?.orderId === "ord-9", writes.join(", "));
+    } finally {
+      Object.assign(store, { updatePaymentRequest, updateInvoice });
+    }
+  }
   void bankCode; void liveCode;
 
   const soon = await call("POST", `/api/users/${miriam.id}/payment-requests`, { amountEur: 5, methods: ["bank"], expiresAt: new Date(Date.now() + 90_000).toISOString() }, miriam.id);

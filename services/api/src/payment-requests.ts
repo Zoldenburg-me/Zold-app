@@ -516,7 +516,7 @@ export function applyPayment(
   r: PaymentRequest,
   payment: Omit<RequestPayment, "id">,
   now = new Date(),
-): { request: PaymentRequest; added: boolean } {
+): { request: PaymentRequest; added: boolean; merged?: boolean } {
   // A merged row keeps only its first ref, so the poller re-seeing the other
   // lens is recognised by its order or transfer id.
   const seen = r.payments.some(
@@ -543,7 +543,7 @@ export function applyPayment(
       ...(payment.transferId && !twin.transferId ? { transferId: payment.transferId } : {}),
       ...(payment.payerName && !twin.payerName ? { payerName: payment.payerName } : {}),
     });
-    return { request: r, added: false };
+    return { request: r, added: false, merged: true };
   }
   const payments = [...r.payments, { id: randomBytes(8).toString("hex"), ...payment }];
   const next: PaymentRequest = { ...r, payments };
