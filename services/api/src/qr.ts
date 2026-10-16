@@ -22,6 +22,8 @@
 
 /** Byte-mode capacity at EC level L, indexed by version. */
 const CAPACITY_L = [0, 17, 32, 53, 78, 106, 134] as const;
+/** The longest payload qrMatrix encodes, in UTF-8 bytes. */
+export const QR_MAX_BYTES = CAPACITY_L[6];
 /** Data codewords per block, and EC codewords per block, at level L. */
 const BLOCKS_L = [0, 1, 1, 1, 1, 1, 2] as const;
 const DATA_PER_BLOCK_L = [0, 19, 34, 55, 80, 108, 68] as const;

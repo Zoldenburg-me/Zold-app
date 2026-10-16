@@ -25,7 +25,8 @@ import {
   publicOrgPayee,
   publicPayee,
 } from "../services/api/src/pay.js";
-import { dataModuleOrder, qrMatrix, qrSvg } from "../services/api/src/qr.js";
+import { dataModuleOrder, QR_MAX_BYTES, qrMatrix, qrSvg } from "../services/api/src/qr.js";
+import { EpcQrError, epcQrPayload } from "../services/api/src/epc-qr.js";
 
 let n = 0;
 const check = (label: string, fn: () => void) => {
@@ -304,6 +305,33 @@ check("the QR served by the payment page decodes, at its rendered size", () => {
   assert.ok(qrSvg(addr).includes("<path"), "svg has a path");
   const { px, span } = rasterise(qrMatrix(addr), 4);
   assert.equal(jsQR(px, span, span)?.data, addr, "decodes at 4px per module");
+});
+
+check("the bank QR is an EPC069-12 payload a decoder reads back field by field", () => {
+  const payload = epcQrPayload({ name: "Miriam Zoldenburg", iban: "de89 3704 0044 0532 0130 00", bic: "COBADEFFXXX", amountEur: 25.5, remittance: "AB12C-DE34F-GH56J" });
+  const { px, span } = rasterise(qrMatrix(payload), 4);
+  const lines = jsQR(px, span, span)?.data.split("\n");
+  assert.deepEqual(lines, ["BCD", "002", "1", "SCT", "COBADEFFXXX", "Miriam Zoldenburg", "DE89370400440532013000", "EUR25.50", "", "", "AB12C-DE34F-GH56J"]);
+});
+
+check("an open-amount link leaves the EPC amount empty, and no BIC leaves its line empty", () => {
+  const lines = epcQrPayload({ name: "Acme GmbH", iban: "DE89370400440532013000", remittance: "AB12C-DE34F-GH56J" }).split("\n");
+  assert.equal(lines[4], "");
+  assert.equal(lines[7], "");
+  assert.equal(lines[10], "AB12C-DE34F-GH56J");
+});
+
+check("a name the QR cannot hold whole is refused, never cut (a cut name fails Verification of Payee)", () => {
+  const base = { iban: "IS000000000000000000000000", bic: "COBADEFFXXX", amountEur: 999_999_999.99, remittance: "AB12C-DE34F-GH56J" };
+  assert.throws(() => epcQrPayload({ ...base, name: "N".repeat(71) }), EpcQrError, "over 70 characters");
+  assert.throws(() => epcQrPayload({ ...base, name: "Ü".repeat(70) }), EpcQrError, "70 characters but over the encoder's bytes");
+  assert.throws(() => epcQrPayload({ ...base, name: "  " }), EpcQrError, "empty");
+  const longest = epcQrPayload({ ...base, name: "N".repeat(45) });
+  assert.equal(new TextEncoder().encode(longest).length, QR_MAX_BYTES, "45 ASCII characters fill the encoder exactly");
+  assert.equal(longest.split("\n")[5], "N".repeat(45), "and the name is whole");
+  qrMatrix(longest);
+  assert.throws(() => epcQrPayload({ ...base, name: "N".repeat(46) }), EpcQrError);
+  assert.throws(() => epcQrPayload({ ...base, name: "x", amountEur: 0 }), EpcQrError);
 });
 
 check("no <img> in the app points at a signed-in route (an image request carries no bearer header)", () => {
