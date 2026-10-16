@@ -126,7 +126,7 @@ Each of these was a bug once.
   preflight: the public paymaster REFUSES Base mainnet and sponsors Base
   Sepolia; `native` and `token` work on mainnet.
 - **Three checks, not one**: session (who), member+role (may they here), plan
-  capability (did the org buy it). Collapsing any two opens a hole.
+  capability (built, right org type). Collapsing any two opens a hole.
 - **Four eyes**: the reviewer may not be the drafter, whatever their role — and
   editing someone's draft lines makes you the drafter.
 - **Gating is a read-time filter, NEVER a write-time delete.** Nothing in
