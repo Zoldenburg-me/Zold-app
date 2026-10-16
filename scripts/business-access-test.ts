@@ -7,7 +7,8 @@
  * does not show is not a guardian; a member who is not the company login
  * reads nothing, and the company login reads only in its own company; a
  * guardian Zold did not set up is still listed; a second owner at threshold
- * 2 says Zold cannot send.
+ * 2 says Zold cannot send; only active owners and admins approve, and
+ * unread members are never "no one"; an unencrypted payment key says so.
  *
  * What this cannot show: the screen in a browser, or a real chain read.
  * Offline.
@@ -269,6 +270,37 @@ assert.equal(m.isCompanyLogin(null), false);
   // A balance the server could not read is unknown, never zero.
   const { balanceEur: _, ...unread } = company;
   assert.equal(m.ownSafeHere(unread, biz, []).balanceEur, null);
+}
+
+// ── who approves payments ───────────────────────────────────────────────────
+
+{
+  const canApprove = (r: string) => r === "owner" || r === "admin";
+  const members = [
+    { id: "m1", role: "owner", status: "active" },
+    { id: "m2", role: "admin", status: "active" },
+    { id: "m3", role: "payer", status: "active" },
+    // An invite or a removed member approves nothing and is no owner.
+    { id: "m4", role: "owner", status: "invited" },
+    { id: "m5", role: "admin", status: "deactivated" },
+  ];
+  const v = m.approvalView(members, canApprove);
+  assert.deepEqual(v.approvers.map((x: any) => x.id), ["m1", "m2"]);
+  assert.equal(v.owners, 1);
+  // Unread members are unknown, never "no one approves".
+  assert.equal(m.approvalView(null, canApprove), null);
+  assert.deepEqual(m.approvalView([], canApprove), { approvers: [], owners: 0 });
+}
+
+// ── this browser's payment key ──────────────────────────────────────────────
+
+{
+  const bound = { authorizerAddress: "0xa1" };
+  assert.equal(m.deviceKeyView({}, { present: true, protection: "prf" }), "none", "no key bound to the account");
+  assert.equal(m.deviceKeyView(bound, { present: false, protection: null }), "elsewhere");
+  assert.equal(m.deviceKeyView(bound, null), "elsewhere", "unread status is not a key here");
+  assert.equal(m.deviceKeyView(bound, { present: true, protection: "prf" }), "encrypted");
+  assert.equal(m.deviceKeyView(bound, { present: true, protection: "none" }), "plain");
 }
 
 // ── where changes are made ──────────────────────────────────────────────────

@@ -1,9 +1,9 @@
 /**
  * Settings (design canvas "Desk-Settings"): a grouped menu on the left, the
- * chosen section on the right. Organisation, Who approves payments and
- * Monerium open in place; the other entries are their own screens.
+ * chosen section on the right. Organisation and Monerium open in place; the
+ * other entries are their own screens.
  */
-import { Z, api, cap, day, ensureMe, esc, issuerFieldNames, issuerIds, me, org, plain, reviewOn, ROLE_CAN, ROLE_WORD } from "./core.js";
+import { Z, api, cap, ensureMe, esc, issuerFieldNames, issuerIds, me, org, plain } from "./core.js";
 import { META, RENDER } from "./views.js";
 import { isOwnCompanyOrg } from "./access-model.js";
 
@@ -15,9 +15,9 @@ function menu(accounts) {
   const away = (v, label) => `<a class="zb-set-menu__item" href="?view=${v}" data-view-link="${v}">${esc(label)}${Z.icon("arrow_forward", "zb-set-menu__out")}</a>`;
   const groups = [
     ["Company", [here("org", "Business profile"), cap("invoices").allowed ? away("invoicing-settings", "Invoicing profile") : ""]],
-    ["Team", [away("members", "Members and access"), here("approvals", "Who approves payments")]],
+    ["Team", [away("members", "Members and access"), away("access", "Who approves payments")]],
     ["Account", [here("monerium", "Monerium"), isOwnCompanyOrg(me, org, accounts)
-      ? away("access", "Access")
+      ? away("access", "Sign-in and recovery")
       : `<a class="zb-set-menu__item" href="/app?from=business#security">Your sign-in and recovery${Z.icon("open_in_new", "zb-set-menu__out")}<span class="z-sr"> (the app)</span></a>`]],
     ["Connected", [away("apps", "Apps"), away("integrations", "Accounting connections")]],
   ];
@@ -49,40 +49,6 @@ function orgSection() {
     + (address ? "" : `<p class="zb-hint">No address yet. Invoices need one.</p>`), edit);
 }
 
-/* What each role may do with a payment, said from ROLE_CAN, the table the
-   rest of the console reads. */
-const VERBS = [["propose", "drafts", "draft"], ["approve", "approves", "approve"], ["send", "sends", "send"]];
-const joined = (ws, conj) => (ws.length > 1 ? `${ws.slice(0, -1).join(", ")} ${conj} ${ws.at(-1)}` : ws[0] || "");
-function roleSentence(role) {
-  const can = ROLE_CAN[role] || {};
-  const yes = joined(VERBS.filter(([k]) => can[k]).map(([, does]) => does), "and");
-  const no = joined(VERBS.filter(([k]) => !can[k]).map(([, , verb]) => verb), "or");
-  const first = yes ? `${yes.charAt(0).toUpperCase()}${yes.slice(1)} payments.` : "Sees payments.";
-  return `${first}${no ? ` Can’t ${no}.` : ""}${role === "owner" ? " An organisation always keeps at least one owner." : ""}`;
-}
-
-function approvalsSection() {
-  const on = reviewOn();
-  const offered = cap("transfers.approvals").allowed;
-  const pr = org.paymentReview || {};
-  const owner = org.role === "owner";
-  const sub = on
-    ? "Every payment needs a second person to approve it. Whoever drafts a payment can’t approve it, whatever their role, and editing someone’s draft makes you its drafter."
-    : offered
-      ? "Review is off: a payment is saved, then sent with the sender’s passkey, without a second approval."
-      : "A payment is saved, then sent with the sender’s passkey. A second approval is part of a business account.";
-  const notes = [
-    pr.source === "owner" && pr.changedAt ? `${on ? "Turned on" : "Turned off"} by an owner on ${day(pr.changedAt)}.` : "",
-    !on && pr.source === "owner" ? "Payments already waiting for review still wait until someone approves them." : "",
-  ].filter(Boolean).map((t) => `<p class="zb-hint">${esc(t)}</p>`).join("");
-  const action = !owner ? ""
-    : on ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="review-off">Turn review off</button>`
-      : offered ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="review-on">Turn review on</button>` : "";
-  const list = Object.keys(ROLE_WORD).map((r) => `<div><dt>${esc(ROLE_WORD[r])}</dt><dd>${esc(roleSentence(r))}</dd></div>`).join("");
-  return section("Who approves payments", sub, `${notes}<dl class="zb-set-rows">${list}</dl>
-    <p><a href="?view=members" data-view-link="members">Change someone’s role in Members</a></p>`, action);
-}
-
 function moneriumSection(accounts) {
   if (!accounts) return section("Monerium", "", `<p class="empty">Accounts couldn’t load. Open Settings again to retry.</p>`);
   const euro = accounts.filter((a) => a.currency === "EUR");
@@ -103,7 +69,7 @@ RENDER.settings = async () => {
   // it waits for who that is and reads whose account backs this one.
   const [acc] = await Promise.allSettled([api(`/api/orgs/${org.id}/accounts`), ensureMe()]);
   const accounts = acc.status === "fulfilled" ? acc.value.accounts : null;
-  const SECTIONS = { org: orgSection, approvals: approvalsSection, monerium: () => moneriumSection(accounts) };
+  const SECTIONS = { org: orgSection, monerium: () => moneriumSection(accounts) };
   return {
     html: `<div class="zb-set" id="set-root">${menu(accounts)}<div id="set-body">${SECTIONS[ss.sec]()}</div></div>`,
     bind(box) {
