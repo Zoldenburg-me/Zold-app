@@ -198,8 +198,8 @@ let q25: import("../services/api/src/payment-requests.js").CryptoQuote;
   const s2 = pr.applyPayment(rOpen, { ...tp!, ref: "x" }, now);
   check("an open-amount link stays OPEN and accumulates", s2.request.state === "OPEN" && pr.paidEur(s2.request) === 25);
   const rPart = mkReq({ amountEur: 50 });
-  const s3 = pr.applyPayment(rPart, { ...tp!, ref: "a", amountEur: 30, kind: "partial" }, now);
-  const s4 = pr.applyPayment(s3.request, { ...tp!, ref: "b", amountEur: 20, kind: "full" }, now);
+  const s3 = pr.applyPayment(rPart, { ...tp!, ref: "a", transferId: "t-a", amountEur: 30, kind: "partial" }, now);
+  const s4 = pr.applyPayment(s3.request, { ...tp!, ref: "b", transferId: "t-b", amountEur: 20, kind: "full" }, now);
   check("two partial payments that add up close the request", s3.request.state === "OPEN" && s4.request.state === "PAID");
   const rHundred = mkReq({ amountEur: 100 });
   const oA = pr.matchMoneriumOrder(order(rHundred.code, { id: "ord-A", amount: "50" }), rHundred, `0x${"ab".repeat(20)}`)!;
@@ -214,6 +214,10 @@ let q25: import("../services/api/src/payment-requests.js").CryptoQuote;
   check("our transfer arriving after its own Monerium order still merges onto that row",
     !orderFirst.added && orderFirst.request.payments.length === 1 &&
       orderFirst.request.payments[0].orderId === "ord-1" && orderFirst.request.payments[0].transferId === "t-1");
+  const reOrder = pr.applyPayment(twin.request, p!, now);
+  const reTransfer = pr.applyPayment(orderFirst.request, tp!, now);
+  check("the poller re-seeing either half of a merged payment books nothing twice",
+    !reOrder.added && pr.paidEur(reOrder.request) === 25 && !reTransfer.added && pr.paidEur(reTransfer.request) === 25);
   check("an OPEN request past its date reads as EXPIRED without a write",
     pr.effectiveState(mkReq({ expiresAt: new Date(now.getTime() - 1).toISOString() }), now) === "EXPIRED" &&
       pr.effectiveState(mkReq(), now) === "OPEN");
