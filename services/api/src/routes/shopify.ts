@@ -254,9 +254,23 @@ export function payeeFor(orgId: string, installerId: string): { user?: User; rea
   return { user };
 }
 
+// One resolve per request at a time: a sweep and a buyer's return visit must
+// not both spend the last attempt.
+const resolving = new Set<string>();
+
 /** Tell Shopify a paid checkout request is paid. Idempotent; records the
  *  outcome on the request so the sweep can retry a failure. */
 export async function resolveShopifyRequest(r: PaymentRequest): Promise<void> {
+  if (resolving.has(r.id)) return;
+  resolving.add(r.id);
+  try {
+    await resolveOnce(store.findPaymentRequest(r.id) ?? r);
+  } finally {
+    resolving.delete(r.id);
+  }
+}
+
+async function resolveOnce(r: PaymentRequest): Promise<void> {
   // The checkout service marks a linked shop's order paid, with its own token.
   if (r.source.linkId) return;
   if (r.source.kind !== "shopify" || r.source.resolvedAt || r.state !== "PAID") return;

@@ -604,6 +604,17 @@ try {
   check("and it cannot be deleted", (() => { try { invDomain.assertDeletable(store.findInvoice(bankPaid)!); return false; } catch { return true; } })());
   const partly = mkInvoice({}, issuedSnapshot(5000, { number: "RE-2026-0778" }));
   routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: "ord-direct-half", memo: "RE-2026-0778" } as any);
+  {
+    const { updateInvoice } = store;
+    let invoiceWrites = 0;
+    store.updateInvoice = (...a: Parameters<typeof updateInvoice>) => (invoiceWrites++, updateInvoice(...a));
+    try {
+      routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: "ord-direct-half", memo: "RE-2026-0778" } as any);
+    } finally {
+      store.updateInvoice = updateInvoice;
+    }
+    check("re-seeing a credit already on a part-paid invoice writes nothing", invoiceWrites === 0, String(invoiceWrites));
+  }
   const partlyInv = store.findInvoice(partly)!;
   check("a credit short of the total leaves the invoice SUBMITTED and collectable for the rest",
     partlyInv.state === "SUBMITTED" && (partlyInv.settlements ?? []).length === 1, JSON.stringify({ state: partlyInv.state }));

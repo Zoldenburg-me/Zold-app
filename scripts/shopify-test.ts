@@ -338,6 +338,11 @@ await check("the sweep stops retrying a failing resolve after RESOLVE_MAX_ATTEMP
   try {
     payRequest(req);
     assert.ok(await until(() => store.findPaymentRequest(req.id)!.source.resolveAttempts === 1), "first attempt not recorded");
+    // A sweep and a buyer's return visit at once spend one attempt, not two.
+    const live = store.findPaymentRequest(req.id)!;
+    await Promise.allSettled([resolveShopifyRequest(live), resolveShopifyRequest(live)]);
+    assert.equal(store.findPaymentRequest(req.id)!.source.resolveAttempts, 2);
+    assert.equal(calls.filter((c) => c.op === "paymentSessionResolve" && c.vars.id === s.gid).length, 2);
     for (let i = 0; i < RESOLVE_MAX_ATTEMPTS + 3; i++) await sweepPaymentRequests();
   } finally {
     failAllResolves = false;
