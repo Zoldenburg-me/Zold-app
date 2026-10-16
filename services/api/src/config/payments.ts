@@ -9,6 +9,9 @@ import { envNumber, IS_LOCAL_CHAIN } from "./env.js";
  * margin: the public page prints it, and the request records the mid it was
  * derived from.
  */
+/** Tries at telling a merchant a request is paid before the sweep stops retrying. */
+export const RESOLVE_MAX_ATTEMPTS = 10;
+
 export const PAYMENT_REQUESTS = {
   /** How long a quoted USDC amount stays the amount to pay. After this the
    *  public page re-quotes; every amount ever quoted still matches a deposit. */
