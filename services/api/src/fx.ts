@@ -60,7 +60,8 @@ export async function createQuote(userId: string, req: QuoteRequest): Promise<Qu
   };
 
   let quote: Quote;
-  const sendEur = req.sendEur ?? 0;
+  // SEPA and the quote move whole cents: a sub-cent remainder became a phantom fee or a rounded-up payout.
+  const sendEur = round(req.sendEur ?? 0, 2);
   const fee = railFeeEur(req.rail);
   const convertible = sendEur - fee;
   if (convertible <= 0) throw new Error(fee > 0 ? `amount must exceed the €${fee} fee` : "amount must be positive");
