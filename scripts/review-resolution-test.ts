@@ -211,7 +211,7 @@ try {
     assert.ok(Date.parse(t.refund!.at));
     assert.equal((t as any).reviewResolution.evidence, REFUND_TX);
     const lines = projectStatementLines({
-      orgId: "o_review", accountId: "a_review", userId: "u_review", safeAddress: `0x${"22".repeat(20)}`,
+      orgId: "o_review", accountId: "a_review", userId: "u_review", safeAddress: `0x${"22".repeat(20)}`, timeZone: "UTC",
       transfers: [t], deposits: [], issueOrders: [], sweeps: [], invoices: [], paymentRequests: [], swapsHaveExecuted: false,
     });
     const refund = lines.find((l: any) => l.statementKey === "transfer:t_review:refund" || l.key === "transfer:t_review:refund" || JSON.stringify(l).includes("transfer:t_review:refund"));
@@ -297,7 +297,7 @@ try {
     assert.deepEqual(t.txs.filter((x) => x.step === "operator.refund").map((x) => x.hash), [ARRIVED_REFUND_TX]);
     const dep = store.cryptoDeposits.find((d: any) => d.id === "dep_refund");
     const lines = projectStatementLines({
-      orgId: "o_review", accountId: "a_review", userId: "u_review", safeAddress: `0x${"22".repeat(20)}`,
+      orgId: "o_review", accountId: "a_review", userId: "u_review", safeAddress: `0x${"22".repeat(20)}`, timeZone: "UTC",
       transfers: [t], deposits: [dep!], issueOrders: [], sweeps: [], invoices: [], paymentRequests: [], swapsHaveExecuted: false,
     });
     const citing = lines.filter((l: any) => JSON.stringify(l).includes(ARRIVED_REFUND_TX));

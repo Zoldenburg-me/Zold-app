@@ -1150,14 +1150,30 @@ export function defaultInvoiceLanguage(country?: string): InvoiceLanguage {
 /**
  * Render the next number. §14 Abs. 4 Nr. 4 requires a number that is unique
  * and assigned once. It does not require a gapless run, and per-year series
- * ({YYYY}) are allowed.
+ * ({YYYY}) are allowed. `when` is the issue date at UTC midnight, so the year
+ * and month are read in UTC whatever the server's own zone.
  */
 export function formatInvoiceNumber(series: NumberSeries, when: Date): string {
   const prefix = series.prefix
-    .replace(/\{YYYY\}/g, String(when.getFullYear()))
-    .replace(/\{YY\}/g, String(when.getFullYear()).slice(-2))
-    .replace(/\{MM\}/g, String(when.getMonth() + 1).padStart(2, "0"));
+    .replace(/\{YYYY\}/g, String(when.getUTCFullYear()))
+    .replace(/\{YY\}/g, String(when.getUTCFullYear()).slice(-2))
+    .replace(/\{MM\}/g, String(when.getUTCMonth() + 1).padStart(2, "0"));
   return `${prefix}${String(series.next).padStart(series.padding, "0")}`;
+}
+
+/**
+ * The first number from the series' counter that is not already issued, and
+ * the counter it sits at. A number typed by hand earlier is stepped over
+ * rather than issued twice; the gap it leaves is that hand-typed number.
+ */
+export function nextFreeNumber(
+  series: NumberSeries,
+  when: Date,
+  taken: ReadonlySet<string>,
+): { number: string; at: number } {
+  let at = series.next;
+  while (taken.has(formatInvoiceNumber({ ...series, next: at }, when))) at++;
+  return { number: formatInvoiceNumber({ ...series, next: at }, when), at };
 }
 
 // ── Per-invoice language and due date ──────────────────────────────────────

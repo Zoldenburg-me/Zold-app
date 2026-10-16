@@ -28,7 +28,10 @@ import { checkVatId } from "../../adapters/vies.js";
 import { assertTransition, newLinkToken, ownerInvoiceView, settlementUpdate } from "../../domain/invoices.js";
 import type { Invoice } from "../../domain/types.js";
 import type { OrgContext } from "../org-context.js";
-import { customReasonsOf, draftDueDate, draftFrom, jurisdictionOf, languageOf, seriesOf, str, withConversion } from "./shared.js";
+import {
+  customReasonsOf, draftDueDate, draftFrom, issuedNumbersOf, jurisdictionOf, languageOf, nextNumberOf, seriesOf, str,
+  withConversion,
+} from "./shared.js";
 
 export interface IssueAnswer {
   status: number;
@@ -103,12 +106,16 @@ export async function issueOutgoing(
     }
   }
 
-  const series = seriesOf(ctx.org);
-  // §14 Abs. 4 Nr. 4: one number, once. A caller may supply its own number,
-  // so uniqueness is checked against what this org has issued rather than
-  // assumed from the series.
-  if (store.invoicesOf(ctx.org.id).some((i) => i.issued?.number === draft.number)) {
-    return refusal(409, `Invoice number ${draft.number} has already been issued.`);
+  // §14 Abs. 4 Nr. 4: one number, once. Everything from here to the write is
+  // synchronous, so the number is picked against what is issued right now: a
+  // request that awaited alongside this one cannot have taken it meanwhile. A
+  // number the caller supplied is refused if issued; an automatic one steps
+  // over any number already issued, say one typed by hand.
+  const numberSupplied = typeof body.number === "string" && body.number.trim() !== "";
+  const picked = numberSupplied ? undefined : nextNumberOf(ctx.org, draft.issueDate!);
+  const number = picked?.number ?? draft.number!;
+  if (numberSupplied && issuedNumbersOf(ctx.org.id).has(number)) {
+    return refusal(409, `Invoice number ${number} has already been issued.`);
   }
   if (fromDraft) {
     // The lookups above awaited: the draft must still be the one that was read.
@@ -119,7 +126,6 @@ export async function issueOutgoing(
     const changed = stillIssuable?.();
     if (changed) return refusal(409, changed);
   }
-  const numberSupplied = typeof body.number === "string" && body.number.trim() !== "";
   const now = new Date();
   const { token, hash } = newLinkToken();
   const display: Record<string, boolean> = {
@@ -141,10 +147,10 @@ export async function issueOutgoing(
     supplier: {
       orgName: draft.issuer.name ?? ctx.org.name,
       email: ctx.org.email ?? "",
-      invoiceNumber: draft.number!,
+      invoiceNumber: number,
     },
     issued: {
-      number: draft.number!,
+      number,
       issueDate: draft.issueDate!,
       supplyDate: draft.supplyDate,
       supplyPeriod: draft.supplyPeriod,
@@ -207,7 +213,7 @@ export async function issueOutgoing(
     store.updateOrganisation(ctx.org.id, {
       invoicing: {
         ...(ctx.org.invoicing ?? {}),
-        ...(numberSupplied ? {} : { numberSeries: { ...series, next: series.next + 1 } }),
+        ...(picked ? { numberSeries: { ...seriesOf(ctx.org), next: picked.at + 1 } } : {}),
         ...(ctx.org.invoicing?.language ? {} : { language: languageOf(ctx.org) }),
       },
     });

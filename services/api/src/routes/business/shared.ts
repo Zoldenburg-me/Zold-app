@@ -25,16 +25,17 @@ import {
   convertTotals,
   defaultInvoiceLanguage,
   defaultSeriesFor,
-  formatInvoiceNumber,
   issuerTaxIdProblem,
   issuerTaxIds,
   normaliseInvoiceCurrency,
   normaliseVatId,
+  nextFreeNumber,
   type ExemptionReasonId,
   type InvoiceDraft,
   type InvoiceLanguage,
   type VatTreatment,
 } from "../../domain/invoicing.js";
+import { dayOf } from "../../domain/income-invoices.js";
 import { createQuote } from "../../fx.js";
 import { midRates, referenceRate } from "../../rates.js";
 import { redactedMessage } from "../../http/log-cause.js";
@@ -124,6 +125,14 @@ export const jurisdictionOf = (org: Organisation) => jurisdictionFor(org.address
  *  else the default for its country. */
 export const seriesOf = (org: Organisation) => org.invoicing?.numberSeries ?? defaultSeriesFor(org.address?.country);
 
+/** Every number this org has issued, for §14 Abs. 4 Nr. 4's "once". */
+export const issuedNumbersOf = (orgId: string): Set<string> =>
+  new Set(store.invoicesOf(orgId).flatMap((i) => (i.issued?.number ? [i.issued.number] : [])));
+
+/** The number the next auto-numbered invoice dated `issueDate` gets. */
+export const nextNumberOf = (org: Organisation, issueDate: string) =>
+  nextFreeNumber(seriesOf(org), new Date(issueDate), issuedNumbersOf(org.id));
+
 /** The language this org's invoices are written in unless one is chosen. */
 export const languageOf = (org: Organisation): InvoiceLanguage =>
   org.invoicing?.language ?? defaultInvoiceLanguage(org.address?.country);
@@ -184,7 +193,7 @@ export function draftDueDate(org: Organisation, issueDate: string): string | und
   if (!days && days !== 0) return undefined;
   const d = new Date(issueDate);
   if (Number.isNaN(d.getTime())) return undefined;
-  d.setDate(d.getDate() + days);
+  d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
 }
 
@@ -195,7 +204,7 @@ export function draftDueDate(org: Organisation, issueDate: string): string | und
  * A Kleinunternehmer must not get a VAT rate by default: showing tax you do
  * not owe makes you liable for it under §14c.
  */
-export function draftFrom(org: Organisation, body: Record<string, any>): InvoiceDraft {
+export function draftFrom(org: Organisation, body: Record<string, any>, now = new Date()): InvoiceDraft {
   const inv = org.invoicing ?? {};
   // Refuses an unrepresentable code before anything else is computed.
   const currency = normaliseInvoiceCurrency(body.currency);
@@ -263,8 +272,14 @@ export function draftFrom(org: Organisation, body: Record<string, any>): Invoice
     treatment = { kind: "standard", rate };
   }
 
-  const issueDate = str(body.issueDate) ?? new Date().toISOString().slice(0, 10);
-  const series = seriesOf(org);
+  // Today where the org keeps its books: 23:30 UTC on 31 December is already
+  // 1 January in Berlin, and the date and the number's year must say so.
+  const issueDate = str(body.issueDate) ?? dayOf(now.toISOString(), org.reporting.timeZone);
+  // A calendar day only: the number's year is read off it, and "NaN" or an
+  // offset that moves the day must never reach an issued number.
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(issueDate) || Number.isNaN(Date.parse(issueDate))) {
+    throw new InvoiceComplianceError(`${issueDate} is not a date (YYYY-MM-DD).`);
+  }
 
   const recipient: InvoiceParty = {
     name: str(body.recipient?.name),
@@ -277,7 +292,8 @@ export function draftFrom(org: Organisation, body: Record<string, any>): Invoice
   };
 
   return {
-    number: str(body.number) ?? formatInvoiceNumber(series, new Date(issueDate)),
+    // A preview: issuing picks the number again at write time (issue-outgoing.ts).
+    number: str(body.number) ?? nextNumberOf(org, issueDate).number,
     issueDate,
     supplyDate: str(body.supplyDate),
     supplyPeriod:

@@ -29,6 +29,7 @@ import { safeMovedEur } from "../transfers/safe-moved.js";
 import type { PaymentRequest } from "../payment-requests.js";
 import { textCarriesCode } from "../payment-requests.js";
 import { paymentMemo } from "../sepa.js";
+import { dayOf } from "../domain/income-invoices.js";
 
 export interface StatementInputs {
   orgId: string;
@@ -36,6 +37,8 @@ export interface StatementInputs {
   userId: string;
   /** The Safe whose movements these are. */
   safeAddress: string;
+  /** The org's reporting time zone: a line's booking and value days are its days. */
+  timeZone: string;
   transfers: Transfer[];
   deposits: CryptoDeposit[];
   issueOrders: MoneriumIssueRecord[];
@@ -50,7 +53,6 @@ export interface StatementInputs {
 const ZERO = "0x0000000000000000000000000000000000000000";
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const cents = (eur: number) => Math.round(eur * 100);
-const day = (iso: string) => iso.slice(0, 10);
 const eurString = (c: number) => (Math.abs(c) / 100).toFixed(2);
 
 /** A row id derived from the org and the key, so the same event never gets
@@ -98,8 +100,8 @@ function toEntry(inp: StatementInputs, d: LineDraft, now: string): LedgerEntry {
     statement: {
       key: d.key,
       event: d.event,
-      bookingDate: day(d.bookingAt),
-      valueDate: day(d.valueAt),
+      bookingDate: dayOf(d.bookingAt, inp.timeZone),
+      valueDate: dayOf(d.valueAt, inp.timeZone),
       amountCents: d.amountCents,
       counterparty: d.counterparty,
       reference: d.reference,
