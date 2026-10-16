@@ -353,6 +353,9 @@ app.use(express.json());
 app.use("/api/admin", createOperatorGate());
 app.use("/api", createOperatorAuthRouter());
 app.use("/api", createZoldenburgRecoveryRouter({ requireUserSession: () => false }));
+// A second mount whose chain sync the test stages (the harness skips chain reads).
+let staged: (r: any) => Promise<any> = async (r) => r;
+app.use("/staged", createZoldenburgRecoveryRouter({ requireUserSession: () => false, sync: ((r: any) => staged(r)) as any }));
 const server = app.listen(0, "127.0.0.1");
 await new Promise<void>((r) => server.once("listening", () => r()));
 const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -579,6 +582,52 @@ await t("execute: a cancel landing while the signature is checked gets 409, and 
   }
 });
 
+await t("execute: a 1 € check voided while the signature is checked gets 409, and nothing is relayed", async () => {
+  store.updateRecoveryRequest("r4", { status: "REVIEW_PENDING", canceledAt: undefined, cancelReason: undefined });
+  const sr = await opCall("/admin/recoveries/r4/sign-request", {});
+  assert.equal(sr.status, 200, sr.text);
+  const { EIP712Domain: _d, ...types } = sr.data.typedData.types;
+  const m = sr.data.typedData.message;
+  const signature = await guardianWallet.signTypedData({ ...sr.data.typedData, types, message: { ...m, newThreshold: BigInt(m.newThreshold), nonce: BigInt(m.nonce) } });
+  const e = structuredClone(user().zoldenburgEnrolment!);
+  const { onChainDigest, relayRecovery } = zoldenburgChain;
+  let relayed = 0;
+  // A re-enrolment lands during execute's chain read.
+  zoldenburgChain.onChainDigest = async (td) => {
+    store.updateUser("u1", { zoldenburgEnrolment: { ...e, enrolledAt: new Date().toISOString() } });
+    return onChainDigest(td);
+  };
+  zoldenburgChain.relayRecovery = async (...a) => { relayed++; return relayRecovery(...a); };
+  try {
+    const ex = await opCall("/admin/recoveries/r4/execute", { signature, reviewNote: "Video call, matched Monerium profile" });
+    assert.equal(ex.status, 409, ex.text);
+    assert.equal(ex.data.code, "BANK_CHECK_PENDING");
+    assert.equal(relayed, 0, "no relay after the check was voided");
+  } finally {
+    Object.assign(zoldenburgChain, { onChainDigest, relayRecovery });
+    store.updateUser("u1", { zoldenburgEnrolment: e });
+  }
+});
+
+await t("person's routes: an expired request asks the chain first; on chain it is in its grace period, unreadable stores nothing", async () => {
+  newRequest("r22");
+  store.updateRecoveryRequest("r22", { expiresAt: new Date(Date.now() - 1000).toISOString() });
+  staged = async () => { throw new Error("rpc down"); };
+  const r1 = await fetch(`${origin}/staged/recovery/zoldenburg/r22`, { headers: person });
+  assert.equal(r1.status, 503, await r1.text());
+  assert.equal(req("r22").status, "REVIEW_PENDING", "nothing stored on an unreadable chain");
+  staged = async (r) => store.updateRecoveryRequest(r.id, { status: "GRACE_PERIOD" });
+  const r2 = await fetch(`${origin}/staged/recovery/zoldenburg/r22`, { headers: person });
+  assert.equal(r2.status, 200, await r2.text());
+  assert.equal(req("r22").status, "GRACE_PERIOD");
+  newRequest("r23");
+  store.updateRecoveryRequest("r23", { expiresAt: new Date(Date.now() - 1000).toISOString() });
+  staged = async (r) => r;
+  const r3 = await fetch(`${origin}/staged/recovery/zoldenburg/r23`, { headers: person });
+  assert.equal(r3.status, 410);
+  assert.equal(req("r23").status, "EXPIRED");
+});
+
 await t("execute: while the relay is in flight nothing closes the request; afterwards it is in its grace period", async () => {
   store.updateRecoveryRequest("r4", { status: "REVIEW_PENDING", canceledAt: undefined, cancelReason: undefined });
   const sr = await opCall("/admin/recoveries/r4/sign-request", {});
@@ -693,16 +742,16 @@ await t("writes after a chain read spread the stored state, not a copy from befo
   assert.equal(chain.match(/\.\.\.zoldenburgNow\(request\.id\)/g)?.length, 3);
 });
 
-await t("the person's routes ask the chain before expiring a request", () => {
+await t("the owner's cancel, the operator's reject and the person's routes wait for a relay in flight", () => {
   const r = src("routes/recovery-zoldenburg.ts");
-  const body = r.slice(r.indexOf("const requestFor = "), r.indexOf("const askView = "));
-  assert.ok(body.indexOf("syncZoldenburgFromChain(r)") > 0 && body.indexOf("syncZoldenburgFromChain(r)") < body.indexOf('status: "EXPIRED"'));
-});
-
-await t("the owner's cancel waits for a relay in flight", () => {
-  const r = src("routes/recovery-zoldenburg.ts");
-  const cancel = r.slice(r.indexOf('"/users/:id/recovery/zoldenburg/requests/:rid/cancel"'), r.indexOf("const findRecoverable"));
-  assert.ok(cancel.indexOf("relaying.has(r.id)") > 0 && cancel.indexOf("relaying.has(r.id)") < cancel.indexOf('status: "CANCELED"'));
+  for (const [from, to, write] of [
+    ['"/users/:id/recovery/zoldenburg/requests/:rid/cancel"', "const findRecoverable", 'status: "CANCELED"'],
+    ['"/admin/recoveries/:id/reject"', "return router;", 'status: "CANCELED"'],
+    ["const requestFor = ", "const askView = ", 'status: "EXPIRED"'],
+  ]) {
+    const body = r.slice(r.indexOf(from), r.indexOf(to));
+    assert.ok(body.indexOf("relaying.has(r.id)") > 0 && body.indexOf("relaying.has(r.id)") < body.indexOf(write), from);
+  }
 });
 
 await t("the operator routes refuse before they hand out or relay anything", () => {
