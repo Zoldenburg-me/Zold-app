@@ -112,7 +112,10 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
     if (!requirePermission(ctx, res, "invoices.manage")) return;
 
     const b = req.body ?? {};
-    const next = { ...(ctx.org.invoicing ?? {}) } as NonNullable<Organisation["invoicing"]>;
+    // Only the fields this request sets. They are merged onto the profile as it
+    // stands at the write, after the passkey step-up has awaited: a copy taken
+    // here would write back the number counter an issue advanced meanwhile.
+    const next = {} as NonNullable<Organisation["invoicing"]>;
     let ibanChange: { oldLast4: string | null; newLast4: string | null } | undefined;
 
     // The business profile's fields, checked by the issuer's country (a German
@@ -177,7 +180,7 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
       };
     }
     if (b.display && typeof b.display === "object") {
-      const display: Record<string, boolean> = { ...(next.display as Record<string, boolean> | undefined) };
+      const display: Record<string, boolean> = { ...(ctx.org.invoicing?.display as Record<string, boolean> | undefined) };
       for (const key of Object.keys(DEFAULT_DISPLAY)) {
         if (typeof b.display[key] === "boolean") display[key] = b.display[key];
       }
@@ -201,7 +204,7 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
     }
 
     const org = store.updateOrganisation(ctx.org.id, {
-      invoicing: next,
+      invoicing: { ...(store.findOrganisation(ctx.org.id)?.invoicing ?? {}), ...next },
       ...(clearsSignupTaxId(identity.patch) ? { taxId: undefined } : {}),
     });
     if (ibanChange) {
