@@ -376,6 +376,9 @@ try {
   const qr = await fetch(`${API}/api/pay/miriam/${code}/qr.svg`);
   check("the link's own QR route serves the deposit address as an SVG", qr.status === 200 && (qr.headers.get("content-type") || "").includes("svg") && (await qr.text()).includes("<svg"));
   check("the QR under someone else's handle is a 404", (await fetch(`${API}/api/pay/someone/${code}/qr.svg`)).status === 404);
+  const sepaQr = await fetch(`${API}/api/pay/miriam/${code}/sepa-qr.svg`);
+  check("the link's bank QR route serves an SVG", sepaQr.status === 200 && (sepaQr.headers.get("content-type") || "").includes("svg") && (await sepaQr.text()).includes("<svg"));
+  check("the bank QR under someone else's handle is a 404", (await fetch(`${API}/api/pay/someone/${code}/sepa-qr.svg`)).status === 404);
   check("a malformed code is a 404, not an error", (await call("GET", `/api/pay/miriam/not-a-code`)).status === 404);
   {
     // A handle released and claimed again. POST /users/:id/handle frees the
@@ -475,6 +478,7 @@ try {
 
   const forInvoice = await call("POST", `/api/users/${miriam.id}/payment-requests`, { amountEur: 25, methods: ["crypto"], invoiceId: theirs }, miriam.id);
   check("a link raised for an invoice the org issued is created and carries it", forInvoice.status === 201 && forInvoice.body.invoiceId === theirs, JSON.stringify(forInvoice.body));
+  check("a crypto-only link has no bank QR", (await fetch(`${API}/api/pay/miriam/${forInvoice.body.code}/sepa-qr.svg`)).status === 404);
   const qInv = forInvoice.body.latestQuote.amountUsdc as number;
   await mintUsdc(owner, qInv);
   await pollCryptoDepositsOnce();

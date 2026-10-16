@@ -1,3 +1,5 @@
+import { QR_MAX_BYTES } from "./qr.js";
+
 /**
  * SEPA remittance information: the line the payee reads on their statement.
  *
@@ -15,6 +17,8 @@
 const SEPA_ALLOWED = /[^A-Za-z0-9/\-?:().,'+ ]/g;
 
 export const SEPA_REMITTANCE_MAX = 140;
+const EPC_NAME_MAX = 70;
+const EPC_AMOUNT_MAX = 999_999_999.99;
 
 /** What the payee reads next to our transfer id on their statement, so a
  *  payment is still traceable back to a transfer. Kept short: every character
@@ -99,4 +103,27 @@ export function moneriumRedeemMessage(amountEur: number, iban: string, issuedAt:
     issuedAt,
     message: `Send EUR ${amount} to ${normalizedIban} at ${issuedAt}`,
   };
+}
+
+/**
+ * The EPC QR payload ("GiroCode", EPC069-12 version 002): what a European
+ * banking app scans to prefill a SEPA credit transfer. No amount leaves the
+ * field empty for the payer to type. The trailing "information" line is
+ * optional and omitted.
+ *
+ * shortcut: qr.ts encodes level L up to version 6 (134 bytes) where EPC069-12
+ * asks for level M, and an over-long name is cut to fit; bank apps read level
+ * L, but extend qr.ts if one refuses it or a cut name trips Verification of Payee.
+ */
+export function epcQrPayload(p: { name: string; iban: string; bic?: string; amountEur?: number; remittance: string }): string {
+  if (p.amountEur !== undefined && !(p.amountEur >= 0.01 && p.amountEur <= EPC_AMOUNT_MAX)) {
+    throw new RangeError(`an EPC QR amount is 0.01 to ${EPC_AMOUNT_MAX} EUR`);
+  }
+  const amount = p.amountEur === undefined ? "" : `EUR${p.amountEur.toFixed(2)}`;
+  const remittance = p.remittance.replace(/\s+/g, " ").trim().slice(0, SEPA_REMITTANCE_MAX);
+  const build = (name: string) =>
+    ["BCD", "002", "1", "SCT", p.bic ?? "", name, normalizeIban(p.iban), amount, "", "", remittance].join("\n");
+  const name = [...p.name.replace(/\s+/g, " ").trim()].slice(0, EPC_NAME_MAX);
+  while (name.length > 1 && new TextEncoder().encode(build(name.join(""))).length > QR_MAX_BYTES) name.pop();
+  return build(name.join("").trimEnd());
 }

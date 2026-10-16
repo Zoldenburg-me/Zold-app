@@ -25,7 +25,8 @@ import {
   publicOrgPayee,
   publicPayee,
 } from "../services/api/src/pay.js";
-import { dataModuleOrder, qrMatrix, qrSvg } from "../services/api/src/qr.js";
+import { dataModuleOrder, QR_MAX_BYTES, qrMatrix, qrSvg } from "../services/api/src/qr.js";
+import { epcQrPayload } from "../services/api/src/sepa.js";
 
 let n = 0;
 const check = (label: string, fn: () => void) => {
@@ -304,6 +305,30 @@ check("the QR served by the payment page decodes, at its rendered size", () => {
   assert.ok(qrSvg(addr).includes("<path"), "svg has a path");
   const { px, span } = rasterise(qrMatrix(addr), 4);
   assert.equal(jsQR(px, span, span)?.data, addr, "decodes at 4px per module");
+});
+
+check("the bank QR is an EPC069-12 payload a decoder reads back field by field", () => {
+  const payload = epcQrPayload({ name: "Miriam Zoldenburg", iban: "de89 3704 0044 0532 0130 00", bic: "COBADEFFXXX", amountEur: 25.5, remittance: "AB12C-DE34F-GH56J" });
+  const { px, span } = rasterise(qrMatrix(payload), 4);
+  const lines = jsQR(px, span, span)?.data.split("\n");
+  assert.deepEqual(lines, ["BCD", "002", "1", "SCT", "COBADEFFXXX", "Miriam Zoldenburg", "DE89370400440532013000", "EUR25.50", "", "", "AB12C-DE34F-GH56J"]);
+});
+
+check("an open-amount link leaves the EPC amount empty, and no BIC leaves its line empty", () => {
+  const lines = epcQrPayload({ name: "Acme GmbH", iban: "DE89370400440532013000", remittance: "AB12C-DE34F-GH56J" }).split("\n");
+  assert.equal(lines[4], "");
+  assert.equal(lines[7], "");
+  assert.equal(lines[10], "AB12C-DE34F-GH56J");
+});
+
+check("the EPC name is at most 70 characters and the payload always fits the encoder", () => {
+  const short = epcQrPayload({ name: "N".repeat(90), iban: "DE89370400440532013000", remittance: "AB12C-DE34F-GH56J" });
+  assert.ok(short.split("\n")[5].length <= 70);
+  const long = epcQrPayload({ name: "Ü".repeat(70), iban: "IS000000000000000000000000", bic: "COBADEFFXXX", amountEur: 999_999_999.99, remittance: "AB12C-DE34F-GH56J" });
+  assert.ok(new TextEncoder().encode(long).length <= QR_MAX_BYTES);
+  assert.equal(long.split("\n")[10], "AB12C-DE34F-GH56J", "the reference is never what gets cut");
+  qrMatrix(long);
+  assert.throws(() => epcQrPayload({ name: "x", iban: "DE89370400440532013000", amountEur: 0, remittance: "r" }), RangeError);
 });
 
 check("no <img> in the app points at a signed-in route (an image request carries no bearer header)", () => {
