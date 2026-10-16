@@ -146,6 +146,10 @@
           </div>
 
           <div class="pane" id="pane-bank">
+            <div id="sepa-qr-box">
+              <div class="qrbox"><img id="sepa-qr" alt="Bank transfer QR code (GiroCode): beneficiary, IBAN, amount and reference" /></div>
+              <p class="note" style="text-align:center">Scan with your banking app to fill in the transfer.</p>
+            </div>
             <div class="lbl">BENEFICIARY</div>
             <div class="val"><span id="holder"></span><button data-copy="holder" aria-label="Copy beneficiary name">Copy</button></div>
             <div class="lbl">IBAN</div>
@@ -311,6 +315,10 @@ function render(p) {
     $("bic-row").classList.toggle("hidden", !b.bic);
     $("bic").textContent = b.bic || "";
     $("ref").textContent = b.reference;
+    // The server refuses a QR it cannot encode whole; the fields below stand alone.
+    $("sepa-qr").onerror = () => hide("sepa-qr-box");
+    $("sepa-qr").onload = () => show("sepa-qr-box");
+    $("sepa-qr").src = `/api/pay/${encodeURIComponent(p.handle)}/${encodeURIComponent(p.code)}/sepa-qr.svg`;
     const target = p.amountEur !== undefined ? p.outstandingEur : amountEur;
     $("bank-amt").textContent = target ? eur(target) : "Any amount";
     const u = new URL(b.appUrl);
