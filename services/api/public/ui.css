@@ -427,8 +427,10 @@ html:has(.z-app__foot) { scroll-padding-bottom: 140px; }
 .z-kv--flat > div { padding: 11px 0; border-top: 1px solid var(--z-line); }
 .z-kv--flat > div + div { border-top: 1px solid var(--z-line); }
 .z-kv--flat dt, .z-kv--flat dd { font-size: 13.5px; }
-.z-payee { display: flex; align-items: center; gap: var(--z-space-3); padding: 14px; }
-.z-payee .z-mono { display: block; margin-top: 2px; font-size: 12.5px; overflow-wrap: anywhere; }
+/* Review total: a double hairline, then the label and the amount on one line. */
+.z-total { display: flex; align-items: baseline; justify-content: space-between; gap: var(--z-space-4); padding-top: var(--z-space-4); border-top: 3px double var(--z-line); }
+.z-total .z-balance__fig { font-size: 32px; letter-spacing: -.04em; }
+.z-total .z-balance__cur, .z-total .z-balance__cents { font-size: 20px; }
 
 /* A collapsed "Technical details" (and the wallet address). */
 .z-disclose { border-top: 1px solid var(--z-line); }

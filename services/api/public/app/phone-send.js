@@ -246,16 +246,17 @@ PH["send/review"] = {
     if (!payee || !q) return `${phTop("Review payment", "send")}${phMain(Z.note({ text: "This payment has no price yet. Enter the amount again." }) + Z.button({ variant: "primary", full: true, label: "Back to Send", href: "#send" }))}`;
     const first = phFirst(payee.name) || "They";
     return `${phTop("Review payment", "send/amount")}${phMain(`
-      <div><p class="z-eyebrow">You send</p>${phBalanceFig(q.sendEur)}</div>
-      <div class="z-card z-payee">${Z.avatar({ name: payee.name, tone: "p" })}<span class="z-row__main"><span class="z-row__title">${esc(payee.name)}</span><span class="z-mono z-dim" translate="no">${esc(Z.groupIban(payee.iban))}</span></span>${Z.tag("Beta")}</div>
       ${Z.kv([
+        { key: "Payee", value: payee.name },
+        { key: "IBAN", value: Z.groupIban(payee.iban), mono: true },
+        ...(phSend.reference ? [{ key: "Reference", value: phSend.reference }] : []),
+        { key: "Sent as", valueHtml: `Bank transfer ${Z.tag("Beta")}` },
         { key: "From", value: `${ownAccountKind()} account` },
         { key: "Zold fee", value: phEur(q.fixedFeeEur) },
         { key: "Exchange", value: "None, euro to euro" },
-        { key: "Sent as", value: "Bank transfer" },
-        ...(phSend.reference ? [{ key: "Reference", value: phSend.reference }] : []),
-        { key: `${first} receives`, value: phEur(q.receiveEur), strong: true },
+        { key: `${first} receives`, value: phEur(q.receiveEur) },
       ])}
+      <div class="z-total"><p class="z-eyebrow">You send</p>${phBalanceFig(q.sendEur)}</div>
       ${phSameIban(payee.iban, user?.iban) ? Z.note({ tone: "a", icon: "sync_alt", text: "This is your own IBAN. The money leaves and comes back to this account, minus the Zold fee." }) : ""}
       ${Z.note({ icon: "verified_user", text: `Your ${Z.byDevice("Face ID", "passkey")} approves this amount to this IBAN only. If either changes, nothing is sent.` })}
       <details class="z-disclose"><summary>Technical details${Z.icon("expand_more")}</summary>${Z.kv([
@@ -263,7 +264,7 @@ PH["send/review"] = {
         { key: "Price valid until", value: phFull(q.expiresAt) },
       ])}</details>
       <p class="z-err" id="ph-rev-err" role="alert" hidden></p>
-    `)}${phFoot(Z.button({ variant: "primary", full: true, icon: "fingerprint", label: Z.byDevice("Approve with Face ID", "Approve with your passkey"), id: "ph-approve" }))}`;
+    `)}${phFoot(Z.button({ variant: "primary", full: true, icon: "fingerprint", label: Z.byDevice("Approve with Face ID", "Approve with your passkey"), id: "ph-approve" }) + Z.button({ variant: "secondary", full: true, label: "Change amount", href: "#send/amount" }))}`;
   },
   bind(root) {
     const b = root.querySelector("#ph-approve");
