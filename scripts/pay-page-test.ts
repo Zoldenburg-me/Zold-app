@@ -26,7 +26,7 @@ import {
   publicPayee,
 } from "../services/api/src/pay.js";
 import { dataModuleOrder, QR_MAX_BYTES, qrMatrix, qrSvg } from "../services/api/src/qr.js";
-import { epcQrPayload } from "../services/api/src/sepa.js";
+import { EpcQrError, epcQrPayload } from "../services/api/src/epc-qr.js";
 
 let n = 0;
 const check = (label: string, fn: () => void) => {
@@ -321,14 +321,17 @@ check("an open-amount link leaves the EPC amount empty, and no BIC leaves its li
   assert.equal(lines[10], "AB12C-DE34F-GH56J");
 });
 
-check("the EPC name is at most 70 characters and the payload always fits the encoder", () => {
-  const short = epcQrPayload({ name: "N".repeat(90), iban: "DE89370400440532013000", remittance: "AB12C-DE34F-GH56J" });
-  assert.ok(short.split("\n")[5].length <= 70);
-  const long = epcQrPayload({ name: "Ü".repeat(70), iban: "IS000000000000000000000000", bic: "COBADEFFXXX", amountEur: 999_999_999.99, remittance: "AB12C-DE34F-GH56J" });
-  assert.ok(new TextEncoder().encode(long).length <= QR_MAX_BYTES);
-  assert.equal(long.split("\n")[10], "AB12C-DE34F-GH56J", "the reference is never what gets cut");
-  qrMatrix(long);
-  assert.throws(() => epcQrPayload({ name: "x", iban: "DE89370400440532013000", amountEur: 0, remittance: "r" }), RangeError);
+check("a name the QR cannot hold whole is refused, never cut (a cut name fails Verification of Payee)", () => {
+  const base = { iban: "IS000000000000000000000000", bic: "COBADEFFXXX", amountEur: 999_999_999.99, remittance: "AB12C-DE34F-GH56J" };
+  assert.throws(() => epcQrPayload({ ...base, name: "N".repeat(71) }), EpcQrError, "over 70 characters");
+  assert.throws(() => epcQrPayload({ ...base, name: "Ü".repeat(70) }), EpcQrError, "70 characters but over the encoder's bytes");
+  assert.throws(() => epcQrPayload({ ...base, name: "  " }), EpcQrError, "empty");
+  const longest = epcQrPayload({ ...base, name: "N".repeat(45) });
+  assert.equal(new TextEncoder().encode(longest).length, QR_MAX_BYTES, "45 ASCII characters fill the encoder exactly");
+  assert.equal(longest.split("\n")[5], "N".repeat(45), "and the name is whole");
+  qrMatrix(longest);
+  assert.throws(() => epcQrPayload({ ...base, name: "N".repeat(46) }), EpcQrError);
+  assert.throws(() => epcQrPayload({ ...base, name: "x", amountEur: 0 }), EpcQrError);
 });
 
 check("no <img> in the app points at a signed-in route (an image request carries no bearer header)", () => {
