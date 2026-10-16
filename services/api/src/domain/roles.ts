@@ -11,7 +11,6 @@ import type { Role } from "./types.js";
 export type Permission =
   | "org.read"
   | "org.update"
-  | "org.billing"
   | "org.delete"
   /** Turning payment review off removes a financial control: owners only. */
   | "payments.policy"
@@ -83,7 +82,7 @@ const ADMIN: Permission[] = [
 ];
 
 const OWNER: Permission[] = [
-  ...new Set([...ADMIN, "org.billing", "org.delete", "payments.policy"] as Permission[]),
+  ...new Set([...ADMIN, "org.delete", "payments.policy"] as Permission[]),
 ];
 
 export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {

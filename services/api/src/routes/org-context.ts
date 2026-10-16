@@ -5,15 +5,15 @@
  *
  *   1. session   — who is this?            (server.ts owns it)
  *   2. member    — may they reach this org, and as what role?
- *   3. capability— did the organisation buy this feature?
+ *   3. capability— is this feature built, and part of this kind of org?
  *
- * A viewer on a Business plan must not send money (2 catches it), and an
- * owner on Starter must not reach the chart of accounts (3 catches it).
+ * A viewer must not send money (2 catches it), and a personal org must not
+ * reach the chart of accounts (3 catches it).
  */
 
 import type express from "express";
 import { store } from "../store.js";
-import { can, capabilityMatrix, effectivePlan, limitsFor, type CapabilityId } from "../domain/plans.js";
+import { LIMITS, can, capabilityMatrix, type CapabilityId } from "../domain/plans.js";
 import { roleCan, type Permission } from "../domain/roles.js";
 import { paymentReviewRequired } from "../domain/payment-review.js";
 import { issuerTaxIds } from "../domain/invoicing.js";
@@ -71,11 +71,8 @@ export function requirePermission(
   return false;
 }
 
-/**
- * Plan gate. Answers 402 Payment Required with the upgrade path, or 409 when
- * the feature does not exist at any price — a distinction worth keeping, since
- * telling someone to pay for something unbuilt costs them money.
- */
+/** Feature gate: 409 when the feature is not built or not part of this kind
+ *  of organisation. No plan decides it; every built feature is free. */
 export function requireCapability(
   ctx: OrgContext,
   res: express.Response,
@@ -83,35 +80,33 @@ export function requireCapability(
 ): boolean {
   const verdict = can(ctx.org, capability);
   if (verdict.allowed) return true;
-  res.status(verdict.unavailable ? 409 : 402).json({
+  res.status(409).json({
     error: verdict.reason,
     capability,
-    requiresPlan: verdict.requiresPlan,
-    upgradeHint: verdict.upgradeHint,
     unavailable: verdict.unavailable,
   });
   return false;
 }
 
-/** Refuse a create that would cross a plan ceiling. Never hides existing rows. */
+/** Refuse a create that would cross a service ceiling. Never hides existing rows. */
 export function requireWithinLimit(
   ctx: OrgContext,
   res: express.Response,
-  limit: keyof ReturnType<typeof limitsFor>,
+  limit: keyof typeof LIMITS,
   current: number,
   noun: string,
 ): boolean {
-  const max = limitsFor(ctx.org)[limit];
+  const max = LIMITS[limit];
   if (current < max) return true;
-  res.status(402).json({
-    error: `Your plan allows ${max} ${noun}${max === 1 ? "" : "s"} and you have ${current}.`,
+  res.status(409).json({
+    error: `An organisation can have up to ${max} ${noun}s and this one has ${current}.`,
     limit: max,
     current,
   });
   return false;
 }
 
-/** The org as the client should see it, with its plan state resolved. */
+/** The org as the client should see it. */
 export function publicOrg(org: Organisation, member?: Member) {
   return {
     id: org.id,
@@ -129,9 +124,6 @@ export function publicOrg(org: Organisation, member?: Member) {
     },
     email: org.email,
     address: org.address,
-    plan: org.plan,
-    effectivePlan: effectivePlan(org),
-    trial: org.trial,
     reporting: org.reporting,
     verifications: org.verifications,
     notificationEmail: org.notificationEmail,
@@ -139,7 +131,7 @@ export function publicOrg(org: Organisation, member?: Member) {
     ...(member ? { role: member.role, memberId: member.id } : {}),
     paymentReview: { ...org.paymentReview, required: paymentReviewRequired(org) },
     capabilities: capabilityMatrix(org),
-    limits: limitsFor(org),
+    limits: LIMITS,
   };
 }
 

@@ -108,7 +108,7 @@ function categoryCard(id, title, dir, now, before, r, chart) {
     <div class="zb-h-fig"><span class="zb-h-fig__value">${esc(eur(total / 100))}</span>${versus(total, cents(before, dir), r.label)}</div>
     ${Array.isArray(chart) ? `<h3 class="zb-h-sub">By category</h3>${list}${hint}`
       : chart === CHART_FAILED ? `<p class="zb-hint">Categories couldn’t load. Open Books again to retry.</p>`
-        : `<p class="zb-hint">Categories need the chart of accounts, which your plan doesn’t include.</p>`}</section>`;
+        : `<p class="zb-hint">Categories need the chart of accounts, which is part of a business account.</p>`}</section>`;
 }
 
 /** What the cash card covers, and what it leaves out in this period. */

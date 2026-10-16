@@ -2,10 +2,10 @@
  * Payment review as the organisation's own policy, and drafts that can be
  * edited and cancelled until sending starts.
  *
- * Review is a paid feature to switch on, but once an org works with it a
- * lapsed trial or a downgrade must not remove it: only an owner turns it off,
- * with a fresh passkey approval. Drafts already waiting for review keep
- * waiting and stay reviewable. A draft is a proposal, so it can be edited
+ * Review is the org's own control: any owner turns it on, and only an owner
+ * turns it off, with a fresh passkey approval. An org that held the business
+ * plan or its trial keeps the review it worked under until an owner chooses.
+ * Drafts already waiting for review keep waiting and stay reviewable. A draft is a proposal, so it can be edited
  * (which sends a waiting or approved one back to Draft) or cancelled (kept as
  * CANCELLED, never deleted) until execution starts.
  *
@@ -54,7 +54,7 @@ const { resolveOrg } = await import("../services/api/src/routes/org-context.js")
 const { createInvoicingRoutes } = await import("../services/api/src/routes/business/invoicing.js");
 const { SECRETS } = await import("../services/api/src/stored-secrets.js");
 const { issueChallenge, stepUpBinding, verifyRegistration } = await import("../services/api/src/webauthn.js");
-const { paymentReviewRequired, reviewHeldOnPlanChange } = await import("../services/api/src/domain/payment-review.js");
+const { paymentReviewRequired } = await import("../services/api/src/domain/payment-review.js");
 const { assertTransition, isCancellable, isEditable } = await import("../services/api/src/domain/drafts.js");
 const { HARNESS, SECURITY } = await import("../services/api/src/config.js");
 
@@ -178,7 +178,8 @@ await check("the harness is off: the passkey approval below is checked for real"
   assert.equal(HARNESS.enabled, false);
 });
 
-await check("review follows the plan until something sets it, and a trial that granted it keeps it after it ends", () => {
+await check("review defaults from a stored business plan or trial until an owner sets it; otherwise it starts off", () => {
+  assert.equal(paymentReviewRequired({ type: "business" }), false);
   const base = { type: "business" as const, plan: "starter" as const };
   assert.equal(paymentReviewRequired({ ...base }), false);
   assert.equal(paymentReviewRequired({ ...base, plan: "business" }), true);
@@ -186,14 +187,6 @@ await check("review follows the plan until something sets it, and a trial that g
   assert.equal(paymentReviewRequired({ ...base, trial: ended }), true, "a lapsed trial does not drop review");
   assert.equal(paymentReviewRequired({ ...base, trial: ended, paymentReview: { required: false, changedAt: now, source: "owner" } }), false);
   assert.equal(paymentReviewRequired({ ...base, plan: "business", paymentReview: { required: false, changedAt: now, source: "owner" } }), false, "an owner's choice wins over the plan");
-});
-
-await check("leaving a plan with review records the policy; a plan change that keeps or never had review records nothing", () => {
-  const onBusiness = { type: "business" as const, plan: "business" as const };
-  assert.deepEqual(reviewHeldOnPlanChange(onBusiness, "business"), {});
-  assert.equal((reviewHeldOnPlanChange(onBusiness, "starter") as any).paymentReview.required, true);
-  assert.equal((reviewHeldOnPlanChange(onBusiness, "starter") as any).paymentReview.source, "plan_change");
-  assert.deepEqual(reviewHeldOnPlanChange({ type: "business", plan: "starter" }, "starter"), {});
 });
 
 await check("a draft is editable and cancellable until execution starts, and CANCELLED is final", () => {
@@ -208,7 +201,7 @@ await check("a draft is editable and cancellable until execution starts, and CAN
   assert.throws(() => assertTransition("CANCELLED", "DRAFT"), /final state/);
 });
 
-console.log("\nA downgrade keeps review");
+console.log("\nAn org that worked under review keeps it");
 
 addOrg("org_a", "business");
 await check("the owner funds the business account from their own Monerium company profile", async () => {
@@ -218,7 +211,7 @@ await check("the owner funds the business account from their own Monerium compan
 
 let waiting = "";
 let approved = "";
-await check("on the business plan a draft is submitted, and an unreviewed draft is not sent", async () => {
+await check("with review kept from the business plan a draft is submitted, and an unreviewed draft is not sent", async () => {
   waiting = await draftIn("org_a");
   assert.equal((await call("POST", `/api/orgs/org_a/drafts/${waiting}/submit`, "u_payer")).status, 200);
   assert.equal(stateOf(waiting), "PENDING_REVIEW");
@@ -230,15 +223,10 @@ await check("on the business plan a draft is submitted, and an unreviewed draft 
   assert.equal(stateOf(plain), "DRAFT");
 });
 
-await check("the owner downgrades: the org says review is still required, recorded as kept from the plan", async () => {
-  const r = await call("POST", "/api/orgs/org_a/plan", "u_owner", { plan: "starter" });
-  assert.equal(r.status, 200, JSON.stringify(r.data));
-  assert.equal(r.data.organisation.capabilities["transfers.approvals"].allowed, false);
-  assert.equal(r.data.organisation.paymentReview.required, true);
-  assert.equal(store.findOrganisation("org_a")!.paymentReview?.source, "plan_change");
-});
-
-await check("after the downgrade an unreviewed draft is still not sent, and a new one can still be submitted", async () => {
+await check("every feature is granted, review still applies: an unreviewed draft is not sent, and a new one can be submitted", async () => {
+  const org = (await call("GET", "/api/orgs/org_a", "u_owner")).data.organisation;
+  assert.equal(org.capabilities["transfers.approvals"].allowed, true);
+  assert.equal(org.paymentReview.required, true);
   const d = await draftIn("org_a");
   const g = await sendGate("org_a", d);
   assert.equal(g.passed, false, JSON.stringify(g.r.data));
@@ -246,14 +234,14 @@ await check("after the downgrade an unreviewed draft is still not sent, and a ne
   assert.equal((await call("POST", `/api/orgs/org_a/drafts/${d}/submit`, "u_payer")).status, 200);
 });
 
-await check("after the downgrade a waiting draft can still be reviewed, by someone other than its drafter", async () => {
+await check("a waiting draft is reviewed, by someone other than its drafter", async () => {
   assert.equal((await call("POST", `/api/orgs/org_a/drafts/${waiting}/review`, "u_payer", { approve: true })).status, 403);
   const r = await call("POST", `/api/orgs/org_a/drafts/${waiting}/review`, "u_admin", { approve: true });
   assert.equal(r.status, 200, JSON.stringify(r.data));
   assert.equal(stateOf(waiting), "REVIEWED");
 });
 
-await check("after the downgrade an approved draft passes the review gate", async () => {
+await check("an approved draft passes the review gate", async () => {
   const g = await sendGate("org_a", approved);
   assert.equal(g.passed, true, JSON.stringify(g.r.data));
 });
@@ -272,7 +260,7 @@ await check("an admin cannot turn review off", async () => {
 await check("an owner without a fresh passkey approval cannot turn it off, and nothing changes", async () => {
   const r = await call("POST", "/api/orgs/org_a/payment-review", "u_owner", { required: false });
   assert.equal(r.status, 401, JSON.stringify(r.data));
-  assert.equal(store.findOrganisation("org_a")!.paymentReview?.source, "plan_change");
+  assert.equal(store.findOrganisation("org_a")!.paymentReview, undefined);
 });
 
 await check("an owner with a fresh passkey approval turns it off, and the change is audited", async () => {
@@ -301,14 +289,8 @@ await check("with review off a draft that was waiting still waits: it is not sen
   assert.equal(stateOf(stillWaiting), "REVIEWED");
 });
 
-await check("turning review back on needs the plan: refused on starter", async () => {
-  const r = await call("POST", "/api/orgs/org_a/payment-review", "u_owner", { required: true });
-  assert.equal(r.status, 402, JSON.stringify(r.data));
-  assert.equal(paymentReviewRequired(store.findOrganisation("org_a")!), false);
-});
-
-await check("on a plan with review an owner turns it back on without a passkey (it adds a control)", async () => {
-  addOrg("org_b", "business");
+await check("an owner turns review back on without a passkey (it adds a control)", async () => {
+  addOrg("org_b", "starter");
   const off = await call("POST", "/api/orgs/org_b/payment-review", "u_owner", { required: false, stepUp: await ownerKey.stepUp() });
   assert.equal(off.status, 200, JSON.stringify(off.data));
   const on = await call("POST", "/api/orgs/org_b/payment-review", "u_owner", { required: true });

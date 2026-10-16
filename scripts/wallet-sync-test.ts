@@ -739,12 +739,10 @@ console.log("\nImport route");
     assert.equal((await post("org_paid", { address: addr(3), chainId: 1, syncFrom: "2010-01-01" })).status, 400, "before any chain existed");
   });
 
-  await check("backfill is the historical-sync capability: a plan without it is refused, and nothing is imported", async () => {
+  await check("backfill needs no plan: an org with none books a wallet from a start day", async () => {
     const r = await post("org_free", { address: addr(4), chainId: 1, syncFrom: "2026-01-01" });
-    assert.equal(r.status, 402, JSON.stringify(r.data));
-    assert.equal(r.data.capability, "ledger.historicalSync");
-    assert.equal(store.importedWalletsOf("org_free").length, 0);
-    assert.equal((await post("org_free", { address: addr(4), chainId: 1 })).status, 201, "importing from now on stays open");
+    assert.equal(r.status, 201, JSON.stringify(r.data));
+    assert.equal(r.data.wallet.sync.from, "2026-01-01");
   });
 
   await check("the org's own Zold account cannot be imported: it would be booked twice", async () => {

@@ -187,17 +187,14 @@ await check("a rule without a description, without a tax line, or with a rate th
   assert.equal(store.findContact("c_other")!.payerRule, undefined);
 });
 
-await check("the three checks: no membership is 404, a viewer is 403, a plan without invoices is 402", async () => {
+await check("no membership is 404 and a viewer is 403; an org with no plan may use invoices", async () => {
   assert.equal((await call("PUT", "/org_1/contacts/c_dao/payer-rule", RULE, "u_outsider")).status, 404);
   assert.equal((await call("PUT", "/org_1/contacts/c_dao/payer-rule", RULE, "u_viewer")).status, 403);
-  assert.equal((await call("PUT", "/org_free/contacts/c_free/payer-rule", RULE)).status, 402);
   assert.equal((await run("2026-08", "org_1", "u_outsider")).status, 404);
   assert.equal((await run("2026-08", "org_1", "u_viewer")).status, 403);
-  assert.equal((await run("2026-08", "org_free")).status, 402);
   assert.equal((await call("POST", "/org_1/income-invoices/inv_x/issue", {}, "u_viewer")).status, 403);
-  assert.equal((await call("POST", "/org_free/income-invoices/inv_x/issue", {})).status, 402);
   assert.equal((await call("DELETE", "/org_1/contacts/c_dao/payer-rule", undefined, "u_viewer")).status, 403);
-  assert.equal((await call("DELETE", "/org_free/contacts/c_free/payer-rule")).status, 402);
+  assert.equal((await call("PUT", "/org_free/contacts/c_free/payer-rule", RULE)).status, 200);
   assert.ok(store.findContact("c_dao")!.payerRule, "a refused removal removes nothing");
 });
 
@@ -700,26 +697,6 @@ await check("the customer's view of an issued invoice has the printed columns an
   assert.ok(view.lines.length > 0);
   for (const line of view.lines) assert.deepEqual(Object.keys(line).sort(), ["amount", "description", "quantity", "unitPrice"]);
   assert.ok(!("fromReceipts" in view) && !("settlements" in view));
-});
-
-console.log("\nGating is a filter on reading");
-
-await check("a plan change hides rules and drafts and deletes neither", async () => {
-  const rulesBefore = store.contactsOf("org_1").filter((c) => c.payerRule).length;
-  const invoicesBefore = store.invoicesOf("org_1").length;
-  assert.ok(rulesBefore > 0 && invoicesBefore > 0);
-  store.updateOrganisation("org_1", { plan: "starter" });
-  const contacts = (await call("GET", "/org_1/contacts")).body.contacts;
-  assert.ok(contacts.length > 0);
-  assert.ok(contacts.every((c: any) => c.payerRule === undefined));
-  assert.equal((await call("GET", "/org_1/invoices")).status, 402);
-  const patched = await call("PATCH", "/org_1/contacts/c_other", { notes: "x" });
-  assert.equal(patched.status, 200);
-  assert.equal(patched.body.contact.payerRule, undefined, "an edit's answer hides the rule too");
-  assert.equal(store.contactsOf("org_1").filter((c) => c.payerRule).length, rulesBefore);
-  assert.equal(store.invoicesOf("org_1").length, invoicesBefore);
-  store.updateOrganisation("org_1", { plan: "business" });
-  assert.ok((await call("GET", "/org_1/contacts")).body.contacts.some((c: any) => c.payerRule));
 });
 
 server.close();

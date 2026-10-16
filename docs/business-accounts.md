@@ -1,4 +1,4 @@
-# Business & premium accounts — the rebuild
+# Business and personal accounts — the rebuild
 
 This file records the model and the reasoning; the code is
 `services/api/src/domain/`. Read this before changing an entity.
@@ -21,11 +21,9 @@ supplier can fill in without an account, and bookkeeping that exports to Xero.
  - **Organisation as the tenant**, not the user. Members are invited by email,
    carry a role, and are deactivated rather than deleted. Invitations expire
    (theirs: 3 days; we keep that).
- - **Two plans with a feature matrix.** Starter is free and payouts-only;
-   Business is paid and unlocks accounting. One 30-day trial per org.
-   Downgrade *pauses* premium features and keeps the data, so an upgrade
-   restores everything. That is enforced in storage, not only in the UI (see
-   `plans.ts`).
+ - **A feature matrix**, without their plans: every built feature is free.
+   Nothing that gates a feature deletes data; that is enforced in storage,
+   not only in the UI (see `plans.ts`).
  - **Per-feature verification.** They ran KYB twice: once with Triple-A for
    fiat payouts, once with Blockpass for cards, because each regulated partner
    owns its own identity relationship and neither accepts the other's. Our
@@ -66,16 +64,13 @@ supplier can fill in without an account, and bookkeeping that exports to Xero.
 
     Organisation
       type      "personal" | "business"
-      plan      "starter" | "premium" | "business"
       profile   legal name, tax id, registered address, country
       reporting currency, time zone, cost-basis method
       verifications  capability -> record   (see below)
 
-Personal and business are the same machine with different defaults and a
-different plan ladder — personal orgs get `starter`/`premium`, business orgs get
-`starter`/`business`. They are not separate code paths, because every feature
-below (accounts, contacts, payouts, receipts, export) is wanted by a premium
-personal user too; what differs is members, KYB and the invoice/COA surface.
+Personal and business are the same machine with different defaults. They are
+not separate code paths, because every feature below (accounts, contacts,
+payouts, receipts, export) is wanted by a personal user too; what differs is members, KYB and the invoice/COA surface.
 
 A `Member` joins a `User` (a login identity — passkey, sessions, device key) to
 an organisation with a role. A user can belong to several organisations, which
@@ -123,17 +118,11 @@ live with the types.
 
 ## Plan gating
 
-`plans.ts` is a matrix of capability -> minimum plan, derived from their feature
-table. Two rules that are easy to get wrong:
-
- 1. **Gating is a read-time filter, never a write-time delete.** A downgraded
-    org keeps its chart of accounts, its tags and its history; the API refuses
-    to *serve* them and the UI shows an upgrade prompt. Their FAQ promises
-    exactly this ("your information isn't lost… all your previous data and
-    settings will come back automatically"), and it is only true if nothing
-    ever deletes on downgrade.
- 2. **A trial is a grant with an end date, not a plan change.** One per org.
-    When it lapses the org is back on its base plan with no data touched.
+`plans.ts` is a matrix of capabilities, derived from their feature table. It
+grants every built feature to every org; it refuses only what is not built and
+what is business-shaped on a personal org. **Gating is a read-time filter,
+never a write-time delete**: nothing deletes an org's chart of accounts, tags
+or history.
 
 
 ## What this rebuild replaces

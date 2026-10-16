@@ -92,7 +92,7 @@ const scripts = [
   "org-migration:test",
   "production-branch:test",
   "identity:test",
-  "plan:test",
+  "free-features:test",
   "admin:test",
   "operator:test",
   "admin:ui:test",

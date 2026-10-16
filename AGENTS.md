@@ -125,13 +125,13 @@ Each of these was a bug once.
   (default) | `native` (Safe pays ETH) | `token` (Safe pays USDC). Verified by
   preflight: the public paymaster REFUSES Base mainnet and sponsors Base
   Sepolia; `native` and `token` work on mainnet.
-- **Three checks, not one**: session (who), member+role (may they here), plan
-  capability (did the org buy it). Collapsing any two opens a hole.
+- **Three checks, not one**: session (who), member+role (may they here),
+  capability (built, right org type). Collapsing any two opens a hole.
 - **Four eyes**: the reviewer may not be the drafter, whatever their role — and
   editing someone's draft lines makes you the drafter.
 - **Gating is a read-time filter, NEVER a write-time delete.** Nothing in
   `store.ts` deletes an org, account, invoice or ledger row; no such method
-  exists. A trial is a grant with an end date, not a plan change.
+  exists. Every feature is free: no plan, no trial.
 - **INVALID_DATA**: a draft line's payee fingerprint is recomputed at review AND
   at execution. The gap between approval and execution is where an address-book
   edit lands.

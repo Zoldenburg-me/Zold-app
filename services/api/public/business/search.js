@@ -46,7 +46,7 @@ function results(raw) {
   if (!q || !st.data) return [];
   const hit = (...xs) => xs.some((x) => String(x || "").toLowerCase().includes(q));
   const compact = q.replace(/\s+/g, "");
-  // Screens by name, where this plan opens them.
+  // Screens by name, where this organisation opens them.
   const screens = [...VIEWS, { id: "settings", label: "Settings", icon: "settings" }]
     .filter((v) => (!v.capability || cap(v.capability).allowed) && hit(v.label))
     .slice(0, 3).map((v) => ({ group: "Go to", go: { view: v.id }, lead: Z.iconTile({ icon: v.icon }), title: mark(v.label, q), right: "" }));

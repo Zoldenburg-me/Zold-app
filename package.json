@@ -110,7 +110,7 @@
     "org-migration:test": "tsx scripts/org-migration-test.ts",
     "production-branch:test": "tsx scripts/production-branch-test.ts",
     "identity:test": "tsx scripts/identity-audit-test.ts",
-    "plan:test": "tsx scripts/plan-grant-test.ts",
+    "free-features:test": "tsx scripts/free-features-test.ts",
     "admin:test": "tsx scripts/admin-dashboard-test.ts",
     "operator:test": "tsx scripts/operator-auth-test.ts",
     "admin:ui:test": "tsx scripts/admin-ui-test.ts",

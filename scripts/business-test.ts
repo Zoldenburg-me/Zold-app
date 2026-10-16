@@ -10,17 +10,7 @@
 
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import {
-  CAPABILITIES,
-  can,
-  capabilityMatrix,
-  effectivePlan,
-  limitsFor,
-  plansFor,
-  trialIsActive,
-  trialPlanFor,
-  TRIAL_DAYS,
-} from "../services/api/src/domain/plans.js";
+import { CAPABILITIES, can, capabilityMatrix } from "../services/api/src/domain/plans.js";
 import { canReviewDraft, emailIsProven, roleCan, wouldOrphanOrg } from "../services/api/src/domain/roles.js";
 import {
   currencyAvailability,
@@ -78,7 +68,6 @@ const org = (over: Partial<Organisation> = {}): Organisation => ({
   id: "org_1",
   type: "business",
   name: "Test GmbH",
-  plan: "starter",
   reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" },
   verifications: {},
   createdAt: "2026-01-01T00:00:00.000Z",
@@ -86,83 +75,33 @@ const org = (over: Partial<Organisation> = {}): Organisation => ({
   ...over,
 });
 
-console.log("\nPlans and gating");
+console.log("\nFeatures");
 
-check("starter business cannot reach the chart of accounts", () => {
-  const v = can(org(), "coa.manage");
-  assert.equal(v.allowed, false);
-  assert.deepEqual(v.requiresPlan, ["business"]);
-  assert.ok(v.upgradeHint, "a refusal should say what upgrading buys");
+check("a business org with no plan reaches the chart of accounts", () => {
+  assert.equal(can(org(), "coa.manage").allowed, true);
 });
 
-check("business plan reaches it", () => {
-  assert.equal(can(org({ plan: "business" }), "coa.manage").allowed, true);
-});
-
-check("a personal org is refused members outright, not sold an upgrade", () => {
-  const v = can(org({ type: "personal", plan: "premium" }), "members.manage");
+check("a personal org is refused members outright", () => {
+  const v = can(org({ type: "personal" }), "members.manage");
   assert.equal(v.allowed, false);
-  assert.equal(v.requiresPlan, undefined, "nothing a personal org can buy grants this");
   assert.match(v.reason!, /business product/);
 });
 
-check("premium is personal-only and business is business-only", () => {
-  assert.deepEqual(plansFor("personal").map((p) => p.id), ["starter", "premium"]);
-  assert.deepEqual(plansFor("business").map((p) => p.id), ["starter", "business"]);
-});
-
-check("cards report as not built rather than as an upgrade", () => {
-  const v = can(org({ plan: "business" }), "cards");
+check("cards report as not built", () => {
+  const v = can(org(), "cards");
   assert.equal(v.allowed, false);
-  assert.ok(v.unavailable, "an unbuilt feature must not be sold");
-  assert.equal(v.requiresPlan, undefined);
   assert.match(v.unavailable!, /issuer partner/);
 });
 
-check("a trial grants without changing the plan", () => {
-  const now = new Date("2026-02-01T00:00:00.000Z");
-  const o = org({
-    trial: {
-      grantsPlan: trialPlanFor("business"),
-      startedAt: "2026-01-20T00:00:00.000Z",
-      endsAt: "2026-02-19T00:00:00.000Z",
-    },
-  });
-  assert.equal(o.plan, "starter", "org.plan must be untouched by a trial");
-  assert.equal(effectivePlan(o, now), "business");
-  assert.equal(can(o, "coa.manage", now).allowed, true);
+check("a stored plan or trial changes nothing", () => {
+  const ended = { grantsPlan: "business" as const, startedAt: "2026-01-01T00:00:00.000Z", endsAt: "2026-01-31T00:00:00.000Z" };
+  assert.deepEqual(capabilityMatrix(org({ plan: "starter", trial: ended })), capabilityMatrix(org()));
 });
 
-check("a lapsed trial falls back with nothing to migrate", () => {
-  const o = org({
-    trial: {
-      grantsPlan: "business",
-      startedAt: "2026-01-01T00:00:00.000Z",
-      endsAt: "2026-01-31T00:00:00.000Z",
-    },
-  });
-  const after = new Date("2026-03-01T00:00:00.000Z");
-  assert.equal(trialIsActive(o, after), false);
-  assert.equal(effectivePlan(o, after), "starter");
-  assert.equal(can(o, "coa.manage", after).allowed, false);
-  assert.equal(TRIAL_DAYS, 30);
-});
-
-check("refused capabilities are returned with reasons, not omitted", () => {
-  const matrix = capabilityMatrix(org());
-  assert.equal(
-    Object.keys(matrix).length,
-    Object.keys(CAPABILITIES).length,
-    "every capability must appear so the UI can prompt in place",
-  );
+check("every capability is returned, refused ones with reasons", () => {
+  const matrix = capabilityMatrix(org({ type: "personal" }));
+  assert.equal(Object.keys(matrix).length, Object.keys(CAPABILITIES).length);
   assert.ok(matrix["coa.manage"].reason);
-});
-
-check("limits follow the effective plan", () => {
-  assert.equal(limitsFor(org()).accounts, 1);
-  assert.equal(limitsFor(org({ plan: "business" })).accounts, 20);
-  assert.equal(limitsFor(org()).bulkCsvRows, 0, "starter has no bulk CSV");
-  assert.equal(limitsFor(org({ plan: "business" })).bulkCsvRows, 500);
 });
 
 console.log("\nRoles");
@@ -490,7 +429,7 @@ check("the row ceiling is enforced", () => {
         token: "Token",
         amount: "Amount",
       }, { maxRows: 2 }),
-    /limit on this plan is 2/,
+    /the limit is 2/,
   );
 });
 

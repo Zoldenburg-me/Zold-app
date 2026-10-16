@@ -286,12 +286,12 @@ try {
 
   console.log("6/7 review and execute…");
 
-  // On a plan WITH approvals, a draft cannot be sent until it is reviewed.
-  await ok("POST", `/api/orgs/${org.id}/plan/trial`, { token: ownerToken });
+  // With review on, a draft cannot be sent until it is reviewed.
+  await ok("POST", `/api/orgs/${org.id}/payment-review`, { token: ownerToken, body: { required: true } });
   const unreviewed = await call("POST", `/api/orgs/${org.id}/drafts/${draft.id}/execute`, {
     token: ownerToken,
   });
-  check("with approvals bought, an unreviewed draft cannot be sent", () => {
+  check("with review on, an unreviewed draft cannot be sent", () => {
     assert.equal(unreviewed.status, 409);
     assert.match(unreviewed.data.error, /requires a second person to review/i);
   });

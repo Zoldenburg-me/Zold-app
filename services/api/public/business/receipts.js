@@ -12,7 +12,7 @@ const field = (id, label, extra = "") => `<label for="${id}">${label}</label><in
 const vatWord = (vat) => (vat.kind === "standard" ? `${vat.rate}% VAT` : `No VAT (${vat.reason.replace(/_/g, " ")})`);
 
 /* The contact's payer rule, in its drawer: what the rule says, or what one
-   would do. Shown only where the plan includes invoices. */
+   would do. Shown only where the organisation has invoices. */
 export function payerRuleSection(c) {
   if (!cap("invoices").allowed) return "";
   const r = c.payerRule;

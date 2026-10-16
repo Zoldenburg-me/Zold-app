@@ -37,10 +37,10 @@ function phLinkSub(r) {
   return amt;
 }
 
-/* The button says what the plan allows, in the plan's own words. Invoices are
+/* The button says what the organisation read allows, in its own words. Invoices are
    written in Zold Business, for the personal space or a company. */
 function phInvoiceButton() {
-  if (phCache.orgs === null) return Z.button({ icon: "receipt_long", label: "Invoice", disabledReason: "Checking your plan…" });
+  if (phCache.orgs === null) return Z.button({ icon: "receipt_long", label: "Invoice", disabledReason: "Loading…" });
   const org = phCan(phPersonalOrg(), "invoices") ? phPersonalOrg() : (phCache.orgs || []).find((o) => phCan(o, "invoices"));
   if (org) return Z.button({ icon: "receipt_long", label: "Invoice", href: phWebHref("invoice-new") }).replace("<a ", `<a data-ph-org="${esc(org.id)}" `);
   const reason = phPersonalOrg()?.capabilities?.invoices?.reason || "Invoices are not part of this account.";

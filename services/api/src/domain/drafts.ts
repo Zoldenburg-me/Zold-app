@@ -279,7 +279,7 @@ export function importCsv(
   const body = rows.slice(1);
   if (body.length > maxRows) {
     throw new DraftError(
-      `That file has ${body.length} rows; the limit on this plan is ${maxRows}.`,
+      `That file has ${body.length} rows; the limit is ${maxRows}.`,
     );
   }
 

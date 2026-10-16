@@ -155,7 +155,7 @@ With in-memory pending executions, an unknown state must not keep signing.
 |---|---|---|
 | who (session) | `http/sessions.ts` | 401 |
 | may they, here (member + role → permission) | `routes/org-context.ts` + `domain/roles.ts` | 404 non-member, 403 missing permission |
-| did the org buy it (plan capability, limits) | `domain/plans.ts` via `requireCapability` / `requireWithinLimit` | 402 with `requiresPlan`, or 409 `unavailable` |
+| is the feature built and right for this org type (capability, limits) | `domain/plans.ts` via `requireCapability` / `requireWithinLimit` | 409, with `unavailable` when not built |
 | may this user use this partner (segment) | `domain/segments.ts` via `http/guards.ts:76-91` | 403 `CAPABILITY_UNAVAILABLE` (audited) |
 
 Permissions are `org.*`, `members.*`, `accounts.*`, `wallets.*`,
@@ -782,11 +782,13 @@ flowchart LR
 - `Organisation`, `Member`, `Account`, `ImportedWallet`, `Contact`,
   `DraftPayment`, `Invoice`, `ChartAccount`, `AccountRule` and `LedgerEntry`
   are defined in `domain/types.ts`.
-- Plans and capabilities: `domain/plans.ts`. `effectivePlan` = the trial's
-  `grantsPlan` while the trial is active, else `org.plan`. `can(org, cap)`
-  resolves in this order: unknown, then unavailable, then wrong org type, then
-  granted, then refused with `requiresPlan`. Limits refuse creates and never
-  hide rows. `capabilityMatrix` is served to the client in `publicOrg`.
+- Capabilities: `domain/plans.ts`. There are no plans: `can(org, cap)`
+  refuses an unknown capability, then an unavailable one, then a wrong org
+  type, and grants everything else. `LIMITS` is the same for every org;
+  limits refuse creates and never hide rows. `capabilityMatrix` is served to
+  the client in `publicOrg`. The stored `org.plan` and `org.trial` grant
+  nothing; only `domain/payment-review.ts` reads them, for the default review
+  policy.
 - Currency registry (`domain/accounts.ts`): **the single place a currency
   becomes real.** `mode()` returns `"live" | false`. EUR is live when Monerium
   OAuth or the encryption key is configured, and every other currency is
@@ -1162,7 +1164,7 @@ overlap guards make that safe.
 - `shell.js` uses one delegated `[data-act]` click listener, which dispatches
   to `ACTIONS` and then re-renders.
 - Navigation is capability-aware only. The role gate is the server's 403.
-- A 402 or 409 renders the same upgrade prompt as the nav lock.
+- A 409 from a capability gate renders the same refusal as the nav lock.
 
 ### 16.3 Public pages
 
@@ -1450,12 +1452,10 @@ Settings (`config/checkout-service.ts`; a bad webhook URL or secret refuses star
 
 | | |
 |---|---|
-| `GET /currencies`, `GET /plans` | Public reference data. |
+| `GET /currencies` | Public reference data. |
 | `GET/POST /` (S) | List or create orgs. |
 | `GET/PATCH /:orgId` (M, P(org.update)) | Read or update the org. |
-| `GET /:orgId/plan` (M) | Plan. |
-| `POST /:orgId/plan[/trial]` (M, P(org.billing)) | Downgrade, or start the trial. A paid plan answers 402 `PAID_PLAN_NEEDS_GRANT`. |
-| `POST /:orgId/payment-review` (P(payments.policy): owners) | `{ required }`. Off needs a fresh passkey step-up (`stepUp`) and works on every plan; on needs C(transfers.approvals). Audited as `org.payment_review_changed`. A plan change away from review records the policy as kept (`domain/payment-review.ts`). |
+| `POST /:orgId/payment-review` (P(payments.policy): owners) | `{ required }`, business orgs only. Off needs a fresh passkey step-up (`stepUp`). Audited as `org.payment_review_changed`. |
 | `GET /:orgId/members` (M) | Member list. |
 | `POST /:orgId/members` (C(members.manage), P(members.invite)) | Invite. |
 | `PATCH /:orgId/members/:m` (C(members.manage), P(members.update)) | Change role or status. |
@@ -1544,4 +1544,3 @@ Settings (`config/checkout-service.ts`; a bad webhook URL or secret refuses star
 | `GET /admin/users/:id/monerium[?live=1]` (operator, A) | What Zold stored from Monerium; `live=1` also reads Monerium on the account's own connection (refused without one), stores nothing, audits the read. |
 | `GET /admin/monerium[?live=1]` (operator, A) | Deployment-wide Monerium view; `live=1` checks the app credentials. |
 | `GET /admin/recoveries` (operator, A) | Zoldenburg requests and guardian enrolments. Each request's account carries `moneriumProfileHistory`, every Monerium profile it recorded (append-only, store.updateUser). |
-| `POST /admin/orgs/:orgId/plan` (operator, A) | Grant a plan. The only way onto a paid plan while there is no billing. |

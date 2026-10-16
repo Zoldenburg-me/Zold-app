@@ -208,7 +208,7 @@ const H = (n: number) => `0x${n.toString(16).padStart(64, "0")}`;
 store.addUser({ id: "u_owner", name: "Sara Lindner", country: "DE", kycStatus: "approved", address: SAFE, createdAt: "2026-01-01T00:00:00.000Z" } as any);
 store.addUser({ id: "u_viewer", name: "Viewer", country: "DE", kycStatus: "approved", address: `0x${"bb".repeat(20)}`, createdAt: now } as any);
 store.addOrganisation({ id: "org_1", type: "business", name: "Zoldenburg UG", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });
-store.addOrganisation({ id: "org_starter", type: "business", name: "Starter GmbH", plan: "starter", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });
+store.addOrganisation({ id: "org_starter", type: "personal", name: "Sara Lindner", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });
 store.addMember({ id: "m_owner", orgId: "org_1", userId: "u_owner", email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now });
 store.addMember({ id: "m_viewer", orgId: "org_1", userId: "u_viewer", email: "", role: "viewer", status: "active", invitedAt: now, acceptedAt: now });
 store.addMember({ id: "m_owner2", orgId: "org_starter", userId: "u_owner", email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now });
@@ -240,8 +240,8 @@ const call = async (method: string, p: string, body?: unknown, asUser = "u_owner
   return { status: res.status, body: data, headers: res.headers, bytes: Buffer.from(text, "latin1") };
 };
 
-await check("a starter org is refused the connector by plan (402); a viewer on a business org by role (403)", async () => {
-  assert.equal((await call("POST", "/api/orgs/org_starter/integrations/getmyinvoices", { apiKey: GOOD_KEY })).status, 402);
+await check("a personal org is refused the connector (409); a viewer on a business org by role (403)", async () => {
+  assert.equal((await call("POST", "/api/orgs/org_starter/integrations/getmyinvoices", { apiKey: GOOD_KEY })).status, 409);
   assert.equal((await call("POST", "/api/orgs/org_1/integrations/getmyinvoices", { apiKey: GOOD_KEY }, "u_viewer")).status, 403);
   assert.equal((await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09" })).status, 409, "no key yet: pushing is refused");
 });
