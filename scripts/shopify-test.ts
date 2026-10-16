@@ -34,6 +34,7 @@ const SHOP = "demo-store.myshopify.com";
 const TOKEN = "shpat_test_offline_token";
 const calls: { op: string; vars: any; shop: string }[] = [];
 let failNextResolve = false;
+let failAllResolves = false;
 
 /** The stub answers as Shopify does: an OAuth code exchange under /admin, and
  *  the Payments Apps GraphQL endpoint under /payments_apps. */
@@ -55,7 +56,7 @@ const stub: Server = createServer((req, res) => {
       const op = /mutation \w+\(.*?\)\s*\{\s*(\w+)/s.exec(b.query)?.[1] ?? "?";
       calls.push({ op, vars: b.variables, shop });
       if (op === "paymentSessionResolve") {
-        if (failNextResolve) { failNextResolve = false; return send(200, { data: { paymentSessionResolve: { paymentSession: null, userErrors: [{ field: ["id"], message: "Payment session is in a state that cannot be resolved" }] } } }); }
+        if (failNextResolve || failAllResolves) { failNextResolve = false; return send(200, { data: { paymentSessionResolve: { paymentSession: null, userErrors: [{ field: ["id"], message: "Payment session is in a state that cannot be resolved" }] } } }); }
         return send(200, { data: { paymentSessionResolve: { paymentSession: { id: b.variables.id, state: { code: "RESOLVED" }, nextAction: { action: "REDIRECT", context: { redirectUrl: `https://${shop}/checkouts/c/thank_you?session=${encodeURIComponent(b.variables.id)}` } } }, userErrors: [] } } });
       }
       if (op === "paymentsAppConfigure") return send(200, { data: { paymentsAppConfigure: { paymentsAppConfiguration: { externalHandle: b.variables.externalHandle, ready: b.variables.ready }, userErrors: [] } } });
@@ -325,6 +326,30 @@ await check("a paid request whose resolve failed keeps the error and the sweep r
   assert.equal(after.source.resolveAttempts, 2);
   assert.equal(calls.filter((c) => c.op === "paymentSessionResolve" && c.vars.id === s.gid).length, 2);
 });
+await check("the sweep stops retrying a failing resolve after RESOLVE_MAX_ATTEMPTS and says so", async () => {
+  const { RESOLVE_MAX_ATTEMPTS } = await import("../services/api/src/config.js");
+  const s = session();
+  await fromShopify("/api/shopify/payment", s);
+  const req = store.findPaymentRequestBySource("shopify", s.id, SHOP)!;
+  failAllResolves = true;
+  const logged: string[] = [];
+  const error = console.error;
+  console.error = (...a: unknown[]) => { logged.push(a.join(" ")); };
+  try {
+    payRequest(req);
+    assert.ok(await until(() => store.findPaymentRequest(req.id)!.source.resolveAttempts === 1), "first attempt not recorded");
+    for (let i = 0; i < RESOLVE_MAX_ATTEMPTS + 3; i++) await sweepPaymentRequests();
+  } finally {
+    failAllResolves = false;
+    console.error = error;
+  }
+  const after = store.findPaymentRequest(req.id)!;
+  assert.equal(after.source.resolveAttempts, RESOLVE_MAX_ATTEMPTS);
+  assert.equal(after.source.resolvedAt, undefined);
+  assert.ok(after.source.resolveError, "the last error stays on the row");
+  assert.equal(calls.filter((c) => c.op === "paymentSessionResolve" && c.vars.id === s.gid).length, RESOLVE_MAX_ATTEMPTS);
+  assert.equal(logged.filter((l) => l.includes("gave up") && l.includes(req.code.slice(0, 5))).length, 1, logged.join("\n"));
+});
 await check("a buyer who cancels is sent back to the store; the unauthenticated GET does not close the request", async () => {
   const s = session();
   await fromShopify("/api/shopify/payment", s);
@@ -360,7 +385,7 @@ await check("the org view lists the store and its checkouts and never the token"
   assert.equal(r.body.available, true);
   assert.equal(r.body.connections[0].shop, SHOP);
   assert.equal(r.body.connections[0].ready, true);
-  assert.equal(r.body.requests.length, 3, "one request per accepted session: paid, failed-then-resolved, abandoned");
+  assert.equal(r.body.requests.length, 4, "one request per accepted session: paid, failed-then-resolved, given up, abandoned");
   assert.ok(r.body.requests.every((x: any) => x.shop === SHOP));
   const text = JSON.stringify(r.body);
   assert.ok(!text.includes(TOKEN) && !text.includes("accessTokenEnc"), "the store token crossed the API");

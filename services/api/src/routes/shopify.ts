@@ -45,7 +45,7 @@
 import { wrap } from "./util.js";
 import express from "express";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { IS_PRODUCTION, PAYMENT_REQUESTS, PUBLIC_URL, SHOPIFY } from "../config.js";
+import { IS_PRODUCTION, PAYMENT_REQUESTS, PUBLIC_URL, RESOLVE_MAX_ATTEMPTS, SHOPIFY } from "../config.js";
 import { cookieValue } from "../http/sessions.js";
 import { store, type User } from "../store.js";
 import { EncryptionUnavailableError } from "../crypto-at-rest.js";
@@ -262,11 +262,13 @@ export async function resolveShopifyRequest(r: PaymentRequest): Promise<void> {
   if (r.source.kind !== "shopify" || r.source.resolvedAt || r.state !== "PAID") return;
   if (!r.source.shop || (!r.source.sessionGid && !r.source.orderGid)) return;
   const connection = store.findShopifyConnectionByShop(r.source.shop);
-  const attempts = (r.source.resolveAttempts ?? 0) + 1;
   if (!connection) {
-    store.updatePaymentRequest(r.id, { source: { ...r.source, resolveAttempts: attempts, resolveError: "the store is no longer connected" } });
+    // Not an attempt: nothing was sent, and a reconnect should find the budget intact.
+    const resolveError = "the store is no longer connected";
+    if (r.source.resolveError !== resolveError) store.updatePaymentRequest(r.id, { source: { ...r.source, resolveError } });
     return;
   }
+  const attempts = (r.source.resolveAttempts ?? 0) + 1;
   try {
     if (r.source.orderGid) {
       // custom-app: the merchant's "Mark as paid", then the facts on the order.
@@ -292,7 +294,12 @@ export async function resolveShopifyRequest(r: PaymentRequest): Promise<void> {
     });
     console.log(`shopify: resolved session for ${displayCode(r.code)} at ${connection.shop}`);
   } catch (err: any) {
-    store.updatePaymentRequest(r.id, { source: { ...r.source, resolveAttempts: attempts, resolveError: redactedMessage(err).slice(0, 300) } });
+    const resolveError = redactedMessage(err).slice(0, 300);
+    store.updatePaymentRequest(r.id, { source: { ...r.source, resolveAttempts: attempts, resolveError } });
+    // The sweep stops here; the row keeps the error for the dashboard, and this line is the alert.
+    if (attempts === RESOLVE_MAX_ATTEMPTS) {
+      console.error(`shopify: gave up telling ${connection.shop} that ${displayCode(r.code)} is paid after ${attempts} attempts: ${resolveError}`);
+    }
     throw err;
   }
 }
