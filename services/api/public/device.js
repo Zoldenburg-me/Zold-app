@@ -127,14 +127,18 @@ export function eip712Digest(typedData) {
  * Ask the authenticator to evaluate the PRF for our salt. Returns 32 bytes
  * that only this passkey can produce, or null when the ceremony succeeded but
  * the authenticator has no PRF support (or the browser has no WebAuthn).
- * A cancelled, refused or timed-out ceremony THROWS: that says nothing about
- * PRF support, so it must not be read as "store the key unprotected".
+ * A cancelled, refused or timed-out ceremony THROWS PASSKEY_CANCELLED (the
+ * browser's error as its cause): that says nothing about PRF support, so it
+ * must not be read as "store the key unprotected".
  * On timeout the pending prompt is aborted; the race still settles for an
  * embedded browser view that ignores the abort and never resolves.
  */
+const PASSKEY_CANCELLED = "The passkey prompt was cancelled or timed out. Nothing was stored; try again.";
+
 async function prfSecret(credentialId, { timeoutMs = 15000 } = {}) {
   if (!window.PublicKeyCredential || !credentialId) return null;
   const abort = new AbortController();
+  const timedOut = new Error("passkey timeout");
   let timer;
   try {
     const assertion = await Promise.race([
@@ -151,13 +155,16 @@ async function prfSecret(credentialId, { timeoutMs = 15000 } = {}) {
       new Promise((_, rej) => {
         timer = setTimeout(() => {
           abort.abort();
-          rej(new Error("passkey timeout"));
+          rej(timedOut);
         }, timeoutMs);
       }),
     ]);
     if (!assertion) throw new Error("the passkey prompt returned nothing");
     const first = assertion.getClientExtensionResults?.().prf?.results?.first;
     return first ? new Uint8Array(first) : null;
+  } catch (cause) {
+    const cancelled = cause?.name === "NotAllowedError" || cause?.name === "AbortError" || cause === timedOut;
+    throw cancelled ? new Error(PASSKEY_CANCELLED, { cause }) : cause;
   } finally {
     clearTimeout(timer);
   }
@@ -218,10 +225,10 @@ const readLegacySlot = (bound) => {
     localStorage.removeItem(LEGACY_KEY_SLOT);
   }
   const blob = parseBlob(localStorage.getItem(KEY_SLOT));
-  if (!blob || !bound || blob.credentialId) return null;
-  if (blob.damaged) return blob;
-  const address = blob.address ?? addressOf(blob.key);
-  return address.toLowerCase() === bound.toLowerCase() ? { ...blob, address } : null;
+  // A damaged or addressless record cannot be shown to be this account's key.
+  if (!blob || !bound || blob.credentialId || blob.damaged) return null;
+  const address = blob.address ?? (typeof blob.key === "string" ? addressOf(blob.key) : null);
+  return address?.toLowerCase() === bound.toLowerCase() ? { ...blob, address } : null;
 };
 
 /** This credential's key; `bound` (the account's authorizer address) lets an
@@ -230,7 +237,7 @@ const readSlot = (credentialId, bound) => {
   const own = credentialId ? parseBlob(localStorage.getItem(slotFor(credentialId))) : null;
   if (own) return own;
   const legacy = readLegacySlot(bound);
-  if (legacy && !legacy.damaged && credentialId) writeSlot(credentialId, legacy);
+  if (legacy && credentialId) writeSlot(credentialId, legacy);
   return legacy;
 };
 const writeSlot = (credentialId, blob) =>
@@ -308,7 +315,10 @@ async function unlock(credentialId, bound) {
   if (!blob) throw new Error("no device key in this browser");
   if (blob.damaged) throw new Error("the spending key stored in this browser is damaged");
   if (blob.protection !== "prf") return blob.key;
-  const secret = await prfSecret(credentialId).catch(() => null); // cancelled: same answer as absent
+  const secret = await prfSecret(credentialId).catch((e) => {
+    if (e.message === PASSKEY_CANCELLED) return null; // cancelled: same answer as absent
+    throw e;
+  });
   if (!secret) throw new Error(`your ${passkeyName()} is needed to approve this payment — the payment key stays locked without it`);
   try {
     return await unwrapKey(blob, secret);
