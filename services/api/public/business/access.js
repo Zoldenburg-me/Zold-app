@@ -27,10 +27,11 @@ const addr = (a) => `<span class="z-mono zb-access__addr">${esc(a)}</span>`;
 const DEVICE_LIB_WAIT_MS = 3000; // device.js that never loads must not hold up the whole screen
 async function deviceKeyRow(me) {
   let status = null;
+  let timer;
   try {
-    const lib = await Promise.race([window.__deviceLib, new Promise((_, no) => setTimeout(no, DEVICE_LIB_WAIT_MS))]);
+    const lib = await Promise.race([window.__deviceLib, new Promise((_, no) => { timer = setTimeout(no, DEVICE_LIB_WAIT_MS); })]);
     status = lib.keyStatus(me.passkey?.credentialId, me.authorizerAddress);
-  } catch { /* unread: said as unknown */ }
+  } catch { /* unread: said as unknown */ } finally { clearTimeout(timer); }
   return {
     none: "Not set up yet",
     unknown: "Couldn’t check this browser",
