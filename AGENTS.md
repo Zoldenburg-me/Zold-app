@@ -125,7 +125,7 @@ Each of these was a bug once.
   (default) | `native` (Safe pays ETH) | `token` (Safe pays USDC). Verified by
   preflight: the public paymaster REFUSES Base mainnet and sponsors Base
   Sepolia; `native` and `token` work on mainnet.
-- **Three checks, not one**: session (who), member+role (may they here), plan
+- **Three checks, not one**: session (who), member+role (may they here),
   capability (built, right org type). Collapsing any two opens a hole.
 - **Four eyes**: the reviewer may not be the drafter, whatever their role — and
   editing someone's draft lines makes you the drafter.
