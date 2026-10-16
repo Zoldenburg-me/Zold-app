@@ -391,5 +391,74 @@ await check("a link lives until 60 days after the due date, at least 30 days, at
   assert.equal(days(linkExpiry("2027-06-01", at)), 364);
 });
 
+console.log("\nNumbering: one number, once, picked at write time");
+
+const issueIn = (orgId: string, over: Record<string, unknown> = {}) =>
+  call("POST", `/api/orgs/${orgId}/invoicing/issue`, "u_owner", { ...invoiceFor("DE"), vat: { kind: "standard", rate: 19 }, ...over });
+const counterOf = (orgId: string) => store.findOrganisation(orgId)!.invoicing!.numberSeries!.next;
+
+await check("a hand-typed number is stepped over by the automatic one, never issued twice", async () => {
+  addOrg("org_num", "DE", { taxId: "1234567890" });
+  const year = new Date().getUTCFullYear();
+  const first = await issueIn("org_num");
+  assert.equal(first.status, 201, JSON.stringify(first.data));
+  assert.equal(first.data.invoice.issued.number, `RE-${year}-0001`);
+  const manual = await issueIn("org_num", { number: `RE-${year}-0002` });
+  assert.equal(manual.status, 201, JSON.stringify(manual.data));
+  assert.equal(counterOf("org_num"), 2, "a hand-typed number does not move the counter");
+  const auto = await issueIn("org_num");
+  assert.equal(auto.status, 201, JSON.stringify(auto.data));
+  assert.equal(auto.data.invoice.issued.number, `RE-${year}-0003`);
+  assert.equal(counterOf("org_num"), 4);
+  const again = await issueIn("org_num", { number: `RE-${year}-0003` });
+  assert.equal(again.status, 409, "a hand-typed number already issued is refused");
+});
+
+await check("two issues at once get two numbers", async () => {
+  // In dollars, so each request awaits the rate before it writes: the two
+  // genuinely interleave between drafting and issuing.
+  process.env.TRANSF_RATES_FIXED = JSON.stringify({ USD: 1.14, KES: 147.53 });
+  const [a, b] = await Promise.all([issueIn("org_num", { currency: "USD" }), issueIn("org_num", { currency: "USD" })])
+    .finally(() => { delete process.env.TRANSF_RATES_FIXED; });
+  assert.equal(a.status, 201, JSON.stringify(a.data));
+  assert.equal(b.status, 201, JSON.stringify(b.data));
+  assert.notEqual(a.data.invoice.issued.number, b.data.invoice.issued.number);
+  const numbers = store.invoicesOf("org_num").map((i: any) => i.issued?.number);
+  assert.equal(new Set(numbers).size, numbers.length, "no number appears twice");
+  assert.equal(counterOf("org_num"), 6);
+});
+
+await check("a profile save does not reset the counter; a stale one cannot cause a duplicate", async () => {
+  const saved = await call("PATCH", "/api/orgs/org_num/invoicing/profile", "u_owner", { footerNote: "Danke" });
+  assert.equal(saved.status, 200, JSON.stringify(saved.data));
+  assert.equal(counterOf("org_num"), 6, "a save that leaves the series alone leaves the counter alone");
+  // A form loaded before the last issues sends the counter it showed.
+  const stale = await call("PATCH", "/api/orgs/org_num/invoicing/profile", "u_owner", {
+    numberSeries: { prefix: "RE-{YYYY}-", next: 2, padding: 4 },
+  });
+  assert.equal(stale.status, 200, JSON.stringify(stale.data));
+  const next = await issueIn("org_num");
+  assert.equal(next.status, 201, JSON.stringify(next.data));
+  assert.equal(next.data.invoice.issued.number, `RE-${new Date().getUTCFullYear()}-0006`);
+});
+
+await check("an issue at 23:30 UTC on 31 December in Berlin is dated, and numbered, in the new year", async () => {
+  const { draftFrom } = await import("../services/api/src/routes/business/shared.js");
+  addOrg("org_berlin", "DE");
+  store.updateOrganisation("org_berlin", { reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" } } as any);
+  const draft = draftFrom(store.findOrganisation("org_berlin")!, invoiceFor("DE"), new Date("2026-12-31T23:30:00Z"));
+  assert.equal(draft.issueDate, "2027-01-01");
+  assert.equal(draft.number, "RE-2027-0001");
+  const utc = draftFrom(store.findOrganisation("org_num")!, invoiceFor("DE"), new Date("2026-12-31T23:30:00Z"));
+  assert.equal(utc.issueDate, "2026-12-31", "a UTC org is still in the old year");
+});
+
+await check("an issue date that is not a calendar day is refused, never numbered NaN", async () => {
+  for (const issueDate of ["garbage", "2026-12-31T23:30:00+01:00", "2026-02-30", "2026-13-01"]) {
+    const r = await issueIn("org_num", { issueDate });
+    assert.equal(r.status, 400, `${issueDate}: ${JSON.stringify(r.data)}`);
+  }
+});
+
 server.close();
 console.log(`\n${passed} passed${process.exitCode ? ", with failures" : ""}`);

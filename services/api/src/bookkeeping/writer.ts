@@ -141,6 +141,14 @@ function groupedRows(): Rows {
   };
 }
 
+/** Books exist only under an org, and an org always has a reporting zone: a
+ *  line is never dated in a zone guessed for it. */
+function zoneOf(orgId: string): string {
+  const timeZone = store.findOrganisation(orgId)?.reporting?.timeZone;
+  if (!timeZone) throw new Error(`organisation ${orgId} has no reporting time zone`);
+  return timeZone;
+}
+
 function inputsFor(user: User, rows: Rows): StatementInputs | undefined {
   const books = booksFor(user.id);
   if (!books) {
@@ -155,6 +163,7 @@ function inputsFor(user: User, rows: Rows): StatementInputs | undefined {
     accountId: books.accountId,
     userId: user.id,
     safeAddress: user.address,
+    timeZone: zoneOf(books.orgId),
     transfers: rows.transfersOf(user.id),
     deposits: rows.depositsOf(user.id),
     issueOrders: rows.issueOrdersOf(user.id),

@@ -35,7 +35,9 @@ export function storeDraft() {
 }
 export function forgetDraft() { try { localStorage.removeItem(draftKey()); } catch { /* nothing kept */ } }
 
-const today = () => new Date().toISOString().slice(0, 10);
+/* Today where the org keeps its books, as the server dates an invoice: at
+   23:30 UTC on 31 December a Berlin org is already in the new year. */
+const today = () => new Date().toLocaleDateString("sv-SE", { timeZone: org.reporting?.timeZone });
 
 /* VAT IDs: the shape per country comes from the profile (domain/vat-ids.ts),
    so the field says what it expects while the number is typed. */
