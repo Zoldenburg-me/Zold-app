@@ -301,6 +301,9 @@ assert.equal(m.isCompanyLogin(null), false);
   assert.equal(m.deviceKeyView(bound, null), "unknown", "an unread browser is never said to be not here");
   assert.equal(m.deviceKeyView(bound, { present: true, protection: "prf" }), "encrypted");
   assert.equal(m.deviceKeyView(bound, { present: true, protection: "none" }), "plain");
+  // A damaged record, or one that names no protection, is never "encrypted".
+  assert.equal(m.deviceKeyView(bound, { present: true, protection: null, damaged: true }), "unknown");
+  assert.equal(m.deviceKeyView(bound, { present: true, protection: null }), "unknown");
 }
 
 // ── where changes are made ──────────────────────────────────────────────────

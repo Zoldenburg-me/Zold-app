@@ -24,9 +24,13 @@ const rows = (list) => `<dl class="zb-set-rows">${list.map(([k, v]) => `<div><dt
 const addr = (a) => `<span class="z-mono zb-access__addr">${esc(a)}</span>`;
 
 /* This browser's payment key (device.js), the way the app's Security screen says it. */
+const DEVICE_LIB_WAIT_MS = 3000; // device.js that never loads must not hold up the whole screen
 async function deviceKeyRow(me) {
   let status = null;
-  try { status = (await window.__deviceLib).keyStatus(me.passkey?.credentialId, me.authorizerAddress); } catch { /* unread: said as unknown */ }
+  try {
+    const lib = await Promise.race([window.__deviceLib, new Promise((_, no) => setTimeout(no, DEVICE_LIB_WAIT_MS))]);
+    status = lib.keyStatus(me.passkey?.credentialId, me.authorizerAddress);
+  } catch { /* unread: said as unknown */ }
   return {
     none: "Not set up yet",
     unknown: "Couldn’t check this browser",
@@ -113,7 +117,7 @@ function approvalsCard(members) {
   const pr = org.paymentReview || {};
   const v = approvalView(members, (r) => Boolean(ROLE_CAN[r]?.approve));
   const second = on
-    ? `<b>On.</b> Zold won’t send a payment until someone other than its drafter approves it, whatever their role. Editing someone’s draft makes you its drafter. This is a Zold rule. On chain the account needs only its passkey.`
+    ? `<b>On.</b> A payment drafted in Zold Business isn’t sent until someone other than its drafter approves it, whatever their role. Editing someone’s draft makes you its drafter. This is a Zold rule. On chain the account needs only its passkey.`
     : offered
       ? `<b>Off.</b> A payment is saved, then sent with the sender’s ${esc(Z.passkeyName())}, without a second approval.`
       : "A payment is saved, then sent with the sender’s passkey. A second approval is part of a business account.";

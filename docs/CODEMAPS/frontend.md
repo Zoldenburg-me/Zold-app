@@ -25,7 +25,8 @@ main.js → screens.js (Approvals, Contacts, Members, Invoices, Books)
 home.js   Home (needs-you, in/out, accounts, latest statement lines)
 send.js · getpaid.js · apps.js (Shopify: merchant links when available, else in-core) · books-overview.js (in/out, by category)
 settings.js  grouped menu; access.js + access-model.js = Settings → Access
-          (signers and recovery of the company login's Safe, read from chain)
+          (who approves payments for every member; for the company login,
+          signers, payment key and recovery of its Safe, read from chain)
 core.js   shared state (org, me, view, cap(), api())
 shell.js  one delegated click handler, render(), router (?view=)
 nav.js    sidebar: VIEWS, PARENT (old ids → nav item), plan banner
@@ -33,7 +34,7 @@ views.js  META/RENDER registry + older views (send, get-paid, shopify,
           ledger, wallets with ownership proof, assets (holdings and lots),
           gains (realised per month), coa, export, integrations, documents, settings, plan…)
 actions.js data-act handlers · receipts.js payer rule + collection summary · search.js ⌘K over loaded lists
-access.js Settings → Access (company login only) · access-model.js its reads and
+access.js Settings → Access (approvals card for all; Safe cards company login only) · access-model.js its reads and
           recoveryStatus, no imports, also behind core.js readRecovery and the banner
 ```
 Render contract: `META[view]()` → title/sub/actions; `RENDER[view]()` → html
