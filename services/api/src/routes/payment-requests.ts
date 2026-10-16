@@ -23,6 +23,7 @@ import {
 import { addrs } from "../chain.js";
 import { livePaymentPage } from "./payment-page.js";
 import { qrSvg } from "../qr.js";
+import { EpcQrError, epcQrPayload } from "../epc-qr.js";
 import { midRates } from "../rates.js";
 import {
   applyPayment,
@@ -39,6 +40,7 @@ import {
   normaliseCode,
   ownerPaymentRequest,
   PaymentRequestError,
+  paidEur,
   publicPaymentRequest,
   quoteCrypto,
   validateCreate,
@@ -451,6 +453,36 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
       if (!(await livePaymentPage(hit.user))) return res.status(503).json({ error: "crypto payment is unavailable on this link just now" });
       res.type("image/svg+xml");
       res.send(qrSvg(address));
+    }),
+  );
+
+  /**
+   * The bank transfer as an EPC QR ("GiroCode"), which a banking app scans to
+   * prefill beneficiary, IBAN, amount and reference. The reference is the
+   * code, which matchMoneriumOrder looks for in the order memo. Built from the
+   * same allowlisted fields the page already shows; an open amount is left
+   * for the payer to type.
+   */
+  router.get(
+    "/pay/:handle/:code/sepa-qr.svg",
+    wrap(async (req, res) => {
+      const hit = resolvePublic(req, res);
+      if (!hit) return;
+      const bank = publicPaymentRequest(hit.r, store.findUser(hit.user.id) ?? hit.user, {
+        chainId: CHAIN_ID, token: payToken(), baseUrl: baseUrlFor(req), payeeName: payeeNameFor(hit.r), cryptoLive: false, handle: hit.handle,
+      }).methods.bank;
+      if (!bank) return res.status(404).json({ error: "this request does not take bank transfer" });
+      const due = hit.r.amountEur === undefined ? undefined : Math.round((hit.r.amountEur - paidEur(hit.r)) * 100) / 100;
+      let payload: string;
+      try {
+        payload = epcQrPayload({ name: bank.holder, iban: bank.iban, bic: bank.bic, amountEur: due && due > 0 ? due : undefined, remittance: bank.reference });
+      } catch (e) {
+        // The page then hides the QR and the typed fields stand alone.
+        if (e instanceof EpcQrError) return res.status(404).json({ error: "no bank QR for this request" });
+        throw e;
+      }
+      res.type("image/svg+xml");
+      res.send(qrSvg(payload));
     }),
   );
 
