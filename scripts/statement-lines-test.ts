@@ -37,6 +37,7 @@ const base = (): Inputs => ({
   accountId: "acc_1",
   userId: "u_1",
   safeAddress: SAFE,
+  timeZone: "UTC",
   transfers: [],
   deposits: [],
   issueOrders: [],
@@ -91,6 +92,16 @@ await check("a PAID SEPA payout is a debit line plus a fee line when a fee was t
   assert.equal(fee.amountCents, -99);
   assert.equal(fee.key, "transfer:t-1:fee");
   assert.equal(fee.counterparty.name, "Zold");
+});
+
+await check("a line's days are the org's: 23:30 UTC on 31 December is 1 January in Berlin", () => {
+  const inp = { ...base(), timeZone: "Europe/Berlin" };
+  inp.transfers = [{ id: "t-ny", userId: "u_1", quoteId: "q", rail: "sepa", state: "PAID", sendEur: 50, receiveEur: 50, recipientName: "Vermieter GmbH", reference: "Miete", txs: [{ step: "safe.redeem", hash: H(9) }], sepa: { mode: "sandbox", orderId: "ord-ny", state: "processed" }, createdAt: "2026-12-31T23:30:00.000Z", updatedAt: "2026-12-31T23:30:00.000Z" } as any];
+  const [line] = projectStatementLines(inp);
+  assert.equal(line.statement!.bookingDate, "2027-01-01");
+  assert.equal(line.statement!.valueDate, "2027-01-01");
+  const utc = projectStatementLines({ ...inp, timeZone: "UTC" })[0].statement!;
+  assert.equal(utc.valueDate, "2026-12-31", "the same instant is still 31 December in UTC");
 });
 
 await check("a CREATED or DEBITED transfer produces no line — money that has not left is not a movement", () => {
