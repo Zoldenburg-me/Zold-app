@@ -20,10 +20,13 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
+import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(os.tmpdir(), "zold-rbank-")), "db.json");
 process.env.RECOVERY_IBAN_HMAC_KEY = "k".repeat(40);
-process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS = `0x${"9".repeat(40)}`;
+// A real key, so the execute test can sign; it lives only in this process.
+const guardianWallet = privateKeyToAccount(generatePrivateKey());
+process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS = guardianWallet.address;
 
 const express = (await import("express")).default;
 const { store } = await import("../services/api/src/store.js");
@@ -31,7 +34,8 @@ const { RECOVERY } = await import("../services/api/src/config.js");
 const E = await import("../services/api/src/recovery/zoldenburg-enrolment.js");
 const B = await import("../services/api/src/recovery/zoldenburg-bank-check.js");
 const { publicRecoveryRequest } = await import("../services/api/src/recovery.js");
-const { createZoldenburgRecoveryRouter } = await import("../services/api/src/routes/recovery-zoldenburg.js");
+const { createZoldenburgRecoveryRouter, sweepZoldenburgRecoveries } = await import("../services/api/src/routes/recovery-zoldenburg.js");
+const { zoldenburgChain } = await import("../services/api/src/recovery/zoldenburg-guardian.js");
 const { createOperatorGate } = await import("../services/api/src/operators/gate.js");
 const { createOperatorAuthRouter } = await import("../services/api/src/routes/operator-auth.js");
 const { OPERATOR: OPERATOR_CONFIG, SECURITY } = await import("../services/api/src/config.js");
@@ -549,6 +553,73 @@ await t("routes: a corrupt read clock does not 500", async () => {
   const r = await call("/recovery/zoldenburg/r14/bank-check", {}, person);
   assert.equal(r.status, 200, r.text);
 });
+await t("execute: a cancel landing while the signature is checked gets 409, and nothing is relayed", async () => {
+  // r4 has passed its 1 € check; the operator fetches what to sign.
+  const sr = await opCall("/admin/recoveries/r4/sign-request", {});
+  assert.equal(sr.status, 200, sr.text);
+  const { EIP712Domain: _d, ...types } = sr.data.typedData.types;
+  const m = sr.data.typedData.message;
+  const signature = await guardianWallet.signTypedData({ ...sr.data.typedData, types, message: { ...m, newThreshold: BigInt(m.newThreshold), nonce: BigInt(m.nonce) } });
+  const { onChainDigest, relayRecovery } = zoldenburgChain;
+  let relayed = 0;
+  // The owner's cancel lands during execute's chain read.
+  zoldenburgChain.onChainDigest = async (td) => {
+    store.updateRecoveryRequest("r4", { status: "CANCELED", canceledAt: new Date().toISOString(), cancelReason: "cancelled by the account owner" });
+    return onChainDigest(td);
+  };
+  zoldenburgChain.relayRecovery = async (...a) => { relayed++; return relayRecovery(...a); };
+  try {
+    const ex = await opCall("/admin/recoveries/r4/execute", { signature, reviewNote: "Video call, matched Monerium profile" });
+    assert.equal(ex.status, 409, ex.text);
+    assert.match(ex.data.error, /CANCELED/);
+    assert.equal(relayed, 0, "no relay after the cancel");
+    assert.equal(req("r4").status, "CANCELED");
+  } finally {
+    Object.assign(zoldenburgChain, { onChainDigest, relayRecovery });
+  }
+});
+
+await t("execute: while the relay is in flight nothing closes the request; afterwards it is in its grace period", async () => {
+  store.updateRecoveryRequest("r4", { status: "REVIEW_PENDING", canceledAt: undefined, cancelReason: undefined });
+  const sr = await opCall("/admin/recoveries/r4/sign-request", {});
+  assert.equal(sr.status, 200, sr.text);
+  const { EIP712Domain: _d, ...types } = sr.data.typedData.types;
+  const m = sr.data.typedData.message;
+  const signature = await guardianWallet.signTypedData({ ...sr.data.typedData, types, message: { ...m, newThreshold: BigInt(m.newThreshold), nonce: BigInt(m.nonce) } });
+  const { relayRecovery } = zoldenburgChain;
+  let during = "";
+  zoldenburgChain.relayRecovery = async (...a) => {
+    // The sweep runs mid-relay, long after the request's expiry.
+    await sweepZoldenburgRecoveries(new Date(Date.parse(req("r4").expiresAt) + 1000), (async (r: any) => r) as any);
+    during = req("r4").status;
+    return relayRecovery(...a);
+  };
+  try {
+    const ex = await opCall("/admin/recoveries/r4/execute", { signature, reviewNote: "Video call, matched Monerium profile" });
+    assert.equal(ex.status, 200, ex.text);
+    assert.equal(during, "REVIEW_PENDING", "the sweep left the in-flight request alone");
+    assert.equal(req("r4").status, "GRACE_PERIOD");
+  } finally {
+    zoldenburgChain.relayRecovery = relayRecovery;
+  }
+});
+
+await t("sweep: the chain is read before an expired request is closed", async () => {
+  newRequest("r20");
+  newRequest("r21");
+  const later = new Date(Date.parse(req("r20").expiresAt) + 1000);
+  const synced: string[] = [];
+  // r20 was signed outside /admin (Safe Cover) and is on chain; r21 is not.
+  const sync = async (r: any) => {
+    synced.push(r.id);
+    return r.id === "r20" ? store.updateRecoveryRequest(r.id, { status: "GRACE_PERIOD" }) : r;
+  };
+  await sweepZoldenburgRecoveries(later, sync as any);
+  assert.ok(synced.includes("r20") && synced.includes("r21"));
+  assert.equal(req("r20").status, "GRACE_PERIOD", "on chain: the grace period, so the owner is alerted");
+  assert.equal(req("r21").status, "EXPIRED", "not on chain: expired");
+});
+
 server.close();
 
 // ---- the page's 1 € step (public/recovery/bank-step.js) --------------------
@@ -620,6 +691,18 @@ await t("writes after a chain read spread the stored state, not a copy from befo
   const chain = r.slice(r.indexOf("export async function syncZoldenburgFromChain"), r.indexOf("export async function sweepZoldenburgRecoveries"));
   assert.ok(!/zoldenburg: \{ \.\.\.z,/.test(chain), "no `...z` spread: a 1 € pass recorded during the read would be put back");
   assert.equal(chain.match(/\.\.\.zoldenburgNow\(request\.id\)/g)?.length, 3);
+});
+
+await t("the person's routes ask the chain before expiring a request", () => {
+  const r = src("routes/recovery-zoldenburg.ts");
+  const body = r.slice(r.indexOf("const requestFor = "), r.indexOf("const askView = "));
+  assert.ok(body.indexOf("syncZoldenburgFromChain(r)") > 0 && body.indexOf("syncZoldenburgFromChain(r)") < body.indexOf('status: "EXPIRED"'));
+});
+
+await t("the owner's cancel waits for a relay in flight", () => {
+  const r = src("routes/recovery-zoldenburg.ts");
+  const cancel = r.slice(r.indexOf('"/users/:id/recovery/zoldenburg/requests/:rid/cancel"'), r.indexOf("const findRecoverable"));
+  assert.ok(cancel.indexOf("relaying.has(r.id)") > 0 && cancel.indexOf("relaying.has(r.id)") < cancel.indexOf('status: "CANCELED"'));
 });
 
 await t("the operator routes refuse before they hand out or relay anything", () => {
