@@ -44,14 +44,14 @@
       // Above the page's sticky bars (200 at most), below a sheet's scrim
       // (ui.css .z-scrim, 250): an open sheet is never covered.
       "z-index:240;max-width:560px;margin:0 auto;padding:14px 16px;border-radius:14px;" +
-      "background:rgba(19,19,23,.97);border:1px solid #2c2c33;color:#ededf0;" +
+      "background:rgba(19,19,20,.97);border:1px solid #3a3833;color:#ede6d6;" +
       "box-shadow:0 18px 50px rgba(0,0,0,.55);font:13px/1.5 Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;" +
       "display:flex;gap:14px;align-items:center;flex-wrap:wrap";
 
     var text = document.createElement("div");
     text.style.cssText = "flex:1 1 260px;min-width:0;color:#b4b4bd";
     text.innerHTML =
-      '<b style="color:#ededf0;font-weight:600">No tracking cookies.</b> ' +
+      '<b style="color:#ede6d6;font-weight:600">No tracking cookies.</b> ' +
       "Zold stores only what it needs to work: your sign-in and device key in this browser, " +
       "and one short-lived cookie while you connect Monerium. ";
     var more = document.createElement("a");
@@ -67,7 +67,7 @@
     ok.type = "button";
     ok.textContent = "Got it";
     ok.style.cssText =
-      "flex:none;height:36px;padding:0 18px;border:0;border-radius:999px;background:#ed188d;color:#08080b;" +
+      "flex:none;height:36px;padding:0 18px;border:0;border-radius:6px;background:#ed188d;color:#0b0b0c;" +
       "font:600 13px Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;cursor:pointer";
     // Where keyboard focus was before it entered the notice, so dismissing it
     // can hand focus back instead of dropping it on <body> with the box gone.

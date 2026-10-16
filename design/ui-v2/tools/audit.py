@@ -97,7 +97,7 @@ def audit(path, legal=False):
     for x, y in zip(hs, hs[1:]):
         if y > x + 1: iss.append(f"heading level skips h{x} to h{y}"); break
     if re.search(r"\b(Acme|John Doe|Jane Doe|Lorem)\b", txt): iss.append("generic placeholder name")
-    if re.search(r"color:\s*#5b5b66", body): iss.append("#5b5b66 text fails contrast, use dim #9a9aa5")
+    if re.search(r"color:\s*#5b5b66", body): iss.append("#5b5b66 text fails contrast, use var(--z-dim)")
     if re.search(r"[\U0001F300-\U0001FAFF]", txt): iss.append("emoji in UI")
     if "transition:all" in src.replace(" ", ""): iss.append("transition: all")
     if re.search(r"#000(000)?\b", src, re.I): iss.append("pure black #000")
