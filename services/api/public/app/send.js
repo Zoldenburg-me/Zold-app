@@ -392,7 +392,7 @@ $("btn-send").onclick = async () => {
     //    terms. With a PRF-capable authenticator the ceremony IS the gate —
     //    the stored key is ciphertext until Face ID / fingerprint unwraps it.
     const dev = await deviceLib;
-    const addr = await dev.deviceAddress(credId());
+    const addr = await dev.deviceAddress(credId(), { bound: created.authorization.authorizer });
     if (created.authorization.authorizer.toLowerCase() !== addr.toLowerCase()) {
       throw new Error("this account's payment key was registered in a different browser — sign in there, or rotate the key from that device");
     }
@@ -407,7 +407,7 @@ $("btn-send").onclick = async () => {
     if (created.authorization.typedData.message.destination.toLowerCase() !== expectedDestination.toLowerCase()) {
       throw new Error("the payout destination in the payment terms does not match the recipient you entered — not approving");
     }
-    const signature = await dev.signTypedData(created.authorization.typedData, credId());
+    const signature = await dev.signTypedData(created.authorization.typedData, credId(), created.authorization.authorizer);
     const execution = await safeExecutionAssertion(created.authorization);
     const redeem = await moneriumRedeemAssertion(created.authorization);
 

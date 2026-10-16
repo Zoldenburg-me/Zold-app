@@ -21,7 +21,7 @@ let phKey;
 function phLoadKey(name) {
   if (phKey !== undefined) return;
   deviceLib.then((dev) => {
-    try { phKey = dev.keyStatus() || { present: false, protection: null }; } catch { phKey = { present: false, protection: null }; }
+    try { phKey = dev.keyStatus(credId(), user?.authorizerAddress) || { present: false, protection: null }; } catch { phKey = { present: false, protection: null }; }
     if (phRoute?.name === name) phRender();
   });
 }

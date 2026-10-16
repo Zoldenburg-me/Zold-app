@@ -36,6 +36,10 @@ const slots = new Map<string, string>();
 
 const dev = await import(path.join(ROOT, "services/api/public/device.js"));
 
+const CRED = "Y3JlZC1h"; // base64url credential id
+const CRED_B = "Y3JlZC1i";
+const SLOT = `zold-device-key:${CRED}`;
+
 let pass = 0;
 const t = async (label: string, fn: () => Promise<void> | void) => {
   await fn();
@@ -84,20 +88,20 @@ await t("digest matches viem byte for byte", () => {
 
 console.log("device key — unprotected fallback (no PRF authenticator):");
 await t("createKey mints a key and reports protection: none", async () => {
-  const { address, protection } = await dev.createKey(null);
+  const { address, protection } = await dev.createKey(CRED);
   assert.equal(protection, "none");
   assert.match(address, /^0x[0-9a-f]{40}$/);
 });
 
 await t("signature recovers to the device address", async () => {
-  const address = await dev.deviceAddress(null);
-  const sig = await dev.signTypedData(TYPED_DATA, null);
+  const address = await dev.deviceAddress(CRED);
+  const sig = await dev.signTypedData(TYPED_DATA, CRED);
   assert.equal((await recoverAddress({ hash: viemDigest, signature: sig })).toLowerCase(), address);
 });
 
 await t("address derivation matches viem for the same key", async () => {
-  const blob = JSON.parse(slots.get("zold-device-key")!);
-  assert.equal(privateKeyToAccount(blob.key).address.toLowerCase(), (await dev.deviceAddress(null)).toLowerCase());
+  const blob = JSON.parse(slots.get(SLOT)!);
+  assert.equal(privateKeyToAccount(blob.key).address.toLowerCase(), (await dev.deviceAddress(CRED)).toLowerCase());
 });
 
 console.log("device key — passkey-wrapped at rest (PRF):");
@@ -133,14 +137,14 @@ await t("each wrap uses a fresh IV", async () => {
 
 await t("a PRF-wrapped key refuses to sign without the passkey", async () => {
   const priv = `0x${"11".repeat(32)}`;
-  slots.set("zold-device-key", JSON.stringify({
+  slots.set(SLOT, JSON.stringify({
     ...(await dev.wrapKey(priv, PRF_SECRET)),
     address: privateKeyToAccount(priv as `0x${string}`).address.toLowerCase(),
   }));
   // No window.PublicKeyCredential here, so prfSecret() returns null — the
   // same path a browser takes when the ceremony is cancelled or unavailable.
   await assert.rejects(
-    () => dev.signTypedData(TYPED_DATA, "some-credential-id"),
+    () => dev.signTypedData(TYPED_DATA, CRED),
     /passkey is needed/,
     "a locked key must not sign without the authenticator",
   );
@@ -149,51 +153,170 @@ await t("a PRF-wrapped key refuses to sign without the passkey", async () => {
 await t("the cached address is readable while the key stays locked", async () => {
   const priv = `0x${"11".repeat(32)}`;
   const expected = privateKeyToAccount(priv as `0x${string}`).address.toLowerCase();
-  assert.equal(await dev.deviceAddress("some-credential-id"), expected);
+  assert.equal(await dev.deviceAddress(CRED), expected);
 });
 
 console.log("device key — strict mode and damaged records:");
 await t("strict createKey refuses a key the passkey cannot protect, and stores nothing", async () => {
   slots.clear();
-  await assert.rejects(() => dev.createKey(null, { requirePrf: true }), /PRF/);
-  assert.equal(dev.keyStatus().present, false);
+  await assert.rejects(() => dev.createKey(CRED, { requirePrf: true }), /PRF/);
+  assert.equal(dev.keyStatus(CRED).present, false);
 });
 
 await t("strict deviceAddress never mints an unprotected key just to report an address", async () => {
   slots.clear();
-  await assert.rejects(() => dev.deviceAddress(null, { requirePrf: true }), /PRF/);
-  assert.equal(dev.keyStatus().present, false);
+  await assert.rejects(() => dev.deviceAddress(CRED, { requirePrf: true }), /PRF/);
+  assert.equal(dev.keyStatus(CRED).present, false);
 });
 
 await t("a damaged record is reported present and unusable, and left exactly as it was", async () => {
   slots.clear();
-  slots.set("zold-device-key", "{not json");
-  assert.deepEqual(dev.keyStatus(), { present: true, protection: null, damaged: true });
-  await assert.rejects(() => dev.createKey(null), /already/);
-  await assert.rejects(() => dev.deviceAddress(null), /damaged/);
-  await assert.rejects(() => dev.signTypedData(TYPED_DATA, null), /damaged/);
-  assert.equal(slots.get("zold-device-key"), "{not json");
+  slots.set(SLOT, "{not json");
+  assert.deepEqual(dev.keyStatus(CRED), { present: true, protection: null, damaged: true });
+  await assert.rejects(() => dev.createKey(CRED), /already/);
+  await assert.rejects(() => dev.deviceAddress(CRED), /damaged/);
+  await assert.rejects(() => dev.signTypedData(TYPED_DATA, CRED), /damaged/);
+  assert.equal(slots.get(SLOT), "{not json");
 });
 
 await t("a damaged record is replaced only when the caller says no key is bound", async () => {
-  const { address } = await dev.createKey(null, { replaceDamaged: true });
+  const { address } = await dev.createKey(CRED, { replaceDamaged: true });
   assert.match(address, /^0x[0-9a-f]{40}$/);
-  assert.equal(dev.keyStatus().damaged, undefined);
+  assert.equal(dev.keyStatus(CRED).damaged, undefined);
 });
 
 await t("a readable stored key is never replaced", async () => {
-  const before = slots.get("zold-device-key");
-  await assert.rejects(() => dev.createKey(null), /already/);
-  await assert.rejects(() => dev.createKey(null, { replaceDamaged: true }), /already/);
-  assert.equal(slots.get("zold-device-key"), before);
+  const before = slots.get(SLOT);
+  await assert.rejects(() => dev.createKey(CRED), /already/);
+  await assert.rejects(() => dev.createKey(CRED, { replaceDamaged: true }), /already/);
+  assert.equal(slots.get(SLOT), before);
 });
 
 await t("onboarding replaces a damaged record only for an account with no key bound", async () => {
   const { readFileSync } = await import("node:fs");
   const src = readFileSync(path.join(ROOT, "services/api/public/app/onboarding.js"), "utf8");
   const fn = src.slice(src.indexOf("async function registerDeviceKey"), src.indexOf("async function registerDeviceKey") + 1200);
-  assert.match(fn, /replaceDamaged = !!dev\.keyStatus\(\)\.damaged && !u\.authorizerAddress/);
+  assert.match(fn, /bound = u\.authorizerAddress/);
+  assert.match(fn, /keyStatus\(credId\(\), bound\)/);
+  assert.match(fn, /replaceDamaged = !!status\.damaged && !bound/);
   assert.match(fn, /createKey\(credId\(\), \{ replaceDamaged \}\)/);
+});
+
+await t("createKey without a passkey credential refuses and stores nothing", async () => {
+  slots.clear();
+  await assert.rejects(() => dev.createKey(null), /passkey is needed/);
+  assert.equal(slots.size, 0);
+});
+
+console.log("device key — one slot per passkey credential:");
+await t("two credentials in one browser keep two keys", async () => {
+  slots.clear();
+  const a = await dev.createKey(CRED);
+  const b = await dev.createKey(CRED_B);
+  assert.notEqual(a.address, b.address);
+  assert.equal(await dev.deviceAddress(CRED), a.address);
+  assert.equal(await dev.deviceAddress(CRED_B), b.address);
+  assert.equal(JSON.parse(slots.get(`zold-device-key:${CRED_B}`)!).credentialId, CRED_B);
+  const sig = await dev.signTypedData(TYPED_DATA, CRED_B);
+  assert.equal((await recoverAddress({ hash: viemDigest, signature: sig })).toLowerCase(), b.address);
+});
+
+const LEGACY_PRIV = `0x${"22".repeat(32)}`;
+const LEGACY_ADDR = privateKeyToAccount(LEGACY_PRIV as `0x${string}`).address;
+
+await t("a legacy unscoped key loads for the account bound to it, and is carried forward", async () => {
+  slots.clear();
+  slots.set("zoll-device-key", JSON.stringify({ v: 1, protection: "none", key: LEGACY_PRIV, address: LEGACY_ADDR.toLowerCase() }));
+  assert.equal(dev.keyStatus(CRED, LEGACY_ADDR).present, true);
+  assert.equal(JSON.parse(slots.get(SLOT)!).key, LEGACY_PRIV);
+  assert.equal(await dev.deviceAddress(CRED), LEGACY_ADDR.toLowerCase());
+  const sig = await dev.signTypedData(TYPED_DATA, CRED);
+  assert.equal(await recoverAddress({ hash: viemDigest, signature: sig }), LEGACY_ADDR);
+  // Copied, not moved: another account this browser bound to the same key keeps it.
+  assert.ok(slots.get("zold-device-key"));
+  assert.equal(slots.get("zoll-device-key"), undefined);
+});
+
+await t("a pre-PRF plaintext legacy key loads for its bound account", async () => {
+  slots.clear();
+  slots.set("zold-device-key", LEGACY_PRIV);
+  assert.equal(await dev.deviceAddress(CRED, { bound: LEGACY_ADDR }), LEGACY_ADDR.toLowerCase());
+});
+
+await t("a new account in the same browser never picks up the legacy key", async () => {
+  slots.clear();
+  slots.set("zold-device-key", JSON.stringify({ v: 1, protection: "none", key: LEGACY_PRIV, address: LEGACY_ADDR.toLowerCase() }));
+  assert.equal(dev.keyStatus(CRED_B).present, false);
+  assert.equal(dev.keyStatus(CRED_B, `0x${"33".repeat(20)}`).present, false);
+  const { address } = await dev.createKey(CRED_B);
+  assert.notEqual(address, LEGACY_ADDR.toLowerCase());
+  // The first account still finds its key.
+  assert.equal(await dev.deviceAddress(CRED, { bound: LEGACY_ADDR }), LEGACY_ADDR.toLowerCase());
+});
+
+console.log("device key — a cancelled or timed-out passkey prompt:");
+const realSetTimeout = globalThis.setTimeout;
+const withAuthenticator = async (get: (opts: any) => Promise<unknown>, fn: () => Promise<void>) => {
+  (globalThis as any).window.PublicKeyCredential = function () {};
+  Object.defineProperty(globalThis, "navigator", { value: { credentials: { get } }, configurable: true, writable: true });
+  try { await fn(); } finally { delete (globalThis as any).window.PublicKeyCredential; }
+};
+
+await t("cancel (NotAllowedError) rethrows and stores nothing", async () => {
+  slots.clear();
+  await withAuthenticator(
+    () => Promise.reject(new DOMException("The operation was cancelled.", "NotAllowedError")),
+    async () => {
+      await assert.rejects(() => dev.createKey(CRED), (e: any) => e.name === "NotAllowedError");
+      await assert.rejects(() => dev.deviceAddress(CRED), (e: any) => e.name === "NotAllowedError");
+    },
+  );
+  assert.equal(slots.size, 0);
+});
+
+await t("timeout aborts the pending prompt, rethrows and stores nothing", async () => {
+  slots.clear();
+  let signal: AbortSignal | undefined;
+  (globalThis as any).setTimeout = (fn: () => void) => realSetTimeout(fn, 0);
+  try {
+    await withAuthenticator(
+      (opts) => { signal = opts.signal; return new Promise(() => {}); }, // never resolves
+      async () => { await assert.rejects(() => dev.createKey(CRED), /passkey timeout/); },
+    );
+  } finally {
+    (globalThis as any).setTimeout = realSetTimeout;
+  }
+  assert.equal(signal?.aborted, true);
+  assert.equal(slots.size, 0);
+});
+
+await t("an assertion that succeeds without PRF still stores the key unprotected", async () => {
+  slots.clear();
+  await withAuthenticator(
+    () => Promise.resolve({ getClientExtensionResults: () => ({}) }),
+    async () => { assert.equal((await dev.createKey(CRED)).protection, "none"); },
+  );
+  assert.equal(dev.keyStatus(CRED).protection, "none");
+});
+
+await t("an assertion with PRF stores the key wrapped", async () => {
+  slots.clear();
+  await withAuthenticator(
+    () => Promise.resolve({ getClientExtensionResults: () => ({ prf: { results: { first: PRF_SECRET.buffer } } }) }),
+    async () => {
+      const { address, protection } = await dev.createKey(CRED);
+      assert.equal(protection, "prf");
+      const sig = await dev.signTypedData(TYPED_DATA, CRED);
+      assert.equal((await recoverAddress({ hash: viemDigest, signature: sig })).toLowerCase(), address);
+    },
+  );
+});
+
+await t("a cancelled prompt at signing time keeps the key locked", async () => {
+  await withAuthenticator(
+    () => Promise.reject(new DOMException("cancelled", "NotAllowedError")),
+    async () => { await assert.rejects(() => dev.signTypedData(TYPED_DATA, CRED), /passkey is needed/); },
+  );
 });
 
 console.log(`\nDEVICE-KEY TEST PASSED — ${pass}/${pass}`);
