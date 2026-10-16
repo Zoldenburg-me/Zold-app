@@ -1,10 +1,12 @@
 /**
- * Settings → Access, without the DOM: who can sign for a company login's
- * Safe and who can recover it, read from the three routes the app's Security
- * screen reads (safe/signers, recovery/zoldenburg, recovery/candide). Those
- * answer only for the signed-in user, so only the company login itself sees
- * this, and only in its own company (isOwnCompanyOrg); other members read
- * nothing. Changes are made in the app (APP_LINKS).
+ * Settings → Access, without the DOM: who approves payments in an
+ * organisation (every member), and who can sign for a company login's
+ * Safe and who can recover it. The Safe and recovery are read from the three
+ * routes the app's Security screen reads (safe/signers, recovery/zoldenburg,
+ * recovery/candide). Those answer only for the signed-in user, so only the
+ * company login itself sees them, and only in its own company
+ * (isOwnCompanyOrg); other members read nothing of them. Signer and recovery
+ * changes are made in the app (APP_LINKS).
  *
  * No imports, so scripts/business-access-test.ts loads it in node.
  */
@@ -127,6 +129,32 @@ export function signersView(s) {
     // signature: without the passkey, or above 1, it sends nothing.
     zoldCanSend: passkeyIsOwner && s.threshold <= 1,
   };
+}
+
+/**
+ * Who approves payments, from GET /api/orgs/:id/members (every role reads
+ * it). Only active members count: an invite or a removed member approves
+ * nothing and is no owner. `canApprove(role)` is the console's role table
+ * (core.js ROLE_CAN). Unread members (null) is null, never "no approvers".
+ */
+export function approvalView(members, canApprove) {
+  if (!Array.isArray(members)) return null;
+  const active = members.filter((m) => m.status === "active");
+  return { approvers: active.filter((m) => canApprove(m.role)), owners: active.filter((m) => m.role === "owner").length };
+}
+
+/**
+ * This browser's payment key, as device.js keyStatus reports it: "none" (no
+ * key bound to the account yet), "unknown" (this browser could not be read,
+ * or its record is damaged: never taken as not here or as encrypted), "elsewhere" (bound, not in this browser),
+ * "encrypted" (wrapped by the passkey) or "plain" (stored unencrypted).
+ */
+export function deviceKeyView(me, status) {
+  if (!me?.authorizerAddress) return "none";
+  if (!status || status.damaged) return "unknown";
+  if (!status.present) return "elsewhere";
+  if (status.protection === "none") return "plain";
+  return status.protection ? "encrypted" : "unknown";
 }
 
 /** Everything Access shows, or null for a member who is not the company login. */
