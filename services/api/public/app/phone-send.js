@@ -297,7 +297,7 @@ async function phSubmit(btn, errEl) {
     created = await api("/api/transfers", { quoteId: q.id, ...recipient, ...(phSend.reference ? { reference: phSend.reference } : {}) });
     phSend.transferId = created.id;
     const dev = await deviceLib;
-    const addr = await dev.deviceAddress(credId());
+    const addr = await dev.deviceAddress(credId(), { bound: created.authorization.authorizer });
     if (created.authorization.authorizer.toLowerCase() !== addr.toLowerCase()) {
       throw new Error("This account’s approval key is on a different browser. Send from there, or change the key there first.");
     }
@@ -305,7 +305,7 @@ async function phSubmit(btn, errEl) {
     if (created.authorization.typedData.message.destination.toLowerCase() !== expected.toLowerCase()) {
       throw new Error("The payment terms name a different recipient from the one you entered. Nothing was approved.");
     }
-    const signature = await dev.signTypedData(created.authorization.typedData, credId());
+    const signature = await dev.signTypedData(created.authorization.typedData, credId(), created.authorization.authorizer);
     const execution = await safeExecutionAssertion(created.authorization);
     const redeem = await moneriumRedeemAssertion(created.authorization);
     const t = await api(`/api/transfers/${created.id}/authorize`, {
