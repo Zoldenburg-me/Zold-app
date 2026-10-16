@@ -451,8 +451,8 @@ export function createDraftRoutes(
         problems.push({
           lineId: line.id,
           reason: sepaFee > 0
-            ? `€${line.amount} does not exceed the €${sepaFee} fee, so nothing would arrive.`
-            : `€${line.amount} is not a positive amount.`,
+            ? `€${sendEur.toFixed(2)} does not exceed the €${sepaFee} fee, so nothing would arrive.`
+            : `€${sendEur.toFixed(2)} is not a positive amount.`,
         });
         continue;
       }
