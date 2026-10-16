@@ -15,6 +15,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+// No chain is used in-process, but config refuses hardhat's dev key on a real
+// chain's RPC, so pin the local one the way _local-chain.ts does.
+process.env.TRANSF_CHAIN_ID = "31337";
+process.env.TRANSF_RPC_URL ??= "http://127.0.0.1:8545";
+
 const PORT = Number(process.env.TRANSF_RATES_STUB_PORT ?? 8549);
 process.env.TRANSF_RATES_URL = `http://127.0.0.1:${PORT}/rates`;
 process.env.TRANSF_RATES_TTL_MS = "500";

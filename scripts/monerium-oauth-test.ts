@@ -570,6 +570,12 @@ try {
     assert.equal(q.status, 201, `quote failed after activation: ${q.data.error ?? ""}`);
   });
 
+  await t("a sub-cent SEPA amount is refused with a 400, not a 500", async () => {
+    // Rounds to €0.00 before the check; unrounded it passed and createQuote threw.
+    const r = await call("/api/quotes", { userId, sendEur: 0.004, rail: "sepa" });
+    assert.equal(r.status, 400, JSON.stringify(r.data));
+  });
+
   await t("disconnect needs the passkey, not just a session", async () => {
     const r = await call(`/api/users/${userId}/monerium/connect`, undefined, "DELETE");
     assert.equal(r.status, 401, JSON.stringify(r.data));

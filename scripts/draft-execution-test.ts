@@ -407,6 +407,15 @@ try {
     assert.match(tiny.r.data.problems[0].reason, /does not exceed the/i);
   });
 
+  // 0.994 is over the 0.99 fee only before rounding; the quote rounds to cents,
+  // so the pre-check must too, or the line fails mid-batch instead of here.
+  const subCent = await preflight([line(contact, "0.994")]);
+  check("a sub-cent line is rounded before the fee check, so the batch refuses it whole", () => {
+    assert.equal(subCent.r.status, 422, JSON.stringify(subCent.r.data));
+    assert.match(subCent.r.data.problems[0].reason, /does not exceed the/i);
+    assert.equal(subCent.after.draft.state, "REVIEWED", "nothing was created");
+  });
+
   const overdraft = await preflight([line(contact, "700.00"), line(secondContact, "700.00")]);
   check("lines that each fit but overdraw TOGETHER are caught as a total", () => {
     assert.equal(overdraft.r.status, 400);
