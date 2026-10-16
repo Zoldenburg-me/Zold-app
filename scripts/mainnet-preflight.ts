@@ -215,6 +215,18 @@ if (!(process.env.CANDIDE_FORWARDING_RPC_URL ?? process.env.FORWARDING_ADDRESS_R
   ok("forwarding is configured (not called: activation is per payment page)");
 }
 
+console.log("wallets");
+{
+  // A real-money deploy must not depend on a wallet nobody can sign for; on a
+  // test chain the same gaps are only warned about.
+  const { REAL_MONEY_CHAINS } = await import("../services/api/src/config/env.js");
+  const { loadWalletRegister, walletRegisterProblems } = await import("./wallet-register.js");
+  const problems = walletRegisterProblems(process.env, CANDIDE.chainId, loadWalletRegister());
+  const report = REAL_MONEY_CHAINS.has(Number(CANDIDE.chainId)) ? fail : warn;
+  for (const p of problems) report(p);
+  if (!problems.length) ok("every configured wallet is in wallets.json with a known key holder");
+}
+
 console.log("retired settings");
 const stale = Object.keys(process.env).filter((k) => k.startsWith("CANDIDE_COSIGNER_") || k === "CANDIDE_ALLOWANCE_MODULE_ADDRESS");
 if (stale.length) warn(`${stale.join(", ")} set but no longer read — remove ${stale.length > 1 ? "them" : "it"}`);
