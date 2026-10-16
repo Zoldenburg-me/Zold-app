@@ -1,7 +1,7 @@
 /**
  * The renderer registry, and the views without a module of their own:
  * Accounts, Wallets, Transactions, Assets, Chart of accounts, the month's
- * statement lines, Connections, Organisation, Plan and the invoicing profile.
+ * statement lines, Connections, Organisation and the invoicing profile.
  * The other screens (screens.js, home.js, getpaid.js, send.js, settings.js,
  * apps.js, invoice.js and the rest) register here.
  *

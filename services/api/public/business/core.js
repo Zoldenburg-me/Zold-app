@@ -1,6 +1,6 @@
 /**
  * What every screen on the dashboard needs: the DOM helpers, the escaping, the
- * session-bearing api(), the plan-capability lookup, and the shared state.
+ * session-bearing api(), the capability lookup, and the shared state.
  *
  * Only this module writes the state. `org`, `view` and the rest are read
  * everywhere; an ES module export is a live binding, so reads stay a plain

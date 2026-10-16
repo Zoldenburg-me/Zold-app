@@ -110,9 +110,9 @@ export async function render({ focus = false } = {}) {
     }
   } catch (e) {
     if (mine !== seq) return;
-    // A 409 here means the feature gate fired server-side. Show the same
-    // prompt rather than an error, so the two agree.
-    box.innerHTML = e.status === 409
+    // A 409 naming a capability is the feature gate firing server-side. Show
+    // the same prompt rather than an error, so the two agree.
+    box.innerHTML = e.status === 409 && e.capability
       ? `<div class="gate"><h3>${esc(e.capability || "Not available")}</h3>
          <p>${esc(e.error)}</p></div>`
       : e.status === 403

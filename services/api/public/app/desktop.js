@@ -58,7 +58,7 @@ function phSideLink(it, active) {
 function phSideItems() {
   const orgs = phCache.orgs || [];
   // The organisation that has the feature opens it: the personal space when
-  // its plan has it, otherwise the first that does (as phInvoiceButton).
+  // it has it, otherwise the first that does (as phInvoiceButton).
   const personal = phPersonalOrg();
   const holder = (cap) => (phCan(personal, cap) ? personal : orgs.find((o) => phCan(o, cap)));
   const web = (id, cap, icon, label) => {
