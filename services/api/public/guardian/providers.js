@@ -10,9 +10,9 @@ const MARKS = {
   apple: `<svg class="z-provider__mark" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16.37 1.43c0 1.14-.5 2.27-1.18 3.08-.74.9-1.99 1.57-2.99 1.57-.12 0-.23-.02-.3-.03-.01-.06-.04-.22-.04-.39 0-1.15.57-2.27 1.2-2.98.81-.94 2.15-1.64 3.25-1.68.03.13.06.28.06.43zm4.56 15.71c-.03.07-.46 1.58-1.52 3.12-.94 1.34-1.94 2.71-3.43 2.71-1.52 0-1.9-.88-3.63-.88-1.7 0-2.3.91-3.67.91-1.38 0-2.33-1.26-3.43-2.8C3.96 18.38 2.93 15.57 2.93 12.92c0-4.28 2.8-6.55 5.55-6.55 1.45 0 2.68.95 3.6.95.87 0 2.22-1.01 3.9-1.01.62 0 2.89.06 4.38 2.19-.13.09-2.38 1.37-2.38 4.19 0 3.26 2.85 4.42 2.95 4.45z"/></svg>`,
 };
 
-/** One button per configured provider; `verb` is "Continue" or "Add". */
+/** One button per configured provider; `verb` is "Continue" or "Add", or left out for the bare name under a round mark. */
 export function providerButtons(caps, verb) {
   return ["google", "apple"].filter((p) => caps?.turnkeyLogins?.[p])
-    .map((p) => `<button type="button" class="z-btn z-provider" data-start="${p}">${MARKS[p]}<span>${verb} with ${PROVIDER_NAMES[p]}</span></button>`)
+    .map((p) => `<button type="button" class="z-btn z-provider" data-start="${p}">${MARKS[p]}<span>${verb ? `${verb} with ` : ""}${PROVIDER_NAMES[p]}</span></button>`)
     .join("");
 }

@@ -664,7 +664,7 @@ function obSocialScreen(p) {
       ${obAlert()}
     </main>
     <div class="z-screen__foot z-screen__foot--quiet">
-      ${obSocialOtp ? obSubmit("Confirm") : `<div class="z-providers" id="ob-social-btns">${caps.turnkeyLogins?.email ? Z.button({ variant: "secondary", full: true, icon: "mail", label: "Use my email", id: "btn-social-email" }) : ""}</div>`}
+      ${obSocialOtp ? obSubmit("Confirm") : `<div class="z-providers z-providers--round" id="ob-social-btns">${caps.turnkeyLogins?.email ? Z.button({ variant: "secondary", icon: "mail", label: "Email", id: "btn-social-email" }) : ""}</div>`}
       ${obSocialOtp ? `<button type="button" class="z-link-btn" id="btn-social-resend">Send a new code</button>` : ""}
       <button type="button" class="z-link-btn" id="btn-social-skip">Skip for now</button>
     </div>`,
@@ -673,7 +673,7 @@ function obSocialScreen(p) {
       import("/guardian/providers.js").then(({ providerButtons }) => {
         const slot = root.querySelector("#ob-social-btns");
         if (!slot) return;
-        slot.insertAdjacentHTML("afterbegin", providerButtons(caps, "Continue"));
+        slot.insertAdjacentHTML("afterbegin", providerButtons(caps));
         slot.querySelectorAll("[data-start]").forEach((b) => { b.onclick = () => obSocialStart(b.dataset.start, b); });
       }).catch(obShowErr);
       const mail = root.querySelector("#btn-social-email");
