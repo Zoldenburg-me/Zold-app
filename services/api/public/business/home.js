@@ -174,7 +174,7 @@ function attention({ waiting, invoices, lines, accounts }) {
   if (fromSuppliers.length) {
     const n = fromSuppliers.length;
     rows.push(row("move_to_inbox", "p", `${n} supplier invoice${n === 1 ? "" : "s"} to check`,
-      `${esc(eur(fromSuppliers.reduce((s, i) => s + (Number(i.total) || 0), 0)))} in total · submitted through your invoice link`,
+      "Submitted through your invoice link",
       `<button type="button" class="z-btn z-btn--primary" data-act="inv-suppliers"><span>Review</span></button>`));
   }
   const late = (invoices || []).filter((i) => i.direction === "outgoing" && i.overdue && !["PAID", "RECONCILED", "DELETED", "DRAFT"].includes(i.state));
