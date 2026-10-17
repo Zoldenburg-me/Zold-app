@@ -375,9 +375,9 @@ export const bk = { month: null, lines: [], chart: null };
 
 META.books = () => ({
   title: "Books",
-  sub: bk.month ? `${new Intl.DateTimeFormat("en-GB", { month: "long", year: "numeric" }).format(new Date(`${bk.month}-15T12:00:00`))} · every euro in and out, with its Beleg` : "Every euro in and out, with its Beleg",
+  sub: bk.month ? `${new Intl.DateTimeFormat("en-GB", { month: "long", year: "numeric" }).format(new Date(`${bk.month}-15T12:00:00`))} · every euro in and out, with its booking receipt` : "Every euro in and out, with its booking receipt",
   actions: cap("export.ledger").allowed
-    ? `${secondary("Issue Belege", 'data-act="export-prepare"', "receipt")}${secondary("Belege as ZIP", 'data-act="export-zip"', "folder_zip")}${secondary("Lexware CSV", 'data-act="export-csv"', "download")}`
+    ? `${secondary("Create receipts", 'data-act="export-prepare"', "receipt")}${secondary("Receipts as ZIP", 'data-act="export-zip"', "folder_zip")}${secondary("Lexware CSV", 'data-act="export-csv"', "download")}`
     : "",
 });
 
@@ -409,8 +409,8 @@ RENDER.books = async () => {
       ? `<button type="button" class="zb-memo zb-memo--set" data-act="bk-memo" data-id="${esc(l.id)}">${esc(l.note)}<span class="z-sr">, change the memo</span></button>`
       : `<button type="button" class="zb-memo" data-act="bk-memo" data-id="${esc(l.id)}">${Z.icon("edit_note")}Add memo<span class="z-sr"> for ${esc(who)}</span></button>`;
     const beleg = l.documentCode
-      ? `<a class="zb-beleg" href="${esc(l.documentUrl)}" target="_blank" rel="noopener">${Z.icon("attach_file")}Beleg<span class="z-sr"> ${esc(l.documentCode)} (opens in a new tab)</span></a>`
-      : `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="line-beleg" data-line="${esc(l.id)}">Issue<span class="z-sr"> a Beleg for ${esc(who)}</span></button>`;
+      ? `<a class="zb-beleg" href="${esc(l.documentUrl)}" target="_blank" rel="noopener">${Z.icon("attach_file")}Receipt<span class="z-sr"> ${esc(l.documentCode)} (opens in a new tab)</span></a>`
+      : `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="line-beleg" data-line="${esc(l.id)}">Create<span class="z-sr"> a booking receipt for ${esc(who)}</span></button>`;
     return `<tr><td class="z-dim">${esc(day(ymd(l.valueDate)))}</td>
       <td><span class="z-tbl__who">${Z.avatar({ name: who })}<span>${esc(who)}${l.reference && l.reference !== l.note ? `<span class="zb-sub2">${esc(l.reference)}</span>` : ""}</span></span></td>
       <td>${memo}</td><td>${cat}</td><td>${beleg}${l.unexecuted ? ` ${Z.tag("Unproven", "amber")}` : ""}</td>
