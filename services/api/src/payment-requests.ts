@@ -37,7 +37,7 @@ export type PaymentMethod = "crypto" | "bank";
 export type PaymentRequestState = "OPEN" | "PAID" | "EXPIRED" | "CANCELLED";
 
 export class PaymentRequestError extends Error {
-  constructor(message: string, public status = 400) {
+  constructor(message: string, public status = 400, public code?: string) {
     super(message);
   }
 }
