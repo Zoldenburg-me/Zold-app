@@ -497,7 +497,7 @@ console.log("\nA supplier submits through a requested link");
 const { newLinkToken, ownerInvoiceView } = await import("../services/api/src/domain/invoices.js");
 const { notifyRequester } = await import("../services/api/src/routes/business/invoice-links.js");
 addOrg("org_req", "DE");
-store.updateUser("u_owner", { email: "olga@example.test" } as any);
+store.updateUser("u_owner", { email: "olga@example.test", emailVerifiedAt: new Date().toISOString() } as any);
 const requestLink = () => {
   const { token, hash } = newLinkToken();
   const at = new Date().toISOString();
@@ -552,6 +552,9 @@ await check("the requester is mailed when mail is on; no mail, no email or a ref
   store.updateMember("m_org_req_u_owner", { status: "deactivated" } as any);
   assert.equal(await notifyRequester(inv, { mailOn: true, send: async () => { throw new Error("must not send"); } }), "no-email", "a requester who left is not mailed");
   store.updateMember("m_org_req_u_owner", { status: "active" } as any);
+  store.updateUser("u_owner", { emailVerifiedAt: undefined } as any);
+  assert.equal(await notifyRequester(inv, { mailOn: true, send: async () => { throw new Error("must not send"); } }), "no-email", "an unconfirmed address is not mailed");
+  store.updateUser("u_owner", { emailVerifiedAt: new Date().toISOString() } as any);
 });
 
 server.close();
