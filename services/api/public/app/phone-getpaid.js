@@ -125,8 +125,10 @@ PH["get-paid"] = {
   bind(root) {
     const setup = root.querySelector("#ph-inv-setup");
     if (setup) setup.onclick = () => phPersonalSheet(setup, phWebHref("invoices"));
-    if (phCache.links === null) phLoadLinks().then(() => { if (phRoute?.name === "get-paid") phRender(); });
-    if (phCache.orgs === null) phLoadOrgs().then(() => { if (phRoute?.name === "get-paid") phRender(); });
+    // phRefresh, not phRender: a load that lands while the personal-space
+    // sheet is open must not close it and drop what was typed.
+    if (phCache.links === null) phLoadLinks().then(() => { if (phRoute?.name === "get-paid") phRefresh(); });
+    if (phCache.orgs === null) phLoadOrgs().then(() => { if (phRoute?.name === "get-paid") phRefresh(); });
   },
 };
 

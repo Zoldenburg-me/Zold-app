@@ -248,14 +248,20 @@ const phEur = (n) => Z.formatMoney(n ?? 0, "EUR");
 /* The capability check, as the organisation read reports it. */
 const phCan = (org, cap) => org?.capabilities?.[cap]?.allowed === true;
 const phPersonalOrg = () => (phCache.orgs || []).find((o) => o.type === "personal") || null;
-async function phLoadOrgs() {
-  if (phCache.orgs !== null) return phCache.orgs;
-  try {
-    phCache.orgs = (await api("/api/orgs")).organisations || [];
-    const owned = user?.accountType === "company" ? phCache.orgs.filter((o) => o.type === "business") : [];
-    ownCompanyOrg = owned.find((o) => o.role === "owner") || owned[0] || null;
-  } catch { phCache.orgs = []; }
-  return phCache.orgs;
+// One request in flight: every caller's redraw lands together, so a second
+// answer cannot arrive later and close a sheet opened after the first.
+let phOrgsLoading = null;
+function phLoadOrgs() {
+  if (phCache.orgs !== null) return Promise.resolve(phCache.orgs);
+  return (phOrgsLoading ??= (async () => {
+    try {
+      phCache.orgs = (await api("/api/orgs")).organisations || [];
+      const owned = user?.accountType === "company" ? phCache.orgs.filter((o) => o.type === "business") : [];
+      ownCompanyOrg = owned.find((o) => o.role === "owner") || owned[0] || null;
+    } catch { phCache.orgs = []; }
+    phOrgsLoading = null;
+    return phCache.orgs;
+  })());
 }
 /* "26 Sep": day first, and the short month en-GB spells "Sept". */
 const phDay = (iso) => {
