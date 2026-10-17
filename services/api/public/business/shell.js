@@ -222,6 +222,8 @@ export async function boot() {
       e.preventDefault();
       const typed = $("#new-org-name").value.trim();
       const type = $("#new-org-type").value;
+      const email = $("#new-org-email").value.trim();
+      if (!$("#new-org-email").checkValidity()) return toast("Enter an email address, or leave it empty.", true);
       try {
         const r = await api("/api/orgs", {
           method: "POST",
@@ -230,14 +232,19 @@ export async function boot() {
             ...(type === "personal" ? { name: u?.name || typed, legalName: typed } : { name: typed }),
             type,
             country: $("#new-org-country").value,
+            ...(email ? { email } : {}),
             timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
           },
         });
         try { localStorage.setItem("zold-org", r.organisation.id); } catch { /* opens the first org */ }
         location.assign(forInvoices ? "/business?view=invoices" : location.pathname);
       } catch (err) {
-        // Made meanwhile (another tab): it is there to open.
-        if (err.code === "PERSONAL_ORG_EXISTS") return location.assign("/business?view=invoices");
+        // Made meanwhile (another tab): open that one, not the last org used.
+        if (err.code === "PERSONAL_ORG_EXISTS") {
+          const own = (await api("/api/orgs").catch(() => ({}))).organisations?.find((o) => o.type === "personal");
+          try { if (own) localStorage.setItem("zold-org", own.id); } catch { /* opens the first org */ }
+          return location.assign("/business?view=invoices");
+        }
         toast(err.message, true);
       }
     };
