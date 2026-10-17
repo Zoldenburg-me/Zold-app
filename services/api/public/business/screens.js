@@ -329,7 +329,7 @@ const copyRow = (label, value, shown = value) => `<div><dt>${esc(label)}</dt><dd
 function payToHtml(p) {
   const rows = p.kind === "wallet"
     ? [copyRow("Wallet address", p.address || ""), `<div><dt>Network</dt><dd>${esc(p.chainName || `Chain ${p.chainId}`)}</dd></div>`]
-    : [`<div><dt>Account holder</dt><dd>${esc(p.bank?.holderName || "")}</dd></div>`,
+    : [copyRow("Account holder", p.bank?.holderName || ""),
       copyRow("IBAN", p.bank?.iban || "", Z.groupIban(p.bank?.iban || "")),
       ...(p.bank?.bic ? [copyRow("BIC", p.bank.bic)] : [])];
   return `<section><h3 class="z-eyebrow" style="margin-bottom:8px">How the supplier wants to be paid</h3><dl class="z-kv z-card">${rows.join("")}</dl></section>`;
