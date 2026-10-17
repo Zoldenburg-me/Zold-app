@@ -189,7 +189,7 @@ export function watchRecovery() {
 
 export async function boot() {
   // Test mode follows the chain (GET /api/health realMoney), as in the app.
-  api("/api/health").then((h) => { setTestMode(!h.realMoney); setChainId(h.chainId); setUsdSymbol(h.capabilities?.usdToken?.symbol); renderNav(); }).catch(() => { /* no pill */ });
+  api("/api/health").then((h) => { setTestMode(!h.realMoney); setChainId(h.chainId); setUsdSymbol(h.capabilities?.usdToken?.symbol); renderNav(); if (view === "wallets") render(); }).catch(() => { /* no pill */ });
   if (!token) { only("#signed-out"); return; }
   let list;
   try {
