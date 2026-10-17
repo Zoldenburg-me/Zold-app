@@ -1,8 +1,9 @@
 /**
  * The one way Zold sends mail: SMTP, configured by EMAIL_VERIFICATION in
- * config.ts. It sends email verification codes and the owner's recovery
- * alerts (recovery/owner-alerts.ts). No other code sends mail, and nothing
- * may say "we emailed you" without going through here.
+ * config.ts. It sends email verification codes, the owner's recovery
+ * alerts (recovery/owner-alerts.ts) and the note that a supplier submitted
+ * a requested invoice (routes/business/invoice-links.ts). No other code
+ * sends mail, and nothing may say "we emailed you" without going through here.
  */
 import nodemailer, { type Transporter } from "nodemailer";
 import { EMAIL_VERIFICATION, IS_PRODUCTION } from "../config.js";
@@ -90,6 +91,24 @@ export async function sendVerificationCode(to: string, code: string): Promise<vo
 /** Mail goes out only where the SMTP transport is configured, which config
  *  checks when EMAIL_VERIFICATION=1. */
 export const mailAvailable = () => EMAIL_VERIFICATION.enabled;
+
+/**
+ * Tell whoever asked for an invoice that the supplier filled the link in.
+ * Nothing the supplier typed goes in it (their name, number or amount could
+ * carry a link or a lie), and it has no link: the requester acts in the app.
+ */
+export async function sendInvoiceSubmitted(to: string, orgName: string): Promise<void> {
+  await smtp().sendMail({
+    from: EMAIL_VERIFICATION.smtp.from,
+    to,
+    subject: "A supplier submitted an invoice",
+    text:
+      `A supplier filled in the invoice link you sent for ${orgName}.\n\n` +
+      `Open Zold, then Invoices, "From suppliers", to check it and pay it.\n\n` +
+      `This email has no link.\n\n` +
+      `Zoldenburg`,
+  });
+}
 
 /** "13 October 2026, 09:00 UTC": the same for every reader, whatever their zone. */
 const utcText = (d: Date) =>

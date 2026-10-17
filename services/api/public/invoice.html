@@ -148,6 +148,8 @@ const own = token === "own" ? new URLSearchParams(location.search) : null;
 let session = "";
 try { session = localStorage.getItem("zold-session") || localStorage.getItem("zoll-session") || ""; } catch { /* signed out */ }
 let password = "";
+/** The chains a wallet payout may be on, from the server: [{ chainId, name }]. */
+let chains = [];
 
 async function api(path, opts = {}) {
   let res;
@@ -414,7 +416,8 @@ function renderForm(inv) {
       <label for="f-bic">BIC (optional)</label><input id="f-bic" placeholder="COBADEFFXXX" />
       <details style="margin-top:.8rem"><summary style="cursor:pointer;color:var(--muted)">Or a wallet address instead</summary>
         <label for="f-wallet">Wallet address</label><input id="f-wallet" placeholder="0x…" />
-        <label for="f-chain">Chain ID</label><input id="f-chain" value="8453" inputmode="numeric" />
+        <label for="f-chain">Network</label><select id="f-chain">${chains.map((c) =>
+          `<option value="${esc(c.chainId)}">${esc(c.name)}</option>`).join("")}</select>
       </details>
     </div>
     <div style="margin-top:1.2rem"><button id="submit">Submit invoice</button></div>
@@ -528,6 +531,7 @@ async function boot() {
     $("#content").innerHTML = `<div class="err" role="alert">${esc(msg)}</div>`;
     return;
   }
+  chains = data.payoutChains || [];
   render(data.invoice);
 }
 
