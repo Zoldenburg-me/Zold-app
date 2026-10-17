@@ -12,7 +12,9 @@
  */
 import express from "express";
 import { store } from "../../store.js";
-import { ContactError } from "../../domain/contacts.js";
+import { ContactError, chainName } from "../../domain/contacts.js";
+import { CHAIN_ID } from "../../config.js";
+import { mailAvailable, sendInvoiceSubmitted } from "../../adapters/mailer.js";
 import {
   InvoiceError,
   assertTransition as assertInvoiceTransition,
@@ -75,6 +77,38 @@ const issuerExtras = (invoice: Invoice) => {
 export const linkInvoiceView = (invoice: Invoice) =>
   supplierView(invoice, payorName(invoice), issuerExtras(invoice));
 
+/** The chains a supplier may name for a wallet payout: the one this
+ *  deployment runs on, the only one the payor's account holds money on. */
+export const payoutChains = () => [{ chainId: CHAIN_ID, name: chainName(CHAIN_ID) }];
+
+/**
+ * Mail whoever made the link that the supplier submitted it. Never blocks or
+ * fails the submission: no mail configured, no email on file, or a refused
+ * send is logged and dropped. `mailOn` and `send` are for tests.
+ */
+export async function notifyRequester(
+  invoice: Invoice,
+  { mailOn = mailAvailable(), send = sendInvoiceSubmitted } = {},
+): Promise<"sent" | "off" | "no-email" | "failed"> {
+  if (!mailOn) return "off";
+  // All of it in the try: this runs unawaited, and an unhandled rejection exits the API.
+  try {
+    // A requester who has left the org is told nothing about it.
+    const member = invoice.createdByMemberId ? store.findMember(invoice.createdByMemberId) : undefined;
+    const email = member?.status === "active" && member.userId ? store.findUser(member.userId)?.email : undefined;
+    if (!email) {
+      console.error(`invoice submitted: ${invoice.id}: the requester is no active member with an email`);
+      return "no-email";
+    }
+    await send(email, store.findOrganisation(invoice.orgId)?.name ?? "your organisation");
+    return "sent";
+  } catch (err: any) {
+    // Codes only: the SMTP server's reply can quote the address.
+    console.error(`invoice submitted: ${invoice.id}: mail failed: ${err?.code ?? "error"}${err?.responseCode ? ` (SMTP ${err.responseCode})` : ""}`);
+    return "failed";
+  }
+}
+
 export function createInvoiceLinkRouter(): express.Router {
   const r = express.Router();
 
@@ -114,7 +148,7 @@ export function createInvoiceLinkRouter(): express.Router {
   r.get("/:token", async (req, res) => {
     const invoice = await load(req, res);
     if (!invoice) return;
-    res.json({ invoice: linkInvoiceView(invoice) });
+    res.json({ invoice: linkInvoiceView(invoice), payoutChains: payoutChains() });
   });
 
   /** The supplier fills the invoice in. Locked once submitted. */
@@ -147,6 +181,10 @@ export function createInvoiceLinkRouter(): express.Router {
       if (dueDate !== undefined && dueDate !== null && dueDate !== "" && !(typeof dueDate === "string" && DUE_DATE.test(dueDate))) {
         return res.status(400).json({ error: "The due date must be a date, YYYY-MM-DD." });
       }
+      const payTo = parsePayTo(req.body?.payTo, invoice.currency);
+      if (payTo?.kind === "wallet" && !payoutChains().some((c) => c.chainId === payTo.chainId)) {
+        return res.status(400).json({ error: `A wallet must be on ${payoutChains().map((c) => c.name).join(" or ")}.` });
+      }
       assertInvoiceTransition(invoice.state, "SUBMITTED");
       const updated = store.updateInvoice(invoice.id, {
         state: "SUBMITTED",
@@ -159,11 +197,12 @@ export function createInvoiceLinkRouter(): express.Router {
         },
         lines,
         total,
-        payTo: parsePayTo(req.body?.payTo, invoice.currency),
+        payTo,
         dueDate: typeof dueDate === "string" && dueDate ? dueDate : invoice.dueDate,
         submittedAt: new Date().toISOString(),
       });
       res.json({ invoice: linkInvoiceView(updated) });
+      void notifyRequester(updated);
     } catch (err) {
       if (err instanceof InvoiceError || err instanceof ContactError) return res.status(400).json({ error: err.message });
       throw err;
