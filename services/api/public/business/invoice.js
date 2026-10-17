@@ -144,8 +144,9 @@ RENDER["invoice-new"] = async () => {
     })),
   ];
   // A reason not offered here (an older draft, or the small-business default
-  // outside the EU) takes the first that is, so its note field is drawn.
-  if (v.kind === "exempt" && !reasons.some((x) => x.id === v.reason)) v.reason = reasons[0]?.id;
+  // outside the EU) is dropped, never swapped: the issuer picks the tax claim,
+  // and an exempt invoice without a reason is refused.
+  if (v.kind === "exempt" && !reasons.some((x) => x.id === v.reason)) v.reason = "";
   const r = invoiceDraft.recipient || {};
   const missing = [
     !(d.issuer.addressLine && d.issuer.city && d.issuer.country) ? "your address" : "",
@@ -205,7 +206,7 @@ RENDER["invoice-new"] = async () => {
             ? `<label for="inv-rate">Rate</label><select id="inv-rate" name="rate" style="max-width:160px">${d.reference.vatRates.map((x) => `<option value="${x}" ${Number(v.rate) === x ? "selected" : ""}>${x} %</option>`).join("")}</select>`
             : `<label for="inv-rate">Rate (%)</label><input id="inv-rate" name="rate" type="number" min="0" max="100" step="0.1" value="${esc(v.rate ?? "")}" style="max-width:160px" />`)
           : `<label for="inv-reason">Why not</label>
-             <select id="inv-reason" name="reason">${reasons.map((x) => `<option value="${esc(x.id)}" ${v.reason === x.id ? "selected" : ""}>${esc(x.label)}${x.legalBasis ? `: ${esc(x.legalBasis)}` : ""}</option>`).join("")}</select>
+             <select id="inv-reason" name="reason">${picked ? "" : `<option value="" selected disabled>Choose a reason…</option>`}${reasons.map((x) => `<option value="${esc(x.id)}" ${v.reason === x.id ? "selected" : ""}>${esc(x.label)}${x.legalBasis ? `: ${esc(x.legalBasis)}` : ""}</option>`).join("")}</select>
              <p class="zb-hint" style="margin-top:6px">${esc(picked?.hint || "")}</p>
              ${picked?.requiresFreeText ? `<label for="inv-note">Note printed on the invoice</label><input id="inv-note" name="note" autocomplete="off" value="${esc(v.note || "")}" placeholder="${de ? "Steuerfrei nach § 4 Nr. … UStG" : "Why no tax is charged, and the law it rests on"}…" />` : ""}`}
       </fieldset>
@@ -214,7 +215,7 @@ RENDER["invoice-new"] = async () => {
           ${f("inv-po", "Order number", invoiceDraft.purchaseOrder)}
         </div>
         ${f("inv-currency", "Currency", currency, 'maxlength="3" style="max-width:120px;text-transform:uppercase"')}
-        <p class="zb-hint" style="margin-top:6px">Any currency with a published exchange rate. Zold collects only euros: the Pay link and bank details ask for the euro amount at the rate on the day it’s issued, and the rate is printed on the invoice.</p>
+        <p class="zb-hint" style="margin-top:6px">Any currency with a published exchange rate. The Pay link and bank details ask for the euro amount, at the rate on the day it’s issued; the rate is printed on the invoice.</p>
       </details>
       <div id="inv-check" class="zb-issues" aria-live="polite"></div>
       <div class="zb-actions">
@@ -259,8 +260,10 @@ export function readInvoiceEditor() {
     const rate = $("#inv-rate")?.value;
     invoiceDraft.vat.rate = rate === undefined || rate === "" ? undefined : Number(rate);
   } else {
-    invoiceDraft.vat.reason = $("#inv-reason")?.value ?? invoiceDraft.vat.reason;
-    invoiceDraft.vat.note = $("#inv-note")?.value ?? invoiceDraft.vat.note;
+    const reason = $("#inv-reason")?.value ?? invoiceDraft.vat.reason;
+    // A note belongs to its reason: a new reason starts with an empty one.
+    invoiceDraft.vat.note = reason === invoiceDraft.vat.reason ? ($("#inv-note")?.value ?? invoiceDraft.vat.note) : "";
+    invoiceDraft.vat.reason = reason;
   }
 }
 

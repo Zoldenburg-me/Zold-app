@@ -87,7 +87,7 @@ const DE_REASONS = [
 /**
  * Home currency of the non-EU countries Zold has issuers in, for the invoice
  * default. Each one still needs a rate to be issued in (withConversion).
- * shortcut: unlisted countries start in EUR, add a country when its issuers do.
+ * Any other country starts in EUR, the currency every invoice settles in.
  */
 const HOME_CURRENCY: Record<string, string> = {
   IN: "INR", NG: "NGN", KE: "KES", GB: "GBP", CH: "CHF", US: "USD",
