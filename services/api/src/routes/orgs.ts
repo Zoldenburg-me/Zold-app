@@ -175,6 +175,10 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
         .status(400)
         .json({ error: `"${String(timeZone)}" is not a time zone. Use an IANA name like Europe/Berlin.`, field: "timeZone" });
     }
+    // Printed as the issuer's contact on invoices.
+    if (typeof email === "string" && email.trim() && !emailLooksValid(email.trim())) {
+      return res.status(400).json({ error: "Enter an email address for your invoices, or leave it empty.", field: "email" });
+    }
 
     /**
      * A personal org is the person's own books, so there is one per person,
