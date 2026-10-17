@@ -30,6 +30,7 @@ import {
   normaliseInvoiceCurrency,
   normaliseVatId,
   nextFreeNumber,
+  reasonForRuleSet,
   type ExemptionReasonId,
   type InvoiceDraft,
   type InvoiceLanguage,
@@ -243,8 +244,8 @@ export function draftFrom(org: Organisation, body: Record<string, any>, now = ne
     const builtIn = EXEMPTION_REASONS[reason as ExemptionReasonId];
     if (builtIn?.requiresFreeText && !str(body.vat?.note)) {
       throw new InvoiceComplianceError(
-        `"${builtIn.label}" has no wording we can supply — the note differs by country. ` +
-          "Write the exemption and its legal basis; it has to appear on the invoice.",
+        `"${reasonForRuleSet(builtIn, jur.ruleSet).label}" has no wording Zold can supply. ` +
+          "Write the note to print on the invoice, with its legal basis where there is one.",
       );
     }
     treatment = { kind: "exempt", reason, note: str(body.vat?.note) };

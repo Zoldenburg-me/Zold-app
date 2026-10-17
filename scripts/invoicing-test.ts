@@ -30,6 +30,7 @@ import {
   FOREIGN_TAX_ID_MAX,
   invoiceLanguage,
   isEuCountry,
+  reasonForRuleSet,
   issuerTaxIdProblem,
   normaliseInvoiceCurrency,
   normaliseVatId,
@@ -481,9 +482,27 @@ check("outside the EU nothing is claimed — structural checks only", () => {
   assert.equal(j.ruleSet, "GENERIC");
   assert.equal(j.verification, "structural");
   assert.equal(j.inEu, false);
-  assert.deepEqual(j.reasons.sort(), ["export_third_country", "other"]);
+  assert.deepEqual([...j.reasons].sort(), ["not_registered", "other"]);
   assert.match(j.notVerified.join(" "), /GSTIN/, "India's actual requirements are named");
   assert.match(j.disclaimer, /does not support/);
+});
+
+check("a non-EU issuer gets no EU reason or note, and starts in its own currency", () => {
+  for (const code of ["IN", "NG", "US"]) {
+    const j = jurisdictionFor(code);
+    for (const id of j.reasons) {
+      const r = reasonForRuleSet(EXEMPTION_REASONS[id as keyof typeof EXEMPTION_REASONS], j.ruleSet);
+      assert.equal(r.requiresFreeText, true, `${code}/${id}: the issuer writes the note`);
+      assert.equal(r.legalBasis, "", `${code}/${id}: no citation is invented`);
+      assert.doesNotMatch(`${r.label} ${r.hint} ${r.invoiceNote}`, /\bEU\b|Directive|UStG|Anderer/, `${code}/${id}`);
+      assert.equal(vatNoteFor({ kind: "exempt", reason: id, note: "Not registered for GST" }, "en"), "Not registered for GST");
+    }
+  }
+  assert.equal(jurisdictionFor("IN").currency, "INR");
+  assert.equal(jurisdictionFor("NG").currency, "NGN");
+  assert.equal(jurisdictionFor("DE").currency, "EUR");
+  assert.equal(jurisdictionFor("PL").currency, "EUR", "settles in euros even outside the eurozone");
+  assert.equal(jurisdictionFor("BR").currency, "EUR", "an unlisted country starts in the settlement currency");
 });
 
 check("an unknown country still resolves, and promises nothing", () => {
