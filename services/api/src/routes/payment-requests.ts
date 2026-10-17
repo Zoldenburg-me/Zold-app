@@ -424,9 +424,9 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
       return undefined;
     }
     // An OPEN link made for an invoice before its payee lost invoice links is
-    // not offered either. A paid one stays readable: it is the payer's
-    // receipt. Money already sent is still matched by the poller.
-    if (r.invoiceId && effectiveState(r) === "OPEN" && invoicePayLinkBlocker(user)) {
+    // not offered either. One with money on it, paid or partly, stays
+    // readable: it is the payer's receipt. Money sent later is still matched.
+    if (r.invoiceId && effectiveState(r) === "OPEN" && paidEur(r) === 0 && invoicePayLinkBlocker(user)) {
       res.status(404).json({ error: "no such payment request" });
       return undefined;
     }
