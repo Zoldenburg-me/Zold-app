@@ -504,7 +504,7 @@ try {
     body: {
       supplier: { orgName: "Chain Vendor", email: "ops@vendor.example", invoiceNumber: "CV-9" },
       lines: [{ description: "Node hosting", quantity: "1", unitPrice: "40.00" }],
-      payTo: { kind: "wallet", address: "0x2222222222222222222222222222222222222222", chainId: 8453 },
+      payTo: { kind: "wallet", address: "0x2222222222222222222222222222222222222222", chainId: 31337 },
     },
   });
   const noIban = await call("POST", `/api/orgs/${org.id}/invoices/${walletOnly.invoice.id}/pay`, { token: ownerToken, body: {} });

@@ -321,6 +321,20 @@ function receiptDraftSections(i) {
     ${note("Issuing gives it the next invoice number and today’s date, and marks it paid by these receipts. Collected " + esc(when(fr.runAt)) + ".", "info")}`;
 }
 
+/* Where the supplier asked to be paid, each value in full with Copy: one
+   wrong character sends the money elsewhere. */
+const copyRow = (label, value, shown = value) => `<div><dt>${esc(label)}</dt><dd><div class="zb-safe-addr">
+    <span class="z-mono" translate="no">${esc(shown)}</span>
+    <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="copy-text" data-text="${esc(value)}" data-said="${esc(label)} copied">${Z.icon("content_copy")}<span>Copy</span></button></div></dd></div>`;
+function payToHtml(p) {
+  const rows = p.kind === "wallet"
+    ? [copyRow("Wallet address", p.address || ""), `<div><dt>Network</dt><dd>${esc(p.chainName || `Chain ${p.chainId}`)}</dd></div>`]
+    : [`<div><dt>Account holder</dt><dd>${esc(p.bank?.holderName || "")}</dd></div>`,
+      copyRow("IBAN", p.bank?.iban || "", Z.groupIban(p.bank?.iban || "")),
+      ...(p.bank?.bic ? [copyRow("BIC", p.bank.bic)] : [])];
+  return `<section><h3 class="z-eyebrow" style="margin-bottom:8px">How the supplier wants to be paid</h3><dl class="z-kv z-card">${rows.join("")}</dl></section>`;
+}
+
 /** One invoice in a drawer: its parties, what it is for, how it was paid. */
 export function invoiceDrawer(i, trigger) {
   const out = i.direction === "outgoing";
@@ -340,13 +354,13 @@ export function invoiceDrawer(i, trigger) {
     [out ? "Customer" : "Supplier", who],
     ["Amount", Z.formatMoney(a.value, a.currency)],
     ["Due", i.dueDate ? day(ymd(i.dueDate)) : "None"],
-    ...(!out && i.payTo?.bank?.iban ? [["Pay to", Z.groupIban(i.payTo.bank.iban)]] : []),
   ];
   document.getElementById("inv-drawer")?.remove();
   document.body.insertAdjacentHTML("beforeend", Z.overlay({
     id: "inv-drawer", title: isDraft ? `Draft for ${monthWord(i.fromReceipts.month)}` : num ? `Invoice ${num}` : "Invoice",
     body: `<div class="z-sheet__body"><div>${Z.tag(invWord(i))}</div>
       <dl class="z-kv z-card">${rows.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>
+      ${!out && i.payTo ? payToHtml(i.payTo) : ""}
       ${isDraft ? receiptDraftSections(i) : i.settlements?.length ? settlementRows(i.settlements) : ""}
       <div class="zb-actions" style="margin-top:0">${out && i.issued ? `<a class="z-btn z-btn--secondary z-btn--sm" href="/invoice/own?org=${encodeURIComponent(org.id)}&amp;id=${encodeURIComponent(i.id)}" target="_blank" rel="noopener">${Z.icon("print")}<span>View, print or save as PDF</span><span class="z-sr"> (opens in a new tab)</span></a>` : ""}${invoiceActions(i)}</div></div>`,
   }));
