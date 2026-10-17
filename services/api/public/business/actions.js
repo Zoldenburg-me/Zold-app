@@ -913,7 +913,7 @@ export const ACTIONS = {
       name: $("#s-name").value, legalName: $("#s-legal").value,
       vatId: $("#s-vatid").value, taxNumber: $("#s-taxno").value,
       registerCourt: $("#s-court").value, registerNumber: $("#s-reg").value, managingDirector: $("#s-gf").value,
-      notificationEmail: $("#s-notify").value,
+      email: $("#s-email").value, notificationEmail: $("#s-notify").value,
       address: {
         line1: $("#s-addr1").value, line2: $("#s-addr2").value,
         postalCode: $("#s-zip").value, city: $("#s-city").value,
