@@ -488,6 +488,7 @@ RENDER.organisation = async () => {
       </div>
       ${issuerFieldsHtml(org.address?.country)}
       <div class="grid g2" style="margin-top:12px">
+        <div><label for="s-email">Email on your invoices <span class="desc">(optional)</span></label><input id="s-email" name="invoice-email" type="email" autocomplete="email" spellcheck="false" value="${esc(org.email || "")}" /></div>
         <div><label for="s-notify">Notification email</label><input id="s-notify" name="email" type="email" autocomplete="email" spellcheck="false" value="${esc(org.notificationEmail || "")}" /></div>
         <div><label for="s-currency">Reporting currency</label>
           <input id="s-currency" name="currency" autocomplete="off" value="${esc(org.reporting.currency)}" style="max-width:140px" /></div>
