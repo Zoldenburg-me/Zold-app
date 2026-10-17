@@ -29,6 +29,7 @@ import {
 import {
   syncInvoicePayment, } from "./state.js";
 import { CEILINGS, ceilingRefusal } from "../../domain/ceilings.js";
+import { linkInvoiceView } from "./invoice-links.js";
 
 /** Resolving the org and the caller's role for a request — injected so this
  *  module cannot acquire its own way of deciding who is calling. */
@@ -52,6 +53,21 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
         .map(syncInvoicePayment)
         .map((i) => ({ ...ownerInvoiceView(i), overdue: isOverdue(i) })),
     });
+  });
+
+  /** An issued invoice as its customer sees it, for the owner to read and
+   *  print again: the link token is stored only as a hash, so the owner
+   *  reaches the same projection with their session instead. Read only. */
+  r.get("/:orgId/invoices/:invoiceId/document", (req, res) => {
+    const ctx = ctxOf(req, res);
+    if (!ctx) return;
+    if (!requireCapability(ctx, res, "invoices")) return;
+    if (!requirePermission(ctx, res, "invoices.read")) return;
+    const invoice = store.findInvoice(String(req.params.invoiceId));
+    if (!invoice || invoice.orgId !== ctx.org.id || invoice.direction !== "outgoing" || !invoice.issued || invoice.state === "DELETED") {
+      return res.status(404).json({ error: "no such invoice" });
+    }
+    res.json({ invoice: linkInvoiceView(syncInvoicePayment(invoice)) });
   });
 
   /** Create the one-time "Invoice-Me" link. The token is shown once. */

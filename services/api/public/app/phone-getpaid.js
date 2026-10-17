@@ -38,13 +38,68 @@ function phLinkSub(r) {
 }
 
 /* The button says what the organisation read allows, in its own words. Invoices are
-   written in Zold Business, for the personal space or a company. */
+   written in Zold Business, for the personal space or a company; a person
+   without either is offered the personal space here, then lands on Invoices. */
 function phInvoiceButton() {
   if (phCache.orgs === null) return Z.button({ icon: "receipt_long", label: "Invoice", disabledReason: "Loading…" });
   const org = phCan(phPersonalOrg(), "invoices") ? phPersonalOrg() : (phCache.orgs || []).find((o) => phCan(o, "invoices"));
   if (org) return Z.button({ icon: "receipt_long", label: "Invoice", href: phWebHref("invoice-new") }).replace("<a ", `<a data-ph-org="${esc(org.id)}" `);
+  if (!phPersonalOrg() && user?.accountType !== "company") return Z.button({ icon: "receipt_long", label: "Invoice", id: "ph-inv-setup" });
   const reason = phPersonalOrg()?.capabilities?.invoices?.reason || "Invoices are not part of this account.";
   return Z.button({ icon: "receipt_long", label: "Invoice", disabledReason: reason });
+}
+
+/* Their own books live in /business. The personal space is made from what
+   the person types here, never from one tap: one per person, none for a
+   company login (routes/orgs.ts). The space is named after the person and
+   follows their name; what they type is the name on their invoices.
+   `then` is where Zold Business opens once it exists (Profile: its home;
+   Get paid: Invoices). */
+function phPersonalSheet(trigger, then = "/business") {
+  const u = user || {};
+  document.getElementById("ph-biz")?.remove();
+  document.body.insertAdjacentHTML("beforeend", Z.overlay({
+    id: "ph-biz", title: "Your personal space",
+    body: `<form class="z-sheet__body z-form" id="ph-biz-form" novalidate>
+        <p class="z-sub">Your own invoices and books in Zold Business, next to any company you work in. What you enter here is printed at the top of your invoices.</p>
+        ${Z.field({ id: "ph-biz-name", label: "Name on your invoices", name: "name", autocomplete: "name", maxlength: 80,
+          placeholder: `${ownAccountName(u) || "Miriam Weber"}…`, hint: "Your full name, or the name you trade under." })}
+        ${Z.select({ id: "ph-biz-country", label: "Country you work from", name: "country", value: u.country || "",
+          options: Z.countries(u.country), hint: "It decides which invoicing rules apply." })}
+        ${Z.field({ id: "ph-biz-email", label: "Email on your invoices", name: "email", type: "email", autocomplete: "email", optional: true,
+          placeholder: `${u.email || "you@example.com"}…` })}
+        ${Z.button({ variant: "primary", full: true, label: "Create personal space", type: "submit" })}
+      </form>`,
+  }));
+  const scrim = $("ph-biz");
+  scrim.dataset.ph = "1";
+  const form = scrim.querySelector("#ph-biz-form");
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const name = form.querySelector("#ph-biz-name");
+    const country = form.querySelector("#ph-biz-country");
+    const email = form.querySelector("#ph-biz-email");
+    const btn = form.querySelector('button[type="submit"]');
+    Z.setFieldError(name, name.value.trim().length >= 2 ? "" : "Enter the name for your invoices.");
+    Z.setFieldError(country, country.value ? "" : "Choose a country.");
+    Z.setFieldError(email, !email.value.trim() || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.value.trim()) ? "" : "Enter an email address, or leave it empty.");
+    if (Z.focusFirstError(form)) return;
+    Z.setLoading(btn, true);
+    try {
+      const r = await api("/api/orgs", { type: "personal", name: user.name || name.value.trim(), legalName: name.value.trim(),
+        country: country.value, ...(email.value.trim() ? { email: email.value.trim() } : {}),
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone });
+      try { localStorage.setItem("zold-org", r.organisation.id); } catch { /* opens the first org */ }
+      location.assign(then);
+    } catch (err) {
+      // Made meanwhile (another tab, a stale list): it is there to open.
+      if (err.code === "PERSONAL_ORG_EXISTS") return location.assign(then);
+      Z.setLoading(btn, false);
+      Z.setFieldError(name, err.message);
+      name.focus();
+    }
+  };
+  Z.openOverlay("ph-biz", trigger);
 }
 
 PH["get-paid"] = {
@@ -67,7 +122,9 @@ PH["get-paid"] = {
       ${phCache.linksError ? Z.note({ tone: "a", text: phCache.linksError }) : ""}
     `)}`;
   },
-  bind() {
+  bind(root) {
+    const setup = root.querySelector("#ph-inv-setup");
+    if (setup) setup.onclick = () => phPersonalSheet(setup, phWebHref("invoices"));
     if (phCache.links === null) phLoadLinks().then(() => { if (phRoute?.name === "get-paid") phRender(); });
     if (phCache.orgs === null) phLoadOrgs().then(() => { if (phRoute?.name === "get-paid") phRender(); });
   },
