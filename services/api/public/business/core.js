@@ -254,15 +254,6 @@ export function setPersonalLater() {
   try { localStorage.setItem(laterKey(), "1"); } catch { /* asked again next visit */ }
 }
 
-/** The personal space is made from what the person typed in the form
- *  (actions.js "create-personal"), never from one tap. It is named after the
- *  person and follows their name; what they typed is the name on invoices. */
-export async function createPersonalOrg({ legalName, country, email }) {
-  const r = await api("/api/orgs", { method: "POST", body: { type: "personal", name: me.name || legalName, legalName, country, ...(email ? { email } : {}), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone } });
-  try { localStorage.setItem("zold-org", r.organisation.id); } catch { /* opens the first org */ }
-  location.reload();
-}
-
 /** A recovery under way on the signed-in login's own Safe: a new passkey
  *  about to replace theirs. Read once per visit (shell.js); for a company
  *  login that Safe is the company's. */
