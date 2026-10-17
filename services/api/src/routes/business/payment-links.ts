@@ -68,7 +68,7 @@ export function createPaymentLinkRoutes(deps: OrgRoutes): express.Router {
       const out = invoiceId ? await withInvoiceLinkLock({ id: invoiceId, orgId: ctx.org.id }, make) : await make();
       res.status(out.status).json(out.body);
     } catch (err) {
-      if (err instanceof PaymentRequestError) return res.status(err.status).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
+      if (err instanceof PaymentRequestError) return res.status(err.status).json({ error: err.message });
       throw err;
     }
   }));
