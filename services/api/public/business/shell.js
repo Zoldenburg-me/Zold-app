@@ -7,7 +7,7 @@
  */
 import {
   $, api, esc, invoiceInputListener, org, orgs, readRecovery, recoveryPending, recoveryUnknown, setInvoiceInputListener, ensureMe, setOrg,
-  setOrgs, setTestMode, setUsdSymbol, setView, toast, token, view,
+  setChainId, setOrgs, setTestMode, setUsdSymbol, setView, toast, token, view,
 } from "./core.js";
 import { KNOWN, planBanner, refreshSide, renderNav, setMenu } from "./nav.js";
 import { META, RENDER, setExportMonth } from "./views.js";
@@ -189,7 +189,7 @@ export function watchRecovery() {
 
 export async function boot() {
   // Test mode follows the chain (GET /api/health realMoney), as in the app.
-  api("/api/health").then((h) => { setTestMode(!h.realMoney); setUsdSymbol(h.capabilities?.usdToken?.symbol); renderNav(); }).catch(() => { /* no pill */ });
+  api("/api/health").then((h) => { setTestMode(!h.realMoney); setChainId(h.chainId); setUsdSymbol(h.capabilities?.usdToken?.symbol); renderNav(); const net = document.getElementById("own-safe-chain"); if (net) net.textContent = String(h.chainId ?? ""); }).catch(() => { /* no pill */ });
   if (!token) { only("#signed-out"); return; }
   let list;
   try {
