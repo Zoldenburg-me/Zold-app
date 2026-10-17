@@ -40,8 +40,9 @@ export function createPaymentLinkRoutes(deps: OrgRoutes): express.Router {
     const user = store.findUser(ctx.userId);
     if (!user) return res.status(401).json({ error: "no such user" });
     // No member's account backs any of the org's accounts yet: say that, not
-    // that the account belongs to someone else.
-    if (!store.accounts.some((a) => a.orgId === ctx.org.id && a.backingUserId)) {
+    // that the account belongs to someone else. A personal space is backed by
+    // its owner's Safe (orgsBackedBy).
+    if (ctx.org.type !== "personal" && !store.accounts.some((a) => a.orgId === ctx.org.id && a.backingUserId)) {
       return res.status(409).json({
         error: "This organisation's euro account is not open yet, so a payment link has nowhere to pay into. Open it on the Accounts screen first.",
         code: "ACCOUNT_NOT_OPEN",
@@ -68,7 +69,7 @@ export function createPaymentLinkRoutes(deps: OrgRoutes): express.Router {
       const out = invoiceId ? await withInvoiceLinkLock({ id: invoiceId, orgId: ctx.org.id }, make) : await make();
       res.status(out.status).json(out.body);
     } catch (err) {
-      if (err instanceof PaymentRequestError) return res.status(err.status).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
+      if (err instanceof PaymentRequestError) return res.status(err.status).json({ error: err.message });
       throw err;
     }
   }));

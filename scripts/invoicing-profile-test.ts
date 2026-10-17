@@ -28,7 +28,8 @@ const { createPaymentLinkRoutes } = await import("../services/api/src/routes/bus
 const { createInvoiceLinkRouter } = await import("../services/api/src/routes/business/invoice-links.js");
 const { createInvoiceRoutes } = await import("../services/api/src/routes/business/invoices.js");
 const { linkExpiry } = await import("../services/api/src/routes/business/invoice-pay-link.js");
-const { createPaymentRequest } = await import("../services/api/src/routes/payment-requests.js");
+const { createPaymentRequest, attributeMoneriumOrderToInvoice } = await import("../services/api/src/routes/payment-requests.js");
+const { publicPaymentRequest } = await import("../services/api/src/payment-requests.js");
 const { defaultInvoiceLanguage, defaultSeriesFor, invoiceLanguage } = await import("../services/api/src/domain/invoicing.js");
 
 let passed = 0;
@@ -560,6 +561,123 @@ await check("the requester is mailed when mail is on; no mail, no email or a ref
   store.updateUser("u_owner", { emailVerifiedAt: undefined } as any);
   assert.equal(await notifyRequester(inv, { mailOn: true, send: async () => { throw new Error("must not send"); } }), "no-email", "an unconfirmed address is not mailed");
   store.updateUser("u_owner", { emailVerifiedAt: new Date().toISOString() } as any);
+});
+
+console.log("\nA wallet-tier account (no KYC, no IBAN) invoices and collects into its Safe");
+
+/** A person with a claimed payment page and their personal space, which has
+ *  no account of its own: what POST /api/orgs leaves for anyone without an IBAN. */
+function personWithSpace(id: string, handle: string, over: Record<string, unknown>) {
+  const safe = `0x${Buffer.from(id).toString("hex").padStart(40, "0")}` as const;
+  store.addUser({
+    id, name: `Person ${id}`, createdAt: now, address: safe,
+    passkeySafe: { status: "active", address: safe },
+    paymentPage: {
+      handle, depositAddress: safe, recipientAddress: safe, settlementAsset: "USDC", autoConvert: false,
+      forwarder: { provider: "local-safe", recipient: safe, destinationChainId: 31337, sourceChainIds: [31337], custodialWithdrawer: safe, active: true, activatedAt: now },
+      createdAt: now, updatedAt: now,
+    },
+    ...over,
+  } as any);
+  store.addOrganisation({
+    id: `org_${id}`, type: "personal", name: `Person ${id}`, legalName: `Person ${id}`, plan: "starter",
+    address: { line1: "1 Main Street", postalCode: "1000", city: "Capital", country: (over.country as string) ?? "DE" },
+    reporting: { currency: "EUR", timeZone: "UTC", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now,
+  } as any);
+  store.addMember({ id: `m_${id}`, orgId: `org_${id}`, userId: id, email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now });
+  return safe;
+}
+// What GET /api/pay/:handle/:code returns, minus the chain's token lookup
+// (deployments.json is not there offline): the projection decides the methods.
+const TOKEN = { symbol: "USDC", address: `0x${"c".repeat(40)}` as const, decimals: 6 };
+const payPage = (userId: string, invoiceId?: string) => {
+  const r = store.paymentRequests.find((p) => p.userId === userId && (!invoiceId || p.invoiceId === invoiceId))!;
+  return publicPaymentRequest(r, store.findUser(userId)!, { chainId: 31337, token: TOKEN, baseUrl: "https://zold.test", cryptoLive: true });
+};
+
+const walletSafe = personWithSpace("u_in", "priya", {
+  country: "IN", kycStatus: "pending",
+  segment: { value: "IN_COLLECTIONS", reasonCode: "collections_only_residence", decidedAt: now, decidedBy: "system" },
+});
+await check("an India wallet-tier account issues an invoice and gets its payment link", async () => {
+  const r = await call("POST", "/api/orgs/org_u_in/invoicing/issue", "u_in", invoiceFor("IN"));
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  assert.equal(r.data.payment.ok, true, JSON.stringify(r.data.payment));
+  assert.match(r.data.payment.url, /\/pay\/priya\//);
+  const view = await call("GET", `/api/invoice-links/${r.data.linkToken}`);
+  assert.ok(view.data.invoice.payPath?.startsWith("/pay/priya/"), "the invoice shows a Pay button");
+});
+await check("its payment page offers only the wallet: the page's address, network and token, no bank", async () => {
+  const link = store.paymentRequests.find((p) => p.userId === "u_in")!;
+  assert.deepEqual(link.methods, ["crypto"], "a bank method is never put on the link");
+  const page = payPage("u_in");
+  assert.deepEqual(Object.keys(page.methods), ["crypto"]);
+  assert.equal(page.methods.crypto!.address, walletSafe);
+  assert.equal(page.methods.crypto!.chainId, 31337);
+  assert.equal(page.methods.crypto!.token.symbol, "USDC");
+  assert.match(page.methods.crypto!.qrUrl, /\/api\/pay\/priya\/qr\.svg$/, "the QR encodes the same page address");
+});
+await check("asked for by hand, the same account gets the link too, and never a bank method", async () => {
+  const id = (await call("POST", "/api/orgs/org_u_in/invoicing/issue", "u_in", invoiceFor("IN"))).data.invoice.id;
+  store.paymentRequests.filter((p) => p.invoiceId === id).forEach((p) => store.updatePaymentRequest(p.id, { state: "CANCELLED" } as any));
+  const made = await call("POST", "/api/orgs/org_u_in/payment-requests", "u_in", { invoiceId: id, methods: ["crypto"] });
+  assert.equal(made.status, 201, JSON.stringify(made.data));
+  const bank = await call("POST", "/api/orgs/org_u_in/payment-requests", "u_in", { amountEur: 5, methods: ["bank"] });
+  assert.equal(bank.status, 409, JSON.stringify(bank.data));
+  assert.match(bank.data.error, /bank payments are not available.*IBAN/, "refused for the missing IBAN, not for the account");
+});
+
+await check("without a claimed payment page there is no Pay button, and it says how to add one", async () => {
+  personWithSpace("u_np", "nopage", { country: "IN", kycStatus: "pending" });
+  store.updateUser("u_np", { paymentPage: undefined } as any);
+  const r = await call("POST", "/api/orgs/org_u_np/invoicing/issue", "u_np", invoiceFor("IN"));
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  assert.equal(r.data.payment.code, "NO_METHOD");
+  assert.match(r.data.payment.reason, /Payment page/);
+});
+await check("only the person behind a personal space collects for it: another member is not the payee", async () => {
+  // POST /:orgId/members refuses a personal space (members.manage is business only); a row put there by hand still gets nothing.
+  store.addMember({ id: "m_in_viewer", orgId: "org_u_in", userId: "u_eu_viewer", email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now });
+  store.addUser({ id: "u_eu_viewer", name: "Other", createdAt: now, paymentPage: { handle: "other", depositAddress: `0x${"9".repeat(40)}` } } as any);
+  const id = (await call("POST", "/api/orgs/org_u_in/invoicing/issue", "u_in", invoiceFor("IN"))).data.invoice.id;
+  store.paymentRequests.filter((p) => p.invoiceId === id).forEach((p) => store.updatePaymentRequest(p.id, { state: "CANCELLED" } as any));
+  const r = await call("POST", "/api/orgs/org_u_in/payment-requests", "u_eu_viewer", { invoiceId: id, methods: ["crypto"] });
+  assert.equal(r.status, 403, "a second owner of a personal space is never its payee");
+  const both = await call("POST", "/api/orgs/org_u_in/payment-requests", "u_in", { invoiceId: id, methods: ["crypto"] });
+  assert.equal(both.status, 403, "with two active members nobody collects: fail closed");
+  store.updateMember("m_in_viewer", { status: "deactivated" } as any);
+  const own = await call("POST", "/api/orgs/org_u_in/payment-requests", "u_in", { invoiceId: id, methods: ["crypto"] });
+  assert.equal(own.status, 201, "alone again, its person collects");
+});
+
+await check("a bank credit into the person's own Safe quoting a personal-space invoice settles it, account row or not", async () => {
+  const safe = personWithSpace("u_kp", "kim", { country: "DE", kycStatus: "approved", iban: "DE89370400440532013000" });
+  const r = await call("POST", "/api/orgs/org_u_kp/invoicing/issue", "u_kp", { ...invoiceFor("DE"), vat: { kind: "standard", rate: 19 } });
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  attributeMoneriumOrderToInvoice({
+    id: "ord-kp-1", kind: "issue", amount: "119.00", address: safe, memo: `${r.data.invoice.issued.number} thanks`,
+    meta: { state: "processed", processedAt: new Date().toISOString() },
+  } as any);
+  const inv = store.findInvoice(r.data.invoice.id)!;
+  assert.equal((inv.settlements ?? []).length, 1, JSON.stringify(inv.settlements));
+  assert.equal(inv.state, "PAID");
+});
+
+personWithSpace("u_eu", "erik", {
+  country: "DE", kycStatus: "approved", iban: "DE89370400440532013000",
+  segment: { value: "EU_FULL", reasonCode: "t", decidedAt: now, decidedBy: "system" },
+});
+store.addAccount({
+  id: "acc_eu", orgId: "org_u_eu", currency: "EUR", label: "EUR", status: "active", provider: "monerium",
+  identifier: { iban: "DE89370400440532013000" }, backingUserId: "u_eu", createdAt: now, updatedAt: now,
+} as any);
+await check("a KYC'd account's invoice page still offers the IBAN and the wallet", async () => {
+  const r = await call("POST", "/api/orgs/org_u_eu/invoicing/issue", "u_eu", { ...invoiceFor("DE"), vat: { kind: "standard", rate: 19 } });
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  assert.equal(r.data.payment.ok, true, JSON.stringify(r.data.payment));
+  const page = payPage("u_eu", r.data.invoice.id);
+  assert.deepEqual(Object.keys(page.methods).sort(), ["bank", "crypto"]);
+  assert.equal(page.methods.bank!.iban, "DE89370400440532013000");
 });
 
 server.close();

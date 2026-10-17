@@ -24,7 +24,6 @@ import { createPaymentRequest, orgsBackedBy } from "../payment-requests.js";
 import type { Invoice } from "../../domain/types.js";
 import type { OrgContext } from "../org-context.js";
 import { redactedMessage } from "../../http/log-cause.js";
-import { invoicePayLinkBlocker } from "../../domain/wallet-tier.js";
 
 const DAY_MS = 24 * 60 * 60_000;
 /** How long after its due date an invoice can still be paid by its link. */
@@ -36,16 +35,11 @@ export type InvoicePayLink =
   | { ok: true; url: string; amountEur?: number; reused: boolean }
   | { ok: false; reason: string; code: string };
 
-/** The invoice's open link, if it has one. A test link never counts, nor one
- *  whose payee may no longer collect invoices by link (a link made before
- *  the rule): its Pay button goes, its /pay page is a 404, and asking again
- *  is refused. A link whose payee row is gone is not offered either. */
+/** The invoice's open link, if it has one. A test link never counts. */
 export function openLinkFor(invoice: Pick<Invoice, "id" | "orgId">): PaymentRequest | undefined {
-  const link = [...store.paymentRequests]
+  return [...store.paymentRequests]
     .reverse()
     .find((p) => p.invoiceId === invoice.id && p.orgId === invoice.orgId && !p.test && effectiveState(p) === "OPEN");
-  const payee = link && store.findUser(link.userId);
-  return link && payee && !invoicePayLinkBlocker(payee) ? link : undefined;
 }
 
 /** Where the open link lives, relative to the site, for the invoice page. */
@@ -100,7 +94,7 @@ export async function payLinkForInvoice(ctx: OrgContext, invoice: Invoice, baseU
   try {
     return await withInvoiceLinkLock(invoice, () => payLinkUnlocked(ctx, invoice, baseUrl));
   } catch (err) {
-    if (err instanceof PaymentRequestError) return { ok: false, code: err.code ?? "REFUSED", reason: err.message };
+    if (err instanceof PaymentRequestError) return { ok: false, code: "REFUSED", reason: err.message };
     console.error(`invoice pay link: ${ctx.org.id}/${invoice.id}: ${redactedMessage(err)}`);
     return {
       ok: false,
@@ -117,9 +111,8 @@ async function payLinkUnlocked(ctx: OrgContext, invoice: Invoice, baseUrl: strin
   }
   const user = store.findUser(ctx.userId);
   if (!user) return { ok: false, code: "NO_USER", reason: "Your session has no account behind it." };
-  const blocked = invoicePayLinkBlocker(user);
-  if (blocked) return { ok: false, code: "INVOICE_PAY_LINK_UNAVAILABLE", reason: blocked };
-  if (!store.accounts.some((a) => a.orgId === ctx.org.id && a.backingUserId)) {
+  // A personal space is backed by its owner's Safe, IBAN or not (orgsBackedBy).
+  if (ctx.org.type !== "personal" && !store.accounts.some((a) => a.orgId === ctx.org.id && a.backingUserId)) {
     return {
       ok: false,
       code: "ACCOUNT_NOT_OPEN",
@@ -135,7 +128,7 @@ async function payLinkUnlocked(ctx: OrgContext, invoice: Invoice, baseUrl: strin
   }
   const methods = availableMethods(user).filter((m) => m.available).map((m) => m.method);
   if (!methods.length) {
-    return { ok: false, code: "NO_METHOD", reason: "No way to get paid is set up on this account yet. The invoice shows your bank details instead." };
+    return { ok: false, code: "NO_METHOD", reason: "No way to get paid is set up on this account yet: claim your payment page (Profile → Payment page) to add a Pay button." };
   }
   const input = validateCreate({ invoiceId: invoice.id, methods, expiresAt: linkExpiry(invoice.dueDate) }, user);
   const link = await createPaymentRequest(user, input, { kind: "app" }, ctx.org.id);
