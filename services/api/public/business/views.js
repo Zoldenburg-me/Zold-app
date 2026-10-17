@@ -134,18 +134,24 @@ const walletProofCell = (w) => {
 
 META.wallets = () => ({ title: "Wallets", sub: "Addresses you want counted in your books. Read only: Zold never holds a key for one.", actions: secondary("Import wallet", 'data-act="import-wallet"', "add") });
 RENDER.wallets = async () => {
-  const { wallets } = await api(`/api/orgs/${org.id}/wallets`);
+  const [{ wallets }, acc, health] = await Promise.all([api(`/api/orgs/${org.id}/wallets`), api(`/api/orgs/${org.id}/accounts`).catch(() => null), api("/api/health").catch(() => null)]);
   const unproven = wallets.filter((w) => w.proofState !== "proven").length;
-  return wallets.length
+  const safe = ownSafe(acc?.accounts ?? []);
+  const unread = acc ? "" : `<div class="banner warn">${Z.icon("warning")}<span>Your Zold account could not be read, so it may be missing from this list. Reload to try again.</span></div>`;
+  // The account's own Safe comes first: it is the account itself, so it has no proof, sync or Remove.
+  const safeRow = safe ? `<tr>
+        <td>${safe.company ? "Company Zold account" : "Your Zold account"}<span class="zb-sub2">SAFE</span></td><td class="z-mono" translate="no">${esc(safe.address)}</td><td>${esc(String(health?.chainId ?? ""))}</td>
+        <td><span class="z-dim">The account itself</span></td><td>${Z.tag("Account’s own", "mint")}</td><td></td></tr>` : "";
+  return unread + (wallets.length || safe
     ? `${unproven ? `<div class="banner warn">${Z.icon("verified_user")}<span>Importing a wallet does not show it is yours. Prove it by signing a short message in the wallet itself: until then it is synced and counted in your books, but its receipts are not collected into invoices.</span></div>` : ""}
-      <div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Label</th><th scope="col">Address</th><th scope="col">Network</th><th scope="col">Sync</th><th scope="col">Ownership</th><th scope="col"><span class="z-sr">Actions</span></th></tr></thead><tbody>${wallets.map((w) => `<tr>
+      <div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Label</th><th scope="col">Address</th><th scope="col">Network</th><th scope="col">Sync</th><th scope="col">Ownership</th><th scope="col"><span class="z-sr">Actions</span></th></tr></thead><tbody>${safeRow}${wallets.map((w) => `<tr>
         <td>${esc(w.label)}<span class="zb-sub2">${esc(w.kind.toUpperCase())}</span></td><td class="z-mono" translate="no">${esc(w.address)}</td><td>${esc(String(w.chainId))}</td>
         <td>${walletSyncCell(w.sync)}</td>
         <td>${walletProofCell(w)}</td>
         <td><div class="zb-cellact">${w.proofState === "proven" || !roleCan(org.role, "wallets") ? "" : `<button type="button" class="z-btn z-btn--primary z-btn--sm" data-act="prove-wallet" data-id="${esc(w.id)}">Prove<span class="z-sr">: ${esc(w.label)}</span></button>`}
           ${w.ownership && roleCan(org.role, "wallets") ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="recheck-wallet" data-id="${esc(w.id)}">Check again<span class="z-sr">: ${esc(w.label)}</span></button>` : ""}
           <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="del-wallet" data-id="${esc(w.id)}">Remove<span class="z-sr">: ${esc(w.label)}</span></button></div></td></tr>`).join("")}</tbody></table></div>`
-    : `<div class="z-card"><p class="empty">No wallets imported.</p></div>`;
+    : `<div class="z-card"><p class="empty">No wallets imported.</p></div>`);
 };
 
 /** A synced token with no feed price is booked as SYMBOL@chain:address, so it
@@ -274,7 +280,7 @@ const EVENT_LABEL = {
 export let exportMonth = null;
 export const setExportMonth = (v) => { exportMonth = v; };
 
-META.export = () => ({ title: "Statement lines", sub: "One line per event on the euro account, the way a PayPal or Stripe account appears in the books. Each line gets one Beleg.", actions: booksBack() });
+META.export = () => ({ title: "Statement lines", sub: "One line per event on the euro account, the way a PayPal or Stripe account appears in the books. Each line gets one booking receipt (Beleg): the signed document your accountant files against it.", actions: booksBack() });
 RENDER.export = async () => {
   if (!cap("export.ledger").allowed) return gateHtml("export.ledger");
   const first = await api(`/api/orgs/${org.id}/bookkeeping/statement`);
@@ -290,19 +296,19 @@ RENDER.export = async () => {
       <select id="x-month" style="width:auto">${months.map((m) => `<option ${m === exportMonth ? "selected" : ""}>${esc(m)}</option>`).join("")}</select></div>
       <div class="row-actions">
         <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="export-rebuild">Rebuild lines</button>
-        <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="export-prepare">Issue Belege for ${esc(exportMonth)}</button>
+        <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="export-prepare">Create receipts for ${esc(exportMonth)}</button>
         <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="export-csv"${dis}>Lexware CSV</button>
-        <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="export-zip"${dis}>Belege as ZIP</button>
+        <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="export-zip"${dis}>Receipts as ZIP</button>
         ${integrations?.getmyinvoices?.connected ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="gmi-push"${dis}>Send to GetMyInvoices</button>` : ""}
       </div></div>
-    <p class="zb-hint" style="margin-bottom:12px">${d.lines.length} line${d.lines.length === 1 ? "" : "s"}, ${withBeleg} with a Beleg.${integrations && !integrations.getmyinvoices?.connected ? ` <a href="?view=integrations" data-view-link="integrations">Connect GetMyInvoices</a> to send the Belege there.` : ""}</p>
-    ${d.lines.length ? `<div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Value date</th><th scope="col">Event</th><th scope="col">Who</th><th scope="col">Reference</th><th scope="col" class="z-tbl__num">Euros</th><th scope="col">Beleg</th></tr></thead><tbody>${d.lines.map((l) => `<tr>
+    <p class="zb-hint" style="margin-bottom:12px">${d.lines.length} line${d.lines.length === 1 ? "" : "s"}, ${withBeleg} with a receipt.${integrations && !integrations.getmyinvoices?.connected ? ` <a href="?view=integrations" data-view-link="integrations">Connect GetMyInvoices</a> to send the receipts there.` : ""}</p>
+    ${d.lines.length ? `<div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Value date</th><th scope="col">Event</th><th scope="col">Who</th><th scope="col">Reference</th><th scope="col" class="z-tbl__num">Euros</th><th scope="col">Receipt</th></tr></thead><tbody>${d.lines.map((l) => `<tr>
         <td class="zb-top z-dim">${esc(day(ymd(l.valueDate)))}${l.bookingDate !== l.valueDate ? `<span class="zb-sub2">booked ${esc(day(ymd(l.bookingDate)))}</span>` : ""}</td>
         <td class="zb-top">${esc(EVENT_LABEL[l.event] || l.event)}${l.unexecuted ? ` ${Z.tag("Unproven", "amber")}` : ""}</td>
         <td class="zb-top">${esc(l.counterparty?.name || "")}<span class="zb-sub2 z-mono">${esc(l.counterparty?.iban ? maskIban(l.counterparty.iban) : l.counterparty?.address ? `${l.counterparty.address.slice(0, 10)}…` : "")}</span></td>
         <td class="zb-top">${esc(l.reference)}${l.links?.invoiceNumber ? `<span class="zb-sub2">Invoice ${esc(l.links.invoiceNumber)}</span>` : ""}</td>
         <td class="zb-top z-tbl__num">${Z.amount({ value: Math.abs(l.amountCents) / 100, direction: l.amountCents >= 0 ? "in" : "out" })}</td>
-        <td class="zb-top">${l.documentCode ? `<a class="zb-beleg" href="${esc(l.documentUrl)}" target="_blank" rel="noopener">${Z.icon("attach_file")}${esc(l.documentCode)}<span class="z-sr"> (opens in a new tab)</span></a>` : `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="line-beleg" data-line="${esc(l.id)}">Issue</button>`}</td></tr>`).join("")}</tbody></table></div>`
+        <td class="zb-top">${l.documentCode ? `<a class="zb-beleg" href="${esc(l.documentUrl)}" target="_blank" rel="noopener">${Z.icon("attach_file")}${esc(l.documentCode)}<span class="z-sr"> (opens in a new tab)</span></a>` : `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="line-beleg" data-line="${esc(l.id)}">Create<span class="z-sr"> a booking receipt</span></button>`}</td></tr>`).join("")}</tbody></table></div>`
       : `<div class="z-card"><p class="empty">No statement lines in ${esc(exportMonth)}. Lines appear once money moves on an account backed by a member’s own account.</p></div>`}`;
 };
 
@@ -322,18 +328,18 @@ RENDER.integrations = async () => {
   const g = r.integrations.getmyinvoices;
   const gmi = g.connected
     ? conn("GMI", "GetMyInvoices", `Connected to ${g.accountName || "your account"}${g.accountEmail ? ` (${g.accountEmail})` : ""} since ${day(g.connectedAt)}`, Z.tag("Beta"),
-      "A month’s bank lines go to a manual bank account there, each with its Beleg attached as a paid document. Sending twice adds nothing twice. Your accountant takes it from there.",
-      `${primary("Send a month’s Belege", 'data-act="gmi-push"', "upload")}${secondary("Remove key", 'data-act="gmi-disconnect"')}`, true)
-    : conn("GMI", "GetMyInvoices", "API key · sends Belege each month", Z.tag("Beta"),
-      "A month’s bank lines go to a manual bank account there, each with its Beleg attached as a paid document. Sending twice adds nothing twice. Your accountant takes it from there.",
+      "A month’s bank lines go to a manual bank account there, each with its booking receipt attached as a paid document. Sending twice adds nothing twice. Your accountant takes it from there.",
+      `${primary("Send a month’s receipts", 'data-act="gmi-push"', "upload")}${secondary("Remove key", 'data-act="gmi-disconnect"')}`, true)
+    : conn("GMI", "GetMyInvoices", "API key · sends receipts each month", Z.tag("Beta"),
+      "A month’s bank lines go to a manual bank account there, each with its booking receipt attached as a paid document. Sending twice adds nothing twice. Your accountant takes it from there.",
       r.available ? primary("Connect", 'data-act="gmi-drawer"', "link") : `<p class="desc">Not available here: ${esc(plain(g.needs || ""))}.</p>`, true);
   return `<h2 class="z-eyebrow zb-conn__group zb-conn__group--first">Sends your books for you</h2>
     ${gmi}
     <h2 class="z-eyebrow zb-conn__group">File exports</h2>
     <div class="zb-grid3">
       ${conn("LO", "Lexware Office", "CSV import", "", "Download the month’s bank lines as a Lexware CSV and import them as an offline account.", linkBtn("Download from Books", "books", "download"))}
-      ${conn("sev", "sevDesk", "Not built yet", Z.tag("Soon"), "Until it’s built, use the Lexware CSV and the Belege ZIP from Books. sevDesk imports both.", linkBtn("CSV and ZIP", "books", "folder_zip"))}
-      ${conn("DATEV", "DATEV", "Not built yet", Z.tag("Soon"), "Your tax adviser can take the Belege ZIP for now.", linkBtn("Exports", "books", "download"))}
+      ${conn("sev", "sevDesk", "Not built yet", Z.tag("Soon"), "Until it’s built, use the Lexware CSV and the receipts ZIP from Books. sevDesk imports both.", linkBtn("CSV and ZIP", "books", "folder_zip"))}
+      ${conn("DATEV", "DATEV", "Not built yet", Z.tag("Soon"), "Your tax adviser can take the receipts ZIP for now.", linkBtn("Exports", "books", "download"))}
     </div>
     <div class="zb-notes"><div class="zb-note">${Z.icon("person")}<span>Or give your accountant read-only access as a member with the Accountant role. They can export on their own.</span>${cap("members.manage").allowed ? linkBtn("Members", "members") : ""}</div></div>`;
 };
@@ -349,7 +355,7 @@ RENDER.integrations = async () => {
    only to the member whose own account it is.
    ========================================================================== */
 
-const DOC_LABEL = { statement: "Account statement", receipt: "Transfer receipt", balance: "Balance confirmation", ownership: "Proof of ownership", beleg: "Beleg" };
+const DOC_LABEL = { statement: "Account statement", receipt: "Transfer receipt", balance: "Balance confirmation", ownership: "Proof of ownership", beleg: "Booking receipt" };
 const DOC_ICON = { statement: "description", receipt: "receipt_long", balance: "account_balance", ownership: "verified_user", beleg: "attach_file" };
 export const docMonth = { value: null };
 /** Receipts list the most recent paid transfers only. */
@@ -357,7 +363,7 @@ const RECEIPT_ROWS = 50;
 /** A document link from the API, opened only if it is ours or https. */
 export const docHref = (url) => (typeof url === "string" && (url.startsWith("/") || /^https:\/\//i.test(url)) ? url : null);
 
-META.documents = () => ({ title: "Statements and documents", sub: "Statements, balance confirmations, proof of ownership and the Beleg for each line. Anyone you give one to can check it at the address printed on it.", actions: "" });
+META.documents = () => ({ title: "Statements and documents", sub: "Statements, balance confirmations, proof of ownership and the booking receipt for each line. Anyone you give one to can check it at the address printed on it.", actions: "" });
 
 RENDER.documents = async () => {
   const { accounts } = await api(`/api/orgs/${org.id}/accounts`);
@@ -434,7 +440,7 @@ RENDER.soon = async () => {
     ...(later.length ? [Z.row({ lead, title: "Accounts in other currencies", sub: `${later.length > 1 ? `${later.slice(0, -1).join(", ")} and ${later.at(-1)}` : later[0]}: waiting on an account provider`, soon: true })] : []),
     Z.row({ lead, title: "More countries", sub: "Bank transfers reach Europe only, for now", soon: true }),
     Z.row({ lead, title: "Paying a crypto wallet", sub: "Not built yet", soon: true }),
-    Z.row({ lead, title: "sevDesk and DATEV", sub: "Use the Lexware CSV and the Belege ZIP until then", soon: true }),
+    Z.row({ lead, title: "sevDesk and DATEV", sub: "Use the Lexware CSV and the receipts ZIP until then", soon: true }),
   ];
   return Z.listGroup({ rows });
 };
