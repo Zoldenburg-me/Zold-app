@@ -111,7 +111,8 @@ async function payLinkUnlocked(ctx: OrgContext, invoice: Invoice, baseUrl: strin
   }
   const user = store.findUser(ctx.userId);
   if (!user) return { ok: false, code: "NO_USER", reason: "Your session has no account behind it." };
-  if (!store.accounts.some((a) => a.orgId === ctx.org.id && a.backingUserId)) {
+  // A personal space is backed by its owner's Safe, IBAN or not (orgsBackedBy).
+  if (ctx.org.type !== "personal" && !store.accounts.some((a) => a.orgId === ctx.org.id && a.backingUserId)) {
     return {
       ok: false,
       code: "ACCOUNT_NOT_OPEN",
@@ -127,7 +128,7 @@ async function payLinkUnlocked(ctx: OrgContext, invoice: Invoice, baseUrl: strin
   }
   const methods = availableMethods(user).filter((m) => m.available).map((m) => m.method);
   if (!methods.length) {
-    return { ok: false, code: "NO_METHOD", reason: "No way to get paid is set up on this account yet. The invoice shows your bank details instead." };
+    return { ok: false, code: "NO_METHOD", reason: "No way to get paid is set up on this account yet: claim your payment page (Profile → Payment page) to add a Pay button." };
   }
   const input = validateCreate({ invoiceId: invoice.id, methods, expiresAt: linkExpiry(invoice.dueDate) }, user);
   const link = await createPaymentRequest(user, input, { kind: "app" }, ctx.org.id);
