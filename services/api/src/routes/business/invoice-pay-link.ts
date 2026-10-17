@@ -38,13 +38,14 @@ export type InvoicePayLink =
 
 /** The invoice's open link, if it has one. A test link never counts, nor one
  *  whose payee may no longer collect invoices by link (a link made before
- *  the rule): its Pay button goes, and asking again is refused. */
+ *  the rule): its Pay button goes, its /pay page is a 404, and asking again
+ *  is refused. A link whose payee row is gone is not offered either. */
 export function openLinkFor(invoice: Pick<Invoice, "id" | "orgId">): PaymentRequest | undefined {
   const link = [...store.paymentRequests]
     .reverse()
     .find((p) => p.invoiceId === invoice.id && p.orgId === invoice.orgId && !p.test && effectiveState(p) === "OPEN");
   const payee = link && store.findUser(link.userId);
-  return link && (!payee || !invoicePayLinkBlocker(payee)) ? link : undefined;
+  return link && payee && !invoicePayLinkBlocker(payee) ? link : undefined;
 }
 
 /** Where the open link lives, relative to the site, for the invoice page. */
