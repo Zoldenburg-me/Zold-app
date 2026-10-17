@@ -7,6 +7,7 @@
  * when money shows up; they hold no network of their own.
  */
 import { wrap } from "./util.js";
+import { invoicePayLinkBlocker } from "../domain/wallet-tier.js";
 import { usdToken } from "../usd-token.js";
 import express from "express";
 import { randomUUID } from "node:crypto";
@@ -145,6 +146,9 @@ export async function ensureQuote(r: PaymentRequest, amountEur: number | undefin
  * paid twice.
  */
 function assertInvoiceCollectable(invoiceId: string, orgId: string | undefined, payee: User) {
+  // First, before the invoice is even looked up: the rule is about the payee.
+  const blocked = invoicePayLinkBlocker(payee);
+  if (blocked) throw new PaymentRequestError(blocked, 403, "INVOICE_PAY_LINK_UNAVAILABLE");
   const invoice = store.findInvoice(invoiceId);
   if (!invoice) throw new PaymentRequestError("no such invoice", 404);
   if (!orgId || invoice.orgId !== orgId) {
@@ -283,7 +287,7 @@ export async function createPaymentRequest(
 }
 
 function fail(res: express.Response, err: unknown) {
-  if (err instanceof PaymentRequestError) return res.status(err.status).json({ error: err.message });
+  if (err instanceof PaymentRequestError) return res.status(err.status).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
   throw err;
 }
 
@@ -416,6 +420,12 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
     // a 404, so a page cannot impersonate another payee.
     const handles = r && user ? [r.handle, user.paymentPage?.handle, companyPageHandle(r.userId, r.orgId)] : [];
     if (!r || !user || !handles.includes(req.params.handle) || heldByOther(req.params.handle, r)) {
+      res.status(404).json({ error: "no such payment request" });
+      return undefined;
+    }
+    // A link made for an invoice before its payee lost invoice links is not
+    // offered either. Money already sent is still matched by the poller.
+    if (r.invoiceId && invoicePayLinkBlocker(user)) {
       res.status(404).json({ error: "no such payment request" });
       return undefined;
     }
