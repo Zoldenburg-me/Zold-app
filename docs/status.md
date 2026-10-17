@@ -159,9 +159,11 @@ Say this plainly rather than letting the surface imply otherwise:
   has never run on an imported Safe, so the screens do not offer it there;
   the API does not refuse it.
 - **One mail transport exists, on zoldhq.com only.** `adapters/mailer.ts`
-  sends email verification codes and the owner's recovery alerts
-  (`recovery/owner-alerts.ts`) over SMTP, with `EMAIL_VERIFICATION=1`
-  (docs/email-verification.md). No recovery alert has been sent for real. zoldhq.com sends through Brevo's relay
+  sends email verification codes, the owner's recovery alerts
+  (`recovery/owner-alerts.ts`) and, to a confirmed address, the note that a
+  supplier submitted a requested invoice (`routes/business/invoice-links.ts`)
+  over SMTP, with `EMAIL_VERIFICATION=1` (docs/email-verification.md). No
+  recovery alert or invoice note has been sent for real. zoldhq.com sends through Brevo's relay
   (`smtp-relay.brevo.com:587`) as `no-reply@zoldhq.com`, with Brevo's DKIM on
   zoldhq.com and Brevo's IP allowlist on. One real code has been delivered and
   confirmed (2026-10-10, a new test account, to a duck.com forwarding

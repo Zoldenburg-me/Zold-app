@@ -106,8 +106,10 @@ function shown(v) {
    here; a failed read leaves the last one. */
 export const side = { orgId: null, accounts: null, drafts: null, invoices: null };
 
-/** Supplier invoices submitted through a link and not yet paid or under way. */
-export const submittedInvoices = (invoices) => (invoices || []).filter((i) => i.direction !== "outgoing" && i.state === "SUBMITTED");
+/** Supplier invoices submitted through a link and not yet paid or under way,
+ *  for a role that can pay one (Pay creates a draft); none for the others. */
+export const submittedInvoices = (invoices) => (roleCan(org.role, "propose") ? invoices || [] : [])
+  .filter((i) => i.direction !== "outgoing" && i.state === "SUBMITTED");
 
 /** Waiting for this person: drafted by someone else, and their role approves. */
 export const waitingForMe = (drafts) => (drafts || []).filter((d) =>
