@@ -119,6 +119,7 @@ export async function refreshSide() {
   const [a, d, i] = await Promise.allSettled([
     api(`/api/orgs/${id}/accounts`),
     cap("transfers.drafts").allowed ? api(`/api/orgs/${id}/drafts`) : Promise.resolve({ drafts: [] }),
+    // shortcut: the whole list for one count, fine at hundreds of invoices; add a count endpoint when orgs reach thousands.
     cap("invoices").allowed ? api(`/api/orgs/${id}/invoices`) : Promise.resolve({ invoices: [] }),
   ]);
   if (org?.id !== id) return;
