@@ -26,6 +26,7 @@ const { resolveOrg } = await import("../services/api/src/routes/org-context.js")
 const { createInvoicingRoutes } = await import("../services/api/src/routes/business/invoicing.js");
 const { createPaymentLinkRoutes } = await import("../services/api/src/routes/business/payment-links.js");
 const { createInvoiceLinkRouter } = await import("../services/api/src/routes/business/invoice-links.js");
+const { createInvoiceRoutes } = await import("../services/api/src/routes/business/invoices.js");
 const { linkExpiry } = await import("../services/api/src/routes/business/invoice-pay-link.js");
 const { createPaymentRequest } = await import("../services/api/src/routes/payment-requests.js");
 const { defaultInvoiceLanguage, defaultSeriesFor, invoiceLanguage } = await import("../services/api/src/domain/invoicing.js");
@@ -70,6 +71,7 @@ const ctxOf = (req: any, res: any) => resolveOrg(req, res, requireSession);
 app.use("/api/orgs", createOrgRouter(requireSession));
 app.use("/api/orgs", createInvoicingRoutes({ ctxOf }));
 app.use("/api/orgs", createPaymentLinkRoutes({ ctxOf }));
+app.use("/api/orgs", createInvoiceRoutes({ ctxOf }));
 app.use("/api/invoice-links", createInvoiceLinkRouter());
 const server = app.listen(0, "127.0.0.1");
 await new Promise<void>((r) => server.once("listening", () => r()));
@@ -239,6 +241,24 @@ await check("without an account to pay into, the invoice is issued and says why 
   assert.equal(view.data.invoice.payPath, undefined);
   assert.match(view.data.invoice.footerNote, /Managing director: Ada Mba/, "the footer speaks the invoice's language");
   assert.ok(!/Geschäftsführ/.test(view.data.invoice.footerNote));
+});
+
+await check("the owner reopens an issued invoice as its customer sees it; nobody else does", async () => {
+  const r = await call("POST", "/api/orgs/org_ga/invoicing/issue", "u_owner", invoiceFor("GA"));
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  const own = await call("GET", `/api/orgs/org_ga/invoices/${r.data.invoice.id}/document`, "u_owner");
+  assert.equal(own.status, 200, JSON.stringify(own.data));
+  const link = await call("GET", `/api/invoice-links/${r.data.linkToken}`);
+  assert.deepEqual(own.data.invoice, link.data.invoice, "the same projection as the link, so no field leaks by this door");
+  assert.equal(own.data.invoice.linkTokenHash, undefined);
+  addOrg("org_other", "DE");
+  const elsewhere = await call("GET", `/api/orgs/org_other/invoices/${r.data.invoice.id}/document`, "u_owner");
+  assert.equal(elsewhere.status, 404, "an invoice is read only through its own org");
+  assert.equal((await call("GET", `/api/orgs/org_ga/invoices/${r.data.invoice.id}/document`)).status, 401);
+  const asked = await call("POST", "/api/orgs/org_ga/invoices", "u_owner", {});
+  assert.equal(asked.status, 201, JSON.stringify(asked.data));
+  const unissued = await call("GET", `/api/orgs/org_ga/invoices/${asked.data.invoice.id}/document`, "u_owner");
+  assert.equal(unissued.status, 404, "a supplier's invoice link is not an issued document");
 });
 
 addOrg("org_pay", "FR", { invoicing: { vatId: "FR40303265045" } });

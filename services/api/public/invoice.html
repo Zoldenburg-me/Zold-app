@@ -142,6 +142,11 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 const token = location.pathname.split("/").filter(Boolean).pop();
+// /invoice/own?org=…&id=… is the issuer reading their own issued invoice
+// again (Zold Business): their session, not the link, which is shown once.
+const own = token === "own" ? new URLSearchParams(location.search) : null;
+let session = "";
+try { session = localStorage.getItem("zold-session") || localStorage.getItem("zoll-session") || ""; } catch { /* signed out */ }
 let password = "";
 
 async function api(path, opts = {}) {
@@ -152,6 +157,7 @@ async function api(path, opts = {}) {
       headers: {
         ...(opts.body ? { "content-type": "application/json" } : {}),
         ...(password ? { "x-invoice-password": password } : {}),
+        ...(own && session ? { authorization: `Bearer ${session}` } : {}),
       },
       body: opts.body ? JSON.stringify(opts.body) : undefined,
     });
@@ -226,7 +232,8 @@ function renderIssued(inv) {
   const day = (iso) => date(iso, loc);
   const decimal = (v) => Number(v).toLocaleString(loc, { minimumFractionDigits: 2 });
   const settled = inv.state === "PAID" || inv.state === "RECONCILED";
-  const pay = !settled && inv.payPath ? inv.payPath : "";
+  // The issuer reading their own invoice is not the one to pay it.
+  const pay = !settled && !own && inv.payPath ? inv.payPath : "";
   const show = d.display ?? {};
   const bilingual = show.bilingual;
   const lab = (k) => (bilingual && L.de[k] !== L.en[k] ? `${L.de[k]} / ${L.en[k]}` : t[k]);
@@ -338,7 +345,7 @@ function renderIssued(inv) {
     <h2>${esc(settled ? "Paid" : "Awaiting payment")}</h2>
     ${pay ? `<p style="margin:.6rem 0 1rem"><a class="pay-btn" href="${esc(pay)}">Pay ${esc(amount(conv ? conv.grossCents : d.grossCents, conv ? conv.to : cur))}</a></p>
       <div class="note">You choose how to pay on the next page. This invoice is marked paid when the money arrives.</div>` : ""}
-    ${!settled && !pay && inv.payLinkLapsed ? `<div class="note">The Pay link for this invoice has expired. ${inv.bank ? "You can still pay by bank transfer to the details on the invoice, or ask" : "Ask"} ${esc(d.issuer?.name || "the issuer")} for a new link.</div>` : ""}
+    ${!settled && !own && !pay && inv.payLinkLapsed ? `<div class="note">The Pay link for this invoice has expired. ${inv.bank ? "You can still pay by bank transfer to the details on the invoice, or ask" : "Ask"} ${esc(d.issuer?.name || "the issuer")} for a new link.</div>` : ""}
     <div class="note">${esc(complianceNote(d.jurisdiction))} Zold is not a tax
       adviser — whether a supply is exempt, and which exemption applies, is the issuer's determination.${d.jurisdiction?.ruleSet === "DE" ? `
       Zold does not yet produce an EN 16931 e-invoice (XRechnung / ZUGFeRD).` : ""}</div>
@@ -473,7 +480,7 @@ function render(inv) {
   if (inv.issued) {
     const settled = inv.state === "PAID" || inv.state === "RECONCILED";
     document.title = `${inv.issued.number} · ${(L[inv.issued.language] || L.en).invoice}`;
-    $("#actions").innerHTML = `${!settled && inv.payPath ? `<a class="pay-btn" href="${esc(inv.payPath)}">Pay</a> ` : ""}<button class="ghost" onclick="window.print()">Print / PDF</button>`;
+    $("#actions").innerHTML = `${!settled && !own && inv.payPath ? `<a class="pay-btn" href="${esc(inv.payPath)}">Pay</a> ` : ""}<button class="ghost" onclick="window.print()">Print / PDF</button>`;
     $("#content").innerHTML = renderIssued(inv);
     return;
   }
@@ -506,12 +513,16 @@ function renderPassword(message) {
 async function boot() {
   let data;
   try {
-    data = await api(`/api/invoice-links/${encodeURIComponent(token)}`);
+    data = await api(own
+      ? `/api/orgs/${encodeURIComponent(own.get("org") || "")}/invoices/${encodeURIComponent(own.get("id") || "")}/document`
+      : `/api/invoice-links/${encodeURIComponent(token)}`);
   } catch (e) {
     if (e.passwordRequired) return renderPassword(e.message);
     // Only the server's 404 means the link is wrong; a dropped connection
     // says nothing about it.
-    const msg = e.status === 404
+    const msg = own
+      ? (e.status === 401 ? "Sign in to Zold Business in this browser, then open the invoice again." : e.status === 404 ? "This invoice isn’t in this organisation, or it hasn’t been issued." : e.message)
+      : e.status === 404
       ? "This link doesn’t work. It may have expired, been closed, or been typed wrong. Ask the person who sent it for a new one."
       : e.message;
     $("#content").innerHTML = `<div class="err" role="alert">${esc(msg)}</div>`;
