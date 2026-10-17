@@ -622,7 +622,7 @@ RENDER["invoicing-settings"] = async () => {
    ========================================================================== */
 
 /* What can be done with an invoice, by state. An issued one still open gets a
-   payment link, unless the account may not collect invoices by link. For an incoming one, "Pay" only appears
+   payment link. For an incoming one, "Pay" only appears
    when the supplier gave an IBAN: a wallet-only invoice says so instead of
    offering a button that the API would refuse. */
 export function invoiceActions(i) {
@@ -634,7 +634,7 @@ export function invoiceActions(i) {
       <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="discard-receipt-draft" data-id="${esc(i.id)}">Discard draft</button>`;
   }
   if (i.direction === "outgoing") {
-    return i.state === "SUBMITTED" && me?.invoicePayLinks !== false
+    return i.state === "SUBMITTED"
       ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="invoice-pay-link" data-id="${esc(i.id)}">Payment link</button>`
       : "";
   }
