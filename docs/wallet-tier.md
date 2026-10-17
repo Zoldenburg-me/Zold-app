@@ -60,6 +60,7 @@ Other rails are not engaged (`docs/roadmap.md` items 0–1).
 | Crypto payment requests, payment page | yes | USDC to the page address |
 | Auto-convert USDC→EURe | yes | the result is EURe in the Safe, never labelled a bank balance |
 | Invoices, income invoices, bookkeeping, exports | yes | gated by org plan, not KYC |
+| Payment link / Pay button on an issued invoice | yes, personal space | the personal space counts as backed by the person's own Safe (`orgsBackedBy`); the page offers the wallet route only |
 | Bank method on requests, SEPA payouts, bulk payouts | no | need an IBAN |
 | Balance confirmation, proof of ownership | no | Zold would vouch for an identity it never checked |
 | Shopify | yes, merchant's own app | below; not built |

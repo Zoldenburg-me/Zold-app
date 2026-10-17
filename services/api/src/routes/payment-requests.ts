@@ -183,9 +183,20 @@ function assertInvoiceCollectable(invoiceId: string, orgId: string | undefined, 
  * a payer on a business org holds their own Safe, and money reaching it is
  * theirs, not the company's. `Account.backingUserId` records whose Safe an
  * account actually is.
+ *
+ * A personal space is its one person's own books, so their Safe backs it with
+ * or without an IBAN account opened there: a wallet-tier account (no KYC, no
+ * Monerium) never has one, and still invoices and collects into its Safe. A
+ * bank credit into that Safe quoting a personal-space invoice settles it too.
  */
 export function orgsBackedBy(userId: string): Set<string> {
-  return new Set(store.accounts.filter((a) => a.backingUserId === userId).map((a) => a.orgId));
+  const backed = new Set(store.accounts.filter((a) => a.backingUserId === userId).map((a) => a.orgId));
+  for (const { org, member } of store.organisationsForUser(userId)) {
+    // Its only active member: a second one would collect into their own Safe.
+    const alone = store.membersOf(org.id).filter((m) => m.status === "active").length === 1;
+    if (org.type === "personal" && member.role === "owner" && alone) backed.add(org.id);
+  }
+  return backed;
 }
 
 /**
