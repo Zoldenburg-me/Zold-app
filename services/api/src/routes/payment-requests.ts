@@ -7,7 +7,6 @@
  * when money shows up; they hold no network of their own.
  */
 import { wrap } from "./util.js";
-import { invoicePayLinkBlocker } from "../domain/wallet-tier.js";
 import { usdToken } from "../usd-token.js";
 import express from "express";
 import { randomUUID } from "node:crypto";
@@ -146,9 +145,6 @@ export async function ensureQuote(r: PaymentRequest, amountEur: number | undefin
  * paid twice.
  */
 function assertInvoiceCollectable(invoiceId: string, orgId: string | undefined, payee: User) {
-  // First, before the invoice is even looked up: the rule is about the payee.
-  const blocked = invoicePayLinkBlocker(payee);
-  if (blocked) throw new PaymentRequestError(blocked, 403, "INVOICE_PAY_LINK_UNAVAILABLE");
   const invoice = store.findInvoice(invoiceId);
   if (!invoice) throw new PaymentRequestError("no such invoice", 404);
   if (!orgId || invoice.orgId !== orgId) {
@@ -187,9 +183,20 @@ function assertInvoiceCollectable(invoiceId: string, orgId: string | undefined, 
  * a payer on a business org holds their own Safe, and money reaching it is
  * theirs, not the company's. `Account.backingUserId` records whose Safe an
  * account actually is.
+ *
+ * A personal space is its one person's own books, so their Safe backs it with
+ * or without an IBAN account opened there: a wallet-tier account (no KYC, no
+ * Monerium) never has one, and still invoices and collects into its Safe. A
+ * bank credit into that Safe quoting a personal-space invoice settles it too.
  */
 export function orgsBackedBy(userId: string): Set<string> {
-  return new Set(store.accounts.filter((a) => a.backingUserId === userId).map((a) => a.orgId));
+  const backed = new Set(store.accounts.filter((a) => a.backingUserId === userId).map((a) => a.orgId));
+  for (const { org, member } of store.organisationsForUser(userId)) {
+    // Its only active member: a second one would collect into their own Safe.
+    const alone = store.membersOf(org.id).filter((m) => m.status === "active").length === 1;
+    if (org.type === "personal" && member.role === "owner" && alone) backed.add(org.id);
+  }
+  return backed;
 }
 
 /**
@@ -287,7 +294,7 @@ export async function createPaymentRequest(
 }
 
 function fail(res: express.Response, err: unknown) {
-  if (err instanceof PaymentRequestError) return res.status(err.status).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
+  if (err instanceof PaymentRequestError) return res.status(err.status).json({ error: err.message });
   throw err;
 }
 
@@ -423,28 +430,9 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
       res.status(404).json({ error: "no such payment request" });
       return undefined;
     }
-    // An OPEN link made for an invoice before its payee lost invoice links is
-    // withdrawn: no way to pay is offered. One with nothing paid is a 404; one
-    // with money on it stays readable as the payer's receipt, without methods.
-    // Money sent anyway is still matched by the poller.
-    const withdrawn = !!r.invoiceId && effectiveState(r) === "OPEN" && invoicePayLinkBlocker(user) !== null;
-    if (withdrawn && paidEur(r) === 0) {
-      res.status(404).json({ error: "no such payment request" });
-      return undefined;
-    }
     // Opened under the payee's current address, a link minted under a handle
     // someone else has since claimed shows the address it was opened under.
-    return { r, user, withdrawn, handle: heldByOther(r.handle, r) ? req.params.handle : undefined };
-  };
-
-  /** resolvePublic, for the routes that take a payment (QRs, quote). */
-  const resolvePayable = (req: express.Request, res: express.Response) => {
-    const hit = resolvePublic(req, res);
-    if (hit?.withdrawn) {
-      res.status(404).json({ error: "this request no longer takes payment" });
-      return undefined;
-    }
-    return hit;
+    return { r, user, handle: heldByOther(r.handle, r) ? req.params.handle : undefined };
   };
 
   router.get(
@@ -455,12 +443,6 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
     wrap(async (req, res) => {
       const hit = resolvePublic(req, res);
       if (!hit) return;
-      if (hit.withdrawn) {
-        const view = publicPaymentRequest(hit.r, hit.user, {
-          chainId: CHAIN_ID, token: payToken(), baseUrl: baseUrlFor(req), payeeName: payeeNameFor(hit.r), cryptoLive: false, handle: hit.handle,
-        });
-        return res.json({ ...view, methods: {}, withdrawn: true });
-      }
       const { request, quote } = await ensureQuote(hit.r, hit.r.amountEur);
       const ctx = await payerContext(req, request, hit.user, quote);
       const user = store.findUser(hit.user.id) ?? hit.user;
@@ -475,7 +457,7 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
   router.get(
     "/pay/:handle/:code/qr.svg",
     wrap(async (req, res) => {
-      const hit = resolvePayable(req, res);
+      const hit = resolvePublic(req, res);
       if (!hit) return;
       const address = hit.user.paymentPage?.depositAddress;
       if (!hit.r.methods.includes("crypto") || !address) return res.status(404).json({ error: "this request does not take crypto" });
@@ -495,7 +477,7 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
   router.get(
     "/pay/:handle/:code/sepa-qr.svg",
     wrap(async (req, res) => {
-      const hit = resolvePayable(req, res);
+      const hit = resolvePublic(req, res);
       if (!hit) return;
       const bank = publicPaymentRequest(hit.r, store.findUser(hit.user.id) ?? hit.user, {
         chainId: CHAIN_ID, token: payToken(), baseUrl: baseUrlFor(req), payeeName: payeeNameFor(hit.r), cryptoLive: false, handle: hit.handle,
@@ -523,7 +505,7 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
   router.post(
     "/pay/:handle/:code/quote",
     wrap(async (req, res) => {
-      const hit = resolvePayable(req, res);
+      const hit = resolvePublic(req, res);
       if (!hit) return;
       if (effectiveState(hit.r) !== "OPEN") return res.status(409).json({ error: `this request is ${effectiveState(hit.r).toLowerCase()}` });
       if (!hit.r.methods.includes("crypto")) return res.status(409).json({ error: "this request does not take crypto" });
