@@ -907,7 +907,7 @@ does not support.
 | `bookkeeping/assets-and-reports.md` | Positions "per asset per wallet"; month-end values "at month-end rates" | Positions are per asset. Values are the running sum of historic fiat value, not a month-end valuation. |
 | `invoicing/issue-an-invoice.md` | Credit notes referencing the corrected invoice | Not built. There is no credit-note type. |
 | `invoicing/issue-an-invoice.md` | VAT rate per line; toggles per invoice; pick a contact | The API has per-line VAT but the UI does not. Toggles are org defaults only. Picking a contact prefills name and country only. |
-| `invoicing/vat-and-jurisdictions.md` | "Under the structural rule set there is no built-in list" | GENERIC offers `export_third_country` and `other`. |
+| `invoicing/vat-and-jurisdictions.md` | "Under the structural rule set there is no built-in list" | GENERIC offers `not_registered` and `other`, both with a note the issuer writes. |
 | `docs/business-accounts.md` (role table) | Owner may delete the org | No delete route exists, by design. |
 | `business/accounts-and-currencies.md` | USD accounts "through Bridge" | The currency registry names **Iron** as the USD/GBP provider. Bridge appears in code only as the cash-rail transfer seam. |
 | `business/bulk-payments.md` | CSV destination "an IBAN, or a wallet address"; Payments → New draft → Import CSV | The importer produces wallet lines only (`chainId: 0`), and wallet lines are refused from an issued account. There is no Import CSV button in `/business`. The API parses and returns lines but does not create a draft. |
