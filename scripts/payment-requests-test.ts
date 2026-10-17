@@ -496,6 +496,12 @@ try {
     check("nothing was created for it", !store.paymentRequests.some((p) => p.invoiceId === fresh));
     check("and the invoice it already had a link for shows no Pay button", openLinkPath({ id: theirs, orgId }) === undefined);
     check("and its /pay page is no longer offered", (await fetch(`${API}/api/pay/miriam/${forInvoice.body.code}`)).status === 404);
+    // A partly paid link is still OPEN, but it holds the payer's receipt.
+    const reqRow: any = store.paymentRequests.find((p) => p.id === forInvoice.body.id)!;
+    reqRow.payments.push({ amountEur: 10 });
+    check("a partly paid invoice link stays readable as the payer's receipt",
+      (await fetch(`${API}/api/pay/miriam/${forInvoice.body.code}`)).status === 200);
+    reqRow.payments.pop();
     check("the session tells the UI to hide Payment link", (publicUser(row) as any).invoicePayLinks === false);
     check("a wallet-tier account outside India keeps invoice links",
       invoicePayLinkBlocker({ ...row, country: "NG", segment: { ...row.segment, value: "WALLET_ONLY" } }) === null);
