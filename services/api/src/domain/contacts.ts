@@ -134,6 +134,13 @@ export function validateBankAccount(raw: unknown): Omit<ContactBankAccount, "id"
   return out;
 }
 
+const CHAIN_NAMES: Record<number, string> = {
+  1: "Ethereum", 100: "Gnosis", 137: "Polygon", 8453: "Base", 84532: "Base Sepolia", 80002: "Polygon Amoy", 31337: "Local test chain",
+};
+
+/** A chain as people name it; an unknown id is named by its number. */
+export const chainName = (chainId: number) => CHAIN_NAMES[chainId] ?? `Chain ${chainId}`;
+
 export function validateWallet(raw: unknown): Omit<ContactWallet, "id"> {
   const input = (raw && typeof raw === "object" ? raw : {}) as Partial<ContactWallet>;
   const address = String(input.address ?? "").trim();

@@ -368,6 +368,7 @@ export const ACTIONS = {
   "ap-tab"(el) { ap.tab = el.dataset.tab; },
   "inv-filter"(el) { iv.filter = el.dataset.f; },
   "inv-side"(el) { iv.side = el.dataset.s; },
+  "inv-suppliers"() { iv.side = "suppliers"; iv.filter = "open"; setView("invoices"); },
   "bk-month"(el) { bk.month = el.dataset.m; },
 
   "draft-detail": async (el) => { await draftDrawer(el); return "keep"; },

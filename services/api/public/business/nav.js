@@ -104,7 +104,10 @@ function shown(v) {
 /* What the sidebar shows beside the nav: the org's accounts, and how many
    payment runs wait for this person. Read after each render, drawn from
    here; a failed read leaves the last one. */
-export const side = { orgId: null, accounts: null, drafts: null };
+export const side = { orgId: null, accounts: null, drafts: null, invoices: null };
+
+/** Supplier invoices submitted through a link and not yet paid or under way. */
+export const submittedInvoices = (invoices) => (invoices || []).filter((i) => i.direction !== "outgoing" && i.state === "SUBMITTED");
 
 /** Waiting for this person: drafted by someone else, and their role approves. */
 export const waitingForMe = (drafts) => (drafts || []).filter((d) =>
@@ -113,14 +116,16 @@ export const waitingForMe = (drafts) => (drafts || []).filter((d) =>
 export async function refreshSide() {
   const id = org?.id;
   if (!id) return;
-  const [a, d] = await Promise.allSettled([
+  const [a, d, i] = await Promise.allSettled([
     api(`/api/orgs/${id}/accounts`),
     cap("transfers.drafts").allowed ? api(`/api/orgs/${id}/drafts`) : Promise.resolve({ drafts: [] }),
+    cap("invoices").allowed ? api(`/api/orgs/${id}/invoices`) : Promise.resolve({ invoices: [] }),
   ]);
   if (org?.id !== id) return;
-  if (side.orgId !== id) { side.accounts = null; side.drafts = null; side.orgId = id; }
+  if (side.orgId !== id) { side.accounts = null; side.drafts = null; side.invoices = null; side.orgId = id; }
   if (a.status === "fulfilled") side.accounts = a.value.accounts;
   if (d.status === "fulfilled") side.drafts = d.value.drafts;
+  if (i.status === "fulfilled") side.invoices = i.value.invoices;
   renderNav();
 }
 
@@ -152,10 +157,11 @@ export function renderNav() {
   const hasBooks = SPACES.books.some((v) => v.capability && shown(v));
   const space = hasBooks ? spaceOf(view) : "banking";
   const waiting = waitingForMe(side.drafts).length;
+  const submitted = submittedInvoices(side.invoices).length;
   const items = SPACES[space].filter(shown).map((v) => ({
     ...v,
     label: v.id === "payments" && !reviewOn() ? "Payments" : v.label,
-    badge: v.id === "payments" && waiting ? String(waiting) : "",
+    badge: v.id === "payments" && waiting ? String(waiting) : v.id === "invoices" && submitted ? String(submitted) : "",
   }));
   $("#nav").innerHTML = items.map((it) => link(it, active)).join("");
   const tabs = TABS[space].map((id) => items.find((it) => it.id === id)).filter(Boolean);
