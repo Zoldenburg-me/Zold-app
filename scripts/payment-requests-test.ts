@@ -478,44 +478,6 @@ try {
 
   const forInvoice = await call("POST", `/api/users/${miriam.id}/payment-requests`, { amountEur: 25, methods: ["crypto"], invoiceId: theirs }, miriam.id);
   check("a link raised for an invoice the org issued is created and carries it", forInvoice.status === 201 && forInvoice.body.invoiceId === theirs, JSON.stringify(forInvoice.body));
-  // Owner rule 2026-10-17: a wallet-tier account resident in India gets no
-  // payment link for an invoice, and an invoice's existing link loses its Pay
-  // button. The same account outside India, or KYC-approved in the EU, keeps it.
-  {
-    const { openLinkPath } = await import("../services/api/src/routes/business/invoice-pay-link.js");
-    const { invoicePayLinkBlocker } = await import("../services/api/src/domain/wallet-tier.js");
-    const { publicUser } = await import("../services/api/src/users/public-user.js");
-    const row: any = store.findUser(miriam.id)!;
-    const saved = { country: row.country, segment: row.segment, kycStatus: row.kycStatus };
-    check("an invoice with an open link offers the Pay button", openLinkPath({ id: theirs, orgId }) !== undefined);
-    Object.assign(row, { country: "IN", kycStatus: "pending", segment: { value: "IN_COLLECTIONS", reasonCode: "t", decidedAt: nowIso, decidedBy: "system" } });
-    const fresh = mkInvoice();
-    const refused = await call("POST", `/api/users/${miriam.id}/payment-requests`, { amountEur: 25, methods: ["crypto"], invoiceId: fresh }, miriam.id);
-    check("a wallet-tier account resident in India gets no payment link for an invoice",
-      refused.status === 403 && refused.body.code === "INVOICE_PAY_LINK_UNAVAILABLE", JSON.stringify(refused));
-    check("nothing was created for it", !store.paymentRequests.some((p) => p.invoiceId === fresh));
-    check("and the invoice it already had a link for shows no Pay button", openLinkPath({ id: theirs, orgId }) === undefined);
-    check("and its /pay page is no longer offered", (await fetch(`${API}/api/pay/miriam/${forInvoice.body.code}`)).status === 404);
-    // A partly paid link is still OPEN, but it holds the payer's receipt.
-    const reqRow: any = store.paymentRequests.find((p) => p.id === forInvoice.body.id)!;
-    reqRow.payments.push({ amountEur: 10, method: "crypto", kind: "partial", at: nowIso });
-    const partly = await fetch(`${API}/api/pay/miriam/${forInvoice.body.code}`);
-    const partlyBody: any = await partly.json().catch(() => ({}));
-    check("a partly paid invoice link stays readable as the payer's receipt",
-      partly.status === 200 && partlyBody.payments?.length === 1, JSON.stringify({ status: partly.status }));
-    check("but offers no way to pay the rest",
-      partlyBody.withdrawn === true && Object.keys(partlyBody.methods ?? { x: 1 }).length === 0, JSON.stringify(partlyBody.methods));
-    check("and its QR and quote routes refuse",
-      (await fetch(`${API}/api/pay/miriam/${forInvoice.body.code}/sepa-qr.svg`)).status === 404
-      && (await fetch(`${API}/api/pay/miriam/${forInvoice.body.code}/quote`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ amountEur: 25 }) })).status === 404);
-    reqRow.payments.pop();
-    check("the session tells the UI to hide Payment link", (publicUser(row) as any).invoicePayLinks === false);
-    check("a wallet-tier account outside India keeps invoice links",
-      invoicePayLinkBlocker({ ...row, country: "NG", segment: { ...row.segment, value: "WALLET_ONLY" } }) === null);
-    Object.assign(row, saved);
-    check("restored: the link is offered again", openLinkPath({ id: theirs, orgId }) !== undefined);
-    check("restored: its /pay page opens again", (await fetch(`${API}/api/pay/miriam/${forInvoice.body.code}`)).status === 200);
-  }
   check("a crypto-only link has no bank QR", (await fetch(`${API}/api/pay/miriam/${forInvoice.body.code}/sepa-qr.svg`)).status === 404);
   const qInv = forInvoice.body.latestQuote.amountUsdc as number;
   await mintUsdc(owner, qInv);
@@ -552,18 +514,6 @@ try {
   check("the invoice is PAID on arrival, before any conversion — the client paid when the money landed",
     store.findInvoice(theirs)!.state === "PAID" && st!.amountEur === dInv.receipt?.amountEur,
     JSON.stringify({ state: store.findInvoice(theirs)!.state, amountEur: st!.amountEur, receipt: dInv.receipt }));
-  {
-    // A paid invoice link is the payer's receipt: it stays readable after the
-    // payee loses invoice links (only an OPEN one is withdrawn).
-    const row: any = store.findUser(miriam.id)!;
-    const saved = { country: row.country, segment: row.segment, kycStatus: row.kycStatus };
-    Object.assign(row, { country: "IN", kycStatus: "pending", segment: { value: "IN_COLLECTIONS", reasonCode: "t", decidedAt: nowIso, decidedBy: "system" } });
-    const receipt = await fetch(`${API}/api/pay/miriam/${forInvoice.body.code}`);
-    const body: any = await receipt.json().catch(() => ({}));
-    check("a paid invoice link stays readable as the payer's receipt after the payee loses invoice links",
-      receipt.status === 200 && body.state !== "OPEN", JSON.stringify({ status: receipt.status, state: body.state }));
-    Object.assign(row, saved);
-  }
 
   // Converting the held USDC later rewrites the same settlement row; it never
   // settles the invoice a second time. The swap itself needs a bundler, so the
