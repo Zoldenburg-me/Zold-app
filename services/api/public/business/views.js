@@ -10,7 +10,7 @@
  * so a screen is added by naming it and the shell dispatches without knowing
  * what exists. Every renderer reads the live `org` from core.js.
  */
-import { $, Z, api, cap, chainId, countrySelect, day, esc, eur, gateHtml, issuerFieldNames, issuerIds, maskIban, me, org, ownSafe, plain, refreshMe, roleCan, safeAddressHtml, ymd } from "./core.js";
+import { $, Z, api, cap, chainId, countrySelect, day, esc, eur, gateHtml, issuerFieldNames, issuerIds, maskIban, mayActOnInvoice, me, org, ownSafe, plain, refreshMe, roleCan, safeAddressHtml, ymd } from "./core.js";
 
 export const RENDER = {};
 export const META = {};
@@ -638,6 +638,8 @@ export function invoiceActions(i) {
       ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="invoice-pay-link" data-id="${esc(i.id)}">Payment link</button>`
       : "";
   }
+  // A member who may not act on it sees no button the API would refuse.
+  if (["SUBMITTED", "PAID"].includes(i.state) && !mayActOnInvoice(i)) return "";
   if (i.state === "SUBMITTED") {
     if (i.payTo?.kind === "bank" && i.payTo.bank?.iban) return `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="pay-invoice" data-id="${esc(i.id)}">Pay</button>`;
     return `<span class="desc">${i.payTo?.kind === "wallet" ? "Wallet only: ask for an IBAN" : "No bank details given"}</span>

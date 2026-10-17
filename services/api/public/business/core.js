@@ -179,13 +179,17 @@ export const safeAddressHtml = (s) => `<div class="zb-safe-addr">
 /* What each role may do, as the API's permission table has it. */
 export const ROLE_WORD = { owner: "Owner", admin: "Admin", payer: "Payer", accountant: "Accountant", viewer: "Viewer" };
 export const ROLE_CAN = {
-  owner: { propose: true, approve: true, send: true, categorise: true, wallets: true },
-  admin: { propose: true, approve: true, send: true, categorise: true, wallets: true },
-  payer: { propose: true, approve: false, send: true, categorise: false, wallets: false },
-  accountant: { propose: true, approve: false, send: false, categorise: true, wallets: false },
-  viewer: { propose: false, approve: false, send: false, categorise: false, wallets: false },
+  owner: { propose: true, approve: true, send: true, categorise: true, wallets: true, invoices: true },
+  admin: { propose: true, approve: true, send: true, categorise: true, wallets: true, invoices: true },
+  payer: { propose: true, approve: false, send: true, categorise: false, wallets: false, invoices: true },
+  accountant: { propose: true, approve: false, send: false, categorise: true, wallets: false, invoices: false },
+  viewer: { propose: false, approve: false, send: false, categorise: false, wallets: false, invoices: false },
 };
 export const roleCan = (role, what) => !!ROLE_CAN[role]?.[what];
+
+/** May this member act on a supplier invoice: Pay (a draft, `propose`) when
+ *  it has an IBAN, else Mark paid or Reconcile (invoices.manage, `invoices`). */
+export const mayActOnInvoice = (i) => roleCan(org?.role, i.state === "SUBMITTED" && i.payTo?.kind === "bank" && i.payTo.bank?.iban ? "propose" : "invoices");
 
 /** Server text for people: the API's words for a few chain and passkey
  *  errors, said plainly. A passkey is named for this device (Z.onPhone). */

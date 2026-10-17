@@ -93,11 +93,12 @@ export async function notifyRequester(
   if (!mailOn) return "off";
   // All of it in the try: this runs unawaited, and an unhandled rejection exits the API.
   try {
-    // A requester who has left the org is told nothing about it.
+    // A requester who has left the org, or never confirmed the address, is told nothing.
     const member = invoice.createdByMemberId ? store.findMember(invoice.createdByMemberId) : undefined;
-    const email = member?.status === "active" && member.userId ? store.findUser(member.userId)?.email : undefined;
+    const user = member?.status === "active" && member.userId ? store.findUser(member.userId) : undefined;
+    const email = user?.emailVerifiedAt ? user.email : undefined;
     if (!email) {
-      console.error(`invoice submitted: ${invoice.id}: the requester is no active member with an email`);
+      console.error(`invoice submitted: ${invoice.id}: the requester has no confirmed email or left the org`);
       return "no-email";
     }
     await send(email, store.findOrganisation(invoice.orgId)?.name ?? "your organisation");
