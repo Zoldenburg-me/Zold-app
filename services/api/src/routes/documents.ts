@@ -195,7 +195,7 @@ export async function buildBalance(user: User): Promise<BalanceSnapshot> {
 async function verifyDocument(doc: StoredDocument): Promise<{ ok: boolean; checks: { name: string; ok: boolean; detail?: string }[] }> {
   const checks: { name: string; ok: boolean; detail?: string }[] = [];
   const zold = await verifyZoldAttestation(doc);
-  checks.push({ name: "Signed by Zold", ok: zold.ok, detail: zold.ok ? `signer ${doc.attestations.zold.signer}` : zold.reason });
+  checks.push({ name: "Signed by Zold", ok: zold.ok, detail: zold.ok ? `Zold's document key (${doc.attestations.zold.signer}) signed this exact document, so nothing on it has changed since` : zold.reason });
   if (doc.revokedAt) checks.push({ name: "Not revoked", ok: false, detail: `revoked ${doc.revokedAt}` });
 
   if (doc.snapshot.kind === "balance") {
@@ -231,7 +231,7 @@ async function verifyDocument(doc: StoredDocument): Promise<{ ok: boolean; check
       issueOrder: s.line.links.orderId ? store.moneriumIssueOrders.find((o) => o.orderId === s.line.links.orderId) : undefined,
       sweep: s.sweep ? store.conversionSweeps.find((x) => `sweep:${x.id}` === s.line.key) : undefined,
     });
-    checks.push({ name: "Underlying records still agree", ok: agree.ok, detail: agree.detail });
+    checks.push({ name: "Records still match", ok: agree.ok, detail: agree.detail });
     if (s.receipt?.txHash && !HARNESS.enabled) {
       try {
         const rc = await publicClient.getTransactionReceipt({ hash: s.receipt.txHash as `0x${string}` });

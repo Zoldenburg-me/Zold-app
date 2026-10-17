@@ -866,7 +866,7 @@ export const ACTIONS = {
   async "export-prepare"() {
     const month = monthChosen();
     const r = await api(`/api/orgs/${org.id}/bookkeeping/export/${month}/prepare`, { method: "POST" });
-    toast(`${month}: ${r.lines} line${r.lines === 1 ? "" : "s"}, ${r.belegeIssued} Beleg${r.belegeIssued === 1 ? "" : "e"} issued${r.failed.length ? `, ${r.failed.length} failed` : ""}.`, r.failed.length > 0);
+    toast(`${month}: ${r.lines} line${r.lines === 1 ? "" : "s"}, ${r.belegeIssued} receipt${r.belegeIssued === 1 ? "" : "s"} created${r.failed.length ? `, ${r.failed.length} failed` : ""}.`, r.failed.length > 0);
   },
   async "export-csv"() {
     const month = monthChosen();
@@ -878,7 +878,7 @@ export const ACTIONS = {
   },
   async "line-beleg"(el) {
     const r = await api(`/api/orgs/${org.id}/bookkeeping/lines/${el.dataset.line}/beleg`, { method: "POST" });
-    toast(`Beleg ${r.code} ${r.issued ? "issued" : "already existed"}.`);
+    toast(`Receipt ${r.code} ${r.issued ? "created" : "already existed"}.`);
   },
   /** One step from Connections or the export page: pick the month, send.
    *  The server issues any missing Beleg first; the result says what landed. */
@@ -894,8 +894,8 @@ export const ACTIONS = {
     const name = (m) => new Intl.DateTimeFormat("en-GB", { month: "long", year: "numeric" }).format(new Date(`${m}-15T12:00:00`));
     const bankField = banks.length
       ? `<label for="gmi-bank">Bank account in GetMyInvoices</label><select id="gmi-bank" name="bank">${banks.map((b) => `<option value="${esc(String(b.bankAccountUid))}"${b.bankAccountUid === picked ? " selected" : ""}>${esc(b.name || `Account ${b.bankAccountUid}`)}</option>`).join("")}</select>`
-      : `<p class="zb-hint" style="margin-top:12px">GetMyInvoices has no manual bank account yet, so only the Belege go up. Add one there (Bank accounts → add a manual account, e.g. “Zold”) and send again to add the bank lines.</p>`;
-    dialog("Send to GetMyInvoices", `<p class="desc">Each bank line of the month goes to the bank account you pick, with its Beleg attached as the document. Lines without a Beleg get one first. Anything already there is skipped, never doubled.</p>
+      : `<p class="zb-hint" style="margin-top:12px">GetMyInvoices has no manual bank account yet, so only the receipts go up. Add one there (Bank accounts → add a manual account, e.g. “Zold”) and send again to add the bank lines.</p>`;
+    dialog("Send to GetMyInvoices", `<p class="desc">Each bank line of the month goes to the bank account you pick, with its booking receipt attached as the document. Lines without one get one first. Anything already there is skipped, never doubled.</p>
       <label for="gmi-month">Month</label><select id="gmi-month" name="month">${months.map((m) => `<option value="${esc(m)}"${m === preset ? " selected" : ""}>${esc(name(m))}</option>`).join("")}</select>
       ${bankField}`,
       async () => {
@@ -907,12 +907,12 @@ export const ACTIONS = {
         const attached = r.results.filter((x) => x.bankLine?.assigned).length;
         const late = r.results.filter((x) => x.tagsMayBeMissing).length;
         const rows = [
-          [bl("added"), "bank lines added"], [bl("exists"), "bank lines already there"], [attached, "with their Beleg attached"],
-          [n("uploaded"), "Belege sent now"], [n("exists"), "Belege already there, skipped"],
+          [bl("added"), "bank lines added"], [bl("exists"), "bank lines already there"], [attached, "with their receipt attached"],
+          [n("uploaded"), "receipts sent now"], [n("exists"), "receipts already there, skipped"],
           [n("failed") + bl("failed"), "failed: send again; whatever did arrive is skipped"],
           [n("unknown") + bl("unknown"), "got no answer and can’t be found there yet: send again in a few minutes"],
-          [n("no-beleg"), "lines that could not get a Beleg, so not sent"],
-          [late, "Belege that arrived slowly and may be missing their tags"],
+          [n("no-beleg"), "lines that could not get a receipt, so not sent"],
+          [late, "receipts that arrived slowly and may be missing their tags"],
         ].filter(([k]) => k > 0);
         const body = r.results.length
           ? `<ul class="zb-next" style="margin-top:10px">${rows.map(([k, t]) => `<li><b>${k}</b>&nbsp;${esc(t)}</li>`).join("")}</ul>
