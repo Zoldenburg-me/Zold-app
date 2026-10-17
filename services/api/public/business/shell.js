@@ -206,9 +206,13 @@ export async function boot() {
     return u;
   }).catch(() => null);
   setOrgs(list.organisations);
-  if (!orgs.length) {
+  // ?setup=invoices: every "Invoice" tap without an organisation that can
+  // invoice comes here (the app's Get paid, the org switcher, the banner), and
+  // lands on Invoices once the organisation exists.
+  const forInvoices = new URLSearchParams(location.search).get("setup") === "invoices" && !orgs.some((o) => o.type === "personal");
+  if (!orgs.length || forInvoices) {
     // A person starts with their personal space, named and placed from the
-    // account; a company login has none (routes/orgs.ts refuses it).
+    // account; a company login has none, and nobody has two (routes/orgs.ts).
     const u = await session;
     only("#no-orgs");
     if (u?.accountType === "company") $("#new-org-type option[value=personal]")?.remove();
@@ -216,18 +220,33 @@ export async function boot() {
     if (u?.country) $("#new-org-country").value = u.country;
     $("#new-org").onsubmit = async (e) => {
       e.preventDefault();
+      const typed = $("#new-org-name").value.trim();
+      const type = $("#new-org-type").value;
+      const email = $("#new-org-email").value.trim();
+      if (!$("#new-org-email").checkValidity()) return toast("Enter an email address, or leave it empty.", true);
       try {
-        await api("/api/orgs", {
+        const r = await api("/api/orgs", {
           method: "POST",
           body: {
-            name: $("#new-org-name").value,
-            type: $("#new-org-type").value,
+            // A personal space is named after its person; what they typed is the name on invoices.
+            ...(type === "personal" ? { name: u?.name || typed, legalName: typed } : { name: typed }),
+            type,
             country: $("#new-org-country").value,
+            ...(email ? { email } : {}),
             timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
           },
         });
-        location.reload();
-      } catch (err) { toast(err.message, true); }
+        try { localStorage.setItem("zold-org", r.organisation.id); } catch { /* opens the first org */ }
+        location.assign(forInvoices ? "/business?view=invoices" : location.pathname);
+      } catch (err) {
+        // Made meanwhile (another tab): open that one, not the last org used.
+        if (err.code === "PERSONAL_ORG_EXISTS") {
+          const own = (await api("/api/orgs").catch(() => ({}))).organisations?.find((o) => o.type === "personal");
+          try { if (own) localStorage.setItem("zold-org", own.id); } catch { /* opens the first org */ }
+          return location.assign("/business?view=invoices");
+        }
+        toast(err.message, true);
+      }
     };
     return;
   }

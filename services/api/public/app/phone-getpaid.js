@@ -39,12 +39,12 @@ function phLinkSub(r) {
 
 /* The button says what the organisation read allows, in its own words. Invoices are
    written in Zold Business, for the personal space or a company; a person
-   without either is offered the personal space here, then lands on Invoices. */
+   without either goes through its organisation onboarding, then lands on Invoices. */
 function phInvoiceButton() {
   if (phCache.orgs === null) return Z.button({ icon: "receipt_long", label: "Invoice", disabledReason: "Loading…" });
   const org = phCan(phPersonalOrg(), "invoices") ? phPersonalOrg() : (phCache.orgs || []).find((o) => phCan(o, "invoices"));
   if (org) return Z.button({ icon: "receipt_long", label: "Invoice", href: phWebHref("invoice-new") }).replace("<a ", `<a data-ph-org="${esc(org.id)}" `);
-  if (!phPersonalOrg() && user?.accountType !== "company") return Z.button({ icon: "receipt_long", label: "Invoice", id: "ph-inv-setup" });
+  if (!phPersonalOrg() && user?.accountType !== "company") return Z.button({ icon: "receipt_long", label: "Invoice", href: "/business?setup=invoices" });
   const reason = phPersonalOrg()?.capabilities?.invoices?.reason || "Invoices are not part of this account.";
   return Z.button({ icon: "receipt_long", label: "Invoice", disabledReason: reason });
 }
@@ -52,10 +52,8 @@ function phInvoiceButton() {
 /* Their own books live in /business. The personal space is made from what
    the person types here, never from one tap: one per person, none for a
    company login (routes/orgs.ts). The space is named after the person and
-   follows their name; what they type is the name on their invoices.
-   `then` is where Zold Business opens once it exists (Profile: its home;
-   Get paid: Invoices). */
-function phPersonalSheet(trigger, then = "/business") {
+   follows their name; what they type is the name on their invoices. */
+function phPersonalSheet(trigger) {
   const u = user || {};
   document.getElementById("ph-biz")?.remove();
   document.body.insertAdjacentHTML("beforeend", Z.overlay({
@@ -90,10 +88,10 @@ function phPersonalSheet(trigger, then = "/business") {
         country: country.value, ...(email.value.trim() ? { email: email.value.trim() } : {}),
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone });
       try { localStorage.setItem("zold-org", r.organisation.id); } catch { /* opens the first org */ }
-      location.assign(then);
+      location.assign("/business");
     } catch (err) {
       // Made meanwhile (another tab, a stale list): it is there to open.
-      if (err.code === "PERSONAL_ORG_EXISTS") return location.assign(then);
+      if (err.code === "PERSONAL_ORG_EXISTS") return location.assign("/business");
       Z.setLoading(btn, false);
       Z.setFieldError(name, err.message);
       name.focus();
@@ -123,10 +121,7 @@ PH["get-paid"] = {
     `)}`;
   },
   bind(root) {
-    const setup = root.querySelector("#ph-inv-setup");
-    if (setup) setup.onclick = () => phPersonalSheet(setup, phWebHref("invoices"));
-    // phRefresh, not phRender: a load that lands while the personal-space
-    // sheet is open must not close it and drop what was typed.
+    // phRefresh, not phRender: a late load must not redraw over the screen.
     if (phCache.links === null) phLoadLinks().then(() => { if (phRoute?.name === "get-paid") phRefresh(); });
     if (phCache.orgs === null) phLoadOrgs().then(() => { if (phRoute?.name === "get-paid") phRefresh(); });
   },
