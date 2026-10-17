@@ -140,7 +140,7 @@ RENDER.wallets = async () => {
   const unread = acc ? "" : `<div class="banner warn">${Z.icon("warning")}<span>Your Zold account could not be read, so it may be missing from this list. Reload to try again.</span></div>`;
   // The account's own Safe comes first: it is the account itself, so it has no proof, sync or Remove.
   const safeRow = safe ? `<tr>
-        <td>${safe.company ? "Company Zold account" : "Your Zold account"}<span class="zb-sub2">SAFE</span></td><td class="z-mono" translate="no">${esc(safe.address)}</td><td>${esc(String(chainId ?? ""))}</td>
+        <td>${safe.company ? "Company Zold account" : "Your Zold account"}<span class="zb-sub2">SAFE</span></td><td class="z-mono" translate="no">${esc(safe.address)}</td><td id="own-safe-chain">${esc(String(chainId ?? ""))}</td>
         <td><span class="z-dim">The account itself</span></td><td>${Z.tag("Account’s own", "mint")}</td><td></td></tr>` : "";
   return unread + (wallets.length || safe
     ? `${unproven ? `<div class="banner warn">${Z.icon("verified_user")}<span>Importing a wallet does not show it is yours. Prove it by signing a short message in the wallet itself: until then it is synced and counted in your books, but its receipts are not collected into invoices.</span></div>` : ""}
