@@ -138,6 +138,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 
 /* Tables: .z-tbl (ui.css) in a card; these add the web app's cells. */
 .z-tbl td.zb-top { vertical-align: top; padding-top: 14px; padding-bottom: 14px; height: auto; }
+.z-tbl tbody tr[data-act] { cursor: pointer; }
 button.z-tbl__link { padding: 0; border: 0; background: none; font: inherit; color: var(--z-text); text-align: left; cursor: pointer; }
 .z-tbl .zb-sub2 { display: block; font-size: 12.5px; color: var(--z-dim); font-weight: 400; }
 .z-tbl .zb-cellact { display: flex; gap: var(--z-space-2); justify-content: flex-end; position: relative; z-index: 1; }

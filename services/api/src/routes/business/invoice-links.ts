@@ -31,6 +31,50 @@ const PASSWORD_FAILURES_MAX = 10;
 const PASSWORD_FAILURE_WINDOW_MS = 15 * 60_000;
 const DUE_DATE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 
+const payorName = (invoice: Invoice) =>
+  store.findOrganisation(invoice.orgId)?.name ?? "";
+
+/** "Managing director" in each language an invoice can be written in. */
+const DIRECTOR_LABEL: Record<string, string> = {
+  de: "Geschäftsführung",
+  en: "Managing director",
+  fr: "Directeur général",
+  es: "Director general",
+};
+
+/**
+ * Bank details, footer and payment link come from the ISSUING org, and only
+ * for an invoice it issued. An incoming invoice must not leak our bank
+ * details to the supplier who filled it in. The footer's labels are in the
+ * invoice's language, not German by default.
+ */
+const issuerExtras = (invoice: Invoice) => {
+  if (invoice.direction !== "outgoing") return undefined;
+  const org = store.findOrganisation(invoice.orgId);
+  const director = DIRECTOR_LABEL[invoice.issued?.language ?? "en"] ?? DIRECTOR_LABEL.en;
+  const footerNote = [
+    org?.invoicing?.footerNote,
+    [org?.invoicing?.registerCourt, org?.invoicing?.registerNumber].filter(Boolean).join(" ") || undefined,
+    org?.invoicing?.managingDirector ? `${director}: ${org.invoicing.managingDirector}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const settled = invoice.state === "PAID" || invoice.state === "RECONCILED";
+  return {
+    bank: org ? invoiceBankOf(org) : undefined,
+    footerNote: footerNote || undefined,
+    // The customer holding the invoice link is the one its payment link was
+    // made for; a settled invoice has nothing left to pay.
+    payPath: settled ? undefined : openLinkPath(invoice),
+    payLinkLapsed: settled ? undefined : payLinkLapsed(invoice) || undefined,
+  };
+};
+
+/** The issued document exactly as the link holder sees it; the owner's
+ *  print view (routes/business/invoices.ts) reads the same projection. */
+export const linkInvoiceView = (invoice: Invoice) =>
+  supplierView(invoice, payorName(invoice), issuerExtras(invoice));
+
 export function createInvoiceLinkRouter(): express.Router {
   const r = express.Router();
 
@@ -67,49 +111,10 @@ export function createInvoiceLinkRouter(): express.Router {
     return invoice;
   };
 
-  const payorName = (invoice: Invoice) =>
-    store.findOrganisation(invoice.orgId)?.name ?? "";
-
-  /**
-   * Bank details, footer and payment link come from the ISSUING org, and only
-   * for an invoice it issued. An incoming invoice must not leak our bank
-   * details to the supplier who filled it in. The footer's labels are in the
-   * invoice's language, not German by default.
-   */
-  /** "Managing director" in each language an invoice can be written in. */
-  const DIRECTOR_LABEL: Record<string, string> = {
-    de: "Geschäftsführung",
-    en: "Managing director",
-    fr: "Directeur général",
-    es: "Director general",
-  };
-
-  const issuerExtras = (invoice: Invoice) => {
-    if (invoice.direction !== "outgoing") return undefined;
-    const org = store.findOrganisation(invoice.orgId);
-    const director = DIRECTOR_LABEL[invoice.issued?.language ?? "en"] ?? DIRECTOR_LABEL.en;
-    const footerNote = [
-      org?.invoicing?.footerNote,
-      [org?.invoicing?.registerCourt, org?.invoicing?.registerNumber].filter(Boolean).join(" ") || undefined,
-      org?.invoicing?.managingDirector ? `${director}: ${org.invoicing.managingDirector}` : undefined,
-    ]
-      .filter(Boolean)
-      .join(" · ");
-    const settled = invoice.state === "PAID" || invoice.state === "RECONCILED";
-    return {
-      bank: org ? invoiceBankOf(org) : undefined,
-      footerNote: footerNote || undefined,
-      // The customer holding the invoice link is the one its payment link was
-      // made for; a settled invoice has nothing left to pay.
-      payPath: settled ? undefined : openLinkPath(invoice),
-      payLinkLapsed: settled ? undefined : payLinkLapsed(invoice) || undefined,
-    };
-  };
-
   r.get("/:token", async (req, res) => {
     const invoice = await load(req, res);
     if (!invoice) return;
-    res.json({ invoice: supplierView(invoice, payorName(invoice), issuerExtras(invoice)) });
+    res.json({ invoice: linkInvoiceView(invoice) });
   });
 
   /** The supplier fills the invoice in. Locked once submitted. */
@@ -119,7 +124,7 @@ export function createInvoiceLinkRouter(): express.Router {
     if (invoice.state !== "LINK_CREATED") {
       return res.status(409).json({
         error: "This invoice was already submitted. Submitted invoices are timestamped and locked.",
-        invoice: supplierView(invoice, payorName(invoice), issuerExtras(invoice)),
+        invoice: linkInvoiceView(invoice),
       });
     }
     try {
@@ -158,7 +163,7 @@ export function createInvoiceLinkRouter(): express.Router {
         dueDate: typeof dueDate === "string" && dueDate ? dueDate : invoice.dueDate,
         submittedAt: new Date().toISOString(),
       });
-      res.json({ invoice: supplierView(updated, payorName(updated), issuerExtras(updated)) });
+      res.json({ invoice: linkInvoiceView(updated) });
     } catch (err) {
       if (err instanceof InvoiceError || err instanceof ContactError) return res.status(400).json({ error: err.message });
       throw err;

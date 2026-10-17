@@ -281,10 +281,10 @@ RENDER.invoices = async () => {
     const fig = w === "WAITING" ? '<span class="z-dim">Not filled in</span>'
       : w === "PAID" ? Z.amount({ value: a.value, currency: a.currency, direction: out ? "in" : "out" })
         : `<span class="z-amount">${esc(Z.formatMoney(a.value, a.currency))}</span>`;
-    // The number opens the invoice too: a name alone does not read as a link.
+    // The whole row opens the invoice; the number is its one keyboard stop.
     const label = esc(num) || (w === "DRAFT" ? "Not issued" : "Open");
-    return `<tr><td class="z-mono"><button type="button" class="z-tbl__link" data-act="invoice-detail" data-id="${esc(i.id)}">${label}</button></td>
-      <td><span class="z-tbl__who">${Z.avatar({ name: who })}<button type="button" class="z-tbl__link" data-act="invoice-detail" data-id="${esc(i.id)}">${esc(who)}</button></span></td>
+    return `<tr data-act="invoice-detail" data-id="${esc(i.id)}"><td class="z-mono"><button type="button" class="z-tbl__link" data-act="invoice-detail" data-id="${esc(i.id)}">${label}<span class="z-sr">, ${esc(who)}</span></button></td>
+      <td><span class="z-tbl__who">${Z.avatar({ name: who })}<span>${esc(who)}</span></span></td>
       <td class="${w === "OVERDUE" ? "zb-due--late" : "z-dim"}">${i.dueDate ? esc(day(ymd(i.dueDate))) : "None"}</td>
       <td>${Z.tag(w)}</td>
       <td class="z-tbl__num">${fig}</td>
@@ -348,7 +348,7 @@ export function invoiceDrawer(i, trigger) {
     body: `<div class="z-sheet__body"><div>${Z.tag(invWord(i))}</div>
       <dl class="z-kv z-card">${rows.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>
       ${isDraft ? receiptDraftSections(i) : i.settlements?.length ? settlementRows(i.settlements) : ""}
-      <div class="zb-actions" style="margin-top:0">${invoiceActions(i)}</div></div>`,
+      <div class="zb-actions" style="margin-top:0">${out && i.issued ? `<a class="z-btn z-btn--secondary z-btn--sm" href="/invoice/own?org=${encodeURIComponent(org.id)}&amp;id=${encodeURIComponent(i.id)}" target="_blank" rel="noopener">${Z.icon("print")}<span>View, print or save as PDF</span><span class="z-sr"> (opens in a new tab)</span></a>` : ""}${invoiceActions(i)}</div></div>`,
   }));
   Z.openOverlay("inv-drawer", trigger);
 }
