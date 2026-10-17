@@ -246,7 +246,7 @@ export function belegStillAgrees(
     else if (ctx.issueOrder.amountEur !== Math.abs(snap.line.amountCents) / 100) diffs.push("the order amount differs");
   }
   if (snap.sweep && !ctx.sweep) diffs.push("the sweep record is gone");
-  return diffs.length ? { ok: false, detail: diffs.join("; ") } : { ok: true, detail: "the underlying records still say the same" };
+  return diffs.length ? { ok: false, detail: diffs.join("; ") } : { ok: true, detail: "Zold re-read the records this document was built from (statement line, deposit, transfer or order) and the amount, transaction and state still match" };
 }
 
 const eur = (n: number | undefined) => (n === undefined ? "—" : `${n < 0 ? "-" : ""}€${Math.abs(n).toFixed(2)}`);
@@ -297,13 +297,14 @@ export function belegLines(snap: BelegSnapshot, code: string, issuedAt: string):
   };
 
   // Header
-  cellsLine([{ text: "Zold", at: 0, bold: true, size: 16 }, { text: "Beleg", at: 1, align: "right", bold: true, size: 11 }]);
+  cellsLine([{ text: "Zold", at: 0, bold: true, size: 16 }, { text: "Booking receipt (Beleg)", at: 1, align: "right", bold: true, size: 11 }]);
   cellsLine([{ text: belegTitle(snap), at: 0, muted: true, size: 10 }, { text: `Generated ${longDay(issuedAt)}`, at: 1, align: "right", muted: true, size: 9 }]);
   cellsLine([{ text: `Verification ${code}`, at: 1, align: "right", muted: true, size: 9 }]);
 
   // Account: who on the left, the account's facts on the right
   const h = snap.holder;
-  const left = [h.name.toUpperCase(), h.operatedBy ? `Operated by ${h.operatedBy}` : "", ...h.addressLines].filter(Boolean);
+  const nameNote = h.nameSource === "monerium" ? "Verified by Monerium" : h.nameSource === "self-declared" ? "Not verified: name as the holder entered it" : "";
+  const left = [h.name.toUpperCase(), nameNote, h.operatedBy ? `Operated by ${h.operatedBy}` : "", ...h.addressLines].filter(Boolean);
   const right: [string, string][] = [
     ...(h.iban ? [["IBAN", h.iban] as [string, string]] : []),
     ...(h.bic ? [["BIC", h.bic] as [string, string]] : []),

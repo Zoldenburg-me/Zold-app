@@ -22,7 +22,7 @@ process.env.TRANSF_CHAIN_ID = "31337";
 
 const { initStore, store } = await import("../services/api/src/store.js");
 const { writeStatementLines } = await import("../services/api/src/bookkeeping/writer.js");
-const { issueBelegForLine } = await import("../services/api/src/bookkeeping/issue.js");
+const { holderFor, issueBelegForLine } = await import("../services/api/src/bookkeeping/issue.js");
 const { belegFileName, belegLines, belegPdf, belegStillAgrees, belegTitle, buildBeleg, UNEXECUTED_NOTE } = await import("../services/api/src/bookkeeping/beleg.js");
 const { verifyZoldAttestation, snapshotDigest } = await import("../services/api/src/documents.js");
 const { winAnsi } = await import("../services/api/src/bookkeeping/pdf.js");
@@ -174,6 +174,21 @@ await check("re-verification checks the records the Beleg was built from", () =>
   assert.equal(unconverted.ok, false);
   assert.match(unconverted.detail, /now refused/);
   assert.match(belegStillAgrees(snap, { entry: undefined, deposit: store.cryptoDeposits[0] }).detail, /no longer exists/);
+});
+
+await check("the holder name says whether Monerium verified it, and a company name only borrows a verification it matches", () => {
+  const u: any = { name: "Christian Lindner", iban: "", address: SAFE, createdAt: now };
+  const approved = { ...u, monerium: { profileId: "p1", profiles: [{ id: "p1", kind: "personal", state: "approved", name: "Christian Lindner" }] } };
+  assert.equal(holderFor(u, undefined).nameSource, "self-declared", "no IBAN, no approved profile: typed");
+  assert.equal(holderFor(approved, undefined).nameSource, "monerium", "the approved profile verifies it before any IBAN");
+  const corp = { id: "c1", kind: "corporate" as const, name: "Linder GmbH", checkedAt: now };
+  assert.equal(holderFor(approved, corp).name, "Linder GmbH");
+  assert.equal(holderFor(approved, corp).nameSource, "self-declared", "a company name Monerium did not verify is not verified");
+  const ibanCo = { ...u, iban: "EE38 2200 2210 2014 5685", monerium: { ibans: [{ iban: "EE38 2200 2210 2014 5685", name: "LINDER GMBH" }] } };
+  assert.equal(holderFor(ibanCo, corp).nameSource, "monerium", "Monerium names the company for the IBAN");
+  const text = (h: any) => belegLines(buildBeleg(line, { holder: h, deposit }), "ABCDEFGHJKMNPQR", now).map((l) => l.text).join("\n");
+  assert.match(text(holderFor(approved, undefined)), /Verified by Monerium/);
+  assert.match(text(holderFor(u, undefined)), /Not verified: name as the holder entered it/);
 });
 
 console.log(`\nbeleg: ${passed} checks passed${process.exitCode ? " (with failures)" : ""}`);
