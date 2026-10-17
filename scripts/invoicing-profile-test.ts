@@ -310,6 +310,11 @@ await check("the invoice link shows the Pay button, and the payment link is the 
   const link = store.paymentRequests.find((p) => p.invoiceId === invoiceId)!;
   assert.ok(view.data.invoice.payPath?.startsWith("/pay/olga/"), JSON.stringify(view.data.invoice.payPath));
   assert.equal(view.data.invoice.payPath.replace(/-/g, "").endsWith(link.code.replace(/-/g, "")), true);
+  const own = await call("GET", `/api/orgs/org_pay/invoices/${invoiceId}/document`, "u_payer");
+  assert.equal(own.status, 200, JSON.stringify(own.data));
+  assert.equal(own.data.invoice.payPath, undefined, "the pay link is the customer's credential, not every member's");
+  const { payPath: _p, payLinkLapsed: _l, ...linkDocument } = view.data.invoice;
+  assert.deepEqual(own.data.invoice, linkDocument, "otherwise the same projection as the link");
 });
 
 await check("asking for the invoice's payment link again returns the open one, never a second", async () => {

@@ -67,7 +67,10 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
     if (!invoice || invoice.orgId !== ctx.org.id || invoice.direction !== "outgoing" || !invoice.issued || invoice.state === "DELETED") {
       return res.status(404).json({ error: "no such invoice" });
     }
-    res.json({ invoice: linkInvoiceView(syncInvoicePayment(invoice)) });
+    // The pay link is the customer's credential, and invoices.read is every
+    // role's: the owner's copy carries the document, not the way to pay it.
+    const { payPath: _payPath, payLinkLapsed: _lapsed, ...document } = linkInvoiceView(invoice);
+    res.json({ invoice: document });
   });
 
   /** Create the one-time "Invoice-Me" link. The token is shown once. */
