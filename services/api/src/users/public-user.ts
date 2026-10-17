@@ -5,6 +5,7 @@
  * here, so a field added to User later is not published by accident.
  */
 import { capabilitiesFor } from "../domain/segments.js";
+import { invoicePayLinkBlocker } from "../domain/wallet-tier.js";
 import { connectionMethod, publicApiKeys } from "../adapters/monerium-connection.js";
 import { maskTarget } from "../recovery/candide-guardian.js";
 import { zoldenburgArmed } from "../recovery/enrolment-key.js";
@@ -109,6 +110,9 @@ export const publicUser = (u: User) => ({
   // Whether Monerium reported this same name for the account. The name is
   // locked at approval either way; only this says it was checked.
   nameVerified: nameVerifiedByMonerium(u),
+  // Whether an invoice can carry a Pay button: the business screen hides
+  // "Payment link" where the API would refuse it (domain/wallet-tier.ts).
+  invoicePayLinks: invoicePayLinkBlocker(u) === null,
   // Whether the 1 € enrolment armed Zoldenburg as guardian. The enrolled
   // account itself (HMAC, last 4) is only on the recovery screen.
   zoldenburgArmed: zoldenburgArmed(u),
