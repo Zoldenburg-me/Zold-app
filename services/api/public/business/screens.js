@@ -13,7 +13,7 @@
  *   executed, an invoice Paid only when the API says so.
  */
 import {
-  $, Z, api, cap, day, esc, eur, gateHtml, maskIban, me, org, plain, reviewOn, roleCan, ROLE_CAN, ROLE_WORD, toast, when, ymd, usdSymbol,
+  $, Z, api, cap, day, ensureMe, esc, eur, gateHtml, maskIban, me, org, plain, reviewOn, roleCan, ROLE_CAN, ROLE_WORD, toast, when, ymd, usdSymbol,
 } from "./core.js";
 import { META, RENDER, invoiceActions, settlementRows } from "./views.js";
 
@@ -265,7 +265,8 @@ META.invoices = () => ({
 
 RENDER.invoices = async () => {
   if (!cap("invoices").allowed) return gateHtml("invoices");
-  const { invoices } = await api(`/api/orgs/${org.id}/invoices`);
+  // The session decides whether "Payment link" is offered (invoiceActions).
+  const [{ invoices }] = await Promise.all([api(`/api/orgs/${org.id}/invoices`), ensureMe().catch(() => null)]);
   iv.invoices = invoices;
   const bySide = invoices.filter((i) => (iv.side === "issued" ? i.direction === "outgoing" : i.direction !== "outgoing"));
   const list = bySide.filter((i) => invIn(iv.filter, i));

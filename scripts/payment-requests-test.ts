@@ -539,6 +539,18 @@ try {
   check("the invoice is PAID on arrival, before any conversion — the client paid when the money landed",
     store.findInvoice(theirs)!.state === "PAID" && st!.amountEur === dInv.receipt?.amountEur,
     JSON.stringify({ state: store.findInvoice(theirs)!.state, amountEur: st!.amountEur, receipt: dInv.receipt }));
+  {
+    // A paid invoice link is the payer's receipt: it stays readable after the
+    // payee loses invoice links (only an OPEN one is withdrawn).
+    const row: any = store.findUser(miriam.id)!;
+    const saved = { country: row.country, segment: row.segment, kycStatus: row.kycStatus };
+    Object.assign(row, { country: "IN", kycStatus: "pending", segment: { value: "IN_COLLECTIONS", reasonCode: "t", decidedAt: nowIso, decidedBy: "system" } });
+    const receipt = await fetch(`${API}/api/pay/miriam/${forInvoice.body.code}`);
+    const body: any = await receipt.json().catch(() => ({}));
+    check("a paid invoice link stays readable as the payer's receipt after the payee loses invoice links",
+      receipt.status === 200 && body.state !== "OPEN", JSON.stringify({ status: receipt.status, state: body.state }));
+    Object.assign(row, saved);
+  }
 
   // Converting the held USDC later rewrites the same settlement row; it never
   // settles the invoice a second time. The swap itself needs a bundler, so the
