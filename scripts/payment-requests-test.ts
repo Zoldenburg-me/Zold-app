@@ -495,11 +495,13 @@ try {
       refused.status === 403 && refused.body.code === "INVOICE_PAY_LINK_UNAVAILABLE", JSON.stringify(refused));
     check("nothing was created for it", !store.paymentRequests.some((p) => p.invoiceId === fresh));
     check("and the invoice it already had a link for shows no Pay button", openLinkPath({ id: theirs, orgId }) === undefined);
+    check("and its /pay page is no longer offered", (await fetch(`${API}/api/pay/miriam/${forInvoice.body.code}`)).status === 404);
     check("the session tells the UI to hide Payment link", (publicUser(row) as any).invoicePayLinks === false);
     check("a wallet-tier account outside India keeps invoice links",
       invoicePayLinkBlocker({ ...row, country: "NG", segment: { ...row.segment, value: "WALLET_ONLY" } }) === null);
     Object.assign(row, saved);
     check("restored: the link is offered again", openLinkPath({ id: theirs, orgId }) !== undefined);
+    check("restored: its /pay page opens again", (await fetch(`${API}/api/pay/miriam/${forInvoice.body.code}`)).status === 200);
   }
   check("a crypto-only link has no bank QR", (await fetch(`${API}/api/pay/miriam/${forInvoice.body.code}/sepa-qr.svg`)).status === 404);
   const qInv = forInvoice.body.latestQuote.amountUsdc as number;

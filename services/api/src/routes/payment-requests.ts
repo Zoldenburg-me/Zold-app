@@ -423,6 +423,12 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
       res.status(404).json({ error: "no such payment request" });
       return undefined;
     }
+    // A link made for an invoice before its payee lost invoice links is not
+    // offered either. Money already sent is still matched by the poller.
+    if (r.invoiceId && invoicePayLinkBlocker(user)) {
+      res.status(404).json({ error: "no such payment request" });
+      return undefined;
+    }
     // Opened under the payee's current address, a link minted under a handle
     // someone else has since claimed shows the address it was opened under.
     return { r, user, handle: heldByOther(r.handle, r) ? req.params.handle : undefined };
