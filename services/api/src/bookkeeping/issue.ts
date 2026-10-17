@@ -8,16 +8,21 @@ import { randomUUID } from "node:crypto";
 import type { LedgerEntry } from "../domain/types.js";
 import { holderBlock, newDocumentCode, normaliseCode, signSnapshot, type HolderBlock, type StoredDocument } from "../documents.js";
 import { store } from "../store.js";
+import { personKey } from "../users/verified-name.js";
 import { buildBeleg, type BelegContext, type BelegSnapshot } from "./beleg.js";
 
 /** The IBAN's owner is the Monerium profile, not the person holding the
- *  device key: a company account's Beleg names the company. */
-function holderFor(user: Parameters<typeof holderBlock>[0], profile: HolderBlock["moneriumProfile"]): HolderBlock {
+ *  device key: a company account's Beleg names the company. The profile
+ *  record may be from a still-pending profile, so the company name counts as
+ *  verified only where it is the name Monerium already verified. */
+export function holderFor(user: Parameters<typeof holderBlock>[0], profile: HolderBlock["moneriumProfile"]): HolderBlock {
   const base = holderBlock(user);
   if (!profile) return base;
+  const company = profile.kind === "corporate" && profile.name ? profile.name : undefined;
+  const verified = base.nameSource === "monerium" && (!company || personKey(company) === personKey(base.name));
   return {
     ...base,
-    ...(profile.kind === "corporate" && profile.name ? { name: profile.name } : {}),
+    ...(company ? { name: company, nameSource: verified ? "monerium" : "self-declared" } : {}),
     moneriumProfile: { id: profile.id, kind: profile.kind, ...(profile.name ? { name: profile.name } : {}), checkedAt: profile.checkedAt },
   };
 }
