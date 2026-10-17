@@ -55,6 +55,8 @@ export let view = "overview";
 export let me = null;
 /** Test mode: the chain moves no real money (GET /api/health). undefined until read. */
 export let testMode = undefined;
+/** The deployment's chain id, from the /api/health the shell reads at load. */
+export let chainId = undefined;
 /** The app's dollar token as it names itself (GET /api/health): "USDC" on
  *  Base mainnet, "zUSD" on a staging chain. */
 export let usdSymbol = "USDC";
@@ -312,6 +314,7 @@ export async function refreshMe() {
   return me;
 }
 export const setTestMode = (v) => { testMode = v; };
+export const setChainId = (v) => { chainId = v; };
 export const setUsdSymbol = (s) => { if (typeof s === "string" && /^[A-Za-z0-9.]{1,11}$/.test(s)) usdSymbol = s; };
 /** Changing the view is a navigation: it gets a history entry, so Back works
  *  and the URL can be bookmarked or opened in a new tab. `push: false` is for
