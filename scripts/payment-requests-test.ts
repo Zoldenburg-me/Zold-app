@@ -498,9 +498,16 @@ try {
     check("and its /pay page is no longer offered", (await fetch(`${API}/api/pay/miriam/${forInvoice.body.code}`)).status === 404);
     // A partly paid link is still OPEN, but it holds the payer's receipt.
     const reqRow: any = store.paymentRequests.find((p) => p.id === forInvoice.body.id)!;
-    reqRow.payments.push({ amountEur: 10 });
+    reqRow.payments.push({ amountEur: 10, method: "crypto", kind: "partial", at: nowIso });
+    const partly = await fetch(`${API}/api/pay/miriam/${forInvoice.body.code}`);
+    const partlyBody: any = await partly.json().catch(() => ({}));
     check("a partly paid invoice link stays readable as the payer's receipt",
-      (await fetch(`${API}/api/pay/miriam/${forInvoice.body.code}`)).status === 200);
+      partly.status === 200 && partlyBody.payments?.length === 1, JSON.stringify({ status: partly.status }));
+    check("but offers no way to pay the rest",
+      partlyBody.withdrawn === true && Object.keys(partlyBody.methods ?? { x: 1 }).length === 0, JSON.stringify(partlyBody.methods));
+    check("and its QR and quote routes refuse",
+      (await fetch(`${API}/api/pay/miriam/${forInvoice.body.code}/sepa-qr.svg`)).status === 404
+      && (await fetch(`${API}/api/pay/miriam/${forInvoice.body.code}/quote`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ amountEur: 25 }) })).status === 404);
     reqRow.payments.pop();
     check("the session tells the UI to hide Payment link", (publicUser(row) as any).invoicePayLinks === false);
     check("a wallet-tier account outside India keeps invoice links",
