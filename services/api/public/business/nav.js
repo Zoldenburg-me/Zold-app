@@ -9,7 +9,7 @@
  * The older views keep their ?view= ids and sit under one of these (PARENT):
  * the ledger and assets under Statement, Shopify under Apps.
  */
-import { $, Z, api, cap, esc, eur, me, needsPersonalOrg, org, orgs, personalLater, recoveryNone, recoveryPending, recoveryUnknown, reviewOn, roleCan, ROLE_WORD, setView, testMode, view } from "./core.js";
+import { $, Z, api, cap, esc, eur, me, mayActOnInvoice, needsPersonalOrg, org, orgs, personalLater, recoveryNone, recoveryPending, recoveryUnknown, reviewOn, roleCan, ROLE_WORD, setView, testMode, view } from "./core.js";
 import { loadOrg, render } from "./shell.js";
 import { isOwnCompanyOrg } from "./access-model.js";
 
@@ -107,9 +107,9 @@ function shown(v) {
 export const side = { orgId: null, accounts: null, drafts: null, invoices: null };
 
 /** Supplier invoices submitted through a link and not yet paid or under way,
- *  for a role that can pay one (Pay creates a draft); none for the others. */
-export const submittedInvoices = (invoices) => (roleCan(org.role, "propose") ? invoices || [] : [])
-  .filter((i) => i.direction !== "outgoing" && i.state === "SUBMITTED");
+ *  that this member can act on; none they could only look at. */
+export const submittedInvoices = (invoices) => (invoices || [])
+  .filter((i) => i.direction !== "outgoing" && i.state === "SUBMITTED" && mayActOnInvoice(i));
 
 /** Waiting for this person: drafted by someone else, and their role approves. */
 export const waitingForMe = (drafts) => (drafts || []).filter((d) =>
