@@ -11,7 +11,7 @@ import {
 } from "./core.js";
 import { KNOWN, planBanner, refreshSide, renderNav, setMenu } from "./nav.js";
 import { META, RENDER, setExportMonth } from "./views.js";
-import { checkCustomerVatId, refreshInvoiceCheck } from "./invoice.js";
+import { checkCustomerVatId, readInvoiceEditor, refreshInvoiceCheck } from "./invoice.js";
 import { ACTIONS } from "./actions.js";
 import { initSearch } from "./search.js";
 
@@ -105,6 +105,8 @@ export async function render({ focus = false } = {}) {
         // Leaving the VAT ID field looks it up in VIES (which then checks
         // again); any other change just checks again.
         if (e.target?.id === "inv-r-vat") checkCustomerVatId();
+        // A new reason brings its own hint and, for some, the note field.
+        else if (e.target?.id === "inv-reason") { readInvoiceEditor(); render(); }
         else refreshInvoiceCheck();
       }, { signal: invoiceInputListener.signal });
     }

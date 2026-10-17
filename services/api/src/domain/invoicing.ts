@@ -61,6 +61,9 @@ export type ExemptionReasonId =
    *  required wording differ, so the issuer supplies the note. Germany's is
    *  encoded separately as `kleinunternehmer`. */
   | "small_business_national"
+  /** Outside the EU: the issuer is not registered for VAT/GST and charges
+   *  none. We have no country's wording for it, so the issuer writes the note. */
+  | "not_registered"
   | "other";
 
 export interface ExemptionReason {
@@ -175,6 +178,18 @@ export const EXEMPTION_REASONS: Record<ExemptionReasonId, ExemptionReason> = {
     requiresRecipientVatId: false,
     requiresFreeText: true,
     hint: "Your country's small-business exemption. Write the note and citation your own rules require.",
+  },
+  not_registered: {
+    id: "not_registered",
+    label: "Not registered for VAT or GST",
+    labelEn: "Not registered for VAT or GST",
+    legalBasis: "—",
+    invoiceNote: "",
+    invoiceNoteEn: "",
+    requiresIssuerVatId: false,
+    requiresRecipientVatId: false,
+    requiresFreeText: true,
+    hint: "You are not registered for VAT, GST or sales tax, so you charge none. Write the note your country requires; Zold has no wording for it.",
   },
   other: {
     id: "other",
