@@ -516,12 +516,12 @@ RENDER.organisation = async () => {
  */
 export function jurisdictionBanner(j, disclaimer, notVerified) {
   const what = {
-    statutory: ["Rules encoded to statute", "Active"],
-    directive: ["Not supported: only your profile and the invoice number are checked", "Not supported"],
-    structural: ["Not supported: only your profile and the invoice number are checked", "Not supported"],
+    statutory: ["rules encoded to statute", "Active"],
+    directive: ["national tax rules aren’t checked. Zold checks only that your details and a unique invoice number are on the invoice.", "Not supported"],
+    structural: ["tax rules aren’t checked. Zold checks only that your details and a unique invoice number are on the invoice.", "Not supported"],
   }[j.verification] || [j.verification, "Draft"];
   return `<details class="card zb-juris"><summary style="cursor:pointer;display:flex;justify-content:space-between;gap:12px;align-items:center;list-style:none">
-      <span><b>${esc(j.countryName)}</b> <span class="desc">${esc(what[0])}</span></span>${Z.icon("expand_more")}</summary>
+      <span><b>${esc(j.countryName)}</b><span class="desc">: ${esc(what[0])}</span></span>${Z.icon("expand_more")}</summary>
     <p class="desc" style="margin:10px 0">${esc(plain(j.basis))} ${esc(plain(disclaimer))}</p>
     <p class="z-eyebrow" style="margin:10px 0 6px">Not checked by Zold</p>
     <ul class="desc" style="margin:0 0 0 18px">${(notVerified ?? []).map((x) => `<li>${esc(plain(x))}</li>`).join("")}</ul></details>`;

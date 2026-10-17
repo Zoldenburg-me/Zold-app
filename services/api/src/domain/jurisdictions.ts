@@ -47,6 +47,8 @@ export interface JurisdictionProfile {
   inEu: boolean;
   /** Exemption reasons offered here, by id (see invoicing.ts). */
   reasons: string[];
+  /** The currency a new invoice starts in. The issuer may pick another. */
+  currency: string;
   /**
    * Simplified-invoice threshold in cents, where we have actually checked it.
    * Only Germany's §33 UStDV is encoded; the EU permits member states to set
@@ -82,6 +84,15 @@ const DE_REASONS = [
   "other",
 ];
 
+/**
+ * Home currency of the non-EU countries Zold has issuers in, for the invoice
+ * default. Each one still needs a rate to be issued in (withConversion).
+ * shortcut: unlisted countries start in EUR, add a country when its issuers do.
+ */
+const HOME_CURRENCY: Record<string, string> = {
+  IN: "INR", NG: "NGN", KE: "KES", GB: "GBP", CH: "CHF", US: "USD",
+};
+
 const GENERIC_DISCLAIMER =
   "Zold does not support this country's invoicing rules. The invoice is checked only for the " +
   "issuing profile and a unique number — nothing in it is verified against local invoicing or " +
@@ -99,6 +110,7 @@ export function jurisdictionFor(country?: string): JurisdictionProfile {
       verification: "statutory",
       inEu: true,
       reasons: DE_REASONS,
+      currency: "EUR",
       simplifiedLimitCents: 250_00, // § 33 UStDV
       basis: "§§ 14, 14a UStG, § 33 UStDV, § 34a UStDV",
       disclaimer:
@@ -122,6 +134,8 @@ export function jurisdictionFor(country?: string): JurisdictionProfile {
       verification: "directive",
       inEu: true,
       reasons: EU_REASONS,
+      // Not every member state uses the euro, but every invoice settles in it.
+      currency: "EUR",
       // Member states may set their own simplified-invoice threshold; we have
       // not checked 26 of them, so no shortcut is offered.
       basis: "Not supported — no national rules encoded",
@@ -147,10 +161,11 @@ export function jurisdictionFor(country?: string): JurisdictionProfile {
     ruleSet: "GENERIC",
     verification: "structural",
     inEu: false,
-    // Only the reasons that mean something outside an EU VAT context: an export
-    // and a free-text basis. Offering "reverse charge" here would be importing
-    // an EU concept into a country that may not have it.
-    reasons: ["export_third_country", "other"],
+    // No EU reason, not even "export": its hint and note are the EU's, and
+    // printing them on, say, an Indian invoice is an EU legal note where none
+    // applies. Both reasons left take the issuer's own wording.
+    reasons: ["not_registered", "other"],
+    currency: HOME_CURRENCY[code] ?? "EUR",
     basis: "Not supported — no tax rules encoded",
     disclaimer: GENERIC_DISCLAIMER,
     notVerified: [

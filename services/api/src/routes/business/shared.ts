@@ -30,6 +30,7 @@ import {
   normaliseInvoiceCurrency,
   normaliseVatId,
   nextFreeNumber,
+  reasonForRuleSet,
   type ExemptionReasonId,
   type InvoiceDraft,
   type InvoiceLanguage,
@@ -197,6 +198,9 @@ export function draftDueDate(org: Organisation, issueDate: string): string | und
   return d.toISOString().slice(0, 10);
 }
 
+/** A free-text VAT note is printed as written: one line, at most this long. */
+const VAT_NOTE_MAX = 300;
+
 /**
  * Build a draft from the request, filling the issuer from the organisation and
  * the VAT treatment from what the user chose.
@@ -243,11 +247,16 @@ export function draftFrom(org: Organisation, body: Record<string, any>, now = ne
     const builtIn = EXEMPTION_REASONS[reason as ExemptionReasonId];
     if (builtIn?.requiresFreeText && !str(body.vat?.note)) {
       throw new InvoiceComplianceError(
-        `"${builtIn.label}" has no wording we can supply — the note differs by country. ` +
-          "Write the exemption and its legal basis; it has to appear on the invoice.",
+        `"${reasonForRuleSet(builtIn, jur.ruleSet).label}" has no wording Zold can supply. ` +
+          "Write the note to print on the invoice, with its legal basis where there is one.",
       );
     }
-    treatment = { kind: "exempt", reason, note: str(body.vat?.note) };
+    const note = str(body.vat?.note);
+    // Printed on the invoice as written: one line, short enough for the page.
+    if (note && (note.length > VAT_NOTE_MAX || /[\u0000-\u001f\u007f]/.test(note))) {
+      throw new InvoiceComplianceError(`The note is at most ${VAT_NOTE_MAX} characters on one line.`);
+    }
+    treatment = { kind: "exempt", reason, note };
   } else {
     if (inv.smallBusiness) {
       throw new InvoiceComplianceError(
