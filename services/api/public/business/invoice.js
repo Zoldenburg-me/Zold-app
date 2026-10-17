@@ -143,6 +143,9 @@ RENDER["invoice-new"] = async () => {
       invoiceNote: c.invoiceNote, hint: "You set this rule. Zold prints your note and doesn’t check it.",
     })),
   ];
+  // A reason not offered here (an older draft, or the small-business default
+  // outside the EU) takes the first that is, so its note field is drawn.
+  if (v.kind === "exempt" && !reasons.some((x) => x.id === v.reason)) v.reason = reasons[0]?.id;
   const r = invoiceDraft.recipient || {};
   const missing = [
     !(d.issuer.addressLine && d.issuer.city && d.issuer.country) ? "your address" : "",
@@ -354,6 +357,7 @@ export async function refreshInvoiceCheck() {
     box.innerHTML = `<div class="zb-note zb-note--a">${Z.icon("error")}<span>${esc(e.message)}</span></div>`;
     // The last preview no longer matches the form; it could print a VAT note
     // the invoice will not carry.
-    $("#inv-paper").innerHTML = `<div class="zb-paper"><p>Fix what’s needed on the left to see the invoice.</p></div>`;
+    const paperEl = $("#inv-paper");
+    if (paperEl) paperEl.innerHTML = `<div class="zb-paper"><p>Fix what’s needed on the left to see the invoice.</p></div>`;
   }
 }

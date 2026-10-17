@@ -473,6 +473,18 @@ await check("an issue at 23:30 UTC on 31 December in Berlin is dated, and number
   assert.equal(utc.issueDate, "2026-12-31", "a UTC org is still in the old year");
 });
 
+await check("an Indian issuer's own VAT note is taken, and bounded to one short line", async () => {
+  const { draftFrom } = await import("../services/api/src/routes/business/shared.js");
+  addOrg("org_in", "IN");
+  const org = store.findOrganisation("org_in")!;
+  const exempt = (note: string) => draftFrom(org, { ...invoiceFor("IN"), vat: { kind: "exempt", reason: "not_registered", note } });
+  assert.deepEqual(exempt("Not registered for GST").treatment, { kind: "exempt", reason: "not_registered", note: "Not registered for GST" });
+  assert.throws(() => exempt(""), /no wording Zold can supply/);
+  assert.throws(() => exempt("x".repeat(301)), /at most 300/);
+  assert.throws(() => exempt("line one\nline two"), /one line/);
+  assert.throws(() => draftFrom(org, { ...invoiceFor("IN"), vat: { kind: "exempt", reason: "export_third_country" } }), /not available in India/);
+});
+
 await check("an issue date that is not a calendar day is refused, never numbered NaN", async () => {
   for (const issueDate of ["garbage", "2026-12-31T23:30:00+01:00", "2026-02-30", "2026-13-01"]) {
     const r = await issueIn("org_num", { issueDate });

@@ -205,6 +205,8 @@ export function draftDueDate(org: Organisation, issueDate: string): string | und
  * A Kleinunternehmer must not get a VAT rate by default: showing tax you do
  * not owe makes you liable for it under §14c.
  */
+const VAT_NOTE_MAX = 300;
+
 export function draftFrom(org: Organisation, body: Record<string, any>, now = new Date()): InvoiceDraft {
   const inv = org.invoicing ?? {};
   // Refuses an unrepresentable code before anything else is computed.
@@ -248,7 +250,12 @@ export function draftFrom(org: Organisation, body: Record<string, any>, now = ne
           "Write the note to print on the invoice, with its legal basis where there is one.",
       );
     }
-    treatment = { kind: "exempt", reason, note: str(body.vat?.note) };
+    const note = str(body.vat?.note);
+    // Printed on the invoice as written: one line, short enough for the page.
+    if (note && (note.length > VAT_NOTE_MAX || /[\u0000-\u001f\u007f]/.test(note))) {
+      throw new InvoiceComplianceError(`The note is at most ${VAT_NOTE_MAX} characters on one line.`);
+    }
+    treatment = { kind: "exempt", reason, note };
   } else {
     if (inv.smallBusiness) {
       throw new InvoiceComplianceError(
