@@ -246,7 +246,7 @@ export function belegStillAgrees(
     else if (ctx.issueOrder.amountEur !== Math.abs(snap.line.amountCents) / 100) diffs.push("the order amount differs");
   }
   if (snap.sweep && !ctx.sweep) diffs.push("the sweep record is gone");
-  return diffs.length ? { ok: false, detail: diffs.join("; ") } : { ok: true, detail: "Zold re-read the records this document was built from (statement line, deposit, transfer or order) and the amount, transaction and state still match" };
+  return diffs.length ? { ok: false, detail: diffs.join("; ") } : { ok: true, detail: "Zold re-read the statement line and the deposit, transfer or order this document was built from, and the figures it relies on still match" };
 }
 
 const eur = (n: number | undefined) => (n === undefined ? "—" : `${n < 0 ? "-" : ""}€${Math.abs(n).toFixed(2)}`);
