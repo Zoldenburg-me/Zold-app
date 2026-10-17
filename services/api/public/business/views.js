@@ -140,7 +140,7 @@ RENDER.wallets = async () => {
   // The account's own Safe comes first: it is the account itself, so it has no proof, sync or Remove.
   const safeRow = safe ? `<tr>
         <td>${safe.company ? "Company Zold account" : "Your Zold account"}<span class="zb-sub2">SAFE</span></td><td class="z-mono" translate="no">${esc(safe.address)}</td><td>${testMode === true ? "Base Sepolia" : testMode === false ? "Base" : ""}</td>
-        <td><span class="z-dim">Always counted</span></td><td>${Z.tag("Account’s own", "mint")}</td><td></td></tr>` : "";
+        <td><span class="z-dim">The account itself</span></td><td>${Z.tag("Account’s own", "mint")}</td><td></td></tr>` : "";
   return wallets.length || safe
     ? `${unproven ? `<div class="banner warn">${Z.icon("verified_user")}<span>Importing a wallet does not show it is yours. Prove it by signing a short message in the wallet itself: until then it is synced and counted in your books, but its receipts are not collected into invoices.</span></div>` : ""}
       <div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Label</th><th scope="col">Address</th><th scope="col">Network</th><th scope="col">Sync</th><th scope="col">Ownership</th><th scope="col"><span class="z-sr">Actions</span></th></tr></thead><tbody>${safeRow}${wallets.map((w) => `<tr>
