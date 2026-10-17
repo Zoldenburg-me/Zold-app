@@ -10,7 +10,7 @@
  * so a screen is added by naming it and the shell dispatches without knowing
  * what exists. Every renderer reads the live `org` from core.js.
  */
-import { $, Z, api, cap, countrySelect, day, esc, eur, gateHtml, issuerFieldNames, issuerIds, maskIban, me, org, ownSafe, plain, refreshMe, roleCan, safeAddressHtml, testMode, ymd } from "./core.js";
+import { $, Z, api, cap, countrySelect, day, esc, eur, gateHtml, issuerFieldNames, issuerIds, maskIban, me, org, ownSafe, plain, refreshMe, roleCan, safeAddressHtml, ymd } from "./core.js";
 
 export const RENDER = {};
 export const META = {};
@@ -134,14 +134,15 @@ const walletProofCell = (w) => {
 
 META.wallets = () => ({ title: "Wallets", sub: "Addresses you want counted in your books. Read only: Zold never holds a key for one.", actions: secondary("Import wallet", 'data-act="import-wallet"', "add") });
 RENDER.wallets = async () => {
-  const [{ wallets }, acc] = await Promise.all([api(`/api/orgs/${org.id}/wallets`), api(`/api/orgs/${org.id}/accounts`).catch(() => ({ accounts: [] }))]);
+  const [{ wallets }, acc, health] = await Promise.all([api(`/api/orgs/${org.id}/wallets`), api(`/api/orgs/${org.id}/accounts`).catch(() => null), api("/api/health").catch(() => null)]);
   const unproven = wallets.filter((w) => w.proofState !== "proven").length;
-  const safe = ownSafe(acc.accounts);
+  const safe = ownSafe(acc?.accounts ?? []);
+  const unread = acc ? "" : `<div class="banner warn">${Z.icon("warning")}<span>Your Zold account could not be read, so it may be missing from this list. Reload to try again.</span></div>`;
   // The account's own Safe comes first: it is the account itself, so it has no proof, sync or Remove.
   const safeRow = safe ? `<tr>
-        <td>${safe.company ? "Company Zold account" : "Your Zold account"}<span class="zb-sub2">SAFE</span></td><td class="z-mono" translate="no">${esc(safe.address)}</td><td>${testMode === true ? "Base Sepolia" : testMode === false ? "Base" : ""}</td>
+        <td>${safe.company ? "Company Zold account" : "Your Zold account"}<span class="zb-sub2">SAFE</span></td><td class="z-mono" translate="no">${esc(safe.address)}</td><td>${esc(String(health?.chainId ?? ""))}</td>
         <td><span class="z-dim">The account itself</span></td><td>${Z.tag("Account’s own", "mint")}</td><td></td></tr>` : "";
-  return wallets.length || safe
+  return unread + (wallets.length || safe
     ? `${unproven ? `<div class="banner warn">${Z.icon("verified_user")}<span>Importing a wallet does not show it is yours. Prove it by signing a short message in the wallet itself: until then it is synced and counted in your books, but its receipts are not collected into invoices.</span></div>` : ""}
       <div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Label</th><th scope="col">Address</th><th scope="col">Network</th><th scope="col">Sync</th><th scope="col">Ownership</th><th scope="col"><span class="z-sr">Actions</span></th></tr></thead><tbody>${safeRow}${wallets.map((w) => `<tr>
         <td>${esc(w.label)}<span class="zb-sub2">${esc(w.kind.toUpperCase())}</span></td><td class="z-mono" translate="no">${esc(w.address)}</td><td>${esc(String(w.chainId))}</td>
@@ -150,7 +151,7 @@ RENDER.wallets = async () => {
         <td><div class="zb-cellact">${w.proofState === "proven" || !roleCan(org.role, "wallets") ? "" : `<button type="button" class="z-btn z-btn--primary z-btn--sm" data-act="prove-wallet" data-id="${esc(w.id)}">Prove<span class="z-sr">: ${esc(w.label)}</span></button>`}
           ${w.ownership && roleCan(org.role, "wallets") ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="recheck-wallet" data-id="${esc(w.id)}">Check again<span class="z-sr">: ${esc(w.label)}</span></button>` : ""}
           <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="del-wallet" data-id="${esc(w.id)}">Remove<span class="z-sr">: ${esc(w.label)}</span></button></div></td></tr>`).join("")}</tbody></table></div>`
-    : `<div class="z-card"><p class="empty">No wallets imported.</p></div>`;
+    : `<div class="z-card"><p class="empty">No wallets imported.</p></div>`);
 };
 
 /** A synced token with no feed price is booked as SYMBOL@chain:address, so it
