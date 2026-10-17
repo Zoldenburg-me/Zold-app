@@ -605,6 +605,21 @@ await check("an invited member's and a contact's name follow the same rule", asy
   assert.equal(kept.status, 200, JSON.stringify(kept.data));
 });
 
+await check("an org's invoice email is checked on create and edit: a malformed one is refused, a good one is stored", async () => {
+  addUser("u_mail", PERSONAL, 7);
+  const bad = await call("POST", "/api/orgs", "u_mail", { type: "personal", name: "Mail", country: "DE", email: "not-an-email" });
+  assert.equal(bad.status, 400, JSON.stringify(bad.data));
+  assert.equal(bad.data.field, "email");
+  const ok = await call("POST", "/api/orgs", "u_mail", { type: "personal", name: "Mail", country: "DE", email: " mail@example.com " });
+  assert.equal(ok.status, 201, JSON.stringify(ok.data));
+  assert.equal(store.findOrganisation(ok.data.organisation.id)?.email, "mail@example.com");
+  const badEdit = await call("PATCH", `/api/orgs/${ok.data.organisation.id}`, "u_mail", { email: "still not one" });
+  assert.equal(badEdit.status, 400, JSON.stringify(badEdit.data));
+  const edit = await call("PATCH", `/api/orgs/${ok.data.organisation.id}`, "u_mail", { email: "new@example.com" });
+  assert.equal(edit.status, 200, JSON.stringify(edit.data));
+  assert.equal(store.findOrganisation(ok.data.organisation.id)?.email, "new@example.com");
+});
+
 await check("a person has one personal org: a second is refused", async () => {
   addUser("u_fresh", PERSONAL, 6);
   const first = await call("POST", "/api/orgs", "u_fresh", { type: "personal", name: "Fresh", country: "DE" });

@@ -175,6 +175,10 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
         .status(400)
         .json({ error: `"${String(timeZone)}" is not a time zone. Use an IANA name like Europe/Berlin.`, field: "timeZone" });
     }
+    // Printed as the issuer's contact on invoices.
+    if (typeof email === "string" && email.trim() && !emailLooksValid(email.trim())) {
+      return res.status(400).json({ error: "Enter an email address for your invoices, or leave it empty.", field: "email" });
+    }
 
     /**
      * A personal org is the person's own books, so there is one per person,
@@ -301,7 +305,14 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       patch.legalName = n;
     }
     if (typeof b.taxId === "string") patch.taxId = b.taxId.trim();
-    if (typeof b.email === "string") patch.email = b.email.trim();
+    if (typeof b.email === "string") {
+      // The issuer's contact on invoices; empty clears it. An unchanged one is
+      // let through, so an older unchecked value never blocks the other fields.
+      if (b.email.trim() && b.email.trim() !== (ctx.org.email ?? "") && !emailLooksValid(b.email.trim())) {
+        return res.status(400).json({ error: "Enter an email address for your invoices, or leave it empty.", field: "email" });
+      }
+      patch.email = b.email.trim();
+    }
     if (typeof b.notificationEmail === "string") {
       patch.notificationEmail = b.notificationEmail.trim();
     }

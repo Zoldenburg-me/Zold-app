@@ -6,7 +6,7 @@
  * and nowhere else. An action that opens a drawer returns "keep", so the
  * shell does not draw the page again under it.
  */
-import { $, Z, api, cap, countrySelect, createPersonalOrg, day, dialog, esc, eur, maskIban, me, org, plain, reviewOn, roleCan, ROLE_WORD, setPersonalLater, setView, toast, token, view } from "./core.js";
+import { $, Z, api, cap, day, dialog, esc, eur, maskIban, me, org, plain, reviewOn, roleCan, ROLE_WORD, setPersonalLater, setView, toast, token, view } from "./core.js";
 import { docHref, docMonth, exportMonth, setExportMonth } from "./views.js";
 import { sendState } from "./send.js";
 import { forgetDraft, invoiceBody, invoiceDraft, readInvoiceEditor, setInvoiceDraft, storeDraft } from "./invoice.js";
@@ -344,24 +344,8 @@ export const ACTIONS = {
     openDocument(await api(`/api/users/${me.id}/documents/receipt`, { method: "POST", body: { transferId: el.dataset.id } }));
   },
 
-  "create-personal"() {
-    Z.closeOverlay("org-switch");
-    dialog("Your personal space",
-      `<p class="desc">Your own invoices and books, next to any company you work in. What you enter here is printed at the top of your invoices.</p>
-       ${field("d-p-name", "Name on your invoices", `autocomplete="name" maxlength="80" placeholder="${esc(me?.name || "Miriam Weber")}…"`)}
-       <p class="desc" style="margin-top:6px">Your full name, or the name you trade under.</p>
-       <label for="d-p-country">Country you work from</label>${countrySelect("d-p-country", me?.country)}
-       ${field("d-p-email", 'Email on your invoices <span class="desc">(optional)</span>', `type="email" autocomplete="email" spellcheck="false" placeholder="${esc(me?.email || "you@example.com")}…"`)}`,
-      async () => {
-        const name = $("#d-p-name").value.trim();
-        const country = $("#d-p-country").value;
-        const email = $("#d-p-email").value.trim();
-        if (name.length < 2) throw new Error("Enter the name for your invoices.");
-        if (!country) throw new Error("Choose the country you work from.");
-        if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Enter an email address, or leave it empty.");
-        await createPersonalOrg({ legalName: name, country, email });
-      }, { okLabel: "Create personal space" });
-  },
+  // The organisation onboarding (shell.js boot), which lands on Invoices.
+  "create-personal"() { location.assign("/business?setup=invoices"); },
   "personal-later"() { setPersonalLater(); },
 
   /* Filters and tabs: state in the screen's module, then a redraw. */
@@ -929,7 +913,7 @@ export const ACTIONS = {
       name: $("#s-name").value, legalName: $("#s-legal").value,
       vatId: $("#s-vatid").value, taxNumber: $("#s-taxno").value,
       registerCourt: $("#s-court").value, registerNumber: $("#s-reg").value, managingDirector: $("#s-gf").value,
-      notificationEmail: $("#s-notify").value,
+      email: $("#s-email").value, notificationEmail: $("#s-notify").value,
       address: {
         line1: $("#s-addr1").value, line2: $("#s-addr2").value,
         postalCode: $("#s-zip").value, city: $("#s-city").value,
