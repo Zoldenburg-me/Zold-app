@@ -198,6 +198,9 @@ export function draftDueDate(org: Organisation, issueDate: string): string | und
   return d.toISOString().slice(0, 10);
 }
 
+/** A free-text VAT note is printed as written: one line, at most this long. */
+const VAT_NOTE_MAX = 300;
+
 /**
  * Build a draft from the request, filling the issuer from the organisation and
  * the VAT treatment from what the user chose.
@@ -205,8 +208,6 @@ export function draftDueDate(org: Organisation, issueDate: string): string | und
  * A Kleinunternehmer must not get a VAT rate by default: showing tax you do
  * not owe makes you liable for it under §14c.
  */
-const VAT_NOTE_MAX = 300;
-
 export function draftFrom(org: Organisation, body: Record<string, any>, now = new Date()): InvoiceDraft {
   const inv = org.invoicing ?? {};
   // Refuses an unrepresentable code before anything else is computed.
