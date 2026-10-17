@@ -746,6 +746,8 @@ export interface Invoice {
   payTo?: {
     kind: "wallet" | "bank";
     chainId?: number;
+    /** Read-time only (ownerInvoiceView), never stored. */
+    chainName?: string;
     address?: `0x${string}`;
     bank?: Omit<ContactBankAccount, "id">;
   };
