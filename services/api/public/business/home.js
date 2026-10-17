@@ -12,7 +12,7 @@
  */
 import { $, Z, api, cap, esc, eur, gateHtml, maskIban, me, org, ownSafe, refreshMe, roleCan, safeAddressHtml, view, when, ymd } from "./core.js";
 import { META, RENDER } from "./views.js";
-import { side, waitingForMe } from "./nav.js";
+import { side, submittedInvoices, waitingForMe } from "./nav.js";
 import { invAmount, loadMembers, memberName } from "./screens.js";
 
 const DAY = 86400000;
@@ -170,6 +170,13 @@ function attention({ waiting, invoices, lines, accounts }) {
       `${sum ? `${esc(eur(sum))} in total · ` : ""}oldest drafted ${esc(when(oldest.createdAt).replace(/^(Today|Yesterday)/, (w) => w.toLowerCase()))} by ${esc(memberName(oldest.createdByMemberId))}`,
       linkBtn("Review", "payments", "", "primary")));
   }
+  const fromSuppliers = submittedInvoices(invoices);
+  if (fromSuppliers.length) {
+    const n = fromSuppliers.length;
+    rows.push(row("move_to_inbox", "p", `${n} supplier invoice${n === 1 ? "" : "s"} to check`,
+      "Submitted through your invoice link",
+      `<button type="button" class="z-btn z-btn--primary" data-act="inv-suppliers"><span>Review</span></button>`));
+  }
   const late = (invoices || []).filter((i) => i.direction === "outgoing" && i.overdue && !["PAID", "RECONCILED", "DELETED", "DRAFT"].includes(i.state));
   if (late.length) {
     const first = late[0];
@@ -209,8 +216,8 @@ function statCard(id, title, view, cells) {
 
 /* ── Screen ───────────────────────────────────────────────────────────────── */
 
-/* New payment is the page's one pink action unless runs wait for you: then
-   Review in Needs attention is, and New payment steps back. */
+/* New payment is the page's one pink action unless runs or supplier invoices
+   wait for you: then Review in Needs attention is, and New payment steps back. */
 function headerActions(waiting) {
   const drafts = cap("transfers.drafts").allowed && roleCan(org.role, "propose");
   const sm = (html) => html.replace('class="z-btn ', 'class="z-btn z-btn--sm ');
@@ -264,7 +271,7 @@ RENDER.overview = async () => {
     cards.push(statCard("home-pay", "Payments", "payments", [["Waiting for review", by("PENDING_REVIEW").length, total(by("PENDING_REVIEW"))], ["Approved, not sent", by("REVIEWED").length, total(by("REVIEWED"))], sent]));
   }
 
-  const html = `<div id="hm-root"><div class="zb-h-actions">${headerActions(waitingForMe(runs).length)}</div>
+  const html = `<div id="hm-root"><div class="zb-h-actions">${headerActions(waitingForMe(runs).length + submittedInvoices(invoices).length)}</div>
     <div class="zb-h-top">${balanceCard(accounts, lines, acc.status === "fulfilled")}${accountsCard(accounts)}</div>
     ${attention({ waiting: waitingForMe(runs), invoices, lines, accounts })}
     ${cards.length ? `<div class="zb-grid2">${cards.join("")}</div>` : ""}

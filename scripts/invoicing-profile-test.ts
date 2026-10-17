@@ -492,5 +492,67 @@ await check("an issue date that is not a calendar day is refused, never numbered
   }
 });
 
+console.log("\nA supplier submits through a requested link");
+
+const { newLinkToken, ownerInvoiceView } = await import("../services/api/src/domain/invoices.js");
+const { notifyRequester } = await import("../services/api/src/routes/business/invoice-links.js");
+addOrg("org_req", "DE");
+store.updateUser("u_owner", { email: "olga@example.test" } as any);
+const requestLink = () => {
+  const { token, hash } = newLinkToken();
+  const at = new Date().toISOString();
+  const inv = store.addInvoice({
+    id: `inv_req_${hash.slice(0, 8)}`, orgId: "org_req", linkTokenHash: hash, state: "LINK_CREATED",
+    lines: [], currency: "EUR", total: "0.00", createdByMemberId: "m_org_req_u_owner", createdAt: at, updatedAt: at,
+  } as any);
+  return { token, id: inv.id };
+};
+const submitBody = (payTo: unknown) => ({
+  supplier: { orgName: "Chain Vendor", email: "ops@vendor.example", invoiceNumber: "CV-9" },
+  lines: [{ description: "Hosting", quantity: "1", unitPrice: "40.00" }],
+  payTo,
+});
+const WALLET = `0x${"2".repeat(40)}`;
+
+await check("the link offers only the chain this deployment runs on, by name", async () => {
+  const { token } = requestLink();
+  const view = await call("GET", `/api/invoice-links/${token}`);
+  assert.equal(view.status, 200, JSON.stringify(view.data));
+  assert.deepEqual(view.data.payoutChains, [{ chainId: 31337, name: "Local test chain" }]);
+});
+
+await check("a wallet on another chain is refused, and the invoice stays open", async () => {
+  const { token, id } = requestLink();
+  const r = await call("POST", `/api/invoice-links/${token}/submit`, undefined, submitBody({ kind: "wallet", address: WALLET, chainId: 8453 }));
+  assert.equal(r.status, 400, JSON.stringify(r.data));
+  assert.match(r.data.error, /Local test chain/);
+  assert.equal(store.findInvoice(id)?.state, "LINK_CREATED");
+});
+
+await check("a wallet on the offered chain is stored, and the org reads it with the chain's name", async () => {
+  const { token, id } = requestLink();
+  const r = await call("POST", `/api/invoice-links/${token}/submit`, undefined, submitBody({ kind: "wallet", address: WALLET, chainId: 31337 }));
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  const owner = ownerInvoiceView(store.findInvoice(id)!) as any;
+  assert.equal(owner.state, "SUBMITTED");
+  assert.equal(owner.payTo.address, WALLET);
+  assert.equal(owner.payTo.chainName, "Local test chain");
+  assert.equal((store.findInvoice(id) as any).payTo.chainName, undefined, "the name is read-time, not stored");
+});
+
+await check("the requester is mailed when mail is on; no mail, no email or a refused send never throws", async () => {
+  const { id } = requestLink();
+  const inv = store.findInvoice(id)!;
+  const sent: [string, string][] = [];
+  assert.equal(await notifyRequester(inv, { mailOn: true, send: async (to, org) => { sent.push([to, org]); } }), "sent");
+  assert.deepEqual(sent, [["olga@example.test", "Org org_req"]]);
+  assert.equal(await notifyRequester(inv, { mailOn: false, send: async () => { throw new Error("must not send"); } }), "off");
+  assert.equal(await notifyRequester(inv, { mailOn: true, send: async () => { throw Object.assign(new Error("x"), { code: "EAUTH" }); } }), "failed");
+  assert.equal(await notifyRequester({ ...inv, createdByMemberId: "m_nobody" }, { mailOn: true, send: async () => {} }), "no-email");
+  store.updateMember("m_org_req_u_owner", { status: "deactivated" } as any);
+  assert.equal(await notifyRequester(inv, { mailOn: true, send: async () => { throw new Error("must not send"); } }), "no-email", "a requester who left is not mailed");
+  store.updateMember("m_org_req_u_owner", { status: "active" } as any);
+});
+
 server.close();
 console.log(`\n${passed} passed${process.exitCode ? ", with failures" : ""}`);

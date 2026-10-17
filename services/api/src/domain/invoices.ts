@@ -22,6 +22,7 @@ import type {
   InvoiceState,
 } from "./types.js";
 import type { CryptoDeposit } from "../store.js";
+import { chainName } from "./contacts.js";
 
 export class InvoiceError extends Error {}
 
@@ -95,7 +96,10 @@ export function hashToken(token: string): string {
  */
 export function ownerInvoiceView<T extends Invoice>(i: T): Omit<T, "linkTokenHash" | "linkPasswordHash"> {
   const { linkTokenHash: _t, linkPasswordHash: _p, ...rest } = i;
-  return rest;
+  // The supplier picked a chain by name; the org reads it by the same name.
+  return rest.payTo?.kind === "wallet" && rest.payTo.chainId
+    ? { ...rest, payTo: { ...rest.payTo, chainName: chainName(rest.payTo.chainId) } }
+    : rest;
 }
 
 /** Constant-time compare, so a token cannot be recovered a byte at a time. */
