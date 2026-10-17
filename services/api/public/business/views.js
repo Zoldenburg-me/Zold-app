@@ -634,7 +634,7 @@ export function invoiceActions(i) {
       <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="discard-receipt-draft" data-id="${esc(i.id)}">Discard draft</button>`;
   }
   if (i.direction === "outgoing") {
-    return i.state === "SUBMITTED" && me?.invoicePayLinks !== false
+    return i.state === "SUBMITTED" && me?.invoicePayLinks === true
       ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="invoice-pay-link" data-id="${esc(i.id)}">Payment link</button>`
       : "";
   }

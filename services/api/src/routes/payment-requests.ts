@@ -423,15 +423,28 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
       res.status(404).json({ error: "no such payment request" });
       return undefined;
     }
-    // A link made for an invoice before its payee lost invoice links is not
-    // offered either. Money already sent is still matched by the poller.
-    if (r.invoiceId && invoicePayLinkBlocker(user)) {
+    // An OPEN link made for an invoice before its payee lost invoice links is
+    // withdrawn: no way to pay is offered. One with nothing paid is a 404; one
+    // with money on it stays readable as the payer's receipt, without methods.
+    // Money sent anyway is still matched by the poller.
+    const withdrawn = !!r.invoiceId && effectiveState(r) === "OPEN" && invoicePayLinkBlocker(user) !== null;
+    if (withdrawn && paidEur(r) === 0) {
       res.status(404).json({ error: "no such payment request" });
       return undefined;
     }
     // Opened under the payee's current address, a link minted under a handle
     // someone else has since claimed shows the address it was opened under.
-    return { r, user, handle: heldByOther(r.handle, r) ? req.params.handle : undefined };
+    return { r, user, withdrawn, handle: heldByOther(r.handle, r) ? req.params.handle : undefined };
+  };
+
+  /** resolvePublic, for the routes that take a payment (QRs, quote). */
+  const resolvePayable = (req: express.Request, res: express.Response) => {
+    const hit = resolvePublic(req, res);
+    if (hit?.withdrawn) {
+      res.status(404).json({ error: "this request no longer takes payment" });
+      return undefined;
+    }
+    return hit;
   };
 
   router.get(
@@ -442,6 +455,12 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
     wrap(async (req, res) => {
       const hit = resolvePublic(req, res);
       if (!hit) return;
+      if (hit.withdrawn) {
+        const view = publicPaymentRequest(hit.r, hit.user, {
+          chainId: CHAIN_ID, token: payToken(), baseUrl: baseUrlFor(req), payeeName: payeeNameFor(hit.r), cryptoLive: false, handle: hit.handle,
+        });
+        return res.json({ ...view, methods: {}, withdrawn: true });
+      }
       const { request, quote } = await ensureQuote(hit.r, hit.r.amountEur);
       const ctx = await payerContext(req, request, hit.user, quote);
       const user = store.findUser(hit.user.id) ?? hit.user;
@@ -456,7 +475,7 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
   router.get(
     "/pay/:handle/:code/qr.svg",
     wrap(async (req, res) => {
-      const hit = resolvePublic(req, res);
+      const hit = resolvePayable(req, res);
       if (!hit) return;
       const address = hit.user.paymentPage?.depositAddress;
       if (!hit.r.methods.includes("crypto") || !address) return res.status(404).json({ error: "this request does not take crypto" });
@@ -476,7 +495,7 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
   router.get(
     "/pay/:handle/:code/sepa-qr.svg",
     wrap(async (req, res) => {
-      const hit = resolvePublic(req, res);
+      const hit = resolvePayable(req, res);
       if (!hit) return;
       const bank = publicPaymentRequest(hit.r, store.findUser(hit.user.id) ?? hit.user, {
         chainId: CHAIN_ID, token: payToken(), baseUrl: baseUrlFor(req), payeeName: payeeNameFor(hit.r), cryptoLive: false, handle: hit.handle,
@@ -504,7 +523,7 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
   router.post(
     "/pay/:handle/:code/quote",
     wrap(async (req, res) => {
-      const hit = resolvePublic(req, res);
+      const hit = resolvePayable(req, res);
       if (!hit) return;
       if (effectiveState(hit.r) !== "OPEN") return res.status(409).json({ error: `this request is ${effectiveState(hit.r).toLowerCase()}` });
       if (!hit.r.methods.includes("crypto")) return res.status(409).json({ error: "this request does not take crypto" });
