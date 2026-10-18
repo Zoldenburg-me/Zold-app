@@ -72,7 +72,7 @@ const seen = {
   ibanRequestedFor: "",
   ibanRequestAnswered: 0,
   patches: [] as { iban: string; address: string; chain: string }[],
-  orderReadsByProfile: [] as (string | null)[],
+  depositReadsByProfile: [] as (string | null)[],
   /** Which of the login's two profiles GET /profiles lists. */
   profilesShown: "both" as "both" | "corporate" | "personal",
   /** GET /ibans answers 500. */
@@ -292,7 +292,7 @@ const stub = createServer((req, res) => {
         }
       : null;
     if (url.pathname === "/orders") {
-      seen.orderReadsByProfile.push(url.searchParams.get("profile"));
+      if (order) seen.depositReadsByProfile.push(url.searchParams.get("profile"));
       return send(200, { orders: order ? [order] : [] });
     }
     if (url.pathname.startsWith("/orders/")) {
@@ -663,9 +663,9 @@ try {
 
   await t("a deposit on the user's account is polled on their credentials and credited locally", async () => {
     let balance = 0;
-    // The unscoped read already returns the order, so the credit can land
-    // before the same cycle's profile-scoped read: wait for both reads too.
-    const bothRead = () => seen.orderReadsByProfile.includes(PROFILE_ID) && seen.orderReadsByProfile.includes(null);
+    // The credit can land before the cycle's profile-scoped read: wait for both.
+    const reads = seen.depositReadsByProfile;
+    const bothRead = () => reads.includes(PROFILE_ID) && reads.includes(null);
     for (const s = Date.now(); Date.now() - s < 20_000; ) {
       const me = await call(`/api/users/${userId}`);
       balance = Number(me.data.balanceEur ?? 0);
@@ -673,8 +673,8 @@ try {
       await new Promise((r) => setTimeout(r, 500));
     }
     assert.ok(balance >= Number(DEPOSIT_EUR), `deposit was not credited within 20s (balance ${balance})`);
-    assert.ok(seen.orderReadsByProfile.includes(PROFILE_ID), "orders should be read scoped to the user's profile");
-    assert.ok(seen.orderReadsByProfile.includes(null), "and unscoped, for the account's default profile");
+    assert.ok(reads.includes(PROFILE_ID), "orders should be read scoped to the user's profile");
+    assert.ok(reads.includes(null), "and unscoped, for the account's default profile");
     assert.equal(seen.unauthorised, 0);
   });
 
