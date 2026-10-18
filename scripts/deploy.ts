@@ -211,7 +211,8 @@ async function main() {
    */
   const { moneriumEure } = await import("../services/api/src/adapters/monerium-tokens.js");
   const { MONERIUM } = await import("../services/api/src/config.js");
-  const real = await moneriumEure(MONERIUM.baseUrl, CHAIN_ID);
+  // Monerium never issues on hardhat; asking would put a network call in every offline test deploy.
+  const real = CHAIN_ID === hardhat.id ? null : await moneriumEure(MONERIUM.baseUrl, CHAIN_ID);
   let eure: `0x${string}`;
   if (real) {
     eure = real.address;
