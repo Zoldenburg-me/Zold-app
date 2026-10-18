@@ -30,6 +30,7 @@ import {
   syncInvoicePayment, } from "./state.js";
 import { CEILINGS, ceilingRefusal } from "../../domain/ceilings.js";
 import { linkInvoiceView } from "./invoice-links.js";
+import { payLinkOffer } from "./invoice-pay-link.js";
 
 /** Resolving the org and the caller's role for a request — injected so this
  *  module cannot acquire its own way of deciding who is calling. */
@@ -52,6 +53,9 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
         .filter((i) => i.state !== "DELETED")
         .map(syncInvoicePayment)
         .map((i) => ({ ...ownerInvoiceView(i), overdue: isOverdue(i) })),
+      // Whether "Payment link" on an issued invoice would pass for this
+      // caller, so the UI offers it only where the API would accept it.
+      payLink: payLinkOffer(ctx),
     });
   });
 

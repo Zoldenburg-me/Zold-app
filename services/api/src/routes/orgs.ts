@@ -7,6 +7,7 @@
  */
 
 import { safeBooksStart } from "../domain/safe-books.js";
+import { walletConnectable } from "../domain/wallet-tier.js";
 import express from "express";
 import { randomBytes, randomUUID } from "node:crypto";
 import { store } from "../store.js";
@@ -81,6 +82,12 @@ function noIbanGate(type: OrgType): NonNullable<Account["gate"]> {
       };
 }
 
+/** A business account backed by a wallet-tier Safe: paid into, never sent from by bank. */
+const WALLET_GATE: NonNullable<Account["gate"]> = {
+  reason: "No IBAN is connected, so nothing can be sent from this account by bank. Payment links pay into the connected wallet.",
+  needs: "an IBAN, which isn’t available for this account.",
+};
+
 /**
  * The gate an account shows, from what it lacks when it is read. A row's
  * stored `gate` keeps the wording it was opened with, so it is only the
@@ -114,7 +121,9 @@ function accountView(org: Organisation, a: Account) {
  */
 export function safeTakenBy(userId: string, orgId: string): { id: string; name: string } | undefined {
   for (const a of store.accounts) {
-    if (a.backingUserId !== userId || a.orgId === orgId || a.status !== "active") continue;
+    // `gated` with a backer and no IBAN: a wallet-tier Safe connected (POST .../fund).
+    const wallet = a.status === "gated" && !a.identifier?.iban;
+    if (a.backingUserId !== userId || a.orgId === orgId || (a.status !== "active" && !wallet)) continue;
     const other = store.findOrganisation(a.orgId);
     if (other?.type === "business") return { id: other.id, name: other.name };
   }
@@ -597,7 +606,9 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     const accounts = store.accountsOf(ctx.org.id);
     const caller = store.findUser(ctx.userId);
     const adoption = roleCan(ctx.member.role, "accounts.open")
-      ? adoptionHint(ctx.org, caller)
+      ? ctx.org.type === "business" && walletConnectable(caller)
+        ? ctx.member.role === "owner" ? { allowed: true, wallet: true } : { allowed: false, reason: "Only an owner can connect their wallet to this organisation." }
+        : adoptionHint(ctx.org, caller)
       : { allowed: false, reason: `Your role (${ctx.member.role}) cannot open or fund accounts.` };
     res.json({
       // `gate` and `profile` are derived here, at read time: no row is
@@ -767,6 +778,29 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
         error: `${def?.name ?? account.currency} cannot be funded this way: ${def?.needs ?? "no rail"}`,
       });
     }
+    // A wallet-tier OWNER (no IBAN, none on offer) connects their Safe as
+    // where the business is paid. The row stays `gated`: there is no IBAN, so
+    // nothing is sent from it by bank, and no Monerium profile to check. Only
+    // the owner: with no profile check to tie the payee to the company, an
+    // admin could otherwise make their own wallet the company's payee.
+    const walletCaller = store.findUser(ctx.userId);
+    if (ctx.org.type === "business" && walletConnectable(walletCaller)) {
+      if (ctx.member.role !== "owner") {
+        return res.status(403).json({ error: "Only an owner can connect their wallet to this organisation.", code: "OWNER_ONLY" });
+      }
+      const taken = safeTakenBy(walletCaller.id, ctx.org.id);
+      if (taken) return res.status(409).json({ error: safeTakenError(taken), code: "SAFE_IN_OTHER_ORG" });
+      const connected = store.updateAccount(account.id, {
+        address: walletCaller.address,
+        backingUserId: walletCaller.id,
+        backedSince: safeBooksStart(walletCaller),
+        gate: WALLET_GATE,
+      });
+      return res.json({
+        account: accountView(ctx.org, connected),
+        note: `Payments to ${ctx.org.name} now arrive in your wallet. It has no IBAN, so nothing is sent from it by bank.`,
+      });
+    }
     // `active` is set exactly when Monerium attributed an IBAN to the Safe
     // (activation), so the status alone is the funded test; the hardhat
     // harness marks its auto-approved accounts active with no IBAN.
@@ -832,6 +866,9 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     const backer = account.backingUserId ? store.findUser(account.backingUserId) : undefined;
     if (!backer) {
       return res.status(409).json({ error: "This account has no funding identity, so there is no Monerium profile to check." });
+    }
+    if (account.status === "gated") {
+      return res.status(409).json({ error: "This account is a connected wallet with no IBAN, so there is no Monerium profile to check." });
     }
     const checked = await checkBackingProfile(ctx.org, backer);
     auditProfileCheck("recheck", { orgId: ctx.org.id, accountId: account.id }, backer.id, checked, ctx.userId);

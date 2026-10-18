@@ -21,9 +21,11 @@ import {
   type PaymentRequest,
 } from "../../payment-requests.js";
 import { createPaymentRequest, orgsBackedBy } from "../payment-requests.js";
-import type { Invoice } from "../../domain/types.js";
+import type { Invoice, Organisation } from "../../domain/types.js";
+import type { User } from "../../store/types.js";
 import type { OrgContext } from "../org-context.js";
 import { redactedMessage } from "../../http/log-cause.js";
+import { roleCan } from "../../domain/roles.js";
 
 const DAY_MS = 24 * 60 * 60_000;
 /** How long after its due date an invoice can still be paid by its link. */
@@ -88,6 +90,41 @@ export async function withInvoiceLinkLock<T>(invoice: Pick<Invoice, "id" | "orgI
   }
 }
 
+/**
+ * Why `user` cannot make a payment link for `org`, or undefined when they can.
+ * The one verdict behind the routes that make links and the UI that offers
+ * them. A personal space is backed by its owner's Safe, IBAN or not; a
+ * business by the Safe connected to its euro account, an IBAN's or a
+ * wallet-tier one's (orgsBackedBy).
+ */
+export function payLinkBlocker(org: Organisation, user: User): { code: "ACCOUNT_NOT_OPEN" | "NOT_THE_PAYEE" | "NO_METHOD"; reason: string } | undefined {
+  if (org.type !== "personal" && !store.accounts.some((a) => a.orgId === org.id && a.backingUserId)) {
+    return {
+      code: "ACCOUNT_NOT_OPEN",
+      reason: `Nothing is connected to ${org.name}’s euro account yet, so a payment link has nowhere to pay into. Connect the company’s IBAN, or your wallet, on Accounts.`,
+    };
+  }
+  if (!orgsBackedBy(user.id).has(org.id)) {
+    return {
+      code: "NOT_THE_PAYEE",
+      reason: "A payment link pays into the account behind this organisation, and that account is another member’s. They can make the link.",
+    };
+  }
+  if (!availableMethods(user).some((m) => m.available)) {
+    return { code: "NO_METHOD", reason: "No way to get paid is set up on this account yet: claim your payment page (Profile → Payment page) to add a Pay button." };
+  }
+  return undefined;
+}
+
+/** Whether this caller may make a payment link here, for the UI: it offers
+ *  the control only where the API would accept it. */
+export function payLinkOffer(ctx: OrgContext): { allowed: boolean; reason?: string } {
+  if (!roleCan(ctx.member.role, "invoices.manage")) return { allowed: false };
+  const user = store.findUser(ctx.userId);
+  const blocked = user ? payLinkBlocker(ctx.org, user) : { reason: "Your session has no account behind it." };
+  return blocked ? { allowed: false, reason: blocked.reason } : { allowed: true };
+}
+
 /** Never throws: the invoice is already issued and numbered, and a 500 here
  *  would invite a retry that issues it twice. Say so and log instead. */
 export async function payLinkForInvoice(ctx: OrgContext, invoice: Invoice, baseUrl: string): Promise<InvoicePayLink> {
@@ -111,25 +148,9 @@ async function payLinkUnlocked(ctx: OrgContext, invoice: Invoice, baseUrl: strin
   }
   const user = store.findUser(ctx.userId);
   if (!user) return { ok: false, code: "NO_USER", reason: "Your session has no account behind it." };
-  // A personal space is backed by its owner's Safe, IBAN or not (orgsBackedBy).
-  if (ctx.org.type !== "personal" && !store.accounts.some((a) => a.orgId === ctx.org.id && a.backingUserId)) {
-    return {
-      ok: false,
-      code: "ACCOUNT_NOT_OPEN",
-      reason: `${ctx.org.name}’s euro account is not open yet, so there is nothing to pay into. The invoice shows your bank details instead.`,
-    };
-  }
-  if (!orgsBackedBy(user.id).has(ctx.org.id)) {
-    return {
-      ok: false,
-      code: "NOT_THE_PAYEE",
-      reason: "A payment link pays into the account behind this organisation, and that account is another member’s. They can add the Pay button from the invoice.",
-    };
-  }
+  const blocked = payLinkBlocker(ctx.org, user);
+  if (blocked) return { ok: false, ...blocked };
   const methods = availableMethods(user).filter((m) => m.available).map((m) => m.method);
-  if (!methods.length) {
-    return { ok: false, code: "NO_METHOD", reason: "No way to get paid is set up on this account yet: claim your payment page (Profile → Payment page) to add a Pay button." };
-  }
   const input = validateCreate({ invoiceId: invoice.id, methods, expiresAt: linkExpiry(invoice.dueDate) }, user);
   const link = await createPaymentRequest(user, input, { kind: "app" }, ctx.org.id);
   return { ok: true, url: ownerPaymentRequest(link, baseUrl).url, amountEur: link.amountEur, reused: false };

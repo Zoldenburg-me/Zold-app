@@ -471,7 +471,7 @@ export const ACTIONS = {
     ]);
     // Without a company page the link opens under the member's own page
     // address; the money still lands in this organisation's account.
-    const personal = page && !page.paymentPage
+    const personal = page && !page.paymentPage && page.ready
       ? ` It opens under your own page address (/pay/${r.handle}/…) because ${org.name} has no payment page yet; set one up under Get paid for links in the company’s name. The money goes to ${org.name}’s account either way.`
       : "";
     setTimeout(() => linkDialog("Payment link ready", `Send your customer this link. It asks for ${eur(r.amountEur)} and marks the invoice paid when the money arrives.${personal}`, r.url), 0);
@@ -481,7 +481,7 @@ export const ACTIONS = {
     const page = await api(`/api/orgs/${org.id}/payment-page`).catch(() => null);
     const where = page?.paymentPage
       ? ` It opens at ${esc(location.host)}/pay/${esc(page.paymentPage.handle)}/….`
-      : " Set up the company’s payment page first, and links open under its address instead of yours.";
+      : page?.ready ? " Set up the company’s payment page first, and links open under its address instead of yours." : "";
     dialog("New payment link",
       `<p class="desc">Your customer pays it into ${esc(org.name)}’s euro account. Leave the amount empty to let them enter it.${where}</p>
        ${field("d-desc", "What it’s for", 'maxlength="140" placeholder="Deposit, roof Weber…"')}
