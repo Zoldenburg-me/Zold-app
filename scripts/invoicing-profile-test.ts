@@ -634,6 +634,9 @@ await check("without a claimed payment page there is no Pay button, and it says 
   assert.equal(r.status, 201, JSON.stringify(r.data));
   assert.equal(r.data.payment.code, "NO_METHOD");
   assert.match(r.data.payment.reason, /Payment page/);
+  const links = await call("GET", "/api/orgs/org_u_np/payment-requests", "u_np");
+  assert.equal(links.data.payLink.allowed, false, "Get paid offers no New payment link the API would refuse");
+  assert.match(links.data.payLink.reason, /Payment page/);
 });
 await check("only the person behind a personal space collects for it: another member is not the payee", async () => {
   // POST /:orgId/members refuses a personal space (members.manage is business only); a row put there by hand still gets nothing.
@@ -678,6 +681,110 @@ await check("a KYC'd account's invoice page still offers the IBAN and the wallet
   const page = payPage("u_eu", r.data.invoice.id);
   assert.deepEqual(Object.keys(page.methods).sort(), ["bank", "crypto"]);
   assert.equal(page.methods.bank!.iban, "DE89370400440532013000");
+});
+
+console.log("\nA wallet-tier owner's business is paid into the wallet connected to its euro account");
+
+/** A business owned by the India wallet-tier account, with a payer, and the
+ *  EUR account a company's first business org opens with: gated, no IBAN. */
+function walletBusiness(id: string) {
+  store.addOrganisation({
+    id, type: "business", name: `Biz ${id}`, legalName: `Biz ${id} Pvt Ltd`, plan: "business",
+    address: { line1: "1 MG Road", postalCode: "560001", city: "Bengaluru", country: "IN" },
+    reporting: { currency: "EUR", timeZone: "UTC", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now,
+  } as any);
+  store.addMember({ id: `m_${id}_in`, orgId: id, userId: "u_in", email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now });
+  store.addMember({ id: `m_${id}_payer`, orgId: id, userId: "u_payer", email: "", role: "payer", status: "active", invitedAt: now, acceptedAt: now });
+  store.addAccount({
+    id: `acc_${id}`, orgId: id, currency: "EUR", label: "EUR", status: "gated", provider: "monerium",
+    identifier: {}, createdAt: now, updatedAt: now,
+  } as any);
+}
+walletBusiness("org_inbiz");
+
+await check("before its wallet is connected, no Pay button: the invoice list and the issue both say what to connect", async () => {
+  const list = await call("GET", "/api/orgs/org_inbiz/invoices", "u_in");
+  assert.equal(list.data.payLink.allowed, false);
+  assert.match(list.data.payLink.reason, /your wallet, on Accounts/);
+  const r = await call("POST", "/api/orgs/org_inbiz/invoicing/issue", "u_in", invoiceFor("IN"));
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  assert.equal(r.data.payment.code, "ACCOUNT_NOT_OPEN");
+  const made = await call("POST", "/api/orgs/org_inbiz/payment-requests", "u_in", { invoiceId: r.data.invoice.id, methods: ["crypto"] });
+  assert.equal(made.status, 409, "refused while nothing backs it: fail closed");
+  const accounts = await call("GET", "/api/orgs/org_inbiz/accounts", "u_in");
+  assert.deepEqual(accounts.data.adoption, { allowed: true, wallet: true }, "Accounts offers Connect your wallet");
+});
+
+await check("an admin with a wallet account cannot make their own wallet the company's payee", async () => {
+  personWithSpace("u_in_admin", "inadmin", { country: "IN", kycStatus: "pending", segment: { value: "IN_COLLECTIONS", reasonCode: "t", decidedAt: now, decidedBy: "system" } });
+  store.addMember({ id: "m_inbiz_admin", orgId: "org_inbiz", userId: "u_in_admin", email: "", role: "admin", status: "active", invitedAt: now, acceptedAt: now });
+  const r = await call("POST", "/api/orgs/org_inbiz/accounts/acc_org_inbiz/fund", "u_in_admin");
+  assert.equal(r.status, 403, JSON.stringify(r.data));
+  assert.equal(r.data.code, "OWNER_ONLY");
+  assert.equal(store.findAccount("acc_org_inbiz")!.backingUserId, undefined);
+  const accounts = await call("GET", "/api/orgs/org_inbiz/accounts", "u_in_admin");
+  assert.equal(accounts.data.adoption.allowed, false, "Accounts offers the admin no Connect button");
+});
+
+await check("the owner connects their wallet: the account stays gated (no IBAN) and its Safe backs the business", async () => {
+  const r = await call("POST", "/api/orgs/org_inbiz/accounts/acc_org_inbiz/fund", "u_in");
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  const a = store.findAccount("acc_org_inbiz")!;
+  assert.equal(a.status, "gated");
+  assert.equal(a.backingUserId, "u_in");
+  assert.equal(a.address, walletSafe);
+  assert.ok(a.backedSince, "backedSince is recorded at the connection");
+  assert.deepEqual(a.identifier, {}, "no IBAN appears");
+  assert.equal(r.data.account.profile.status, "not_applicable", "no Monerium profile to check without an IBAN");
+  const recheck = await call("POST", "/api/orgs/org_inbiz/accounts/acc_org_inbiz/profile-check", "u_in");
+  assert.equal(recheck.status, 409, "a wallet row has no profile to re-check");
+  store.updateUser("u_in", { iban: "DE89370400440532013000" } as any);
+  assert.deepEqual(store.findAccount("acc_org_inbiz")!.identifier, {}, "an IBAN never follows onto a wallet row without the profile check");
+  store.updateUser("u_in", { iban: undefined } as any);
+});
+
+await check("connected, an issued invoice gets its link, and the page offers only the wallet", async () => {
+  const list = await call("GET", "/api/orgs/org_inbiz/invoices", "u_in");
+  assert.deepEqual(list.data.payLink, { allowed: true });
+  assert.deepEqual((await call("GET", "/api/orgs/org_inbiz/payment-requests", "u_in")).data.payLink, { allowed: true }, "Get paid reads the same verdict");
+  const r = await call("POST", "/api/orgs/org_inbiz/invoicing/issue", "u_in", invoiceFor("IN"));
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  assert.equal(r.data.payment.ok, true, JSON.stringify(r.data.payment));
+  const link = store.paymentRequests.find((p) => p.invoiceId === r.data.invoice.id)!;
+  assert.equal(link.orgId, "org_inbiz");
+  assert.deepEqual(link.methods, ["crypto"]);
+  const page = payPage("u_in", r.data.invoice.id);
+  assert.deepEqual(Object.keys(page.methods), ["crypto"]);
+  assert.equal(page.methods.crypto!.address, walletSafe);
+});
+
+await check("only the member whose wallet backs it collects: a payer is refused, and its list offers no button", async () => {
+  const id = (await call("POST", "/api/orgs/org_inbiz/invoicing/issue", "u_in", invoiceFor("IN"))).data.invoice.id;
+  store.paymentRequests.filter((p) => p.invoiceId === id).forEach((p) => store.updatePaymentRequest(p.id, { state: "CANCELLED" } as any));
+  const r = await call("POST", "/api/orgs/org_inbiz/payment-requests", "u_payer", { invoiceId: id, methods: ["crypto"] });
+  assert.equal(r.status, 403, JSON.stringify(r.data));
+  assert.equal(r.data.code, "NOT_THE_PAYEE");
+  const list = await call("GET", "/api/orgs/org_inbiz/invoices", "u_payer");
+  assert.equal(list.data.payLink.allowed, false);
+});
+
+await check("a wallet connected to one business is refused in another (SAFE_IN_OTHER_ORG)", async () => {
+  walletBusiness("org_inbiz2");
+  const r = await call("POST", "/api/orgs/org_inbiz2/accounts/acc_org_inbiz2/fund", "u_in");
+  assert.equal(r.status, 409, JSON.stringify(r.data));
+  assert.equal(r.data.code, "SAFE_IN_OTHER_ORG");
+  assert.equal(store.findAccount("acc_org_inbiz2")!.backingUserId, undefined);
+  const issued = await call("POST", "/api/orgs/org_inbiz2/invoicing/issue", "u_in", invoiceFor("IN"));
+  assert.equal(issued.data.payment.code, "ACCOUNT_NOT_OPEN");
+});
+
+await check("an account that can still get an IBAN does not connect as a wallet: it goes through Monerium", async () => {
+  personWithSpace("u_de_wallet", "dewallet", { country: "DE", kycStatus: "pending", segment: { value: "EU_FULL", reasonCode: "t", decidedAt: now, decidedBy: "system" } });
+  store.addMember({ id: "m_inbiz2_de", orgId: "org_inbiz2", userId: "u_de_wallet", email: "", role: "admin", status: "active", invitedAt: now, acceptedAt: now });
+  const r = await call("POST", "/api/orgs/org_inbiz2/accounts/acc_org_inbiz2/fund", "u_de_wallet");
+  assert.equal(r.status, 409, JSON.stringify(r.data));
+  assert.match(r.data.error, /not funded yet/);
+  assert.equal(store.findAccount("acc_org_inbiz2")!.backingUserId, undefined);
 });
 
 server.close();

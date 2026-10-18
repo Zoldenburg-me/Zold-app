@@ -12,9 +12,9 @@ import { store } from "../../store.js";
 import { wrap } from "../util.js";
 import { requireCapability, requirePermission } from "../org-context.js";
 import { PaymentRequestError, ownerPaymentRequest, validateCreate } from "../../payment-requests.js";
-import { baseUrlFor, createPaymentRequest, orgsBackedBy } from "../payment-requests.js";
+import { baseUrlFor, createPaymentRequest } from "../payment-requests.js";
 import type { OrgRoutes } from "./invoicing.js";
-import { openLinkFor, withInvoiceLinkLock } from "./invoice-pay-link.js";
+import { openLinkFor, payLinkBlocker, payLinkOffer, withInvoiceLinkLock } from "./invoice-pay-link.js";
 
 export function createPaymentLinkRoutes(deps: OrgRoutes): express.Router {
   const { ctxOf } = deps;
@@ -29,7 +29,7 @@ export function createPaymentLinkRoutes(deps: OrgRoutes): express.Router {
       .filter((p) => p.orgId === ctx.org.id && p.source.kind === "app")
       .map((p) => ownerPaymentRequest(p, base))
       .reverse();
-    res.json({ paymentRequests: links });
+    res.json({ paymentRequests: links, payLink: payLinkOffer(ctx) });
   });
 
   r.post("/:orgId/payment-requests", wrap(async (req, res) => {
@@ -39,21 +39,8 @@ export function createPaymentLinkRoutes(deps: OrgRoutes): express.Router {
     if (!requirePermission(ctx, res, "invoices.manage")) return;
     const user = store.findUser(ctx.userId);
     if (!user) return res.status(401).json({ error: "no such user" });
-    // No member's account backs any of the org's accounts yet: say that, not
-    // that the account belongs to someone else. A personal space is backed by
-    // its owner's Safe (orgsBackedBy).
-    if (ctx.org.type !== "personal" && !store.accounts.some((a) => a.orgId === ctx.org.id && a.backingUserId)) {
-      return res.status(409).json({
-        error: "This organisation's euro account is not open yet, so a payment link has nowhere to pay into. Open it on the Accounts screen first.",
-        code: "ACCOUNT_NOT_OPEN",
-      });
-    }
-    if (!orgsBackedBy(user.id).has(ctx.org.id)) {
-      return res.status(403).json({
-        error: "A payment link pays into the account behind this organisation's EUR account, and that is not yours. The member whose account it is can make the link.",
-        code: "NOT_THE_PAYEE",
-      });
-    }
+    const blocked = payLinkBlocker(ctx.org, user);
+    if (blocked) return res.status(blocked.code === "NOT_THE_PAYEE" ? 403 : 409).json({ error: blocked.reason, code: blocked.code });
     // An invoice has one open link: the one its Pay button already opens.
     // Returned as is, with `reused: true`: the amount and methods asked for
     // now are not applied to it.

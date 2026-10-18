@@ -18,3 +18,15 @@ export function walletBlocker(user: Pick<User, "segment">): string | null {
   if (can(user.segment?.value ?? "EU_FULL", "onchain_balance")) return null;
   return "an on-chain balance is not part of your account";
 }
+
+/**
+ * A wallet-tier account that may connect its Safe to a business as the
+ * account its payments arrive in: no IBAN, and none on offer (the segment has
+ * no Monerium, or Monerium refused it), with a deployed Safe. Mirrors the
+ * app's `bankOffered()`. An account that can still get an IBAN connects that
+ * instead, through the Monerium profile check.
+ */
+export function walletConnectable<U extends Pick<User, "segment" | "kycStatus" | "iban" | "passkeySafe">>(user: U | undefined): user is U {
+  if (!user || user.iban || user.passkeySafe?.status !== "active") return false;
+  return !can(user.segment?.value ?? "EU_FULL", "monerium") || user.kycStatus === "rejected";
+}

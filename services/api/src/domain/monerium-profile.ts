@@ -207,9 +207,10 @@ export type ProfileStanding =
  */
 export function accountProfileStanding(
   org: Pick<Organisation, "type" | "name" | "legalName">,
-  account: Pick<Account, "backingUserId" | "moneriumProfile">,
+  account: Pick<Account, "backingUserId" | "moneriumProfile" | "status">,
 ): ProfileStanding {
-  if (!account.backingUserId) return { status: "not_applicable" };
+  // Gated with a backer is a wallet-tier Safe: no IBAN, so no profile to check.
+  if (!account.backingUserId || account.status === "gated") return { status: "not_applicable" };
   const p = account.moneriumProfile;
   if (!p) {
     if (org.type !== "business") return { status: "not_applicable" };
