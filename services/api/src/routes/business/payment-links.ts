@@ -14,7 +14,7 @@ import { requireCapability, requirePermission } from "../org-context.js";
 import { PaymentRequestError, ownerPaymentRequest, validateCreate } from "../../payment-requests.js";
 import { baseUrlFor, createPaymentRequest } from "../payment-requests.js";
 import type { OrgRoutes } from "./invoicing.js";
-import { openLinkFor, payLinkBlocker, withInvoiceLinkLock } from "./invoice-pay-link.js";
+import { openLinkFor, payLinkBlocker, payLinkOffer, withInvoiceLinkLock } from "./invoice-pay-link.js";
 
 export function createPaymentLinkRoutes(deps: OrgRoutes): express.Router {
   const { ctxOf } = deps;
@@ -29,7 +29,7 @@ export function createPaymentLinkRoutes(deps: OrgRoutes): express.Router {
       .filter((p) => p.orgId === ctx.org.id && p.source.kind === "app")
       .map((p) => ownerPaymentRequest(p, base))
       .reverse();
-    res.json({ paymentRequests: links });
+    res.json({ paymentRequests: links, payLink: payLinkOffer(ctx) });
   });
 
   r.post("/:orgId/payment-requests", wrap(async (req, res) => {
