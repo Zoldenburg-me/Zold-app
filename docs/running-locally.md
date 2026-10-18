@@ -146,7 +146,10 @@ Rules, because whatever is on `production` is what zoldhq.com runs:
 
 ## Test suites
 
-`npm run check` is OFFLINE and is the one to run. `npm run check:live` adds the
+`npm run check` is OFFLINE and is the one to run. It pins the deploy's EUR/USD
+seed (`DEPLOY_EURUSD_RATE`) and points both rate feeds at a closed loopback
+port, so no suite reaches the network; a suite run alone outside `check` still
+fetches live FX at deploy. `npm run check:live` adds the
 three Stellar suites (each pins testnet via `scripts/_stellar-testnet.ts` —
 config defaults to pubnet, and a real treasury secret in .env would otherwise
 submit mainnet ops).
