@@ -151,13 +151,14 @@ const ratesStubPort = process.env.TRANSF_RATES_STUB_PORT ?? String(await freePor
  * No live FX in the offline check. deploy.ts seeds the FxSwapper from the live
  * EUR/USD mid unless DEPLOY_EURUSD_RATE pins it, and the server asks the rate
  * feeds per quote. Both feeds point at a closed loopback port, so a suite sees
- * "no rate" (fail closed) at once, as on a machine without egress. Suites that
- * need a rate pin TRANSF_RATES_FIXED or serve their own feed, and win.
+ * "no rate" (fail closed) at once, as on a machine without egress. An exported
+ * feed URL does not survive here (that is `check:live`); suites that need a
+ * rate pin TRANSF_RATES_FIXED or serve their own feed in their own process.
  */
 const offlineFx = process.env.CHECK_LIVE === "1" ? {} : {
   DEPLOY_EURUSD_RATE: process.env.DEPLOY_EURUSD_RATE ?? "1137900",
-  TRANSF_RATES_URL: process.env.TRANSF_RATES_URL ?? "http://127.0.0.1:9/latest/EUR",
-  TRANSF_ECB_RATES_URL: process.env.TRANSF_ECB_RATES_URL ?? "http://127.0.0.1:9/v1",
+  TRANSF_RATES_URL: "http://127.0.0.1:9/latest/EUR",
+  TRANSF_ECB_RATES_URL: "http://127.0.0.1:9/v1",
 };
 const env = {
   ...process.env,
