@@ -149,6 +149,11 @@ const stubPort = process.env.TRANSF_STUB_PORT ?? String(await freePort());
 const ratesStubPort = process.env.TRANSF_RATES_STUB_PORT ?? String(await freePort());
 const env = {
   ...process.env,
+  // Offline FX: a pinned swapper seed for deploy.ts, and both rate feeds on a
+  // closed port, so a suite gets "no rate" (fail closed), never the network.
+  DEPLOY_EURUSD_RATE: process.env.DEPLOY_EURUSD_RATE ?? "1137900",
+  TRANSF_RATES_URL: "http://127.0.0.1:9/latest/EUR",
+  TRANSF_ECB_RATES_URL: "http://127.0.0.1:9/v1",
   TRANSF_API_PORT: apiPort,
   TRANSF_RPC_URL: process.env.TRANSF_RPC_URL ?? `http://127.0.0.1:${rpcPort}`,
   TRANSF_STUB_PORT: stubPort,
