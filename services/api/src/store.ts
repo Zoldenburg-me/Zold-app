@@ -177,6 +177,9 @@ export const store = {
       const iban = bare(u.iban) || undefined;
       for (const a of db.accounts) {
         if (a.backingUserId !== id || a.currency !== "EUR") continue;
+        // A wallet-connected row (gated, no IBAN) gets an IBAN only through
+        // POST .../fund and its Monerium profile check, never by following.
+        if (a.status === "gated" && !a.identifier?.iban) continue;
         Object.assign(a, { identifier: { ...a.identifier, iban }, updatedAt: new Date().toISOString() });
       }
     }

@@ -17,14 +17,12 @@ const DAY_MS = 86400000;
 
 const gp = { tab: "open" };
 
-/** Why this person cannot make a link, or "" when they can. */
-function linkBlock(accounts) {
+/** Why this person cannot make a link, or "" when they can: the API's own
+ *  verdict (`payLink` on GET payment-requests), never worked out here. */
+function linkBlock(payLink) {
   if (!MAKES_LINKS.has(org.role)) return "";
-  const backed = accounts.filter((a) => a.backingUserId && a.status === "active");
-  if (!backed.length) return "The euro account isn’t open yet, so a link has nowhere to pay into.";
-  if (backed.some((a) => a.backingUserId === me?.id)) return "";
-  const who = backed[0].backingMemberName || "the member whose account it is";
-  return `Only ${who} can make payment links: a link pays into their own account, which backs ${org.name}’s euro account.`;
+  if (!payLink) return "Payment links couldn’t load. Open Get paid again to retry.";
+  return payLink.allowed ? "" : payLink.reason || "You can’t make payment links here.";
 }
 
 function headerActions(block) {
@@ -142,7 +140,7 @@ RENDER["get-paid"] = async () => {
   if (acc.status === "rejected") throw acc.reason;
   const accounts = acc.value.accounts;
   const list = links.status === "fulfilled" ? links.value.paymentRequests : null;
-  const block = linkBlock(accounts);
+  const block = linkBlock(links.status === "fulfilled" ? links.value.payLink : null);
   if (view === "get-paid") $("#view-actions").innerHTML = headerActions(block);
 
   const html = `<div id="gp-root"><h2 class="zb-h2" style="margin-bottom:12px">Bank details</h2>${bankCards(accounts)}
