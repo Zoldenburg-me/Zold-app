@@ -61,13 +61,14 @@ RENDER.accounts = async () => {
     const mine = a.backingUserId && me && a.backingUserId === me.id;
     const action = !a.backingUserId && a.currency === "EUR"
       ? adoption?.allowed
-        ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="fund-account" data-id="${esc(a.id)}">${profileWait ? "Check with Monerium again" : org.type === "business" ? "Connect the company’s IBAN" : "Fund from my account"}</button>`
+        ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="fund-account" data-id="${esc(a.id)}">${adoption.wallet ? "Connect your wallet" : profileWait ? "Check with Monerium again" : org.type === "business" ? "Connect the company’s IBAN" : "Fund from my account"}</button>`
         : adoption?.reason ? `<p class="desc">${esc(plain(adoption.reason))}</p>` : ""
       : "";
     const details = [
       a.gate ? ["Not open because", `${esc(plain(a.gate.reason))}<br>Needs: ${esc(plain(a.gate.needs))}`] : null,
       !a.backingUserId && a.currency === "EUR" && waitHtml ? ["Monerium", waitHtml] : null,
-      a.backingUserId ? ["Spends from", mine ? "Your own account" : "A member’s own account"] : null,
+      // Gated with a backer: a wallet with no IBAN, paid into and never sent from by bank.
+      a.backingUserId ? a.status === "gated" ? ["Paid into", mine ? "Your wallet" : "A member’s wallet"] : ["Spends from", mine ? "Your own account" : "A member’s own account"] : null,
       ...profileRows(a, mayManageAccounts),
       mine && a.currency === "EUR" && a.status === "active" ? ["Documents", `<a href="?view=documents" data-view-link="documents">Statements and documents</a>`] : null,
     ].filter(Boolean);
@@ -623,10 +624,10 @@ RENDER["invoicing-settings"] = async () => {
    ========================================================================== */
 
 /* What can be done with an invoice, by state. An issued one still open gets a
-   payment link. For an incoming one, "Pay" only appears
+   payment link where the API would make one (`payLink` from GET invoices). For an incoming one, "Pay" only appears
    when the supplier gave an IBAN: a wallet-only invoice says so instead of
    offering a button that the API would refuse. */
-export function invoiceActions(i) {
+export function invoiceActions(i, payLink) {
   if (i.state === "DRAFT") {
     // Issue only where the API would accept it: receipts on the draft, and a
     // total that net plus VAT can reach.
@@ -635,7 +636,7 @@ export function invoiceActions(i) {
       <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="discard-receipt-draft" data-id="${esc(i.id)}">Discard draft</button>`;
   }
   if (i.direction === "outgoing") {
-    return i.state === "SUBMITTED"
+    return i.state === "SUBMITTED" && payLink?.allowed
       ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="invoice-pay-link" data-id="${esc(i.id)}">Payment link</button>`
       : "";
   }

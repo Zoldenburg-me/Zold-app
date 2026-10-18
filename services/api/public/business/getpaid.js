@@ -20,8 +20,11 @@ const gp = { tab: "open" };
 /** Why this person cannot make a link, or "" when they can. */
 function linkBlock(accounts) {
   if (!MAKES_LINKS.has(org.role)) return "";
-  const backed = accounts.filter((a) => a.backingUserId && a.status === "active");
-  if (!backed.length) return "The euro account isn’t open yet, so a link has nowhere to pay into.";
+  // A personal space is backed by its owner's own Safe, account row or not.
+  if (org.type === "personal") return "";
+  // A gated account with a backer is a wallet-tier Safe: links pay into it.
+  const backed = accounts.filter((a) => a.backingUserId && (a.status === "active" || a.status === "gated"));
+  if (!backed.length) return "Nothing is connected to the euro account yet, so a link has nowhere to pay into. Connect the company’s IBAN, or your wallet, on Accounts.";
   if (backed.some((a) => a.backingUserId === me?.id)) return "";
   const who = backed[0].backingMemberName || "the member whose account it is";
   return `Only ${who} can make payment links: a link pays into their own account, which backs ${org.name}’s euro account.`;

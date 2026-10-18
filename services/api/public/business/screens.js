@@ -265,13 +265,14 @@ META.invoices = () => ({
 
 RENDER.invoices = async () => {
   if (!cap("invoices").allowed) return gateHtml("invoices");
-  const { invoices } = await api(`/api/orgs/${org.id}/invoices`);
+  const { invoices, payLink } = await api(`/api/orgs/${org.id}/invoices`);
   iv.invoices = invoices;
+  iv.payLink = payLink;
   const bySide = invoices.filter((i) => (iv.side === "issued" ? i.direction === "outgoing" : i.direction !== "outgoing"));
   const list = bySide.filter((i) => invIn(iv.filter, i));
   const pills = `<div class="zb-pills" role="group" aria-label="Show">${INV_FILTERS.map(([k, w]) => `<button type="button" class="zb-pill" data-act="inv-filter" data-f="${k}" aria-current="${k === iv.filter}">${w} <b>${bySide.filter((i) => invIn(k, i)).length}</b></button>`).join("")}</div>`;
   const sides = `<div class="zb-pills" role="group" aria-label="Whose">${[["issued", "Issued by you"], ["suppliers", "From suppliers"]].map(([k, w]) => `<button type="button" class="zb-pill" data-act="inv-side" data-s="${k}" aria-current="${k === iv.side}">${w}</button>`).join("")}</div>`;
-  const withActs = list.some((i) => invoiceActions(i));
+  const withActs = list.some((i) => invoiceActions(i, iv.payLink));
   const rows = list.map((i) => {
     const out = i.direction === "outgoing";
     const w = invWord(i);
@@ -288,12 +289,12 @@ RENDER.invoices = async () => {
       <td class="${w === "OVERDUE" ? "zb-due--late" : "z-dim"}">${i.dueDate ? esc(day(ymd(i.dueDate))) : "None"}</td>
       <td>${Z.tag(w)}</td>
       <td class="z-tbl__num">${fig}</td>
-      ${withActs ? `<td><div class="zb-cellact">${invoiceActions(i)}</div></td>` : ""}</tr>`;
+      ${withActs ? `<td><div class="zb-cellact">${invoiceActions(i, iv.payLink)}</div></td>` : ""}</tr>`;
   });
   return `<div class="zb-bar">${pills}${sides}</div>
     ${list.length ? table([["Number"], [iv.side === "issued" ? "Customer" : "Supplier"], ["Due"], ["Status"], ["Amount", "z-tbl__num"], ...(withActs ? [[""]] : [])], rows)
       : empty(bySide.length ? "No invoices match that filter." : iv.side === "issued" ? "No invoices issued yet." : "No supplier invoices yet. Request one with a link.")}
-    <div class="zb-notes">${note(`An invoice marks itself paid when a bank transfer with its number arrives. Your details on every invoice come from the <a href="?view=invoicing-settings" data-view-link="invoicing-settings">invoicing profile</a>.`, "auto_awesome")}</div>`;
+    <div class="zb-notes">${iv.side === "issued" && payLink?.reason ? note(esc(plain(payLink.reason))) : ""}${note(`An invoice marks itself paid when a bank transfer with its number arrives. Your details on every invoice come from the <a href="?view=invoicing-settings" data-view-link="invoicing-settings">invoicing profile</a>.`, "auto_awesome")}</div>`;
 };
 
 /* A draft made from wallet receipts: each receipt it bills, then the payer's
@@ -362,7 +363,7 @@ export function invoiceDrawer(i, trigger) {
       <dl class="z-kv z-card">${rows.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>
       ${!out && i.payTo ? payToHtml(i.payTo) : ""}
       ${isDraft ? receiptDraftSections(i) : i.settlements?.length ? settlementRows(i.settlements) : ""}
-      <div class="zb-actions" style="margin-top:0">${out && i.issued ? `<a class="z-btn z-btn--secondary z-btn--sm" href="/invoice/own?org=${encodeURIComponent(org.id)}&amp;id=${encodeURIComponent(i.id)}" target="_blank" rel="noopener">${Z.icon("print")}<span>View, print or save as PDF</span><span class="z-sr"> (opens in a new tab)</span></a>` : ""}${invoiceActions(i)}</div></div>`,
+      <div class="zb-actions" style="margin-top:0">${out && i.issued ? `<a class="z-btn z-btn--secondary z-btn--sm" href="/invoice/own?org=${encodeURIComponent(org.id)}&amp;id=${encodeURIComponent(i.id)}" target="_blank" rel="noopener">${Z.icon("print")}<span>View, print or save as PDF</span><span class="z-sr"> (opens in a new tab)</span></a>` : ""}${invoiceActions(i, iv.payLink)}</div></div>`,
   }));
   Z.openOverlay("inv-drawer", trigger);
 }
