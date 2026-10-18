@@ -30,11 +30,20 @@ import {
   syncInvoicePayment, } from "./state.js";
 import { CEILINGS, ceilingRefusal } from "../../domain/ceilings.js";
 import { linkInvoiceView } from "./invoice-links.js";
+import { payLinkBlocker } from "./invoice-pay-link.js";
+import { roleCan } from "../../domain/roles.js";
 
 /** Resolving the org and the caller's role for a request — injected so this
  *  module cannot acquire its own way of deciding who is calling. */
 export interface OrgRoutes {
   ctxOf: (req: express.Request, res: express.Response) => OrgContext | undefined;
+}
+
+function payLinkOffer(ctx: OrgContext): { allowed: boolean; reason?: string } {
+  if (!roleCan(ctx.member.role, "invoices.manage")) return { allowed: false };
+  const user = store.findUser(ctx.userId);
+  const blocked = user ? payLinkBlocker(ctx.org, user) : { reason: "Your session has no account behind it." };
+  return blocked ? { allowed: false, reason: blocked.reason } : { allowed: true };
 }
 
 export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
@@ -52,6 +61,9 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
         .filter((i) => i.state !== "DELETED")
         .map(syncInvoicePayment)
         .map((i) => ({ ...ownerInvoiceView(i), overdue: isOverdue(i) })),
+      // Whether "Payment link" on an issued invoice would pass for this
+      // caller, so the UI offers it only where the API would accept it.
+      payLink: payLinkOffer(ctx),
     });
   });
 
