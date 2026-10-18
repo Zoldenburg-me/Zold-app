@@ -663,10 +663,13 @@ try {
 
   await t("a deposit on the user's account is polled on their credentials and credited locally", async () => {
     let balance = 0;
+    // The unscoped read already returns the order, so the credit can land
+    // before the same cycle's profile-scoped read: wait for both reads too.
+    const bothRead = () => seen.orderReadsByProfile.includes(PROFILE_ID) && seen.orderReadsByProfile.includes(null);
     for (const s = Date.now(); Date.now() - s < 20_000; ) {
       const me = await call(`/api/users/${userId}`);
       balance = Number(me.data.balanceEur ?? 0);
-      if (balance >= Number(DEPOSIT_EUR)) break;
+      if (balance >= Number(DEPOSIT_EUR) && bothRead()) break;
       await new Promise((r) => setTimeout(r, 500));
     }
     assert.ok(balance >= Number(DEPOSIT_EUR), `deposit was not credited within 20s (balance ${balance})`);
