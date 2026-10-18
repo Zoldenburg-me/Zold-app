@@ -25,6 +25,7 @@ import type { Invoice, Organisation } from "../../domain/types.js";
 import type { User } from "../../store/types.js";
 import type { OrgContext } from "../org-context.js";
 import { redactedMessage } from "../../http/log-cause.js";
+import { roleCan } from "../../domain/roles.js";
 
 const DAY_MS = 24 * 60 * 60_000;
 /** How long after its due date an invoice can still be paid by its link. */
@@ -113,6 +114,15 @@ export function payLinkBlocker(org: Organisation, user: User): { code: "ACCOUNT_
     return { code: "NO_METHOD", reason: "No way to get paid is set up on this account yet: claim your payment page (Profile → Payment page) to add a Pay button." };
   }
   return undefined;
+}
+
+/** Whether this caller may make a payment link here, for the UI: it offers
+ *  the control only where the API would accept it. */
+export function payLinkOffer(ctx: OrgContext): { allowed: boolean; reason?: string } {
+  if (!roleCan(ctx.member.role, "invoices.manage")) return { allowed: false };
+  const user = store.findUser(ctx.userId);
+  const blocked = user ? payLinkBlocker(ctx.org, user) : { reason: "Your session has no account behind it." };
+  return blocked ? { allowed: false, reason: blocked.reason } : { allowed: true };
 }
 
 /** Never throws: the invoice is already issued and numbered, and a 500 here

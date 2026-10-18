@@ -634,6 +634,9 @@ await check("without a claimed payment page there is no Pay button, and it says 
   assert.equal(r.status, 201, JSON.stringify(r.data));
   assert.equal(r.data.payment.code, "NO_METHOD");
   assert.match(r.data.payment.reason, /Payment page/);
+  const links = await call("GET", "/api/orgs/org_u_np/payment-requests", "u_np");
+  assert.equal(links.data.payLink.allowed, false, "Get paid offers no New payment link the API would refuse");
+  assert.match(links.data.payLink.reason, /Payment page/);
 });
 await check("only the person behind a personal space collects for it: another member is not the payee", async () => {
   // POST /:orgId/members refuses a personal space (members.manage is business only); a row put there by hand still gets nothing.
@@ -743,6 +746,7 @@ await check("the owner connects their wallet: the account stays gated (no IBAN) 
 await check("connected, an issued invoice gets its link, and the page offers only the wallet", async () => {
   const list = await call("GET", "/api/orgs/org_inbiz/invoices", "u_in");
   assert.deepEqual(list.data.payLink, { allowed: true });
+  assert.deepEqual((await call("GET", "/api/orgs/org_inbiz/payment-requests", "u_in")).data.payLink, { allowed: true }, "Get paid reads the same verdict");
   const r = await call("POST", "/api/orgs/org_inbiz/invoicing/issue", "u_in", invoiceFor("IN"));
   assert.equal(r.status, 201, JSON.stringify(r.data));
   assert.equal(r.data.payment.ok, true, JSON.stringify(r.data.payment));
