@@ -49,6 +49,12 @@
   }, { rootMargin: "-40% 0px -59% 0px" });
   stops.forEach(function (s) { band.observe(s); });
 
+  /* The light hero draws its own narwhal; this line-drawn one would be a white ghost on it, so it waits below. */
+  var hero = document.getElementById("top");
+  if (hero) new IntersectionObserver(function (entries) {
+    fish.classList.toggle("is-away", entries[0].intersectionRatio > 0.2);
+  }, { threshold: [0, 0.2, 1] }).observe(hero);
+
   /* The box around a heading's visible words. Measures each text node, not
      the elements: a centred heading, or a block line inside one, spans the
      full width. A screen-reader copy (.s-sr) is skipped. */
