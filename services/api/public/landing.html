@@ -15,7 +15,6 @@
 <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
 <link rel="preload" href="/vendor/fonts/phosphor-landing.woff2" as="font" type="font/woff2" crossorigin />
-<link rel="preload" href="/landing/img/home-active.jpg" as="image" />
 <link rel="stylesheet" href="/vendor/fonts/text.css" />
 <link rel="stylesheet" href="/tokens.css" />
 <link rel="stylesheet" href="/site.css" />
@@ -29,21 +28,43 @@
 <!--zold:site-nav-->
 <main id="main">
 
-  <!-- Hero: the promise, centred, and the app rising out of the glow below it -->
-  <section id="top" class="l-hero" data-narwhal-say="nothing moves without your yes">
-    <div class="l-wrap l-hero__copy">
-      <p class="l-status">Private beta<span class="l-status__test" role="status" data-test-mode>Test mode, no real money</span></p>
-      <h1>Nothing moves without your&nbsp;yes.</h1>
-      <p class="l-hero__sub">The euro account you own. Your own IBAN, a card for everyday spending, and transfers only you can approve.</p>
-      <div class="l-actions">
-        <a class="l-btn" href="/app#account-type">Open an account</a>
-        <a class="l-btn l-btn--quiet" href="/app#b-about">Open a business account</a>
+  <!-- Hero: the promise on the left; the narwhal looking over a transfer waiting for your yes on the right. Light, and drawn on first paint. -->
+  <section id="top" class="l-hero">
+    <div class="l-wrap l-hero__grid">
+      <div class="l-hero__copy">
+        <p class="l-status">Private beta<span class="l-status__test" role="status" data-test-mode>Test mode, no real money</span></p>
+        <h1>Nothing moves without your&nbsp;yes.</h1>
+        <p class="l-hero__sub">The euro account you own. Your own IBAN, a card for everyday spending, and transfers only you can approve.</p>
+        <div class="l-actions l-actions--left">
+          <a class="l-btn" href="/app#account-type">Open an account</a>
+          <a class="l-hero__link" href="/app#b-about">Open a business account <i class="ph ph-arrow-up-right" aria-hidden="true"></i></a>
+        </div>
       </div>
+      <figure class="l-hero__stage">
+        <svg class="l-hero__nw" viewBox="-10 -60 410 380" aria-hidden="true">
+          <defs><clipPath id="nw-tusk"><path d="M150 105L80-45 167 98Z"/></clipPath></defs>
+          <path d="M150 105L80-45 167 98Z" fill="#f6f2e8"/>
+          <g clip-path="url(#nw-tusk)" stroke="#8c8578" stroke-width="2.5" stroke-linecap="round"><path d="M139 89L156 72M131 74L148 57M123 60L140 43M115 45L132 28M108 30L125 14M100 16L117-1M92 1L109-15"/></g>
+          <g stroke="#141217" stroke-width="4.5" stroke-linejoin="round">
+            <path d="M150 105L80-45 167 98Z" fill="none" stroke-width="4" stroke-linejoin="miter" stroke-miterlimit="12"/>
+            <path d="M310 180C345 160 380 145 390 160 395 168 385 185 365 190 388 202 392 220 382 228 370 235 340 215 305 200Z" fill="#f4f4f6"/>
+            <path d="M85 175C85 110 140 90 220 90 295 90 330 135 330 195 330 255 270 275 195 275 115 275 85 240 85 175Z" fill="#faf9f6"/>
+            <path d="M150 220C140 250 120 262 105 255 95 248 102 230 125 212Z" fill="#faf9f6"/>
+          </g>
+          <circle cx="132" cy="165" r="5" fill="#141217"/><circle cx="182" cy="165" r="5" fill="#141217"/>
+          <ellipse cx="118" cy="178" rx="8" ry="5" fill="#f4bacd"/><ellipse cx="196" cy="178" rx="8" ry="5" fill="#f4bacd"/>
+          <path d="M150 174Q157 184 164 174" stroke="#141217" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+        </svg>
+        <div class="l-send">
+          <p class="l-send__title">Send to an IBAN</p>
+          <p class="l-send__amount">€500.00</p>
+          <p class="l-send__to">Anna Becker <span class="s-mono">DE89 3704 0044 0532 0130 00</span></p>
+          <p class="l-send__row"><span>Zold fee</span><span>€0.00</span></p>
+          <p class="l-send__go"><i class="ph ph-fingerprint" aria-hidden="true"></i>Approve with biometrics</p>
+        </div>
+        <figcaption class="l-cap">Sample transfer, for illustration.</figcaption>
+      </figure>
     </div>
-    <figure class="l-hero__stage">
-      <div class="l-device l-device--hero"><img src="/landing/img/home-active.jpg" width="412" height="900" fetchpriority="high" alt="The Zold home screen: a balance of €2,318.47, Send, Add money and Request buttons, and a payment to Anna Schmidt arriving." /></div>
-      <figcaption class="l-cap l-hero__cap">Sample account, for illustration.</figcaption>
-    </figure>
     <button class="l-motion" type="button" aria-pressed="false" hidden>Pause motion</button>
   </section>
 
