@@ -3,13 +3,13 @@
  * shared nav, footer, buttons, legal pages and 404), and only by landing.html.
  *
  * The model: the app showcase pages of GitHub, ether.fi and Ethena Pay.
- * Centred display headlines, a real phone rising out of a lit horizon, one
- * phone that stays put while the chapters scroll past it (its screen follows
- * the chapter), a pill switcher, one light "proof" panel, a product window in
- * a lit frame, and a closing call with the phone under a spotlight.
+ * A light hero with the narwhal over a sample transfer, one phone that stays
+ * put while the chapters scroll past it (its screen follows the chapter), a
+ * pill switcher, one light "proof" panel, a product window in a lit frame, and
+ * a closing call with the phone under a spotlight.
  *
- * The rest of the page is dark like the brand and the app; the proof panel is
- * the one deliberate light surface. Outfit for display type, Inter for
+ * The rest of the page is dark like the brand and the app; the hero and the
+ * proof panel are the two light surfaces. Outfit for display type, Inter for
  * reading. Every sample screen is captioned (visibly or for screen readers).
  *
  * Colour: pink is the one accent. Labels on pink are dark (--z-bg): white on
@@ -19,7 +19,7 @@
  * surface nested inside a padded one takes the outer radius minus the padding.
  * The phone frame is 44px around a 36px screen.
  *
- * Motion: the hero rises once on load, the phone's screen crossfades to the
+ * Motion: the hero is drawn on first paint, the phone's screen crossfades to the
  * chapter being read, sections settle once as they scroll into view
  * (motion.js adds .in), and the narwhal swims. Pause motion stops the
  * narwhal; prefers-reduced-motion turns all of it off and shows everything.
@@ -86,25 +86,38 @@
   box-shadow: 0 50px 120px rgba(8,2,6,.75), inset 0 0 0 1px color-mix(in srgb, var(--z-text) 5%, transparent); }
 .l-device img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top; border-radius: 36px; }
 
-/* ---------- hero: centred copy, the phone rising out of a lit horizon ---------- */
-.l-hero { position: relative; overflow: hidden; padding-top: clamp(56px, 9vh, 96px); text-align: center; }
-.l-hero__copy { position: relative; z-index: 2; }
-.l-status { margin: 0 0 24px; font-size: 14px; color: var(--l-body); }
-.l-status__test { color: var(--z-amber); }
-.l-status__test::before { content: ". "; color: var(--l-body); }
-.l-hero h1 { margin: 0 auto; max-width: 12ch; font: 600 clamp(48px, 7.4vw, 108px)/.98 var(--l-display); letter-spacing: -.05em; color: var(--l-ink); text-wrap: balance; }
-.l-hero__sub { margin: 26px auto 0; max-width: 40ch; font-size: clamp(17px, 1.7vw, 20px); line-height: 1.5; color: var(--l-body); }
-.l-hero__stage { position: relative; height: clamp(300px, 40vh, 440px); margin-top: clamp(40px, 6vh, 64px); display: flex; justify-content: center; }
-.l-device--hero { position: relative; z-index: 1; height: 680px; }
-/* The horizon: a dark planet whose rim catches pink light; the phone stands behind it. */
-.l-hero__stage::before { content: ""; position: absolute; z-index: 2; left: 50%; top: 62%; width: max(1800px, 150vw); height: 1600px; transform: translateX(-50%); border-radius: 50%;
-  background: radial-gradient(40% 8% at 50% 0%, rgba(237,24,141,.28), transparent 100%), var(--z-bg);
-  box-shadow: inset 0 1.5px 0 rgba(255,190,225,.55), 0 -24px 90px rgba(237,24,141,.32), 0 -2px 24px rgba(255,160,210,.25); }
-.l-hero__stage::after { content: ""; position: absolute; z-index: 0; left: 50%; top: 20%; width: 900px; height: 520px; transform: translateX(-50%); pointer-events: none;
-  background: radial-gradient(50% 50% at 50% 70%, rgba(237,24,141,.22), transparent 70%); }
-/* Sits on the horizon, above the planet, so the sample label stays visible. */
-.l-hero__cap { position: absolute; z-index: 3; left: 0; right: 0; bottom: 12px; margin: 0; }
-@media (max-width: 640px) { .l-hero__stage { height: 300px; } .l-device--hero { height: 560px; } }
+/* ---------- hero: warm paper, the promise left, the narwhal over a transfer right ---------- */
+/* Drawn on first paint: no rise-in, no glow. Berry is the hero's one colour, on the main button. */
+.l-hero { --h-paper: #f5f3ee; --h-ink: #141217; --h-body: #55534e; --h-line: #e2ded6; --h-berry: #8a1f52;
+  position: relative; overflow: hidden; display: grid; align-content: center; min-height: 100svh; box-sizing: border-box; margin-top: -76px; padding: calc(76px + clamp(56px, 10vh, 112px)) 0 clamp(56px, 9vh, 96px); background: var(--h-paper); color: var(--h-ink); }
+.l-hero__grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: clamp(32px, 5vw, 72px); align-items: end; }
+.l-status { margin: 0 0 24px; font-size: 14px; color: var(--h-body); }
+.l-status__test { color: #8a5a00; }
+.l-status__test::before { content: ". "; color: var(--h-body); }
+.l-hero h1 { margin: 0; max-width: 14ch; font: 600 clamp(44px, 5.6vw, 84px)/.98 var(--l-display); letter-spacing: -.045em; color: var(--h-ink); text-wrap: balance; }
+.l-hero__sub { margin: 24px 0 0; max-width: 38ch; font-size: clamp(17px, 1.6vw, 19px); line-height: 1.55; color: var(--h-body); }
+.l-hero .l-actions { align-items: center; gap: 24px; }
+.l-hero .l-btn { color: #fff; background: var(--h-berry); border-radius: 999px; }
+.l-hero .l-btn:hover { color: #fff; background: #741844; }
+.l-hero__link { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; font-weight: 500; color: var(--h-ink); }
+.l-hero__link:hover { color: var(--h-berry); }
+.l-hero :focus-visible { outline-color: var(--h-berry); }
+.l-hero__stage { position: relative; padding-top: clamp(120px, 14vw, 200px); }
+.l-hero__nw { position: absolute; top: 0; left: 50%; width: clamp(220px, 24vw, 330px); transform: translateX(-58%); }
+.l-send { position: relative; padding: 20px 22px; border: 1px solid var(--h-line); border-radius: 20px; background: #fff; font-size: 14px; color: var(--h-body); }
+.l-send p { margin: 0; }
+.l-send__title { font-weight: 600; color: var(--h-ink); }
+.l-send__amount { margin-top: 12px !important; font: 600 34px/1.1 var(--l-display); letter-spacing: -.02em; color: var(--h-ink); }
+.l-send__to { margin-top: 4px !important; }
+.l-send__to .s-mono { display: block; font-size: 13px; }
+.l-send__row { display: flex; justify-content: space-between; margin-top: 16px !important; padding: 12px 0; border-top: 1px solid var(--h-line); }
+.l-send__row span:last-child { color: var(--h-ink); font-weight: 500; }
+.l-send__go { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 48px; border-radius: 12px; background: var(--h-ink); color: #fff; font-weight: 500; }
+.l-hero .l-cap { color: var(--h-body); }
+@media (max-width: 860px) {
+  .l-hero__grid { grid-template-columns: 1fr; }
+  .l-hero__stage { max-width: 420px; padding-top: 160px; }
+}
 /* Pause motion: stops the narwhal (WCAG 2.2.2). Shown by motion.js. */
 .l-motion { position: absolute; right: 24px; bottom: 20px; z-index: 3; min-height: 44px; padding: 0 16px; border-radius: var(--z-radius-control); cursor: pointer;
   font: 500 13px var(--z-font); color: var(--z-text); border: 1px solid var(--z-line-strong); background: color-mix(in srgb, var(--z-bg) 60%, transparent); transition: border-color .2s ease; }
@@ -114,8 +127,10 @@
 /* ---------- story: the phone stays, the chapters scroll past ---------- */
 .l-story { max-width: var(--l-max); margin: 0 auto; padding: clamp(40px, 6vw, 80px) 24px 0; display: grid;
   grid-template-columns: minmax(0, 1fr) 300px minmax(0, 1fr); column-gap: clamp(32px, 5vw, 72px); }
-.l-story__rail { grid-column: 2; grid-row: 1 / span 3; align-self: start; position: sticky; top: calc(50dvh - 330px); }
-.l-device--story { height: 620px; margin: 0 auto; }
+/* Centred in the space under the floating nav (76px), and shorter on short screens so it never tucks under it. */
+.l-story { --rail-phone: min(620px, calc(100dvh - 200px)); }
+.l-story__rail { grid-column: 2; grid-row: 1 / span 3; align-self: start; position: sticky; top: calc(50dvh + 38px - var(--rail-phone) / 2 - 16px); }
+.l-device--story { height: var(--rail-phone); margin: 0 auto; }
 .l-device--story img { position: absolute; inset: 8px; width: calc(100% - 16px); height: calc(100% - 16px); opacity: 0; transform: scale(.97); transition: opacity .6s var(--l-ease), transform .8s var(--l-ease); }
 .l-device--story img.is-on { opacity: 1; transform: none; }
 .l-ch { display: contents; }
@@ -288,14 +303,7 @@
 
 /* ---------- motion: rise on load, settle on scroll ---------- */
 @keyframes l-rise { from { opacity: 0; transform: translateY(24px); } }
-@keyframes l-lift { from { opacity: 0; transform: translateY(140px); } }
 @media (prefers-reduced-motion: no-preference) {
-  .l-hero__copy > * { animation: l-rise .9s var(--l-ease) both; }
-  .l-hero__copy > :nth-child(2) { animation-delay: .06s; }
-  .l-hero__copy > :nth-child(3) { animation-delay: .12s; }
-  .l-hero__copy > :nth-child(4) { animation-delay: .18s; }
-  .l-device--hero { animation: l-lift 1.6s var(--l-ease) .2s both; }
-
   .l-js .l-rv { opacity: 0; transform: translateY(28px); transition: opacity .8s var(--l-ease), transform .9s var(--l-ease); }
   .l-js .l-rv.in { opacity: 1; transform: none; }
   .l-trust li:nth-child(2) { transition-delay: .08s; }
@@ -308,6 +316,9 @@
 /* ---------- narwhal (landing/narwhal.js positions it) ---------- */
 .l-narwhal { --nw-scale: calc(150 / 244); position: fixed; left: 0; top: 0; z-index: 30; width: 150px; pointer-events: none; will-change: transform; }
 .l-narwhal__body { position: relative; transform-origin: 50% 60%; }
+/* Out of the way over the light hero, which has its own narwhal; narwhal.js sets it. */
+.l-narwhal { transition: opacity .4s ease; }
+.l-narwhal.is-away { opacity: 0; }
 /* A line drawing in the text colour over frosted glass in the body's shape:
    text it swims over blurs instead of crossing the outline. The glass is drawn
    in the SVG's 244-unit space and scaled to the narwhal's width (--nw-scale),
