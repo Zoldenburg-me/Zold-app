@@ -128,9 +128,10 @@
 .l-story { max-width: var(--l-max); margin: 0 auto; padding: clamp(40px, 6vw, 80px) 24px 0; display: grid;
   grid-template-columns: minmax(0, 1fr) 300px minmax(0, 1fr); column-gap: clamp(32px, 5vw, 72px); }
 /* Centred in the space under the floating nav (76px), and shorter on short screens so it never tucks under it. */
-.l-story { --rail-phone: min(620px, calc(100dvh - 200px)); }
-.l-story__rail { grid-column: 2; grid-row: 1 / span 3; align-self: start; position: sticky; top: calc(50dvh + 38px - var(--rail-phone) / 2 - 16px); }
-.l-device--story { height: var(--rail-phone); margin: 0 auto; }
+.l-story { --rail-phone: min(620px, calc(100dvh - 200px)); --rail-cap: 34px; }
+.l-story__rail { grid-column: 2; grid-row: 1 / span 3; align-self: start; position: sticky; top: calc(50dvh + 38px - (var(--rail-phone) + var(--rail-cap)) / 2); }
+/* Width follows the height so the 412:900 screen inside the 8px bezel shows whole instead of being cropped. */
+.l-device--story { height: var(--rail-phone); width: calc((var(--rail-phone) - 16px) * 412 / 900 + 16px); margin: 0 auto; }
 .l-device--story img { position: absolute; inset: 8px; width: calc(100% - 16px); height: calc(100% - 16px); opacity: 0; transform: scale(.97); transition: opacity .6s var(--l-ease), transform .8s var(--l-ease); }
 .l-device--story img.is-on { opacity: 1; transform: none; }
 .l-ch { display: contents; }
