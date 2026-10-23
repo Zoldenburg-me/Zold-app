@@ -118,9 +118,9 @@
           <div class="m-perk"><span class="material-symbols-rounded" aria-hidden="true">percent</span><div><div class="t">No FX margin</div><div class="d">First €2,000 sent each month</div></div></div>
         </div>
         <button class="m-cta" disabled>Coming soon</button>
-        <!-- Two of those perks ship today under a different name, so the real
-             thing stays reachable rather than being hidden behind a preview. -->
-        <button class="m-optrow" id="m-go-bundle" style="margin-top:16px">
+        <!-- Two of those perks are the Privacy Bundle; this row shows only where
+             the deployment offers it (PRIVACY_BUNDLE_ENABLED=1). -->
+        <button class="m-optrow hidden" id="m-go-bundle" style="margin-top:16px">
           <span class="material-symbols-rounded ic" aria-hidden="true">check_circle</span>
           <span class="tx"><span class="t">Available now: Privacy Bundle</span><span class="d" id="m-bundle-sub">eSIM and VPN, live today</span></span>
           <span class="material-symbols-rounded ch" aria-hidden="true">chevron_right</span>
@@ -254,7 +254,7 @@
         <div class="hint hidden" id="funding-action-hint"></div>
       </div>
 
-      <div class="card" id="privacy-card">
+      <div class="card hidden" id="privacy-card">
         <h2>Premium</h2>
         <div class="bundle-head">
           <div>
@@ -371,7 +371,7 @@
             <div class="error hidden" role="alert" id="recovery-err"></div>
             <div class="setting-row"><div><div class="st">Session</div><div class="sd">Stored only in this browser.</div></div><button class="ghost" id="btn-signout">Sign out</button></div>
           </div>
-          <div class="card">
+          <div class="card hidden" id="set-privacy-card">
             <h2>Privacy bundle</h2>
             <div class="setting-row"><div><div class="st">Traffic routing</div><div class="sd">VPN traffic should go device to Mysterium nodes, not through Zold.</div></div></div>
             <div class="setting-row"><div><div class="st">Data stored</div><div class="sd">Billing status and aggregate allowance only.</div></div></div>
