@@ -105,10 +105,14 @@ guardian built behind `TURNKEY_GUARDIANS`: `recovery-guardians-plan.md`.
   one, and a payment passes only the request whose code it carries (one
   order passes one request). A request waits an hour for its new passkey,
   then the full request TTL. With ten open, the oldest without a passkey
-  gives way; with all ten holding one, a start is refused (409
-  `RECOVERY_IN_PROGRESS`). While one is being signed or in its grace period
+  that is past its 5-minute passkey ceremony gives way; with none such, a
+  start is refused (409 `RECOVERY_IN_PROGRESS`). Registering a passkey costs
+  nothing, so whoever knows the email can block new starts for the request
+  TTL with ten of them: an owner who still has their passkey cancels them in
+  the app; one who lost it waits for them to expire or for an operator to
+  reject them (`/admin/recoveries/:id/reject`). While one is being signed or in its grace period
   the others cannot be signed (409 `OTHER_RECOVERY`), and once one is on
-  chain the others close. An owner who closed the enrolled bank
+  chain or finished the others close. An owner who closed the enrolled bank
   account cannot pass this check. Until it passes,
   `sign-request`, `execute` and `sync` answer 409 `BANK_CHECK_PENDING`, and
   /admin shows signing as locked. There is no override. The Didit ID check

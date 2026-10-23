@@ -687,6 +687,120 @@ await t("sweep: the chain is read before an expired request is closed", async ()
   assert.equal(req("r21").status, "EXPIRED", "not on chain: expired");
 });
 
+await t("full: only a request without a passkey past its ceremony gives way, the oldest first; an expired one holds no slot", async () => {
+  // Earlier tests left u1's requests open; this one counts slots from none.
+  for (const r of store.recoveryRequestsForUser("u1")) if (["PASSKEY_PENDING", "REVIEW_PENDING", "GRACE_PERIOD"].includes(r.status)) store.updateRecoveryRequest(r.id, { status: "FINALIZED" });
+  const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
+  newRequest("cap-old", "PASSKEY_PENDING");
+  store.updateRecoveryRequest("cap-old", { requestedAt: ago(30) });
+  newRequest("cap-older", "PASSKEY_PENDING");
+  store.updateRecoveryRequest("cap-older", { requestedAt: ago(40) });
+  newRequest("cap-young", "PASSKEY_PENDING");
+  store.updateRecoveryRequest("cap-young", { requestedAt: ago(1) });
+  for (let i = 0; i < 7; i++) newRequest(`cap-${i}`);
+  newRequest("cap-gone", "PASSKEY_PENDING");
+  store.updateRecoveryRequest("cap-gone", { requestedAt: ago(50), expiresAt: ago(1) });
+  const start = () => call("/recovery/zoldenburg", { email: "anna@example.com" });
+  assert.equal((await start()).status, 201, "the expired one is not counted, but ten are open: the oldest past its ceremony gives way");
+  assert.equal(req("cap-older").status, "CANCELED");
+  assert.equal(req("cap-older").cancelReason, "superseded by a new recovery start");
+  assert.equal((await start()).status, 201);
+  assert.equal(req("cap-old").status, "CANCELED");
+  // Left: cap-young (mid-ceremony), seven with a passkey, and the two new starts.
+  const refused = await start();
+  assert.equal(refused.status, 409, refused.text);
+  assert.equal(refused.data.code, "RECOVERY_IN_PROGRESS");
+  assert.equal(req("cap-young").status, "PASSKEY_PENDING", "someone mid-ceremony is not pushed out");
+  // An old request resumed with its secret starts a new ceremony, and is not pushed out mid-way either.
+  store.updateRecoveryRequest("cap-young", { requestedAt: ago(30) });
+  const resumed = await call("/recovery/zoldenburg", { email: "anna@example.com" }, person);
+  assert.equal(resumed.data.id, "cap-young", resumed.text);
+  assert.ok(resumed.data.registerChallenge);
+  assert.equal((await start()).status, 409, "the resumed ceremony keeps its slot");
+  assert.equal(req("cap-young").status, "PASSKEY_PENDING");
+  for (const r of store.recoveryRequestsForUser("u1")) if (["PASSKEY_PENDING", "REVIEW_PENDING"].includes(r.status)) store.updateRecoveryRequest(r.id, { status: "FINALIZED" });
+});
+
+await t("while one is on chain or being signed, no other can be signed and no start is taken; signing one closes the others", async () => {
+  // The earlier tests' recoveries on chain are done; one left there would block every request here.
+  for (const r of store.recoveryRequestsForUser("u1")) if (r.status === "GRACE_PERIOD") store.updateRecoveryRequest(r.id, { status: "FINALIZED" });
+  const paid = (id: string) => {
+    newRequest(id);
+    store.updateRecoveryRequest(id, { zoldenburg: { ...req(id).zoldenburg, bankCheck: { codesIssued: 1, passedAt: at(1).toISOString(), orderId: `o-${id}`, enrolledAt: user().zoldenburgEnrolment!.enrolledAt } } });
+  };
+  paid("og-a");
+  paid("og-b");
+  store.updateRecoveryRequest("og-b", { status: "GRACE_PERIOD" });
+  for (const p of ["sign-request", "execute"]) {
+    const r = await opCall(`/admin/recoveries/og-a/${p}`, { signature: "0x00", reviewNote: "Video call, matched Monerium profile" });
+    assert.equal(r.data.code, "OTHER_RECOVERY", `${p}: ${r.text}`);
+  }
+  assert.equal((await call("/recovery/zoldenburg", { email: "anna@example.com" })).data.code, "RECOVERY_IN_PROGRESS", "no start while one is in its grace period");
+  store.updateRecoveryRequest("og-b", { status: "FINALIZED" });
+  // og-c is being relayed: og-a is refused meanwhile, and closed once og-c is on chain.
+  paid("og-c");
+  const sr = await opCall("/admin/recoveries/og-c/sign-request", {});
+  assert.equal(sr.status, 200, sr.text);
+  const { EIP712Domain: _d, ...types } = sr.data.typedData.types;
+  const m = sr.data.typedData.message;
+  const signature = await guardianWallet.signTypedData({ ...sr.data.typedData, types, message: { ...m, newThreshold: BigInt(m.newThreshold), nonce: BigInt(m.nonce) } });
+  const { relayRecovery } = zoldenburgChain;
+  let during: { sign?: string; start?: string } = {};
+  zoldenburgChain.relayRecovery = async (...a) => {
+    during = {
+      sign: (await opCall("/admin/recoveries/og-a/sign-request", {})).data.code,
+      start: (await call("/recovery/zoldenburg", { email: "anna@example.com" })).data.code,
+    };
+    return relayRecovery(...a);
+  };
+  try {
+    const ex = await opCall("/admin/recoveries/og-c/execute", { signature, reviewNote: "Video call, matched Monerium profile" });
+    assert.equal(ex.status, 200, ex.text);
+  } finally {
+    zoldenburgChain.relayRecovery = relayRecovery;
+  }
+  assert.deepEqual(during, { sign: "OTHER_RECOVERY", start: "RECOVERY_IN_PROGRESS" });
+  assert.equal(req("og-a").status, "CANCELED");
+  assert.equal(req("og-a").cancelReason, "another recovery for this account was signed");
+  store.updateRecoveryRequest("og-c", { status: "FINALIZED" });
+});
+
+await t("a recovery finishing while another is being relayed leaves the relayed one open", async () => {
+  // Last of the route tests on purpose: finishing binds a recovered passkey to u1.
+  const { generateKeyPairSync } = await import("node:crypto");
+  const jwk = generateKeyPairSync("ec", { namedCurve: "P-256" }).publicKey.export({ format: "jwk" });
+  // The earlier tests' recoveries on chain are done; one left there would block signing rel-x.
+  for (const r of store.recoveryRequestsForUser("u1")) if (r.status === "GRACE_PERIOD") store.updateRecoveryRequest(r.id, { status: "FINALIZED" });
+  newRequest("rel-x");
+  store.updateRecoveryRequest("rel-x", { zoldenburg: { ...req("rel-x").zoldenburg, bankCheck: { codesIssued: 1, passedAt: at(1).toISOString(), orderId: "o-rel", enrolledAt: user().zoldenburgEnrolment!.enrolledAt } } });
+  newRequest("rel-y");
+  store.updateRecoveryRequest("rel-y", { zoldenburg: { ...req("rel-y").zoldenburg, finalizeAfter: at(0).toISOString(),
+    newPasskey: { credentialId: "cred-rel", publicKey: { alg: "ES256", jwk } as any, signCount: 0, rpId: "localhost", attestation: "x", createdAt: at(1).toISOString() } } } as any);
+  const sr = await opCall("/admin/recoveries/rel-x/sign-request", {});
+  assert.equal(sr.status, 200, sr.text);
+  const { EIP712Domain: _d, ...types } = sr.data.typedData.types;
+  const m = sr.data.typedData.message;
+  const signature = await guardianWallet.signTypedData({ ...sr.data.typedData, types, message: { ...m, newThreshold: BigInt(m.newThreshold), nonce: BigInt(m.nonce) } });
+  const { relayRecovery, relayFinalize } = zoldenburgChain;
+  let during = "";
+  zoldenburgChain.relayFinalize = async () => ({ txHash: `0x${"2".repeat(64)}` as `0x${string}` });
+  zoldenburgChain.relayRecovery = async (...a) => {
+    // rel-y, signed in Safe Cover, finishes while rel-x's signature is relayed.
+    store.updateRecoveryRequest("rel-y", { status: "GRACE_PERIOD" });
+    await finalizeZoldenburgRecovery(req("rel-y"));
+    during = req("rel-x").status;
+    return relayRecovery(...a);
+  };
+  try {
+    await opCall("/admin/recoveries/rel-x/execute", { signature, reviewNote: "Video call, matched Monerium profile" });
+    assert.equal(req("rel-y").status, "FINALIZED");
+    assert.equal(during, "REVIEW_PENDING", "the relayed request is not closed under it");
+  } finally {
+    zoldenburgChain.relayRecovery = relayRecovery;
+    zoldenburgChain.relayFinalize = relayFinalize;
+  }
+});
+
 server.close();
 
 // ---- the page's 1 € step (public/recovery/bank-step.js) --------------------
@@ -782,6 +896,16 @@ await t("the operator routes refuse before they hand out or relay anything", () 
   }
   const sync = between('"/admin/recoveries/:id/sync"', '"/admin/recoveries/:id/finalize"');
   assert.ok(sync.indexOf("refusalFor(r)") > 0 && sync.indexOf("refusalFor(r)") < sync.indexOf("syncZoldenburgFromChain"));
+});
+
+await t("the chain paths the harness skips close the account's other requests", () => {
+  // syncZoldenburgFromChain returns early under the harness; its two exits must still close the others.
+  const r = src("routes/recovery-zoldenburg.ts");
+  const sync = r.slice(r.indexOf("export async function syncZoldenburgFromChain"), r.indexOf("function bindAndFinish"));
+  assert.ok(sync.indexOf("closeOtherRequests(request, now)") > 0 && sync.indexOf("closeOtherRequests(request, now)") < sync.indexOf('status: "GRACE_PERIOD"'), "seen on chain");
+  assert.ok(sync.includes("return bindAndFinish("), "finished elsewhere goes through bindAndFinish");
+  const finish = r.slice(r.indexOf("function bindAndFinish"), r.indexOf("export async function finalizeZoldenburgRecovery"));
+  assert.ok(finish.includes("closeOtherRequests(request, now)"), "bindAndFinish closes the others");
 });
 
 await t("a recovery that finishes closes the account's other requests, so none is left signable", async () => {

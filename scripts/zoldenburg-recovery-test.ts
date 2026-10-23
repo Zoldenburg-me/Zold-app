@@ -479,7 +479,7 @@ try {
     const stranger = await call("/api/recovery/zoldenburg", { email: EMAIL }, undefined, "");
     assert.equal(stranger.status, 201, JSON.stringify(stranger.data));
     const wait = Date.parse(stranger.data.expiresAt) - Date.now();
-    assert.ok(wait > 0 && wait <= 3600_000, stranger.data.expiresAt);
+    assert.ok(wait > 59 * 60_000 && wait <= 3600_000, stranger.data.expiresAt);
     const owner = await call("/api/recovery/zoldenburg", { email: EMAIL }, undefined, "");
     assert.equal(owner.status, 201, JSON.stringify(owner.data));
     assert.notEqual(owner.data.id, stranger.data.id);
@@ -491,14 +491,14 @@ try {
     await cancelAll();
   });
 
-  await t("ten requests at most: a full set gives up its oldest without a passkey; ten with passkeys refuse the next start", async () => {
+  await t("ten requests at most: ten fresh ones refuse the next start, and so do ten holding a passkey", async () => {
     const starts = [];
     for (let i = 0; i < 10; i++) starts.push((await call("/api/recovery/zoldenburg", { email: EMAIL }, undefined, "")).data);
+    // None is past its passkey ceremony, so none gives way to an eleventh.
     const eleventh = await call("/api/recovery/zoldenburg", { email: EMAIL }, undefined, "");
-    assert.equal(eleventh.status, 201, JSON.stringify(eleventh.data));
-    const oldest = await call(`/api/recovery/zoldenburg/${starts[0].id}`, undefined, undefined, "", { "x-recovery-secret": starts[0].recoverySecret });
-    assert.equal(oldest.data.status, "CANCELED");
-    for (const s of [...starts.slice(1), eleventh.data]) {
+    assert.equal(eleventh.status, 409, JSON.stringify(eleventh.data));
+    assert.equal(eleventh.data.code, "RECOVERY_IN_PROGRESS");
+    for (const s of starts) {
       const pk = await makePasskey(`filler-${s.id}`);
       const r = await call(s.submitTo, pk.register(s.registerChallenge), undefined, "", { "x-recovery-secret": s.recoverySecret });
       assert.equal(r.data.status, "REVIEW_PENDING", JSON.stringify(r.data));
