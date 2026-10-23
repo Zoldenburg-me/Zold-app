@@ -215,6 +215,20 @@ async function screenState(user: User) {
  *  passed meanwhile is not put back. */
 const zoldenburgNow = (id: string) => store.findRecoveryRequest(id)!.zoldenburg!;
 
+/** Requests closeOtherRequests skipped because their relay was in flight:
+ *  closed when that relay settles without reaching the chain. */
+const sparedWhileRelaying = new Set<string>();
+
+/** A relay settled: if another recovery reached the chain meanwhile and this
+ *  one did not, it ends as its siblings did. */
+function settleSpared(id: string): void {
+  if (!sparedWhileRelaying.delete(id)) return;
+  const r = store.findRecoveryRequest(id);
+  if (!r || !["PASSKEY_PENDING", "REVIEW_PENDING"].includes(r.status)) return;
+  console.warn(`RECOVERY: ${id} closed after its relay did not reach the chain (another recovery did)`);
+  store.updateRecoveryRequest(id, { status: "CANCELED", canceledAt: new Date().toISOString(), cancelReason: "another recovery for this account was signed" });
+}
+
 /** One recovery reached the chain: the others for the account end. The
  *  module holds one pending recovery, so none of them could be signed. */
 function closeOtherRequests(signed: RecoveryRequest, now: Date): void {
@@ -223,6 +237,7 @@ function closeOtherRequests(signed: RecoveryRequest, now: Date): void {
     // Its signature is being relayed: closing it would hide what lands on chain.
     if (relaying.has(r.id)) {
       console.warn(`RECOVERY: ${r.id} left open while its signature is relayed (${signed.id} reached the chain)`);
+      sparedWhileRelaying.add(r.id);
       continue;
     }
     store.updateRecoveryRequest(r.id, { status: "CANCELED", canceledAt: now.toISOString(), cancelReason: "another recovery for this account was signed" });
@@ -1066,6 +1081,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
         res.json(adminView(updated));
       } finally {
         relaying.delete(r.id);
+        settleSpared(r.id);
       }
     }),
   );
