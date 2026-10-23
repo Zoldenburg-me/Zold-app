@@ -85,6 +85,8 @@ export interface ZoldenburgRecoveryDeps {
 }
 
 const CEREMONY_TTL_MS = 5 * 60_000;
+/** A start that never registers a passkey expires after this. */
+const PASSKEY_WAIT_MS = 60 * 60_000;
 const OPEN = ["PASSKEY_PENDING", "REVIEW_PENDING", "GRACE_PERIOD"] as const;
 
 const pendingOps = new Map<string, { userId: string; kind: "add" | "remove"; userOperation: any; expiresAt: number; challenge: string }>();
@@ -589,14 +591,16 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       let open = store
         .recoveryRequestsForUser(user.id)
         .find((r) => r.mode === "zoldenburg" && (OPEN as readonly string[]).includes(r.status) && (r.status === "GRACE_PERIOD" || Date.now() < Date.parse(r.expiresAt)));
-      // Only the starting browser may resume. A request is replaced only by
-      // a caller that presents its secret, so naming the account can no
-      // longer cancel a victim's in-progress initiation.
+      // Only the starting browser may resume. Anyone else who names the
+      // account supersedes a request with nothing invested yet
+      // (PASSKEY_PENDING); one past that point is refused.
       if (open && !secretMatches(open, presentedSecret(req))) {
-        return res.status(409).json({
+        if (open.status !== "PASSKEY_PENDING") return res.status(409).json({
           error: "a recovery for this account is already in progress — continue it in the browser that started it, or contact support",
           code: "RECOVERY_IN_PROGRESS",
         });
+        store.updateRecoveryRequest(open.id, { status: "CANCELED", canceledAt: now.toISOString(), cancelReason: "superseded by a new recovery start" });
+        open = undefined;
       }
       const moduleAddress = user.passkeySafe!.recovery!.moduleAddress;
       const secret = open ? undefined : randomBytes(32).toString("base64url");
@@ -609,7 +613,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
           mode: "zoldenburg",
           status: "PASSKEY_PENDING",
           requestedAt: now.toISOString(),
-          expiresAt: new Date(now.getTime() + RECOVERY.requestTtlHours * 3600_000).toISOString(),
+          expiresAt: new Date(now.getTime() + PASSKEY_WAIT_MS).toISOString(),
           recoveryDelayHours: Math.max(1, Math.round((recoveryGracePeriodSeconds(moduleAddress) ?? 0) / 3600)),
           guardianAddress: user.passkeySafe!.recovery!.guardianAddress,
           recoveryModuleAddress: moduleAddress,
@@ -660,6 +664,8 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       const newOwners: `0x${string}`[] = [passkeyAccountAddress(owner)];
       const updated = store.updateRecoveryRequest(request.id, {
         status: "REVIEW_PENDING",
+        // The review and the 1 € check get the full wait from here.
+        expiresAt: new Date(Date.now() + RECOVERY.requestTtlHours * 3600_000).toISOString(),
         zoldenburg: {
           ...request.zoldenburg,
           newPasskey: {

@@ -467,6 +467,21 @@ try {
     assert.equal(c.data.requests.length, 0);
   });
 
+  await t("a stranger's start without a passkey does not block the owner, and waits an hour", async () => {
+    const stranger = await call("/api/recovery/zoldenburg", { email: EMAIL }, undefined, "");
+    assert.equal(stranger.status, 201, JSON.stringify(stranger.data));
+    const wait = Date.parse(stranger.data.expiresAt) - Date.now();
+    assert.ok(wait > 0 && wait <= 3600_000, stranger.data.expiresAt);
+    const owner = await call("/api/recovery/zoldenburg", { email: EMAIL }, undefined, "");
+    assert.equal(owner.status, 201, JSON.stringify(owner.data));
+    assert.notEqual(owner.data.id, stranger.data.id);
+    const late = await call(stranger.data.submitTo, {}, undefined, "", { "x-recovery-secret": stranger.data.recoverySecret });
+    assert.equal(late.status, 409, JSON.stringify(late.data));
+    assert.equal(late.data.status, "CANCELED");
+    const c = await call(`/api/users/${userId}/recovery/zoldenburg/requests/${owner.data.id}/cancel`, {});
+    assert.equal(c.data.requests.length, 0);
+  });
+
   const newPasskey = await makePasskey("replacement");
   let secret = "";
   let recoveryId = "";
@@ -482,6 +497,7 @@ try {
     const r = await rc(start.data.submitTo, newPasskey.register(start.data.registerChallenge));
     assert.equal(r.status, 200, JSON.stringify(r.data));
     assert.equal(r.data.status, "REVIEW_PENDING");
+    assert.ok(Date.parse(r.data.expiresAt) - Date.now() > 24 * 3600_000, "a registered passkey gets the full wait");
     assert.match(r.data.zoldenburg.reference, /^[0-9A-F]{5}-[0-9A-F]{5}$/);
     assert.ok(!r.text.includes("attestation"));
   });
