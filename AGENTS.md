@@ -3,8 +3,8 @@
 ## Start here
 
 **Budget: 12,000 characters** (`wc -m AGENTS.md`). Only what almost every task
-needs goes here; everything else goes in `docs/` with a one-line pointer. Over
-budget: replace or move something, do not append.
+needs; the rest goes in `docs/` behind a pointer. Over budget: replace, never
+append.
 
 Read when the task touches it:
 - `docs/status.md` — **what has never run** (mainnet: owner only, one swap, no
@@ -66,7 +66,7 @@ THREE RULES OVERRIDE CONVENIENCE:
 
 ## Where the code lives
 
-- `server.ts` is wiring only (~320 lines): routers under `routes/`, the shared
+- `server.ts` is wiring only: routers under `routes/`, the shared
   HTTP layer under `http/`, and **`transfers/build.ts` is the ONE path that
   builds a transfer** — the business router is handed it, never rebuilds it.
 - `store.ts` holds the methods; row shapes in `store/types.ts`, the file-backed
@@ -191,7 +191,7 @@ path. Where ECC or Ponytail disagrees with this file, this file wins.
 ## Environment
 
 - Ports 3000 (API/UI), 8545 (chain); contract tests pick a free port.
-- No `gh` CLI, no brew. `origin` is SSH and pushes without a token.
+- `gh` is logged in; no brew. `origin` is SSH.
 - Node lives in-project: `export PATH="$PWD/.toolchain/node-v22.23.4-darwin-arm64/bin:$PATH"`.
   arm64 only; on Intel see `docs/running-locally.md`.
 
@@ -199,18 +199,15 @@ path. Where ECC or Ponytail disagrees with this file, this file wins.
 
 - **Zoldenburg** = the company / infra brand (B2B, legal, footer).
 - **Zold** = the consumer app. **Zoll** only in the two strings above.
-- **Narwhal** = mascot. No narwhal emoji exists; the UI uses 🦄.
 - Repo dir on disk is still `transF`; do NOT rewrite absolute paths in
-  `.claude/launch.json`. GitHub repo rename is pending.
+  `.claude/launch.json`.
 
 ## Multi-agent workflow
 
 - Branch prefix: `x/*`. **Never push to a branch another agent created.**
-- Before merging, confirm the PR head SHA equals the
-  commit you last pushed; after merging, grep the tree — "merged: true" is not
-  proof (a PR once dropped a pushed commit).
+- Before merging, confirm the PR head SHA equals your last push; after, grep
+  origin/main ("merged: true" is not proof).
 - Start every session with `git fetch`; expect main to have moved mid-session.
-- A grep count of zero is not proof: confirm the file is readable first.
 
 ## Style
 
