@@ -140,9 +140,8 @@ Rules, because whatever is on `production` is what zoldhq.com runs:
 - **A file the server newly needs at runtime goes in the script's allowlist**
   in the same PR. Then check a clean checkout boots: `npm ci --omit=dev`,
   `npm start`, `/api/health`. The ABIs were found this way.
-- On GitHub, `production` should be protected against force-pushes and
-  deletion (Settings → Branches). Regular pushes stay allowed, since the
-  script only adds commits.
+- On GitHub, `production` is protected against force-pushes and deletion;
+  regular pushes stay allowed, since the script only adds commits.
 
 ### Lease changes
 
