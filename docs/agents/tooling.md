@@ -20,21 +20,10 @@ Installed as the `ponytail@ponytail` plugin, level `full`, on at session start.
 Its session hook also injects a codebase map (exported names per folder);
 treat that map as a hint and read the file before relying on it.
 
-Here it means:
-
-- **Reuse in this order**: a house helper (`store.ts` methods, `transfers/build.ts`,
-  the `liquidity.ts` seam, `capabilities()`), then the standard library, then an
-  installed dependency. No new dependency for a few lines.
-- **Finish the change**: callers, tests, fixtures, the four suites that grep
-  source text, the zold-docs PR for a user-visible change.
-- **Never cut**: validation at a route, a fail-closed refusal, compensation, a
-  quote/price check, an allowlist, anything listed under Invariants.
-- **Tests**: money, identity, a parser or a new route gets a test. A rename, a
-  copy change or a comment does not.
-- **`shortcut:` comments** (`shortcut: <limit>, <when to upgrade>`) are fine in
-  tooling, admin and UI code. On a money or identity path a known limit is a
-  refusal, not a shortcut.
-- Every reply ends with what was skipped or not checked.
+Here it means `AGENTS.md` "Change size". House helpers to reuse first:
+`store.ts` methods, `transfers/build.ts`, the `liquidity.ts` seam,
+`capabilities()`. On a money or identity path a known limit is a refusal, not a
+`shortcut:`.
 
 Commands: `/ponytail-review` (diff review for over-building), `/ponytail-audit`
 (whole-repo), `/ponytail-debt` (collects `shortcut:` comments),
@@ -51,13 +40,8 @@ and `web/` ever fire here.
 
 | ECC says | Here |
 |---|---|
-| TDD always, 80% coverage | Test what the Ponytail rule above names; `npm run check` is the gate. No coverage tool is wired. |
-| Planner agent + PRD/architecture docs before coding | Only for a multi-file feature, and the plan goes in chat or the PR, not new files in `docs/`. |
-| `gh search code`, `gh` for PRs | No `gh` CLI. Push with `git`, open the PR through the GitHub API (owner's Keychain PAT) or the web. |
-| `ecc:planner`, `ecc:code-reviewer` | Agents are unprefixed in this install: `planner`, `code-reviewer`, `typescript-reviewer`, `security-reviewer`. |
 | No `console.log` | Server code logs with `console.error`/`console.warn`; there is no logger module. No debug `console.log` left in `public/`. |
 | Immutability always | `store.ts` mutates the db object by design; follow the surrounding code. |
-| Co-Authored-By off | Same here: no Claude trailer or "Generated with" line. |
 
 ### Hooks that will stop you
 
