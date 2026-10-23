@@ -352,6 +352,64 @@ await t("from Home the alert opens the first time a recovery is found, not every
   assert.deepEqual(nav, ["go:recovery-alert"], "Back to Home is not undone a minute later");
 });
 
+await t("cancel ends every open request, so \"Recovery cancelled\" is true", async () => {
+  route("recovery-alert");
+  answers = { "/recovery/zoldenburg": zOk({ requests: [request("REVIEW_PENDING", "rq1"), request("PASSKEY_PENDING", "rq2")] }) };
+  await check();
+  assert.equal(JSON.stringify(state().open.map((r: any) => r.id)), '["rq1","rq2"]');
+  calls.length = 0;
+  // The server's answer after the cancels: nothing open.
+  answers = { ...answers, "/recovery/zoldenburg": zOk() };
+  const attrs: Record<string, string> = {};
+  const button: any = { isConnected: true, getAttribute: (k: string) => attrs[k] ?? null, setAttribute: (k: string, v: string) => { attrs[k] = v; }, removeAttribute: (k: string) => { delete attrs[k]; } };
+  run(`PH["recovery-alert"].bind`)({ querySelector: (sel: string) => (sel === "#ph-rec-cancel" ? button : null) });
+  await button.onclick();
+  assert.deepEqual(calls.filter((c) => c.endsWith("/cancel")), ["/api/users/u1/recovery/zoldenburg/requests/rq1/cancel", "/api/users/u1/recovery/zoldenburg/requests/rq2/cancel"]);
+  assert.ok(nav.includes("render:recovery-alert"), "the cancelled screen is drawn");
+  assert.equal(state(), null, "cleared: nothing is open");
+});
+
+await t("a request opened while cancelling: the screen does not say cancelled", async () => {
+  route("recovery-alert");
+  answers = { "/recovery/zoldenburg": zOk({ requests: [request("REVIEW_PENDING", "rq1")] }) };
+  await check();
+  answers = { "/recovery/zoldenburg": zOk({ requests: [request("PASSKEY_PENDING", "rq9")] }) };
+  const attrs: Record<string, string> = {};
+  const button: any = { isConnected: true, getAttribute: (k: string) => attrs[k] ?? null, setAttribute: (k: string, v: string) => { attrs[k] = v; }, removeAttribute: (k: string) => { delete attrs[k]; } };
+  run(`PH["recovery-alert"].bind`)({ querySelector: (sel: string) => (sel === "#ph-rec-cancel" ? button : null) });
+  await button.onclick();
+  assert.equal(state().request?.id, "rq9", "the new one is shown");
+  assert.equal(run("phRecDone"), false);
+});
+
+await t("a refusal for a request that already ended, with nothing left open, does not throw", async () => {
+  route("recovery-alert");
+  answers = { "/recovery/zoldenburg": zOk({ requests: [request("PASSKEY_PENDING", "rq1")] }) };
+  await check();
+  answers = { "/recovery/zoldenburg": zOk(), "/requests/rq1/cancel": new Error("recovery is EXPIRED") };
+  const attrs: Record<string, string> = {};
+  const button: any = { isConnected: true, getAttribute: (k: string) => attrs[k] ?? null, setAttribute: (k: string, v: string) => { attrs[k] = v; }, removeAttribute: (k: string) => { delete attrs[k]; } };
+  run(`PH["recovery-alert"].bind`)({ querySelector: (sel: string) => (sel === "#ph-rec-cancel" ? button : null) });
+  await button.onclick();
+  assert.equal(state().none, true);
+});
+
+await t("one refused cancel still cancels the rest, and the screen does not say cancelled", async () => {
+  route("recovery-alert");
+  answers = { "/recovery/zoldenburg": zOk({ requests: [request("REVIEW_PENDING", "rq1"), request("REVIEW_PENDING", "rq2")] }) };
+  await check();
+  calls.length = 0;
+  answers = { ...answers, "/requests/rq1/cancel": new Error("recovery is EXPIRED") };
+  const attrs: Record<string, string> = {};
+  const button: any = { isConnected: true, getAttribute: (k: string) => attrs[k] ?? null, setAttribute: (k: string, v: string) => { attrs[k] = v; }, removeAttribute: (k: string) => { delete attrs[k]; } };
+  run(`PH["recovery-alert"].bind`)({ querySelector: (sel: string) => (sel === "#ph-rec-cancel" ? button : null) });
+  await button.onclick();
+  assert.ok(calls.includes("/api/users/u1/recovery/zoldenburg/requests/rq2/cancel"), "rq2 is cancelled after rq1 is refused");
+  assert.ok(calls.at(-1)?.endsWith("/recovery/zoldenburg"), "the requests are read again after the refusal");
+  assert.ok(state(), "the alert's state is kept, not cleared as cancelled");
+  assert.equal(run("phRecDone"), false);
+});
+
 await t("a chain time that is not a number: the warning shows without a date, and nothing throws", async () => {
   route("send");
   answers = { "/recovery/zoldenburg": zOk({ onChain: { pendingRecovery: { ...chain, executeAfter: "soon" }, guardians: [] } }) };
