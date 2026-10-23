@@ -100,7 +100,10 @@ guardian built behind `TURNKEY_GUARDIANS`: `recovery-guardians-plan.md`.
   one still counts, and a new code does not reset the 30 s Monerium read
   throttle. The pass records the enrolment it matched: a re-enrolment voids
   it, and /admin shows the pass as no longer counting. The person sees no digits of either IBAN, because anyone who knows the
-  account's email can start a request. An owner who closed the enrolled bank
+  account's email can start a request. A start waits an hour for its new passkey and
+  until then is replaced by anyone else's start; once it holds a passkey it
+  waits the full request TTL and a new start is refused (409
+  `RECOVERY_IN_PROGRESS`). An owner who closed the enrolled bank
   account cannot pass this check. Until it passes,
   `sign-request`, `execute` and `sync` answer 409 `BANK_CHECK_PENDING`, and
   /admin shows signing as locked. There is no override. The Didit ID check
