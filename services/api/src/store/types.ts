@@ -955,6 +955,8 @@ export interface RecoveryRequest {
   zoldenburg?: {
     /** sha256 of the per-request secret given once to the starting browser. */
     accessHash?: string;
+    /** When its latest passkey ceremony began (a resume starts a new one). */
+    ceremonyAt?: string;
     /** Short code the person quotes when they contact support. */
     reference?: string;
     newPasskey?: {

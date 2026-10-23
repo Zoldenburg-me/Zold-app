@@ -334,6 +334,7 @@ async function startApi() {
     LOCAL_HARNESS: "1",
     KYC_AUTO_APPROVE: "1",
     RECOVERY_IBAN_HMAC_KEY: IBAN_KEY,
+    AUTH_RATE_LIMIT_PER_MIN: "1000",
   });
   for (const s = Date.now(); ; ) {
     try { if ((await fetch(`${API}/api/health`)).ok) break; } catch {}
@@ -467,6 +468,47 @@ try {
     assert.equal(c.data.requests.length, 0);
   });
 
+  const cancelAll = async () => {
+    for (const r of (await call(`/api/users/${userId}/recovery/zoldenburg`)).data.requests) {
+      await call(`/api/users/${userId}/recovery/zoldenburg/requests/${r.id}/cancel`, {});
+    }
+    assert.equal((await call(`/api/users/${userId}/recovery/zoldenburg`)).data.requests.length, 0);
+  };
+
+  await t("a stranger's start does not block the owner's: each gets a request of their own, and one without a passkey waits an hour", async () => {
+    const stranger = await call("/api/recovery/zoldenburg", { email: EMAIL }, undefined, "");
+    assert.equal(stranger.status, 201, JSON.stringify(stranger.data));
+    const wait = Date.parse(stranger.data.expiresAt) - Date.now();
+    assert.ok(wait > 59 * 60_000 && wait <= 3600_000, stranger.data.expiresAt);
+    const owner = await call("/api/recovery/zoldenburg", { email: EMAIL }, undefined, "");
+    assert.equal(owner.status, 201, JSON.stringify(owner.data));
+    assert.notEqual(owner.data.id, stranger.data.id);
+    assert.ok(!owner.text.includes(stranger.data.id));
+    const resumed = await call("/api/recovery/zoldenburg", { email: EMAIL }, undefined, "", { "x-recovery-secret": stranger.data.recoverySecret });
+    assert.equal(resumed.status, 200, "its own secret resumes the stranger's request");
+    assert.equal(resumed.data.id, stranger.data.id);
+    assert.equal((await call(`/api/users/${userId}/recovery/zoldenburg`)).data.requests.length, 2);
+    await cancelAll();
+  });
+
+  await t("ten requests at most: ten fresh ones refuse the next start, and so do ten holding a passkey", async () => {
+    const starts = [];
+    for (let i = 0; i < 10; i++) starts.push((await call("/api/recovery/zoldenburg", { email: EMAIL }, undefined, "")).data);
+    // None is past its passkey ceremony, so none gives way to an eleventh.
+    const eleventh = await call("/api/recovery/zoldenburg", { email: EMAIL }, undefined, "");
+    assert.equal(eleventh.status, 409, JSON.stringify(eleventh.data));
+    assert.equal(eleventh.data.code, "RECOVERY_IN_PROGRESS");
+    for (const s of starts) {
+      const pk = await makePasskey(`filler-${s.id}`);
+      const r = await call(s.submitTo, pk.register(s.registerChallenge), undefined, "", { "x-recovery-secret": s.recoverySecret });
+      assert.equal(r.data.status, "REVIEW_PENDING", JSON.stringify(r.data));
+    }
+    const full = await call("/api/recovery/zoldenburg", { email: EMAIL }, undefined, "");
+    assert.equal(full.status, 409, JSON.stringify(full.data));
+    assert.equal(full.data.code, "RECOVERY_IN_PROGRESS");
+    await cancelAll();
+  });
+
   const newPasskey = await makePasskey("replacement");
   let secret = "";
   let recoveryId = "";
@@ -482,16 +524,24 @@ try {
     const r = await rc(start.data.submitTo, newPasskey.register(start.data.registerChallenge));
     assert.equal(r.status, 200, JSON.stringify(r.data));
     assert.equal(r.data.status, "REVIEW_PENDING");
+    assert.ok(Date.parse(r.data.expiresAt) - Date.now() > 24 * 3600_000, "a registered passkey gets the full wait");
     assert.match(r.data.zoldenburg.reference, /^[0-9A-F]{5}-[0-9A-F]{5}$/);
     assert.ok(!r.text.includes("attestation"));
   });
 
-  await t("the id alone reads nothing; a second starter is refused once a passkey is registered", async () => {
+  let strangerId = "";
+  let strangerSecret = "";
+  await t("the id alone reads nothing; a second starter gets their own request and learns nothing of the first", async () => {
     assert.equal((await rc(`/api/recovery/zoldenburg/${recoveryId}`, undefined, "")).status, 404);
     const again = await call("/api/recovery/zoldenburg", { email: EMAIL }, undefined, "");
-    assert.equal(again.status, 409);
-    assert.equal(again.data.code, "RECOVERY_IN_PROGRESS");
+    assert.equal(again.status, 201, JSON.stringify(again.data));
+    assert.notEqual(again.data.id, recoveryId);
     assert.ok(!again.text.includes(recoveryId));
+    strangerId = again.data.id;
+    strangerSecret = again.data.recoverySecret;
+    const pk = await makePasskey("stranger");
+    const r = await rc(again.data.submitTo, pk.register(again.data.registerChallenge), strangerSecret);
+    assert.equal(r.data.status, "REVIEW_PENDING", JSON.stringify(r.data));
   });
 
   await t("the new passkey cannot sign in while the request waits", async () => {
@@ -562,6 +612,12 @@ try {
 
   await passBankCheckInDb(recoveryId);
 
+  await t("the 1 € passed for one request only: the stranger's beside it still cannot be signed", async () => {
+    const sr = await op(`/api/admin/recoveries/${strangerId}/sign-request`);
+    assert.equal(sr.status, 409, JSON.stringify(sr.data));
+    assert.equal(sr.data.code, "BANK_CHECK_PENDING");
+  });
+
   await t("/admin/recoveries needs an operator session; a user session is not enough", async () => {
     assert.equal((await call("/api/admin/recoveries")).status, 401);
     assert.equal((await call(`/api/admin/recoveries/${recoveryId}/execute`, { signature: "0x" })).status, 401);
@@ -606,6 +662,15 @@ try {
     assert.equal(r.data.status, "GRACE_PERIOD");
     assert.match(r.data.reviewedBy, /^operator:/);
     assert.ok(r.data.zoldenburg.finalizeAfter);
+  });
+
+  await t("once one is on chain the others close, and a new start is refused", async () => {
+    const theirs = await rc(`/api/recovery/zoldenburg/${strangerId}`, undefined, strangerSecret);
+    assert.equal(theirs.data.status, "CANCELED", JSON.stringify(theirs.data));
+    assert.equal(theirs.data.cancelReason, "another recovery for this account was signed");
+    const again = await call("/api/recovery/zoldenburg", { email: EMAIL }, undefined, "");
+    assert.equal(again.status, 409, JSON.stringify(again.data));
+    assert.equal(again.data.code, "RECOVERY_IN_PROGRESS");
   });
 
   await t("reject is refused once the recovery is on chain (only the old passkey can stop it now)", async () => {

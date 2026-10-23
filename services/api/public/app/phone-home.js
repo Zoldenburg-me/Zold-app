@@ -313,7 +313,9 @@ async function phRecRead() {
   ]);
   const chain = z?.onChain?.pendingRecovery || c?.onChain?.pendingRecovery || t?.onChain?.pendingRecovery || null;
   const reqs = [...(Array.isArray(z?.requests) ? z.requests : []), ...(Array.isArray(t?.requests) ? t.requests : [])];
-  const request = chain ? null : reqs.find((r) => PH_REC_OPEN.includes(r?.status)) || null;
+  // Several can be open at once (Zoldenburg and Turnkey requests wait side by side).
+  const open = chain ? [] : reqs.filter((r) => PH_REC_OPEN.includes(r?.status));
+  const request = open[0] || null;
   // Nothing found is only "none" when every read worked, by the same rule
   // as /business (access-model.js recoveryStatus): a guardian switched on
   // that did not answer (null; undefined is one not asked), a chain read
@@ -332,7 +334,7 @@ async function phRecRead() {
   const method = !chain ? (byLogin(request) ? "Your Google or Apple recovery helper" : "Zoldenburg ID check")
     : reqs.some((r) => r?.status === "GRACE_PERIOD") ? (reqs.some((r) => r?.status === "GRACE_PERIOD" && byLogin(r)) ? "Your Google or Apple recovery helper" : "Zoldenburg ID check")
       : c?.guardianStatus === "active" && !z?.active ? codes : null;
-  phRec = chain || request ? { chain, request, method } : { none: true };
+  phRec = chain || request ? { chain, request, open, method } : { none: true };
   phRecBarSync();
   if (phRoute?.name === "recovery-alert") return phRender();
   if (phRec.none) return;
@@ -404,14 +406,34 @@ PH["recovery-alert"] = {
       Z.setLoading(cancel, true);
       try {
         if (phRec.chain) await recoveryCancelRun();
-        else await api(`/api/users/${user.id}/recovery/${phRec.request.mode === "turnkey" ? "turnkey" : "zoldenburg"}/requests/${phRec.request.id}/cancel`, {});
+        else {
+          // "Cancelled" is only true once every open request is: one refusal
+          // does not leave the rest open, and is shown after they are tried.
+          let refused = null;
+          for (const r of phRec.open?.length ? phRec.open : [phRec.request]) {
+            try {
+              await api(`/api/users/${user.id}/recovery/${r.mode === "turnkey" ? "turnkey" : "zoldenburg"}/requests/${r.id}/cancel`, {});
+            } catch (e) { refused ||= e; }
+          }
+          if (refused) throw refused;
+          // One opened meanwhile: "cancelled" only once a fresh read finds none.
+          await phRecRun;
+          await phRecoveryCheck({ force: true });
+          if (!phRec?.none) throw new Error(phRec?.request || phRec?.chain ? "Another recovery was started meanwhile. Cancel it too." : "We could not check that every request is cancelled. Check again.");
+        }
         phRec = null;
         phRecBarSync();
         phRecDone = true;
         phRender({ focus: true });
         phRecDone = false;
       } catch (e) {
-        showErr("ph-rec-err", e?.name === "NotAllowedError" ? new Error(Z.byDevice("Face ID or fingerprint was cancelled. The recovery is still under way.", "The passkey prompt was cancelled. The recovery is still under way.")) : e);
+        // Re-read (it redraws), so what was cancelled drops out and a retry
+        // tries only the rest: after any read already running, which began
+        // before the cancels. The error goes on the redrawn screen, if it
+        // still has one (nothing left open draws none).
+        await phRecRun;
+        await phRecoveryCheck({ force: true });
+        if (document.getElementById("ph-rec-err")) showErr("ph-rec-err", e?.name === "NotAllowedError" ? new Error(Z.byDevice("Face ID or fingerprint was cancelled. The recovery is still under way.", "The passkey prompt was cancelled. The recovery is still under way.")) : e);
       } finally { if (cancel.isConnected) Z.setLoading(cancel, false); }
     };
     const mine = root.querySelector("#ph-rec-mine");
