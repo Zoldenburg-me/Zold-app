@@ -369,6 +369,7 @@ async function renderPrivacyBundle() {
   const card = $("privacy-card");
   if (!card || !user) return;
   try { await loadPrivacyCatalog(); } catch { return; }
+  for (const id of ["m-go-bundle", "set-privacy-card"]) $(id).classList.toggle("hidden", !privacyCatalog.enabled);
   if (!privacyCatalog.enabled) {
     card.classList.add("hidden");
     return;
