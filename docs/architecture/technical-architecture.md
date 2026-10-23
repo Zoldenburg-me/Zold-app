@@ -1236,9 +1236,9 @@ in per-origin localStorage, so accounts do not move between origins.
 
 The testnet deployment runs on [Akash](https://akash.network), paid from the
 Akash Console's managed wallet. There is no image registry: the container
-starts from `node:22.23.4-bookworm-slim`, pinned in the lease SDL (a floating `node:22-bookworm-slim`
-keeps whatever patch the provider had cached), clones this repository, checks
-out the tip of the `production` branch (runtime files and prebuilt ABIs only), runs
+starts from `node:22.23.4-bookworm-slim`, pinned in the lease SDL (a
+floating `node:22-bookworm-slim` keeps whatever patch the provider had
+cached), clones this repository, checks out the tip of the `production` branch (runtime files and prebuilt ABIs only), runs
 `npm ci --omit=dev`, writes `deployments.json` from an environment variable,
 and starts the API next to `cloudflared`.
 
