@@ -51,8 +51,8 @@ function renderUser(u) {
 function renderMobile(u = user) {
   if (!u) return;
   /* Zold Plus is a preview: the tier in the design (card, no-FX-margin, vault
-     boost) is not built, so it carries no price. The Privacy Bundle that DOES
-     ship is reported on the Plus screen itself. */
+     boost) is not built, so it carries no price. The Privacy Bundle, where the
+     deployment offers it, is reported on the Plus screen itself. */
   const sub = u.privacyBundle;
   const active = sub && sub.status !== "canceled";
   const plan = active ? bundlePlan(sub.planId) : null;
