@@ -250,6 +250,8 @@ export async function syncZoldenburgFromChain(request: RecoveryRequest, now = ne
 function bindAndFinish(request: RecoveryRequest, user: User, now: Date, txHash: `0x${string}` | undefined): RecoveryRequest {
   const z = request.zoldenburg!;
   bindRecoveredPasskey(user, z.newPasskey!, now);
+  // Also reached without a grace period seen here (finalised in Safe Cover).
+  closeOtherRequests(request, now);
   console.log(`RECOVERY: ${request.id} finalized — ${user.id}'s Safe ${request.safeAddress} now owned by the new passkey`);
   return store.updateRecoveryRequest(request.id, {
     status: "FINALIZED",
