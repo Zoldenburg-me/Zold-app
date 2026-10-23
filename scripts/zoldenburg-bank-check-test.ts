@@ -34,7 +34,7 @@ const { RECOVERY } = await import("../services/api/src/config.js");
 const E = await import("../services/api/src/recovery/zoldenburg-enrolment.js");
 const B = await import("../services/api/src/recovery/zoldenburg-bank-check.js");
 const { publicRecoveryRequest } = await import("../services/api/src/recovery.js");
-const { createZoldenburgRecoveryRouter, sweepZoldenburgRecoveries } = await import("../services/api/src/routes/recovery-zoldenburg.js");
+const { createZoldenburgRecoveryRouter, sweepZoldenburgRecoveries, finalizeZoldenburgRecovery } = await import("../services/api/src/routes/recovery-zoldenburg.js");
 const { zoldenburgChain } = await import("../services/api/src/recovery/zoldenburg-guardian.js");
 const { createOperatorGate } = await import("../services/api/src/operators/gate.js");
 const { createOperatorAuthRouter } = await import("../services/api/src/routes/operator-auth.js");
@@ -782,6 +782,38 @@ await t("the operator routes refuse before they hand out or relay anything", () 
   }
   const sync = between('"/admin/recoveries/:id/sync"', '"/admin/recoveries/:id/finalize"');
   assert.ok(sync.indexOf("refusalFor(r)") > 0 && sync.indexOf("refusalFor(r)") < sync.indexOf("syncZoldenburgFromChain"));
+});
+
+await t("a recovery that finishes closes the account's other requests, so none is left signable", async () => {
+  // Its own account: binding the recovered passkey changes the owner.
+  const safe = `0x${"d".repeat(40)}` as `0x${string}`;
+  store.addUser({ ...structuredClone(user()), id: "u-fin", email: "fin@example.com", address: safe, passkeySafe: { ...structuredClone(user().passkeySafe!), address: safe } } as any);
+  const { generateKeyPairSync } = await import("node:crypto");
+  const jwk = generateKeyPairSync("ec", { namedCurve: "P-256" }).publicKey.export({ format: "jwk" });
+  const base = {
+    userId: "u-fin", safeAddress: safe, mode: "zoldenburg" as const, requestedAt: at(1).toISOString(),
+    expiresAt: new Date(Date.now() + 14 * 24 * 3600_000).toISOString(), recoveryDelayHours: 72,
+    guardianAddress: process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS as `0x${string}`, recoveryModuleAddress: `0x${"4".repeat(40)}` as `0x${string}`,
+    factors: { kyc: "pending", otp: "pending", liveness: "pending", manualReview: "pending" } as any,
+  };
+  // The state Safe Cover leaves: the owners already changed, the sibling never saw a grace period here.
+  store.addRecoveryRequest({ ...base, id: "fin-done", status: "GRACE_PERIOD", zoldenburg: {
+    accessHash: "00", reference: "FIN00-00001", newOwners: [`0x${"e".repeat(40)}`], newThreshold: 1, finalizeAfter: at(0).toISOString(),
+    newPasskey: { credentialId: "cred-fin", publicKey: { alg: "ES256", jwk } as any, signCount: 0, rpId: "localhost", attestation: "x", createdAt: at(1).toISOString() },
+  } } as any);
+  store.addRecoveryRequest({ ...base, id: "fin-other", status: "REVIEW_PENDING", zoldenburg: { accessHash: "00", reference: "FIN00-00002", newOwners: [`0x${"f".repeat(40)}`], newThreshold: 1 } } as any);
+  store.addRecoveryRequest({ ...base, id: "fin-new", status: "PASSKEY_PENDING", zoldenburg: { accessHash: "00", reference: "FIN00-00003" } } as any);
+  const { relayFinalize } = zoldenburgChain;
+  zoldenburgChain.relayFinalize = async () => ({ txHash: `0x${"1".repeat(64)}` as `0x${string}` });
+  try {
+    assert.equal((await finalizeZoldenburgRecovery(req("fin-done"))).status, "FINALIZED");
+  } finally {
+    zoldenburgChain.relayFinalize = relayFinalize;
+  }
+  for (const id of ["fin-other", "fin-new"]) {
+    assert.equal(req(id).status, "CANCELED", id);
+    assert.equal(req(id).cancelReason, "another recovery for this account was signed");
+  }
 });
 
 if (failed) { console.error(`ZOLDENBURG RECOVERY 1 € TEST FAILED — ${failed}`); process.exit(1); }
