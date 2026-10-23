@@ -17,7 +17,7 @@ Read when the task touches it:
 - `docs/architecture/` — product (what) and technical (how).
 - `docs/CODEMAPS/` — routes, modules, data, deps.
 - `docs/security-hardening.md` — secrets, keys, Postgres, mail; Rules bind.
-- `docs/agents/tooling.md` — ECC, Ponytail, hooks: which rule wins.
+- `docs/agents/tooling.md` — ai-harness, Ponytail: which rule wins.
 
 ## How to write in this repo (comments, docs, this file, notes)
 
@@ -178,7 +178,7 @@ an installed dependency; nothing "for later". Finish what it breaks: callers,
 tests, the grep suites. Never cut validation, a fail-closed refusal,
 compensation or an invariant. Money, identity, a parser or a route gets a test.
 `shortcut: <limit>, <when to upgrade>` marks a known limit, never on a money
-path. Where ECC or Ponytail disagrees with this file, this file wins.
+path. Where a plugin disagrees with this file, this file wins.
 
 ## Running and testing
 
