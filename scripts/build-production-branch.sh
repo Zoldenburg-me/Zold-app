@@ -17,8 +17,8 @@ BRANCH=production
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
-if [ -x "$ROOT/.toolchain/node-v22.17.0-darwin-arm64/bin/node" ] && "$ROOT/.toolchain/node-v22.17.0-darwin-arm64/bin/node" -v >/dev/null 2>&1; then
-  export PATH="$ROOT/.toolchain/node-v22.17.0-darwin-arm64/bin:$PATH"
+if [ -x "$ROOT/.toolchain/node-v22.23.4-darwin-arm64/bin/node" ] && "$ROOT/.toolchain/node-v22.23.4-darwin-arm64/bin/node" -v >/dev/null 2>&1; then
+  export PATH="$ROOT/.toolchain/node-v22.23.4-darwin-arm64/bin:$PATH"
 fi
 
 git fetch -q origin
