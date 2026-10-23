@@ -193,7 +193,7 @@ path. Where ECC or Ponytail disagrees with this file, this file wins.
 
 - Ports 3000 (API/UI), 8545 (chain); contract tests pick a free port.
 - No `gh` CLI, no brew. `origin` is SSH and pushes without a token.
-- Node lives in-project: `export PATH="$PWD/.toolchain/node-v22.17.0-darwin-arm64/bin:$PATH"`.
+- Node lives in-project: `export PATH="$PWD/.toolchain/node-v22.23.4-darwin-arm64/bin:$PATH"`.
   arm64 only; on Intel see `docs/running-locally.md`.
 
 ## Naming

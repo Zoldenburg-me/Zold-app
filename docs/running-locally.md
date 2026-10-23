@@ -45,7 +45,7 @@ that do not own the local deployment).
 
 ## Toolchain and shell
 
-- The in-project node (`.toolchain/node-v22.17.0-darwin-arm64`) is an
+- The in-project node (`.toolchain/node-v22.23.4-darwin-arm64`) is an
   **arm64** build. On an Intel Mac it fails with "Bad CPU type" (tsx too), so
   use a system node; `npm run typecheck` works on either (tsc is pure JS).
 - `sw.js` serves page `.js`/`.css` network-first, so a deploy needs no
