@@ -8,7 +8,7 @@
 // Must be first: pins chain, keys and a throwaway database.
 import "./_local-chain.js";
 import assert from "node:assert/strict";
-import { chmodSync, closeSync, existsSync, mkdtempSync, openSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -649,6 +649,16 @@ await check("operator scripts print a configured URL by its origin only", async 
     }
   }
   assert.deepEqual(offenders, []);
+});
+
+await check("the Privacy Bundle, which bills nothing yet, is off unless PRIVACY_BUNDLE_ENABLED=1 and starts hidden", async () => {
+  delete process.env.PRIVACY_BUNDLE_ENABLED;
+  const { PRIVACY_BUNDLE } = await import("../services/api/src/config/partners.js");
+  assert.equal(PRIVACY_BUNDLE.enabled, false);
+  const html = readFileSync("services/api/public/index.html", "utf8");
+  for (const id of ["privacy-card", "m-go-bundle", "set-privacy-card"]) {
+    assert.match(html, new RegExp(`class="[^"]*\\bhidden\\b[^"]*" id="${id}"`), id);
+  }
 });
 
 rmSync(process.env.TRANSF_DB_PATH!, { force: true });
