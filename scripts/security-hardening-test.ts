@@ -652,9 +652,19 @@ await check("operator scripts print a configured URL by its origin only", async 
 });
 
 await check("the Privacy Bundle, which bills nothing yet, is off unless PRIVACY_BUNDLE_ENABLED=1 and starts hidden", async () => {
-  delete process.env.PRIVACY_BUNDLE_ENABLED;
-  const { PRIVACY_BUNDLE } = await import("../services/api/src/config/partners.js");
-  assert.equal(PRIVACY_BUNDLE.enabled, false);
+  // A fresh process per value: the config is read once, at import.
+  const partners = new URL("../services/api/src/config/partners.ts", import.meta.url).href;
+  const enabledWith = (value: string | undefined) => {
+    const { PRIVACY_BUNDLE_ENABLED: _, ...env } = process.env;
+    const r = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e",
+      `const { PRIVACY_BUNDLE } = await import(${JSON.stringify(partners)}); process.stdout.write(String(PRIVACY_BUNDLE.enabled));`],
+      { env: value === undefined ? env : { ...env, PRIVACY_BUNDLE_ENABLED: value }, encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+    return r.stdout;
+  };
+  assert.equal(enabledWith(undefined), "false");
+  assert.equal(enabledWith("0"), "false");
+  assert.equal(enabledWith("1"), "true");
   const html = readFileSync("services/api/public/index.html", "utf8");
   for (const id of ["privacy-card", "m-go-bundle", "set-privacy-card"]) {
     assert.match(html, new RegExp(`class="[^"]*\\bhidden\\b[^"]*" id="${id}"`), id);
