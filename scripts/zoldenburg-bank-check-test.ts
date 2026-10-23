@@ -219,6 +219,8 @@ await t("only open REVIEW_PENDING requests are checked; the sweep skips the rest
   assert.equal(await B.sweepRecoveryBankChecks(counting, at(41)), 1, "r2 passes");
   assert.equal(asked, 1, "r1 is spent, r-grace and r-old skipped");
   assert.ok(B.bankCheckPassed(req("r2"), user()));
+  // A request on chain blocks signing any other for the account; this one has done its part.
+  store.updateRecoveryRequest("r-grace", { status: "FINALIZED" });
 });
 
 await t("a request that moves on while a check ran is left as it is", async () => {
@@ -271,6 +273,20 @@ await t("a request gets at most maxCodes codes; the count and the read clock sur
   }
   assert.equal(B.canIssueRecoveryBankCode(req("r7")), false);
   assert.equal(req("r7").zoldenburg!.bankCheck!.lastReadAt, at(80).toISOString(), "a new code does not reset the read clock");
+});
+
+await t("a payment passes only the request whose code it carries, and only one request", async () => {
+  newRequest("r-a");
+  newRequest("r-b");
+  const a = B.issueRecoveryBankCode(req("r-a"), at(90));
+  const b = B.issueRecoveryBankCode(req("r-b"), at(90));
+  open = a;
+  const paid = order(paidAt(91));
+  assert.equal(await B.checkRecoveryBankPayment("r-b", reads([paid]), at(92)), "waiting", "A's code does not pass B");
+  assert.equal(await B.checkRecoveryBankPayment("r-a", reads([paid]), at(92)), "passed");
+  const both = { ...paid, memo: `${a.memo} ${b.memo}` };
+  assert.equal(await B.checkRecoveryBankPayment("r-b", reads([both]), at(93)), "mismatch", "an order already counted for A never passes B");
+  assert.ok(!B.bankCheckPassed(req("r-b"), user()));
 });
 
 await t("an order processed before its code was issued never counts", async () => {
@@ -620,6 +636,8 @@ await t("person's routes: an expired request asks the chain first; on chain it i
   const r2 = await fetch(`${origin}/staged/recovery/zoldenburg/r22`, { headers: person });
   assert.equal(r2.status, 200, await r2.text());
   assert.equal(req("r22").status, "GRACE_PERIOD");
+  // Done: one on chain would block signing the account's others below.
+  store.updateRecoveryRequest("r22", { status: "FINALIZED" });
   newRequest("r23");
   store.updateRecoveryRequest("r23", { expiresAt: new Date(Date.now() - 1000).toISOString() });
   staged = async (r) => r;

@@ -175,7 +175,14 @@ export async function checkRecoveryBankPayment(
     }
     if (!name) return unreadable("monerium_profile");
     let reason = "";
+    // One payment proves one request: several may be open for an account.
+    const spentElsewhere = (orderId: string) =>
+      store.recoveryRequests.some((x) => x.id !== requestId && x.zoldenburg?.bankCheck?.orderId === orderId);
     for (const o of found) {
+      if (spentElsewhere(o.id)) {
+        reason = "This payment already counted for another recovery. Send 1 € with this recovery's reference.";
+        continue;
+      }
       // The account as it is now: an enrolment removed or replaced during
       // the reads is not the one this payment can pass against.
       const live = store.findUser(user.id);
