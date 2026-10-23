@@ -87,6 +87,9 @@ export interface ZoldenburgRecoveryDeps {
 const CEREMONY_TTL_MS = 5 * 60_000;
 /** A start that never registers a passkey expires after this. */
 const PASSKEY_WAIT_MS = 60 * 60_000;
+/** Requests one account may have waiting at once. Each holds a slot until
+ *  it ends, so a stranger needs this many passkeys to block a start. */
+const MAX_OPEN_REQUESTS = 10;
 const OPEN = ["PASSKEY_PENDING", "REVIEW_PENDING", "GRACE_PERIOD"] as const;
 
 const pendingOps = new Map<string, { userId: string; kind: "add" | "remove"; userOperation: any; expiresAt: number; challenge: string }>();
@@ -211,6 +214,15 @@ async function screenState(user: User) {
  *  passed meanwhile is not put back. */
 const zoldenburgNow = (id: string) => store.findRecoveryRequest(id)!.zoldenburg!;
 
+/** One recovery reached the chain: the others for the account end. The
+ *  module holds one pending recovery, so none of them could be signed. */
+function closeOtherRequests(signed: RecoveryRequest, now: Date): void {
+  for (const r of store.recoveryRequestsForUser(signed.userId)) {
+    if (r.id === signed.id || r.mode !== "zoldenburg" || !["PASSKEY_PENDING", "REVIEW_PENDING"].includes(r.status)) continue;
+    store.updateRecoveryRequest(r.id, { status: "CANCELED", canceledAt: now.toISOString(), cancelReason: "another recovery for this account was signed" });
+  }
+}
+
 export async function syncZoldenburgFromChain(request: RecoveryRequest, now = new Date()): Promise<RecoveryRequest> {
   const z = request.zoldenburg;
   if (!z?.newOwners?.length || !["REVIEW_PENDING", "GRACE_PERIOD"].includes(request.status)) return request;
@@ -222,6 +234,7 @@ export async function syncZoldenburgFromChain(request: RecoveryRequest, now = ne
     if (state.pending && sameSet(state.pending.newOwners, z.newOwners)) {
       const executeAfter = new Date(state.pending.executeAfter * 1000);
       console.log(`RECOVERY: ${request.id} seen executed on chain; finalizable after ${executeAfter.toISOString()}`);
+      closeOtherRequests(request, now);
       return store.updateRecoveryRequest(request.id, {
         status: "GRACE_PERIOD",
         factors: { ...request.factors, kyc: "passed", manualReview: "passed" },
@@ -588,19 +601,28 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       const user = findRecoverable(req.body);
       if (!user) return res.status(404).json({ error: "recovery not found" });
       const now = new Date();
-      let open = store
+      const live = store
         .recoveryRequestsForUser(user.id)
-        .find((r) => r.mode === "zoldenburg" && (OPEN as readonly string[]).includes(r.status) && (r.status === "GRACE_PERIOD" || Date.now() < Date.parse(r.expiresAt)));
-      // Only the starting browser may resume. Anyone else who names the
-      // account supersedes a request with nothing invested yet
-      // (PASSKEY_PENDING); one past that point is refused.
-      if (open && !secretMatches(open, presentedSecret(req))) {
-        if (open.status !== "PASSKEY_PENDING") return res.status(409).json({
+        .filter((r) => r.mode === "zoldenburg" && (OPEN as readonly string[]).includes(r.status) && (r.status === "GRACE_PERIOD" || Date.now() < Date.parse(r.expiresAt)));
+      // Only the starting browser may resume its request. Anyone else gets a
+      // request of their own: several wait side by side, since the 1 € can
+      // take days, and only the one whose own code is paid can be signed.
+      const presented = presentedSecret(req);
+      const open = live.find((r) => secretMatches(r, presented));
+      if (!open) {
+        const refuse = () => res.status(409).json({
           error: "a recovery for this account is already in progress — continue it in the browser that started it, or contact support",
           code: "RECOVERY_IN_PROGRESS",
         });
-        store.updateRecoveryRequest(open.id, { status: "CANCELED", canceledAt: now.toISOString(), cancelReason: "superseded by a new recovery start" });
-        open = undefined;
+        // One is on chain: the owner's cancel or its end comes first.
+        if (live.some((r) => r.status === "GRACE_PERIOD" || relaying.has(r.id))) return refuse();
+        if (live.length >= MAX_OPEN_REQUESTS) {
+          // Full: the oldest with nothing invested gives way; with every one
+          // holding a passkey, the start is refused until one ends.
+          const idle = live.filter((r) => r.status === "PASSKEY_PENDING").sort((a, b) => Date.parse(a.requestedAt) - Date.parse(b.requestedAt))[0];
+          if (!idle) return refuse();
+          store.updateRecoveryRequest(idle.id, { status: "CANCELED", canceledAt: now.toISOString(), cancelReason: "superseded by a new recovery start" });
+        }
       }
       const moduleAddress = user.passkeySafe!.recovery!.moduleAddress;
       const secret = open ? undefined : randomBytes(32).toString("base64url");
@@ -835,6 +857,12 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
         code: "BANK_CHECK_PENDING",
       };
     }
+    const other = store
+      .recoveryRequestsForUser(r.userId)
+      .find((x) => x.id !== r.id && x.mode === "zoldenburg" && (x.status === "GRACE_PERIOD" || relaying.has(x.id)));
+    if (other) {
+      return { error: `another recovery for this account (${other.zoldenburg?.reference}) is on chain or being signed`, code: "OTHER_RECOVERY" };
+    }
     return null;
   };
 
@@ -1019,6 +1047,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
             ...(verifierDeployTxHash ? { verifierDeployTxHash } : {}),
           },
         });
+        closeOtherRequests(r, now);
         console.log(`RECOVERY: ${r.id} signed by ${operatorLabel(req)} and executed (${txHash}); finalizable after ${finalizeAfter.toISOString()}`);
         res.json(adminView(updated));
       } finally {
