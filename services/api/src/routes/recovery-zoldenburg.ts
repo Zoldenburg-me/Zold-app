@@ -88,7 +88,8 @@ const CEREMONY_TTL_MS = 5 * 60_000;
 /** A start that never registers a passkey expires after this. */
 const PASSKEY_WAIT_MS = 60 * 60_000;
 /** Requests one account may have waiting at once. Each holds a slot until
- *  it ends, so a stranger needs this many passkeys to block a start. */
+ *  it ends, and a passkey costs a stranger nothing: this many holding one
+ *  refuse every new start until one ends (docs/recovery-and-signers.md). */
 const MAX_OPEN_REQUESTS = 10;
 const OPEN = ["PASSKEY_PENDING", "REVIEW_PENDING", "GRACE_PERIOD"] as const;
 
@@ -219,6 +220,11 @@ const zoldenburgNow = (id: string) => store.findRecoveryRequest(id)!.zoldenburg!
 function closeOtherRequests(signed: RecoveryRequest, now: Date): void {
   for (const r of store.recoveryRequestsForUser(signed.userId)) {
     if (r.id === signed.id || r.mode !== "zoldenburg" || !["PASSKEY_PENDING", "REVIEW_PENDING"].includes(r.status)) continue;
+    // Its signature is being relayed: closing it would hide what lands on chain.
+    if (relaying.has(r.id)) {
+      console.warn(`RECOVERY: ${r.id} left open while its signature is relayed (${signed.id} reached the chain)`);
+      continue;
+    }
     store.updateRecoveryRequest(r.id, { status: "CANCELED", canceledAt: now.toISOString(), cancelReason: "another recovery for this account was signed" });
   }
 }
@@ -619,9 +625,13 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
         // One is on chain: the owner's cancel or its end comes first.
         if (live.some((r) => r.status === "GRACE_PERIOD" || relaying.has(r.id))) return refuse();
         if (live.length >= MAX_OPEN_REQUESTS) {
-          // Full: the oldest with nothing invested gives way; with every one
-          // holding a passkey, the start is refused until one ends.
-          const idle = live.filter((r) => r.status === "PASSKEY_PENDING").sort((a, b) => Date.parse(a.requestedAt) - Date.parse(b.requestedAt))[0];
+          // Full: the oldest with nothing invested gives way, once it is past
+          // its passkey ceremony, so a flood cannot push out someone mid-way;
+          // with none such, the start is refused until one ends.
+          const idleBefore = now.getTime() - CEREMONY_TTL_MS;
+          const idle = live
+            .filter((r) => r.status === "PASSKEY_PENDING" && Date.parse(r.zoldenburg?.ceremonyAt ?? r.requestedAt) <= idleBefore)
+            .sort((a, b) => Date.parse(a.requestedAt) - Date.parse(b.requestedAt))[0];
           if (!idle) return refuse();
           store.updateRecoveryRequest(idle.id, { status: "CANCELED", canceledAt: now.toISOString(), cancelReason: "superseded by a new recovery start" });
         }
@@ -652,6 +662,8 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
         gracePeriodSeconds: recoveryGracePeriodSeconds(moduleAddress),
       };
       if (request.status === "PASSKEY_PENDING") {
+        // A resume starts a new ceremony: it is not evicted mid-way at the cap.
+        if (open) store.updateRecoveryRequest(request.id, { zoldenburg: { ...request.zoldenburg!, ceremonyAt: now.toISOString() } });
         out.registerChallenge = issueChallenge("register", `recovery:${request.id}`);
         out.rpId = SECURITY.rpId;
         out.userHandle = user.id;
