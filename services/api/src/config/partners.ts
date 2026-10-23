@@ -138,7 +138,9 @@ export const SHOPIFY = {
 const boolEnv = (key: string) => process.env[key] === "1";
 
 export const PRIVACY_BUNDLE = {
-  enabled: process.env.PRIVACY_BUNDLE_ENABLED !== "0",
+  /** Off unless PRIVACY_BUNDLE_ENABLED=1: subscribing records a plan but bills
+   *  nothing and calls no partner, so it is not offered until both exist. */
+  enabled: boolEnv("PRIVACY_BUNDLE_ENABLED"),
   kokioLive: boolEnv("KOKIO_LIVE"),
   mysteriumLive: boolEnv("MYSTERIUM_LIVE"),
   minMarginBps: Number(process.env.PRIVACY_BUNDLE_MIN_MARGIN_BPS ?? 3500),
