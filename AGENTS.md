@@ -1,10 +1,7 @@
 # Zold — notes for coding agents
 
-For every agent here; Claude Code loads it via `CLAUDE.md`.
-
 ## Start here
 
-The map and the invariants, loaded into every session.
 **Budget: 12,000 characters** (`wc -m AGENTS.md`). Only what almost every task
 needs goes here; everything else goes in `docs/` with a one-line pointer. Over
 budget: replace or move something, do not append.
@@ -13,7 +10,7 @@ Read when the task touches it:
 - `docs/status.md` — **what has never run** (mainnet: owner only, one swap, no
   SEPA payout; no cash rail; no on-chain recovery). Read before claiming it works.
 - `docs/running-locally.md` — dev vs api, preflight, funding, KYC gate,
-  tests, production branch, browser.
+  tests, production branch, lease changes, browser.
 - `docs/wallets.md` — every wallet and its key holder.
 - `docs/recovery-and-signers.md` — second owner, Zoldenburg guardian, recovery.
 - `docs/roadmap.md` — current milestone, agreed priority, parked ideas.
@@ -158,7 +155,9 @@ Each of these was a bug once.
 
 **Secrets and storage**
 - **Agents never read `.env*`, `.private/` (bar `pentest/`) or
-  `data/*.json`**, and never print a secret.
+  `data/*.json`**, and never print a secret. They may RUN
+  `.private/akash/console.mjs`, unread, as the user's own message in the
+  session asks.
 - **No secret in source, commits, PRs, logs, errors or fixtures.**
 - **Stored credentials go through `stored-secrets.ts`** (v2, a purpose per
   kind, row-bound), never a plaintext fallback.
