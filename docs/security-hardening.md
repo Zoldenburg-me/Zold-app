@@ -65,7 +65,8 @@ In the repo (`docs/running-locally.md`, "Secrets"):
   `.private/**` (bar `.private/pentest/`) and `data/*.json`. Read rules also
   cover `cat`, `head`, `tail`, `sed` and redirections in Bash, but not a
   script that opens the file itself, so they are a guard against slips, not
-  a boundary; the boundary is the encryption.
+  a boundary; the boundary is the encryption. Running the lease tool reads
+  nothing for the agent, so the deny rules allow it.
 - `Strict-Transport-Security: max-age=300; includeSubDomains` in production
   (`http/policy.ts`).
 
@@ -576,9 +577,11 @@ These are the agent-facing rules. AGENTS.md carries the short form.
 
 - **Agents never read secret files.** `.env*`, `.private/**` and
   `data/*.json` are off limits. The one exception is `.private/pentest/`,
-  which holds testnet test accounts made by `scripts/pentest-user.ts`. To
-  know whether a variable is set, read the code that reads it, or ask the
-  user. Never print a value.
+  which holds testnet test accounts made by `scripts/pentest-user.ts`.
+  Agents may run `.private/akash/console.mjs`, without reading it, for what
+  the user asked in their own message in that session
+  (`docs/running-locally.md`, Lease changes). To know whether a variable is
+  set, read the code that reads it, or ask the user. Never print a value.
 - **No secret outside the secret store.** Not in source, commits, PR text,
   logs, error messages, test fixtures (other than hardhat's public dev
   keys), or any file outside `.private/`. A new secret gets an inventory row
