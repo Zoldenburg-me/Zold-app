@@ -357,8 +357,10 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       const ctx = resolveOrg(req, res, requireSession);
       if (!ctx) return;
       if (!requirePermission(ctx, res, "org.read")) return;
-      // Carries payment codes and each store's email-link key.
+      // Carries payment codes, and for a member who may change the org each
+      // store's email-link key.
       res.setHeader("cache-control", "no-store");
+      const manage = roleCan(ctx.member.role, "org.update");
       const connections = store.shopifyConnectionsForOrg(ctx.org.id);
       const shops = new Set(connections.map((c) => c.shop));
       const base = baseUrlFor(req);
@@ -371,6 +373,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
         scopes: SHOPIFY.scopes,
         manualGateway: SHOPIFY.manualGateway,
         orderTtlHours: Math.round(SHOPIFY.orderTtlMs / 3_600_000),
+        canManage: manage,
         endpoints: SHOPIFY.mode === "payments-app"
           ? {
               payment: `${base}/api/shopify/payment`,
@@ -387,7 +390,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
         // a link to the order's pay page signed with that store's key.
         connections: connections.map((c) => ({
           ...publicConnection(c),
-          ...(c.mode === "custom-app" && canSignPayLinks(c) ? { payLinkTemplate: payLinkTemplate(base, c) } : {}),
+          ...(manage && c.mode === "custom-app" && canSignPayLinks(c) ? { payLinkTemplate: payLinkTemplate(base, c) } : {}),
         })),
         requests,
       });

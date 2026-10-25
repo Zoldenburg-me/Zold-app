@@ -72,7 +72,7 @@ function ordersTable(d, custom, { viaCheckout = false, id = "app-orders" } = {})
 
 function payLinks(d) {
   const rows = d.connections.filter((c) => c.payLinkTemplate);
-  if (!rows.length) return "";
+  if (!rows.length) return d.connections.length && !d.canManage ? `<p class="zb-hint">An owner or admin sees the pay link here.</p>` : "";
   return `<dl class="zb-set-rows">${rows.map((c) => `<div><dt>Pay link, ${esc(c.shop)}</dt><dd class="z-mono">${esc(c.payLinkTemplate)}</dd></div>`).join("")}</dl>`;
 }
 

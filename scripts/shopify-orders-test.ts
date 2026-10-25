@@ -370,6 +370,24 @@ await check("with no data encryption key the store's settings still load, withou
     process.env.DATA_ENCRYPTION_KEYS = ring;
   }
 });
+await check("a viewer sees the stores but no pay-link template and no link key; an admin still gets it", async () => {
+  const key = await linkKey();
+  const as = async (role: string) => {
+    const u: any = { id: randomUUID(), name: `A ${role}`, country: "DE", address: `0x${"ce".repeat(20)}`, iban: "", kycStatus: "approved", createdAt: now };
+    store.addUser(u);
+    store.addMember({ id: randomUUID(), orgId: org.id, userId: u.id, email: `${role}@example.com`, role, status: "active", invitedAt: now, acceptedAt: now } as any);
+    return call("GET", `/api/orgs/${org.id}/shopify`, { user: u.id });
+  };
+  const v = await as("viewer");
+  assert.equal(v.status, 200);
+  assert.equal(v.body.connections[0].shop, SHOP);
+  assert.equal(v.body.canManage, false);
+  assert.equal(v.body.connections[0].payLinkTemplate, undefined);
+  assert.ok(!JSON.stringify(v.body).includes(key), "the link key reached a viewer");
+  const a = await as("admin");
+  assert.equal(a.body.canManage, true);
+  assert.ok(a.body.connections[0].payLinkTemplate?.includes(key), "an admin lost the template");
+});
 await check("the email link redirects to the order's pay page only with the order id signed by the store's key", async () => {
   const key = await linkKey();
   const r = await call("GET", `/api/shopify/orders/${SHOP}/${o1.id}/pay?b=${sign(key, o1.id)}`);
