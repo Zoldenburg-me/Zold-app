@@ -80,8 +80,7 @@ $("btn-add-contact").onclick = () => {
 };
 
 function signOut() {
-  localStorage.removeItem("zold-session");
-  localStorage.removeItem("zoll-session");
+  endSession();
   location.reload();
 }
 $("btn-signout").onclick = signOut;

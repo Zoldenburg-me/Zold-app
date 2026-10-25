@@ -52,6 +52,7 @@ const scripts = [
   "offline-bar:test",
   "iban-moved:ui:test",
   "unread-balance:ui:test",
+  "signout:test",
   "money-in:ui:test",
   "execution:test",
   "gas:test",

@@ -2243,9 +2243,7 @@ async function resumeSession(capabilitiesLoaded) {
       await capabilitiesLoaded;
       return errShow(state);
     }
-    sessionToken = null;
-    localStorage.removeItem("zold-session");
-    localStorage.removeItem("zoll-session");
+    endSession();
     await capabilitiesLoaded;
     obStart();
   }
