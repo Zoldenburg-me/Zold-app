@@ -1,6 +1,6 @@
 /**
  * The account, the older phone screens app/phone.js has not replaced yet (the
- * card, Zold Plus, settings), their routing, and converting a received
+ * card, the Privacy Bundle, settings), their routing, and converting a received
  * digital-dollar payment.
  */
 /* ---------- account ---------- */
@@ -45,23 +45,12 @@ function renderUser(u) {
    --------------------------------------------------------------------------
    Home, Activity, Send, Add money, Get paid, Contacts and More are
    app/phone.js. What stays here: the older screens it has not replaced yet
-   (the card, Zold Plus, settings and what hangs off it) and their routing.
+   (the card, the Privacy Bundle, settings and what hangs off it) and their routing.
    ========================================================================== */
 
 function renderMobile(u = user) {
   if (!u) return;
-  /* Zold Plus is a preview: the tier in the design (card, no-FX-margin, vault
-     boost) is not built, so it carries no price. The Privacy Bundle, where the
-     deployment offers it, is reported on the Plus screen itself. */
-  const sub = u.privacyBundle;
-  const active = sub && sub.status !== "canceled";
-  const plan = active ? bundlePlan(sub.planId) : null;
   applySegment();
-  $("m-card-name").textContent = ownAccountName(u).toUpperCase() || "—";
-  const cheapest = privacyCatalog?.plans?.[0];
-  $("m-bundle-sub").textContent = active
-    ? `${plan ? plan.name : "Subscribed"} · ${sub.status === "pending_fulfillment" ? "awaiting partner setup" : "active"}`
-    : cheapest ? `eSIM and VPN from €${cheapest.priceEur}` : "eSIM and VPN";
   // The phone screens (app/phone.js) redraw from the same account.
   phRefresh();
 }
@@ -81,16 +70,17 @@ function mobileNav(target) {
 /** Routing of the older screens. `msub` names the sub-screen. */
 function mobileNavLegacy(target) {
   const shell = $("dashboard");
-  // A deep link to #bundle where the bundle is off, and the account holds none,
-  // lands on Plus, not an empty screen.
-  if (target === "bundle" && !caps.privacyBundle && !bundleSubscribed(user)) target = "plus";
-  const sub = { plus: "plus", bundle: "bundle", payment: "payment", share: "share", card: "card",
+  // There is no Plus tier: an old #plus link opens the bundle, and the bundle
+  // where it is off and the account holds none lands on Settings.
+  if (target === "plus") target = "bundle";
+  if (target === "bundle" && !caps.privacyBundle && !bundleSubscribed(user)) return phGo("settings", null, { replace: true });
+  const sub = { bundle: "bundle", payment: "payment", share: "share", card: "card",
     monerium: "monerium", recovery: "recovery", documents: "documents", signers: "signers" }[target];
   if (!sub) return phGo("settings");
   shell.dataset.msub = sub;
   switchView("dashboard");
   if (sub === "payment") { $("m-subtitle").textContent = "Payment page"; renderHandle(user?.paymentPage); }
-  if (sub === "bundle") $("m-subtitle").textContent = "Zold Plus";
+  if (sub === "bundle") $("m-subtitle").textContent = "Privacy Bundle";
   if (sub === "card") renderCardScreen();
   if (sub === "share") renderShareScreen();
   if (sub === "monerium") renderMoneriumScreen();

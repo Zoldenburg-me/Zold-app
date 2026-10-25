@@ -163,20 +163,6 @@
   .l-ch__side { margin-top: 24px; }
 }
 
-/* ---------- spend: icon, headline and a pill switcher ---------- */
-.l-tabs { margin: 48px auto 0; max-width: 760px; }
-.l-tabs__list { display: inline-flex; flex-wrap: wrap; justify-content: center; gap: 4px; padding: 6px; border-radius: var(--z-radius-control); border: 1px solid var(--z-line-strong); background: color-mix(in srgb, var(--z-bg) 60%, transparent); }
-.l-tabs__list button { display: inline-flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 22px; border-radius: var(--z-radius-control); border: 1px solid transparent; background: none; cursor: pointer;
-  font: 500 15px var(--z-font); color: var(--l-body); transition: color .2s ease, background-color .2s ease, border-color .2s ease; }
-.l-tabs__list button i { font-size: 19px; }
-.l-tabs__list button:hover { color: var(--z-heading); }
-.l-tabs__list button[aria-selected="true"] { color: var(--z-heading); background: var(--z-surface); border-color: var(--z-line-hover); }
-.l-tabs__list button[aria-selected="true"] i { color: var(--z-pink); }
-.l-tabs__panel { margin: 28px auto 0; max-width: 32ch; font: 500 clamp(20px, 2.2vw, 26px)/1.35 var(--l-display); letter-spacing: -.015em; color: var(--z-heading); }
-.l-tabs__panel[hidden] { display: none; }
-@media (prefers-reduced-motion: no-preference) { .l-tabs__panel:not([hidden]) { animation: l-rise .5s var(--l-ease) both; } }
-@media (max-width: 640px) { .l-tabs__list { display: flex; flex-direction: column; border-radius: var(--l-radius); } .l-tabs__list button { justify-content: center; } }
-
 /* ---------- yours, not ours: the one light panel ---------- */
 .l-proof { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: clamp(32px, 6vw, 96px); align-items: center;
   padding: clamp(36px, 6vw, 88px); border-radius: var(--l-radius); background: var(--l-paper); color: var(--l-paper-ink); }

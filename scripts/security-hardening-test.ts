@@ -701,7 +701,7 @@ await check("capabilities.privacyBundle is true only when the bundle is switched
   assert.equal(liveWith(["KOKIO_LIVE", "MYSTERIUM_LIVE"]), "false");
   assert.equal(liveWith(FLAGS), "true");
   const html = readFileSync("services/api/public/index.html", "utf8");
-  for (const id of ["privacy-card", "m-go-bundle", "set-privacy-card", "m-perk-vpn", "m-perk-esim"]) {
+  for (const id of ["privacy-card", "set-privacy-card"]) {
     assert.match(html, new RegExp(`class="[^"]*\\bhidden\\b[^"]*" id="${id}"`), id);
   }
 });
