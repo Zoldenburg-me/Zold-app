@@ -19,6 +19,7 @@
 // Must be first: pins the chain/keys before config.js reads the environment.
 import "./_local-chain.js";
 import assert from "node:assert/strict";
+import { freePort } from "./_free-port.js";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
@@ -33,7 +34,8 @@ import {
 } from "viem";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const RPC = "http://127.0.0.1:8549";
+const RPC_PORT = await freePort();
+const RPC = `http://127.0.0.1:${RPC_PORT}`;
 process.env.TRANSF_RPC_URL = RPC;
 // SEPA is free by default, so the fee leg this suite exercises would not exist.
 // Pin a fee for the run: the property under test is that ONLY the fee comes
@@ -76,7 +78,7 @@ const check = (label: string, cond: boolean, detail = "") => {
 
 try {
   console.log("1/5 chain + deploy…");
-  bg(process.execPath, [bin("hardhat"), "node", "--port", "8549"]);
+  bg(process.execPath, [bin("hardhat"), "node", "--port", String(RPC_PORT)]);
   await waitRpc();
   const dep = spawnSync(process.execPath, [bin("tsx"), "scripts/deploy.ts"], {
     cwd: ROOT,

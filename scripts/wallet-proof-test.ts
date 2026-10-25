@@ -23,9 +23,9 @@
  */
 import "./_test-env.js";
 import assert from "node:assert/strict";
+import { freePort } from "./_free-port.js";
 import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync } from "node:fs";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,18 +35,6 @@ import { privateKeyToAccount } from "viem/accounts";
 import { hardhat } from "viem/chains";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const freePort = (): Promise<number> =>
-  new Promise((resolve, reject) => {
-    const s = createServer();
-    s.once("error", reject);
-    s.listen(0, "127.0.0.1", () => {
-      const a = s.address();
-      if (!a || typeof a === "string") { s.close(); reject(new Error("no free port")); return; }
-      const port = a.port;
-      s.close(() => resolve(port));
-    });
-  });
-
 const CHAIN_PORT = await freePort();
 const DEAD_PORT = await freePort();
 const RPC = `http://127.0.0.1:${CHAIN_PORT}`;

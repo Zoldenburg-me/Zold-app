@@ -11,7 +11,7 @@
  * still get a green check that means what it says.
  */
 import { spawnSync } from "node:child_process";
-import { createServer } from "node:net";
+import { freePort } from "./_free-port.js";
 import { urlForLog } from "../services/api/src/http/log-safe.js";
 
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
@@ -129,23 +129,6 @@ const scripts = [
 ];
 const liveScripts = ["anchor:test", "travelrule:test", "trustline:test", "recovery:fork:test"];
 if (process.env.CHECK_LIVE === "1") scripts.push(...liveScripts);
-
-async function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const s = createServer();
-    s.once("error", reject);
-    s.listen(0, "127.0.0.1", () => {
-      const address = s.address();
-      if (!address || typeof address === "string") {
-        s.close();
-        reject(new Error("could not allocate a free port"));
-        return;
-      }
-      const port = address.port;
-      s.close(() => resolve(port));
-    });
-  });
-}
 
 const apiPort = process.env.TRANSF_API_PORT ?? String(await freePort());
 const rpcPort = process.env.TRANSF_RPC_URL ? "" : String(await freePort());

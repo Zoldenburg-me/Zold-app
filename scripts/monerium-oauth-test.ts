@@ -19,6 +19,7 @@
 // Must be first: pins the chain/keys before config.js reads the environment.
 import "./_local-chain.js";
 import assert from "node:assert/strict";
+import { freePort } from "./_free-port.js";
 import { createHash, randomBytes, webcrypto } from "node:crypto";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createServer } from "node:http";
@@ -32,7 +33,7 @@ const API_PORT = Number(process.env.TRANSF_API_PORT ?? 3001);
 const RPC_URL = process.env.TRANSF_RPC_URL ?? "http://127.0.0.1:8545";
 const RPC_PORT = new URL(RPC_URL).port || "8545";
 const API = `http://127.0.0.1:${API_PORT}`;
-const STUB_PORT = Number(process.env.TRANSF_STUB_PORT ?? 8549);
+const STUB_PORT = Number(process.env.TRANSF_STUB_PORT ?? await freePort());
 const STUB = `http://127.0.0.1:${STUB_PORT}`;
 const ENC_KEY = "test-monerium-token-encryption-key-32b";
 const bin = (n: string) => (n === "tsx" ? path.join(ROOT, "node_modules/tsx/dist/cli.mjs") : path.join(ROOT, "node_modules/.bin", n));

@@ -3,7 +3,7 @@
  * OffchainResolver — the last one end to end through the API's gateway code).
  * Run: npm run test:contracts
  */
-import { createServer } from "node:net";
+import { freePort } from "../../scripts/_free-port.js";
 import { createServer as createHttpServer } from "node:http";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -19,16 +19,7 @@ import { hardhat } from "viem/chains";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 // A free port, so the suite never deploys against some other node that
 // happens to be listening on a fixed one.
-const PORT: number = await new Promise((resolve, reject) => {
-  const s = createServer();
-  s.once("error", reject);
-  s.listen(0, "127.0.0.1", () => {
-    const a = s.address();
-    if (!a || typeof a === "string") { s.close(); reject(new Error("no free port")); return; }
-    const port = a.port;
-    s.close(() => resolve(port));
-  });
-});
+const PORT = await freePort();
 const RPC = `http://127.0.0.1:${PORT}`;
 
 const pk = {

@@ -21,9 +21,12 @@ import { rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
+import { freePort } from "./_free-port.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const RPC = "http://127.0.0.1:8554";
+// Its own node on a free port: a fixed one collides with a parallel run.
+const RPC_PORT = await freePort();
+const RPC = `http://127.0.0.1:${RPC_PORT}`;
 process.env.TRANSF_RPC_URL = RPC;
 process.env.MONERIUM_CLIENT_ID = "";
 process.env.MONERIUM_CLIENT_SECRET = "";
@@ -314,7 +317,7 @@ let q25: import("../services/api/src/payment-requests.js").CryptoQuote;
 // ---------------------------------------------------------------------------
 console.log("2/4 chain + routes…");
 try {
-  bg(process.execPath, [bin("hardhat"), "node", "--port", "8554"]);
+  bg(process.execPath, [bin("hardhat"), "node", "--port", String(RPC_PORT)]);
   await waitRpc();
   const dep = spawnSync(process.execPath, [bin("tsx"), "scripts/deploy.ts"], { cwd: ROOT, stdio: "inherit", env: process.env });
   assert.equal(dep.status, 0, "deploy failed");

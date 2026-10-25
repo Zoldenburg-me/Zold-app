@@ -21,9 +21,10 @@ import { randomUUID, randomBytes } from "node:crypto";
 import { readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { freePort } from "./_free-port.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const PORT = Number(process.env.FAUCET_TEST_RPC_PORT ?? 8554);
+const PORT = Number(process.env.FAUCET_TEST_RPC_PORT ?? await freePort());
 const RPC = `http://127.0.0.1:${PORT}`;
 process.env.TRANSF_RPC_URL = RPC;
 process.env.MONERIUM_CLIENT_ID = "";

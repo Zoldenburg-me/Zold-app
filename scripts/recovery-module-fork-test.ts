@@ -22,9 +22,9 @@
  * Run: npm run recovery:fork:test
  */
 import assert from "node:assert/strict";
+import { freePort } from "./_free-port.js";
 import { spawn, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { createServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -105,16 +105,7 @@ const factoryAbi = parseAbi([
   "function createProxyWithNonce(address singleton, bytes initializer, uint256 saltNonce) returns (address proxy)",
 ]);
 
-const PORT: number = await new Promise((resolve, reject) => {
-  const s = createServer();
-  s.once("error", reject);
-  s.listen(0, "127.0.0.1", () => {
-    const a = s.address();
-    if (!a || typeof a === "string") { s.close(); reject(new Error("no free port")); return; }
-    const port = a.port;
-    s.close(() => resolve(port));
-  });
-});
+const PORT = await freePort();
 const RPC = `http://127.0.0.1:${PORT}`;
 
 async function rpc(method: string, params: unknown[] = []): Promise<unknown> {
