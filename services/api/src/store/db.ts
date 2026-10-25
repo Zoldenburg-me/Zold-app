@@ -9,7 +9,7 @@
  * The migrations run at load and are idempotent, each keyed on the row it
  * would create, because this holds a money ledger.
  */
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { IS_PRODUCTION, ROOT } from "../config.js";
@@ -442,9 +442,21 @@ export function persist() {
   const tmp = DB_PATH + ".tmp";
   // Owner-only. The chmod covers a .tmp left by a crash, whose old mode
   // writeFileSync's `mode` would keep.
-  writeFileSync(tmp, JSON.stringify(db), { mode: 0o600 });
-  chmodSync(tmp, 0o600);
-  renameSync(tmp, DB_PATH);
+  try {
+    writeFileSync(tmp, JSON.stringify(db), { mode: 0o600 });
+    chmodSync(tmp, 0o600);
+    renameSync(tmp, DB_PATH);
+  } catch (err) {
+    // Memory now holds a change the disk refused. Serving on would answer
+    // from it, and the next good write would land it after the caller saw an
+    // error. Exit before any response goes out, so the supervisor restarts
+    // from the last good db.json. The code only: the message can carry data.
+    const e = err as NodeJS.ErrnoException | undefined;
+    console.error(`FATAL store write failed (${e?.code ?? e?.name}) — the API is exiting`);
+    // No second copy of the store left behind; we are exiting either way.
+    try { rmSync(tmp, { force: true }); } catch {}
+    process.exit(1);
+  }
 }
 
 /** Run `fn` with its writes collected into one, written before this returns

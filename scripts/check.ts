@@ -43,6 +43,7 @@ const scripts = [
   "receipt:test",
   "convert:test",
   "convert:race:test",
+  "persist-failure:test",
   "safe-op-uncertain:test",
   "device-key:test",
   "authorizer-bind:test",
