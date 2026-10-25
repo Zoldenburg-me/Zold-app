@@ -522,7 +522,10 @@ try {
     assert.equal(r.data.channels.length, 2);
     assert.ok(!r.text.includes(EMAIL) && !r.text.includes(PHONE), "targets are masked on the public surface");
     assert.ok(r.data.registerChallenge, "a WebAuthn registration challenge bound to this recovery");
-    assert.equal(r.data.userHandle, userId);
+    for (const k of ["userId", "safeAddress", "guardianAddress", "recoveryModuleAddress", "userHandle"]) {
+      assert.equal(r.data[k], undefined, `${k} is not shown to whoever knows the email`);
+    }
+    assert.ok(!/0x[0-9a-fA-F]{40}/.test(r.text) && !r.text.includes(userId), "the start names no address and no account id");
     assert.match(r.data.recoverySecret ?? "", /^[A-Za-z0-9_-]{40,}$/, "a per-request secret, handed out once");
     assert.ok(!r.text.includes("accessHash"), "the stored hash is not on the public surface");
     recovery = r.data;
@@ -574,6 +577,7 @@ try {
     assert.equal(r.data.candide.auths.length, 2);
     assert.equal(r.data.candide.newPasskeyRegistered, true);
     assert.ok(!r.text.includes("attestation"), "the new credential is not on the public surface");
+    assert.ok(!r.text.includes(userId) && !r.text.toLowerCase().includes(safeAddress.toLowerCase()), "before the codes, the request still names no account or Safe");
     assert.match(r.data.otpTicket ?? "", /^[A-Za-z0-9_-]{40,}$/, "a ticket for the browser that registered the passkey");
     assert.ok(!r.text.includes("otpTicketHash"));
     otpTicket = r.data.otpTicket;
