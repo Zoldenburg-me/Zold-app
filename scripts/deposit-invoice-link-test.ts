@@ -2,7 +2,9 @@
  * Tying a crypto deposit to an organisation's invoice.
  *
  * Marking the org's invoice paid is invoice management: a viewer or an
- * accountant may not do it with a deposit into their own Safe. One deposit settles one
+ * accountant may not do it with a deposit into their own Safe. Only a deposit
+ * into the Safe that backs the org's account settles its invoice; a payer or
+ * admin's personal Safe never does. One deposit settles one
  * invoice: once its payment is on an invoice it cannot be moved or dropped,
  * or the same money would settle a second one. Only an invoice the org issued
  * can be paid this way, never a bill it owes.
@@ -32,12 +34,13 @@ const check = async (name: string, fn: () => void | Promise<void>) => {
 initStore();
 const now = new Date().toISOString();
 const ORG = "org_dep";
-const roles = { u_owner: "owner", u_admin: "admin", u_accountant: "accountant", u_viewer: "viewer" } as const;
+const roles = { u_owner: "owner", u_admin: "admin", u_payer: "payer", u_accountant: "accountant", u_viewer: "viewer" } as const;
 store.addOrganisation({ id: ORG, type: "business", name: "Acme", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now } as any);
 for (const [userId, role] of Object.entries(roles)) {
   store.addUser({ id: userId, name: userId, country: "DE", kycStatus: "approved", createdAt: now, address: `0x${randomBytes(20).toString("hex")}` } as any);
   store.addMember({ id: `m_${userId}`, orgId: ORG, userId, email: "", role, status: "active", invitedAt: now, acceptedAt: now } as any);
 }
+store.addAccount({ id: "acc_dep", orgId: ORG, currency: "EUR", label: "main", status: "active", provider: "monerium", identifier: {}, backingUserId: "u_owner", createdAt: now, updatedAt: now } as any);
 
 const invoice = (over: Record<string, unknown> = {}) => {
   const id = `inv_${randomBytes(6).toString("hex")}`;
@@ -92,9 +95,22 @@ await check("nor can an accountant: books, not money", async () => {
   assert.equal(stateOf(inv), "SUBMITTED");
 });
 
-await check("an admin can, and the converted deposit settles the invoice", async () => {
+await check("an admin cannot with a deposit into their own Safe: it does not back the org's account", async () => {
   const inv = invoice();
-  const r = await link("u_admin", deposit("u_admin"), inv);
+  assert.equal((await link("u_admin", deposit("u_admin"), inv)).status, 403);
+  assert.equal(stateOf(inv), "SUBMITTED");
+  assert.equal((store.invoices.find((i) => i.id === inv)!.settlements ?? []).length, 0);
+});
+
+await check("nor can a payer", async () => {
+  const inv = invoice();
+  assert.equal((await link("u_payer", deposit("u_payer"), inv)).status, 403);
+  assert.equal(stateOf(inv), "SUBMITTED");
+});
+
+await check("the member whose Safe backs the org's account can, and the converted deposit settles the invoice", async () => {
+  const inv = invoice();
+  const r = await link("u_owner", deposit("u_owner"), inv);
   assert.equal(r.status, 200, JSON.stringify(r.data));
   assert.equal(stateOf(inv), "PAID");
 });
