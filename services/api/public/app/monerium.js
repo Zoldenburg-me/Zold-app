@@ -384,8 +384,10 @@ async function renderPrivacyBundle() {
     card.classList.add("hidden");
     return;
   }
-  // Cancel needs nothing from the catalog, so a failed fetch only loses the plans.
-  try { await loadPrivacyCatalog(); } catch { if (!active) return; }
+  // Only the offer needs the catalog: a subscriber's status and Cancel read the
+  // record, so where the offer is off it is not fetched, and a failed fetch only
+  // loses the plans.
+  if (live) try { await loadPrivacyCatalog(); } catch { if (!active) return; }
   card.classList.toggle("hidden", !kycApproved(user) && !active);
   const activePlan = active ? bundlePlan(user.privacyBundle.planId) : null;
   const chip = $("privacy-chip");
