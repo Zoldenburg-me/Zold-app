@@ -150,7 +150,12 @@ export function normaliseDisplayName(raw: unknown): string | undefined {
   return name;
 }
 
-const LATIN_FOLD: Record<string, string> = { "ß": "ss", "æ": "ae", "œ": "oe", "ø": "o", "ł": "l", "đ": "d", "ð": "d", "þ": "th", "ı": "i", "ħ": "h" };
+/** Latin letters with no decomposition, as the ASCII letter they are read as. */
+const LATIN_FOLD: Record<string, string> = {
+  "ß": "ss", "æ": "ae", "œ": "oe", "ø": "o", "ł": "l", "đ": "d", "ð": "d", "þ": "th", "ı": "i", "ħ": "h",
+  "ə": "e", "ɛ": "e", "ɔ": "o", "ŋ": "n", "ŧ": "t", "ɓ": "b", "ɗ": "d", "ƒ": "f", "ʒ": "z", "ĸ": "k",
+};
+const LATIN_FOLDED = new RegExp(`[${Object.keys(LATIN_FOLD).join("")}]`, "g");
 
 /** Why a display name may not be shown, or undefined. It heads the page above
  *  the deposit address, so it takes the handle's rules (no staff, partner or
@@ -160,17 +165,21 @@ function displayNameRefusal(name: string): string | undefined {
   if (cleanName(name, { min: 1 }) === null) {
     return "displayName cannot contain control, formatting or direction characters, emoji, < or >";
   }
-  // Folded to ASCII so the handle's rules apply: accents dropped, fullwidth to
-  // ASCII, and the Latin letters with no decomposition mapped by hand. Like the
-  // handle, a letter or digit that does not fold to a-z or 0-9 is refused: one
-  // from another alphabet (a Cyrillic "о", an Arabic-Indic zero) can look
-  // identical and would pass the list and the 0x check.
-  const folded = name.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase()
-    .replace(/[ßæœøłđðþıħ]/g, (c) => LATIN_FOLD[c]);
-  if (/[\p{L}\p{N}]/u.test(folded.replace(/[a-z0-9]/g, ""))) {
-    return "displayName may only use Latin letters, with or without accents, and the digits 0-9 — others can look identical";
+  // Folded so the handle's rules apply: accents dropped, fullwidth to ASCII,
+  // Latin letters with no decomposition mapped (LATIN_FOLD).
+  const folded = name.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().replace(LATIN_FOLDED, (c) => LATIN_FOLD[c]);
+  // Beside Latin letters, any letter left unfolded can draw like one and pass
+  // the list: another alphabet's (a Cyrillic "о" in "Zоld") or a Latin
+  // look-alike (a small-cap "ᴢ"). A name wholly in another alphabet passes.
+  // shortcut: such a name is not folded for the list, so an all-Cyrillic "ВАЅЕ"
+  // reads as "base" and passes; add a confusables fold if one is seen in use.
+  if (/\p{Script=Latin}/u.test(name) && /\p{L}/u.test(folded.replace(/[a-z]/g, ""))) {
+    return "displayName cannot mix Latin letters with another alphabet or look-alike letters — they can look identical";
   }
-  if (/(?<![0-9])0x[0-9a-f]/.test(folded)) return "displayName cannot contain 0x — it would read as an address";
+  // A digit from another script (an Arabic-Indic zero) would pass the 0x check.
+  if (/\p{N}/u.test(folded.replace(/[0-9]/g, ""))) return "displayName may only use the digits 0-9";
+  // Cyrillic "х" and Greek "χ" draw as "x" in a name with no Latin letter.
+  if (/(?<![0-9])0[xхχ][\p{L}\p{N}]/u.test(folded)) return "displayName cannot contain 0x — it would read as an address";
   // In handle form, every run of other characters a hyphen, so the handle list applies.
   const asHandle = folded.replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   const impersonated = impersonatedName(asHandle);
