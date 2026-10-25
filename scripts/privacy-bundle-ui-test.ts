@@ -143,6 +143,10 @@ await check("offer on, account not yet approved: no Settings entry, and #bundle 
   run(`mobileNavLegacy("bundle")`);
   assert.equal(el("dashboard").dataset.msub, undefined);
   assert.equal(run("phRoute?.name"), "settings");
+  const before = run("PH.settings.live()");
+  run(`user = { ...user, kycStatus: "approved" }`);
+  assert.notEqual(run("PH.settings.live()"), before, "approval redraws Settings");
+  assert.match(run("PH.settings.html()"), /href="#bundle"/);
 });
 
 await check("#bundle and an old #plus open no screen where the offer is off and the account holds none, and the bundle for a subscriber", async () => {

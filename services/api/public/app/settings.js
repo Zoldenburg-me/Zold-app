@@ -70,8 +70,8 @@ function phSecurityChecks() {
 
 PH.settings = {
   title: "Settings",
-  live: () => JSON.stringify([user?.name, user?.email, user?.monerium?.method, user?.paymentPage?.settlementAsset, user?.paymentPage?.autoConvert,
-    phKey?.protection, phSecurityChecks(), user?.privacyBundle?.status, caps.privacyBundle]),
+  live: () => JSON.stringify([user?.name, user?.email, user?.monerium?.method, user?.monerium?.connectedAt, user?.paymentPage?.handle, user?.paymentPage?.settlementAsset, user?.paymentPage?.autoConvert,
+    phKey?.protection, phSecurityChecks(), user?.privacyBundle?.status, caps.privacyBundle, user?.kycStatus]),
   html() {
     const u = user || {};
     const checks = phSecurityChecks();
