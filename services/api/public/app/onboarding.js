@@ -2122,7 +2122,15 @@ async function registerDeviceKey(u) {
   const { address, protection } = status.present && !replaceDamaged
     ? { address: await dev.deviceAddress(credId(), { bound }), protection: status.protection }
     : await dev.createKey(credId(), { replaceDamaged });
-  const updated = await api(`/api/users/${u.id}/authorizer`, { address, stepUp: await passkeyStepUp("authorizer.bind") });
+  // The key proves it is held here by signing the server's binding challenge.
+  const { typedData, approval } = await api(`/api/users/${u.id}/authorizer/challenge`, { address });
+  if (typedData?.primaryType !== "AuthorizerBinding" || typedData.message.authorizer.toLowerCase() !== address.toLowerCase()) {
+    throw new Error("the server asked this device key to sign something other than its binding");
+  }
+  const proof = { nonce: typedData.message.nonce, signature: await dev.signTypedData(typedData, credId(), address) };
+  // The step-up is issued for this address only, so it cannot approve another.
+  const stepUp = credId() ? await passkeyAssertion(approval.challenge) : null;
+  const updated = await api(`/api/users/${u.id}/authorizer`, { address, proof, stepUp });
   if (updated.authorizerAddress) user = { ...user, authorizerAddress: updated.authorizerAddress };
   if (protection !== "prf") {
     console.warn("device key stored unprotected — this authenticator has no PRF support");

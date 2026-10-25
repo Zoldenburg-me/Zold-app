@@ -29,7 +29,10 @@ export function signTerms(device: Device, typedData: any): Promise<`0x${string}`
   });
 }
 
-/** Bind the account to this device key (trust-on-first-use at onboarding). */
-export function registerDevice(api: ApiFn, userId: string, device: Device) {
-  return api(`/api/users/${userId}/authorizer`, { address: device.address });
+/** Bind the account to this device key (trust-on-first-use at onboarding),
+ *  signing the server's binding challenge with it as the browser does. */
+export async function registerDevice(api: ApiFn, userId: string, device: Device) {
+  const { typedData } = await api(`/api/users/${userId}/authorizer/challenge`, { address: device.address });
+  const signature = await device.signTypedData(typedData);
+  return api(`/api/users/${userId}/authorizer`, { address: device.address, proof: { nonce: typedData.message.nonce, signature } });
 }

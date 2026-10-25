@@ -6,6 +6,7 @@
  * authorization. Don't build transfers here: there must be one builder.
  */
 import express from "express";
+import { verifyTypedData } from "viem";
 import { wrap } from "./util.js";
 import { FX, SECURITY, railFeeEur } from "../config.js";
 import { ibanChecksumValid, normaliseIban } from "../domain/contacts.js";
@@ -26,7 +27,8 @@ import { userTransfer } from "../transfers/user-transfer.js";
 import { buildActivity } from "../transfers/activity.js";
 import { passkeySafeChallenge } from "../wallet/passkey-safe-plan.js";
 import { safeMessageHash, signMessageAsPasskeySafe } from "../wallet/candide.js";
-import { b64urlToBuf, verifyAssertionForChallenge } from "../webauthn.js";
+import { authorizerBindingTypedData } from "../chain.js";
+import { b64urlToBuf, consumeChallenge, issueChallenge, stepUpBinding, verifyAssertionForChallenge } from "../webauthn.js";
 import { verifyPasskeyStepUp } from "./auth.js";
 import { publicUser } from "../users/public-user.js";
 import { redactedMessage } from "../http/log-cause.js";
@@ -42,8 +44,9 @@ export interface TransferDeps {
 /**
  * Register the device key that may authorize transfers from this account.
  * The browser generates the key, keeps the private half, and sends only the
- * address. This binding is app state until Safe-native module policies replace
- * it on-chain.
+ * address, signed by that key over a single-use challenge for this account
+ * and address, so nobody binds an address they hold no key for. This binding
+ * is app state until Safe-native module policies replace it on-chain.
  */
 /**
  * Submit the device signature for a CREATED transfer and execute it.
@@ -204,6 +207,28 @@ export function createTransferRouter(deps: TransferDeps) {
     }),
   );
 
+  const isAddress = (v: unknown): v is `0x${string}` => typeof v === "string" && /^0x[0-9a-fA-F]{40}$/.test(v);
+  const bindBinding = (userId: string, address: string) => stepUpBinding(userId, "authorizer.bind", address.toLowerCase());
+
+  router.post(
+    "/users/:id/authorizer/challenge",
+    wrap(async (req, res) => {
+      const user = store.findUser(req.params.id);
+      if (!user) return res.status(404).json({ error: "user not found" });
+      if (!requireUserSession(req, res, user.id)) return;
+      if (!requireKycApproved(user, res)) return;
+      const address = req.body?.address;
+      if (!isAddress(address)) return res.status(400).json({ error: "address required (0x-prefixed, 20 bytes)" });
+      const binding = bindBinding(user.id, address);
+      const nonce = `0x${b64urlToBuf(issueChallenge("authorizer_bind", binding)).toString("hex")}` as const;
+      res.json({
+        typedData: authorizerBindingTypedData({ account: user.address, authorizer: address, nonce }),
+        // The passkey approves this address, not just "a binding".
+        approval: { challenge: issueChallenge("step_up", binding) },
+      });
+    }),
+  );
+
   router.post(
     "/users/:id/authorizer",
     wrap(async (req, res) => {
@@ -211,21 +236,40 @@ export function createTransferRouter(deps: TransferDeps) {
       if (!user) return res.status(404).json({ error: "user not found" });
       if (!requireUserSession(req, res, user.id)) return;
       if (!requireKycApproved(user, res)) return;
-      if (!(await verifyPasskeyStepUp(user, req.body, res, "authorizer.bind"))) return;
       const address = req.body?.address;
-      if (typeof address !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(address)) {
-        return res.status(400).json({ error: "address required (0x-prefixed, 20 bytes)" });
-      }
-      if (user.authorizerAddress) {
-        if (user.authorizerAddress.toLowerCase() !== address.toLowerCase()) {
-          return res.status(409).json({
+      if (!isAddress(address)) return res.status(400).json({ error: "address required (0x-prefixed, 20 bytes)" });
+      if (!(await verifyPasskeyStepUp(user, req.body, res, "authorizer.bind", address.toLowerCase()))) return;
+      // Read fresh each time: the verifications await, and a binding that
+      // landed meanwhile must not be overwritten.
+      const answeredBound = () => {
+        const current = store.findUser(user.id)!;
+        if (!current.authorizerAddress) return false;
+        if (current.authorizerAddress.toLowerCase() !== address.toLowerCase()) {
+          res.status(409).json({
             error: "this account is already bound to a different device key — rotate it from that device",
-            authorizerAddress: user.authorizerAddress,
+            authorizerAddress: current.authorizerAddress,
           });
+        } else {
+          res.json(publicUser(current));
         }
-        return res.json(publicUser(user));
+        return true;
+      };
+      if (answeredBound()) return;
+      const { nonce, signature } = req.body?.proof ?? {};
+      const proven =
+        typeof nonce === "string" && /^0x[0-9a-fA-F]{64}$/.test(nonce) &&
+        typeof signature === "string" && /^0x[0-9a-fA-F]+$/.test(signature) &&
+        consumeChallenge(Buffer.from(nonce.slice(2), "hex").toString("base64url"), "authorizer_bind", bindBinding(user.id, address)) &&
+        (await verifyTypedData({
+          address,
+          ...authorizerBindingTypedData({ account: user.address, authorizer: address, nonce: nonce as `0x${string}` }),
+          signature: signature as `0x${string}`,
+        }).catch(() => false));
+      if (!proven) {
+        return res.status(401).json({ error: "sign a fresh binding challenge with the device key being bound", code: "AUTHORIZER_PROOF" });
       }
-      const updated = store.updateUser(user.id, { authorizerAddress: address as `0x${string}` });
+      if (answeredBound()) return; // no await from here to the write
+      const updated = store.updateUser(user.id, { authorizerAddress: address });
       res.status(201).json(publicUser(updated));
     }),
   );

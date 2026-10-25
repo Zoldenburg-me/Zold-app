@@ -221,8 +221,12 @@ const parseBlob = (raw) => {
 /**
  * The key from before per-credential slots: one unscoped slot per browser.
  * Taken only by an account whose bound authorizer IS that key, so a new
- * account in the same browser can never pick up someone else's key. Copied,
- * not moved: accounts this browser already bound to the same key keep it.
+ * account in the same browser can never pick up someone else's key. A
+ * plaintext one is copied, not moved: before per-credential slots every
+ * account this browser created was bound to that one key, and each still
+ * needs it. A PRF-wrapped one opens for one passkey only, so once that passkey
+ * has unwrapped it into its own slot the unscoped copy is deleted (adoptLegacy):
+ * left behind, it would outlive a rotation as a key bound to nothing.
  */
 const readLegacySlot = (bound) => {
   const legacy = localStorage.getItem(LEGACY_KEY_SLOT);
@@ -252,6 +256,13 @@ const readSlot = (credentialId, bound) => {
 };
 const writeSlot = (credentialId, blob) =>
   localStorage.setItem(slotFor(credentialId), JSON.stringify({ ...blob, credentialId }));
+/** Move an unscoped PRF-wrapped key into this credential's slot, deleting the
+ *  unscoped copy only once the slot reads back holding the same ciphertext. */
+const adoptLegacy = (credentialId, blob) => {
+  writeSlot(credentialId, blob);
+  const back = parseBlob(localStorage.getItem(slotFor(credentialId)));
+  if (back?.credentialId === credentialId && blob.ct && back.ct === blob.ct) localStorage.removeItem(KEY_SLOT);
+};
 
 function freshPrivateKey() {
   let priv;
@@ -335,7 +346,7 @@ async function unlock(credentialId, bound) {
   if (!secret) throw new Error(`your ${passkeyName()} is needed to approve this payment — the payment key stays locked without it`);
   try {
     const privHex = await unwrapKey(blob, secret);
-    if (!blob.credentialId && credentialId) writeSlot(credentialId, blob); // legacy key, now proven this passkey's
+    if (!blob.credentialId && credentialId) adoptLegacy(credentialId, blob); // legacy key, now proven this passkey's
     return privHex;
   } catch {
     throw new Error(`could not unlock the payment key with this ${passkeyName()}`);
