@@ -49,6 +49,7 @@
     "unread-balance:ui:test": "tsx scripts/app-unread-balance-ui-test.ts",
     "signout:test": "tsx scripts/app-signout-test.ts",
     "money-in:ui:test": "tsx scripts/money-in-ui-test.ts",
+    "privacy-bundle:ui:test": "tsx scripts/privacy-bundle-ui-test.ts",
     "execution:test": "tsx scripts/safe-execution-test.ts",
     "gas:test": "tsx scripts/safe-gas-test.ts",
     "faucet:test": "tsx scripts/faucet-test.ts",

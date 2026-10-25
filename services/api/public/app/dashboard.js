@@ -61,7 +61,7 @@ function renderMobile(u = user) {
   const cheapest = privacyCatalog?.plans?.[0];
   $("m-bundle-sub").textContent = active
     ? `${plan ? plan.name : "Subscribed"} · ${sub.status === "pending_fulfillment" ? "awaiting partner setup" : "active"}`
-    : cheapest ? `eSIM and VPN, live today from €${cheapest.priceEur}` : "eSIM and VPN, live today";
+    : cheapest ? `eSIM and VPN from €${cheapest.priceEur}` : "eSIM and VPN";
   // The phone screens (app/phone.js) redraw from the same account.
   phRefresh();
 }
@@ -81,6 +81,9 @@ function mobileNav(target) {
 /** Routing of the older screens. `msub` names the sub-screen. */
 function mobileNavLegacy(target) {
   const shell = $("dashboard");
+  // A deep link to #bundle where the bundle is off, and the account holds none,
+  // lands on Plus, not an empty screen.
+  if (target === "bundle" && !caps.privacyBundle && !bundleSubscribed(user)) target = "plus";
   const sub = { plus: "plus", bundle: "bundle", payment: "payment", share: "share", card: "card",
     monerium: "monerium", recovery: "recovery", documents: "documents", signers: "signers" }[target];
   if (!sub) return phGo("settings");

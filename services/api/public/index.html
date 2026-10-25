@@ -113,16 +113,16 @@
         <div class="m-h1" style="font-size:28px;margin-top:24px">Everything, coming soon</div>
         <div class="m-perks">
           <div class="m-perk"><span class="material-symbols-rounded" aria-hidden="true">credit_card</span><div><div class="t">Zold card</div><div class="d">Virtual today, metal on request</div></div></div>
-          <div class="m-perk"><span class="material-symbols-rounded" aria-hidden="true">vpn_lock</span><div><div class="t">Mysterium VPN</div><div class="d">Unlimited, device to node</div></div></div>
-          <div class="m-perk"><span class="material-symbols-rounded" aria-hidden="true">sim_card</span><div><div class="t">Kokio eSIM</div><div class="d">20 GB data in 120 countries</div></div></div>
+          <div class="m-perk hidden" id="m-perk-vpn"><span class="material-symbols-rounded" aria-hidden="true">vpn_lock</span><div><div class="t">Mysterium VPN</div><div class="d">Hides your IP, with a monthly allowance</div></div></div>
+          <div class="m-perk hidden" id="m-perk-esim"><span class="material-symbols-rounded" aria-hidden="true">sim_card</span><div><div class="t">Kokio eSIM</div><div class="d">Mobile data abroad, with a monthly allowance</div></div></div>
           <div class="m-perk"><span class="material-symbols-rounded" aria-hidden="true">percent</span><div><div class="t">No FX margin</div><div class="d">First €2,000 sent each month</div></div></div>
         </div>
         <button class="m-cta" disabled>Coming soon</button>
-        <!-- Two of those perks are the Privacy Bundle; this row shows only where
-             the deployment offers it (PRIVACY_BUNDLE_ENABLED=1). -->
+        <!-- The VPN and eSIM perks are the Privacy Bundle; they and this row
+             show only where capabilities.privacyBundle is true. -->
         <button class="m-optrow hidden" id="m-go-bundle" style="margin-top:16px">
           <span class="material-symbols-rounded ic" aria-hidden="true">check_circle</span>
-          <span class="tx"><span class="t">Available now: Privacy Bundle</span><span class="d" id="m-bundle-sub">eSIM and VPN, live today</span></span>
+          <span class="tx"><span class="t">Privacy Bundle</span><span class="d" id="m-bundle-sub">eSIM and VPN</span></span>
           <span class="material-symbols-rounded ch" aria-hidden="true">chevron_right</span>
         </button>
       </div>
@@ -375,7 +375,6 @@
             <h2>Privacy bundle</h2>
             <div class="setting-row"><div><div class="st">Traffic routing</div><div class="sd">VPN traffic should go device to Mysterium nodes, not through Zold.</div></div></div>
             <div class="setting-row"><div><div class="st">Data stored</div><div class="sd">Billing status and aggregate allowance only.</div></div></div>
-            <div class="setting-row"><div><div class="st">Live fulfillment</div><div class="sd" id="set-privacy-live">Pending partner credentials.</div></div></div>
           </div>
         </div>
       </section>

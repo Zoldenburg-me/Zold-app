@@ -139,7 +139,7 @@ const boolEnv = (key: string) => process.env[key] === "1";
 
 export const PRIVACY_BUNDLE = {
   /** Off unless PRIVACY_BUNDLE_ENABLED=1: subscribing records a plan but bills
-   *  nothing and calls no partner, so it is not offered until both exist. */
+   *  nothing and calls no partner. See privacyBundleLive(). */
   enabled: boolEnv("PRIVACY_BUNDLE_ENABLED"),
   kokioLive: boolEnv("KOKIO_LIVE"),
   mysteriumLive: boolEnv("MYSTERIUM_LIVE"),
@@ -183,3 +183,10 @@ export const PRIVACY_BUNDLE = {
     },
   ],
 };
+
+/** May the bundle be offered and subscribed? Only when the operator has
+ *  switched it on AND both partners fulfil it; anything less records a
+ *  subscription nobody delivers. The subscribe route takes no payment, so
+ *  PRIVACY_BUNDLE_ENABLED must stay off until billing exists. */
+export const privacyBundleLive = () =>
+  PRIVACY_BUNDLE.enabled && PRIVACY_BUNDLE.kokioLive && PRIVACY_BUNDLE.mysteriumLive;

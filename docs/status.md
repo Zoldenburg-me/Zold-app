@@ -38,6 +38,11 @@ Say this plainly rather than letting the surface imply otherwise:
   payout has never run — only the on-ledger payment half is proven (tx
   `60528481…`, ledger 3965805). testanchor never publishes
   `withdraw_anchor_account`, so MoneyGram's own anchor is where the bugs will be.
+- **The Privacy Bundle (eSIM + VPN) has never been sold.** No billing exists
+  and neither Kokio nor Mysterium has been called. `capabilities.privacyBundle`
+  is false unless `PRIVACY_BUNDLE_ENABLED`, `KOKIO_LIVE` and `MYSTERIUM_LIVE`
+  are all `1`; while false the app hides the offer and the subscribe route
+  refuses.
 - **No checkout service has called the service read or received the webhook.**
   `GET /api/service/checkout/transfers/:id`, credential rotation and the
   signed state-change webhook have run only in `checkout-service:test`; no

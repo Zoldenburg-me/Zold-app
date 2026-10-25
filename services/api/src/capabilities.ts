@@ -7,7 +7,7 @@
  * 3,800-line file.
  */
 import { TURNKEY } from "./config.js";
-import { EMAIL_VERIFICATION, ENS_GATEWAY, ENS_LOOKUP, FORWARDING, HARNESS, MONERIUM, SHOPIFY, TESTNET_FAUCET, moneriumOAuthEnabled } from "./config.js";
+import { EMAIL_VERIFICATION, ENS_GATEWAY, ENS_LOOKUP, FORWARDING, HARNESS, MONERIUM, SHOPIFY, TESTNET_FAUCET, moneriumOAuthEnabled, privacyBundleLive } from "./config.js";
 import { moneriumApiKeysAvailable, moneriumEnvironment } from "./adapters/monerium-connection.js";
 import { cashRailOpen } from "./orchestrator.js";
 import { usdLabel } from "./usd-token.js";
@@ -36,6 +36,10 @@ export function capabilities() {
     /** Is the cash (EUR -> KES) corridor open? Bridge live AND an anchor
      *  configured; the UI hides the corridor rather than quote into a wall. */
     cashRail: cashRailOpen(),
+    /** May a user subscribe to the Privacy Bundle (eSIM + VPN)? Only where
+     *  it is switched on and both partners fulfil; otherwise the app draws no
+     *  offer and POST /users/:id/privacy-bundle refuses. */
+    privacyBundle: privacyBundleLive(),
     /** Is a Shopify payments app registered for this deployment? Without one
      *  the dashboard's Shopify card says so instead of offering a connect
      *  button that can only fail. */
