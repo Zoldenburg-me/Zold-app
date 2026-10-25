@@ -26,6 +26,7 @@
     "crypto-deposit:test": "tsx scripts/crypto-deposit-test.ts",
     "crypto-in-getlogs:test": "tsx scripts/crypto-in-getlogs-test.ts",
     "convert:test": "tsx scripts/convert-deposit-test.ts",
+    "convert:race:test": "tsx scripts/convert-race-test.ts",
     "safe-op-uncertain:test": "tsx scripts/safe-op-uncertain-test.ts",
     "pay:test": "tsx scripts/pay-page-test.ts",
     "ens:test": "tsx scripts/ens-test.ts",
