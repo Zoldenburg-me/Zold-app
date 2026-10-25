@@ -9,7 +9,7 @@
  * someone with a shell on the host can start an enrolment.
  */
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { OPERATOR } from "../config.js";
 import { DATA_DIR } from "../store/db.js";
@@ -41,7 +41,9 @@ export function startEnrolment(name: string, email: string, now = Date.now(), fi
     tokenHash: hash(token),
     expiresAt: new Date(now + OPERATOR.enrolmentTtlMs).toISOString(),
   };
+  // The chmod covers an existing file, whose old mode writeFileSync's `mode` would keep.
   writeFileSync(file, JSON.stringify(enrolment), { mode: 0o600 });
+  chmodSync(file, 0o600);
   return token;
 }
 
