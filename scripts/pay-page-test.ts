@@ -147,6 +147,20 @@ check("display name is optional, trimmed, and length-capped", () => {
   throws(() => normaliseDisplayName("x".repeat(41)), /40 characters/);
 });
 
+check("display name refuses what the handle and account-name rules refuse", () => {
+  for (const name of ["Zold Support", "monerium refunds", "Z0ld", "Vitalik Buterin", "Iron Pay", `0x${"11".repeat(19)}`, "pay 0xAbC", "Anna‮agerot‬", "Anna​Lee", "Anna\u0000Lee", "Anna<b>"]) {
+    throws(() => normaliseDisplayName(name), /displayName/);
+  }
+  for (const name of ["Miriam Z", "Lindner Holzbau & Söhne", "Ironing Board Co", "10x5 Studio", "Café Zürich"]) {
+    assert.equal(normaliseDisplayName(name), name);
+  }
+});
+
+check("a stored display name the rules refuse is not served, so the page shows the handle", () => {
+  const p = publicPayee({ ...user, paymentPage: { ...user.paymentPage, displayName: "Zold Support" } }, CHAIN);
+  assert.ok(!("displayName" in p));
+});
+
 check("the public projection returns exactly the expected payment-page keys", () => {
   const p = publicPayee(user, CHAIN);
   assert.deepEqual(Object.keys(p).sort(), [
