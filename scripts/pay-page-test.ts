@@ -148,7 +148,7 @@ check("display name is optional, trimmed, and length-capped", () => {
 });
 
 check("display name refuses what the handle and account-name rules refuse", () => {
-  for (const name of ["Zold Support", "monerium refunds", "Z0ld", "Vitalik Buterin", "Iron Pay", `0x${"11".repeat(19)}`, "pay 0xAbC", "Anna‮agerot‬", "Anna​Lee", "Anna\u0000Lee", "Anna<b>"]) {
+  for (const name of ["Zold Support", "monerium refunds", "Z0ld", "Vitalik Buterin", "Iron Pay", `0x${"11".repeat(19)}`, "pay 0xAbC", "Anna‮agerot‬", "Anna​Lee", "Anna\u0000Lee", "Anna<b>", "Pay ０ｘ８３２Ａ", "Pay0x12"]) {
     throws(() => normaliseDisplayName(name), /displayName/);
   }
   for (const name of ["Miriam Z", "Lindner Holzbau & Söhne", "Ironing Board Co", "10x5 Studio", "Café Zürich"]) {

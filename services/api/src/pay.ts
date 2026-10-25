@@ -17,6 +17,7 @@
  * leak the next field somebody adds.
  */
 import type { User } from "./store.js";
+import { cleanName } from "./users/display-name.js";
 
 /** 3-30 characters, lowercase alphanumeric and internal hyphens. */
 const HANDLE_RE = /^[a-z0-9](?:[a-z0-9-]{1,28}[a-z0-9])?$/;
@@ -143,7 +144,38 @@ export function normaliseDisplayName(raw: unknown): string | undefined {
   if (typeof raw !== "string") throw new HandleError("displayName must be a string");
   const name = raw.trim().replace(/\s+/g, " ");
   if (name.length > 40) throw new HandleError("displayName must be 40 characters or fewer");
-  return name || undefined;
+  if (!name) return undefined;
+  const refusal = displayNameRefusal(raw);
+  if (refusal) throw new HandleError(refusal);
+  return name;
+}
+
+/** Why a display name may not be shown, or undefined. It heads the page above
+ *  the deposit address, so it takes the handle's rules (no staff, partner or
+ *  well-known name, nothing that reads as an address) and the account name's
+ *  characters (no format, control or bidi characters). */
+function displayNameRefusal(name: string): string | undefined {
+  if (cleanName(name, { min: 1 }) === null) {
+    return "displayName cannot contain control, formatting or direction characters, emoji, < or >";
+  }
+  // Folded first so fullwidth digits and letters are tested as ASCII: accents
+  // dropped, fullwidth to ASCII.
+  // shortcut: letters from other scripts (Cyrillic "о") and Latin letters with
+  // no decomposition ("ł", "ø") are not folded, so such a look-alike passes the
+  // list; add a confusables fold if one is seen in use.
+  const folded = name.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase();
+  if (/(?<![0-9])0x[0-9a-f]/.test(folded)) return "displayName cannot contain 0x — it would read as an address";
+  // In handle form, every run of other characters a hyphen, so the handle list applies.
+  const asHandle = folded.replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const impersonated = impersonatedName(asHandle);
+  if (impersonated) return `displayName cannot contain "${impersonated}" — it would read as someone else's page`;
+  return undefined;
+}
+
+/** A stored display name if the current rules allow it. Checked when read, so
+ *  a name an older rule let in stops being served but is never deleted. */
+export function shownDisplayName(name: string | undefined): string | undefined {
+  return name && !displayNameRefusal(name) ? name : undefined;
 }
 
 export interface PublicPayee {
@@ -179,9 +211,10 @@ export function publicPayee(
   if (!page?.handle) {
     throw new HandleError("account has no payment handle");
   }
+  const displayName = shownDisplayName(page.displayName);
   return {
     handle: page.handle,
-    ...(page.displayName ? { displayName: page.displayName } : {}),
+    ...(displayName ? { displayName } : {}),
     address: page.depositAddress,
     chainId: chain.chainId,
     token: chain.token,
@@ -232,7 +265,7 @@ export function publicOrgPayee(
   return {
     kind: "organisation",
     handle: page.handle,
-    displayName: page.displayName || org.legalName || org.name,
+    displayName: shownDisplayName(page.displayName) || org.legalName || org.name,
     bank: {
       holder: holder?.trim() || org.legalName || org.name,
       holderVerified: Boolean(holder?.trim()),
