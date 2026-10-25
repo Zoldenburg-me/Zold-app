@@ -1,7 +1,17 @@
 import type { RecoveryRequest } from "./store.js";
 
 /**
- * A recovery request as its starter (and the owner) may see it. The new
+ * A recovery request as its starter sees it. Whoever knows the email can start
+ * one and hold its secret, so it names no account, Safe, module or guardian;
+ * the owner's session reads publicRecoveryRequest.
+ */
+export function starterRecoveryRequest(request: RecoveryRequest) {
+  const { userId: _userId, safeAddress: _safeAddress, guardianAddress: _guardianAddress, recoveryModuleAddress: _module, ...rest } = publicRecoveryRequest(request);
+  return rest;
+}
+
+/**
+ * A recovery request as its owner may see it. The new
  * credential stays private until it is bound, stored secrets never leave, and
  * channel targets are masked: a recovery id is not a licence to read
  * someone's phone number.

@@ -30,7 +30,7 @@ import { CHAIN_ID, HARNESS, RECOVERY, SECURITY } from "../config.js";
 import { store, type RecoveryRequest, type User } from "../store.js";
 import { operatorLabel, requireOperator } from "../http/guards.js";
 import { describeCause, describeError, shortErrorForClient, redactedMessage } from "../http/log-cause.js";
-import { publicRecoveryRequest } from "../recovery.js";
+import { publicRecoveryRequest, starterRecoveryRequest } from "../recovery.js";
 import { recoveryEnrolment } from "../admin/onboarding.js";
 import { bindRecoveredPasskey, deployVerifierForOwner } from "../recovery/recovered-passkey.js";
 import {
@@ -605,7 +605,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       }
     }
     if (expired(r)) {
-      res.status(410).json({ ...publicRecoveryRequest(store.updateRecoveryRequest(r.id, { status: "EXPIRED" })), error: "this recovery expired — start again" });
+      res.status(410).json({ ...starterRecoveryRequest(store.updateRecoveryRequest(r.id, { status: "EXPIRED" })), error: "this recovery expired — start again" });
       return undefined;
     }
     return r;
@@ -613,7 +613,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
 
   /** A request as the person recovering sees it, with the 1 € check. */
   const askView = (r: RecoveryRequest) => ({
-    ...publicRecoveryRequest(r),
+    ...starterRecoveryRequest(r),
     bankCheck: bankCheckView(r, store.findUser(r.userId)),
   });
 
@@ -672,7 +672,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
         store.addRecoveryRequest(request);
       }
       const out: Record<string, unknown> = {
-        ...publicRecoveryRequest(request),
+        ...starterRecoveryRequest(request),
         ...(secret ? { recoverySecret: secret } : {}),
         gracePeriodSeconds: recoveryGracePeriodSeconds(moduleAddress),
       };
@@ -681,7 +681,6 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
         if (open) store.updateRecoveryRequest(request.id, { zoldenburg: { ...request.zoldenburg!, ceremonyAt: now.toISOString() } });
         out.registerChallenge = issueChallenge("register", `recovery:${request.id}`);
         out.rpId = SECURITY.rpId;
-        out.userHandle = user.id;
         out.submitTo = `/api/recovery/zoldenburg/${request.id}/passkey`;
       }
       res.status(open ? 200 : 201).json(out);
@@ -693,7 +692,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
     wrap(async (req, res) => {
       const request = await requestFor(req, res);
       if (!request) return;
-      if (request.status !== "PASSKEY_PENDING") return res.status(409).json({ ...publicRecoveryRequest(request), error: `recovery is ${request.status}` });
+      if (request.status !== "PASSKEY_PENDING") return res.status(409).json({ ...starterRecoveryRequest(request), error: `recovery is ${request.status}` });
       const user = store.findUser(request.userId);
       if (!user?.passkeySafe) return res.status(410).json({ error: "the account behind this recovery no longer exists" });
       const { credentialId, attestation, clientDataJSON } = req.body ?? {};
@@ -799,14 +798,14 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
     wrap(async (req, res) => {
       const request = await requestFor(req, res);
       if (!request) return;
-      if (request.status === "FINALIZED") return res.json(publicRecoveryRequest(request));
-      if (request.status !== "GRACE_PERIOD") return res.status(409).json({ ...publicRecoveryRequest(request), error: `recovery is ${request.status}` });
+      if (request.status === "FINALIZED") return res.json(starterRecoveryRequest(request));
+      if (request.status !== "GRACE_PERIOD") return res.status(409).json({ ...starterRecoveryRequest(request), error: `recovery is ${request.status}` });
       const updated = await finalizeZoldenburgRecovery(request);
       if (updated.status !== "FINALIZED") {
-        return res.status(502).json({ ...publicRecoveryRequest(updated), error: updated.zoldenburg?.finalizeError ?? "not finalized yet" });
+        return res.status(502).json({ ...starterRecoveryRequest(updated), error: updated.zoldenburg?.finalizeError ?? "not finalized yet" });
       }
       // No session: the new passkey signs in through the ordinary login.
-      res.json(publicRecoveryRequest(updated));
+      res.json(starterRecoveryRequest(updated));
     }),
   );
 

@@ -223,7 +223,6 @@ export function createTurnkeyRecoveryRouter({
       if (request.status === "PASSKEY_PENDING") {
         out.registerChallenge = issueChallenge("register", `recovery:${request.id}`);
         out.rpId = SECURITY.rpId;
-        out.userHandle = user.id;
         out.submitTo = `/api/recovery/turnkey/requests/${request.id}/passkey`;
       }
       res.status(open ? 200 : 201).json(out);
