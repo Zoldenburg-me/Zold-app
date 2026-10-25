@@ -93,10 +93,10 @@ const PENDING = {
   usage: { esimGb: 0, vpnGb: 0, periodStartedAt: "2026-10-01T00:00:00Z" },
 };
 /** Render the bundle for one account and one deployment; the catalog fetch fails unless given. */
-async function render(privacyBundle: unknown, live: boolean, catalog: unknown = null) {
+async function render(privacyBundle: unknown, live: boolean, catalog: unknown = null, kycStatus = "approved") {
   els.clear();
   fetched.length = 0;
-  run(`user = ${JSON.stringify({ id: "u1", name: "Erika Muster", kycStatus: "approved", privacyBundle })};
+  run(`user = ${JSON.stringify({ id: "u1", name: "Erika Muster", kycStatus, privacyBundle })};
     caps = { ...caps, privacyBundle: ${live} }; capsLoaded = true; privacyCatalog = ${JSON.stringify(catalog)};`);
   await run("renderPrivacyBundle()");
 }
@@ -135,6 +135,14 @@ await check("offer on, no subscription: the plans can be added", async () => {
   assert.ok(!hidden("privacy-card"));
   assert.match(el("privacy-plans").innerHTML, /data-plan="travel-shield"/);
   assert.match(run("PH.settings.html()"), /href="#bundle"/);
+});
+
+await check("offer on, account not yet approved: no Settings entry, and #bundle lands on Settings", async () => {
+  await render(undefined, true, CATALOG, "pending");
+  assert.doesNotMatch(run("PH.settings.html()"), /#bundle/);
+  run(`mobileNavLegacy("bundle")`);
+  assert.equal(el("dashboard").dataset.msub, undefined);
+  assert.equal(run("phRoute?.name"), "settings");
 });
 
 await check("#bundle and an old #plus open no screen where the offer is off and the account holds none, and the bundle for a subscriber", async () => {

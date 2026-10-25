@@ -71,9 +71,10 @@ function mobileNav(target) {
 function mobileNavLegacy(target) {
   const shell = $("dashboard");
   // There is no Plus tier: an old #plus link opens the bundle, and the bundle
-  // where it is off and the account holds none lands on Settings.
+  // lands on Settings where it would be empty: the offer is off or the account
+  // may not subscribe yet, and it holds none.
   if (target === "plus") target = "bundle";
-  if (target === "bundle" && !caps.privacyBundle && !bundleSubscribed(user)) return phGo("settings", null, { replace: true });
+  if (target === "bundle" && !(caps.privacyBundle && kycApproved(user)) && !bundleSubscribed(user)) return phGo("settings", null, { replace: true });
   const sub = { bundle: "bundle", payment: "payment", share: "share", card: "card",
     monerium: "monerium", recovery: "recovery", documents: "documents", signers: "signers" }[target];
   if (!sub) return phGo("settings");

@@ -85,8 +85,9 @@ PH.settings = {
     ];
     // Accounting software connects to a space in Zold Business, not here.
     const connections = HAS("monerium") ? [Z.row({ lead: Z.iconTile({ icon: "account_balance" }), title: "Monerium", sub: mon, href: "#monerium-settings" })] : [];
-    // The bundle's only entry: where the offer is live, or for an account that holds one.
-    const bundleRow = bundle || caps.privacyBundle === true ? Z.listGroup({ rows: [Z.row({ lead: Z.iconTile({ icon: "vpn_lock" }), title: "Privacy Bundle", sub: !bundle ? "eSIM and VPN" : u.privacyBundle.status === "active" ? "Active" : "Awaiting partner setup", href: "#bundle" })] }) : "";
+    // The bundle's only entry: where the offer is live and the account may subscribe
+    // (the API needs approval), or for an account that holds one.
+    const bundleRow = bundle || (caps.privacyBundle === true && kycApproved(u)) ? Z.listGroup({ rows: [Z.row({ lead: Z.iconTile({ icon: "vpn_lock" }), title: "Privacy Bundle", sub: !bundle ? "eSIM and VPN" : u.privacyBundle.status === "active" ? "Active" : "Awaiting partner setup", href: "#bundle" })] }) : "";
     return `${phTop("Settings", "more")}${phMain(`
       ${Z.listGroup({ rows: account })}
       ${connections.length ? `<section class="z-group"><h2 class="z-eyebrow">Connections</h2>${Z.listGroup({ rows: connections })}</section>` : ""}
