@@ -319,8 +319,8 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
           return res.status(401).json({ error: redactedMessage(err) });
         }
 
-        // Measure BEFORE submitting: the credited amount is the balance delta, not
-        // anything the quote promised.
+        // Read BEFORE submitting: the credited amount is the swap's own logged
+        // output, and this balance delta checks it.
         const before = eur.toWei(await accountBalances(user.address).then((b) => b.safeBalanceEur));
         // The rate sanity check runs BEFORE the user-signed swap lands: after it,
         // a rate-feed outage would leave the EURe in the Safe with the deposit
@@ -390,7 +390,7 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
           // deposit's (the approval was for its remainder), so it is capped;
           // no receipt to read means the whole remainder is taken as swapped.
           const asked = unconvertedUnits(current);
-          const took = await usdcSwappedIn(submitted.txHash, user.address, pending.userOperation.paymaster)
+          const took = await usdcSwappedIn(submitted.txHash, submitted.userOpHash, user.address, pending.userOperation.paymaster)
             .catch((err) => {
               console.error(`convert: could not read what swap ${submitted.txHash} took:`, describeCause(err));
               return undefined;

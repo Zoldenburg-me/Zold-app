@@ -644,7 +644,8 @@ export async function submitPasskeySafeOperationWithReceipt(
   const { account, passkeyOwner } = accountForPlan(plan);
   if (allowSimulation()) {
     // Harness only (hardhat, no bundler): a fake receipt to match the fake hash.
-    return { userOpHash: "0xmock-user-op-hash", txHash: "0xmock-tx-hash", blockNumber: 0, gasCostWei: "0", gasPaidBy, success: true };
+    // Both hashes are hash-shaped so a test's stub chain can answer the receipt.
+    return { userOpHash: `0x${"0".repeat(63)}1`, txHash: `0x${"0".repeat(64)}`, blockNumber: 0, gasCostWei: "0", gasPaidBy, success: true };
   }
   const deployed = await isDeployed(account.accountAddress);
   const passkeySigner = fromSafeWebauthn({

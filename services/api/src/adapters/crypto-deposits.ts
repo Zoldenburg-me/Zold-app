@@ -30,6 +30,7 @@
  *   transfer belongs with a compliance provider.
  */
 import { randomUUID } from "node:crypto";
+import { ENTRYPOINT_V9 } from "abstractionkit";
 import { decodeEventLog } from "viem";
 import { usdToken } from "../usd-token.js";
 import { CHAIN_ID, CRYPTO_IN } from "../config.js";
@@ -296,47 +297,98 @@ export function settleOnArrival(deposit: CryptoDeposit): CryptoDeposit {
   return settled;
 }
 
+const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+/** The EntryPoint's BeforeExecution() and UserOperationEvent(bytes32,...).
+ *  A bundle executes its userOps in order after BeforeExecution, and each
+ *  op's logs end with its own UserOperationEvent. */
+const BEFORE_EXECUTION_TOPIC = "0xbb47ee3e183a558b1a2ff0874b079f3fc5478b7454eacf2bfc5af2ff5878f972";
+const USER_OP_EVENT_TOPIC = "0x49628fd1471006c1482da88028e9ce4dbb080b815c9b0344d39e5a8e6ec1419f";
+/** The EntryPoint the Safe's userOps go through (UserOperationV9). */
+const ENTRY_POINT = ENTRYPOINT_V9.toLowerCase();
+
 /**
- * USDC a swap took from the Safe, read from the swap transaction's own
- * Transfer logs. That is what left, not what the quote asked for; a balance
- * delta would also count a payment that arrived in the same block. A transfer
- * to the paymaster is gas paid in USDC, not swap input. Undefined when there
- * is no transaction receipt to read.
+ * Transfer logs of one token in one transaction's receipt. When the
+ * transaction is an EntryPoint bundle, only the logs of `userOpHash`'s own
+ * execution count: another party's userOp in the same bundle may send the
+ * same token to the same Safe. Undefined when there is no receipt to read, or
+ * a userOp is named or present but that one's event is not in the receipt.
+ */
+async function tokenTransfers(txHash: string | undefined, token: string, userOpHash: string | null | undefined) {
+  if (!txHash || !/^0x[0-9a-fA-F]{64}$/.test(txHash)) return undefined;
+  const receipt = await publicClient.getTransactionReceipt({ hash: txHash as `0x${string}` });
+  let logs = receipt.logs;
+  // Markers count only from the EntryPoint itself: any contract in the bundle
+  // can emit a log shaped like one. receipt.to may be a bundler's own contract.
+  const marker = (i: number, topic: string) =>
+    logs[i].address.toLowerCase() === ENTRY_POINT && logs[i].topics[0] === topic;
+  const end = logs.findIndex((l, i) => marker(i, USER_OP_EVENT_TOPIC) && l.topics[1]?.toLowerCase() === userOpHash?.toLowerCase());
+  if (end >= 0) {
+    let start = end - 1;
+    while (start >= 0 && !marker(start, USER_OP_EVENT_TOPIC) && !marker(start, BEFORE_EXECUTION_TOPIC)) start--;
+    logs = logs.slice(start + 1, end);
+  } else if (userOpHash || logs.some((_, i) => marker(i, USER_OP_EVENT_TOPIC))) {
+    // A userOp whose own event is not in this receipt: nothing here is its.
+    return undefined;
+  }
+  const transfers: { from: string; to: string; value: bigint }[] = [];
+  for (const log of logs) {
+    if (log.address.toLowerCase() !== token.toLowerCase() || log.topics[0] !== TRANSFER_TOPIC) continue;
+    const { args } = decodeEventLog({ abi: [TRANSFER_EVENT], data: log.data, topics: log.topics });
+    transfers.push({ from: args.from.toLowerCase(), to: args.to.toLowerCase(), value: args.value });
+  }
+  return transfers;
+}
+
+/**
+ * USDC a swap took from the Safe, read from the swap's own Transfer logs.
+ * That is what left, not what the quote asked for; a balance delta would also
+ * count a payment that arrived in the same block. A transfer to the paymaster
+ * is gas paid in USDC, not swap input. Undefined when there is no receipt to
+ * read.
  */
 export async function usdcSwappedIn(
   txHash: string | undefined,
+  userOpHash: string | null | undefined,
   safe: string,
   paymaster: string | null | undefined,
 ): Promise<bigint | undefined> {
-  if (!txHash || !/^0x[0-9a-fA-F]{64}$/.test(txHash)) return undefined;
-  const receipt = await publicClient.getTransactionReceipt({ hash: txHash as `0x${string}` });
-  const usdc = addrs().usdc.toLowerCase();
-  let took = 0n;
-  for (const log of receipt.logs) {
-    if (log.address.toLowerCase() !== usdc) continue;
-    let ev;
-    try {
-      ev = decodeEventLog({ abi: [TRANSFER_EVENT], data: log.data, topics: log.topics });
-    } catch {
-      continue; // an Approval, not a Transfer
-    }
-    if (ev.args.from.toLowerCase() !== safe.toLowerCase()) continue;
-    if (paymaster && ev.args.to.toLowerCase() === paymaster.toLowerCase()) continue;
-    took += ev.args.value;
-  }
-  return took;
+  const transfers = await tokenTransfers(txHash, addrs().usdc, userOpHash);
+  return transfers
+    ?.filter((t) => t.from === safe.toLowerCase() && (!paymaster || t.to !== paymaster.toLowerCase()))
+    .reduce((n, t) => n + t.value, 0n);
+}
+
+/**
+ * EURe a swap delivered to the Safe, read from the swap's own Transfer logs.
+ * EURe from any other transaction (a SEPA mint, a payment) is the scanner's
+ * to book as its own deposit; the Safe moving EURe to itself delivers
+ * nothing. Undefined when there is no receipt to read.
+ */
+export async function eureSwappedOut(
+  txHash: string | undefined,
+  userOpHash: string | null | undefined,
+  safe: string,
+): Promise<bigint | undefined> {
+  const s = safe.toLowerCase();
+  const transfers = await tokenTransfers(txHash, addrs().eure, userOpHash);
+  return transfers?.filter((t) => t.to === s && t.from !== s).reduce((n, t) => n + t.value, 0n);
 }
 
 /**
  * Record the result of a conversion the user signed and the API submitted.
  *
- * The credited amount is measured as the Safe's EURe balance delta, not copied
- * from the quote (a swap that did not revert may still deliver less). The
- * signed floor is checked against that delta too.
+ * The credited amount is measured from the swap transaction's EURe Transfer
+ * logs into the Safe, not copied from the quote (a swap that did not revert
+ * may still deliver less) and not taken from the balance delta (EURe from
+ * another transaction in the same window is the scanner's to book). The
+ * signed floor is checked against that logged amount. The delta is only a
+ * reconciliation check: more than logged is recorded on the conversion for
+ * the reconciler, less than logged means EURe left the Safe mid-swap and the
+ * conversion is left for review.
  *
  * Runs after the swap executed, so it must not throw on anything but a
- * failure to read the chain: the caller has already marked the row
- * `unconfirmed` and leaves it there if this throws.
+ * failure to read the chain (no receipt is one): the caller has already
+ * marked the row `unconfirmed` and leaves it there if this throws.
  */
 export async function settleConvertedDeposit(
   deposit: CryptoDeposit,
@@ -353,13 +405,26 @@ export async function settleConvertedDeposit(
   // mid is recorded when there is one and left out when there is not.
   const venueRate = Number(quote.rate) / 1e6;
   const midRate = await midRates().then((r) => r.eur.USD, () => undefined);
-  const after = await balanceAfterWrite(addrs().eure, user.address as `0x${string}`, balanceBeforeWei);
-  const receivedWei = after - balanceBeforeWei;
+  const receivedWei = await eureSwappedOut(conversion?.txHash, conversion?.userOpHash, user.address);
+  if (receivedWei === undefined) throw new Error("the swap has no transaction receipt to measure what arrived");
+  // Wait for a read that shows the logged output, so a replica that has seen
+  // an earlier inflow but not the swap does not read as EURe leaving.
+  const after = await balanceAfterWrite(addrs().eure, user.address as `0x${string}`, balanceBeforeWei, balanceBeforeWei + receivedWei);
+  const deltaWei = after - balanceBeforeWei;
 
   if (receivedWei <= 0n) {
     return store.updateCryptoDeposit(deposit.id, {
       holding: "refused",
       reason: "the swap delivered no EURe to your account — nothing has been credited",
+      txs,
+    });
+  }
+  if (deltaWei < receivedWei) {
+    return store.updateCryptoDeposit(deposit.id, {
+      holding: "refused",
+      reason:
+        `the swap delivered €${eur.fromWei(receivedWei)}, but the account's balance shows only €${eur.fromWei(deltaWei)} more ` +
+        "— EURe may have left the account while it ran, or the balance read is behind; left for review rather than credited",
       txs,
     });
   }
@@ -379,6 +444,14 @@ export async function settleConvertedDeposit(
   const leftover = remaining - amountInUnits;
   const partials = deposit.partials ?? [];
   const rates = { provider: quote.provider, rate: venueRate, ...(midRate ? { midRate } : {}) };
+  // More arrived than the swap delivered: another transaction's EURe, which
+  // the scanner books as its own deposit. Kept for the reconciler, not credited.
+  const otherInflowWei = deltaWei - receivedWei;
+  const recorded = {
+    ...(conversion ?? {}),
+    amountInUnits: amountInUnits.toString(),
+    ...(otherInflowWei > 0n ? { otherInflowWei: otherInflowWei.toString() } : {}),
+  };
   console.log(
     `crypto-in: converted ${usd.fromUnits(amountInUnits)} USDC to EUR ${filledEur} for ${user.name} ` +
       `via ${quote.provider} at ${venueRate.toFixed(4)}` + (leftover > 0n ? ` (${usd.fromUnits(leftover)} USDC left held)` : ""),
@@ -401,7 +474,7 @@ export async function settleConvertedDeposit(
           creditedEur: filledEur,
           ...(receiptPortionEur === undefined ? {} : { receiptPortionEur }),
           ...rates,
-          conversion: { ...(conversion ?? {}), amountInUnits: amountInUnits.toString() },
+          conversion: recorded,
         },
       ],
       creditedUsdc: usd.fromUnits(leftover),
@@ -439,7 +512,7 @@ export async function settleConvertedDeposit(
     settlementAsset: "EURE",
     ...rates,
     ...(realisedGainEur === undefined ? {} : { realisedGainEur }),
-    conversion: { ...(conversion ?? {}), amountInUnits: amountInUnits.toString() },
+    conversion: recorded,
     leftoverUnits: undefined,
     txs,
     reason: undefined,

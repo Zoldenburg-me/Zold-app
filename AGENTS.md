@@ -100,7 +100,10 @@ Each of these was a bug once.
 - **Venue calldata is allowlisted** (`LIFI_CONTRACTS`, `BEBOP_CONTRACTS`), value
   must be 0, and you approve the spender the maker **NAMES** (`approvalTarget`,
   not `tx.to`).
-- **Amounts out are MEASURED** as a balance delta, never copied from the quote.
+- **Amounts out are MEASURED**, never copied from the quote. A crypto-in
+  conversion credits the swap receipt's EURe Transfer logs into the Safe; its
+  balance delta is only a check (more: recorded, less: review). Other venues
+  still measure a balance delta.
 - **Compensation is asymmetric on purpose**: only a 4xx refusal refunds; a
   timeout, a duplicate-transfer revert, or any failure after Bridge holds the
   deposit is MANUAL_REVIEW. `store.updateTransfer` refuses to move a

@@ -11,7 +11,7 @@
  *
  * Offline: the router runs in-process, the Safe operation is the hardhat
  * harness stand-in, the venue plan is stubbed, and a stub JSON-RPC answers
- * balanceOf. Needs deployments.json for chain 31337, which `npm run check`
+ * balanceOf and the swap's receipt (a bundle with another party's userOp). Needs deployments.json for chain 31337, which `npm run check`
  * has written by the time this suite runs.
  *
  * Run: npm run convert:race:test
@@ -25,10 +25,48 @@ import path from "node:path";
 import express from "express";
 import { makeSoftwarePasskey } from "./_software-passkey.js";
 
-// Every EURe read is higher than the last, so a balance delta is always a
-// delivery; USDC always covers the deposit.
+// Every EURe read is higher than the last, so the balance delta always covers
+// the swap's logged 100 EURe; USDC always covers the deposit.
 let eureReads = 0n;
 let usdcAddress = "";
+let eureAddress = "";
+const SAFE = "0x1111111111111111111111111111111111111111";
+const ENTRY_POINT = "0x433709009b8330fda32311df1c2afa402ed8d009"; // ENTRYPOINT_V9
+// The harness stand-in's userOp hash (wallet/candide.ts).
+const OUR_OP = `0x${"0".repeat(63)}1`;
+const OTHER_OP = `0x${"0".repeat(63)}2`;
+const word = (v: string | bigint) => "0x" + (typeof v === "bigint" ? v.toString(16) : v.slice(2)).padStart(64, "0");
+/**
+ * The swap lands in a bundle with another party's userOp, which also sends
+ * this Safe 50 EURe and forges our op's event. Only the 100 inside our own
+ * op's logs is the swap's.
+ */
+const swapReceipt = (hash: string) => {
+  const at = { blockHash: word("0x1"), blockNumber: "0x1", transactionHash: hash, transactionIndex: "0x0", removed: false };
+  const eureIn = (eure: bigint) => ({
+    address: eureAddress,
+    topics: ["0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef", word("0x0"), word(SAFE)],
+    data: word(eure * 10n ** 18n),
+  });
+  const opEnd = (op: string) => ({
+    address: ENTRY_POINT,
+    topics: ["0x49628fd1471006c1482da88028e9ce4dbb080b815c9b0344d39e5a8e6ec1419f", op, word(SAFE), word("0x0")],
+    data: "0x",
+  });
+  const logs = [
+    { address: ENTRY_POINT, topics: ["0xbb47ee3e183a558b1a2ff0874b079f3fc5478b7454eacf2bfc5af2ff5878f972"], data: "0x" },
+    eureIn(50n), opEnd(OTHER_OP),
+    // A co-tenant contract forging our op's event must not open a span.
+    { ...opEnd(OUR_OP), address: `0x${"ee".repeat(20)}` },
+    eureIn(100n), opEnd(OUR_OP),
+  ];
+  return {
+    ...at, contractAddress: null, cumulativeGasUsed: "0x0", effectiveGasPrice: "0x0", from: SAFE, gasUsed: "0x0",
+    // Sent through a bundler's own contract, so `to` is not the EntryPoint.
+    logsBloom: "0x" + "0".repeat(512), status: "0x1", to: `0x${"b0".repeat(20)}`, type: "0x2",
+    logs: logs.map((l, i) => ({ ...at, ...l, logIndex: "0x" + i.toString(16) })),
+  };
+};
 const rpc = createServer((req, res) => {
   let body = "";
   req.on("data", (c) => (body += c));
@@ -36,6 +74,7 @@ const rpc = createServer((req, res) => {
     const calls = [JSON.parse(body)].flat();
     const out = calls.map((c: any) => {
       if (c.method === "eth_chainId") return { jsonrpc: "2.0", id: c.id, result: "0x7a69" };
+      if (c.method === "eth_getTransactionReceipt") return { jsonrpc: "2.0", id: c.id, result: swapReceipt(c.params[0]) };
       if (c.method !== "eth_call") return { jsonrpc: "2.0", id: c.id, error: { code: -32601, message: c.method } };
       const usdc = String(c.params[0].to).toLowerCase() === usdcAddress;
       const value = usdc ? 1_000n * 10n ** 6n : ++eureReads * 100n * 10n ** 18n;
@@ -59,6 +98,7 @@ const { FxSwapperLiquidityProvider } = await import("../services/api/src/liquidi
 
 initStore();
 usdcAddress = addrs().usdc.toLowerCase();
+eureAddress = addrs().eure.toLowerCase();
 
 // The venue: a fixed plan at the pinned mid. FxSwapper has no Safe plan of its
 // own; this one only has to price the swap the harness then "executes".
@@ -72,7 +112,6 @@ usdcAddress = addrs().usdc.toLowerCase();
 
 const ORIGIN = "http://localhost:3000";
 const passkey = await makeSoftwarePasskey("race", ORIGIN);
-const SAFE = "0x1111111111111111111111111111111111111111";
 const hex = (b64: string) => "0x" + Buffer.from(b64, "base64url").toString("hex");
 const now = new Date().toISOString();
 store.addUser({
@@ -121,6 +160,10 @@ try {
   assert.equal(d.holding, "converted");
   const won = both.find((r) => r.status === 200)!.data.deposit;
   assert.equal(d.creditedEur, won.creditedEur, "credited once: the one measured delivery");
+  assert.equal(d.creditedEur, 100, "the credit is the swap's own logged output, not a co-tenant op's EURe");
+  const { eureSwappedOut } = await import("../services/api/src/adapters/crypto-deposits.js");
+  assert.equal(await eureSwappedOut(word("0x9"), `0x${"0".repeat(63)}3`, SAFE), undefined, "a bundle without our op measures nothing");
+  console.log("  ok  only the swap's own userOp's EURe is credited from a shared bundle");
   console.log("  ok  the same signed conversion submitted twice at once converts and credits once");
 
   const again = await post("/convert", { executionAssertion });
@@ -134,4 +177,4 @@ try {
   rpc.close();
 }
 if (failed) process.exit(1);
-console.log("convert-race: 2/2 checks passed");
+console.log("convert-race: 3/3 checks passed");

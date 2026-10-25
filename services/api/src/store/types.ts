@@ -559,7 +559,7 @@ export interface CryptoDeposit {
    * - held: not converted; the user may convert it at any time.
    * - awaiting_approval: auto-convert is on, and the swap waits for the
    *   passkey signature (the API cannot move funds).
-   * - converted: swapped; `creditedEur` is the measured delta.
+   * - converted: swapped; `creditedEur` is what the swap's logs delivered.
    * - refused: a swap was refused or failed; the USDC is still held and the
    *   conversion can be retried.
    * - unconfirmed: a conversion was sent and its inclusion never confirmed.
@@ -605,6 +605,10 @@ export interface CryptoDeposit {
      *  Safe in ETH or in the gas token. */
     gasCostWei?: string;
     gasPaidBy?: "sponsored" | "safe-native" | "safe-token";
+    /** EURe wei the Safe's balance grew by beyond what the swap's logs
+     *  delivered: another transaction's money, booked by the scanner as its
+     *  own deposit and not credited here. The reconciler reports it. */
+    otherInflowWei?: string;
   };
   /** USDC units still held after a partial fill; cleared once the rest is
    *  converted. */

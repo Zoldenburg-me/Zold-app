@@ -517,8 +517,8 @@ try {
 
   // Converting the held USDC later rewrites the same settlement row; it never
   // settles the invoice a second time. The swap itself needs a bundler, so the
-  // EURe it would deliver is minted into the Safe and the settle step runs on
-  // the measured delta, as crypto:test does.
+  // EURe it would deliver is minted into the Safe and the settle step reads
+  // that mint's logs, as crypto-deposit:test does.
   {
     const { settleConvertedDeposit, depositConversionBlocker, unconvertedUnits } = await import("../services/api/src/adapters/crypto-deposits.js");
     const { accountBalances, eur, usd } = await import("../services/api/src/chain.js");
@@ -535,10 +535,10 @@ try {
       const toVenue = await writeAndWait(deployerWallet!, { address: addrs().usdc, abi: abis.MockToken, functionName: "transfer", args: [venue, 3_250_000n] });
       const toPaymaster = await writeAndWait(deployerWallet!, { address: addrs().usdc, abi: abis.MockToken, functionName: "transfer", args: [paymasterAddr, 400_000n] });
       check("the USDC a swap took is measured from its logs, gas to the paymaster excluded, someone else's transfer not counted",
-        (await usdcSwappedIn(toVenue, me, paymasterAddr)) === 3_250_000n &&
-          (await usdcSwappedIn(toPaymaster, me, paymasterAddr)) === 0n &&
-          (await usdcSwappedIn(toVenue, owner, null)) === 0n &&
-          (await usdcSwappedIn(undefined, me, null)) === undefined);
+        (await usdcSwappedIn(toVenue, undefined, me, paymasterAddr)) === 3_250_000n &&
+          (await usdcSwappedIn(toPaymaster, undefined, me, paymasterAddr)) === 0n &&
+          (await usdcSwappedIn(toVenue, undefined, owner, null)) === 0n &&
+          (await usdcSwappedIn(undefined, undefined, me, null)) === undefined);
     }
 
     // A partial fill first: the swap takes half. The rest stays held and
@@ -546,10 +546,10 @@ try {
     const half = BigInt(dInv.amountUnits) / 2n;
     const firstBefore = eur.toWei((await accountBalances(owner)).safeBalanceEur);
     const firstOut = 12;
-    await writeAndWait(deployerWallet!, { address: addrs().eure, abi: abis.MockToken, functionName: "mint", args: [owner, eur.toWei(firstOut)] });
+    const firstTx = await writeAndWait(deployerWallet!, { address: addrs().eure, abi: abis.MockToken, functionName: "mint", args: [owner, eur.toWei(firstOut)] });
     const part = await settleConvertedDeposit(store.cryptoDeposits.find((d) => d.id === dInv.id)!, miriam,
-      { provider: "dex", rate, minOut: eur.toWei(11) }, firstBefore, [{ step: "safe.swap(usdc->eure)", hash: `0x${"aa".repeat(32)}` }],
-      { txHash: `0x${"aa".repeat(32)}`, amountInUnits: half.toString() });
+      { provider: "dex", rate, minOut: eur.toWei(11) }, firstBefore, [{ step: "safe.swap(usdc->eure)", hash: firstTx }],
+      { txHash: firstTx, amountInUnits: half.toString() });
     const rest = BigInt(dInv.amountUnits) - half;
     check("a partial fill stays held for the rest, with that fill kept as a partial",
       part.holding === "held" && part.partials?.length === 1 && part.partials[0].creditedEur === firstOut &&
@@ -562,10 +562,10 @@ try {
     const before = eur.toWei((await accountBalances(owner)).safeBalanceEur);
     const out = 24.93;
     const total = Math.round((firstOut + out) * 100) / 100;
-    await writeAndWait(deployerWallet!, { address: addrs().eure, abi: abis.MockToken, functionName: "mint", args: [owner, eur.toWei(out)] });
+    const restTx = await writeAndWait(deployerWallet!, { address: addrs().eure, abi: abis.MockToken, functionName: "mint", args: [owner, eur.toWei(out)] });
     const conv = await settleConvertedDeposit(store.cryptoDeposits.find((d) => d.id === dInv.id)!, miriam,
       { provider: "dex", rate, minOut: eur.toWei(24) }, before,
-      [{ step: "safe.swap(usdc->eure)", hash: `0x${"aa".repeat(32)}` }, { step: "safe.swap(usdc->eure)", hash: `0x${"ab".repeat(32)}` }]);
+      [{ step: "safe.swap(usdc->eure)", hash: firstTx }, { step: "safe.swap(usdc->eure)", hash: restTx }], { txHash: restTx });
     const after = store.findInvoice(theirs)!;
     const rows = (after.settlements ?? []).filter((x: any) => x.depositId === dInv.id) as any[];
     check("converting the rest leaves ONE settlement row for the deposit, carrying both fills' EURe",
