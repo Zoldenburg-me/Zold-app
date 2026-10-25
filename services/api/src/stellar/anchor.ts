@@ -37,6 +37,8 @@ export async function getTreasury(file = TREASURY_PATH): Promise<Keypair> {
     if (IS_PRODUCTION) {
       throw new Error("production anchor mode requires STELLAR_TREASURY_SECRET or managed signing, not data/stellar-treasury.json");
     }
+    // A file written before it was owner-only is tightened before it is read.
+    chmodSync(file, 0o600);
     return Keypair.fromSecret(JSON.parse(readFileSync(file, "utf8")).secret);
   }
   if (IS_PRODUCTION || STELLAR.networkPassphrase !== STELLAR_TESTNET_PASSPHRASE || !STELLAR.friendbot) {

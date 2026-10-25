@@ -422,15 +422,19 @@ await check("a new operator enrolment file, and one over a stale 0644 file, is m
     const stale = path.join(dir, "stale.json");
     writeFileSync(stale, "{}");
     chmodSync(stale, 0o644);
+    writeFileSync(stale + ".tmp", "{}");
+    chmodSync(stale + ".tmp", 0o644);
+    const inode = statSync(stale).ino;
     startEnrolment("Op", "op@example.com", Date.now(), stale);
+    // A new file renamed over the old: the details never sit in the 0644 one.
+    assert.notEqual(statSync(stale).ino, inode);
     assert.equal(statSync(stale).mode & 0o777, 0o600);
   } finally {
     process.umask(oldUmask);
     rmSync(dir, { recursive: true, force: true });
   }
 });
-await check("a provisioned testnet Stellar treasury file is mode 600 under umask 022", async () => {
-  // An existing treasury file is read, never rewritten, so only the create path writes.
+await check("a provisioned testnet Stellar treasury file is mode 600 under umask 022, and a stale 0644 one is tightened on read", async () => {
   const { STELLAR, STELLAR_TESTNET_PASSPHRASE } = await import("../services/api/src/config.js");
   const { getTreasury } = await import("../services/api/src/stellar/anchor.js");
   const saved = { ...STELLAR };
@@ -441,7 +445,11 @@ await check("a provisioned testnet Stellar treasury file is mode 600 under umask
     Object.assign(STELLAR, { treasurySecret: "", networkPassphrase: STELLAR_TESTNET_PASSPHRASE, friendbot: "https://friendbot.invalid" });
     globalThis.fetch = (async () => new Response("{}")) as typeof fetch;
     const file = path.join(dir, "data", "stellar-treasury.json");
-    await getTreasury(file);
+    const kp = await getTreasury(file);
+    assert.equal(statSync(file).mode & 0o777, 0o600);
+    // A treasury file left at 0644 by an older write is tightened when read.
+    chmodSync(file, 0o644);
+    assert.equal((await getTreasury(file)).publicKey(), kp.publicKey());
     assert.equal(statSync(file).mode & 0o777, 0o600);
   } finally {
     process.umask(oldUmask);
