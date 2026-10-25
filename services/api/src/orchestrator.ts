@@ -124,9 +124,12 @@ function inputFundsMoved(txs: Transfer["txs"]): boolean {
 
 
 /** EUR this user has committed to Safe-funded transfers today. FAILED/REFUNDED
- * transfers released their reservation. */
+ * transfers released their reservation, and so did a CREATED one never signed
+ * before its deadline: assertDeviceAuthorization refuses it, so it can never
+ * debit. A claimed one (authorizedAt) or one without terms still counts. */
 export function safeFundedEurToday(userId: string, now = new Date()): number {
   const day = now.toISOString().slice(0, 10);
+  const nowSec = now.getTime() / 1000;
   // Transfers still being prepared hold their share of the cap before their
   // row exists — see store.holdDailyCap.
   return store.heldEurToday(userId, day) + store.transfers
@@ -135,7 +138,8 @@ export function safeFundedEurToday(userId: string, now = new Date()): number {
         t.userId === userId &&
         t.fundingSource === "safe" &&
         t.createdAt.slice(0, 10) === day &&
-        !["FAILED", "REFUNDED"].includes(t.state),
+        !["FAILED", "REFUNDED"].includes(t.state) &&
+        !(t.state === "CREATED" && t.auth && !t.auth.authorizedAt && nowSec > t.auth.deadline),
     )
     .reduce((sum, t) => sum + t.sendEur, 0);
 }
