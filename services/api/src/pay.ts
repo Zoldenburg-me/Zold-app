@@ -156,6 +156,18 @@ const LATIN_FOLD: Record<string, string> = {
   "ə": "e", "ɛ": "e", "ɔ": "o", "ŋ": "n", "ŧ": "t", "ɓ": "b", "ɗ": "d", "ƒ": "f", "ʒ": "z", "ĸ": "k",
 };
 const LATIN_FOLDED = new RegExp(`[${Object.keys(LATIN_FOLD).join("")}]`, "g");
+/** Cyrillic, Greek and Armenian letters, lowercased, as the Latin letter they
+ *  draw like in either case, so a name wholly in one of them is read for the
+ *  0x check and the list. */
+const LOOKALIKE_LATIN: Record<string, string> = {
+  "а": "a", "в": "b", "г": "r", "е": "e", "ё": "e", "ѕ": "s", "і": "i", "ї": "i", "ј": "j", "к": "k",
+  "м": "m", "н": "h", "о": "o", "п": "n", "р": "p", "с": "c", "т": "t", "у": "y", "ү": "y", "х": "x",
+  "ь": "b", "һ": "h", "ԁ": "d", "ӏ": "l", "ԛ": "q", "ԝ": "w", "ѵ": "v", "ѡ": "w",
+  "α": "a", "β": "b", "γ": "y", "ε": "e", "ζ": "z", "η": "h", "ι": "i", "κ": "k", "μ": "m", "ν": "n",
+  "ο": "o", "ρ": "p", "ς": "c", "τ": "t", "υ": "y", "χ": "x",
+  "ա": "w", "հ": "h", "յ": "j", "ո": "n", "ս": "u", "ց": "g", "ք": "p", "օ": "o", "ռ": "n",
+};
+const LOOKALIKES = new RegExp(`[${Object.keys(LOOKALIKE_LATIN).join("")}]`, "g");
 
 /** Why a display name may not be shown, or undefined. It heads the page above
  *  the deposit address, so it takes the handle's rules (no staff, partner or
@@ -170,18 +182,17 @@ function displayNameRefusal(name: string): string | undefined {
   const folded = name.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().replace(LATIN_FOLDED, (c) => LATIN_FOLD[c]);
   // Beside Latin letters, any letter left unfolded can draw like one and pass
   // the list: another alphabet's (a Cyrillic "о" in "Zоld") or a Latin
-  // look-alike (a small-cap "ᴢ"). A name wholly in another alphabet passes.
-  // shortcut: such a name is not folded for the list, so an all-Cyrillic "ВАЅЕ"
-  // reads as "base" and passes; add a confusables fold if one is seen in use.
+  // look-alike (a small-cap "ᴢ"). A name wholly in another alphabet passes, and
+  // is read for the 0x check and the list through LOOKALIKE_LATIN ("ВАЅЕ").
   if (/\p{Script=Latin}/u.test(name) && /\p{L}/u.test(folded.replace(/[a-z]/g, ""))) {
     return "displayName cannot mix Latin letters with another alphabet or look-alike letters — they can look identical";
   }
   // A digit from another script (an Arabic-Indic zero) would pass the 0x check.
   if (/\p{N}/u.test(folded.replace(/[0-9]/g, ""))) return "displayName may only use the digits 0-9";
-  // Cyrillic "х" and Greek "χ" draw as "x" in a name with no Latin letter.
-  if (/(?<![0-9])0[xхχ][\p{L}\p{N}]/u.test(folded)) return "displayName cannot contain 0x — it would read as an address";
+  const asLatin = folded.replace(LOOKALIKES, (c) => LOOKALIKE_LATIN[c]);
+  if (/(?<![0-9])0x[\p{L}\p{N}]/u.test(asLatin)) return "displayName cannot contain 0x — it would read as an address";
   // In handle form, every run of other characters a hyphen, so the handle list applies.
-  const asHandle = folded.replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const asHandle = asLatin.replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   const impersonated = impersonatedName(asHandle);
   if (impersonated) return `displayName cannot contain "${impersonated}" — it would read as someone else's page`;
   return undefined;
