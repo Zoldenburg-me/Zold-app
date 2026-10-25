@@ -167,6 +167,21 @@ async function api(path, body, method, extraHeaders) {
   return data;
 }
 
+/**
+ * End the session on the server as well as in this browser, so a copied token
+ * stops working now rather than at its expiry. Best effort: keepalive lets the
+ * DELETE outlive a reload, and storage is cleared whatever the network says.
+ */
+function endSession() {
+  if (sessionToken) {
+    fetch("/api/session", { method: "DELETE", headers: { authorization: `Bearer ${sessionToken}` }, keepalive: true })
+      .catch(() => {});
+  }
+  sessionToken = null;
+  contacts = [];
+  for (const k of ["zold-session", "zoll-session", "zoll-contacts"]) localStorage.removeItem(k);
+}
+
 const b64url = (buf) =>
   btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 const b64urlToBytes = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
