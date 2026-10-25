@@ -150,6 +150,8 @@ export function normaliseDisplayName(raw: unknown): string | undefined {
   return name;
 }
 
+const LATIN_FOLD: Record<string, string> = { "ß": "ss", "æ": "ae", "œ": "oe", "ø": "o", "ł": "l", "đ": "d", "ð": "d", "þ": "th", "ı": "i", "ħ": "h" };
+
 /** Why a display name may not be shown, or undefined. It heads the page above
  *  the deposit address, so it takes the handle's rules (no staff, partner or
  *  well-known name, nothing that reads as an address) and the account name's
@@ -158,12 +160,16 @@ function displayNameRefusal(name: string): string | undefined {
   if (cleanName(name, { min: 1 }) === null) {
     return "displayName cannot contain control, formatting or direction characters, emoji, < or >";
   }
-  // Folded first so fullwidth digits and letters are tested as ASCII: accents
-  // dropped, fullwidth to ASCII.
-  // shortcut: letters from other scripts (Cyrillic "о") and Latin letters with
-  // no decomposition ("ł", "ø") are not folded, so such a look-alike passes the
-  // list; add a confusables fold if one is seen in use.
-  const folded = name.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase();
+  // Folded to ASCII so the handle's rules apply: accents dropped, fullwidth to
+  // ASCII, and the Latin letters with no decomposition mapped by hand. Like the
+  // handle, a letter or digit that does not fold to a-z or 0-9 is refused: one
+  // from another alphabet (a Cyrillic "о", an Arabic-Indic zero) can look
+  // identical and would pass the list and the 0x check.
+  const folded = name.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase()
+    .replace(/[ßæœøłđðþıħ]/g, (c) => LATIN_FOLD[c]);
+  if (/[\p{L}\p{N}]/u.test(folded.replace(/[a-z0-9]/g, ""))) {
+    return "displayName may only use Latin letters, with or without accents, and the digits 0-9 — others can look identical";
+  }
   if (/(?<![0-9])0x[0-9a-f]/.test(folded)) return "displayName cannot contain 0x — it would read as an address";
   // In handle form, every run of other characters a hyphen, so the handle list applies.
   const asHandle = folded.replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");

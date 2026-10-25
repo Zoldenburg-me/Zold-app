@@ -297,7 +297,7 @@ await check("a member cannot then claim the company's handle for a personal page
 });
 // The names the handle rules refuse: staff and partner names, an address, and
 // bidi or other format and control characters.
-const BORROWED_NAMES = ["Zold Support", "Monerium Refunds", "Z0LD Pay", `0x${"11".repeat(19)}`, "Anna‮agerot‬", "Anna​Lee", "Anna\u0007Lee"];
+const BORROWED_NAMES = ["Zold Support", "Monerium Refunds", "Z0LD Pay", `0x${"11".repeat(19)}`, "Anna\u202Eagerot\u202C", "Anna\u200BLee", "Anna\u0007Lee"];
 await check("a display name the handle rules would refuse is refused on a company page", async () => {
   for (const displayName of BORROWED_NAMES) {
     const r = await call("POST", "/api/orgs/org_co/payment-page", { handle: "lindnerholzbau", displayName });
@@ -319,7 +319,7 @@ await check("an ordinary company display name is still accepted", async () => {
 await check("a stored display name the rules refuse is not served, and is kept", async () => {
   const org = store.findOrganisation("org_co")!;
   store.updateOrganisation("org_co", { paymentPage: { ...org.paymentPage!, displayName: "Zold Support" } });
-  store.updateUser("u_admin", { paymentPage: { ...store.findUser("u_admin")!.paymentPage!, displayName: "Monerium‮" } } as any);
+  store.updateUser("u_admin", { paymentPage: { ...store.findUser("u_admin")!.paymentPage!, displayName: "Monerium\u202E" } } as any);
   try {
     assert.equal((await call("GET", "/api/pay/lindnerholzbau", undefined, "")).body.displayName, "Lindner Holzbau GmbH");
     const own = store.paymentRequests.find((p) => p.userId === "u_admin" && !p.orgId)!;

@@ -148,10 +148,10 @@ check("display name is optional, trimmed, and length-capped", () => {
 });
 
 check("display name refuses what the handle and account-name rules refuse", () => {
-  for (const name of ["Zold Support", "monerium refunds", "Z0ld", "Vitalik Buterin", "Iron Pay", `0x${"11".repeat(19)}`, "pay 0xAbC", "Anna‮agerot‬", "Anna​Lee", "Anna\u0000Lee", "Anna<b>", "Pay ０ｘ８３２Ａ", "Pay0x12"]) {
+  for (const name of ["Zold Support", "monerium refunds", "Z0ld", "Vitalik Buterin", "Iron Pay", `0x${"11".repeat(19)}`, "pay 0xAbC", "Anna\u202Eagerot\u202C", "Anna\u200BLee", "Anna\u0000Lee", "Anna<b>", "Pay ０ｘ８３２Ａ", "Pay0x12", "Z\u043eld Pay", "\u0405upport", "\u0405\u0443\u0440\u0440\u043e\u0433\u0442", "\u041c\u0430\u0448\u0430", "Supp\u00f8rt", "Moner\u0131um", "\u0545old", "\u0660x1234abcd"]) {
     throws(() => normaliseDisplayName(name), /displayName/);
   }
-  for (const name of ["Miriam Z", "Lindner Holzbau & Söhne", "Ironing Board Co", "10x5 Studio", "Café Zürich"]) {
+  for (const name of ["Miriam Z", "Lindner Holzbau & Söhne", "Ironing Board Co", "10x5 Studio", "Café Zürich", "Łódź Bakery", "Æsir Ltd", "Straße 12"]) {
     assert.equal(normaliseDisplayName(name), name);
   }
 });
