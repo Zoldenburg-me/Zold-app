@@ -379,6 +379,34 @@ await check("the database file is readable by its owner only, even over a stale 
   persist();
   assert.equal(statSync(dbPath).mode & 0o777, 0o600);
 });
+await check("a store write under umask 022 replaces the database file at mode 600, and a new store dir is 700", async () => {
+  const dbPath = process.env.TRANSF_DB_PATH!;
+  const { auditEntry } = await import("../services/api/src/audit.js");
+  const oldUmask = process.umask(0o022);
+  try {
+    chmodSync(dbPath, 0o600);
+    const inode = statSync(dbPath).ino;
+    store.audit(auditEntry("operator.request", { test: "file-mode" }));
+    assert.notEqual(statSync(dbPath).ino, inode, "the write renamed a new file over the store");
+    assert.equal(statSync(dbPath).mode & 0o777, 0o600);
+    // The child inherits umask 022, so a missing mkdir mode would show as 755.
+    const dir = path.join(mkdtempSync(path.join(os.tmpdir(), "zold-db-mode-")), "data");
+    const run = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "-e", `import("./services/api/src/store/db.ts").then((m) => m.initStore())`],
+      { cwd: new URL("..", import.meta.url).pathname, env: { ...process.env, TRANSF_DB_PATH: path.join(dir, "db.json") }, encoding: "utf8" },
+    );
+    try {
+      assert.equal(run.status, 0, run.stderr);
+      assert.equal(statSync(dir).mode & 0o777, 0o700);
+      assert.equal(statSync(path.join(dir, "db.json")).mode & 0o777, 0o600);
+    } finally {
+      rmSync(path.dirname(dir), { recursive: true, force: true });
+    }
+  } finally {
+    process.umask(oldUmask);
+  }
+});
 
 console.log("secrets runner (scripts/with-env-fd.mjs)");
 const RUNNER = new URL("./with-env-fd.mjs", import.meta.url).pathname;
