@@ -76,7 +76,7 @@ PH.settings = {
     const u = user || {};
     const checks = phSecurityChecks();
     const mon = u.monerium?.method === "api_keys" ? "Connected with your own keys" : hasConnectedMonerium(u) ? "Connected" : "Not connected";
-    const plus = caps.privacyBundle && u.privacyBundle && u.privacyBundle.status !== "canceled";
+    const plus = bundleSubscribed(u);
     const account = [
       Z.row({ lead: Z.iconTile({ icon: "person" }), title: "Account", sub: [ownAccountName(u), u.email].filter(Boolean).join(" · "), href: "#account-details" }),
       Z.row({ lead: Z.iconTile({ icon: "shield_lock" }), title: "Security", sub: "Recovery, sign-in, who can approve and spend", right: checks ? Z.tag(`${checks} to check`, "amber") : "", href: "#security" }),
@@ -85,7 +85,7 @@ PH.settings = {
     ];
     // Accounting software connects to a space in Zold Business, not here.
     const connections = HAS("monerium") ? [Z.row({ lead: Z.iconTile({ icon: "account_balance" }), title: "Monerium", sub: mon, href: "#monerium-settings" })] : [];
-    const plusRow = plus ? Z.listGroup({ rows: [Z.row({ lead: Z.iconTile({ icon: "stars" }), title: "Zold Plus", sub: "Privacy Bundle active", href: "#plus" })] }) : "";
+    const plusRow = plus ? Z.listGroup({ rows: [Z.row({ lead: Z.iconTile({ icon: "stars" }), title: "Zold Plus", sub: u.privacyBundle.status === "active" ? "Privacy Bundle active" : "Privacy Bundle · awaiting partner setup", href: "#plus" })] }) : "";
     return `${phTop("Settings", "more")}${phMain(`
       ${Z.listGroup({ rows: account })}
       ${connections.length ? `<section class="z-group"><h2 class="z-eyebrow">Connections</h2>${Z.listGroup({ rows: connections })}</section>` : ""}
@@ -220,7 +220,7 @@ PH.soon = {
       ...(later.length ? [Z.row({ lead: soonTile, title: "Accounts in other currencies", sub: `${later.length > 1 ? `${later.slice(0, -1).join(", ")} and ${later.at(-1)}` : later[0]}: waiting on an account provider`, soon: true })] : []),
       Z.row({ lead: soonTile, title: "More countries", sub: "Bank transfers reach Europe only, for now", soon: true }),
       Z.row({ lead: soonTile, title: "Sending to a crypto wallet", sub: "Not built yet", soon: true }),
-      ...(!(caps.privacyBundle && u.privacyBundle && u.privacyBundle.status !== "canceled") ? [Z.row({ lead: soonTile, title: "Zold Plus", sub: "Card and no FX margin in one plan, not on sale yet", href: "#plus" })] : []),
+      ...(!bundleSubscribed(u) ? [Z.row({ lead: soonTile, title: "Zold Plus", sub: "Card and no FX margin in one plan, not on sale yet", href: "#plus" })] : []),
     ];
     return `${phTop("Coming soon", "more")}${phMain(`
       <p class="z-sub">What this account can’t do yet, and why. Each one switches on here as soon as it works.</p>

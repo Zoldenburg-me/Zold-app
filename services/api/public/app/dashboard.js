@@ -81,8 +81,9 @@ function mobileNav(target) {
 /** Routing of the older screens. `msub` names the sub-screen. */
 function mobileNavLegacy(target) {
   const shell = $("dashboard");
-  // A deep link to #bundle where the bundle is off lands on Plus, not an empty screen.
-  if (target === "bundle" && !caps.privacyBundle) target = "plus";
+  // A deep link to #bundle where the bundle is off, and the account holds none,
+  // lands on Plus, not an empty screen.
+  if (target === "bundle" && !caps.privacyBundle && !bundleSubscribed(user)) target = "plus";
   const sub = { plus: "plus", bundle: "bundle", payment: "payment", share: "share", card: "card",
     monerium: "monerium", recovery: "recovery", documents: "documents", signers: "signers" }[target];
   if (!sub) return phGo("settings");

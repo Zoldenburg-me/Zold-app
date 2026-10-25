@@ -315,6 +315,12 @@ async function loadPrivacyCatalog() {
   return privacyCatalog;
 }
 
+/** A bundle subscription that is not canceled. It keeps its status and its
+ *  cancel button even where the offer is switched off. */
+function bundleSubscribed(u) {
+  return Boolean(u?.privacyBundle?.status && u.privacyBundle.status !== "canceled");
+}
+
 function bundlePlan(planId) {
   return privacyCatalog?.plans?.find((p) => p.id === planId);
 }
@@ -338,6 +344,8 @@ async function cancelPrivacyBundle() {
   try {
     user = await api(`/api/users/${user.id}/privacy-bundle/cancel`, {});
     renderUser(user);
+    // Where the offer is off the bundle screen is now empty: go back to Plus.
+    if (!caps.privacyBundle) mobileNav("plus");
   } catch (e) { showErr("privacy-err", e); }
 }
 
@@ -369,19 +377,22 @@ async function renderPrivacyBundle() {
   const card = $("privacy-card");
   if (!card || !user) return;
   const live = caps.privacyBundle === true;
-  for (const id of ["m-go-bundle", "set-privacy-card", "m-perk-vpn", "m-perk-esim"]) $(id).classList.toggle("hidden", !live);
-  if (!live) {
+  const active = bundleSubscribed(user);
+  for (const id of ["set-privacy-card", "m-perk-vpn", "m-perk-esim"]) $(id).classList.toggle("hidden", !live);
+  $("m-go-bundle").classList.toggle("hidden", !live && !active);
+  if (!live && !active) {
     card.classList.add("hidden");
     return;
   }
-  try { await loadPrivacyCatalog(); } catch { return; }
-  card.classList.toggle("hidden", !kycApproved(user));
-  const active = user.privacyBundle?.status && user.privacyBundle.status !== "canceled";
+  // Cancel needs nothing from the catalog, so a failed fetch only loses the plans.
+  try { await loadPrivacyCatalog(); } catch { if (!active) return; }
+  card.classList.toggle("hidden", !kycApproved(user) && !active);
   const activePlan = active ? bundlePlan(user.privacyBundle.planId) : null;
   const chip = $("privacy-chip");
   chip.textContent = active ? user.privacyBundle.status.replace("_", " ").toUpperCase() : "OPTIONAL";
   chip.className = active && user.privacyBundle.status === "active" ? "chip ok" : active ? "chip pend" : "chip review";
-  $("privacy-plans").innerHTML = privacyCatalog.plans.map((p) => {
+  // Where the offer is off, a subscriber sees their status and cancel, no plans.
+  $("privacy-plans").innerHTML = (live ? privacyCatalog?.plans || [] : []).map((p) => {
     const isActive = activePlan?.id === p.id;
     const disabled = !p.marginProtected || isActive;
     const label = isActive ? "Selected" : p.marginProtected ? "Add" : "Paused";
@@ -397,18 +408,20 @@ async function renderPrivacyBundle() {
     b.onclick = () => subscribePrivacyBundle(b.dataset.plan);
   });
   const status = $("privacy-status");
-  if (!activePlan) {
+  if (!active) {
     status.classList.add("hidden");
     status.innerHTML = "";
     return;
   }
   const b = user.privacyBundle;
+  // A plan gone from the catalog still shows what the record holds, and its cancel.
+  const plan = activePlan || {};
   status.classList.remove("hidden");
   status.innerHTML = `
-    <div class="bundle-line"><span>Kokio eSIM</span><span>${b.esim?.status || "pending"} · ${b.esim?.region || activePlan.esimRegion}</span></div>
-    ${usageLine("eSIM data", b.usage?.esimGb || 0, b.esim?.dataGb || activePlan.esimGb)}
-    <div class="bundle-line"><span>Mysterium VPN</span><span>${b.vpn?.status || "pending"} · ${b.vpn?.devices || activePlan.vpnDevices} devices</span></div>
-    ${usageLine("VPN bandwidth", b.usage?.vpnGb || 0, b.vpn?.bandwidthGb || activePlan.vpnGb)}
+    <div class="bundle-line"><span>Kokio eSIM</span><span>${esc(b.esim?.status || "pending")} · ${esc(b.esim?.region || plan.esimRegion || "")}</span></div>
+    ${usageLine("eSIM data", b.usage?.esimGb || 0, b.esim?.dataGb || plan.esimGb)}
+    <div class="bundle-line"><span>Mysterium VPN</span><span>${esc(b.vpn?.status || "pending")} · ${esc(b.vpn?.devices || plan.vpnDevices || "")} devices</span></div>
+    ${usageLine("VPN bandwidth", b.usage?.vpnGb || 0, b.vpn?.bandwidthGb || plan.vpnGb)}
     <div class="bundle-line"><span>Renews</span><span>${new Date(b.renewsAt).toLocaleDateString()}</span></div>
     <button class="ghost" id="btn-privacy-cancel">Cancel bundle</button>`;
   $("btn-privacy-cancel").onclick = cancelPrivacyBundle;
