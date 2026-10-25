@@ -35,6 +35,7 @@
     "check:live": "CHECK_LIVE=1 tsx scripts/check.ts",
     "quote-binding:test": "tsx scripts/quote-binding-test.ts",
     "device-key:test": "tsx scripts/device-key-test.ts",
+    "authorizer-bind:test": "tsx scripts/authorizer-bind-test.ts",
     "passkey-safe:test": "tsx scripts/passkey-safe-plan-test.ts",
     "safe-signers:test": "tsx scripts/safe-signers-test.ts",
     "safe-import:test": "tsx scripts/safe-import-test.ts",

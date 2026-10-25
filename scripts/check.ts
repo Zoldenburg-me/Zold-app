@@ -44,6 +44,7 @@ const scripts = [
   "convert:test",
   "safe-op-uncertain:test",
   "device-key:test",
+  "authorizer-bind:test",
   "passkey-safe:test",
   "safe-signers:test",
   "safe-import:test",

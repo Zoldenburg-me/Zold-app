@@ -175,9 +175,11 @@ sets are cumulative (`domain/roles.ts:39-86`). `transfers.read` and
   `passkey.replace`, `monerium.connect`, `monerium.disconnect`,
   `authorizer.bind`, `org.payment-review.off`, `org.invoice-iban.change`,
   `safe.import`), and only the route making that change accepts it.
-  `safe.import` is also bound to its target (`stepUpBinding(user, action,
-  target)`): `/safe/import/prepare` issues it for one Safe's address, owners
-  and threshold, and `/webauthn/challenge` refuses to issue it.
+  `safe.import` and `authorizer.bind` are also bound to their target
+  (`stepUpBinding(user, action, target)`): `/safe/import/prepare` issues the
+  first for one Safe's address, owners and threshold,
+  `/users/:id/authorizer/challenge` the second for one device-key address,
+  and `/webauthn/challenge` refuses to issue either.
 - Registration checks type, challenge, origin allowlist, rpIdHash and the UP
   and UV flags. **Attestation statements are not verified**, so any
   authenticator that verifies its user is accepted.
@@ -346,7 +348,10 @@ Safe (`importedAt`) as for a recovered one (`recoveredAt`).
   **Do not rename the salt**:
   it is a KDF input.
 - It is bound once through `POST /users/:id/authorizer` with a passkey
-  step-up. Binding is trust-on-first-use and there is no rotation route.
+  step-up for that address and the key's own EIP-712 `AuthorizerBinding {account, authorizer,
+  nonce}` signature over a single-use challenge from
+  `POST /users/:id/authorizer/challenge`, bound to the account and address.
+  Binding is trust-on-first-use and there is no rotation route.
   Recovery finalisation clears it.
 - It signs EIP-712 `PaymentAuthorization {account, amount, to, transferId,
   destination, deadline}` under the domain `{name: "TransF Safe Transfer",
@@ -1340,7 +1345,8 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | `GET /users/:id/bic` (U) | The BIC Monerium lists for the account's IBAN (`GET /ibans`), read once per IBAN and kept as `ibanBic`; `null` when there is no IBAN or Monerium lists none. The account read then carries it as `bic`. |
 | `GET /privacy-bundles` | Privacy Bundle catalogue. |
 | `POST /users/:id/privacy-bundle[/cancel]` (U) | Subscribe to or cancel the Privacy Bundle. |
-| `POST /users/:id/authorizer` (U + step-up) | Bind the device key. |
+| `POST /users/:id/authorizer/challenge` (U) | Single-use `AuthorizerBinding` typed data for one address, for the device key to sign. |
+| `POST /users/:id/authorizer` (U + step-up + key signature) | Bind the device key. |
 
 **Recovery**
 

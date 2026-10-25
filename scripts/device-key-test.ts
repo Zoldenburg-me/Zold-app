@@ -420,6 +420,7 @@ await t("a PRF-wrapped legacy key is carried forward only once this passkey unwr
   const copied = JSON.parse(slots.get(SLOT)!);
   assert.equal(copied.credentialId, CRED);
   assert.equal(copied.key, undefined);
+  assert.equal(slots.get("zold-device-key"), undefined, "the unscoped copy is deleted once the scoped slot holds it");
 });
 
 await t("a cancelled prompt at signing time keeps the key locked", async () => {

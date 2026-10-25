@@ -78,10 +78,11 @@ const isStepUpAction = (v: unknown): v is StepUpAction => STEP_UP_ACTIONS.includ
 /**
  * Actions approved for one object, not just for the account. Their challenge
  * comes from the route that read the object (safe.import: /safe/import/prepare,
- * bound to the Safe's address, owners and threshold), never from
+ * bound to the Safe's address, owners and threshold; authorizer.bind:
+ * /users/:id/authorizer/challenge, bound to the address), never from
  * /webauthn/challenge.
  */
-const TARGETED_STEP_UP_ACTIONS: readonly StepUpAction[] = ["safe.import"];
+const TARGETED_STEP_UP_ACTIONS: readonly StepUpAction[] = ["safe.import", "authorizer.bind"];
 
 export async function verifyPasskeyStepUp(
   user: User,

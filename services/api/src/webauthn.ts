@@ -152,7 +152,7 @@ async function importKey(k: StoredKey) {
 
 /** The operator purposes are their own, so no user challenge can stand in for
  *  an operator ceremony and no operator challenge for a user one. */
-export type ChallengePurpose = "register" | "login" | "step_up" | "operator_enrol" | "operator_login" | "operator_step_up";
+export type ChallengePurpose = "register" | "login" | "step_up" | "operator_enrol" | "operator_login" | "operator_step_up" | "authorizer_bind";
 
 const challenges = new Map<string, { purpose: ChallengePurpose; binding?: string; exp: number }>();
 const CHALLENGE_TTL_MS = 5 * 60_000;
@@ -202,7 +202,7 @@ export function issueChallenge(purpose: ChallengePurpose, binding?: string): str
 export const stepUpBinding = (userId: string, action: string, target?: string) =>
   target === undefined ? `${userId}:${action}` : `${userId}:${action}:${target}`;
 
-function consumeChallenge(c: string, purpose: ChallengePurpose, binding?: string): boolean {
+export function consumeChallenge(c: string, purpose: ChallengePurpose, binding?: string): boolean {
   const e = challenges.get(c);
   challenges.delete(c);
   pruneChallenges();

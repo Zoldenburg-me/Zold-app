@@ -234,6 +234,8 @@ function isAuthRoute(req: express.Request): boolean {
     (path === "/users" && req.method === "POST") ||
     // A 6-digit code is a guessable credential; sending one spends mail.
     /^\/users\/[^/]+\/email\/(code|verify)$/.test(path) ||
+    // Every call stores two challenges server-side.
+    /^\/users\/[^/]+\/authorizer\/challenge$/.test(path) ||
     // The 1 € enrolment code is a credential, and a check spends a Monerium call.
     /^\/users\/[^/]+\/recovery\/zoldenburg\/enrolment(\/|$)/.test(path)
   );

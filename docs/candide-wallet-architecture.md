@@ -59,11 +59,14 @@ that shows reset period, cap, recipient, and revocation controls.
 
 ## Authorizer binding
 
-`POST /api/users/:id/authorizer` requires a fresh passkey step-up when the
-account has a registered passkey, so a stolen bearer session cannot bind the
+`POST /api/users/:id/authorizer` requires a fresh passkey step-up, issued for
+the one address being bound, when the account has a registered passkey, so a stolen bearer session cannot bind the
 first spending key. The hardhat harness (chain 31337) waives this so the
 suites can fund an account without an authenticator; everywhere else,
-authorizer binding without a verified passkey is refused.
+authorizer binding without a verified passkey is refused. On every chain the
+key being bound must also sign the single-use `AuthorizerBinding` challenge
+from `POST /api/users/:id/authorizer/challenge`, so an account cannot bind an
+address it holds no key for.
 
 ## Open work
 

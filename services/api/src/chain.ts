@@ -333,6 +333,35 @@ export function paymentAuthorizationTypedData(args: {
 }
 
 /**
+ * The EIP-712 payload a device key signs to be bound as the account's
+ * authorizer: proof that the caller holds the key for the address it binds.
+ * `nonce` is a single-use server challenge for this account and address.
+ */
+export function authorizerBindingTypedData(args: {
+  account: `0x${string}`;
+  authorizer: `0x${string}`;
+  nonce: `0x${string}`;
+}) {
+  return {
+    domain: {
+      name: "TransF Safe Transfer",
+      version: "1",
+      chainId: CHAIN_ID,
+      verifyingContract: args.account,
+    },
+    types: {
+      AuthorizerBinding: [
+        { name: "account", type: "address" },
+        { name: "authorizer", type: "address" },
+        { name: "nonce", type: "bytes32" },
+      ],
+    },
+    primaryType: "AuthorizerBinding" as const,
+    message: args,
+  };
+}
+
+/**
  * The EUR->USD rate the swapper will actually execute at.
  *
  * The quote's EUR leg is read from here rather than from a constant so that
