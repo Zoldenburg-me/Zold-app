@@ -14,7 +14,8 @@
  *
  * Run: npm run tx:audit:test
  */
-import "./_test-env.js";
+// Pins chain and keys: orchestrator.js (the real cap sum) refuses the hosted posture.
+import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createServer } from "node:http";
@@ -42,6 +43,7 @@ process.env.TRANSF_RATES_TIMEOUT_MS = "400";
 const { FX, PAYMENT_REQUESTS, railFeeEur } = await import("../services/api/src/config.js");
 const { matchDepositToRequests, quoteCrypto } = await import("../services/api/src/payment-requests.js");
 const { store } = await import("../services/api/src/store.js");
+const { safeFundedEurToday } = await import("../services/api/src/orchestrator.js");
 const { destinationCommitment } = await import("../services/api/src/chain.js");
 const { externalHttpUrl } = await import("../services/api/src/routes/shopify.js");
 const { midRates, RateUnavailableError } = await import("../services/api/src/rates.js");
@@ -124,17 +126,8 @@ const transfer = (id: string, sendEur: number, over: Partial<Transfer> = {}): Tr
   ...over,
 });
 
-const usedByCapUser = () =>
-  store.heldEurToday("cap-user") +
-  store.transfers
-    .filter(
-      (t) =>
-        t.userId === "cap-user" &&
-        t.fundingSource === "safe" &&
-        t.createdAt.slice(0, 10) === new Date().toISOString().slice(0, 10) &&
-        !["FAILED", "REFUNDED"].includes(t.state),
-    )
-    .reduce((sum, t) => sum + t.sendEur, 0);
+// The real cap sum, not a copy of it: a copy drifts from the code it guards.
+const usedByCapUser = () => safeFundedEurToday("cap-user");
 
 console.log("─── (a) clean, valid transactions ───");
 
@@ -372,6 +365,39 @@ await check("a released hold frees the cap; a committed one cannot be released t
   store.releaseCapHold(id); // what the finally block does after success
   assert.equal(usedByCapUser(), 10, "committing a hold counted the amount twice, or releasing it uncounted the row");
   assert.throws(() => store.addTransferUnderHold(transfer("t-held-2", 10), id), /no cap hold/);
+});
+
+await check("an abandoned unsigned transfer frees the cap; a still-signable one holds it", () => {
+  store.transfers.length = 0;
+  const now = new Date();
+  const nowSec = now.getTime() / 1000;
+  const used = () => safeFundedEurToday("cap-user", now);
+  // Same clock as `now`, so a run across UTC midnight cannot change the day.
+  const row = (id: string, sendEur: number, over: Partial<Transfer> = {}) =>
+    transfer(id, sendEur, { createdAt: now.toISOString(), ...over });
+  const auth = (deadline: number, authorizedAt?: string) => ({
+    to: "0x0000000000000000000000000000000000000001" as const,
+    amountWei: "0",
+    destination: "0x00" as const,
+    deadline,
+    ...(authorizedAt ? { authorizedAt } : {}),
+  });
+  try {
+    store.addTransfer(row("t-abandoned", FX.DAILY_CAP_EUR, { auth: auth(nowSec - 1) }));
+    assert.equal(used(), 0, "a never-signed transfer past its deadline still counts against the cap");
+    store.addTransfer(row("t-live", 10, { auth: auth(nowSec + 600) }));
+    assert.equal(used(), 10, "an unsigned transfer that can still be signed stopped counting");
+    // AT the deadline assertDeviceAuthorization still accepts a signature.
+    store.addTransfer(row("t-at-deadline", 5, { auth: auth(nowSec) }));
+    assert.equal(used(), 15, "a transfer signable at exactly its deadline stopped counting");
+    // Claimed past its deadline: the debit may be in flight, so it still counts.
+    store.addTransfer(row("t-claimed", 20, { auth: auth(nowSec - 1, now.toISOString()) }));
+    // CREATED with no terms at all: fail closed and count it.
+    store.addTransfer(row("t-no-auth", 30));
+    assert.equal(used(), 65);
+  } finally {
+    store.transfers.length = 0;
+  }
 });
 
 await check("a deposit recorded twice by overlapping scans is stored once", () => {
