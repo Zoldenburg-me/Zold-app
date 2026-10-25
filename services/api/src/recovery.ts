@@ -7,6 +7,13 @@ import type { RecoveryRequest } from "./store.js";
  */
 export function starterRecoveryRequest(request: RecoveryRequest) {
   const { userId: _userId, safeAddress: _safeAddress, guardianAddress: _guardianAddress, recoveryModuleAddress: _module, ...rest } = publicRecoveryRequest(request);
+  // The new owner set is the starter's own key, but /recovery never reads it: no address leaves.
+  for (const mode of ["candide", "zoldenburg"] as const) {
+    if (rest[mode]) {
+      const { newOwners: _newOwners, ...sub } = rest[mode] as Record<string, unknown>;
+      rest[mode] = sub;
+    }
+  }
   return rest;
 }
 

@@ -578,6 +578,7 @@ try {
     assert.equal(r.data.candide.newPasskeyRegistered, true);
     assert.ok(!r.text.includes("attestation"), "the new credential is not on the public surface");
     assert.ok(!r.text.includes(userId) && !r.text.toLowerCase().includes(safeAddress.toLowerCase()), "before the codes, the request still names no account or Safe");
+    assert.ok(!/0x[0-9a-fA-F]{40}/.test(r.text), "nor any address, the new owner's included");
     assert.match(r.data.otpTicket ?? "", /^[A-Za-z0-9_-]{40,}$/, "a ticket for the browser that registered the passkey");
     assert.ok(!r.text.includes("otpTicketHash"));
     otpTicket = r.data.otpTicket;
