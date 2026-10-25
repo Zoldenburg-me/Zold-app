@@ -164,6 +164,20 @@ try {
     assert.equal(store.findUser(id)!.authorizerAddress, approved.address);
   });
 
+  await check("two bindings racing for an unbound account: one key wins, the other is refused", async () => {
+    const id = makeUser("u-race");
+    const [a, b] = [newDevice(), newDevice()];
+    const proofFor = async (d: ReturnType<typeof newDevice>) => {
+      const { typedData } = await challenge(id, d.address);
+      return { address: d.address, proof: { nonce: typedData.message.nonce, signature: await signTerms(d, typedData) } };
+    };
+    const [ba, bb] = [await proofFor(a), await proofFor(b)];
+    const results = await Promise.all([post(`/api/users/${id}/authorizer`, ba), post(`/api/users/${id}/authorizer`, bb)]);
+    assert.deepEqual(results.map((r) => r.status).sort(), [201, 409], JSON.stringify(results.map((r) => r.body)));
+    const winner = results[0].status === 201 ? a : b;
+    assert.equal(store.findUser(id)!.authorizerAddress, winner.address);
+  });
+
   await check("the test device helper binds through the same route", async () => {
     const id = makeUser("u-helper");
     const device = newDevice();

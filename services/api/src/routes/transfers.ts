@@ -239,15 +239,22 @@ export function createTransferRouter(deps: TransferDeps) {
       const address = req.body?.address;
       if (!isAddress(address)) return res.status(400).json({ error: "address required (0x-prefixed, 20 bytes)" });
       if (!(await verifyPasskeyStepUp(user, req.body, res, "authorizer.bind", address.toLowerCase()))) return;
-      if (user.authorizerAddress) {
-        if (user.authorizerAddress.toLowerCase() !== address.toLowerCase()) {
-          return res.status(409).json({
+      // Read fresh each time: the verifications await, and a binding that
+      // landed meanwhile must not be overwritten.
+      const answeredBound = () => {
+        const current = store.findUser(user.id)!;
+        if (!current.authorizerAddress) return false;
+        if (current.authorizerAddress.toLowerCase() !== address.toLowerCase()) {
+          res.status(409).json({
             error: "this account is already bound to a different device key — rotate it from that device",
-            authorizerAddress: user.authorizerAddress,
+            authorizerAddress: current.authorizerAddress,
           });
+        } else {
+          res.json(publicUser(current));
         }
-        return res.json(publicUser(user));
-      }
+        return true;
+      };
+      if (answeredBound()) return;
       const { nonce, signature } = req.body?.proof ?? {};
       const proven =
         typeof nonce === "string" && /^0x[0-9a-fA-F]{64}$/.test(nonce) &&
@@ -261,6 +268,7 @@ export function createTransferRouter(deps: TransferDeps) {
       if (!proven) {
         return res.status(401).json({ error: "sign a fresh binding challenge with the device key being bound", code: "AUTHORIZER_PROOF" });
       }
+      if (answeredBound()) return; // no await from here to the write
       const updated = store.updateUser(user.id, { authorizerAddress: address });
       res.status(201).json(publicUser(updated));
     }),
