@@ -1,4 +1,4 @@
-import { IS_LOCAL_CHAIN, IS_PRODUCTION, LOOKS_LOCAL } from "./env.js";
+import { envNumber, IS_LOCAL_CHAIN, IS_PRODUCTION, LOOKS_LOCAL } from "./env.js";
 
 /**
  * THE ONE HARNESS SEAM. scripts/_local-chain.ts sets LOCAL_HARNESS=1 for every
@@ -31,7 +31,7 @@ export const KYC = {
 
 export const RECOVERY = {
   /** How long a started recovery may wait for its passkey, codes or review. */
-  requestTtlHours: Math.max(1, Number(process.env.RECOVERY_REQUEST_TTL_HOURS ?? 24 * 14)),
+  requestTtlHours: envNumber("RECOVERY_REQUEST_TTL_HOURS", 24 * 14, { min: 1 }),
   /**
    * Candide's Safe Recovery Service — the email/SMS guardian.
    *
@@ -48,7 +48,7 @@ export const RECOVERY = {
   siweDomain: process.env.RECOVERY_SIWE_DOMAIN ?? "",
   siweUri: process.env.RECOVERY_SIWE_URI ?? "",
   /** How often finalizable recoveries are swept. */
-  sweepMs: Math.max(10_000, Number(process.env.RECOVERY_SWEEP_MS ?? 60_000)),
+  sweepMs: envNumber("RECOVERY_SWEEP_MS", 60_000, { min: 10_000 }),
   /**
    * Keys the HMAC of the bank account a user enrolled for Zoldenburg recovery
    * (recovery/zoldenburg-enrolment.ts), so the stored value names no IBAN.
@@ -104,7 +104,7 @@ export const SECURITY = {
    * the right position in X-Forwarded-For; leaving it 0 keeps the socket peer,
    * which is correct only when nothing is in front.
    */
-  trustedProxyHops: Math.max(0, Number(process.env.TRUSTED_PROXY_HOPS ?? 0)),
+  trustedProxyHops: envNumber("TRUSTED_PROXY_HOPS", 0, { min: 0, max: 10, integer: true }),
   /** WebAuthn relying-party id + origins allowed for ceremonies and for
    *  cross-origin state-changing requests. */
   rpId: process.env.RP_ID ?? "localhost",
@@ -118,31 +118,25 @@ export const SECURITY = {
   moneriumWebhookSecret: process.env.MONERIUM_WEBHOOK_SECRET ?? "",
   /** How far a signed webhook timestamp may be from now before we refuse it.
    *  Guards replay of a captured delivery we never received, which delivery-id
-   *  dedupe cannot catch. There is no off switch: anything but a positive
-   *  number refuses to start (below). */
-  webhookToleranceSec: Number(process.env.MONERIUM_WEBHOOK_TOLERANCE_SEC ?? 300),
+   *  dedupe cannot catch. There is no off switch: anything but 1–3600 s
+   *  refuses to start; empty is the 300 s default. */
+  webhookToleranceSec: envNumber("MONERIUM_WEBHOOK_TOLERANCE_SEC", 300, { min: 1, max: 3600 }),
   /** Simple per-IP rate limits (requests per minute). */
-  rateLimitPerMin: Number(process.env.RATE_LIMIT_PER_MIN ?? 300),
-  authRateLimitPerMin: Number(process.env.AUTH_RATE_LIMIT_PER_MIN ?? 20),
+  rateLimitPerMin: envNumber("RATE_LIMIT_PER_MIN", 300, { min: 1, integer: true }),
+  authRateLimitPerMin: envNumber("AUTH_RATE_LIMIT_PER_MIN", 20, { min: 1, integer: true }),
   /** Routes that call a partner or the chain per request (http/policy.ts). */
-  partnerRateLimitPerMin: Number(process.env.PARTNER_RATE_LIMIT_PER_MIN ?? 30),
-  documentRateLimitPerMin: Number(process.env.DOCUMENT_RATE_LIMIT_PER_MIN ?? 10),
+  partnerRateLimitPerMin: envNumber("PARTNER_RATE_LIMIT_PER_MIN", 30, { min: 1, integer: true }),
+  documentRateLimitPerMin: envNumber("DOCUMENT_RATE_LIMIT_PER_MIN", 10, { min: 1, integer: true }),
   /** The operator dashboard with a valid token. Its refresh loop alone sends
    *  ~16 requests a minute; a wrong token stays on the auth bucket. */
-  operatorRateLimitPerMin: Number(process.env.OPERATOR_RATE_LIMIT_PER_MIN ?? 300),
+  operatorRateLimitPerMin: envNumber("OPERATOR_RATE_LIMIT_PER_MIN", 300, { min: 1, integer: true }),
   /** Shopify's HMAC-signed calls, from Shopify's shared addresses. */
-  shopifyRateLimitPerMin: Number(process.env.SHOPIFY_RATE_LIMIT_PER_MIN ?? 600),
+  shopifyRateLimitPerMin: envNumber("SHOPIFY_RATE_LIMIT_PER_MIN", 600, { min: 1, integer: true }),
   /** Maximum JSON request body accepted by the API. */
   jsonBodyLimit: process.env.JSON_BODY_LIMIT ?? "64kb",
   /** Opaque bearer session lifetime. Default: 24 hours. */
-  sessionTtlMs: Number(process.env.SESSION_TTL_MS ?? 24 * 60 * 60 * 1000),
+  sessionTtlMs: envNumber("SESSION_TTL_MS", 24 * 60 * 60 * 1000, { min: 60_000, max: 30 * 24 * 60 * 60 * 1000 }),
   /** Keep provider/chain internals out of hosted API responses; a local
    *  stack is the one place a stack trace helps more than it leaks. */
   exposeInternalErrors: process.env.NODE_ENV !== "production" && LOOKS_LOCAL,
 };
-
-// Number("") is 0 and Number("5m") is NaN, and neither is a window. Refuse to
-// start rather than run the Monerium webhook without replay protection.
-if (!(Number.isFinite(SECURITY.webhookToleranceSec) && SECURITY.webhookToleranceSec > 0)) {
-  throw new Error("MONERIUM_WEBHOOK_TOLERANCE_SEC must be a positive number of seconds; unset it for the 300 s default");
-}

@@ -20,7 +20,7 @@ export const MONERIUM = {
   chain: process.env.MONERIUM_CHAIN ?? "base",
   // How often to poll for incoming EURe issue orders (webhooks need a public
   // URL; polling works for local dev).
-  pollMs: Number(process.env.MONERIUM_POLL_MS ?? 15_000),
+  pollMs: envNumber("MONERIUM_POLL_MS", 15_000, { min: 250 }),
   // How often, at most, one user's stored IBAN is re-read at Monerium to
   // confirm it still pays into their Safe (verifyIbanBinding), from the
   // poller and from GET /users/:id. GET /users/:id/monerium/accounts reads

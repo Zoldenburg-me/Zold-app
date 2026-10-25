@@ -1,4 +1,4 @@
-import { CHAIN_ID } from "./env.js";
+import { CHAIN_ID, envNumber } from "./env.js";
 
 const evmAddressRe = /^0x[0-9a-fA-F]{40}$/;
 const parseChainIds = (raw: string | undefined) =>
@@ -39,14 +39,15 @@ export const FORWARDING = {
  */
 export const EMAIL_VERIFICATION = (() => {
   const enabled = process.env.EMAIL_VERIFICATION === "1";
+  const port = envNumber("SMTP_PORT", 587, { min: 1, max: 65_535, integer: true });
   const smtp = {
     host: process.env.SMTP_HOST ?? "",
-    port: Number(process.env.SMTP_PORT ?? 587),
+    port,
     user: process.env.SMTP_USER ?? "",
     pass: process.env.SMTP_PASS ?? "",
     from: process.env.MAIL_FROM ?? "",
     /** Port 465 speaks TLS from the first byte; others upgrade with STARTTLS. */
-    secure: (process.env.SMTP_PORT ?? "587") === "465",
+    secure: port === 465,
   };
   if (enabled) {
     const missing = (["host", "user", "pass", "from"] as const).filter((k) => !smtp[k]);
@@ -81,9 +82,9 @@ export const EMAIL_VERIFICATION = (() => {
  */
 export const GNOSIS_PAY = {
   baseUrl: process.env.GNOSIS_PAY_BASE_URL ?? "https://api.gnosispay.com",
-  siweChainId: Number(process.env.GNOSIS_PAY_SIWE_CHAIN_ID ?? 100),
-  jwtTtlSeconds: Number(process.env.GNOSIS_PAY_JWT_TTL_SECONDS ?? 3600),
-  timeoutMs: Number(process.env.GNOSIS_PAY_TIMEOUT_MS ?? 12_000),
+  siweChainId: envNumber("GNOSIS_PAY_SIWE_CHAIN_ID", 100, { min: 1, integer: true }),
+  jwtTtlSeconds: envNumber("GNOSIS_PAY_JWT_TTL_SECONDS", 3600, { min: 1 }),
+  timeoutMs: envNumber("GNOSIS_PAY_TIMEOUT_MS", 12_000, { min: 1 }),
   partnerId: process.env.GNOSIS_PAY_PARTNER_ID ?? "",
 } as const;
 
@@ -129,9 +130,9 @@ export const SHOPIFY = {
    *  payment order waits for the buyer, so this is longer than a checkout
    *  session; after it the order is still there, but a late deposit lands on
    *  the page unattributed and the merchant marks the order paid by hand. */
-  orderTtlMs: Number(process.env.SHOPIFY_ORDER_TTL_MS ?? 24 * 60 * 60_000),
+  orderTtlMs: envNumber("SHOPIFY_ORDER_TTL_MS", 24 * 60 * 60_000, { min: 1 }),
   shopBaseUrl: process.env.SHOPIFY_SHOP_BASE_URL ?? "",
-  timeoutMs: Number(process.env.SHOPIFY_TIMEOUT_MS ?? 12_000),
+  timeoutMs: envNumber("SHOPIFY_TIMEOUT_MS", 12_000, { min: 1 }),
   enabled: Boolean(process.env.SHOPIFY_API_KEY && process.env.SHOPIFY_API_SECRET),
 } as const;
 
@@ -143,13 +144,13 @@ export const PRIVACY_BUNDLE = {
   enabled: boolEnv("PRIVACY_BUNDLE_ENABLED"),
   kokioLive: boolEnv("KOKIO_LIVE"),
   mysteriumLive: boolEnv("MYSTERIUM_LIVE"),
-  minMarginBps: Number(process.env.PRIVACY_BUNDLE_MIN_MARGIN_BPS ?? 3500),
+  minMarginBps: envNumber("PRIVACY_BUNDLE_MIN_MARGIN_BPS", 3500, { min: 0 }),
   plans: [
     {
       id: "travel-shield",
       name: "Travel Shield",
       priceEur: 9.99,
-      estimatedCostEur: Number(process.env.PRIVACY_BUNDLE_TRAVEL_COST_EUR ?? 5.25),
+      estimatedCostEur: envNumber("PRIVACY_BUNDLE_TRAVEL_COST_EUR", 5.25, { min: 0 }),
       esimGb: 3,
       esimRegion: "regional",
       vpnGb: 25,
@@ -161,7 +162,7 @@ export const PRIVACY_BUNDLE = {
       id: "global-shield",
       name: "Global Shield",
       priceEur: 19.99,
-      estimatedCostEur: Number(process.env.PRIVACY_BUNDLE_GLOBAL_COST_EUR ?? 10.75),
+      estimatedCostEur: envNumber("PRIVACY_BUNDLE_GLOBAL_COST_EUR", 10.75, { min: 0 }),
       esimGb: 10,
       esimRegion: "global",
       vpnGb: 100,
@@ -173,7 +174,7 @@ export const PRIVACY_BUNDLE = {
       id: "nomad-shield",
       name: "Nomad Shield",
       priceEur: 34.99,
-      estimatedCostEur: Number(process.env.PRIVACY_BUNDLE_NOMAD_COST_EUR ?? 19.5),
+      estimatedCostEur: envNumber("PRIVACY_BUNDLE_NOMAD_COST_EUR", 19.5, { min: 0 }),
       esimGb: 25,
       esimRegion: "global",
       vpnGb: 250,
