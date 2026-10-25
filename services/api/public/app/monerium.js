@@ -368,12 +368,13 @@ function startRecoveryRequest() {
 async function renderPrivacyBundle() {
   const card = $("privacy-card");
   if (!card || !user) return;
-  try { await loadPrivacyCatalog(); } catch { return; }
-  for (const id of ["m-go-bundle", "set-privacy-card"]) $(id).classList.toggle("hidden", !privacyCatalog.enabled);
-  if (!privacyCatalog.enabled) {
+  const live = caps.privacyBundle === true;
+  for (const id of ["m-go-bundle", "set-privacy-card", "m-perk-vpn", "m-perk-esim"]) $(id).classList.toggle("hidden", !live);
+  if (!live) {
     card.classList.add("hidden");
     return;
   }
+  try { await loadPrivacyCatalog(); } catch { return; }
   card.classList.toggle("hidden", !kycApproved(user));
   const active = user.privacyBundle?.status && user.privacyBundle.status !== "canceled";
   const activePlan = active ? bundlePlan(user.privacyBundle.planId) : null;
@@ -502,9 +503,6 @@ function renderShellPages() {
       ? "Your company’s Safe, brought into Zold · you approve every payment Zold makes. Any other approver is your own wallet."
       : `You are the only approver · every payment needs your approval.`;
   renderRecoveryInfo();
-  $("set-privacy-live").textContent = privacyCatalog
-    ? `Kokio ${privacyCatalog.fulfillment.kokio}; Mysterium ${privacyCatalog.fulfillment.mysterium}.`
-    : "Pending partner credentials.";
   renderContacts();
   renderTransactionPage();
 }

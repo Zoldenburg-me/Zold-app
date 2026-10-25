@@ -644,8 +644,8 @@
   /* ---------- Zold Plus ----------
      A preview, not a product: the tier in the design (card, no-FX-margin,
      vault boost) is not built, so the price is replaced by "coming soon" and
-     the CTA cannot be pressed. The eSIM and VPN behind two of these perks DO
-     ship today as the Privacy Bundle, which the last row still reaches. */
+     the CTA cannot be pressed. The eSIM and VPN perks and the last row are
+     the Privacy Bundle, drawn only where capabilities.privacyBundle is true. */
   .m-card {
     border-radius: 12px; background: linear-gradient(140deg, #4a1a30, #261e20 70%);
     box-shadow: 0 0 0 1px #2a2a2a, 0 18px 40px rgba(0, 0, 0, .85);

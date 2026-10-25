@@ -71,12 +71,12 @@ function phSecurityChecks() {
 PH.settings = {
   title: "Settings",
   live: () => JSON.stringify([user?.name, user?.email, user?.monerium?.method, user?.paymentPage?.settlementAsset, user?.paymentPage?.autoConvert,
-    phKey?.protection, phSecurityChecks(), user?.privacyBundle?.status, privacyCatalog?.enabled]),
+    phKey?.protection, phSecurityChecks(), user?.privacyBundle?.status, caps.privacyBundle]),
   html() {
     const u = user || {};
     const checks = phSecurityChecks();
     const mon = u.monerium?.method === "api_keys" ? "Connected with your own keys" : hasConnectedMonerium(u) ? "Connected" : "Not connected";
-    const plus = privacyCatalog?.enabled && u.privacyBundle && u.privacyBundle.status !== "canceled";
+    const plus = caps.privacyBundle && u.privacyBundle && u.privacyBundle.status !== "canceled";
     const account = [
       Z.row({ lead: Z.iconTile({ icon: "person" }), title: "Account", sub: [ownAccountName(u), u.email].filter(Boolean).join(" · "), href: "#account-details" }),
       Z.row({ lead: Z.iconTile({ icon: "shield_lock" }), title: "Security", sub: "Recovery, sign-in, who can approve and spend", right: checks ? Z.tag(`${checks} to check`, "amber") : "", href: "#security" }),
@@ -204,7 +204,7 @@ async function phLoadSoon() {
 
 PH.soon = {
   title: "Coming soon",
-  live: () => JSON.stringify([user?.iban, user?.kycStatus, caps.cashRail, phCache.soon?.length, user?.privacyBundle?.status, privacyCatalog?.enabled]),
+  live: () => JSON.stringify([user?.iban, user?.kycStatus, caps.cashRail, phCache.soon?.length, user?.privacyBundle?.status, caps.privacyBundle]),
   html() {
     const u = user || {};
     const soonTile = Z.iconTile({ icon: "hourglass_top", tone: "a" });
@@ -220,7 +220,7 @@ PH.soon = {
       ...(later.length ? [Z.row({ lead: soonTile, title: "Accounts in other currencies", sub: `${later.length > 1 ? `${later.slice(0, -1).join(", ")} and ${later.at(-1)}` : later[0]}: waiting on an account provider`, soon: true })] : []),
       Z.row({ lead: soonTile, title: "More countries", sub: "Bank transfers reach Europe only, for now", soon: true }),
       Z.row({ lead: soonTile, title: "Sending to a crypto wallet", sub: "Not built yet", soon: true }),
-      ...(!(privacyCatalog?.enabled && u.privacyBundle && u.privacyBundle.status !== "canceled") ? [Z.row({ lead: soonTile, title: "Zold Plus", sub: "Card, VPN and eSIM in one plan, not on sale yet", href: "#plus" })] : []),
+      ...(!(caps.privacyBundle && u.privacyBundle && u.privacyBundle.status !== "canceled") ? [Z.row({ lead: soonTile, title: "Zold Plus", sub: "Card and no FX margin in one plan, not on sale yet", href: "#plus" })] : []),
     ];
     return `${phTop("Coming soon", "more")}${phMain(`
       <p class="z-sub">What this account can’t do yet, and why. Each one switches on here as soon as it works.</p>

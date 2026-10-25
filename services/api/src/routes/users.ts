@@ -14,7 +14,7 @@
 import express from "express";
 import { wrap } from "./util.js";
 import { randomUUID } from "node:crypto";
-import { EMAIL_VERIFICATION, KYC, PRIVACY_BUNDLE } from "../config.js";
+import { EMAIL_VERIFICATION, KYC, PRIVACY_BUNDLE, privacyBundleLive } from "../config.js";
 import { accountBalances } from "../chain.js";
 import { auditEntry, redact } from "../audit.js";
 import { normaliseCountryCode } from "../country-policy.js";
@@ -380,11 +380,7 @@ export function createUserRouter(deps: UserDeps) {
     "/privacy-bundles",
     wrap(async (_req, res) => {
       res.json({
-        enabled: PRIVACY_BUNDLE.enabled,
-        fulfillment: {
-          kokio: PRIVACY_BUNDLE.kokioLive ? "live" : "pending_partner_credentials",
-          mysterium: PRIVACY_BUNDLE.mysteriumLive ? "live" : "pending_partner_credentials",
-        },
+        enabled: privacyBundleLive(),
         guardrails: {
           minMarginBps: PRIVACY_BUNDLE.minMarginBps,
           noUnlimitedUsage: true,
@@ -401,8 +397,9 @@ export function createUserRouter(deps: UserDeps) {
       const user = store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
       if (!requireUserSession(req, res, user.id)) return;
+      // Fail closed before any record: nothing bills it or delivers it yet.
+      if (!privacyBundleLive()) return res.status(503).json({ error: "privacy bundle is not available", code: "PRIVACY_BUNDLE_UNAVAILABLE" });
       if (!requireKycApproved(user, res)) return;
-      if (!PRIVACY_BUNDLE.enabled) return res.status(503).json({ error: "privacy bundle is not enabled" });
 
       const plan = PRIVACY_BUNDLE.plans.find((p) => p.id === req.body?.planId);
       if (!plan) return res.status(400).json({ error: "unknown privacy bundle plan" });
@@ -415,23 +412,22 @@ export function createUserRouter(deps: UserDeps) {
       }
 
       const now = new Date().toISOString();
-      const status =
-        PRIVACY_BUNDLE.kokioLive && PRIVACY_BUNDLE.mysteriumLive ? "active" : "pending_fulfillment";
       const updated = store.updateUser(user.id, {
         privacyBundle: {
           planId: plan.id,
-          status,
+          // Nothing here bills or calls Kokio or Mysterium, so nothing is active yet.
+          status: "pending_fulfillment",
           startedAt: now,
           renewsAt: nextMonthlyRenewal(),
           esim: {
             provider: "kokio",
-            status: PRIVACY_BUNDLE.kokioLive ? "active" : "pending",
+            status: "pending",
             dataGb: plan.esimGb,
             region: plan.esimRegion,
           },
           vpn: {
             provider: "mysterium",
-            status: PRIVACY_BUNDLE.mysteriumLive ? "active" : "pending",
+            status: "pending",
             bandwidthGb: plan.vpnGb,
             devices: plan.vpnDevices,
           },
