@@ -22,6 +22,7 @@ const scripts = [
   "webauthn:selftest",
   "authorize:test",
   "country:policy:test",
+  "env:number:test",
   "recovery:test",
   "recovery:remove:test",
   "recovery:candide:test",

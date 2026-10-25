@@ -7,7 +7,7 @@ import { envNumber } from "./env.js";
  */
 export const VIES = {
   url: process.env.VIES_URL ?? "https://ec.europa.eu/taxation_customs/vies/rest-api/check-vat-number",
-  timeoutMs: Number(process.env.VIES_TIMEOUT_MS ?? 10_000),
+  timeoutMs: envNumber("VIES_TIMEOUT_MS", 10_000, { min: 1 }),
 } as const;
 
 /** GetMyInvoices, the document inbox the accountant reads. The key is per

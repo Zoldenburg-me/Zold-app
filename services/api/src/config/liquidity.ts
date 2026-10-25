@@ -1,4 +1,4 @@
-import { CHAIN_ID } from "./env.js";
+import { CHAIN_ID, envNumber } from "./env.js";
 
 const UNISWAP_V3_BY_CHAIN: Record<number, { factory: string; router: string; quoter: string }> = {
   8453: {
@@ -48,16 +48,16 @@ export const LIQUIDITY = {
   BEBOP_CHAIN: process.env.BEBOP_CHAIN ?? "polygon",
   BEBOP_BASE_URL: process.env.BEBOP_BASE_URL ?? "https://api.bebop.xyz",
   BEBOP_API_KEY: process.env.BEBOP_API_KEY ?? "",
-  BEBOP_TIMEOUT_MS: Number(process.env.BEBOP_TIMEOUT_MS ?? 8_000),
+  BEBOP_TIMEOUT_MS: envNumber("BEBOP_TIMEOUT_MS", 8_000, { min: 1 }),
   /** Settlement contracts a Bebop quote may name as call target or approval
    *  spender. A maker's calldata runs with our (or the user's) signature, so
    *  it is checked against this list, never trusted. Empty = RFQ execution
    *  refused. */
   BEBOP_CONTRACTS: (process.env.BEBOP_CONTRACTS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean),
   /** Nominal EURe size used to probe an indicative rate for receipts. */
-  PROBE_EUR: Number(process.env.LIQUIDITY_PROBE_EUR ?? 100),
+  PROBE_EUR: envNumber("LIQUIDITY_PROBE_EUR", 100, { min: 1 }),
   /** How long an indicative (display-only) rate may be reused. */
-  INDICATIVE_TTL_MS: Number(process.env.LIQUIDITY_INDICATIVE_TTL_MS ?? 60_000),
+  INDICATIVE_TTL_MS: envNumber("LIQUIDITY_INDICATIVE_TTL_MS", 60_000, { min: 0 }),
   /**
    * CoW Protocol. Intent-based rather than RFQ: you sign an order and solvers
    * compete to fill it, so no inventory is carried on either side — which is
@@ -69,7 +69,7 @@ export const LIQUIDITY = {
    */
   COW_BASE_URL: process.env.COW_BASE_URL ?? "https://api.cow.fi",
   COW_NETWORK: process.env.COW_NETWORK ?? "xdai",
-  COW_TIMEOUT_MS: Number(process.env.COW_TIMEOUT_MS ?? 15_000),
+  COW_TIMEOUT_MS: envNumber("COW_TIMEOUT_MS", 15_000, { min: 1 }),
   /**
    * Uniswap v3, on-chain. The v3 interface is identical on Base Sepolia and
    * Base mainnet, so the path tested on the testnet is the path that ships.
@@ -86,7 +86,7 @@ export const LIQUIDITY = {
   DEX_FEE_TIERS: (process.env.DEX_FEE_TIERS ?? "100,500,3000,10000")
     .split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0),
   /** Slippage floor written into the swap call as amountOutMinimum. */
-  DEX_SLIPPAGE_BPS: BigInt(process.env.DEX_SLIPPAGE_BPS ?? 50),
+  DEX_SLIPPAGE_BPS: BigInt(envNumber("DEX_SLIPPAGE_BPS", 50, { min: 0, max: 1_000, integer: true })),
   /**
    * How far the pool's implied EUR/USD may sit from the independent live mid
    * before we refuse to trade.
@@ -97,7 +97,7 @@ export const LIQUIDITY = {
    * thin one. Without this a skewed pool would let us settle a real transfer
    * at a garbage rate and report it as a market price.
    */
-  DEX_MAX_MID_DEVIATION_BPS: BigInt(process.env.DEX_MAX_MID_DEVIATION_BPS ?? 300),
+  DEX_MAX_MID_DEVIATION_BPS: BigInt(envNumber("DEX_MAX_MID_DEVIATION_BPS", 300, { min: 0, max: 2_000, integer: true })),
   /**
    * LI.FI, the production venue.
    *
@@ -111,11 +111,11 @@ export const LIQUIDITY = {
    */
   LIFI_BASE_URL: process.env.LIFI_BASE_URL ?? "https://li.quest",
   LIFI_API_KEY: process.env.LIFI_API_KEY ?? "",
-  LIFI_TIMEOUT_MS: Number(process.env.LIFI_TIMEOUT_MS ?? 15_000),
+  LIFI_TIMEOUT_MS: envNumber("LIFI_TIMEOUT_MS", 15_000, { min: 1 }),
   /** Fraction, LI.FI's own units: 0.005 = 50bps. */
-  LIFI_SLIPPAGE: Number(process.env.LIFI_SLIPPAGE ?? 0.005),
+  LIFI_SLIPPAGE: envNumber("LIFI_SLIPPAGE", 0.005, { min: 0, max: 0.1 }),
   /** Chain to route on. The app chain; EURe exists on 1/100/137/8453/42161/59144. */
-  LIFI_CHAIN_ID: Number(process.env.LIFI_CHAIN_ID ?? CHAIN_ID),
+  LIFI_CHAIN_ID: envNumber("LIFI_CHAIN_ID", CHAIN_ID, { min: 1, integer: true }),
   /** Contracts a LI.FI route may call or be approved for (default: the LI.FI
    *  Diamond). Same reason as BEBOP_CONTRACTS: routing is delegated, the
    *  calldata is not. */
@@ -146,8 +146,8 @@ export const LIQUIDITY = {
 // fallback.
 export const RATES = {
   URL: process.env.TRANSF_RATES_URL ?? "https://open.er-api.com/v6/latest/EUR",
-  TTL_MS: Number(process.env.TRANSF_RATES_TTL_MS ?? 10 * 60 * 1000),
-  TIMEOUT_MS: Number(process.env.TRANSF_RATES_TIMEOUT_MS ?? 8_000),
+  TTL_MS: envNumber("TRANSF_RATES_TTL_MS", 10 * 60 * 1000, { min: 0 }),
+  TIMEOUT_MS: envNumber("TRANSF_RATES_TIMEOUT_MS", 8_000, { min: 1 }),
   /**
    * ECB reference rates (Frankfurter mirrors the ECB's daily fixing). Used to
    * VALUE a receipt for the books, never to price a trade: the ECB publishes
@@ -172,8 +172,8 @@ export const FX = {
    * can be introduced without a deploy, and read through railFeeEur() so no
    * code path can pick up the wrong rail's number.
    */
-  SEPA_FEE_EUR: Math.max(0, Number(process.env.SEPA_FEE_EUR ?? 0)),
-  CASH_FEE_EUR: Math.max(0, Number(process.env.CASH_FEE_EUR ?? 0.99)),
+  SEPA_FEE_EUR: envNumber("SEPA_FEE_EUR", 0, { min: 0 }),
+  CASH_FEE_EUR: envNumber("CASH_FEE_EUR", 0.99, { min: 0 }),
   QUOTE_TTL_MS: 10 * 60 * 1000,
   DAILY_CAP_EUR: 2500,
   // Quote binding: max on-chain rate drift between quote and execution before the
