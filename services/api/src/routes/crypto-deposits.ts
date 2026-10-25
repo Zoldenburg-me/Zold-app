@@ -28,6 +28,7 @@ import {
 } from "../adapters/crypto-deposits.js";
 import { store, type CryptoDeposit, type User } from "../store.js";
 import { custodyBlockerBeforeFunding, requireCapability } from "../http/guards.js";
+import { orgsBackedBy } from "./payment-requests.js";
 import type { PendingPasskeySafeDeployment } from "../http/pending.js";
 import { AUTH_WINDOW_SEC } from "../transfers/build.js";
 import { publicUser } from "../users/public-user.js";
@@ -148,13 +149,19 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
       const invoice = store.invoices.find((i) => i.id === String(invoiceId ?? ""));
       // An invoice belongs to an organisation. Membership alone is not enough:
       // marking the org's invoice paid is invoice management, which a viewer
-      // or a payer does not have. The id is not a capability either.
+      // or an accountant does not have. The id is not a capability either.
       const member = invoice
         ? store.membersOf(invoice.orgId).find((m) => m.userId === user.id && m.status === "active")
         : undefined;
       if (!invoice || !member) return res.status(404).json({ error: "invoice not found" });
       if (!roleCan(member.role, "invoices.manage")) {
         return res.status(403).json({ error: "Your role cannot record payments on this organisation's invoices." });
+      }
+      // The deposit landed in this user's Safe, so that Safe must be the one
+      // behind the org's account, as for payment links and bank memos: a
+      // member's personal Safe never closes the company's invoice.
+      if (!orgsBackedBy(user.id).has(invoice.orgId)) {
+        return res.status(403).json({ error: "This deposit went to your own account, not the one behind this organisation, so it cannot pay its invoice." });
       }
       // Money that arrived settles an invoice the org issued, never a bill it owes.
       if (invoice.direction !== "outgoing") return res.status(409).json({ error: "Only an invoice your organisation issued can be paid by a deposit." });
