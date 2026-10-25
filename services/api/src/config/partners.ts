@@ -39,14 +39,15 @@ export const FORWARDING = {
  */
 export const EMAIL_VERIFICATION = (() => {
   const enabled = process.env.EMAIL_VERIFICATION === "1";
+  const port = envNumber("SMTP_PORT", 587, { min: 1, max: 65_535, integer: true });
   const smtp = {
     host: process.env.SMTP_HOST ?? "",
-    port: envNumber("SMTP_PORT", 587, { min: 1, max: 65_535, integer: true }),
+    port,
     user: process.env.SMTP_USER ?? "",
     pass: process.env.SMTP_PASS ?? "",
     from: process.env.MAIL_FROM ?? "",
     /** Port 465 speaks TLS from the first byte; others upgrade with STARTTLS. */
-    secure: (process.env.SMTP_PORT ?? "587") === "465",
+    secure: port === 465,
   };
   if (enabled) {
     const missing = (["host", "user", "pass", "from"] as const).filter((k) => !smtp[k]);

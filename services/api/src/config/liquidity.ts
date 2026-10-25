@@ -83,8 +83,14 @@ export const LIQUIDITY = {
   DEX_ROUTER: (process.env.DEX_ROUTER ?? UNISWAP_V3.router) as `0x${string}`,
   DEX_QUOTER: (process.env.DEX_QUOTER ?? UNISWAP_V3.quoter) as `0x${string}`,
   /** Fee tiers probed, cheapest first. The deepest pool wins, not the first. */
-  DEX_FEE_TIERS: (process.env.DEX_FEE_TIERS ?? "100,500,3000,10000")
-    .split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0),
+  DEX_FEE_TIERS: (process.env.DEX_FEE_TIERS || "100,500,3000,10000").split(",").map((s) => {
+    const tier = Number(s.trim());
+    // Uniswap fees are parts per million, so a tier is 1..999999.
+    if (!/^\s*\d+\s*$/.test(s) || tier <= 0 || tier >= 1_000_000) {
+      throw new Error("DEX_FEE_TIERS must be whole numbers from 1 to 999999, separated by commas");
+    }
+    return tier;
+  }),
   /** Slippage floor written into the swap call as amountOutMinimum. */
   DEX_SLIPPAGE_BPS: BigInt(envNumber("DEX_SLIPPAGE_BPS", 50, { min: 0, max: 1_000, integer: true })),
   /**

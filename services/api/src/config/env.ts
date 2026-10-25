@@ -21,7 +21,7 @@ if (initialPort) process.env.TRANSF_API_PORT = initialPort;
 // id (scripts/_local-chain.ts); nothing else should ever land here by accident.
 export const RPC_URL = process.env.TRANSF_RPC_URL ?? "https://mainnet.base.org";
 const PORT_RANGE = { min: 0, max: 65_535, integer: true };
-export const API_PORT = envNumber("TRANSF_API_PORT", envNumber("PORT", 3000, PORT_RANGE), PORT_RANGE);
+export const API_PORT = envNumber(process.env.TRANSF_API_PORT ? "TRANSF_API_PORT" : "PORT", 3000, PORT_RANGE);
 export const API_HOST = process.env.TRANSF_API_HOST ?? "127.0.0.1";
 export const IS_PRODUCTION = process.env.NODE_ENV === "production" || process.env.TRANSF_PRODUCTION === "1";
 export const PUBLIC_URL = process.env.TRANSF_PUBLIC_URL ?? "";
@@ -69,8 +69,10 @@ export function envNumber(
 ): number {
   const raw = process.env[name];
   if (raw === undefined || raw === "") return fallback;
+  // Plain decimal only: Number() also takes "0x10", "1e3" and "  ", none of which is a setting.
+  if (!/^\s*-?\d+(\.\d+)?\s*$/.test(raw)) throw new Error(`${name} must be a number`);
   const n = Number(raw);
-  if (raw.trim() === "" || !Number.isFinite(n)) throw new Error(`${name} must be a number`);
+  if (!Number.isFinite(n)) throw new Error(`${name} must be a number`);
   // Only a short plain decimal is echoed: "0x…" parses too, and a key's magnitude is still a leak.
   const got = /^\s*-?\d{1,12}(\.\d{1,12})?\s*$/.test(raw) ? `, got ${n}` : "";
   if (opts.integer && !Number.isInteger(n)) throw new Error(`${name} must be a whole number${got}`);
