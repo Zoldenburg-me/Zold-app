@@ -3,10 +3,9 @@
  * OffchainResolver — the last one end to end through the API's gateway code).
  * Run: npm run test:contracts
  */
-import { createServer } from "node:net";
+import { hardhatNode } from "../../scripts/_free-port.js";
 import { createServer as createHttpServer } from "node:http";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,17 +18,8 @@ import { hardhat } from "viem/chains";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 // A free port, so the suite never deploys against some other node that
 // happens to be listening on a fixed one.
-const PORT: number = await new Promise((resolve, reject) => {
-  const s = createServer();
-  s.once("error", reject);
-  s.listen(0, "127.0.0.1", () => {
-    const a = s.address();
-    if (!a || typeof a === "string") { s.close(); reject(new Error("no free port")); return; }
-    const port = a.port;
-    s.close(() => resolve(port));
-  });
-});
-const RPC = `http://127.0.0.1:${PORT}`;
+const node = await hardhatNode(ROOT);
+const RPC = node.url;
 
 const pk = {
   deployer: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
@@ -307,15 +297,9 @@ async function main() {
   console.log(`\n${pass} tests passed`);
 }
 
-const node = spawn(
-  process.execPath,
-  [path.join(ROOT, "node_modules/.bin/hardhat"), "node", "--port", String(PORT)],
-  { cwd: ROOT, stdio: "ignore" },
-);
-
 try {
   await waitForRpc();
   await main();
 } finally {
-  node.kill();
+  node.child.kill();
 }

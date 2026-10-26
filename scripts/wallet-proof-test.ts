@@ -23,9 +23,8 @@
  */
 import "./_test-env.js";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { freePort, hardhatNode } from "./_free-port.js";
 import { mkdtempSync, readFileSync } from "node:fs";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,21 +34,8 @@ import { privateKeyToAccount } from "viem/accounts";
 import { hardhat } from "viem/chains";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const freePort = (): Promise<number> =>
-  new Promise((resolve, reject) => {
-    const s = createServer();
-    s.once("error", reject);
-    s.listen(0, "127.0.0.1", () => {
-      const a = s.address();
-      if (!a || typeof a === "string") { s.close(); reject(new Error("no free port")); return; }
-      const port = a.port;
-      s.close(() => resolve(port));
-    });
-  });
-
-const CHAIN_PORT = await freePort();
+const { child: chain, url: RPC } = await hardhatNode(ROOT);
 const DEAD_PORT = await freePort();
-const RPC = `http://127.0.0.1:${CHAIN_PORT}`;
 
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-wallet-proof-")), "db.json");
 process.env.TRANSF_CHAIN_ID = "31337";
@@ -101,8 +87,6 @@ const viesServer = vies.listen(0, "127.0.0.1");
 await new Promise<void>((r) => viesServer.once("listening", () => r()));
 process.env.VIES_URL = `http://127.0.0.1:${(viesServer.address() as any).port}/`;
 
-const chain = spawn(process.execPath, [path.join(ROOT, "node_modules/.bin/hardhat"), "node", "--port", String(CHAIN_PORT)], { cwd: ROOT, stdio: "ignore" });
-process.on("exit", () => chain.kill());
 const pub = createPublicClient({ chain: hardhat, transport: http(RPC) });
 for (let i = 0; ; i++) {
   try { await pub.getBlockNumber(); break; } catch {
