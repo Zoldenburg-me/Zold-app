@@ -249,7 +249,7 @@ export function payeeFor(orgId: string, installerId: string): { user?: User; rea
   const user = store.findUser(eurAccount?.backingUserId ?? installerId);
   if (!user) return { reason: "no account to receive into" };
   if (!user.paymentPage?.handle || !user.paymentPage.depositAddress) {
-    return { reason: `${user.id === installerId ? "you" : "the account backing this organisation's EUR account"} must claim a payment page first (Profile → Payment page)` };
+    return { reason: `${user.id === installerId ? "you" : "the account backing this organisation's EUR account"} must claim a payment page first (Get paid → Your page in the app, or Settings → Payment page in Zold Business)` };
   }
   return { user };
 }

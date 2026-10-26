@@ -108,8 +108,8 @@ function phShowRoot(on) {
 
 /* A company login's money moves in Zold Business, where drafts and approvals
    apply. Here it may only see to its sign-in and recovery, its Monerium
-   connection, and a receipt it shares from there. */
-const PH_COMPANY_APP = new Set(["security", "signers", "recovery-settings", "recovery-alert", "monerium-settings", "share"]);
+   connection, its payment page, and a receipt it shares from there. */
+const PH_COMPANY_APP = new Set(["security", "signers", "recovery-settings", "recovery-alert", "monerium-settings", "page-settings", "share"]);
 
 /* On its way to /business, a company login is first shown a recovery under
    way on its Safe, unless "It was me" already hid that one. A check that
