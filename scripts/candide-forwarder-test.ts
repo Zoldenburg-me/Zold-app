@@ -16,8 +16,9 @@
 import "./_test-env.js";
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
+import { freePort } from "./_free-port.js";
 
-const PORT = Number(process.env.TRANSF_FORWARDER_STUB_PORT ?? 8554);
+const PORT = Number(process.env.TRANSF_FORWARDER_STUB_PORT ?? await freePort());
 const APP_CHAIN = 8453;
 const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 const OTHER = "0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2";

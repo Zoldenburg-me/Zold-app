@@ -175,9 +175,10 @@ try {
     assert.equal(r.status, 201, JSON.stringify(r.body));
     assert.equal(r.body.mode, "turnkey");
     assert.equal(r.body.status, "PASSKEY_PENDING");
-    for (const k of ["userId", "safeAddress", "guardianAddress", "recoveryModuleAddress"]) {
+    for (const k of ["userId", "safeAddress", "guardianAddress", "recoveryModuleAddress", "userHandle"]) {
       assert.equal(r.body[k], undefined, `${k} is not shown to whoever knows the email`);
     }
+    assert.ok(!/0x[0-9a-fA-F]{40}/.test(JSON.stringify(r.body)), "the start names no address");
     assert.equal(r.body.turnkey?.guardianSubOrgId, undefined);
     const row = store.findRecoveryRequest(r.body.id)!;
     assert.equal(row.guardianAddress, guardian.address);

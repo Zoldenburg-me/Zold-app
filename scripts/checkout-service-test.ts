@@ -425,15 +425,16 @@ const loadSecurity = (tolerance: string | undefined) => {
     encoding: "utf8",
   });
 };
-for (const tolerance of ["", "0", "-5", "5m", "Infinity"]) {
+for (const tolerance of ["0", "-5", "5m", "Infinity", "86400"]) {
   await check(`config refuses MONERIUM_WEBHOOK_TOLERANCE_SEC=${JSON.stringify(tolerance)}`, () => {
     const r = loadSecurity(tolerance);
     assert.notEqual(r.status, 0);
     assert.match(r.stderr, /MONERIUM_WEBHOOK_TOLERANCE_SEC/);
   });
 }
-await check("an unset MONERIUM_WEBHOOK_TOLERANCE_SEC is 300 s, and a positive one is kept", () => {
+await check("an unset or empty MONERIUM_WEBHOOK_TOLERANCE_SEC is 300 s, and a positive one is kept", () => {
   assert.equal(loadSecurity(undefined).stdout.trim(), "300");
+  assert.equal(loadSecurity("").stdout.trim(), "300");
   assert.equal(loadSecurity("120").stdout.trim(), "120");
 });
 

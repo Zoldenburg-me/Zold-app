@@ -20,7 +20,8 @@ if (initialPort) process.env.TRANSF_API_PORT = initialPort;
 // Base mainnet by default. The local hardhat stack sets its own RPC and chain
 // id (scripts/_local-chain.ts); nothing else should ever land here by accident.
 export const RPC_URL = process.env.TRANSF_RPC_URL ?? "https://mainnet.base.org";
-export const API_PORT = Number(process.env.TRANSF_API_PORT ?? process.env.PORT ?? 3000);
+const PORT_RANGE = { min: 0, max: 65_535, integer: true };
+export const API_PORT = envNumber(process.env.TRANSF_API_PORT ? "TRANSF_API_PORT" : "PORT", 3000, PORT_RANGE);
 export const API_HOST = process.env.TRANSF_API_HOST ?? "127.0.0.1";
 export const IS_PRODUCTION = process.env.NODE_ENV === "production" || process.env.TRANSF_PRODUCTION === "1";
 export const PUBLIC_URL = process.env.TRANSF_PUBLIC_URL ?? "";
@@ -35,7 +36,7 @@ export const USING_LOCAL_RPC = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?($|\/
  * the real EURe and Circle the real USDC), 31337 = the local hardhat stack the
  * test harnesses pin themselves to. Unknown ids are synthesized by chain.ts.
  */
-export const CHAIN_ID = Number(process.env.TRANSF_CHAIN_ID ?? 8453);
+export const CHAIN_ID = envNumber("TRANSF_CHAIN_ID", 8453, { min: 1, integer: true });
 /** Chains where the tokens are real money. Anything test-only refuses here. */
 export const REAL_MONEY_CHAINS = new Set([1, 100, 137, 8453, 42161, 59144]);
 export const IS_REAL_MONEY_CHAIN = REAL_MONEY_CHAINS.has(CHAIN_ID);
@@ -56,23 +57,26 @@ export const LOOKS_LOCAL = USING_LOCAL_API_HOST && USING_LOCAL_RPC && IS_LOCAL_C
 /**
  * A number from the environment, or a refusal naming the variable.
  *
- * `Number("2 ")` is 2 but `Number("two")` is NaN, and a NaN that reaches
- * `BigInt(...)` throws a bare RangeError from inside the deposit poller —
- * a typo in one env var surfacing as a crash loop in the scanner, several
- * layers from the cause. Boot is the place to say it.
+ * `Number("two")` is NaN and `Number("")` is 0: a typo would surface as a
+ * NaN session expiry or a 0 ms poll loop, several layers from the cause.
+ * Boot is the place to say it. Only a short plain decimal is ever echoed back,
+ * in case a secret landed in the wrong variable.
  */
 export function envNumber(
   name: string,
   fallback: number,
-  opts: { min?: number; integer?: boolean } = {},
+  opts: { min?: number; max?: number; integer?: boolean } = {},
 ): number {
   const raw = process.env[name];
   if (raw === undefined || raw === "") return fallback;
+  // Plain decimal only: Number() also takes "0x10", "1e3" and "  ", none of which is a setting.
+  if (!/^\s*-?\d+(\.\d+)?\s*$/.test(raw)) throw new Error(`${name} must be a number`);
   const n = Number(raw);
-  if (!Number.isFinite(n)) throw new Error(`${name} must be a number, got "${raw}"`);
-  if (opts.integer && !Number.isInteger(n)) throw new Error(`${name} must be a whole number, got ${n}`);
-  if (opts.min !== undefined && n < opts.min) {
-    throw new Error(`${name} must be at least ${opts.min}, got ${n}`);
-  }
+  if (!Number.isFinite(n)) throw new Error(`${name} must be a number`);
+  // Only a short plain decimal is echoed: "0x…" parses too, and a key's magnitude is still a leak.
+  const got = /^\s*-?\d{1,12}(\.\d{1,12})?\s*$/.test(raw) ? `, got ${n}` : "";
+  if (opts.integer && !Number.isInteger(n)) throw new Error(`${name} must be a whole number${got}`);
+  if (opts.min !== undefined && n < opts.min) throw new Error(`${name} must be at least ${opts.min}${got}`);
+  if (opts.max !== undefined && n > opts.max) throw new Error(`${name} must be at most ${opts.max}${got}`);
   return n;
 }

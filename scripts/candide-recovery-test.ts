@@ -20,6 +20,7 @@
 // Must be first: pins the chain/keys before config.js reads the environment.
 import "./_local-chain.js";
 import assert from "node:assert/strict";
+import { freePort } from "./_free-port.js";
 import { createHash, randomBytes, webcrypto } from "node:crypto";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createServer } from "node:http";
@@ -33,7 +34,7 @@ const API_PORT = Number(process.env.TRANSF_API_PORT ?? 3041);
 const RPC_URL = process.env.TRANSF_RPC_URL ?? "http://127.0.0.1:8545";
 const RPC_PORT = new URL(RPC_URL).port || "8545";
 const API = `http://127.0.0.1:${API_PORT}`;
-const STUB_PORT = Number(process.env.TRANSF_STUB_PORT ?? 8561);
+const STUB_PORT = Number(process.env.TRANSF_STUB_PORT ?? await freePort());
 const STUB = `http://127.0.0.1:${STUB_PORT}`;
 const bin = (n: string) => (n === "tsx" ? path.join(ROOT, "node_modules/tsx/dist/cli.mjs") : path.join(ROOT, "node_modules/.bin", n));
 
@@ -522,7 +523,10 @@ try {
     assert.equal(r.data.channels.length, 2);
     assert.ok(!r.text.includes(EMAIL) && !r.text.includes(PHONE), "targets are masked on the public surface");
     assert.ok(r.data.registerChallenge, "a WebAuthn registration challenge bound to this recovery");
-    assert.equal(r.data.userHandle, userId);
+    for (const k of ["userId", "safeAddress", "guardianAddress", "recoveryModuleAddress", "userHandle"]) {
+      assert.equal(r.data[k], undefined, `${k} is not shown to whoever knows the email`);
+    }
+    assert.ok(!/0x[0-9a-fA-F]{40}/.test(r.text) && !r.text.includes(userId), "the start names no address and no account id");
     assert.match(r.data.recoverySecret ?? "", /^[A-Za-z0-9_-]{40,}$/, "a per-request secret, handed out once");
     assert.ok(!r.text.includes("accessHash"), "the stored hash is not on the public surface");
     recovery = r.data;
@@ -574,6 +578,8 @@ try {
     assert.equal(r.data.candide.auths.length, 2);
     assert.equal(r.data.candide.newPasskeyRegistered, true);
     assert.ok(!r.text.includes("attestation"), "the new credential is not on the public surface");
+    assert.ok(!r.text.includes(userId) && !r.text.toLowerCase().includes(safeAddress.toLowerCase()), "before the codes, the request still names no account or Safe");
+    assert.ok(!/0x[0-9a-fA-F]{40}/.test(r.text), "nor any address, the new owner's included");
     assert.match(r.data.otpTicket ?? "", /^[A-Za-z0-9_-]{40,}$/, "a ticket for the browser that registered the passkey");
     assert.ok(!r.text.includes("otpTicketHash"));
     otpTicket = r.data.otpTicket;

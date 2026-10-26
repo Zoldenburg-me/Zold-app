@@ -12,6 +12,7 @@ import { defineChain } from "viem";
 import { base, baseSepolia, hardhat, polygon, polygonAmoy } from "viem/chains";
 import {
   CHAIN_ID,
+  envNumber,
   KEYS,
   RPC_URL,
   TESTNET_FAUCET,
@@ -79,7 +80,7 @@ export async function assertChainMatches(): Promise<void> {
  * there. In production assertProductionConfig fails outright.
  */
 export function warnIfSmartAccountChainDiffers(): void {
-  const candideChainId = Number(process.env.CANDIDE_CHAIN_ID ?? CHAIN_ID);
+  const candideChainId = envNumber("CANDIDE_CHAIN_ID", CHAIN_ID, { min: 1, integer: true });
   if (candideChainId === CHAIN_ID) return;
   console.warn(
     `WARNING: app chain is ${CHAIN_ID} but CANDIDE_CHAIN_ID is ${candideChainId}. ` +

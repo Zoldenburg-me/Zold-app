@@ -147,6 +147,20 @@ check("display name is optional, trimmed, and length-capped", () => {
   throws(() => normaliseDisplayName("x".repeat(41)), /40 characters/);
 });
 
+check("display name refuses what the handle and account-name rules refuse", () => {
+  for (const name of ["Zold Support", "monerium refunds", "Z0ld", "Vitalik Buterin", "Iron Pay", `0x${"11".repeat(19)}`, "pay 0xAbC", "Anna\u202Eagerot\u202C", "Anna\u200BLee", "Anna\u0000Lee", "Anna<b>", "Pay ０ｘ８３２Ａ", "Pay0x12", "Z\u043eld Pay", "\u0405upport", "Z\u043eld", "Supp\u00f8rt", "Moner\u0131um", "\u0545old", "\u0660x1234abcd", "Z\u0254ld", "\u1D22old", "\uA731upport", "Moneri\u1D1Cm", "\u0261old Pay", "0\u04451234abcd", "0\u04451234", "\u0396old", "\u1D22\u1D0F\u029F\u1D05", "\u0412\u0410\u0405\u0415", "\u0456\u0433\u043e\u043f", "\u0455\u057d\u0440\u0440\u043e\u0433\u0442", "\u0430\u0501\u043c\u0456\u043f", "\u043c\u0585\u0578\u0435\u0433\u0456\u057d\u043c", "\u0392\u0391\u0405\u0395"]) {
+    throws(() => normaliseDisplayName(name), /displayName/);
+  }
+  for (const name of ["Miriam Z", "Lindner Holzbau & Söhne", "Ironing Board Co", "10x5 Studio", "Café Zürich", "Łódź Bakery", "Æsir Ltd", "Straße 12", "\u018Fli M\u0259mm\u0259dov", "Kwame \u0186sei", "\u0141ukasz", "S\u00f8ren", "Ay\u015fe G\u00fcne\u015f", "\u041c\u0430\u0448\u0430", "\u0411\u043e\u0440\u0438\u0441 \u041f\u0435\u0442\u0440\u043e\u0432", "\u0418\u0432\u0430\u043d \u041f\u0435\u0442\u0440\u043e\u0432", "\u738b\u82b3"]) {
+    assert.equal(normaliseDisplayName(name), name);
+  }
+});
+
+check("a stored display name the rules refuse is not served, so the page shows the handle", () => {
+  const p = publicPayee({ ...user, paymentPage: { ...user.paymentPage, displayName: "Zold Support" } }, CHAIN);
+  assert.ok(!("displayName" in p));
+});
+
 check("the public projection returns exactly the expected payment-page keys", () => {
   const p = publicPayee(user, CHAIN);
   assert.deepEqual(Object.keys(p).sort(), [

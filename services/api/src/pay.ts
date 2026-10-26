@@ -17,6 +17,7 @@
  * leak the next field somebody adds.
  */
 import type { User } from "./store.js";
+import { cleanName } from "./users/display-name.js";
 
 /** 3-30 characters, lowercase alphanumeric and internal hyphens. */
 const HANDLE_RE = /^[a-z0-9](?:[a-z0-9-]{1,28}[a-z0-9])?$/;
@@ -143,7 +144,64 @@ export function normaliseDisplayName(raw: unknown): string | undefined {
   if (typeof raw !== "string") throw new HandleError("displayName must be a string");
   const name = raw.trim().replace(/\s+/g, " ");
   if (name.length > 40) throw new HandleError("displayName must be 40 characters or fewer");
-  return name || undefined;
+  if (!name) return undefined;
+  const refusal = displayNameRefusal(raw);
+  if (refusal) throw new HandleError(refusal);
+  return name;
+}
+
+/** Latin letters with no decomposition, as the ASCII letter they are read as. */
+const LATIN_FOLD: Record<string, string> = {
+  "ß": "ss", "æ": "ae", "œ": "oe", "ø": "o", "ł": "l", "đ": "d", "ð": "d", "þ": "th", "ı": "i", "ħ": "h",
+  "ə": "e", "ɛ": "e", "ɔ": "o", "ŋ": "n", "ŧ": "t", "ɓ": "b", "ɗ": "d", "ƒ": "f", "ʒ": "z", "ĸ": "k",
+};
+const LATIN_FOLDED = new RegExp(`[${Object.keys(LATIN_FOLD).join("")}]`, "g");
+/** Cyrillic, Greek and Armenian letters, lowercased, as the Latin letter they
+ *  draw like in either case, so a name wholly in one of them is read for the
+ *  0x check and the list. */
+const LOOKALIKE_LATIN: Record<string, string> = {
+  "а": "a", "в": "b", "г": "r", "е": "e", "ё": "e", "ѕ": "s", "і": "i", "ї": "i", "ј": "j", "к": "k",
+  "м": "m", "н": "h", "о": "o", "п": "n", "р": "p", "с": "c", "т": "t", "у": "y", "ү": "y", "х": "x",
+  "ь": "b", "һ": "h", "ԁ": "d", "ӏ": "l", "ԛ": "q", "ԝ": "w", "ѵ": "v", "ѡ": "w",
+  "α": "a", "β": "b", "γ": "y", "ε": "e", "ζ": "z", "η": "h", "ι": "i", "κ": "k", "μ": "m", "ν": "n",
+  "ο": "o", "ρ": "p", "ς": "c", "τ": "t", "υ": "y", "χ": "x",
+  "ա": "w", "հ": "h", "յ": "j", "ո": "n", "ս": "u", "ց": "g", "ք": "p", "օ": "o", "ռ": "n",
+};
+const LOOKALIKES = new RegExp(`[${Object.keys(LOOKALIKE_LATIN).join("")}]`, "g");
+
+/** Why a display name may not be shown, or undefined. It heads the page above
+ *  the deposit address, so it takes the handle's rules (no staff, partner or
+ *  well-known name, nothing that reads as an address) and the account name's
+ *  characters (no format, control or bidi characters). */
+function displayNameRefusal(name: string): string | undefined {
+  if (cleanName(name, { min: 1 }) === null) {
+    return "displayName cannot contain control, formatting or direction characters, emoji, < or >";
+  }
+  // Folded so the handle's rules apply: accents dropped, fullwidth to ASCII,
+  // Latin letters with no decomposition mapped (LATIN_FOLD).
+  const folded = name.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().replace(LATIN_FOLDED, (c) => LATIN_FOLD[c]);
+  // Beside Latin letters, any letter left unfolded can draw like one and pass
+  // the list: another alphabet's (a Cyrillic "о" in "Zоld") or a Latin
+  // look-alike (a small-cap "ᴢ"). A name wholly in another alphabet passes, and
+  // is read for the 0x check and the list through LOOKALIKE_LATIN ("ВАЅЕ").
+  if (/\p{Script=Latin}/u.test(name) && /\p{L}/u.test(folded.replace(/[a-z]/g, ""))) {
+    return "displayName cannot mix Latin letters with another alphabet or look-alike letters — they can look identical";
+  }
+  // A digit from another script (an Arabic-Indic zero) would pass the 0x check.
+  if (/\p{N}/u.test(folded.replace(/[0-9]/g, ""))) return "displayName may only use the digits 0-9";
+  const asLatin = folded.replace(LOOKALIKES, (c) => LOOKALIKE_LATIN[c]);
+  if (/(?<![0-9])0x[\p{L}\p{N}]/u.test(asLatin)) return "displayName cannot contain 0x — it would read as an address";
+  // In handle form, every run of other characters a hyphen, so the handle list applies.
+  const asHandle = asLatin.replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const impersonated = impersonatedName(asHandle);
+  if (impersonated) return `displayName cannot contain "${impersonated}" — it would read as someone else's page`;
+  return undefined;
+}
+
+/** A stored display name if the current rules allow it. Checked when read, so
+ *  a name an older rule let in stops being served but is never deleted. */
+export function shownDisplayName(name: string | undefined): string | undefined {
+  return name && !displayNameRefusal(name) ? name : undefined;
 }
 
 export interface PublicPayee {
@@ -179,9 +237,10 @@ export function publicPayee(
   if (!page?.handle) {
     throw new HandleError("account has no payment handle");
   }
+  const displayName = shownDisplayName(page.displayName);
   return {
     handle: page.handle,
-    ...(page.displayName ? { displayName: page.displayName } : {}),
+    ...(displayName ? { displayName } : {}),
     address: page.depositAddress,
     chainId: chain.chainId,
     token: chain.token,
@@ -232,7 +291,7 @@ export function publicOrgPayee(
   return {
     kind: "organisation",
     handle: page.handle,
-    displayName: page.displayName || org.legalName || org.name,
+    displayName: shownDisplayName(page.displayName) || org.legalName || org.name,
     bank: {
       holder: holder?.trim() || org.legalName || org.name,
       holderVerified: Boolean(holder?.trim()),

@@ -70,13 +70,13 @@ function phSecurityChecks() {
 
 PH.settings = {
   title: "Settings",
-  live: () => JSON.stringify([user?.name, user?.email, user?.monerium?.method, user?.paymentPage?.settlementAsset, user?.paymentPage?.autoConvert,
-    phKey?.protection, phSecurityChecks(), user?.privacyBundle?.status, caps.privacyBundle]),
+  live: () => JSON.stringify([user?.name, user?.email, user?.monerium?.method, user?.monerium?.connectedAt, user?.paymentPage?.handle, user?.paymentPage?.settlementAsset, user?.paymentPage?.autoConvert,
+    phKey?.protection, phSecurityChecks(), user?.privacyBundle?.status, caps.privacyBundle, user?.kycStatus]),
   html() {
     const u = user || {};
     const checks = phSecurityChecks();
     const mon = u.monerium?.method === "api_keys" ? "Connected with your own keys" : hasConnectedMonerium(u) ? "Connected" : "Not connected";
-    const plus = bundleSubscribed(u);
+    const bundle = bundleSubscribed(u);
     const account = [
       Z.row({ lead: Z.iconTile({ icon: "person" }), title: "Account", sub: [ownAccountName(u), u.email].filter(Boolean).join(" · "), href: "#account-details" }),
       Z.row({ lead: Z.iconTile({ icon: "shield_lock" }), title: "Security", sub: "Recovery, sign-in, who can approve and spend", right: checks ? Z.tag(`${checks} to check`, "amber") : "", href: "#security" }),
@@ -85,11 +85,13 @@ PH.settings = {
     ];
     // Accounting software connects to a space in Zold Business, not here.
     const connections = HAS("monerium") ? [Z.row({ lead: Z.iconTile({ icon: "account_balance" }), title: "Monerium", sub: mon, href: "#monerium-settings" })] : [];
-    const plusRow = plus ? Z.listGroup({ rows: [Z.row({ lead: Z.iconTile({ icon: "stars" }), title: "Zold Plus", sub: u.privacyBundle.status === "active" ? "Privacy Bundle active" : "Privacy Bundle · awaiting partner setup", href: "#plus" })] }) : "";
+    // The bundle's only entry: where the offer is live and the account may subscribe
+    // (the API needs approval), or for an account that holds one.
+    const bundleRow = bundle || (caps.privacyBundle === true && kycApproved(u)) ? Z.listGroup({ rows: [Z.row({ lead: Z.iconTile({ icon: "vpn_lock" }), title: "Privacy Bundle", sub: !bundle ? "eSIM and VPN" : u.privacyBundle.status === "active" ? "Active" : "Awaiting partner setup", href: "#bundle" })] }) : "";
     return `${phTop("Settings", "more")}${phMain(`
       ${Z.listGroup({ rows: account })}
       ${connections.length ? `<section class="z-group"><h2 class="z-eyebrow">Connections</h2>${Z.listGroup({ rows: connections })}</section>` : ""}
-      ${plusRow}
+      ${bundleRow}
       ${Z.button({ full: true, icon: "logout", label: "Sign out", id: "ph-signout" })}
     `)}`;
   },
@@ -204,7 +206,7 @@ async function phLoadSoon() {
 
 PH.soon = {
   title: "Coming soon",
-  live: () => JSON.stringify([user?.iban, user?.kycStatus, caps.cashRail, phCache.soon?.length, user?.privacyBundle?.status, caps.privacyBundle]),
+  live: () => JSON.stringify([user?.iban, user?.kycStatus, caps.cashRail, phCache.soon?.length]),
   html() {
     const u = user || {};
     const soonTile = Z.iconTile({ icon: "hourglass_top", tone: "a" });
@@ -220,7 +222,6 @@ PH.soon = {
       ...(later.length ? [Z.row({ lead: soonTile, title: "Accounts in other currencies", sub: `${later.length > 1 ? `${later.slice(0, -1).join(", ")} and ${later.at(-1)}` : later[0]}: waiting on an account provider`, soon: true })] : []),
       Z.row({ lead: soonTile, title: "More countries", sub: "Bank transfers reach Europe only, for now", soon: true }),
       Z.row({ lead: soonTile, title: "Sending to a crypto wallet", sub: "Not built yet", soon: true }),
-      ...(!bundleSubscribed(u) ? [Z.row({ lead: soonTile, title: "Zold Plus", sub: "Card and no FX margin in one plan, not on sale yet", href: "#plus" })] : []),
     ];
     return `${phTop("Coming soon", "more")}${phMain(`
       <p class="z-sub">What this account can’t do yet, and why. Each one switches on here as soon as it works.</p>

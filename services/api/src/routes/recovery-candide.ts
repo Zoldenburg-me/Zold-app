@@ -69,7 +69,7 @@ import {
   verifyRegistration as verifyChannelOtp,
 } from "../recovery/candide-guardian.js";
 import { b64urlToBuf, bufToB64url, issueChallenge, verifyAssertionForChallenge, verifyRegistration } from "../webauthn.js";
-import { publicRecoveryRequest } from "../recovery.js";
+import { publicRecoveryRequest, starterRecoveryRequest } from "../recovery.js";
 import { hostedGuardianBlocked, ONE_GUARDIAN_MESSAGE } from "../recovery/one-guardian.js";
 import { bindRecoveredPasskey, deployVerifierForOwner } from "../recovery/recovered-passkey.js";
 import { ADDRESS_RE } from "../domain/contacts.js";
@@ -193,7 +193,7 @@ function publicCandideRecovery(user: User) {
 }
 
 function publicRequest(r: RecoveryRequest) {
-  return publicRecoveryRequest(r);
+  return starterRecoveryRequest(r);
 }
 
 // ---------------------------------------------------------------------------
@@ -420,7 +420,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       out.requests = store
         .recoveryRequestsForUser(user.id)
         .filter((r) => r.mode === "candide")
-        .map(publicRequest);
+        .map(publicRecoveryRequest);
       res.json(out);
     }),
   );
@@ -847,7 +847,6 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       if (request.status === "PASSKEY_PENDING") {
         out.registerChallenge = issueChallenge("register", `recovery:${request.id}`);
         out.rpId = SECURITY.rpId;
-        out.userHandle = user.id;
         out.submitTo = `/api/recovery/candide/${request.id}/passkey`;
       }
       res.status(open ? 200 : 201).json(out);

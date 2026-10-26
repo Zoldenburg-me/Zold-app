@@ -641,30 +641,6 @@
   #dashboard.m-on[data-msub="payment"] #paylink-card { display: block; }
   #dashboard.m-on[data-msub="payment"] .m-subhead { display: flex; }
 
-  /* ---------- Zold Plus ----------
-     A preview, not a product: the tier in the design (card, no-FX-margin,
-     vault boost) is not built, so the price is replaced by "coming soon" and
-     the CTA cannot be pressed. The eSIM and VPN perks and the last row are
-     the Privacy Bundle, drawn only where capabilities.privacyBundle is true. */
-  .m-card {
-    border-radius: 12px; background: linear-gradient(140deg, #4a1a30, #261e20 70%);
-    box-shadow: 0 0 0 1px #2a2a2a, 0 18px 40px rgba(0, 0, 0, .85);
-    padding: 24px; height: 196px; display: flex; flex-direction: column;
-  }
-  .m-card .brandline { display: flex; justify-content: space-between; align-items: flex-start; font-size: 16px; font-weight: 500; letter-spacing: .5px; }
-  .m-card .pan { margin-top: auto; font-family: var(--m-mono); font-size: 17px; letter-spacing: 3px; color: var(--m-dim); }
-  .m-card .foot { display: flex; justify-content: space-between; margin-top: 12px; font-size: 12px; letter-spacing: .5px; color: var(--m-dim); }
-  .m-perks { margin-top: 16px; border-radius: 12px; background: var(--m-surface); border: 1px solid var(--m-line); overflow: hidden; }
-  .m-perk {
-    display: flex; align-items: center; gap: 12px; padding: 12px 14px;
-    border-top: 1px solid var(--m-line); min-height: 62px;
-  }
-  .m-perk:first-child { border-top: 0; }
-  .m-perk .material-symbols-rounded { font-size: 19px; color: var(--m-pink); flex: none; }
-  .m-perk .t { font-size: 13.5px; font-weight: 500; }
-  .m-perk .d { font-size: 11px; color: var(--m-faint); margin-top: 1px; }
-  #dashboard.m-on[data-msub="plus"] #m-plus-screen { display: block; }
-
   /* ---------- pay hub ---------- */
   #dashboard.m-on[data-msub="pay"] #m-pay-screen { display: block; }
 

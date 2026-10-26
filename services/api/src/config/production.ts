@@ -5,7 +5,7 @@
  * and before the signing keys are read. Every problem is collected, in the
  * order below, and reported in one error.
  */
-import { CHAIN_ID, IS_PRODUCTION, IS_REAL_MONEY_CHAIN, LOOKS_LOCAL, PUBLIC_URL, REAL_MONEY_CHAINS } from "./env.js";
+import { CHAIN_ID, envNumber, IS_PRODUCTION, IS_REAL_MONEY_CHAIN, LOOKS_LOCAL, PUBLIC_URL, REAL_MONEY_CHAINS } from "./env.js";
 import { MONERIUM, moneriumOAuthEnabled, moneriumSandboxEnabled } from "./monerium.js";
 import { dataKeyProblems } from "./data-keys.js";
 import { RECOVERY, RECOVERY_MODULE_3_MINUTES, SECURITY } from "./security.js";
@@ -80,7 +80,7 @@ function checkMainnet(fail: Fail) {
   if (!/^(ethereum|gnosis|polygon|base|arbitrum|linea)$/.test(MONERIUM.chain)) {
     fail(`MONERIUM_CHAIN=${MONERIUM.chain} is not a Monerium production chain name`);
   }
-  if (Number(process.env.LIFI_CHAIN_ID ?? CHAIN_ID) !== CHAIN_ID) fail("LIFI_CHAIN_ID must equal TRANSF_CHAIN_ID");
+  if (envNumber("LIFI_CHAIN_ID", CHAIN_ID, { min: 1, integer: true }) !== CHAIN_ID) fail("LIFI_CHAIN_ID must equal TRANSF_CHAIN_ID");
   if (process.env.ALLOW_PLAINTEXT_STORE !== "1") {
     fail("ALLOW_PLAINTEXT_STORE=1 is required to acknowledge the JSON file store is not production storage");
   }
@@ -135,7 +135,7 @@ function checkBridge(fail: Fail) {
  * production it is never intentional.
  */
 function checkSmartAccount(fail: Fail) {
-  const candideChainId = Number(process.env.CANDIDE_CHAIN_ID ?? CHAIN_ID);
+  const candideChainId = envNumber("CANDIDE_CHAIN_ID", CHAIN_ID, { min: 1, integer: true });
   if (candideChainId !== CHAIN_ID) {
     fail(
       `CANDIDE_CHAIN_ID (${candideChainId}) must match TRANSF_CHAIN_ID (${CHAIN_ID}) — ` +

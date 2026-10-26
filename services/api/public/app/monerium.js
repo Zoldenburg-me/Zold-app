@@ -145,7 +145,6 @@ async function connectMoneriumKeys() {
 document.querySelectorAll("[data-mback]").forEach((b) => {
   b.onclick = () => phBack(b.dataset.mback || "home");
 });
-$("m-go-bundle").onclick = () => mobileNav("bundle");
 $("m-back").onclick = () => phBack("home");
 
 /**
@@ -344,8 +343,8 @@ async function cancelPrivacyBundle() {
   try {
     user = await api(`/api/users/${user.id}/privacy-bundle/cancel`, {});
     renderUser(user);
-    // Where the offer is off the bundle screen is now empty: go back to Plus.
-    if (!caps.privacyBundle) mobileNav("plus");
+    // Where the offer is off the bundle screen is now empty: go back to Settings.
+    if (!caps.privacyBundle) phGo("settings", null, { replace: true });
   } catch (e) { showErr("privacy-err", e); }
 }
 
@@ -378,8 +377,7 @@ async function renderPrivacyBundle() {
   if (!card || !user) return;
   const live = caps.privacyBundle === true;
   const active = bundleSubscribed(user);
-  for (const id of ["set-privacy-card", "m-perk-vpn", "m-perk-esim"]) $(id).classList.toggle("hidden", !live);
-  $("m-go-bundle").classList.toggle("hidden", !live && !active);
+  $("set-privacy-card").classList.toggle("hidden", !live);
   if (!live && !active) {
     card.classList.add("hidden");
     return;

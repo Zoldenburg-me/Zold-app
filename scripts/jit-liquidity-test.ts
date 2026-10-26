@@ -19,10 +19,11 @@
  */
 import "./_local-chain.js";
 import assert from "node:assert/strict";
+import { freePort } from "./_free-port.js";
 import { createServer, type Server } from "node:http";
 import { BASE_SEPOLIA_TOKENS } from "./_base-sepolia-tokens.js";
 
-const PORT = Number(process.env.TRANSF_BEBOP_STUB_PORT ?? 8551);
+const PORT = Number(process.env.TRANSF_BEBOP_STUB_PORT ?? await freePort());
 
 process.env.LIQUIDITY_PROVIDER = "rfq";
 process.env.BEBOP_BASE_URL = `http://127.0.0.1:${PORT}`;

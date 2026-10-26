@@ -2,9 +2,12 @@
  * The Privacy Bundle in the app (app/monerium.js renderPrivacyBundle, the
  * #bundle route in app/dashboard.js, the Settings row in app/settings.js).
  *
- * The offer (entry row, VPN/eSIM perks, plan buttons) shows only where
+ * The offer (Settings entry row, plan buttons) shows only where
  * capabilities.privacyBundle is true. An account that already holds a
  * subscription keeps its status and its Cancel button either way.
+ *
+ * There is no Zold Plus tier and no Zold card: no screen, row or page may
+ * draw one, a card number or a "no FX margin" perk.
  *
  * Runs the real classic scripts in load order with a stub DOM. What this
  * cannot show: the screens in a browser. Offline.
@@ -36,7 +39,7 @@ const element = () => {
     },
     querySelector: () => element(),
     querySelectorAll: () => [],
-    setAttribute() {}, appendChild() {}, addEventListener() {},
+    setAttribute() {}, appendChild() {}, addEventListener() {}, focus() {},
   };
 };
 const els = new Map<string, any>();
@@ -90,10 +93,10 @@ const PENDING = {
   usage: { esimGb: 0, vpnGb: 0, periodStartedAt: "2026-10-01T00:00:00Z" },
 };
 /** Render the bundle for one account and one deployment; the catalog fetch fails unless given. */
-async function render(privacyBundle: unknown, live: boolean, catalog: unknown = null) {
+async function render(privacyBundle: unknown, live: boolean, catalog: unknown = null, kycStatus = "approved") {
   els.clear();
   fetched.length = 0;
-  run(`user = ${JSON.stringify({ id: "u1", name: "Erika Muster", kycStatus: "approved", privacyBundle })};
+  run(`user = ${JSON.stringify({ id: "u1", name: "Erika Muster", kycStatus, privacyBundle })};
     caps = { ...caps, privacyBundle: ${live} }; capsLoaded = true; privacyCatalog = ${JSON.stringify(catalog)};`);
   await run("renderPrivacyBundle()");
 }
@@ -107,48 +110,70 @@ async function check(name: string, fn: () => void | Promise<void>) {
 
 await check("offer off, no subscription: nothing of the bundle is drawn", async () => {
   await render(undefined, false);
-  for (const id of ["m-go-bundle", "privacy-card", "set-privacy-card", "m-perk-vpn", "m-perk-esim"]) assert.ok(hidden(id), id);
+  for (const id of ["privacy-card", "set-privacy-card"]) assert.ok(hidden(id), id);
+  assert.doesNotMatch(run("PH.settings.html()"), /Privacy Bundle|#bundle/);
 });
 
 await check("offer off, a pending subscription keeps its status and Cancel, with no plan buttons", async () => {
   await render(PENDING, false, CATALOG);
-  assert.ok(!hidden("m-go-bundle"));
   assert.ok(!hidden("privacy-card"));
   assert.ok(!hidden("privacy-status"));
   assert.match(el("privacy-status").innerHTML, /id="btn-privacy-cancel"/);
   assert.doesNotMatch(el("privacy-plans").innerHTML, /data-plan/);
-  for (const id of ["set-privacy-card", "m-perk-vpn", "m-perk-esim"]) assert.ok(hidden(id), id);
+  assert.ok(hidden("set-privacy-card"));
   assert.deepEqual(fetched.filter((u) => u.includes("privacy-bundles")), [], "the catalog is not fetched while the offer is off");
 });
 
 await check("offer off, a canceled subscription is hidden like none", async () => {
   await render({ ...PENDING, status: "canceled" }, false);
-  assert.ok(hidden("m-go-bundle"));
   assert.ok(hidden("privacy-card"));
+  assert.doesNotMatch(run("PH.settings.html()"), /#bundle/);
 });
 
 await check("offer on, no subscription: the plans can be added", async () => {
   await render(undefined, true, CATALOG);
-  assert.ok(!hidden("m-go-bundle"));
   assert.ok(!hidden("privacy-card"));
   assert.match(el("privacy-plans").innerHTML, /data-plan="travel-shield"/);
+  assert.match(run("PH.settings.html()"), /href="#bundle"/);
 });
 
-await check("#bundle lands on Plus where the offer is off and the account holds none, and stays for a subscriber", async () => {
+await check("offer on, account not yet approved: no Settings entry, and #bundle lands on Settings", async () => {
+  await render(undefined, true, CATALOG, "pending");
+  assert.doesNotMatch(run("PH.settings.html()"), /#bundle/);
+  run(`mobileNavLegacy("bundle")`);
+  assert.equal(el("dashboard").dataset.msub, undefined);
+  assert.equal(run("phRoute?.name"), "settings");
+  const before = run("PH.settings.live()");
+  run(`user = { ...user, kycStatus: "approved" }`);
+  assert.notEqual(run("PH.settings.live()"), before, "approval redraws Settings");
+  assert.match(run("PH.settings.html()"), /href="#bundle"/);
+});
+
+await check("#bundle and an old #plus open no screen where the offer is off and the account holds none, and the bundle for a subscriber", async () => {
+  for (const target of ["bundle", "plus"]) {
+    await render(undefined, false);
+    run(`mobileNavLegacy(${JSON.stringify(target)})`);
+    assert.equal(el("dashboard").dataset.msub, undefined, target);
+    assert.equal(run("phRoute?.name"), "settings", target);
+    await render(PENDING, false);
+    run(`mobileNavLegacy(${JSON.stringify(target)})`);
+    assert.equal(el("dashboard").dataset.msub, "bundle", target);
+  }
+});
+
+await check("no Zold Plus, Zold card, card number or FX-margin perk in the app, Settings, Coming soon or the landing page", async () => {
   await render(undefined, false);
-  run(`mobileNavLegacy("bundle")`);
-  assert.equal(el("dashboard").dataset.msub, "plus");
-  await render(PENDING, false);
-  run(`mobileNavLegacy("bundle")`);
-  assert.equal(el("dashboard").dataset.msub, "bundle");
+  const fake = /Zold Plus|Zold card|metal|No FX margin|no-FX|•••• \d{4}|m-plus-screen|#plus/i;
+  for (const screen of ["settings", "soon"]) assert.doesNotMatch(run(`PH[${JSON.stringify(screen)}].html()`), fake, screen);
+  for (const f of ["index.html", "landing.html"]) assert.doesNotMatch(readFileSync(path.join(PUB, f), "utf8").replace(/<!--[\s\S]*?-->/g, ""), fake, f);
 });
 
 await check("Settings shows a subscriber's bundle as awaiting setup, not active, while the offer is off", async () => {
   await render(PENDING, false);
   const html = run("PH.settings.html()");
-  assert.match(html, /Zold Plus/);
-  assert.match(html, /awaiting partner setup/);
-  assert.doesNotMatch(html, /Privacy Bundle active/);
+  assert.match(html, /Privacy Bundle/);
+  assert.match(html, /Awaiting partner setup/);
+  assert.doesNotMatch(html, />Active</);
 });
 
 if (failed) { console.error(`\n${failed} check(s) failed`); process.exit(1); }
