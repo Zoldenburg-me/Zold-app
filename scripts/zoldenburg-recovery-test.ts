@@ -521,9 +521,14 @@ try {
     recoveryId = start.data.id;
     assert.ok(secret && start.data.registerChallenge);
     assert.ok(!start.text.includes("accessHash"));
+    assert.ok(!/0x[0-9a-fA-F]{40}/.test(start.text) && !start.text.includes(userId), "the start names no address and no account id");
+    assert.equal(start.data.userHandle, undefined);
     const r = await rc(start.data.submitTo, newPasskey.register(start.data.registerChallenge));
     assert.equal(r.status, 200, JSON.stringify(r.data));
     assert.equal(r.data.status, "REVIEW_PENDING");
+    const safe: string = (await call(`/api/users/${userId}`)).data.address;
+    assert.ok(!r.text.includes(userId) && !r.text.toLowerCase().includes(safe.toLowerCase()), "before review, the request still names no account or Safe");
+    assert.ok(!/0x[0-9a-fA-F]{40}/.test(r.text), "nor any address, the new owner's included");
     assert.ok(Date.parse(r.data.expiresAt) - Date.now() > 24 * 3600_000, "a registered passkey gets the full wait");
     assert.match(r.data.zoldenburg.reference, /^[0-9A-F]{5}-[0-9A-F]{5}$/);
     assert.ok(!r.text.includes("attestation"));

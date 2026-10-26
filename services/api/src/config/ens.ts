@@ -44,7 +44,7 @@ export const ENS_GATEWAY = (() => {
  */
 export const ENS_LOOKUP = (() => {
   const rpcUrl = process.env.ENS_RPC_URL?.trim() ?? "";
-  const chainId = Number(process.env.ENS_CHAIN_ID ?? (rpcUrl ? NaN : 0));
+  const chainId = envNumber("ENS_CHAIN_ID", rpcUrl ? NaN : 0, { integer: true });
   if (rpcUrl && chainId !== 1 && chainId !== 11155111) {
     throw new Error("ENS_RPC_URL needs ENS_CHAIN_ID set to 1 (mainnet) or 11155111 (Sepolia)");
   }

@@ -137,7 +137,7 @@ function phOpen(route, { focus = false } = {}) {
     phSig = "";
     window.scrollTo(0, 0);
     // The share composer needs its payment; the others open by name.
-    document.title = `${{ plus: "Zold Plus", bundle: "Zold Plus", card: "Card", documents: "Documents", signers: "Who approves payments", "monerium-settings": "Monerium", "recovery-settings": "Recovery", "page-settings": "Your page", share: "Share receipt" }[route.name] || "Zold"} · Zold`;
+    document.title = `${{ plus: "Privacy Bundle", bundle: "Privacy Bundle", card: "Card", documents: "Documents", signers: "Who approves payments", "monerium-settings": "Monerium", "recovery-settings": "Recovery", "page-settings": "Your page", share: "Share receipt" }[route.name] || "Zold"} · Zold`;
     if (route.name === "share") return route.arg ? openShare(route.arg) : phGo("activity", null, { replace: true });
     mobileNavLegacy(PH_LEGACY[route.name]);
     return;

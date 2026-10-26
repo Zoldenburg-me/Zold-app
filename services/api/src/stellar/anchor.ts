@@ -8,7 +8,7 @@
  */
 // Every call carries a timeout: an anchor or Horizon request that hangs
 // would stall a payout refresh for the process's lifetime.
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { chmodSync, readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
 import {
   Asset,
@@ -30,13 +30,16 @@ import { redactedMessage } from "../http/log-cause.js";
 
 const TREASURY_PATH = path.join(ROOT, "data", "stellar-treasury.json");
 
-export async function getTreasury(): Promise<Keypair> {
+/** `file` is another path, for a suite that must not touch data/. */
+export async function getTreasury(file = TREASURY_PATH): Promise<Keypair> {
   if (STELLAR.treasurySecret) return Keypair.fromSecret(STELLAR.treasurySecret);
-  if (existsSync(TREASURY_PATH)) {
+  if (existsSync(file)) {
     if (IS_PRODUCTION) {
       throw new Error("production anchor mode requires STELLAR_TREASURY_SECRET or managed signing, not data/stellar-treasury.json");
     }
-    return Keypair.fromSecret(JSON.parse(readFileSync(TREASURY_PATH, "utf8")).secret);
+    // A file written before it was owner-only is tightened before it is read.
+    chmodSync(file, 0o600);
+    return Keypair.fromSecret(JSON.parse(readFileSync(file, "utf8")).secret);
   }
   if (IS_PRODUCTION || STELLAR.networkPassphrase !== STELLAR_TESTNET_PASSPHRASE || !STELLAR.friendbot) {
     throw new Error("refusing to auto-provision a Stellar treasury outside local testnet mode");
@@ -45,11 +48,15 @@ export async function getTreasury(): Promise<Keypair> {
   // Fund on testnet so the account exists on-ledger.
   const res = await fetch(`${STELLAR.friendbot}?addr=${kp.publicKey()}`, { signal: partnerTimeout() });
   if (!res.ok) throw new Error(`friendbot funding failed (${res.status})`);
-  mkdirSync(path.dirname(TREASURY_PATH), { recursive: true });
+  mkdirSync(path.dirname(file), { recursive: true });
+  // Owner-only. The chmod covers an existing file, whose old mode
+  // writeFileSync's `mode` would keep.
   writeFileSync(
-    TREASURY_PATH,
+    file,
     JSON.stringify({ publicKey: kp.publicKey(), secret: kp.secret() }, null, 2),
+    { mode: 0o600 },
   );
+  chmodSync(file, 0o600);
   console.log(`stellar: provisioned treasury ${kp.publicKey()} (friendbot funded)`);
   return kp;
 }

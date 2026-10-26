@@ -1,11 +1,9 @@
 /*
- * Landing motion and the two small interactions:
+ * Landing motion:
  *   - blocks marked .l-rv (and the closing phone) settle once they scroll
  *     into view;
  *   - the story: the chapter crossing the middle of the screen is the one
  *     being read, and the sticky phone shows that chapter's screen;
- *   - the card switcher: an ARIA tablist (arrow keys, Home, End). Without JS
- *     every panel shows, as a plain list;
  *   - the Pause motion button.
  *
  * Every hidden-until-visible state in landing.css is scoped to html.l-js;
@@ -45,37 +43,6 @@
     }, { rootMargin: "-45% 0px -45% 0px" });
     chapters.forEach(function (c) { var main = c.querySelector(".l-ch__main"); if (main) band.observe(main); });
   }
-
-  /* ---- card switcher ---- */
-  document.querySelectorAll("[data-tabs]").forEach(function (box) {
-    // Roles are added here, so without JS the markup stays a plain list.
-    box.querySelector(".l-tabs__list").setAttribute("role", "tablist");
-    var tabs = Array.prototype.slice.call(box.querySelectorAll("[aria-controls]"));
-    tabs.forEach(function (t) {
-      t.setAttribute("role", "tab");
-      document.getElementById(t.getAttribute("aria-controls")).setAttribute("role", "tabpanel");
-    });
-    function select(i, focus) {
-      tabs.forEach(function (t, j) {
-        var on = i === j;
-        t.setAttribute("aria-selected", String(on));
-        t.tabIndex = on ? 0 : -1;
-        var panel = document.getElementById(t.getAttribute("aria-controls"));
-        if (panel) panel.hidden = !on;
-      });
-      if (focus) tabs[i].focus();
-    }
-    tabs.forEach(function (t, i) {
-      t.addEventListener("click", function () { select(i, false); });
-      t.addEventListener("keydown", function (e) {
-        var to = { ArrowRight: i + 1, ArrowDown: i + 1, ArrowLeft: i - 1, ArrowUp: i - 1, Home: 0, End: tabs.length - 1 }[e.key];
-        if (to === undefined) return;
-        e.preventDefault();
-        select((to + tabs.length) % tabs.length, true);
-      });
-    });
-    select(0, false);
-  });
 
   /* ---- Pause motion. Hidden under reduced motion, where nothing loops anyway. ---- */
   var pause = document.querySelector(".l-motion");

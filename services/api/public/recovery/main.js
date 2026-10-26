@@ -175,7 +175,8 @@ async function boot() {
       publicKey: {
         challenge: b64urlToBytes(r.registerChallenge),
         rp: { name: "Zold", id: location.hostname },
-        user: { id: new TextEncoder().encode(r.userHandle), name: s.email, displayName: s.email },
+        // The start names no account, so the handle is random; sign-in finds the account by credential id.
+        user: { id: crypto.getRandomValues(new Uint8Array(16)), name: s.email, displayName: s.email },
         pubKeyCredParams: [{ type: "public-key", alg: -7 }],
         authenticatorSelection: { residentKey: "preferred", userVerification: "required" },
         extensions: { prf: {} },

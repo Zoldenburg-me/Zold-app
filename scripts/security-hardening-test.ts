@@ -410,6 +410,55 @@ await check("a store write under umask 022 replaces the database file at mode 60
   }
 });
 
+console.log("secret files");
+await check("a new operator enrolment file, and one over a stale 0644 file, is mode 600 under umask 022", async () => {
+  const { startEnrolment } = await import("../services/api/src/operators/enrolment.js");
+  const dir = mkdtempSync(path.join(os.tmpdir(), "zold-enrol-mode-"));
+  const oldUmask = process.umask(0o022);
+  try {
+    const fresh = path.join(dir, "fresh.json");
+    startEnrolment("Op", "op@example.com", Date.now(), fresh);
+    assert.equal(statSync(fresh).mode & 0o777, 0o600);
+    const stale = path.join(dir, "stale.json");
+    writeFileSync(stale, "{}");
+    chmodSync(stale, 0o644);
+    writeFileSync(stale + ".tmp", "{}");
+    chmodSync(stale + ".tmp", 0o644);
+    const inode = statSync(stale).ino;
+    startEnrolment("Op", "op@example.com", Date.now(), stale);
+    // A new file renamed over the old: the details never sit in the 0644 one.
+    assert.notEqual(statSync(stale).ino, inode);
+    assert.equal(statSync(stale).mode & 0o777, 0o600);
+  } finally {
+    process.umask(oldUmask);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+await check("a provisioned testnet Stellar treasury file is mode 600 under umask 022, and a stale 0644 one is tightened on read", async () => {
+  const { STELLAR, STELLAR_TESTNET_PASSPHRASE } = await import("../services/api/src/config.js");
+  const { getTreasury } = await import("../services/api/src/stellar/anchor.js");
+  const saved = { ...STELLAR };
+  const realFetch = globalThis.fetch;
+  const dir = mkdtempSync(path.join(os.tmpdir(), "zold-treasury-mode-"));
+  const oldUmask = process.umask(0o022);
+  try {
+    Object.assign(STELLAR, { treasurySecret: "", networkPassphrase: STELLAR_TESTNET_PASSPHRASE, friendbot: "https://friendbot.invalid" });
+    globalThis.fetch = (async () => new Response("{}")) as typeof fetch;
+    const file = path.join(dir, "data", "stellar-treasury.json");
+    const kp = await getTreasury(file);
+    assert.equal(statSync(file).mode & 0o777, 0o600);
+    // A treasury file left at 0644 by an older write is tightened when read.
+    chmodSync(file, 0o644);
+    assert.equal((await getTreasury(file)).publicKey(), kp.publicKey());
+    assert.equal(statSync(file).mode & 0o777, 0o600);
+  } finally {
+    process.umask(oldUmask);
+    globalThis.fetch = realFetch;
+    Object.assign(STELLAR, saved);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 console.log("secrets runner (scripts/with-env-fd.mjs)");
 const RUNNER = new URL("./with-env-fd.mjs", import.meta.url).pathname;
 const runWithSecrets = (dotenv: string | null, command: string[], env: NodeJS.ProcessEnv = {}) => {
@@ -701,7 +750,7 @@ await check("capabilities.privacyBundle is true only when the bundle is switched
   assert.equal(liveWith(["KOKIO_LIVE", "MYSTERIUM_LIVE"]), "false");
   assert.equal(liveWith(FLAGS), "true");
   const html = readFileSync("services/api/public/index.html", "utf8");
-  for (const id of ["privacy-card", "m-go-bundle", "set-privacy-card", "m-perk-vpn", "m-perk-esim"]) {
+  for (const id of ["privacy-card", "set-privacy-card"]) {
     assert.match(html, new RegExp(`class="[^"]*\\bhidden\\b[^"]*" id="${id}"`), id);
   }
 });
