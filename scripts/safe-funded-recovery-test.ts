@@ -19,7 +19,7 @@
 // Must be first: pins the chain/keys before config.js reads the environment.
 import "./_local-chain.js";
 import assert from "node:assert/strict";
-import { freePort } from "./_free-port.js";
+import { hardhatNode } from "./_free-port.js";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
@@ -34,8 +34,9 @@ import {
 } from "viem";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const RPC_PORT = await freePort();
-const RPC = `http://127.0.0.1:${RPC_PORT}`;
+// Its own node on a port the OS assigns: a fixed one collides with a parallel run.
+const chain = await hardhatNode(ROOT);
+const RPC = chain.url;
 process.env.TRANSF_RPC_URL = RPC;
 // SEPA is free by default, so the fee leg this suite exercises would not exist.
 // Pin a fee for the run: the property under test is that ONLY the fee comes
@@ -46,7 +47,7 @@ process.env.MONERIUM_CLIENT_SECRET = "";
 process.env.MG_ANCHOR_DOMAIN = "";
 
 const bin = (n: string) => path.join(ROOT, "node_modules/.bin", n);
-const children: ChildProcess[] = [];
+const children: ChildProcess[] = [chain.child];
 const bg = (cmd: string, args: string[]) => {
   const c = spawn(cmd, args, { cwd: ROOT, stdio: "ignore", env: process.env });
   children.push(c);
@@ -78,7 +79,6 @@ const check = (label: string, cond: boolean, detail = "") => {
 
 try {
   console.log("1/5 chain + deploy…");
-  bg(process.execPath, [bin("hardhat"), "node", "--port", String(RPC_PORT)]);
   await waitRpc();
   const dep = spawnSync(process.execPath, [bin("tsx"), "scripts/deploy.ts"], {
     cwd: ROOT,

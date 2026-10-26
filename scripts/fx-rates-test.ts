@@ -9,7 +9,7 @@
  */
 import "./_test-env.js";
 import assert from "node:assert/strict";
-import { freePort } from "./_free-port.js";
+import { freePort, hardhatNode } from "./_free-port.js";
 import { createServer, type Server } from "node:http";
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -178,11 +178,10 @@ try {
     // A keyed feed carries its key in the path; the API must not repeat it.
     mode = "403";
     hits = 0;
-    const apiPort = await freePort();
-    const rpcPort = await freePort();
     const dataDir = mkdtempSync(path.join(os.tmpdir(), "fx-rates-api-"));
     // The API reads the chain at boot; a bare node is enough for this route.
-    const chain = spawn(process.execPath, [path.resolve("node_modules/.bin/hardhat"), "node", "--port", String(rpcPort)], { stdio: "ignore" });
+    const { child: chain, url: rpcUrl } = await hardhatNode(process.cwd());
+    const apiPort = await freePort();
     const api = spawn(process.execPath, [path.resolve("node_modules/.bin/tsx"), "services/api/src/server.ts"], {
       stdio: "ignore",
       env: {
@@ -192,7 +191,7 @@ try {
         TRANSF_CHAIN_ID: "31337",
         LOCAL_HARNESS: "1",
         TRANSF_DB_PATH: path.join(dataDir, "db.json"),
-        TRANSF_RPC_URL: `http://127.0.0.1:${rpcPort}`,
+        TRANSF_RPC_URL: rpcUrl,
         TRANSF_RATES_URL: `http://127.0.0.1:${PORT}/v6/KEYSECRET/latest/EUR`,
       },
     });

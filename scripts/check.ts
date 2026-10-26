@@ -130,10 +130,12 @@ const scripts = [
 const liveScripts = ["anchor:test", "travelrule:test", "trustline:test", "recovery:fork:test"];
 if (process.env.CHECK_LIVE === "1") scripts.push(...liveScripts);
 
+// Stub ports are not shared: each suite picks its own right before it listens.
+// shortcut: the API and RPC ports are picked once and held free for the whole run,
+// so a parallel run could take one in between; give those suites hardhatNode and
+// their own API port if that ever bites.
 const apiPort = process.env.TRANSF_API_PORT ?? String(await freePort());
 const rpcPort = process.env.TRANSF_RPC_URL ? "" : String(await freePort());
-const stubPort = process.env.TRANSF_STUB_PORT ?? String(await freePort());
-const ratesStubPort = process.env.TRANSF_RATES_STUB_PORT ?? String(await freePort());
 const env = {
   ...process.env,
   // Offline FX: a pinned swapper seed for deploy.ts, and both rate feeds on a
@@ -143,11 +145,9 @@ const env = {
   TRANSF_ECB_RATES_URL: "http://127.0.0.1:9/v1",
   TRANSF_API_PORT: apiPort,
   TRANSF_RPC_URL: process.env.TRANSF_RPC_URL ?? `http://127.0.0.1:${rpcPort}`,
-  TRANSF_STUB_PORT: stubPort,
-  TRANSF_RATES_STUB_PORT: ratesStubPort,
 };
 
-console.log(`check ports: api=${env.TRANSF_API_PORT} rpc=${urlForLog(env.TRANSF_RPC_URL)} stub=${env.TRANSF_STUB_PORT} rates=${env.TRANSF_RATES_STUB_PORT}`);
+console.log(`check ports: api=${env.TRANSF_API_PORT} rpc=${urlForLog(env.TRANSF_RPC_URL)}`);
 
 for (const script of scripts) {
   const r = spawnSync(npm, ["run", script], { stdio: "inherit", env });

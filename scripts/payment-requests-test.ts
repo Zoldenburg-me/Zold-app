@@ -21,12 +21,12 @@ import { rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
-import { freePort } from "./_free-port.js";
+import { hardhatNode } from "./_free-port.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-// Its own node on a free port: a fixed one collides with a parallel run.
-const RPC_PORT = await freePort();
-const RPC = `http://127.0.0.1:${RPC_PORT}`;
+// Its own node on a port the OS assigns: a fixed one collides with a parallel run.
+const chain = await hardhatNode(ROOT);
+const RPC = chain.url;
 process.env.TRANSF_RPC_URL = RPC;
 process.env.MONERIUM_CLIENT_ID = "";
 process.env.MONERIUM_CLIENT_SECRET = "";
@@ -65,7 +65,7 @@ process.env.CANDIDE_FORWARDING_CUSTODIAL_WITHDRAWER = `0x${"ee".repeat(20)}`;
 process.env.CANDIDE_FORWARDING_SOURCE_CHAIN_IDS = "31337";
 
 const bin = (n: string) => path.join(ROOT, "node_modules/.bin", n);
-const children: ChildProcess[] = [];
+const children: ChildProcess[] = [chain.child];
 const bg = (cmd: string, args: string[]) => {
   const c = spawn(cmd, args, { cwd: ROOT, stdio: "ignore", env: process.env });
   children.push(c);
@@ -317,7 +317,6 @@ let q25: import("../services/api/src/payment-requests.js").CryptoQuote;
 // ---------------------------------------------------------------------------
 console.log("2/4 chain + routes…");
 try {
-  bg(process.execPath, [bin("hardhat"), "node", "--port", String(RPC_PORT)]);
   await waitRpc();
   const dep = spawnSync(process.execPath, [bin("tsx"), "scripts/deploy.ts"], { cwd: ROOT, stdio: "inherit", env: process.env });
   assert.equal(dep.status, 0, "deploy failed");

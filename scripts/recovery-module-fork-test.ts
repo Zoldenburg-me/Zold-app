@@ -105,9 +105,6 @@ const factoryAbi = parseAbi([
   "function createProxyWithNonce(address singleton, bytes initializer, uint256 saltNonce) returns (address proxy)",
 ]);
 
-const PORT = await freePort();
-const RPC = `http://127.0.0.1:${PORT}`;
-
 async function rpc(method: string, params: unknown[] = []): Promise<unknown> {
   const r = await fetch(RPC, {
     method: "POST",
@@ -407,6 +404,9 @@ const compile = spawnSync(process.execPath, [path.join(ROOT, "node_modules/.bin/
 });
 if (compile.status !== 0) process.exit(compile.status ?? 1);
 
+// Picked after the compile step, right before the node binds it.
+const PORT = await freePort();
+const RPC = `http://127.0.0.1:${PORT}`;
 const forkArgs = ["--fork", FORK_URL, ...(FORK_BLOCK ? ["--fork-block-number", FORK_BLOCK] : [])];
 const node = spawn(
   process.execPath,
