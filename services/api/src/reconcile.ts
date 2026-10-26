@@ -14,13 +14,17 @@
  *                missed webhook or a poller outage.
  *  - PHANTOM     We recorded an order Monerium has no record of, e.g. from a
  *                forged webhook body trusted by an older receiver.
+ *  - CONVERSION_OVERLAP  A USDC->EURe swap's Safe grew by more than the swap
+ *                delivered: another transaction's EURe landed in the window.
+ *                The scanner should have booked it as its own deposit.
  */
 import { usersWithOwnCredentials } from "./adapters/monerium-connection.js";
 import { moneriumSandboxEnabled } from "./config.js";
 import { store } from "./store.js";
+import { eur } from "./chain.js";
 import { listProcessedIssueOrders } from "./adapters/monerium-sandbox.js";
 
-export type FindingKind = "UNMIRRORED" | "PHANTOM";
+export type FindingKind = "UNMIRRORED" | "PHANTOM" | "CONVERSION_OVERLAP";
 
 export interface Finding {
   kind: FindingKind;
@@ -74,6 +78,20 @@ export async function reconcile(): Promise<ReconcileReport> {
         kind: "PHANTOM",
         detail: `app recorded order ${id}, which Monerium has no processed issue order for — record may be fabricated`,
         orderId: id,
+      });
+    }
+  }
+
+  // --- conversions: balance growth no swap log accounts for ---------------
+  for (const d of store.cryptoDeposits) {
+    for (const c of [d.conversion, ...(d.partials ?? []).map((p) => p.conversion)]) {
+      if (!c?.otherInflowWei) continue;
+      const address = store.findUser(d.userId)?.address;
+      findings.push({
+        kind: "CONVERSION_OVERLAP",
+        detail: `swap ${c.txHash} of deposit ${d.id}: the Safe grew by more than the swap delivered — check the scanner booked that EURe as its own deposit`,
+        amountEur: eur.fromWei(BigInt(c.otherInflowWei)),
+        ...(address ? { address } : {}),
       });
     }
   }

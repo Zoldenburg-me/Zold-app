@@ -215,12 +215,14 @@ export interface LiquidityProvider {
  * the compensation reverse swap DELIVERED (Safe went 40 -> 44.01 EURe on
  * chain) and its own verification then read a stale replica, saw no delta,
  * and declared the delivery missing. Returns the last read either way — the
- * caller still decides what a zero delta means.
+ * caller still decides what a zero delta means. `atLeast` is the balance the
+ * write is known to have produced, when the caller knows it from the logs.
  */
 export async function balanceAfterWrite(
   token: `0x${string}`,
   who: `0x${string}`,
   before: bigint,
+  atLeast = before + 1n,
 ): Promise<bigint> {
   let last = before;
   for (let i = 0; i < 12; i++) {
@@ -230,7 +232,7 @@ export async function balanceAfterWrite(
       functionName: "balanceOf",
       args: [who],
     })) as bigint;
-    if (last > before) return last;
+    if (last >= atLeast) return last;
     await new Promise((r) => setTimeout(r, 500));
   }
   return last;

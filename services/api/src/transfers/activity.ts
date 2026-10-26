@@ -17,6 +17,7 @@
  */
 import type { CryptoDeposit, MoneriumIssueRecord, Transfer } from "../store/types.js";
 import { userTransfer, type UserTransfer } from "./user-transfer.js";
+import { conversionOutputs } from "./conversion-outputs.js";
 
 const ZERO_ADDRESS = /^0x0{40}$/i;
 const DAY_MS = 24 * 3600_000;
@@ -80,16 +81,10 @@ const bankRowFromMint = (d: CryptoDeposit): ActivityRow => ({
   amountEur: d.amountEur!,
 });
 
-/** Transactions that converted a deposit: its EURe output is not money in. */
-export function conversionTxHashes(deposits: CryptoDeposit[]): Set<string> {
-  const hashes = deposits.flatMap((d) => [d.conversion?.txHash, ...(d.partials ?? []).map((p) => p.conversion?.txHash)]);
-  return new Set(hashes.filter((h): h is string => Boolean(h)).map((h) => h.toLowerCase()));
-}
-
 /** Deposits that are money in: every one but a conversion's EURe output. */
 export function withoutConversionOutputs(deposits: CryptoDeposit[]): CryptoDeposit[] {
-  const conversions = conversionTxHashes(deposits);
-  return deposits.filter((d) => !(d.token === "EURE" && conversions.has(d.txHash.toLowerCase())));
+  const isConversionOutput = conversionOutputs(deposits);
+  return deposits.filter((d) => !(d.token === "EURE" && isConversionOutput(d.txHash, d.logIndex, d.userId)));
 }
 
 const fundingRow = (d: CryptoDeposit): ActivityRow => ({

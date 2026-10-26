@@ -13,7 +13,7 @@
 import express from "express";
 import { wrap } from "./util.js";
 import { LIQUIDITY, SECURITY } from "../config.js";
-import { accountBalances, addrs, eur, orchestratorAddress, usd } from "../chain.js";
+import { abis, accountBalances, addrs, eur, orchestratorAddress, usd } from "../chain.js";
 import { safeDebitBlocker } from "../orchestrator.js";
 import { prepareDepositConversion } from "../liquidity.js";
 import {
@@ -319,9 +319,13 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
           return res.status(401).json({ error: redactedMessage(err) });
         }
 
-        // Measure BEFORE submitting: the credited amount is the balance delta, not
-        // anything the quote promised.
-        const before = eur.toWei(await accountBalances(user.address).then((b) => b.safeBalanceEur));
+        // Read BEFORE submitting: the credited amount is the swap's own logged
+        // output, and this balance delta checks it. In wei: a rounded figure
+        // could sit above the real balance, and the delta would never cover
+        // the logged output.
+        const before = (await publicClient.readContract({
+          address: addrs().eure, abi: abis.MockToken, functionName: "balanceOf", args: [user.address],
+        })) as bigint;
         // The rate sanity check runs BEFORE the user-signed swap lands: after it,
         // a rate-feed outage would leave the EURe in the Safe with the deposit
         // still marked ready to convert.
@@ -390,7 +394,7 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
           // deposit's (the approval was for its remainder), so it is capped;
           // no receipt to read means the whole remainder is taken as swapped.
           const asked = unconvertedUnits(current);
-          const took = await usdcSwappedIn(submitted.txHash, user.address, pending.userOperation.paymaster)
+          const took = await usdcSwappedIn(submitted.txHash, submitted.userOpHash, user.address, pending.userOperation.paymaster)
             .catch((err) => {
               console.error(`convert: could not read what swap ${submitted.txHash} took:`, describeCause(err));
               return undefined;

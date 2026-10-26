@@ -26,6 +26,7 @@ import type {
 } from "../store/types.js";
 import { OPERATOR_REFUND_STEP } from "../store/types.js";
 import { safeMovedEur } from "../transfers/safe-moved.js";
+import { conversionOutputs } from "../transfers/conversion-outputs.js";
 import type { PaymentRequest } from "../payment-requests.js";
 import { textCarriesCode } from "../payment-requests.js";
 import { paymentMemo } from "../sepa.js";
@@ -272,14 +273,14 @@ function eureInLines(inp: StatementInputs): LineDraft[] {
     if (s.conversion?.txHash) booked.add(s.conversion.txHash.toLowerCase());
     for (const x of s.txs) booked.add(x.hash.toLowerCase());
   }
-  for (const d of inp.deposits) {
-    if (d.conversion?.txHash) booked.add(d.conversion.txHash.toLowerCase());
-    for (const x of d.txs) booked.add(x.hash.toLowerCase());
-  }
+  // A swap's output by log: another userOp's EURe in the same bundle is
+  // money in.
+  for (const d of inp.deposits) for (const x of d.txs) if (x.step !== "safe.swap(usdc->eure)") booked.add(x.hash.toLowerCase());
+  const isConversionOutput = conversionOutputs(inp.deposits);
   const out: LineDraft[] = [];
   for (const d of inp.deposits) {
     if (d.userId !== inp.userId || d.token !== "EURE" || !((d.amountEur ?? 0) > 0)) continue;
-    if ((d.from ?? ZERO) === ZERO || booked.has(d.txHash.toLowerCase())) continue;
+    if ((d.from ?? ZERO) === ZERO || booked.has(d.txHash.toLowerCase()) || isConversionOutput(d.txHash, d.logIndex, d.userId)) continue;
     const at = d.arrivedAt ?? d.detectedAt;
     out.push({
       event: "eure_in",

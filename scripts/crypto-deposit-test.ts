@@ -75,7 +75,7 @@ const check = (label: string, cond: boolean, detail = "") => {
 };
 
 try {
-  console.log("1/13 chain + deploy…");
+  console.log("1/14 chain + deploy…");
   await waitRpc();
   const dep = spawnSync(process.execPath, [bin("tsx"), "scripts/deploy.ts"], {
     cwd: ROOT,
@@ -241,7 +241,7 @@ try {
     });
   }
 
-  console.log("2/13 nobody opted in — the chain is not even read…");
+  console.log("2/14 nobody opted in — the chain is not even read…");
   {
     const before = store.cryptoDepositCursor(cursorKey);
     const n = await pollCryptoDepositsOnce();
@@ -249,7 +249,7 @@ try {
     check("and no cursor is written", store.cryptoDepositCursor(cursorKey) === before);
   }
 
-  console.log("3/13 a real inbound transfer is detected and attributed…");
+  console.log("3/14 a real inbound transfer is detected and attributed…");
   const ann = addUser("Crypto Ann");
   // The first poll only establishes the cursor: transfers from before the
   // account opted in are deliberately not swept up.
@@ -276,7 +276,7 @@ try {
     check("nothing was settled", (await safeBalanceOf(ann.address)) === 0);
   }
 
-  console.log("4/13 a ready deposit parks for a signature, then settles what ARRIVED…");
+  console.log("4/14 a ready deposit parks for a signature, then settles what ARRIVED…");
   const bo = addUser("Crypto Bo", { withSafe: true });
   {
     /**
@@ -294,13 +294,14 @@ try {
     check("nothing is credited before the signature", !parked.creditedEur);
 
     // Simulate the signed batch having landed: EURe arrives in the user's own
-    // Safe. settleConvertedDeposit credits the MEASURED delta, not the quote.
+    // Safe. settleConvertedDeposit credits what the swap's logs MEASURED, not
+    // the quote.
     const before = eur.toWei(await safeBalanceOf(bo.address));
-    await mintEure(bo.address, 87.88);
+    const swapTx = await mintEure(bo.address, 87.88);
     const d = await settleConvertedDeposit(
       parked, store.findUser(bo.id)!,
       { provider: "fx-swapper", rate: BigInt(Math.round(MID * 1e6)), minOut: eur.toWei(80) },
-      before, [...parked.txs, { step: "safe.swap(usdc->eure)", hash: `0x${"22".repeat(32)}` }],
+      before, [...parked.txs, { step: "safe.swap(usdc->eure)", hash: swapTx }], { txHash: swapTx },
     );
     check("it is converted once the swap has landed", d.holding === "converted" && d.settlementAsset === "EURE", `${d.holding} (${d.reason ?? ""})`);
     check("the held USDC figure is cleared, the received one kept", d.creditedUsdc === undefined && d.amountUsdc === 100);
@@ -324,7 +325,7 @@ try {
     check("the balance is spendable in the Safe", Math.abs(bal - 87.88) < 0.001, `EUR ${bal}`);
   }
 
-  console.log("5/13 the same deposit is never credited twice…");
+  console.log("5/14 the same deposit is never credited twice…");
   {
     const d = store.cryptoDeposits.find((x) => x.userId === bo.id && x.holding === "converted")!;
     const balBefore = await safeBalanceOf(bo.address);
@@ -348,7 +349,7 @@ try {
     check("and no duplicate row appears", store.cryptoDeposits.length === countBefore);
   }
 
-  console.log("6/13 dust is left alone, direct Safe funding is only recorded…");
+  console.log("6/14 dust is left alone, direct Safe funding is only recorded…");
   {
     const dusty = addUser("Dusty", { withSafe: true });
     const d = settleOnArrival(await seedReadyDeposit(dusty, 0.25));
@@ -368,7 +369,7 @@ try {
     check("and keeps a zero EUR balance", (await safeBalanceOf(optedOut.address)) === 0);
   }
 
-  console.log("7/13 a venue price off the market is refused before the swap…");
+  console.log("7/14 a venue price off the market is refused before the swap…");
   {
     // The convert route runs assertRateSane BEFORE it submits the signed swap
     // (routes/crypto-deposits.ts). That is where a mispriced venue is stopped.
@@ -393,11 +394,11 @@ try {
       const cass = addUser("Cass", { withSafe: true });
       const parked = settleOnArrival(await seedReadyDeposit(cass, 100));
       const before = eur.toWei(await safeBalanceOf(cass.address));
-      await mintEure(cass.address, 87.88);
+      const swapTx = await mintEure(cass.address, 87.88);
       const d = await settleConvertedDeposit(
         parked, store.findUser(cass.id)!,
         { provider: "fx-swapper", rate: venue, minOut: eur.toWei(80) },
-        before, parked.txs,
+        before, parked.txs, { txHash: swapTx },
       );
       check(
         "a swap that already landed is recorded with the mid it was checked against",
@@ -409,7 +410,7 @@ try {
     }
   }
 
-  console.log("8/13 a USDC-settled page does not turn the payment into euros…");
+  console.log("8/14 a USDC-settled page does not turn the payment into euros…");
   {
     const dana = addUser("Crypto Dana", { settlementAsset: "USDC" });
     const seeded = await seedReadyDeposit(dana, 25);
@@ -420,7 +421,7 @@ try {
     check("the USDC amount is recorded", d.creditedUsdc === 25, `${d.creditedUsdc}`);
   }
 
-  console.log("9/13 a direct EURe transfer to the Safe appears as funding activity…");
+  console.log("9/14 a direct EURe transfer to the Safe appears as funding activity…");
   {
     const eva = addUser("Crypto Eva", { autoConvert: false });
     await sendEure(eva.address, 30);
@@ -433,7 +434,7 @@ try {
     );
   }
 
-  console.log("10/13 held USDC converts later; spent USDC is refused before a quote…");
+  console.log("10/14 held USDC converts later; spent USDC is refused before a quote…");
   {
     const hal = addUser("Held Hal", { withSafe: true, autoConvert: false });
     await sendUsdc(hal.paymentPage.depositAddress, 40);
@@ -443,14 +444,14 @@ try {
     check("a held deposit has no blocker", depositConversionBlocker(store.findUser(hal.id)!, held) === null);
     check("and the Safe still holds its USDC", (await heldUsdcBlocker(store.findUser(hal.id)!, held)) === null);
     const before = eur.toWei(await safeBalanceOf(hal.address));
-    await mintEure(hal.address, 35.1);
+    const swapTx = await mintEure(hal.address, 35.1);
     const settledAt = held.settledAt;
     const d = await settleConvertedDeposit(
       held, store.findUser(hal.id)!,
       { provider: "fx-swapper", rate: BigInt(Math.round(MID * 1e6)), minOut: eur.toWei(34) },
-      before, [{ step: "safe.swap(usdc->eure)", hash: `0x${"33".repeat(32)}` }],
+      before, [{ step: "safe.swap(usdc->eure)", hash: swapTx }], { txHash: swapTx },
     );
-    check("converted later, at the measured delta", d.holding === "converted" && Math.abs(d.creditedEur! - 35.1) < 0.001, `${d.holding} ${d.creditedEur}`);
+    check("converted later, at the measured output", d.holding === "converted" && Math.abs(d.creditedEur! - 35.1) < 0.001, `${d.holding} ${d.creditedEur}`);
     check("its settlement time is the arrival, not the conversion", d.settledAt === settledAt);
 
     // Seeded without moving USDC: the Safe holds only Hal's 40 (the stand-in
@@ -460,7 +461,7 @@ try {
     check("a deposit whose USDC is no longer in the Safe is refused in words", /holds 40 USDC, less than the 60 USDC/.test(why ?? "") && /may have been spent/.test(why ?? ""), why ?? "none");
   }
 
-  console.log("11/13 the sweep settles what was missed, once, and leaves held deposits alone…");
+  console.log("11/14 the sweep settles what was missed, once, and leaves held deposits alone…");
   {
     const gil = addUser("Sweep Gil", { withSafe: true });
     const missed = await seedReadyDeposit(gil, 12);
@@ -472,7 +473,7 @@ try {
     check("a second sweep touches nothing", again === 0 && store.cryptoDeposits.find((x) => x.id === missed.id)!.updatedAt === stamp);
   }
 
-  console.log("12/13 a forwarder page with auto-convert off records the payment once…");
+  console.log("12/14 a forwarder page with auto-convert off records the payment once…");
   {
     // Seen on a live page: auto-convert off, no open payment request, payment
     // to the forwarder address. The page was not watched, and the forwarder's
@@ -495,7 +496,7 @@ try {
     );
   }
 
-  console.log("13/13 a rescan records what the cursor passed, once…");
+  console.log("13/14 a rescan records what the cursor passed, once…");
   {
     // A payment the scanner passed without recording: it reached an address
     // that was not watched yet. The cursor moves past it, and nothing goes back.
@@ -529,6 +530,103 @@ try {
     const caughtUp = store.cryptoDepositCursor(cursorKey);
     check("the same value on the next boot does not rewind again", (await applyCryptoRescan(paidAt, 1_000n)) === "already-applied");
     check("so the cursor stays where the scan left it", store.cryptoDepositCursor(cursorKey) === caughtUp);
+  }
+
+  console.log("14/14 EURe from another transaction during the swap is booked once…");
+  {
+    // The conversion credits what the swap's own Transfer logs delivered to
+    // the Safe. A SEPA mint landing between the before and after balance reads
+    // is booked by the scanner as its own deposit, so crediting the balance
+    // delta would book it twice.
+    const quote = { provider: "fx-swapper", rate: BigInt(Math.round(MID * 1e6)), minOut: eur.toWei(80) };
+    const ida = addUser("Mid-swap Ida", { withSafe: true });
+    const parked = settleOnArrival(await seedReadyDeposit(ida, 100));
+    const before = eur.toWei(await safeBalanceOf(ida.address));
+    const swapTx = await mintEure(ida.address, 87.88);
+    await sendEure(ida.address, 30);
+    const d = await settleConvertedDeposit(
+      parked, store.findUser(ida.id)!, quote, before,
+      [...parked.txs, { step: "safe.swap(usdc->eure)", hash: swapTx }], { txHash: swapTx },
+    );
+    await pollCryptoDepositsOnce();
+    const inflows = store.cryptoDeposits.filter((x) => x.userId === ida.id && x.token === "EURE");
+    check("the mint is booked once, as its own deposit", inflows.length === 1 && inflows[0].creditedEur === 30, JSON.stringify(inflows));
+    check("the conversion credits only what its own logs delivered", d.holding === "converted" && d.creditedEur === 87.88, `${d.holding} ${d.creditedEur}`);
+    check(
+      "the books add up to what the Safe holds",
+      Math.abs(d.creditedEur! + inflows[0].creditedEur! - (await safeBalanceOf(ida.address))) < 0.001,
+    );
+    check("the other money is recorded on the conversion for the reconciler", d.conversion?.otherInflowWei === eur.toWei(30).toString(), JSON.stringify(d.conversion));
+    const { reconcile } = await import("../services/api/src/reconcile.js");
+    const found = (await reconcile()).findings.filter((f) => f.kind === "CONVERSION_OVERLAP" && f.address === ida.address);
+    check("and the reconciler reports it", found.length === 1 && found[0].amountEur === 30, JSON.stringify(found));
+
+    // The signed floor holds against the logged output, not a delta another
+    // inflow inflated past it.
+    const jo = addUser("Floor Jo", { withSafe: true });
+    const joParked = settleOnArrival(await seedReadyDeposit(jo, 100));
+    const joBefore = eur.toWei(await safeBalanceOf(jo.address));
+    const thin = await mintEure(jo.address, 20);
+    await sendEure(jo.address, 70);
+    const under = await settleConvertedDeposit(
+      joParked, store.findUser(jo.id)!, quote, joBefore,
+      [...joParked.txs, { step: "safe.swap(usdc->eure)", hash: thin }], { txHash: thin },
+    );
+    check("a swap under the floor is refused although the delta clears it", under.holding === "refused" && !under.creditedEur && /floor/.test(under.reason ?? ""), `${under.holding} ${under.reason ?? ""}`);
+
+    // Less arrived than the logs show: EURe left the Safe mid-swap. Nothing is
+    // credited and the USDC is not offered again; a person looks at it.
+    const kai = addUser("Outflow Kai", { withSafe: true });
+    const kaiParked = settleOnArrival(await seedReadyDeposit(kai, 100));
+    await mintEure(kai.address, 50);
+    const kaiBefore = eur.toWei(await safeBalanceOf(kai.address));
+    const out = await mintEure(kai.address, 87.88);
+    await rpc("hardhat_impersonateAccount", [kai.address]);
+    await rpc("hardhat_setBalance", [kai.address, "0xDE0B6B3A7640000"]);
+    await publicClient.waitForTransactionReceipt({
+      hash: await rpc("eth_sendTransaction", [{
+        from: kai.address,
+        to: addrs().eure,
+        data: encodeFunctionData({ abi: abis.MockToken, functionName: "transfer", args: [`0x${"5e".repeat(20)}`, eur.toWei(40)] }),
+      }]),
+    });
+    const short = await settleConvertedDeposit(
+      kaiParked, store.findUser(kai.id)!, quote, kaiBefore,
+      [...kaiParked.txs, { step: "safe.swap(usdc->eure)", hash: out }], { txHash: out },
+    );
+    check("a delta under the logged output is left for review, nothing credited", short.holding === "refused" && !short.creditedEur && /review/.test(short.reason ?? ""), `${short.holding} ${short.reason ?? ""}`);
+    check("and the deposit is not offered for conversion again", /under review/.test(depositConversionBlocker(store.findUser(kai.id)!, short) ?? ""));
+    await pollCryptoDepositsOnce();
+    const kaiIn = store.cryptoDeposits.filter((x) => x.userId === kai.id && x.token === "EURE");
+    check("the refused swap's output is never booked as money in", !kaiIn.some((x) => x.txHash === out) && kaiIn.length === 1, JSON.stringify(kaiIn.map((x) => x.amountEur)));
+
+    // The scanner reads the swap before it is settled. With the executed
+    // swap on the row (the route writes it before settling), the output is
+    // left alone and settling credits it once.
+    const lea = addUser("Settling Lea", { withSafe: true });
+    const leaParked = settleOnArrival(await seedReadyDeposit(lea, 100));
+    const leaBefore = eur.toWei(await safeBalanceOf(lea.address));
+    const leaTx = await mintEure(lea.address, 87.88);
+    const leaTxs = [...leaParked.txs, { step: "safe.swap(usdc->eure)", hash: leaTx }];
+    store.updateCryptoDeposit(leaParked.id, { holding: "unconfirmed", txs: leaTxs });
+    await pollCryptoDepositsOnce();
+    check("a scan before settling books nothing from the swap", !store.cryptoDeposits.some((x) => x.userId === lea.id && x.token === "EURE"));
+    const leaD = await settleConvertedDeposit(store.cryptoDeposits.find((x) => x.id === leaParked.id)!, store.findUser(lea.id)!, quote, leaBefore, leaTxs, { txHash: leaTx });
+    check("and settling credits it once", leaD.holding === "converted" && leaD.creditedEur === 87.88, `${leaD.holding} ${leaD.creditedEur}`);
+
+    // Without that record the scanner books the output first; settling then
+    // refuses to credit it again and leaves it for review.
+    const max = addUser("Raced Max", { withSafe: true });
+    const maxParked = settleOnArrival(await seedReadyDeposit(max, 100));
+    const maxBefore = eur.toWei(await safeBalanceOf(max.address));
+    const maxTx = await mintEure(max.address, 87.88);
+    await pollCryptoDepositsOnce();
+    const raced = await settleConvertedDeposit(maxParked, store.findUser(max.id)!, quote, maxBefore,
+      [...maxParked.txs, { step: "safe.swap(usdc->eure)", hash: maxTx }], { txHash: maxTx });
+    check("output the scanner already booked is not credited twice", raced.holding === "refused" && !raced.creditedEur && /already recorded as a deposit/.test(raced.reason ?? ""), `${raced.holding} ${raced.reason ?? ""}`);
+    const { withoutConversionOutputs } = await import("../services/api/src/transfers/activity.js");
+    check("and the scanner's row stays the one record of that EURe",
+      withoutConversionOutputs(store.cryptoDeposits.filter((x) => x.userId === max.id)).filter((x) => x.token === "EURE").length === 1);
   }
 
   console.log(`\ncrypto deposits: ${passed}/${passed} checks passed`);
