@@ -594,6 +594,37 @@ try {
     );
     check("a delta under the logged output is left for review, nothing credited", short.holding === "refused" && !short.creditedEur && /review/.test(short.reason ?? ""), `${short.holding} ${short.reason ?? ""}`);
     check("and the deposit is not offered for conversion again", /under review/.test(depositConversionBlocker(store.findUser(kai.id)!, short) ?? ""));
+    await pollCryptoDepositsOnce();
+    const kaiIn = store.cryptoDeposits.filter((x) => x.userId === kai.id && x.token === "EURE");
+    check("the refused swap's output is never booked as money in", !kaiIn.some((x) => x.txHash === out) && kaiIn.length === 1, JSON.stringify(kaiIn.map((x) => x.amountEur)));
+
+    // The scanner reads the swap before it is settled. With the executed
+    // swap on the row (the route writes it before settling), the output is
+    // left alone and settling credits it once.
+    const lea = addUser("Settling Lea", { withSafe: true });
+    const leaParked = settleOnArrival(await seedReadyDeposit(lea, 100));
+    const leaBefore = eur.toWei(await safeBalanceOf(lea.address));
+    const leaTx = await mintEure(lea.address, 87.88);
+    const leaTxs = [...leaParked.txs, { step: "safe.swap(usdc->eure)", hash: leaTx }];
+    store.updateCryptoDeposit(leaParked.id, { holding: "unconfirmed", txs: leaTxs });
+    await pollCryptoDepositsOnce();
+    check("a scan before settling books nothing from the swap", !store.cryptoDeposits.some((x) => x.userId === lea.id && x.token === "EURE"));
+    const leaD = await settleConvertedDeposit(store.cryptoDeposits.find((x) => x.id === leaParked.id)!, store.findUser(lea.id)!, quote, leaBefore, leaTxs, { txHash: leaTx });
+    check("and settling credits it once", leaD.holding === "converted" && leaD.creditedEur === 87.88, `${leaD.holding} ${leaD.creditedEur}`);
+
+    // Without that record the scanner books the output first; settling then
+    // refuses to credit it again and leaves it for review.
+    const max = addUser("Raced Max", { withSafe: true });
+    const maxParked = settleOnArrival(await seedReadyDeposit(max, 100));
+    const maxBefore = eur.toWei(await safeBalanceOf(max.address));
+    const maxTx = await mintEure(max.address, 87.88);
+    await pollCryptoDepositsOnce();
+    const raced = await settleConvertedDeposit(maxParked, store.findUser(max.id)!, quote, maxBefore,
+      [...maxParked.txs, { step: "safe.swap(usdc->eure)", hash: maxTx }], { txHash: maxTx });
+    check("output the scanner already booked is not credited twice", raced.holding === "refused" && !raced.creditedEur && /already recorded as a deposit/.test(raced.reason ?? ""), `${raced.holding} ${raced.reason ?? ""}`);
+    const { withoutConversionOutputs } = await import("../services/api/src/transfers/activity.js");
+    check("and the scanner's row stays the one record of that EURe",
+      withoutConversionOutputs(store.cryptoDeposits.filter((x) => x.userId === max.id)).filter((x) => x.token === "EURE").length === 1);
   }
 
   console.log(`\ncrypto deposits: ${passed}/${passed} checks passed`);

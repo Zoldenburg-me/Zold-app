@@ -286,6 +286,20 @@ await check("EURe sent from another wallet is one line dated by the block; a min
   assert.equal(lines[0].txType, "transfer_in");
 });
 
+await check("another userOp's EURe in a conversion's bundle is a line; the conversion's own output is not", () => {
+  const inp = base();
+  const eure = (over: any) => ({ userId: "u_1", chainId: 31337, token: "EURE", amountUnits: "50000000000000000000", amountEur: 50, creditedEur: 50,
+    settlementAsset: "EURE", holding: "none", settledAt: "2026-10-03T16:00:00.000Z", txs: [], detectedAt: "2026-10-03T16:00:00.000Z", updatedAt: "2026-10-03T16:00:00.000Z", ...over });
+  inp.deposits = [
+    usdcDeposit({ txs: [{ step: "safe.swap(usdc->eure)", hash: H(7), outputLogIndexes: [4] }, { step: "userOperation", hash: H(6) }] }) as any,
+    eure({ id: "e-own", txHash: H(7), logIndex: 4, from: `0x${"cc".repeat(20)}` }),
+    eure({ id: "e-cotenant", txHash: H(7), logIndex: 1, from: `0x${"44".repeat(20)}` }),
+  ] as any;
+  const lines = projectStatementLines(inp).filter((l) => l.statement!.event === "eure_in");
+  assert.deepEqual(lines.map((l) => l.statement!.links.depositId), ["e-cotenant"]);
+  assert.equal(lines[0].statement!.amountCents, 5000);
+});
+
 await check("a sweep is one Kursdifferenz / Restbeträge line for the month", () => {
   const inp = base();
   inp.sweeps = [{ id: "sw-1", userId: "u_1", month: "2026-09", depositIds: ["d-1", "d-2"], amountInUnits: "2310000", creditedEur: 2.01, provider: "dex", rate: 1.149, conversion: { txHash: H(9), at: "2026-10-01T06:00:00.000Z" }, txs: [], at: "2026-10-01T06:01:00.000Z" }];

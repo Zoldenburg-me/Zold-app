@@ -13,7 +13,7 @@
 import express from "express";
 import { wrap } from "./util.js";
 import { LIQUIDITY, SECURITY } from "../config.js";
-import { accountBalances, addrs, eur, orchestratorAddress, usd } from "../chain.js";
+import { abis, accountBalances, addrs, eur, orchestratorAddress, usd } from "../chain.js";
 import { safeDebitBlocker } from "../orchestrator.js";
 import { prepareDepositConversion } from "../liquidity.js";
 import {
@@ -320,8 +320,12 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
         }
 
         // Read BEFORE submitting: the credited amount is the swap's own logged
-        // output, and this balance delta checks it.
-        const before = eur.toWei(await accountBalances(user.address).then((b) => b.safeBalanceEur));
+        // output, and this balance delta checks it. In wei: a rounded figure
+        // could sit above the real balance, and the delta would never cover
+        // the logged output.
+        const before = (await publicClient.readContract({
+          address: addrs().eure, abi: abis.MockToken, functionName: "balanceOf", args: [user.address],
+        })) as bigint;
         // The rate sanity check runs BEFORE the user-signed swap lands: after it,
         // a rate-feed outage would leave the EURe in the Safe with the deposit
         // still marked ready to convert.

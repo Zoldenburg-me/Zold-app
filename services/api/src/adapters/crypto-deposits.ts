@@ -45,7 +45,7 @@ import { attributeDepositToRequest, noteDepositSettled } from "../routes/payment
 import { buildCryptoSettlement, settlementUpdate } from "../domain/invoices.js";
 import { writeStatementLines } from "../bookkeeping/writer.js";
 import { readLogWindow } from "../log-range.js";
-import { conversionTxHashes } from "../transfers/activity.js";
+import { conversionOutputs } from "../transfers/conversion-outputs.js";
 
 /** The ERC-20 event, declared here rather than pulled from the mock's ABI —
  *  the real USDC emits the same signature and this path must not depend on our
@@ -313,7 +313,7 @@ const ENTRY_POINT = ENTRYPOINT_V9.toLowerCase();
  * same token to the same Safe. Undefined when there is no receipt to read, or
  * a userOp is named or present but that one's event is not in the receipt.
  */
-async function tokenTransfers(txHash: string | undefined, token: string, userOpHash: string | null | undefined) {
+export async function tokenTransfers(txHash: string | undefined, token: string, userOpHash: string | null | undefined) {
   if (!txHash || !/^0x[0-9a-fA-F]{64}$/.test(txHash)) return undefined;
   const receipt = await publicClient.getTransactionReceipt({ hash: txHash as `0x${string}` });
   let logs = receipt.logs;
@@ -330,11 +330,11 @@ async function tokenTransfers(txHash: string | undefined, token: string, userOpH
     // A userOp whose own event is not in this receipt: nothing here is its.
     return undefined;
   }
-  const transfers: { from: string; to: string; value: bigint }[] = [];
+  const transfers: { from: string; to: string; value: bigint; logIndex: number }[] = [];
   for (const log of logs) {
     if (log.address.toLowerCase() !== token.toLowerCase() || log.topics[0] !== TRANSFER_TOPIC) continue;
     const { args } = decodeEventLog({ abi: [TRANSFER_EVENT], data: log.data, topics: log.topics });
-    transfers.push({ from: args.from.toLowerCase(), to: args.to.toLowerCase(), value: args.value });
+    transfers.push({ from: args.from.toLowerCase(), to: args.to.toLowerCase(), value: args.value, logIndex: Number(log.logIndex) });
   }
   return transfers;
 }
@@ -362,16 +362,18 @@ export async function usdcSwappedIn(
  * EURe a swap delivered to the Safe, read from the swap's own Transfer logs.
  * EURe from any other transaction (a SEPA mint, a payment) is the scanner's
  * to book as its own deposit; the Safe moving EURe to itself delivers
- * nothing. Undefined when there is no receipt to read.
+ * nothing. The log indexes are what the scanner leaves out as conversion
+ * output; any other EURe log in the same transaction is money in. Undefined
+ * when there is no receipt to read.
  */
 export async function eureSwappedOut(
   txHash: string | undefined,
   userOpHash: string | null | undefined,
   safe: string,
-): Promise<bigint | undefined> {
+): Promise<{ wei: bigint; logIndexes: number[] } | undefined> {
   const s = safe.toLowerCase();
-  const transfers = await tokenTransfers(txHash, addrs().eure, userOpHash);
-  return transfers?.filter((t) => t.to === s && t.from !== s).reduce((n, t) => n + t.value, 0n);
+  const transfers = (await tokenTransfers(txHash, addrs().eure, userOpHash))?.filter((t) => t.to === s && t.from !== s);
+  return transfers && { wei: transfers.reduce((n, t) => n + t.value, 0n), logIndexes: transfers.map((t) => t.logIndex) };
 }
 
 /**
@@ -405,8 +407,15 @@ export async function settleConvertedDeposit(
   // mid is recorded when there is one and left out when there is not.
   const venueRate = Number(quote.rate) / 1e6;
   const midRate = await midRates().then((r) => r.eur.USD, () => undefined);
-  const receivedWei = await eureSwappedOut(conversion?.txHash, conversion?.userOpHash, user.address);
-  if (receivedWei === undefined) throw new Error("the swap has no transaction receipt to measure what arrived");
+  const swapTx = conversion?.txHash;
+  const output = await eureSwappedOut(swapTx, conversion?.userOpHash, user.address);
+  if (swapTx === undefined || output === undefined) throw new Error("the swap has no transaction receipt to measure what arrived");
+  const receivedWei = output.wei;
+  // Whatever happens below, the swap step names the logs that were its own
+  // output, so the scanner books every other EURe log in the bundle.
+  const stepped = (outputLogIndexes: number[]) =>
+    txs.map((t) => (t.step === "safe.swap(usdc->eure)" && t.hash.toLowerCase() === swapTx.toLowerCase() ? { ...t, outputLogIndexes } : t));
+  txs = stepped(output.logIndexes);
   // Wait for a read that shows the logged output, so a replica that has seen
   // an earlier inflow but not the swap does not read as EURe leaving.
   const after = await balanceAfterWrite(addrs().eure, user.address as `0x${string}`, balanceBeforeWei, balanceBeforeWei + receivedWei);
@@ -417,6 +426,16 @@ export async function settleConvertedDeposit(
       holding: "refused",
       reason: "the swap delivered no EURe to your account — nothing has been credited",
       txs,
+    });
+  }
+  // The scanner read this transaction before the conversion was recorded and
+  // booked its output as money in. Crediting it as well would book it twice;
+  // the scanner's row stays the one record of that EURe until reviewed.
+  if (output.logIndexes.some((i) => store.findCryptoDeposit(swapTx, i))) {
+    return store.updateCryptoDeposit(deposit.id, {
+      holding: "refused",
+      reason: "what the swap delivered was already recorded as a deposit — left for review rather than credited twice",
+      txs: stepped([]),
     });
   }
   if (deltaWei < receivedWei) {
@@ -654,7 +673,6 @@ async function scanCryptoDeposits(): Promise<{ found: number; more: boolean }> {
     byAddress.set(key, [...(byAddress.get(key) ?? []), item]);
   }
   const fresh: CryptoDeposit[] = [];
-  const conversions = conversionTxHashes(store.cryptoDeposits);
   for (const [i, token] of tokens.entries()) {
     const logs = logsByToken[i];
 
@@ -681,9 +699,6 @@ async function scanCryptoDeposits(): Promise<{ found: number; more: boolean }> {
       const txHash = log.transactionHash!;
       const logIndex = Number(log.logIndex);
       if (store.findCryptoDeposit(txHash, logIndex)) continue;
-      // A conversion's EURe output is the user's money changing form, not
-      // money in (transfers/activity.ts lists the same rule).
-      if (token.token === "EURE" && conversions.has(txHash.toLowerCase())) continue;
 
       const pageMatch = matches.find((m) => m.source === "payment-page" && m.user.paymentPage?.autoConvert);
       const match = token.token === "USDC" && pageMatch ? pageMatch : matches[0];
@@ -693,6 +708,11 @@ async function scanCryptoDeposits(): Promise<{ found: number; more: boolean }> {
       const ownPage = match.user.paymentPage?.depositAddress?.toLowerCase();
       if (match.source === "safe" && ownPage && ownPage !== to && from === ownPage) continue;
       const user = match.user;
+      // A conversion's EURe output is the user's money changing form, not
+      // money in (transfers/activity.ts lists the same rule). Another EURe
+      // log in the same bundle is money in. Read now, not before this scan's
+      // awaits: a conversion settled meanwhile has named its output.
+      if (token.token === "EURE" && conversionOutputs(store.cryptoDeposits)(txHash, logIndex, user.id)) continue;
       const now = new Date().toISOString();
       /**
        * The acquisition value, stamped once at detection with the rate's

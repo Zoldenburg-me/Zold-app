@@ -620,7 +620,10 @@ export interface CryptoDeposit {
    * partial books its own disposal line and Beleg.
    */
   partials?: CryptoPartialConversion[];
-  txs: { step: string; hash: string }[];
+  /** Each step's transaction. A "safe.swap(usdc->eure)" step, once settled,
+   *  names the EURe log indexes the swap delivered (`outputLogIndexes`), so
+   *  any other EURe log in that bundle is booked as money in. */
+  txs: { step: string; hash: string; outputLogIndexes?: number[] }[];
   detectedAt: string;
   updatedAt: string;
 }

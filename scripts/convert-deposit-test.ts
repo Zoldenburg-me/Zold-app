@@ -395,9 +395,10 @@ await check("the pending execution is claimed BEFORE any await — no double sub
 
 await check("the credited amount is MEASURED from the swap's logs, never taken from the quote", () => {
   const fn = dep.slice(dep.indexOf("export async function settleConvertedDeposit"));
-  const head = fn.slice(0, 2400);
-  assert.match(head, /receivedWei\s*=\s*await eureSwappedOut\(conversion\?\.txHash, conversion\?\.userOpHash, user\.address\)/);
-  assert.match(head, /receivedWei === undefined\) throw/, "no receipt, no credit");
+  const head = fn.slice(0, 3400);
+  assert.match(head, /output\s*=\s*await eureSwappedOut\(swapTx, conversion\?\.userOpHash, user\.address\)/);
+  assert.match(head, /output === undefined\) throw/, "no receipt, no credit");
+  assert.match(head, /receivedWei\s*=\s*output\.wei/);
   assert.match(head, /deltaWei\s*<\s*receivedWei/, "the balance delta checks the logged amount");
   assert.match(head, /receivedWei\s*<\s*quote\.minOut/, "the signed floor must be checked against the logged amount");
   assert.ok(!/creditedEur:\s*eur\.fromWei\(quote\./.test(head),
@@ -442,6 +443,21 @@ await check("the invoice names the swap that converted, never a reverted attempt
     txs: [{ step: "safe.swap(usdc->eure).reverted", hash: "0xrev" }, { step: "safe.swap(usdc->eure)", hash: "0xok" }] });
   assert.equal(buildCryptoSettlement(d).conversion?.txHash, "0xok");
   assert.equal(buildCryptoSettlement({ ...d, conversion: { txHash: "0xchain" } }).conversion?.txHash, "0xchain");
+});
+
+await check("only the logs a swap delivered are conversion output; an unsettled swap covers its own user only", async () => {
+  const { conversionOutputs } = await import("../services/api/src/transfers/conversion-outputs.js");
+  const u = mkUser();
+  const tx = "0x" + "d".repeat(64);
+  const settled = conversionOutputs([mkDeposit(u.id, { holding: "converted", conversion: { txHash: tx },
+    txs: [{ step: "safe.swap(usdc->eure)", hash: tx, outputLogIndexes: [4] }] })]);
+  assert.ok(settled(tx.toUpperCase().replace("0X", "0x"), 4, u.id), "the credited log");
+  assert.ok(!settled(tx, 1, u.id), "another op's EURe to the same Safe in the bundle is money in");
+  const pending = conversionOutputs([mkDeposit(u.id, { holding: "unconfirmed", txs: [{ step: "safe.swap(usdc->eure)", hash: tx }] })]);
+  assert.ok(pending(tx, 1, u.id) && pending(tx, 4, u.id), "a swap not yet settled covers every EURe log to its own user");
+  assert.ok(!pending(tx, 2, "someone-else"), "and never another user's payment in the same bundle");
+  const legacy = conversionOutputs([mkDeposit(u.id, { holding: "converted", conversion: { txHash: tx }, txs: [] })]);
+  assert.ok(legacy(tx, 1, u.id) && !legacy(tx, 1, "someone-else"), "a row from before indexes: its whole transaction, its own user");
 });
 
 await check("a row with neither state nor holding is migrated, not skipped", () => {
