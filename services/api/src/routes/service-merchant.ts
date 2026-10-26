@@ -22,6 +22,7 @@ import { bearerToken } from "../http/sessions.js";
 import { SHOPIFY } from "../config.js";
 import { EncryptionUnavailableError } from "../crypto-at-rest.js";
 import { store, type MerchantLink, type ServiceCredential } from "../store.js";
+import { shownDisplayName } from "../pay.js";
 import { MAX_REQUEST_EUR, effectiveState, type PaymentRequest } from "../payment-requests.js";
 import { normaliseShop, isValidShopDomain } from "../shopify/hmac.js";
 import { checkoutCredentialFor, checkoutCredentialIssued } from "../checkout-service.js";
@@ -196,12 +197,13 @@ export function createServiceMerchantRouter() {
       if (refusePending(res, caller, kind, pending)) return;
       markLinkCodePreviewed(body.code);
       const page = store.findUser(pending.payeeUserId)!.paymentPage!;
+      const payeeDisplayName = shownDisplayName(page.displayName);
       audit(kind, caller, "", "previewed", { orgId: pending.orgId, shop: body.shop, payeeUserId: pending.payeeUserId }, pending.installerId);
       res.json({
         shop: pending.shop,
         orgName: store.findOrganisation(pending.orgId)?.name,
         payeeHandle: page.handle,
-        ...(page.displayName ? { payeeDisplayName: page.displayName } : {}),
+        ...(payeeDisplayName ? { payeeDisplayName } : {}),
         expiresAt: new Date(pending.expiresAt).toISOString(),
       });
     }),

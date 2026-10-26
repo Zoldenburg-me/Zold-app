@@ -31,6 +31,7 @@
 import { randomBytes } from "node:crypto";
 import { MONERIUM, PAYMENT_REQUESTS } from "./config.js";
 import type { CryptoDeposit, Transfer, User } from "./store.js";
+import { shownDisplayName } from "./pay.js";
 import { reportedBic } from "./sepa.js";
 
 export type PaymentMethod = "crypto" | "bank";
@@ -667,10 +668,11 @@ export function publicPaymentRequest(
       appUrl: `${ctx.baseUrl}/app?pay=${encodeURIComponent(handle)}/${displayCode(r.code)}`,
     };
   }
+  const shownName = shownDisplayName(page?.displayName);
   return {
     code: displayCode(r.code),
     handle,
-    ...(ctx.payeeName ? { displayName: ctx.payeeName } : page?.displayName ? { displayName: page.displayName } : {}),
+    ...(ctx.payeeName ? { displayName: ctx.payeeName } : shownName ? { displayName: shownName } : {}),
     state,
     ...(r.amountEur !== undefined ? { amountEur: r.amountEur, outstandingEur: Math.max(0, Math.round((r.amountEur - paid) * 100) / 100) } : {}),
     paidEur: paid,
