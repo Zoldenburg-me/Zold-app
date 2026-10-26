@@ -63,7 +63,7 @@
 
   <!-- ============ older screens ============
        Settings and what hangs off it (recovery, documents, signers, Monerium
-       keys), the card and Zold Plus, until their own redesign steps. -->
+       keys), the card and the Privacy Bundle, until their own redesign steps. -->
   <section id="dashboard">
     <aside class="side">
       <div class="logo"><span class="tri" aria-hidden="true">▽</span> Zold</div>
@@ -95,36 +95,6 @@
         <div class="m-h1">Card</div>
         <div class="m-lede" id="m-card-lede">A Gnosis Pay card, connected to Zold. Gnosis Pay issues it and holds its KYC.</div>
         <div id="m-card-body" style="margin-top:24px"></div>
-      </div>
-
-<!-- ================= Zold Plus (preview) ================= -->
-      <div class="m-screen" id="m-plus-screen">
-        <div class="m-sheadrow"><button class="m-backbtn" data-mback aria-label="Back"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:24px">arrow_back</span></button></div>
-        <div class="m-card">
-          <div class="brandline">
-            <div>Zold <span style="color:var(--m-pink)">Plus</span></div>
-            <span class="material-symbols-rounded" aria-hidden="true" style="font-size:24px;color:var(--m-dim);transform:rotate(90deg)">wifi</span>
-          </div>
-          <div class="pan">•••• •••• •••• 4471</div>
-          <div class="foot"><span id="m-card-name">—</span><span>09/29</span></div>
-        </div>
-        <!-- The design prices this at €7.99. No such tier exists, so the price
-             is not shown and the CTA cannot be pressed. -->
-        <div class="m-h1" style="font-size:28px;margin-top:24px">Everything, coming soon</div>
-        <div class="m-perks">
-          <div class="m-perk"><span class="material-symbols-rounded" aria-hidden="true">credit_card</span><div><div class="t">Zold card</div><div class="d">Virtual today, metal on request</div></div></div>
-          <div class="m-perk hidden" id="m-perk-vpn"><span class="material-symbols-rounded" aria-hidden="true">vpn_lock</span><div><div class="t">Mysterium VPN</div><div class="d">Hides your IP, with a monthly allowance</div></div></div>
-          <div class="m-perk hidden" id="m-perk-esim"><span class="material-symbols-rounded" aria-hidden="true">sim_card</span><div><div class="t">Kokio eSIM</div><div class="d">Mobile data abroad, with a monthly allowance</div></div></div>
-          <div class="m-perk"><span class="material-symbols-rounded" aria-hidden="true">percent</span><div><div class="t">No FX margin</div><div class="d">First €2,000 sent each month</div></div></div>
-        </div>
-        <button class="m-cta" disabled>Coming soon</button>
-        <!-- The VPN and eSIM perks are the Privacy Bundle; they and this row
-             show only where capabilities.privacyBundle is true. -->
-        <button class="m-optrow hidden" id="m-go-bundle" style="margin-top:16px">
-          <span class="material-symbols-rounded ic" aria-hidden="true">check_circle</span>
-          <span class="tx"><span class="t">Privacy Bundle</span><span class="d" id="m-bundle-sub">eSIM and VPN</span></span>
-          <span class="material-symbols-rounded ch" aria-hidden="true">chevron_right</span>
-        </button>
       </div>
 
 <!-- ================= Share receipt (composer) =================
@@ -194,7 +164,7 @@
       <!-- Sub-screen header for the desktop cards still reached from the nav. -->
       <div class="m-head m-subhead">
         <button class="m-iconbtn" id="m-back" aria-label="Back"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:19px">arrow_back</span></button>
-        <div class="m-name" id="m-subtitle">Zold Plus</div>
+        <div class="m-name" id="m-subtitle">Privacy Bundle</div>
       </div>
 
       <div class="card hidden" id="kyc-card">
