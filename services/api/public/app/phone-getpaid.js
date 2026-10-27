@@ -186,6 +186,10 @@ PH["get-paid/page"] = {
           <p class="z-hint">Anyone with this link can pay you in digital dollars (${usdSym()}). They see your name, never your balance. The page is public.</p>
         </div>
         ${phAcceptsList(page)}
+        ${page.depositAddress ? `<div class="z-card">${Z.copyRow({
+          // The page's own address: the Safe, or the forwarder that routes into it.
+          label: page.depositAddress.toLowerCase() === String(u.address).toLowerCase() ? `Wallet address (${phChainName(caps.chainId)})` : "Page address",
+          value: page.depositAddress, mono: true })}</div>` : ""}
         <div class="z-pair">
           ${Z.button({ icon: "tune", label: "Page settings", href: "#page-settings" })}
           ${Z.button({ variant: "primary", icon: "ios_share", label: "Share", id: "ph-page-share" })}

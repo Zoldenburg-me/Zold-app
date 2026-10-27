@@ -473,12 +473,14 @@ function phDetailsText(u, bic) {
 /* The account details body, used by the sheet and by Get paid. */
 function phDetailsBody(u, bic, { loadingBic = false } = {}) {
   const hasWallet = u.address && u.passkeySafe?.status === "active";
-  const walletWarn = Z.note({ tone: "a", text: `Only ${usdSym()} on the Base network. Anything else sent here is lost.` });
+  const net = phChainName(caps.chainId);
+  const walletRow = () => Z.copyRow({ label: `Wallet address (${net})`, value: u.address, mono: true });
+  const walletWarn = Z.note({ tone: "a", text: `Only ${usdSym()} or EURe on ${net}. Anything else sent here is lost.` });
   if (!u.iban || !kycApproved(u)) {
     // Without an IBAN the wallet address is the account's details, shown open.
     const walletOpen = hasWallet
       ? `<p class="z-sub">Share your wallet address to get paid in ${usdSym()}.</p>
-        <div class="z-card">${Z.copyRow({ label: "Your wallet address", value: u.address, mono: true })}</div>${walletWarn}`
+        <div class="z-card">${walletRow()}</div>${walletWarn}`
       : "";
     if (ibanMovedAway(u)) return `${ibanMovedAwayHtml("ph-det-iban-back")}${walletOpen}`;
     return `${walletOpen}
@@ -493,18 +495,16 @@ function phDetailsBody(u, bic, { loadingBic = false } = {}) {
   const bicRow = loadingBic
     ? `<li><div class="z-copy" aria-hidden="true"><span class="z-copy__main"><span class="z-copy__label">BIC</span><span class="z-skel z-skel--line" style="width:40%;margin-top:6px"></span></span></div></li>`
     : bic ? `<li>${Z.copyRow({ label: "BIC", value: bic, mono: true })}</li>` : "";
-  const wallet = hasWallet
-    ? `<details class="z-disclose"><summary>Crypto wallet address${Z.icon("expand_more")}</summary>
-        <div class="z-card">${Z.copyRow({ label: "Your wallet address", value: u.address, mono: true })}</div>
-        ${walletWarn}</details>`
-    : "";
-  return `<p class="z-sub">Share these to get paid by bank transfer.</p>
+  // The wallet address is a row of its own, open, like the IBAN: a user
+  // looking for their Safe address must not have to find a disclosure.
+  return `<p class="z-sub">Share these to get paid by bank transfer${hasWallet ? ", or the wallet address for crypto" : ""}.</p>
     <ul class="z-list z-card">
       <li>${Z.copyRow({ label: "Account holder", value: ownAccountName(u) })}</li>
       <li>${Z.copyRow({ label: "IBAN", value: String(u.iban).replace(/\s+/g, ""), display: Z.groupIban(u.iban), mono: true })}</li>
       ${bicRow}
+      ${hasWallet ? `<li>${walletRow()}</li>` : ""}
     </ul>
-    ${wallet}
+    ${hasWallet ? walletWarn : ""}
     <div class="z-pair">
       ${Z.button({ icon: "content_copy", label: "Copy all", id: "ph-det-copy" })}
       ${Z.button({ variant: "primary", icon: "ios_share", label: "Share", id: "ph-det-share" })}
