@@ -88,8 +88,9 @@ Product documentation for users lives in the
 | **Never run on real money** | No live Bridge/CCTP transfer, no registered Monerium production OAuth app, no Shopify app install, no Candide recovery call, no mail transport (mail runs on zoldhq.com only) |
 
 app.zoldhq.com runs Base mainnet (8453) with real money, for the owner only,
-behind Cloudflare Access. Two full SEPA rounds have run on it, euros in by
-bank transfer and back out by bank transfer, over €2,000 in total.
+behind Cloudflare Access. One SEPA round has run on it: 992 + 95 EURe
+minted by Monerium and 1,000 EURe burned on redeem, all on chain; the bank
+transfer in and the SEPA payout out are the owner's statement.
 zoldhq.com runs Base Sepolia (84532) with Monerium's sandbox (its
 `/api/health` reports `chainId` 84532, `realMoney` false). What has and has
 not run is in [docs/status.md](docs/status.md).
