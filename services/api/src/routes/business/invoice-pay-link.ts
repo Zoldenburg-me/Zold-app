@@ -18,6 +18,7 @@ import {
   effectiveState,
   ownerPaymentRequest,
   validateCreate,
+  type PaymentMethod,
   type PaymentRequest,
 } from "../../payment-requests.js";
 import { companyPageHandle, createPaymentRequest, orgsBackedBy } from "../payment-requests.js";
@@ -116,6 +117,17 @@ export function linkPayee(org: Organisation, user: User): User | undefined {
   return payee && member && orgsBackedBy(payee.id).has(org.id) ? payee : undefined;
 }
 
+/**
+ * The ways a link may be paid. Made by the payee: whatever their account
+ * takes. Made by another member: bank transfer only. The company page shows
+ * the company's bank details and no crypto address, and a link in the
+ * company's name must not publish the holder's personal deposit address.
+ */
+export function linkMethods(payee: User, caller: User): PaymentMethod[] {
+  const own = payee.id === caller.id;
+  return availableMethods(payee).filter((m) => m.available && (own || m.method === "bank")).map((m) => m.method);
+}
+
 export type PayLinkBlock = { code: "ACCOUNT_NOT_OPEN" | "NOT_THE_PAYEE" | "NO_PAGE" | "NO_METHOD"; reason: string };
 
 export function payLinkBlocker(org: Organisation, user: User): PayLinkBlock | undefined {
@@ -151,12 +163,12 @@ export function payLinkPayee(org: Organisation, user: User): { payee: User } | P
           : `A link you make for ${org.name} opens under its company payment page, which isn’t set up yet. Owners and admins set it up under Get paid.`,
     };
   }
-  if (!availableMethods(payee).some((m) => m.available)) {
+  if (!linkMethods(payee, user).length) {
     return {
       code: "NO_METHOD",
       reason: own
         ? "No way to get paid is set up on this account yet: activate your IBAN with Monerium, or set up your payment page to take digital dollars."
-        : `No way to get paid is set up on ${org.name}’s account yet. The account holder can activate its IBAN, or set up a page that takes digital dollars.`,
+        : `A link you make for ${org.name} is paid by bank transfer, and its account has no active IBAN yet.`,
     };
   }
   return { payee };
@@ -198,7 +210,7 @@ async function payLinkUnlocked(ctx: OrgContext, invoice: Invoice, baseUrl: strin
   const found = payLinkPayee(ctx.org, user);
   if (!("payee" in found)) return { ok: false, ...found };
   const { payee } = found;
-  const methods = availableMethods(payee).filter((m) => m.available).map((m) => m.method);
+  const methods = linkMethods(payee, user);
   const input = validateCreate({ invoiceId: invoice.id, methods, expiresAt: linkExpiry(invoice.dueDate) }, payee);
   const link = await createPaymentRequest(payee, input, { kind: "app" }, ctx.org.id, user.id);
   return { ok: true, url: ownerPaymentRequest(link, baseUrl).url, amountEur: link.amountEur, reused: false };

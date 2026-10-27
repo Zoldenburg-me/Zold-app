@@ -12,6 +12,7 @@ import { META, RENDER } from "./views.js";
 
 const MAKES_LINKS = new Set(["owner", "admin", "payer"]); // invoices.manage
 const EDITS_PAGE = new Set(["owner", "admin"]); // org.update
+const MAKES_LINKS = new Set(["owner", "admin", "payer"]); // invoices.manage
 const TABS = [["open", "Open"], ["paid", "Paid"], ["all", "All"]];
 const DAY_MS = 86400000;
 
@@ -84,8 +85,12 @@ function linksSection(links, block, fix) {
   const tabs = TABS.map(([id, text]) => `<button type="button" class="zb-h-chip" data-gt="${id}" aria-pressed="${gp.tab === id}">${text}</button>`).join("");
   const row = (r) => {
     const amount = typeof r.amountEur === "number" ? eur(r.amountEur) : "Any amount";
+    // Cancel only before anyone has paid: the server refuses after.
+    const cancel = r.state === "OPEN" && !r.payments?.length && MAKES_LINKS.has(org.role)
+      ? ` <button type="button" class="z-link-btn" data-act="cancel-link" data-id="${esc(r.id)}">Cancel<span class="z-sr"> ${esc(linkTitle(r))}</span></button>`
+      : "";
     const copy = r.state === "OPEN"
-      ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="copy-text" data-text="${esc(r.url)}" data-said="Link copied">Copy link<span class="z-sr">: ${esc(linkTitle(r))}</span></button>`
+      ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="copy-text" data-text="${esc(r.url)}" data-said="Link copied">Copy link<span class="z-sr">: ${esc(linkTitle(r))}</span></button>${cancel}`
       : "";
     return `<tr><td>${Z.icon("link", "z-dim")} <b>${esc(linkTitle(r))}</b></td><td class="z-dim">${esc(linkWhen(r))}</td>
       <td>${Z.tag(STATE_WORD[r.state] || r.state)}</td><td class="num">${esc(amount)}</td><td class="num">${copy}</td></tr>`;

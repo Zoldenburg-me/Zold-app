@@ -289,10 +289,30 @@ await check("an admin's link then pays into the account's Safe under the company
   assert.equal(link.userId, "u_co", "the member whose Safe backs acc_co");
   assert.equal(link.createdBy, "u_admin");
   assert.equal(link.handle, "lindnerholzbau");
-  assert.deepEqual(link.methods, ["crypto", "bank"], "no methods named: the holder's, not the admin's (who has none)");
+  assert.deepEqual(link.methods, ["bank"], "bank only, as the company page is; never the holder's personal crypto address");
   assert.equal(r.body.createdBy, undefined, "not in the owner projection");
+  assert.equal((await call("GET", `/api/pay/lindnerholzbau/${link.code}`, undefined, "")).status, 200, "opens under the company page");
+  assert.equal((await call("GET", `/api/pay/lindner/${link.code}`, undefined, "")).status, 404, "never under the holder's personal page");
+  const crypto = await call("POST", "/api/orgs/org_co/payment-requests", { amountEur: 50, methods: ["crypto"] }, "u_admin");
+  assert.equal(crypto.status, 409, JSON.stringify(crypto.body));
+  assert.match(crypto.body.error, /bank transfer only/);
   // Out again: the checks below count the company's links from here.
   store.paymentRequests.splice(i, 1);
+});
+await check("a company link is cancelled by anyone who may make one, not a viewer, and not once paid", async () => {
+  const made = await call("POST", "/api/orgs/org_co/payment-requests", { amountEur: 9 });
+  assert.equal(made.status, 201, JSON.stringify(made.body));
+  const id = made.body.id;
+  assert.equal((await call("POST", `/api/orgs/org_co/payment-requests/${id}/cancel`, undefined, "u_view")).status, 403);
+  assert.equal((await call("POST", `/api/orgs/org_new/payment-requests/${id}/cancel`)).status, 404, "another organisation's route does not reach it");
+  const paid = store.findPaymentRequest(id)!;
+  paid.payments.push({ at: now } as any);
+  assert.equal((await call("POST", `/api/orgs/org_co/payment-requests/${id}/cancel`, undefined, "u_admin")).status, 409);
+  paid.payments.length = 0;
+  const done = await call("POST", `/api/orgs/org_co/payment-requests/${id}/cancel`, undefined, "u_admin");
+  assert.equal(done.status, 200, JSON.stringify(done.body));
+  assert.equal(store.findPaymentRequest(id)!.state, "CANCELLED", "an admin cancels the holder's company link");
+  store.paymentRequests.splice(store.paymentRequests.findIndex((p) => p.id === id), 1);
 });
 await check("open links count against whoever made them: an admin at the limit cannot use up the holder's", async () => {
   const { CEILINGS } = await import("../services/api/src/domain/ceilings.js");

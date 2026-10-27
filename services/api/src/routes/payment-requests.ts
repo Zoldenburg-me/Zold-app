@@ -431,7 +431,8 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
     // old handle keeps working, and so does the payee's own handle or the
     // company page their Safe backs, but a code under anyone else's handle is
     // a 404, so a page cannot impersonate another payee.
-    const handles = r && user ? [r.handle, user.paymentPage?.handle, companyPageHandle(r.userId, r.orgId)] : [];
+    // A link another member made for the company never opens under the payee's personal page.
+    const handles = r && user ? [r.handle, ...(r.createdBy ? [] : [user.paymentPage?.handle]), companyPageHandle(r.userId, r.orgId)] : [];
     if (!r || !user || !handles.includes(req.params.handle) || heldByOther(req.params.handle, r)) {
       res.status(404).json({ error: "no such payment request" });
       return undefined;
