@@ -189,7 +189,11 @@ PH["get-paid/page"] = {
         ${u.address && u.passkeySafe?.status === "active" ? `<div class="z-card">${Z.copyRow({
           // The Safe itself, never the page's forwarder: a forwarder's activation
           // expires, and the public page stops offering it when it does.
-          label: `Wallet address (${phChainName(caps.chainId)})`, value: u.address, mono: true })}</div>` : ""}
+          label: `Wallet address (${phChainName(caps.chainId)})`, value: u.address, mono: true })}</div>
+        ${(page.supportedTokens || []).some((t) => t.chainId !== caps.chainId)
+          // Tokens from other chains reach the Safe only through the page's link.
+          ? Z.note({ tone: "a", text: `This address takes ${usdSym()} on ${phChainName(caps.chainId)} only. Payers on other chains use your page link.` })
+          : ""}` : ""}
         <div class="z-pair">
           ${Z.button({ icon: "tune", label: "Page settings", href: "#page-settings" })}
           ${Z.button({ variant: "primary", icon: "ios_share", label: "Share", id: "ph-page-share" })}

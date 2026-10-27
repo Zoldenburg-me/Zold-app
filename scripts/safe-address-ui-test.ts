@@ -95,6 +95,11 @@ await t("Your page shows the Safe's address, never the page's forwarder", () => 
   assert.match(html, /Wallet address \(Base\)/);
   assert.match(html, new RegExp(`data-z-copy="${SAFE}"`));
   assert.doesNotMatch(html, new RegExp(FWD), "a forwarder may have expired; it is never offered here");
+  assert.doesNotMatch(html, /Payers on other chains/, "no other chains listed, no note");
+  run(`user = ${JSON.stringify({ ...base, paymentPage: { ...page, supportedTokens: [...page.supportedTokens, { symbol: "USDC", chainId: 42161, decimals: 6 }] } })}`);
+  const multi = flat(run(`PH["get-paid/page"].html()`));
+  assert.match(multi, /USDC on Arbitrum/);
+  assert.match(multi, /This address takes USDC on Base only\. Payers on other chains use your page link\./);
 });
 
 await t("Copy all and Share carry the wallet address too", () => {
