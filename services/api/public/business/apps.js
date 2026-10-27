@@ -24,15 +24,25 @@ const heading = (id, text) => `<h2 class="zb-h2" id="${id}" style="margin:28px 0
 META.apps = () => ({ title: "Apps", sub: `Tools that take payments for ${org.name}. Accounting software is in Books, Connections.`, actions: "" });
 META.shopify = META.apps;
 
+/** What stands before Connect store for this person, or "": the role, or
+ *  the payment page a store pays into (the API's payeeFor verdict). */
+function connectBlock(d) {
+  if (!d.canManage) return `<p class="zb-hint">Only owners and admins can connect a store.</p>`;
+  if (!d.payeeReason) return "";
+  return `<div class="banner warn">${Z.icon("info")}<span><b>A store pays into a payment page.</b> ${esc(sentence(plain(d.payeeReason)).replace(/^./, (c) => c.toUpperCase()))}</span></div>
+    ${d.payeePageIsYours ? `<div class="zb-actions"><a class="z-btn z-btn--secondary z-btn--sm" href="/app?from=business#page-settings">Set up your page${Z.icon("open_in_new")}<span class="z-sr"> (the app)</span></a></div>` : ""}`;
+}
+
 function appCard(d, custom) {
-  const connect = d.available
+  const block = d.available ? connectBlock(d) : "";
+  const connect = block || (d.available
     ? `<form class="zb-app__form" onsubmit="return false"><label for="sh-shop">${d.connections.length ? "Connect another store" : "Store address"}</label>
         <div class="zb-app__row"><input id="sh-shop" name="shop" autocomplete="off" spellcheck="false" placeholder="my-store.myshopify.com…" />
         <button type="button" class="z-btn z-btn--primary" data-act="shopify-connect">Connect store</button></div>
         <p class="zb-hint">You approve the app at Shopify. The store’s access key is stored encrypted and never shown.${custom ? " Connecting subscribes Zold to the store’s new orders." : ""}</p></form>`
     : `<div class="banner warn">${Z.icon("info")}<span><b>Not available here.</b> ${esc(sentence(plain(d.reason || "")))} ${custom
         ? "A Shopify app has to be created in a Partner account, and its key set on this deployment."
-        : "A Shopify payments app has to be approved into Shopify’s Payments Apps program first. Nobody has done that yet."}</span></div>`;
+        : "A Shopify payments app has to be approved into Shopify’s Payments Apps program first. Nobody has done that yet."}</span></div>`);
   return `<section class="z-card zb-pad zb-app" aria-labelledby="app-shopify">
       <div class="zb-app__head">${Z.iconTile({ icon: "storefront" })}<div><h2 class="zb-h2" id="app-shopify">Shopify ${Z.tag("Beta")}</h2>
         <p class="desc">Customers pay an order in digital dollars (${usdSymbol}), and Zold marks it paid in Shopify once the money arrives.</p></div></div>
@@ -98,12 +108,10 @@ function setUp(d, custom) {
 // ── Through the checkout service (merchant links) ──────────────────────
 
 function linkCard(m) {
-  const connect = m.canManage
-    ? `<form class="zb-app__form" onsubmit="return false"><label for="ml-shop">${m.links.some((l) => !l.revokedAt) ? "Connect another store" : "Store address"}</label>
+  const connect = connectBlock(m) || `<form class="zb-app__form" onsubmit="return false"><label for="ml-shop">${m.links.some((l) => !l.revokedAt) ? "Connect another store" : "Store address"}</label>
         <div class="zb-app__row"><input id="ml-shop" name="shop" autocomplete="off" spellcheck="false" placeholder="my-store.myshopify.com…" />
         <button type="button" class="z-btn z-btn--primary" data-act="merchant-link-connect">Connect store</button></div>
-        <p class="zb-hint">You approve the app at Shopify on the Zold checkout. The store’s access key stays with the checkout, stored encrypted, and is never shown.</p></form>`
-    : `<p class="zb-hint">An owner or admin connects stores.</p>`;
+        <p class="zb-hint">You approve the app at Shopify on the Zold checkout. The store’s access key stays with the checkout, stored encrypted, and is never shown.</p></form>`;
   return `<section class="z-card zb-pad zb-app" aria-labelledby="app-shopify">
       <div class="zb-app__head">${Z.iconTile({ icon: "storefront" })}<div><h2 class="zb-h2" id="app-shopify">Shopify ${Z.tag("Beta")}</h2>
         <p class="desc">Customers pay an order in digital dollars (${usdSymbol}), and the Zold checkout marks it paid in Shopify once the money arrives.</p></div></div>

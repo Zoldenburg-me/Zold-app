@@ -64,6 +64,16 @@ function drawer(id, title, body, trigger) {
   Z.openOverlay(id, trigger);
   return $(`#${id}`);
 }
+/** The store address typed into a Connect store form, checked against the
+ *  shape the API accepts (shopify/hmac.ts SHOP_RE) before it is sent. */
+function shopAddress(sel) {
+  const shop = ($(sel).value || "").trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/.test(shop)) {
+    throw new Error("Enter the store’s myshopify.com address, for example my-store.myshopify.com. You find it in Shopify under Settings, Domains.");
+  }
+  return shop;
+}
+
 const field = (id, label, extra = "") => `<label for="${id}">${label}</label><input id="${id}" name="${id}" autocomplete="off" ${extra} />`;
 
 /* ── Payment runs ─────────────────────────────────────────────────────── */
@@ -366,13 +376,13 @@ export const ACTIONS = {
   "gmi-drawer": (el) => { gmiDrawer(el); return "keep"; },
 
   async "shopify-connect"() {
-    const shop = ($("#sh-shop").value || "").trim().toLowerCase();
+    const shop = shopAddress("#sh-shop");
     const r = await api(`/api/orgs/${org.id}/shopify/install`, { method: "POST", body: { shop } });
     if (!/^https:\/\//i.test(String(r.authorizeUrl))) return toast("Shopify sent back an address Zold can’t use.", true);
     location.href = r.authorizeUrl;
   },
   async "merchant-link-connect"() {
-    const shop = ($("#ml-shop").value || "").trim().toLowerCase();
+    const shop = shopAddress("#ml-shop");
     const r = await api(`/api/orgs/${org.id}/merchant-links`, { method: "POST", body: { integration: "shopify", shop } });
     if (!/^https:\/\//i.test(String(r.installUrl)) && !/^http:\/\/(localhost|127\.0\.0\.1)[:/]/i.test(String(r.installUrl))) {
       return toast("The checkout sent back an address Zold can’t use.", true);
