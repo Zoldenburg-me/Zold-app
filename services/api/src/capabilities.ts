@@ -32,7 +32,8 @@ export function capabilities() {
     /** Deposits are real Monerium IBAN transfers, always: there is no mock. */
     sandbox: true,
     /** May the browser offer "sign up / sign in with Monerium" (OAuth)? */
-    moneriumOAuth: moneriumOAuthEnabled(),
+    // connect/start refuses without a data encryption key (tokens are stored sealed).
+    moneriumOAuth: moneriumOAuthEnabled() && moneriumApiKeysAvailable(),
     /** Is the cash (EUR -> KES) corridor open? Bridge live AND an anchor
      *  configured; the UI hides the corridor rather than quote into a wall. */
     cashRail: cashRailOpen(),

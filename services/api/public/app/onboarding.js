@@ -51,8 +51,8 @@ function enterDashboard(name) {
 }
 
 /* Onboarding is over (or put off): the company's desk or the personal home. */
-function obFinish() {
-  if (user?.accountType === "company") return location.assign("/business");
+function obFinish(view) {
+  if (user?.accountType === "company") return location.assign(view ? `/business?view=${view}` : "/business");
   enterDashboard(user?.name || "Account");
 }
 
@@ -1527,7 +1527,7 @@ OB.monerium = {
   },
   bind: (root) => {
     const oauth = root.querySelector("#btn-monerium-existing");
-    if (oauth) oauth.onclick = () => { Z.setLoading(oauth, true); startMoneriumConnect("ob-err").finally(() => Z.setLoading(oauth, false)); };
+    if (oauth) oauth.onclick = () => { Z.setLoading(oauth, true); startMoneriumConnect("ob-err").then((left) => { if (!left) Z.setLoading(oauth, false); }); };
     const later = root.querySelector("#btn-kyc-dashboard");
     if (later) later.onclick = () => obFinish();
     const re = root.querySelector("#btn-kyc-reconnect");
@@ -1771,7 +1771,8 @@ async function refreshKycStatus({ continueWhenApproved = false } = {}) {
     renderKycState(user);
     if (kycApproved(user) && continueWhenApproved) {
       renderUser(await api(`/api/users/${user.id}`));
-      return obFinish();
+      // A company's next step is connecting that IBAN on Business → Accounts.
+      return obFinish("accounts");
     }
   } catch (e) { obShowErr(e); }
 }
@@ -1783,6 +1784,7 @@ async function startMoneriumConnect(errorId = "ob-err") {
     const target = safeUrl(connect.redirectUrl);
     if (!target) throw new Error("Monerium returned an unusable sign-in address");
     location.href = target;
+    return true;
   } catch (e) {
     if ($(errorId)?.classList.contains("z-alert")) obShowErr(e, errorId);
     else showErr(errorId, e);
@@ -1797,7 +1799,7 @@ async function activateIbanAtGate(btn) {
   Z.setLoading(btn, true);
   try {
     await issueAppIban();
-    if (kycApproved(user)) return obFinish();
+    if (kycApproved(user)) return obFinish("accounts");
     obRender({ focus: true });
   } catch (e) { obShowErr(e); } finally { Z.setLoading(btn, false); }
 }
