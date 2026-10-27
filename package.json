@@ -47,6 +47,7 @@
     "passkey-prompt:test": "tsx scripts/passkey-prompt-test.ts",
     "offline-bar:test": "tsx scripts/offline-bar-test.ts",
     "iban-moved:ui:test": "tsx scripts/iban-moved-ui-test.ts",
+    "app-copy:ui:test": "tsx scripts/app-copy-ui-test.ts",
     "monerium-screen:ui:test": "tsx scripts/monerium-screen-ui-test.ts",
     "paylink-form:ui:test": "tsx scripts/paylink-form-ui-test.ts",
     "unread-balance:ui:test": "tsx scripts/app-unread-balance-ui-test.ts",

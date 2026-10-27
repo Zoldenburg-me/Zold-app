@@ -132,9 +132,9 @@ function movement(all, months) {
       ${rows.length ? `<ul class="zb-h-tops">${rows.map(([who, v]) => `<li>${Z.avatar({ name: who })}<span>${esc(who)}</span><b>${esc(eur(v / 100))}</b></li>`).join("")}</ul>` : `<p class="zb-hint">None this month.</p>`}</div>`;
   };
   return `<div class="zb-h-head"><h2 class="zb-h2" id="home-move">Money movement</h2>
-      <span class="zb-h-month"><button type="button" class="zb-h-icon-btn" data-hm="${esc(months[i + 1] || "")}" aria-label="Previous month"${months[i + 1] ? "" : " disabled"}>${Z.icon("chevron_left")}</button>
+      <span class="zb-h-month"><button type="button" class="zb-h-icon-btn" data-hm="${esc(months[i + 1] || "")}" aria-label="Previous month"${months[i + 1] ? "" : ' disabled title="No earlier month with money in or out"'}>${Z.icon("chevron_left")}</button>
       <span>${esc(name)}</span>
-      <button type="button" class="zb-h-icon-btn" data-hm="${esc(months[i - 1] || "")}" aria-label="Next month"${i > 0 ? "" : " disabled"}>${Z.icon("chevron_right")}</button></span></div>
+      <button type="button" class="zb-h-icon-btn" data-hm="${esc(months[i - 1] || "")}" aria-label="Next month"${i > 0 ? "" : ' disabled title="This is the latest month"'}>${Z.icon("chevron_right")}</button></span></div>
     <div class="zb-grid2">${side2("in", "Money in", "Top payers")}${side2("out", "Money out", "Top payees")}</div>`;
 }
 
@@ -197,7 +197,7 @@ function attention({ waiting, invoices, lines, accounts }) {
 }
 
 function accountsCard(accounts) {
-  if (!accounts.length) return `<section class="z-card zb-side-card" aria-labelledby="home-acc"><div class="zb-side-card__head"><h2 id="home-acc">Accounts</h2></div><p class="zb-hint">No account can pay yet. ${org.type === "personal" ? "Connect your Monerium account" : "Connect the company’s Monerium profile"} on the Accounts screen.</p>${linkBtn("Accounts", "accounts")}</section>`;
+  if (!accounts.length) return `<section class="z-card zb-side-card" aria-labelledby="home-acc"><div class="zb-side-card__head"><h2 id="home-acc">Accounts</h2></div><p class="zb-hint">No account can pay yet. ${org.type === "personal" ? "Connect your Monerium account" : `Connect ${esc(org.name)}’s Monerium profile`} on the Accounts screen.</p>${linkBtn("Accounts", "accounts")}</section>`;
   const one = (a) => {
     const mine = a.status === "active" && a.backingUserId && me && a.backingUserId === me.id;
     const iban = a.identifier?.iban;

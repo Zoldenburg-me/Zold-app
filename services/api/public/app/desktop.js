@@ -424,7 +424,7 @@ function phSearchOpen(trigger) {
         <div class="z-cmdk__bar">${Z.icon("search")}
           <label class="z-sr" for="dk-q">Search payments and contacts</label>
           <input id="dk-q" class="z-cmdk__input" type="search" name="q" role="combobox" aria-expanded="false" aria-controls="dk-results" aria-autocomplete="list" autocomplete="off" spellcheck="false" placeholder="Search payments and contacts…">
-          <kbd class="z-kbd">esc</kbd></div>
+          <kbd class="z-kbd">esc</kbd><button type="button" class="z-iconbtn z-overlay__close" aria-label="Close search">${Z.icon("close")}</button></div>
         <div class="z-cmdk__list" id="dk-results" role="listbox" aria-label="Results"></div>
         <div class="z-cmdk__foot" aria-hidden="true"><span><kbd class="z-kbd">↑</kbd><kbd class="z-kbd">↓</kbd> to move</span><span><kbd class="z-kbd">↵</kbd> to open</span></div>
       </div></div>`);

@@ -534,8 +534,14 @@ function phBindDetails(root) {
   if (verify) verify.onclick = () => { Z.closeOverlay(); enterKycReview(user?.name || "Account"); };
   const copy = root.querySelector("#ph-det-copy");
   if (copy) copy.onclick = async () => {
-    try { await navigator.clipboard.writeText(phDetailsText(user, phCache.bic)); Z.announce("Copied"); }
-    catch { Z.announce("Could not copy. Select the text and copy it yourself."); }
+    const label = copy.querySelector("span:not(.z-ic)"); // the icon span comes first
+    const was = (label.dataset.label ||= label.textContent); // a second click inside 1.5 s must not keep "Copied"
+    try { await navigator.clipboard.writeText(phDetailsText(user, phCache.bic)); }
+    catch { Z.announce("Could not copy. Select the text and copy it yourself."); return; }
+    // Seen as well as heard, as a copy row shows its check mark.
+    label.textContent = "Copied";
+    Z.announce("Copied");
+    setTimeout(() => { label.textContent = was; }, 1500);
   };
   const share = root.querySelector("#ph-det-share");
   if (share) share.onclick = () => phShare("My account details", phDetailsText(user, phCache.bic));
