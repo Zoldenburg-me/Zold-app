@@ -15,7 +15,7 @@
 import { randomUUID } from "node:crypto";
 import express from "express";
 import { formatUnits, getAddress, isAddress, parseUnits } from "viem";
-import { FX, SECURITY } from "../config.js";
+import { CHAIN_ID, ENS_GATEWAY, FX, SECURITY } from "../config.js";
 import { addrs, publicClient } from "../chain.js";
 import { eurPer } from "../rates.js";
 import { usdToken } from "../usd-token.js";
@@ -65,6 +65,29 @@ async function recipient(
   if (/^0x/i.test(to) && !to.includes(".")) return { ok: false, status: 400, code: "BAD_ADDRESS", error: "an address is 0x and 40 hex characters" };
   const r = await resolveName(to);
   return r.ok ? { ok: true, name: r.name, address: r.address } : r;
+}
+
+/**
+ * The tokens a Zold payment page's address takes, when `address` is one: a
+ * page's Candide forwarder moves only the tokens its routes name (USDC), and
+ * anything else sent there is stranded. Undefined: not a page forwarder.
+ * A name under our ENS parent always resolves to a page address, so one we
+ * cannot place is treated as a forwarder (fail closed).
+ */
+export function pageAddressTakes(address: `0x${string}`, name?: string): `0x${string}`[] | undefined {
+  const a = address.toLowerCase();
+  const isSafeOf = (u: User) => [u.address, u.passkeySafe?.address].some((x) => x?.toLowerCase() === a);
+  const owner = store.users.find((u) => u.paymentPage?.depositAddress?.toLowerCase() === a);
+  const usdcOnly = [usdToken().address];
+  if (owner) {
+    // A page without forwarding uses the Safe itself, which takes anything.
+    if (isSafeOf(owner)) return undefined;
+    const listed = (owner.paymentPage!.supportedTokens ?? []).filter((t) => t.chainId === CHAIN_ID).map((t) => t.address);
+    return listed.length ? listed : usdcOnly;
+  }
+  const ours = ENS_GATEWAY.enabled && !!name && name.endsWith(`.${ENS_GATEWAY.parent}`);
+  if (ours && !store.users.some(isSafeOf)) return usdcOnly;
+  return undefined;
 }
 
 function publicSend(s: CryptoSend) {
@@ -119,6 +142,14 @@ export function createCryptoSendsRouter({
         return res.status(400).json({ error: "tokens sent to that address are lost", code: "BURN_ADDRESS" });
       }
 
+      const takes = pageAddressTakes(to.address, to.name);
+      if (takes && !takes.some((t) => t.toLowerCase() === token.address.toLowerCase())) {
+        const sym = symbol === "EURE" ? "EURe" : usdToken().symbol;
+        return res.status(409).json({
+          error: `${to.name ?? "That address"} is a Zold payment page that does not take ${sym}; it would be stuck there. Send ${usdToken().symbol}, or ask them for their wallet address.`,
+          code: "PAGE_TOKEN_REFUSED",
+        });
+      }
       const amount = Number(formatUnits(units, token.decimals));
       let capEur: number;
       if (symbol === "EURE") capEur = amount;

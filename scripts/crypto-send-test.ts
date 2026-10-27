@@ -12,7 +12,9 @@
  *     no rate means no send, and an expired unsigned send stops counting;
  *   - a wrong passkey, and a second submit of the same signature, are refused;
  *   - a name starting with 0x is resolved, and ENS down at approval leaves
- *     the send approvable.
+ *     the send approvable;
+ *   - a Zold page's forwarder (by its address, or any name under our ENS
+ *     parent we cannot place) takes only its listed tokens: EURe is refused.
  *
  * Offline: the ENS resolver, balance and rate are injected; the Safe operation
  * is the hardhat harness stand-in. Run: npm run crypto-send:test
@@ -26,6 +28,11 @@ import express from "express";
 import { makeSoftwarePasskey } from "./_software-passkey.js";
 
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-crypto-send-")), "db.json");
+// The ENS gateway on, so names under zoldhq.com are known to be page names.
+// Derived, not a literal: a throwaway key for this test only.
+process.env.ENS_PARENT_NAME = "zoldhq.com";
+process.env.ENS_RESOLVER_ADDRESS = "0x00000000000000000000000000000000000e45e5";
+process.env.ENS_GATEWAY_KEY = (await import("viem")).keccak256((await import("viem")).toHex("zold crypto-send-test gateway key"));
 
 const { store, initStore } = await import("../services/api/src/store.js");
 const { addrs } = await import("../services/api/src/chain.js");
@@ -41,7 +48,13 @@ const MALLORY = "0x3333333333333333333333333333333333333333" as const;
 const GOOD = "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed";
 const BAD_SUM = "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAeD";
 
-const names: Record<string, `0x${string}` | null | "down"> = { "alice.eth": ALICE, "nobase.eth": null, "0xsplits.eth": ALICE };
+const FWD = "0x4444444444444444444444444444444444444444" as const;
+const KIM_SAFE = "0x5555555555555555555555555555555555555555" as const;
+const names: Record<string, `0x${string}` | null | "down"> = {
+  "alice.eth": ALICE, "nobase.eth": null, "0xsplits.eth": ALICE,
+  // A Zold user's page name, and the same page under a plain .eth name.
+  "kim.zoldhq.com": FWD, "kim.eth": FWD, "lee.zoldhq.com": KIM_SAFE, "gone.zoldhq.com": MALLORY,
+};
 let balance = 1_000n * 10n ** 18n;
 let rate: number | undefined = 1.25; // USD per EUR
 
@@ -57,6 +70,29 @@ store.addUser({
   passkeySafe: { status: "active", address: SAFE, threshold: 1, importedAt: now, passkeyPublicKey: { x: hex(passkey.jwk.x!), y: hex(passkey.jwk.y!) } },
   createdAt: now,
 } as any);
+
+// Kim's page forwards through a Candide address that takes USDC only; Lee's
+// page has no forwarder, so its address is Lee's Safe.
+store.addUser({
+  id: "u-kim", name: "Kim", country: "DE", kycStatus: "approved", address: KIM_SAFE, createdAt: now,
+  paymentPage: { handle: "kim", depositAddress: FWD, forwarder: { provider: "candide", recipient: KIM_SAFE, destinationChainId: 31337, sourceChainIds: [31337], custodialWithdrawer: KIM_SAFE, active: true, activatedAt: now },
+    supportedTokens: [{ chainId: 31337, symbol: "USDC", address: addrs().usdc, decimals: 6 }], settlementAsset: "USDC", autoConvert: false, createdAt: now },
+} as any);
+store.addUser({
+  id: "u-lee", name: "Lee", country: "DE", kycStatus: "approved", address: KIM_SAFE.replace("5555", "5556"), createdAt: now,
+  paymentPage: { handle: "lee", depositAddress: KIM_SAFE.replace("5555", "5556"), settlementAsset: "EURE", autoConvert: false, createdAt: now },
+} as any);
+names["lee.zoldhq.com"] = KIM_SAFE.replace("5555", "5556") as `0x${string}`;
+// Ann's page address is her passkey Safe, which differs from her stored address.
+const ANN_SAFE = "0x6666666666666666666666666666666666666666" as const;
+store.addUser({
+  id: "u-ann", name: "Ann", country: "DE", kycStatus: "approved", address: "0x6666666666666666666666666666666666666667", createdAt: now,
+  passkeySafe: { status: "active", address: ANN_SAFE, threshold: 1, importedAt: now },
+  paymentPage: { handle: "ann", depositAddress: ANN_SAFE, settlementAsset: "EURE", autoConvert: false, createdAt: now },
+} as any);
+names["ann.zoldhq.com"] = ANN_SAFE;
+// A name under our parent that resolves to a user's Safe with no page there.
+names["kimsafe.zoldhq.com"] = KIM_SAFE;
 
 const app = express();
 app.use(express.json());
@@ -130,6 +166,29 @@ try {
     const again = await post(`/crypto-sends/${c.data.id}/authorize`, { executionAssertion: await passkey.assert(c.data.safeExecution.challenge) });
     assert.equal(again.status, 200, JSON.stringify(again.data));
     assert.equal(store.findCryptoSend(c.data.id)!.state, "SENT");
+  });
+
+  await t("a Zold page's forwarder takes USDC only: EURe is refused, USDC goes through", async () => {
+    for (const to of ["kim.zoldhq.com", "kim.eth", FWD]) {
+      const e = await create({ to, confirmedAddress: FWD, amount: "1" });
+      assert.equal(e.status, 409, `${to}: ${JSON.stringify(e.data)}`);
+      assert.equal(e.data.code, "PAGE_TOKEN_REFUSED");
+      assert.match(e.data.error, /Send USDC/);
+    }
+    const u = await create({ to: "kim.eth", confirmedAddress: FWD, token: "USDC", amount: "1" });
+    assert.equal(u.status, 201, JSON.stringify(u.data));
+  });
+
+  await t("a page without a forwarder is the Safe and takes EURe; an unknown page name does not", async () => {
+    const lee = await create({ to: "lee.zoldhq.com", confirmedAddress: names["lee.zoldhq.com"], amount: "1" });
+    assert.equal(lee.status, 201, JSON.stringify(lee.data));
+    assert.equal((await create({ to: "ann.zoldhq.com", confirmedAddress: ANN_SAFE, amount: "1" })).status, 201, "a page whose address is the passkey Safe takes EURe");
+    assert.equal((await create({ to: "kimsafe.zoldhq.com", confirmedAddress: KIM_SAFE, amount: "1" })).status, 201, "a name pointing at a user's Safe takes EURe");
+    const held = safeFundedEurToday("u-cs");
+    const gone = await create({ to: "gone.zoldhq.com", confirmedAddress: MALLORY, amount: "1" });
+    assert.equal(gone.data.code, "PAGE_TOKEN_REFUSED", "a name under our parent we cannot place fails closed");
+    assert.equal(safeFundedEurToday("u-cs"), held, "a refusal holds nothing against the cap");
+    assert.equal((await create({ to: "gone.zoldhq.com", confirmedAddress: MALLORY, token: "USDC", amount: "1" })).status, 201, "USDC to it goes through");
   });
 
   await t("an address other than the one confirmed is refused at create", async () => {
