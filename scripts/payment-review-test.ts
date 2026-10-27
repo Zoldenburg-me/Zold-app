@@ -424,16 +424,16 @@ await check("a payer, who may manage invoices, cannot change the payout IBAN", a
   assert.equal(ibanOf(), PAYOUT);
 });
 await check("a payer still saves the rest of the profile when the IBAN is unchanged", async () => {
-  const r = await call("PATCH", "/api/orgs/org_iban/invoicing/profile", "u_payer", { footerNote: "Danke", bank: { iban: "de89 3704 0044 0532 0130 00" } });
+  const r = await call("PATCH", "/api/orgs/org_iban/invoicing/profile", "u_payer", { paymentTermsNote: "Danke", bank: { iban: "de89 3704 0044 0532 0130 00" } });
   assert.equal(r.status, 200, JSON.stringify(r.data));
-  assert.equal(store.findOrganisation("org_iban")!.invoicing?.footerNote, "Danke");
+  assert.equal(store.findOrganisation("org_iban")!.invoicing?.paymentTermsNote, "Danke");
   assert.equal(ibanOf(), PAYOUT);
 });
 await check("an owner without a fresh passkey approval cannot change it, and nothing else in the request is saved", async () => {
-  const r = await call("PATCH", "/api/orgs/org_iban/invoicing/profile", "u_owner", { footerNote: "changed", bank: { iban: OTHER } });
+  const r = await call("PATCH", "/api/orgs/org_iban/invoicing/profile", "u_owner", { paymentTermsNote: "changed", bank: { iban: OTHER } });
   assert.equal(r.status, 401, JSON.stringify(r.data));
   assert.equal(ibanOf(), PAYOUT);
-  assert.equal(store.findOrganisation("org_iban")!.invoicing?.footerNote, "Danke");
+  assert.equal(store.findOrganisation("org_iban")!.invoicing?.paymentTermsNote, "Danke");
 });
 await check("an admin with no passkey cannot change it", async () => {
   const r = await call("PATCH", "/api/orgs/org_iban/invoicing/profile", "u_admin", { bank: { iban: OTHER } });

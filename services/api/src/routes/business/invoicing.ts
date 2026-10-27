@@ -104,8 +104,8 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
    * money, so changing it takes an owner or admin and a fresh passkey
    * approval, and is audited with the old and new last four characters. Who
    * the issuer is (VAT ID, tax and register numbers, director) takes
-   * org.update, as on the business profile. The rest needs only
-   * invoices.manage.
+   * org.update, as on the business profile, and so does a change to the
+   * footer or custom fields. The rest needs only invoices.manage.
    */
   r.patch("/:orgId/invoicing/profile", wrap(async (req, res) => {
     const ctx = ctxOf(req, res);
@@ -142,6 +142,23 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
     for (const k of ["paymentTermsNote", "footerNote"] as const) {
       if (typeof b[k] === "string") next[k] = b[k].trim() || undefined;
     }
+    if (Array.isArray(b.customFields)) {
+      next.customFields = b.customFields
+        .slice(0, 12)
+        .map((f: Record<string, unknown>) => ({
+          label: String(f.label ?? "").trim().slice(0, 60),
+          value: String(f.value ?? "").trim().slice(0, 200),
+        }))
+        .filter((f: { label: string }) => f.label);
+    }
+    // Free text printed on every invoice can pass for an identity line, so a
+    // change to it takes org.update like the identity itself. Settings sends
+    // the footer on every save: an unchanged one is let through.
+    const stored = ctx.org.invoicing;
+    const printsChanged =
+      ("footerNote" in next && next.footerNote !== (stored?.footerNote ?? undefined)) ||
+      ("customFields" in next && JSON.stringify(next.customFields) !== JSON.stringify(stored?.customFields ?? []));
+    if (printsChanged && !requirePermission(ctx, res, "org.update")) return;
     if (typeof b.paymentTermsDays === "number" && b.paymentTermsDays >= 0) {
       next.paymentTermsDays = Math.round(b.paymentTermsDays);
     }
@@ -195,15 +212,6 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
       } catch (err) {
         return res.status(400).json({ error: redactedMessage(err), field: "customReasons" });
       }
-    }
-    if (Array.isArray(b.customFields)) {
-      next.customFields = b.customFields
-        .slice(0, 12)
-        .map((f: Record<string, unknown>) => ({
-          label: String(f.label ?? "").trim().slice(0, 60),
-          value: String(f.value ?? "").trim().slice(0, 200),
-        }))
-        .filter((f: { label: string }) => f.label);
     }
 
     const org = store.updateOrganisation(ctx.org.id, {

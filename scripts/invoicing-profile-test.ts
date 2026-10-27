@@ -222,7 +222,7 @@ await check("a payer, who may manage invoices but not the organisation, cannot e
   assert.equal(store.findOrganisation("org_ga")!.invoicing?.vatId, "GA-NIF 123456 X");
 });
 
-await check("nor rewrite the issuer's identity through the invoicing profile, though the rest of it saves", async () => {
+await check("nor rewrite the issuer's identity, footer or custom fields through the invoicing profile, though the rest of it saves", async () => {
   const r = await call("PATCH", "/api/orgs/org_ga/invoicing/profile", "u_payer", {
     vatId: "GA-NIF 999999 Z", taxNumber: "RCCM 2099 B 9", registerCourt: "Elsewhere", registerNumber: "9", managingDirector: "Mallory",
   });
@@ -230,8 +230,16 @@ await check("nor rewrite the issuer's identity through the invoicing profile, th
   const inv = store.findOrganisation("org_ga")!.invoicing!;
   assert.equal(inv.vatId, "GA-NIF 123456 X");
   assert.equal(inv.managingDirector, "Ada Mba");
-  const ok = await call("PATCH", "/api/orgs/org_ga/invoicing/profile", "u_payer", { footerNote: "Thank you" });
+  const footer = await call("PATCH", "/api/orgs/org_ga/invoicing/profile", "u_payer", { footerNote: "VAT ID DE999999999" });
+  assert.equal(footer.status, 403, JSON.stringify(footer.data));
+  const fields = await call("PATCH", "/api/orgs/org_ga/invoicing/profile", "u_payer", { customFields: [{ label: "VAT ID", value: "DE999999999" }] });
+  assert.equal(fields.status, 403, JSON.stringify(fields.data));
+  assert.equal(inv.footerNote, store.findOrganisation("org_ga")!.invoicing!.footerNote);
+  assert.equal(store.findOrganisation("org_ga")!.invoicing!.customFields, undefined);
+  // Settings sends the footer on every save: unchanged, it does not block the rest.
+  const ok = await call("PATCH", "/api/orgs/org_ga/invoicing/profile", "u_payer", { footerNote: inv.footerNote ?? "", paymentTermsNote: "Net 14" });
   assert.equal(ok.status, 200, JSON.stringify(ok.data));
+  assert.equal(store.findOrganisation("org_ga")!.invoicing!.paymentTermsNote, "Net 14");
 });
 
 await check("registration text is one bounded line", async () => {
