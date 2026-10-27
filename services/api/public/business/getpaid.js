@@ -12,7 +12,6 @@ import { META, RENDER } from "./views.js";
 
 const MAKES_LINKS = new Set(["owner", "admin", "payer"]); // invoices.manage
 const EDITS_PAGE = new Set(["owner", "admin"]); // org.update
-const MAKES_LINKS = new Set(["owner", "admin", "payer"]); // invoices.manage
 const TABS = [["open", "Open"], ["paid", "Paid"], ["all", "All"]];
 const DAY_MS = 86400000;
 

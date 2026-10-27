@@ -296,6 +296,7 @@ await check("an admin's link then pays into the account's Safe under the company
   const crypto = await call("POST", "/api/orgs/org_co/payment-requests", { amountEur: 50, methods: ["crypto"] }, "u_admin");
   assert.equal(crypto.status, 409, JSON.stringify(crypto.body));
   assert.match(crypto.body.error, /bank transfer only/);
+  assert.equal((await call("POST", "/api/orgs/org_co/payment-requests", { amountEur: 50, methods: [1] }, "u_admin")).status, 400, "a malformed method is a bad request, not a refusal");
   // Out again: the checks below count the company's links from here.
   store.paymentRequests.splice(i, 1);
 });

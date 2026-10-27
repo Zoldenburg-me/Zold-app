@@ -54,7 +54,8 @@ export function createPaymentLinkRoutes(deps: OrgRoutes): express.Router {
       // caller's own account is not the one being paid, so it does not decide.
       const allowed = linkMethods(payee, user);
       const named: unknown[] = Array.isArray(req.body?.methods) ? req.body.methods : allowed;
-      const refused = named.find((m) => !allowed.includes(m as never));
+      // An unknown method is validateCreate's 400; a known one this link may not take is ours.
+      const refused = named.find((m) => (m === "crypto" || m === "bank") && !allowed.includes(m));
       if (refused !== undefined && payee.id !== user.id) {
         throw new PaymentRequestError(`a link you make for ${ctx.org.name} is paid by bank transfer only, as its payment page is`, 409);
       }
