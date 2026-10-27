@@ -507,6 +507,12 @@ export function paidEur(r: PaymentRequest): number {
   return Math.round(r.payments.reduce((s, p) => s + p.amountEur, 0) * 100) / 100;
 }
 
+/** What a fixed-amount request still asks for: what its crypto quote and bank
+ *  QR show after a partial payment. Undefined for an open amount. */
+export function outstandingEur(r: PaymentRequest): number | undefined {
+  return r.amountEur === undefined ? undefined : Math.max(0, Math.round((r.amountEur - paidEur(r)) * 100) / 100);
+}
+
 /**
  * Record a payment. Idempotent on `ref`. The same money seen through two
  * lenses — our own PAID transfer and the Monerium issue order it produced at
@@ -674,7 +680,7 @@ export function publicPaymentRequest(
     handle,
     ...(ctx.payeeName ? { displayName: ctx.payeeName } : shownName ? { displayName: shownName } : {}),
     state,
-    ...(r.amountEur !== undefined ? { amountEur: r.amountEur, outstandingEur: Math.max(0, Math.round((r.amountEur - paid) * 100) / 100) } : {}),
+    ...(r.amountEur !== undefined ? { amountEur: r.amountEur, outstandingEur: outstandingEur(r) } : {}),
     paidEur: paid,
     currency: "EUR",
     ...(r.description ? { description: r.description } : {}),

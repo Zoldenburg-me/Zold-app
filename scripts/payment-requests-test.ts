@@ -696,10 +696,14 @@ try {
   await pollCryptoDepositsOnce();
   let r3 = store.findPaymentRequest(part.body.id)!;
   check("60% of the amount is a partial payment and the link stays open for the rest", r3.state === "OPEN" && r3.payments[0]?.kind === "partial" && r3.payments[0].amountEur === 30, JSON.stringify(r3.payments));
-  await mintUsdc(owner, Math.round(q50 * 0.4 * 1e6) / 1e6);
+  const rest = await call("GET", `/api/pay/miriam/${part.body.code}`);
+  const restUsdc = rest.body.methods.crypto?.amountUsdc as number;
+  check("the page then quotes the €20 still owed, not the whole €50 again",
+    rest.body.outstandingEur === 20 && restUsdc > 0 && restUsdc < q50 * 0.45, JSON.stringify(rest.body.methods.crypto));
+  await mintUsdc(owner, restUsdc);
   await pollCryptoDepositsOnce();
   r3 = store.findPaymentRequest(part.body.id)!;
-  check("the remaining 40% closes it", r3.state === "PAID" && r3.payments.length === 2, JSON.stringify(r3.payments));
+  check("paying what the page shows closes it at €50, not over", r3.state === "PAID" && r3.payments.length === 2 && pr.paidEur(r3) === 50, JSON.stringify(r3.payments));
 
   console.log("4/4 bank side and housekeeping…");
   const bankReq = await call("POST", `/api/users/${miriam.id}/payment-requests`, { amountEur: 40, methods: ["bank"] }, miriam.id);

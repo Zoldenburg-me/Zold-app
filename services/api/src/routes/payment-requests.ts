@@ -40,7 +40,7 @@ import {
   normaliseCode,
   ownerPaymentRequest,
   PaymentRequestError,
-  paidEur,
+  outstandingEur,
   publicPaymentRequest,
   quoteCrypto,
   validateCreate,
@@ -115,7 +115,7 @@ async function liveMid() {
  * says crypto cannot be quoted right now, which is the truth.
  */
 export async function ensureQuote(r: PaymentRequest, amountEur: number | undefined): Promise<{ request: PaymentRequest; quote?: CryptoQuote }> {
-  if (!r.methods.includes("crypto") || amountEur === undefined || effectiveState(r) !== "OPEN") return { request: r };
+  if (!r.methods.includes("crypto") || !(amountEur && amountEur > 0) || effectiveState(r) !== "OPEN") return { request: r };
   const existing = currentQuote(r, amountEur);
   if (existing) return { request: r, quote: existing };
   let mid;
@@ -443,7 +443,9 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
     wrap(async (req, res) => {
       const hit = resolvePublic(req, res);
       if (!hit) return;
-      const { request, quote } = await ensureQuote(hit.r, hit.r.amountEur);
+      // After a partial payment the page quotes what is still owed, not the
+      // whole amount again, or a payer who pays what it shows overpays.
+      const { request, quote } = await ensureQuote(hit.r, outstandingEur(hit.r));
       const ctx = await payerContext(req, request, hit.user, quote);
       const user = store.findUser(hit.user.id) ?? hit.user;
       res.json(publicPaymentRequest(request, user, { ...ctx, handle: hit.handle }));
@@ -483,7 +485,7 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
         chainId: CHAIN_ID, token: payToken(), baseUrl: baseUrlFor(req), payeeName: payeeNameFor(hit.r), cryptoLive: false, handle: hit.handle,
       }).methods.bank;
       if (!bank) return res.status(404).json({ error: "this request does not take bank transfer" });
-      const due = hit.r.amountEur === undefined ? undefined : Math.round((hit.r.amountEur - paidEur(hit.r)) * 100) / 100;
+      const due = outstandingEur(hit.r);
       let payload: string;
       try {
         payload = epcQrPayload({ name: bank.holder, iban: bank.iban, bic: bank.bic, amountEur: due && due > 0 ? due : undefined, remittance: bank.reference });

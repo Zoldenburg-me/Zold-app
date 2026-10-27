@@ -99,6 +99,8 @@ export function ZoldPay({ ui, orderId, checkoutToken, shop, apiBase }) {
   const c = r.methods?.crypto;
   const eur = typeof r.amountEur === "number" ? `€${r.amountEur.toFixed(2)}` : "";
   const name = r.orderName ? `Order ${r.orderName}` : "Your order";
+  // After a partial payment the crypto quote is for what is still owed.
+  const due = typeof r.outstandingEur === "number" ? `€${r.outstandingEur.toFixed(2)}` : eur;
 
   if (r.state === "PAID") {
     return (
@@ -128,7 +130,7 @@ export function ZoldPay({ ui, orderId, checkoutToken, shop, apiBase }) {
 
   return (
     <BlockStack spacing="base" border="base" cornerRadius="base" padding="base">
-      <Heading level={2}>{name} — pay {eur} with crypto</Heading>
+      <Heading level={2}>{name} — pay {due} with crypto</Heading>
       <Text>
         Send <Text emphasis="bold">{usdc ? `${usdc} USDC` : "USDC"}</Text> on {c.token?.chainName ?? `chain ${c.chainId}`} to the address below. The order is marked paid the moment the transfer is seen.
         {c.allowanceBps ? ` The USDC figure includes a ${(c.allowanceBps / 100).toFixed(2)}% rate allowance.` : ""}

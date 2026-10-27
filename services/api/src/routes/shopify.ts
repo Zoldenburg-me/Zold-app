@@ -51,7 +51,7 @@ import { store, type User } from "../store.js";
 import { EncryptionUnavailableError } from "../crypto-at-rest.js";
 import { dataEncryptionProblem } from "../config/data-keys.js";
 import { SECRETS } from "../stored-secrets.js";
-import { MAX_REQUEST_EUR, displayCode, effectiveState, normaliseCode, type PaymentRequest } from "../payment-requests.js";
+import { MAX_REQUEST_EUR, displayCode, effectiveState, normaliseCode, outstandingEur, type PaymentRequest } from "../payment-requests.js";
 import { baseUrlFor, createPaymentRequest, ensureQuote, payerContext } from "./payment-requests.js";
 import { publicPaymentRequest } from "../payment-requests.js";
 import { requirePermission, resolveOrg, type SessionResolver } from "./org-context.js";
@@ -776,7 +776,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       const t = typeof req.query.t === "string" ? req.query.t : "";
       const proven = Boolean(r?.source.checkoutTokenHash && t && sameHex(sha256Hex(t), r.source.checkoutTokenHash));
       if (!r || !user || !proven) return res.status(404).json({ error: "no payment request for this order yet", pending: true });
-      const { request, quote } = await ensureQuote(r, r.amountEur);
+      const { request, quote } = await ensureQuote(r, outstandingEur(r));
       const { code: _code, returnUrl: _ret, cancelUrl: _cancel, payments, ...payer } =
         publicPaymentRequest(request, user, await payerContext(req, request, user, quote));
       res.json({
