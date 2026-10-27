@@ -29,6 +29,7 @@ import { attributeMoneriumOrder, attributeMoneriumOrderToInvoice } from "../rout
 import { noteMoneriumIssue, writeStatementLines } from "../bookkeeping/writer.js";
 import { moneriumOrderProcessed } from "../domain/monerium-order.js";
 import { describeCause } from "../http/log-cause.js";
+import { can } from "../domain/segments.js";
 
 /**
  * The bank facts of a processed issue order on our chain, for the statement
@@ -207,6 +208,30 @@ export function releaseIbanFromOtherUsers(iban: string, keepUserId: string): voi
  * and an approved one keeps its original approval record.
  */
 export const mayApproveOnIban = (user: User) => user.kycStatus === "pending";
+
+/**
+ * Why Zold must not link a Safe to Monerium or ask for an IBAN for this
+ * account, else undefined: its segment has no bank account (the app's
+ * `bankOffered()`), Monerium refused or is still reviewing it, or a pending
+ * account has no Monerium connection of its own. Checked before any Monerium
+ * call or passkey ceremony; the app hiding the button is not the check.
+ */
+export function ibanActivationRefusal(user: User): { error: string; code: string } | undefined {
+  if (!can(user.segment?.value ?? "EU_FULL", "monerium")) {
+    return { error: "a bank account is not part of your account", code: "IBAN_NOT_OFFERED" };
+  }
+  if (user.kycStatus === "approved") return undefined;
+  if (user.kycStatus !== "pending") {
+    return { error: "we can’t open a bank account for this account", code: "IBAN_NOT_OFFERED" };
+  }
+  if (!hasOwnMoneriumCredentials(user)) {
+    return {
+      error: "connect a Monerium account first — sign in with Monerium or add your Monerium API keys — before activating an IBAN",
+      code: "MONERIUM_NOT_CONNECTED",
+    };
+  }
+  return undefined;
+}
 
 /** Mark the newest unconfirmed move of `iban` on this user as confirmed. */
 export function confirmedMoves(user: User, iban: string): User["moneriumIbanMoves"] {

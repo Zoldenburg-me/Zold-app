@@ -48,6 +48,7 @@ import { normalizeIban } from "../sepa.js";
 import {
   applyIbanBinding,
   confirmedMoves,
+  ibanActivationRefusal,
   mayApproveOnIban,
   paysInto,
   releaseIbanFromOtherUsers,
@@ -544,6 +545,8 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       if (!user.passkey?.publicKey || !user.passkeySafe || user.passkeySafe.status !== "active") {
         return res.status(409).json({ error: "active passkey Safe required before Monerium address linking" });
       }
+      const refused = ibanActivationRefusal(user);
+      if (refused) return res.status(409).json(refused);
       // Fail here, before the passkey ceremony, if no Monerium access exists —
       // a ceremony whose submit is doomed just burns the user's approval.
       // No access at all is the account's state, not a server fault: a 409
@@ -602,6 +605,8 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       if (custodyBlocked) {
         return res.status(409).json({ error: custodyBlocked });
       }
+      const refused = ibanActivationRefusal(user);
+      if (refused) return res.status(409).json(refused);
       const { accessToken, viaApp } = await moneriumLinkAccessToken(user);
 
       if (!(await isDeployed(user.address))) {
@@ -860,6 +865,8 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       if (!hasActiveSafe(user)) {
         return res.status(409).json({ error: "active passkey Safe required before moving an IBAN to it" });
       }
+      const refused = ibanActivationRefusal(user);
+      if (refused) return res.status(409).json(refused);
       const safeUser = user;
 
       // Checked before the ceremony is consumed, so a typo costs no approval.
@@ -1105,8 +1112,9 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       }
       const profileId = pick.profile.id;
       // ADDRESS-MATCHED ONLY, for the reason activate gives: any other IBAN in
-      // the snapshot is somebody's money routing, not this account's.
-      const ownIban = ownIbanOf(verified.ibans, user.address, profileId);
+      // the snapshot is somebody's money routing, not this account's. And only
+      // for an account activation would serve: these keys are its connection.
+      const ownIban = ibanActivationRefusal(user)?.code === "IBAN_NOT_OFFERED" ? "" : ownIbanOf(verified.ibans, user.address, profileId);
       // A stored IBAN stays only if this login lists it on the picked profile.
       const keepsIban = !ownIban && user.funding?.status === "active" && storedIbanOnProfile(user, verified.ibans, profileId);
       const dropIban = Boolean(user.iban) && !ownIban && !keepsIban;

@@ -19,7 +19,7 @@
 import "./_test-env.js";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -53,7 +53,7 @@ const { initStore, store } = await import("../services/api/src/store.js");
 const { SECRETS } = await import("../services/api/src/stored-secrets.js");
 const { publicUser } = await import("../services/api/src/users/public-user.js");
 const { MONERIUM } = await import("../services/api/src/config.js");
-const { verifyIbanBinding, applyIbanBinding, refreshPendingIban } = await import("../services/api/src/adapters/monerium-sandbox.js");
+const { verifyIbanBinding, applyIbanBinding, refreshPendingIban, ibanActivationRefusal } = await import("../services/api/src/adapters/monerium-sandbox.js");
 const { accountBankOf } = await import("../services/api/src/routes/business/shared.js");
 
 let passed = 0;
@@ -240,6 +240,33 @@ await check("several IBANs and no move asked for, or an account never approved: 
   store.updateUser(p.id, { iban: "", kycStatus: "pending", funding: { mode: "sandbox", status: "iban_pending", moneriumProfileId: PROFILE } });
   ibansOf.set(p.token, [listed(p.iban, OTHER)]);
   assert.equal((await refreshPendingIban(store.findUser(p.id)!)).moneriumIbanElsewhere, undefined, "activation offers the move for a new account");
+});
+
+console.log("\nActivation gate");
+
+await check("only an approved account, or a pending one with its own Monerium connection and a bank segment, may activate an IBAN", () => {
+  const u = { ...store.findUser(addUser(15).id)!, iban: "", kycStatus: "pending" as const };
+  assert.equal(ibanActivationRefusal(u), undefined, "pending, connected, no segment (EU_FULL)");
+  assert.equal(ibanActivationRefusal({ ...u, kycStatus: "approved" }), undefined);
+  for (const kycStatus of ["rejected", "manual_review"] as const) {
+    assert.equal(ibanActivationRefusal({ ...u, kycStatus })?.code, "IBAN_NOT_OFFERED", kycStatus);
+  }
+  const wallet = { ...u, segment: { value: "WALLET_ONLY" as const, reasonCode: "test", decidedAt: now, decidedBy: "system" as const } };
+  assert.equal(ibanActivationRefusal(wallet)?.code, "IBAN_NOT_OFFERED", "wallet-only, though pending and connected");
+  assert.equal(ibanActivationRefusal({ ...wallet, kycStatus: "approved" })?.code, "IBAN_NOT_OFFERED", "wallet-only, though approved");
+  assert.equal(ibanActivationRefusal({ ...u, monerium: undefined })?.code, "MONERIUM_NOT_CONNECTED", "pending with no connection of its own");
+});
+
+await check("start, activate and move-iban ask the gate before their first Monerium call", () => {
+  const src = readFileSync(new URL("../services/api/src/routes/monerium.ts", import.meta.url), "utf8");
+  for (const route of ["link-signature/start", "activate", "move-iban"]) {
+    const at = src.indexOf(`"/users/:id/monerium/${route}"`);
+    assert.ok(at > 0, route);
+    const body = src.slice(at, src.indexOf("router.post(", at));
+    const gate = body.indexOf("ibanActivationRefusal(user)");
+    assert.ok(gate > 0, `${route} calls the gate`);
+    assert.ok(gate < body.indexOf("moneriumLinkAccessToken("), `${route} refuses before asking Monerium`);
+  }
 });
 
 console.log("\nOrganisation accounts");
