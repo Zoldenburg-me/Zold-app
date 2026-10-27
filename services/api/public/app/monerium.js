@@ -32,27 +32,26 @@ function ibanMovedAwayHtml(id) {
     <p class="z-err" id="${esc(id)}-err" role="alert" hidden></p>`;
 }
 
-/* ---------- Monerium: your own API keys ---------- */
+/* ---------- Monerium: sign in at Monerium, or your own API keys ----------
+   The one Monerium screen a company login may open (PH_COMPANY_APP), so it
+   offers the sign-in too, not only the developer keys. */
 function renderMoneriumScreen() {
   const el = $("m-mon-body");
   const u = user || {};
   const m = u.monerium;
   const keys = m?.method === "api_keys" ? m.apiKeys : null;
+  const oauth = m?.method === "oauth";
   const env = caps.moneriumEnvironment || "sandbox";
   const portal = env === "production" ? "monerium.app" : env === "sandbox" ? "monerium.dev" : caps.moneriumHost;
-  $("m-mon-lede").textContent =
-    `Connect the API keys of your own Monerium account. This deployment talks to Monerium ${env} (${caps.moneriumHost}), so the keys must come from an app created at ${portal} — keys from the other environment are refused as a wrong secret.`;
+  $("m-mon-lede").textContent = oauth
+    ? "Connected by signing in at Monerium."
+    : keys || !caps.moneriumOAuth
+      ? `Connect the API keys of your own Monerium account. This deployment talks to Monerium ${env} (${caps.moneriumHost}), so the keys must come from an app created at ${portal} — keys from the other environment are refused as a wrong secret.`
+      : "Monerium issues your IBAN. Sign in or sign up there, then come back here.";
   const row = (k, v) => `<div class="m-row"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`;
   const when = (iso) => { const d = new Date(iso || ""); return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString(); };
 
-  if (!caps.moneriumApiKeys) {
-    el.innerHTML = `
-      <div class="m-rows">${row("Status", "Unavailable")}</div>
-      <div class="m-lede" style="font-size:13px;margin-top:16px">This deployment has no data encryption key (DATA_ENCRYPTION_KEYS), so it cannot store a client secret. It refuses rather than keep one in plaintext.</div>`;
-    return;
-  }
-
-  if (keys) {
+  if (keys || oauth) {
     const funding = u.funding || {};
     // Connected and pending still activates: issuing the IBAN is what
     // approves it (issueAppIban). A company login has no Home to do it. Not
@@ -66,29 +65,36 @@ function renderMoneriumScreen() {
     el.innerHTML = `
       <div class="m-rows">
         ${row("Status", "Connected")}
-        ${row("Client id", keys.clientId)}
+        ${keys ? `${row("Client id", keys.clientId)}
         ${keys.label ? row("Label", keys.label) : ""}
         ${keys.accountEmail ? row("Monerium account", keys.accountEmail) : ""}
         ${row("Environment", `${keys.environment} · ${keys.host}`)}
         ${row("Verified", when(keys.verifiedAt))}
-        ${m.profileId ? row("Profile", m.profileId) : ""}
+        ${m.profileId ? row("Profile", m.profileId) : ""}` : moneriumConnectedRows(u).map((r) => row(r.key, r.value)).join("")}
         ${row("IBAN", u.iban || (movedAway ? "Moved to another app" : "Not issued yet"))}
       </div>
       <div class="m-lede" style="font-size:13px;margin-top:16px">${esc(movedAway
         ? `${IBAN_MOVED_AWAY.title} ${IBAN_MOVED_AWAY.sub}`
-        : funding.detail || "Deposits to this account and SEPA payouts from it run on these keys.")}</div>
+        : funding.detail || `Deposits to this account and SEPA payouts from it run on ${keys ? "these keys" : "this connection"}.`)}</div>
       ${needsIban ? `<button class="m-cta" id="m-mon-activate" style="margin-top:16px">${movedAway ? IBAN_MOVED_AWAY.action : "Get your IBAN"}</button>` : ""}
       <button class="m-link" id="m-mon-refresh" style="margin-top:12px">Refresh accounts</button>
-      <button class="m-link" id="m-mon-remove" style="margin-top:12px">Remove keys</button>
+      ${keys ? `<button class="m-link" id="m-mon-remove" style="margin-top:12px">Remove keys</button>` : ""}
       <div class="m-err hidden" role="alert" id="m-mon-err" style="margin-top:12px"></div>
-      <div class="m-lede" style="font-size:12px;margin-top:20px;color:var(--m-dim)">
+      ${keys ? `<div class="m-lede" style="font-size:12px;margin-top:20px;color:var(--m-dim)">
         The secret was checked against Monerium once and stored encrypted. It is never shown again, not even to you —
         to rotate it, remove the keys and connect the new pair.
-      </div>`;
+      </div>` : ""}`;
     const act = $("m-mon-activate");
     if (act) act.onclick = async () => {
+      if (act.disabled) return;
       clearErr("m-mon-err");
-      try { await issueAppIban(); mobileNav("monerium"); } catch (e) { showErr("m-mon-err", e); }
+      act.disabled = true;
+      try {
+        await issueAppIban();
+        // A company goes on to connect that IBAN on Business → Accounts.
+        if (u.accountType === "company" && kycApproved(user)) return obFinish("accounts");
+        mobileNav("monerium");
+      } catch (e) { showErr("m-mon-err", e); act.disabled = false; }
     };
     $("m-mon-refresh").onclick = async () => {
       clearErr("m-mon-err");
@@ -99,7 +105,7 @@ function renderMoneriumScreen() {
         mobileNav("monerium");
       } catch (e) { showErr("m-mon-err", e); }
     };
-    $("m-mon-remove").onclick = async () => {
+    if (keys) $("m-mon-remove").onclick = async () => {
       clearErr("m-mon-err");
       if (!confirm("Remove the Monerium keys from this account? Deposits and payouts on it pause until keys are connected again.")) return;
       try {
@@ -110,8 +116,23 @@ function renderMoneriumScreen() {
     return;
   }
 
-  el.innerHTML = `
-    <div class="m-field"><label>Client id</label><input id="m-mon-id" autocomplete="off" spellcheck="false" placeholder="from your Monerium app"></div>
+  // Not connected: the sign-in first, the developer keys under it.
+  const signIn = caps.moneriumOAuth ? `
+    ${u.moneriumRefusal ? `<div class="m-note warn" style="font-size:13px">${esc(u.moneriumRefusal.error)}</div>` : ""}
+    <div class="m-note" style="font-size:13px;margin-top:12px">${u.accountType === "company"
+      ? "When asked, choose Company. A personal profile can’t be used for a company account."
+      : "When asked, choose Personal. A company profile can’t be used for a personal account."}</div>
+    <button class="m-cta" id="m-mon-oauth" style="margin-top:16px">Continue with Monerium</button>` : "";
+  if (!caps.moneriumApiKeys) {
+    el.innerHTML = signIn ? `${signIn}<div class="m-err hidden" role="alert" id="m-mon-err" style="margin-top:12px"></div>` : `
+      <div class="m-rows">${row("Status", "Unavailable")}</div>
+      <div class="m-lede" style="font-size:13px;margin-top:16px">This deployment has no data encryption key (DATA_ENCRYPTION_KEYS), so it cannot store a client secret. It refuses rather than keep one in plaintext.</div>`;
+    if (signIn) bindMoneriumSignIn();
+    return;
+  }
+  el.innerHTML = `${signIn}
+    ${signIn ? `<div class="m-h2" style="margin-top:32px">Developer option: your own API keys</div>` : ""}
+    <div class="m-field"${signIn ? ' style="margin-top:12px"' : ""}><label>Client id</label><input id="m-mon-id" autocomplete="off" spellcheck="false" placeholder="from your Monerium app"></div>
     <div class="m-field" style="margin-top:12px"><label>Client secret</label><input id="m-mon-secret" type="password" autocomplete="off" placeholder="shown once when the app was created"></div>
     <div class="m-field" style="margin-top:12px"><label>Label (optional)</label><input id="m-mon-label" placeholder="e.g. my sandbox app"></div>
     <button class="m-cta" id="m-mon-connect" style="margin-top:16px">Verify and connect</button>
@@ -120,9 +141,21 @@ function renderMoneriumScreen() {
       Zold verifies the pair against Monerium before storing anything, encrypts the secret at rest and never returns it.
       Your Monerium account, its profile and its IBANs stay yours; Zold links your account address under that profile and asks
       Monerium for an IBAN bound to it. Deposits and SEPA payouts on this account then run on your keys.
-      ${m?.method === "oauth" ? "This account is connected by OAuth today; connecting keys replaces that connection." : ""}
     </div>`;
   $("m-mon-connect").onclick = connectMoneriumKeys;
+  if (signIn) bindMoneriumSignIn();
+}
+
+/* startMoneriumConnect lives in app/onboarding.js; this runs on a click,
+   after every script has loaded. */
+function bindMoneriumSignIn() {
+  const b = $("m-mon-oauth");
+  b.onclick = async () => {
+    clearErr("m-mon-err");
+    b.disabled = true;
+    // On its way to Monerium: stays off, so a second click mints no second state.
+    if (!(await startMoneriumConnect("m-mon-err"))) b.disabled = false;
+  };
 }
 
 async function connectMoneriumKeys() {
