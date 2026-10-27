@@ -3,9 +3,9 @@
  * its payment links, its public payment page, and the other ways in.
  *
  * A payment link pays into the Safe of the member whose account backs the
- * euro account, so only that member can make one (the API answers
- * NOT_THE_PAYEE to anyone else). Everyone else sees the button switched off
- * with that reason beside it, not a button that fails.
+ * euro account, whoever makes it: an owner, admin or payer (invoices.manage).
+ * Where the API would refuse (no account, no page, no way to get paid), the
+ * button is switched off with the reason beside it, not a button that fails.
  */
 import { $, Z, api, cap, day, esc, eur, me, org, view } from "./core.js";
 import { META, RENDER } from "./views.js";

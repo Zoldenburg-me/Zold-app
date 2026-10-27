@@ -34,6 +34,7 @@ const { createOrgRouter } = await import("../services/api/src/routes/orgs.js");
 const { createBusinessRouter } = await import("../services/api/src/routes/business.js");
 const { createPaymentRequestRouter } = await import("../services/api/src/routes/payment-requests.js");
 const { createPaymentPageRouter } = await import("../services/api/src/routes/payment-page.js");
+const { linkPayee } = await import("../services/api/src/routes/business/invoice-pay-link.js");
 const { accountIsSpendable } = await import("../services/api/src/domain/accounts.js");
 
 let failed = 0;
@@ -144,10 +145,20 @@ await check("a company whose euro account is not open is told that, not that the
   assert.equal(r.body.code, "ACCOUNT_NOT_OPEN");
   assert.doesNotMatch(r.body.error, /not yours/);
 });
-await check("only the member whose Safe backs the account can make a company's link", async () => {
+await check("an admin's link waits for the company page: never under the account holder's personal page", async () => {
+  const list = await call("GET", "/api/orgs/org_co/payment-requests", undefined, "u_admin");
+  assert.equal(list.body.payLink.allowed, false);
+  assert.equal(list.body.payLink.code, "NO_PAGE");
+  assert.match(list.body.payLink.reason, /opens under its company payment page, which isn’t set up yet/);
   const r = await call("POST", "/api/orgs/org_co/payment-requests", { amountEur: 50, methods: ["bank"] }, "u_admin");
-  assert.equal(r.status, 403);
-  assert.equal(r.body.code, "NOT_THE_PAYEE");
+  assert.equal(r.status, 409, JSON.stringify(r.body));
+  assert.equal(r.body.code, "NO_PAGE");
+});
+await check("a viewer still cannot make one, and nobody else's link reaches a personal account", async () => {
+  const v = await call("POST", "/api/orgs/org_co/payment-requests", { amountEur: 50, methods: ["bank"] }, "u_view");
+  assert.equal(v.status, 403);
+  assert.equal(linkPayee(store.findOrganisation("org_p")!, store.findUser("u_admin")!), undefined, "a personal org pays only its own owner");
+  assert.equal(linkPayee(store.findOrganisation("org_p")!, store.findUser("u_co")!)?.id, "u_co");
 });
 await check("with no company page and no page of the payee's own, Get paid offers no link and says to set up the page", async () => {
   const page = store.findUser("u_co")!.paymentPage;
@@ -269,6 +280,47 @@ await check("once the company has a page, a link made in the console carries its
   assert.equal(pub.body.handle, "lindnerholzbau");
   assert.equal(pub.body.displayName, "Lindner Holzbau GmbH");
   assert.equal(pub.body.methods.bank.holder, "Lindner Holzbau GmbH");
+});
+await check("an admin's link then pays into the account's Safe under the company page, counted against the admin", async () => {
+  const r = await call("POST", "/api/orgs/org_co/payment-requests", { amountEur: 50 }, "u_admin");
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  const i = store.paymentRequests.findIndex((p) => p.id === r.body.id);
+  const link = store.paymentRequests[i];
+  assert.equal(link.userId, "u_co", "the member whose Safe backs acc_co");
+  assert.equal(link.createdBy, "u_admin");
+  assert.equal(link.handle, "lindnerholzbau");
+  assert.deepEqual(link.methods, ["crypto", "bank"], "no methods named: the holder's, not the admin's (who has none)");
+  assert.equal(r.body.createdBy, undefined, "not in the owner projection");
+  // Out again: the checks below count the company's links from here.
+  store.paymentRequests.splice(i, 1);
+});
+await check("open links count against whoever made them: an admin at the limit cannot use up the holder's", async () => {
+  const { CEILINGS } = await import("../services/api/src/domain/ceilings.js");
+  const far = new Date(Date.now() + 86_400_000).toISOString();
+  const fill = Array.from({ length: CEILINGS.openPaymentRequestsPerUser }, (_, n) => ({
+    id: `fill_${n}`, code: `FILL${n}`, userId: "u_co", orgId: "org_co", createdBy: "u_admin", handle: "lindnerholzbau",
+    currency: "EUR", methods: ["bank"], state: "OPEN", cryptoQuotes: [], payments: [], source: { kind: "app" },
+    expiresAt: far, createdAt: now, updatedAt: now,
+  }));
+  store.paymentRequests.push(...(fill as any));
+  try {
+    const admin = await call("POST", "/api/orgs/org_co/payment-requests", { amountEur: 5, methods: ["bank"] }, "u_admin");
+    assert.equal(admin.status, 409, JSON.stringify(admin.body));
+    const holder = await call("POST", "/api/orgs/org_co/payment-requests", { amountEur: 5, methods: ["bank"] });
+    assert.equal(holder.status, 201, `the holder's own quota is untouched: ${JSON.stringify(holder.body)}`);
+    store.paymentRequests.splice(store.paymentRequests.findIndex((p) => p.id === holder.body.id), 1);
+  } finally {
+    for (const f of fill) store.paymentRequests.splice(store.paymentRequests.findIndex((p) => p.id === f.id), 1);
+  }
+});
+await check("a backer who has left the company is not paid by links others make", async () => {
+  const m = store.membersOf("org_co").find((x) => x.userId === "u_co")!;
+  const was = m.status;
+  (m as any).status = "deactivated";
+  try {
+    assert.equal(linkPayee(store.findOrganisation("org_co")!, store.findUser("u_admin")!), undefined);
+  } finally { (m as any).status = was; }
+  assert.equal(linkPayee(store.findOrganisation("org_co")!, store.findUser("u_admin")!)?.id, "u_co");
 });
 await check("the company page alone is enough: no NO_PAGE once it exists", async () => {
   const page = store.findUser("u_co")!.paymentPage;

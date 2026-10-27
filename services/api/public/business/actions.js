@@ -497,11 +497,10 @@ export const ACTIONS = {
        ${field("d-desc", "What it’s for", 'maxlength="140" placeholder="Deposit, roof Weber…"')}
        ${field("d-amt", "Amount in euros (optional)", 'inputmode="decimal" placeholder="1200.00…"')}`,
       async () => {
-        const { methods } = await api(`/api/users/${me.id}/payment-requests/methods`);
-        const usable = methods.filter((m) => m.available).map((m) => m.method);
-        if (!usable.length) throw new Error(plain(methods.map((m) => m.needs).filter(Boolean).join(" ")) || "No way to get paid is set up on this account yet.");
+        // The server takes every way the company's account can be paid now:
+        // the account may be another member's, so this caller's methods do not decide.
         const amount = $("#d-amt").value.trim().replace(",", ".");
-        const r = await api(`/api/orgs/${org.id}/payment-requests`, { method: "POST", body: { description: $("#d-desc").value, ...(amount ? { amountEur: amount } : {}), methods: usable } });
+        const r = await api(`/api/orgs/${org.id}/payment-requests`, { method: "POST", body: { description: $("#d-desc").value, ...(amount ? { amountEur: amount } : {}) } });
         setTimeout(() => linkDialog("Payment link ready", `Send your customer this link.${typeof r.amountEur === "number" ? ` It asks for ${eur(r.amountEur)}.` : ""} It shows as paid here when the money arrives.`, r.url), 0);
       }, { okLabel: "Create link" });
   },
