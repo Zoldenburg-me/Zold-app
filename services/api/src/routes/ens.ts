@@ -22,7 +22,7 @@ import dns from "node:dns";
 import https from "node:https";
 import net from "node:net";
 import express from "express";
-import { createPublicClient, getAddress, http, isHex, toCoinType, type Address, type Hex } from "viem";
+import { createPublicClient, getAddress, http, isAddress, isHex, toCoinType, type Address, type Hex } from "viem";
 import { mainnet, sepolia } from "viem/chains";
 import { normalize } from "viem/ens";
 import { CHAIN_ID, ENS_GATEWAY, ENS_LOOKUP, PUBLIC_URL } from "../config.js";
@@ -288,6 +288,10 @@ export async function resolveEnsName(raw: string): Promise<EnsResolution> {
     return { ok: false, status: 502, code: "ENS_UNAVAILABLE", error: "the ENS lookup failed — try again" };
   }
   if (!address) return { ok: false, status: 404, code: "NO_ADDRESS", error: `${name} has no address for this network` };
+  // A resolver may answer anything; only an address goes on screen or into a send.
+  if (!isAddress(address, { strict: false })) {
+    return { ok: false, status: 502, code: "ENS_UNAVAILABLE", error: `${name}'s resolver did not answer with an address` };
+  }
   return { ok: true, name, address: getAddress(address) };
 }
 

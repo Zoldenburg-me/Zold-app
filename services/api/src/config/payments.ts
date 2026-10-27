@@ -91,3 +91,11 @@ export const CRYPTO_IN = {
    *  getLogs call; 100,000 Base blocks is about 2.3 days of chain. */
   maxRescanBlocks: BigInt(envNumber("CRYPTO_IN_MAX_RESCAN_BLOCKS", 100_000, { min: 1, integer: true })),
 };
+
+/**
+ * Crypto sends (routes/crypto-sends.ts): off unless CRYPTO_SEND_ENABLED=1.
+ * No crypto send has moved real money yet, and Activity and the books do not
+ * read them; while off the route refuses and the app shows no way in. Read
+ * per call, so it follows the environment as set.
+ */
+export const cryptoSendEnabled = () => process.env.CRYPTO_SEND_ENABLED === "1";

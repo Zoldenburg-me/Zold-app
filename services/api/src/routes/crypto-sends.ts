@@ -15,7 +15,7 @@
 import { randomUUID } from "node:crypto";
 import express from "express";
 import { formatUnits, getAddress, isAddress, parseUnits } from "viem";
-import { CHAIN_ID, ENS_GATEWAY, FX, SECURITY } from "../config.js";
+import { CHAIN_ID, cryptoSendEnabled, ENS_GATEWAY, FX, SECURITY } from "../config.js";
 import { addrs, publicClient } from "../chain.js";
 import { eurPer } from "../rates.js";
 import { usdToken } from "../usd-token.js";
@@ -102,11 +102,14 @@ export function createCryptoSendsRouter({
   usdPerEur = () => eurPer("USD"),
 }: CryptoSendDeps) {
   const router = express.Router();
+  const off = (res: express.Response) =>
+    res.status(503).json({ error: "sending to a crypto wallet is not open on this deployment", code: "CRYPTO_SEND_OFF" });
 
   router.post(
     "/users/:id/crypto-sends",
     wrap(async (req, res) => {
       if (!requireUserSession(req, res, req.params.id)) return;
+      if (!cryptoSendEnabled()) return off(res);
       const user = store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
       if (!requireKycApproved(user, res)) return;
@@ -215,6 +218,7 @@ export function createCryptoSendsRouter({
       const send = store.findCryptoSend(req.params.id);
       if (!send) return res.status(404).json({ error: "send not found" });
       if (!requireUserSession(req, res, send.userId)) return;
+      if (!cryptoSendEnabled()) return off(res);
       if (send.state !== "CREATED") return res.status(409).json({ error: `this send is ${send.state}` });
       if (Date.now() / 1000 > send.deadline) return res.status(410).json({ error: "the approval window closed — start the send again" });
       prunePendingCryptoSends();

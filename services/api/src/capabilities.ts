@@ -7,7 +7,7 @@
  * 3,800-line file.
  */
 import { CHAIN_ID, TURNKEY } from "./config.js";
-import { EMAIL_VERIFICATION, ENS_GATEWAY, ENS_LOOKUP, FORWARDING, HARNESS, MONERIUM, SHOPIFY, TESTNET_FAUCET, moneriumOAuthEnabled, privacyBundleLive } from "./config.js";
+import { EMAIL_VERIFICATION, ENS_GATEWAY, ENS_LOOKUP, FORWARDING, HARNESS, MONERIUM, SHOPIFY, TESTNET_FAUCET, moneriumOAuthEnabled, privacyBundleLive, cryptoSendEnabled } from "./config.js";
 import { moneriumApiKeysAvailable, moneriumEnvironment } from "./adapters/monerium-connection.js";
 import { cashRailOpen } from "./orchestrator.js";
 import { usdLabel } from "./usd-token.js";
@@ -41,6 +41,8 @@ export function capabilities() {
      *  it is switched on and both partners fulfil; otherwise the app draws no
      *  offer and POST /users/:id/privacy-bundle refuses. */
     privacyBundle: privacyBundleLive(),
+    /** May the app offer Send → Crypto wallet? Off unless CRYPTO_SEND_ENABLED. */
+    cryptoSend: cryptoSendEnabled(),
     /** Is a Shopify payments app registered for this deployment? Without one
      *  the dashboard's Shopify card says so instead of offering a connect
      *  button that can only fail. */

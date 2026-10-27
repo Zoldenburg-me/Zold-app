@@ -58,7 +58,7 @@ const run = (code: string) => vm.runInContext(code, ctx);
 
 const flat = (html: string) => html.replace(/\s+/g, " ");
 const ADDR = "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed";
-run(`user = { id: "u1", kycStatus: "approved", iban: "DE89370400440532013000" }; caps = { ...caps, ensLookup: true, chainId: 8453 };
+run(`user = { id: "u1", kycStatus: "approved", iban: "DE89370400440532013000" }; caps = { ...caps, ensLookup: true, chainId: 8453, cryptoSend: true };
   __calls = []; __went = [];
   phGo = (name, arg) => __went.push(name);
   refresh = () => {};
@@ -79,6 +79,14 @@ await t("the Send screen offers the crypto wallet as a real row", () => {
   const html = flat(run(`PH.send.html()`));
   assert.match(html, /href="#send\/wallet"/);
   assert.match(html, /EURe or USDC to an ENS name or 0x address/);
+});
+
+await t("with the switch off, the row is the old soon row and the form does not open", () => {
+  run(`caps = { ...caps, cryptoSend: false }`);
+  const html = flat(run(`PH.send.html()`));
+  assert.doesNotMatch(html, /href="#send\/wallet"/);
+  assert.match(flat(run(`PH["send/wallet"].html()`)), /isn’t available here/);
+  run(`caps = { ...caps, cryptoSend: true }`);
 });
 
 await t("the check screen shows the name, the full address, the network and the amount", () => {

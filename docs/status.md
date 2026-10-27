@@ -44,7 +44,10 @@ Say this plainly rather than letting the surface imply otherwise:
   Safe to an ENS name or 0x address (`routes/crypto-sends.ts`) has run only
   in `crypto-send:test`, against the hardhat stand-in for the Safe
   operation and a stubbed resolver. No name has been resolved, re-checked
-  and paid for real.
+  and paid for real. It is off unless `CRYPTO_SEND_ENABLED=1`. Before it is
+  switched on: Activity does not list crypto sends, the statement and books
+  do not book them (a USDC send is a disposal), and an unconfirmed
+  submission has no reconciler.
 - **One real swap has run: 1 USDC to EURe in the earlier owner Safe on Base
   mainnet (2026-10-11).** Read back on chain 2026-10-12, before the 1 €
   below arrived: the Safe held 0 USDC and 0.8914 EURe. Which venue filled it and the gas it used are in

@@ -14,7 +14,8 @@
  *   - a name starting with 0x is resolved, and ENS down at approval leaves
  *     the send approvable;
  *   - a Zold page's forwarder (by its address, or any name under our ENS
- *     parent we cannot place) takes only its listed tokens: EURe is refused.
+ *     parent we cannot place) takes only its listed tokens: EURe is refused;
+ *   - off unless CRYPTO_SEND_ENABLED=1.
  *
  * Offline: the ENS resolver, balance and rate are injected; the Safe operation
  * is the hardhat harness stand-in. Run: npm run crypto-send:test
@@ -28,6 +29,7 @@ import express from "express";
 import { makeSoftwarePasskey } from "./_software-passkey.js";
 
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-crypto-send-")), "db.json");
+process.env.CRYPTO_SEND_ENABLED = "1";
 // The ENS gateway on, so names under zoldhq.com are known to be page names.
 // Derived, not a literal: a throwaway key for this test only.
 process.env.ENS_PARENT_NAME = "zoldhq.com";
@@ -248,6 +250,17 @@ try {
     const wrongChallenge = await post(`/crypto-sends/${c.data.id}/authorize`, { executionAssertion: await passkey.assert(Buffer.from("other").toString("base64url")) });
     assert.equal(wrongChallenge.status, 401);
     assert.equal(store.findCryptoSend(c.data.id)!.state, "CREATED", "a refused signature does not consume the send");
+  });
+
+  await t("with CRYPTO_SEND_ENABLED off, create and approve both refuse", async () => {
+    const c = await create({ to: ALICE, confirmedAddress: ALICE, amount: "1" });
+    process.env.CRYPTO_SEND_ENABLED = "0";
+    const made = await create({ to: ALICE, confirmedAddress: ALICE, amount: "1" });
+    const approve = await post(`/crypto-sends/${c.data.id}/authorize`, { executionAssertion: await passkey.assert(c.data.safeExecution.challenge) });
+    process.env.CRYPTO_SEND_ENABLED = "1";
+    assert.equal(made.data.code, "CRYPTO_SEND_OFF");
+    assert.equal(approve.data.code, "CRYPTO_SEND_OFF");
+    assert.equal(store.findCryptoSend(c.data.id)!.state, "CREATED");
   });
 
   await t("a KYC-pending account cannot send", async () => {

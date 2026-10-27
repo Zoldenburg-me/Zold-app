@@ -62,7 +62,9 @@ PH.send = {
         label: "New payment",
         rows: [
           Z.row({ lead: Z.iconTile({ icon: "account_balance", tone: "p" }), title: "Bank transfer", sub: "To any IBAN in Europe, no Zold fee", right: Z.tag("Beta"), href: "#send/new" }),
-          Z.row({ lead: Z.iconTile({ icon: "account_balance_wallet", tone: "p" }), title: "Crypto wallet", sub: `EURe or ${usdSym()} to an ENS name or 0x address`, href: "#send/wallet" }),
+          caps.cryptoSend
+            ? Z.row({ lead: Z.iconTile({ icon: "account_balance_wallet", tone: "p" }), title: "Crypto wallet", sub: `EURe or ${usdSym()} to an ENS name or 0x address`, href: "#send/wallet" })
+            : Z.soonRow({ lead: Z.iconTile({ icon: "account_balance_wallet" }), title: "Crypto wallet", sub: `Send digital dollars (${usdSym()}) to a wallet` }),
         ],
       })}
       ${Z.listGroup({
@@ -141,6 +143,7 @@ PH["send/wallet"] = {
   title: "Send to a crypto wallet",
   html() {
     const w = phWallet;
+    if (!caps.cryptoSend) return `${phTop("Send to a crypto wallet", "send")}${phMain(Z.note({ text: "Sending to a crypto wallet isn’t available here." }) + Z.button({ variant: "primary", full: true, label: "Back to Send", href: "#send" }))}`;
     return `${phTop("Send to a crypto wallet", "send")}<form id="ph-wal" class="z-app__form" novalidate>${phMain(`
       <div class="z-form">
         ${Z.field({ id: "ph-wal-to", label: "To", name: "to", spellcheck: false, placeholder: caps.ensLookup ? "name.eth or 0x…" : "0x…", value: w.to, required: true, hint: caps.ensLookup ? "An ENS name or a wallet address." : "A wallet address." })}
@@ -153,6 +156,7 @@ PH["send/wallet"] = {
   },
   bind(root) {
     const form = root.querySelector("#ph-wal");
+    if (!form) return;
     const next = root.querySelector("#ph-wal-next");
     const err = root.querySelector("#ph-wal-err");
     form.onsubmit = async (e) => {
