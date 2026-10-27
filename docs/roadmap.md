@@ -36,6 +36,10 @@ Done when one real euro has come in by SEPA, sat in a passkey Safe on 8453,
 and gone back out, with every step in `docs/status.md` rewritten from "never
 run" to what was observed.
 
+- [x] The done-when round ran on 2026-10-26: 992 + 95 EURe in by SEPA and
+      1,000 EURe out through the app's mainnet Safe (`docs/status.md`). The
+      owner items below stay open.
+
 Owner:
 - [ ] Funded operator keys; Base mainnet entry in `deployments.json`;
       `npm run preflight` green; gas mode chosen (`native` or `token`).
