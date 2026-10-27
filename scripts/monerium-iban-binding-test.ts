@@ -314,14 +314,18 @@ async function addRefused(n: number, refusal: "rejected" | "manual_review" | "wa
   return { ...u, stepUp: (action: string) => key.assert(issueChallenge("step_up", stepUpBinding(u.id, action))) };
 }
 
-await check("the poller does not attach an IBAN to a pending activation the account may no longer have", async () => {
+await check("the poller does not attach an IBAN to a pending activation the account may no longer have, and it stops waiting", async () => {
   for (const [n, refused] of [[19, { kycStatus: "rejected" }], [20, { kycStatus: "manual_review" }], [21, { segment: { value: "WALLET_ONLY", reasonCode: "test", decidedAt: now, decidedBy: "system" } }]] as const) {
     const u = addUser(n);
     store.updateUser(u.id, { iban: "", ...refused, funding: { mode: "sandbox", status: "iban_pending", moneriumProfileId: PROFILE } } as any);
     ibansOf.set(u.token, [listed(u.iban, u.address)]);
     const after = await refreshPendingIban(store.findUser(u.id)!);
     assert.equal(after.iban, "", `${u.id}: no IBAN attached`);
-    assert.equal(after.funding?.status, "iban_pending", u.id);
+    assert.equal(after.funding?.status, "provisioning", `${u.id}: no longer shown as an IBAN being issued`);
+    assert.match(after.funding?.detail ?? "", /bank account/, u.id);
+    const reads = fake.reads;
+    await refreshPendingIban(after);
+    assert.equal(fake.reads, reads, `${u.id}: not re-read on the next tick`);
   }
 });
 

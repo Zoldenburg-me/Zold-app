@@ -273,11 +273,15 @@ export function pendingIbanElsewhere(user: User, ibans: any[]): User["moneriumIb
   };
 }
 
-/** Re-check a user whose IBAN was still pending. An account Zold may not bank
- *  stays pending: the poller does not finish an activation the routes refuse. */
+/** Re-check a user whose IBAN was still pending. For an account Zold may not
+ *  bank the poller does not finish an activation the routes refuse: the
+ *  account stops waiting on an IBAN and says why. */
 export async function refreshPendingIban(user: User): Promise<User> {
   if (user.funding?.status !== "iban_pending") return user;
-  if (ibanActivationRefusal(user)?.code === "IBAN_NOT_OFFERED") return user;
+  const refused = ibanActivationRefusal(user);
+  if (refused?.code === "IBAN_NOT_OFFERED") {
+    return store.updateUser(user.id, { funding: { ...user.funding, status: "provisioning", detail: refused.error } });
+  }
   try {
     const list = ibanList(await moneriumClientFor(user).ibans());
     const iban = ownIbanIn(list, user.address, user);
