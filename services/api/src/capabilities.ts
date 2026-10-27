@@ -6,7 +6,7 @@
  * Extracted from server.ts so /api/health is not the reason this lives in a
  * 3,800-line file.
  */
-import { TURNKEY } from "./config.js";
+import { CHAIN_ID, TURNKEY } from "./config.js";
 import { EMAIL_VERIFICATION, ENS_GATEWAY, ENS_LOOKUP, FORWARDING, HARNESS, MONERIUM, SHOPIFY, TESTNET_FAUCET, moneriumOAuthEnabled, privacyBundleLive } from "./config.js";
 import { moneriumApiKeysAvailable, moneriumEnvironment } from "./adapters/monerium-connection.js";
 import { cashRailOpen } from "./orchestrator.js";
@@ -103,6 +103,8 @@ export function capabilities() {
     ensParent: ENS_GATEWAY.enabled ? ENS_GATEWAY.parent : null,
     /** May a signed-in user look up an ENS name (GET /api/ens/lookup)? */
     ensLookup: ENS_LOOKUP.enabled,
+    /** The chain the app runs on, for naming the network on screen. */
+    chainId: CHAIN_ID,
     /** Does the app ask the user to confirm their email with a code? Off
      *  until EMAIL_VERIFICATION is enabled with an SMTP server. */
     emailVerification: EMAIL_VERIFICATION.enabled,

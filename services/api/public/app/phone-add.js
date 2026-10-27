@@ -88,7 +88,7 @@ PH["add/wallet"] = {
     const change = page.handle ? ` <a href="#settings/currency/wallet">Change</a>` : "";
     return `${phTop("From a crypto wallet", "add", Z.tag("Beta"))}${phMain(`
       ${address ? `<div class="z-qr"><img id="ph-wallet-qr" ${phCache.walletQr?.key === `${u.id}:${address}` ? `src="${phCache.walletQr.url}"` : "hidden"} width="168" height="168" alt="QR code of your wallet address"></div>` : ""}
-      ${address ? `<div class="z-card">${Z.copyRow({ label: "Your wallet address", value: address, mono: true })}</div>`
+      ${address ? `<div class="z-card">${Z.copyRow({ label: `Wallet address (${phChainName(caps.chainId)})`, value: address, mono: true })}</div>`
         : Z.note({ tone: "a", text: "Your account is not set up yet, so it has no wallet address." })}
       ${Z.note({ tone: "a", text: `Only ${usdSym()} on the Base network. Anything else sent here is lost.` })}
       ${!address ? "" : caps.paymentPageForwarding
