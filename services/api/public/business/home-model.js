@@ -22,8 +22,8 @@ export function quickSendBlock(accounts, contacts) {
   return null;
 }
 
-/** Runs drafted here and not yet on the statement. */
-export const PENDING = ["PENDING_REVIEW", "REVIEWED", "EXECUTING"];
+/** Runs drafted here and not yet sent: with review off, a saved payment waits as DRAFT. */
+export const PENDING = ["DRAFT", "PENDING_REVIEW", "REVIEWED", "EXECUTING"];
 export const pendingRuns = (runs) => runs.filter((d) => PENDING.includes(d.state));
 
 /**
@@ -67,7 +67,8 @@ export function setupSteps(me, accounts, access) {
   return [
     { id: "passkey", done: !!me?.passkey?.credentialId },
     { id: "account", done: safeOn },
-    { id: "monerium", done: iban || me?.kycStatus === "approved" || !!me?.monerium?.connectedAt },
+    // Connected now, not once: a removed connection is a step to do again.
+    { id: "monerium", done: !!me?.monerium?.connectedAt },
     { id: "iban", done: iban },
     { id: "backup", done: !safeOn ? false : signers ? signers.otherOwners.length > 0 : null },
   ];
@@ -77,8 +78,11 @@ export function setupSteps(me, accounts, access) {
 export const setupOpen = (steps) => steps.some((s) => s.done !== true);
 
 /** What the no-IBAN note offers: `own` is whether this login's own account
- *  backs the organisation (only it connects Monerium for it). */
+ *  backs the organisation (only it connects Monerium for it). The IBAN is
+ *  issued on the login's own account in the app ("activate"); once it has
+ *  one, Accounts connects it to this organisation ("adopt"). */
 export function noIbanStep(own, me) {
   if (!own) return "not-own";
-  return me?.monerium?.connectedAt ? "activate" : "connect";
+  if (!me?.monerium?.connectedAt) return "connect";
+  return me.iban ? "adopt" : "activate";
 }

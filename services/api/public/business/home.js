@@ -177,7 +177,7 @@ function activity(all, limit = ACTIVITY_ROWS, runs = null) {
     });
   const all_ = limit === Infinity;
   return `<div class="zb-h-head">${all_ ? "" : `<h2 class="zb-h2" id="home-act">Recent activity</h2>`}<div class="zb-h-chips" role="group" aria-label="Show">${tabs}</div>
-      <span class="zb-h-end zb-h-tools">${exp}${all_ ? "" : `<a class="z-group__action" href="?view=transactions" data-view-link="transactions">See all</a>`}</span></div>
+      <span class="zb-h-end zb-h-tools">${tab === "pending" ? "" : exp}${all_ ? "" : `<a class="z-group__action" href="?view=transactions" data-view-link="transactions">See all</a>`}</span></div>
     ${rows.length ? `<div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Date</th><th scope="col">Who</th><th scope="col">Memo</th><th scope="col">Status</th><th scope="col" class="z-tbl__num">Amount</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>`
       : `<div class="z-card"><p class="empty">${tab === "pending" ? "No payment is waiting to be sent." : "No money has moved on this organisation’s accounts yet."}</p></div>`}`;
 }
@@ -227,7 +227,8 @@ function noIbanHtml(accounts) {
   const whose = org.type === "personal" ? "you" : esc(org.name);
   if (step === "not-own") return `<p class="zb-hint">No IBAN yet. Monerium issues one once it has verified ${whose}, and only the company’s own login can connect it.</p>${linkBtn("Accounts", "accounts")}`;
   if (step === "connect") return `<p class="zb-hint">No IBAN yet. Monerium issues it once it has verified ${whose}: connect Monerium to start the check.</p>${moneriumLink("Connect Monerium")}`;
-  return `<p class="zb-hint">No IBAN yet. Monerium is connected; activate the IBAN on the Accounts screen.</p>${linkBtn("Accounts", "accounts")}`;
+  if (step === "activate") return `<p class="zb-hint">No IBAN yet. Monerium is connected: activate the IBAN in the app.</p>${moneriumLink("Activate IBAN")}`;
+  return `<p class="zb-hint">Your IBAN is issued. Connect it to ${org.type === "personal" ? "this space" : whose} on the Accounts screen.</p>${linkBtn("Accounts", "accounts")}`;
 }
 
 function accountsCard(accounts, read) {
@@ -277,7 +278,8 @@ const STEP = {
   passkey: () => ({ title: `${Z.passkeyName().replace(/^./, (c) => c.toUpperCase())} sign-in`, sub: "Approves the company’s payments." }),
   account: () => ({ title: "Company account live", sub: "The Safe the company’s money is held in. It is deployed when the company signs up." }),
   monerium: () => ({ title: "Connect Monerium", sub: "Monerium verifies the company before it issues an IBAN.", action: { label: "Connect", href: "/app?from=business#monerium-settings" } }),
-  iban: (s) => ({ title: "Activate the euro IBAN", sub: s.monerium ? "Receives and sends bank transfers." : "Follows the Monerium check.", view: s.monerium ? "accounts" : null }),
+  iban: (s) => ({ title: "Activate the euro IBAN", sub: s.monerium ? "Receives and sends bank transfers." : "Follows the Monerium check.",
+    ...(!s.monerium ? {} : me?.iban ? { view: "accounts" } : { action: { label: "Activate", href: "/app?from=business#monerium-settings" } }) }),
   backup: (_, d) => ({ title: "Add a backup key", sub: d === null ? "Couldn’t check just now." : "A second key you keep, in case this sign-in is lost.", action: d === null ? null : { label: "Add", href: APP_LINKS.signers } }),
 };
 

@@ -90,9 +90,9 @@ const done = (steps: any[]) => Object.fromEntries(steps.map((s) => [s.id, s.done
   assert.deepEqual(done(m.setupSteps(me, [], { signers })), { passkey: true, account: true, monerium: false, iban: false, backup: false });
   assert.equal(done(m.setupSteps(me, [], { signers: null })).backup, null, "signers unread: backup unknown, not missing");
   assert.equal(done(m.setupSteps({ ...me, monerium: { connectedAt: "2026-10-01" } }, [], { signers })).monerium, true);
-  assert.deepEqual(done(m.setupSteps(me, [active], { signers: { ...signers, otherOwners: ["0xb"] } })), { passkey: true, account: true, monerium: true, iban: true, backup: true });
+  assert.deepEqual(done(m.setupSteps({ ...me, monerium: { connectedAt: "2026-10-01" } }, [active], { signers: { ...signers, otherOwners: ["0xb"] } })), { passkey: true, account: true, monerium: true, iban: true, backup: true });
   assert.equal(done(m.setupSteps(me, [{ ...active, status: "gated" }], { signers })).iban, false, "a gated account's IBAN does not count");
-  assert.equal(done(m.setupSteps({ ...me, kycStatus: "approved" }, [], { signers })).monerium, true, "an approved KYC counts as verified");
+  assert.equal(done(m.setupSteps({ ...me, kycStatus: "approved" }, [active], { signers })).monerium, false, "a removed connection is not done, whatever KYC or IBAN came before");
   assert.equal(done(m.setupSteps({ ...me, passkey: null }, [], { signers })).passkey, false);
 }
 {
@@ -106,14 +106,15 @@ const done = (steps: any[]) => Object.fromEntries(steps.map((s) => [s.id, s.done
 
 assert.equal(m.noIbanStep(false, { monerium: { connectedAt: "x" } }), "not-own", "only the company's own login is told to connect");
 assert.equal(m.noIbanStep(true, {}), "connect");
-assert.equal(m.noIbanStep(true, { monerium: { connectedAt: "2026-10-01" } }), "activate");
+assert.equal(m.noIbanStep(true, { monerium: { connectedAt: "2026-10-01" } }), "activate", "connected, no IBAN yet: activate in the app");
+assert.equal(m.noIbanStep(true, { monerium: { connectedAt: "2026-10-01" }, iban: "DE89" }), "adopt", "the login has its IBAN: connect it on Accounts");
 assert.equal(done(m.setupSteps({ passkey: { credentialId: "k" } }, [], { noSafe: true })).backup, false, "no Safe: no backup key");
 
 // ── Pending ─────────────────────────────────────────────────────────────────
 
 assert.deepEqual(
   m.pendingRuns(["DRAFT", "PENDING_REVIEW", "REVIEWED", "EXECUTING", "EXECUTED", "FAILED", "REJECTED", "CANCELLED"].map((state) => ({ state }))).map((d: any) => d.state),
-  ["PENDING_REVIEW", "REVIEWED", "EXECUTING"],
+  ["DRAFT", "PENDING_REVIEW", "REVIEWED", "EXECUTING"],
 );
 
 console.log("business home: ok");
