@@ -15,6 +15,7 @@
  *     longer than 2 s;
  *   - malformed calls, names under another parent, a node that does not match
  *     its name are refused;
+ *   - a resolver answer that is not an address is refused (ENS_UNAVAILABLE);
  *   - the lookup needs a session, says when it is not configured, and never
  *     fetches a gateway URL on a private or loopback address.
  *
@@ -54,7 +55,7 @@ delete process.env.ENS_RPC_URL;
 
 const { store, initStore } = await import("../services/api/src/store.js");
 const { CHAIN_ID } = await import("../services/api/src/config.js");
-const { createEnsRouter, ccipFetch, fetchPublic, isPublicAddress } = await import("../services/api/src/routes/ens.js");
+const { createEnsRouter, ccipFetch, ensAnswer, fetchPublic, isPublicAddress } = await import("../services/api/src/routes/ens.js");
 const { gatewaySignatureHash } = await import("../services/api/src/ens.js");
 const { HandleError, normaliseHandle } = await import("../services/api/src/pay.js");
 const { livePaymentPage } = await import("../services/api/src/routes/payment-page.js");
@@ -271,6 +272,18 @@ try {
   await check("browsers may read the gateway from any origin", async () => {
     const r = await gateway(addrCall("alice.zoldhq.com"));
     assert.equal(r.headers.get("access-control-allow-origin"), "*");
+  });
+
+  await check("a resolver answer that is not an address is refused, not thrown", async () => {
+    for (const bad of ["0x1234", "not-an-address", "0x" + "zz".repeat(20)]) {
+      const r = ensAnswer("odd.eth", bad);
+      assert.equal(r.ok, false);
+      assert.equal(!r.ok && r.code, "ENS_UNAVAILABLE");
+    }
+    const none = ensAnswer("none.eth", null);
+    assert.equal(!none.ok && none.code, "NO_ADDRESS");
+    const good = ensAnswer("alice.eth", "0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed");
+    assert.deepEqual(good, { ok: true, name: "alice.eth", address: "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed" }, "checksummed");
   });
 
   await check("the lookup needs a session, and says when it is not configured", async () => {

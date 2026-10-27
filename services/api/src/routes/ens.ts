@@ -287,8 +287,13 @@ export async function resolveEnsName(raw: string): Promise<EnsResolution> {
   } catch {
     return { ok: false, status: 502, code: "ENS_UNAVAILABLE", error: "the ENS lookup failed — try again" };
   }
+  return ensAnswer(name, address);
+}
+
+/** What a resolver answered, as a resolution: a resolver may answer anything,
+ *  and only an address goes on screen or into a send. */
+export function ensAnswer(name: string, address: string | null | undefined): EnsResolution {
   if (!address) return { ok: false, status: 404, code: "NO_ADDRESS", error: `${name} has no address for this network` };
-  // A resolver may answer anything; only an address goes on screen or into a send.
   if (!isAddress(address, { strict: false })) {
     return { ok: false, status: 502, code: "ENS_UNAVAILABLE", error: `${name}'s resolver did not answer with an address` };
   }
