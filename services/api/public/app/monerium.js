@@ -78,7 +78,7 @@ function renderMoneriumScreen() {
         : funding.detail || `Deposits to this account and SEPA payouts from it run on ${keys ? "these keys" : "this connection"}.`)}</div>
       ${needsIban ? `<button class="m-cta" id="m-mon-activate" style="margin-top:16px">${movedAway ? IBAN_MOVED_AWAY.action : "Get your IBAN"}</button>` : ""}
       <button class="m-link" id="m-mon-refresh" style="margin-top:12px">Refresh accounts</button>
-      ${keys ? `<button class="m-link" id="m-mon-remove" style="margin-top:12px">Remove keys</button>` : ""}
+      <button class="m-link" id="m-mon-remove" style="margin-top:12px">${keys ? "Remove keys" : "Use a different Monerium account"}</button>
       <div class="m-err hidden" role="alert" id="m-mon-err" style="margin-top:12px"></div>
       ${keys ? `<div class="m-lede" style="font-size:12px;margin-top:20px;color:var(--m-dim)">
         The secret was checked against Monerium once and stored encrypted. It is never shown again, not even to you —
@@ -105,11 +105,14 @@ function renderMoneriumScreen() {
         mobileNav("monerium");
       } catch (e) { showErr("m-mon-err", e); }
     };
-    if (keys) $("m-mon-remove").onclick = async () => {
+    $("m-mon-remove").onclick = async () => {
       clearErr("m-mon-err");
-      if (!confirm("Remove the Monerium keys from this account? Deposits and payouts on it pause until keys are connected again.")) return;
+      if (!confirm(keys
+        ? "Remove the Monerium keys from this account? Deposits and payouts on it pause until keys are connected again."
+        : "Disconnect this Monerium login? Deposits and payouts on it pause until you sign in again.")) return;
       try {
-        renderUser(await api(`/api/users/${user.id}/monerium/api-keys`, await moneriumStepUp(user, true), "DELETE"));
+        // The same passkey-approved disconnect obReconnect uses; the screen then offers the sign-in again.
+        renderUser(await api(`/api/users/${user.id}/monerium/${keys ? "api-keys" : "connect"}`, await moneriumStepUp(user, true), "DELETE"));
         mobileNav("monerium");
       } catch (e) { showErr("m-mon-err", e); }
     };
@@ -117,17 +120,17 @@ function renderMoneriumScreen() {
   }
 
   // Not connected: the sign-in first, the developer keys under it.
-  const signIn = caps.moneriumOAuth ? `
+  // connect/start refuses without a data encryption key, as the keys do.
+  const signIn = caps.moneriumOAuth && caps.moneriumApiKeys ? `
     ${u.moneriumRefusal ? `<div class="m-note warn" style="font-size:13px">${esc(u.moneriumRefusal.error)}</div>` : ""}
     <div class="m-note" style="font-size:13px;margin-top:12px">${u.accountType === "company"
       ? "When asked, choose Company. A personal profile can’t be used for a company account."
       : "When asked, choose Personal. A company profile can’t be used for a personal account."}</div>
     <button class="m-cta" id="m-mon-oauth" style="margin-top:16px">Continue with Monerium</button>` : "";
   if (!caps.moneriumApiKeys) {
-    el.innerHTML = signIn ? `${signIn}<div class="m-err hidden" role="alert" id="m-mon-err" style="margin-top:12px"></div>` : `
+    el.innerHTML = `
       <div class="m-rows">${row("Status", "Unavailable")}</div>
-      <div class="m-lede" style="font-size:13px;margin-top:16px">This deployment has no data encryption key (DATA_ENCRYPTION_KEYS), so it cannot store a client secret. It refuses rather than keep one in plaintext.</div>`;
-    if (signIn) bindMoneriumSignIn();
+      <div class="m-lede" style="font-size:13px;margin-top:16px">This deployment has no data encryption key (DATA_ENCRYPTION_KEYS), so it cannot store a Monerium connection. It refuses rather than keep one in plaintext.</div>`;
     return;
   }
   el.innerHTML = `${signIn}

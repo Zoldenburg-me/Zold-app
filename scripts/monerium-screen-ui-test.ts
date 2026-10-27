@@ -87,10 +87,10 @@ await t("not connected, no OAuth client: the keys form alone, as before", () => 
   assert.match(html, /id="m-mon-id"/);
 });
 
-await t("not connected, no key storage: the sign-in still shows", () => {
+await t("not connected, no key storage: Unavailable, and no sign-in connect/start would refuse", () => {
   const html = show(company, { moneriumOAuth: true, moneriumApiKeys: false });
-  assert.match(html, /Continue with Monerium/);
-  assert.doesNotMatch(html, /Unavailable/);
+  assert.doesNotMatch(html, /m-mon-oauth/);
+  assert.match(html, /Unavailable/);
 });
 
 await t("a refused sign-in says why on the screen", () => {
@@ -104,8 +104,18 @@ await t("connected by OAuth: login, profile and its kind; no keys form or Remove
   assert.match(html, /Connected/);
   assert.match(html, /kora@example\.test/);
   assert.match(html, /Kora Corp \(Company\)/);
-  assert.doesNotMatch(html, /m-mon-id|m-mon-remove|m-mon-oauth|Client id/);
+  assert.doesNotMatch(html, /m-mon-id|m-mon-oauth|Client id|Remove keys/);
+  assert.match(html, /id="m-mon-remove"[^>]*>Use a different Monerium account</);
   assert.match(String(run(`__els["m-mon-lede"].textContent`)), /signing in at Monerium/);
+});
+
+await t("Use a different Monerium account disconnects the OAuth login with the passkey step-up", async () => {
+  show({ ...company, monerium: { method: "oauth", connectedAt: "2026-10-27T10:00:00Z", profileId: "p1" } }, BOTH);
+  run(`__calls = []; confirm = () => true; moneriumStepUp = async (u, always) => ({ stepUp: always });
+    api = async (p, body, m) => { __calls.push([p, body, m]); return { ...user, monerium: undefined }; };
+    renderUser = (u) => { user = u; }; mobileNav = () => {};`);
+  await run(`__els["m-mon-remove"].onclick()`);
+  assert.deepEqual(JSON.parse(JSON.stringify(run("__calls"))), [["/api/users/c1/monerium/connect", { stepUp: true }, "DELETE"]]);
 });
 
 await t("connected by keys: the key rows and Remove keys, as before", () => {

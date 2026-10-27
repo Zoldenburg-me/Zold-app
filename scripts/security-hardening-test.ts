@@ -10,6 +10,7 @@ import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { chmodSync, closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
@@ -753,6 +754,23 @@ await check("capabilities.privacyBundle is true only when the bundle is switched
   for (const id of ["privacy-card", "set-privacy-card"]) {
     assert.match(html, new RegExp(`class="[^"]*\\bhidden\\b[^"]*" id="${id}"`), id);
   }
+});
+
+await check("capabilities.moneriumOAuth is false without a data encryption key: connect/start would refuse it", async () => {
+  const caps = new URL("../services/api/src/capabilities.ts", import.meta.url).href;
+  const oauthWith = (key: string | undefined) => {
+    const env: NodeJS.ProcessEnv = { ...process.env, MONERIUM_OAUTH_CLIENT_ID: "client-test" };
+    delete env.MONERIUM_OAUTH;
+    delete env.DATA_ENCRYPTION_KEYS;
+    if (key) env.DATA_ENCRYPTION_KEYS = key;
+    const r = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e",
+      `const { capabilities } = await import(${JSON.stringify(caps)}); process.stdout.write(String(capabilities().moneriumOAuth));`],
+      { env, encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+    return r.stdout;
+  };
+  assert.equal(oauthWith(undefined), "false");
+  assert.equal(oauthWith(`k1:${randomBytes(32).toString("base64")}`), "true");
 });
 
 await check("POST /users/:id/privacy-bundle refuses while the capability is off, and records nothing", async () => {
