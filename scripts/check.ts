@@ -122,6 +122,8 @@ const scripts = [
   "pay:test",
   "ens:test",
   "safe-address-ui:test",
+  "crypto-send:test",
+  "crypto-send-ui:test",
   "tx:audit:test",
   "statement:test",
   "wallet-sync:test",

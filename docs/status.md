@@ -40,6 +40,11 @@ Say this plainly rather than letting the surface imply otherwise:
   ENS's OffchainDNSResolver has never run. No wallet or ENS client has
   resolved a name. `/api/ens/lookup` has never been called against a real
   ENS RPC.
+- **No crypto send has run on any chain.** Sending EURe or USDC from the
+  Safe to an ENS name or 0x address (`routes/crypto-sends.ts`) has run only
+  in `crypto-send:test`, against the hardhat stand-in for the Safe
+  operation and a stubbed resolver. No name has been resolved, re-checked
+  and paid for real.
 - **One real swap has run: 1 USDC to EURe in the earlier owner Safe on Base
   mainnet (2026-10-11).** Read back on chain 2026-10-12, before the 1 €
   below arrived: the Safe held 0 USDC and 0.8914 EURe. Which venue filled it and the gas it used are in

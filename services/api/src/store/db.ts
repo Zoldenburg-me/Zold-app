@@ -33,6 +33,7 @@ import type {
   Operator,
   OperatorSession,
   CryptoDeposit,
+  CryptoSend,
   MoneriumIssueRecord,
   PaymentRequest,
   Quote,
@@ -80,6 +81,7 @@ export interface Db {
   conversionSweeps: ConversionSweep[];
   /** Inbound crypto seen at a user's account, and what became of it. */
   cryptoDeposits: CryptoDeposit[];
+  cryptoSends: CryptoSend[];
   /** Append-only audit trail: segment decisions, consents, partner events. */
   audit: import("../audit.js").AuditEntry[];
   /** Managed KYC guardian recovery requests. */
@@ -142,6 +144,7 @@ export let db: Db = {
   moneriumIssueOrders: [],
   conversionSweeps: [],
   cryptoDeposits: [],
+  cryptoSends: [],
   audit: [],
   recoveryRequests: [],
   cryptoDepositCursor: {},
@@ -176,6 +179,7 @@ export function initStore() {
     db.moneriumIssueOrders ??= [];
     db.conversionSweeps ??= [];
     db.cryptoDeposits ??= [];
+    db.cryptoSends ??= [];
     db.audit ??= [];
     db.recoveryRequests ??= [];
     db.cryptoDepositCursor ??= {};

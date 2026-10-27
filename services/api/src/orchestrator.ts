@@ -123,7 +123,7 @@ function inputFundsMoved(txs: Transfer["txs"]): boolean {
 }
 
 
-/** EUR this user has committed to Safe-funded transfers today. FAILED/REFUNDED
+/** EUR this user has committed to Safe-funded transfers and crypto sends today. FAILED/REFUNDED
  * transfers released their reservation, and so did a CREATED one never signed
  * before its deadline: assertDeviceAuthorization refuses it, so it can never
  * debit. A claimed one (authorizedAt) or one without terms still counts. */
@@ -141,7 +141,16 @@ export function safeFundedEurToday(userId: string, now = new Date()): number {
         !["FAILED", "REFUNDED"].includes(t.state) &&
         !(t.state === "CREATED" && t.auth && !t.auth.authorizedAt && nowSec > t.auth.deadline),
     )
-    .reduce((sum, t) => sum + t.sendEur, 0);
+    .reduce((sum, t) => sum + t.sendEur, 0) + store.cryptoSends
+    // Crypto sends share the budget; an expired unsigned one can never debit.
+    .filter(
+      (c) =>
+        c.userId === userId &&
+        c.createdAt.slice(0, 10) === day &&
+        c.state !== "FAILED" &&
+        !(c.state === "CREATED" && nowSec > c.deadline),
+    )
+    .reduce((sum, c) => sum + c.capEur, 0);
 }
 
 /** One daily budget over Safe-funded transfers. */

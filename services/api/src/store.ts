@@ -33,6 +33,7 @@ import { matchesPayoutEvidence } from "./transfers/review-evidence.js";
 import type {
   ConversionSweep,
   CryptoDeposit,
+  CryptoSend,
   MerchantLink,
   MoneriumIssueRecord,
   Operator,
@@ -846,6 +847,38 @@ export const store = {
   },
   findTransfer(id: string) {
     return db.transfers.find((t) => t.id === id);
+  },
+
+  get cryptoSends() {
+    return db.cryptoSends;
+  },
+  findCryptoSend(id: string) {
+    return db.cryptoSends.find((s) => s.id === id);
+  },
+  /** Turn a cap hold into the send row that replaces it, as addTransferUnderHold. */
+  addCryptoSendUnderHold(s: CryptoSend, holdId: string) {
+    if (!capHolds.delete(holdId)) throw new Error(`no cap hold ${holdId} — the send was not reserved`);
+    db.cryptoSends.push(s);
+    persist();
+  },
+  /**
+   * Claim the one submission of a send. Synchronous, like claimAuthorization:
+   * two requests carrying the same signature cannot both pass it.
+   */
+  claimCryptoSend(id: string) {
+    const s = db.cryptoSends.find((x) => x.id === id);
+    if (!s || s.state !== "CREATED" || s.authorizedAt) return false;
+    const now = new Date().toISOString();
+    Object.assign(s, { state: "SUBMITTED", authorizedAt: now, updatedAt: now });
+    persist();
+    return true;
+  },
+  updateCryptoSend(id: string, patch: Partial<Pick<CryptoSend, "state" | "userOpHash" | "txHash" | "error">>) {
+    const s = db.cryptoSends.find((x) => x.id === id);
+    if (!s) throw new Error(`unknown crypto send ${id}`);
+    Object.assign(s, patch, { updatedAt: new Date().toISOString() });
+    persist();
+    return s;
   },
 
   get cryptoDeposits() {
