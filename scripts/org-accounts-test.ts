@@ -149,6 +149,19 @@ await check("only the member whose Safe backs the account can make a company's l
   assert.equal(r.status, 403);
   assert.equal(r.body.code, "NOT_THE_PAYEE");
 });
+await check("with no company page and no page of the payee's own, Get paid offers no link and says to set up the page", async () => {
+  const page = store.findUser("u_co")!.paymentPage;
+  store.updateUser("u_co", { paymentPage: undefined } as any);
+  try {
+    const list = await call("GET", "/api/orgs/org_co/payment-requests");
+    assert.equal(list.body.payLink.allowed, false, "the button is off, not a Create link that 409s");
+    assert.equal(list.body.payLink.code, "NO_PAGE");
+    assert.match(list.body.payLink.reason, /Set up a payment page first/);
+    const r = await call("POST", "/api/orgs/org_co/payment-requests", { amountEur: 50, methods: ["bank"] });
+    assert.equal(r.status, 409, JSON.stringify(r.body));
+    assert.equal(r.body.code, "NO_PAGE");
+  } finally { store.updateUser("u_co", { paymentPage: page } as any); }
+});
 let code = "";
 await check("a link for an issued invoice is booked under the company, for the invoice's amount", async () => {
   const r = await call("POST", "/api/orgs/org_co/payment-requests", { invoiceId: "inv_1", methods: ["bank"] });
@@ -256,6 +269,14 @@ await check("once the company has a page, a link made in the console carries its
   assert.equal(pub.body.handle, "lindnerholzbau");
   assert.equal(pub.body.displayName, "Lindner Holzbau GmbH");
   assert.equal(pub.body.methods.bank.holder, "Lindner Holzbau GmbH");
+});
+await check("the company page alone is enough: no NO_PAGE once it exists", async () => {
+  const page = store.findUser("u_co")!.paymentPage;
+  store.updateUser("u_co", { paymentPage: undefined } as any);
+  try {
+    const list = await call("GET", "/api/orgs/org_co/payment-requests");
+    assert.notEqual(list.body.payLink.code, "NO_PAGE", JSON.stringify(list.body.payLink));
+  } finally { store.updateUser("u_co", { paymentPage: page } as any); }
 });
 await check("the same code resolves under the payee's own handle, never under another page", async () => {
   assert.equal((await call("GET", `/api/pay/lindner/${pageCode}`, undefined, "")).status, 200);

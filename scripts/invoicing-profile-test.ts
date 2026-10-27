@@ -665,11 +665,11 @@ await check("without a claimed payment page there is no Pay button, and it says 
   store.updateUser("u_np", { paymentPage: undefined } as any);
   const r = await call("POST", "/api/orgs/org_u_np/invoicing/issue", "u_np", invoiceFor("IN"));
   assert.equal(r.status, 201, JSON.stringify(r.data));
-  assert.equal(r.data.payment.code, "NO_METHOD");
-  assert.match(r.data.payment.reason, /Payment page/);
+  assert.equal(r.data.payment.code, "NO_PAGE");
+  assert.match(r.data.payment.reason, /Set up your page first/);
   const links = await call("GET", "/api/orgs/org_u_np/payment-requests", "u_np");
   assert.equal(links.data.payLink.allowed, false, "Get paid offers no New payment link the API would refuse");
-  assert.match(links.data.payLink.reason, /Payment page/);
+  assert.equal(links.data.payLink.code, "NO_PAGE");
 });
 await check("only the person behind a personal space collects for it: another member is not the payee", async () => {
   // POST /:orgId/members refuses a personal space (members.manage is business only); a row put there by hand still gets nothing.

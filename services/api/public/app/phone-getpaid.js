@@ -245,7 +245,7 @@ PH.link = {
             ${check("ph-lk-bank", "bank", "Bank transfer, with the link’s code as reference")}
             ${check("ph-lk-crypto", "crypto", `Digital dollars (${usdSym()}) to your page`)}
           </fieldset>
-          ${needs.length ? Z.note({ text: needs.join(" ") }) : ""}
+          ${needs.length ? Z.note({ html: `${esc(needs.join(" "))}${user?.paymentPage?.handle ? "" : ` <a href="#get-paid/page">Set up your page</a>`}` }) : ""}
           <p class="z-err" id="ph-lk-err" role="alert" hidden></p>
         </div>
       `)}${phFoot(Z.button({ variant: "primary", full: true, label: "Create link", type: "submit", ...(can("bank") || can("crypto") ? {} : { disabledReason: "No way to pay is open on this account yet." }) }))}</form>`;
