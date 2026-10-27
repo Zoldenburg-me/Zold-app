@@ -42,6 +42,9 @@ const COMPARISONS = ["qonto", "revolut-business", "holyheld"];
  *  the legal pages. Everything else is an app screen or a credential-bearing link. */
 const INDEXABLE = ["/", ...COMPARISONS.map((c) => `/compare/${c}`), "/imprint", "/legal", "/partner-terms", "/privacy"];
 
+/** RFC 9116 allows at most a year ahead. */
+export const SECURITY_TXT_EXPIRES = "2027-10-26T00:00:00.000Z";
+
 const attr = (s: string) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 
 function absTags(canonicalPath?: string): string {
@@ -127,6 +130,16 @@ export function createPageRouter() {
     ];
     if (base) lines.push("", `Sitemap: ${base}/sitemap.xml`);
     res.type("text/plain").send(lines.join("\n") + "\n");
+  });
+
+  // RFC 9116. Renew Expires before it passes; security-txt:test fails once it has.
+  router.get("/.well-known/security.txt", (_req, res) => {
+    res.type("text/plain").send([
+      "Contact: mailto:security@zoldhq.com",
+      `Expires: ${SECURITY_TXT_EXPIRES}`,
+      "Policy: https://github.com/Zoldenburg-me/Zold-app/blob/main/SECURITY.md",
+      "Preferred-Languages: en, de",
+    ].join("\n") + "\n");
   });
 
   router.get("/sitemap.xml", (_req, res, next) => {

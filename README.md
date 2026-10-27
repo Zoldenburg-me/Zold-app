@@ -85,10 +85,14 @@ Product documentation for users lives in the
 | **Open** | Euro IBAN (Monerium OAuth or your own Monerium API keys), SEPA payouts via Monerium redeem (no Zold fee), USDC ⇄ EURe conversion, payment page, payment links, Invoice-Me links, receipts, verifiable documents, business organisations with four-eyes drafts, invoicing, bookkeeping, Gnosis Pay card view |
 | **Closed** | Cash pickup (Bridge.xyz → Stellar → MoneyGram). Quotes answer `503 RAIL_CLOSED` until `BRIDGE_LIVE=1` and an anchor are configured |
 | **Not built** | USD account, other currencies, own card, Shopify in-checkout payment method |
-| **Never run on real money** | No mainnet deploy, no executed swap, no live Bridge/CCTP transfer, no registered Monerium production OAuth app, no Shopify app install, no Candide recovery call, no mail transport |
+| **Never run on real money** | No live Bridge/CCTP transfer, no registered Monerium production OAuth app, no Shopify app install, no Candide recovery call, no mail transport (mail runs on zoldhq.com only) |
 
-The running deployment is Base Sepolia (84532). The default chain is Base
-mainnet (8453), which has no entry in `deployments.json` yet.
+app.zoldhq.com runs Base mainnet (8453) with real money, for the owner only,
+behind Cloudflare Access. Two full SEPA rounds have run on it, euros in by
+bank transfer and back out by bank transfer, over €2,000 in total.
+zoldhq.com runs Base Sepolia (84532) with Monerium's sandbox (its
+`/api/health` reports `chainId` 84532, `realMoney` false). What has and has
+not run is in [docs/status.md](docs/status.md).
 
 ## Architecture
 
@@ -207,8 +211,8 @@ npm run check           # typecheck, contracts and every offline test suite
 | database | `data/db.dev.json`, wiped every start | `data/db.json`, kept |
 | passkey Safe deploy | not possible (no bundler/paymaster) | works |
 
-Sending a payment end to end needs `npm run api` against Base Sepolia with a
-funded, deployed Safe. Before `npm run api` on a new chain, run
+Sending a payment end to end needs `npm run api` against Base Sepolia or
+Base mainnet with a funded, deployed Safe. Before `npm run api` on a new chain, run
 `npm run deploy` with real operator keys.
 
 Pages: `/` landing, `/app` account, `/business` organisations,

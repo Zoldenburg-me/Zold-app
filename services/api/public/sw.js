@@ -119,6 +119,7 @@ self.addEventListener("fetch", (event) => {
 
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return; // not ours: leave alone
+  if (url.pathname.startsWith("/.well-known/")) return; // security.txt and friends: never a cached copy
 
   // Account state, quotes, transfers, rates: network or nothing.
   if (url.pathname.startsWith("/api/")) {
