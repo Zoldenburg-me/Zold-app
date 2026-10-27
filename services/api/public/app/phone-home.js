@@ -534,7 +534,7 @@ function phBindDetails(root) {
   if (verify) verify.onclick = () => { Z.closeOverlay(); enterKycReview(user?.name || "Account"); };
   const copy = root.querySelector("#ph-det-copy");
   if (copy) copy.onclick = async () => {
-    const label = copy.querySelector("span");
+    const label = copy.querySelector("span:not(.z-ic)"); // the icon span comes first
     const was = (label.dataset.label ||= label.textContent); // a second click inside 1.5 s must not keep "Copied"
     try { await navigator.clipboard.writeText(phDetailsText(user, phCache.bic)); }
     catch { Z.announce("Could not copy. Select the text and copy it yourself."); return; }

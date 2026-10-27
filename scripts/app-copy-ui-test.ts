@@ -63,7 +63,7 @@ run(`user = { id: "u1", name: "Kim", iban: "DE89370400440532013000" }; phCache.b
 const bind = (clipboard: any) => {
   ctx.navigator.clipboard = clipboard;
   const label: any = { textContent: "Copy all", dataset: {} };
-  const btn: any = { querySelector: () => label };
+  const btn: any = { querySelector: (sel: string) => (sel === "span:not(.z-ic)" ? label : { textContent: "content_copy", dataset: {} }) };
   ctx.__root = { querySelector: (sel: string) => (sel === "#ph-det-copy" ? btn : null) };
   run("phBindDetails(__root)");
   return { btn, label };
