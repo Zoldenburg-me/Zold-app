@@ -8,9 +8,9 @@ Say this plainly rather than letting the surface imply otherwise:
   Access; technical-architecture §18.1). Its operator keys are not yet keys held for
   real customers. Monerium production issues the owner's IBAN on their own
   production API keys (client credentials, not OAuth).
-- **SEPA in and out has run on mainnet, for the owner only.** The owner
-  states that two full rounds have run, money in by bank transfer and back
-  out by SEPA payout, over €2,000 in total. One round is read back on chain
+- **One SEPA round in and out has run on mainnet, for the owner only.**
+  The bank transfer in (€1,087) and the SEPA payout out (€1,000) are the
+  owner's statement; the mints and the burn are read back on chain
   (2026-10-27) in the app's mainnet Safe `0xc1409bd66B9719A61A2139F093B58d29D9fC232F`,
   in use from 2026-10-26 (its deployment date is not checked here):
   - In: 992 EURe and 95 EURe minted by Monerium on 2026-10-26 at 02:25:15
@@ -27,10 +27,8 @@ Say this plainly rather than letting the surface imply otherwise:
   - The books matched: one verifying Beleg per line, and Books' net +87
     equals the chain (the owner's check).
   - Monerium order ids: pending owner.
-  The Safe has no other token transfer on chain (Blockscout lists three),
-  so the second round is not in it and was not found on chain; it is recorded here
-  only as the owner's statement. Mainnet ran the production build from
-  before #485.
+  The Safe has no other token transfer on chain (Blockscout lists three).
+  Mainnet ran the production build from before #485.
 - **The owner's 1 € recovery enrolment** came in by bank transfer to an
   earlier owner Safe on Base mainnet, not the one above, minted as 1 EURe
   (read back on chain 2026-10-12, 0.8914 → 1.8914 EURe).
