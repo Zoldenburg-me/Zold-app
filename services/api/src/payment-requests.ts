@@ -218,7 +218,7 @@ export function availableMethods(user: User): { method: PaymentMethod; available
     {
       method: "crypto",
       available: Boolean(user.paymentPage?.handle && user.paymentPage.depositAddress),
-      ...(user.paymentPage?.handle ? {} : { needs: "claim a payment page (Profile → Payment page)" }),
+      ...(user.paymentPage?.handle ? {} : { needs: "claim a payment page (Get paid → Your page in the app, or Settings → Payment page in Zold Business)" }),
     },
     {
       method: "bank",

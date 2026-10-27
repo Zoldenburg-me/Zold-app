@@ -4,7 +4,7 @@
  * other entries are their own screens.
  */
 import { Z, api, cap, ensureMe, esc, issuerFieldNames, issuerIds, me, org, plain } from "./core.js";
-import { META, RENDER } from "./views.js";
+import { META, RENDER, moneriumLink } from "./views.js";
 import { isOwnCompanyOrg } from "./access-model.js";
 
 const ss = { sec: "org" };
@@ -17,7 +17,7 @@ function menu(accounts) {
     ["Company", [here("org", "Business profile"), cap("invoices").allowed ? away("invoicing-settings", "Invoicing profile") : ""]],
     ["Team", [away("members", "Members and access"), away("access", "Who approves payments")]],
     ["Account", [here("monerium", "Monerium"), isOwnCompanyOrg(me, org, accounts)
-      ? away("access", "Sign-in and recovery")
+      ? `${away("access", "Sign-in and recovery")}<a class="zb-set-menu__item" href="/app?from=business#page-settings">Payment page${Z.icon("open_in_new", "zb-set-menu__out")}<span class="z-sr"> (the app)</span></a>`
       : `<a class="zb-set-menu__item" href="/app?from=business#security">Your sign-in and recovery${Z.icon("open_in_new", "zb-set-menu__out")}<span class="z-sr"> (the app)</span></a>`]],
     ["Connected", [away("apps", "Apps"), away("integrations", "Accounting connections")]],
   ];
@@ -58,10 +58,12 @@ function moneriumSection(accounts) {
   const profile = p?.name ? `${p.name} (${p.kind === "corporate" ? "company" : "personal"} profile)` : "";
   const mine = live.some((a) => a.backingUserId === me?.id);
   const backer = live.find((a) => a.backingUserId)?.backingMemberName;
+  const own = org.type === "personal" || isOwnCompanyOrg(me, org, accounts);
   return section("Monerium", "Monerium issues the IBANs and the euros. Zold is the software you use them with.",
     rows([["Status", status], ["Profile", profile], ["Through the account of", mine ? "You" : backer], ["Accounts", live.map((a) => a.label || a.currency).join(", ")]])
     + (p?.status === "needs_check" && p.reason ? `<p class="zb-hint">${esc(plain(p.reason))}</p>` : ""),
-    `<a class="z-btn z-btn--secondary z-btn--sm" href="?view=accounts" data-view-link="accounts">Accounts</a>`);
+    own ? moneriumLink(live.length ? "Manage" : "Connect Monerium")
+      : `<a class="z-btn z-btn--secondary z-btn--sm" href="?view=accounts" data-view-link="accounts">Accounts</a>`);
 }
 
 RENDER.settings = async () => {

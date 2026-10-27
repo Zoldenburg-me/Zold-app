@@ -54,7 +54,14 @@ function renderMoneriumScreen() {
 
   if (keys) {
     const funding = u.funding || {};
-    const needsIban = kycApproved(u) && !u.iban && funding.mode === "sandbox";
+    // Connected and pending still activates: issuing the IBAN is what
+    // approves it (issueAppIban). A company login has no Home to do it. Not
+    // under review, rejected, where no bank account is offered, or once the
+    // IBAN is requested and Monerium is still issuing it (ibanWait), unless
+    // Monerium holds one at another address: the button is the way to move it.
+    const activates = kycApproved(u) || (u.kycStatus === "pending" && hasConnectedMonerium(u) && bankOffered(u)
+      && (funding.status !== "iban_pending" || !!u.moneriumIbanElsewhere?.iban));
+    const needsIban = activates && !u.iban && funding.mode === "sandbox";
     const movedAway = ibanMovedAway(u);
     el.innerHTML = `
       <div class="m-rows">

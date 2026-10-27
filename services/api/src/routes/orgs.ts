@@ -647,7 +647,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     if (existing.some((a) => a.currency === currency)) {
       return res
         .status(409)
-        .json({ error: `This organisation already has a ${currency} account.` });
+        .json({ error: `This organisation already has a ${currency} account, listed on Accounts even while it is not open. Connect it there instead of opening another.` });
     }
     // A second currency is the paid feature; the first one is not.
     if (existing.length >= 1 && !requireCapability(ctx, res, "accounts.multiCurrency")) return;

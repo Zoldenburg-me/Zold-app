@@ -10,6 +10,7 @@
  * so a screen is added by naming it and the shell dispatches without knowing
  * what exists. Every renderer reads the live `org` from core.js.
  */
+import { isOwnCompanyOrg } from "./access-model.js";
 import { $, Z, api, cap, chainId, countrySelect, day, esc, eur, gateHtml, issuerFieldNames, issuerIds, maskIban, mayActOnInvoice, me, org, ownSafe, plain, refreshMe, roleCan, safeAddressHtml, ymd } from "./core.js";
 
 export const RENDER = {};
@@ -42,6 +43,10 @@ const profileRows = (a, mayManage) => {
   ].filter(Boolean);
 };
 
+/** The Monerium connection and the IBAN activation live in the app, which a
+ *  company login may open for exactly this (app/phone.js PH_COMPANY_APP). */
+export const moneriumLink = (label) => `<a class="z-btn z-btn--secondary z-btn--sm" href="/app?from=business#monerium-settings">${esc(label)}</a>`;
+
 META.accounts = () => ({
   title: "Accounts",
   sub: "An account holds one currency and pays out on that currency’s own bank network.",
@@ -55,6 +60,9 @@ RENDER.accounts = async () => {
   const waitHtml = profileWait
     ? `${Z.tag("Waiting for Monerium", "amber")} Monerium had ${who} as ${esc(plain(profileWait.state))} on ${esc(new Date(profileWait.at).toLocaleString())}.`
     : "";
+  // Only a login whose own account can back this one connects Monerium for
+  // it; a member's personal profile cannot back a company.
+  const ownMonerium = org.type === "personal" || isOwnCompanyOrg(me, org, accounts);
   const cards = accounts.map((a) => {
     const ident = a.identifier?.iban || a.identifier?.accountNumber || a.identifier?.mobile || "";
     const identLabel = a.identifier?.iban ? "IBAN" : a.identifier?.accountNumber ? "Account number" : a.identifier?.mobile ? "Mobile" : "IBAN";
@@ -62,7 +70,7 @@ RENDER.accounts = async () => {
     const action = !a.backingUserId && a.currency === "EUR"
       ? adoption?.allowed
         ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="fund-account" data-id="${esc(a.id)}">${adoption.wallet ? "Connect your wallet" : profileWait ? "Check with Monerium again" : org.type === "business" ? "Connect the company’s IBAN" : "Fund from my account"}</button>`
-        : adoption?.reason ? `<p class="desc">${esc(plain(adoption.reason))}</p>` : ""
+        : adoption?.reason ? `<p class="desc">${esc(plain(adoption.reason))}</p>${ownMonerium ? moneriumLink("Connect Monerium") : ""}` : ""
       : "";
     const details = [
       a.gate ? ["Not open because", `${esc(plain(a.gate.reason))}<br>Needs: ${esc(plain(a.gate.needs))}`] : null,
