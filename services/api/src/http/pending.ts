@@ -59,6 +59,18 @@ export const pendingTransferExecutions = new Map<
   }
 >();
 
+/** A crypto send's UserOperation awaiting its passkey, keyed by send id. */
+export const pendingCryptoSends = new Map<
+  string,
+  {
+    userId: string;
+    expiresAt: number;
+    challenge: string;
+    plan: NonNullable<User["passkeySafe"]>;
+    userOperation: PendingPasskeySafeDeployment;
+  }
+>();
+
 const pruneExpired = (m: Map<string, { expiresAt: number }>, now: number) => {
   for (const [id, pending] of m) if (pending.expiresAt < now) m.delete(id);
 };
@@ -69,3 +81,4 @@ export const prunePendingPasskeySafeDeployments = (now = Date.now()) =>
   pruneExpired(pendingPasskeySafeDeployments, now);
 export const prunePendingMoneriumLinkSignatures = (now = Date.now()) =>
   pruneExpired(pendingMoneriumLinkSignatures, now);
+export const prunePendingCryptoSends = (now = Date.now()) => pruneExpired(pendingCryptoSends, now);

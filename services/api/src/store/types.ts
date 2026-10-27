@@ -482,6 +482,38 @@ export interface CryptoPartialConversion {
 export type CryptoHolding = "none" | "held" | "awaiting_approval" | "converted" | "refused" | "unconfirmed";
 
 /**
+ * A crypto send: EURe or USDC from the user's passkey Safe straight to an
+ * address the user gave as an ENS name or a 0x address. No quote, no swap and
+ * no Zold fee; it counts against the daily cap at `capEur`.
+ *
+ * `to` is the address the user confirmed on the check screen. The passkey
+ * signs a UserOperation moving exactly `amount` of `token` to it, and a name
+ * is resolved again before that operation is submitted.
+ */
+export interface CryptoSend {
+  id: string;
+  userId: string;
+  /** The ENS name, normalised, when the recipient was given by name. */
+  name?: string;
+  to: `0x${string}`;
+  token: "EURE" | "USDC";
+  /** Token units as a decimal string, e.g. "12.5". */
+  amount: string;
+  capEur: number;
+  /** CREATED: waiting for the passkey. SUBMITTED: claimed and sent to the
+   *  bundler. SENT: included and succeeded. FAILED: refused or reverted. */
+  state: "CREATED" | "SUBMITTED" | "SENT" | "FAILED";
+  /** Unix seconds; an unsigned send expires then and stops counting. */
+  deadline: number;
+  createdAt: string;
+  updatedAt: string;
+  authorizedAt?: string;
+  userOpHash?: string;
+  txHash?: string;
+  error?: string;
+}
+
+/**
  * One inbound crypto transfer seen at a user's account.
  *
  * Recorded before anything is moved or credited, so a crash between detection

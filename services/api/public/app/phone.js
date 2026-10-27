@@ -345,8 +345,24 @@ function phInWord(t) {
   return "RECEIVED";
 }
 
-/** One activity row: a transfer out, or money in. */
+/* A crypto send in Activity: to whom, how much, and what the chain said.
+   SUBMITTED is "checking": sent, and not yet seen included. */
+const phCryptoOutWho = (t) => t.name || `${String(t.to).slice(0, 6)}…${String(t.to).slice(-4)}`;
+const phCryptoOutAmount = (t) => Z.amount({ value: Number(t.amount), currency: t.token === "USDC" ? usdSym() : "EURe", direction: t.state === "FAILED" ? undefined : "out" });
+const phCryptoOutWord = (t) => (t.state === "SENT" ? "SENT" : t.state === "SUBMITTED" ? "CHECKING" : "FAILED");
+
+/** One activity row: a transfer out, a crypto send, or money in. */
 function phActivityRow(t) {
+  if (t.kind === "crypto_out") {
+    return Z.row({
+      lead: Z.iconTile({ icon: "account_balance_wallet" }),
+      title: phCryptoOutWho(t),
+      sub: `To a crypto wallet · ${phWhen(t.at)}`,
+      right: `${phCryptoOutAmount(t)}${Z.tag(phCryptoOutWord(t))}`,
+      href: phHref("send/wallet-done", t.id),
+      chevron: false,
+    });
+  }
   if (t.kind === "bank_in") {
     return Z.row({
       lead: Z.avatar({ name: t.counterpartyName || "Bank transfer" }),

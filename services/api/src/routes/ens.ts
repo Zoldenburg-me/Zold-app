@@ -22,7 +22,7 @@ import dns from "node:dns";
 import https from "node:https";
 import net from "node:net";
 import express from "express";
-import { createPublicClient, getAddress, http, isHex, toCoinType, type Address, type Hex } from "viem";
+import { createPublicClient, getAddress, http, isAddress, isHex, toCoinType, type Address, type Hex } from "viem";
 import { mainnet, sepolia } from "viem/chains";
 import { normalize } from "viem/ens";
 import { CHAIN_ID, ENS_GATEWAY, ENS_LOOKUP, PUBLIC_URL } from "../config.js";
@@ -252,6 +252,54 @@ function cacheControl(expires: bigint, lookup?: Lookup): string {
   return `public, max-age=${Math.max(0, Math.min(HTTP_MAX_AGE_S, left))}`;
 }
 
+const ensClient = ENS_LOOKUP.enabled
+  ? createPublicClient({
+      chain: ENS_LOOKUP.chainId === 1 ? mainnet : sepolia,
+      transport: http(ENS_LOOKUP.rpcUrl, { timeout: ENS_RPC_TIMEOUT_MS }),
+      ccipRead: { request: ccipFetch },
+    })
+  : undefined;
+
+export type EnsResolution =
+  | { ok: true; name: string; address: Address }
+  | { ok: false; status: 400 | 404 | 502 | 503; code: "BAD_NAME" | "ENS_LOOKUP_OFF" | "ENS_UNAVAILABLE" | "NO_ADDRESS"; error: string };
+
+/**
+ * The address an ENS name holds for the pay chain's coin type (ENSIP-11), or
+ * why there is none. A name with only an Ethereum record does not resolve:
+ * money sent here goes out on the pay chain. The lookup and a crypto send both
+ * use this, so what the user is shown is what gets signed.
+ */
+export async function resolveEnsName(raw: string): Promise<EnsResolution> {
+  const typed = raw.trim();
+  if (typed.length > MAX_NAME_LENGTH) return { ok: false, status: 400, code: "BAD_NAME", error: "not a valid ENS name" };
+  let name: string;
+  try {
+    name = normalize(typed);
+  } catch {
+    return { ok: false, status: 400, code: "BAD_NAME", error: "not a valid ENS name" };
+  }
+  if (!name.includes(".")) return { ok: false, status: 400, code: "BAD_NAME", error: "not a valid ENS name" };
+  if (!ensClient) return { ok: false, status: 503, code: "ENS_LOOKUP_OFF", error: "ENS lookups are not configured on this deployment" };
+  let address: string | null;
+  try {
+    address = await ensClient.getEnsAddress({ name, coinType: toCoinType(CHAIN_ID) });
+  } catch {
+    return { ok: false, status: 502, code: "ENS_UNAVAILABLE", error: "the ENS lookup failed — try again" };
+  }
+  return ensAnswer(name, address);
+}
+
+/** What a resolver answered, as a resolution: a resolver may answer anything,
+ *  and only an address goes on screen or into a send. */
+export function ensAnswer(name: string, address: string | null | undefined): EnsResolution {
+  if (!address) return { ok: false, status: 404, code: "NO_ADDRESS", error: `${name} has no address for this network` };
+  if (!isAddress(address, { strict: false })) {
+    return { ok: false, status: 502, code: "ENS_UNAVAILABLE", error: `${name}'s resolver did not answer with an address` };
+  }
+  return { ok: true, name, address: getAddress(address) };
+}
+
 export function createEnsRouter({ requireSession, livePage = livePaymentPage }: EnsDeps) {
   const router = express.Router();
 
@@ -296,39 +344,14 @@ export function createEnsRouter({ requireSession, livePage = livePaymentPage }: 
     }),
   );
 
-  const client = ENS_LOOKUP.enabled
-    ? createPublicClient({
-        chain: ENS_LOOKUP.chainId === 1 ? mainnet : sepolia,
-        transport: http(ENS_LOOKUP.rpcUrl, { timeout: ENS_RPC_TIMEOUT_MS }),
-        ccipRead: { request: ccipFetch },
-      })
-    : undefined;
-
   router.get(
     "/ens/lookup",
     wrap(async (req, res) => {
       if (!requireSession(req, res)) return;
-      const raw = String(req.query.name ?? "").trim();
-      if (raw.length > MAX_NAME_LENGTH) return res.status(400).json({ error: "not a valid ENS name", code: "BAD_NAME" });
-      let name: string;
-      try {
-        name = normalize(raw);
-      } catch {
-        return res.status(400).json({ error: "not a valid ENS name", code: "BAD_NAME" });
-      }
-      if (!name.includes(".")) return res.status(400).json({ error: "not a valid ENS name", code: "BAD_NAME" });
-      if (!client) return res.status(503).json({ error: "ENS lookups are not configured on this deployment", code: "ENS_LOOKUP_OFF" });
-      let address: string | null;
-      try {
-        address = await client.getEnsAddress({ name, coinType: toCoinType(CHAIN_ID) });
-      } catch {
-        return res.status(502).json({ error: "the ENS lookup failed — try again", code: "ENS_UNAVAILABLE" });
-      }
-      if (!address) {
-        return res.status(404).json({ error: `${name} has no address for this network`, code: "NO_ADDRESS" });
-      }
+      const found = await resolveEnsName(String(req.query.name ?? ""));
+      if (!found.ok) return res.status(found.status).json({ error: found.error, code: found.code });
       res.setHeader("cache-control", "private, no-store");
-      res.json({ name, address: getAddress(address), chainId: CHAIN_ID });
+      res.json({ name: found.name, address: found.address, chainId: CHAIN_ID });
     }),
   );
 

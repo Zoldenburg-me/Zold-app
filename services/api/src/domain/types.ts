@@ -989,7 +989,9 @@ export type StatementEvent =
    *  receipt value. */
   | "crypto_disposal"
   | "eure_in"
-  | "sweep";
+  | "sweep"
+  /** EURe or USDC sent from the Safe to a wallet (routes/crypto-sends.ts). */
+  | "crypto_out";
 
 export interface StatementFacts {
   key: string;

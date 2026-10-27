@@ -491,6 +491,18 @@ function bindHistRetry(el) {
   el.querySelectorAll("[data-hist-retry]").forEach((b) => { b.onclick = () => loadTransfers(); });
 }
 function histRow(t) {
+  if (t.kind === "crypto_out") {
+    return `
+    <div class="hic">OUT</div>
+    <div class="hmain">
+      <div class="hn">${esc(phCryptoOutWho(t))}</div>
+      <div class="hs">To a crypto wallet</div>
+    </div>
+    <div>
+      <div class="hamt">${phCryptoOutAmount(t)}</div>
+      <div class="hst">${esc(phCryptoOutWord(t))}</div>
+    </div>`;
+  }
   if (t.kind === "bank_in") {
     return `
     <div class="hic">IN</div>

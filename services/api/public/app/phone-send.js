@@ -32,7 +32,7 @@ function phPayees() {
 function phSendBlocked(u = user) {
   if (!HAS("onchain_balance")) return { text: "Sending is not part of this account.", action: null };
   // Send is a bank transfer today; sending to a crypto wallet is not built.
-  if (!bankOffered(u) && !kycApproved(u)) return { text: "Sending here is a bank transfer, and this account has no bank account. Sending to a crypto wallet isn’t built yet.", action: null };
+  if (!bankOffered(u) && !kycApproved(u)) return { text: "Sending opens once your identity is verified, and this account has no bank account to verify it with.", action: null };
   if (!kycApproved(u) || !u?.iban) return { text: "Sending opens once Monerium has verified you and your IBAN is active.", action: { id: "ph-send-verify", label: "Verify your identity" } };
   return null;
 }
@@ -62,7 +62,9 @@ PH.send = {
         label: "New payment",
         rows: [
           Z.row({ lead: Z.iconTile({ icon: "account_balance", tone: "p" }), title: "Bank transfer", sub: "To any IBAN in Europe, no Zold fee", right: Z.tag("Beta"), href: "#send/new" }),
-          Z.soonRow({ lead: Z.iconTile({ icon: "account_balance_wallet" }), title: "Crypto wallet", sub: `Send digital dollars (${usdSym()}) to a wallet` }),
+          caps.cryptoSend
+            ? Z.row({ lead: Z.iconTile({ icon: "account_balance_wallet", tone: "p" }), title: "Crypto wallet", sub: `EURe or ${usdSym()} to an ENS name or 0x address`, href: "#send/wallet" })
+            : Z.soonRow({ lead: Z.iconTile({ icon: "account_balance_wallet" }), title: "Crypto wallet", sub: `Send digital dollars (${usdSym()}) to a wallet` }),
         ],
       })}
       ${Z.listGroup({
@@ -122,6 +124,155 @@ PH["send/new"] = {
       phSend = { payee: { name: name.value.trim(), iban: clean }, amount: "", reference: "", quote: null, transferId: null, error: null };
       phGo("send/amount", "new");
     };
+  },
+};
+
+/* ==========================================================================
+   Send to a crypto wallet
+   ========================================================================== */
+
+/* The wallet send in progress. `address` is what the check screen showed and
+   the server must still resolve to at create and again before submitting. */
+let phWallet = { to: "", token: "EURE", amount: "", name: null, address: null };
+
+const phWalletSym = (token) => (token === "USDC" ? usdSym() : "EURe");
+/* 0x address in groups of four, as an IBAN is shown, so it can be read aloud. */
+const phGroupAddress = (a) => `0x ${String(a).slice(2).replace(/(.{4})/g, "$1 ").trim()}`;
+
+PH["send/wallet"] = {
+  title: "Send to a crypto wallet",
+  html() {
+    const w = phWallet;
+    if (!caps.cryptoSend) return `${phTop("Send to a crypto wallet", "send")}${phMain(Z.note({ text: "Sending to a crypto wallet isn’t available here." }) + Z.button({ variant: "primary", full: true, label: "Back to Send", href: "#send" }))}`;
+    return `${phTop("Send to a crypto wallet", "send")}<form id="ph-wal" class="z-app__form" novalidate>${phMain(`
+      <div class="z-form">
+        ${Z.field({ id: "ph-wal-to", label: "To", name: "to", spellcheck: false, placeholder: caps.ensLookup ? "name.eth or 0x…" : "0x…", value: w.to, required: true, hint: caps.ensLookup ? "An ENS name or a wallet address." : "A wallet address." })}
+        ${Z.select({ id: "ph-wal-token", label: "Token", name: "token", value: w.token, options: [{ value: "EURE", label: "EURe (euro)" }, { value: "USDC", label: `${usdSym()} (dollar)` }] })}
+        ${Z.field({ id: "ph-wal-amount", label: "Amount", name: "amount", inputmode: "decimal", placeholder: "0.00…", value: w.amount, required: true })}
+      </div>
+      ${Z.note({ text: `Sent on ${phChainName(caps.chainId)} from your account, with no Zold fee. A wallet payment can’t be called back.` })}
+      <p class="z-err" id="ph-wal-err" role="alert" hidden></p>
+    `)}${phFoot(Z.button({ variant: "primary", full: true, label: "Check the address", type: "submit", id: "ph-wal-next" }))}</form>`;
+  },
+  bind(root) {
+    const form = root.querySelector("#ph-wal");
+    if (!form) return;
+    const next = root.querySelector("#ph-wal-next");
+    const err = root.querySelector("#ph-wal-err");
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      if (Z.isDisabled(next)) return;
+      const to = root.querySelector("#ph-wal-to");
+      const amount = root.querySelector("#ph-wal-amount");
+      const typed = to.value.trim();
+      const amt = amount.value.trim().replace(",", ".");
+      const isAddr = /^0x[0-9a-fA-F]{40}$/.test(typed);
+      Z.setFieldError(to, isAddr || (caps.ensLookup && /^[^\s.]+(\.[^\s.]+)+$/.test(typed)) ? "" : caps.ensLookup ? "Enter an ENS name like name.eth, or a 0x address." : "Enter a 0x address of 40 characters.");
+      Z.setFieldError(amount, /^\d{1,12}(\.\d{1,6})?$/.test(amt) && Number(amt) > 0 ? "" : "Enter an amount, like 25 or 25.50.");
+      if (Z.focusFirstError(root)) return;
+      err.hidden = true;
+      phWallet = { to: typed, token: root.querySelector("#ph-wal-token").value, amount: amt, name: null, address: null };
+      if (isAddr) { phWallet.address = typed; phGo("send/wallet-check"); return; }
+      Z.setLoading(next, true);
+      try {
+        const r = await api(`/api/ens/lookup?name=${encodeURIComponent(typed)}`);
+        phWallet.name = r.name;
+        phWallet.address = r.address;
+        phGo("send/wallet-check");
+      } catch (e2) {
+        Z.setLoading(next, false);
+        err.textContent = e2.message;
+        err.hidden = false;
+      }
+    };
+  },
+};
+
+/* The address in full before anything is signed. Sending asks for a tick,
+   because the passkey approves exactly this address and nothing can undo it. */
+PH["send/wallet-check"] = {
+  title: "Check the address",
+  html() {
+    const w = phWallet;
+    if (!w.address) return `${phTop("Check the address", "send")}${phMain(Z.note({ text: "Enter who to pay first." }) + Z.button({ variant: "primary", full: true, label: "Send to a wallet", href: "#send/wallet" }))}`;
+    return `${phTop("Check the address", "send")}${phMain(`
+      ${Z.kv([
+        ...(w.name ? [{ key: "Name", value: w.name }] : []),
+        { key: "Address", value: phGroupAddress(w.address), mono: true },
+        { key: "Network", value: phChainName(caps.chainId) },
+        { key: "Amount", value: `${w.amount} ${phWalletSym(w.token)}`, strong: true },
+        { key: "Zold fee", value: "None" },
+      ])}
+      ${Z.note({ tone: "a", text: w.name ? `Compare the address with the one ${w.name}’s owner gave you. We check the name again just before sending and stop if it points anywhere else.` : "Compare every character with the address they gave you. A payment to a wrong address can’t be recovered." })}
+      <label class="z-check" for="ph-wal-ok"><input id="ph-wal-ok" type="checkbox"><span>I checked this address with them.</span></label>
+      <p class="z-err" id="ph-wal-err" role="alert" hidden></p>
+    `)}${phFoot(Z.button({ variant: "primary", full: true, label: `Send ${w.amount} ${phWalletSym(w.token)}`, id: "ph-wal-send", disabledReason: undefined }))}`;
+  },
+  bind(root) {
+    const btn = root.querySelector("#ph-wal-send");
+    const ok = root.querySelector("#ph-wal-ok");
+    if (!btn || !ok) return;
+    const sync = () => { if (ok.checked) btn.removeAttribute("aria-disabled"); else btn.setAttribute("aria-disabled", "true"); };
+    ok.onchange = sync;
+    sync();
+    btn.onclick = () => { if (!ok.checked) { ok.focus(); return; } phWalletSubmit(btn, root.querySelector("#ph-wal-err")); };
+  },
+};
+
+/* Create (the server resolves again and must match the address shown), then
+   the passkey signs the Safe operation paying exactly that address, then
+   submit (the server resolves a name once more first). */
+async function phWalletSubmit(btn, errEl) {
+  if (Z.isDisabled(btn)) return;
+  errEl.hidden = true;
+  Z.setLoading(btn, true);
+  const w = phWallet;
+  try {
+    const created = await api(`/api/users/${encodeURIComponent(user.id)}/crypto-sends`, { to: w.to, token: w.token, amount: w.amount, confirmedAddress: w.address });
+    const execution = await safeExecutionAssertion({ safeExecution: created.safeExecution });
+    if (!execution) throw new Error("This account can’t approve the payment with a passkey here.");
+    const sent = await api(`/api/crypto-sends/${encodeURIComponent(created.id)}/authorize`, { executionAssertion: execution });
+    phPutCryptoSend(sent);
+    refresh();
+    phGo("send/wallet-done", sent.id, { replace: true });
+  } catch (e) {
+    Z.setLoading(btn, false);
+    errEl.textContent = e?.name === "NotAllowedError"
+      ? Z.byDevice("Face ID or fingerprint was cancelled. Nothing was sent.", "The passkey prompt was cancelled. Nothing was sent.")
+      : e.message;
+    errEl.hidden = false;
+  }
+}
+
+/* Put a crypto send into the activity list, new or updated, as the server lists it. */
+function phPutCryptoSend(s) {
+  const row = { kind: "crypto_out", at: s.createdAt, ...s };
+  if (hist.some((x) => x.id === s.id)) updateHistory(row); else addHistory(row);
+}
+
+PH["send/wallet-done"] = {
+  title: "Wallet payment",
+  live: (id) => { const s = hist.find((x) => x.id === id); return s ? `${s.state}|${histLoaded}` : `none|${histLoaded}`; },
+  html(id) {
+    // From Activity, so the result is still there after a reload.
+    const s = hist.find((x) => x.id === id && x.kind === "crypto_out");
+    if (!s && id && !histLoaded && !histLoadFailed) return `${phTop("Wallet payment", "activity")}${phMain(Z.skeletonRows(3, "Loading the payment…"))}`;
+    if (!s) return `${phTop("Wallet payment", "send")}${phMain(Z.note({ text: "No wallet payment is open." }))}`;
+    const sent = s.state === "SENT";
+    const title = sent ? "Sent" : s.state === "SUBMITTED" ? "Sent, not yet confirmed" : "Not sent";
+    const lede = sent
+      ? `${s.amount} ${phWalletSym(s.token)} went to ${s.name || "the address"} on ${phChainName(caps.chainId)}.`
+      : s.state === "SUBMITTED" ? "The network took the payment but hasn’t confirmed it yet. It may still land; check your balance before trying again."
+        : s.error || "Nothing left your account.";
+    return `${Z.topbar({ srTitle: title, back: { href: "#home", label: "Back to Home" } })}${phMain(`
+      <span class="z-tile z-tile--${sent ? "p" : "a"} z-tile--lg" aria-hidden="true">${Z.icon(sent ? "check" : "hourglass_top")}</span>
+      <div class="z-intro"><h2 class="z-title">${esc(title)}</h2><p class="z-sub">${esc(lede)}</p></div>
+      ${Z.kv([
+        ...(s.name ? [{ key: "Name", value: s.name }] : []),
+        { key: "Address", value: phGroupAddress(s.to), mono: true },
+        ...(s.txHash ? [{ key: "Transaction", value: s.txHash, mono: true }] : []),
+      ])}
+    `)}${phFoot(Z.button({ variant: "primary", full: true, label: "Done", href: "#home" }))}`;
   },
 };
 

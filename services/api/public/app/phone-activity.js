@@ -20,7 +20,7 @@ function phFiltered(filter, q) {
     if (filter === "out" && histIsIn(t)) return false;
     if (filter === "flight" && !phInFlight(t)) return false;
     if (!needle) return true;
-    const hay = [t.recipientName, t.reference, t.recipientIban, t.counterpartyName, t.memo, t.kind === "bank_in" ? "bank transfer received" : t.token === "USDC" ? "digital dollars usdc" : t.kind === "funding" ? "euros received" : ""]
+    const hay = [t.recipientName, t.reference, t.recipientIban, t.counterpartyName, t.memo, t.name, t.to, t.kind === "crypto_out" ? "crypto wallet" : t.kind === "bank_in" ? "bank transfer received" : t.token === "USDC" ? "digital dollars usdc" : t.kind === "funding" ? "euros received" : ""]
       .filter(Boolean).join(" ").toLowerCase();
     return hay.includes(needle);
   });

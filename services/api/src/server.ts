@@ -32,6 +32,7 @@ import { createUserRouter } from "./routes/users.js";
 import { createCryptoDepositRouter } from "./routes/crypto-deposits.js";
 import { createPaymentPageRouter } from "./routes/payment-page.js";
 import { createEnsRouter } from "./routes/ens.js";
+import { createCryptoSendsRouter } from "./routes/crypto-sends.js";
 import { createEmailVerificationRouter } from "./routes/email-verification.js";
 import { createReceiptShareRouter } from "./routes/receipt-shares.js";
 import { createFaucetRouter } from "./routes/faucet.js";
@@ -230,6 +231,8 @@ app.use("/api", createCryptoDepositRouter({ requireUserSession }));
 // The payment page: claiming a handle, and the public payee read.
 app.use("/api", createPaymentPageRouter({ requireUserSession }));
 app.use("/api", createEnsRouter({ requireSession }));
+// Crypto out: EURe or USDC from the Safe to an ENS name or 0x address.
+app.use("/api", createCryptoSendsRouter({ requireUserSession }));
 // Shareable receipts. The slug IS the credential, hence the tight bucket.
 app.use("/api", createReceiptShareRouter({ requireUserSession }));
 // Testnet faucet: one EURe grant per account, testnet chains only.

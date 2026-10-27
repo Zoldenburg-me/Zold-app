@@ -15,7 +15,7 @@
  * form, not money in, so an EURe deposit made by a recorded conversion is not
  * listed; the converted USDC row says what it became.
  */
-import type { CryptoDeposit, MoneriumIssueRecord, Transfer } from "../store/types.js";
+import type { CryptoDeposit, CryptoSend, MoneriumIssueRecord, Transfer } from "../store/types.js";
 import { userTransfer, type UserTransfer } from "./user-transfer.js";
 import { conversionOutputs } from "./conversion-outputs.js";
 
@@ -49,12 +49,19 @@ export type ActivityRow =
       detectedAt: string;
       updatedAt: string;
     }
-  | { kind: "bank_in"; id: string; at: string; amountEur: number; counterpartyName?: string; memo?: string };
+  | { kind: "bank_in"; id: string; at: string; amountEur: number; counterpartyName?: string; memo?: string }
+  | ({ kind: "crypto_out"; at: string } & Omit<CryptoSend, "userId" | "capEur">);
 
 export interface ActivitySources {
   transfers: Transfer[];
   deposits: CryptoDeposit[];
   issues: MoneriumIssueRecord[];
+  cryptoSends?: CryptoSend[];
+}
+
+/** A crypto send once its passkey approved it; an unsigned one never moved. */
+function cryptoOutRow({ userId: _u, capEur: _c, ...s }: CryptoSend): ActivityRow {
+  return { kind: "crypto_out", at: s.createdAt, ...s };
 }
 
 /** An EURe mint the watcher accepted: Monerium issuing against a SEPA credit. */
@@ -110,7 +117,7 @@ const fundingRow = (d: CryptoDeposit): ActivityRow => ({
 });
 
 /** One user's rows, newest first. The caller has already scoped every source to the user. */
-export function buildActivity({ transfers, deposits, issues }: ActivitySources): ActivityRow[] {
+export function buildActivity({ transfers, deposits, issues, cryptoSends = [] }: ActivitySources): ActivityRow[] {
   const unclaimed = [...issues];
   const depositRows = withoutConversionOutputs(deposits).flatMap((d): ActivityRow[] => {
     if (!isAcceptedMint(d)) return [fundingRow(d)];
@@ -123,6 +130,7 @@ export function buildActivity({ transfers, deposits, issues }: ActivitySources):
     ...transfers.map((t): ActivityRow => ({ kind: "transfer", at: t.createdAt, ...userTransfer(t) })),
     ...depositRows,
     ...issues.map(bankRowFromIssue),
+    ...cryptoSends.filter((c) => c.state !== "CREATED").map(cryptoOutRow),
   ];
   return rows.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
 }

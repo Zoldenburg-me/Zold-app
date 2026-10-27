@@ -23,6 +23,7 @@ import {
   store,
   type ConversionSweep,
   type CryptoDeposit,
+  type CryptoSend,
   type MoneriumIssueRecord,
   type PaymentRequest,
   type Transfer,
@@ -75,6 +76,7 @@ const warned = new Set<string>();
 interface Rows {
   transfersOf(userId: string): Transfer[];
   depositsOf(userId: string): CryptoDeposit[];
+  cryptoSendsOf(userId: string): CryptoSend[];
   issueOrdersOf(userId: string): MoneriumIssueRecord[];
   sweepsOf(userId: string): ConversionSweep[];
   paymentRequestsOf(userId: string): PaymentRequest[];
@@ -89,6 +91,7 @@ interface Rows {
 const storeRows: Rows = {
   transfersOf: (id) => store.transfers.filter((t) => t.userId === id),
   depositsOf: (id) => withoutConversionOutputs(store.cryptoDeposits.filter((d) => d.userId === id)),
+  cryptoSendsOf: (id) => store.cryptoSends.filter((c) => c.userId === id),
   issueOrdersOf: (id) => store.moneriumIssueOrders.filter((o) => o.userId === id),
   sweepsOf: (id) => store.conversionSweeps.filter((s) => s.userId === id),
   paymentRequestsOf: (id) => store.paymentRequestsForUser(id),
@@ -117,6 +120,7 @@ function groupedRows(): Rows {
   // A conversion's EURe output is not income (transfers/activity.ts).
   const deposits = groupBy(withoutConversionOutputs(store.cryptoDeposits), (d) => d.userId);
   const issueOrders = groupBy(store.moneriumIssueOrders, (o) => o.userId);
+  const cryptoSends = groupBy(store.cryptoSends, (c) => c.userId);
   const sweeps = groupBy(store.conversionSweeps, (s) => s.userId);
   const paymentRequests = groupBy(store.paymentRequests, (r) => r.userId);
   const invoices = groupBy(store.invoices, (i) => i.orgId);
@@ -126,6 +130,7 @@ function groupedRows(): Rows {
   return {
     transfersOf: (id) => transfers.get(id) ?? [],
     depositsOf: (id) => deposits.get(id) ?? [],
+    cryptoSendsOf: (id) => cryptoSends.get(id) ?? [],
     issueOrdersOf: (id) => issueOrders.get(id) ?? [],
     sweepsOf: (id) => sweeps.get(id) ?? [],
     paymentRequestsOf: (id) => paymentRequests.get(id) ?? [],
@@ -170,6 +175,7 @@ function inputsFor(user: User, rows: Rows): StatementInputs | undefined {
     sweeps: rows.sweepsOf(user.id),
     invoices: rows.invoicesOf(books.orgId),
     paymentRequests: rows.paymentRequestsOf(user.id),
+    cryptoSends: rows.cryptoSendsOf(user.id),
     swapsHaveExecuted: rows.swapsHaveExecuted(),
   };
 }
