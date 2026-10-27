@@ -348,6 +348,15 @@ dialog .desc, dialog .zb-hint { font-size: 14.5px; color: var(--z-dim); }
 .zb-h-head { display: flex; align-items: center; gap: var(--z-space-4); flex-wrap: wrap; }
 .zb-h-end { margin-left: auto; }
 .zb-h-chips { display: flex; gap: 6px; }
+.zb-h-tools { display: flex; align-items: center; gap: var(--z-space-3); }
+.zb-h-checks { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; }
+.zb-h-checks > li { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--z-line); }
+.zb-h-checks > li:first-child { border-top: 0; padding-top: 0; }
+.zb-h-checks__main { flex: 1; min-width: 0; }
+.zb-h-mark { flex: none; font-size: 20px; }
+.zb-h-mark.is-ok { color: var(--z-mint); }
+.zb-h-mark.is-warn { color: var(--z-amber); }
+.zb-h-mark.is-unknown { color: var(--z-dim); }
 .zb-h-month { display: inline-flex; align-items: center; gap: 2px; font-size: 14px; }
 .zb-h-month > span { padding: 0 10px; }
 .zb-h-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: var(--z-radius-control); border: 1px solid var(--z-line-strong); background: transparent; color: var(--z-text); cursor: pointer; }
