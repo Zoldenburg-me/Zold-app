@@ -15,7 +15,10 @@
  *     the send approvable;
  *   - a Zold page's forwarder (by its address, or any name under our ENS
  *     parent we cannot place) takes only its listed tokens: EURe is refused;
- *   - off unless CRYPTO_SEND_ENABLED=1.
+ *   - off unless CRYPTO_SEND_ENABLED=1;
+ *   - gas paid in the token being sent is reserved from the balance;
+ *   - Activity lists approved sends, from the server, and the books carry a
+ *     line for each sent one.
  *
  * Offline: the ENS resolver, balance and rate are injected; the Safe operation
  * is the hardhat harness stand-in. Run: npm run crypto-send:test
@@ -41,6 +44,12 @@ const { addrs } = await import("../services/api/src/chain.js");
 const { FX } = await import("../services/api/src/config.js");
 const { safeFundedEurToday } = await import("../services/api/src/orchestrator.js");
 const { createCryptoSendsRouter } = await import("../services/api/src/routes/crypto-sends.js");
+const { prepareTransferExecution } = await import("../services/api/src/wallet/candide.js");
+// The harness stand-in, or one that also reports gas paid in a token.
+let gasInToken: { token: `0x${string}`; units: bigint } | undefined;
+const prepare: typeof prepareTransferExecution = async (...a) => ({ ...(await prepareTransferExecution(...a)), ...(gasInToken ? { gasTokenCost: gasInToken } : {}) });
+const { buildActivity } = await import("../services/api/src/transfers/activity.js");
+const { projectStatementLines } = await import("../services/api/src/bookkeeping/statement.js");
 initStore();
 
 const SAFE = "0x1111111111111111111111111111111111111111";
@@ -108,6 +117,7 @@ app.use("/api", createCryptoSendsRouter({
   },
   balanceOf: async () => balance,
   usdPerEur: async () => { if (rate === undefined) throw new Error("no rate"); return rate; },
+  prepare,
 }));
 const server = app.listen(0, "127.0.0.1");
 await new Promise<void>((r) => server.once("listening", () => r()));
@@ -261,6 +271,77 @@ try {
     assert.equal(made.data.code, "CRYPTO_SEND_OFF");
     assert.equal(approve.data.code, "CRYPTO_SEND_OFF");
     assert.equal(store.findCryptoSend(c.data.id)!.state, "CREATED");
+  });
+
+  await t("Activity lists approved sends from the server, never unsigned ones or private fields", async () => {
+    const mine = store.cryptoSends.filter((c) => c.userId === "u-cs");
+    const rows = buildActivity({ transfers: [], deposits: [], issues: [], cryptoSends: mine }).filter((r) => r.kind === "crypto_out") as any[];
+    assert.ok(rows.some((r) => r.state === "SENT" && r.txHash), "a sent payment is there with its tx hash");
+    assert.ok(rows.some((r) => r.state === "FAILED"), "a refused one is there as failed");
+    assert.ok(!rows.some((r) => r.state === "CREATED"), "an unsigned send never moved and is not listed");
+    assert.ok(rows.every((r) => r.userId === undefined && r.capEur === undefined));
+  });
+
+  await t("the books carry a line for each sent crypto send, at its euro value, and none for the rest", async () => {
+    const mine = store.cryptoSends.filter((c) => c.userId === "u-cs");
+    const lines = projectStatementLines({
+      orgId: "o1", accountId: "a1", userId: "u-cs", safeAddress: SAFE, timeZone: "UTC",
+      transfers: [], deposits: [], issueOrders: [], sweeps: [], invoices: [], paymentRequests: [],
+      cryptoSends: mine, swapsHaveExecuted: false,
+    }).filter((l) => l.statement?.event === "crypto_out");
+    const sent = mine.filter((c) => c.state === "SENT" || c.state === "SUBMITTED");
+    assert.equal(lines.length, sent.length, "one line per SENT or SUBMITTED send, none for CREATED or FAILED");
+    const usdc = mine.find((c) => c.state === "SENT" && c.token === "USDC");
+    if (!usdc) {
+      // Make one: a USDC send the chain confirmed.
+      const u = await create({ to: ALICE, confirmedAddress: ALICE, token: "USDC", amount: "12.5" });
+      const ok = await post(`/crypto-sends/${u.data.id}/authorize`, { executionAssertion: await passkey.assert(u.data.safeExecution.challenge) });
+      assert.equal(ok.status, 200);
+    }
+    const all = projectStatementLines({
+      orgId: "o1", accountId: "a1", userId: "u-cs", safeAddress: SAFE, timeZone: "UTC",
+      transfers: [], deposits: [], issueOrders: [], sweeps: [], invoices: [], paymentRequests: [],
+      cryptoSends: store.cryptoSends.filter((c) => c.userId === "u-cs"), swapsHaveExecuted: false,
+    }).filter((l) => l.statement?.event === "crypto_out");
+    const eure = all.find((l) => l.tags.includes("eure"))!;
+    assert.equal(eure.direction, "out");
+    assert.equal(eure.amount, "10.00", "the first €10 EURe send, at face value");
+    assert.equal(eure.counterparty?.address, ALICE);
+    assert.ok(eure.txHash, "the chain transaction is on the line");
+    const dollars = all.find((l) => l.tags.includes("usdc"))!;
+    assert.equal(dollars.amount, "10.00", "12.5 USDC at 1.25 USD per EUR is €10.00");
+    assert.match(dollars.note ?? "", /disposal gain or loss .* is not computed/);
+    // Sent but unconfirmed may still land: booked, tagged, valued at approval.
+    const pending = store.cryptoSends.find((c) => c.userId === "u-cs" && c.state === "SENT" && c.token === "EURE")!;
+    store.updateCryptoSend(pending.id, { state: "SUBMITTED" });
+    const again = projectStatementLines({
+      orgId: "o1", accountId: "a1", userId: "u-cs", safeAddress: SAFE, timeZone: "UTC",
+      transfers: [], deposits: [], issueOrders: [], sweeps: [], invoices: [], paymentRequests: [],
+      cryptoSends: [pending], swapsHaveExecuted: false,
+    });
+    store.updateCryptoSend(pending.id, { state: "SENT" });
+    assert.equal(again.length, 1);
+    assert.ok(again[0].tags.includes("submitted"));
+    assert.match(again[0].note ?? "", /not yet confirmed/);
+    assert.equal(again[0].at, pending.authorizedAt, "valued on the day it was approved, not on a later update");
+  });
+
+  await t("gas paid in USDC is reserved: a full-balance USDC send says the most it can send", async () => {
+    balance = 100n * 10n ** 6n; // 100 USDC
+    gasInToken = { token: addrs().usdc, units: 250_000n }; // 0.25 USDC
+    const before = safeFundedEurToday("u-cs");
+    const all = await create({ to: ALICE, confirmedAddress: ALICE, token: "USDC", amount: "100" });
+    assert.equal(all.status, 409, JSON.stringify(all.data));
+    assert.equal(all.data.code, "INSUFFICIENT_FOR_GAS");
+    assert.equal(all.data.maxSendable, "99.75");
+    assert.match(all.data.error, /the most you can send is 99\.75/);
+    assert.equal(safeFundedEurToday("u-cs"), before, "the cap hold is released");
+    assert.equal((await create({ to: ALICE, confirmedAddress: ALICE, token: "USDC", amount: "99.75" })).status, 201);
+    // EURe with USDC gas: the gas is not taken from EURe, so no reserve.
+    balance = 100n * 10n ** 18n;
+    assert.equal((await create({ to: ALICE, confirmedAddress: ALICE, amount: "100" })).status, 201);
+    gasInToken = undefined;
+    balance = 10n ** 30n;
   });
 
   await t("a KYC-pending account cannot send", async () => {

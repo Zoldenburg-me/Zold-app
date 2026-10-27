@@ -260,6 +260,7 @@ const EVENT_TITLES: Record<StatementFacts["event"], string> = {
   crypto_disposal: "Held USDC converted to EURe (disposal)",
   eure_in: "EURe received on chain",
   sweep: "Monthly conversion of leftover USDC",
+  crypto_out: "Sent to a crypto wallet",
 };
 
 export const belegTitle = (s: BelegSnapshot) => EVENT_TITLES[s.line.event];

@@ -377,6 +377,15 @@ export function transferSwapBatchTransactions(args: {
   return txs;
 }
 
+/** A prepared operation. `gasTokenCost` is set under SAFE_GAS_PAYMENT=token:
+ *  the most the paymaster takes from the Safe, in the gas token's units. */
+export interface PreparedSafeOperation {
+  safeAddress: `0x${string}`;
+  challenge: `0x${string}`;
+  userOperation: UserOperationV9;
+  gasTokenCost?: { token: `0x${string}`; units: bigint };
+}
+
 /**
  * The shared core of every send-time user-signed operation: validate the plan,
  * short-circuit under simulation, refuse undeployed Safes, then wrap the
@@ -386,7 +395,7 @@ export function transferSwapBatchTransactions(args: {
 async function prepareSafeExecutionCore(
   plan: PasskeySafeDeploymentPlan,
   txs: MetaTransaction[],
-): Promise<{ safeAddress: `0x${string}`; challenge: `0x${string}`; userOperation: UserOperationV9 }> {
+): Promise<PreparedSafeOperation> {
   const { account, passkeyOwner } = accountForPlan(plan);
   if (allowSimulation()) {
     return {
@@ -413,19 +422,23 @@ async function paidUserOperation(
   account: SafeAccount,
   passkeyOwner: WebauthnPublicKey,
   txs: MetaTransaction[],
-): Promise<{ safeAddress: `0x${string}`; challenge: `0x${string}`; userOperation: UserOperationV9 }> {
+): Promise<PreparedSafeOperation> {
   const userOperation = await account.createUserOperation(txs, rpc(), bundler(), {
     expectedSigners: [passkeyOwner],
   });
-  const finalOp = await payGas(account, userOperation);
+  const { userOperation: finalOp, gasTokenCost } = await payGas(account, userOperation);
   return {
     safeAddress: account.accountAddress as `0x${string}`,
     challenge: account.getUserOperationEip712Hash(finalOp, CANDIDE.chainId) as `0x${string}`,
     userOperation: finalOp,
+    ...(gasTokenCost ? { gasTokenCost } : {}),
   };
 }
 
-async function payGas(account: SafeAccount, userOperation: UserOperationV9): Promise<UserOperationV9> {
+async function payGas(
+  account: SafeAccount,
+  userOperation: UserOperationV9,
+): Promise<{ userOperation: UserOperationV9; gasTokenCost?: PreparedSafeOperation["gasTokenCost"] }> {
   const gas = CANDIDE.gas;
   if (gas.mode === "native") {
     // No paymaster: the EntryPoint takes the prefund from the Safe's ETH.
@@ -439,7 +452,7 @@ async function payGas(account: SafeAccount, userOperation: UserOperationV9): Pro
           `send ETH to ${account.accountAddress} on chain ${CANDIDE.chainId}`,
       );
     }
-    return userOperation;
+    return { userOperation };
   }
   const context =
     gas.mode === "token"
@@ -458,7 +471,12 @@ async function payGas(account: SafeAccount, userOperation: UserOperationV9): Pro
   if (gas.mode === "token" && !result.tokenQuote) {
     throw new SafeGasError(`the paymaster gave no quote for gas token ${gas.token}`);
   }
-  return result.userOperation as UserOperationV9;
+  return {
+    userOperation: result.userOperation as UserOperationV9,
+    ...(gas.mode === "token" && result.tokenQuote
+      ? { gasTokenCost: { token: gas.token as `0x${string}`, units: result.tokenQuote.tokenCost } }
+      : {}),
+  };
 }
 
 /**
@@ -596,7 +614,7 @@ export async function prepareTransferExecution(
   token: `0x${string}`,
   to: `0x${string}`,
   amount: bigint,
-): Promise<{ safeAddress: `0x${string}`; challenge: `0x${string}`; userOperation: UserOperationV9 }> {
+): Promise<PreparedSafeOperation> {
   return prepareSafeExecutionCore(plan, transferExecutionTransactions(token, to, amount));
 }
 

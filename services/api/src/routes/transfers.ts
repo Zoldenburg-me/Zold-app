@@ -182,6 +182,7 @@ export function createTransferRouter(deps: TransferDeps) {
           transfers: mine(store.transfers),
           deposits: mine(store.cryptoDeposits),
           issues: mine(store.moneriumIssueOrders),
+          cryptoSends: mine(store.cryptoSends),
         }),
       });
     }),

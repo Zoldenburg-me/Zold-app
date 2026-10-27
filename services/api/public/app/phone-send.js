@@ -133,7 +133,7 @@ PH["send/new"] = {
 
 /* The wallet send in progress. `address` is what the check screen showed and
    the server must still resolve to at create and again before submitting. */
-let phWallet = { to: "", token: "EURE", amount: "", name: null, address: null, sent: null };
+let phWallet = { to: "", token: "EURE", amount: "", name: null, address: null };
 
 const phWalletSym = (token) => (token === "USDC" ? usdSym() : "EURe");
 /* 0x address in groups of four, as an IBAN is shown, so it can be read aloud. */
@@ -171,7 +171,7 @@ PH["send/wallet"] = {
       Z.setFieldError(amount, /^\d{1,12}(\.\d{1,6})?$/.test(amt) && Number(amt) > 0 ? "" : "Enter an amount, like 25 or 25.50.");
       if (Z.focusFirstError(root)) return;
       err.hidden = true;
-      phWallet = { to: typed, token: root.querySelector("#ph-wal-token").value, amount: amt, name: null, address: null, sent: null };
+      phWallet = { to: typed, token: root.querySelector("#ph-wal-token").value, amount: amt, name: null, address: null };
       if (isAddr) { phWallet.address = typed; phGo("send/wallet-check"); return; }
       Z.setLoading(next, true);
       try {
@@ -231,9 +231,10 @@ async function phWalletSubmit(btn, errEl) {
     const created = await api(`/api/users/${encodeURIComponent(user.id)}/crypto-sends`, { to: w.to, token: w.token, amount: w.amount, confirmedAddress: w.address });
     const execution = await safeExecutionAssertion({ safeExecution: created.safeExecution });
     if (!execution) throw new Error("This account can’t approve the payment with a passkey here.");
-    phWallet.sent = await api(`/api/crypto-sends/${encodeURIComponent(created.id)}/authorize`, { executionAssertion: execution });
+    const sent = await api(`/api/crypto-sends/${encodeURIComponent(created.id)}/authorize`, { executionAssertion: execution });
+    phPutCryptoSend(sent);
     refresh();
-    phGo("send/wallet-done", null, { replace: true });
+    phGo("send/wallet-done", sent.id, { replace: true });
   } catch (e) {
     Z.setLoading(btn, false);
     errEl.textContent = e?.name === "NotAllowedError"
@@ -243,10 +244,19 @@ async function phWalletSubmit(btn, errEl) {
   }
 }
 
+/* Put a crypto send into the activity list, new or updated, as the server lists it. */
+function phPutCryptoSend(s) {
+  const row = { kind: "crypto_out", at: s.createdAt, ...s };
+  if (hist.some((x) => x.id === s.id)) updateHistory(row); else addHistory(row);
+}
+
 PH["send/wallet-done"] = {
   title: "Wallet payment",
-  html() {
-    const s = phWallet.sent;
+  live: (id) => { const s = hist.find((x) => x.id === id); return s ? `${s.state}|${histLoaded}` : `none|${histLoaded}`; },
+  html(id) {
+    // From Activity, so the result is still there after a reload.
+    const s = hist.find((x) => x.id === id && x.kind === "crypto_out");
+    if (!s && id && !histLoaded && !histLoadFailed) return `${phTop("Wallet payment", "activity")}${phMain(Z.skeletonRows(3, "Loading the payment…"))}`;
     if (!s) return `${phTop("Wallet payment", "send")}${phMain(Z.note({ text: "No wallet payment is open." }))}`;
     const sent = s.state === "SENT";
     const title = sent ? "Sent" : s.state === "SUBMITTED" ? "Sent, not yet confirmed" : "Not sent";

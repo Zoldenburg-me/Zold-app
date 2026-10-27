@@ -43,6 +43,7 @@ export interface CryptoSendDeps {
   resolveName?: (name: string) => Promise<EnsResolution>;
   balanceOf?: (token: `0x${string}`, holder: `0x${string}`) => Promise<bigint>;
   usdPerEur?: () => Promise<number>;
+  prepare?: typeof prepareTransferExecution;
 }
 
 const tokens = () => ({
@@ -100,6 +101,7 @@ export function createCryptoSendsRouter({
   resolveName = resolveEnsName,
   balanceOf = (token, holder) => publicClient.readContract({ address: token, abi: ERC20_BALANCE, functionName: "balanceOf", args: [holder] }),
   usdPerEur = () => eurPer("USD"),
+  prepare = prepareTransferExecution,
 }: CryptoSendDeps) {
   const router = express.Router();
   const off = (res: express.Response) =>
@@ -184,7 +186,19 @@ export function createCryptoSendsRouter({
       const deadline = Math.floor(Date.now() / 1000) + AUTH_WINDOW_SEC;
       let challenge: string;
       try {
-        const prepared = await prepareTransferExecution(user.passkeySafe, token.address, to.address, units);
+        const prepared = await prepare(user.passkeySafe, token.address, to.address, units);
+        // Gas paid in the token being sent comes out of the same balance.
+        const gas = prepared.gasTokenCost;
+        if (gas && gas.token.toLowerCase() === token.address.toLowerCase() && balance < units + gas.units) {
+          store.releaseCapHold(held.holdId);
+          const most = balance > gas.units ? formatUnits(balance - gas.units, token.decimals) : "0";
+          const sym = symbol === "EURE" ? "EURe" : usdToken().symbol;
+          return res.status(409).json({
+            error: `gas for this payment is paid in ${sym} from the same balance; the most you can send is ${most} ${sym}`,
+            code: "INSUFFICIENT_FOR_GAS",
+            maxSendable: most,
+          });
+        }
         challenge = passkeySafeChallenge(prepared.challenge);
         prunePendingCryptoSends();
         pendingCryptoSends.set(id, { userId: user.id, expiresAt: deadline * 1000, challenge, plan: user.passkeySafe, userOperation: prepared.userOperation });

@@ -90,7 +90,7 @@ await t("with the switch off, the row is the old soon row and the form does not 
 });
 
 await t("the check screen shows the name, the full address, the network and the amount", () => {
-  run(`phWallet = { to: "alice.eth", token: "USDC", amount: "25.5", name: "alice.eth", address: "${ADDR}", sent: null }`);
+  run(`phWallet = { to: "alice.eth", token: "USDC", amount: "25.5", name: "alice.eth", address: "${ADDR}" }`);
   const html = flat(run(`PH["send/wallet-check"].html()`));
   assert.match(html, /alice\.eth/);
   assert.match(html, /0x 5aAe b605 3F3E 94C9 b9A0 9f33 6694 35E7 Ef1B eAed/, "every character of the address, grouped");
@@ -116,7 +116,20 @@ await t("sending posts the address shown as confirmedAddress, signs, then submit
   assert.equal(calls[1][0], "/api/crypto-sends/s1/authorize");
   assert.equal(calls[1][1].executionAssertion.from, "ch", "the passkey signs the challenge the server returned");
   assert.equal(run(`__went.at(-1)`), "send/wallet-done");
-  assert.match(flat(run(`PH["send/wallet-done"].html()`)), /Sent.*0xab/);
+  assert.match(flat(run(`PH["send/wallet-done"].html("s1")`)), /Sent.*0xab/, "the result is read from Activity by id");
+});
+
+await t("a crypto send is a row in Activity, phone and desktop, and opens its result", () => {
+  run(`hist.splice(0, hist.length, { kind: "crypto_out", id: "s2", at: "2026-10-27T10:00:00Z", createdAt: "2026-10-27T10:00:00Z", name: "alice.eth", to: "${ADDR}", token: "EURE", amount: "12.5", state: "SENT", txHash: "0xcd" }); histLoaded = true;`);
+  const row = flat(run(`phActivityRow(hist[0])`));
+  assert.match(row, /alice\.eth/);
+  assert.match(row, /−12\.50 EURe/);
+  assert.match(row, /SENT/);
+  assert.match(row, /href="#send\/wallet-done\/s2"/);
+  assert.match(flat(run(`phDeskTxRow(hist[0])`)), /alice\.eth.*−12\.50 EURe/);
+  assert.match(flat(run(`histRow(hist[0])`)), /alice\.eth/);
+  assert.equal(run(`phFiltered("out", "alice").length`), 1, "found by name under Money out");
+  assert.match(flat(run(`PH["send/wallet-done"].html("s2")`)), /Sent.*0xcd/);
 });
 
 await t("a refused send says why and moves nowhere", async () => {

@@ -201,6 +201,15 @@ function phDeskGetPaid(u) {
 
 /* A payment as a table row. The name is the link; the row takes its click. */
 function phDeskTxRow(t) {
+  if (t.kind === "crypto_out") {
+    return `<tr>
+      <td class="z-dim">${esc(phWhen(t.at))}</td>
+      <td><span class="z-tbl__who">${Z.iconTile({ icon: "account_balance_wallet" })}<a class="z-tbl__link" href="${phHref("send/wallet-done", t.id)}">${esc(phCryptoOutWho(t))}</a></span></td>
+      <td><span class="z-dim">To a crypto wallet</span></td>
+      <td>${Z.tag(phCryptoOutWord(t))}</td>
+      <td class="z-tbl__num">${phCryptoOutAmount(t)}</td>
+    </tr>`;
+  }
   if (t.kind === "bank_in") {
     const who = t.counterpartyName || "Bank transfer";
     return `<tr>
@@ -360,7 +369,7 @@ function phSearchResults(raw) {
     .slice(0, 4)
     .map((c) => ({ group: "Contacts", go: ["contacts", c.key], lead: Z.avatar({ name: c.name }), title: phMark(c.name, q), right: esc(phMaskIban(c.iban)), label: c.name }));
   const payments = hist
-    .filter((t) => (t.kind === "bank_in" ? hit(t.counterpartyName, t.memo, "bank transfer received") : t.kind === "funding" ? hit("digital dollars usdc", "euros received") : hit(t.recipientName, t.reference)))
+    .filter((t) => (t.kind === "bank_in" ? hit(t.counterpartyName, t.memo, "bank transfer received") : t.kind === "funding" ? hit("digital dollars usdc", "euros received") : t.kind === "crypto_out" ? hit(t.name, t.to, "crypto wallet") : hit(t.recipientName, t.reference)))
     .slice(0, 5)
     .map((t) => {
       if (t.kind === "bank_in") {
@@ -371,6 +380,10 @@ function phSearchResults(raw) {
         const usdc = t.token === "USDC";
         const name = usdc ? `Digital dollars (${usdSym()})` : "Euros received";
         return { group: "Payments", go: ["in", t.id], lead: Z.iconTile({ icon: "south_west" }), title: phMark(name, q), right: `+${esc(usdc ? Z.formatMoney(t.amountUsdc || 0, usdSym()) : phEur(t.amountEur))} · ${esc(phDay(t.at || t.detectedAt))}`, label: name };
+      }
+      if (t.kind === "crypto_out") {
+        const name = phCryptoOutWho(t);
+        return { group: "Payments", go: ["send/wallet-done", t.id], lead: Z.iconTile({ icon: "north_east" }), title: phMark(name, q), right: `${phCryptoOutAmount(t)} · ${esc(phDay(t.at))}`, label: name };
       }
       const name = [t.recipientName || "Payment", t.reference].filter(Boolean).join(" · ");
       return { group: "Payments", go: ["tx", t.id], lead: Z.iconTile({ icon: "arrow_outward" }), title: phMark(name, q), right: `${phOut(t) ? "−" : ""}${esc(phEur(t.sendEur))} · ${esc(phDay(t.createdAt))}`, label: name };

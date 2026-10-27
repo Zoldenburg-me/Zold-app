@@ -21,6 +21,7 @@ import type { Invoice, LedgerEntry, StatementEvent, StatementFacts } from "../do
 import type {
   ConversionSweep,
   CryptoDeposit,
+  CryptoSend,
   MoneriumIssueRecord,
   Transfer,
 } from "../store/types.js";
@@ -46,6 +47,7 @@ export interface StatementInputs {
   sweeps: ConversionSweep[];
   invoices: Invoice[];
   paymentRequests: PaymentRequest[];
+  cryptoSends?: CryptoSend[];
   /** Rule 2: no swap has moved real money, so every conversion figure is
    *  labelled as coming from an unexecuted path until one has. */
   swapsHaveExecuted: boolean;
@@ -459,6 +461,37 @@ function cryptoLines(inp: StatementInputs): LineDraft[] {
 
 // ── The monthly sweep ────────────────────────────────────────────────────────
 
+/**
+ * A crypto send that left the Safe, or was sent and may still land
+ * (SUBMITTED, tagged so). EURe at face value; USDC at the mid it was checked
+ * against when sent. A USDC send
+ * is a disposal of held dollars, and its gain or loss against the receipt
+ * value is not computed here; the note says so.
+ */
+function cryptoOutLines(inp: StatementInputs): LineDraft[] {
+  return (inp.cryptoSends ?? [])
+    // SUBMITTED may still land, so it is booked as such, like a placed redeem.
+    .filter((c) => c.userId === inp.userId && (c.state === "SENT" || c.state === "SUBMITTED"))
+    .map((c) => ({
+      event: "crypto_out" as const,
+      key: `cryptosend:${c.id}`,
+      bookingAt: c.createdAt,
+      valueAt: c.authorizedAt ?? c.updatedAt,
+      amountCents: -cents(c.capEur),
+      counterparty: { ...(c.name ? { name: c.name } : {}), address: c.to },
+      reference: c.name ?? `To ${c.to.slice(0, 10)}`,
+      links: { txHashes: c.txHash ? [c.txHash] : [], ...(c.userOpHash ? { userOpHash: c.userOpHash } : {}) },
+      txType: "payout",
+      tags: [c.token === "USDC" ? "usdc" : "eure", "crypto_out", ...(c.state === "SUBMITTED" ? ["submitted"] : [])],
+      ...((c.token === "USDC" || c.state === "SUBMITTED")
+        ? { note: [
+            c.state === "SUBMITTED" ? "Sent to the network; not yet confirmed included." : "",
+            c.token === "USDC" ? `${c.amount} USDC sent, valued at the mid when sent (€${c.capEur.toFixed(2)}). The disposal gain or loss against its receipt value is not computed.` : "",
+          ].filter(Boolean).join(" ") }
+        : {}),
+    }));
+}
+
 function sweepLines(inp: StatementInputs): LineDraft[] {
   return inp.sweeps
     .filter((s) => s.userId === inp.userId && s.creditedEur > 0)
@@ -483,7 +516,7 @@ function sweepLines(inp: StatementInputs): LineDraft[] {
 
 /** Every line the inputs support, sorted by value date. */
 export function projectStatementLines(inp: StatementInputs, now = new Date().toISOString()): LedgerEntry[] {
-  const drafts = [...sepaInLines(inp), ...sepaOutLines(inp), ...cryptoLines(inp), ...eureInLines(inp), ...sweepLines(inp)];
+  const drafts = [...sepaInLines(inp), ...sepaOutLines(inp), ...cryptoLines(inp), ...eureInLines(inp), ...sweepLines(inp), ...cryptoOutLines(inp)];
   const seen = new Set<string>();
   const out: LedgerEntry[] = [];
   for (const d of drafts) {
