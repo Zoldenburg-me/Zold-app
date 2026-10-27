@@ -1,7 +1,8 @@
 /**
  * The account's Safe address is easy to find in the app: an open row in
  * Account details (label, full address, copy button, network), and on Your
- * page under what the page takes. It was inside a collapsed "Crypto wallet
+ * page under what the page takes (the Safe, never an expirable forwarder),
+ * and in Copy all / Share. It was inside a collapsed "Crypto wallet
  * address" block that users did not find.
  *
  * Runs the real classic scripts in load order with a stub DOM. Offline.
@@ -86,17 +87,20 @@ await t("no active Safe, no wallet row", () => {
   assert.doesNotMatch(html, /Wallet address/);
 });
 
-await t("Your page shows the address payers pay, named as the wallet when it is the Safe", () => {
-  const page = { handle: "kim", depositAddress: SAFE, supportedTokens: [{ symbol: "USDC", chainId: 8453, decimals: 6 }] };
+await t("Your page shows the Safe's address, never the page's forwarder", () => {
+  const page = { handle: "kim", depositAddress: FWD, supportedTokens: [{ symbol: "USDC", chainId: 8453, decimals: 6 }] };
   run(`user = ${JSON.stringify({ ...base, paymentPage: page })}`);
   const html = flat(run(`PH["get-paid/page"].html()`));
   assert.match(html, /USDC on Base/);
   assert.match(html, /Wallet address \(Base\)/);
   assert.match(html, new RegExp(`data-z-copy="${SAFE}"`));
-  run(`user = ${JSON.stringify({ ...base, paymentPage: { ...page, depositAddress: FWD } })}`);
-  const fwd = flat(run(`PH["get-paid/page"].html()`));
-  assert.match(fwd, /Page address/, "a forwarder is the page's address, not called the wallet");
-  assert.match(fwd, new RegExp(`data-z-copy="${FWD}"`));
+  assert.doesNotMatch(html, new RegExp(FWD), "a forwarder may have expired; it is never offered here");
+});
+
+await t("Copy all and Share carry the wallet address too", () => {
+  const text = run(`phDetailsText(${JSON.stringify({ ...base, iban: "DE89370400440532013000" })}, "COBADEFFXXX")`);
+  assert.ok(text.includes(`Wallet address (Base): ${SAFE}`), text);
+  assert.doesNotMatch(run(`phDetailsText(${JSON.stringify({ ...base, iban: "DE89370400440532013000", passkeySafe: { status: "pending" } })}, null)`), /Wallet/);
 });
 
 console.log(`\nSAFE ADDRESS UI TEST PASSED — ${pass}/${pass}`);

@@ -467,7 +467,8 @@ async function phLoadBic() {
 }
 
 function phDetailsText(u, bic) {
-  return [`Account holder: ${ownAccountName(u)}`, `IBAN: ${Z.groupIban(u.iban)}`, ...(bic ? [`BIC: ${bic}`] : [])].join("\n");
+  const wallet = u.address && u.passkeySafe?.status === "active" ? [`Wallet address (${phChainName(caps.chainId)}): ${u.address}`] : [];
+  return [`Account holder: ${ownAccountName(u)}`, `IBAN: ${Z.groupIban(u.iban)}`, ...(bic ? [`BIC: ${bic}`] : []), ...wallet].join("\n");
 }
 
 /* The account details body, used by the sheet and by Get paid. */
@@ -475,7 +476,7 @@ function phDetailsBody(u, bic, { loadingBic = false } = {}) {
   const hasWallet = u.address && u.passkeySafe?.status === "active";
   const net = phChainName(caps.chainId);
   const walletRow = () => Z.copyRow({ label: `Wallet address (${net})`, value: u.address, mono: true });
-  const walletWarn = Z.note({ tone: "a", text: `Only ${usdSym()} or EURe on ${net}. Anything else sent here is lost.` });
+  const walletWarn = Z.note({ tone: "a", text: `Only ${usdSym()} on the ${net} network. Anything else sent here is lost.` });
   if (!u.iban || !kycApproved(u)) {
     // Without an IBAN the wallet address is the account's details, shown open.
     const walletOpen = hasWallet
