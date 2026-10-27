@@ -245,6 +245,8 @@ try {
     assert.equal((await create({ to: ALICE, confirmedAddress: ALICE, amount: "0" })).data.code, "BAD_AMOUNT");
     assert.equal((await create({ to: ALICE, confirmedAddress: ALICE, amount: "1.1234567" })).data.code, "BAD_AMOUNT");
     assert.equal((await create({ to: ALICE, confirmedAddress: ALICE, amount: "-1" })).data.code, "BAD_AMOUNT");
+    assert.equal((await create({ to: ALICE, confirmedAddress: ALICE, amount: "0.004" })).data.code, "BELOW_MINIMUM", "under a cent the books would show nothing");
+    assert.equal((await create({ to: ALICE, confirmedAddress: ALICE, token: "USDC", amount: "0.01" })).data.code, "BELOW_MINIMUM", "0.01 USDC is under a euro cent");
     balance = 5n * 10n ** 18n;
     assert.equal((await create({ to: ALICE, confirmedAddress: ALICE })).data.code, "INSUFFICIENT_BALANCE");
     balance = 10n ** 30n;
@@ -308,8 +310,8 @@ try {
       transfers: [], deposits: [], issueOrders: [], sweeps: [], invoices: [], paymentRequests: [],
       cryptoSends: mine, swapsHaveExecuted: false,
     }).filter((l) => l.statement?.event === "crypto_out");
-    const sent = mine.filter((c) => c.state === "SENT" || c.state === "SUBMITTED");
-    assert.equal(lines.length, sent.length, "one line per SENT or SUBMITTED send, none for CREATED or FAILED");
+    const sent = mine.filter((c) => c.state === "SENT");
+    assert.equal(lines.length, sent.length, "one line per SENT send, none for CREATED, SUBMITTED or FAILED");
     const usdc = mine.find((c) => c.state === "SENT" && c.token === "USDC");
     if (!usdc) {
       // Make one: a USDC send the chain confirmed.
@@ -330,19 +332,15 @@ try {
     const dollars = all.find((l) => l.tags.includes("usdc"))!;
     assert.equal(dollars.amount, "10.00", "12.5 USDC at 1.25 USD per EUR is €10.00");
     assert.match(dollars.note ?? "", /disposal gain or loss .* is not computed/);
-    // Sent but unconfirmed may still land: booked, tagged, valued at approval.
+    // Sent but not confirmed may still fail, and a line is never deleted: not booked.
     const pending = store.cryptoSends.find((c) => c.userId === "u-cs" && c.state === "SENT" && c.token === "EURE")!;
-    store.updateCryptoSend(pending.id, { state: "SUBMITTED" });
-    const again = projectStatementLines({
+    const at = (c: typeof pending) => projectStatementLines({
       orgId: "o1", accountId: "a1", userId: "u-cs", safeAddress: SAFE, timeZone: "UTC",
       transfers: [], deposits: [], issueOrders: [], sweeps: [], invoices: [], paymentRequests: [],
-      cryptoSends: [pending], swapsHaveExecuted: false,
+      cryptoSends: [c], swapsHaveExecuted: false,
     });
-    store.updateCryptoSend(pending.id, { state: "SENT" });
-    assert.equal(again.length, 1);
-    assert.ok(again[0].tags.includes("submitted"));
-    assert.match(again[0].note ?? "", /not yet confirmed/);
-    assert.equal(again[0].at, pending.authorizedAt, "valued on the day it was approved, not on a later update");
+    assert.equal(at({ ...pending, state: "SUBMITTED" }).length, 0);
+    assert.equal(at({ ...pending, updatedAt: "2099-01-01T00:00:00Z" })[0].at, pending.authorizedAt, "valued on the day it was approved, not on a later update");
   });
 
   await t("gas paid in USDC is reserved: a full-balance USDC send says the most it can send", async () => {

@@ -46,8 +46,8 @@ Say this plainly rather than letting the surface imply otherwise:
   operation and a stubbed resolver. No name has been resolved, re-checked
   and paid for real. It is off unless `CRYPTO_SEND_ENABLED=1`. The books
   carry a USDC send at the mid when sent, without its disposal gain or loss
-  against the receipt value, and an unconfirmed submission has no
-  reconciler.
+  against the receipt value. An unconfirmed submission has no reconciler,
+  and is not booked: it stays SUBMITTED even if it lands.
 - **One real swap has run: 1 USDC to EURe in the earlier owner Safe on Base
   mainnet (2026-10-11).** Read back on chain 2026-10-12, before the 1 €
   below arrived: the Safe held 0 USDC and 0.8914 EURe. Which venue filled it and the gas it used are in

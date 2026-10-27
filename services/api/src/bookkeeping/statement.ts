@@ -462,16 +462,15 @@ function cryptoLines(inp: StatementInputs): LineDraft[] {
 // ── The monthly sweep ────────────────────────────────────────────────────────
 
 /**
- * A crypto send that left the Safe, or was sent and may still land
- * (SUBMITTED, tagged so). EURe at face value; USDC at the mid it was checked
- * against when sent. A USDC send
+ * A crypto send the chain confirmed: the money left the Safe. EURe at face
+ * value; USDC at the mid it was checked against when sent. A USDC send
  * is a disposal of held dollars, and its gain or loss against the receipt
  * value is not computed here; the note says so.
  */
 function cryptoOutLines(inp: StatementInputs): LineDraft[] {
   return (inp.cryptoSends ?? [])
-    // SUBMITTED may still land, so it is booked as such, like a placed redeem.
-    .filter((c) => c.userId === inp.userId && (c.state === "SENT" || c.state === "SUBMITTED"))
+    // SENT only: lines are never deleted, and a SUBMITTED send may still fail.
+    .filter((c) => c.userId === inp.userId && c.state === "SENT")
     .map((c) => ({
       event: "crypto_out" as const,
       key: `cryptosend:${c.id}`,
@@ -482,12 +481,9 @@ function cryptoOutLines(inp: StatementInputs): LineDraft[] {
       reference: c.name ?? `To ${c.to.slice(0, 10)}`,
       links: { txHashes: c.txHash ? [c.txHash] : [], ...(c.userOpHash ? { userOpHash: c.userOpHash } : {}) },
       txType: "payout",
-      tags: [c.token === "USDC" ? "usdc" : "eure", "crypto_out", ...(c.state === "SUBMITTED" ? ["submitted"] : [])],
-      ...((c.token === "USDC" || c.state === "SUBMITTED")
-        ? { note: [
-            c.state === "SUBMITTED" ? "Sent to the network; not yet confirmed included." : "",
-            c.token === "USDC" ? `${c.amount} USDC sent, valued at the mid when sent (€${c.capEur.toFixed(2)}). The disposal gain or loss against its receipt value is not computed.` : "",
-          ].filter(Boolean).join(" ") }
+      tags: [c.token === "USDC" ? "usdc" : "eure", "crypto_out"],
+      ...(c.token === "USDC"
+        ? { note: `${c.amount} USDC sent, valued at the mid when sent (€${c.capEur.toFixed(2)}). The disposal gain or loss against its receipt value is not computed.` }
         : {}),
     }));
 }

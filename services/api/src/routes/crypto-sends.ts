@@ -173,6 +173,10 @@ export function createCryptoSendsRouter({
           return res.status(503).json({ error: "no exchange rate to check your daily limit against — try again shortly", code: "NO_RATE" });
         }
       }
+      // Under a cent the books would show nothing (a €0.00 line reads as money in).
+      if (capEur < 0.01) {
+        return res.status(400).json({ error: "the smallest payment is worth €0.01", code: "BELOW_MINIMUM" });
+      }
       let balance: bigint;
       try {
         balance = await balanceOf(token.address, user.passkeySafe.address);
