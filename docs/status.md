@@ -6,11 +6,34 @@ Say this plainly rather than letting the surface imply otherwise:
 
 - **Mainnet has one user, the owner** (app.zoldhq.com, behind Cloudflare
   Access; technical-architecture §18.1). Its operator keys are not yet keys held for
-  real customers. Monerium production issued the owner's IBAN
-  for their Safe on their own production API keys (client credentials, not
-  OAuth). One bank transfer has come in on it: the owner's 1 € for the
-  Zoldenburg recovery enrolment, minted into the Safe as 1 EURe (read back
-  on chain 2026-10-12, 0.8914 → 1.8914 EURe). No SEPA payout has left.
+  real customers. Monerium production issues the owner's IBAN on their own
+  production API keys (client credentials, not OAuth).
+- **SEPA in and out has run on mainnet, for the owner only.** The owner
+  states that two full rounds have run, money in by bank transfer and back
+  out by SEPA payout, over €2,000 in total. One round is read back on chain
+  (2026-10-27) in the app's mainnet Safe `0xc1409bd66B9719A61A2139F093B58d29D9fC232F`,
+  in use from 2026-10-26 (its deployment date is not checked here):
+  - In: 992 EURe and 95 EURe minted by Monerium on 2026-10-26 at 02:25:15
+    UTC, block 53096084, txs `0x0625769295ab82a76cdd5722cbf620b07f2f6324a75dcd05d665faea369a12cd`
+    and `0xe1b573af5b7670ffce8092f9a6c9fe6765df54eeaecb1844a253c94f3e8041ce`.
+  - Out: 1,000 EURe burned from the Safe at 05:52:25 UTC, block 53102299,
+    tx `0xcfe881ef7d40f809e96666b2d3e8b6e392e825863fc831277754b8f557fe8d99`.
+    Monerium's account sent the burn (`burn(from, amount, hash,
+    signature)`), not a userOp. The Safe's `isValidSignature` accepts that
+    hash and signature, made by its only owner, the passkey signer
+    (threshold 1): the passkey signed the redeem order. The order's text is
+    only a hash on chain, so the bank credit is the owner's statement. 87
+    EURe stay in the Safe.
+  - The books matched: one verifying Beleg per line, and Books' net +87
+    equals the chain (the owner's check).
+  - Monerium order ids: pending owner.
+  The Safe has no other token transfer on chain (Blockscout lists three),
+  so the second round is not in it and was not found on chain; it is recorded here
+  only as the owner's statement. Mainnet ran the production build from
+  before #485.
+- **The owner's 1 € recovery enrolment** came in by bank transfer to an
+  earlier owner Safe on Base mainnet, not the one above, minted as 1 EURe
+  (read back on chain 2026-10-12, 0.8914 → 1.8914 EURe).
 - **No ENS name has resolved through a live resolver.** The OffchainResolver
   and the gateway pass end to end on local hardhat (`test:contracts`). The
   resolver is deployed on Sepolia (`docs/ens.md`; read back on-chain
@@ -19,7 +42,7 @@ Say this plainly rather than letting the surface imply otherwise:
   ENS's OffchainDNSResolver has never run. No wallet or ENS client has
   resolved a name. `/api/ens/lookup` has never been called against a real
   ENS RPC.
-- **One real swap has run: 1 USDC to EURe in the owner's Safe on Base
+- **One real swap has run: 1 USDC to EURe in the earlier owner Safe on Base
   mainnet (2026-10-11).** Read back on chain 2026-10-12, before the 1 €
   below arrived: the Safe held 0 USDC and 0.8914 EURe. Which venue filled it and the gas it used are in
   the deposit's record on the lease, not checked here. No swap for a send
@@ -106,8 +129,8 @@ Say this plainly rather than letting the surface imply otherwise:
   signature, no finalisation, and Safe Cover has not been used against a Zold
   Safe. `recovery:test` runs the flow under the harness only.
 - **One real 1 € enrolment has been paid, and whether it armed the account
-  is not checked here.** The owner's euro reached their Safe on Base
-  mainnet (above); matching it to the code, the live name match and the
+  is not checked here.** The owner's euro reached the earlier owner Safe
+  on Base mainnet (above); matching it to the code, the live name match and the
   armed state are in the lease's records, which nothing outside the lease
   reads (there is no mainnet admin). `enrolment:test` runs the matching
   against stub orders. `RECOVERY_IBAN_HMAC_KEY` must be set on a deployment
@@ -130,7 +153,7 @@ Say this plainly rather than letting the surface imply otherwise:
   driven a real recovery. No DPA with Turnkey is signed.
 - **One Candide forward has run, on the same chain.** On 2026-10-11 the
   owner paid 1 USDC on Base to their app.zoldhq.com payment page's forwarding
-  address, and it reached their Safe (the conversion above spent it there).
+  address, and it reached the earlier owner Safe (the conversion above spent it there).
   No forward from another chain has run, and the minimums and TTL renewal
   run only against a stub (`forwarder:test`, `paylinks:test`). Candide routes
   nothing on testnets, so zoldhq.com's payment pages show the Safe itself.
