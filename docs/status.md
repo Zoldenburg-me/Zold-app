@@ -18,14 +18,17 @@ Say this plainly rather than letting the surface imply otherwise:
     and `0xe1b573af5b7670ffce8092f9a6c9fe6765df54eeaecb1844a253c94f3e8041ce`.
   - Out: 1,000 EURe burned from the Safe at 05:52:25 UTC, block 53102299,
     tx `0xcfe881ef7d40f809e96666b2d3e8b6e392e825863fc831277754b8f557fe8d99`.
-    Monerium's account sent the burn to the EURe contract; it is not a
-    userOp. That it paid out by SEPA is the owner's statement. 87 EURe stay
-    in the Safe.
+    Monerium's account sent the burn (`burn(from, amount, hash,
+    signature)`), not a userOp. The Safe's `isValidSignature` accepts that
+    hash and signature, made by its only owner, the passkey signer
+    (threshold 1): the passkey signed the redeem order. The order's text is
+    only a hash on chain, so the bank credit is the owner's statement. 87
+    EURe stay in the Safe.
   - The books matched: one verifying Beleg per line, and Books' net +87
     equals the chain (the owner's check).
   - Monerium order ids: pending owner.
-  The second round is not in this Safe's EURe or USDC history from block
-  51000000 (2026-09-07) on, and was not found on chain; it is recorded here
+  The Safe has no other token transfer on chain (Blockscout lists three),
+  so the second round is not in it and was not found on chain; it is recorded here
   only as the owner's statement. Mainnet ran the production build from
   before #485.
 - **The owner's 1 € recovery enrolment** came in by bank transfer to an

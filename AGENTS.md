@@ -7,8 +7,8 @@ needs; the rest goes in `docs/` behind a pointer. Over budget: replace, never
 append.
 
 Read when the task touches it:
-- `docs/status.md` — **what has never run** (mainnet: owner only, one swap, no
-  SEPA payout; no cash rail; no on-chain recovery). Read before claiming it works.
+- `docs/status.md` — **what has never run** (mainnet: owner only, one swap, one SEPA
+  round: mints and Monerium's redeem burn on chain; no cash rail; no on-chain recovery). Read before claiming it works.
 - `docs/running-locally.md` — dev vs api, preflight, funding, KYC gate,
   tests, production branch, lease changes, browser.
 - `docs/wallets.md` — every wallet and its key holder.

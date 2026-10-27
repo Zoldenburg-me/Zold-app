@@ -558,7 +558,7 @@ is recorded.
 
 ## 8. Rails
 
-### 8.1 SEPA via Monerium redeem — built, never executed end to end
+### 8.1 SEPA via Monerium redeem — built; one owner round on mainnet: mints and Monerium's redeem burn on chain (`docs/status.md`)
 
 - The redeem message is `"Send EUR <amount> to <IBAN> at <rfc3339>"`, signed
   as an EIP-1271 SafeMessage.
