@@ -225,7 +225,7 @@ export async function createPaymentRequest(
   orgId?: string,
 ): Promise<PaymentRequest> {
   const handle = (source.kind === "app" ? companyPageHandle(user.id, orgId) : undefined) ?? user.paymentPage?.handle;
-  if (!handle) throw new PaymentRequestError("claim a payment page before creating a payment link", 409);
+  if (!handle) throw new PaymentRequestError("set up a payment page before creating a payment link (Get paid → Your page in the app, or Get paid → Set up the page in Zold Business)", 409);
   // Not for Shopify: its checkouts open requests at the shop's volume, signed
   // by Shopify, and each expires with its checkout.
   const open = source.kind === "shopify" ? 0 : store.paymentRequestsForUser(user.id).filter((r) => effectiveState(r) === "OPEN").length;

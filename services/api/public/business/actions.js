@@ -481,7 +481,7 @@ export const ACTIONS = {
     const page = await api(`/api/orgs/${org.id}/payment-page`).catch(() => null);
     const where = page?.paymentPage
       ? ` It opens at ${esc(location.host)}/pay/${esc(page.paymentPage.handle)}/….`
-      : page?.ready ? " Set up the company’s payment page first, and links open under its address instead of yours." : "";
+      : page?.ready ? ` ${esc(org.name)} has no payment page yet, so it opens under your own page address. For links in the company’s name, ${["owner", "admin"].includes(org.role) ? "set up its page under Get paid first" : "ask an owner or admin to set up its page"}.` : "";
     dialog("New payment link",
       `<p class="desc">Your customer pays it into ${esc(org.name)}’s euro account. Leave the amount empty to let them enter it.${where}</p>
        ${field("d-desc", "What it’s for", 'maxlength="140" placeholder="Deposit, roof Weber…"')}

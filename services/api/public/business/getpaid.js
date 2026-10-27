@@ -25,6 +25,16 @@ function linkBlock(payLink) {
   return payLink.allowed ? "" : payLink.reason || "You can’t make payment links here.";
 }
 
+/** The fix beside a NO_PAGE refusal: the company page where this person may
+ *  set it up, else their own page in the app (a link needs one or the other). */
+function pageFix(payLink, page) {
+  if (payLink?.code !== "NO_PAGE") return "";
+  if (org.type === "business" && EDITS_PAGE.has(org.role) && page?.ready) {
+    return `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="org-page">${Z.icon("add")}<span>Set up the page</span></button>`;
+  }
+  return `<a class="z-btn z-btn--secondary z-btn--sm" href="/app?from=business#page-settings">Set up your page${Z.icon("open_in_new")}<span class="z-sr"> (the app)</span></a>`;
+}
+
 function headerActions(block) {
   const invoice = cap("invoices").allowed
     ? `<button type="button" class="z-btn z-btn--secondary" data-act="issue-invoice">${Z.icon("receipt_long")}<span>Issue invoice</span></button>`
@@ -69,7 +79,7 @@ function linkWhen(r) {
 /* Z.tag picks the tone from the word (SYSTEM.md, "Status words"). */
 const STATE_WORD = { OPEN: "Open", PAID: "Paid", EXPIRED: "Ended", CANCELLED: "Cancelled" };
 
-function linksSection(links, block) {
+function linksSection(links, block, fix = "") {
   const shown = links.filter((r) => gp.tab === "all" || (gp.tab === "open" ? r.state === "OPEN" : r.state === "PAID"));
   const tabs = TABS.map(([id, text]) => `<button type="button" class="zb-h-chip" data-gt="${id}" aria-pressed="${gp.tab === id}">${text}</button>`).join("");
   const row = (r) => {
@@ -82,7 +92,7 @@ function linksSection(links, block) {
   };
   const empty = gp.tab === "open" ? "No open links." : gp.tab === "paid" ? "No link has been paid yet." : "No payment links yet.";
   return `<div class="zb-side-card__head"><h2 class="zb-h2" id="gp-links-h">Payment links</h2><div class="zb-h-chips" role="group" aria-label="Show">${tabs}</div></div>
-    ${block ? `<p class="zb-hint" id="gp-why" style="margin-bottom:10px">${esc(block)}</p>` : ""}
+    ${block ? `<p class="zb-hint" id="gp-why" style="margin-bottom:10px">${esc(block)}</p>${fix ? `<div class="zb-actions" style="margin-bottom:10px">${fix}</div>` : ""}` : ""}
     ${shown.length
       ? `<div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">For</th><th scope="col">When</th><th scope="col">Status</th><th scope="col" class="num">Amount</th><th scope="col"><span class="z-sr">Actions</span></th></tr></thead><tbody>${shown.map(row).join("")}</tbody></table></div>`
       : `<div class="z-card"><p class="empty">${empty}</p></div>`}
@@ -140,13 +150,15 @@ RENDER["get-paid"] = async () => {
   if (acc.status === "rejected") throw acc.reason;
   const accounts = acc.value.accounts;
   const list = links.status === "fulfilled" ? links.value.paymentRequests : null;
-  const block = linkBlock(links.status === "fulfilled" ? links.value.payLink : null);
+  const payLink = links.status === "fulfilled" ? links.value.payLink : null;
+  const block = linkBlock(payLink);
+  const fix = pageFix(payLink, page.status === "fulfilled" ? page.value : null);
   if (view === "get-paid") $("#view-actions").innerHTML = headerActions(block);
 
   const html = `<div id="gp-root"><h2 class="zb-h2" style="margin-bottom:12px">Bank details</h2>${bankCards(accounts)}
     <div class="zb-gp-split">
       <section class="zb-h-section" id="gp-links" aria-labelledby="gp-links-h">${list
-        ? linksSection(list, block)
+        ? linksSection(list, block, fix)
         : `<h2 class="zb-h2" id="gp-links-h">Payment links</h2><div class="z-card"><p class="empty">Payment links couldn’t load. Open Get paid again to retry.</p></div>`}</section>
       <div>${pageCard(page.status === "fulfilled" ? page.value : null)}</div>
     </div>

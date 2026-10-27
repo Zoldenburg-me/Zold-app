@@ -57,6 +57,7 @@ const scripts = [
   "offline-bar:test",
   "iban-moved:ui:test",
   "monerium-screen:ui:test",
+  "paylink-form:ui:test",
   "unread-balance:ui:test",
   "signout:test",
   "money-in:ui:test",

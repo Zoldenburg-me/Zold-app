@@ -20,7 +20,7 @@ import {
   validateCreate,
   type PaymentRequest,
 } from "../../payment-requests.js";
-import { createPaymentRequest, orgsBackedBy } from "../payment-requests.js";
+import { companyPageHandle, createPaymentRequest, orgsBackedBy } from "../payment-requests.js";
 import type { Invoice, Organisation } from "../../domain/types.js";
 import type { User } from "../../store/types.js";
 import type { OrgContext } from "../org-context.js";
@@ -97,7 +97,7 @@ export async function withInvoiceLinkLock<T>(invoice: Pick<Invoice, "id" | "orgI
  * business by the Safe connected to its euro account, an IBAN's or a
  * wallet-tier one's (orgsBackedBy).
  */
-export function payLinkBlocker(org: Organisation, user: User): { code: "ACCOUNT_NOT_OPEN" | "NOT_THE_PAYEE" | "NO_METHOD"; reason: string } | undefined {
+export function payLinkBlocker(org: Organisation, user: User): { code: "ACCOUNT_NOT_OPEN" | "NOT_THE_PAYEE" | "NO_PAGE" | "NO_METHOD"; reason: string } | undefined {
   if (org.type !== "personal" && !store.accounts.some((a) => a.orgId === org.id && a.backingUserId)) {
     return {
       code: "ACCOUNT_NOT_OPEN",
@@ -110,19 +110,29 @@ export function payLinkBlocker(org: Organisation, user: User): { code: "ACCOUNT_
       reason: "A payment link pays into the account behind this organisation, and that account is another member’s. They can make the link.",
     };
   }
+  // A link opens under a page (createPaymentRequest): the company's, else the payee's own.
+  if (!companyPageHandle(user.id, org.id) && !user.paymentPage?.handle) {
+    return {
+      code: "NO_PAGE",
+      reason: org.type === "business"
+        ? `A payment link opens under a payment page, and neither ${org.name} nor you has one yet. Set up a payment page first.`
+        : "A payment link opens under your payment page, and you have none yet. Set up your page first.",
+    };
+  }
   if (!availableMethods(user).some((m) => m.available)) {
-    return { code: "NO_METHOD", reason: "No way to get paid is set up on this account yet: claim your payment page (Profile → Payment page) to add a Pay button." };
+    return { code: "NO_METHOD", reason: "No way to get paid is set up on this account yet: activate your IBAN with Monerium, or set up your payment page to take digital dollars." };
   }
   return undefined;
 }
 
 /** Whether this caller may make a payment link here, for the UI: it offers
  *  the control only where the API would accept it. */
-export function payLinkOffer(ctx: OrgContext): { allowed: boolean; reason?: string } {
+export function payLinkOffer(ctx: OrgContext): { allowed: boolean; reason?: string; code?: string } {
   if (!roleCan(ctx.member.role, "invoices.manage")) return { allowed: false };
   const user = store.findUser(ctx.userId);
   const blocked = user ? payLinkBlocker(ctx.org, user) : { reason: "Your session has no account behind it." };
-  return blocked ? { allowed: false, reason: blocked.reason } : { allowed: true };
+  // The code lets the UI put the fix beside the reason (NO_PAGE: "Set up the page").
+  return blocked ? { allowed: false, reason: blocked.reason, ...("code" in blocked ? { code: blocked.code } : {}) } : { allowed: true };
 }
 
 /** Never throws: the invoice is already issued and numbered, and a 500 here
