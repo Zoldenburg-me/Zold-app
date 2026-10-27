@@ -90,7 +90,7 @@ RENDER.send = async () => {
   const fundable = accounts.filter((a) => a.status === "active" && a.backingUserId && a.profile?.status !== "needs_check");
   if (!fundable.length) {
     return `<div class="gate"><h3>No account can pay yet</h3><p>${org.type === "business"
-      ? "Connect the company’s Monerium profile to an account first."
+      ? `Connect ${esc(org.name)}’s Monerium profile to an account first.`
       : "Open an account and fund it from your own account first."}</p><div class="zb-actions">${linkBtn("Accounts", "accounts")}</div></div>`;
   }
   if (!payable.length) {
