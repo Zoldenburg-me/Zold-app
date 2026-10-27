@@ -222,6 +222,39 @@ await check("a payer, who may manage invoices but not the organisation, cannot e
   assert.equal(store.findOrganisation("org_ga")!.invoicing?.vatId, "GA-NIF 123456 X");
 });
 
+await check("nor rewrite the issuer's identity, footer or custom fields through the invoicing profile, though the rest of it saves", async () => {
+  const r = await call("PATCH", "/api/orgs/org_ga/invoicing/profile", "u_payer", {
+    vatId: "GA-NIF 999999 Z", taxNumber: "RCCM 2099 B 9", registerCourt: "Elsewhere", registerNumber: "9", managingDirector: "Mallory",
+  });
+  assert.equal(r.status, 403, JSON.stringify(r.data));
+  const inv = store.findOrganisation("org_ga")!.invoicing!;
+  assert.equal(inv.vatId, "GA-NIF 123456 X");
+  assert.equal(inv.managingDirector, "Ada Mba");
+  const footer = await call("PATCH", "/api/orgs/org_ga/invoicing/profile", "u_payer", { footerNote: "VAT ID DE999999999" });
+  assert.equal(footer.status, 403, JSON.stringify(footer.data));
+  const fields = await call("PATCH", "/api/orgs/org_ga/invoicing/profile", "u_payer", { customFields: [{ label: "VAT ID", value: "DE999999999" }] });
+  assert.equal(fields.status, 403, JSON.stringify(fields.data));
+  assert.equal(inv.footerNote, store.findOrganisation("org_ga")!.invoicing!.footerNote);
+  assert.equal(store.findOrganisation("org_ga")!.invoicing!.customFields, undefined);
+  // Settings sends the footer on every save: unchanged, it does not block the rest.
+  const ok = await call("PATCH", "/api/orgs/org_ga/invoicing/profile", "u_payer", { footerNote: inv.footerNote ?? "", paymentTermsNote: "Net 14" });
+  assert.equal(ok.status, 200, JSON.stringify(ok.data));
+  assert.equal(store.findOrganisation("org_ga")!.invoicing!.paymentTermsNote, "Net 14");
+});
+
+await check("nor change the payee name, BIC or bank printed beside the IBAN, though resending them saves", async () => {
+  const set = await call("PATCH", "/api/orgs/org_ga/invoicing/profile", "u_owner", { bank: { holder: "Ada Mba SARL", bic: "UGABGALI", bankName: "UGB" } });
+  assert.equal(set.status, 200, JSON.stringify(set.data));
+  for (const bank of [{ holder: "Mallory Holdings" }, { bic: "MALLGB2L" }, { bankName: "Elsewhere Bank" }, { holder: "" }]) {
+    const r = await call("PATCH", "/api/orgs/org_ga/invoicing/profile", "u_payer", { bank });
+    assert.equal(r.status, 403, `${JSON.stringify(bank)}: ${JSON.stringify(r.data)}`);
+  }
+  // Settings sends holder, IBAN and BIC on every save and never the bank name.
+  const ok = await call("PATCH", "/api/orgs/org_ga/invoicing/profile", "u_payer", { bank: { holder: "Ada Mba SARL", iban: "", bic: "ugab gali" }, paymentTermsNote: "Net 30" });
+  assert.equal(ok.status, 200, JSON.stringify(ok.data));
+  assert.deepEqual(store.findOrganisation("org_ga")!.invoicing!.bank, { holder: "Ada Mba SARL", iban: undefined, bic: "UGABGALI", bankName: "UGB" });
+});
+
 await check("registration text is one bounded line", async () => {
   const r = await call("PATCH", "/api/orgs/org_ga", "u_owner", { registerNumber: "a\nb" });
   assert.equal(r.status, 400, JSON.stringify(r.data));

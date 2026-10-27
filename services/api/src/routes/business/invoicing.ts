@@ -102,8 +102,10 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
   /**
    * Everything an invoice prints. The payout IBAN is where customers send the
    * money, so changing it takes an owner or admin and a fresh passkey
-   * approval, and is audited with the old and new last four characters. The
-   * rest of the profile needs only invoices.manage.
+   * approval, and is audited with the old and new last four characters. Who
+   * the issuer is (VAT ID, tax and register numbers, director) takes
+   * org.update, as on the business profile, and so does a change to the
+   * footer or custom fields. The rest needs only invoices.manage.
    */
   r.patch("/:orgId/invoicing/profile", wrap(async (req, res) => {
     const ctx = ctxOf(req, res);
@@ -123,6 +125,7 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
     // business profile saves through.
     const identity = issuerIdentityFrom(b, ctx.org.address?.country);
     if (!identity.ok) return res.status(400).json({ error: identity.error, field: identity.field });
+    if (Object.keys(identity.patch).length && !requirePermission(ctx, res, "org.update")) return;
     Object.assign(next, identity.patch);
     if (typeof b.smallBusiness === "boolean") next.smallBusiness = b.smallBusiness;
     if (b.defaultVatRate !== undefined) {
@@ -139,6 +142,23 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
     for (const k of ["paymentTermsNote", "footerNote"] as const) {
       if (typeof b[k] === "string") next[k] = b[k].trim() || undefined;
     }
+    if (Array.isArray(b.customFields)) {
+      next.customFields = b.customFields
+        .slice(0, 12)
+        .map((f: Record<string, unknown>) => ({
+          label: String(f.label ?? "").trim().slice(0, 60),
+          value: String(f.value ?? "").trim().slice(0, 200),
+        }))
+        .filter((f: { label: string }) => f.label);
+    }
+    // Free text printed on every invoice can pass for an identity line, so a
+    // change to it takes org.update like the identity itself. Settings sends
+    // the footer on every save: an unchanged one is let through.
+    const stored = ctx.org.invoicing;
+    const printsChanged =
+      ("footerNote" in next && next.footerNote !== (stored?.footerNote ?? undefined)) ||
+      ("customFields" in next && JSON.stringify(next.customFields) !== JSON.stringify(stored?.customFields ?? []));
+    if (printsChanged && !requirePermission(ctx, res, "org.update")) return;
     if (typeof b.paymentTermsDays === "number" && b.paymentTermsDays >= 0) {
       next.paymentTermsDays = Math.round(b.paymentTermsDays);
     }
@@ -150,6 +170,19 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
       if (iban && !ibanChecksumValid(iban)) {
         return res.status(400).json({ error: `${iban} is not a valid IBAN.`, field: "bank.iban" });
       }
+      // The name, BIC and bank printed beside the IBAN say who is paid, so a
+      // change to them takes org.update too. One not sent keeps its value:
+      // Settings never sends bankName and would otherwise clear it on save.
+      const storedBank = ctx.org.invoicing?.bank;
+      const text = (k: "holder" | "bic" | "bankName", clean = (v: string) => v) =>
+        typeof b.bank[k] === "string" ? clean(b.bank[k].trim()) || undefined : storedBank?.[k] ?? undefined;
+      const shown = {
+        holder: text("holder"),
+        bic: text("bic", (v) => v.toUpperCase().replace(/\s+/g, "")),
+        bankName: text("bankName"),
+      };
+      if ((["holder", "bic", "bankName"] as const).some((k) => shown[k] !== (storedBank?.[k] ?? undefined)) &&
+        !requirePermission(ctx, res, "org.update")) return;
       const was = ctx.org.invoicing?.bank?.iban;
       if ((iban || undefined) !== was) {
         if (!requirePermission(ctx, res, "org.update")) return;
@@ -158,13 +191,7 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
         if (!(await verifyPasskeyStepUp(user, b, res, "org.invoice-iban.change"))) return;
         ibanChange = { oldLast4: was ? was.slice(-4) : null, newLast4: iban ? iban.slice(-4) : null };
       }
-      const text = (v: unknown) => (typeof v === "string" ? v.trim() : "");
-      next.bank = {
-        holder: text(b.bank.holder) || undefined,
-        iban: iban || undefined,
-        bic: text(b.bank.bic).toUpperCase().replace(/\s+/g, "") || undefined,
-        bankName: text(b.bank.bankName) || undefined,
-      };
+      next.bank = { holder: shown.holder, iban: iban || undefined, bic: shown.bic, bankName: shown.bankName };
     }
     if (b.numberSeries && typeof b.numberSeries === "object") {
       const fallback = seriesOf(ctx.org);
@@ -192,15 +219,6 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
       } catch (err) {
         return res.status(400).json({ error: redactedMessage(err), field: "customReasons" });
       }
-    }
-    if (Array.isArray(b.customFields)) {
-      next.customFields = b.customFields
-        .slice(0, 12)
-        .map((f: Record<string, unknown>) => ({
-          label: String(f.label ?? "").trim().slice(0, 60),
-          value: String(f.value ?? "").trim().slice(0, 200),
-        }))
-        .filter((f: { label: string }) => f.label);
     }
 
     const org = store.updateOrganisation(ctx.org.id, {
