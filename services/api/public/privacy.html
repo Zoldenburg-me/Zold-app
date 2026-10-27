@@ -51,7 +51,7 @@
             <tr><td><b>Payments</b>: amount, date, recipient name and IBAN, the payment reference, incoming payments and the address they came from, and the addresses of wallets you import</td><td>To make the payments you approve, show your history, and produce receipts and statements. Contract (Art. 6(1)(b)).</td></tr>
             <tr><td><b>Recovery</b>: the guardians you choose and when they were added; for email or SMS recovery, that email address or phone number; for Zoldenburg recovery, a keyed hash and the last 4 characters of the IBAN you enrol with (the payer name is compared with the name Monerium verified, and not kept); for a recovery, its request and timeline</td><td>To let you regain your account if you lose your device, and to alert you by email when someone starts a recovery. Contract (Art. 6(1)(b)).</td></tr>
             <tr><td><b>Gnosis Pay</b>, only if you connect a card account: your wallet address, and the account and card status Zold receives from Gnosis Pay</td><td>To show your card account in Zold. Contract (Art. 6(1)(b)).</td></tr>
-            <tr><td><b>Business accounts</b>: the organisation’s name, address, tax and VAT numbers and bank details; members’ names, emails and roles; contacts, invoices, payment requests, documents and bookkeeping entries you create</td><td>To run the organisation’s account and its books as you set them up. Contract (Art. 6(1)(b)). Contacts you enter are data about other people: you decide what goes in.</td></tr>
+            <tr><td><b>Business accounts</b>: the organisation’s name, address, tax and VAT numbers and bank details; members’ names, emails and roles; contacts, invoices, payment requests, documents and bookkeeping entries you create</td><td>To run the organisation’s account and its books as you set them up. Contract (Art. 6(1)(b)). For the data a business account enters about other people (its contacts, customers and suppliers), the organisation decides what goes in and Zold processes it on the organisation’s behalf.</td></tr>
             <tr><td><b>Shared items</b>: a payment page handle, receipts and documents you share by link</td><td>Shown to whoever has the link, with only the fields you chose. Contract (Art. 6(1)(b)).</td></tr>
             <tr><td><b>Audit log</b>: signup screening decisions (including refused signups, with the email kept only as a hash), consents, and account events such as a name change</td><td>To be able to show what was decided and when. Legitimate interest in accountability and security (Art. 6(1)(f)).</td></tr>
             <tr><td><b>Technical</b>: your IP address</td><td>To limit how often one address can call the service, against abuse. Zold’s server holds it in memory for about a minute and does not store it. Legitimate interest in security (Art. 6(1)(f)).</td></tr>
@@ -75,14 +75,14 @@
             <tr><td><b>Monerium ehf.</b>, Iceland (EEA)</td><td>When you connect Monerium: your email, to fill in Monerium’s sign-in form, and your account address. For each bank transfer you approve: the amount, the recipient’s name, IBAN and country, and the reference. Monerium is responsible for its own identity checks; see the <a href="/partner-terms#monerium">partner terms</a>.</td></tr>
             <tr><td><b>Candide Labs</b>, France</td><td>Your account address and the payments you sign, which it sends to the blockchain. If you choose email or SMS recovery, also that email address or phone number.</td></tr>
             <tr><td><b>Brevo</b>, France</td><td>Your email address and the message, when Zold sends you a verification code, a recovery alert, or a notice that a supplier submitted an invoice.</td></tr>
-            <tr><td><b>Turnkey</b>, USA</td><td>Only if you add a guardian that signs in by email, Google or Apple: that email address, or the sign-in token from Google or Apple. Turnkey holds the guardian key.</td></tr>
+            <tr><td><b>Turnkey</b>, USA</td><td>Only if you add a guardian that signs in by email, Google or Apple: that email address, or the sign-in token from Google or Apple. Turnkey holds the guardian key. Turnkey publishes a data processing agreement, and its <a href="https://www.turnkey.com/legal/privacy" target="_blank" rel="noopener">privacy policy<span class="s-sr"> (opens in a new tab)</span></a> names the EU Standard Contractual Clauses among its safeguards for transfers.</td></tr>
             <tr><td><b>LI.FI</b></td><td>When you convert between currencies: your account address, the receiving address and the amount, to get a price.</td></tr>
             <tr><td><b>Gnosis Pay</b></td><td>Only if you connect a Gnosis Pay card account: your wallet address and the sign-in you approve.</td></tr>
             <tr><td><b>GetMyInvoices</b></td><td>Only if a business account connects it: the organisation’s payments (reference, amount, the other side’s name and IBAN) and receipts.</td></tr>
             <tr><td><b>European Commission</b> (VIES)</td><td>When a business account checks a VAT number: that number and the organisation’s own VAT ID.</td></tr>
             <tr><td><b>Cloudflare, Inc.</b>, USA</td><td>Every request to zoldhq.com passes through Cloudflare, which sees your IP address. Cloudflare is certified under the EU-U.S. Data Privacy Framework.</td></tr>
             <tr><td><b>Blockchain node provider</b></td><td>Zold reads your account’s balance and payments from the Base blockchain through a node provider.</td></tr>
-            <tr><td><b>Our hosting provider</b></td><td>Runs the server and stores the database and its logs.</td></tr>
+            <tr><td><b>Digital Frontier</b>, servers in Sofia, Bulgaria (EU)</td><td>Hosts the server, which stores the database and its logs.</td></tr>
           </tbody>
         </table>
         <p>Zold does not sell your data, show advertising, or use analytics or tracking.</p>
@@ -91,14 +91,14 @@
       <section id="retention">
         <h2>How long we keep it</h2>
         <p>A sign-in session ends after 24 hours or when you sign out, and its record is deleted a day or more after that. Email verification codes expire after 15 minutes. Zold’s server does not store IP addresses.</p>
-        <p>Everything else is kept while your account exists. Zold does not yet delete account data automatically, and the app has no way to close an account yet. Write to us if you want yours closed (see <a href="#rights">your rights</a>).</p>
+        <p>Everything else is kept until you ask us to delete the details Zold holds (see <a href="#rights">your rights</a>). Zold does not yet delete account data automatically.</p>
       </section>
 
       <section id="rights">
         <h2>Your rights</h2>
         <p>You have the right to access your data, to have it corrected or erased, to restrict its processing, to receive it in a portable format, and to object to processing based on legitimate interest (Art. 15 to 21 GDPR). Where you gave consent, you may withdraw it at any time.</p>
-        <p>To use any of these rights, write to <a href="mailto:support@zoldhq.com">support@zoldhq.com</a>. We answer within one month. You can change your name in the app until Monerium has verified you; after that, and for a company account, write to us. Everything else, including a copy of your data, closing your account and changing your email, is done on request: the app has no button for them yet.</p>
-        <p>Payments on the public blockchain cannot be erased by anyone.</p>
+        <p>To use any of these rights, write to <a href="mailto:support@zoldhq.com">support@zoldhq.com</a>. We answer within one month. You can change your name in the app until Monerium has verified you; after that, and for a company account, write to us. Everything else, including a copy of your data, deleting the details Zold holds and changing your email, is done on request: the app has no button for them yet.</p>
+        <p>Some things are not Zold’s to delete. Your account is a smart account on the blockchain: it and every payment made with it are permanent, and nobody, including Zold, can delete or change them. Your Monerium account is between you and Monerium; ask Monerium to close it.</p>
       </section>
 
       <section id="decisions">
