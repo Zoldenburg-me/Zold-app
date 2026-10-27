@@ -102,8 +102,10 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
   /**
    * Everything an invoice prints. The payout IBAN is where customers send the
    * money, so changing it takes an owner or admin and a fresh passkey
-   * approval, and is audited with the old and new last four characters. The
-   * rest of the profile needs only invoices.manage.
+   * approval, and is audited with the old and new last four characters. Who
+   * the issuer is (VAT ID, tax and register numbers, director) takes
+   * org.update, as on the business profile. The rest needs only
+   * invoices.manage.
    */
   r.patch("/:orgId/invoicing/profile", wrap(async (req, res) => {
     const ctx = ctxOf(req, res);
@@ -123,6 +125,7 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
     // business profile saves through.
     const identity = issuerIdentityFrom(b, ctx.org.address?.country);
     if (!identity.ok) return res.status(400).json({ error: identity.error, field: identity.field });
+    if (Object.keys(identity.patch).length && !requirePermission(ctx, res, "org.update")) return;
     Object.assign(next, identity.patch);
     if (typeof b.smallBusiness === "boolean") next.smallBusiness = b.smallBusiness;
     if (b.defaultVatRate !== undefined) {

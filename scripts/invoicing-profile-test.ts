@@ -222,6 +222,18 @@ await check("a payer, who may manage invoices but not the organisation, cannot e
   assert.equal(store.findOrganisation("org_ga")!.invoicing?.vatId, "GA-NIF 123456 X");
 });
 
+await check("nor rewrite the issuer's identity through the invoicing profile, though the rest of it saves", async () => {
+  const r = await call("PATCH", "/api/orgs/org_ga/invoicing/profile", "u_payer", {
+    vatId: "GA-NIF 999999 Z", taxNumber: "RCCM 2099 B 9", registerCourt: "Elsewhere", registerNumber: "9", managingDirector: "Mallory",
+  });
+  assert.equal(r.status, 403, JSON.stringify(r.data));
+  const inv = store.findOrganisation("org_ga")!.invoicing!;
+  assert.equal(inv.vatId, "GA-NIF 123456 X");
+  assert.equal(inv.managingDirector, "Ada Mba");
+  const ok = await call("PATCH", "/api/orgs/org_ga/invoicing/profile", "u_payer", { footerNote: "Thank you" });
+  assert.equal(ok.status, 200, JSON.stringify(ok.data));
+});
+
 await check("registration text is one bounded line", async () => {
   const r = await call("PATCH", "/api/orgs/org_ga", "u_owner", { registerNumber: "a\nb" });
   assert.equal(r.status, 400, JSON.stringify(r.data));
