@@ -11,8 +11,9 @@
  * a clear answer (read failed, IBAN not listed, listed twice) changes
  * nothing.
  *
- * The fake Monerium answers GET /ibans per bearer token. No network, no
- * chain: the adapter and the store run in-process.
+ * The fake Monerium answers GET /ibans per bearer token, and the one pair of
+ * API keys the activation-gate cases connect with. No network, no chain: the
+ * adapter, the store and the Monerium router run in-process.
  *
  * Run: npm run monerium:iban-binding:test
  */
@@ -22,9 +23,11 @@ import { createServer } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import express from "express";
 
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-iban-binding-")), "db.json");
 process.env.TRANSF_CHAIN_ID = "31337";
+process.env.TRANSF_RPC_URL = "http://127.0.0.1:8545"; // the router imports the operator keys; nothing here reads the chain
 process.env.LOCAL_HARNESS = "";
 process.env.MONERIUM_TOKEN_ENCRYPTION_KEY = "test-encryption-key-for-iban-binding-32b";
 process.env.MONERIUM_CLIENT_ID = "";
@@ -34,16 +37,32 @@ process.env.MONERIUM_IBAN_CHECK_MS = "300000";
 
 /** The IBANs each bearer token sees at GET /ibans. */
 const ibansOf = new Map<string, any[]>();
-const fake = { down: false, reads: 0 };
+const fake = { down: false, reads: 0, calls: 0 };
+/** The user's own API keys (client credentials) and the token they mint. */
+const KEYS = { clientId: "own-keys-client", clientSecret: "own-keys-secret-0001", token: "tok-own-keys" };
 
 const monerium = createServer((req, res) => {
+  fake.calls++;
   const url = new URL(req.url ?? "/", "http://fake");
   const send = (code: number, b: any) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(b)); };
   if (fake.down) return send(503, { code: 503, status: "Service Unavailable" });
+  if (url.pathname === "/auth/token") {
+    let raw = "";
+    req.on("data", (c) => (raw += c));
+    req.on("end", () => {
+      const form = new URLSearchParams(raw);
+      if (form.get("client_id") !== KEYS.clientId || form.get("client_secret") !== KEYS.clientSecret) return send(401, { error: "invalid_client" });
+      send(200, { access_token: KEYS.token, token_type: "Bearer", expires_in: 3600 });
+    });
+    return;
+  }
   const token = String(req.headers.authorization ?? "").replace(/^Bearer /, "");
   const list = ibansOf.get(token);
   if (!list) return send(401, { code: 401, status: "Unauthorized" });
   if (url.pathname === "/ibans") { fake.reads++; return send(200, { ibans: list }); }
+  if (url.pathname === "/auth/context") return send(200, { email: "own@example.com" });
+  if (url.pathname === "/profiles") return send(200, { profiles: [{ id: PROFILE, kind: "personal", state: "approved" }] });
+  if (url.pathname === "/addresses") return send(200, { addresses: [] });
   send(404, { code: 404, status: "Not Found" });
 });
 await new Promise<void>((r) => monerium.listen(0, "127.0.0.1", r));
@@ -52,8 +71,11 @@ process.env.MONERIUM_BASE_URL = `http://127.0.0.1:${(monerium.address() as any).
 const { initStore, store } = await import("../services/api/src/store.js");
 const { SECRETS } = await import("../services/api/src/stored-secrets.js");
 const { publicUser } = await import("../services/api/src/users/public-user.js");
-const { MONERIUM } = await import("../services/api/src/config.js");
-const { verifyIbanBinding, applyIbanBinding, refreshPendingIban } = await import("../services/api/src/adapters/monerium-sandbox.js");
+const { MONERIUM, SECURITY } = await import("../services/api/src/config.js");
+const { createMoneriumRouter } = await import("../services/api/src/routes/monerium.js");
+const { issueChallenge, stepUpBinding, verifyRegistration } = await import("../services/api/src/webauthn.js");
+const { makeSoftwarePasskey } = await import("./_software-passkey.js");
+const { verifyIbanBinding, applyIbanBinding, refreshPendingIban, ibanActivationRefusal } = await import("../services/api/src/adapters/monerium-sandbox.js");
 const { accountBankOf } = await import("../services/api/src/routes/business/shared.js");
 
 let passed = 0;
@@ -66,6 +88,19 @@ initStore();
 const now = new Date().toISOString();
 const PROFILE = "22222222-aaaa-4bbb-8ccc-000000000001";
 const OTHER = "0x00000000000000000000000000000000000000cc";
+
+// The Monerium routes over HTTP, signed in as whichever user the path names.
+const app = express();
+app.use(express.json());
+app.use("/api", createMoneriumRouter({ requireUserSession: (_req, _res, id) => ({ id: `s_${id}` }) }));
+const api = app.listen(0, "127.0.0.1");
+await new Promise((r) => api.once("listening", r));
+const API = `http://127.0.0.1:${(api.address() as any).port}`;
+const post = async (p: string, body: unknown) => {
+  const r = await fetch(API + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  return { status: r.status, data: (await r.json().catch(() => ({}))) as any };
+};
+const ORIGIN = SECURITY.origins.find((o) => o.startsWith("http://localhost"))!;
 
 /** An approved account with an active IBAN on its own OAuth connection. */
 function addUser(n: number, opts: { ownCredentials?: boolean } = {}) {
@@ -242,6 +277,94 @@ await check("several IBANs and no move asked for, or an account never approved: 
   assert.equal((await refreshPendingIban(store.findUser(p.id)!)).moneriumIbanElsewhere, undefined, "activation offers the move for a new account");
 });
 
+console.log("\nActivation gate");
+
+await check("only an approved account, or a pending one with its own Monerium connection and a bank segment, may activate an IBAN", () => {
+  const u = { ...store.findUser(addUser(15).id)!, iban: "", kycStatus: "pending" as const };
+  assert.equal(ibanActivationRefusal(u), undefined, "pending, connected, no segment (EU_FULL)");
+  assert.equal(ibanActivationRefusal({ ...u, kycStatus: "approved" }), undefined);
+  for (const kycStatus of ["rejected", "manual_review"] as const) {
+    assert.equal(ibanActivationRefusal({ ...u, kycStatus })?.code, "IBAN_NOT_OFFERED", kycStatus);
+  }
+  const wallet = { ...u, segment: { value: "WALLET_ONLY" as const, reasonCode: "test", decidedAt: now, decidedBy: "system" as const } };
+  assert.equal(ibanActivationRefusal(wallet)?.code, "IBAN_NOT_OFFERED", "wallet-only, though pending and connected");
+  assert.equal(ibanActivationRefusal({ ...wallet, kycStatus: "approved" })?.code, "IBAN_NOT_OFFERED", "wallet-only, though approved");
+  assert.equal(ibanActivationRefusal({ ...u, monerium: undefined })?.code, "MONERIUM_NOT_CONNECTED", "pending with no connection of its own");
+});
+
+/**
+ * An approved account with an active IBAN, a passkey and an active Safe,
+ * then refused: Monerium rejected it, is reviewing it, or its segment has no
+ * bank account.
+ */
+async function addRefused(n: number, refusal: "rejected" | "manual_review" | "wallet-only") {
+  const u = addUser(n);
+  const key = await makeSoftwarePasskey(`gate-${n}`, ORIGIN);
+  const reg = key.register(issueChallenge("register", u.id));
+  const { credentialId, key: publicKey } = verifyRegistration(reg.attestation, reg.clientDataJSON, SECURITY.rpId, SECURITY.origins, u.id);
+  store.updateUser(u.id, {
+    passkey: { credentialId, publicKey, signCount: 0, rpId: SECURITY.rpId, createdAt: now },
+    passkeySafe: { status: "active", address: u.address },
+    ...(refusal === "wallet-only"
+      ? { segment: { value: "WALLET_ONLY", reasonCode: "test", decidedAt: now, decidedBy: "system" } }
+      : { kycStatus: refusal }),
+  } as any);
+  ibansOf.set(u.token, [listed(u.iban, u.address)]);
+  ibansOf.set(KEYS.token, [listed(u.iban, u.address)]);
+  return { ...u, stepUp: (action: string) => key.assert(issueChallenge("step_up", stepUpBinding(u.id, action))) };
+}
+
+await check("the poller does not attach an IBAN to a pending activation the account may no longer have, and it stops waiting", async () => {
+  for (const [n, refused] of [[19, { kycStatus: "rejected" }], [20, { kycStatus: "manual_review" }], [21, { segment: { value: "WALLET_ONLY", reasonCode: "test", decidedAt: now, decidedBy: "system" } }]] as const) {
+    const u = addUser(n);
+    store.updateUser(u.id, { iban: "", ...refused, funding: { mode: "sandbox", status: "iban_pending", moneriumProfileId: PROFILE } } as any);
+    ibansOf.set(u.token, [listed(u.iban, u.address)]);
+    const after = await refreshPendingIban(store.findUser(u.id)!);
+    assert.equal(after.iban, "", `${u.id}: no IBAN attached`);
+    assert.equal(after.funding?.status, "provisioning", `${u.id}: no longer shown as an IBAN being issued`);
+    assert.match(after.funding?.detail ?? "", /bank account/, u.id);
+    const reads = fake.reads;
+    await refreshPendingIban(after);
+    assert.equal(fake.reads, reads, `${u.id}: not re-read on the next tick`);
+  }
+});
+
+for (const [n, refusal] of [[16, "rejected"], [17, "manual_review"], [18, "wallet-only"]] as const) {
+  await check(`${refusal}: start, activate and move-iban turn the account away before any Monerium call`, async () => {
+    const u = await addRefused(n, refusal);
+    const calls = fake.calls;
+    const start = await post(`/api/users/${u.id}/monerium/link-signature/start`, { profileId: PROFILE });
+    assert.equal(start.status, 409, JSON.stringify(start.data));
+    assert.equal(start.data.code, "IBAN_NOT_OFFERED");
+    for (const route of ["activate", "move-iban"]) {
+      const r = await post(`/api/users/${u.id}/monerium/${route}`, { profileId: PROFILE, iban: u.iban, confirm: "MOVE" });
+      // A wallet-only segment is refused one step earlier, by the capability check.
+      if (refusal === "wallet-only") assert.ok(r.status >= 400 && r.status < 500, `${route}: ${r.status} ${JSON.stringify(r.data)}`);
+      else {
+        assert.equal(r.status, 409, `${route}: ${JSON.stringify(r.data)}`);
+        assert.equal(r.data.code, "IBAN_NOT_OFFERED", route);
+      }
+    }
+    assert.equal(fake.calls, calls, "no request reached Monerium");
+  });
+
+  // wallet-only has no "monerium" capability, so the api-keys route refuses it outright.
+  if (refusal === "wallet-only") continue;
+  await check(`${refusal}: connecting API keys neither keeps nor attributes an IBAN`, async () => {
+    const u = await addRefused(n + 10, refusal);
+    const r = await post(`/api/users/${u.id}/monerium/api-keys`, {
+      clientId: KEYS.clientId, clientSecret: KEYS.clientSecret, stepUp: await u.stepUp("monerium.connect"),
+    });
+    assert.equal(r.status, 201, JSON.stringify(r.data));
+    const after = store.findUser(u.id)!;
+    assert.equal(after.iban, undefined, "the IBAN Monerium lists on this Safe is not kept");
+    assert.notEqual(after.funding?.status, "active");
+    assert.equal(after.kycStatus, refusal);
+    assert.match(after.funding?.detail ?? "", /can’t open a bank account/);
+    assert.ok(!publicUser(after).iban, "and no bank details are shown");
+  });
+}
+
 console.log("\nOrganisation accounts");
 
 await check("an org account backed by the user drops the IBAN with the user's (the row stays) and gets it back", async () => {
@@ -263,4 +386,5 @@ await check("an org account backed by the user drops the IBAN with the user's (t
 });
 
 monerium.close();
+api.close();
 console.log(process.exitCode ? "\nMONERIUM IBAN BINDING TEST FAILED" : `\nMONERIUM IBAN BINDING TEST PASSED — ${passed}/${passed}`);
