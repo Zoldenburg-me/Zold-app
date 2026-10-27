@@ -780,7 +780,7 @@ await check("a wallet connected to one business is refused in another (SAFE_IN_O
 
 await check("an account that can still get an IBAN does not connect as a wallet: it goes through Monerium", async () => {
   personWithSpace("u_de_wallet", "dewallet", { country: "DE", kycStatus: "pending", segment: { value: "EU_FULL", reasonCode: "t", decidedAt: now, decidedBy: "system" } });
-  store.addMember({ id: "m_inbiz2_de", orgId: "org_inbiz2", userId: "u_de_wallet", email: "", role: "admin", status: "active", invitedAt: now, acceptedAt: now });
+  store.addMember({ id: "m_inbiz2_de", orgId: "org_inbiz2", userId: "u_de_wallet", email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now });
   const r = await call("POST", "/api/orgs/org_inbiz2/accounts/acc_org_inbiz2/fund", "u_de_wallet");
   assert.equal(r.status, 409, JSON.stringify(r.data));
   assert.match(r.data.error, /not funded yet/);
