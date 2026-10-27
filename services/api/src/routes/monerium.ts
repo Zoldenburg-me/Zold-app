@@ -1113,10 +1113,12 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       const profileId = pick.profile.id;
       // ADDRESS-MATCHED ONLY, for the reason activate gives: any other IBAN in
       // the snapshot is somebody's money routing, not this account's. And only
-      // for an account activation would serve: these keys are its connection.
-      const ownIban = ibanActivationRefusal(user)?.code === "IBAN_NOT_OFFERED" ? "" : ownIbanOf(verified.ibans, user.address, profileId);
+      // for an account Zold may bank: a refused one gains no IBAN and keeps none.
+      const refused = ibanActivationRefusal(user);
+      const notOffered = refused?.code === "IBAN_NOT_OFFERED";
+      const ownIban = notOffered ? "" : ownIbanOf(verified.ibans, user.address, profileId);
       // A stored IBAN stays only if this login lists it on the picked profile.
-      const keepsIban = !ownIban && user.funding?.status === "active" && storedIbanOnProfile(user, verified.ibans, profileId);
+      const keepsIban = !notOffered && !ownIban && user.funding?.status === "active" && storedIbanOnProfile(user, verified.ibans, profileId);
       const dropIban = Boolean(user.iban) && !ownIban && !keepsIban;
       const now = new Date().toISOString();
       const wasApproved = user.kycStatus === "approved";
@@ -1151,9 +1153,11 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
           mode: "sandbox" as const,
           status: ownIban || keepsIban ? ("active" as const) : ("provisioning" as const),
           moneriumProfileId: profileId,
-          detail: ownIban
-            ? `IBAN attributed to this account by your Monerium (${moneriumEnvironment()}) account`
-            : keepsIban
+          detail: notOffered
+            ? refused.error
+            : ownIban
+              ? `IBAN attributed to this account by your Monerium (${moneriumEnvironment()}) account`
+              : keepsIban
                 ? "own Monerium keys connected; the existing IBAN is kept and Monerium calls for this account now use your keys"
                 : dropIban
                   ? "the IBAN this account had is not on the Monerium profile now connected; approve IBAN issuance with your passkey"
@@ -1179,7 +1183,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       forgetUserClient(user.id);
       store.audit(auditEntry(
         "partner.credentials_connected",
-        { partner: "monerium", method: "api_keys", clientId: input.clientId, environment: moneriumEnvironment(), profileId, ibanAttributed: Boolean(ownIban) },
+        { partner: "monerium", method: "api_keys", clientId: input.clientId, environment: moneriumEnvironment(), profileId, ibanAttributed: Boolean(ownIban), ...(dropIban && user.iban ? { ibanDroppedLast4: user.iban.slice(-4) } : {}) },
         user.id,
       ));
       if (replacing) revokeOtherSessions(user.id, session.id);
