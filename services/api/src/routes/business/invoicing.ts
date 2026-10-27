@@ -170,6 +170,19 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
       if (iban && !ibanChecksumValid(iban)) {
         return res.status(400).json({ error: `${iban} is not a valid IBAN.`, field: "bank.iban" });
       }
+      // The name, BIC and bank printed beside the IBAN say who is paid, so a
+      // change to them takes org.update too. One not sent keeps its value:
+      // Settings never sends bankName and would otherwise clear it on save.
+      const storedBank = ctx.org.invoicing?.bank;
+      const text = (k: "holder" | "bic" | "bankName", clean = (v: string) => v) =>
+        typeof b.bank[k] === "string" ? clean(b.bank[k].trim()) || undefined : storedBank?.[k] ?? undefined;
+      const shown = {
+        holder: text("holder"),
+        bic: text("bic", (v) => v.toUpperCase().replace(/\s+/g, "")),
+        bankName: text("bankName"),
+      };
+      if ((["holder", "bic", "bankName"] as const).some((k) => shown[k] !== (storedBank?.[k] ?? undefined)) &&
+        !requirePermission(ctx, res, "org.update")) return;
       const was = ctx.org.invoicing?.bank?.iban;
       if ((iban || undefined) !== was) {
         if (!requirePermission(ctx, res, "org.update")) return;
@@ -178,13 +191,7 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
         if (!(await verifyPasskeyStepUp(user, b, res, "org.invoice-iban.change"))) return;
         ibanChange = { oldLast4: was ? was.slice(-4) : null, newLast4: iban ? iban.slice(-4) : null };
       }
-      const text = (v: unknown) => (typeof v === "string" ? v.trim() : "");
-      next.bank = {
-        holder: text(b.bank.holder) || undefined,
-        iban: iban || undefined,
-        bic: text(b.bank.bic).toUpperCase().replace(/\s+/g, "") || undefined,
-        bankName: text(b.bank.bankName) || undefined,
-      };
+      next.bank = { holder: shown.holder, iban: iban || undefined, bic: shown.bic, bankName: shown.bankName };
     }
     if (b.numberSeries && typeof b.numberSeries === "object") {
       const fallback = seriesOf(ctx.org);
