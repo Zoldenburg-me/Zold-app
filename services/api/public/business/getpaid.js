@@ -79,7 +79,7 @@ function linkWhen(r) {
 /* Z.tag picks the tone from the word (SYSTEM.md, "Status words"). */
 const STATE_WORD = { OPEN: "Open", PAID: "Paid", EXPIRED: "Ended", CANCELLED: "Cancelled" };
 
-function linksSection(links, block, fix = "") {
+function linksSection(links, block, fix) {
   const shown = links.filter((r) => gp.tab === "all" || (gp.tab === "open" ? r.state === "OPEN" : r.state === "PAID"));
   const tabs = TABS.map(([id, text]) => `<button type="button" class="zb-h-chip" data-gt="${id}" aria-pressed="${gp.tab === id}">${text}</button>`).join("");
   const row = (r) => {
@@ -171,7 +171,7 @@ RENDER["get-paid"] = async () => {
         const b = ev.target.closest("[data-gt]");
         if (!b || !list) return;
         gp.tab = b.dataset.gt;
-        box.querySelector("#gp-links").innerHTML = linksSection(list, block);
+        box.querySelector("#gp-links").innerHTML = linksSection(list, block, fix);
         box.querySelector(`[data-gt="${gp.tab}"]`)?.focus();
       });
     },
