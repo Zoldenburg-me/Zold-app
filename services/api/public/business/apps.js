@@ -55,7 +55,7 @@ function storesTable(d, title = "Connected stores", id = "app-stores") {
       <td><b>${esc(c.shop)}</b></td><td class="z-mono">@${esc(c.payeeHandle || "")}</td>
       <td>${c.ready ? Z.tag("Active") : `${Z.tag("Needs setup", "amber")}${c.configureError ? `<p class="desc">${esc(plain(c.configureError))}</p>` : ""}`}</td>
       <td class="z-dim">${esc(day(c.installedAt))}${c.lastSessionAt ? `, last order ${esc(day(c.lastSessionAt))}` : ""}</td>
-      <td class="num"><button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="shopify-disconnect" data-id="${esc(c.id)}">Disconnect<span class="z-sr"> ${esc(c.shop)}</span></button></td></tr>`));
+      <td class="num">${d.canManage ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="shopify-disconnect" data-id="${esc(c.id)}">Disconnect<span class="z-sr"> ${esc(c.shop)}</span></button>` : ""}</td></tr>`));
 }
 
 /** `viaCheckout`: the checkout service marks these orders paid, and this
