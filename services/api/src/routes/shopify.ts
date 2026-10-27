@@ -244,14 +244,24 @@ export function publicConnection(c: ShopifyConnection) {
 /** Whose payment page a store pays into: the org's EUR account's backing
  *  user when there is one, else the installer. Must have a payment page.
  *  The same rule for a merchant link (merchant-links.ts). */
-export function payeeFor(orgId: string, installerId: string): { user?: User; reason?: string } {
+export function payeeFor(orgId: string, installerId: string): { user?: User; reason?: string; missingPageOf?: string } {
   const eurAccount = store.accountsOf(orgId).find((a) => a.currency === "EUR" && a.backingUserId);
   const user = store.findUser(eurAccount?.backingUserId ?? installerId);
   if (!user) return { reason: "no account to receive into" };
   if (!user.paymentPage?.handle || !user.paymentPage.depositAddress) {
-    return { reason: `${user.id === installerId ? "you" : "the account backing this organisation's EUR account"} must claim a payment page first (Get paid → Your page in the app, or Settings → Payment page in Zold Business)` };
+    return {
+      reason: `${user.id === installerId ? "you" : "the account backing this organisation's EUR account"} must claim a payment page first (Get paid → Your page in the app, or Settings → Payment page in Zold Business)`,
+      missingPageOf: user.id,
+    };
   }
   return { user };
+}
+
+/** For the Apps card: why Connect store would 409 now, and whether the page
+ *  missing is the caller's own (then the card links to theirs). */
+export function payeeBlock(orgId: string, userId: string): { payeeReason?: string; payeePageIsYours?: boolean } {
+  const p = payeeFor(orgId, userId);
+  return p.user ? {} : { payeeReason: p.reason, payeePageIsYours: p.missingPageOf === userId };
 }
 
 // One resolve per request at a time: a sweep and a buyer's return visit share
@@ -374,6 +384,8 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
         manualGateway: SHOPIFY.manualGateway,
         orderTtlHours: Math.round(SHOPIFY.orderTtlMs / 3_600_000),
         canManage: manage,
+        // Why Connect store would 409 now, said before anyone types a shop.
+        ...(manage ? payeeBlock(ctx.org.id, ctx.userId) : {}),
         endpoints: SHOPIFY.mode === "payments-app"
           ? {
               payment: `${base}/api/shopify/payment`,

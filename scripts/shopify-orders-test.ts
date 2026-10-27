@@ -388,6 +388,22 @@ await check("a viewer sees the stores but no pay-link template and no link key; 
   assert.equal(a.body.canManage, true);
   assert.ok(a.body.connections[0].payLinkTemplate?.includes(key), "an admin lost the template");
 });
+await check("the Apps card hears why Connect store would 409 before a shop is typed, and only an owner or admin hears it", async () => {
+  const as = async (role: string) => {
+    const u: any = { id: randomUUID(), name: `B ${role}`, country: "DE", address: `0x${"cf".repeat(20)}`, iban: "", kycStatus: "approved", createdAt: now };
+    store.addUser(u);
+    store.addMember({ id: randomUUID(), orgId: org.id, userId: u.id, email: `b-${role}@example.com`, role, status: "active", invitedAt: now, acceptedAt: now } as any);
+    return call("GET", `/api/orgs/${org.id}/shopify`, { user: u.id });
+  };
+  const own = await call("GET", `/api/orgs/${org.id}/shopify`, { user: merchant.id });
+  assert.equal(own.body.payeeReason, undefined, "a merchant with a page is not held up");
+  const admin = await as("admin");
+  assert.match(admin.body.payeeReason, /you must claim a payment page/);
+  assert.equal(admin.body.payeePageIsYours, true, "the store would pay into the admin's own page, so the card links to it");
+  const viewer = await as("viewer");
+  assert.equal(viewer.body.payeeReason, undefined);
+  assert.equal(viewer.body.payeePageIsYours, undefined);
+});
 await check("the email link redirects to the order's pay page only with the order id signed by the store's key", async () => {
   const key = await linkKey();
   const r = await call("GET", `/api/shopify/orders/${SHOP}/${o1.id}/pay?b=${sign(key, o1.id)}`);

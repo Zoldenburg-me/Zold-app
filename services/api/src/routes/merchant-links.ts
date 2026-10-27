@@ -20,7 +20,7 @@ import { roleCan } from "../domain/roles.js";
 import { isValidShopDomain, normaliseShop } from "../shopify/hmac.js";
 import { requirePermission, resolveOrg, type SessionResolver } from "./org-context.js";
 import { baseUrlFor } from "./payment-requests.js";
-import { newestShopifyRequests, payeeFor, shopifyRequestRow } from "./shopify.js";
+import { newestShopifyRequests, payeeBlock, payeeFor, shopifyRequestRow } from "./shopify.js";
 import { announceMerchantLinkRevoked } from "../checkout-webhook.js";
 import { issueLinkCode, linkRefusal, merchantLinksAvailable, payLinkTemplate, publicLink, voidLinkCodes } from "../merchant-links.js";
 
@@ -81,6 +81,7 @@ export function createMerchantLinkRouter(requireSession: SessionResolver): expre
         available: avail.available,
         ...(origin ? { checkoutOrigin: origin } : {}),
         canManage: manage,
+        ...(manage ? payeeBlock(ctx.org.id, ctx.userId) : {}),
         links,
         requests,
       });
