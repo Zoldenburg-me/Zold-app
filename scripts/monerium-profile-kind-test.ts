@@ -238,6 +238,24 @@ await check("POST /accounts with useMyAccount adopts a corporate profile the sam
   assert.match(r.data.note, /company profile "Acme Technik GmbH"/);
 }));
 
+await check("an admin cannot back a business with their own account, so the owner is never locked out", () => withSafeFree("u_corp", async () => {
+  addOrg("org_biz_admin", "business", "u_pending", "Acme Technik GmbH");
+  store.addMember({ id: "m_org_biz_admin_u_corp", orgId: "org_biz_admin", userId: "u_corp", email: "", role: "admin", status: "active", invitedAt: now, acceptedAt: now });
+  addGatedEur("acc_biz_admin", "org_biz_admin");
+  const fund = await call("POST", "/api/orgs/org_biz_admin/accounts/acc_biz_admin/fund", "u_corp");
+  assert.equal(fund.status, 403, JSON.stringify(fund.data));
+  assert.equal(fund.data.code, "OWNER_ONLY");
+  assert.equal(store.findAccount("acc_biz_admin")!.backingUserId, undefined, "nothing written");
+  const list = await call("GET", "/api/orgs/org_biz_admin/accounts", "u_corp");
+  assert.equal(list.data.adoption.allowed, false, "the UI offers no fund control to an admin");
+  addOrg("org_biz_admin_new", "business", "u_pending", "Acme Technik GmbH");
+  store.addMember({ id: "m_org_biz_admin_new_u_corp", orgId: "org_biz_admin_new", userId: "u_corp", email: "", role: "admin", status: "active", invitedAt: now, acceptedAt: now });
+  const open = await call("POST", "/api/orgs/org_biz_admin_new/accounts", "u_corp", { currency: "EUR", useMyAccount: true });
+  assert.equal(open.status, 403, JSON.stringify(open.data));
+  assert.equal(open.data.code, "OWNER_ONLY");
+  assert.equal(store.accountsOf("org_biz_admin_new").length, 0, "no account opened");
+}));
+
 await check("a different legal name is a visible warning, not a block", () => withSafeFree("u_corp", async () => {
   addOrg("org_biz_other", "business", "u_corp", "Beta Handel UG (haftungsbeschränkt)");
   addGatedEur("acc_biz_other", "org_biz_other");

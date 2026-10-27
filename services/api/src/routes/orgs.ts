@@ -82,6 +82,7 @@ function noIbanGate(type: OrgType): NonNullable<Account["gate"]> {
       };
 }
 
+const OWNER_ONLY_FUNDING = "Only an owner can connect their account or wallet to this organisation.";
 /** A business account backed by a wallet-tier Safe: paid into, never sent from by bank. */
 const WALLET_GATE: NonNullable<Account["gate"]> = {
   reason: "No IBAN is connected, so nothing can be sent from this account by bank. Payment links pay into the connected wallet.",
@@ -605,11 +606,13 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     if (!requirePermission(ctx, res, "accounts.read")) return;
     const accounts = store.accountsOf(ctx.org.id);
     const caller = store.findUser(ctx.userId);
-    const adoption = roleCan(ctx.member.role, "accounts.open")
-      ? ctx.org.type === "business" && walletConnectable(caller)
-        ? ctx.member.role === "owner" ? { allowed: true, wallet: true } : { allowed: false, reason: "Only an owner can connect their wallet to this organisation." }
-        : adoptionHint(ctx.org, caller)
-      : { allowed: false, reason: `Your role (${ctx.member.role}) cannot open or fund accounts.` };
+    const adoption = !roleCan(ctx.member.role, "accounts.open")
+      ? { allowed: false, reason: `Your role (${ctx.member.role}) cannot open or fund accounts.` }
+      : ctx.org.type === "business" && ctx.member.role !== "owner"
+        ? { allowed: false, reason: OWNER_ONLY_FUNDING }
+        : ctx.org.type === "business" && walletConnectable(caller)
+          ? { allowed: true, wallet: true }
+          : adoptionHint(ctx.org, caller);
     res.json({
       // `gate` and `profile` are derived here, at read time: no row is
       // rewritten when the wording or the Monerium check changes.
@@ -678,6 +681,9 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       currency === "EUR" &&
       Boolean(callerFunded) &&
       (ctx.org.type === "personal" || req.body?.useMyAccount === true);
+    if (wantsAdoption && ctx.org.type === "business" && ctx.member.role !== "owner") {
+      return res.status(403).json({ error: OWNER_ONLY_FUNDING, code: "OWNER_ONLY" });
+    }
 
     /**
      * An account nobody can fund is `gated`, with a reason. `provisioning`
@@ -778,16 +784,17 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
         error: `${def?.name ?? account.currency} cannot be funded this way: ${def?.needs ?? "no rail"}`,
       });
     }
-    // A wallet-tier OWNER (no IBAN, none on offer) connects their Safe as
+    // Only an owner backs a business: the backer becomes the company's payee
+    // and the only key that authorises its payments, and no route unbinds it,
+    // so an admin backing it would lock the owner out.
+    if (ctx.org.type === "business" && ctx.member.role !== "owner") {
+      return res.status(403).json({ error: OWNER_ONLY_FUNDING, code: "OWNER_ONLY" });
+    }
+    // A wallet-tier owner (no IBAN, none on offer) connects their Safe as
     // where the business is paid. The row stays `gated`: there is no IBAN, so
-    // nothing is sent from it by bank, and no Monerium profile to check. Only
-    // the owner: with no profile check to tie the payee to the company, an
-    // admin could otherwise make their own wallet the company's payee.
+    // nothing is sent from it by bank, and no Monerium profile to check.
     const walletCaller = store.findUser(ctx.userId);
     if (ctx.org.type === "business" && walletConnectable(walletCaller)) {
-      if (ctx.member.role !== "owner") {
-        return res.status(403).json({ error: "Only an owner can connect their wallet to this organisation.", code: "OWNER_ONLY" });
-      }
       const taken = safeTakenBy(walletCaller.id, ctx.org.id);
       if (taken) return res.status(409).json({ error: safeTakenError(taken), code: "SAFE_IN_OTHER_ORG" });
       const connected = store.updateAccount(account.id, {
