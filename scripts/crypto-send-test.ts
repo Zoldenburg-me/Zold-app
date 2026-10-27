@@ -87,7 +87,7 @@ store.addUser({
 store.addUser({
   id: "u-kim", name: "Kim", country: "DE", kycStatus: "approved", address: KIM_SAFE, createdAt: now,
   paymentPage: { handle: "kim", depositAddress: FWD, forwarder: { provider: "candide", recipient: KIM_SAFE, destinationChainId: 31337, sourceChainIds: [31337], custodialWithdrawer: KIM_SAFE, active: true, activatedAt: now },
-    supportedTokens: [{ chainId: 31337, symbol: "USDC", address: addrs().usdc, decimals: 6 }], settlementAsset: "USDC", autoConvert: false, createdAt: now },
+    supportedTokens: [{ chainId: 31337, symbol: "USDC", address: addrs().usdc, decimals: 6 }], routesReadAt: now, settlementAsset: "USDC", autoConvert: false, createdAt: now },
 } as any);
 store.addUser({
   id: "u-lee", name: "Lee", country: "DE", kycStatus: "approved", address: KIM_SAFE.replace("5555", "5556"), createdAt: now,
@@ -200,7 +200,26 @@ try {
     const gone = await create({ to: "gone.zoldhq.com", confirmedAddress: MALLORY, amount: "1" });
     assert.equal(gone.data.code, "PAGE_TOKEN_REFUSED", "a name under our parent we cannot place fails closed");
     assert.equal(safeFundedEurToday("u-cs"), held, "a refusal holds nothing against the cap");
-    assert.equal((await create({ to: "gone.zoldhq.com", confirmedAddress: MALLORY, token: "USDC", amount: "1" })).status, 201, "USDC to it goes through");
+    assert.equal((await create({ to: "gone.zoldhq.com", confirmedAddress: MALLORY, token: "USDC", amount: "1" })).data.code, "PAGE_TOKEN_REFUSED", "nor USDC: it cannot be checked");
+  });
+
+  await t("a forwarder that cannot forward now takes nothing: expired, never read, or no route here", async () => {
+    const page = store.findUser("u-kim")!.paymentPage!;
+    const was = JSON.parse(JSON.stringify(page));
+    const usdc = () => create({ to: "kim.eth", confirmedAddress: FWD, token: "USDC", amount: "1" });
+    page.forwarder!.expiresAt = new Date(Date.now() - 1000).toISOString();
+    const expired = await usdc();
+    Object.assign(page, JSON.parse(JSON.stringify(was)));
+    delete (page as any).routesReadAt;
+    const unread = await usdc();
+    Object.assign(page, JSON.parse(JSON.stringify(was)), { supportedTokens: [{ chainId: 42161, symbol: "USDC", address: addrs().usdc, decimals: 6 }] });
+    const elsewhere = await usdc();
+    Object.assign(page, JSON.parse(JSON.stringify(was)));
+    for (const [why, r] of [["expired", expired], ["never read from its routes", unread], ["routes only on another chain", elsewhere]] as const) {
+      assert.equal(r.data.code, "PAGE_TOKEN_REFUSED", `${why}: ${JSON.stringify(r.data)}`);
+      assert.match(r.data.error, /can't take payments from here right now/);
+    }
+    assert.equal((await usdc()).status, 201, "restored: USDC goes through again");
   });
 
   await t("an address other than the one confirmed is refused at create", async () => {

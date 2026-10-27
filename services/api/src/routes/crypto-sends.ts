@@ -70,24 +70,29 @@ async function recipient(
 
 /**
  * The tokens a Zold payment page's address takes, when `address` is one: a
- * page's Candide forwarder moves only the tokens its routes name (USDC), and
- * anything else sent there is stranded. Undefined: not a page forwarder.
- * A name under our ENS parent always resolves to a page address, so one we
- * cannot place is treated as a forwarder (fail closed).
+ * page's Candide forwarder moves only the tokens its routes name, on the
+ * chains they name, while its activation lasts; anything else sent there is
+ * stranded. Undefined: not a page forwarder. Empty: it takes nothing now.
+ * Judged as livePaymentPage judges a page: a list never read from the
+ * forwarder's routes, an inactive or expired activation, or a list with no
+ * route on this chain takes nothing. A name under our ENS parent that
+ * resolves to no known Safe is a page we cannot check, so it takes nothing.
  */
-export function pageAddressTakes(address: `0x${string}`, name?: string): `0x${string}`[] | undefined {
+export function pageAddressTakes(address: `0x${string}`, name?: string, now = Date.now()): `0x${string}`[] | undefined {
   const a = address.toLowerCase();
   const isSafeOf = (u: User) => [u.address, u.passkeySafe?.address].some((x) => x?.toLowerCase() === a);
   const owner = store.users.find((u) => u.paymentPage?.depositAddress?.toLowerCase() === a);
-  const usdcOnly = [usdToken().address];
   if (owner) {
     // A page without forwarding uses the Safe itself, which takes anything.
     if (isSafeOf(owner)) return undefined;
-    const listed = (owner.paymentPage!.supportedTokens ?? []).filter((t) => t.chainId === CHAIN_ID).map((t) => t.address);
-    return listed.length ? listed : usdcOnly;
+    const page = owner.paymentPage!;
+    const f = page.forwarder;
+    const live = f?.provider !== "candide" || (f.active && (!f.expiresAt || Date.parse(f.expiresAt) > now) && !!page.routesReadAt);
+    if (!live) return [];
+    return (page.supportedTokens ?? []).filter((t) => t.chainId === CHAIN_ID).map((t) => t.address);
   }
   const ours = ENS_GATEWAY.enabled && !!name && name.endsWith(`.${ENS_GATEWAY.parent}`);
-  if (ours && !store.users.some(isSafeOf)) return usdcOnly;
+  if (ours && !store.users.some(isSafeOf)) return [];
   return undefined;
 }
 
@@ -151,7 +156,9 @@ export function createCryptoSendsRouter({
       if (takes && !takes.some((t) => t.toLowerCase() === token.address.toLowerCase())) {
         const sym = symbol === "EURE" ? "EURe" : usdToken().symbol;
         return res.status(409).json({
-          error: `${to.name ?? "That address"} is a Zold payment page that does not take ${sym}; it would be stuck there. Send ${usdToken().symbol}, or ask them for their wallet address.`,
+          error: takes.length
+            ? `${to.name ?? "That address"} is a Zold payment page that does not take ${sym}; it would be stuck there. Send ${usdToken().symbol}, or ask them for their wallet address.`
+            : `${to.name ?? "That address"} is a Zold payment page that can't take payments from here right now; it would be stuck there. Ask them for their wallet address.`,
           code: "PAGE_TOKEN_REFUSED",
         });
       }
