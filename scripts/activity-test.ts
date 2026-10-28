@@ -162,5 +162,15 @@ check("a held USDC deposit carries no conversion figures", () => {
   assert.equal((rows[0] as any).creditedEur, undefined);
 });
 
+check("a transfer never signed is not listed", () => {
+  const rows = buildActivity({ transfers: [transfer({ id: "t-unsigned", state: "CREATED" }), transfer()], deposits: [], issues: [] });
+  assert.deepEqual(rows.map((r) => r.id), ["t1"]);
+});
+
+check("a signed transfer still CREATED while its debit is relayed is listed", () => {
+  const signed = transfer({ id: "t-signed", state: "CREATED", auth: { authorizedAt: "2026-10-02T09:00:05.000Z" } as Transfer["auth"] });
+  assert.deepEqual(buildActivity({ transfers: [signed], deposits: [], issues: [] }).map((r) => r.id), ["t-signed"]);
+});
+
 if (failed) { console.log(`\n${failed} failed`); process.exit(1); }
 console.log("\nactivity: all ok");

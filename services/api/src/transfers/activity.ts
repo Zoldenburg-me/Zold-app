@@ -127,7 +127,10 @@ export function buildActivity({ transfers, deposits, issues, cryptoSends = [] }:
     return [];
   });
   const rows: ActivityRow[] = [
-    ...transfers.map((t): ActivityRow => ({ kind: "transfer", at: t.createdAt, ...userTransfer(t) })),
+    // Unsigned CREATED moved no money, so it is not activity. A signed one
+    // stays CREATED while its debit is relayed and must stay listed.
+    ...transfers.filter((t) => t.state !== "CREATED" || t.auth?.authorizedAt || t.moneriumRedeem?.signedAt)
+      .map((t): ActivityRow => ({ kind: "transfer", at: t.createdAt, ...userTransfer(t) })),
     ...depositRows,
     ...issues.map(bankRowFromIssue),
     ...cryptoSends.filter((c) => c.state !== "CREATED").map(cryptoOutRow),
