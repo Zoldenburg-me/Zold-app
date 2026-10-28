@@ -10,8 +10,10 @@
 import { Z, api, cap, esc, eur, gateHtml, maskIban, me, org, reviewOn, roleCan, usdSymbol } from "./core.js";
 import { loadMembers } from "./screens.js";
 import { META, RENDER } from "./views.js";
+import { fundableAccounts, payableContacts } from "./home-model.js";
 
-export const sendState = { contactId: null };
+/** Picked before the form opens: a contact's Pay button, or Home's Quick send. */
+export const sendState = { contactId: null, amount: "" };
 
 const linkBtn = (label, view, icon) => `<a class="z-btn z-btn--secondary" href="?view=${esc(view)}" data-view-link="${esc(view)}">${icon ? Z.icon(icon) : ""}<span>${esc(label)}</span></a>`;
 const last4 = (iban) => `•••• ${String(iban || "").replace(/\s+/g, "").slice(-4)}`;
@@ -86,9 +88,11 @@ RENDER.send = async () => {
     api(`/api/orgs/${org.id}/accounts`),
     loadMembers(),
   ]);
-  const payable = contacts.filter((c) => c.bankAccounts.some((b) => b.iban));
-  const fundable = accounts.filter((a) => a.status === "active" && a.backingUserId && a.profile?.status !== "needs_check");
+  const payable = payableContacts(contacts);
+  const fundable = fundableAccounts(accounts);
   if (!fundable.length) {
+    // Nothing here can use Quick send's amount: a later New payment starts empty.
+    sendState.amount = "";
     return `<div class="gate"><h3>No account can pay yet</h3><p>${org.type === "business"
       ? `Connect ${esc(org.name)}’s Monerium profile to an account first.`
       : "Open an account and fund it from your own account first."}</p><div class="zb-actions">${linkBtn("Accounts", "accounts")}</div></div>`;
@@ -100,6 +104,8 @@ RENDER.send = async () => {
   const first = fundable.find((a) => a.backingUserId === me?.id) || fundable[0];
   const chosen = payable.find((c) => c.id === sendState.contactId)?.id;
   const action = reviewOn() ? "Submit for approval" : "Save payment";
+  // Quick send's amount fills the form once; a later New payment starts empty.
+  const amount = sendState.amount;
 
   const html = `<div class="zb-send">
     <form class="z-card zb-pad zb-stack" id="send-form" style="gap:20px" novalidate>
@@ -109,7 +115,7 @@ RENDER.send = async () => {
         <div class="z-card zb-pick-list" id="send-contacts">${payable.map((c) => contactRow(c, c.id === chosen)).join("")}
           <button type="button" class="zb-pick-row zb-pick-row--add" data-act="new-contact">${Z.iconTile({ icon: "person_add" })}<span class="z-row__main"><span class="z-row__title">Add a contact</span><span class="z-row__sub">A payment goes to a saved contact, so a later change to their bank details is caught before sending.</span></span></button>
         </div></fieldset>
-      <div><label for="d-amt">Amount in euros</label><input id="d-amt" name="amount" inputmode="decimal" autocomplete="off" placeholder="250.00…" /></div>
+      <div><label for="d-amt">Amount in euros</label><input id="d-amt" name="amount" inputmode="decimal" autocomplete="off" placeholder="250.00…" value="${esc(amount)}" /></div>
       <div><label for="d-note">Reference <span class="desc">(on their bank statement)</span></label><input id="d-note" name="reference" autocomplete="off" maxlength="140" placeholder="Invoice 2026-114…" /></div>
       <p class="zb-err" id="send-err" role="alert"></p>
       <div class="zb-actions"><button type="button" class="z-btn z-btn--primary" data-act="send-create"><span>${action}</span></button>${linkBtn("Cancel", "payments")}</div>
@@ -122,6 +128,8 @@ RENDER.send = async () => {
   return {
     html,
     bind(box) {
+      // Cleared only by the render that is shown: a superseded one never binds.
+      sendState.amount = "";
       const form = box.querySelector("#send-form");
       const draw = () => { box.querySelector("#send-summary").innerHTML = summary(form, fundable, payable, approvers); };
       draw();

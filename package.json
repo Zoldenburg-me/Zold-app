@@ -115,6 +115,7 @@
     "dex:setup": "tsx scripts/dex-setup.ts",
     "business:test": "tsx scripts/business-test.ts",
     "business:access:test": "tsx scripts/business-access-test.ts",
+    "business:home:test": "tsx scripts/business-home-test.ts",
     "security:test": "tsx scripts/security-hardening-test.ts",
     "persist-failure:test": "tsx scripts/persist-failure-test.ts",
     "reencrypt": "tsx scripts/reencrypt-fields.ts",
