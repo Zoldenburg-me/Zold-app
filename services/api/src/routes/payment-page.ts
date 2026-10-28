@@ -246,7 +246,7 @@ export function createPaymentPageRouter(deps: PaymentPageDeps) {
   );
 
   /** The account's own Safe address as a QR, for the in-app receive screen.
-   *  Signed-in only: unlike a payment page, this address is not published. */
+   *  Signed-in only, though a handle's ENS name resolves to this address. */
   router.get(
     "/users/:id/address/qr.svg",
     wrap(async (req, res) => {

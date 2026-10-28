@@ -63,7 +63,8 @@ const FWD = "0x4444444444444444444444444444444444444444" as const;
 const KIM_SAFE = "0x5555555555555555555555555555555555555555" as const;
 const names: Record<string, `0x${string}` | null | "down"> = {
   "alice.eth": ALICE, "nobase.eth": null, "0xsplits.eth": ALICE,
-  // A Zold user's page name, and the same page under a plain .eth name.
+  // Names that resolve to a page's forwarder: a page name whose signed answer
+  // is still within its validity, and a .eth name its owner pointed there.
   "kim.zoldhq.com": FWD, "kim.eth": FWD, "lee.zoldhq.com": KIM_SAFE, "gone.zoldhq.com": MALLORY,
 };
 let balance = 1_000n * 10n ** 18n;
