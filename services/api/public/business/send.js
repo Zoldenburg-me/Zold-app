@@ -91,6 +91,8 @@ RENDER.send = async () => {
   const payable = payableContacts(contacts);
   const fundable = fundableAccounts(accounts);
   if (!fundable.length) {
+    // Nothing here can use Quick send's amount: a later New payment starts empty.
+    sendState.amount = "";
     return `<div class="gate"><h3>No account can pay yet</h3><p>${org.type === "business"
       ? `Connect ${esc(org.name)}’s Monerium profile to an account first.`
       : "Open an account and fund it from your own account first."}</p><div class="zb-actions">${linkBtn("Accounts", "accounts")}</div></div>`;
