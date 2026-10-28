@@ -118,6 +118,7 @@
     "business:home:test": "tsx scripts/business-home-test.ts",
     "business:payment:test": "tsx scripts/business-payment-test.ts",
     "phone:home-cards:test": "tsx scripts/phone-home-cards-ui-test.ts",
+    "desktop:handle:test": "tsx scripts/desktop-handle-ui-test.ts",
     "security:test": "tsx scripts/security-hardening-test.ts",
     "persist-failure:test": "tsx scripts/persist-failure-test.ts",
     "reencrypt": "tsx scripts/reencrypt-fields.ts",

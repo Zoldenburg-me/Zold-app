@@ -94,6 +94,7 @@ const scripts = [
   "business:home:test",
   "business:payment:test",
   "phone:home-cards:test",
+  "desktop:handle:test",
   "recovery-alert:ui:test",
   "draft:test",
   "draft:failure:test",
