@@ -169,10 +169,10 @@ Each of these was a bug once.
   domain.
 
 **Keep the "zoll" spelling in two places**: `PRF_SALT = "zoll/device-key/v1"`
-is a key-derivation input (renaming it makes every wrapped device key
-undecryptable), and the `zoll-device-key` / `zoll-session` localStorage slots
-are read once and migrated forward. Only the current authorizer rotates a
-device key.
+is a key-derivation input (renaming it changes every PRF-derived device key
+and makes every wrapped one undecryptable), and the `zoll-device-key` /
+`zoll-session` localStorage slots are read once and migrated forward. The
+passkey re-creates or replaces the device key; the old key need not exist.
 
 ## Change size
 

@@ -49,8 +49,8 @@ and revoked.
 A send carries **two signatures**, checked in two places:
 
 1. **Device key → `PaymentAuthorization`** (EIP-712). The browser holds a
-   device key, wrapped with WebAuthn PRF (HKDF → AES-GCM) where the
-   authenticator supports it. It signs the transfer id, amount, recipient
+   device key, derived from the passkey's WebAuthn PRF output (HKDF) where the
+   authenticator supports it, so the same passkey re-creates it. It signs the transfer id, amount, recipient
    commitment and deadline. The server verifies it
    (`assertDeviceAuthorization` in `orchestrator.ts`) against the terms stored
    on the transfer.

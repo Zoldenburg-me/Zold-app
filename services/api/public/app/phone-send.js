@@ -443,14 +443,14 @@ async function phSubmit(btn, errEl) {
   let created = null;
   try {
     if (phSendBlocked()) throw new Error(phSendBlocked().text);
-    if (!user.authorizerAddress) await registerDeviceKey(user);
+    await registerDeviceKey(user);
     const recipient = { recipientName: payee.name, recipientIban: payee.iban };
     created = await api("/api/transfers", { quoteId: q.id, ...recipient, ...(phSend.reference ? { reference: phSend.reference } : {}) });
     phSend.transferId = created.id;
     const dev = await deviceLib;
     const addr = await dev.deviceAddress(credId(), { bound: created.authorization.authorizer });
     if (created.authorization.authorizer.toLowerCase() !== addr.toLowerCase()) {
-      throw new Error("This account’s approval key is on a different browser. Send from there, or change the key there first.");
+      throw new Error("The payment key changed while this payment was being set up. Nothing was sent; try again.");
     }
     const expected = dev.destinationCommitment("sepa", { iban: recipient.recipientIban, name: recipient.recipientName });
     if (created.authorization.typedData.message.destination.toLowerCase() !== expected.toLowerCase()) {

@@ -32,6 +32,7 @@ import { b64urlToBuf, consumeChallenge, issueChallenge, stepUpBinding, verifyAss
 import { verifyPasskeyStepUp } from "./auth.js";
 import { publicUser } from "../users/public-user.js";
 import { redactedMessage } from "../http/log-cause.js";
+import { auditEntry } from "../audit.js";
 
 /** requireUserSession is injected — server.ts owns authentication. */
 export interface TransferDeps {
@@ -239,21 +240,30 @@ export function createTransferRouter(deps: TransferDeps) {
       if (!requireKycApproved(user, res)) return;
       const address = req.body?.address;
       if (!isAddress(address)) return res.status(400).json({ error: "address required (0x-prefixed, 20 bytes)" });
+      // The passkey is the Safe's only owner and signs every debit, so its
+      // step-up for this exact address may also replace a key this browser
+      // lost: it grants nothing the passkey does not already hold.
+      const before = user.authorizerAddress?.toLowerCase();
       if (!(await verifyPasskeyStepUp(user, req.body, res, "authorizer.bind", address.toLowerCase()))) return;
+      // The harness waives the step-up for an account with no passkey; a
+      // replacement is never waived.
+      if (before && before !== address.toLowerCase() && !user.passkey?.publicKey) {
+        return res.status(409).json({ error: "replacing the payment key needs this account's passkey", code: "NO_PASSKEY" });
+      }
       // Read fresh each time: the verifications await, and a binding that
       // landed meanwhile must not be overwritten.
       const answeredBound = () => {
         const current = store.findUser(user.id)!;
-        if (!current.authorizerAddress) return false;
-        if (current.authorizerAddress.toLowerCase() !== address.toLowerCase()) {
-          res.status(409).json({
-            error: "this account is already bound to a different device key — rotate it from that device",
-            authorizerAddress: current.authorizerAddress,
-          });
-        } else {
+        const now = current.authorizerAddress?.toLowerCase();
+        if (now === address.toLowerCase()) {
           res.json(publicUser(current));
+          return true;
         }
-        return true;
+        if (now !== before) {
+          res.status(409).json({ error: "the payment key changed while this was being approved; try again", code: "AUTHORIZER_CHANGED" });
+          return true;
+        }
+        return false;
       };
       if (answeredBound()) return;
       const { nonce, signature } = req.body?.proof ?? {};
@@ -271,6 +281,7 @@ export function createTransferRouter(deps: TransferDeps) {
       }
       if (answeredBound()) return; // no await from here to the write
       const updated = store.updateUser(user.id, { authorizerAddress: address });
+      store.audit(auditEntry("user.authorizer_bound", { from: before ?? null, to: address.toLowerCase() }, user.id));
       res.status(201).json(publicUser(updated));
     }),
   );

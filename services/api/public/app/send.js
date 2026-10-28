@@ -382,7 +382,8 @@ $("btn-send").onclick = async () => {
   try {
     if (!kycApproved(user)) throw new Error("identity review must be approved before sending");
     // Late binding for accounts that skipped registration at onboarding.
-    if (!user.authorizerAddress) await registerDeviceKey(user);
+    // Before the transfer exists, so a browser without the key leaves no row.
+    await registerDeviceKey(user);
 
     // 1. Propose: the server fixes the terms and returns them unexecuted.
     const created = await api("/api/transfers", { quoteId: quote.id, ...recipient });
@@ -393,7 +394,7 @@ $("btn-send").onclick = async () => {
     const dev = await deviceLib;
     const addr = await dev.deviceAddress(credId(), { bound: created.authorization.authorizer });
     if (created.authorization.authorizer.toLowerCase() !== addr.toLowerCase()) {
-      throw new Error("this account's payment key was registered in a different browser — sign in there, or rotate the key from that device");
+      throw new Error("the payment key changed while this payment was being set up — nothing was sent; try again");
     }
     // Recompute the payout commitment from what WE typed and refuse to sign if
     // the server's signed terms name a different destination — this is what

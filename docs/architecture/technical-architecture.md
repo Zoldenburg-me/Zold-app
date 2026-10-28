@@ -342,17 +342,31 @@ Safe (`importedAt`) as for a recovered one (`recoveredAt`).
 
 ### 5.2 Device key (`public/device.js`)
 
-- A secp256k1 key is generated in the browser and stored in
-  `localStorage["zold-device-key"]`. It is wrapped with AES-GCM under
-  HKDF(WebAuthn PRF output, salt `"zoll/device-key/v1"`) where PRF exists.
-  **Do not rename the salt**:
-  it is a KDF input.
-- It is bound once through `POST /users/:id/authorizer` with a passkey
-  step-up for that address and the key's own EIP-712 `AuthorizerBinding {account, authorizer,
-  nonce}` signature over a single-use challenge from
+- Where the authenticator has PRF, the secp256k1 key is
+  HKDF(WebAuthn PRF output, salt `"zoll/device-key/v1"`, info
+  `"zold/device-key/v2/secp256k1/<i>"`), and
+  `localStorage["zold-device-key:<credentialId>"]` caches only its address
+  (v2). The same passkey derives the same key after site data is cleared.
+  Keys from before v2 are random and stored AES-GCM-wrapped under
+  HKDF(PRF, same salt, info `"aes-gcm"`) (v1). Without PRF the key is random
+  and stored in the clear. **Do not rename the salt**: it is a KDF input.
+- It is bound through `POST /users/:id/authorizer` with a passkey step-up for
+  that address and the key's own EIP-712 `AuthorizerBinding {account,
+  authorizer, nonce}` signature over a single-use challenge from
   `POST /users/:id/authorizer/challenge`, bound to the account and address.
-  Binding is trust-on-first-use and there is no rotation route.
-  Recovery finalisation clears it.
+  The same two proofs replace a bound key (a browser that lost a v1 or
+  unprotected key), with no wait: the passkey is the Safe's only owner and
+  already signs every debit. A replacement always needs a passkey (the
+  harness waiver does not apply), refuses with `AUTHORIZER_CHANGED` if the
+  binding moved while it was approved, and is audited as
+  `user.authorizer_bound`. Send runs `registerDeviceKey` before
+  `POST /api/transfers`, so a browser without the key creates no transfer.
+  Recovery finalisation clears the binding.
+- Trade-off: a v2 key is the passkey's, so whoever can use the passkey (a
+  synced copy included) can derive or replace it. That adds nothing to what
+  the passkey already does as the Safe's only owner; the key still stops a
+  stolen session and a swapped payee. Without PRF a replacement key is stored
+  unprotected, and Settings → Security says so.
 - It signs EIP-712 `PaymentAuthorization {account, amount, to, transferId,
   destination, deadline}` under the domain `{name: "TransF Safe Transfer",
   version 1, chainId, verifyingContract: user Safe}` (`chain.ts:203-238`).
