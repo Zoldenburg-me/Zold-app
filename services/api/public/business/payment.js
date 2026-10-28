@@ -52,7 +52,7 @@ function linesHtml(run, contacts) {
       ${p.iban ? kv("IBAN", copyable(p.iban.replace(/\s+/g, ""), "IBAN", grouped(p.iban))) : ""}
       ${p.bic ? kv("BIC", `<span class="z-mono">${esc(p.bic)}</span>`) : ""}
       ${p.wallet ? kv("Wallet", copyable(p.wallet, "wallet address")) : ""}
-      ${l.note ? kv("Reference", copyable(l.note, "reference")) : ""}
+      ${l.note ? kv("Note", `${esc(l.note)}<br><span class="z-dim">Yours, not sent to the bank</span>`) : ""}
       ${many ? kv("Amount", esc(/^(EUR|EURe)$/i.test(l.asset) ? eur(Number(l.amount)) : `${l.amount} ${l.asset}`)) : ""}`;
   }).join("");
 }
@@ -90,7 +90,8 @@ RENDER.payment = async () => {
     loadMembers(),
   ]);
   if (r.status === "rejected") return `<div class="gate"><h3>Payment not found</h3><p>${esc(r.reason?.message || "It could not be read.")}</p></div>`;
-  const run = r.value.draft;
+  // The single-run route returns the totals beside the run, not in it.
+  const run = { ...r.value.draft, totals: r.value.totals };
   // The address names the run, so a reload or a copied link opens it again.
   // Only while this run is still the one asked for: a slow read must not name a later run's entry.
   if (view === "payment" && pd.id === run.id && !new URLSearchParams(location.search).get("id")) {
@@ -98,6 +99,7 @@ RENDER.payment = async () => {
   }
   const contacts = ct.status === "fulfilled" ? ct.value.contacts : null;
   const account = run.source.kind === "account" && ac.status === "fulfilled" ? ac.value.accounts.find((a) => a.id === run.source.accountId) : null;
+  const wallet = run.source.kind === "wallet";
   const bank = run.lines.every((l) => l.destination.kind === "bank");
   // Euro bank lines go out by SEPA through Monerium, which Zold charges nothing for; other rails are not named here.
   const sepa = bank && run.lines.every((l) => /^(EUR|EURe)$/i.test(l.asset));
@@ -107,14 +109,15 @@ RENDER.payment = async () => {
     <section class="z-card zb-pad zb-pd-head" aria-label="Summary">
       <div><p class="zb-pd-tags">${draftTag(run)}</p>
         <h2 class="zb-pd-title">${esc(draftTitle(run))}</h2>
-        <p class="zb-hint">Drafted ${esc(when(run.createdAt))} · ${bank ? "Bank transfer" : "Wallet transfer"}${run.lines.length === 1 && first.note ? ` · Ref: ${esc(first.note)}` : ""}</p></div>
+        <p class="zb-hint">Drafted ${esc(when(run.createdAt))} · ${bank ? "Bank transfer" : "Wallet transfer"}${run.lines.length === 1 && first.note ? ` · Note: ${esc(first.note)}` : ""}</p></div>
       <p class="zb-pd-total">−${esc(draftTotal(run))}</p></section>
     <div class="zb-pd-grid">
       <section class="z-card zb-pad" aria-labelledby="pd-stmt"><h2 class="zb-h3" id="pd-stmt">Transfer</h2>
         ${linesHtml(run, contacts)}
         ${account ? kv("From", `${esc(account.label || account.currency)}${account.identifier?.iban ? `<br><span class="z-mono z-dim">${esc(maskIban(account.identifier.iban))}</span>` : ""}`) : ""}
-        ${kv("Method", sepa ? "SEPA bank transfer, paid out by Monerium" : bank ? "Bank transfer" : "Transfer on chain from the account")}
-        ${kv("Next", esc(nextStep(run, reviewOn())))}
+        ${wallet ? kv("From", "An imported wallet") : ""}
+        ${kv("Method", wallet ? "Prepared here, signed in your own wallet" : sepa ? "SEPA bank transfer, paid out by Monerium" : bank ? "Bank transfer" : "Transfer on chain from the account")}
+        ${kv("Next", esc(wallet ? "Approve it in your own wallet. Zold does not send it." : nextStep(run, reviewOn())))}
         ${sepa && account ? kv("Zold fee", esc(eur(0))) : ""}
         <div class="zb-kv zb-kv--total"><span>Total</span><b>−${esc(draftTotal(run))}</b></div>
         ${contacts ? "" : '<p class="zb-hint">The contacts could not be read, so the IBAN and BIC are not shown.</p>'}

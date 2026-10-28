@@ -7,9 +7,11 @@
  * No imports, so scripts/business-payment-test.ts loads it in node.
  */
 
-/** The run a statement line was sent by: its transfer is one of the run's. */
+/** The run a statement line was sent by: money out whose transfer is one of
+ *  the run's. A refund carries the same transfer id but is money in, so it
+ *  is not the payment. */
 export function runIdForLine(runs, line) {
-  const t = line?.links?.transferId;
+  const t = line?.amountCents < 0 && line.event !== "sepa_out_reversal" ? line.links?.transferId : null;
   return (t && (runs || []).find((d) => (d.transferIds || []).includes(t))?.id) || null;
 }
 
@@ -54,7 +56,7 @@ export function nextStep(run, reviewRequired) {
     REJECTED: "Sent back to the drafter.",
     INVALID_DATA: "Stopped: a contact’s bank details changed after it was drafted. Confirm them and submit it again.",
     EXECUTING: "Sending. Each transfer waits for the signer’s passkey.",
-    EXECUTED: "Sent. Its status turns to Paid when the bank confirms.",
+    EXECUTED: "Paid: every transfer in it is confirmed.",
     FAILED: run.failureReason ? `Failed: ${run.failureReason}` : "Failed. Create a new payment to try again.",
     CANCELLED: "Cancelled before anything was sent.",
   }[run.state] || "";

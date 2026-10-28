@@ -22,10 +22,12 @@ const m: any = await import(pathToFileURL(path.join(ROOT, "services/api/public/b
 // ── Which run a statement line came from ─────────────────────────────────────
 
 const runs = [{ id: "d1", transferIds: ["t1", "t2"] }, { id: "d2" }, { id: "d3", transferIds: ["t3"] }];
-assert.equal(m.runIdForLine(runs, { links: { transferId: "t2" } }), "d1");
-assert.equal(m.runIdForLine(runs, { links: { transferId: "t9" } }), null, "a transfer no run sent: no run");
-assert.equal(m.runIdForLine(runs, { links: {} }), null, "money in has no transfer: no run");
-assert.equal(m.runIdForLine(null, { links: { transferId: "t1" } }), null, "runs unread: no link");
+const out = (t: string, extra = {}) => ({ event: "sepa_out", amountCents: -10000, links: { transferId: t }, ...extra });
+assert.equal(m.runIdForLine(runs, out("t2")), "d1");
+assert.equal(m.runIdForLine(runs, out("t9")), null, "a transfer no run sent: no run");
+assert.equal(m.runIdForLine(runs, { event: "sepa_in", amountCents: 5000, links: {} }), null, "money in has no transfer: no run");
+assert.equal(m.runIdForLine(runs, out("t2", { event: "sepa_out_reversal", amountCents: 10000 })), null, "a refund carries the transfer id but is not the payment");
+assert.equal(m.runIdForLine(null, out("t1")), null, "runs unread: no link");
 
 // ── Where a line pays ────────────────────────────────────────────────────────
 
