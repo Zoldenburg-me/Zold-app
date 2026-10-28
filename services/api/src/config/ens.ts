@@ -20,7 +20,9 @@ export const ENS_GATEWAY = (() => {
   if (set > 0 && set < 3) {
     throw new Error("ENS gateway needs ENS_PARENT_NAME, ENS_RESOLVER_ADDRESS and ENS_GATEWAY_KEY together — set all three or none");
   }
-  if (process.env.ENS_NAMES_LIVE?.trim() && set !== 3) {
+  const namesLive = process.env.ENS_NAMES_LIVE?.trim() ?? "";
+  if (!["", "0", "1"].includes(namesLive)) throw new Error("ENS_NAMES_LIVE must be 1 or 0");
+  if (namesLive === "1" && set !== 3) {
     throw new Error("ENS_NAMES_LIVE needs the ENS gateway (ENS_PARENT_NAME, ENS_RESOLVER_ADDRESS, ENS_GATEWAY_KEY) — without it no name resolves");
   }
   if (parent && !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(parent)) throw new Error("ENS_PARENT_NAME must be a name like zoldhq.com");
@@ -35,7 +37,7 @@ export const ENS_GATEWAY = (() => {
      *  the live L1 resolver (docs/status.md). Until then the gateway may
      *  answer, but Home shows no name: one that no wallet can resolve is not
      *  an address anyone can pay. */
-    namesLive: process.env.ENS_NAMES_LIVE?.trim() === "1",
+    namesLive: namesLive === "1",
     parent,
     resolver: resolver.toLowerCase() as `0x${string}`,
     key: (key || undefined) as `0x${string}` | undefined,

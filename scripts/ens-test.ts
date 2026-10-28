@@ -27,6 +27,7 @@
  */
 import "./_local-chain.js";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -203,12 +204,56 @@ try {
     const nameOf = (id: string) => publicUser(store.findUser(id)!).ensName;
     assert.equal(nameOf("u-alice"), "alice.zoldhq.com");
     assert.equal(nameOf("u-bob"), "bob.zoldhq.com", "a page with a forwarder still names the Safe");
-    for (const id of ["u-carol", "u-frank", "u-gina"]) assert.equal(nameOf(id), null, `${id}: the gateway gives no answer, so Home shows no name`);
+    for (const id of ["u-carol", "u-frank", "u-gina"]) assert.equal(nameOf(id), undefined, `${id}: the gateway gives no answer, so Home shows no name`);
+    // A second account holding the same handle (claims refuse it; old data might not): the gateway
+    // finds the first, so the second is never shown a name that resolves to someone else.
+    store.addUser({ id: "u-hank", name: "Hank", country: "DE", kycStatus: "approved", address: "0xcccccccccccccccccccccccccccccccccccccccc",
+      passkeySafe: safeOf("0xcccccccccccccccccccccccccccccccccccccccc"), createdAt: new Date().toISOString(),
+      paymentPage: { handle: "alice", depositAddress: PAGE, autoConvert: true, settlementAsset: "EURE" } } as any);
+    assert.equal(nameOf("u-hank"), undefined, "a duplicate handle is not shown to the account the gateway would not answer for");
+    assert.equal(nameOf("u-alice"), "alice.zoldhq.com");
     assert.equal(ensNameOf({ ...store.findUser("u-alice")!, paymentPage: undefined }, "zoldhq.com"), null, "no page handle: no name");
     assert.equal(ensNameOf(store.findUser("u-alice")!, null), null, "no gateway on this deployment: no name");
     assert.equal(shownParent({ enabled: true, namesLive: false, parent: "zoldhq.com" }), null, "the gateway answers but no wallet has resolved a name yet: no name on Home");
     assert.equal(shownParent({ enabled: false, namesLive: true, parent: "" }), null);
     assert.equal(shownParent({ enabled: true, namesLive: true, parent: "zoldhq.com" }), "zoldhq.com");
+  });
+
+  await check("ENS_NAMES_LIVE: off by default and at 0, refused when malformed or without the gateway", async () => {
+    // Config reads the environment once at import, so each case runs in its own process.
+    const tsx = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "node_modules", ".bin", "tsx");
+    const cfg = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "services", "api", "src", "config", "ens.ts");
+    const gateway = { ENS_PARENT_NAME: "zoldhq.com", ENS_RESOLVER_ADDRESS: RESOLVER, ENS_GATEWAY_KEY: GATEWAY_KEY };
+    const run = (env: Record<string, string>) => {
+      const clean = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("ENS_")));
+      try {
+        return execFileSync(tsx, ["-e", `import(${JSON.stringify(cfg)}).then((m) => console.log(JSON.stringify(m.ENS_GATEWAY.namesLive)))`],
+          { env: { ...clean, ...env }, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+      } catch (e: any) {
+        return `throws: ${String(e.stderr).match(/ENS_NAMES_LIVE[^\n]*/)?.[0] ?? e.message}`;
+      }
+    };
+    assert.equal(run(gateway), "false", "unset: off");
+    assert.equal(run({ ...gateway, ENS_NAMES_LIVE: "0" }), "false");
+    assert.equal(run({ ENS_NAMES_LIVE: "0" }), "false", "0 without a gateway is simply off");
+    assert.equal(run({ ...gateway, ENS_NAMES_LIVE: "1" }), "true");
+    assert.match(run({ ENS_NAMES_LIVE: "1" }), /^throws: ENS_NAMES_LIVE needs the ENS gateway/);
+    assert.match(run({ ...gateway, ENS_NAMES_LIVE: "true" }), /^throws: ENS_NAMES_LIVE must be 1 or 0/);
+    // And the session: with the gateway on but the switch off, no ensName key at all.
+    const api = path.join(path.dirname(cfg), "..");
+    const db = path.join(mkdtempSync(path.join(tmpdir(), "zold-ens-off-")), "db.json");
+    const session = execFileSync(tsx, ["-e", `(async () => {
+      const { store, initStore } = await import(${JSON.stringify(path.join(api, "store.ts"))});
+      const { publicUser } = await import(${JSON.stringify(path.join(api, "users", "public-user.ts"))});
+      initStore();
+      const a = "0x1111111111111111111111111111111111111111";
+      store.addUser({ id: "u", name: "A", country: "DE", kycStatus: "approved", address: a, createdAt: new Date().toISOString(),
+        passkeySafe: { address: a, status: "active", threshold: 1, passkeyPublicKey: { x: "0x1", y: "0x2" } },
+        paymentPage: { handle: "alice", depositAddress: a, autoConvert: true, settlementAsset: "EURE" } });
+      console.log(JSON.stringify("ensName" in publicUser(store.findUser("u"))));
+    })()`],
+      { env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("ENS_"))), ...gateway, TRANSF_DB_PATH: db }, encoding: "utf8" }).trim().split("\n").pop();
+    assert.equal(session, "false", "switch off: the session carries no ensName");
   });
 
   await check("no Ethereum (coin type 60) address unless this deployment is on Ethereum", async () => {

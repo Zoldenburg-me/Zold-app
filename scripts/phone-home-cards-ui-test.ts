@@ -223,7 +223,7 @@ await t("Zold name: shown with copy on Home and in the account details only when
   const details = flat(run("phDetailsBody(user, null)"));
   assert.match(details, /erika\.zoldhq\.com/);
   assert.match(run("phDetailsText(user, null)"), /Zold name: erika\.zoldhq\.com/);
-  setUser({ ...done, ensName: null });
+  setUser(done); // the API leaves ensName out where it shows no name
   assert.doesNotMatch(home(), /Zold name/, "no ensName from the API: no name, nothing guessed from the handle");
   assert.doesNotMatch(flat(run("phDetailsBody(user, null)")), /Zold name/);
   run("hist.length = 0");

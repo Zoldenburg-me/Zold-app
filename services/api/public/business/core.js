@@ -173,7 +173,7 @@ export const ownSafe = (accounts) => ownSafeHere(me, org, accounts);
  *  the money, so it is never shortened. */
 export const safeAddressHtml = (s) => {
   // The API sends ensName only where its gateway resolves it to this login's Safe (users/ens-name.ts).
-  const name = me?.ensName && me.address?.toLowerCase() === s.address.toLowerCase() ? me.ensName : null;
+  const name = me?.ensName && s.address && me.address?.toLowerCase() === s.address.toLowerCase() ? me.ensName : null;
   const row = (value, said) => `<div class="zb-safe-addr">
     <span class="z-mono" translate="no">${esc(value)}</span>
     <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="copy-text" data-text="${esc(value)}" data-said="${said}">${Z.icon("content_copy")}<span>Copy</span></button></div>`;
