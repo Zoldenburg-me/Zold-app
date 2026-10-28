@@ -20,6 +20,8 @@ import { draftTag, draftTitle, draftTotal, invAmount, loadMembers, memberName } 
 import { APP_LINKS, isOwnCompanyOrg, loadAccess } from "./access-model.js";
 import { hasIban, noIbanStep, payableContacts, pendingRuns, quickSendBlock, securityRows, setupOpen, setupSteps } from "./home-model.js";
 import { sendState } from "./send.js";
+import { runLink } from "./payment.js";
+import { runIdForLine } from "./payment-model.js";
 import { render } from "./shell.js";
 
 const DAY = 86400000;
@@ -152,7 +154,7 @@ function pendingRows(runs, limit) {
   return pendingRuns(runs).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))).slice(0, limit).map((d) => {
     const ref = d.lines.length === 1 ? d.lines[0].note : "";
     return `<tr><td class="z-dim">${esc(when(d.createdAt))}</td>
-        <td><span class="z-tbl__who">${Z.avatar({ name: draftTitle(d) })}<a class="z-tbl__link" href="?view=payments" data-view-link="payments">${esc(draftTitle(d))}</a></span></td>
+        <td><span class="z-tbl__who">${Z.avatar({ name: draftTitle(d) })}${runLink(d.id, esc(draftTitle(d)))}</span></td>
         <td>${ref ? esc(ref) : '<span class="z-dim">No memo</span>'}</td>
         <td>${draftTag(d)}</td>
         <td class="z-tbl__num">−${esc(draftTotal(d))}</td></tr>`;
@@ -169,8 +171,10 @@ function activity(all, limit = ACTIVITY_ROWS, runs = null) {
     .sort((a, b) => b.valueDate.localeCompare(a.valueDate)).slice(0, limit).map((l) => {
       const inbound = l.amountCents >= 0;
       const who = l.counterparty?.name || (inbound ? "Money in" : "Payment");
+      // A payment this organisation sent opens its run; anything else opens Books.
+      const run = runIdForLine(runs, l);
       return `<tr><td class="z-dim">${esc(when(ymd(l.valueDate)))}</td>
-        <td><span class="z-tbl__who">${Z.avatar({ name: who })}<a class="z-tbl__link" href="?view=books" data-view-link="books">${esc(who)}</a></span></td>
+        <td><span class="z-tbl__who">${Z.avatar({ name: who })}${run ? runLink(run, esc(who)) : `<a class="z-tbl__link" href="?view=books" data-view-link="books">${esc(who)}</a>`}</span></td>
         <td>${l.note ? esc(l.note) : l.reference ? esc(l.reference) : '<span class="z-dim">No memo</span>'}</td>
         <td>${Z.tag(LINE_WORD[l.event] || (inbound ? "Received" : "Sent"))}</td>
         <td class="z-tbl__num">${Z.amount({ value: Math.abs(l.amountCents) / 100, direction: inbound ? "in" : "out" })}</td></tr>`;
