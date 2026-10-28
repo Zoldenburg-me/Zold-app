@@ -33,6 +33,7 @@ $("btn-handle").onclick = async () => {
       ...(settlementAsset ? { settlementAsset } : {}),
     });
     user.paymentPage = r.paymentPage;
+    user.ensName = r.ensName; // a new handle is a new name, or none (absent in the answer)
     renderHandle(r.paymentPage);
     renderMobile(user);
   } catch (e) { showErr("handle-err", e); }
