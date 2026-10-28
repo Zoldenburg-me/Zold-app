@@ -52,15 +52,13 @@ export function createPaymentLinkRoutes(deps: OrgRoutes): express.Router {
       if (open) return { status: 200, body: { ...ownerPaymentRequest(open, baseUrlFor(req)), reused: true } };
       // No methods named: every way this link may be paid (linkMethods). The
       // caller's own account is not the one being paid, so it does not decide.
-      const allowed = linkMethods(payee, user);
+      const allowed = linkMethods(ctx.org, payee, user);
       const named: unknown[] = Array.isArray(req.body?.methods) ? req.body.methods : allowed;
-      // An unknown method is validateCreate's 400; a known one this link may not take is ours.
-      const refused = named.find((m) => (m === "crypto" || m === "bank") && !allowed.includes(m));
-      if (refused !== undefined && payee.id !== user.id) {
+      // A malformed body is validateCreate's 400 first; a known method this link may not take is ours.
+      const input = validateCreate({ ...req.body, methods: named }, payee);
+      if (payee.id !== user.id && input.methods.some((m) => !allowed.includes(m))) {
         throw new PaymentRequestError(`a link you make for ${ctx.org.name} is paid by bank transfer only, as its payment page is`, 409);
       }
-      const body = { ...req.body, methods: named };
-      const input = validateCreate(body, payee);
       const link = await createPaymentRequest(payee, input, { kind: "app" }, ctx.org.id, user.id);
       return { status: 201, body: { ...ownerPaymentRequest(link, baseUrlFor(req)), reused: false } };
     };
@@ -81,6 +79,7 @@ export function createPaymentLinkRoutes(deps: OrgRoutes): express.Router {
     if (!requirePermission(ctx, res, "invoices.manage")) return;
     const link = store.findPaymentRequest(req.params.reqId);
     if (!link || link.orgId !== ctx.org.id || link.source.kind !== "app") return res.status(404).json({ error: "payment request not found" });
+    if (link.invoiceId && !requireCapability(ctx, res, "invoices")) return;
     if (link.state !== "OPEN") return res.status(409).json({ error: `this link is ${effectiveState(link).toLowerCase()}` });
     if (link.payments.length) return res.status(409).json({ error: "a payment has already been recorded against this link — it cannot be cancelled" });
     const done = store.updatePaymentRequest(link.id, { state: "CANCELLED", cancelledAt: new Date().toISOString() });

@@ -34,7 +34,7 @@ const { createOrgRouter } = await import("../services/api/src/routes/orgs.js");
 const { createBusinessRouter } = await import("../services/api/src/routes/business.js");
 const { createPaymentRequestRouter } = await import("../services/api/src/routes/payment-requests.js");
 const { createPaymentPageRouter } = await import("../services/api/src/routes/payment-page.js");
-const { linkPayee } = await import("../services/api/src/routes/business/invoice-pay-link.js");
+const { linkMethods, linkPayee } = await import("../services/api/src/routes/business/invoice-pay-link.js");
 const { accountIsSpendable } = await import("../services/api/src/domain/accounts.js");
 
 let failed = 0;
@@ -148,11 +148,11 @@ await check("a company whose euro account is not open is told that, not that the
 await check("an admin's link waits for the company page: never under the account holder's personal page", async () => {
   const list = await call("GET", "/api/orgs/org_co/payment-requests", undefined, "u_admin");
   assert.equal(list.body.payLink.allowed, false);
-  assert.equal(list.body.payLink.code, "NO_PAGE");
+  assert.equal(list.body.payLink.code, "NO_COMPANY_PAGE");
   assert.match(list.body.payLink.reason, /opens under its company payment page, which isn’t set up yet/);
   const r = await call("POST", "/api/orgs/org_co/payment-requests", { amountEur: 50, methods: ["bank"] }, "u_admin");
   assert.equal(r.status, 409, JSON.stringify(r.body));
-  assert.equal(r.body.code, "NO_PAGE");
+  assert.equal(r.body.code, "NO_COMPANY_PAGE");
 });
 await check("a viewer still cannot make one, and nobody else's link reaches a personal account", async () => {
   const v = await call("POST", "/api/orgs/org_co/payment-requests", { amountEur: 50, methods: ["bank"] }, "u_view");
@@ -297,6 +297,7 @@ await check("an admin's link then pays into the account's Safe under the company
   assert.equal(crypto.status, 409, JSON.stringify(crypto.body));
   assert.match(crypto.body.error, /bank transfer only/);
   assert.equal((await call("POST", "/api/orgs/org_co/payment-requests", { amountEur: 50, methods: [1] }, "u_admin")).status, 400, "a malformed method is a bad request, not a refusal");
+  assert.equal((await call("POST", "/api/orgs/org_co/payment-requests", { amountEur: 50, methods: ["crypto", 1] }, "u_admin")).status, 400, "malformed beats refused");
   // Out again: the checks below count the company's links from here.
   store.paymentRequests.splice(i, 1);
 });
@@ -350,6 +351,51 @@ await check("the company page alone is enough: no NO_PAGE once it exists", async
     const list = await call("GET", "/api/orgs/org_co/payment-requests");
     assert.notEqual(list.body.payLink.code, "NO_PAGE", JSON.stringify(list.body.payLink));
   } finally { store.updateUser("u_co", { paymentPage: page } as any); }
+});
+await check("a wallet-backed company account gets no bank link on behalf, even when its holder has a personal IBAN", async () => {
+  const acc = { identifier: { ...store.accountsOf("org_co").find((x) => x.id === "acc_co")!.identifier } };
+  store.updateAccount("acc_co", { identifier: {} } as any);
+  try {
+    const orgCo = store.findOrganisation("org_co")!;
+    assert.ok(store.findUser("u_co")!.iban, "the holder has a personal IBAN");
+    assert.deepEqual(linkMethods(orgCo, store.findUser("u_co")!, store.findUser("u_admin")!), []);
+    assert.ok(linkMethods(orgCo, store.findUser("u_co")!, store.findUser("u_co")!).includes("bank"), "the holder's own link still takes their IBAN");
+    const before = store.paymentRequests.length;
+    const r = await call("POST", "/api/orgs/org_co/payment-requests", { amountEur: 50, methods: ["bank"] }, "u_admin");
+    assert.equal(r.status, 409, JSON.stringify(r.body));
+    assert.equal(store.paymentRequests.length, before, "no link published");
+  } finally { store.updateAccount("acc_co", { identifier: acc.identifier } as any); }
+  store.updateAccount("acc_co", { identifier: { iban: "DE00000000000000000000" } } as any);
+  try {
+    assert.deepEqual(linkMethods(store.findOrganisation("org_co")!, store.findUser("u_co")!, store.findUser("u_admin")!), [], "an account IBAN that is not the one published is not enough");
+  } finally { store.updateAccount("acc_co", { identifier: acc.identifier } as any); }
+  assert.deepEqual(linkMethods(store.findOrganisation("org_co")!, store.findUser("u_co")!, store.findUser("u_admin")!), ["bank"]);
+});
+await check("a link on behalf with no active IBAN behind the company says so", async () => {
+  store.updateUser("u_co", { iban: undefined } as any);
+  try {
+    const list = await call("GET", "/api/orgs/org_co/payment-requests", undefined, "u_admin");
+    assert.equal(list.body.payLink.code, "NO_METHOD", JSON.stringify(list.body.payLink));
+    assert.match(list.body.payLink.reason, /paid by bank transfer, and its account has no active IBAN yet/);
+  } finally { store.updateUser("u_co", { iban: IBAN } as any); }
+});
+await check("cancelling an invoice's link needs the invoices capability, as making it does", async () => {
+  store.paymentRequests.push({
+    id: "pr_inv_p", code: "INVP", userId: "u_co", orgId: "org_p", invoiceId: "inv_x", currency: "EUR", methods: ["bank"], state: "OPEN",
+    cryptoQuotes: [], payments: [], source: { kind: "app" }, expiresAt: new Date(Date.now() + 86_400_000).toISOString(), createdAt: now, updatedAt: now,
+  } as any);
+  // Every org type has invoices today; switch it off to reach the refusal.
+  const { CAPABILITIES } = await import("../services/api/src/domain/plans.js");
+  (CAPABILITIES.invoices as any).unavailable = "Invoices are switched off here.";
+  try {
+    const r = await call("POST", "/api/orgs/org_p/payment-requests/pr_inv_p/cancel");
+    assert.equal(r.status, 409, JSON.stringify(r.body));
+    assert.equal(r.body.capability, "invoices");
+    assert.equal(store.findPaymentRequest("pr_inv_p")!.state, "OPEN");
+  } finally {
+    delete (CAPABILITIES.invoices as any).unavailable;
+    store.paymentRequests.splice(store.paymentRequests.findIndex((p) => p.id === "pr_inv_p"), 1);
+  }
 });
 await check("the same code resolves under the payee's own handle, never under another page", async () => {
   assert.equal((await call("GET", `/api/pay/lindner/${pageCode}`, undefined, "")).status, 200);

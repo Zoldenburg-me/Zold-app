@@ -123,12 +123,18 @@ export function linkPayee(org: Organisation, user: User): User | undefined {
  * the company's bank details and no crypto address, and a link in the
  * company's name must not publish the holder's personal deposit address.
  */
-export function linkMethods(payee: User, caller: User): PaymentMethod[] {
+export function linkMethods(org: Organisation, payee: User, caller: User): PaymentMethod[] {
   const own = payee.id === caller.id;
-  return availableMethods(payee).filter((m) => m.available && (own || m.method === "bank")).map((m) => m.method);
+  // On behalf, the IBAN a link publishes (payee.iban) must be the company
+  // account's own: a wallet-backed account, or one whose IBAN differs from
+  // the holder's, would publish a personal IBAN under the company's name.
+  const flat = (iban?: string) => String(iban ?? "").replace(/\s+/g, "").toUpperCase();
+  const companyIban = !own && Boolean(payee.iban) && store.accountsOf(org.id).some((a) =>
+    a.currency === "EUR" && a.backingUserId === payee.id && a.status === "active" && flat(a.identifier?.iban) === flat(payee.iban));
+  return availableMethods(payee).filter((m) => m.available && (own || (companyIban && m.method === "bank"))).map((m) => m.method);
 }
 
-export type PayLinkBlock = { code: "ACCOUNT_NOT_OPEN" | "NOT_THE_PAYEE" | "NO_PAGE" | "NO_METHOD"; reason: string };
+export type PayLinkBlock = { code: "ACCOUNT_NOT_OPEN" | "NOT_THE_PAYEE" | "NO_PAGE" | "NO_COMPANY_PAGE" | "NO_METHOD"; reason: string };
 
 export function payLinkBlocker(org: Organisation, user: User): PayLinkBlock | undefined {
   const r = payLinkPayee(org, user);
@@ -155,7 +161,8 @@ export function payLinkPayee(org: Organisation, user: User): { payee: User } | P
   // payee's own, and only the payee's own when the payee made it.
   if (!companyPageHandle(payee.id, org.id) && (!own || !payee.paymentPage?.handle)) {
     return {
-      code: "NO_PAGE",
+      // NO_COMPANY_PAGE: only the company page unblocks a link made on behalf.
+      code: own ? "NO_PAGE" : "NO_COMPANY_PAGE",
       reason: org.type !== "business"
         ? "A payment link opens under your payment page, and you have none yet. Set up your page first."
         : own
@@ -163,7 +170,7 @@ export function payLinkPayee(org: Organisation, user: User): { payee: User } | P
           : `A link you make for ${org.name} opens under its company payment page, which isn’t set up yet. Owners and admins set it up under Get paid.`,
     };
   }
-  if (!linkMethods(payee, user).length) {
+  if (!linkMethods(org, payee, user).length) {
     return {
       code: "NO_METHOD",
       reason: own
@@ -210,7 +217,7 @@ async function payLinkUnlocked(ctx: OrgContext, invoice: Invoice, baseUrl: strin
   const found = payLinkPayee(ctx.org, user);
   if (!("payee" in found)) return { ok: false, ...found };
   const { payee } = found;
-  const methods = linkMethods(payee, user);
+  const methods = linkMethods(ctx.org, payee, user);
   const input = validateCreate({ invoiceId: invoice.id, methods, expiresAt: linkExpiry(invoice.dueDate) }, payee);
   const link = await createPaymentRequest(payee, input, { kind: "app" }, ctx.org.id, user.id);
   return { ok: true, url: ownerPaymentRequest(link, baseUrl).url, amountEur: link.amountEur, reused: false };

@@ -25,13 +25,16 @@ function linkBlock(payLink) {
   return payLink.allowed ? "" : payLink.reason || "You can’t make payment links here.";
 }
 
-/** The fix beside a NO_PAGE refusal: the company page where this person may
- *  set it up, else their own page in the app (a link needs one or the other). */
+/** The fix beside a missing-page refusal: the company page where this person
+ *  may set it up, else their own page in the app. Their own page unblocks only
+ *  a link into their own account (NO_PAGE), never one made on behalf. */
 function pageFix(payLink, page) {
-  if (payLink?.code !== "NO_PAGE") return "";
+  const code = payLink?.code;
+  if (code !== "NO_PAGE" && code !== "NO_COMPANY_PAGE") return "";
   if (org.type === "business" && EDITS_PAGE.has(org.role) && page?.ready) {
     return `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="org-page">${Z.icon("add")}<span>Set up the page</span></button>`;
   }
+  if (code !== "NO_PAGE") return "";
   return `<a class="z-btn z-btn--secondary z-btn--sm" href="/app?from=business#page-settings">Set up your page${Z.icon("open_in_new")}<span class="z-sr"> (the app)</span></a>`;
 }
 

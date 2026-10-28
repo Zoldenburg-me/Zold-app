@@ -364,7 +364,7 @@ await check("a payer's invoice waits for the company page: issued, no link under
   unlinkedInvoiceId = r.data.invoice.id;
   unlinkedToken = r.data.linkToken;
   assert.equal(r.data.payment.ok, false);
-  assert.equal(r.data.payment.code, "NO_PAGE");
+  assert.equal(r.data.payment.code, "NO_COMPANY_PAGE");
   assert.match(r.data.payment.reason, /opens under its company payment page/);
   assert.ok(!store.paymentRequests.some((p) => p.invoiceId === unlinkedInvoiceId), "nothing opened under /pay/olga");
 });
@@ -798,7 +798,7 @@ await check("a payer's link waits for a company page, never the wallet holder's 
   store.paymentRequests.filter((p) => p.invoiceId === id).forEach((p) => store.updatePaymentRequest(p.id, { state: "CANCELLED" } as any));
   const r = await call("POST", "/api/orgs/org_inbiz/payment-requests", "u_payer", { invoiceId: id, methods: ["crypto"] });
   assert.equal(r.status, 409, JSON.stringify(r.data));
-  assert.equal(r.data.code, "NO_PAGE");
+  assert.equal(r.data.code, "NO_COMPANY_PAGE");
   assert.match(r.data.error, /opens under its company payment page/);
   const list = await call("GET", "/api/orgs/org_inbiz/invoices", "u_payer");
   assert.equal(list.data.payLink.allowed, false);
