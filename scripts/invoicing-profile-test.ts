@@ -358,13 +358,15 @@ await check("asking for the invoice's payment link again returns the open one, n
   assert.equal(store.paymentRequests.filter((p) => p.invoiceId === invoiceId).length, 1);
 });
 
-await check("a member whose account does not back the org gets the invoice and the reason, not a link", async () => {
+await check("a payer's invoice waits for the company page: issued, no link under the owner's personal page", async () => {
   const r = await call("POST", "/api/orgs/org_pay/invoicing/issue", "u_payer", invoiceFor("FR"));
   assert.equal(r.status, 201, JSON.stringify(r.data));
-  assert.equal(r.data.payment.ok, false);
-  assert.equal(r.data.payment.code, "NOT_THE_PAYEE");
   unlinkedInvoiceId = r.data.invoice.id;
   unlinkedToken = r.data.linkToken;
+  assert.equal(r.data.payment.ok, false);
+  assert.equal(r.data.payment.code, "NO_COMPANY_PAGE");
+  assert.match(r.data.payment.reason, /opens under its company payment page/);
+  assert.ok(!store.paymentRequests.some((p) => p.invoiceId === unlinkedInvoiceId), "nothing opened under /pay/olga");
 });
 
 await check("two requests at once for an invoice's link make one link, not two", async () => {
@@ -791,14 +793,16 @@ await check("connected, an issued invoice gets its link, and the page offers onl
   assert.equal(page.methods.crypto!.address, walletSafe);
 });
 
-await check("only the member whose wallet backs it collects: a payer is refused, and its list offers no button", async () => {
+await check("a payer's link waits for a company page, never the wallet holder's personal page", async () => {
   const id = (await call("POST", "/api/orgs/org_inbiz/invoicing/issue", "u_in", invoiceFor("IN"))).data.invoice.id;
   store.paymentRequests.filter((p) => p.invoiceId === id).forEach((p) => store.updatePaymentRequest(p.id, { state: "CANCELLED" } as any));
   const r = await call("POST", "/api/orgs/org_inbiz/payment-requests", "u_payer", { invoiceId: id, methods: ["crypto"] });
-  assert.equal(r.status, 403, JSON.stringify(r.data));
-  assert.equal(r.data.code, "NOT_THE_PAYEE");
+  assert.equal(r.status, 409, JSON.stringify(r.data));
+  assert.equal(r.data.code, "NO_COMPANY_PAGE");
+  assert.match(r.data.error, /opens under its company payment page/);
   const list = await call("GET", "/api/orgs/org_inbiz/invoices", "u_payer");
   assert.equal(list.data.payLink.allowed, false);
+  assert.equal((await call("GET", "/api/orgs/org_inbiz/invoices", "u_in")).data.payLink.allowed, true, "the wallet holder's own link still opens under their page");
 });
 
 await check("a wallet connected to one business is refused in another (SAFE_IN_OTHER_ORG)", async () => {
