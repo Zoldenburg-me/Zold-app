@@ -36,7 +36,7 @@ async function deviceKeyRow(me) {
     none: "Not set up yet",
     unknown: "Couldn’t check this browser",
     elsewhere: "On another device",
-    encrypted: `In this browser, encrypted by your ${esc(Z.passkeyName())}`,
+    encrypted: `In this browser, protected by your ${esc(Z.passkeyName())}`,
     plain: `<b>In this browser, not encrypted.</b> Your ${esc(Z.passkeyName())} here can’t encrypt it. Don’t use Zold in this browser on a shared computer.`,
   }[deviceKeyView(me, status)];
 }

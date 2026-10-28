@@ -118,8 +118,8 @@ export interface Db {
  *
  * Tests point this somewhere disposable because they reset the database on
  * every run. A test run on the live file once wiped a Safe owner key on Base
- * Sepolia and stranded the account (only the current authorizer may rotate),
- * so tests must not be able to reach the working database.
+ * Sepolia and stranded the account, so tests must not be able to reach the
+ * working database.
  */
 export const DB_PATH = process.env.TRANSF_DB_PATH
   ? path.resolve(process.env.TRANSF_DB_PATH)

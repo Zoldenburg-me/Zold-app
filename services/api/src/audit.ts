@@ -47,6 +47,9 @@ export type AuditKind =
   /** An imported wallet's ownership proof was checked on its chain: prove or
    *  re-check, and what the chain answered. */
   | "wallet.ownership_checked"
+  /** The account's payment key (authorizer) was bound or replaced, with a
+   *  passkey step-up for the new address: old and new address. */
+  | "user.authorizer_bound"
   | "org.payment_review_changed"
   /** The payout IBAN printed on invoices changed: last four characters only. */
   | "org.invoice_iban_changed"

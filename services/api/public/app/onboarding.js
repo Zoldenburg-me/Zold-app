@@ -2107,23 +2107,24 @@ async function moneriumRedeemAssertion(authorization) {
   };
 }
 
-/* Mint the device key and bind it as the account's payment authorizer.
-   Runs after passkey registration so the key can be wrapped with the
-   authenticator's PRF secret; the server takes the first binding and refuses
-   re-binding by anyone but the device, so this establishes, never steals. */
+/* Make sure this browser holds the account's payment key, before anything
+   that needs it. Nothing to do when it does. Otherwise it makes the key (from
+   the passkey's PRF output: the same passkey gives back the same key after
+   site data was cleared) and binds it; a key that comes out different
+   replaces the bound one, approved by the passkey for that exact address. */
 async function registerDeviceKey(u) {
   const dev = await deviceLib;
-  // A record that cannot be read is not this account's key if none is bound
-  // yet, so it is replaced; with a key bound it may be that key, and device.js
-  // refuses to write over it.
-  // Only a key already bound to this account is reused: another account's key
-  // in this browser is never bound here.
   const bound = u.authorizerAddress;
+  if (dev.holdsKey(credId(), bound)) return u;
+  // A record that cannot be read is nobody's usable key, so it is replaced.
+  // With a key bound, so is any other key here: binding it back would only
+  // undo another browser's binding.
   const status = dev.keyStatus(credId(), bound);
-  const replaceDamaged = !!status.damaged && !bound;
-  const { address, protection } = status.present && !replaceDamaged
-    ? { address: await dev.deviceAddress(credId(), { bound }), protection: status.protection }
-    : await dev.createKey(credId(), { replaceDamaged });
+  const replaceDamaged = !!status.damaged;
+  const { address, protection } = status.present && !replaceDamaged && !bound
+    ? { address: await dev.deviceAddress(credId()), protection: status.protection }
+    : await dev.createKey(credId(), { replaceDamaged, staleFor: bound });
+  if (bound && address.toLowerCase() === bound.toLowerCase()) return u; // derived again
   // The key proves it is held here by signing the server's binding challenge.
   const { typedData, approval } = await api(`/api/users/${u.id}/authorizer/challenge`, { address });
   if (typedData?.primaryType !== "AuthorizerBinding" || typedData.message.authorizer.toLowerCase() !== address.toLowerCase()) {

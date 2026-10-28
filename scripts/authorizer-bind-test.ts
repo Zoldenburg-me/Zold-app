@@ -162,6 +162,22 @@ try {
     const ok = await post(`/api/users/${id}/authorizer`, { address: approved.address, proof, stepUp: await key.assert(good.approval.challenge) });
     assert.equal(ok.status, 201, JSON.stringify(ok.body));
     assert.equal(store.findUser(id)!.authorizerAddress, approved.address);
+
+    // A browser that lost the key: the passkey approves a new one in its place.
+    const fresh = newDevice();
+    const next = await challenge(id, fresh.address);
+    const freshProof = { nonce: next.typedData.message.nonce, signature: await signTerms(fresh, next.typedData) };
+    const bare = await post(`/api/users/${id}/authorizer`, { address: fresh.address, proof: freshProof });
+    assert.deepEqual([bare.status, bare.body.code], [401, "STEP_UP_REQUIRED"], "no replacement without the passkey");
+    const wrong = await post(`/api/users/${id}/authorizer`, { address: fresh.address, proof: freshProof, stepUp: await key.assert((await challenge(id, other.address)).approval.challenge) });
+    assert.deepEqual([wrong.status, wrong.body.code], [401, "STEP_UP_INVALID"], "an approval for another address replaces nothing");
+    assert.equal(store.findUser(id)!.authorizerAddress, approved.address);
+    const swapped = await post(`/api/users/${id}/authorizer`, { address: fresh.address, proof: freshProof, stepUp: await key.assert(next.approval.challenge) });
+    assert.equal(swapped.status, 201, JSON.stringify(swapped.body));
+    assert.equal(store.findUser(id)!.authorizerAddress, fresh.address);
+    const entry = store.auditFor(id).find((e: any) => e.kind === "user.authorizer_bound" && e.data.to === fresh.address.toLowerCase());
+    assert.ok(entry, "the replacement is audited");
+    assert.equal(entry.data.from, approved.address.toLowerCase());
   });
 
   await check("two bindings racing for an unbound account: one key wins, the other is refused", async () => {

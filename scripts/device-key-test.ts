@@ -202,14 +202,23 @@ await t("a readable stored key is never replaced", async () => {
   assert.equal(slots.get(SLOT), before);
 });
 
-await t("onboarding replaces a damaged record only for an account with no key bound", async () => {
+await t("onboarding makes a key only when this browser lacks the bound one, and replaces a damaged record", async () => {
   const { readFileSync } = await import("node:fs");
   const src = readFileSync(path.join(ROOT, "services/api/public/app/onboarding.js"), "utf8");
   const fn = src.slice(src.indexOf("async function registerDeviceKey"), src.indexOf("async function registerDeviceKey") + 1200);
   assert.match(fn, /bound = u\.authorizerAddress/);
+  assert.match(fn, /if \(dev\.holdsKey\(credId\(\), bound\)\) return u;/);
   assert.match(fn, /keyStatus\(credId\(\), bound\)/);
-  assert.match(fn, /replaceDamaged = !!status\.damaged && !bound/);
-  assert.match(fn, /createKey\(credId\(\), \{ replaceDamaged \}\)/);
+  assert.match(fn, /replaceDamaged = !!status\.damaged;/);
+  assert.match(fn, /status\.present && !replaceDamaged && !bound/);
+  assert.match(fn, /createKey\(credId\(\), \{ replaceDamaged, staleFor: bound \}\)/);
+  assert.match(fn, /if \(bound && address\.toLowerCase\(\) === bound\.toLowerCase\(\)\) return u;/);
+  // Send makes sure of the key before the transfer exists.
+  for (const file of ["send.js", "phone-send.js"]) {
+    const send = readFileSync(path.join(ROOT, "services/api/public/app", file), "utf8");
+    const ensure = send.indexOf("await registerDeviceKey(user);");
+    assert.ok(ensure > 0 && ensure < send.indexOf('api("/api/transfers"'), file);
+  }
 });
 
 await t("createKey without a passkey credential refuses and stores nothing", async () => {
@@ -275,9 +284,9 @@ await t("a legacy key is refused for an account bound to a different address", a
 
 await t("a bound account with no key here is refused, and no stray key is minted", async () => {
   slots.clear();
-  await assert.rejects(() => dev.deviceAddress(CRED, { bound: LEGACY_ADDR }), /not in this browser/);
+  await assert.rejects(() => dev.deviceAddress(CRED, { bound: LEGACY_ADDR }), /not set up in this browser/);
   slots.set("zold-device-key", "{not json");
-  await assert.rejects(() => dev.deviceAddress(CRED, { bound: LEGACY_ADDR }), /not in this browser/);
+  await assert.rejects(() => dev.deviceAddress(CRED, { bound: LEGACY_ADDR }), /not set up in this browser/);
   assert.equal(slots.get(SLOT), undefined);
 });
 
@@ -395,11 +404,57 @@ await t("two credentials with PRF keep two keys, and B's secret cannot unwrap A'
       assert.equal(a.protection, "prf");
       assert.equal(b.protection, "prf");
       assert.notEqual(a.address, b.address);
-      await assert.rejects(() => dev.unwrapKey(JSON.parse(slots.get(SLOT)!), SECRET_B));
+      assert.equal(JSON.parse(slots.get(SLOT)!).ct, undefined, "a derived key stores no key material");
       const sigB = await dev.signTypedData(TYPED_DATA, CRED_B);
       assert.equal((await recoverAddress({ hash: viemDigest, signature: sigB })).toLowerCase(), b.address);
     },
   );
+});
+
+await t("a derived key comes back from the same passkey after the browser forgets it", async () => {
+  slots.clear();
+  const answer = (secret: Uint8Array) => () => Promise.resolve({ getClientExtensionResults: () => ({ prf: { results: { first: secret.buffer } } }) });
+  let first = "";
+  await withAuthenticator(answer(PRF_SECRET), async () => {
+    first = (await dev.createKey(CRED)).address;
+    const stored = JSON.parse(slots.get(SLOT)!);
+    assert.deepEqual([stored.v, stored.derived, stored.key, stored.ct], [2, true, undefined, undefined]);
+    assert.equal(dev.holdsKey(CRED, first), true);
+    assert.equal(dev.holdsKey(CRED, `0x${"44".repeat(20)}`), false);
+    slots.clear();
+    assert.equal(dev.holdsKey(CRED, first), false);
+    assert.equal((await dev.createKey(CRED)).address, first, "same passkey, same key");
+    const sig = await dev.signTypedData(TYPED_DATA, CRED, first);
+    assert.equal((await recoverAddress({ hash: viemDigest, signature: sig })).toLowerCase(), first);
+  });
+  await withAuthenticator(answer(new Uint8Array(32).fill(9)), async () => {
+    await assert.rejects(() => dev.signTypedData(TYPED_DATA, CRED, first), /could not unlock/);
+  });
+});
+
+await t("the app's device-lib calls all exist on the object device.js hands it", async () => {
+  const { readFileSync, readdirSync } = await import("node:fs");
+  const lib = readFileSync(path.join(ROOT, "services/api/public/device.js"), "utf8");
+  const handed = new Set(lib.match(/__deviceLibReady\(\{([^}]*)\}\)/)![1].split(",").map((s) => s.trim()));
+  const dir = path.join(ROOT, "services/api/public/app");
+  for (const file of readdirSync(dir).filter((f) => f.endsWith(".js"))) {
+    for (const [, name] of readFileSync(path.join(dir, file), "utf8").matchAll(/\bdev\.(\w+)\(/g)) {
+      assert.ok(handed.has(name), `${file} calls dev.${name}, which device.js does not hand over`);
+    }
+  }
+});
+
+await t("a stale key here is replaced by the passkey's key, never the bound one", async () => {
+  slots.clear();
+  const answer = () => Promise.resolve({ getClientExtensionResults: () => ({ prf: { results: { first: PRF_SECRET.buffer } } }) });
+  const old = (await dev.createKey(CRED)).address; // random, unprotected: not the bound key
+  await withAuthenticator(answer, async () => {
+    const bound = `0x${"55".repeat(20)}`;
+    const { address } = await dev.createKey(CRED, { staleFor: bound });
+    assert.notEqual(address, old);
+    assert.equal(JSON.parse(slots.get(SLOT)!).derived, true);
+    await assert.rejects(() => dev.createKey(CRED, { staleFor: address }), /already/, "the bound key itself is never replaced");
+  });
 });
 
 await t("a PRF-wrapped legacy key is carried forward only once this passkey unwraps it", async () => {
