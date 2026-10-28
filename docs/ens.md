@@ -61,7 +61,10 @@ gateway does not check `{sender}`.
 A signed answer is reused for the same request (whatever its hex case): one
 with an address for half its validity (150 s by default), one without for
 30 s, so a handle claimed after a lookup shows soon. HTTP `max-age` is 60 s,
-never past the signature's expiry.
+never past the signature's expiry. A changed answer (a handle released, or
+an account's Safe replaced) can therefore keep resolving to the old address
+for up to the signature's validity, 300 s by default, in a wallet that keeps
+it that long.
 
 Handles are already a subset of what ENS accepts. The one extra rule is that
 `--` cannot be the third and fourth characters (ENSIP-15), and `normaliseHandle`
