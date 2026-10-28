@@ -215,11 +215,14 @@ export function createPaymentPageRouter(deps: PaymentPageDeps) {
           updatedAt: now,
         },
       });
+      // The name follows the handle: the caller replaces its own (absent when none is shown).
+      const pub = publicUser(updated);
       res.json({
         handle: updated.paymentPage!.handle,
         displayName: updated.paymentPage!.displayName,
         payUrl: `/pay/${handle}`,
-        paymentPage: publicUser(updated).paymentPage,
+        paymentPage: pub.paymentPage,
+        ensName: pub.ensName,
       });
     }),
   );
