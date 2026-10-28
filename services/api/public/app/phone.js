@@ -41,7 +41,7 @@
 let phRoute = null;            // { name, arg }
 let phSig = "";                // what the open screen was drawn from, for the poll
 const phCache = { deposits: null, links: null, methods: null, orgs: null, contacts: null, bic: undefined, bicFor: "", currencyPending: null,
-  signers: undefined, soon: null, walletQr: null };
+  signers: undefined, soon: null, walletQr: null, invoices: undefined };
 
 /* A link into Zold Business: it opens the organisation it last had, so a
    link for one names it first (see the click listener below). */
@@ -248,6 +248,8 @@ const phEur = (n) => Z.formatMoney(n ?? 0, "EUR");
 /* The capability check, as the organisation read reports it. */
 const phCan = (org, cap) => org?.capabilities?.[cap]?.allowed === true;
 const phPersonalOrg = () => (phCache.orgs || []).find((o) => o.type === "personal") || null;
+/* Where this person writes invoices: their personal space when it may, else the first organisation that may. */
+const phInvoiceOrg = () => (phCan(phPersonalOrg(), "invoices") ? phPersonalOrg() : (phCache.orgs || []).find((o) => phCan(o, "invoices")) || null);
 // One request in flight: every caller's redraw lands together, so a second
 // answer cannot arrive later and close a sheet opened after the first.
 let phOrgsLoading = null;

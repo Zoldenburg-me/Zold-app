@@ -269,7 +269,7 @@ PH.more = {
 /* Reset the per-account caches (sign-out, a different account). */
 function phReset() {
   phCache.deposits = null; phCache.links = null; phCache.methods = null; phCache.orgs = null;
-  phCache.signers = undefined; phCache.soon = null;
+  phCache.signers = undefined; phCache.soon = null; phCache.invoices = undefined;
   ownCompanyOrg = null;
   phCache.contacts = null; phCache.bic = undefined; phCache.bicFor = ""; phCache.linksError = null;
   phSend = { payee: null, amount: "", reference: "", quote: null, transferId: null, error: null };
