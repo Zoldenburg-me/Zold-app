@@ -79,7 +79,7 @@ const home = () => flat(run("PH.home.html()"));
 
 let pass = 0;
 const t = async (name: string, fn: () => unknown) => { await fn(); pass++; console.log(`  ok  ${name}`); };
-const org = { id: "o1", type: "personal", capabilities: { invoices: { allowed: true } } };
+const org = { id: "o1", type: "personal", role: "owner", capabilities: { invoices: { allowed: true } } };
 const inv = (state: string, grossCents: number, direction = "outgoing") => ({ state, direction, issued: { grossCents, currency: "EUR" } });
 
 await t("Invoices: counts sent, unpaid invoices and sums what is owed", () => {
@@ -89,6 +89,31 @@ await t("Invoices: counts sent, unpaid invoices and sums what is owed", () => {
   assert.match(html, /<h2 id="ph-inv-title">Invoices<\/h2><span class="z-fig">2 open<\/span>/);
   assert.match(html, /€1,500\.50 outstanding/);
   assert.match(html, /data-ph-org="o1" [^>]*href="\/business\?view=invoice-new"|href="\/business\?view=invoice-new"[^>]*data-ph-org="o1"|data-ph-org="o1"[^>]*>.*Create invoice/);
+});
+
+await t("Invoices: owed is what is left after payments, in the euro frozen at issue", () => {
+  const list = [
+    { ...inv("LINK_CREATED", 10000), settlements: [{ amountEur: 40 }] },
+    { state: "LINK_CREATED", direction: "outgoing", issued: { grossCents: 11000, currency: "USD", conversion: { grossCents: 10000 } } },
+    { state: "LINK_CREATED", direction: "outgoing", total: "50" },
+  ];
+  setUser(done, `phCache.invoices = { org: ${JSON.stringify(org)}, list: ${JSON.stringify(list)} };`);
+  const html = home();
+  assert.match(html, /3 open/);
+  assert.match(html, /€160\.00 outstanding · 1 without an amount/, "€60 left + €100 converted; the one without a frozen figure is counted, not summed");
+});
+
+await t("Invoices: a member who may only read invoices gets See all, not Create invoice", () => {
+  setUser(done, `phCache.invoices = { org: ${JSON.stringify({ ...org, role: "accountant" })}, list: [] };`);
+  const html = home();
+  assert.match(html, /See all/);
+  assert.doesNotMatch(html, /Create invoice/);
+});
+
+await t("backup key: a key just added on the signers screen counts at once", () => {
+  setUser(done, `phCache.signers = { owners: [{ kind: "passkey" }] }; signersState = { owners: [{ kind: "passkey" }, { kind: "eoa" }] }; phCache.invoices = { org: null }; localStorage.setItem("zold-hide-recovery-banner:u1", "1");`);
+  assert.doesNotMatch(home(), /Add a backup key/);
+  run("signersState = null");
 });
 
 await t("Invoices: an unread list says so, never 0 open", () => {

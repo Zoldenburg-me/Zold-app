@@ -84,7 +84,8 @@ function phChecklist(u) {
   }
   // A backup key is the user's own second owner (signers screen). Only a
   // signers read that worked says whether there is one; otherwise no row.
-  const s = phCache.signers;
+  // The signers screen keeps its own, newer read (signers.js): a key added there counts at once.
+  const s = signersState?.owners ? signersState : phCache.signers;
   if (safe.status === "active" && s?.owners) {
     items.push({ title: "Add a backup key", sub: "A second key you keep, in case you lose this phone.",
       done: s.owners.some((o) => o.kind !== "passkey"), action: { href: "#signers", label: "Add" } });
@@ -127,16 +128,23 @@ async function phLoadHomeData() {
 
 /* Invoices sent and not paid yet. A draft was never sent, so it is not open. */
 const PH_INV_CLOSED = ["DRAFT", "PAID", "RECONCILED", "DELETED"];
+/* What is still owed, in euro, the way the API closes an invoice
+   (domain/invoices.ts settlementUpdate): the euro figure frozen at issue
+   less the payments already put on it. An invoice with no frozen figure is
+   counted, not summed. */
 function phOpenInvoices(list) {
   const open = list.filter((i) => i.direction === "outgoing" && !PH_INV_CLOSED.includes(i.state));
-  const sums = {};
+  let owedCents = 0, unpriced = 0;
   for (const i of open) {
-    const cur = i.issued?.currency || i.currency || "EUR";
-    const v = i.issued && Number.isFinite(i.issued.grossCents) ? i.issued.grossCents / 100 : Number(i.total) || 0;
-    sums[cur] = (sums[cur] || 0) + v;
+    const cents = i.issued?.conversion ? i.issued.conversion.grossCents : i.issued?.grossCents;
+    if (!Number.isFinite(cents)) { unpriced++; continue; }
+    const paid = (i.settlements || []).reduce((n, x) => n + (Number.isFinite(x.amountEur) ? x.amountEur : 0), 0);
+    owedCents += Math.max(0, Math.round(cents) - Math.round(paid * 100));
   }
-  return { count: open.length, sums };
+  return { count: open.length, owedEur: owedCents / 100, unpriced };
 }
+/* Who may issue an invoice: the roles with invoices.manage (domain/roles.ts). */
+const PH_INVOICE_ROLES = ["owner", "admin", "payer"];
 
 /* Open invoices and the sum still owed, with Create invoice. Only where an
    organisation may invoice; an unread list says so rather than "0 open". */
@@ -145,11 +153,11 @@ function phInvoicesCard() {
   if (!inv?.org) return "";
   const link = (view, label, variant) => Z.button({ variant, icon: view === "invoice-new" ? "add" : undefined, label, href: phWebHref(view) }).replace("<a ", `<a data-ph-org="${esc(inv.org.id)}" `);
   const open = inv.error ? null : phOpenInvoices(inv.list);
-  const owed = open && (Object.entries(open.sums).map(([cur, v]) => Z.formatMoney(v, cur)).join(" + ") || phEur(0));
+  const owed = open && `${phEur(open.owedEur)} outstanding${open.unpriced ? ` · ${open.unpriced} without an amount` : ""}`;
   return `<section class="z-card z-checklist" aria-labelledby="ph-inv-title">
     <div class="z-checklist__head"><h2 id="ph-inv-title">Invoices</h2>${open ? `<span class="z-fig">${open.count} open</span>` : ""}</div>
-    <div style="padding:14px"><p class="z-hint" style="margin:0 0 12px">${open ? `${esc(owed)} outstanding` : "Your invoices could not be read just now."}</p>
-      <div class="z-actions">${link("invoice-new", "Create invoice", "primary")}${link("invoices", "See all")}</div></div></section>`;
+    <div style="padding:14px"><p class="z-hint" style="margin:0 0 12px">${open ? esc(owed) : "Your invoices could not be read just now."}</p>
+      <div class="z-actions">${PH_INVOICE_ROLES.includes(inv.org.role) ? link("invoice-new", "Create invoice", "primary") : ""}${link("invoices", "See all")}</div></div></section>`;
 }
 
 const phRecoveryBannerKey = (u) => `zold-hide-recovery-banner:${u.id}`;
@@ -187,7 +195,7 @@ PH.home = {
   tab: "home",
   live: () => JSON.stringify([user?.balanceEur, user?.iban, user?.moneriumIbanElsewhere?.iban, user?.kycStatus, user?.monerium?.connectedAt, user?.passkeySafe?.status,
     user?.passkeySafe?.recovery?.status, user?.passkeySafe?.candideRecovery?.guardianStatus, user?.passkeySafe?.recoveryChoice?.choice, user?.zoldenburgArmed, caps.zoldenburgEnrolment, user?.emailVerifiedAt, caps.emailVerification, user?.segment?.gate, caps.emailSmsRecovery, caps.zoldenburgRecovery, realMoney, phHistSig(),
-    phCache.signers?.owners?.length, phCache.invoices?.error, phCache.invoices?.list && JSON.stringify(phOpenInvoices(phCache.invoices.list))]),
+    phCache.signers?.owners?.length, signersState?.owners?.length, phCache.invoices?.error, phCache.invoices?.list && JSON.stringify(phOpenInvoices(phCache.invoices.list))]),
   html() {
     const u = user || {};
     const name = ownAccountName(u) || "Account";
