@@ -151,4 +151,45 @@ await t("Home's reads leave the shared signers cache undefined until they land, 
   assert.equal(run("phCache.invoices"), undefined);
 });
 
+await t("Invoices: an empty list is 0 open and nothing owed", () => {
+  setUser(done, `phCache.invoices = { org: ${JSON.stringify(org)}, list: [] };`);
+  const html = home();
+  assert.match(html, /<span class="z-fig">0 open<\/span>/);
+  assert.match(html, /€0\.00 outstanding/);
+});
+
+await t("Copy IBAN: hidden once there is activity", () => {
+  setUser(done, `phCache.invoices = { org: null }; hist.push({ id: "t1", kind: "bank_in", amountEur: 5, createdAt: "2026-10-20T10:00:00Z", status: "paid" });`);
+  assert.doesNotMatch(home(), /Copy Your IBAN/);
+  run("hist.length = 0");
+});
+
+await t("a read that lands after sign-out and another sign-in is dropped", async () => {
+  setUser(done, `phCache.signers = undefined; phCache.invoices = undefined; phCache.orgs = ${JSON.stringify([org])}; phRoute = { name: "home" };
+    __open = []; api = (p) => new Promise((ok) => { __open.push(() => ok(p.includes("/safe/signers") ? { owners: [{ kind: "passkey" }] } : { invoices: [${JSON.stringify(inv("LINK_CREATED", 9900))}] })); });`);
+  const loading = run("phLoadHomeData()");
+  await new Promise((r) => setTimeout(r, 0));
+  run(`phReset(); user = ${JSON.stringify({ ...done, id: "u2" })}; phCache.orgs = [];`);
+  run("__open.forEach((f) => f())");
+  await loading;
+  // The redraw after the drop may start the new person's own reads; none of the old one's data survives.
+  assert.equal(run("phCache.signers?.owners"), undefined, "the old person's signers are not kept");
+  assert.notEqual(run("phCache.invoices?.org?.id"), "o1", "nor their organisation's invoices");
+  assert.equal(run("phCache.invoices?.list"), undefined);
+});
+
+await t("a caller that joined a dropped organisations read gets the new person's own list", async () => {
+  setUser(done, `phCache.orgs = null; phOrgsLoading = null; __open = []; api = (p) => new Promise((ok) => { __open.push({ p, ok }); });`);
+  const first = run("phLoadOrgs()");
+  run(`user = ${JSON.stringify({ ...done, id: "u2" })};`);
+  const joined = run("phLoadOrgs()"); // no phReset: the shared promise is the old person's
+  run(`__open.shift().ok({ organisations: [${JSON.stringify(org)}] })`);
+  await new Promise((r) => setTimeout(r, 0));
+  run(`__open.shift().ok({ organisations: [{ id: "o2", type: "personal" }] })`);
+  const [a, b] = await Promise.all([first, joined]);
+  assert.ok(Array.isArray(a) && Array.isArray(b), "never null");
+  assert.deepEqual(JSON.parse(JSON.stringify(b.map((o: any) => o.id))), ["o2"], "the old person's list is not handed over");
+  assert.deepEqual(JSON.parse(run("JSON.stringify(phCache.orgs.map((o) => o.id))")), ["o2"]);
+});
+
 console.log(`phone home cards: ${pass} passed`);

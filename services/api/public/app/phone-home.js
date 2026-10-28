@@ -100,19 +100,25 @@ function phChecklist(u) {
 let phHomeReads = { signers: false, invoices: false };
 async function phLoadHomeData() {
   const reads = [];
+  // A read that lands after a sign-out and another sign-in is the old person's: dropped.
+  const who = user?.id;
+  const still = () => user?.id === who;
   if (phCache.signers === undefined && !phHomeReads.signers && user?.id && user.passkeySafe?.status === "active") {
     phHomeReads.signers = true;
-    reads.push(api(`/api/users/${user.id}/safe/signers`).then((r) => { phCache.signers = r; }, (e) => { phCache.signers = { error: e.message }; })
-      .finally(() => { phHomeReads.signers = false; }));
+    reads.push(api(`/api/users/${user.id}/safe/signers`).then((r) => { if (still()) phCache.signers = r; }, (e) => { if (still()) phCache.signers = { error: e.message }; })
+      .finally(() => { if (still()) phHomeReads.signers = false; }));
   }
   if (phCache.invoices === undefined && !phHomeReads.invoices) {
     phHomeReads.invoices = true;
     reads.push(phLoadOrgs().then(async () => {
+      if (!still()) return;
       const org = phInvoiceOrg();
       if (!org) { phCache.invoices = { org: null }; return; }
-      try { phCache.invoices = { org, list: (await api(`/api/orgs/${encodeURIComponent(org.id)}/invoices`)).invoices || [] }; }
-      catch { phCache.invoices = { org, error: true }; }
-    }).finally(() => { phHomeReads.invoices = false; }));
+      let read;
+      try { read = { org, list: (await api(`/api/orgs/${encodeURIComponent(org.id)}/invoices`)).invoices || [] }; }
+      catch { read = { org, error: true }; }
+      if (still()) phCache.invoices = read;
+    }).finally(() => { if (still()) phHomeReads.invoices = false; }));
   }
   if (!reads.length) return;
   await Promise.all(reads);

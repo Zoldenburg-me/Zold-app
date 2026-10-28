@@ -255,15 +255,21 @@ const phInvoiceOrg = () => (phCan(phPersonalOrg(), "invoices") ? phPersonalOrg()
 let phOrgsLoading = null;
 function phLoadOrgs() {
   if (phCache.orgs !== null) return Promise.resolve(phCache.orgs);
-  return (phOrgsLoading ??= (async () => {
+  const who = user?.id; // a list read for a person who has since signed out is dropped
+  const mine = (phOrgsLoading ??= (async () => {
     try {
-      phCache.orgs = (await api("/api/orgs")).organisations || [];
-      const owned = user?.accountType === "company" ? phCache.orgs.filter((o) => o.type === "business") : [];
-      ownCompanyOrg = owned.find((o) => o.role === "owner") || owned[0] || null;
-    } catch { phCache.orgs = []; }
-    phOrgsLoading = null;
-    return phCache.orgs;
+      const orgs = (await api("/api/orgs")).organisations || [];
+      if (user?.id === who) {
+        phCache.orgs = orgs;
+        const owned = user?.accountType === "company" ? orgs.filter((o) => o.type === "business") : [];
+        ownCompanyOrg = owned.find((o) => o.role === "owner") || owned[0] || null;
+      }
+    } catch { if (user?.id === who) phCache.orgs = []; }
+    if (phOrgsLoading === mine) phOrgsLoading = null; // a sign-out may already have started another
+    // Anyone who joined a dropped read gets the signed-in person's own list, never null.
+    return user?.id === who ? phCache.orgs : user?.id ? phLoadOrgs() : [];
   })());
+  return mine;
 }
 /* "26 Sep": day first, and the short month en-GB spells "Sept". */
 const phDay = (iso) => {

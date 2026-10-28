@@ -270,6 +270,8 @@ PH.more = {
 function phReset() {
   phCache.deposits = null; phCache.links = null; phCache.methods = null; phCache.orgs = null;
   phCache.signers = undefined; phCache.soon = null; phCache.invoices = undefined;
+  // Reads still in flight belong to the person who signed out: the next one starts their own.
+  phOrgsLoading = null; phHomeReads = { signers: false, invoices: false };
   ownCompanyOrg = null;
   phCache.contacts = null; phCache.bic = undefined; phCache.bicFor = ""; phCache.linksError = null;
   phSend = { payee: null, amount: "", reference: "", quote: null, transferId: null, error: null };
