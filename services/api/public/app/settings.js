@@ -173,7 +173,7 @@ PH.security = {
       : Z.row({
         lead: Z.iconTile({ icon: "smartphone" }),
         title: "Payment key",
-        sub: phKey === undefined ? "Checking this phone…" : keyHere ? (phKey.protection === "none" ? "On this phone, not encrypted" : `On this phone, encrypted by your ${Z.passkeyName()}`) : "On another device",
+        sub: phKey === undefined ? "Checking this phone…" : keyHere ? (phKey.protection === "none" ? "On this phone, not encrypted" : `On this phone, protected by your ${Z.passkeyName()}`) : "On another device",
         right: keyHere ? Z.tag(phKey.protection === "none" ? "Not encrypted" : "This device", phKey.protection === "none" ? "amber" : "pink") : "",
         chevron: false,
       });
