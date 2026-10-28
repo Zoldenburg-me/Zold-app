@@ -18,6 +18,7 @@ import {
   effectiveState,
   ownerPaymentRequest,
   validateCreate,
+  type PaymentMethod,
   type PaymentRequest,
 } from "../../payment-requests.js";
 import { companyPageHandle, createPaymentRequest, orgsBackedBy } from "../payment-requests.js";
@@ -97,32 +98,87 @@ export async function withInvoiceLinkLock<T>(invoice: Pick<Invoice, "id" | "orgI
  * business by the Safe connected to its euro account, an IBAN's or a
  * wallet-tier one's (orgsBackedBy).
  */
-export function payLinkBlocker(org: Organisation, user: User): { code: "ACCOUNT_NOT_OPEN" | "NOT_THE_PAYEE" | "NO_PAGE" | "NO_METHOD"; reason: string } | undefined {
+/**
+ * Whose account a link made here pays into: the caller's, when their Safe
+ * backs the organisation; else, in a business, the member's whose Safe backs
+ * its euro account. An admin or payer may make a link into the company's
+ * account (roles allow it: invoices.manage), and the money lands where the
+ * company's account is, never in the caller's own Safe.
+ */
+export function linkPayee(org: Organisation, user: User): User | undefined {
+  if (orgsBackedBy(user.id).has(org.id)) return user;
+  if (org.type !== "business") return undefined;
+  // Backed is backed, as orgsBackedBy reads it: a wallet-backed account stays gated (no IBAN).
+  const backed = store.accountsOf(org.id).filter((a) => a.currency === "EUR" && a.backingUserId);
+  const account = backed.find((a) => a.status === "active") ?? backed[0];
+  const payee = account ? store.findUser(account.backingUserId!) : undefined;
+  // A backer who has left the company is not where its customers' money goes.
+  const member = payee && store.membersOf(org.id).some((m) => m.userId === payee.id && m.status === "active");
+  return payee && member && orgsBackedBy(payee.id).has(org.id) ? payee : undefined;
+}
+
+/**
+ * The ways a link may be paid. Made by the payee: whatever their account
+ * takes. Made by another member: bank transfer only. The company page shows
+ * the company's bank details and no crypto address, and a link in the
+ * company's name must not publish the holder's personal deposit address.
+ */
+export function linkMethods(org: Organisation, payee: User, caller: User): PaymentMethod[] {
+  const own = payee.id === caller.id;
+  // On behalf, the IBAN a link publishes (payee.iban) must be the company
+  // account's own: a wallet-backed account, or one whose IBAN differs from
+  // the holder's, would publish a personal IBAN under the company's name.
+  const flat = (iban?: string) => String(iban ?? "").replace(/\s+/g, "").toUpperCase();
+  const companyIban = !own && Boolean(payee.iban) && store.accountsOf(org.id).some((a) =>
+    a.currency === "EUR" && a.backingUserId === payee.id && a.status === "active" && flat(a.identifier?.iban) === flat(payee.iban));
+  return availableMethods(payee).filter((m) => m.available && (own || (companyIban && m.method === "bank"))).map((m) => m.method);
+}
+
+export type PayLinkBlock = { code: "ACCOUNT_NOT_OPEN" | "NOT_THE_PAYEE" | "NO_PAGE" | "NO_COMPANY_PAGE" | "NO_METHOD"; reason: string };
+
+export function payLinkBlocker(org: Organisation, user: User): PayLinkBlock | undefined {
+  const r = payLinkPayee(org, user);
+  return "payee" in r ? undefined : r;
+}
+
+/** The payee a link made here pays into, or why there is none. */
+export function payLinkPayee(org: Organisation, user: User): { payee: User } | PayLinkBlock {
   if (org.type !== "personal" && !store.accounts.some((a) => a.orgId === org.id && a.backingUserId)) {
     return {
       code: "ACCOUNT_NOT_OPEN",
       reason: `Nothing is connected to ${org.name}’s euro account yet, so a payment link has nowhere to pay into. Connect the company’s IBAN, or your wallet, on Accounts.`,
     };
   }
-  if (!orgsBackedBy(user.id).has(org.id)) {
+  const payee = linkPayee(org, user);
+  if (!payee) {
     return {
       code: "NOT_THE_PAYEE",
       reason: "A payment link pays into the account behind this organisation, and that account is another member’s. They can make the link.",
     };
   }
-  // A link opens under a page (createPaymentRequest): the company's, else the payee's own.
-  if (!companyPageHandle(user.id, org.id) && !user.paymentPage?.handle) {
+  const own = payee.id === user.id;
+  // A link opens under a page (createPaymentRequest): the company's, else the
+  // payee's own, and only the payee's own when the payee made it.
+  if (!companyPageHandle(payee.id, org.id) && (!own || !payee.paymentPage?.handle)) {
     return {
-      code: "NO_PAGE",
-      reason: org.type === "business"
-        ? `A payment link opens under a payment page, and neither ${org.name} nor you has one yet. Set up a payment page first.`
-        : "A payment link opens under your payment page, and you have none yet. Set up your page first.",
+      // NO_COMPANY_PAGE: only the company page unblocks a link made on behalf.
+      code: own ? "NO_PAGE" : "NO_COMPANY_PAGE",
+      reason: org.type !== "business"
+        ? "A payment link opens under your payment page, and you have none yet. Set up your page first."
+        : own
+          ? `A payment link opens under a payment page, and neither ${org.name} nor you has one yet. Set up a payment page first.`
+          : `A link you make for ${org.name} opens under its company payment page, which isn’t set up yet. Owners and admins set it up under Get paid.`,
     };
   }
-  if (!availableMethods(user).some((m) => m.available)) {
-    return { code: "NO_METHOD", reason: "No way to get paid is set up on this account yet: activate your IBAN with Monerium, or set up your payment page to take digital dollars." };
+  if (!linkMethods(org, payee, user).length) {
+    return {
+      code: "NO_METHOD",
+      reason: own
+        ? "No way to get paid is set up on this account yet: activate your IBAN with Monerium, or set up your payment page to take digital dollars."
+        : `A link you make for ${org.name} is paid by bank transfer, and its account has no active IBAN yet.`,
+    };
   }
-  return undefined;
+  return { payee };
 }
 
 /** Whether this caller may make a payment link here, for the UI: it offers
@@ -158,10 +214,11 @@ async function payLinkUnlocked(ctx: OrgContext, invoice: Invoice, baseUrl: strin
   }
   const user = store.findUser(ctx.userId);
   if (!user) return { ok: false, code: "NO_USER", reason: "Your session has no account behind it." };
-  const blocked = payLinkBlocker(ctx.org, user);
-  if (blocked) return { ok: false, ...blocked };
-  const methods = availableMethods(user).filter((m) => m.available).map((m) => m.method);
-  const input = validateCreate({ invoiceId: invoice.id, methods, expiresAt: linkExpiry(invoice.dueDate) }, user);
-  const link = await createPaymentRequest(user, input, { kind: "app" }, ctx.org.id);
+  const found = payLinkPayee(ctx.org, user);
+  if (!("payee" in found)) return { ok: false, ...found };
+  const { payee } = found;
+  const methods = linkMethods(ctx.org, payee, user);
+  const input = validateCreate({ invoiceId: invoice.id, methods, expiresAt: linkExpiry(invoice.dueDate) }, payee);
+  const link = await createPaymentRequest(payee, input, { kind: "app" }, ctx.org.id, user.id);
   return { ok: true, url: ownerPaymentRequest(link, baseUrl).url, amountEur: link.amountEur, reused: false };
 }

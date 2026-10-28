@@ -149,6 +149,9 @@ export interface PaymentRequest {
    * number on the Beleg, so the accountant matches on it directly.
    */
   externalInvoiceNumber?: string;
+  /** The member who made the link, when that was not the payee: an admin or
+   *  payer making a link into the account another member's Safe backs. */
+  createdBy?: string;
   cryptoQuotes: CryptoQuote[];
   payments: RequestPayment[];
   source: PaymentRequestSource;

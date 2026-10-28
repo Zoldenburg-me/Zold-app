@@ -223,12 +223,17 @@ export async function createPaymentRequest(
   },
   source: PaymentRequestSource,
   orgId?: string,
+  createdBy?: string,
 ): Promise<PaymentRequest> {
-  const handle = (source.kind === "app" ? companyPageHandle(user.id, orgId) : undefined) ?? user.paymentPage?.handle;
+  // Made by another member: only under the company's page, never the payee's personal one.
+  const onBehalf = !!createdBy && createdBy !== user.id;
+  const handle = (source.kind === "app" ? companyPageHandle(user.id, orgId) : undefined) ?? (onBehalf ? undefined : user.paymentPage?.handle);
   if (!handle) throw new PaymentRequestError("set up a payment page before creating a payment link (Get paid → Your page in the app, or Get paid → Set up the page in Zold Business)", 409);
   // Not for Shopify: its checkouts open requests at the shop's volume, signed
   // by Shopify, and each expires with its checkout.
-  const open = source.kind === "shopify" ? 0 : store.paymentRequestsForUser(user.id).filter((r) => effectiveState(r) === "OPEN").length;
+  // Counted against whoever made the link, so one member cannot fill the payee's quota.
+  const by = createdBy ?? user.id;
+  const open = source.kind === "shopify" ? 0 : store.paymentRequests.filter((r) => (r.createdBy ?? r.userId) === by && effectiveState(r) === "OPEN").length;
   if (open >= CEILINGS.openPaymentRequestsPerUser) {
     throw new PaymentRequestError(ceilingRefusal("open payment links", CEILINGS.openPaymentRequestsPerUser).error, 409);
   }
@@ -283,6 +288,7 @@ export async function createPaymentRequest(
     ...(input.test ? { test: true } : {}),
     ...(input.invoiceId ? { invoiceId: input.invoiceId } : {}),
     ...(input.externalInvoiceNumber ? { externalInvoiceNumber: input.externalInvoiceNumber } : {}),
+    ...(createdBy && createdBy !== user.id ? { createdBy } : {}),
     cryptoQuotes: [],
     payments: [],
     source,
@@ -425,7 +431,8 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
     // old handle keeps working, and so does the payee's own handle or the
     // company page their Safe backs, but a code under anyone else's handle is
     // a 404, so a page cannot impersonate another payee.
-    const handles = r && user ? [r.handle, user.paymentPage?.handle, companyPageHandle(r.userId, r.orgId)] : [];
+    // A link another member made for the company never opens under the payee's personal page.
+    const handles = r && user ? [r.handle, ...(r.createdBy ? [] : [user.paymentPage?.handle]), companyPageHandle(r.userId, r.orgId)] : [];
     if (!r || !user || !handles.includes(req.params.handle) || heldByOther(req.params.handle, r)) {
       res.status(404).json({ error: "no such payment request" });
       return undefined;

@@ -3,9 +3,9 @@
  * its payment links, its public payment page, and the other ways in.
  *
  * A payment link pays into the Safe of the member whose account backs the
- * euro account, so only that member can make one (the API answers
- * NOT_THE_PAYEE to anyone else). Everyone else sees the button switched off
- * with that reason beside it, not a button that fails.
+ * euro account, whoever makes it: an owner, admin or payer (invoices.manage).
+ * Where the API would refuse (no account, no page, no way to get paid), the
+ * button is switched off with the reason beside it, not a button that fails.
  */
 import { $, Z, api, cap, day, esc, eur, me, org, view } from "./core.js";
 import { META, RENDER } from "./views.js";
@@ -25,13 +25,16 @@ function linkBlock(payLink) {
   return payLink.allowed ? "" : payLink.reason || "You can’t make payment links here.";
 }
 
-/** The fix beside a NO_PAGE refusal: the company page where this person may
- *  set it up, else their own page in the app (a link needs one or the other). */
+/** The fix beside a missing-page refusal: the company page where this person
+ *  may set it up, else their own page in the app. Their own page unblocks only
+ *  a link into their own account (NO_PAGE), never one made on behalf. */
 function pageFix(payLink, page) {
-  if (payLink?.code !== "NO_PAGE") return "";
+  const code = payLink?.code;
+  if (code !== "NO_PAGE" && code !== "NO_COMPANY_PAGE") return "";
   if (org.type === "business" && EDITS_PAGE.has(org.role) && page?.ready) {
     return `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="org-page">${Z.icon("add")}<span>Set up the page</span></button>`;
   }
+  if (code !== "NO_PAGE") return "";
   return `<a class="z-btn z-btn--secondary z-btn--sm" href="/app?from=business#page-settings">Set up your page${Z.icon("open_in_new")}<span class="z-sr"> (the app)</span></a>`;
 }
 
@@ -84,8 +87,12 @@ function linksSection(links, block, fix) {
   const tabs = TABS.map(([id, text]) => `<button type="button" class="zb-h-chip" data-gt="${id}" aria-pressed="${gp.tab === id}">${text}</button>`).join("");
   const row = (r) => {
     const amount = typeof r.amountEur === "number" ? eur(r.amountEur) : "Any amount";
+    // Cancel only before anyone has paid: the server refuses after.
+    const cancel = r.state === "OPEN" && !r.payments?.length && MAKES_LINKS.has(org.role)
+      ? ` <button type="button" class="z-link-btn" data-act="cancel-link" data-id="${esc(r.id)}">Cancel<span class="z-sr"> ${esc(linkTitle(r))}</span></button>`
+      : "";
     const copy = r.state === "OPEN"
-      ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="copy-text" data-text="${esc(r.url)}" data-said="Link copied">Copy link<span class="z-sr">: ${esc(linkTitle(r))}</span></button>`
+      ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="copy-text" data-text="${esc(r.url)}" data-said="Link copied">Copy link<span class="z-sr">: ${esc(linkTitle(r))}</span></button>${cancel}`
       : "";
     return `<tr><td>${Z.icon("link", "z-dim")} <b>${esc(linkTitle(r))}</b></td><td class="z-dim">${esc(linkWhen(r))}</td>
       <td>${Z.tag(STATE_WORD[r.state] || r.state)}</td><td class="num">${esc(amount)}</td><td class="num">${copy}</td></tr>`;
