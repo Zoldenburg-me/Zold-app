@@ -7,6 +7,8 @@
  *     type, never the page's Candide forwarder, signed by the gateway key for
  *     the configured resolver, whoever relays it;
  *   - no Safe that is active and the account's address, no answer;
+ *   - the session's ensName names exactly the accounts the gateway answers
+ *     for, and nothing when the deployment runs no gateway;
  *   - no other chain is claimed: not Ethereum (coin type 60), not the
  *     forwarder's source chains;
  *   - contenthash, name, pubkey and ABI answer empty rather than refuse;
@@ -50,6 +52,7 @@ process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-ens
 process.env.ENS_PARENT_NAME = "zoldhq.com";
 process.env.ENS_RESOLVER_ADDRESS = RESOLVER;
 process.env.ENS_GATEWAY_KEY = GATEWAY_KEY;
+process.env.ENS_NAMES_LIVE = "1";
 // With a trailing slash on purpose: the url record must not read `//pay/`.
 process.env.TRANSF_PUBLIC_URL = "https://zoldhq.com/";
 delete process.env.ENS_RPC_URL;
@@ -59,6 +62,8 @@ const { CHAIN_ID } = await import("../services/api/src/config.js");
 const { createEnsRouter, ccipFetch, ensAnswer, fetchPublic, isPublicAddress } = await import("../services/api/src/routes/ens.js");
 const { gatewaySignatureHash } = await import("../services/api/src/ens.js");
 const { HandleError, normaliseHandle } = await import("../services/api/src/pay.js");
+const { publicUser } = await import("../services/api/src/users/public-user.js");
+const { ensNameOf, shownParent } = await import("../services/api/src/users/ens-name.js");
 initStore();
 
 const PAGE = "0x2222222222222222222222222222222222222222";
@@ -192,6 +197,18 @@ try {
       const url = await answer(callFor(name, encodeFunctionData({ abi: profile, functionName: "text", args: [namehash(name), "url"] })));
       assert.equal(decodeAbiParameters([{ type: "string" }], url)[0], "", name);
     }
+  });
+
+  await check("the session's ensName is the name the gateway answers for, and only that", async () => {
+    const nameOf = (id: string) => publicUser(store.findUser(id)!).ensName;
+    assert.equal(nameOf("u-alice"), "alice.zoldhq.com");
+    assert.equal(nameOf("u-bob"), "bob.zoldhq.com", "a page with a forwarder still names the Safe");
+    for (const id of ["u-carol", "u-frank", "u-gina"]) assert.equal(nameOf(id), null, `${id}: the gateway gives no answer, so Home shows no name`);
+    assert.equal(ensNameOf({ ...store.findUser("u-alice")!, paymentPage: undefined }, "zoldhq.com"), null, "no page handle: no name");
+    assert.equal(ensNameOf(store.findUser("u-alice")!, null), null, "no gateway on this deployment: no name");
+    assert.equal(shownParent({ enabled: true, namesLive: false, parent: "zoldhq.com" }), null, "the gateway answers but no wallet has resolved a name yet: no name on Home");
+    assert.equal(shownParent({ enabled: false, namesLive: true, parent: "" }), null);
+    assert.equal(shownParent({ enabled: true, namesLive: true, parent: "zoldhq.com" }), "zoldhq.com");
   });
 
   await check("no Ethereum (coin type 60) address unless this deployment is on Ethereum", async () => {

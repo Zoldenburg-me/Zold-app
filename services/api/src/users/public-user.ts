@@ -13,6 +13,8 @@ import { reportedBic } from "../sepa.js";
 import type { User } from "../store.js";
 import { carriesMoneriumIdentity } from "../domain/monerium-identity.js";
 import { moneriumVerifiedName, personKey } from "./verified-name.js";
+import { ENS_GATEWAY } from "../config.js";
+import { ensNameOf, shownParent } from "./ens-name.js";
 
 /** The named keys of `obj` that are set, and nothing else. */
 function pick<T extends object, K extends keyof T>(obj: T | undefined, keys: readonly K[]): Pick<T, K> | undefined {
@@ -71,6 +73,9 @@ function publicPasskeySafe(plan: NonNullable<User["passkeySafe"]>) {
  */
 export const publicUser = (u: User) => ({
   ...pick(u, TOP_LEVEL),
+  // The name wallets resolve to this account's Safe: only where the gateway
+  // answers for it, and only once names are known to resolve (ENS_NAMES_LIVE).
+  ensName: ensNameOf(u, shownParent(ENS_GATEWAY)),
   ...(u.kyc ? { kyc: pick(u.kyc, ["provider", "onboardingPath", "applicantId", "checkedAt", "reason"] as const) } : {}),
   ...(u.wallet ? { wallet: pick(u.wallet, ["type", "deployed", "deployOpHash"] as const) } : {}),
   ...(u.faucet ? { faucet: pick(u.faucet, ["grantedEur", "txHash", "at"] as const) } : {}),

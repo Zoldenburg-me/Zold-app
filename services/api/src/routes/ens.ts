@@ -27,6 +27,7 @@ import { normalize } from "viem/ens";
 import { CHAIN_ID, ENS_GATEWAY, ENS_LOOKUP, PUBLIC_URL } from "../config.js";
 import { answerResolveCall, EnsGatewayError, NO_RECORDS, signGatewayResponse, type EnsRecords } from "../ens.js";
 import { store } from "../store.js";
+import { ensSafe } from "../users/ens-name.js";
 import { wrap } from "./util.js";
 
 /** requireSession is injected — server.ts owns authentication. */
@@ -182,13 +183,13 @@ async function handleRecords(handle: string | undefined, lookup: Lookup): Promis
   const user = store.findUserByHandle(handle);
   // findUserByHandle trims and lowercases; the label must be the handle as stored.
   if (!user?.paymentPage?.handle || user.paymentPage.handle !== handle) return NO_RECORDS;
-  // The identity the page claim checks; "active" is set once the Safe is deployed.
-  const safe = user.passkeySafe;
-  if (safe?.status !== "active" || user.address.toLowerCase() !== safe.address.toLowerCase()) return NO_RECORDS;
+  // The same test the session's ensName uses (users/ens-name.ts).
+  const safe = ensSafe(user);
+  if (!safe) return NO_RECORDS;
   const base = PUBLIC_URL.replace(/\/+$/, "");
   lookup.found = true;
   return {
-    addresses: new Map([[toCoinType(CHAIN_ID), getAddress(safe.address)]]),
+    addresses: new Map([[toCoinType(CHAIN_ID), getAddress(safe)]]),
     texts: base ? { url: `${base}/pay/${user.paymentPage.handle}` } : {},
   };
 }

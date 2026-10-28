@@ -39,7 +39,8 @@ Say this plainly rather than letting the surface imply otherwise:
   gateway, zoldhq.com has no DNSSEC/ENS TXT record, and the DNS path through
   ENS's OffchainDNSResolver has never run. No wallet or ENS client has
   resolved a name. `/api/ens/lookup` has never been called against a real
-  ENS RPC.
+  ENS RPC. Home shows a user's name only once `ENS_NAMES_LIVE=1` is set,
+  which no deployment has.
 - **No crypto send has run on any chain.** Sending EURe or USDC from the
   Safe to an ENS name or 0x address (`routes/crypto-sends.ts`) has run only
   in `crypto-send:test`, against the hardhat stand-in for the Safe

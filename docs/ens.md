@@ -91,6 +91,11 @@ refuses that.
 4. **API env:** `ENS_PARENT_NAME=zoldhq.com`, `ENS_RESOLVER_ADDRESS`,
    `ENS_GATEWAY_KEY`. All three or none; a partial set refuses to start.
    `/api/health` then reports `ensParent`.
+5. **Show names on Home:** only after a wallet has resolved a name to its
+   Safe through steps 1–3, set `ENS_NAMES_LIVE=1`. The session then carries
+   `ensName` for every account the gateway answers for (users/ens-name.ts),
+   and the app and business Home show it with Copy. Without it, no name is
+   shown, whatever the gateway answers.
 
 Once `zold.eth` is bought, the same resolver serves it: set it as the
 resolver of `zold.eth` in the ENS app. The parent name is one env value, so
