@@ -3,16 +3,17 @@
  * the signed-in ENS lookup.
  *
  * Covers:
- *   - a live page answers its deposit address for the pay chain's coin type,
- *     signed by the gateway key for the configured resolver, whoever relays it;
- *   - no Ethereum (coin type 60) address unless the page takes payments there;
+ *   - a page's name answers the owner's passkey Safe for the pay chain's coin
+ *     type, never the page's Candide forwarder, signed by the gateway key for
+ *     the configured resolver, whoever relays it;
+ *   - no Safe that is active and the account's address, no answer;
+ *   - no other chain is claimed: not Ethereum (coin type 60), not the
+ *     forwarder's source chains;
  *   - contenthash, name, pubkey and ABI answer empty rather than refuse;
  *   - org pages, unknown handles, deeper names and labels not in normalised
  *     form answer nothing;
- *   - a chain id ENSIP-11 cannot express is skipped, not a failure;
  *   - a repeated request reuses its signed answer for half its validity (30 s
- *     when it has no address), never one given because the page check took
- *     longer than 2 s;
+ *     when it has no address);
  *   - malformed calls, names under another parent, a node that does not match
  *     its name are refused;
  *   - a resolver answer that is not an address is refused (ENS_UNAVAILABLE);
@@ -58,43 +59,54 @@ const { CHAIN_ID } = await import("../services/api/src/config.js");
 const { createEnsRouter, ccipFetch, ensAnswer, fetchPublic, isPublicAddress } = await import("../services/api/src/routes/ens.js");
 const { gatewaySignatureHash } = await import("../services/api/src/ens.js");
 const { HandleError, normaliseHandle } = await import("../services/api/src/pay.js");
-const { livePaymentPage } = await import("../services/api/src/routes/payment-page.js");
 initStore();
 
 const PAGE = "0x2222222222222222222222222222222222222222";
+const safeOf = (address: string, status = "active") => ({ address, status, threshold: 1, passkeyPublicKey: { x: "0x1", y: "0x2" } });
+const ALICE = "0x1111111111111111111111111111111111111111";
 store.addUser({
   id: "u-alice", name: "Alice", country: "DE", kycStatus: "approved",
-  address: "0x1111111111111111111111111111111111111111",
+  address: ALICE, passkeySafe: safeOf(ALICE),
   createdAt: new Date().toISOString(),
-  paymentPage: { handle: "alice", depositAddress: PAGE, autoConvert: true, settlementAsset: "EURE" },
+  paymentPage: { handle: "alice", depositAddress: ALICE, autoConvert: true, settlementAsset: "EURE" },
 } as any);
-// A token list with a chain id ENSIP-11 cannot express (>= 2^31).
+// A forwarder that takes tokens on other chains too.
+const BOB = "0x3333333333333333333333333333333333333333";
 store.addUser({
   id: "u-bob", name: "Bob", country: "DE", kycStatus: "approved",
-  address: "0x3333333333333333333333333333333333333333",
+  address: BOB, passkeySafe: safeOf(BOB),
   createdAt: new Date().toISOString(),
   paymentPage: {
     handle: "bob", depositAddress: PAGE, autoConvert: true, settlementAsset: "EURE",
     routesReadAt: new Date().toISOString(),
-    supportedTokens: [{ chainId: 2 ** 31, symbol: "USDC", address: PAGE, decimals: 6 }],
+    supportedTokens: [10, 42161].map((chainId) => ({ chainId, symbol: "USDC", address: PAGE, decimals: 6 })),
   },
 } as any);
 store.addOrganisation({ id: "o-acme", name: "Acme", createdAt: new Date().toISOString(), paymentPage: { handle: "acme" } } as any, false);
-// Carol's page check hangs while `carolSlow` is set: a forwarder renewal
-// slower than the gateway waits.
+// Carol's Safe is only planned; Frank's account address is not his Safe.
 store.addUser({
   id: "u-carol", name: "Carol", country: "DE", kycStatus: "approved",
-  address: "0x4444444444444444444444444444444444444444",
+  address: "0x4444444444444444444444444444444444444444", passkeySafe: safeOf("0x4444444444444444444444444444444444444444", "planned"),
   createdAt: new Date().toISOString(),
   paymentPage: { handle: "carol", depositAddress: PAGE, autoConvert: true, settlementAsset: "EURE" },
 } as any);
-let carolSlow = true;
+store.addUser({
+  id: "u-frank", name: "Frank", country: "DE", kycStatus: "approved",
+  address: "0x9999999999999999999999999999999999999999", passkeySafe: safeOf("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+  createdAt: new Date().toISOString(),
+  paymentPage: { handle: "frank", depositAddress: PAGE, autoConvert: true, settlementAsset: "EURE" },
+} as any);
+store.addUser({
+  id: "u-gina", name: "Gina", country: "DE", kycStatus: "approved",
+  address: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  createdAt: new Date().toISOString(),
+  paymentPage: { handle: "gina", depositAddress: PAGE, autoConvert: true, settlementAsset: "EURE" },
+} as any);
 
 const app = express().use(
   "/api",
   createEnsRouter({
     requireSession: (req, res) => (req.header("x-session") ? true : (res.status(401).json({ error: "authorization required" }), false)),
-    livePage: (user) => (user.id === "u-carol" && carolSlow ? new Promise<boolean>(() => {}) : livePaymentPage(user)),
   }),
 );
 
@@ -141,13 +153,48 @@ const check = async (label: string, fn: () => Promise<void> | void) => {
   console.log(`  ${++n}. ${label}`);
 };
 
+// Erin's page is a live Candide forwarder, a different address from her Safe:
+// production on Base mainnet.
+const ERIN_SAFE = "0x6666666666666666666666666666666666666666";
+const FORWARDER = "0x7777777777777777777777777777777777777777";
+store.addUser({
+  id: "u-erin", name: "Erin", country: "DE", kycStatus: "approved",
+  address: ERIN_SAFE,
+  createdAt: new Date().toISOString(),
+  passkeySafe: safeOf(ERIN_SAFE),
+  paymentPage: {
+    handle: "erin", depositAddress: FORWARDER, recipientAddress: ERIN_SAFE, autoConvert: true, settlementAsset: "EURE",
+    routesReadAt: new Date().toISOString(),
+    supportedTokens: [{ chainId: CHAIN_ID, symbol: "USDC", address: "0x8888888888888888888888888888888888888888", decimals: 6 }],
+    forwarder: {
+      provider: "candide", recipient: ERIN_SAFE, destinationChainId: CHAIN_ID, sourceChainIds: [CHAIN_ID],
+      custodialWithdrawer: ERIN_SAFE, active: true, expiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString(),
+      activatedAt: new Date().toISOString(),
+    },
+  },
+} as any);
+
 try {
-  await check("a live page answers its deposit address for the pay chain, signed", async () => {
-    const [address] = decodeAbiParameters([{ type: "bytes" }], await answer(addrCall("alice.zoldhq.com")));
-    assert.equal(address, PAGE);
+  await check("with Candide forwarding on, the name answers the Safe, never the forwarder", async () => {
+    const [address] = decodeAbiParameters([{ type: "bytes" }], await answer(addrCall("erin.zoldhq.com")));
+    assert.equal(address, ERIN_SAFE, "EURe sent to the forwarder would strand");
   });
 
-  await check("no Ethereum address for a page that does not take payments on Ethereum", async () => {
+  await check("a page without forwarding answers the same Safe, signed", async () => {
+    const [address] = decodeAbiParameters([{ type: "bytes" }], await answer(addrCall("alice.zoldhq.com")));
+    assert.equal(address, ALICE);
+  });
+
+  await check("no active Safe that is the account's address, or no Safe at all: no answer and no url", async () => {
+    for (const name of ["carol.zoldhq.com", "frank.zoldhq.com", "gina.zoldhq.com"]) {
+      const [address] = decodeAbiParameters([{ type: "bytes" }], await answer(addrCall(name)));
+      assert.equal(address, "0x", name);
+      const url = await answer(callFor(name, encodeFunctionData({ abi: profile, functionName: "text", args: [namehash(name), "url"] })));
+      assert.equal(decodeAbiParameters([{ type: "string" }], url)[0], "", name);
+    }
+  });
+
+  await check("no Ethereum (coin type 60) address unless this deployment is on Ethereum", async () => {
     const [legacy] = decodeAbiParameters(
       [{ type: "address" }],
       await answer(callFor("alice.zoldhq.com", encodeFunctionData({ abi: profile, functionName: "addr", args: [namehash("alice.zoldhq.com")] }))),
@@ -190,9 +237,13 @@ try {
     }
   });
 
-  await check("a token on a chain ENSIP-11 cannot express does not break the page's other records", async () => {
+  await check("the forwarder's source chains are not claimed: the Safe is deployed on the pay chain only", async () => {
     const [address] = decodeAbiParameters([{ type: "bytes" }], await answer(addrCall("bob.zoldhq.com")));
-    assert.equal(address, PAGE);
+    assert.equal(address, BOB);
+    for (const chainId of [10, 42161]) {
+      const [other] = decodeAbiParameters([{ type: "bytes" }], await answer(addrCall("bob.zoldhq.com", toCoinType(chainId))));
+      assert.equal(other, "0x", `chain ${chainId}`);
+    }
     const url = await answer(callFor("bob.zoldhq.com", encodeFunctionData({ abi: profile, functionName: "text", args: [namehash("bob.zoldhq.com"), "url"] })));
     assert.equal(decodeAbiParameters([{ type: "string" }], url)[0], "https://zoldhq.com/pay/bob");
   });
@@ -217,7 +268,7 @@ try {
     assert.equal(decodeAbiParameters([{ type: "bytes" }], await answer(call))[0], "0x");
     store.addUser({
       id: "u-dave", name: "Dave", country: "DE", kycStatus: "approved",
-      address: "0x5555555555555555555555555555555555555555",
+      address: "0x5555555555555555555555555555555555555555", passkeySafe: safeOf("0x5555555555555555555555555555555555555555"),
       createdAt: new Date().toISOString(),
       paymentPage: { handle: "dave", depositAddress: PAGE, autoConvert: true, settlementAsset: "EURE" },
     } as any);
@@ -226,22 +277,7 @@ try {
     assert.equal(stillEmpty, "0x", "within 30 s the cached empty answer stands");
     const after = await later(31_000, async () => (await (await gateway(call)).json()).data);
     const [found] = decodeAbiParameters([{ type: "bytes" }], decodeAbiParameters([{ type: "bytes" }, { type: "uint64" }, { type: "bytes" }], after)[0]);
-    assert.equal(found, PAGE);
-  });
-
-  await check("a page check slower than 2 s answers nothing, uncached, and the next lookup sees the page", async () => {
-    const call = addrCall("carol.zoldhq.com");
-    const t0 = Date.now();
-    const r = await gateway(call);
-    const waited = Date.now() - t0;
-    assert.ok(waited >= 1_900 && waited < 4_000, `answered after ${waited} ms`);
-    assert.equal(r.headers.get("cache-control"), "no-store");
-    const { data } = await r.json();
-    const [result] = decodeAbiParameters([{ type: "bytes" }, { type: "uint64" }, { type: "bytes" }], data);
-    assert.equal(decodeAbiParameters([{ type: "bytes" }], result)[0], "0x");
-    carolSlow = false;
-    const [address] = decodeAbiParameters([{ type: "bytes" }], await answer(call));
-    assert.equal(address, PAGE, "the timed-out answer was not reused");
+    assert.equal(found, "0x5555555555555555555555555555555555555555");
   });
 
   await check("unknown handles, org pages, deeper names and the parent answer nothing", async () => {

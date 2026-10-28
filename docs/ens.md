@@ -1,8 +1,10 @@
 # ENS names for payment pages
 
 A payment page with the handle `alice` can also be reached as the ENS name
-`alice.zoldhq.com`. A wallet that resolves the name gets the page's deposit
-address. Status: tested end to end on local hardhat only; the Sepolia
+`alice.zoldhq.com`. A wallet that resolves the name gets the owner's passkey
+Safe, which holds EURe. Anyone can therefore read that Safe's balance and
+history from the handle alone; the payment page itself shows only its
+deposit address. Status: tested end to end on local hardhat only; the Sepolia
 resolver is deployed but no name resolves yet (`docs/status.md`).
 
 | Network | Resolver | Gateway URL |
@@ -33,26 +35,28 @@ gateway does not check `{sender}`.
 
 ## What a name answers
 
-These are the same facts `GET /pay/:handle` already publishes:
-
-- `addr(node, coinType)`: the page's deposit address, but only for the coin
-  types (ENSIP-11) of chains the page takes payments on. These are the pay
-  chain, plus the forwarder's source chains when it has them.
-- `addr(node)`, Ethereum's coin type 60: zero, unless the page takes payments
-  on Ethereum. Most wallets ask for this record by default. A Base-only page
-  therefore resolves only in wallets that ask for Base's coin type.
+- `addr(node, coinType)`: the handle owner's passkey Safe, for this
+  deployment's chain's coin type (ENSIP-11) only, the one chain the Safe is
+  deployed on. Never the page's deposit address: with Candide forwarding on
+  (production) that is a forwarder that moves only USDC, and EURe sent to it
+  would strand. The forwarder's source chains are not claimed; a payer on
+  another chain uses the payment page.
+- `addr(node)`, Ethereum's coin type 60: zero, unless this deployment is on
+  Ethereum. Most wallets ask for this record by default, so a name on Base
+  resolves only in wallets that ask for Base's coin type.
 - `text(node, "url")`: the page URL.
 - `contenthash`, `name`, `pubkey` and `ABI`: always empty. Wallets ask for
   these alongside the address, and refusing them would fail the whole lookup.
   Any other record type is refused (400).
-- Nothing for a closed page, an org page (it has no address), an unknown
+- Nothing, the url included, unless the account's address is its passkey
+  Safe and that Safe is `active` (deployed), the identity a page claim
+  checks. Whether the page's forwarder is live is not asked: it decides
+  only what the page shows.
+- Nothing for an org page (the gateway reads user handles only), an unknown
   handle, a deeper name like `x.alice.zoldhq.com`, or a label not already in
   normalised form (`ALICE`, or a look-alike letter that lowercases to a
   handle). ENS clients normalise before they hash, so only a caller that
   skipped that sends one.
-- Nothing while a page's forwarder renewal takes longer than 2 s. That answer
-  is not cached (`no-store`); the renewal carries on and the next lookup sees
-  it.
 
 A signed answer is reused for the same request (whatever its hex case): one
 with an address for half its validity (150 s by default), one without for

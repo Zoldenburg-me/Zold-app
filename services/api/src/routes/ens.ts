@@ -4,8 +4,7 @@
  * - GET /ens/gateway/:sender/:callData.json: the CCIP-Read gateway the L1
  *   OffchainResolver points wallets at (ens.ts holds the encoding). No
  *   session, because any wallet may resolve `alice.zoldhq.com`. It answers
- *   only what GET /pay/:handle already publishes: the deposit address and
- *   the page URL, and nothing for a closed page.
+ *   the handle owner's passkey Safe and the page URL.
  * - GET /ens/lookup?name=: an ENS name to an address on this deployment's
  *   chain, for a signed-in user. There is no fallback to the Ethereum address
  *   record: a name with no record for this chain does not resolve, because a
@@ -27,26 +26,17 @@ import { mainnet, sepolia } from "viem/chains";
 import { normalize } from "viem/ens";
 import { CHAIN_ID, ENS_GATEWAY, ENS_LOOKUP, PUBLIC_URL } from "../config.js";
 import { answerResolveCall, EnsGatewayError, NO_RECORDS, signGatewayResponse, type EnsRecords } from "../ens.js";
-import { publicPayee } from "../pay.js";
-import { store, type User } from "../store.js";
-import { livePaymentPage, payChain } from "./payment-page.js";
+import { store } from "../store.js";
 import { wrap } from "./util.js";
 
 /** requireSession is injected — server.ts owns authentication. */
 export interface EnsDeps {
   requireSession: (req: express.Request, res: express.Response) => unknown;
-  /** Defaults to livePaymentPage. */
-  livePage?: LivePage;
 }
 
 /** A resolve(bytes,bytes) call is a few hundred bytes; this bounds the work a
  *  stranger can ask for. Hex characters, prefix included. */
 const MAX_CALL_DATA_HEX = 4_096;
-
-/** How long the gateway waits for a page's forwarder renewal before it
- *  answers "no records". A wallet gives up on a slow gateway; the renewal
- *  carries on and the next lookup sees its result. */
-const PAGE_CHECK_TIMEOUT_MS = 2_000;
 
 /** Signed answers kept per request, so repeat lookups cost no signature and
  *  no store scan. One with an address is reused for half its validity, one
@@ -172,52 +162,35 @@ export async function ccipFetch({ data, sender, urls }: { data: Hex; sender: Add
   throw new Error("no usable CCIP-Read gateway");
 }
 
-/** How a gateway answer came about, which decides how long it may be reused. */
+/** Whether a gateway answer carries an address, which decides how long it may be reused. */
 interface Lookup {
-  /** The page check ran out of time: the answer is "nothing" for now only. */
-  timedOut: boolean;
-  /** The answer carries an address. */
   found: boolean;
 }
 
-/** What `<handle>.<parent>` resolves to: the page's deposit address on each
- *  chain the page takes payments on, and the page's URL. */
-async function handleRecords(handle: string | undefined, livePage: LivePage, lookup: Lookup): Promise<EnsRecords> {
+/**
+ * What `<handle>.<parent>` resolves to: the handle owner's passkey Safe on the
+ * chain it is deployed on (this deployment's), and the page's URL. Never the
+ * page's deposit address: in production that is a Candide forwarder that
+ * moves only USDC, so EURe sent to the name would strand there. No active
+ * passkey Safe that is the account's address, no answer at all.
+ *
+ * The forwarder's liveness (livePaymentPage) is not asked: it is about the
+ * forwarder only, and the Safe takes payments whatever its state.
+ */
+async function handleRecords(handle: string | undefined, lookup: Lookup): Promise<EnsRecords> {
   if (!handle) return NO_RECORDS;
   const user = store.findUserByHandle(handle);
   // findUserByHandle trims and lowercases; the label must be the handle as stored.
   if (!user?.paymentPage?.handle || user.paymentPage.handle !== handle) return NO_RECORDS;
-  const live = await liveWithin(livePage(user), PAGE_CHECK_TIMEOUT_MS);
-  if (live === undefined) lookup.timedOut = true;
-  if (!live) return NO_RECORDS;
-  const payee = publicPayee(store.findUser(user.id) ?? user, payChain());
-  const chainIds = new Set([payee.chainId, ...(payee.supportedTokens ?? []).map((t) => t.chainId)]);
+  // The identity the page claim checks; "active" is set once the Safe is deployed.
+  const safe = user.passkeySafe;
+  if (safe?.status !== "active" || user.address.toLowerCase() !== safe.address.toLowerCase()) return NO_RECORDS;
   const base = PUBLIC_URL.replace(/\/+$/, "");
-  const addresses = new Map([...chainIds].flatMap((id) => coinTypeOf(id)).map((coin) => [coin, payee.address]));
-  lookup.found = addresses.size > 0;
-  return { addresses, texts: base ? { url: `${base}/pay/${payee.handle}` } : {} };
-}
-
-/** Is the page live? `livePaymentPage`, injectable so a test can make it slow. */
-export type LivePage = (user: User) => Promise<boolean>;
-
-/** The page check's answer, or undefined once `ms` pass. */
-function liveWithin(check: Promise<boolean>, ms: number): Promise<boolean | undefined> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const late = new Promise<undefined>((resolve) => {
-    timer = setTimeout(() => resolve(undefined), ms);
-  });
-  return Promise.race([check, late]).finally(() => clearTimeout(timer));
-}
-
-/** ENSIP-11 coin type for a chain id, or none for an id it cannot express
- *  (one bad token entry must not fail the page's other records). */
-function coinTypeOf(chainId: number): bigint[] {
-  try {
-    return [toCoinType(chainId)];
-  } catch {
-    return [];
-  }
+  lookup.found = true;
+  return {
+    addresses: new Map([[toCoinType(CHAIN_ID), getAddress(safe.address)]]),
+    texts: base ? { url: `${base}/pay/${user.paymentPage.handle}` } : {},
+  };
 }
 
 /** Signed answers by request (lowercase hex), oldest first (Map keeps
@@ -234,20 +207,16 @@ function cachedAnswer(key: string): { data: Hex; expires: bigint } | undefined {
 }
 
 /** Keep an answer for reuse: half its validity if it has an address, less if
- *  it has none (a handle claimed a moment later should show soon), and not
- *  at all if the page check timed out (the renewal may finish any second). */
+ *  it has none (a handle claimed a moment later should show soon). */
 function rememberAnswer(key: string, data: Hex, expires: bigint, lookup: Lookup) {
-  if (lookup.timedOut) return;
   const reuseS = lookup.found ? ENS_GATEWAY.ttlSeconds / 2 : Math.min(NOT_FOUND_REUSE_S, ENS_GATEWAY.ttlSeconds / 2);
   const oldest = signedAnswers.keys().next();
   if (signedAnswers.size >= SIGNED_CACHE_MAX && !oldest.done) signedAnswers.delete(oldest.value);
   signedAnswers.set(key, { data, expires, reuseUntil: Date.now() + reuseS * 1000 });
 }
 
-/** HTTP caching for an answer: never past its signed expiry, and none for an
- *  answer given because the page check timed out. */
-function cacheControl(expires: bigint, lookup?: Lookup): string {
-  if (lookup?.timedOut) return "no-store";
+/** HTTP caching for an answer: never past its signed expiry. */
+function cacheControl(expires: bigint): string {
   const left = Math.floor(Number(expires) - Date.now() / 1000);
   return `public, max-age=${Math.max(0, Math.min(HTTP_MAX_AGE_S, left))}`;
 }
@@ -300,7 +269,7 @@ export function ensAnswer(name: string, address: string | null | undefined): Ens
   return { ok: true, name, address: getAddress(address) };
 }
 
-export function createEnsRouter({ requireSession, livePage = livePaymentPage }: EnsDeps) {
+export function createEnsRouter({ requireSession }: EnsDeps) {
   const router = express.Router();
 
   router.get(
@@ -324,8 +293,8 @@ export function createEnsRouter({ requireSession, livePage = livePaymentPage }: 
         return res.json({ data: cached.data });
       }
       try {
-        const lookup: Lookup = { timedOut: false, found: false };
-        const { result } = await answerResolveCall(callData as Hex, ENS_GATEWAY.parent, (handle) => handleRecords(handle, livePage, lookup));
+        const lookup: Lookup = { found: false };
+        const { result } = await answerResolveCall(callData as Hex, ENS_GATEWAY.parent, (handle) => handleRecords(handle, lookup));
         const expires = BigInt(Math.floor(Date.now() / 1000) + ENS_GATEWAY.ttlSeconds);
         const data = await signGatewayResponse({
           resolver: ENS_GATEWAY.resolver,
@@ -335,7 +304,7 @@ export function createEnsRouter({ requireSession, livePage = livePaymentPage }: 
           key: ENS_GATEWAY.key,
         });
         rememberAnswer(key, data, expires, lookup);
-        res.setHeader("cache-control", cacheControl(expires, lookup));
+        res.setHeader("cache-control", cacheControl(expires));
         return res.json({ data });
       } catch (e) {
         if (e instanceof EnsGatewayError) return res.status(400).json({ message: e.message });

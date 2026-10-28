@@ -40,8 +40,8 @@ Function-level map of both rails: remittance.md.
 → reconcile.ts reports drift, never repairs.
 
 ## Money flow (receive)
-Monerium issue to the Safe (IBAN in) · payment page / request (`/pay`, or
-its ENS name `<handle>.zoldhq.com`) ·
+Monerium issue to the Safe (IBAN in) · ENS name `<handle>.zoldhq.com` (the
+Safe itself) · payment page / request (`/pay`) ·
 crypto deposit via Candide forwarder → optional convert to EURe.
 
 ## Deploy
