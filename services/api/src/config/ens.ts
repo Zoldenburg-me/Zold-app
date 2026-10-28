@@ -20,6 +20,11 @@ export const ENS_GATEWAY = (() => {
   if (set > 0 && set < 3) {
     throw new Error("ENS gateway needs ENS_PARENT_NAME, ENS_RESOLVER_ADDRESS and ENS_GATEWAY_KEY together — set all three or none");
   }
+  const namesLive = process.env.ENS_NAMES_LIVE?.trim() ?? "";
+  if (!["", "0", "1"].includes(namesLive)) throw new Error("ENS_NAMES_LIVE must be 1 or 0");
+  if (namesLive === "1" && set !== 3) {
+    throw new Error("ENS_NAMES_LIVE needs the ENS gateway (ENS_PARENT_NAME, ENS_RESOLVER_ADDRESS, ENS_GATEWAY_KEY) — without it no name resolves");
+  }
   if (parent && !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(parent)) throw new Error("ENS_PARENT_NAME must be a name like zoldhq.com");
   if (resolver && !/^0x[0-9a-fA-F]{40}$/.test(resolver)) throw new Error("ENS_RESOLVER_ADDRESS is not an address");
   if (key && !/^0x[0-9a-fA-F]{64}$/.test(key)) throw new Error("ENS_GATEWAY_KEY is not a 32-byte hex private key");
@@ -28,6 +33,11 @@ export const ENS_GATEWAY = (() => {
   if (shared) throw new Error(`ENS_GATEWAY_KEY must not be the same key as ${shared} — it signs where every handle points, and nothing else`);
   return {
     enabled: set === 3,
+    /** Set (ENS_NAMES_LIVE=1) only once a wallet has resolved a name through
+     *  the live L1 resolver (docs/status.md). Until then the gateway may
+     *  answer, but Home shows no name: one that no wallet can resolve is not
+     *  an address anyone can pay. */
+    namesLive: namesLive === "1",
     parent,
     resolver: resolver.toLowerCase() as `0x${string}`,
     key: (key || undefined) as `0x${string}` | undefined,

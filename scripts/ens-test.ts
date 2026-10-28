@@ -7,6 +7,8 @@
  *     type, never the page's Candide forwarder, signed by the gateway key for
  *     the configured resolver, whoever relays it;
  *   - no Safe that is active and the account's address, no answer;
+ *   - the session's ensName names exactly the accounts the gateway answers
+ *     for, and nothing when the deployment runs no gateway;
  *   - no other chain is claimed: not Ethereum (coin type 60), not the
  *     forwarder's source chains;
  *   - contenthash, name, pubkey and ABI answer empty rather than refuse;
@@ -25,6 +27,8 @@
  */
 import "./_local-chain.js";
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -44,12 +48,14 @@ import { privateKeyToAccount } from "viem/accounts";
 import { packetToBytes } from "viem/ens";
 
 // Derived, not a literal: a fixed throwaway key for this test only.
+const execFileAsync = promisify(execFile);
 const GATEWAY_KEY = keccak256(toHex("zold ens-test gateway key"));
 const RESOLVER = "0x00000000000000000000000000000000000e45e5";
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-ens-")), "db.json");
 process.env.ENS_PARENT_NAME = "zoldhq.com";
 process.env.ENS_RESOLVER_ADDRESS = RESOLVER;
 process.env.ENS_GATEWAY_KEY = GATEWAY_KEY;
+process.env.ENS_NAMES_LIVE = "1";
 // With a trailing slash on purpose: the url record must not read `//pay/`.
 process.env.TRANSF_PUBLIC_URL = "https://zoldhq.com/";
 delete process.env.ENS_RPC_URL;
@@ -59,6 +65,8 @@ const { CHAIN_ID } = await import("../services/api/src/config.js");
 const { createEnsRouter, ccipFetch, ensAnswer, fetchPublic, isPublicAddress } = await import("../services/api/src/routes/ens.js");
 const { gatewaySignatureHash } = await import("../services/api/src/ens.js");
 const { HandleError, normaliseHandle } = await import("../services/api/src/pay.js");
+const { publicUser } = await import("../services/api/src/users/public-user.js");
+const { ensNameOf, shownParent } = await import("../services/api/src/users/ens-name.js");
 initStore();
 
 const PAGE = "0x2222222222222222222222222222222222222222";
@@ -192,6 +200,25 @@ try {
       const url = await answer(callFor(name, encodeFunctionData({ abi: profile, functionName: "text", args: [namehash(name), "url"] })));
       assert.equal(decodeAbiParameters([{ type: "string" }], url)[0], "", name);
     }
+  });
+
+  await check("the session's ensName is the name the gateway answers for, and only that", async () => {
+    const nameOf = (id: string) => publicUser(store.findUser(id)!).ensName;
+    assert.equal(nameOf("u-alice"), "alice.zoldhq.com");
+    assert.equal(nameOf("u-bob"), "bob.zoldhq.com", "a page with a forwarder still names the Safe");
+    for (const id of ["u-carol", "u-frank", "u-gina"]) assert.equal(nameOf(id), undefined, `${id}: the gateway gives no answer, so Home shows no name`);
+    // A second account holding the same handle (claims refuse it; old data might not): the gateway
+    // finds the first, so the second is never shown a name that resolves to someone else.
+    store.addUser({ id: "u-hank", name: "Hank", country: "DE", kycStatus: "approved", address: "0xcccccccccccccccccccccccccccccccccccccccc",
+      passkeySafe: safeOf("0xcccccccccccccccccccccccccccccccccccccccc"), createdAt: new Date().toISOString(),
+      paymentPage: { handle: "alice", depositAddress: PAGE, autoConvert: true, settlementAsset: "EURE" } } as any);
+    assert.equal(nameOf("u-hank"), undefined, "a duplicate handle is not shown to the account the gateway would not answer for");
+    assert.equal(nameOf("u-alice"), "alice.zoldhq.com");
+    assert.equal(ensNameOf({ ...store.findUser("u-alice")!, paymentPage: undefined }, "zoldhq.com"), null, "no page handle: no name");
+    assert.equal(ensNameOf(store.findUser("u-alice")!, null), null, "no gateway on this deployment: no name");
+    assert.equal(shownParent({ enabled: true, namesLive: false, parent: "zoldhq.com" }), null, "the gateway answers but no wallet has resolved a name yet: no name on Home");
+    assert.equal(shownParent({ enabled: false, namesLive: true, parent: "" }), null);
+    assert.equal(shownParent({ enabled: true, namesLive: true, parent: "zoldhq.com" }), "zoldhq.com");
   });
 
   await check("no Ethereum (coin type 60) address unless this deployment is on Ethereum", async () => {
@@ -364,6 +391,45 @@ try {
     assert.throws(() => normaliseHandle("ab--cd"), (e: any) => e instanceof HandleError && /third and fourth/.test(e.message));
     assert.equal(normaliseHandle("a--bcd"), "a--bcd");
   });
+
+  // Last: it starts child processes, and nothing after it needs the server.
+  await check("ENS_NAMES_LIVE: off by default and at 0, refused when malformed or without the gateway", async () => {
+    // Config reads the environment once at import, so each case runs in its own process.
+    const tsx = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "node_modules", ".bin", "tsx");
+    const cfg = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "services", "api", "src", "config", "ens.ts");
+    const gateway = { ENS_PARENT_NAME: "zoldhq.com", ENS_RESOLVER_ADDRESS: RESOLVER, ENS_GATEWAY_KEY: GATEWAY_KEY };
+    const run = async (env: Record<string, string>) => {
+      const clean = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("ENS_")));
+      try {
+        return (await execFileAsync(tsx, ["-e", `import(${JSON.stringify(cfg)}).then((m) => console.log(JSON.stringify(m.ENS_GATEWAY.namesLive)))`],
+          { env: { ...clean, ...env }, encoding: "utf8" })).stdout.trim();
+      } catch (e: any) {
+        return `throws: ${String(e.stderr).match(/ENS_NAMES_LIVE[^\n]*/)?.[0] ?? e.message}`;
+      }
+    };
+    assert.equal(await run(gateway), "false", "unset: off");
+    assert.equal(await run({ ...gateway, ENS_NAMES_LIVE: "0" }), "false");
+    assert.equal(await run({ ENS_NAMES_LIVE: "0" }), "false", "0 without a gateway is simply off");
+    assert.equal(await run({ ...gateway, ENS_NAMES_LIVE: "1" }), "true");
+    assert.match(await run({ ENS_NAMES_LIVE: "1" }), /^throws: ENS_NAMES_LIVE needs the ENS gateway/);
+    assert.match(await run({ ...gateway, ENS_NAMES_LIVE: "true" }), /^throws: ENS_NAMES_LIVE must be 1 or 0/);
+    // And the session: with the gateway on but the switch off, no ensName key at all.
+    const api = path.join(path.dirname(cfg), "..");
+    const db = path.join(mkdtempSync(path.join(tmpdir(), "zold-ens-off-")), "db.json");
+    const session = (await execFileAsync(tsx, ["-e", `(async () => {
+      const { store, initStore } = await import(${JSON.stringify(path.join(api, "store.ts"))});
+      const { publicUser } = await import(${JSON.stringify(path.join(api, "users", "public-user.ts"))});
+      initStore();
+      const a = "0x1111111111111111111111111111111111111111";
+      store.addUser({ id: "u", name: "A", country: "DE", kycStatus: "approved", address: a, createdAt: new Date().toISOString(),
+        passkeySafe: { address: a, status: "active", threshold: 1, passkeyPublicKey: { x: "0x1", y: "0x2" } },
+        paymentPage: { handle: "alice", depositAddress: a, autoConvert: true, settlementAsset: "EURE" } });
+      console.log(JSON.stringify("ensName" in publicUser(store.findUser("u"))));
+    })()`],
+      { env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("ENS_"))), ...gateway, TRANSF_DB_PATH: db }, encoding: "utf8" })).stdout.trim().split("\n").pop();
+    assert.equal(session, "false", "switch off: the session carries no ensName");
+  });
+
 
   console.log(`\n${n} ens checks passed`);
 } finally {

@@ -195,7 +195,7 @@ PH.home = {
   tab: "home",
   live: () => JSON.stringify([user?.balanceEur, user?.iban, user?.moneriumIbanElsewhere?.iban, user?.kycStatus, user?.monerium?.connectedAt, user?.passkeySafe?.status,
     user?.passkeySafe?.recovery?.status, user?.passkeySafe?.candideRecovery?.guardianStatus, user?.passkeySafe?.recoveryChoice?.choice, user?.zoldenburgArmed, caps.zoldenburgEnrolment, user?.emailVerifiedAt, caps.emailVerification, user?.segment?.gate, caps.emailSmsRecovery, caps.zoldenburgRecovery, realMoney, phHistSig(),
-    phCache.signers?.owners?.length, signersState?.owners?.length, phCache.invoices?.error, phCache.invoices?.list && JSON.stringify(phOpenInvoices(phCache.invoices.list))]),
+    user?.ensName, phCache.signers?.owners?.length, signersState?.owners?.length, phCache.invoices?.error, phCache.invoices?.list && JSON.stringify(phOpenInvoices(phCache.invoices.list))]),
   html() {
     const u = user || {};
     const name = ownAccountName(u) || "Account";
@@ -218,6 +218,7 @@ PH.home = {
         ${ibanMovedAway(u) ? ibanMovedAwayHtml("ph-iban-back") : ""}
         ${phBalance(knownBalance(u), "Balance")}
         <a class="z-card z-acctrow" href="#account-details">${Z.icon("account_balance", "z-acctrow__ic")}<span class="z-acctrow__label">Account details</span>${ibanRight}${Z.icon("chevron_right", "z-row__chev")}</a>
+        ${phNameRow(u) ? `<div class="z-card">${phNameRow(u)}</div>` : ""}
         <div class="z-actions">
           ${Z.button({ variant: "primary", icon: "arrow_outward", label: "Send", href: "#send" })}
           ${Z.button({ icon: "add", label: "Add money", href: "#add" })}
@@ -545,8 +546,13 @@ async function phLoadBic() {
   return phCache.bic;
 }
 
+/* The account's ENS name, with copy. The API sends ensName only where its
+   gateway resolves the name to this account's Safe (users/ens-name.ts). */
+const phNameRow = (u) => (u.ensName ? Z.copyRow({ label: "Your Zold name (same address)", value: u.ensName, mono: true }) : "");
+
 function phDetailsText(u, bic) {
-  const wallet = u.address && u.passkeySafe?.status === "active" ? [`Wallet address (${phChainName(caps.chainId)}): ${u.address}`] : [];
+  const wallet = u.address && u.passkeySafe?.status === "active"
+    ? [`Wallet address (${phChainName(caps.chainId)}): ${u.address}`, ...(u.ensName ? [`Zold name: ${u.ensName}`] : [])] : [];
   return [`Account holder: ${ownAccountName(u)}`, `IBAN: ${Z.groupIban(u.iban)}`, ...(bic ? [`BIC: ${bic}`] : []), ...wallet].join("\n");
 }
 
@@ -560,7 +566,7 @@ function phDetailsBody(u, bic, { loadingBic = false } = {}) {
     // Without an IBAN the wallet address is the account's details, shown open.
     const walletOpen = hasWallet
       ? `<p class="z-sub">Share your wallet address to get paid in ${usdSym()}.</p>
-        <div class="z-card">${walletRow()}</div>${walletWarn}`
+        <div class="z-card">${walletRow()}${phNameRow(u)}</div>${walletWarn}`
       : "";
     if (ibanMovedAway(u)) return `${ibanMovedAwayHtml("ph-det-iban-back")}${walletOpen}`;
     return `${walletOpen}
@@ -582,7 +588,7 @@ function phDetailsBody(u, bic, { loadingBic = false } = {}) {
       <li>${Z.copyRow({ label: "Account holder", value: ownAccountName(u) })}</li>
       <li>${Z.copyRow({ label: "IBAN", value: String(u.iban).replace(/\s+/g, ""), display: Z.groupIban(u.iban), mono: true })}</li>
       ${bicRow}
-      ${hasWallet ? `<li>${walletRow()}</li>` : ""}
+      ${hasWallet ? `<li>${walletRow()}</li>${u.ensName ? `<li>${phNameRow(u)}</li>` : ""}` : ""}
     </ul>
     ${hasWallet ? walletWarn : ""}
     <div class="z-pair">

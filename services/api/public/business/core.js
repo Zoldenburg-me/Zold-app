@@ -171,10 +171,15 @@ export const ownSafe = (accounts) => ownSafeHere(me, org, accounts);
 
 /** The Safe's address in full with a Copy button: one wrong character loses
  *  the money, so it is never shortened. */
-export const safeAddressHtml = (s) => `<div class="zb-safe-addr">
-    <span class="z-mono" translate="no">${esc(s.address)}</span>
-    <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="copy-text" data-text="${esc(s.address)}" data-said="Address copied">${Z.icon("content_copy")}<span>Copy</span></button></div>
-  <p class="zb-hint">Send only EURe${testMode === true ? " on Base Sepolia, the test network" : testMode === false ? " on Base" : ""} to this address.</p>`;
+export const safeAddressHtml = (s) => {
+  // The API sends ensName only where its gateway resolves it to this login's Safe (users/ens-name.ts).
+  const name = me?.ensName && s.address && me.address?.toLowerCase() === s.address.toLowerCase() ? me.ensName : null;
+  const row = (value, said) => `<div class="zb-safe-addr">
+    <span class="z-mono" translate="no">${esc(value)}</span>
+    <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="copy-text" data-text="${esc(value)}" data-said="${said}">${Z.icon("content_copy")}<span>Copy</span></button></div>`;
+  return `${name ? row(name, "Name copied") : ""}${row(s.address, "Address copied")}
+  <p class="zb-hint">Send only EURe${testMode === true ? " on Base Sepolia, the test network" : testMode === false ? " on Base" : ""} to this ${name ? "name or address: both reach the same account" : "address"}.</p>`;
+};
 
 /* What each role may do, as the API's permission table has it. */
 export const ROLE_WORD = { owner: "Owner", admin: "Admin", payer: "Payer", accountant: "Accountant", viewer: "Viewer" };

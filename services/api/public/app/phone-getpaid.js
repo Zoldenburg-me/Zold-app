@@ -224,6 +224,7 @@ PH["get-paid/page"] = {
           ...(user.paymentPage?.settlementAsset ? { settlementAsset: user.paymentPage.settlementAsset } : {}),
         });
         user.paymentPage = r.paymentPage;
+        user.ensName = r.ensName; // a new handle is a new name, or none
         phRender({ focus: true });
       } catch (err) {
         Z.setLoading(btn, false);
