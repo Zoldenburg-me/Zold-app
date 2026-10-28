@@ -16,6 +16,7 @@ import {
   $, Z, api, cap, day, esc, eur, gateHtml, maskIban, me, org, plain, reviewOn, roleCan, ROLE_CAN, ROLE_WORD, toast, when, ymd, usdSymbol,
 } from "./core.js";
 import { META, RENDER, invoiceActions, settlementRows } from "./views.js";
+import { runLink } from "./payment.js";
 
 const primary = (label, attrs, icon) => `<button type="button" class="z-btn z-btn--primary" ${attrs}>${icon ? Z.icon(icon) : ""}<span>${esc(label)}</span></button>`;
 const secondary = (label, attrs, icon) => `<button type="button" class="z-btn z-btn--secondary" ${attrs}>${icon ? Z.icon(icon) : ""}<span>${esc(label)}</span></button>`;
@@ -52,7 +53,8 @@ export function draftTag(d) {
   return {
     DRAFT: Z.tag("Draft"), PENDING_REVIEW: Z.tag("Waiting for review"), INVALID_DATA: Z.tag("Needs fixing"),
     REJECTED: Z.tag("Sent back", "amber"), REVIEWED: Z.tag("Approved"), EXECUTING: Z.tag("Sending", "pink"),
-    EXECUTED: Z.tag("Sent"), FAILED: Z.tag("Failed"), CANCELLED: Z.tag("Cancelled"),
+    // The API marks a run executed only once every transfer in it is paid (routes/business/state.ts).
+    EXECUTED: Z.tag("Paid"), FAILED: Z.tag("Failed"), CANCELLED: Z.tag("Cancelled"),
   }[d.state] || "";
 }
 /** Four eyes, as the API's canReviewDraft says it. */
@@ -99,7 +101,7 @@ function apRow(d) {
   }
   const cap1 = (s) => s.charAt(0).toUpperCase() + s.slice(1);
   return `<tr>
-    <td><span class="z-tbl__who">${Z.avatar({ name: memberInitials(d.createdByMemberId) })}<span><button type="button" class="z-tbl__link" data-act="draft-detail" data-id="${esc(d.id)}">${esc(draftTitle(d))}</button><span class="zb-sub2">${esc(lines)}</span></span></span></td>
+    <td><span class="z-tbl__who">${Z.avatar({ name: memberInitials(d.createdByMemberId) })}<span><button type="button" class="z-tbl__link" data-act="draft-detail" data-id="${esc(d.id)}">${esc(draftTitle(d))}</button><span class="zb-sub2">${esc(lines)} · ${runLink(d.id, `Details<span class="z-sr">: ${esc(draftTitle(d))}</span>`)}</span></span></span></td>
     <td>${reviewer ? esc(cap1(reviewer)) : '<span class="z-dim">None yet</span>'}</td>
     <td>${draftTag(d)}</td>
     <td class="z-tbl__num"><span class="z-amount">−${esc(draftTotal(d))}</span></td>

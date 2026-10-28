@@ -357,6 +357,18 @@ dialog .desc, dialog .zb-hint { font-size: 14.5px; color: var(--z-dim); }
 .zb-h-mark.is-ok { color: var(--z-mint); }
 .zb-h-mark.is-warn { color: var(--z-amber); }
 .zb-h-mark.is-unknown { color: var(--z-dim); }
+.zb-pd { display: flex; flex-direction: column; gap: var(--z-space-5); }
+.zb-pd-head { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--z-space-4); flex-wrap: wrap; }
+.zb-pd-tags { margin: 0 0 8px; }
+.zb-pd-title { margin: 0 0 6px; font: 600 24px/1.2 var(--z-font); color: var(--z-heading); }
+.zb-pd-total { margin: 0; font: 600 30px/1.1 var(--z-font); color: var(--z-heading); font-variant-numeric: tabular-nums; }
+.zb-pd-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: var(--z-space-5); align-items: start; }
+@media (max-width: 1199px) { .zb-pd-grid { grid-template-columns: minmax(0, 1fr); } }
+.zb-pd-copy { display: inline-flex; align-items: center; gap: 4px; overflow-wrap: anywhere; }
+@media print {
+  .zb-side, #tabs, #plan-banner, .zb-head__actions, .zb-pd .z-btn, .zb-pd [data-z-copy] { display: none !important; }
+  .zb-pd-grid { grid-template-columns: minmax(0, 1fr); }
+}
 .zb-h-month { display: inline-flex; align-items: center; gap: 2px; font-size: 14px; }
 .zb-h-month > span { padding: 0 10px; }
 .zb-h-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: var(--z-radius-control); border: 1px solid var(--z-line-strong); background: transparent; color: var(--z-text); cursor: pointer; }
