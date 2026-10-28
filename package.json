@@ -117,6 +117,7 @@
     "business:access:test": "tsx scripts/business-access-test.ts",
     "business:home:test": "tsx scripts/business-home-test.ts",
     "business:payment:test": "tsx scripts/business-payment-test.ts",
+    "phone:home-cards:test": "tsx scripts/phone-home-cards-ui-test.ts",
     "security:test": "tsx scripts/security-hardening-test.ts",
     "persist-failure:test": "tsx scripts/persist-failure-test.ts",
     "reencrypt": "tsx scripts/reencrypt-fields.ts",

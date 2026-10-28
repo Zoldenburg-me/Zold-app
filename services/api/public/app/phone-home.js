@@ -82,7 +82,82 @@ function phChecklist(u) {
     return `<div class="z-banner" role="note">${Z.icon("shield")}<span>Recovery isn’t set up. If you lose this phone, no one can get you back in. <a href="#recovery-settings">Set up</a></span>
       <button type="button" class="z-iconbtn z-iconbtn--bare" id="ph-rec-x" aria-label="Hide this reminder">${Z.icon("close")}</button></div>`;
   }
+  // A backup key is the user's own second owner (signers screen). Only a
+  // signers read that worked says whether there is one; otherwise no row.
+  // The signers screen keeps its own, newer read (signers.js): a key added there counts at once.
+  const s = signersState?.owners ? signersState : phCache.signers;
+  if (safe.status === "active" && s?.owners) {
+    items.push({ title: "Add a backup key", sub: "A second key you keep, in case you lose this phone.",
+      done: s.owners.some((o) => o.kind !== "passkey"), action: { href: "#signers", label: "Add" } });
+  }
   return phChecklistCard("Finish setting up", items);
+}
+
+/* Home's reads beyond the session: who signs (the backup-key step) and the
+   invoices of the organisation this person invoices from. Each read once per
+   visit; Home redraws when one lands. */
+/* In flight, kept here: phCache.signers is shared with Security (settings.js),
+   which reads undefined as "not read yet" and starts its own read. */
+let phHomeReads = { signers: false, invoices: false };
+async function phLoadHomeData() {
+  const reads = [];
+  // A read that lands after a sign-out and another sign-in is the old person's: dropped.
+  const who = user?.id;
+  const still = () => user?.id === who;
+  if (phCache.signers === undefined && !phHomeReads.signers && user?.id && user.passkeySafe?.status === "active") {
+    phHomeReads.signers = true;
+    reads.push(api(`/api/users/${user.id}/safe/signers`).then((r) => { if (still()) phCache.signers = r; }, (e) => { if (still()) phCache.signers = { error: e.message }; })
+      .finally(() => { if (still()) phHomeReads.signers = false; }));
+  }
+  if (phCache.invoices === undefined && !phHomeReads.invoices) {
+    phHomeReads.invoices = true;
+    reads.push(phLoadOrgs().then(async () => {
+      if (!still()) return;
+      const org = phInvoiceOrg();
+      if (!org) { phCache.invoices = { org: null }; return; }
+      let read;
+      try { read = { org, list: (await api(`/api/orgs/${encodeURIComponent(org.id)}/invoices`)).invoices || [] }; }
+      catch { read = { org, error: true }; }
+      if (still()) phCache.invoices = read;
+    }).finally(() => { if (still()) phHomeReads.invoices = false; }));
+  }
+  if (!reads.length) return;
+  await Promise.all(reads);
+  if (phRoute?.name === "home") phRender();
+}
+
+/* Invoices sent and not paid yet. A draft was never sent, so it is not open. */
+const PH_INV_CLOSED = ["DRAFT", "PAID", "RECONCILED", "DELETED"];
+/* What is still owed, in euro, the way the API closes an invoice
+   (domain/invoices.ts settlementUpdate): the euro figure frozen at issue
+   less the payments already put on it. An invoice with no frozen figure is
+   counted, not summed. */
+function phOpenInvoices(list) {
+  const open = list.filter((i) => i.direction === "outgoing" && !PH_INV_CLOSED.includes(i.state));
+  let owedCents = 0, unpriced = 0;
+  for (const i of open) {
+    const cents = i.issued?.conversion ? i.issued.conversion.grossCents : i.issued?.grossCents;
+    if (!Number.isFinite(cents)) { unpriced++; continue; }
+    const paid = (i.settlements || []).reduce((n, x) => n + (Number.isFinite(x.amountEur) ? x.amountEur : 0), 0);
+    owedCents += Math.max(0, Math.round(cents) - Math.round(paid * 100));
+  }
+  return { count: open.length, owedEur: owedCents / 100, unpriced };
+}
+/* Who may issue an invoice: the roles with invoices.manage (domain/roles.ts). */
+const PH_INVOICE_ROLES = ["owner", "admin", "payer"];
+
+/* Open invoices and the sum still owed, with Create invoice. Only where an
+   organisation may invoice; an unread list says so rather than "0 open". */
+function phInvoicesCard() {
+  const inv = phCache.invoices;
+  if (!inv?.org) return "";
+  const link = (view, label, variant) => Z.button({ variant, icon: view === "invoice-new" ? "add" : undefined, label, href: phWebHref(view) }).replace("<a ", `<a data-ph-org="${esc(inv.org.id)}" `);
+  const open = inv.error ? null : phOpenInvoices(inv.list);
+  const owed = open && `${phEur(open.owedEur)} outstanding${open.unpriced ? ` · ${open.unpriced} without an amount` : ""}`;
+  return `<section class="z-card z-checklist" aria-labelledby="ph-inv-title">
+    <div class="z-checklist__head"><h2 id="ph-inv-title">Invoices</h2>${open ? `<span class="z-fig">${open.count} open</span>` : ""}</div>
+    <div style="padding:14px"><p class="z-hint" style="margin:0 0 12px">${open ? esc(owed) : "Your invoices could not be read just now."}</p>
+      <div class="z-actions">${PH_INVOICE_ROLES.includes(inv.org.role) ? link("invoice-new", "Create invoice", "primary") : ""}${link("invoices", "See all")}</div></div></section>`;
 }
 
 const phRecoveryBannerKey = (u) => `zold-hide-recovery-banner:${u.id}`;
@@ -119,7 +194,8 @@ PH.home = {
   title: "Home",
   tab: "home",
   live: () => JSON.stringify([user?.balanceEur, user?.iban, user?.moneriumIbanElsewhere?.iban, user?.kycStatus, user?.monerium?.connectedAt, user?.passkeySafe?.status,
-    user?.passkeySafe?.recovery?.status, user?.passkeySafe?.candideRecovery?.guardianStatus, user?.passkeySafe?.recoveryChoice?.choice, user?.zoldenburgArmed, caps.zoldenburgEnrolment, user?.emailVerifiedAt, caps.emailVerification, user?.segment?.gate, caps.emailSmsRecovery, caps.zoldenburgRecovery, realMoney, phHistSig()]),
+    user?.passkeySafe?.recovery?.status, user?.passkeySafe?.candideRecovery?.guardianStatus, user?.passkeySafe?.recoveryChoice?.choice, user?.zoldenburgArmed, caps.zoldenburgEnrolment, user?.emailVerifiedAt, caps.emailVerification, user?.segment?.gate, caps.emailSmsRecovery, caps.zoldenburgRecovery, realMoney, phHistSig(),
+    phCache.signers?.owners?.length, signersState?.owners?.length, phCache.invoices?.error, phCache.invoices?.list && JSON.stringify(phOpenInvoices(phCache.invoices.list))]),
   html() {
     const u = user || {};
     const name = ownAccountName(u) || "Account";
@@ -152,11 +228,13 @@ PH.home = {
             <span class="z-row__main"><span class="z-row__title">${esc(phEur(inflight.sendEur))} to ${esc(inflight.recipientName || "")}</span>
             <span class="z-row__sub">Waiting for the bank to confirm</span></span>${Z.icon("chevron_right", "z-row__chev")}</a>` : ""}
         ${checklist}
+        ${phInvoicesCard()}
         ${phActivityList(hist.slice(0, 5), {
           label: "Recent activity",
           action: hist.length ? { href: "#activity", label: "See all" } : undefined,
           empty: { text: u.iban ? "No payments yet. Share your account details to get paid." : "No payments yet. Once your IBAN is live, share it to get paid." },
         })}
+        ${!hist.length && u.iban && kycApproved(u) ? `<div class="z-card">${Z.copyRow({ label: "Your IBAN", value: String(u.iban).replace(/\s+/g, ""), display: Z.groupIban(u.iban), mono: true })}</div>` : ""}
       `)}`;
   },
   bind(root) {
@@ -181,6 +259,7 @@ PH.home = {
     };
     phBindRetry(root);
     phRecoveryCheck();
+    phLoadHomeData().catch(() => { /* each read keeps its own error; a failed redraw waits for the next */ });
   },
 };
 

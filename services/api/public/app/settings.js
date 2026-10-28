@@ -106,7 +106,8 @@ PH.settings = {
    ========================================================================== */
 
 async function phLoadSigners() {
-  try { phCache.signers = await api(`/api/users/${user.id}/safe/signers`); }
+  // The signers screen's copy follows too, so Home never prefers an older read.
+  try { phCache.signers = signersState = await api(`/api/users/${user.id}/safe/signers`); }
   catch (e) { phCache.signers = { error: e.message }; }
   if (phRoute?.name === "security") phRender();
 }

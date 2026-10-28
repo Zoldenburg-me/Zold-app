@@ -42,7 +42,7 @@ function phLinkSub(r) {
    without either goes through its organisation onboarding, then lands on Invoices. */
 function phInvoiceButton() {
   if (phCache.orgs === null) return Z.button({ icon: "receipt_long", label: "Invoice", disabledReason: "Loading…" });
-  const org = phCan(phPersonalOrg(), "invoices") ? phPersonalOrg() : (phCache.orgs || []).find((o) => phCan(o, "invoices"));
+  const org = phInvoiceOrg();
   if (org) return Z.button({ icon: "receipt_long", label: "Invoice", href: phWebHref("invoice-new") }).replace("<a ", `<a data-ph-org="${esc(org.id)}" `);
   if (!phPersonalOrg() && user?.accountType !== "company") return Z.button({ icon: "receipt_long", label: "Invoice", href: "/business?setup=invoices" });
   const reason = phPersonalOrg()?.capabilities?.invoices?.reason || "Invoices are not part of this account.";

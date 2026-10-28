@@ -41,7 +41,7 @@
 let phRoute = null;            // { name, arg }
 let phSig = "";                // what the open screen was drawn from, for the poll
 const phCache = { deposits: null, links: null, methods: null, orgs: null, contacts: null, bic: undefined, bicFor: "", currencyPending: null,
-  signers: undefined, soon: null, walletQr: null };
+  signers: undefined, soon: null, walletQr: null, invoices: undefined };
 
 /* A link into Zold Business: it opens the organisation it last had, so a
    link for one names it first (see the click listener below). */
@@ -248,20 +248,28 @@ const phEur = (n) => Z.formatMoney(n ?? 0, "EUR");
 /* The capability check, as the organisation read reports it. */
 const phCan = (org, cap) => org?.capabilities?.[cap]?.allowed === true;
 const phPersonalOrg = () => (phCache.orgs || []).find((o) => o.type === "personal") || null;
+/* Where this person writes invoices: their personal space when it may, else the first organisation that may. */
+const phInvoiceOrg = () => (phCan(phPersonalOrg(), "invoices") ? phPersonalOrg() : (phCache.orgs || []).find((o) => phCan(o, "invoices")) || null);
 // One request in flight: every caller's redraw lands together, so a second
 // answer cannot arrive later and close a sheet opened after the first.
 let phOrgsLoading = null;
 function phLoadOrgs() {
   if (phCache.orgs !== null) return Promise.resolve(phCache.orgs);
-  return (phOrgsLoading ??= (async () => {
+  const who = user?.id; // a list read for a person who has since signed out is dropped
+  const mine = (phOrgsLoading ??= (async () => {
     try {
-      phCache.orgs = (await api("/api/orgs")).organisations || [];
-      const owned = user?.accountType === "company" ? phCache.orgs.filter((o) => o.type === "business") : [];
-      ownCompanyOrg = owned.find((o) => o.role === "owner") || owned[0] || null;
-    } catch { phCache.orgs = []; }
-    phOrgsLoading = null;
-    return phCache.orgs;
+      const orgs = (await api("/api/orgs")).organisations || [];
+      if (user?.id === who) {
+        phCache.orgs = orgs;
+        const owned = user?.accountType === "company" ? orgs.filter((o) => o.type === "business") : [];
+        ownCompanyOrg = owned.find((o) => o.role === "owner") || owned[0] || null;
+      }
+    } catch { if (user?.id === who) phCache.orgs = []; }
+    if (phOrgsLoading === mine) phOrgsLoading = null; // a sign-out may already have started another
+    // Anyone who joined a dropped read gets the signed-in person's own list, never null.
+    return user?.id === who ? phCache.orgs : user?.id ? phLoadOrgs() : [];
   })());
+  return mine;
 }
 /* "26 Sep": day first, and the short month en-GB spells "Sept". */
 const phDay = (iso) => {
