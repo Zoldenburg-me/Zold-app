@@ -80,7 +80,7 @@ matchMedia("(min-width: 1024px)").addEventListener("change", (e) => {
 /** Which nav item an older view belongs to. */
 export const PARENT = {
   ledger: "books", assets: "books", gains: "books",
-  shopify: "apps", "invoice-new": "invoices", "invoicing-settings": "settings", organisation: "settings", access: "settings", accounts: "accounts",
+  shopify: "apps", "invoice-new": "invoices", "invoicing-settings": "settings", organisation: "settings", access: "settings", accounts: "accounts", payment: "payments",
 };
 /** Every view id the router accepts, including those without a nav item. */
 export const KNOWN = new Set([...VIEWS.map((v) => v.id), ...Object.keys(PARENT), "settings", "soon"]);

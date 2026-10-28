@@ -92,6 +92,7 @@ const scripts = [
   "business:test",
   "business:access:test",
   "business:home:test",
+  "business:payment:test",
   "recovery-alert:ui:test",
   "draft:test",
   "draft:failure:test",

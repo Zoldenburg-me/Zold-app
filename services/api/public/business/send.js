@@ -116,7 +116,7 @@ RENDER.send = async () => {
           <button type="button" class="zb-pick-row zb-pick-row--add" data-act="new-contact">${Z.iconTile({ icon: "person_add" })}<span class="z-row__main"><span class="z-row__title">Add a contact</span><span class="z-row__sub">A payment goes to a saved contact, so a later change to their bank details is caught before sending.</span></span></button>
         </div></fieldset>
       <div><label for="d-amt">Amount in euros</label><input id="d-amt" name="amount" inputmode="decimal" autocomplete="off" placeholder="250.00…" value="${esc(amount)}" /></div>
-      <div><label for="d-note">Reference <span class="desc">(on their bank statement)</span></label><input id="d-note" name="reference" autocomplete="off" maxlength="140" placeholder="Invoice 2026-114…" /></div>
+      <div><label for="d-note">Note <span class="desc">(for you; not sent to the bank)</span></label><input id="d-note" name="reference" autocomplete="off" maxlength="140" placeholder="October timber…" /></div>
       <p class="zb-err" id="send-err" role="alert"></p>
       <div class="zb-actions"><button type="button" class="z-btn z-btn--primary" data-act="send-create"><span>${action}</span></button>${linkBtn("Cancel", "payments")}</div>
     </form>
