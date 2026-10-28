@@ -53,7 +53,8 @@ export function draftTag(d) {
   return {
     DRAFT: Z.tag("Draft"), PENDING_REVIEW: Z.tag("Waiting for review"), INVALID_DATA: Z.tag("Needs fixing"),
     REJECTED: Z.tag("Sent back", "amber"), REVIEWED: Z.tag("Approved"), EXECUTING: Z.tag("Sending", "pink"),
-    EXECUTED: Z.tag("Sent"), FAILED: Z.tag("Failed"), CANCELLED: Z.tag("Cancelled"),
+    // The API marks a run executed only once every transfer in it is paid (routes/business/state.ts).
+    EXECUTED: Z.tag("Paid"), FAILED: Z.tag("Failed"), CANCELLED: Z.tag("Cancelled"),
   }[d.state] || "";
 }
 /** Four eyes, as the API's canReviewDraft says it. */

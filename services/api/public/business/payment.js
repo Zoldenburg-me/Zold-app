@@ -11,7 +11,7 @@
 import { Z, api, cap, esc, eur, gateHtml, maskIban, org, reviewOn, roleCan, view, when } from "./core.js";
 import { META, RENDER } from "./views.js";
 import { draftTag, draftTitle, draftTotal, loadMembers, mayReview, memberName } from "./screens.js";
-import { approvals, nextStep, payee, runIdFrom } from "./payment-model.js";
+import { approvals, bankReference, nextStep, payee, runIdFrom } from "./payment-model.js";
 
 /* Read now: boot drops every query parameter but ?view= before the first render. */
 const pd = { id: runIdFrom(location.search, null) };
@@ -43,15 +43,17 @@ META.payment = () => ({
     <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-z-copy="${esc(location.origin + location.pathname)}?view=payment&id=${esc(encodeURIComponent(runIdFrom(location.search, pd.id) || ""))}">${Z.icon("link")}<span>Copy link</span></button>`,
 });
 
-function linesHtml(run, contacts) {
+function linesHtml(run, contacts, invoices) {
   const many = run.lines.length > 1;
   return run.lines.map((l, i) => {
     const p = payee(l, contacts);
+    const ref = bankReference(l, run, org.name, invoices);
     return `${many ? `<h3 class="zb-h3">Payment ${i + 1} of ${run.lines.length}</h3>` : ""}
       ${kv("Beneficiary", esc(p.name))}
       ${p.iban ? kv("IBAN", copyable(p.iban.replace(/\s+/g, ""), "IBAN", grouped(p.iban))) : ""}
       ${p.bic ? kv("BIC", `<span class="z-mono">${esc(p.bic)}</span>`) : ""}
       ${p.wallet ? kv("Wallet", copyable(p.wallet, "wallet address")) : ""}
+      ${ref ? kv("Bank reference", `${copyable(ref, "bank reference")}${["EXECUTING", "EXECUTED", "FAILED"].includes(run.state) ? '<br><span class="z-dim">Built from today’s organisation name</span>' : ""}`) : ""}
       ${l.note ? kv("Note", `${esc(l.note)}<br><span class="z-dim">Yours, not sent to the bank</span>`) : ""}
       ${many ? kv("Amount", esc(/^(EUR|EURe)$/i.test(l.asset) ? eur(Number(l.amount)) : `${l.amount} ${l.asset}`)) : ""}`;
   }).join("");
@@ -83,10 +85,12 @@ RENDER.payment = async () => {
   if (!cap("transfers.drafts").allowed) return gateHtml("transfers.drafts");
   const id = runIdFrom(location.search, pd.id);
   if (!id) return `<div class="gate"><h3>No payment picked</h3><p>Open one from Approvals or Home.</p></div>`;
-  const [r, ct, ac] = await Promise.allSettled([
+  const [r, ct, ac, iv] = await Promise.allSettled([
     api(`/api/orgs/${org.id}/drafts/${encodeURIComponent(id)}`),
     api(`/api/orgs/${org.id}/contacts`),
     api(`/api/orgs/${org.id}/accounts`),
+    // Only for the reference of a line that pays an invoice; unread, that line shows none.
+    cap("invoices").allowed ? api(`/api/orgs/${org.id}/invoices`) : Promise.resolve(null),
     loadMembers(),
   ]);
   if (r.status === "rejected") return `<div class="gate"><h3>Payment not found</h3><p>${esc(r.reason?.message || "It could not be read.")}</p></div>`;
@@ -98,6 +102,7 @@ RENDER.payment = async () => {
     history.replaceState({ view: "payment" }, "", `${location.pathname}?view=payment&id=${encodeURIComponent(run.id)}`);
   }
   const contacts = ct.status === "fulfilled" ? ct.value.contacts : null;
+  const invoices = iv.status === "fulfilled" && iv.value ? iv.value.invoices : null;
   const account = run.source.kind === "account" && ac.status === "fulfilled" ? ac.value.accounts.find((a) => a.id === run.source.accountId) : null;
   const wallet = run.source.kind === "wallet";
   const bank = run.lines.every((l) => l.destination.kind === "bank");
@@ -109,16 +114,16 @@ RENDER.payment = async () => {
     <section class="z-card zb-pad zb-pd-head" aria-label="Summary">
       <div><p class="zb-pd-tags">${draftTag(run)}</p>
         <h2 class="zb-pd-title">${esc(draftTitle(run))}</h2>
-        <p class="zb-hint">Drafted ${esc(when(run.createdAt))} · ${bank ? "Bank transfer" : "Wallet transfer"}${run.lines.length === 1 && first.note ? ` · Note: ${esc(first.note)}` : ""}</p></div>
+        <p class="zb-hint">Drafted ${esc(when(run.createdAt))} · ${bank ? "Bank transfer" : "Wallet transfer"}${run.lines.length === 1 && bankReference(first, run, org.name, invoices) ? ` · Ref: ${esc(bankReference(first, run, org.name, invoices))}` : ""}</p></div>
       <p class="zb-pd-total">−${esc(draftTotal(run))}</p></section>
     <div class="zb-pd-grid">
       <section class="z-card zb-pad" aria-labelledby="pd-stmt"><h2 class="zb-h3" id="pd-stmt">Transfer</h2>
-        ${linesHtml(run, contacts)}
-        ${account ? kv("From", `${esc(account.label || account.currency)}${account.identifier?.iban ? `<br><span class="z-mono z-dim">${esc(maskIban(account.identifier.iban))}</span>` : ""}`) : ""}
+        ${linesHtml(run, contacts, invoices)}
+        ${account ? kv("From", `${esc(account.label || account.currency)}${account.identifier?.iban ? `<br><span class="z-mono z-dim">${esc(maskIban(account.identifier.iban))}</span>` : ""}`)
+          : run.source.kind === "account" && ac.status === "rejected" ? kv("From", '<span class="z-dim">The account could not be read just now.</span>') : ""}
         ${wallet ? kv("From", "An imported wallet") : ""}
         ${kv("Method", wallet ? "Prepared here, signed in your own wallet" : sepa ? "SEPA bank transfer, paid out by Monerium" : bank ? "Bank transfer" : "Transfer on chain from the account")}
         ${kv("Next", esc(wallet ? "Approve it in your own wallet. Zold does not send it." : nextStep(run, reviewOn())))}
-        ${sepa && account ? kv("Zold fee", esc(eur(0))) : ""}
         <div class="zb-kv zb-kv--total"><span>Total</span><b>−${esc(draftTotal(run))}</b></div>
         ${contacts ? "" : '<p class="zb-hint">The contacts could not be read, so the IBAN and BIC are not shown.</p>'}
         ${bank && contacts ? `<p class="zb-hint">IBAN and BIC are the contact’s as saved now. ${["EXECUTING", "EXECUTED"].includes(run.state) ? "Zold checked them against the drafted details before sending." : "Zold checks them again before sending, and stops the payment if they changed."}</p>` : ""}</section>

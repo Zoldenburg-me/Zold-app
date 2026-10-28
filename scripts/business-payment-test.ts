@@ -76,6 +76,20 @@ assert.equal(m.approvals({ ...base, state: "PENDING_REVIEW" }, true).sentBy, nul
   assert.deepEqual([a.have, a.steps[1].done], [1, false], "stopped because a contact changed: not approved");
 }
 
+// ── The bank reference ───────────────────────────────────────────────────────
+
+{
+  const run = { id: "abcdef1234567890" };
+  const bankLine = { destination: { kind: "bank" } };
+  assert.equal(m.bankReference(bankLine, run, "Lindner GmbH", null), "Lindner GmbH abcdef12", "no invoice: the payer and the run id's first 8");
+  const invLine = { ...bankLine, invoiceId: "i1" };
+  assert.equal(m.bankReference(invLine, run, "Lindner GmbH", [{ id: "i1", supplier: { invoiceNumber: " RE-114 " } }]), "Invoice RE-114 Lindner GmbH");
+  assert.equal(m.bankReference(invLine, run, "Lindner GmbH", [{ id: "i1", supplier: {} }]), "Lindner GmbH", "an invoice without a number: the payer alone");
+  assert.equal(m.bankReference(invLine, run, "Lindner GmbH", null), null, "invoice unread: no guess");
+  assert.equal(m.bankReference({ destination: { kind: "wallet" } }, run, "Lindner GmbH", null), null);
+  assert.equal(m.bankReference(bankLine, run, "x".repeat(150), null).length, 140);
+}
+
 // ── Next step and the id ─────────────────────────────────────────────────────
 
 assert.match(m.nextStep({ state: "FAILED", failureReason: "Line 2 could not be prepared" }), /Line 2/);

@@ -62,5 +62,21 @@ export function nextStep(run, reviewRequired) {
   }[run.state] || "";
 }
 
+/**
+ * The remittance text a bank line carries, as execution builds it
+ * (routes/business/drafts.ts, domain/invoices.ts paymentReference): for a
+ * line paying an invoice, "Invoice <number> <payer>" (or the payer alone
+ * without a number); otherwise "<payer> <first 8 of the run id>". Null when
+ * the line pays an invoice that could not be read: no guess.
+ */
+export function bankReference(line, run, orgName, invoices) {
+  if (line.destination.kind !== "bank") return null;
+  if (!line.invoiceId) return `${orgName} ${run.id.slice(0, 8)}`.slice(0, 140);
+  const inv = (invoices || []).find((i) => i.id === line.invoiceId);
+  if (!inv) return null;
+  const number = inv.supplier?.invoiceNumber?.trim();
+  return (number ? `Invoice ${number} ${orgName}` : orgName).trim().slice(0, 140);
+}
+
 /** The run's id from the address bar, or the one a link picked. */
 export const runIdFrom = (search, picked) => new URLSearchParams(search).get("id") || picked || null;
