@@ -1,4 +1,5 @@
-import * as ui from "@shopify/ui-extensions-react/checkout";
+import "@shopify/ui-extensions/preact";
+import { render } from "preact";
 import { ZoldPay } from "./ZoldPay.jsx";
 
 /**
@@ -7,20 +8,17 @@ import { ZoldPay } from "./ZoldPay.jsx";
  * id and `checkoutToken` the proof the API asks for; the Zold API's orders/create webhook opens the payment request at about
  * the same moment, so the block starts by polling until it exists.
  */
-export default ui.reactExtension("purchase.thank-you.block.render", () => <Entry />);
+export default function extension() {
+  render(<Entry />, document.body);
+}
 
 function Entry() {
-  const api = ui.useApi();
-  const confirmation = ui.useSubscription(api.orderConfirmation);
-  const checkoutToken = ui.useSubscription(api.checkoutToken);
-  const settings = ui.useSettings();
   return (
     <ZoldPay
-      ui={ui}
-      orderId={confirmation?.order?.id}
-      checkoutToken={checkoutToken}
-      shop={api.shop?.myshopifyDomain}
-      apiBase={settings.api_base}
+      orderId={shopify.orderConfirmation.value?.order?.id}
+      checkoutToken={shopify.checkoutToken.value}
+      shop={shopify.shop?.myshopifyDomain}
+      apiBase={shopify.settings.value.api_base}
     />
   );
 }

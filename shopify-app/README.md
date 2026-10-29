@@ -2,7 +2,7 @@
 
 This folder is the Shopify side of the custom-app integration: the app config
 Shopify's CLI reads, and one checkout UI extension that renders the order's
-Zold payment on the **Thank you** and **Order status** pages. There is no
+Zold payment on the **Thank you** page. There is no
 server here. Everything Shopify calls lives in the Zold API
 (`services/api/src/routes/shopify.ts`), and the API needs `SHOPIFY_MODE=custom-app`
 (the default), `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET` and a public origin.
@@ -41,24 +41,24 @@ The one thing this cannot hide: the order exists before the money does.
    npx shopify app dev              # or: npx shopify app deploy
    ```
    then in the store's **checkout editor** add the "Zold — pay with crypto"
-   block to the Thank you page and the Order status page, and set its
-   **Zold API origin** setting to the same origin as step 2.
+   block to the Thank you page and set its **Zold API origin** setting to
+   the same origin as step 2. (No Order status block: that page has no
+   checkout token to prove the buyer; a returning buyer uses the signed link
+   in the confirmation email.)
 6. Place a test order with the Zold method and pay the USDC figure. The order
    flips to Paid in the Shopify admin, and `zold.payment` on the order carries
    the transaction.
 
 ## Not yet proven
 
-This extension has NOT been built with the Shopify CLI or run in a real
-checkout. Things the first `shopify app dev` may correct:
+The extension is Preact with Polaris web components (`@shopify/ui-extensions`
+2026.7.x, API `2026-07`). It installs and bundles with esbuild, but has NOT
+been built by the Shopify CLI against a linked app or run in a real checkout.
+Things the first `shopify app dev` may correct:
 
-- The `@shopify/ui-extensions*` package versions in `extensions/zold-pay/package.json`
-  (they track Shopify's API version; use whatever the CLI scaffolds for
-  `2026-07`).
-- The exact API names on the two surfaces: `api.orderConfirmation` on the
-  thank-you target and `api.order` on the order-status target are the
-  documented ones as of the version this was written against.
 - `network_access = true` may need enabling for the app in the Partner
   Dashboard before the block can fetch the Zold API.
+- Component attributes (`s-qr-code`, `s-box`, `s-banner` tones) are written
+  from Shopify's docs, not checked in a rendered checkout.
 
 The API side IS proven against a stub: `npm run shopify:orders:test`.
