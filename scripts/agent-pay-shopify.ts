@@ -71,6 +71,10 @@ export function planAgentPayment(view: PayView, mandate: Mandate, now = new Date
       amount: signed.amount,
       currency: "eur",
       counterpart: { iban: signed.iban, name: bank.holder },
+      // Not covered by `message`: Monerium's signed text has no memo field,
+      // so whoever submits the order could swap the code and book the credit
+      // to another of this merchant's orders. The submitter must be the agent itself,
+      // and the mandate contract must record the code with its reservation.
       // The code alone: matchMoneriumOrder looks for it in the memo, and
       // nothing the merchant names can push it past a length limit.
       memo: bank.reference,
