@@ -34,6 +34,7 @@ const scripts = [
   "paylinks:test",
   "shopify:test",
   "shopify:orders:test",
+  "agent-pay:test",
   "monerium:oauth:test",
   "monerium:apikeys:test",
   "monerium:iban-binding:test",

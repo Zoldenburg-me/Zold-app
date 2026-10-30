@@ -86,6 +86,7 @@
     "paylinks:test": "tsx scripts/payment-requests-test.ts",
     "shopify:test": "tsx scripts/shopify-test.ts",
     "shopify:orders:test": "tsx scripts/shopify-orders-test.ts",
+    "agent-pay:test": "tsx scripts/agent-pay-shopify-test.ts",
     "monerium:oauth:test": "tsx scripts/monerium-oauth-test.ts",
     "monerium:apikeys:test": "tsx scripts/monerium-apikeys-test.ts",
     "monerium:iban-binding:test": "tsx scripts/monerium-iban-binding-test.ts",

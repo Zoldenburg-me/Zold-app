@@ -29,7 +29,8 @@
  *    custom-distribution install on a real store.
  *  - Crypto only. A checkout needs an answer within the session's life and a
  *    SEPA transfer takes longer, so bank payment is not offered on a checkout
- *    request (ordinary links still offer it).
+ *    request (ordinary links still offer it, and merchant links do with
+ *    MERCHANT_LINK_BANK=1).
  *  - Sale only. `kind: authorization` (manual capture) is refused with a
  *    merchant-readable reason; a chain transfer from the buyer's own wallet
  *    cannot be held and captured.
