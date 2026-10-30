@@ -1,5 +1,5 @@
 /**
- * The invoice editor (design/ui-v2 Desk-Invoice-Editor): the form on the
+ * The invoice editor: the form on the
  * left, the invoice as paper on the right, drawn from the API's own check
  * (POST /invoicing/check) as you type. The paper is in the invoice's
  * language, never the app's.

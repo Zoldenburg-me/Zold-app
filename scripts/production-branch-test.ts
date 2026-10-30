@@ -1,7 +1,7 @@
 /**
  * scripts/build-production-branch.sh writes `production` only from merged
  * main, and never moves it back: a source must be on origin/main and descend
- * from the source of the current production commit (AGENTS.md rule 1).
+ * from the source of the current production commit.
  *
  * Runs the real script in a throwaway repo with a bare origin. The hardhat
  * compile and the lockfile install are shimmed on PATH: what is under test is

@@ -1,4 +1,3 @@
-<!-- Generated: 2026-10-05 | Files scanned: 36 (TypeSafe Jev remittance score >= 2.5) + their callers | Token estimate: ~1000 -->
 # Remittance (send money to a recipient)
 
 Two rails, picked per quote: **sepa** (EURe → IBAN via a Monerium redeem; open)

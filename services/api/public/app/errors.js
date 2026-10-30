@@ -1,5 +1,5 @@
 /**
- * Whole-screen states from design/ui-v2 (build step 9): offline, something
+ * Whole-screen states: offline, something
  * went wrong on our side, and a link that does not work. They are OB entries
  * of kind "state", drawn into #ob-root by errShow() without touching the URL:
  * a state is not a place, so reload and back never land on one.
@@ -7,7 +7,7 @@
  * Declarations only; resumeSession(), enterDashboard() and
  * handlePayDeepLink() in app/onboarding.js open them at run time.
  *
- * Honesty rules that shape this file (design/ui-v2/RULES.md §4):
+ * Rules for what this file shows:
  * - Offline shows no balance: nothing is stored on the phone to show, and a
  *   figure from an earlier visit would be read as today's.
  * - The error screen has no reference code. The API's 500 answer carries

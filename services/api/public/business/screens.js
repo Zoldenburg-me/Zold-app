@@ -1,10 +1,9 @@
 /**
- * The screens drawn from the design/ui-v2 desktop references (build step 8b):
- * Approvals, Contacts, Members, Invoices and Books. The older views are
+ * The desktop screens: Approvals, Contacts, Members, Invoices and Books. The older views are
  * in views.js; the invoice editor in invoice.js. Each registers into RENDER
  * (the body) and META (title, subtitle, header actions).
  *
- * Honesty rules that shape this file (design/ui-v2/RULES.md §4):
+ * Rules for what this file shows:
  * - There is no company balance. A company account spends from one member's
  *   own account; only that member sees a figure, labelled as theirs.
  * - A payment run is sent per run, with Face ID or fingerprint (exec-draft,

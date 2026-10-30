@@ -73,7 +73,7 @@ function activePlan(user: User): PasskeySafeDeploymentPlan {
   }
   if (!user.passkey?.publicKey) throw new Refusal(409, "a verified passkey is required first", "NO_PASSKEY");
   // The harness chain has no bundler and the harness answers no Safe reads;
-  // an owner screen built on invented state would be the UPI lesson again.
+  // an owner screen there would show owners nobody read from a chain.
   if (HARNESS.enabled) {
     throw new Refusal(409, "signer settings need a real chain — the local harness has no Safe to read", "NO_CHAIN");
   }

@@ -1,4 +1,4 @@
-# UI v2: standing instructions for Claude sessions
+# UI v2: rules for UI work
 
 Applies to any UI work in this repo: the landing page, legal pages, `public/app`, `public/business`, `pay.html`, `invoice.html` and any new page.
 

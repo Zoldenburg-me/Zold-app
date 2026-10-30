@@ -1,5 +1,5 @@
 /**
- * The app from 1024px (design/ui-v2 build step 8): a 256px sidebar next to
+ * The app from 1024px: a 256px sidebar next to
  * the open screen, Home laid out for a wide window, and Search (Cmd or Ctrl
  * K) over payments and contacts. Sheets turn into right drawers in
  * ui.css. Screens without a desktop layout keep their phone column, centred.
@@ -9,7 +9,7 @@
  * company here opens it there. Declarations and listeners only; app/main.js
  * stays last.
  *
- * Honesty rules that shape this file (design/ui-v2/RULES.md §4):
+ * Rules for what this file shows:
  * - Search reads only what this page already loaded from the API (payments,
  *   contacts); there is no search route, and nothing is guessed.
  * - The payment page QR the API draws holds the wallet address, not the page

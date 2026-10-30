@@ -1,4 +1,4 @@
-/* The web app (/business), UI v2 build step 8b.
+/* The web app (/business).
    Loaded before ui.css: the components (.z-btn, .z-tag, .z-row, the drawer,
    the sidebar .z-side) come from there. This file holds the page shell, the
    form controls, the screens' own layouts, and the older classes (.card,

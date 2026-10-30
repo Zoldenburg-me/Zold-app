@@ -1,4 +1,3 @@
-<!-- Generated: 2026-10-04 | Files scanned: 41 | Token estimate: ~900 -->
 # Frontend (services/api/public)
 
 Shared: tokens.css (`--z-*`), ui.css + ui.js (`window.Z` components), sw.js

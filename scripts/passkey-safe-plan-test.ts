@@ -67,7 +67,7 @@ assert.ok(
 
 assert.equal(webauthnOwnerFromJwk({ ...jwk, crv: "P-384" }), null);
 
-/* ---- The co-signer is retired: new plans are passkey-only --------------- */
+/* ---- New plans are passkey-only: no co-signer ---------------------------- */
 const plan = passkeySafePlan(
   { address: "0x0000000000000000000000000000000000000000" } as any,
   { jwk, alg: "ES256" } as any,

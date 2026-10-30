@@ -1,4 +1,3 @@
-<!-- Generated: 2026-10-04 | Files scanned: 3 (store/db.ts, store/types.ts, domain/types.ts) | Token estimate: ~650 -->
 # Data
 
 One JSON file (`TRANSF_DB_PATH`, default data/db.json), read/written whole by
