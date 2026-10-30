@@ -56,8 +56,7 @@ that do not own the local deployment).
 
 ## Secrets
 
-`.env` and `.private/` can be kept `age`-encrypted (`docs/security-hardening.md`,
-Phase 0). The identity is in the macOS Keychain (`zold-age-identity`), or in a
+`.env` and `.private/` can be kept `age`-encrypted. The identity is in the macOS Keychain (`zold-age-identity`), or in a
 file named by `AGE_IDENTITY_FILE` (an `age-plugin-yubikey` stub).
 
 - `npm run age:fetch` installs the pinned `age` into `.toolchain/`, refusing a

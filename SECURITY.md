@@ -49,8 +49,8 @@ Documented where they live rather than hidden:
   `stored-secrets.ts`), and storing one refuses without a key. Names, emails,
   IBANs and transfer records are **plaintext** in that file; a production
   start refuses the file store unless `ALLOW_PLAINTEXT_STORE=1` acknowledges
-  it. Database backups are `age`-encrypted. `docs/security-hardening.md` is
-  the plan for encrypted PII columns, Postgres, secrets and keys.
+  it. Database backups are `age`-encrypted. Encrypted PII columns and
+  Postgres are planned.
 - Several external legs are proven only as far as their sandboxes allow;
   `docs/status.md` lists what has and has not run against the real
   counterparty. Read it before relying on any leg.

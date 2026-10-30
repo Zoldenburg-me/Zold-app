@@ -193,8 +193,7 @@ docs/                 design docs, architecture, and the GitBook user guide
   read-time filter.
 - **Public projections are allowlists**, redacted on the server.
 
-Platform design: [ARCHITECTURE.md](ARCHITECTURE.md). External dependencies and their
-credentials: [INTEGRATORS.md](INTEGRATORS.md).
+Platform design: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Run it
 

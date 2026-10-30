@@ -112,8 +112,7 @@ export function guardianPageCsp(turnkeyOrigin?: string): string {
  *
  * Five minutes on purpose: a browser keeps this header for max-age and a
  * rollback cannot take it back, so it stays short until every subdomain of
- * the production host is confirmed to serve HTTPS (docs/security-hardening.md,
- * Phase 0).
+ * the production host is confirmed to serve HTTPS.
  */
 export const STRICT_TRANSPORT_SECURITY = "max-age=300; includeSubDomains";
 

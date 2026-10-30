@@ -16,7 +16,6 @@ Read when the task touches it:
 - `docs/roadmap.md` — current milestone, agreed priority, parked ideas.
 - `docs/architecture/` — product (what) and technical (how).
 - `docs/CODEMAPS/` — routes, modules, data, deps.
-- `docs/security-hardening.md` — secrets, keys, Postgres, mail; Rules bind.
 - `docs/agents/tooling.md` — ai-harness, Ponytail: which rule wins.
 
 ## How to write in this repo (comments, docs, this file, notes)

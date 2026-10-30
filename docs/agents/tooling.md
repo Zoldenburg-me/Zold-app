@@ -6,7 +6,7 @@ when they disagree. Other agents (Codex, Cursor) load none of this; for them
 
 ## Precedence
 
-1. `AGENTS.md` and `docs/security-hardening.md` (the repo's invariants).
+1. `AGENTS.md` (the repo's invariants).
 2. Ponytail (how big a change is).
 3. ai-harness skills and agents (review, testing, workflow defaults).
 
