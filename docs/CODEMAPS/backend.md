@@ -1,4 +1,3 @@
-<!-- Generated: 2026-10-04 | Files scanned: 151 | Token estimate: ~1000 -->
 # Backend (services/api/src)
 
 ## Middleware chain (server.ts)

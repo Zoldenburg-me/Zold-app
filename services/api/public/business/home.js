@@ -3,7 +3,7 @@
  * what needs you, money in and out, the accounts, invoices and payments at a
  * glance, who paid and who got paid, and the latest statement lines.
  *
- * Honesty rules that shape this file (design/ui-v2/RULES.md §4):
+ * Rules for what this file shows:
  * - There is no company balance. Only the account backed by YOUR own account
  *   shows a figure; another names the member who backs it.
  * - Money in and out is summed from the statement lines Books shows. An org

@@ -17,7 +17,7 @@
  *  - config.ts refuses to start with any faucet variable on a chain where EURe
  *    is real money or in production; faucetLive() re-checks;
  *  - a claim (grant row, drip slot) is taken synchronously before the first
- *    await (the authorize-race lesson), so two calls cannot pay twice;
+ *    await, so two concurrent calls cannot both pay;
  *  - a dry faucet, or a failure BEFORE the transfer is sent, releases the
  *    claim; once sent, the claim stands even if waiting for the receipt then
  *    fails — the transfer may still land, and releasing would pay twice;

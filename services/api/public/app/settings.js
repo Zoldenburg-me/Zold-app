@@ -1,12 +1,11 @@
 /**
- * Settings from design/ui-v2 (build step 7): Settings, Security and Coming
- * soon. Recovery, documents, signers and Monerium keys are still the
+ * Settings, Security and Coming soon. Recovery, documents, signers and Monerium keys are still the
  * older #dashboard screens; these rows open them by route.
  *
  * Declarations only: phone.js draws these through the PH registry, and
  * nothing here runs at load. app/main.js stays last.
  *
- * Honesty rules that shape this file (design/ui-v2/RULES.md §4, AGENTS.md):
+ * Rules for what this file shows:
  * - The storage warning shows only when this browser's payment key is kept
  *   without hardware protection (no PRF), as device.js reports it.
  * - There is no list of devices: the API knows one sign-in (the passkey) and

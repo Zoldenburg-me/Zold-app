@@ -159,7 +159,3 @@ One thin-stroke outline family at 1.5px stroke (Phosphor Light). 20 to 22px in r
 ## Copy voice
 
 The UI v2 word list applies unchanged: "Face ID or fingerprint" not passkey, "bank transfer" not SEPA, "approve" not sign, "Zoldenburg recovery" not guardian, "backup key" not second owner. ARK adds a tone, not new words: short, unhurried, assured, the way a good private banker writes a letter. No exclamation marks, no em-dashes, no filler verbs. Sample names stay local (Miriam Zoldenburg, Lindner Holzbau GmbH, Café Ostwind).
-
-## Using this with Stitch
-
-Upload this file as the project's design system (Stitch's design-from-markdown option). In each screen prompt, name the screen from `SCREENS.md` and say "use the ARK account plate", "ARK receipt" and so on. Stitch output is a reference only: a screen is done when it meets RULES.md section 8, not when it looks like the mockup.

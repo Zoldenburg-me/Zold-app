@@ -1,5 +1,5 @@
 /**
- * The phone app from design/ui-v2 (build steps 4 and 5): Home, account
+ * The phone app: Home, account
  * details, Activity, one payment, Send, Add money, Get paid, Contacts,
  * Profile, main currency and converting digital dollars to euros. Settings
  * and Security are in app/settings.js, loaded after it.
@@ -24,7 +24,7 @@
  * renderHistory() at run time, and started by enterDashboard(); nothing here
  * runs at load. app/main.js stays last.
  *
- * Honesty rules that shape this file (design/ui-v2/RULES.md §4):
+ * Rules for what this file shows:
  * - Every figure is read from the API. A row the API has not confirmed is not
  *   ticked, and a status tag follows the transfer's own state.
  * - A payment is PAID only when the transfer says PAID. There is no separate

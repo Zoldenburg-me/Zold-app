@@ -1,4 +1,3 @@
-<!-- Generated: 2026-10-04 | Files scanned: package.json, adapters/, config/ | Token estimate: ~600 -->
 # Dependencies
 
 ## npm (runtime)

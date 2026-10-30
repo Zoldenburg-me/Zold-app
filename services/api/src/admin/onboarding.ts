@@ -1,7 +1,7 @@
 /**
  * Where an account stands, for the operator dashboard.
  *
- * The steps are the onboarding order (AGENTS.md "Identity is Monerium's"):
+ * The steps are the onboarding order:
  * account → passkey → Safe → recovery choice → Monerium connected → IBAN
  * active. `stage` is the first step not done, so an account stuck at Monerium
  * reads as stuck there and not as "pending" in general.

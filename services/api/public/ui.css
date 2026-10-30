@@ -628,7 +628,7 @@ button.z-switch:hover { border-color: var(--z-line-hover); }
 .z-invite { margin-top: var(--z-space-4); }
 
 /* ==========================================================================
-   Desktop (build step 8): from 1024px the app is a 256px sidebar and the
+   Desktop: from 1024px the app is a 256px sidebar and the
    open screen. Home has its own wide layout (.z-app--desk); every other
    screen keeps its phone column, centred in the space.
    ========================================================================== */
@@ -756,7 +756,7 @@ button.z-side__org:hover { border-color: var(--z-line-hover); }
 .z-cmdk__foot .z-kbd { margin-right: 4px; padding: 0 5px; }
 @media (max-width: 639px) { .z-scrim--top { padding: var(--z-space-4) var(--z-space-4) 0; } }
 
-/* ---- Recovery and whole-screen states (build step 9) ---------------- */
+/* ---- Recovery and whole-screen states -------------------------------- */
 .z-screen__fine--flush { padding: 0; }
 .z-screen__logo { display: inline-flex; align-items: center; gap: var(--z-space-2); font-size: 18px; font-weight: 600; letter-spacing: -.02em; color: var(--z-text); }
 /* Offline, error, link: the tile and the words sit in the middle. */

@@ -2,10 +2,8 @@
 
 The checklist human testers work through on zoldhq.com (Base Sepolia +
 Monerium sandbox, dollar = zUSD). Testers tick checks and file bugs on the
-shared page, not here: https://claude.ai/artifact/6Y7J8Lz8TcPWQDFk22Djr2
-(private; give each tester Contributor access from its Share menu). This file
-holds the same checks so agents can read and update them; change both
-together.
+shared tracker, not here (ask the owner for access). This file holds the
+same checks; change both together.
 
 Written for testers: plain steps, no internals. What has never run is in
 `docs/status.md`.
