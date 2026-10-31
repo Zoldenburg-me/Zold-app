@@ -68,7 +68,8 @@ const { startCheckoutWebhook } = await import("../services/api/src/checkout-webh
 const { createMerchantLinkRouter } = await import("../services/api/src/routes/merchant-links.js");
 const { createServiceMerchantRouter } = await import("../services/api/src/routes/service-merchant.js");
 const { createShopifyRouter, resolveShopifyRequest } = await import("../services/api/src/routes/shopify.js");
-const { attributeDepositToRequest, sweepPaymentRequests } = await import("../services/api/src/routes/payment-requests.js");
+const { attributeDepositToRequest, attributeMoneriumOrder, sweepPaymentRequests } = await import("../services/api/src/routes/payment-requests.js");
+const { CHECKOUT_SERVICE, MONERIUM } = await import("../services/api/src/config.js");
 const { consumeLinkCode, LINK_CODE_TTL_MS } = await import("../services/api/src/merchant-links.js");
 const { signQuery } = await import("../services/api/src/shopify/hmac.js");
 const { apiRateLimit } = await import("../services/api/src/http/policy.js");
@@ -618,6 +619,27 @@ await check("core's Shopify listing leaves link requests out; the merchant-links
   assert.ok(mine.body.requests.every((r: any) => r.linkId && store.findMerchantLink(r.linkId)!.orgId === org.id));
   const times = mine.body.requests.map((r: any) => Date.parse(r.createdAt));
   assert.deepEqual(times, [...times].sort((a, b) => b - a));
+});
+
+await check("MERCHANT_LINK_BANK=1 and a payee with an IBAN: the order also takes a bank transfer, and a Monerium credit carrying its reference pays it (an agent paying from EURe)", async () => {
+  CHECKOUT_SERVICE.bankPayments = true;
+  store.updateUser(owner.id, { iban: "DE89370400440532013000" });
+  try {
+    const r = await create(link.linkId, { amountEur: 42, order: { gid: ORDER(5901), name: "#5901" } });
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    const stored = store.findPaymentRequest(r.body.id)!;
+    assert.deepEqual(stored.methods, ["crypto", "bank"]);
+    deliveries.length = 0;
+    const order = { id: randomUUID(), kind: "issue", amount: "42", currency: "eur", chain: MONERIUM.chain, address: owner.address, memo: `Order #5901 ${r.body.code}`, meta: { state: "processed" } };
+    assert.equal(attributeMoneriumOrder(order)?.state, "PAID");
+    assert.ok(await until(() => deliveries.some((d: any) => d.paymentRequestId === r.body.id)), "no PAID hint for the checkout");
+    CHECKOUT_SERVICE.bankPayments = false;
+    const off = await create(link.linkId, { amountEur: 42, order: { gid: ORDER(5902) } });
+    assert.deepEqual(store.findPaymentRequest(off.body.id)!.methods, ["crypto"], "flag off, IBAN set: crypto only");
+  } finally {
+    CHECKOUT_SERVICE.bankPayments = false;
+    store.updateUser(owner.id, { iban: undefined });
+  }
 });
 
 console.log("route 2: what members see");

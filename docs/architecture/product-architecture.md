@@ -434,7 +434,9 @@ that were not real are flagged `simulated`.
 | **payments-app** | BUILT, approval uncertain | Zold is an offsite payment method inside checkout, with Shopify payment sessions resolved on PAID. It needs admission to Shopify's Payments Apps programme, which is uncertain without a MiCA licence. |
 
 Shopify orders are **crypto only**, because a SEPA transfer cannot land inside
-a checkout. They are EUR only. Refund, capture and void are rejected with a
+a checkout. A merchant-link order (which waits as "payment pending") also takes a
+bank transfer when `MERCHANT_LINK_BANK=1` and the payee has an IBAN, so an
+agent can pay it from EURe (`scripts/agent-pay-shopify.ts`, a prototype). They are EUR only. Refund, capture and void are rejected with a
 merchant-readable message, and refunds are manual. The checkout extension has
 never been built with the Shopify CLI. The in-core custom-app path stays until
 the merchant-link adapter has run end to end on a real store.

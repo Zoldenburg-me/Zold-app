@@ -19,7 +19,7 @@ import express from "express";
 import { wrap } from "./util.js";
 import { auditEntry, type AuditKind } from "../audit.js";
 import { bearerToken } from "../http/sessions.js";
-import { SHOPIFY } from "../config.js";
+import { CHECKOUT_SERVICE, SHOPIFY } from "../config.js";
 import { EncryptionUnavailableError } from "../crypto-at-rest.js";
 import { store, type MerchantLink, type ServiceCredential } from "../store.js";
 import { shownDisplayName } from "../pay.js";
@@ -313,7 +313,7 @@ export function createServiceMerchantRouter() {
           {
             amountEur: body.amountEur,
             description: body.description ?? `Order ${body.name ?? ""} at ${link.shop}`.replace(/\s+/g, " "),
-            methods: ["crypto"],
+            methods: CHECKOUT_SERVICE.bankPayments && payee.iban ? ["crypto", "bank"] : ["crypto"],
             expiresAt: new Date(Date.now() + body.expiresInMs).toISOString(),
             ...(body.test ? { test: true } : {}),
           },

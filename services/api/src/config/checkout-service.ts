@@ -67,5 +67,10 @@ export const CHECKOUT_SERVICE = (() => {
     webhookMaxAttempts: envNumber("CHECKOUT_WEBHOOK_MAX_ATTEMPTS", 6, { min: 1, integer: true }),
     /** The service's public origin (no trailing slash), or "" when unset. */
     origin,
+    /** MERCHANT_LINK_BANK=1: a linked shop's order also takes a bank transfer
+     *  (IBAN + reference) when the payee has an IBAN, so a payer without USDC,
+     *  such as an agent spending EURe, can pay it. Off by default: a plain
+     *  SEPA credit can arrive after the order's request has expired. */
+    bankPayments: process.env.MERCHANT_LINK_BANK === "1",
   };
 })();
