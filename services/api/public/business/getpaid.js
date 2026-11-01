@@ -94,7 +94,7 @@ function linksSection(links, block, fix) {
     const copy = r.state === "OPEN"
       ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="copy-text" data-text="${esc(r.url)}" data-said="Link copied">Copy link<span class="z-sr">: ${esc(linkTitle(r))}</span></button>${cancel}`
       : "";
-    return `<tr><td>${Z.icon("link", "z-dim")} <b>${esc(linkTitle(r))}</b></td><td class="z-dim">${esc(linkWhen(r))}</td>
+    return `<tr><td>${Z.icon("link", "z-dim")} <b data-z-scramble>${esc(linkTitle(r))}</b></td><td class="z-dim">${esc(linkWhen(r))}</td>
       <td>${Z.tag(STATE_WORD[r.state] || r.state)}</td><td class="num">${esc(amount)}</td><td class="num">${copy}</td></tr>`;
   };
   const empty = gp.tab === "open" ? "No open links." : gp.tab === "paid" ? "No link has been paid yet." : "No payment links yet.";
