@@ -11,6 +11,10 @@
  * steps (ADDRESS_CHANGED). The passkey signs a UserOperation that moves
  * exactly this token and amount to exactly that address, so the chain enforces
  * the destination whatever happens on the server afterwards.
+ *
+ * A wallet feature, so its gate is the segment and the Safe, never kycStatus
+ * (docs/wallet-tier.md). The address is screened at both steps; no answer from
+ * the screen, no send.
  */
 import { randomUUID } from "node:crypto";
 import express from "express";
@@ -21,17 +25,21 @@ import { eurPer } from "../rates.js";
 import { usdToken } from "../usd-token.js";
 import { safeDebitBlocker, safeFundedEurToday } from "../orchestrator.js";
 import { store, type CryptoSend, type User } from "../store.js";
-import { requireKycApproved } from "../http/guards.js";
+import { requireCapability } from "../http/guards.js";
 import { pendingCryptoSends, prunePendingCryptoSends } from "../http/pending.js";
 import { redactedMessage, describeCause } from "../http/log-cause.js";
 import { passkeySafeChallenge } from "../wallet/passkey-safe-plan.js";
-import { prepareTransferExecution, SafeOperationUncertainError, submitPasskeySafeOperationWithReceipt } from "../wallet/candide.js";
+import { prepareTransferExecution, SafeOperationUncertainError, submitPasskeySafeOperationWithReceipt, userOperationOutcome } from "../wallet/candide.js";
 import { b64urlToBuf, verifyAssertionForChallenge } from "../webauthn.js";
+import { isSanctioned } from "../sanctions.js";
 import { resolveEnsName, type EnsResolution } from "./ens.js";
 import { wrap } from "./util.js";
 
 /** How long the passkey prompt may wait, as for a transfer's terms. */
 const AUTH_WINDOW_SEC = 10 * 60;
+
+const SANCTIONED_ERROR = "this address is on a sanctions list, so Zold can’t send to it — nothing was sent";
+const SCREENING_DOWN_ERROR = "this address could not be screened just now — nothing was sent; try again";
 
 const ERC20_BALANCE = [
   { type: "function", name: "balanceOf", stateMutability: "view", inputs: [{ name: "a", type: "address" }], outputs: [{ type: "uint256" }] },
@@ -44,6 +52,7 @@ export interface CryptoSendDeps {
   balanceOf?: (token: `0x${string}`, holder: `0x${string}`) => Promise<bigint>;
   usdPerEur?: () => Promise<number>;
   prepare?: typeof prepareTransferExecution;
+  screen?: (address: `0x${string}`) => Promise<boolean>;
 }
 
 const tokens = () => ({
@@ -101,12 +110,33 @@ function publicSend(s: CryptoSend) {
   return rest;
 }
 
+/**
+ * Settle sends the bundler took but whose receipt never came back. A hash with
+ * no receipt stays SUBMITTED: only the chain's answer moves it, so an operation
+ * that was dropped keeps showing as being checked.
+ */
+export async function settleUnconfirmedCryptoSends(outcome = userOperationOutcome) {
+  for (const s of store.cryptoSends) {
+    if (s.state !== "SUBMITTED" || !s.userOpHash) continue;
+    try {
+      const op = await outcome(s.userOpHash);
+      if (!op) continue;
+      store.updateCryptoSend(s.id, op.success
+        ? { state: "SENT", txHash: op.txHash, error: undefined }
+        : { state: "FAILED", txHash: op.txHash, error: "included but reverted — nothing left your Safe except gas" });
+    } catch (err) {
+      console.error(`crypto send ${s.id}: receipt read failed: ${describeCause(err)}`);
+    }
+  }
+}
+
 export function createCryptoSendsRouter({
   requireUserSession,
   resolveName = resolveEnsName,
   balanceOf = (token, holder) => publicClient.readContract({ address: token, abi: ERC20_BALANCE, functionName: "balanceOf", args: [holder] }),
   usdPerEur = () => eurPer("USD"),
   prepare = prepareTransferExecution,
+  screen = isSanctioned,
 }: CryptoSendDeps) {
   const router = express.Router();
   const off = (res: express.Response) =>
@@ -119,7 +149,7 @@ export function createCryptoSendsRouter({
       if (!cryptoSendEnabled()) return off(res);
       const user = store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireKycApproved(user, res)) return;
+      if (!requireCapability(user, "onchain_balance", res)) return;
       const blocked = safeDebitBlocker(user);
       if (blocked || !user.passkey?.credentialId || !user.passkeySafe) {
         return res.status(409).json({ error: blocked ?? "no passkey registered for this account", code: "NO_SAFE" });
@@ -150,6 +180,13 @@ export function createCryptoSendsRouter({
       const tokenAddresses = Object.values(tokens()).map((t) => t.address.toLowerCase());
       if (to.address === "0x0000000000000000000000000000000000000000" || tokenAddresses.includes(to.address.toLowerCase())) {
         return res.status(400).json({ error: "tokens sent to that address are lost", code: "BURN_ADDRESS" });
+      }
+
+      try {
+        if (await screen(to.address)) return res.status(403).json({ error: SANCTIONED_ERROR, code: "SANCTIONED" });
+      } catch (err) {
+        console.error(`crypto send: screening failed: ${describeCause(err)}`);
+        return res.status(503).json({ error: SCREENING_DOWN_ERROR, code: "SCREENING_UNAVAILABLE" });
       }
 
       const takes = pageAddressTakes(to.address, to.name);
@@ -252,7 +289,7 @@ export function createCryptoSendsRouter({
         return res.status(410).json({ error: "this send can no longer be approved — start it again" });
       }
       let user = store.findUser(send.userId) as User;
-      if (!requireKycApproved(user, res)) return;
+      if (!requireCapability(user, "onchain_balance", res)) return;
       const a = req.body?.executionAssertion ?? {};
       if (!user.passkey?.publicKey) return res.status(409).json({ error: "no passkey registered for this account" });
       if (a.credentialId !== user.passkey.credentialId) {
@@ -297,6 +334,17 @@ export function createCryptoSendsRouter({
             code: now.ok ? "ADDRESS_CHANGED" : now.code,
           });
         }
+      }
+      // A list can change in the ten minutes the passkey prompt may wait.
+      try {
+        if (await screen(send.to as `0x${string}`)) {
+          store.updateCryptoSend(send.id, { state: "FAILED", error: "the address is on a sanctions list" });
+          pendingCryptoSends.delete(send.id);
+          return res.status(403).json({ error: SANCTIONED_ERROR, code: "SANCTIONED" });
+        }
+      } catch (err) {
+        console.error(`crypto send ${send.id}: screening failed: ${describeCause(err)}`);
+        return res.status(503).json({ error: SCREENING_DOWN_ERROR, code: "SCREENING_UNAVAILABLE" });
       }
       if (!store.claimCryptoSend(send.id)) return res.status(409).json({ error: "this send was already submitted" });
       pendingCryptoSends.delete(send.id);

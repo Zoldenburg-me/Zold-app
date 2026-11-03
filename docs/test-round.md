@@ -102,7 +102,8 @@ On this test site the dollar is zUSD, a token we mint ourselves. On mainnet it w
   Try an amount over your balance on a dollar screen and read the message.
 - [ ] Send a different token (EURC, or zUSD on another chain) to the account and report what the app shows **[first run]**
   It must not be counted as zUSD.
-- [ ] Sending crypto out is marked SOON and cannot be started **[must stay off]**
+- [ ] Send → Crypto wallet: send 1 EURe to a 0x address you control, approve with your passkey, and check it arrives and shows SENT in Activity **[first run]**
+- [ ] Send → Crypto wallet: an address with one letter's case changed is refused, and nothing asks for your passkey **[first run]**
 
 ## The swapper: zUSD to euros
 

@@ -43,7 +43,10 @@ const { store, initStore } = await import("../services/api/src/store.js");
 const { addrs } = await import("../services/api/src/chain.js");
 const { FX } = await import("../services/api/src/config.js");
 const { safeFundedEurToday } = await import("../services/api/src/orchestrator.js");
-const { createCryptoSendsRouter } = await import("../services/api/src/routes/crypto-sends.js");
+const { createCryptoSendsRouter, settleUnconfirmedCryptoSends } = await import("../services/api/src/routes/crypto-sends.js");
+const { isSanctioned } = await import("../services/api/src/sanctions.js");
+const sanctioned = new Set<string>();
+let screenDown = false;
 const { prepareTransferExecution } = await import("../services/api/src/wallet/candide.js");
 // The harness stand-in, or one that also reports gas paid in a token.
 let gasInToken: { token: `0x${string}`; units: bigint } | undefined;
@@ -119,6 +122,7 @@ app.use("/api", createCryptoSendsRouter({
   balanceOf: async () => balance,
   usdPerEur: async () => { if (rate === undefined) throw new Error("no rate"); return rate; },
   prepare,
+  screen: async (a) => { if (screenDown) throw new Error("oracle down"); return sanctioned.has(a); },
 }));
 const server = app.listen(0, "127.0.0.1");
 await new Promise<void>((r) => server.once("listening", () => r()));
@@ -362,10 +366,72 @@ try {
     balance = 10n ** 30n;
   });
 
-  await t("a KYC-pending account cannot send", async () => {
-    store.findUser("u-cs")!.kycStatus = "pending";
-    assert.equal((await create({ to: ALICE, confirmedAddress: ALICE })).status, 409);
-    store.findUser("u-cs")!.kycStatus = "approved";
+  await t("a sanctioned address is refused before the passkey, and no answer refuses too", async () => {
+    sanctioned.add(MALLORY);
+    const r = await create({ to: MALLORY, confirmedAddress: MALLORY });
+    sanctioned.clear();
+    assert.equal(r.status, 403);
+    assert.equal(r.data.code, "SANCTIONED");
+    screenDown = true;
+    const down = await create({ to: MALLORY, confirmedAddress: MALLORY });
+    screenDown = false;
+    assert.equal(down.status, 503);
+    assert.equal(down.data.code, "SCREENING_UNAVAILABLE");
+  });
+
+  await t("the screen is read again at approval: listed since fails the send, no answer can be retried", async () => {
+    const made = await create({ to: MALLORY, confirmedAddress: MALLORY });
+    assert.equal(made.status, 201);
+    screenDown = true;
+    const down = await post(`/crypto-sends/${made.data.id}/authorize`, { executionAssertion: await passkey.assert(made.data.safeExecution.challenge) });
+    screenDown = false;
+    assert.equal(down.status, 503);
+    assert.equal(store.findCryptoSend(made.data.id)!.state, "CREATED", "nothing was sent and it can be approved again");
+    sanctioned.add(MALLORY);
+    const listed = await post(`/crypto-sends/${made.data.id}/authorize`, { executionAssertion: await passkey.assert(made.data.safeExecution.challenge) });
+    sanctioned.clear();
+    assert.equal(listed.status, 403);
+    assert.equal(store.findCryptoSend(made.data.id)!.state, "FAILED");
+  });
+
+  await t("isSanctioned: test chains pass unread, a real chain needs its oracle, a failed read throws", async () => {
+    const never = async () => { throw new Error("must not read"); };
+    assert.equal(await isSanctioned(ALICE, 84532, never), false);
+    await assert.rejects(isSanctioned(ALICE, 1, async () => false), /no sanctions oracle/);
+    assert.equal(await isSanctioned(ALICE, 8453, async () => true), true);
+    assert.equal(await isSanctioned(ALICE, 8453, async () => false), false);
+    await assert.rejects(isSanctioned(ALICE, 8453, never), /must not read/);
+  });
+
+  await t("an unconfirmed send settles from the bundler's receipt, and only from it", async () => {
+    const pendingSend = async () => {
+      const made = await create({ to: ALICE, confirmedAddress: ALICE, amount: "1" });
+      assert.equal(made.status, 201);
+      store.claimCryptoSend(made.data.id);
+      store.updateCryptoSend(made.data.id, { userOpHash: `0x${made.data.id.replace(/-/g, "")}`, error: "sent, not yet confirmed" });
+      return made.data.id as string;
+    };
+    const [lands, reverts] = [await pendingSend(), await pendingSend()];
+    await settleUnconfirmedCryptoSends(async () => null);
+    assert.equal(store.findCryptoSend(lands)!.state, "SUBMITTED", "no receipt yet");
+    await settleUnconfirmedCryptoSends(async () => { throw new Error("bundler down"); });
+    assert.equal(store.findCryptoSend(lands)!.state, "SUBMITTED", "a failed read changes nothing");
+    const hashOf = (id: string) => store.findCryptoSend(id)!.userOpHash;
+    await settleUnconfirmedCryptoSends(async (h) => ({ success: h === hashOf(lands), txHash: "0xabc" }));
+    assert.equal(store.findCryptoSend(lands)!.state, "SENT");
+    assert.equal(store.findCryptoSend(lands)!.txHash, "0xabc");
+    assert.equal(store.findCryptoSend(lands)!.error, undefined);
+    assert.equal(store.findCryptoSend(reverts)!.state, "FAILED");
+  });
+
+  await t("KYC is not the gate: a pending account sends, a segment without a balance does not", async () => {
+    const u = store.findUser("u-cs")!;
+    u.kycStatus = "pending";
+    assert.equal((await create({ to: ALICE, confirmedAddress: ALICE })).status, 201);
+    u.kycStatus = "approved";
+    u.segment = { value: "BLOCKED_US" } as any;
+    assert.equal((await create({ to: ALICE, confirmedAddress: ALICE })).status, 403);
+    delete u.segment;
   });
 } catch (err: any) {
   failed = true;

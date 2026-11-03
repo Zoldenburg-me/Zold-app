@@ -55,8 +55,7 @@ Build:
 - [ ] Database encrypted at rest; data export and account closure routes.
 - [ ] `RECOVERY_IBAN_HMAC_KEY` set; one 1 € enrolment arms an account; one
       Zoldenburg recovery runs on chain against a test Safe.
-- [ ] Wallet tier: gas policy for accounts without fiat, and address
-      screening before any send-to-address route opens.
+- [ ] Wallet tier: gas policy for accounts without fiat.
 - [ ] The recovery TTL before the 1 € arrives has a length.
 
 ## Partners and rails

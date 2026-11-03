@@ -31,7 +31,8 @@
  *   "arriving" state in the API, so the progress screen does not draw one.
  * - Bank sends, payment links and digital-dollar deposits have never moved
  *   real money end to end: they carry a Beta tag. Sending to a crypto wallet
- *   and USD accounts are not built: Soon, not pressable.
+ *   opens with capabilities.cryptoSend, and is Soon until then; USD accounts
+ *   are not built: Soon, not pressable.
  */
 
 /* ==========================================================================
