@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Cookies and storage · Zold</title>
-<meta name="description" content="What Zold stores in your browser, and why. No analytics, advertising or tracking." />
+<title>Privacy · Zold</title>
+<meta name="description" content="What personal data Zold processes, why, who receives it, how long it is kept, and your rights under the GDPR." />
 <meta name="theme-color" content="#0b0b0c" />
 <!--zold:abs-->
 <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
@@ -21,21 +21,100 @@
       <a href="/imprint">Imprint</a>
       <a href="/legal">Legal notes</a>
       <a href="/partner-terms">Partner terms</a>
-      <a href="/privacy" aria-current="page">Cookies and storage</a>
+      <a href="/privacy" aria-current="page">Privacy</a>
     </nav>
-    <!-- Only the cookies section of the privacy notice is published. The rest
-         (processors, retention, data protection officer, authority) waits on
-         counsel, and a notice with placeholders in it is not published. -->
+    <!-- Art. 13 GDPR notice, written from the code's data map. Every row says
+         what the code does; a feature that is switched off or not built is not
+         listed. Keep in step with store/types.ts and the outbound adapters. -->
     <main id="main">
       <div class="s-legal__head">
-        <h1>Cookies and storage</h1>
-        <p>What Zold stores in your browser, and why.</p>
-        <span>Last updated 30 Sep 2026</span>
+        <h1>Privacy</h1>
+        <p>What personal data Zold processes, why, who receives it, how long it is kept, and your rights.</p>
+        <span>Last updated 27 Oct 2026</span>
       </div>
+
+      <section id="controller">
+        <h2>Who is responsible</h2>
+        <p>The controller is Zoldenburg UG (haftungsbeschränkt), Franz-Josef-Straße 11, 80801 München, Germany, email <a href="mailto:support@zoldhq.com">support@zoldhq.com</a>. See the <a href="/imprint">imprint</a> for the register details.</p>
+        <p>Questions about your data go to the managing director, Tony Thomas, at the same address or email.</p>
+      </section>
+
+      <section id="data">
+        <h2>What we process and why</h2>
+        <p>Your passkey stays on your device. Zold receives only its public key, and no fingerprint or face data ever reaches us.</p>
+        <table>
+          <thead><tr><th scope="col">Data</th><th scope="col">Why, and the legal basis</th></tr></thead>
+          <tbody>
+            <tr><td><b>Account</b>: name, email, country of residence, citizenships, whether you are a person or a company (and where it is incorporated), your answers to the US-person questions, the version and time of the terms you accepted, and the result of the signup screening</td><td>To open and run your account, and to check that Zold may serve you (see <a href="#decisions">automated decisions</a>). Your email also lets you find and recover the account. Contract (Art. 6(1)(b) GDPR).</td></tr>
+            <tr><td><b>Sign-in</b>: your passkey’s id and public key, your account’s address on the blockchain, sign-in sessions, email verification codes</td><td>To sign you in and to check that you approved each payment. Contract (Art. 6(1)(b)).</td></tr>
+            <tr><td><b>Monerium connection</b>: the access tokens (encrypted), and what Zold receives from Monerium: your Monerium profile id, the email of the Monerium login you connected, your IBAN and BIC, and where your IBAN was attached before</td><td>To show your IBAN and send bank transfers through Monerium. Contract (Art. 6(1)(b)).</td></tr>
+            <tr><td><b>Payments</b>: amount, date, recipient name and IBAN, the payment reference, incoming payments and the address they came from, and the addresses of wallets you import</td><td>To make the payments you approve, show your history, and produce receipts and statements. Contract (Art. 6(1)(b)).</td></tr>
+            <tr><td><b>Recovery</b>: the guardians you choose and when they were added; for email or SMS recovery, that email address or phone number; for Zoldenburg recovery, a keyed hash and the last 4 characters of the IBAN you enrol with (the payer name is compared with the name Monerium verified, and not kept); for a recovery, its request and timeline</td><td>To let you regain your account if you lose your device, and to alert you by email when someone starts a recovery. Contract (Art. 6(1)(b)).</td></tr>
+            <tr><td><b>Gnosis Pay</b>, only if you connect a card account: your wallet address, and the account and card status Zold receives from Gnosis Pay</td><td>To show your card account in Zold. Contract (Art. 6(1)(b)).</td></tr>
+            <tr><td><b>Business accounts</b>: the organisation’s name, address, tax and VAT numbers and bank details; members’ names, emails and roles; contacts, invoices, payment requests, documents and bookkeeping entries you create</td><td>To run the organisation’s account and its books as you set them up. Contract (Art. 6(1)(b)). Contacts you enter are data about other people: you decide what goes in.</td></tr>
+            <tr><td><b>Shared items</b>: a payment page handle, receipts and documents you share by link</td><td>Shown to whoever has the link, with only the fields you chose. Contract (Art. 6(1)(b)).</td></tr>
+            <tr><td><b>Audit log</b>: signup screening decisions (including refused signups, with the email kept only as a hash), consents, and account events such as a name change</td><td>To be able to show what was decided and when. Legitimate interest in accountability and security (Art. 6(1)(f)).</td></tr>
+            <tr><td><b>Technical</b>: your IP address</td><td>To limit how often one address can call the service, against abuse. Zold’s server holds it in memory for about a minute and does not store it. Legitimate interest in security (Art. 6(1)(f)).</td></tr>
+            <tr><td><b>Error logs</b>: when a request fails, the server logs what failed. A log line can contain your account id, your name with a payment amount, or part or all of an IBAN.</td><td>To find and fix faults. Legitimate interest in running a working service (Art. 6(1)(f)).</td></tr>
+          </tbody>
+        </table>
+        <p>For accounts opened before September 2026, the IP address at the time you accepted the terms was also recorded with that acceptance.</p>
+        <p>To open an account you must give a name, an email and your country; without them Zold cannot open one. Everything else is optional or comes from what you do in the app.</p>
+      </section>
+
+      <section id="blockchain">
+        <h2>The blockchain is public</h2>
+        <p>Your account is a smart account on the Base blockchain. Its address, its balance and every payment in or out are public and permanent there, and nobody, including Zold, can remove them. Zold does not put your name, email or IBAN on the blockchain.</p>
+      </section>
+
+      <section id="recipients">
+        <h2>Who receives your data</h2>
+        <table>
+          <thead><tr><th scope="col">Recipient</th><th scope="col">What and when</th></tr></thead>
+          <tbody>
+            <tr><td><b>Monerium ehf.</b>, Iceland (EEA)</td><td>When you connect Monerium: your email, to fill in Monerium’s sign-in form, and your account address. For each bank transfer you approve: the amount, the recipient’s name, IBAN and country, and the reference. Monerium is responsible for its own identity checks; see the <a href="/partner-terms#monerium">partner terms</a>.</td></tr>
+            <tr><td><b>Candide Labs</b>, France</td><td>Your account address and the payments you sign, which it sends to the blockchain. If you choose email or SMS recovery, also that email address or phone number.</td></tr>
+            <tr><td><b>Brevo</b>, France</td><td>Your email address and the message, when Zold sends you a verification code, a recovery alert, or a notice that a supplier submitted an invoice.</td></tr>
+            <tr><td><b>Turnkey</b>, USA</td><td>Only if you add a guardian that signs in by email, Google or Apple: that email address, or the sign-in token from Google or Apple. Turnkey holds the guardian key.</td></tr>
+            <tr><td><b>LI.FI</b></td><td>When you convert between currencies: your account address, the receiving address and the amount, to get a price.</td></tr>
+            <tr><td><b>Gnosis Pay</b></td><td>Only if you connect a Gnosis Pay card account: your wallet address and the sign-in you approve.</td></tr>
+            <tr><td><b>GetMyInvoices</b></td><td>Only if a business account connects it: the organisation’s payments (reference, amount, the other side’s name and IBAN) and receipts.</td></tr>
+            <tr><td><b>European Commission</b> (VIES)</td><td>When a business account checks a VAT number: that number and the organisation’s own VAT ID.</td></tr>
+            <tr><td><b>Cloudflare, Inc.</b>, USA</td><td>Every request to zoldhq.com passes through Cloudflare, which sees your IP address. Cloudflare is certified under the EU-U.S. Data Privacy Framework.</td></tr>
+            <tr><td><b>Blockchain node provider</b></td><td>Zold reads your account’s balance and payments from the Base blockchain through a node provider.</td></tr>
+            <tr><td><b>Our hosting provider</b></td><td>Runs the server and stores the database and its logs.</td></tr>
+          </tbody>
+        </table>
+        <p>Zold does not sell your data, show advertising, or use analytics or tracking.</p>
+      </section>
+
+      <section id="retention">
+        <h2>How long we keep it</h2>
+        <p>A sign-in session ends after 24 hours or when you sign out, and its record is deleted a day or more after that. Email verification codes expire after 15 minutes. Zold’s server does not store IP addresses.</p>
+        <p>Everything else is kept while your account exists. Zold does not yet delete account data automatically, and the app has no way to close an account yet. Write to us if you want yours closed (see <a href="#rights">your rights</a>).</p>
+      </section>
+
+      <section id="rights">
+        <h2>Your rights</h2>
+        <p>You have the right to access your data, to have it corrected or erased, to restrict its processing, to receive it in a portable format, and to object to processing based on legitimate interest (Art. 15 to 21 GDPR). Where you gave consent, you may withdraw it at any time.</p>
+        <p>To use any of these rights, write to <a href="mailto:support@zoldhq.com">support@zoldhq.com</a>. We answer within one month. You can change your name in the app until Monerium has verified you; after that, and for a company account, write to us. Everything else, including a copy of your data, closing your account and changing your email, is done on request: the app has no button for them yet.</p>
+        <p>Payments on the public blockchain cannot be erased by anyone.</p>
+      </section>
+
+      <section id="decisions">
+        <h2>Automated decisions</h2>
+        <p>At signup, Zold decides automatically whether it can open your account, from your answers alone: it refuses US persons, residents and citizens of sanctioned countries, and residents of countries it does not serve yet. If you enrol in Zoldenburg recovery, it checks automatically that the name on your 1 € payment matches the name Monerium verified, and refuses the enrolment if it does not. Nothing else about you is scored or profiled. If you think a refusal is wrong, write to us.</p>
+      </section>
+
+      <section id="complaints">
+        <h2>Complaints</h2>
+        <p>You can complain to a data protection authority. The one for Zoldenburg is the Bayerisches Landesamt für Datenschutzaufsicht (BayLDA), Promenade 18, 91522 Ansbach, Germany, <a href="https://www.lda.bayern.de" target="_blank" rel="noopener">lda.bayern.de<span class="s-sr"> (opens in a new tab)</span></a>.</p>
+      </section>
+
       <!-- Keep in step with cookie-notice.js, which links to #cookies. -->
       <section id="cookies">
-        <h2>What we store</h2>
-        <p>Zold uses no analytics, advertising or tracking, and loads no third-party scripts. It stores only what the service needs, so there is nothing to opt in or out of.</p>
+        <h2>Cookies and storage</h2>
+        <p>Zold uses no analytics, advertising or tracking, and loads no third-party scripts. It stores only what the service needs, so there is nothing to opt in or out of (§ 25 (2) TDDDG).</p>
         <table>
           <thead><tr><th scope="col">What</th><th scope="col">Why</th></tr></thead>
           <tbody>
@@ -45,6 +124,7 @@
             <tr><td><b>Recovery in progress</b> (browser storage)</td><td>Only while you recover an account on a new device.</td></tr>
             <tr><td><b>Contacts and selected organisation</b> (browser storage)</td><td>Conveniences that never leave this browser.</td></tr>
             <tr><td><b>App cache</b> (service worker)</td><td>The app’s own files, so it opens offline.</td></tr>
+            <tr><td><b>Balance hidden</b> (browser storage)</td><td>Remembers that you chose to hide your balance on the home screen.</td></tr>
             <tr><td><b>Notice dismissed</b> (browser storage)</td><td>Remembers that you closed the cookie notice.</td></tr>
           </tbody>
         </table>
