@@ -633,6 +633,9 @@ await check("MERCHANT_LINK_BANK=1 and a payee with an IBAN: the order also takes
     const order = { id: randomUUID(), kind: "issue", amount: "42", currency: "eur", chain: MONERIUM.chain, address: owner.address, memo: `Order #5901 ${r.body.code}`, meta: { state: "processed" } };
     assert.equal(attributeMoneriumOrder(order)?.state, "PAID");
     assert.ok(await until(() => deliveries.some((d: any) => d.paymentRequestId === r.body.id)), "no PAID hint for the checkout");
+    const test = await create(link.linkId, { amountEur: 42, test: true, order: { gid: ORDER(5903) } });
+    assert.equal(test.status, 201, JSON.stringify(test.body));
+    assert.deepEqual(store.findPaymentRequest(test.body.id)!.methods, ["crypto"], "a test order: crypto only, no real IBAN");
     CHECKOUT_SERVICE.bankPayments = false;
     const off = await create(link.linkId, { amountEur: 42, order: { gid: ORDER(5902) } });
     assert.deepEqual(store.findPaymentRequest(off.body.id)!.methods, ["crypto"], "flag off, IBAN set: crypto only");
