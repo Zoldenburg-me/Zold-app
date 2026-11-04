@@ -150,6 +150,7 @@
     "receipt:test": "tsx scripts/receipt-share-test.ts",
     "tx:audit:test": "tsx scripts/transaction-audit-test.ts",
     "statement:test": "tsx scripts/statement-lines-test.ts",
+    "own-transfer:test": "tsx scripts/own-transfer-test.ts",
     "wallet-sync:test": "tsx scripts/wallet-sync-test.ts",
     "income-invoices:test": "tsx scripts/income-invoices-test.ts",
     "wallet-proof:test": "tsx scripts/wallet-proof-test.ts",

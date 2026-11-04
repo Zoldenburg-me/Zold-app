@@ -11,6 +11,7 @@ import { store } from "../../store.js";
 import { TX_TYPES, applyRules, validateChartAccount } from "../../domain/coa.js";
 import {
   LEDGER_EXPORT_COLUMNS,
+  bookedCode,
   computeCostBasis,
   ledgerExportRows,
   monthlyBalances,
@@ -19,6 +20,8 @@ import {
   toCsv,
 } from "../../domain/ledger.js";
 import { IncomeInvoiceError } from "../../domain/income-invoices.js";
+import { ownTransferAllowed } from "../../bookkeeping/statement.js";
+import { publicStatementLine } from "./bookkeeping-export.js";
 import { proofStateOf } from "../../domain/wallet-ownership.js";
 import { revaluable, revalueEntry } from "../../wallet-sync/revalue.js";
 import { CHAIN_ID } from "../../config.js";
@@ -173,11 +176,11 @@ export function createBookkeepingRoutes(deps: OrgRoutes): express.Router {
     if (to) entries = entries.filter((e) => e.at <= String(to));
     if (asset) entries = entries.filter((e) => e.asset.toUpperCase() === String(asset).toUpperCase());
     if (direction) entries = entries.filter((e) => e.direction === direction);
-    if (accountCode) entries = entries.filter((e) => e.accountCode === String(accountCode));
+    if (accountCode) entries = entries.filter((e) => bookedCode(e) === String(accountCode));
     if (tag) entries = entries.filter((e) => e.tags.includes(String(tag)));
 
     res.json({
-      entries: entries.sort((a, b) => b.at.localeCompare(a.at)),
+      entries: entries.sort((a, b) => b.at.localeCompare(a.at)).map((e) => ({ ...e, accountCode: bookedCode(e) })),
       total: entries.length,
     });
   });
@@ -206,6 +209,28 @@ export function createBookkeepingRoutes(deps: OrgRoutes): express.Router {
     }
     if (typeof req.body?.note === "string") patch.note = req.body.note;
     res.json({ entry: store.updateLedgerEntry(entry.id, patch) });
+  });
+
+  /**
+   * "Between my own accounts": the person says so, Zold never guesses. A
+   * statement line only: on a wallet row the tag would change its cost basis.
+   * Taken off a line whatever the line has become, so it can always be undone.
+   */
+  r.put("/:orgId/ledger/:entryId/own-transfer", (req, res) => {
+    const ctx = ctxOf(req, res);
+    if (!ctx) return;
+    if (!requireCapability(ctx, res, "ledger.transactions")) return;
+    if (!requirePermission(ctx, res, "ledger.categorise")) return;
+    const entry = store.ledgerOf(ctx.org.id).find((e) => e.id === String(req.params.entryId) && e.statement);
+    if (!entry) return res.status(404).json({ error: "no such statement line" });
+    const own = req.body?.own;
+    if (typeof own !== "boolean") return res.status(400).json({ error: "own must be true or false" });
+    if (own && !ownTransferAllowed(entry)) {
+      return res.status(409).json({ error: "This line is a fee, a reversal or an invoice payment, so it can't be a transfer between your own accounts." });
+    }
+    const others = entry.tags.filter((t) => t !== "internal");
+    const updated = store.updateLedgerEntry(entry.id, { tags: own ? [...others, "internal"] : others });
+    res.json({ line: publicStatementLine(updated) });
   });
 
   /**

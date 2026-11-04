@@ -582,6 +582,17 @@ export function mergeStatementLines(
   return { toAdd, toUpdate };
 }
 
+const OWN_TRANSFER_EVENTS = new Set<StatementEvent>(["sepa_in", "eure_in", "crypto_held", "crypto_converted", "crypto_out"]);
+
+/** May a person call this line a move between their own accounts? Only one
+ *  payment in or out: a fee, a reversal, a sweep or a disposal is none, and a
+ *  line settling an invoice is income or an expense by that invoice. */
+export function ownTransferAllowed(e: LedgerEntry): boolean {
+  const s = e.statement;
+  if (!s || s.links.invoiceId) return false;
+  return OWN_TRANSFER_EVENTS.has(s.event) || s.key.endsWith(":payout");
+}
+
 /** Lines in a calendar month, by value date. */
 export function linesInMonth(entries: LedgerEntry[], month: string): LedgerEntry[] {
   return entries

@@ -36,6 +36,7 @@ import { createCryptoSendsRouter } from "./routes/crypto-sends.js";
 import { createEmailVerificationRouter } from "./routes/email-verification.js";
 import { createReceiptShareRouter } from "./routes/receipt-shares.js";
 import { createFaucetRouter } from "./routes/faucet.js";
+import { createBooksLineRouter } from "./routes/books-line.js";
 import { capabilities } from "./capabilities.js";
 import { publicUser } from "./users/public-user.js";
 import { urlForLog } from "./http/log-safe.js";
@@ -237,6 +238,7 @@ app.use("/api", createCryptoSendsRouter({ requireUserSession }));
 app.use("/api", createReceiptShareRouter({ requireUserSession }));
 // Testnet faucet: one EURe grant per account, testnet chains only.
 app.use("/api", createFaucetRouter({ requireUserSession }));
+app.use("/api", createBooksLineRouter({ requireUserSession }));
 // Monerium: connect by OAuth or by your own API keys, and activate the IBAN.
 // Connecting is not approval — an address-matched IBAN is.
 app.use("/api", createMoneriumRouter({ requireUserSession }));

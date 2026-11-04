@@ -10,7 +10,7 @@
 import express from "express";
 import { store } from "../../store.js";
 import { requireCapability, requirePermission, type OrgContext } from "../org-context.js";
-import { isMonth, linesInMonth } from "../../bookkeeping/statement.js";
+import { isMonth, linesInMonth, ownTransferAllowed } from "../../bookkeeping/statement.js";
 import { statementLinesOf, swapsHaveExecuted, writeStatementLinesFor } from "../../bookkeeping/writer.js";
 import { issueBelegForLine } from "../../bookkeeping/issue.js";
 import { belegFileName, belegPdf, UNEXECUTED_NOTE } from "../../bookkeeping/beleg.js";
@@ -18,6 +18,7 @@ import { lexwareCsvBytes, lexwareRow } from "../../bookkeeping/lexware.js";
 import { zipStored } from "../../bookkeeping/zip.js";
 import { documentUrl } from "../../documents.js";
 import type { LedgerEntry } from "../../domain/types.js";
+import { bookedCode, isInternal } from "../../domain/ledger.js";
 import { redactedMessage } from "../../http/log-cause.js";
 
 export interface OrgRoutes {
@@ -35,11 +36,13 @@ export function publicStatementLine(e: LedgerEntry) {
     amountCents: s.amountCents,
     counterparty: s.counterparty,
     reference: s.reference,
-    accountCode: e.accountCode,
+    accountCode: bookedCode(e),
     // A rule chose it (true) or a person did (false): Books overview counts
     // the lines only the default rule sorted.
-    ...(e.accountCode ? { accountCodeAuto: e.accountCodeAuto !== false } : {}),
+    ...(bookedCode(e) ? { accountCodeAuto: e.accountCodeAuto !== false } : {}),
     tags: e.tags,
+    ...(isInternal(e) ? { ownTransfer: true } : {}),
+    ...(ownTransferAllowed(e) ? { ownTransferAllowed: true } : {}),
     note: e.note,
     links: s.links,
     ...(s.documentCode ? { documentCode: s.documentCode, documentUrl: documentUrl(s.documentCode) } : {}),

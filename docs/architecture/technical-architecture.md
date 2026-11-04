@@ -1534,6 +1534,8 @@ Settings (`config/checkout-service.ts`; a bad webhook URL or secret refuses star
 | `GET /:orgId/export/ledger.csv` (C(export.ledger)) | Ledger CSV. |
 | `GET /:orgId/bookkeeping/statement[?month=]` (C(ledger.transactions)) | Statement lines: one per economic event, with links and Beleg codes. |
 | `POST /:orgId/bookkeeping/statement/rebuild` (C(ledger.transactions), ledger.categorise) | Re-run the ledger writer for the org's accounts. |
+| `PUT /:orgId/ledger/:entryId/own-transfer` (C(ledger.transactions), ledger.categorise) | `{own: true or false}` on a statement line: the person says this payment is between their own accounts. Sets or removes the `internal` tag: out of Revenue, Expenses and the category, while the stored code stays for undo. Refused on a fee, reversal, sweep, disposal or invoice payment. |
+| `GET /users/:id/books-line/:paymentId` (session) | The statement line behind one payment for /app's detail sheet: `{orgId, lineId, ownTransfer}`, or `null` wherever the mark would be refused. |
 | `POST /:orgId/bookkeeping/export/:month/prepare` (C(export.ledger), reports.run) | Issue the month's missing Belege. |
 | `GET /:orgId/bookkeeping/export/:month/lexware.csv` (C(export.ledger)) | Lexware Office bank-import CSV. |
 | `GET /:orgId/bookkeeping/export/:month/belege.zip` (C(export.ledger)) | ZIP of the month's Belege. |

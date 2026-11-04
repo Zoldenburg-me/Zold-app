@@ -12,6 +12,7 @@
 import { Z, api, cap, esc, eur, gateHtml, org, plain } from "./core.js";
 import { META, RENDER } from "./views.js";
 import { MONTHS, barsHtml, cents, weeks } from "./home.js";
+import { countedLines as counted } from "./home-model.js";
 
 const DAY = 86400000;
 const MONTH_PILLS = 5;
@@ -128,6 +129,7 @@ function body(lines, months, chart, w) {
   const r = ranges(bo.period);
   const now = inRange(lines, r), before = inRange(lines, r.prev);
   const sc = scope(w, r);
+  const own = now.length - counted(now).length;
   const inC = cents(now, "in"), outC = cents(now, "out"), net = inC - outC;
   const signed = (sign, c) => `${c ? sign : ""}${esc(eur(Math.abs(c) / 100))}`;
   const pills = [["30d", "Last 30 days"], ...months.slice(0, MONTH_PILLS).map((m) => [m, monthName(m, false)])]
@@ -141,7 +143,8 @@ function body(lines, months, chart, w) {
       ${now.length ? barsHtml(weeks(now, r.from, r.to), `Money in and out per week, ${r.title}`) : `<p class="zb-hint">No money moved in this period.</p>`}
       ${sc.note}
     </section>
-    <div class="zb-grid2 zb-bo-split">${categoryCard("bo-exp", "Expenses", "out", now, before, r, chart)}${categoryCard("bo-rev", "Revenue", "in", now, before, r, chart)}</div>`;
+    <div class="zb-grid2 zb-bo-split">${categoryCard("bo-exp", "Expenses", "out", counted(now), counted(before), r, chart)}${categoryCard("bo-rev", "Revenue", "in", counted(now), counted(before), r, chart)}</div>
+    ${own ? `<p class="zb-hint">${own} payment${own === 1 ? "" : "s"} between your own accounts ${own === 1 ? "is" : "are"} in cash above but not in Expenses or Revenue: ${own === 1 ? "it isn’t" : "they aren’t"} income or an expense. <a href="?view=books" data-view-link="books">View lines</a></p>` : ""}`;
 }
 
 META["books-overview"] = () => ({

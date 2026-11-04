@@ -855,6 +855,12 @@ export const ACTIONS = {
         await api(`/api/orgs/${org.id}/ledger/${l.id}`, { method: "PATCH", body: { note: $("#d-memo").value.trim() } });
       }, { okLabel: "Save" });
   },
+  /** The line stays on the statement; the view redraws with its category gone or back. */
+  async "bk-own"(el) {
+    const own = el.dataset.own === "true";
+    await api(`/api/orgs/${org.id}/ledger/${el.dataset.id}/own-transfer`, { method: "PUT", body: { own } });
+    toast(own ? "Marked as between your own accounts: not income or an expense." : "Back in your income and expenses.");
+  },
   async "export-rebuild"() {
     const r = await api(`/api/orgs/${org.id}/bookkeeping/statement/rebuild`, { method: "POST" });
     toast(`${r.added} line${r.added === 1 ? "" : "s"} added, ${r.updated} refreshed. Categories you set yourself were left alone.`);

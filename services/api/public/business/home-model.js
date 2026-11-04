@@ -6,6 +6,10 @@
  * No imports, so scripts/business-home-test.ts loads it in node.
  */
 
+/** Statement lines that count as income or an expense: not the ones marked
+ *  as between the holder's own accounts. */
+export const countedLines = (lines) => lines.filter((l) => !l.ownTransfer);
+
 /** Accounts a payment can be drafted from: the ones the send form offers. */
 export const fundableAccounts = (accounts) => accounts.filter((a) => a.status === "active" && a.backingUserId && a.profile?.status !== "needs_check");
 /** Contacts a payment can go to: a saved IBAN. */
