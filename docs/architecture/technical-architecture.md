@@ -484,10 +484,14 @@ router receives injected and never rebuilds.
   Otherwise it compensates.
 - An outbound call that may move money records an intent step first:
   `safe.refundTransfer.pending` (refund or reverse swap),
-  `monerium.redeem.pending` (settled by `.placed` or `.refused`) and
-  `bridge.xyz.deposit.pending`. An intent without a settling step after its
-  last occurrence means the money may have moved, and the transfer goes to
-  MANUAL_REVIEW, never a refund.
+  `monerium.redeem.pending` (settled by `.placed` or `.refused`),
+  `liquidity.swap.pending`, `bridge.xyz.deposit.pending` and
+  `anchor.payment.pending` (settled by `.sent`). An intent without a settling
+  step after its last occurrence means the money may have moved, and the
+  transfer goes to MANUAL_REVIEW, never a refund. A failed store write exits
+  the process, so no intent on disk means the call never went out, and the
+  sweep may compensate. A batched debit writes its swap step in the debit's
+  own write. `send-record-crash-test.ts` proves each path with a real exit.
 - The two chain writes (refund, Bridge deposit) also settle on a definite
   failure, through `writeAndWait`'s hooks: `<step>.not-sent` only when the
   write threw before any hash with an error that proves the node refused it

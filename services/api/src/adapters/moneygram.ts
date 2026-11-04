@@ -323,6 +323,10 @@ export async function fundAndRefreshAnchorPickup(
    *  must persist it synchronously: a crash during the poll loop would
    *  otherwise lose the record and the next run would pay a second time. */
   onPaymentSubmitted?: (pickup: CashPickup) => void,
+  /** Called just before the payment is broadcast. The caller must persist an
+   *  intent synchronously, so a crash before the hash is recorded cannot read
+   *  as "never paid". */
+  beforeBroadcast?: () => void,
 ): Promise<CashPickup | undefined> {
   const pickup = await refreshAnchorPickup(transferId, existing);
   if (!pickup?.anchorTransactionId || !pickup.anchorAmount || !pickup.anchorAsset) return pickup;
@@ -348,6 +352,7 @@ export async function fundAndRefreshAnchorPickup(
         treasury,
         pickup.anchorAsset,
         pickup.anchorAmount,
+        beforeBroadcast,
       );
       pickup.anchorPaymentHash = sent.hash;
       onPaymentSubmitted?.(pickup);
