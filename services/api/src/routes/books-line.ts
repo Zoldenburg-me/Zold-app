@@ -3,9 +3,9 @@
  * org the person's Safe books under is the server's to decide (booksFor), and
  * a line's id is derived from that org.
  *
- * `line` is null wherever the mark would be refused, so the sheet draws no
- * action there: no line yet, no books, no permission, or a line that cannot
- * be an own transfer.
+ * `line` is null where the sheet draws no action: no line yet, no books, no
+ * permission, a payment outside keysOf, or a line that cannot be an own
+ * transfer. A line already marked always comes back, so the mark can be undone.
  */
 import express from "express";
 import { store } from "../store.js";

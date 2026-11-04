@@ -541,6 +541,9 @@ function bookedAsOneLine(byKey: Map<string, LedgerEntry>, key: string): boolean 
  * created time, tags, note, document code and — above all — any account
  * code, because a human may have set it.
  */
+/** An invoice number alone is an external invoice on a pay link. */
+const settlesInvoice = (s: StatementFacts) => Boolean(s.links.invoiceId || s.links.invoiceNumber);
+
 export function mergeStatementLines(
   existing: LedgerEntry[],
   projected: LedgerEntry[],
@@ -559,7 +562,7 @@ export function mergeStatementLines(
     const facts = { ...cur.statement, ...nextFacts };
     // A line that settles an invoice is income or an expense by that invoice,
     // so a mark made before the match does not stand (ownTransferAllowed).
-    const dropMark = Boolean(p.statement!.links.invoiceId) && cur.tags.includes("internal");
+    const dropMark = settlesInvoice(p.statement!) && cur.tags.includes("internal");
     const changed =
       dropMark ||
       JSON.stringify(facts) !== JSON.stringify(cur.statement) ||
@@ -594,7 +597,7 @@ const OWN_TRANSFER_EVENTS = new Set<StatementEvent>(["sepa_in", "eure_in", "cryp
  *  line settling an invoice is income or an expense by that invoice. */
 export function ownTransferAllowed(e: LedgerEntry): boolean {
   const s = e.statement;
-  if (!s || s.links.invoiceId) return false;
+  if (!s || settlesInvoice(s)) return false;
   return OWN_TRANSFER_EVENTS.has(s.event) || s.key.endsWith(":payout");
 }
 

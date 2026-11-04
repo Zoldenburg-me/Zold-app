@@ -258,6 +258,8 @@ await check("a mark made before an invoice match does not stand: the writer drop
     const linked = { ...marked, tags: ["sepa"], statement: { ...facts, links: { ...facts.links, invoiceId: "i1" } } };
     const { toUpdate } = mergeStatementLines([marked], [linked]);
     assert.deepEqual(toUpdate[0].patch.tags, ["sepa"], event);
+    const external = { ...marked, tags: ["sepa"], statement: { ...facts, links: { ...facts.links, invoiceNumber: "RE-1" } } };
+    assert.deepEqual(mergeStatementLines([marked], [external]).toUpdate[0].patch.tags, ["sepa"], `${event}, external invoice`);
   }
   const unmarked = { ...base, tags: ["sepa"] } as any;
   const again = mergeStatementLines([unmarked], [{ ...unmarked, statement: { ...base.statement!, links: { ...base.statement!.links, invoiceId: "i1" } } }]);
@@ -280,9 +282,10 @@ await check("a fee, a line settling an invoice and a reversal are refused; undo 
     { ...base, id: "rev", tags: [], statement: facts({ key: "transfer:t_out:refund", event: "sepa_out_reversal" }) },
     { ...base, id: "swp", tags: [], statement: facts({ key: "sweep:s", event: "sweep" }) },
     { ...base, id: "inv", tags: [], statement: facts({ key: "transfer:t2:payout", links: { txHashes: [], invoiceId: "i1" } }) },
+    { ...base, id: "ext", tags: [], statement: facts({ key: "monerium:issue:o2", event: "sepa_in", links: { txHashes: [], invoiceNumber: "RE-1" } }) },
     { ...base, id: "was", tags: ["internal"], statement: facts({ key: "transfer:t3:payout", links: { txHashes: [], invoiceId: "i2" } }) },
   ] as any);
-  for (const id of [fee, "rev", "swp", "inv"]) {
+  for (const id of [fee, "rev", "swp", "inv", "ext"]) {
     assert.equal((await own("org_me", id, true)).status, 409, id);
     assert.equal((await line(id)).ownTransferAllowed, undefined, id);
   }
