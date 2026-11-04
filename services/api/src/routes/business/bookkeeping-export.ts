@@ -18,7 +18,7 @@ import { lexwareCsvBytes, lexwareRow } from "../../bookkeeping/lexware.js";
 import { zipStored } from "../../bookkeeping/zip.js";
 import { documentUrl } from "../../documents.js";
 import type { LedgerEntry } from "../../domain/types.js";
-import { bookedCode, isInternal } from "../../domain/ledger.js";
+import { bookedCode, isOwnTransfer } from "../../domain/ledger.js";
 import { redactedMessage } from "../../http/log-cause.js";
 
 export interface OrgRoutes {
@@ -41,7 +41,7 @@ export function publicStatementLine(e: LedgerEntry) {
     // the lines only the default rule sorted.
     ...(bookedCode(e) ? { accountCodeAuto: e.accountCodeAuto !== false } : {}),
     tags: e.tags,
-    ...(isInternal(e) ? { ownTransfer: true } : {}),
+    ...(isOwnTransfer(e) ? { ownTransfer: true } : {}),
     ...(ownTransferAllowed(e) ? { ownTransferAllowed: true } : {}),
     note: e.note,
     links: s.links,

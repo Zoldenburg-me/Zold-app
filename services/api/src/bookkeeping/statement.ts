@@ -557,7 +557,11 @@ export function mergeStatementLines(
     }
     const nextFacts: StatementFacts = { ...p.statement!, ...(cur.statement?.documentCode ? { documentCode: cur.statement.documentCode } : {}) };
     const facts = { ...cur.statement, ...nextFacts };
+    // A line that settles an invoice is income or an expense by that invoice,
+    // so a mark made before the match does not stand (ownTransferAllowed).
+    const dropMark = Boolean(p.statement!.links.invoiceId) && cur.tags.includes("internal");
     const changed =
+      dropMark ||
       JSON.stringify(facts) !== JSON.stringify(cur.statement) ||
       cur.amount !== p.amount ||
       cur.direction !== p.direction ||
@@ -575,6 +579,7 @@ export function mergeStatementLines(
           ...(p.txHash ? { txHash: p.txHash } : {}),
           counterparty: { ...(cur.counterparty ?? {}), ...(p.counterparty ?? {}) },
           statement: facts,
+          ...(dropMark ? { tags: cur.tags.filter((t) => t !== "internal") } : {}),
         },
       });
     }

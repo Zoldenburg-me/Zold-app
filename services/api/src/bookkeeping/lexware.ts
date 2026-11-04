@@ -19,7 +19,7 @@
  * one, and lives here in one place.
  */
 import { formulaSafe } from "../domain/csv-safe.js";
-import { isInternal } from "../domain/ledger.js";
+import { isOwnTransfer } from "../domain/ledger.js";
 import type { LedgerEntry } from "../domain/types.js";
 
 export const LEXWARE_HEADER =
@@ -66,7 +66,7 @@ export function lexwareRow(e: LedgerEntry, holderName: string): LexwareRow {
   const credit = s.amountCents >= 0;
   const extra = [
     // The line stays: it is on the account, and the import must reconcile to it.
-    isInternal(e) ? "Zwischen eigenen Konten (kein Ertrag, kein Aufwand)" : undefined,
+    isOwnTransfer(e) ? "Zwischen eigenen Konten (kein Ertrag, kein Aufwand)" : undefined,
     s.documentCode ? `Beleg ${s.documentCode}` : undefined,
     s.links.invoiceNumber ? `Rechnung ${s.links.invoiceNumber}` : undefined,
     s.links.txHashes[0] ? `tx ${s.links.txHashes[0]}` : undefined,

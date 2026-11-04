@@ -33,7 +33,7 @@ const { createBooksLineRouter } = await import("../services/api/src/routes/books
 const { writeStatementLinesFor } = await import("../services/api/src/bookkeeping/writer.js");
 const { issueBelegForLine } = await import("../services/api/src/bookkeeping/issue.js");
 const { belegStillAgrees } = await import("../services/api/src/bookkeeping/beleg.js");
-const { lineId } = await import("../services/api/src/bookkeeping/statement.js");
+const { lineId, mergeStatementLines } = await import("../services/api/src/bookkeeping/statement.js");
 const model: any = await import(pathToFileURL(path.join(ROOT, "services/api/public/business/home-model.js")).href);
 
 let passed = 0;
@@ -159,11 +159,22 @@ await check("marking the credit moves it out of the statement's category, Revenu
 await check("the mark survives the writer and a rules re-run, and marking twice is one mark", async () => {
   writeStatementLinesFor(store.findUser("u_me")!);
   assert.equal((await call("POST", "/orgs/org_me/bookkeeping/statement/rebuild", {})).status, 200);
-  assert.equal((await call("POST", "/orgs/org_co/account-rules/apply", {}, "u_boss")).status, 200);
   assert.equal((await line(IN)).ownTransfer, true);
   await own("org_me", IN, true);
   assert.equal(store.ledgerOf("org_me").find((e: any) => e.id === IN)!.tags.filter((t: string) => t === "internal").length, 1);
   assert.equal((await line(IN)).accountCode, undefined);
+});
+
+await check("a rules re-run does not bring a marked line's category back, and undo gives the rule's code", async () => {
+  const id = lineId("org_co", "monerium:issue:ord_co");
+  const code = async () => (await call("GET", "/orgs/org_co/bookkeeping/statement", undefined, "u_boss")).body.lines.find((x: any) => x.id === id);
+  assert.equal((await code()).accountCode, "4100");
+  await own("org_co", id, true, "u_boss");
+  assert.equal((await call("POST", "/orgs/org_co/account-rules/apply", {}, "u_boss")).status, 200);
+  assert.equal((await code()).accountCode, undefined);
+  await own("org_co", id, false, "u_boss");
+  assert.equal((await code()).accountCode, "4100");
+  assert.equal((await code()).accountCodeAuto, true);
 });
 
 await check("undo restores the totals, the category and the exports", async () => {
@@ -216,10 +227,47 @@ await check("the mark opens nothing else on a personal account: the chart and it
   assert.doesNotMatch(readFileSync(path.join(ROOT, "services/api/src/routes/business/bookkeeping.ts"), "utf8").match(/own-transfer"[\s\S]*?\n  }\);/)![0], /ledger\.tags|coa\./);
 });
 
+await check("PATCH cannot set or clear the mark on a statement line, so it cannot get round the refusals; other tags still work", async () => {
+  const add = await call("PATCH", `/orgs/org_me/ledger/${OUT}`, { tags: ["sepa", "internal"] });
+  assert.equal(add.status, 409);
+  assert.equal((await line(OUT)).ownTransfer, undefined);
+  await own("org_me", IN, true);
+  assert.equal((await call("PATCH", `/orgs/org_me/ledger/${IN}`, { tags: ["sepa"] })).status, 409, "nor clear it");
+  const keep = await call("PATCH", `/orgs/org_me/ledger/${IN}`, { tags: ["sepa", "internal", "rent"], note: "x" });
+  assert.equal(keep.status, 200);
+  assert.equal(keep.body.entry.accountCode, undefined, "the answer reads like every other reader");
+  await own("org_me", IN, false);
+  assert.equal((await line(IN)).tags.includes("rent"), true);
+});
+
+await check("a wallet row's internal tag is the sync's: it keeps its category, and PATCH treats it as before", async () => {
+  store.addLedgerEntries([{ id: "w_int", orgId: "org_me", source: { kind: "wallet", walletId: "w" }, direction: "out", asset: "OP", amount: "1", accountCode: "1100", tags: ["internal"], at: NOW, createdAt: NOW } as any]);
+  const entries = (await call("GET", "/orgs/org_me/ledger")).body.entries as any[];
+  assert.equal(entries.find((e) => e.id === "w_int").accountCode, "1100");
+  assert.ok(row(await ledgerCsv(), "OP").includes("1100"));
+  assert.equal((await call("PATCH", "/orgs/org_me/ledger/w_int", { tags: [] })).status, 200);
+});
+
+await check("a mark made before an invoice match does not stand: the writer drops it, for a bank credit and a crypto receipt", async () => {
+  const base = store.ledgerOf("org_me").find((e: any) => e.id === IN)!;
+  for (const event of ["sepa_in", "crypto_held"]) {
+    const facts = { ...base.statement!, event, key: `k:${event}` };
+    const marked = { ...base, tags: ["sepa", "internal"], statement: facts } as any;
+    const same = mergeStatementLines([marked], [{ ...marked, tags: ["sepa"] }]);
+    assert.equal(same.toUpdate.length, 0, "no invoice: the mark and the line stay");
+    const linked = { ...marked, tags: ["sepa"], statement: { ...facts, links: { ...facts.links, invoiceId: "i1" } } };
+    const { toUpdate } = mergeStatementLines([marked], [linked]);
+    assert.deepEqual(toUpdate[0].patch.tags, ["sepa"], event);
+  }
+  const unmarked = { ...base, tags: ["sepa"] } as any;
+  const again = mergeStatementLines([unmarked], [{ ...unmarked, statement: { ...base.statement!, links: { ...base.statement!.links, invoiceId: "i1" } } }]);
+  assert.equal(again.toUpdate[0].patch.tags, undefined, "a line with no mark keeps its tags as they are");
+});
+
 await check("only true or false; a line of another org, or a wallet row, is no such line", async () => {
   assert.equal((await call("PUT", `/orgs/org_me/ledger/${IN}/own-transfer`, { own: "yes" })).status, 400);
   assert.equal((await own("org_me", lineId("org_co", "transfer:t_co:payout"), true)).status, 404);
-  store.addLedgerEntries([{ id: "w1", orgId: "org_me", source: { kind: "wallet", walletId: "w" }, direction: "in", asset: "OP", amount: "1", tags: [], at: NOW, createdAt: NOW } as any]);
+  store.addLedgerEntries([{ id: "w1", orgId: "org_me", source: { kind: "wallet", walletId: "w" }, direction: "in", asset: "XW", amount: "1", tags: [], at: NOW, createdAt: NOW } as any]);
   assert.equal((await own("org_me", "w1", true)).status, 404, "tagging a wallet row would change its cost basis");
 });
 
@@ -251,6 +299,10 @@ await check("a payment finds its line, in the org its Safe books under, with the
   assert.equal((await look("ord_in")).body.line.ownTransfer, true);
   await own("org_me", IN, false);
   assert.equal((await look("nope")).body.line, null, "no line yet: the sheet shows no action");
+  const was = structuredClone(store.ledgerOf("org_me").find((e: any) => e.id === OUT)!);
+  store.updateLedgerEntry(OUT, { tags: [...was.tags, "internal"], statement: { ...was.statement!, links: { ...was.statement!.links, invoiceId: "i9" } } });
+  assert.equal((await look("t_out")).body.line.ownTransfer, true, "a mark that can no longer be made can still be undone");
+  store.updateLedgerEntry(OUT, { tags: was.tags, statement: was.statement });
   assert.equal((await look("t_out", "u_boss")).status, 403, "someone else's payments");
   assert.equal((await look("t_co", "u_boss", "u_boss")).body.line.orgId, "org_co");
 });

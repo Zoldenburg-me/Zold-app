@@ -206,9 +206,14 @@ export function createBookkeepingRoutes(deps: OrgRoutes): express.Router {
     if (Array.isArray(req.body?.tags)) {
       if (!requireCapability(ctx, res, "ledger.tags")) return;
       patch.tags = req.body.tags.map(String);
+      // On a statement line this tag is the own-transfer mark, with its refusals.
+      if (entry.statement && (patch.tags as string[]).includes("internal") !== entry.tags.includes("internal")) {
+        return res.status(409).json({ error: "Use the own-transfer action to change whether this line is between your own accounts." });
+      }
     }
     if (typeof req.body?.note === "string") patch.note = req.body.note;
-    res.json({ entry: store.updateLedgerEntry(entry.id, patch) });
+    const updated = store.updateLedgerEntry(entry.id, patch);
+    res.json({ entry: { ...updated, accountCode: bookedCode(updated) } });
   });
 
   /**

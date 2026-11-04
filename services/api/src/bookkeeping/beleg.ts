@@ -16,7 +16,7 @@
  * real money, and the document says so in words.
  */
 import { CHAIN_ID } from "../config.js";
-import { bookedCode, isInternal } from "../domain/ledger.js";
+import { bookedCode, isOwnTransfer } from "../domain/ledger.js";
 import type { LedgerEntry, StatementFacts } from "../domain/types.js";
 import type { HolderBlock } from "../documents.js";
 import type { ConversionSweep, CryptoDeposit, MoneriumIssueRecord, Transfer } from "../store/types.js";
@@ -110,7 +110,7 @@ export function buildBeleg(entry: LedgerEntry, ctx: BelegContext): BelegSnapshot
       ...s,
       lineId: entry.id,
       ...(bookedCode(entry) ? { accountCode: bookedCode(entry) } : {}),
-      ...(isInternal(entry) ? { ownTransfer: true } : {}),
+      ...(isOwnTransfer(entry) ? { ownTransfer: true } : {}),
     },
     chainId: CHAIN_ID,
   };

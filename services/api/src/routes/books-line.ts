@@ -11,18 +11,19 @@ import express from "express";
 import { store } from "../store.js";
 import { can } from "../domain/plans.js";
 import { roleCan } from "../domain/roles.js";
-import { isInternal } from "../domain/ledger.js";
+import { isOwnTransfer } from "../domain/ledger.js";
 import { booksFor } from "../bookkeeping/writer.js";
 import { lineId, ownTransferAllowed } from "../bookkeeping/statement.js";
 
-/** The keys a payment id in the activity feed can have a mark-able line under. */
+/** The keys a payment on these sheets can have a mark-able line under. A crypto
+ *  send's own screen has no action yet, and a conversion in parts has one line
+ *  per part: both are marked on the statement in /business. */
 const keysOf = (id: string) => [
   `transfer:${id}:payout`,
   `monerium:issue:${id}`,
   `deposit:${id}:eure`,
   `deposit:${id}:held`,
   `deposit:${id}:converted`,
-  `cryptosend:${id}`,
 ];
 
 export function createBooksLineRouter({ requireUserSession }: { requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown }) {
@@ -37,8 +38,8 @@ export function createBooksLineRouter({ requireUserSession }: { requireUserSessi
       return res.json({ line: null });
     }
     const ids = new Set(keysOf(String(req.params.paymentId)).map((k) => lineId(org.id, k)));
-    const entry = store.ledgerOf(org.id).find((e) => ids.has(e.id) && ownTransferAllowed(e));
-    res.json({ line: entry ? { orgId: org.id, lineId: entry.id, ownTransfer: isInternal(entry) } : null });
+    const entry = store.ledgerOf(org.id).find((e) => ids.has(e.id) && (ownTransferAllowed(e) || isOwnTransfer(e)));
+    res.json({ line: entry ? { orgId: org.id, lineId: entry.id, ownTransfer: isOwnTransfer(entry) } : null });
   });
   return r;
 }
