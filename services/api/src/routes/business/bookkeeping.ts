@@ -18,6 +18,7 @@ import {
   positions,
   realisedByMonth,
   toCsv,
+  isOwnTransfer,
 } from "../../domain/ledger.js";
 import { IncomeInvoiceError } from "../../domain/income-invoices.js";
 import { ownTransferAllowed } from "../../bookkeeping/statement.js";
@@ -195,6 +196,8 @@ export function createBookkeepingRoutes(deps: OrgRoutes): express.Router {
 
     const patch: Record<string, unknown> = {};
     if (req.body?.accountCode !== undefined) {
+      // Undo would bring back a code nobody saw being set.
+      if (isOwnTransfer(entry)) return res.status(409).json({ error: "This line is between your own accounts, so it has no category. Undo that first." });
       const code = String(req.body.accountCode);
       if (!store.chartOf(ctx.org.id).some((c) => c.code === code)) {
         return res.status(400).json({ error: `No account with code ${code}.` });

@@ -233,6 +233,7 @@ await check("PATCH cannot set or clear the mark on a statement line, so it canno
   assert.equal((await line(OUT)).ownTransfer, undefined);
   await own("org_me", IN, true);
   assert.equal((await call("PATCH", `/orgs/org_me/ledger/${IN}`, { tags: ["sepa"] })).status, 409, "nor clear it");
+  assert.equal((await call("PATCH", `/orgs/org_me/ledger/${IN}`, { accountCode: "6100" })).status, 409, "a marked line has no category to set");
   const keep = await call("PATCH", `/orgs/org_me/ledger/${IN}`, { tags: ["sepa", "internal", "rent"], note: "x" });
   assert.equal(keep.status, 200);
   assert.equal(keep.body.entry.accountCode, undefined, "the answer reads like every other reader");
@@ -343,6 +344,32 @@ await check("a Beleg issued on a marked line carries no income or expense code a
   assert.equal(s.line.accountCode, undefined);
   assert.equal(s.line.ownTransfer, true);
   await own("org_me", IN, false);
+});
+
+await check("a Beleg that says own transfer fails verification once the books stop saying so: on undo, and when an invoice match drops the mark", async () => {
+  const agrees = (doc: any, e: any) => belegStillAgrees(store.findDocumentByCode(doc.code)!.snapshot as any, { entry: e, issueOrder: store.moneriumIssueOrders.find((o: any) => o.orderId === "ord_in") });
+  const now = () => store.ledgerOf("org_me").find((e: any) => e.id === IN)!;
+  const cleared = structuredClone(now());
+  store.updateLedgerEntry(IN, { statement: { ...cleared.statement!, documentCode: undefined } });
+  await own("org_me", IN, true);
+  const { doc } = await issueBelegForLine(now());
+  assert.equal(agrees(doc, now()).ok, true, "still marked");
+  await own("org_me", IN, false);
+  const undone = agrees(doc, now());
+  assert.equal(undone.ok, false, "undo");
+  assert.match(undone.detail, /no longer marked/);
+  await own("org_me", IN, true);
+  assert.equal(agrees(doc, now()).ok, true, "marked again, so the document is true again");
+  const linked = { ...now(), tags: now().tags.filter((t: string) => t !== "internal"), statement: { ...now().statement!, links: { ...now().statement!.links, invoiceId: "i1" } } };
+  const { toUpdate } = mergeStatementLines([now()], [linked]);
+  store.updateLedgerEntry(IN, toUpdate[0].patch);
+  assert.equal(agrees(doc, now()).ok, false, "the writer dropped the mark");
+  store.updateDocument(doc.id, { revokedAt: NOW });
+  store.updateLedgerEntry(IN, { statement: { ...now().statement!, links: cleared.statement!.links } });
+  const again = await issueBelegForLine(now());
+  assert.equal(again.issued, true, "revoking lets a new one be issued");
+  assert.equal((again.doc.snapshot as any).line.ownTransfer, undefined);
+  assert.equal(agrees(again.doc, now()).ok, true);
 });
 
 console.log("\nThe screens");

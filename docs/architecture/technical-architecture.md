@@ -1525,7 +1525,7 @@ Settings (`config/checkout-service.ts`; a bad webhook URL or secret refuses star
 | `GET/POST /:orgId/chart-of-accounts` (C(coa.manage)) | Chart of accounts. |
 | `POST /:orgId/account-rules[/apply]` (C(coa.rules)) | Add a rule, or re-run rules. |
 | `GET /:orgId/ledger` (C(ledger.transactions)) | Ledger. |
-| `PATCH /:orgId/ledger/:e` (C(ledger.transactions)) | Categorise a ledger row. Changing a statement line's `internal` tag is a 409: that goes through `own-transfer`. |
+| `PATCH /:orgId/ledger/:e` (C(ledger.transactions)) | Categorise a ledger row. Changing a statement line's `internal` tag is a 409, as that goes through `own-transfer`; so is setting a category on a marked line. |
 | `GET /:orgId/assets` (C(assets.costBasis), P(ledger.read)) | Holdings per token with their lots, disposals, moves to the Zold account, shortfalls, quantity-only tokens, unvalued rows and each wallet's proof state. |
 | `GET /:orgId/reports/realised-gains` (C(assets.costBasis), P(ledger.read)) | Measured gains and losses per month in the reporting time zone, with every disposal. |
 | `POST /:orgId/ledger/:e/revalue` (C(ledger.transactions), P(ledger.categorise)) | Ask the price feed again for an unvalued wallet row. 409 not revaluable, 422 still no price, 503 feed or ECB down. |

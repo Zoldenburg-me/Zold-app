@@ -233,6 +233,9 @@ export function belegStillAgrees(
   const diffs: string[] = [];
   if (!ctx.entry) diffs.push("the statement line no longer exists");
   else if (ctx.entry.statement?.amountCents !== snap.line.amountCents) diffs.push(`the line now reads ${(ctx.entry.statement!.amountCents / 100).toFixed(2)}`);
+  // One way only: a Beleg issued before a mark keeps the booking it froze, as
+  // after a hand recategorisation. This one states a fact the books now deny.
+  if (ctx.entry && snap.line.ownTransfer && !isOwnTransfer(ctx.entry)) diffs.push("the line is no longer marked as between own accounts");
   if (snap.receipt) {
     if (!ctx.deposit) diffs.push("the deposit record is gone");
     else {

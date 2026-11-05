@@ -93,14 +93,17 @@ function phOwnBind(root, id) {
       : `${Z.button({ variant: "secondary", label: "Between my own accounts", id: "ph-own-btn" })}<p class="z-hint">Mark it if this money moved to or from another account of yours. It is then not income or an expense in your books.</p>`;
     const b = slot.querySelector("#ph-own-btn");
     b.onclick = async () => {
+      if (Z.isDisabled(b)) return;
       Z.setLoading(b, true);
       const err = slot.querySelector(".z-err") || slot.appendChild(Object.assign(document.createElement("p"), { className: "z-err", role: "alert" }));
       err.textContent = "";
       try {
         const own = !line.ownTransfer;
         await api(`/api/orgs/${encodeURIComponent(line.orgId)}/ledger/${encodeURIComponent(line.lineId)}/own-transfer`, { own }, "PUT");
-        draw({ ...line, ownTransfer: own });
         Z.announce(own ? "Marked as between your own accounts." : "Mark removed.");
+        // The history poll may have redrawn the sheet during the PUT.
+        if (!slot.isConnected) return phOwnBind(root, id);
+        draw({ ...line, ownTransfer: own });
       } catch (e) {
         err.textContent = e.message;
         Z.setLoading(b, false);
