@@ -36,7 +36,7 @@ adapters/monerium-sandbox.redeemToIban (Safe signs EIP-1271,
   memo = sepa.ts paymentMemo(id, reference))                 → PAYOUT_SUBMITTED
 pollRedeemOrdersOnce (Monerium poll tick): processed → PAID · rejected/failed → FAILED
 ```
-Redeem error: 4xx → failAndCompensate (refund); timeout/5xx → MANUAL_REVIEW.
+Redeem error: 401/403 → failAndCompensate (refund); any other answer or a timeout → MANUAL_REVIEW.
 
 ## Cash rail (orchestrator.ts:687)
 ```

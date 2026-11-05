@@ -301,7 +301,7 @@ export function createTransferRouter(deps: TransferDeps) {
         return res.status(400).json({ error: "signature required" });
       }
       if (Date.now() / 1000 > transfer.auth.deadline) {
-        return res.status(410).json({ error: "authorization window expired, create a new transfer" });
+        return res.status(410).json({ error: "This approval expired and nothing was sent. Start the payment again." });
       }
       let executableTransfer = transfer;
       const redeemSignature = req.body?.moneriumRedeemSignature;

@@ -74,6 +74,7 @@
     "relay-key:test": "tsx scripts/relay-key-test.ts",
     "final-state:test": "tsx scripts/final-state-test.ts",
     "authorize:test": "tsx scripts/authorize-claim-test.ts",
+    "redeem-window:test": "tsx scripts/redeem-window-test.ts",
     "recovery:test": "tsx scripts/zoldenburg-recovery-test.ts",
     "recovery:remove:test": "tsx scripts/zoldenburg-remove-test.ts",
     "recovery:candide:test": "tsx scripts/candide-recovery-test.ts",

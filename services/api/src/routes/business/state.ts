@@ -9,6 +9,7 @@
  */
 import { store } from "../../store.js";
 import { activity, findDriftedLines } from "../../domain/drafts.js";
+import { expiredUnsigned } from "../../orchestrator.js";
 import type { DraftPayment, DraftState, Invoice } from "../../domain/types.js";
 
 /** The org's address book, keyed by id, for the drift fingerprint check. */
@@ -28,7 +29,7 @@ export const withExecutionState = (draft: DraftPayment) => {
   const summary = transfers.map((t) => ({ id: t.id, state: t.state }));
   const settled = transfers.filter((t) => t.state === "PAID");
   const stuck = transfers.filter((t) =>
-    ["FAILED", "REFUNDED", "MANUAL_REVIEW"].includes(t.state),
+    ["FAILED", "REFUNDED", "MANUAL_REVIEW"].includes(t.state) || expiredUnsigned(t),
   );
 
   let state: DraftState = draft.state;
@@ -43,7 +44,7 @@ export const withExecutionState = (draft: DraftPayment) => {
     ...(stuck.length
       ? {
           failureReason: `${stuck.length} of ${transfers.length} transfer(s) did not settle: ${stuck
-            .map((t) => `${t.id.slice(0, 8)} ${t.state}`)
+            .map((t) => `${t.id.slice(0, 8)} ${expiredUnsigned(t) ? "approval expired" : t.state}`)
             .join(", ")}`,
         }
       : {}),
@@ -66,7 +67,7 @@ export const syncInvoicePayment = (invoice: Invoice): Invoice => {
         payment: { ...invoice.payment, paidAt: transfer.updatedAt },
       });
     }
-    if (transfer.state === "FAILED" || transfer.state === "REFUNDED") {
+    if (transfer.state === "FAILED" || transfer.state === "REFUNDED" || expiredUnsigned(transfer)) {
       return store.updateInvoice(invoice.id, {
         state: "SUBMITTED",
         payment: { ...invoice.payment, draftId: undefined, transferId: undefined },

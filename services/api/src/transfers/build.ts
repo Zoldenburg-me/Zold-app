@@ -26,6 +26,10 @@ import { describeCause, redactedMessage } from "../http/log-cause.js";
 
 /** How long a device signature stays submittable. */
 export const AUTH_WINDOW_SEC = 15 * 60;
+/** Monerium's docs refuse a redeem message stamped over 5 minutes ago, and it is
+ *  stamped at creation. A minute is left for the fee debit that runs first. */
+const REDEEM_WINDOW_SEC = 4 * 60;
+export const authWindowSec = (rail: Transfer["rail"]) => (rail === "sepa" ? REDEEM_WINDOW_SEC : AUTH_WINDOW_SEC);
 
 /**
  * Build a transfer from an open quote, and the authorization the device must
@@ -174,7 +178,7 @@ async function prepareTransferFromQuote(
     // binds the payout target into the signature (see destinationCommitment):
     // the device signs *who* is paid, not only how much.
     const amountWei = eur.toWei(transfer.sendEur);
-    const deadline = Math.floor(Date.now() / 1000) + AUTH_WINDOW_SEC;
+    const deadline = Math.floor(Date.now() / 1000) + authWindowSec(transfer.rail);
     const destination = destinationCommitment(transfer.rail, {
       phone: transfer.recipientPhone,
       iban: transfer.recipientIban,

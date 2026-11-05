@@ -446,7 +446,7 @@ sequenceDiagram
   B->>A: POST /quotes {rail, sendEur}
   A-->>B: quote (10 min TTL; SEPA: 1:1, fee €0)
   B->>A: POST /transfers {quoteId, recipient, IBAN, reference}
-  Note over A: build.ts: KYC · balance · Safe active · device key bound<br/>holdDailyCap (sync) · consumeQuote (sync)<br/>auth terms {to, amountWei, destination, deadline+15m}<br/>prepare UserOp (fee transfer, or fee+approve+swap batch)<br/>pendingTransferExecutions[id] (memory)
+  Note over A: build.ts: KYC · balance · Safe active · device key bound<br/>holdDailyCap (sync) · consumeQuote (sync)<br/>auth terms {to, amountWei, destination, deadline+15m, SEPA +4m}<br/>prepare UserOp (fee transfer, or fee+approve+swap batch)<br/>pendingTransferExecutions[id] (memory)
   A-->>B: transfer + authorization {typedData, safeExecution.challenge, moneriumRedeem.challenge}
   B->>B: device key signs typedData
   B->>B: passkey signs safeExecution.challenge
@@ -589,6 +589,9 @@ is recorded.
 - The memo is `<SEPA-Latin folded reference> Powered by Zold <8 hex>`, at most
   140 characters.
 - It is refused **before the fee debit** if `!moneriumLiveFor(user)`.
+- The redeem message is stamped at creation and Monerium's docs allow 5 minutes,
+  so the approval deadline is 4 minutes, not 15. A later approval answers 410.
+  An expired unsigned line fails its payment run and releases its invoice.
 - Settlement is tracked by `pollRedeemOrdersOnce` every 15 s: `processed`
   becomes PAID, and `rejected`/`failed` becomes FAILED.
 
