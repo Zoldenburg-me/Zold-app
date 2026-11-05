@@ -60,7 +60,7 @@ OB["state-offline"] = {
 OB["state-error"] = {
   kind: "state",
   title: "Something went wrong",
-  html: () => `${errBody("error", "a", "Something went wrong on our side", "Nothing was sent: payments only go out when you approve them. Try again in a minute.")}
+  html: () => `${errBody("error", "a", "Something went wrong on our side", "If you just approved a payment, check it once Zold answers. Try again in a minute.")}
     <div class="z-screen__foot">
       ${Z.button({ variant: "primary", full: true, icon: "refresh", label: "Try again", id: "btn-err-retry" })}
       ${Z.button({ variant: "secondary", full: true, icon: "mail", label: "Contact support", href: "mailto:support@zoldhq.com" })}

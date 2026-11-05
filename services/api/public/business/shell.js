@@ -219,8 +219,8 @@ export async function boot() {
     const u = await session;
     only("#no-orgs");
     if (u?.accountType === "company") $("#new-org-type option[value=personal]")?.remove();
-    else if (u?.name) $("#new-org-name").value = u.name;
-    if (u?.country) $("#new-org-country").value = u.country;
+    else if (u?.name) $("#new-org-name").defaultValue = u.name;
+    if (u?.country) $("#new-org-country").defaultValue = u.country;
     $("#new-org").onsubmit = async (e) => {
       e.preventDefault();
       const typed = $("#new-org-name").value.trim();

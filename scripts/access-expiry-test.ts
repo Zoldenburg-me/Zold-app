@@ -207,6 +207,58 @@ await check("/app: a foreign answer to a write never reloads, and says to check 
   assert.ok(unspent());
 });
 
+await check("/app: a refused write keeps its error on screen: later reads fail as offline and never reload, until the person reloads", async () => {
+  freshTab();
+  answer = opaque;
+  await run(`api("/api/orgs", { name: "x" })`).catch(() => {});
+  for (let i = 0; i < 2; i++) assert.equal(((await settled(run(`api("/api/session")`))) as any).error?.offline, true);
+  assert.equal(reloads, 0);
+  assert.ok(unspent());
+  reloadUi();
+  assert.equal(await settled(run(`api("/api/session")`)), PENDING);
+  assert.equal(reloads, 1);
+});
+
+await check("/app: a gated /authorize reaches the send error screen, with its message", async () => {
+  freshTab();
+  const screens: string[] = [];
+  ctx.__screen = (name: string) => screens.push(name);
+  ctx.__deviceLibReady({
+    deviceAddress: async () => "0xa",
+    destinationCommitment: () => "0xd",
+    signTypedData: async () => "0xs",
+  });
+  run(`user = { id: "u" };
+    phSend.payee = { name: "Ana", iban: "DE00" }; phSend.quote = { id: "q" };
+    phSendBlocked = () => null; registerDeviceKey = async () => {};
+    safeExecutionAssertion = async () => null; moneriumRedeemAssertion = async () => null;
+    phGo = (name) => globalThis.__screen(name);`);
+  answer = () => calls.at(-1).url === "/api/transfers"
+    ? response(200, JSON.stringify({
+        id: "t1", state: "CREATED", createdAt: "2026-11-05T00:00:00Z",
+        authorization: { authorizer: "0xA", typedData: { message: { destination: "0xD" } } },
+      }), "application/json")
+    : opaque();
+  ctx.__el = stub;
+  await run(`phSubmit(__el, __el)`);
+  assert.deepEqual(screens, ["send/error"]);
+  assert.match(run(`phSend.error`), /check before you try it again/);
+  assert.equal(reloads, 0);
+  assert.ok(unspent());
+  run(`phSend.error = null;`);
+});
+
+await check("/app: a write sent while the page reloads is refused before it leaves", async () => {
+  freshTab();
+  answer = opaque;
+  assert.equal(await settled(run(`api("/api/session")`)), PENDING);
+  assert.equal(reloads, 1);
+  calls.length = 0;
+  const e: any = await run(`api("/api/orgs", { name: "x" })`).catch((x: any) => x);
+  assert.equal(e.offline, true);
+  assert.equal(calls.length, 0);
+});
+
 await check("/app: an open passkey prompt holds the reload until it closes", async () => {
   freshTab();
   let close: () => void = () => {};
@@ -239,7 +291,7 @@ await check("/app: a poll while someone types does not reload; once they leave t
   assert.equal(reloads, 1);
 });
 
-await check("/app: typed work left in a field holds the reload; a hidden field or an untouched one does not", async () => {
+await check("/app: typed work left in a field holds the reload; a hidden field, an untouched one or a default checkbox does not", async () => {
   freshTab();
   answer = opaque;
   const field = (value: string, defaultValue: string, offsetParent: object | null) => ({ value, defaultValue, offsetParent });
@@ -247,7 +299,10 @@ await check("/app: typed work left in a field holds the reload; a hidden field o
   ctx.document.querySelectorAll = () => [field("120 lines", "", {})];
   assert.equal(((await settled(run(`api("/api/session")`))) as any).error?.offline, true);
   assert.equal(reloads, 0);
-  ctx.document.querySelectorAll = () => [field("x", "", null), field("same", "same", {})];
+  ctx.document.querySelectorAll = () => [
+    field("x", "", null), field("same", "same", {}),
+    ...["checkbox", "radio", "range", "color"].map((type) => ({ ...field("on", "", {}), type })),
+  ];
   assert.equal(await settled(run(`api("/api/session")`)), PENDING);
   assert.equal(reloads, 1);
   ctx.document.querySelectorAll = real;
@@ -463,6 +518,25 @@ await check("/business: a write whose body cannot be read fails, and still ends 
   bizAnswer = FOREIGN["an opaque redirect"];
   assert.equal(await settled(core.api("/api/orgs")), PENDING);
   assert.equal(bizReloads, 1);
+});
+
+await check("/business: a refused write keeps its report on screen: later reads never reload", async () => {
+  bizFresh();
+  bizAnswer = FOREIGN["an opaque redirect"];
+  const core = await import(biz("core.js"));
+  await assert.rejects(core.api("/api/orgs", { method: "POST", body: { name: "x" } }), /check before you try it again/);
+  assert.equal(((await settled(core.api("/api/orgs"))) as any).error?.offline, true);
+  assert.equal(bizReloads, 0);
+});
+
+await check("/business: the no-organisation form's prefill is a default, so it does not read as typed work", async () => {
+  const shellSource = read("business/shell.js");
+  assert.match(shellSource, /"#new-org-name"\)\.defaultValue = u\.name/);
+  assert.match(shellSource, /"#new-org-country"\)\.defaultValue = u\.country/);
+});
+
+await check("no screen shown after a failed start-up says nothing was sent: Zold cannot know that", async () => {
+  for (const f of ["business.html", "app/errors.js"]) assert.doesNotMatch(read(f), /Nothing was sent/);
 });
 
 await check("/business: a server that does not answer draws a screen too", async () => {
