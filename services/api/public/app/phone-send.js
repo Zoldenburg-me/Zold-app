@@ -441,6 +441,7 @@ async function phSubmit(btn, errEl) {
   Z.setLoading(btn, true);
   const { payee, quote: q } = phSend;
   let created = null;
+  let authorizeSent = false;
   try {
     if (phSendBlocked()) throw new Error(phSendBlocked().text);
     await registerDeviceKey(user);
@@ -459,6 +460,7 @@ async function phSubmit(btn, errEl) {
     const signature = await dev.signTypedData(created.authorization.typedData, credId(), created.authorization.authorizer);
     const execution = await safeExecutionAssertion(created.authorization);
     const redeem = await moneriumRedeemAssertion(created.authorization);
+    authorizeSent = true;
     const t = await api(`/api/transfers/${created.id}/authorize`, {
       signature,
       ...(execution ? { executionAssertion: execution } : {}),
@@ -477,12 +479,22 @@ async function phSubmit(btn, errEl) {
     }
     // A transfer exists: its own state decides what the user is told.
     phSend.error = e?.name === "NotAllowedError" ? Z.byDevice("You cancelled Face ID or fingerprint.", "You cancelled the passkey prompt.") : e.message;
+    // Until Zold has refused it, /authorize may still be arriving: an unsigned
+    // read then proves nothing, and a retry is a second payment nothing would stop.
+    const refused = e?.status < 500 && typeof e.body?.error === "string";
+    // Kept here too: Activity's next load drops an unsigned CREATED from hist.
     try {
       const fresh = await api(`/api/transfers/${created.id}`);
-      phPutTransfer(fresh);
-    } catch { phPutTransfer(created); }
+      if (authorizeSent && !refused && phUnsent(fresh)) phSend.failed = { ...fresh, unread: true };
+      else { phSend.failed = fresh; phPutTransfer(fresh); }
+    } catch { phSend.failed = authorizeSent ? { ...created, unread: true } : created; }
     phGo("send/error", created.id, { replace: true });
   }
+}
+
+/* Not signed, so not listed in Activity: transfers/activity.ts draws the same line. */
+function phUnsent(t) {
+  return t.state === "CREATED" && !t.auth?.authorizedAt && !t.moneriumRedeem?.signedAt;
 }
 
 /* Put a transfer into the activity list, new or updated. */
@@ -531,35 +543,53 @@ PH["send/progress"] = {
   },
 };
 
-/* Nothing was sent, or we do not know yet: words from the real state. */
+/* Nothing was sent, or we do not know yet: words from the state Zold answered
+   with. Every hist row is such an answer; a state that could not be read is
+   never "nothing was sent", and a person who may have paid gets no retry. */
 PH["send/error"] = {
-  title: "Payment not sent",
-  live: (id) => { const t = hist.find((x) => x.id === id); return t ? t.state : "none"; },
+  title: "Payment result",
+  live: (id) => { const t = hist.find((x) => x.id === id); return t ? `${t.state}|${t.sepa?.state}` : `none|${histLoaded}|${histLoadFailed}`; },
   html(id) {
-    const t = hist.find((x) => x.id === id) || {};
+    const listed = hist.find((x) => x.id === id);
+    const t = listed || (phSend.failed?.id === id ? phSend.failed : {});
+    if (!t.state && !histLoaded && !histLoadFailed) return `${phTop("", "home")}${phMain(Z.skeletonRows(3, "Loading the payment…"))}`;
+    const unknown = !listed && (!t.state || t.unread);
+    // An answer lost after the debit started, then read back: it is on its way.
+    if (!unknown && !phUnsent(t) && !["FAILED", "REFUNDED", "MANUAL_REVIEW"].includes(t.state)) return PH["send/progress"].html(id);
     const review = t.state === "MANUAL_REVIEW";
     const refunded = t.state === "REFUNDED";
     // FAILED after money left the Safe is on its way back (the server
     // compensates it); FAILED before that moved nothing. The debit steps are
     // the server's DEBIT_STEP: an intent step ("0x") is not money that left.
     const returning = t.state === "FAILED" && (t.txs || []).some((x) => x.step === "safe.transfer(orchestrator)" || x.step === "safe.transfer(fee)");
-    const title = review ? "We’re checking this payment" : returning ? "This payment failed" : "Nothing was sent";
-    const lede = review
+    const title = unknown ? "We can’t confirm this payment" : review ? "We’re checking this payment" : returning ? "This payment failed" : "Nothing was sent";
+    const lede = unknown
+      ? "We couldn’t check what happened to this payment, so it may have gone out. Don’t send it again until you’ve checked Activity: a payment that went out is listed there."
+      : review
       ? "We can’t tell yet whether it reached the bank, so nothing is refunded automatically. Write to support@zoldhq.com and we’ll look into it."
       : refunded ? `It was refused, and ${phEur(t.refund?.amountEur ?? t.sendEur)} is back in your account.`
         : returning ? "The money that left your account is being returned. It shows as refunded once it is back."
           : phSend.error || t.error || "The payment was stopped before any money left your account.";
     const word = review ? "IN REVIEW" : refunded ? "REFUNDED" : t.state === "FAILED" ? "FAILED" : null;
-    const sub = review ? "outcome not known yet" : refunded ? "refunded" : returning ? "being returned" : "not debited";
+    const sub = unknown || review ? "outcome not known yet" : refunded ? "refunded" : returning ? "being returned" : "not debited";
     return `${Z.topbar({ srTitle: title, back: { href: "#home", label: "Back to Home" } })}${phMain(`
-      <span class="z-tile z-tile--a z-tile--lg" aria-hidden="true">${Z.icon(review ? "hourglass_top" : "sync_problem")}</span>
+      <span class="z-tile z-tile--a z-tile--lg" aria-hidden="true">${Z.icon(unknown || review ? "hourglass_top" : "sync_problem")}</span>
       <div class="z-intro"><h2 class="z-title">${esc(title)}</h2><p class="z-sub">${esc(lede)}</p></div>
       ${t.recipientName ? `<div class="z-card">${Z.row({ lead: Z.avatar({ name: t.recipientName }), title: t.recipientName, sub: `${phEur(t.sendEur)} · ${sub}`, right: word ? Z.tag(word) : "" })}</div>` : ""}
-    `)}${phFoot(review
+    `)}${phFoot(unknown
+      ? `${Z.button({ variant: "primary", full: true, label: "Check Activity", id: "ph-check-activity" })}<a class="z-link-btn" href="#home">Back to Home</a>`
+      : review
       ? Z.button({ variant: "primary", full: true, label: "Back to Home", href: "#home" })
       : `${Z.button({ variant: "primary", full: true, label: "Review again", id: "ph-again" })}<a class="z-link-btn" href="#home">Back to Home</a>`)}`;
   },
   bind(root, id) {
+    // A reload, not a hash change: it reads Activity afresh and passes any gate
+    // that refused the write, which holds its own reload until the person acts.
+    const check = root.querySelector("#ph-check-activity");
+    if (check) check.onclick = () => {
+      history.replaceState(null, "", `${location.pathname}${location.search}#activity`);
+      location.reload();
+    };
     const b = root.querySelector("#ph-again");
     if (!b) return;
     b.onclick = () => {
