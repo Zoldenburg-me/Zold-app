@@ -781,9 +781,10 @@ export type StrandedAction = "compensate" | "fail-and-compensate" | "review-outb
  *  and so is a transfer an operator resolved out of review.
  *
  *  Compensating with no intent on record is safe because every outbound call
- *  writes its intent synchronously first, and a failed write exits the process:
- *  no intent on disk means the call never went out. send-record-crash-test
- *  proves this path by path. */
+ *  syncs its intent to disk first, and a failed write exits the process: no
+ *  intent on disk means the call never went out. The user-signed debit has no
+ *  intent; its persisted claim is what review-unrecorded-debit reads instead.
+ *  send-record-crash-test proves this path by path. */
 export function strandedAction(t: Transfer, now: number, busy: (id: string) => boolean): StrandedAction | null {
   if (busy(t.id) || t.reviewResolution) return null;
   if (t.state === "FAILED") return !t.refund && inputFundsMoved(t.txs) ? "compensate" : null;
@@ -848,7 +849,11 @@ export async function sweepAnchorPayouts(): Promise<number> {
   let n = 0;
   for (const t of [...store.transfers]) {
     try {
-      if (["PAYOUT_DETAILS_PENDING", "PAYOUT_FUNDING_PENDING", "PAYOUT_FUNDED"].includes(t.state)) {
+      // PAYOUT_READY waits on the recipient, unless a lost payment needs an operator.
+      if (
+        ["PAYOUT_DETAILS_PENDING", "PAYOUT_FUNDING_PENDING", "PAYOUT_FUNDED"].includes(t.state) ||
+        (t.state === "PAYOUT_READY" && intentUnsettled(t.txs, "anchor.payment.pending"))
+      ) {
         const before = t.updatedAt;
         const updated = await refreshPayout(t);
         if (updated.updatedAt !== before) n++;
@@ -1149,9 +1154,9 @@ export async function executeSepaTransfer(
         });
       } catch (err: any) {
         // A 4xx is Monerium refusing: the fee moved, so refund it rather than
-        // pretend. Anything else (timeout, 5xx, reset) may have placed the
+        // pretend. Anything else (timeout, 408, 5xx, reset) may have placed the
         // order — refunding then pays twice, so hold for review instead.
-        const refused = err instanceof MoneriumApiError && err.status < 500;
+        const refused = err instanceof MoneriumApiError && err.status < 500 && err.status !== 408;
         if (!refused) {
           return store.updateTransfer(transfer.id, {
             state: "MANUAL_REVIEW",

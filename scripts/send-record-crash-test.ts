@@ -6,8 +6,10 @@
  * Each scenario is two real processes: `send` runs the real executor until the
  * named store write fails, and the process really exits; `restart` loads what
  * is on disk, tries to claim the authorization again and runs the sweeps twice.
- * The chain is hardhat. Partners are stubbed, and every call that would move
- * money is logged, so a resend is counted across both processes.
+ * The chain is hardhat, reverted between scenarios so one's balances cannot pay
+ * for another's refund. Partners are stubbed and their money-moving calls are
+ * logged, so a resend is counted across both processes. A chain resend or refund
+ * shows in the Safe's balance or ends the transfer anywhere but review.
  *
  * The passkey debit is the harness's fake operation: a hardhat node has no
  * bundler. The scenario mints what the debit would have delivered.
@@ -39,10 +41,12 @@ type Row = { state: string; txs: { step: string }[]; pickup?: { anchorPaymentHas
 const hasStep = (r: Row, step: string) => r.txs.some((x) => x.step === step);
 
 interface Scenario {
-  kind: "sepa" | "cash" | "batch" | "refund" | "reverse-refund" | "anchor";
+  kind: "sepa" | "cash" | "batch" | "refund" | "reverse-refund" | "anchor" | "anchor-ready";
   /** The write that fails, seen with the change already in memory. `n` counts earlier writes that matched `seen`. */
   crashOn: (r: Row, n: number) => boolean;
   seen?: (r: Row) => boolean;
+  /** Monerium answers the redeem with this status, and nothing crashes. */
+  redeemStatus?: number;
   expect: { state: string; refunded: boolean; sends: string[] };
 }
 
@@ -124,6 +128,30 @@ const SCENARIOS: Record<string, Scenario> = {
     crashOn: (r) => Boolean(r.pickup?.anchorPaymentHash),
     expect: { state: "MANUAL_REVIEW", refunded: false, sends: ["stellar.payment"] },
   },
+  "anchor payment in PAYOUT_READY sent, its hash write fails": {
+    kind: "anchor-ready",
+    crashOn: (r) => Boolean(r.pickup?.anchorPaymentHash),
+    expect: { state: "MANUAL_REVIEW", refunded: false, sends: ["stellar.payment"] },
+  },
+  // Not a crash: a 408 is an intermediary's timeout, so the order may exist.
+  "sepa redeem answered 408": {
+    kind: "sepa",
+    redeemStatus: 408,
+    crashOn: () => false,
+    expect: { state: "MANUAL_REVIEW", refunded: false, sends: [] },
+  },
+  "sepa redeem answered 400": {
+    kind: "sepa",
+    redeemStatus: 400,
+    crashOn: () => false,
+    expect: { state: "REFUNDED", refunded: true, sends: [] },
+  },
+  // Nothing went out, so the restart pays once and finishes.
+  "anchor payment intent write fails, nothing sent": {
+    kind: "anchor",
+    crashOn: (r) => hasStep(r, "anchor.payment.pending"),
+    expect: { state: "PAID", refunded: false, sends: ["stellar.payment"] },
+  },
 };
 
 const phase = process.argv[2];
@@ -132,8 +160,10 @@ else await parent();
 
 /** Partners, faked at the edge. Anything else that is not the local chain is refused: this suite is offline. */
 async function stubPartners(logSend: (what: string) => void) {
-  const { MoneriumClient } = await import("../services/api/src/adapters/monerium-client.js");
+  const { MoneriumApiError, MoneriumClient } = await import("../services/api/src/adapters/monerium-client.js");
+  const redeemStatus = SCENARIOS[process.argv[3]]?.redeemStatus;
   (MoneriumClient.prototype as any).placeOrder = async () => {
+    if (redeemStatus) throw new MoneriumApiError("stubbed answer", redeemStatus);
     logSend("monerium.redeem");
     return { id: "order-1", state: "placed" };
   };
@@ -286,8 +316,8 @@ async function child(which: string, name: string) {
       await mint(addrs().usdc, orchestratorAddress, usd.toUnits(30));
     }
   }
-  if (scenario.kind === "anchor") {
-    base.state = "PAYOUT_FUNDING_PENDING";
+  if (scenario.kind === "anchor" || scenario.kind === "anchor-ready") {
+    base.state = scenario.kind === "anchor" ? "PAYOUT_FUNDING_PENDING" : "PAYOUT_READY";
     base.txs.push({ step: "bridge.xyz.deposit.transfer", hash: "0x33" });
     base.pickup = {
       referenceCode: "R1", provider: "anchor:test", status: "PENDING", anchorTransactionId: "anchor-tx",
@@ -325,7 +355,7 @@ async function child(which: string, name: string) {
   const t = store.findTransfer(id)!;
   if (scenario.kind === "refund" || scenario.kind === "reverse-refund") {
     await orch.compensateTransfer(id);
-  } else if (scenario.kind === "anchor") {
+  } else if (scenario.kind === "anchor" || scenario.kind === "anchor-ready") {
     await orch.refreshPayout(t, { pollMs: 1, timeoutMs: 1 });
   } else {
     const signature = await device.signTypedData(
@@ -375,11 +405,28 @@ async function parent() {
     const deploy = spawnSync(process.execPath, [bin("tsx"), "scripts/deploy.ts"], { cwd: ROOT, encoding: "utf8", env });
     assert.equal(deploy.status, 0, `deploy failed\n${deploy.stderr}`);
 
+    const rpc = async (method: string, params: unknown[] = []) =>
+      (await (await fetch(node.url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+      })).json()).result;
+    let snapshot = await rpc("evm_snapshot");
+
     for (const [name, scenario] of Object.entries(SCENARIOS)) {
+      assert.equal(await rpc("evm_revert", [snapshot]), true, "chain revert failed");
+      snapshot = await rpc("evm_snapshot");
       const dbPath = path.join(dir, `${randomUUID()}.json`);
       const sendLog = path.join(dir, `${randomUUID()}.log`);
       appendFileSync(sendLog, "");
       const send = run(["send", name], dbPath, sendLog);
+      if (scenario.redeemStatus) {
+        const state = send.stdout.match(/^NOCRASH .*ended (\w+)/m)?.[1];
+        const ok = state === scenario.expect.state;
+        if (!ok) failures.push(name);
+        console.log(`  ${ok ? "ok  " : "FAIL"} ${name} -> ${state}\n${ok ? "" : send.stdout + send.stderr}`.trimEnd());
+        continue;
+      }
       if (send.status !== 1 || !/FATAL store write failed \(EIO\)/.test(send.stderr)) {
         failures.push(name);
         console.log(`  FAIL ${name}: the send phase did not die on the failed write (exit ${send.status})\n${send.stdout}\n${send.stderr}`);
@@ -398,7 +445,8 @@ async function parent() {
         got.state === scenario.expect.state &&
         got.refundedEur > 0 === scenario.expect.refunded &&
         JSON.stringify(sends) === JSON.stringify(scenario.expect.sends) &&
-        got.reclaimed === false;
+        // Only a transfer that started CREATED has a claim to refuse.
+        (!["sepa", "cash", "batch"].includes(scenario.kind) || got.reclaimed === false);
       if (!ok) failures.push(name);
       console.log(
         `  ${ok ? "ok  " : "FAIL"} ${name} -> ${got.state}, refunded €${got.refundedEur}, partner sends [${sends}], re-claim ${got.reclaimed}` +

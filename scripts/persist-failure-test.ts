@@ -48,6 +48,30 @@ try {
   assert.ok(!onDisk.quotes.some((q: { id: string }) => q.id === MARKER), "the refused change is not on disk");
   assert.ok(!existsSync(dbPath + ".tmp"), "no second copy of the store is left behind");
   console.log("  ok  a failed store write exits 1 and leaves the last good db.json");
+
+  // A rename the host loses would bring an outbound intent back as "never sent",
+  // and recovery would refund a send that went out.
+  const order = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
+    import fs from "node:fs";
+    import { syncBuiltinESMExports } from "node:module";
+    const m = await import("./services/api/src/store/db.ts");
+    m.initStore();
+    const calls = [];
+    const { fsyncSync, renameSync } = fs;
+    fs.fsyncSync = (fd) => { calls.push(fs.fstatSync(fd).isDirectory() ? "fsync-dir" : "fsync-file"); return fsyncSync(fd); };
+    fs.renameSync = (a, b) => { calls.push("rename"); return renameSync(a, b); };
+    syncBuiltinESMExports();
+    m.persist();
+    console.log(calls.join(","));
+  `], {
+    cwd: new URL("..", import.meta.url).pathname,
+    env: { ...process.env, TRANSF_DB_PATH: dbPath },
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+  assert.equal(order.status, 0, order.stderr);
+  assert.equal(order.stdout.trim(), "fsync-file,rename,fsync-dir");
+  console.log("  ok  a write syncs the file before the rename and the directory after it");
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }
