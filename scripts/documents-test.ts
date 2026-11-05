@@ -94,7 +94,7 @@ await t("three sources merge without double-counting the same money", () => {
   assert.equal(merged.length, 3, "issue+credit are one line, redeem+transfer are one line, plus the fee");
   const payout = merged.find((l) => l.reference === "o2")!;
   assert.equal(payout.counterpartyName, "A B");
-  assert.equal(payout.memo, "Powered by Zold t-1", "our memo fills the gap Monerium's order left");
+  assert.equal(payout.memo, "Powered by Zold t1", "our memo fills the gap Monerium's order left");
   assert.equal(docs.statementTotals(merged).inEur, 100);
   assert.equal(docs.statementTotals(merged).outEur, 40.99);
 });

@@ -21,13 +21,14 @@ const check = (label: string, fn: () => void) => {
 
 console.log("SEPA remittance reference");
 
-check("no reference keeps the previous string, so non-checkout payouts read the same", () => {
-  assert.equal(paymentMemo(ID), `Powered by Zold ${ID}`);
+check("no reference carries the short id, never the full transfer id", () => {
+  assert.equal(paymentMemo(ID), "Powered by Zold 7494cd64");
+  assert.ok(paymentMemo(ID).length <= SEPA_REMITTANCE_MAX);
 });
 
 check("blank and whitespace-only references are treated as absent", () => {
-  assert.equal(paymentMemo(ID, ""), `Powered by Zold ${ID}`);
-  assert.equal(paymentMemo(ID, "   "), `Powered by Zold ${ID}`);
+  assert.equal(paymentMemo(ID, ""), "Powered by Zold 7494cd64");
+  assert.equal(paymentMemo(ID, "   "), "Powered by Zold 7494cd64");
 });
 
 check("the payer's reference leads; our short id trails", () => {
@@ -75,7 +76,7 @@ check("a reference at exactly the limit still leaves the id intact", () => {
 
 check("a reference that is only unsupported characters falls back to the plain tag", () => {
   // Not silently sending an empty remittance line: the payout is still ours.
-  assert.equal(paymentMemo(ID, "€€€"), `Powered by Zold ${ID}`);
+  assert.equal(paymentMemo(ID, "€€€"), "Powered by Zold 7494cd64");
 });
 
 check("truncation does not leave a dangling slash at the cut", () => {
