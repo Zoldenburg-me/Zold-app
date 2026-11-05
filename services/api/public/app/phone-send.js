@@ -441,6 +441,7 @@ async function phSubmit(btn, errEl) {
   Z.setLoading(btn, true);
   const { payee, quote: q } = phSend;
   let created = null;
+  let authorizeSent = false;
   try {
     if (phSendBlocked()) throw new Error(phSendBlocked().text);
     await registerDeviceKey(user);
@@ -459,6 +460,7 @@ async function phSubmit(btn, errEl) {
     const signature = await dev.signTypedData(created.authorization.typedData, credId(), created.authorization.authorizer);
     const execution = await safeExecutionAssertion(created.authorization);
     const redeem = await moneriumRedeemAssertion(created.authorization);
+    authorizeSent = true;
     const t = await api(`/api/transfers/${created.id}/authorize`, {
       signature,
       ...(execution ? { executionAssertion: execution } : {}),
@@ -477,13 +479,22 @@ async function phSubmit(btn, errEl) {
     }
     // A transfer exists: its own state decides what the user is told.
     phSend.error = e?.name === "NotAllowedError" ? Z.byDevice("You cancelled Face ID or fingerprint.", "You cancelled the passkey prompt.") : e.message;
+    // Until Zold has refused it, /authorize may still be arriving: an unsigned
+    // read then proves nothing, and a retry is a second payment nothing would stop.
+    const refused = e?.status && !e.offline && typeof e.body?.error === "string";
     // Kept here too: Activity's next load drops an unsigned CREATED from hist.
     try {
-      phSend.failed = await api(`/api/transfers/${created.id}`);
-      phPutTransfer(phSend.failed);
-    } catch { phSend.failed = { ...created, unread: true }; }
+      const fresh = await api(`/api/transfers/${created.id}`);
+      if (authorizeSent && !refused && phUnsent(fresh)) phSend.failed = { ...fresh, unread: true };
+      else { phSend.failed = fresh; phPutTransfer(fresh); }
+    } catch { phSend.failed = authorizeSent ? { ...created, unread: true } : created; }
     phGo("send/error", created.id, { replace: true });
   }
+}
+
+/* Not signed, so not listed in Activity: transfers/activity.ts draws the same line. */
+function phUnsent(t) {
+  return t.state === "CREATED" && !t.auth?.authorizedAt && !t.moneriumRedeem?.signedAt;
 }
 
 /* Put a transfer into the activity list, new or updated. */
@@ -537,14 +548,14 @@ PH["send/progress"] = {
    never "nothing was sent", and a person who may have paid gets no retry. */
 PH["send/error"] = {
   title: "Payment result",
-  live: (id) => { const t = hist.find((x) => x.id === id); return t ? t.state : "none"; },
+  live: (id) => { const t = hist.find((x) => x.id === id); return t ? `${t.state}|${t.sepa?.state}` : `none|${histLoaded}|${histLoadFailed}`; },
   html(id) {
     const listed = hist.find((x) => x.id === id);
     const t = listed || (phSend.failed?.id === id ? phSend.failed : {});
+    if (!t.state && !histLoaded && !histLoadFailed) return `${phTop("", "home")}${phMain(Z.skeletonRows(3, "Loading the payment…"))}`;
     const unknown = !listed && (!t.state || t.unread);
     // An answer lost after the debit started, then read back: it is on its way.
-    const unsent = t.state === "CREATED" && !t.auth?.authorizedAt && !t.moneriumRedeem?.signedAt;
-    if (!unknown && !unsent && !["FAILED", "REFUNDED", "MANUAL_REVIEW"].includes(t.state)) return PH["send/progress"].html(id);
+    if (!unknown && !phUnsent(t) && !["FAILED", "REFUNDED", "MANUAL_REVIEW"].includes(t.state)) return PH["send/progress"].html(id);
     const review = t.state === "MANUAL_REVIEW";
     const refunded = t.state === "REFUNDED";
     // FAILED after money left the Safe is on its way back (the server

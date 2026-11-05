@@ -1282,7 +1282,7 @@ async function obCreateAccount(btn) {
       if (!res) throw new Error("You appear to be offline. Zold could not be reached.");
       let bodyLost = false;
       const u = await res.json().catch(() => { bodyLost = true; return {}; });
-      if (res.ok && bodyLost) throw new Error("Zold’s answer didn’t arrive. Check before you try it again.");
+      if (res.ok && bodyLost) throw new Error("Zold’s answer didn’t arrive. Try again.");
       if (!res.ok) {
         if (res.status === 403 && String(u.code || "").startsWith("BLOCKED_")) {
           obBlockedCode = u.code;

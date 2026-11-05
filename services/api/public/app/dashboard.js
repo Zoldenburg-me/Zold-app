@@ -155,7 +155,7 @@ const gpApi = async (path, body, method) => {
     err.reauth = Boolean(data.reauth);
     throw err;
   }
-  if (bodyLost) throw new Error("Zold’s answer didn’t arrive. Check before you try it again.");
+  if (bodyLost) throw new Error(`Zold’s answer didn’t arrive. ${body || method ? "Check before you try it again." : "Try again."}`);
   return data;
 };
 
