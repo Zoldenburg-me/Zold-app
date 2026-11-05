@@ -194,6 +194,7 @@ export async function boot() {
   let list;
   try {
     list = await api("/api/orgs");
+    if (!Array.isArray(list.organisations)) throw new Error("Zold’s answer could not be read.");
   } catch (e) {
     // Only a real 401 means signed out. Anything else keeps the session, and a
     // toast alone would leave an empty page.
@@ -259,7 +260,7 @@ export async function boot() {
     await loadOrg(org.id);
   } catch (e) {
     toast(e.message, true);
-    only("#no-answer");
+    only(e.status === 401 ? "#signed-out" : "#no-answer");
     return;
   }
   // Deep links: /business?view=shopify after a store install, with the

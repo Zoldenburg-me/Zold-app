@@ -394,7 +394,8 @@
   };
 
   /* What a reload would destroy: a write whose answer is still coming, an open
-     passkey prompt, typed work. While any is true the next poll tries again. */
+     passkey prompt, typed work, focused or left in a field. While any is true the
+     next poll tries again. */
   let gateHolds = 0;
   const gateWrites = new WeakSet();
   const holdReload = (promise) => {
@@ -403,7 +404,8 @@
     Promise.resolve(promise).then(done, done);
   };
   const reloadWouldLoseWork = () => gateHolds > 0 || open.length > 0
-    || Boolean(document.activeElement?.closest?.("input, textarea, select, [contenteditable]"));
+    || Boolean(document.activeElement?.closest?.("input, textarea, select, [contenteditable]"))
+    || [...document.querySelectorAll("input, textarea")].some((el) => el.value !== el.defaultValue && el.offsetParent);
 
   /* Every api() call. Followed, a redirect to a login on another origin fails
      CORS and reads as offline. refuseForeignAnswer ends a write's hold, once its

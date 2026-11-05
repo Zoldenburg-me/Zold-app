@@ -221,7 +221,7 @@ await check("/app: an open passkey prompt holds the reload until it closes", asy
   assert.equal(reloads, 1);
 });
 
-await check("/app: every passkey prompt site holds the reload", async () => {
+await check("/app: both passkey prompt paths, app/core.js and device.js, hold the reload", async () => {
   assert.match(read("app/core.js"), /Z\.holdReload\(prompt\)/);
   const device = read("device.js");
   assert.equal(device.match(/navigator\.credentials\.get\(/g)?.length, 1, "device.js has one way to ask");
@@ -237,6 +237,20 @@ await check("/app: a poll while someone types does not reload; once they leave t
   ctx.document.activeElement = { closest: () => null };
   assert.equal(await settled(run(`api("/api/session")`)), PENDING);
   assert.equal(reloads, 1);
+});
+
+await check("/app: typed work left in a field holds the reload; a hidden field or an untouched one does not", async () => {
+  freshTab();
+  answer = opaque;
+  const field = (value: string, defaultValue: string, offsetParent: object | null) => ({ value, defaultValue, offsetParent });
+  const real = ctx.document.querySelectorAll;
+  ctx.document.querySelectorAll = () => [field("120 lines", "", {})];
+  assert.equal(((await settled(run(`api("/api/session")`))) as any).error?.offline, true);
+  assert.equal(reloads, 0);
+  ctx.document.querySelectorAll = () => [field("x", "", null), field("same", "same", {})];
+  assert.equal(await settled(run(`api("/api/session")`)), PENDING);
+  assert.equal(reloads, 1);
+  ctx.document.querySelectorAll = real;
 });
 
 await check("/app: a failed check shows the offline bar's state, so frozen numbers are explained", async () => {
@@ -423,6 +437,32 @@ await check("/business: the organisation list arrives, then the organisation fai
     await shell.boot();
     assert.deepEqual(visible(), ["#no-answer"]);
   }
+});
+
+await check("/business: a real 401 on the organisation is the signed-out screen", async () => {
+  bizFresh();
+  bizAnswer = (url) => (url === "/api/orgs"
+    ? response(200, JSON.stringify({ organisations: [{ id: "o1", type: "business", role: "owner", name: "A" }] }), "application/json")
+    : url === "/api/orgs/o1" ? zold401() : response(200, "{}", "application/json"));
+  await shell.boot();
+  assert.deepEqual(visible(), ["#signed-out"]);
+});
+
+await check("/business: an organisation list that is no list draws a screen", async () => {
+  bizFresh();
+  bizAnswer = () => response(200, "{}", "application/json");
+  await shell.boot();
+  assert.deepEqual(visible(), ["#no-answer"]);
+});
+
+await check("/business: a write whose body cannot be read still ends its hold", async () => {
+  bizFresh();
+  bizAnswer = () => ({ ...response(200, "", "application/json"), text: async () => { throw new TypeError("body stream failed"); } });
+  const core = await import(biz("core.js"));
+  await core.api("/api/orgs", { method: "POST", body: { name: "x" } });
+  bizAnswer = FOREIGN["an opaque redirect"];
+  assert.equal(await settled(core.api("/api/orgs")), PENDING);
+  assert.equal(bizReloads, 1);
 });
 
 await check("/business: a server that does not answer draws a screen too", async () => {
