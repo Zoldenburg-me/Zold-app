@@ -313,7 +313,8 @@ export function createServiceMerchantRouter() {
           {
             amountEur: body.amountEur,
             description: body.description ?? `Order ${body.name ?? ""} at ${link.shop}`.replace(/\s+/g, " "),
-            methods: CHECKOUT_SERVICE.bankPayments && payee.iban ? ["crypto", "bank"] : ["crypto"],
+            // A test order never shows the real IBAN: a bank credit would pay it for real.
+            methods: CHECKOUT_SERVICE.bankPayments && payee.iban && !body.test ? ["crypto", "bank"] : ["crypto"],
             expiresAt: new Date(Date.now() + body.expiresInMs).toISOString(),
             ...(body.test ? { test: true } : {}),
           },
