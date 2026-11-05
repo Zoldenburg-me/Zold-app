@@ -88,5 +88,7 @@ OB["state-link"] = {
 function errFromStartup(e) {
   if (e?.offline || (!e?.status && !navigator.onLine)) return "offline";
   if (e?.status >= 500) return "error";
+  // A 404 or 429 without Zold's { error } came from in front of the API, so it says nothing about the session.
+  if (e?.status && e.status !== 401 && typeof e.body?.error !== "string") return "error";
   return null;
 }

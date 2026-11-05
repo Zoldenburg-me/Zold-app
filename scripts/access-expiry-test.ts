@@ -69,9 +69,13 @@ async function check(name: string, fn: () => Promise<void>) {
 // ── /app ───────────────────────────────────────────────────────────────────
 let answer: () => any = zold401;
 let reloads = 0;
+// The 5 s wait for a reload that the page may refuse: held, so a test decides when it ends.
+const held: (() => void)[] = [];
+const holdingTimeout = (real: typeof setTimeout) => (fn: () => void, ms?: number) => (ms === 5000 ? (held.push(fn), 0) : real(fn, ms));
+const endGateWaits = () => { for (const fn of held.splice(0)) fn(); };
 const calls: any[] = [];
 const ctx: any = {
-  console, setTimeout, clearTimeout, setInterval, clearInterval, URL, URLSearchParams, Blob, Intl, TextEncoder, btoa, atob, JSON, Promise,
+  console, setTimeout: holdingTimeout(setTimeout), clearTimeout, setInterval, clearInterval, URL, URLSearchParams, Blob, Intl, TextEncoder, btoa, atob, JSON, Promise,
   AbortController,
   addEventListener() {}, removeEventListener() {}, scrollTo() {},
   matchMedia: () => ({ matches: false, addEventListener() {} }),
@@ -104,6 +108,8 @@ function reloadUi() {
 }
 function freshTab() {
   ctx.sessionStorage.clear();
+  ctx.document.activeElement = null;
+  held.length = 0;
   ctx.localStorage.setItem("zold-session", "tok");
   run(`sessionToken = "tok";`);
   reloads = 0;
@@ -152,7 +158,7 @@ await check("/app: calls in flight at the same moment reload once, and none of t
 
 await check("/app: a minute later a new expiry reloads again", async () => {
   freshTab();
-  ctx.sessionStorage.setItem("zold-gate-reload", String(Date.now() - 61000));
+  ctx.sessionStorage.setItem("zold-gate-reload", `1:${Date.now() - 61000}`);
   answer = FOREIGN["an opaque redirect"];
   assert.equal(await settled(run(`api("/api/session")`)), PENDING);
   assert.equal(reloads, 1);
@@ -168,6 +174,132 @@ await check("/app: with no sessionStorage it cannot count reloads, so it does no
   assert.equal(reloads, 0);
   assert.equal(got.error?.offline, true);
 });
+
+const opaque = FOREIGN["an opaque redirect"];
+const unspent = () => ctx.sessionStorage.getItem("zold-gate-reload") === null;
+
+await check("/app: a poll waits while a write is on its way: no reload, guard unspent, and the next poll reloads", async () => {
+  freshTab();
+  let answerWrite: (r: any) => void = () => {};
+  answer = () => new Promise((r) => { answerWrite = r; });
+  const write = run(`api("/api/transfers/t1/authorize", { sig: "x" })`);
+  await new Promise((r) => setTimeout(r, 5));
+  answer = opaque;
+  const poll: any = await settled(run(`api("/api/session")`));
+  assert.equal(poll.error?.offline, true, "the poll fails as offline");
+  assert.equal(reloads, 0, "the write's answer is not thrown away");
+  assert.ok(unspent());
+  answerWrite(response(200, "{}", "application/json"));
+  await write;
+  assert.equal(await settled(run(`api("/api/session")`)), PENDING);
+  assert.equal(reloads, 1);
+});
+
+await check("/app: a foreign answer to a write never reloads, and says to check first", async () => {
+  freshTab();
+  for (const name of ["a 403 with an HTML page", "a 200 with an HTML page", "an opaque redirect"]) {
+    answer = FOREIGN[name];
+    const e: any = await run(`api("/api/orgs", { name: "x" })`).catch((x: any) => x);
+    assert.match(e.message, /check before you try it again/);
+    assert.equal(e.offline, true);
+  }
+  assert.equal(reloads, 0);
+  assert.ok(unspent());
+});
+
+await check("/app: an open passkey prompt holds the reload until it closes", async () => {
+  freshTab();
+  let close: () => void = () => {};
+  run(`Z`).holdReload(new Promise<void>((r) => { close = r; }));
+  answer = opaque;
+  assert.equal(((await settled(run(`api("/api/session")`))) as any).error?.offline, true);
+  assert.equal(reloads, 0);
+  assert.ok(unspent());
+  close();
+  await new Promise((r) => setTimeout(r, 1));
+  assert.equal(await settled(run(`api("/api/session")`)), PENDING);
+  assert.equal(reloads, 1);
+});
+
+await check("/app: every passkey prompt site holds the reload", async () => {
+  assert.match(read("app/core.js"), /Z\.holdReload\(prompt\)/);
+  const device = read("device.js");
+  assert.equal(device.match(/navigator\.credentials\.get\(/g)?.length, 1, "device.js has one way to ask");
+  assert.match(device, /holdReload\?\.\(prompt\)/);
+});
+
+await check("/app: a poll while someone types does not reload; once they leave the field it does", async () => {
+  freshTab();
+  ctx.document.activeElement = { closest: (s: string) => (s.includes("input") ? {} : null) };
+  answer = opaque;
+  assert.equal(((await settled(run(`api("/api/session")`))) as any).error?.offline, true);
+  assert.equal(reloads, 0);
+  ctx.document.activeElement = { closest: () => null };
+  assert.equal(await settled(run(`api("/api/session")`)), PENDING);
+  assert.equal(reloads, 1);
+});
+
+await check("/app: a failed check shows the offline bar's state, so frozen numbers are explained", async () => {
+  freshTab();
+  ctx.document.activeElement = { closest: () => ({}) };
+  answer = opaque;
+  const seen: boolean[] = [];
+  ctx.__seen = (on: boolean) => seen.push(on);
+  run(`{ const real = setReachable; setReachable = (on) => { globalThis.__seen(on); real(on); }; }`);
+  await run(`api("/api/session")`).catch(() => {});
+  assert.deepEqual(seen, [false]);
+});
+
+await check("/app: if the page refuses to leave, the call ends in an offline error and later calls do not hang", async () => {
+  freshTab();
+  answer = opaque;
+  const first = run(`api("/api/session")`);
+  assert.equal(await settled(first), PENDING);
+  assert.equal(reloads, 1, "location.reload() ran, and the person clicked Stay");
+  endGateWaits();
+  assert.equal(((await settled(first)) as any).error?.offline, true);
+  const later: any = await settled(run(`api("/api/session")`));
+  assert.equal(later.error?.offline, true, "inside the minute: an answer, not a hang");
+  answer = () => response(200, "{}", "application/json");
+  await run(`api("/api/session")`);
+});
+
+await check("/app: three reloads an hour at most, and Zold answering some paths does not reset that", async () => {
+  freshTab();
+  answer = opaque;
+  const later = (ms: number) => {
+    const [n, at] = (ctx.sessionStorage.getItem("zold-gate-reload") || "0:0").split(":");
+    if (n !== "0") ctx.sessionStorage.setItem("zold-gate-reload", `${n}:${Number(at) - ms}`);
+  };
+  for (let minute = 0; minute < 10; minute++) {
+    reloadUi();
+    later(61000);
+    answer = () => response(200, "{}", "application/json");
+    await run(`api("/api/health")`);
+    answer = opaque;
+    void run(`api("/api/session")`).catch(() => {});
+    await new Promise((r) => setTimeout(r, 2));
+    endGateWaits();
+    await new Promise((r) => setTimeout(r, 1));
+  }
+  assert.equal(reloads, 3);
+
+  reloadUi();
+  later(3600000);
+  assert.equal(await settled(run(`api("/api/session")`)), PENDING);
+  assert.equal(reloads, 4, "an hour later a new expiry gets its reload");
+});
+
+for (const status of [404, 429]) {
+  await check(`/app: an HTML ${status} at start-up keeps the session and draws a screen`, async () => {
+    freshTab();
+    answer = () => response(status, HTML, "text/html");
+    await resume();
+    assert.equal(reloads, 0);
+    assert.equal(landed, "state:error");
+    assert.ok(sessionKept());
+  });
+}
 
 await check("/app: Zold's own 401 lands on sign-in with no reload", async () => {
   freshTab();
@@ -209,23 +341,29 @@ const section = (id: string) => (shown[id] ||= {
   remove() { shown[id].gone = true; },
 });
 let bizReloads = 0;
-let bizAnswer: () => any = zold401;
+let bizAnswer: (url?: string) => any = zold401;
+const bizInits: any[] = [];
 const ls = store();
 const ss = store();
 ls.setItem("zold-session", "tok");
 Object.assign(g, {
   window: g, localStorage: ls, sessionStorage: ss,
+  setTimeout: holdingTimeout(setTimeout),
+  requestAnimationFrame: (fn: () => void) => fn(),
   addEventListener() {},
   matchMedia: () => ({ matches: false, addEventListener() {} }),
   history: { pushState() {}, replaceState() {}, state: null },
   location: { pathname: "/business", search: "", hash: "", href: "http://test/business", reload: () => { bizReloads++; } },
   document: {
     hidden: false, title: "",
-    querySelector: (s: string) => (["#signed-out", "#no-answer", "#no-orgs", "#app"].includes(s) ? section(s) : null),
+    querySelector: (s: string) => (["#signed-out", "#no-answer", "#no-orgs", "#app"].includes(s) ? section(s) : s === "#toast" ? stub : null),
     getElementById: () => null, querySelectorAll: () => [], createElement: () => stub, body: stub, documentElement: stub,
     addEventListener() {},
   },
-  fetch: async (url: string) => (url === "/api/health" ? response(200, "{}", "application/json") : bizAnswer()),
+  fetch: async (url: string, init: any) => {
+    bizInits.push(init);
+    return url === "/api/health" ? response(200, "{}", "application/json") : bizAnswer(url);
+  },
 });
 Object.defineProperty(g, "navigator", { value: { userAgent: "test", language: "en", maxTouchPoints: 0, onLine: true }, configurable: true });
 // business/core.js keeps the Z it imports with, so a "new page load" swaps what this one points at.
@@ -269,6 +407,22 @@ await check("/business: Zold's own 401 is the signed-out screen, with no reload"
   await shell.boot();
   assert.equal(bizReloads, 0);
   assert.deepEqual(visible(), ["#signed-out"]);
+});
+
+await check("/business: every call asks not to follow redirects", async () => {
+  assert.ok(bizInits.length > 0);
+  assert.ok(bizInits.every((i) => i.redirect === "manual"));
+});
+
+await check("/business: the organisation list arrives, then the organisation fails: a screen, not an empty page", async () => {
+  for (const fail of [() => response(502, HTML, "text/html"), () => { throw new TypeError("Failed to fetch"); }]) {
+    bizFresh();
+    bizAnswer = (url) => (url === "/api/orgs"
+      ? response(200, JSON.stringify({ organisations: [{ id: "o1", type: "business", role: "owner", name: "A" }] }), "application/json")
+      : url === "/api/orgs/o1" ? fail() : response(200, "{}", "application/json"));
+    await shell.boot();
+    assert.deepEqual(visible(), ["#no-answer"]);
+  }
 });
 
 await check("/business: a server that does not answer draws a screen too", async () => {

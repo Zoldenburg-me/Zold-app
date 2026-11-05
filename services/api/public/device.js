@@ -55,6 +55,13 @@ const hexToBytes = (h) => {
 };
 const b64 = (b) => btoa(String.fromCharCode(...new Uint8Array(b)));
 const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+/* An open prompt holds back the reload ui.js does when a gate answers /api. */
+const passkeyGet = (options) => {
+  const prompt = navigator.credentials.get(options);
+  globalThis.Z?.holdReload?.(prompt);
+  return prompt;
+};
+
 const b64urlToBytes = (s) =>
   Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
 const concat = (...arrs) => {
@@ -150,7 +157,7 @@ async function prfSecret(credentialId, { timeoutMs = PRF_TIMEOUT_MS } = {}) {
   let timer;
   try {
     const assertion = await Promise.race([
-      navigator.credentials.get({
+      passkeyGet({
         publicKey: {
           challenge: crypto.getRandomValues(new Uint8Array(32)),
           allowCredentials: [{ type: "public-key", id: b64urlToBytes(credentialId) }],
@@ -417,7 +424,7 @@ const b64url = (buf) =>
  */
 export async function passkeyAssertion(req) {
   if (!req?.challenge || !req?.credentialId) return undefined;
-  const cred = await navigator.credentials.get({
+  const cred = await passkeyGet({
     publicKey: {
       challenge: b64urlToBytes(req.challenge),
       allowCredentials: [{ type: "public-key", id: b64urlToBytes(req.credentialId) }],

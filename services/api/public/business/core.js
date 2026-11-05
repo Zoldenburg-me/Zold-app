@@ -76,7 +76,7 @@ export function toast(msg, bad = false) {
 }
 
 export async function api(path, opts = {}) {
-  const res = await fetch(path, {
+  const res = await Z.apiFetch(path, {
     ...opts,
     headers: {
       ...(opts.body ? { "content-type": "application/json" } : {}),
@@ -84,8 +84,6 @@ export async function api(path, opts = {}) {
       ...(opts.headers || {}),
     },
     body: opts.body ? JSON.stringify(opts.body) : undefined,
-    // Followed, a redirect to a login on another origin fails CORS and reads as offline.
-    redirect: "manual",
   });
   const text = await res.text();
   let data = {};

@@ -17,8 +17,9 @@ import { payerRuleDialog, payerRuleSection, runSummary } from "./receipts.js";
 /** A file the API serves behind the bearer header, which a navigation
  *  cannot carry: fetch it, then hand the bytes to the browser as a download. */
 async function download(path, filename) {
-  const res = await fetch(path, { headers: { authorization: `Bearer ${token}` } });
-  if (!res.ok) return toast("The download failed. Try again.", true);
+  const res = await fetch(path, { headers: { authorization: `Bearer ${token}` }, redirect: "manual" });
+  // A gate's HTML page must not be saved as the file.
+  if (!res.ok || res.headers.get("content-type")?.includes("html")) return toast("The download failed. Reload the page and try again.", true);
   const url = URL.createObjectURL(await res.blob());
   const a = Object.assign(document.createElement("a"), { href: url, download: filename });
   document.body.appendChild(a); a.click(); a.remove();

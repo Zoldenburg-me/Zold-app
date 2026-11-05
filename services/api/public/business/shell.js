@@ -255,7 +255,13 @@ export async function boot() {
   let wanted = null;
   try { wanted = localStorage.getItem("zold-org"); } catch { /* the first one */ }
   setOrg(orgs.find((o) => o.id === wanted) ?? orgs[0]);
-  await loadOrg(org.id);
+  try {
+    await loadOrg(org.id);
+  } catch (e) {
+    toast(e.message, true);
+    only("#no-answer");
+    return;
+  }
   // Deep links: /business?view=shopify after a store install, with the
   // outcome in the query so the redirect from Shopify lands on an answer.
   const qs = new URLSearchParams(location.search);
