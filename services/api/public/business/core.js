@@ -85,7 +85,14 @@ export async function api(path, opts = {}) {
     },
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
-  const text = await res.text().catch(() => "");
+  let text;
+  try {
+    text = await res.text();
+  } catch {
+    // Not an empty success: the caller must not act on {}. This still ends a write's hold.
+    await Z.refuseForeignAnswer(res, {});
+    throw new Error("Zold’s answer didn’t arrive. Check before you try it again.");
+  }
   let data = {};
   try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
   await Z.refuseForeignAnswer(res, data);

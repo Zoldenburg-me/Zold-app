@@ -455,11 +455,11 @@ await check("/business: an organisation list that is no list draws a screen", as
   assert.deepEqual(visible(), ["#no-answer"]);
 });
 
-await check("/business: a write whose body cannot be read still ends its hold", async () => {
+await check("/business: a write whose body cannot be read fails, and still ends its hold", async () => {
   bizFresh();
   bizAnswer = () => ({ ...response(200, "", "application/json"), text: async () => { throw new TypeError("body stream failed"); } });
   const core = await import(biz("core.js"));
-  await core.api("/api/orgs", { method: "POST", body: { name: "x" } });
+  await assert.rejects(core.api("/api/orgs", { method: "POST", body: { name: "x" } }), /didn’t arrive/);
   bizAnswer = FOREIGN["an opaque redirect"];
   assert.equal(await settled(core.api("/api/orgs")), PENDING);
   assert.equal(bizReloads, 1);
