@@ -586,7 +586,7 @@ is recorded.
   mismatch. It then calls `POST /orders {kind: redeem}` on **the user's own
   Monerium client**. The counterpart name is split on whitespace.
 - The memo is `<SEPA-Latin folded reference> Powered by Zold <8 hex>`, at most
-  140 characters.
+  140 characters. With no reference it is `Powered by Zold <8 hex>`.
 - It is refused **before the fee debit** if `!moneriumLiveFor(user)`.
 - Settlement is tracked by `pollRedeemOrdersOnce` every 15 s: `processed`
   becomes PAID, and `rejected`/`failed` becomes FAILED.

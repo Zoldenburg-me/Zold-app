@@ -53,17 +53,18 @@ function stripReservedSlashes(s: string): string {
 /**
  * Build the remittance line for a payout.
  *
- * With no reference the line is `Powered by Zold <transfer id>`, so a payee
- * sees who sent it and an operator can find the transfer from the statement.
+ * Every line ends in `Powered by Zold <short id>`: the first 8 hex characters
+ * of the transfer id, so a payee sees who sent it and an operator can find the
+ * transfer from the statement.
  *
- * With one, the reference leads (the payee reconciles on it) and a short form
- * of our transfer id trails, always whole. If both do not fit, the reference
- * is truncated; callers should already have refused an over-long reference.
+ * A reference leads that tail (the payee reconciles on it), and the tail stays
+ * whole. If both do not fit, the reference is truncated; callers should
+ * already have refused an over-long reference.
  */
 export function paymentMemo(transferId: string, reference?: string): string {
   const shortId = transferId.replace(/-/g, "").slice(0, 8);
   const ref = stripReservedSlashes(toSepaCharset(reference ?? ""));
-  if (!ref) return `${TAG} ${transferId}`.slice(0, SEPA_REMITTANCE_MAX);
+  if (!ref) return `${TAG} ${shortId}`;
   const suffix = ` ${TAG} ${shortId}`;
   const room = SEPA_REMITTANCE_MAX - suffix.length;
   return `${stripReservedSlashes(ref.slice(0, room)).trimEnd()}${suffix}`;
