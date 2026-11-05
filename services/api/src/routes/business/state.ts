@@ -7,7 +7,7 @@
  *
  * Plain functions over the store, shared by the four route modules.
  */
-import { store } from "../../store.js";
+import { store, type Transfer } from "../../store.js";
 import { activity, findDriftedLines } from "../../domain/drafts.js";
 import { expiredUnsigned } from "../../orchestrator.js";
 import type { DraftPayment, DraftState, Invoice } from "../../domain/types.js";
@@ -20,6 +20,28 @@ export const contactsById = (orgId: string) =>
  * A draft's execution state, derived from the transfers it created.
  * Returns a view and writes nothing.
  */
+/** What each line of a failed run did, by payee: the run shows nothing else per line, and a
+ *  rebuilt run pays a sent line again. "Not sent" only where no payout can follow. */
+const lineReport = (transfers: Transfer[]) => {
+  const line = (t: Transfer, why?: string) =>
+    `${t.recipientName} €${t.sendEur.toFixed(2)}${why ? ` (${why})` : ""}`;
+  const sent: string[] = [];
+  const notSent: string[] = [];
+  const waiting: string[] = [];
+  for (const t of transfers) {
+    if (t.state === "PAID" || t.state === "PAYOUT_SUBMITTED") sent.push(line(t));
+    else if (expiredUnsigned(t)) notSent.push(line(t, "approval expired"));
+    else if (t.state === "FAILED" || t.state === "REFUNDED") notSent.push(line(t, t.state.toLowerCase()));
+    else waiting.push(line(t, t.state === "MANUAL_REVIEW" ? "in review" : undefined));
+  }
+  return [
+    sent.length && `Sent: ${sent.join(", ")}.`,
+    notSent.length && `Not sent: ${notSent.join(", ")}.`,
+    waiting.length && `Still waiting: ${waiting.join(", ")}.`,
+    notSent.length && "Make a new run for the not sent lines only.",
+  ].filter(Boolean).join(" ");
+};
+
 export const withExecutionState = (draft: DraftPayment) => {
   if (draft.state !== "EXECUTING" || !draft.transferIds?.length) return draft;
   const transfers = draft.transferIds
@@ -41,13 +63,7 @@ export const withExecutionState = (draft: DraftPayment) => {
     ...draft,
     state,
     transfers: summary,
-    ...(stuck.length
-      ? {
-          failureReason: `${stuck.length} of ${transfers.length} transfer(s) did not settle: ${stuck
-            .map((t) => `${t.id.slice(0, 8)} ${expiredUnsigned(t) ? "approval expired" : t.state}`)
-            .join(", ")}`,
-        }
-      : {}),
+    ...(stuck.length ? { failureReason: lineReport(transfers) } : {}),
   };
 };
 

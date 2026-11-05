@@ -591,7 +591,9 @@ is recorded.
 - It is refused **before the fee debit** if `!moneriumLiveFor(user)`.
 - The redeem message is stamped at creation and Monerium's docs allow 5 minutes,
   so the approval deadline is 4 minutes, not 15. A later approval answers 410.
-  An expired unsigned line fails its payment run and releases its invoice.
+  An expired unsigned line fails its payment run and releases its invoice. The
+  run's `failureReason` lists payees as Sent, Not sent or Still waiting; a claimed
+  line is never Not sent, because it may have debited.
 - Settlement is tracked by `pollRedeemOrdersOnce` every 15 s: `processed`
   becomes PAID, and `rejected`/`failed` becomes FAILED.
 
