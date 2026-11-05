@@ -534,16 +534,17 @@ function bookedAsOneLine(byKey: Map<string, LedgerEntry>, key: string): boolean 
   return !!m && byKey.has(`deposit:${m[1]}:converted`);
 }
 
+/** An invoice number alone is an external invoice on a pay link. */
+const settlesInvoice = (s: StatementFacts) => Boolean(s.links.invoiceId || s.links.invoiceNumber);
+
 /**
  * What to write. Rows are matched by statement key. A new row is added; an
  * existing one has only its statement facts refreshed (a conversion that
  * gained a tx hash, an order that gained a counterparty), and keeps its id,
- * created time, tags, note, document code and — above all — any account
- * code, because a human may have set it.
+ * created time, note, document code, tags (bar an own-transfer mark on a line
+ * that now settles an invoice) and — above all — any account code, because a
+ * human may have set it.
  */
-/** An invoice number alone is an external invoice on a pay link. */
-const settlesInvoice = (s: StatementFacts) => Boolean(s.links.invoiceId || s.links.invoiceNumber);
-
 export function mergeStatementLines(
   existing: LedgerEntry[],
   projected: LedgerEntry[],
