@@ -716,6 +716,7 @@ export async function sendSep24WithdrawalPayment(
   source: Keypair,
   assetCode: string,
   amount: number,
+  beforeBroadcast?: () => void,
 ): Promise<Sep24PaymentResult> {
   const status = await sep24GetTransaction(homeDomain, jwt, id);
   if (!status.withdrawAnchorAccount) {
@@ -746,6 +747,7 @@ export async function sendSep24WithdrawalPayment(
   // Everything above this line is safe to retry: nothing has been broadcast.
   // Past it, a failure is ambiguous — a timeout can still land on-ledger — so
   // the error type tells the caller not to refund on the assumption it didn't.
+  beforeBroadcast?.();
   let submitted;
   try {
     submitted = await server.submitTransaction(tx);

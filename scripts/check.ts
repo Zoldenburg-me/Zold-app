@@ -47,6 +47,7 @@ const scripts = [
   "convert:test",
   "convert:race:test",
   "persist-failure:test",
+  "send-record-crash:test",
   "safe-op-uncertain:test",
   "device-key:test",
   "authorizer-bind:test",

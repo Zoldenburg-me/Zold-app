@@ -9,7 +9,7 @@
  * The migrations run at load and are idempotent, each keyed on the row it
  * would create, because this holds a money ledger.
  */
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { IS_PRODUCTION, ROOT } from "../config.js";
@@ -427,8 +427,9 @@ export function seedChartOfAccounts(orgId: string, at = new Date().toISOString()
   }
 }
 
-/* Every write rewrites the whole file, synchronously, so the state is on disk
- * before the caller goes on to the chain or a partner. A loop of writes inside
+/* Every write rewrites the whole file, synchronously, and syncs it, so the state
+ * survives a host crash as well as a process exit before the caller goes on to
+ * the chain or a partner: recovery reads a missing intent as "nothing was sent". A loop of writes inside
  * one request runs in `batched` and lands as one write at its end; nothing is
  * deferred past the call that made it.
  *
@@ -445,11 +446,18 @@ export function persist() {
   }
   const tmp = DB_PATH + ".tmp";
   // Owner-only. The chmod covers a .tmp left by a crash, whose old mode
-  // writeFileSync's `mode` would keep.
+  // openSync's `mode` would keep.
   try {
-    writeFileSync(tmp, JSON.stringify(db), { mode: 0o600 });
+    const file = openSync(tmp, "w", 0o600);
+    writeFileSync(file, JSON.stringify(db));
+    fsyncSync(file);
+    closeSync(file);
     chmodSync(tmp, 0o600);
     renameSync(tmp, DB_PATH);
+    // The rename is only durable once the directory holding it is.
+    const dir = openSync(DATA_DIR, "r");
+    fsyncSync(dir);
+    closeSync(dir);
   } catch (err) {
     // Memory now holds a change the disk refused. Serving on would answer
     // from it, and the next good write would land it after the caller saw an

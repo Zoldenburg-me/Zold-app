@@ -227,6 +227,10 @@ async function debitInputFunds(
   auth: PaymentAuthorization,
   txs: Transfer["txs"],
   execution: SafeExecution | undefined,
+  /** A step the same UserOperation settles atomically. It goes in the debit's
+   *  own write: on a later write, a restart between the two would refund a
+   *  debit whose money the swap already delivered elsewhere. */
+  atomicStep?: string,
 ): Promise<void> {
   await assertDeviceAuthorization(transfer, user, auth);
   if (transfer.txs.some((x) => x.step === DEBIT_STEP.safe)) {
@@ -235,6 +239,7 @@ async function debitInputFunds(
 
   const moveHash = await submitSafeExecution(user, execution);
   txs.push({ step: DEBIT_STEP.safe, hash: moveHash });
+  if (atomicStep) txs.push({ step: atomicStep, hash: moveHash });
   store.updateTransfer(transfer.id, { state: "DEBITED", txs });
 }
 
@@ -454,20 +459,25 @@ const OUTBOUND_INTENT_STEPS = {
     "liquidity.lifi.eure-usdc",
     "liquidity.dex.eure-usdc",
   ],
+  // The Stellar payment to the anchor. A new build of it is a new payment under
+  // a new sequence number, and the anchor may not show the first one yet, so
+  // only this record stops a restart from paying twice.
+  "anchor.payment.pending": ["anchor.payment.sent"],
 } satisfies Record<string, string[]>;
 type OutboundIntent = keyof typeof OUTBOUND_INTENT_STEPS;
 
-/** The first intent whose LAST occurrence has no settling step after it. A
- *  retry records a new intent, which an earlier attempt's outcome does not
- *  settle. */
-function unsettledOutbound(txs: Transfer["txs"]): string | undefined {
+/** Does this intent's LAST occurrence have no settling step after it? A retry
+ *  records a new intent, which an earlier attempt's outcome does not settle. */
+function intentUnsettled(txs: Transfer["txs"], intent: OutboundIntent): boolean {
   const steps = txs.map((x) => x.step);
-  return (Object.keys(OUTBOUND_INTENT_STEPS) as OutboundIntent[]).find((intent) => {
-    const at = steps.lastIndexOf(intent);
-    if (at < 0) return false;
-    const settling: string[] = OUTBOUND_INTENT_STEPS[intent];
-    return !steps.slice(at + 1).some((s) => settling.includes(s));
-  });
+  const at = steps.lastIndexOf(intent);
+  if (at < 0) return false;
+  const settling: string[] = OUTBOUND_INTENT_STEPS[intent];
+  return !steps.slice(at + 1).some((s) => settling.includes(s));
+}
+
+function unsettledOutbound(txs: Transfer["txs"]): string | undefined {
+  return (Object.keys(OUTBOUND_INTENT_STEPS) as OutboundIntent[]).find((intent) => intentUnsettled(txs, intent));
 }
 
 /** Record an outbound intent on the transfer before the call goes out. */
@@ -768,7 +778,13 @@ export type StrandedAction = "compensate" | "fail-and-compensate" | "review-outb
 /** What the sweep does with one transfer. `busy` says whether an execution or
  *  a compensation for it is running in this process; a running one is never
  *  stranded. MANUAL_REVIEW, like every state not named here, is left alone,
- *  and so is a transfer an operator resolved out of review. */
+ *  and so is a transfer an operator resolved out of review.
+ *
+ *  Compensating with no intent on record is safe because every outbound call
+ *  syncs its intent to disk first, and a failed write exits the process: no
+ *  intent on disk means the call never went out. The user-signed debit has no
+ *  intent; its persisted claim is what review-unrecorded-debit reads instead.
+ *  send-record-crash-test proves this path by path. */
 export function strandedAction(t: Transfer, now: number, busy: (id: string) => boolean): StrandedAction | null {
   if (busy(t.id) || t.reviewResolution) return null;
   if (t.state === "FAILED") return !t.refund && inputFundsMoved(t.txs) ? "compensate" : null;
@@ -833,7 +849,11 @@ export async function sweepAnchorPayouts(): Promise<number> {
   let n = 0;
   for (const t of [...store.transfers]) {
     try {
-      if (["PAYOUT_DETAILS_PENDING", "PAYOUT_FUNDING_PENDING", "PAYOUT_FUNDED"].includes(t.state)) {
+      // PAYOUT_READY waits on the recipient, unless a lost payment needs an operator.
+      if (
+        ["PAYOUT_DETAILS_PENDING", "PAYOUT_FUNDING_PENDING", "PAYOUT_FUNDED"].includes(t.state) ||
+        (t.state === "PAYOUT_READY" && intentUnsettled(t.txs, "anchor.payment.pending"))
+      ) {
         const before = t.updatedAt;
         const updated = await refreshPayout(t);
         if (updated.updatedAt !== before) n++;
@@ -884,15 +904,20 @@ export async function executeTransfer(
           args: [recipient],
         }) as Promise<bigint>;
       const before = await usdcBalance();
-      await debitInputFunds(transfer, user, auth, txs, execution);
       // The swap step is recorded WITH the debit, before any measurement: the
       // batch is atomic, so if the debit landed the swap landed. Recording it
       // only after a successful balance read would let a stale RPC replica
       // strand a swapped transfer looking unswapped — and compensation would
       // then "refund" EURe this side no longer holds.
+      await debitInputFunds(
+        transfer,
+        user,
+        auth,
+        txs,
+        execution,
+        `liquidity.${transfer.liquidity?.provider ?? "safe"}.eure-usdc`,
+      );
       const opHash = txs.at(-1)?.hash ?? "0x";
-      txs.push({ step: `liquidity.${transfer.liquidity?.provider ?? "safe"}.eure-usdc`, hash: opHash });
-      store.updateTransfer(transfer.id, { txs });
       const delivered = (await balanceAfterWrite(a.usdc, recipient, before)) - before;
       const minOut = BigInt(transfer.liquidity?.minOut ?? "0");
       if (delivered < minOut) {
@@ -1129,9 +1154,9 @@ export async function executeSepaTransfer(
         });
       } catch (err: any) {
         // A 4xx is Monerium refusing: the fee moved, so refund it rather than
-        // pretend. Anything else (timeout, 5xx, reset) may have placed the
+        // pretend. Anything else (timeout, 408, 5xx, reset) may have placed the
         // order — refunding then pays twice, so hold for review instead.
-        const refused = err instanceof MoneriumApiError && err.status < 500;
+        const refused = err instanceof MoneriumApiError && err.status < 500 && err.status !== 408;
         if (!refused) {
           return store.updateTransfer(transfer.id, {
             state: "MANUAL_REVIEW",
@@ -1190,6 +1215,16 @@ async function refreshPayoutUnlocked(
   if (!["PAYOUT_DETAILS_PENDING", "PAYOUT_FUNDING_PENDING", "PAYOUT_FUNDED", "PAYOUT_READY"].includes(transfer.state)) {
     return transfer;
   }
+  // A payment went out (or was about to) before the restart and its hash never
+  // reached the disk. The anchor may not show it yet, so asking would pay again.
+  if (intentUnsettled(transfer.txs, "anchor.payment.pending")) {
+    return store.updateTransfer(transfer.id, {
+      state: "MANUAL_REVIEW",
+      error:
+        "a Stellar payment to the anchor may have gone out before a restart and its hash was never recorded; " +
+        "check the treasury account before paying again or refunding",
+    });
+  }
   if (transfer.state === "PAYOUT_FUNDED" && transfer.pickup?.status === "PAID") {
     return settlePickup(transfer);
   }
@@ -1204,10 +1239,13 @@ async function refreshPayoutUnlocked(
       // during the poll loop below loses the record and the next call pays
       // the anchor a second time.
       (funded) => {
+        transfer.txs.push({ step: "anchor.payment.sent", hash: funded.anchorPaymentHash ?? "0x" });
         store.updateTransfer(transfer.id, {
           pickup: { ...transfer.pickup, ...funded },
+          txs: transfer.txs,
         });
       },
+      () => recordOutboundIntent(transfer.id, transfer.txs, "anchor.payment.pending"),
     );
     if (!pickup) return transfer;
     const updated = store.updateTransfer(transfer.id, {
