@@ -148,12 +148,14 @@ const gpApi = async (path, body, method) => {
     ...(body ? { method: method ?? "POST", body: JSON.stringify(body) } : method ? { method } : {}),
     headers,
   });
-  const data = await res.json().catch(() => ({}));
+  let bodyLost = false;
+  const data = await res.json().catch(() => { bodyLost = true; return {}; });
   if (!res.ok) {
     const err = new Error(data.error || `request failed (HTTP ${res.status})`);
     err.reauth = Boolean(data.reauth);
     throw err;
   }
+  if (bodyLost) throw new Error("Zold’s answer didn’t arrive. Check before you try it again.");
   return data;
 };
 
