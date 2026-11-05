@@ -446,7 +446,7 @@ sequenceDiagram
   B->>A: POST /quotes {rail, sendEur}
   A-->>B: quote (10 min TTL; SEPA: 1:1, fee €0)
   B->>A: POST /transfers {quoteId, recipient, IBAN, reference}
-  Note over A: build.ts: KYC · balance · Safe active · device key bound<br/>holdDailyCap (sync) · consumeQuote (sync)<br/>auth terms {to, amountWei, destination, deadline+15m}<br/>prepare UserOp (fee transfer, or fee+approve+swap batch)<br/>pendingTransferExecutions[id] (memory)
+  Note over A: build.ts: KYC · balance · Safe active · device key bound<br/>holdDailyCap (sync) · consumeQuote (sync)<br/>auth terms {to, amountWei, destination, deadline+15m, SEPA +4m}<br/>prepare UserOp (fee transfer, or fee+approve+swap batch)<br/>pendingTransferExecutions[id] (memory)
   A-->>B: transfer + authorization {typedData, safeExecution.challenge, moneriumRedeem.challenge}
   B->>B: device key signs typedData
   B->>B: passkey signs safeExecution.challenge
@@ -518,8 +518,9 @@ router receives injected and never rebuilds.
   - If the funds were swapped (non-batch), it reverse-swaps and returns the
     measured EURe.
   - A live batch swap, or any failure of the above, goes to MANUAL_REVIEW.
-- SEPA: a Monerium **4xx** refunds the fee. A **timeout or 5xx** goes to
-  MANUAL_REVIEW ("redeem outcome unknown").
+- SEPA: a Monerium **401 or 403** refunds the fee. Any other answer goes to
+  MANUAL_REVIEW ("redeem outcome unknown"), including a timeout and a 400, 409
+  or 422: its API reference lists no other refusal and no answer for a duplicate.
 - Sweeps:
   - `sweepStrandedTransfers` runs at boot and every 5 min and skips any
     transfer being executed or compensated. It re-fails DEBITED/SWAPPED/BRIDGED
@@ -588,6 +589,11 @@ is recorded.
 - The memo is `<SEPA-Latin folded reference> Powered by Zold <8 hex>`, at most
   140 characters. With no reference it is `Powered by Zold <8 hex>`.
 - It is refused **before the fee debit** if `!moneriumLiveFor(user)`.
+- The redeem message is stamped at creation and Monerium's docs allow 5 minutes,
+  so the approval deadline is 4 minutes, not 15. A later approval answers 410.
+  An expired unsigned line fails its payment run and releases its invoice. The
+  run's `failureReason` lists payees as Sent, Not sent or Still waiting; a claimed
+  line is never Not sent, because it may have debited.
 - Settlement is tracked by `pollRedeemOrdersOnce` every 15 s: `processed`
   becomes PAID, and `rejected`/`failed` becomes FAILED.
 

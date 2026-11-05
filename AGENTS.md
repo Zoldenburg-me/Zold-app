@@ -103,7 +103,7 @@ Each of these was a bug once.
   conversion credits the swap receipt's EURe Transfer logs into the Safe; its
   balance delta is only a check (more: recorded, less: review). Other venues
   still measure a balance delta.
-- **Compensation is asymmetric on purpose**: only a 4xx refusal refunds; a
+- **Compensation is asymmetric on purpose**: only a definite refusal refunds (Monerium: 401 or 403); a
   timeout, a duplicate-transfer revert, or any failure after Bridge holds the
   deposit is MANUAL_REVIEW. `store.updateTransfer` refuses to move a
   REFUNDED/PAID transfer backwards.

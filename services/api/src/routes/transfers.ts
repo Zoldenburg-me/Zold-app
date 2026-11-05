@@ -16,6 +16,7 @@ import {
   cashRailOpen,
   executeSepaTransfer,
   executeTransfer,
+  expiredUnsigned,
   refreshPayout,
 } from "../orchestrator.js";
 import { store } from "../store.js";
@@ -300,8 +301,9 @@ export function createTransferRouter(deps: TransferDeps) {
       if (typeof signature !== "string" || !/^0x[0-9a-fA-F]+$/.test(signature)) {
         return res.status(400).json({ error: "signature required" });
       }
-      if (Date.now() / 1000 > transfer.auth.deadline) {
-        return res.status(410).json({ error: "authorization window expired, create a new transfer" });
+      // A claimed transfer may have debited, so it goes on to the claim's own refusal.
+      if (expiredUnsigned(transfer)) {
+        return res.status(410).json({ error: "This approval expired, so this payment was not sent." });
       }
       let executableTransfer = transfer;
       const redeemSignature = req.body?.moneriumRedeemSignature;

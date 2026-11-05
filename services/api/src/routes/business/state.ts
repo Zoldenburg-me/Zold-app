@@ -7,13 +7,37 @@
  *
  * Plain functions over the store, shared by the four route modules.
  */
-import { store } from "../../store.js";
+import { store, type Transfer } from "../../store.js";
 import { activity, findDriftedLines } from "../../domain/drafts.js";
+import { expiredUnsigned } from "../../orchestrator.js";
 import type { DraftPayment, DraftState, Invoice } from "../../domain/types.js";
 
 /** The org's address book, keyed by id, for the drift fingerprint check. */
 export const contactsById = (orgId: string) =>
   new Map(store.contactsOf(orgId).map((c) => [c.id, c] as const));
+
+/** What each line of a failed run did, by payee: the run shows nothing else per line, and a
+ *  rebuilt run pays a sent line again. "Not sent" only where no payout can follow. */
+const lineReport = (transfers: Transfer[]) => {
+  // A holder name is free text and comes from suppliers: it must not write a heading of its own.
+  const line = (t: Transfer, why?: string) =>
+    `${t.recipientName.replace(/[.:]/g, "")} €${t.sendEur.toFixed(2)}${why ? ` (${why})` : ""}`;
+  const sent: string[] = [];
+  const notSent: string[] = [];
+  const waiting: string[] = [];
+  for (const t of transfers) {
+    if (t.state === "PAID" || t.state === "PAYOUT_SUBMITTED") sent.push(line(t));
+    else if (expiredUnsigned(t)) notSent.push(line(t, "approval expired"));
+    else if (t.state === "FAILED" || t.state === "REFUNDED") notSent.push(line(t, t.state.toLowerCase()));
+    else waiting.push(line(t, t.state === "MANUAL_REVIEW" ? "in review" : undefined));
+  }
+  return [
+    sent.length && `Sent: ${sent.join(", ")}.`,
+    notSent.length && `Not sent: ${notSent.join(", ")}.`,
+    waiting.length && `Still waiting: ${waiting.join(", ")}.`,
+    notSent.length && "Create a new payment for the not sent lines only.",
+  ].filter(Boolean).join(" ");
+};
 
 /**
  * A draft's execution state, derived from the transfers it created.
@@ -28,7 +52,7 @@ export const withExecutionState = (draft: DraftPayment) => {
   const summary = transfers.map((t) => ({ id: t.id, state: t.state }));
   const settled = transfers.filter((t) => t.state === "PAID");
   const stuck = transfers.filter((t) =>
-    ["FAILED", "REFUNDED", "MANUAL_REVIEW"].includes(t.state),
+    ["FAILED", "REFUNDED", "MANUAL_REVIEW"].includes(t.state) || expiredUnsigned(t),
   );
 
   let state: DraftState = draft.state;
@@ -40,13 +64,7 @@ export const withExecutionState = (draft: DraftPayment) => {
     ...draft,
     state,
     transfers: summary,
-    ...(stuck.length
-      ? {
-          failureReason: `${stuck.length} of ${transfers.length} transfer(s) did not settle: ${stuck
-            .map((t) => `${t.id.slice(0, 8)} ${t.state}`)
-            .join(", ")}`,
-        }
-      : {}),
+    ...(stuck.length ? { failureReason: lineReport(transfers) } : {}),
   };
 };
 
@@ -66,7 +84,7 @@ export const syncInvoicePayment = (invoice: Invoice): Invoice => {
         payment: { ...invoice.payment, paidAt: transfer.updatedAt },
       });
     }
-    if (transfer.state === "FAILED" || transfer.state === "REFUNDED") {
+    if (transfer.state === "FAILED" || transfer.state === "REFUNDED" || expiredUnsigned(transfer)) {
       return store.updateInvoice(invoice.id, {
         state: "SUBMITTED",
         payment: { ...invoice.payment, draftId: undefined, transferId: undefined },

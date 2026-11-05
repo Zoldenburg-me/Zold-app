@@ -1044,6 +1044,11 @@ export const ACTIONS = {
     let signed = 0;
     const failures = [];
     for (const a of r.authorizations) {
+      // No passkey prompt for a line the server would refuse.
+      if (Date.now() / 1000 > Number(a.authorization.typedData.message.deadline)) {
+        failures.push(`${a.recipient}: approval expired`);
+        continue;
+      }
       try {
         const signature = await lib.signTypedData(a.authorization.typedData, credentialId, a.authorization.authorizer);
         // The debit itself is a Safe operation the passkey signs, then the

@@ -21,6 +21,7 @@ const scripts = [
   "test:contracts",
   "webauthn:selftest",
   "authorize:test",
+  "redeem-window:test",
   "country:policy:test",
   "env:number:test",
   "recovery:test",

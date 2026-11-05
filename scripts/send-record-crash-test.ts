@@ -1,6 +1,6 @@
 /**
  * A send went out and the write recording it failed. A failed write exits the
- * process (store/db.ts), so the restart sees only the last good db.json. Can
+ * process (store/db.ts), so the restart sees only what reached db.json. Can
  * that restart refund money that left, or send it again?
  *
  * Each scenario is two real processes: `send` runs the real executor until the
@@ -133,19 +133,19 @@ const SCENARIOS: Record<string, Scenario> = {
     crashOn: (r) => Boolean(r.pickup?.anchorPaymentHash),
     expect: { state: "MANUAL_REVIEW", refunded: false, sends: ["stellar.payment"] },
   },
-  // Not a crash: a 408 is an intermediary's timeout, so the order may exist.
-  "sepa redeem answered 408": {
+  // Not a crash: Monerium's answer alone decides. See the refusal rule in executeSepaTransfer.
+  ...Object.fromEntries([401, 403].map((status) => [`sepa redeem answered ${status}`, {
     kind: "sepa",
-    redeemStatus: 408,
-    crashOn: () => false,
-    expect: { state: "MANUAL_REVIEW", refunded: false, sends: [] },
-  },
-  "sepa redeem answered 400": {
-    kind: "sepa",
-    redeemStatus: 400,
+    redeemStatus: status,
     crashOn: () => false,
     expect: { state: "REFUNDED", refunded: true, sends: [] },
-  },
+  } satisfies Scenario])),
+  ...Object.fromEntries([400, 404, 408, 409, 422, 429].map((status) => [`sepa redeem answered ${status}`, {
+    kind: "sepa",
+    redeemStatus: status,
+    crashOn: () => false,
+    expect: { state: "MANUAL_REVIEW", refunded: false, sends: [] },
+  } satisfies Scenario])),
   // Nothing went out, so the restart pays once and finishes.
   "anchor payment intent write fails, nothing sent": {
     kind: "anchor",
@@ -352,6 +352,7 @@ async function child(which: string, name: string) {
   }) as typeof fs.renameSync;
   syncBuiltinESMExports();
 
+  const safeBefore = await balance(addrs().eure, address);
   const t = store.findTransfer(id)!;
   if (scenario.kind === "refund" || scenario.kind === "reverse-refund") {
     await orch.compensateTransfer(id);
@@ -368,7 +369,8 @@ async function child(which: string, name: string) {
     if (rail === "sepa") await orch.executeSepaTransfer(t, user, auth, execution);
     else await orch.executeTransfer(t, user, auth, execution);
   }
-  console.log(`NOCRASH the armed write never happened; the transfer ended ${store.findTransfer(id)?.state}: ${store.findTransfer(id)?.error}`);
+  const refundedEur = eur.fromWei((await balance(addrs().eure, address)) - safeBefore);
+  console.log(`NOCRASH the armed write never happened; the transfer ended ${store.findTransfer(id)?.state}, refunded €${refundedEur}: ${store.findTransfer(id)?.error}`);
   process.exit(0);
 }
 
@@ -421,10 +423,10 @@ async function parent() {
       appendFileSync(sendLog, "");
       const send = run(["send", name], dbPath, sendLog);
       if (scenario.redeemStatus) {
-        const state = send.stdout.match(/^NOCRASH .*ended (\w+)/m)?.[1];
-        const ok = state === scenario.expect.state;
+        const [, state, refundedEur] = send.stdout.match(/^NOCRASH .*ended (\w+), refunded €([\d.]+)/m) ?? [];
+        const ok = state === scenario.expect.state && Number(refundedEur) > 0 === scenario.expect.refunded;
         if (!ok) failures.push(name);
-        console.log(`  ${ok ? "ok  " : "FAIL"} ${name} -> ${state}\n${ok ? "" : send.stdout + send.stderr}`.trimEnd());
+        console.log(`  ${ok ? "ok  " : "FAIL"} ${name} -> ${state}, refunded €${refundedEur}\n${ok ? "" : send.stdout + send.stderr}`.trimEnd());
         continue;
       }
       if (send.status !== 1 || !/FATAL store write failed \(EIO\)/.test(send.stderr)) {

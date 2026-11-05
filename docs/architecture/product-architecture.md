@@ -311,7 +311,7 @@ spend during the grace period.
 SEPA: `CREATED → DEBITED → PAYOUT_SUBMITTED → PAID`, or `FAILED → REFUNDED`,
 or `MANUAL_REVIEW`.
 
-Refunds are asymmetric on purpose. Only a clear refusal (a Monerium 4xx, or a
+Refunds are asymmetric on purpose. Only a clear refusal (a Monerium 401 or 403, or a
 failure before any partner held money) refunds automatically. Timeouts,
 duplicates and anything after a partner holds the money go to
 **MANUAL_REVIEW**, because refunding money that may also be delivered is worse

@@ -123,6 +123,10 @@ function inputFundsMoved(txs: Transfer["txs"]): boolean {
 }
 
 
+/** Past its deadline with no claim: assertDeviceAuthorization refuses it, so it can never debit. */
+export const expiredUnsigned = (t: Transfer, nowSec = Date.now() / 1000) =>
+  t.state === "CREATED" && Boolean(t.auth) && !t.auth!.authorizedAt && nowSec > t.auth!.deadline;
+
 /** EUR this user has committed to Safe-funded transfers and crypto sends today. FAILED/REFUNDED
  * transfers released their reservation, and so did a CREATED one never signed
  * before its deadline: assertDeviceAuthorization refuses it, so it can never
@@ -139,7 +143,7 @@ export function safeFundedEurToday(userId: string, now = new Date()): number {
         t.fundingSource === "safe" &&
         t.createdAt.slice(0, 10) === day &&
         !["FAILED", "REFUNDED"].includes(t.state) &&
-        !(t.state === "CREATED" && t.auth && !t.auth.authorizedAt && nowSec > t.auth.deadline),
+        !expiredUnsigned(t, nowSec),
     )
     .reduce((sum, t) => sum + t.sendEur, 0) + store.cryptoSends
     // Crypto sends share the budget; an expired unsigned one can never debit.
@@ -1098,8 +1102,9 @@ export async function executeTransfer(
  *   CREATED -> DEBITED -> PAYOUT_SUBMITTED -> PAID
  * The payout amount remains in the user's Safe for Monerium to redeem; only
  * the fee leg is moved before placing the order — and only once the account
- * has a Monerium connection to place it on. A rejected order fails closed and
- * refunds the fee; nothing is ever marked paid without a real order.
+ * has a Monerium connection to place it on. An order Monerium refuses (401 or
+ * 403) refunds the fee, any other failure goes to review, and nothing is ever
+ * marked paid without a real order.
  */
 export async function executeSepaTransfer(
   transfer: Transfer,
@@ -1153,10 +1158,13 @@ export async function executeSepaTransfer(
           },
         });
       } catch (err: any) {
-        // A 4xx is Monerium refusing: the fee moved, so refund it rather than
-        // pretend. Anything else (timeout, 408, 5xx, reset) may have placed the
-        // order — refunding then pays twice, so hold for review instead.
-        const refused = err instanceof MoneriumApiError && err.status < 500 && err.status !== 408;
+        // Monerium's API reference lists 401 and 403 for POST /orders, with no
+        // description; we read them as "may not place it", so no order. It
+        // documents no other refusal and no answer for a duplicate, so a 400, 409
+        // or 422 could mean an order exists. Those, a timeout, 5xx or reset may
+        // have placed one, and the transfer would read as failed while it pays,
+        // so hold for review.
+        const refused = err instanceof MoneriumApiError && (err.status === 401 || err.status === 403);
         if (!refused) {
           return store.updateTransfer(transfer.id, {
             state: "MANUAL_REVIEW",
