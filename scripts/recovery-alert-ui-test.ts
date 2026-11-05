@@ -525,7 +525,7 @@ Object.assign(g, {
   matchMedia: () => ({ matches: false, addEventListener() {} }),
   history: { pushState() {}, replaceState() {}, state: null },
   location: { pathname: "/business", search: "", hash: "", href: "http://test/business" },
-  Z: new Proxy({ announce: (m: string) => bizAnnounced.push(m) }, { get: (t: any, k) => (k in t ? t[k] : k === "icon" ? () => "" : stub) }),
+  Z: new Proxy({ announce: (m: string) => bizAnnounced.push(m), apiFetch: (p: string, i: any) => g.fetch(p, i), refuseForeignAnswer: async () => {} }, { get: (t: any, k) => (k in t ? t[k] : k === "icon" ? () => "" : stub) }),
   document: {
     hidden: false, title: "",
     querySelector: (s: string) => (s === "#plan-banner" ? banner : null),

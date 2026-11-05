@@ -382,11 +382,99 @@
     else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
   });
 
+  /* An /api answer Zold did not write. Whatever stands in front of the API
+     (Cloudflare Access on app.zoldhq.com) answered, so the request never reached
+     Zold and says nothing about the session. Zold's own 401 and 403 always carry
+     { error }. */
+  const isForeignAnswer = (res, data) => {
+    if (res.type === "opaqueredirect") return true;
+    if (res.status === 401 || res.status === 403) return typeof data?.error !== "string";
+    const type = res.headers?.get("content-type");
+    return Boolean(res.ok && type && !type.includes("json"));
+  };
+
+  /* What a reload would destroy: a write whose answer is still coming, the error
+     of a refused write (until the person reloads, as it tells them to), an open
+     passkey prompt, typed work, focused or left in a field. While any is true the
+     next poll tries again. A browser gives these input types a value nobody typed. */
+  let gateHolds = 0;
+  let gateWriteRefused = false;
+  const NOT_TYPED = new Set(["checkbox", "radio", "range", "color"]);
+  const gateWrites = new WeakSet();
+  const holdReload = (promise) => {
+    gateHolds++;
+    const done = () => { gateHolds--; };
+    Promise.resolve(promise).then(done, done);
+  };
+  const reloadWouldLoseWork = () => gateWriteRefused || gateHolds > 0 || open.length > 0
+    || Boolean(document.activeElement?.closest?.("input, textarea, select, [contenteditable]"))
+    || [...document.querySelectorAll("input, textarea")].some((el) => !NOT_TYPED.has(el.type) && el.value !== el.defaultValue && el.offsetParent);
+
+  /* Every api() call. Followed, a redirect to a login on another origin fails
+     CORS and reads as offline. refuseForeignAnswer ends a write's hold, once its
+     body has been read. */
+  const apiFetch = async (path, init) => {
+    const write = (init.method || "GET") !== "GET";
+    if (write && gateReloading) throw gateError("The page is reloading. Nothing was sent; try again once it’s back.");
+    if (write) gateHolds++;
+    try {
+      const res = await fetch(path, { ...init, redirect: "manual" });
+      if (write) gateWrites.add(res);
+      return res;
+    } catch (e) {
+      if (write) gateHolds--;
+      throw e;
+    }
+  };
+
+  /* A gate that answers /api and lets the page through must not reload forever:
+     one a minute, three an hour. Zold answering does not reset this: a gate over
+     some paths lets /api/health through on every load. Without storage reloads
+     cannot be counted, so none. */
+  const GATE_KEY = "zold-gate-reload";
+  const spendGateReload = () => {
+    try {
+      const [stored, at] = (sessionStorage.getItem(GATE_KEY) || "0:0").split(":").map(Number);
+      const count = Date.now() - at < 3600000 ? stored : 0;
+      if (count >= 3 || Date.now() - at < 60000) return false;
+      sessionStorage.setItem(GATE_KEY, `${count + 1}:${Date.now()}`);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const gateError = (message) => Object.assign(new Error(message), { offline: true });
+
+  /* A reload is a navigation, which that gate can answer with its login page; a
+     fetch cannot show one. Only a read reloads: a write may have reached Zold, so
+     its caller says so and the person decides. While the reload is under way the
+     call waits, so nothing paints over it or signs out; the wait ends because the
+     page can refuse to leave (beforeunload). */
+  let gateReloading = false;
+  const refuseForeignAnswer = async (res, data) => {
+    const write = gateWrites.delete(res);
+    if (write) gateHolds--;
+    if (!isForeignAnswer(res, data)) return;
+    if (write) {
+      gateWriteRefused = true;
+      throw gateError("Zold didn’t answer this. Reload the page, then check before you try it again.");
+    }
+    if (!gateReloading && !reloadWouldLoseWork() && spendGateReload()) {
+      gateReloading = true;
+      location.reload();
+    }
+    if (gateReloading) {
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+      gateReloading = false;
+    }
+    throw gateError("Zold can’t be reached from here. Reload the page, or try again in a minute.");
+  };
+
   window.Z = Object.freeze({
     esc, icon, tag, button, isDisabled, setLoading, iconButton, topbar, largeTitle, progress,
     field, select, countries, setFieldError, focusFirstError,
     row, soonRow, listGroup, skeletonRows, avatar, iconTile, formatMoney, amount, note, kv, groupIban, copyRow,
     testModePill, bottomNav, skipLink, overlay, openOverlay, closeOverlay, announce,
-    onPhone, byDevice, passkeyName,
+    onPhone, byDevice, passkeyName, apiFetch, refuseForeignAnswer, holdReload,
   });
 })();

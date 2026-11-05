@@ -141,7 +141,7 @@ export async function loadOrg(id) {
 /* One of the three states is the page; the other two leave the DOM, so the
    page has one h1. */
 function only(sel) {
-  for (const id of ["#signed-out", "#no-orgs", "#app"]) {
+  for (const id of ["#signed-out", "#no-answer", "#no-orgs", "#app"]) {
     if (id === sel) $(id).classList.remove("hidden"); else $(id)?.remove();
   }
 }
@@ -194,9 +194,12 @@ export async function boot() {
   let list;
   try {
     list = await api("/api/orgs");
+    if (!Array.isArray(list.organisations)) throw new Error("Zold’s answer could not be read.");
   } catch (e) {
-    if (e.status === 401) { only("#signed-out"); return; }
-    throw e;
+    // Only a real 401 means signed out. Anything else keeps the session, and a
+    // toast alone would leave an empty page.
+    only(e.status === 401 ? "#signed-out" : "#no-answer");
+    return;
   }
   const session = ensureMe().then((u) => {
     renderNav();
@@ -216,8 +219,8 @@ export async function boot() {
     const u = await session;
     only("#no-orgs");
     if (u?.accountType === "company") $("#new-org-type option[value=personal]")?.remove();
-    else if (u?.name) $("#new-org-name").value = u.name;
-    if (u?.country) $("#new-org-country").value = u.country;
+    else if (u?.name) $("#new-org-name").defaultValue = u.name;
+    if (u?.country) $("#new-org-country").defaultValue = u.country;
     $("#new-org").onsubmit = async (e) => {
       e.preventDefault();
       const typed = $("#new-org-name").value.trim();
@@ -253,7 +256,13 @@ export async function boot() {
   let wanted = null;
   try { wanted = localStorage.getItem("zold-org"); } catch { /* the first one */ }
   setOrg(orgs.find((o) => o.id === wanted) ?? orgs[0]);
-  await loadOrg(org.id);
+  try {
+    await loadOrg(org.id);
+  } catch (e) {
+    toast(e.message, true);
+    only(e.status === 401 ? "#signed-out" : "#no-answer");
+    return;
+  }
   // Deep links: /business?view=shopify after a store install, with the
   // outcome in the query so the redirect from Shopify lands on an answer.
   const qs = new URLSearchParams(location.search);

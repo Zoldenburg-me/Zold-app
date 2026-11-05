@@ -76,7 +76,7 @@ export function toast(msg, bad = false) {
 }
 
 export async function api(path, opts = {}) {
-  const res = await fetch(path, {
+  const res = await Z.apiFetch(path, {
     ...opts,
     headers: {
       ...(opts.body ? { "content-type": "application/json" } : {}),
@@ -85,9 +85,17 @@ export async function api(path, opts = {}) {
     },
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
-  const text = await res.text();
+  let text;
+  try {
+    text = await res.text();
+  } catch {
+    // Not an empty success: the caller must not act on {}. This still ends a write's hold.
+    await Z.refuseForeignAnswer(res, {});
+    throw new Error("Zold’s answer didn’t arrive. Check before you try it again.");
+  }
   let data = {};
   try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
+  await Z.refuseForeignAnswer(res, data);
   if (!res.ok) {
     // A 5xx without JSON came from in front of the API (Cloudflare, the
     // tunnel): the API never answers an error without a body.

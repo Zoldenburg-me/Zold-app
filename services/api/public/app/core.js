@@ -132,7 +132,7 @@ async function api(path, body, method, extraHeaders) {
   if (extraHeaders) Object.assign(headers, extraHeaders);
   let res;
   try {
-    res = await fetch(path, {
+    res = await Z.apiFetch(path, {
       ...(body ? { method: method ?? "POST", body: JSON.stringify(body) } : method ? { method } : {}),
       headers,
     });
@@ -147,6 +147,12 @@ async function api(path, body, method, extraHeaders) {
     throw err;
   }
   const data = await res.json().catch(() => ({}));
+  try {
+    await Z.refuseForeignAnswer(res, data);
+  } catch (e) {
+    setReachable(false);
+    throw e;
+  }
   // Only the service worker's own 503 means it could not reach us at all; the
   // API answers 503 too (a partner down, a closed rail) and that is not offline.
   setReachable(res.headers.get("x-zold-offline") !== "1");
@@ -233,7 +239,9 @@ const passkeyPause = (ms, signal) => new Promise((resolve) => {
 async function passkeyAsk(kind, publicKey, signal) {
   for (let tries = 0; ; tries++) {
     try {
-      return await navigator.credentials[kind]({ publicKey: { ...publicKey, timeout: PASSKEY_TIMEOUT_MS }, signal });
+      const prompt = navigator.credentials[kind]({ publicKey: { ...publicKey, timeout: PASSKEY_TIMEOUT_MS }, signal });
+      Z.holdReload(prompt);
+      return await prompt;
     } catch (e) {
       // Closed by a newer prompt, Cancel or the deadline: say aborted, as the
       // browser would, not "pending".
