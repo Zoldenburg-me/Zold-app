@@ -141,7 +141,7 @@ export async function loadOrg(id) {
 /* One of the three states is the page; the other two leave the DOM, so the
    page has one h1. */
 function only(sel) {
-  for (const id of ["#signed-out", "#no-orgs", "#app"]) {
+  for (const id of ["#signed-out", "#no-answer", "#no-orgs", "#app"]) {
     if (id === sel) $(id).classList.remove("hidden"); else $(id)?.remove();
   }
 }
@@ -195,8 +195,10 @@ export async function boot() {
   try {
     list = await api("/api/orgs");
   } catch (e) {
-    if (e.status === 401) { only("#signed-out"); return; }
-    throw e;
+    // Only a real 401 means signed out. Anything else keeps the session, and a
+    // toast alone would leave an empty page.
+    only(e.status === 401 ? "#signed-out" : "#no-answer");
+    return;
   }
   const session = ensureMe().then((u) => {
     renderNav();

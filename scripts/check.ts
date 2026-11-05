@@ -56,6 +56,7 @@ const scripts = [
   "safe-import:ui:test",
   "passkey-prompt:test",
   "offline-bar:test",
+  "access-expiry:test",
   "iban-moved:ui:test",
   "app-copy:ui:test",
   "monerium-screen:ui:test",

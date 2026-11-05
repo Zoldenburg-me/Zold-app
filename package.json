@@ -48,6 +48,7 @@
     "recovery-alert:ui:test": "tsx scripts/recovery-alert-ui-test.ts",
     "passkey-prompt:test": "tsx scripts/passkey-prompt-test.ts",
     "offline-bar:test": "tsx scripts/offline-bar-test.ts",
+    "access-expiry:test": "tsx scripts/access-expiry-test.ts",
     "iban-moved:ui:test": "tsx scripts/iban-moved-ui-test.ts",
     "app-copy:ui:test": "tsx scripts/app-copy-ui-test.ts",
     "monerium-screen:ui:test": "tsx scripts/monerium-screen-ui-test.ts",

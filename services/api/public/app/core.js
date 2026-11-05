@@ -135,6 +135,8 @@ async function api(path, body, method, extraHeaders) {
     res = await fetch(path, {
       ...(body ? { method: method ?? "POST", body: JSON.stringify(body) } : method ? { method } : {}),
       headers,
+      // Followed, a redirect to a login on another origin fails CORS and reads as offline.
+      redirect: "manual",
     });
   } catch {
     /* A dead network reads as "Failed to fetch", which tells the user nothing
@@ -147,6 +149,7 @@ async function api(path, body, method, extraHeaders) {
     throw err;
   }
   const data = await res.json().catch(() => ({}));
+  await Z.refuseForeignAnswer(res, data);
   // Only the service worker's own 503 means it could not reach us at all; the
   // API answers 503 too (a partner down, a closed rail) and that is not offline.
   setReachable(res.headers.get("x-zold-offline") !== "1");

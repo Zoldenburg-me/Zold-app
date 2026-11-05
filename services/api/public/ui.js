@@ -382,11 +382,46 @@
     else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
   });
 
+  /* An /api answer Zold did not write. Whatever stands in front of the API
+     (Cloudflare Access on app.zoldhq.com) answered, so the request never reached
+     Zold and says nothing about the session. Zold's own 401 and 403 always carry
+     { error }. */
+  const isForeignAnswer = (res, data) => {
+    if (res.type === "opaqueredirect") return true;
+    if (res.status === 401 || res.status === 403) return typeof data?.error !== "string";
+    const type = res.headers?.get("content-type");
+    return Boolean(res.ok && type && !type.includes("json"));
+  };
+
+  /* A reload is a navigation, which that gate can answer with its login page; a
+     fetch cannot show one. Once a minute at most, so a gate that answers /api
+     and lets the page through cannot loop: the second time the caller gets an
+     offline error and draws its "can't reach Zold" state. While the reload is
+     under way the call never settles, so nothing paints over it or signs out. */
+  let gateReloading = false;
+  const refuseForeignAnswer = async (res, data) => {
+    if (!isForeignAnswer(res, data)) return;
+    if (!gateReloading) {
+      try {
+        const last = Number(sessionStorage.getItem("zold-gate-reload")) || 0;
+        if (Date.now() - last >= 60000) {
+          sessionStorage.setItem("zold-gate-reload", String(Date.now()));
+          gateReloading = true;
+          location.reload();
+        }
+      } catch { /* no storage, so no way to count reloads: don't reload */ }
+    }
+    if (gateReloading) await new Promise(() => {});
+    const err = new Error("Zold can’t be reached from here. Reload the page, or try again in a minute.");
+    err.offline = true;
+    throw err;
+  };
+
   window.Z = Object.freeze({
     esc, icon, tag, button, isDisabled, setLoading, iconButton, topbar, largeTitle, progress,
     field, select, countries, setFieldError, focusFirstError,
     row, soonRow, listGroup, skeletonRows, avatar, iconTile, formatMoney, amount, note, kv, groupIban, copyRow,
     testModePill, bottomNav, skipLink, overlay, openOverlay, closeOverlay, announce,
-    onPhone, byDevice, passkeyName,
+    onPhone, byDevice, passkeyName, refuseForeignAnswer,
   });
 })();

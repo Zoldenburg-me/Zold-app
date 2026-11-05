@@ -84,10 +84,13 @@ export async function api(path, opts = {}) {
       ...(opts.headers || {}),
     },
     body: opts.body ? JSON.stringify(opts.body) : undefined,
+    // Followed, a redirect to a login on another origin fails CORS and reads as offline.
+    redirect: "manual",
   });
   const text = await res.text();
   let data = {};
   try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
+  await Z.refuseForeignAnswer(res, data);
   if (!res.ok) {
     // A 5xx without JSON came from in front of the API (Cloudflare, the
     // tunnel): the API never answers an error without a body.
