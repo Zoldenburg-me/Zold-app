@@ -481,7 +481,7 @@ async function phSubmit(btn, errEl) {
     phSend.error = e?.name === "NotAllowedError" ? Z.byDevice("You cancelled Face ID or fingerprint.", "You cancelled the passkey prompt.") : e.message;
     // Until Zold has refused it, /authorize may still be arriving: an unsigned
     // read then proves nothing, and a retry is a second payment nothing would stop.
-    const refused = e?.status && !e.offline && typeof e.body?.error === "string";
+    const refused = e?.status < 500 && typeof e.body?.error === "string";
     // Kept here too: Activity's next load drops an unsigned CREATED from hist.
     try {
       const fresh = await api(`/api/transfers/${created.id}`);

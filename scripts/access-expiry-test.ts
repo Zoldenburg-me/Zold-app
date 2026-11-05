@@ -315,6 +315,7 @@ await check("/app send: a lost /authorize answer read back as unsigned CREATED p
     () => { throw new TypeError("network"); },
     lostBody,
     () => response(502, "<html>Bad gateway</html>", "text/html"),
+    () => json(500, { error: "Something went wrong on our side. Check whether it went through before trying again." }),
     () => response(503, JSON.stringify({ error: "offline" }), "application/json", { headers: { get: (k: string) => (k === "x-zold-offline" ? "1" : "application/json") } }),
   ]) {
     await driveSend(authorize, () => json(200, CREATED_T));
@@ -338,6 +339,14 @@ await check("/app send: a signature that never left says \"Nothing was sent\" wi
   assert.equal(calls.some((c) => c.url.endsWith("/authorize")), false);
   assert.match(html, /Nothing was sent/);
   assert.match(html, /You cancelled/);
+  assert.match(html, /ph-again/);
+});
+
+await check("/app send: a signature that never left, read back as unsigned CREATED, says \"Nothing was sent\"", async () => {
+  await driveSend(opaque, () => json(200, CREATED_T), `async () => { throw Object.assign(new Error("x"), { name: "NotAllowedError" }); }`);
+  const html = errorScreen();
+  assert.equal(calls.some((c) => c.url.endsWith("/authorize")), false);
+  assert.match(html, /Nothing was sent/);
   assert.match(html, /ph-again/);
 });
 
