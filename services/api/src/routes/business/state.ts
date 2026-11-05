@@ -16,15 +16,12 @@ import type { DraftPayment, DraftState, Invoice } from "../../domain/types.js";
 export const contactsById = (orgId: string) =>
   new Map(store.contactsOf(orgId).map((c) => [c.id, c] as const));
 
-/**
- * A draft's execution state, derived from the transfers it created.
- * Returns a view and writes nothing.
- */
 /** What each line of a failed run did, by payee: the run shows nothing else per line, and a
  *  rebuilt run pays a sent line again. "Not sent" only where no payout can follow. */
 const lineReport = (transfers: Transfer[]) => {
+  // A holder name is free text and comes from suppliers: it must not write a heading of its own.
   const line = (t: Transfer, why?: string) =>
-    `${t.recipientName} €${t.sendEur.toFixed(2)}${why ? ` (${why})` : ""}`;
+    `${t.recipientName.replace(/[.:]/g, "")} €${t.sendEur.toFixed(2)}${why ? ` (${why})` : ""}`;
   const sent: string[] = [];
   const notSent: string[] = [];
   const waiting: string[] = [];
@@ -38,10 +35,14 @@ const lineReport = (transfers: Transfer[]) => {
     sent.length && `Sent: ${sent.join(", ")}.`,
     notSent.length && `Not sent: ${notSent.join(", ")}.`,
     waiting.length && `Still waiting: ${waiting.join(", ")}.`,
-    notSent.length && "Make a new run for the not sent lines only.",
+    notSent.length && "Create a new payment for the not sent lines only.",
   ].filter(Boolean).join(" ");
 };
 
+/**
+ * A draft's execution state, derived from the transfers it created.
+ * Returns a view and writes nothing.
+ */
 export const withExecutionState = (draft: DraftPayment) => {
   if (draft.state !== "EXECUTING" || !draft.transferIds?.length) return draft;
   const transfers = draft.transferIds

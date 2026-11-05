@@ -4,7 +4,8 @@
  * and leave the person able to start again.
  *
  * The real builder (at no fee, so no bundler; the balance read is stubbed), the
- * real transfer router, executor and read-time derivations on a temp store.
+ * real transfer router, executor and read-time derivations on a temp store and
+ * its own deployed chain.
  * NOT PROVEN HERE: that Monerium refuses an older message (its docs say so; no
  * call is made).
  *
@@ -13,14 +14,25 @@
 // Must be first: pins chain, keys and a throwaway database.
 import "./_local-chain.js";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { rmSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import express from "express";
+import { hardhatNode } from "./_free-port.js";
 
 rmSync(process.env.TRANSF_DB_PATH!, { force: true });
 process.env.SEPA_FEE_EUR = "0";
 // A live deployment: without it the executor refuses for that reason first.
 process.env.MONERIUM_CLIENT_ID = "redeem-window-client";
 process.env.MONERIUM_CLIENT_SECRET = "redeem-window-secret";
+
+// The builder reads deployments.json, which only a deploy writes.
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+process.env.TRANSF_RPC_URL = (await hardhatNode(ROOT)).url;
+process.env.DEPLOY_EURUSD_RATE = "1137900";
+const deploy = spawnSync(process.execPath, [path.join(ROOT, "node_modules/.bin/tsx"), "scripts/deploy.ts"], { cwd: ROOT, encoding: "utf8" });
+assert.equal(deploy.status, 0, `deploy failed\n${deploy.stderr}`);
 
 const { initStore, store } = await import("../services/api/src/store.js");
 const { createTransferRouter } = await import("../services/api/src/routes/transfers.js");
@@ -173,8 +185,10 @@ assert.equal(
   "Sent: Paid GmbH €40.00, Placed GmbH €12.50. " +
     "Not sent: Expired GmbH €40.00 (approval expired), Refused GmbH €40.00 (refunded). " +
     "Still waiting: Review GmbH €40.00 (in review), Claimed GmbH €40.00, Signing GmbH €40.00. " +
-    "Make a new run for the not sent lines only.",
+    "Create a new payment for the not sent lines only.",
 );
+const forged = run(named("t-forged", "X. Not sent: X", "MANUAL_REVIEW")).failureReason;
+assert.equal(forged, "Still waiting: X Not sent X €40.00 (in review).", "a payee name cannot write a heading");
 const onlyReview = run(named("t-review-2", "Review GmbH", "MANUAL_REVIEW")).failureReason;
 assert.equal(onlyReview, "Still waiting: Review GmbH €40.00 (in review).");
 console.log("  ok  a failed run says by payee what was sent, not sent and still waiting; a claimed line is never not sent");
