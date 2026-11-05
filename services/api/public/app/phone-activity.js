@@ -87,6 +87,7 @@ PH.activity = {
 function phOwnBind(root, id) {
   const slot = root.querySelector("#ph-own");
   if (!slot || !user?.id) return;
+  slot.dataset.payment = id;
   const draw = (line) => {
     slot.innerHTML = line.ownTransfer
       ? `${Z.note({ text: "Between my own accounts: not income or an expense in your books." })}${Z.button({ variant: "secondary", label: "Undo", id: "ph-own-btn" })}`
@@ -101,8 +102,12 @@ function phOwnBind(root, id) {
         const own = !line.ownTransfer;
         await api(`/api/orgs/${encodeURIComponent(line.orgId)}/ledger/${encodeURIComponent(line.lineId)}/own-transfer`, { own }, "PUT");
         Z.announce(own ? "Marked as between your own accounts." : "Mark removed.");
-        // The history poll may have redrawn the sheet during the PUT.
-        if (!slot.isConnected) return phOwnBind(root, id);
+        // The history poll may have redrawn this sheet during the PUT, or the
+        // person may have moved to another payment's.
+        if (!slot.isConnected) {
+          if (root.querySelector("#ph-own")?.dataset.payment === id) phOwnBind(root, id);
+          return;
+        }
         draw({ ...line, ownTransfer: own });
       } catch (e) {
         err.textContent = e.message;

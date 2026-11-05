@@ -7,8 +7,9 @@
  * statement's category, the overview's Revenue and Expenses, the Beleg's
  * booking and both exports, and undo restores it, a person's own category
  * included. The mark needs a session, membership and `ledger.categorise`; it
- * asks for neither the chart of accounts nor `ledger.tags`. An issued
- * Beleg is never touched and keeps verifying.
+ * asks for neither the chart of accounts nor `ledger.tags`. An issued Beleg is
+ * never touched. One issued before a mark keeps verifying; one issued on a
+ * marked line fails verification once the mark comes off.
  *
  * What this cannot show: the screens in a browser. Offline.
  *
@@ -373,6 +374,50 @@ await check("a Beleg that says own transfer fails verification once the books st
 });
 
 console.log("\nThe screens");
+
+await check("a sheet redrawn during the PUT is rebound only if it still shows that payment", async () => {
+  const src = readFileSync(path.join(ROOT, "services/api/public/app/phone-activity.js"), "utf8").match(/function phOwnBind\(root, id\) \{[\s\S]*?\n\}/)![0];
+  const sheet = () => {
+    const btn: any = { getAttribute: () => null };
+    const err = { textContent: "" };
+    return { innerHTML: "", isConnected: true, dataset: {}, btn, querySelector: (s: string) => (s === "#ph-own-btn" ? btn : err), appendChild: (x: any) => x };
+  };
+  const tick = () => new Promise((r) => setImmediate(r));
+  const Z = { isDisabled: () => false, setLoading() {}, announce() {}, note: (o: any) => o.text, button: (o: any) => o.label };
+  const run = async (next: "A" | "B") => {
+    const marked = new Set<string>();
+    const lookups: string[] = [];
+    let land = () => {};
+    const api = async (url: string, body?: any) => {
+      const id = decodeURIComponent(url.split("/").pop()!);
+      if (!body) { lookups.push(id); return { line: { orgId: "o", lineId: id, ownTransfer: marked.has(id) } }; }
+      await new Promise<void>((r) => { land = r; });
+      marked.add(decodeURIComponent(url.split("/").at(-2)!));
+      return {};
+    };
+    const bind = new Function("Z", "api", "user", "document", `${src}; return phOwnBind;`)(Z, api, { id: "u" }, {});
+    const first = sheet();
+    const root = { querySelector: () => first as any };
+    bind(root, "A");
+    await tick();
+    const press = first.btn.onclick();
+    await tick();
+    const second = sheet();
+    first.isConnected = false;
+    root.querySelector = () => second;
+    bind(root, next);
+    await tick();
+    land();
+    await press;
+    await tick();
+    return { second, lookups };
+  };
+  const other = await run("B");
+  assert.doesNotMatch(other.second.innerHTML, /Undo/, "payment A's Undo on payment B's sheet");
+  assert.deepEqual(other.lookups, ["A", "B"]);
+  const same = await run("A");
+  assert.match(same.second.innerHTML, /Undo/, "the same payment shows its new state");
+});
 
 await check("Revenue and Expenses are summed from counted lines; cash keeps every line; both screens carry the plain words", () => {
   const read = (f: string) => readFileSync(path.join(ROOT, "services/api/public", f), "utf8");
