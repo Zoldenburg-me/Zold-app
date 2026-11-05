@@ -518,8 +518,9 @@ router receives injected and never rebuilds.
   - If the funds were swapped (non-batch), it reverse-swaps and returns the
     measured EURe.
   - A live batch swap, or any failure of the above, goes to MANUAL_REVIEW.
-- SEPA: a Monerium **4xx** refunds the fee. A **timeout or 5xx** goes to
-  MANUAL_REVIEW ("redeem outcome unknown").
+- SEPA: a Monerium **401 or 403** refunds the fee. Any other answer goes to
+  MANUAL_REVIEW ("redeem outcome unknown"), including a timeout and a 400, 409
+  or 422: its API reference lists no other refusal and no answer for a duplicate.
 - Sweeps:
   - `sweepStrandedTransfers` runs at boot and every 5 min and skips any
     transfer being executed or compensated. It re-fails DEBITED/SWAPPED/BRIDGED

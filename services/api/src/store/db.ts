@@ -461,8 +461,10 @@ export function persist() {
   } catch (err) {
     // Memory now holds a change the disk refused. Serving on would answer
     // from it, and the next good write would land it after the caller saw an
-    // error. Exit before any response goes out, so the supervisor restarts
-    // from the last good db.json. The code only: the message can carry data.
+    // error. Exit before any response goes out, so the supervisor restarts from
+    // what is on disk: the last good db.json, or this change if only the
+    // directory sync failed, after the rename. The code only: the message can
+    // carry data.
     const e = err as NodeJS.ErrnoException | undefined;
     console.error(`FATAL store write failed (${e?.code ?? e?.name}) — the API is exiting`);
     // No second copy of the store left behind; we are exiting either way.
