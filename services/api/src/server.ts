@@ -32,7 +32,7 @@ import { createUserRouter } from "./routes/users.js";
 import { createCryptoDepositRouter } from "./routes/crypto-deposits.js";
 import { createPaymentPageRouter } from "./routes/payment-page.js";
 import { createEnsRouter } from "./routes/ens.js";
-import { createCryptoSendsRouter } from "./routes/crypto-sends.js";
+import { createCryptoSendsRouter, settleUnconfirmedCryptoSends } from "./routes/crypto-sends.js";
 import { createEmailVerificationRouter } from "./routes/email-verification.js";
 import { createReceiptShareRouter } from "./routes/receipt-shares.js";
 import { createFaucetRouter } from "./routes/faucet.js";
@@ -326,6 +326,7 @@ sweepStrandedTransfers()
   .then((n) => n && console.log(`Compensation sweep: compensated ${n} stranded transfer(s)`))
   .catch((e) => console.error(`Compensation sweep failed: ${describeCause(e)}`));
 setInterval(() => sweepStrandedTransfers().catch(() => {}), 5 * 60_000).unref();
+setInterval(() => settleUnconfirmedCryptoSends().catch(() => {}), 60_000).unref();
 // Tell the checkout service when one of its transfers moves (CHECKOUT_WEBHOOK_URL).
 if (startCheckoutWebhook()) console.log("checkout webhook: on");
 // Zoldenburg recoveries: pick up a signature made in Safe Cover, expire

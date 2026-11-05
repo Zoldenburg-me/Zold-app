@@ -303,7 +303,7 @@ spend during the grace period.
 | **SEPA transfer** | BUILT; one owner round on Base mainnet: mints and Monerium's redeem burn on chain (`docs/status.md`) | Monerium *redeems* EURe from the Safe to the payee's IBAN. The principal never passes through Zold, so it is non-custodial. The Zold fee is €0. The payee sees a reference plus "Powered by Zold". |
 | **Cash pickup (MoneyGram via Bridge.xyz and a Stellar anchor)** | GATED | Closed unless `BRIDGE_LIVE=1` and an anchor are configured. Quotes answer 503 `RAIL_CLOSED` and the app hides the corridor. It has never run live. |
 | **Zold-to-Zold** | NOT BUILT | The "Zold account" option on a pay link opens a pre-filled *SEPA* send. |
-| **Crypto out** | NOT BUILT | Marked SOON in the app ("USDC in only, never out"). |
+| **Crypto out** | BUILT, UNPROVEN | EURe or USDC from the Safe to an ENS name or 0x address, sanctions-screened, off unless `CRYPTO_SEND_ENABLED=1`. SOON in the app while off. |
 | **UPI** | Deleted | It minted references for money that reached nobody. |
 
 ### 5.3 Transfer lifecycle (what the user sees)

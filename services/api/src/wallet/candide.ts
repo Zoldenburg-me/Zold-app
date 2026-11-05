@@ -713,6 +713,21 @@ export async function submitPasskeySafeOperationWithReceipt(
   };
 }
 
+/** The bundler's answer for an operation it took; null while it has no receipt. */
+export async function userOperationOutcome(userOpHash: string): Promise<{ success: boolean; txHash: string } | null> {
+  const res = await fetch(CANDIDE.bundlerUrl, {
+    signal: partnerTimeout(),
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_getUserOperationReceipt", params: [userOpHash] }),
+  });
+  const { result, error } = await res.json();
+  if (error) throw new Error(`eth_getUserOperationReceipt failed: ${redactedMessage(error?.message ?? JSON.stringify(error))}`);
+  if (!result) return null;
+  if (typeof result.success !== "boolean" || !result.receipt?.transactionHash) throw new Error("unreadable user operation receipt");
+  return { success: result.success, txHash: result.receipt.transactionHash };
+}
+
 export async function signMessageAsPasskeySafe(
   plan: PasskeySafeDeploymentPlan,
   safeAddress: string,

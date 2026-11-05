@@ -31,11 +31,12 @@ function phPayees() {
 /* Why sending is closed, and the one thing that opens it. null: open. */
 function phSendBlocked(u = user) {
   if (!HAS("onchain_balance")) return { text: "Sending is not part of this account.", action: null };
-  // Send is a bank transfer today; sending to a crypto wallet is not built.
-  if (!bankOffered(u) && !kycApproved(u)) return { text: "Sending opens once your identity is verified, and this account has no bank account to verify it with.", action: null };
-  if (!kycApproved(u) || !u?.iban) return { text: "Sending opens once Monerium has verified you and your IBAN is active.", action: { id: "ph-send-verify", label: "Verify your identity" } };
+  if (!bankOffered(u) && !kycApproved(u)) return { text: "Bank transfers open once your identity is verified, and this account has no bank account to verify it with.", action: null };
+  if (!kycApproved(u) || !u?.iban) return { text: "Bank transfers open once Monerium has verified you and your IBAN is active.", action: { id: "ph-send-verify", label: "Verify your identity" } };
   return null;
 }
+
+const phWalletRow = () => Z.row({ lead: Z.iconTile({ icon: "account_balance_wallet", tone: "p" }), title: "Crypto wallet", sub: `EURe or ${usdSym()} to an ENS name or 0x address`, href: "#send/wallet" });
 
 function phPayeeRow(p, href) {
   return Z.row({ lead: Z.avatar({ name: p.name }), title: p.name || "Payee", sub: phMaskIban(p.iban), href });
@@ -50,7 +51,7 @@ PH.send = {
     const payees = phPayees();
     const q = phQuery;
     return `${phTop("Send")}${phMain(`
-      ${blocked ? `${Z.note({ tone: "a", text: blocked.text })}${blocked.action ? Z.button({ variant: "primary", full: true, label: blocked.action.label, id: blocked.action.id }) : ""}` : `
+      ${blocked ? `${Z.note({ tone: "a", text: blocked.text })}${blocked.action ? Z.button({ variant: "primary", full: true, label: blocked.action.label, id: blocked.action.id }) : ""}${caps.cryptoSend && HAS("onchain_balance") ? Z.listGroup({ label: "New payment", rows: [phWalletRow()] }) : ""}` : `
       <form class="z-search" role="search" onsubmit="return false">
         <label class="z-sr" for="ph-sq">Search people you’ve paid</label>${Z.icon("search")}
         <input class="z-search__input" id="ph-sq" type="search" name="q" autocomplete="off" spellcheck="false" placeholder="Name or IBAN…" value="">
@@ -63,7 +64,7 @@ PH.send = {
         rows: [
           Z.row({ lead: Z.iconTile({ icon: "account_balance", tone: "p" }), title: "Bank transfer", sub: "To any IBAN in Europe, no Zold fee", right: Z.tag("Beta"), href: "#send/new" }),
           caps.cryptoSend
-            ? Z.row({ lead: Z.iconTile({ icon: "account_balance_wallet", tone: "p" }), title: "Crypto wallet", sub: `EURe or ${usdSym()} to an ENS name or 0x address`, href: "#send/wallet" })
+            ? phWalletRow()
             : Z.soonRow({ lead: Z.iconTile({ icon: "account_balance_wallet" }), title: "Crypto wallet", sub: `Send digital dollars (${usdSym()}) to a wallet` }),
         ],
       })}

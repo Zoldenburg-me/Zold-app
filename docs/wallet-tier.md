@@ -50,8 +50,10 @@ Other rails are not engaged (`docs/roadmap.md` items 0–1).
   nothing asks the user to verify. A rejected account is told: our banking
   partner can't onboard you at the moment; you can keep using Zold as a
   wallet.
-- There is no route that sends tokens to an arbitrary address or swaps
-  between arbitrary tokens. The app's Send is SEPA only and says so.
+- **Crypto sends** (`routes/crypto-sends.ts`, off unless `CRYPTO_SEND_ENABLED=1`)
+  are a wallet feature: EURe or USDC to an address the user chose, the only
+  route that does, with Send's bank rows closed as above. No route swaps
+  between arbitrary tokens.
 
 ## Business features without KYC
 
@@ -93,9 +95,10 @@ credentials.
 - **Gas.** Safe deployment and conversions are sponsored on Base Sepolia, for
   wallet accounts too. Before mainnet: `token` gas or a per-account cap for
   accounts without a fiat partner (sybil drain).
-- **Address screening.** Needed before any outgoing op to a user-chosen
-  address exists; none does yet. No answer from the screening source →
-  refuse. Provider not chosen.
+- **Address screening.** `sanctions.ts` reads Chainalysis's on-chain sanctions
+  oracle at both steps of a crypto send; no answer → refuse. Test chains have
+  no oracle and skip it. Sanctions lists only, no wider risk score: whether
+  that is enough is for counsel, with the deny list.
 - **Zold fee on wallet-tier swaps and checkout.** Conversion has none. A fee
   on routing an anonymous user's swaps or merchant payments may make
   Zoldenburg a CASP under MiCA. Lawyer before any fee lands.
@@ -111,7 +114,6 @@ per call, store nothing: the wallet tier adds no identity fields.
 
 ## Remaining PRs on `x/wallet-tier*`
 
-1. Gas policy for accounts without a fiat partner; address screening with the
-   first send-to-address route.
+1. Gas policy for accounts without a fiat partner.
 2. Unverified-name rendering on invoices and checkout.
 3. Shopify per-merchant credentials.
