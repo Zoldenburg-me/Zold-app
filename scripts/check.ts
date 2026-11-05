@@ -132,6 +132,7 @@ const scripts = [
   "crypto-send-ui:test",
   "tx:audit:test",
   "statement:test",
+  "own-transfer:test",
   "wallet-sync:test",
   "income-invoices:test",
   "wallet-proof:test",

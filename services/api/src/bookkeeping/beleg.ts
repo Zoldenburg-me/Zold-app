@@ -16,6 +16,7 @@
  * real money, and the document says so in words.
  */
 import { CHAIN_ID } from "../config.js";
+import { bookedCode, isOwnTransfer } from "../domain/ledger.js";
 import type { LedgerEntry, StatementFacts } from "../domain/types.js";
 import type { HolderBlock } from "../documents.js";
 import type { ConversionSweep, CryptoDeposit, MoneriumIssueRecord, Transfer } from "../store/types.js";
@@ -28,7 +29,7 @@ export interface BelegSnapshot {
   kind: "beleg";
   holder: HolderBlock;
   /** The statement line as booked. */
-  line: StatementFacts & { lineId: string; accountCode?: string };
+  line: StatementFacts & { lineId: string; accountCode?: string; ownTransfer?: boolean };
   /** The invoice, when the line settles one. */
   invoice?: { number: string; payer?: string; invoiceId?: string; source: "zold" | "external" };
   /** SEPA facts, on a bank line. */
@@ -105,7 +106,12 @@ export function buildBeleg(entry: LedgerEntry, ctx: BelegContext): BelegSnapshot
   const snap: BelegSnapshot = {
     kind: "beleg",
     holder: ctx.holder,
-    line: { ...s, lineId: entry.id, ...(entry.accountCode ? { accountCode: entry.accountCode } : {}) },
+    line: {
+      ...s,
+      lineId: entry.id,
+      ...(bookedCode(entry) ? { accountCode: bookedCode(entry) } : {}),
+      ...(isOwnTransfer(entry) ? { ownTransfer: true } : {}),
+    },
     chainId: CHAIN_ID,
   };
   const req = ctx.paymentRequest;
@@ -227,6 +233,9 @@ export function belegStillAgrees(
   const diffs: string[] = [];
   if (!ctx.entry) diffs.push("the statement line no longer exists");
   else if (ctx.entry.statement?.amountCents !== snap.line.amountCents) diffs.push(`the line now reads ${(ctx.entry.statement!.amountCents / 100).toFixed(2)}`);
+  // One way only: a Beleg issued before a mark keeps the booking it froze, as
+  // after a hand recategorisation. This one states a fact the books now deny.
+  if (ctx.entry && snap.line.ownTransfer && !isOwnTransfer(ctx.entry)) diffs.push("the line is no longer marked as between own accounts");
   if (snap.receipt) {
     if (!ctx.deposit) diffs.push("the deposit record is gone");
     else {
@@ -343,6 +352,7 @@ export function belegLines(snap: BelegSnapshot, code: string, issuedAt: string):
   heading("Booked against");
   if (snap.invoice) kv("Invoice", `${snap.invoice.number}${snap.invoice.payer ? ` · ${snap.invoice.payer}` : ""}${snap.invoice.source === "external" ? " (issued outside Zold)" : ""}`);
   kv("Account code", line.accountCode);
+  if (line.ownTransfer) kv("Booked as", "Between the holder's own accounts, not income or an expense");
   if (memo && !memoInRow) kv("Memo", memo);
   kv("Zold fee", bank?.feeEur !== undefined ? eur(bank.feeEur) : undefined);
   if (bank?.refund) kv("Refund", `${eur(bank.refund.amountEur)} at ${when(bank.refund.at)} — ${bank.refund.deductions}`);

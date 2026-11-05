@@ -403,10 +403,15 @@ RENDER.books = async () => {
   const rows = [...d.lines].sort((a, b) => b.valueDate.localeCompare(a.valueDate)).map((l) => {
     const inbound = l.amountCents >= 0;
     const who = l.counterparty?.name || (inbound ? "Money in" : "Payment");
-    const cat = chart
+    const mayMark = roleCan(org?.role, "categorise");
+    const cat = l.ownTransfer
+      ? `Between my own accounts<span class="zb-sub2">Not income or an expense</span>${mayMark ? `<button type="button" class="zb-memo" data-act="bk-own" data-id="${esc(l.id)}" data-own="false">Undo<span class="z-sr">: ${esc(who)} is not between my own accounts</span></button>` : ""}`
+      : chart
       ? `<label class="z-sr" for="cat-${esc(l.id)}">Category for ${esc(who)}, ${esc(day(ymd(l.valueDate)))}</label><select class="zb-inline" id="cat-${esc(l.id)}" data-cat-of="${esc(l.id)}" data-was="${esc(l.accountCode || "")}">
           ${l.accountCode ? "" : '<option value="" selected>Choose…</option>'}${chart.map((c) => `<option value="${esc(c.code)}"${c.code === l.accountCode ? " selected" : ""}>${esc(plain(c.name))}</option>`).join("")}</select>`
       : l.accountCode ? esc(l.accountCode) : '<span class="z-dim">None</span>';
+    const markOwn = !l.ownTransfer && l.ownTransferAllowed && mayMark
+      ? `<button type="button" class="zb-memo" data-act="bk-own" data-id="${esc(l.id)}" data-own="true">Between my own accounts<span class="z-sr">: ${esc(who)}, ${esc(day(ymd(l.valueDate)))}</span></button>` : "";
     const memo = l.note
       ? `<button type="button" class="zb-memo zb-memo--set" data-act="bk-memo" data-id="${esc(l.id)}">${esc(l.note)}<span class="z-sr">, change the memo</span></button>`
       : `<button type="button" class="zb-memo" data-act="bk-memo" data-id="${esc(l.id)}">${Z.icon("edit_note")}Add memo<span class="z-sr"> for ${esc(who)}</span></button>`;
@@ -415,7 +420,7 @@ RENDER.books = async () => {
       : `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="line-beleg" data-line="${esc(l.id)}">Create<span class="z-sr"> a booking receipt for ${esc(who)}</span></button>`;
     return `<tr><td class="z-dim">${esc(day(ymd(l.valueDate)))}</td>
       <td><span class="z-tbl__who">${Z.avatar({ name: who })}<span>${esc(who)}${l.reference && l.reference !== l.note ? `<span class="zb-sub2">${esc(l.reference)}</span>` : ""}</span></span></td>
-      <td>${memo}</td><td>${cat}</td><td>${beleg}${l.unexecuted ? ` ${Z.tag("Unproven", "amber")}` : ""}</td>
+      <td>${memo}</td><td>${cat}${markOwn}</td><td>${beleg}${l.unexecuted ? ` ${Z.tag("Unproven", "amber")}` : ""}</td>
       <td class="z-tbl__num">${Z.amount({ value: Math.abs(l.amountCents) / 100, direction: inbound ? "in" : "out" })}</td></tr>`;
   });
   const accountants = (mem || []).filter((m) => m.role === "accountant" && m.status === "active");

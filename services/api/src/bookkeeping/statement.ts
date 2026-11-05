@@ -534,12 +534,16 @@ function bookedAsOneLine(byKey: Map<string, LedgerEntry>, key: string): boolean 
   return !!m && byKey.has(`deposit:${m[1]}:converted`);
 }
 
+/** An invoice number alone is an external invoice on a pay link. */
+const settlesInvoice = (s: StatementFacts) => Boolean(s.links.invoiceId || s.links.invoiceNumber);
+
 /**
  * What to write. Rows are matched by statement key. A new row is added; an
  * existing one has only its statement facts refreshed (a conversion that
  * gained a tx hash, an order that gained a counterparty), and keeps its id,
- * created time, tags, note, document code and — above all — any account
- * code, because a human may have set it.
+ * created time, note, document code, tags (bar an own-transfer mark on a line
+ * that now settles an invoice) and — above all — any account code, because a
+ * human may have set it.
  */
 export function mergeStatementLines(
   existing: LedgerEntry[],
@@ -557,7 +561,11 @@ export function mergeStatementLines(
     }
     const nextFacts: StatementFacts = { ...p.statement!, ...(cur.statement?.documentCode ? { documentCode: cur.statement.documentCode } : {}) };
     const facts = { ...cur.statement, ...nextFacts };
+    // A line that settles an invoice is income or an expense by that invoice,
+    // so a mark made before the match does not stand (ownTransferAllowed).
+    const dropMark = settlesInvoice(p.statement!) && cur.tags.includes("internal");
     const changed =
+      dropMark ||
       JSON.stringify(facts) !== JSON.stringify(cur.statement) ||
       cur.amount !== p.amount ||
       cur.direction !== p.direction ||
@@ -575,11 +583,23 @@ export function mergeStatementLines(
           ...(p.txHash ? { txHash: p.txHash } : {}),
           counterparty: { ...(cur.counterparty ?? {}), ...(p.counterparty ?? {}) },
           statement: facts,
+          ...(dropMark ? { tags: cur.tags.filter((t) => t !== "internal") } : {}),
         },
       });
     }
   }
   return { toAdd, toUpdate };
+}
+
+const OWN_TRANSFER_EVENTS = new Set<StatementEvent>(["sepa_in", "eure_in", "crypto_held", "crypto_converted", "crypto_out"]);
+
+/** May a person call this line a move between their own accounts? Only one
+ *  payment in or out: a fee, a reversal, a sweep or a disposal is none, and a
+ *  line settling an invoice is income or an expense by that invoice. */
+export function ownTransferAllowed(e: LedgerEntry): boolean {
+  const s = e.statement;
+  if (!s || settlesInvoice(s)) return false;
+  return OWN_TRANSFER_EVENTS.has(s.event) || s.key.endsWith(":payout");
 }
 
 /** Lines in a calendar month, by value date. */

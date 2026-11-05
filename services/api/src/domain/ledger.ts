@@ -149,6 +149,12 @@ const isMoney = (e: LedgerEntry) =>
   tagged(e, "e-money") || e.asset.toUpperCase() === "EURE" || (e.source.kind === "account" && FIAT.has(e.asset.toUpperCase()));
 const isUnlisted = (e: LedgerEntry) => tagged(e, "unlisted") || e.txType === "unlisted_token";
 const isInternal = (e: LedgerEntry) => tagged(e, "internal") || e.txType === "internal_transfer";
+/** A statement line the holder marked as between their own accounts. A wallet
+ *  row's `internal` tag is the sync's, and keeps its category. */
+export const isOwnTransfer = (e: LedgerEntry) => Boolean(e.statement) && tagged(e, "internal");
+/** The code a row is booked to for every reader. A marked line is on none, and
+ *  keeps its stored code so undo brings back the rule's or the person's choice. */
+export const bookedCode = (e: LedgerEntry) => (isOwnTransfer(e) ? undefined : e.accountCode);
 /** A value the books can use: EUR, and not marked as missing. */
 const valueCents = (e: LedgerEntry): number | undefined =>
   tagged(e, "needs-valuation") || (e.fiatCurrency !== undefined && e.fiatCurrency !== "EUR") ? undefined : eurCents(e.fiatValue);
@@ -639,7 +645,7 @@ export function ledgerExportRows(entries: LedgerEntry[]): Record<string, unknown
     fiatValue: e.fiatValue ?? "",
     fiatRate: e.fiatRate ?? "",
     counterparty: e.counterparty?.name ?? e.counterparty?.address ?? "",
-    accountCode: e.accountCode ?? "",
+    accountCode: bookedCode(e) ?? "",
     tags: e.tags.join(";"),
     note: e.note ?? "",
     txHash: e.txHash ?? "",

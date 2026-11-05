@@ -315,7 +315,7 @@ RENDER.export = async () => {
         <td class="zb-top z-dim">${esc(day(ymd(l.valueDate)))}${l.bookingDate !== l.valueDate ? `<span class="zb-sub2">booked ${esc(day(ymd(l.bookingDate)))}</span>` : ""}</td>
         <td class="zb-top">${esc(EVENT_LABEL[l.event] || l.event)}${l.unexecuted ? ` ${Z.tag("Unproven", "amber")}` : ""}</td>
         <td class="zb-top">${esc(l.counterparty?.name || "")}<span class="zb-sub2 z-mono">${esc(l.counterparty?.iban ? maskIban(l.counterparty.iban) : l.counterparty?.address ? `${l.counterparty.address.slice(0, 10)}…` : "")}</span></td>
-        <td class="zb-top">${esc(l.reference)}${l.links?.invoiceNumber ? `<span class="zb-sub2">Invoice ${esc(l.links.invoiceNumber)}</span>` : ""}</td>
+        <td class="zb-top">${esc(l.reference)}${l.ownTransfer ? `<span class="zb-sub2">Between my own accounts</span>` : ""}${l.links?.invoiceNumber ? `<span class="zb-sub2">Invoice ${esc(l.links.invoiceNumber)}</span>` : ""}</td>
         <td class="zb-top z-tbl__num">${Z.amount({ value: Math.abs(l.amountCents) / 100, direction: l.amountCents >= 0 ? "in" : "out" })}</td>
         <td class="zb-top">${l.documentCode ? `<a class="zb-beleg" href="${esc(l.documentUrl)}" target="_blank" rel="noopener">${Z.icon("attach_file")}${esc(l.documentCode)}<span class="z-sr"> (opens in a new tab)</span></a>` : `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="line-beleg" data-line="${esc(l.id)}">Create<span class="z-sr"> a booking receipt</span></button>`}</td></tr>`).join("")}</tbody></table></div>`
       : `<div class="z-card"><p class="empty">No statement lines in ${esc(exportMonth)}. Lines appear once money moves on an account backed by a member’s own account.</p></div>`}`;

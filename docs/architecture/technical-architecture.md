@@ -1531,7 +1531,7 @@ Settings (`config/checkout-service.ts`; a bad webhook URL or secret refuses star
 | `GET/POST /:orgId/chart-of-accounts` (C(coa.manage)) | Chart of accounts. |
 | `POST /:orgId/account-rules[/apply]` (C(coa.rules)) | Add a rule, or re-run rules. |
 | `GET /:orgId/ledger` (C(ledger.transactions)) | Ledger. |
-| `PATCH /:orgId/ledger/:e` (C(ledger.transactions)) | Categorise a ledger row. |
+| `PATCH /:orgId/ledger/:e` (C(ledger.transactions)) | Categorise a ledger row. Changing a statement line's `internal` tag is a 409, as that goes through `own-transfer`; so is setting a category on a marked line. |
 | `GET /:orgId/assets` (C(assets.costBasis), P(ledger.read)) | Holdings per token with their lots, disposals, moves to the Zold account, shortfalls, quantity-only tokens, unvalued rows and each wallet's proof state. |
 | `GET /:orgId/reports/realised-gains` (C(assets.costBasis), P(ledger.read)) | Measured gains and losses per month in the reporting time zone, with every disposal. |
 | `POST /:orgId/ledger/:e/revalue` (C(ledger.transactions), P(ledger.categorise)) | Ask the price feed again for an unvalued wallet row. 409 not revaluable, 422 still no price, 503 feed or ECB down. |
@@ -1540,6 +1540,8 @@ Settings (`config/checkout-service.ts`; a bad webhook URL or secret refuses star
 | `GET /:orgId/export/ledger.csv` (C(export.ledger)) | Ledger CSV. |
 | `GET /:orgId/bookkeeping/statement[?month=]` (C(ledger.transactions)) | Statement lines: one per economic event, with links and Beleg codes. |
 | `POST /:orgId/bookkeeping/statement/rebuild` (C(ledger.transactions), ledger.categorise) | Re-run the ledger writer for the org's accounts. |
+| `PUT /:orgId/ledger/:entryId/own-transfer` (C(ledger.transactions), ledger.categorise) | `{own: true or false}` on a statement line: the person says this payment is between their own accounts. Sets or removes the `internal` tag: out of Revenue, Expenses and the category, while the stored code stays for undo. Refused on a fee, reversal, sweep, disposal or invoice payment. |
+| `GET /users/:id/books-line/:paymentId` (session) | The statement line behind one payment for /app's detail sheet: `{orgId, lineId, ownTransfer}`, or `null` where the sheet draws no action: no line, no books, no permission, a crypto send or a conversion in parts (both marked on the statement in /business), or a line that cannot be marked and is not. |
 | `POST /:orgId/bookkeeping/export/:month/prepare` (C(export.ledger), reports.run) | Issue the month's missing Belege. |
 | `GET /:orgId/bookkeeping/export/:month/lexware.csv` (C(export.ledger)) | Lexware Office bank-import CSV. |
 | `GET /:orgId/bookkeeping/export/:month/belege.zip` (C(export.ledger)) | ZIP of the month's Belege. |

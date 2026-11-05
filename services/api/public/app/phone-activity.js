@@ -82,6 +82,44 @@ PH.activity = {
   },
 };
 
+/* "Between my own accounts", under a payment. Only where the API says the mark
+   is possible (routes/books-line.ts), so nothing shows until it answers. */
+function phOwnBind(root, id) {
+  const slot = root.querySelector("#ph-own");
+  if (!slot || !user?.id) return;
+  slot.dataset.payment = id;
+  const draw = (line) => {
+    slot.innerHTML = line.ownTransfer
+      ? `${Z.note({ text: "Between my own accounts: not income or an expense in your books." })}${Z.button({ variant: "secondary", label: "Undo", id: "ph-own-btn" })}`
+      : `${Z.button({ variant: "secondary", label: "Between my own accounts", id: "ph-own-btn" })}<p class="z-hint">Mark it if this money moved to or from another account of yours. It is then not income or an expense in your books.</p>`;
+    const b = slot.querySelector("#ph-own-btn");
+    b.onclick = async () => {
+      if (Z.isDisabled(b)) return;
+      Z.setLoading(b, true);
+      const err = slot.querySelector(".z-err") || slot.appendChild(Object.assign(document.createElement("p"), { className: "z-err", role: "alert" }));
+      err.textContent = "";
+      try {
+        const own = !line.ownTransfer;
+        await api(`/api/orgs/${encodeURIComponent(line.orgId)}/ledger/${encodeURIComponent(line.lineId)}/own-transfer`, { own }, "PUT");
+        Z.announce(own ? "Marked as between your own accounts." : "Mark removed.");
+        // The history poll may have redrawn this sheet during the PUT, or the
+        // person may have moved to another payment's.
+        if (!slot.isConnected) {
+          if (root.querySelector("#ph-own")?.dataset.payment === id) phOwnBind(root, id);
+          return;
+        }
+        draw({ ...line, ownTransfer: own });
+      } catch (e) {
+        err.textContent = e.message;
+        Z.setLoading(b, false);
+      }
+    };
+  };
+  api(`/api/users/${encodeURIComponent(user.id)}/books-line/${encodeURIComponent(id)}`)
+    .then((r) => { if (r.line && slot.isConnected) draw(r.line); })
+    .catch(() => { /* the payment still reads without the action */ });
+}
+
 /* One payment: its body and its actions, drawn as a screen on the phone and
    as a drawer over Activity on a desktop (app/desktop.js). */
 function phTxParts(id) {
@@ -119,6 +157,7 @@ function phTxParts(id) {
     ${t.error ? Z.note({ tone: "a", text: t.error }) : ""}
     ${phInFlight(t) ? Z.note({ tone: "p", html: `On its way. <a href="${phHref("send/progress", t.id)}">See progress</a>` }) : ""}
     ${Z.kv(rows)}
+    <div id="ph-own" class="z-stack"></div>
     <details class="z-disclose"><summary>Technical details${Z.icon("expand_more")}</summary>${Z.kv(tech)}</details>
     <p class="z-err" id="ph-tx-err" role="alert" hidden></p>
   `, foot: t.state === "CREATED" ? "" : `<div class="z-pair">
@@ -135,6 +174,7 @@ PH.tx = {
     return `${phTop("Payment", "activity")}${phMain(p.body)}${p.foot ? phFoot(p.foot) : ""}`;
   },
   bind(root, id) {
+    phOwnBind(root, id);
     const b = root.querySelector("#ph-tx-receipt");
     if (b) b.onclick = async () => {
       Z.setLoading(b, true);
@@ -203,6 +243,7 @@ function phInParts(id) {
         { key: "Received as", value: "Bank transfer (SEPA)" },
         ...(t.memo ? [{ key: "Reference", value: t.memo }] : []),
       ])}
+      <div id="ph-own" class="z-stack"></div>
       <details class="z-disclose"><summary>Technical details${Z.icon("expand_more")}</summary>${Z.kv([{ key: "Payment ID", value: t.id, mono: true }])}</details>
     ` };
   }
@@ -236,6 +277,7 @@ function phInParts(id) {
     ${Z.note({ tone: t.holding === "refused" || t.holding === "unconfirmed" ? "a" : "p", text: phInStory(t) })}
     ${t.reason && t.holding === "refused" ? Z.note({ tone: "a", text: t.reason }) : ""}
     ${Z.kv(rows)}
+    <div id="ph-own" class="z-stack"></div>
     <details class="z-disclose"><summary>Technical details${Z.icon("expand_more")}</summary>${Z.kv(tech)}</details>
   `, foot: convertible ? Z.button({ variant: "primary", full: true, icon: "currency_exchange", label: "Convert to euros", href: phHref("convert", t.id) }) : "" };
 }
@@ -247,7 +289,7 @@ PH.in = {
     const p = phInParts(id);
     return `${phTop("Payment", "activity")}${phMain(p.body)}${p.foot ? phFoot(p.foot) : ""}`;
   },
-  bind() {},
+  bind(root, id) { phOwnBind(root, id); },
 };
 
 /* The older share composer, reached from one payment. */

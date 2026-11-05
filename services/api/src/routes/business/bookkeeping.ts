@@ -11,14 +11,18 @@ import { store } from "../../store.js";
 import { TX_TYPES, applyRules, validateChartAccount } from "../../domain/coa.js";
 import {
   LEDGER_EXPORT_COLUMNS,
+  bookedCode,
   computeCostBasis,
   ledgerExportRows,
   monthlyBalances,
   positions,
   realisedByMonth,
   toCsv,
+  isOwnTransfer,
 } from "../../domain/ledger.js";
 import { IncomeInvoiceError } from "../../domain/income-invoices.js";
+import { ownTransferAllowed } from "../../bookkeeping/statement.js";
+import { publicStatementLine } from "./bookkeeping-export.js";
 import { proofStateOf } from "../../domain/wallet-ownership.js";
 import { revaluable, revalueEntry } from "../../wallet-sync/revalue.js";
 import { CHAIN_ID } from "../../config.js";
@@ -173,11 +177,11 @@ export function createBookkeepingRoutes(deps: OrgRoutes): express.Router {
     if (to) entries = entries.filter((e) => e.at <= String(to));
     if (asset) entries = entries.filter((e) => e.asset.toUpperCase() === String(asset).toUpperCase());
     if (direction) entries = entries.filter((e) => e.direction === direction);
-    if (accountCode) entries = entries.filter((e) => e.accountCode === String(accountCode));
+    if (accountCode) entries = entries.filter((e) => bookedCode(e) === String(accountCode));
     if (tag) entries = entries.filter((e) => e.tags.includes(String(tag)));
 
     res.json({
-      entries: entries.sort((a, b) => b.at.localeCompare(a.at)),
+      entries: entries.sort((a, b) => b.at.localeCompare(a.at)).map((e) => ({ ...e, accountCode: bookedCode(e) })),
       total: entries.length,
     });
   });
@@ -192,6 +196,8 @@ export function createBookkeepingRoutes(deps: OrgRoutes): express.Router {
 
     const patch: Record<string, unknown> = {};
     if (req.body?.accountCode !== undefined) {
+      // Undo would bring back a code nobody saw being set.
+      if (isOwnTransfer(entry)) return res.status(409).json({ error: "This line is between your own accounts, so it has no category. Undo that first." });
       const code = String(req.body.accountCode);
       if (!store.chartOf(ctx.org.id).some((c) => c.code === code)) {
         return res.status(400).json({ error: `No account with code ${code}.` });
@@ -203,9 +209,36 @@ export function createBookkeepingRoutes(deps: OrgRoutes): express.Router {
     if (Array.isArray(req.body?.tags)) {
       if (!requireCapability(ctx, res, "ledger.tags")) return;
       patch.tags = req.body.tags.map(String);
+      // On a statement line this tag is the own-transfer mark, with its refusals.
+      if (entry.statement && (patch.tags as string[]).includes("internal") !== entry.tags.includes("internal")) {
+        return res.status(409).json({ error: "Use the own-transfer action to change whether this line is between your own accounts." });
+      }
     }
     if (typeof req.body?.note === "string") patch.note = req.body.note;
-    res.json({ entry: store.updateLedgerEntry(entry.id, patch) });
+    const updated = store.updateLedgerEntry(entry.id, patch);
+    res.json({ entry: { ...updated, accountCode: bookedCode(updated) } });
+  });
+
+  /**
+   * "Between my own accounts": the person says so, Zold never guesses. A
+   * statement line only: on a wallet row the tag would change its cost basis.
+   * Taken off a line whatever the line has become, so it can always be undone.
+   */
+  r.put("/:orgId/ledger/:entryId/own-transfer", (req, res) => {
+    const ctx = ctxOf(req, res);
+    if (!ctx) return;
+    if (!requireCapability(ctx, res, "ledger.transactions")) return;
+    if (!requirePermission(ctx, res, "ledger.categorise")) return;
+    const entry = store.ledgerOf(ctx.org.id).find((e) => e.id === String(req.params.entryId) && e.statement);
+    if (!entry) return res.status(404).json({ error: "no such statement line" });
+    const own = req.body?.own;
+    if (typeof own !== "boolean") return res.status(400).json({ error: "own must be true or false" });
+    if (own && !ownTransferAllowed(entry)) {
+      return res.status(409).json({ error: "This line is a fee, a reversal or an invoice payment, so it can't be a transfer between your own accounts." });
+    }
+    const others = entry.tags.filter((t) => t !== "internal");
+    const updated = store.updateLedgerEntry(entry.id, { tags: own ? [...others, "internal"] : others });
+    res.json({ line: publicStatementLine(updated) });
   });
 
   /**
