@@ -94,8 +94,7 @@ export const CRYPTO_IN = {
 
 /**
  * Crypto sends (routes/crypto-sends.ts): off unless CRYPTO_SEND_ENABLED=1.
- * No crypto send has moved real money yet, and Activity and the books do not
- * read them; while off the route refuses and the app shows no way in. Read
- * per call, so it follows the environment as set.
+ * While off the route refuses and the app shows no way in. Read per call, so
+ * it follows the environment as set.
  */
 export const cryptoSendEnabled = () => process.env.CRYPTO_SEND_ENABLED === "1";

@@ -89,6 +89,12 @@ await t("with the switch off, the row is the old soon row and the form does not 
   run(`caps = { ...caps, cryptoSend: true }`);
 });
 
+await t("an account without a bank route still gets the crypto wallet row", () => {
+  const html = flat(run(`(() => { const u = user; user = { id: "u1", kycStatus: "pending" }; const h = PH.send.html(); user = u; return h; })()`));
+  assert.match(html, /Bank transfers open/);
+  assert.match(html, /href="#send\/wallet"/);
+});
+
 await t("the check screen shows the name, the full address, the network and the amount", () => {
   run(`phWallet = { to: "alice.eth", token: "USDC", amount: "25.5", name: "alice.eth", address: "${ADDR}" }`);
   const html = flat(run(`PH["send/wallet-check"].html()`));
