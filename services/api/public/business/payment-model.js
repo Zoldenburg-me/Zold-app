@@ -80,3 +80,36 @@ export function bankReference(line, run, orgName, invoices) {
 
 /** The run's id from the address bar, or the one a link picked. */
 export const runIdFrom = (search, picked) => new URLSearchParams(search).get("id") || picked || null;
+
+/**
+ * What one line's /authorize answer says about the money. `answer` is the
+ * transfer on a 2xx, or the thrown error (its status and body) after the
+ * request went out. The server answers 200 for review and refunds too, so a
+ * 2xx alone is not "sent". A 409 can mean another submission holds the claim,
+ * and a 5xx without FAILED or a dropped answer can still be paying.
+ */
+export function signedLineOutcome(answer, ok) {
+  if (ok) {
+    if (answer?.state === "PAYOUT_SUBMITTED" || answer?.state === "PAID") return "sent";
+    if (answer?.state === "MANUAL_REVIEW") return "review";
+    if (answer?.state === "REFUNDED") return "refunded";
+    return "unknown";
+  }
+  if (answer?.state === "FAILED") return "not_sent";
+  return answer?.status >= 400 && answer.status < 500 && answer.status !== 409 ? "not_sent" : "unknown";
+}
+
+/** The toast after signing a run, from each line's outcome: "sent to the bank" only for lines Monerium took. */
+export function signedRunToast(total, lines) {
+  const by = (o) => lines.filter((l) => l.outcome === o);
+  const sent = by("sent").length;
+  if (sent === total) return { text: `All ${total} payment${total === 1 ? "" : "s"} approved and sent to the bank.`, error: false };
+  const group = (label, list) => (list.length ? ` ${label}: ${list.map((l) => (l.why ? `${l.recipient}: ${l.why}` : l.recipient)).join("; ")}.` : "");
+  return {
+    text: `${sent} of ${total} sent.` +
+      group("In review, not confirmed", by("review")) +
+      group("Not sent", [...by("not_sent"), ...by("refunded").map((l) => ({ ...l, why: "refunded" }))]) +
+      group("Outcome unknown, check the payment before trying again", by("unknown")),
+    error: true,
+  };
+}

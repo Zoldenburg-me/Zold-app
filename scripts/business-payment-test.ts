@@ -13,6 +13,7 @@
  *   npm run business:payment:test
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -98,5 +99,41 @@ assert.match(m.nextStep({ state: "DRAFT" }, false), /Saved/);
 assert.equal(m.runIdFrom("?view=payment&id=d9", "d1"), "d9", "the address wins");
 assert.equal(m.runIdFrom("?view=payment", "d1"), "d1");
 assert.equal(m.runIdFrom("", null), null);
+
+// ── The toast after signing a run ────────────────────────────────────────────
+{
+  // /authorize answers 200 for review and refunds as well: only Monerium's order is "sent".
+  assert.equal(m.signedLineOutcome({ state: "PAYOUT_SUBMITTED" }, true), "sent");
+  assert.equal(m.signedLineOutcome({ state: "PAID" }, true), "sent");
+  assert.equal(m.signedLineOutcome({ state: "MANUAL_REVIEW" }, true), "review");
+  assert.equal(m.signedLineOutcome({ state: "REFUNDED" }, true), "refunded");
+  assert.equal(m.signedLineOutcome({ state: "DEBITED" }, true), "unknown");
+  assert.equal(m.signedLineOutcome({ status: 502, state: "FAILED" }, false), "not_sent");
+  assert.equal(m.signedLineOutcome({ status: 410 }, false), "not_sent");
+  assert.equal(m.signedLineOutcome({ status: 409 }, false), "unknown", "another submission may hold the claim");
+  assert.equal(m.signedLineOutcome({ status: 502 }, false), "unknown", "a gateway 502 is not the API's FAILED");
+  assert.equal(m.signedLineOutcome(new Error("Zold’s answer didn’t arrive"), false), "unknown");
+
+  assert.deepEqual(m.signedRunToast(2, [{ recipient: "A", outcome: "sent" }, { recipient: "B", outcome: "sent" }]),
+    { text: "All 2 payments approved and sent to the bank.", error: false });
+  const mixed = m.signedRunToast(5, [
+    { recipient: "A", outcome: "sent" },
+    { recipient: "B", outcome: "review" },
+    { recipient: "C", outcome: "refunded" },
+    { recipient: "D", outcome: "not_sent", why: "approval expired" },
+    { recipient: "E", outcome: "unknown", why: "Zold’s answer didn’t arrive" },
+  ]);
+  assert.equal(mixed.text,
+    "1 of 5 sent. In review, not confirmed: B. Not sent: D: approval expired; C: refunded. " +
+    "Outcome unknown, check the payment before trying again: E: Zold’s answer didn’t arrive.");
+  assert.equal(mixed.error, true);
+  assert.match(m.signedRunToast(1, [{ recipient: "B", outcome: "review" }]).text, /^0 of 1 sent\. In review/);
+
+  // The run's own toast is built from these, not from a count of answers.
+  const actions = readFileSync(path.join(ROOT, "services/api/public/business/actions.js"), "utf8");
+  assert.match(actions, /signedLineOutcome\(t, true\)/);
+  assert.match(actions, /signedRunToast\(r\.authorizations\.length, lines\)/);
+  assert.doesNotMatch(actions, /sent to the bank/, "only signedRunToast may say sent to the bank");
+}
 
 console.log("business payment: ok");

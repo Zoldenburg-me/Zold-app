@@ -187,8 +187,8 @@ assert.equal(
     "Still waiting: Review GmbH €40.00 (in review), Claimed GmbH €40.00, Signing GmbH €40.00. " +
     "Create a new payment for the not sent lines only.",
 );
-const forged = run(named("t-forged", "X. Not sent: X", "MANUAL_REVIEW")).failureReason;
-assert.equal(forged, "Still waiting: X Not sent X €40.00 (in review).", "a payee name cannot write a heading");
+const forged = run(named("t-forged", "X. Not sent: Y €0.00 (approval expired), Z", "MANUAL_REVIEW")).failureReason;
+assert.equal(forged, "Still waiting: X Not sent Y 000 approval expired Z €40.00 (in review).", "a payee name cannot write a heading or an entry");
 const onlyReview = run(named("t-review-2", "Review GmbH", "MANUAL_REVIEW")).failureReason;
 assert.equal(onlyReview, "Still waiting: Review GmbH €40.00 (in review).");
 console.log("  ok  a failed run says by payee what was sent, not sent and still waiting; a claimed line is never not sent");

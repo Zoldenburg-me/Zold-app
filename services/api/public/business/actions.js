@@ -13,6 +13,7 @@ import { forgetDraft, invoiceBody, invoiceDraft, readInvoiceEditor, setInvoiceDr
 import { ap, bk, contactPayments, ct, draftTag, draftTitle, draftTotal, invoiceDrawer, iv, mayReview, memberName } from "./screens.js";
 import { loadOrg, render } from "./shell.js";
 import { payerRuleDialog, payerRuleSection, runSummary } from "./receipts.js";
+import { signedLineOutcome, signedRunToast } from "./payment-model.js";
 
 /** A file the API serves behind the bearer header, which a navigation
  *  cannot carry: fetch it, then hand the bytes to the browser as a download. */
@@ -1041,14 +1042,15 @@ export const ACTIONS = {
     const me = await api("/api/session");
     const credentialId = me.passkey?.credentialId;
     if (!credentialId) throw new Error("This account has no passkey here, so nothing can be approved.");
-    let signed = 0;
-    const failures = [];
+    let approved = 0;
+    const lines = [];
     for (const a of r.authorizations) {
       // No passkey prompt for a line the server would refuse.
       if (Date.now() / 1000 > Number(a.authorization.typedData.message.deadline)) {
-        failures.push(`${a.recipient}: approval expired`);
+        lines.push({ recipient: a.recipient, outcome: "not_sent", why: "approval expired" });
         continue;
       }
+      let submitted = false;
       try {
         const signature = await lib.signTypedData(a.authorization.typedData, credentialId, a.authorization.authorizer);
         // The debit itself is a Safe operation the passkey signs, then the
@@ -1056,7 +1058,8 @@ export const ACTIONS = {
         // verifies them (authenticator counters rise with each ceremony).
         const executionAssertion = await lib.passkeyAssertion(a.authorization.safeExecution);
         const moneriumRedeemAssertion = await lib.passkeyAssertion(a.authorization.moneriumRedeem);
-        await api(a.authorization.submitTo, {
+        submitted = true;
+        const t = await api(a.authorization.submitTo, {
           method: "POST",
           body: {
             signature,
@@ -1064,19 +1067,15 @@ export const ACTIONS = {
             ...(moneriumRedeemAssertion ? { moneriumRedeemAssertion } : {}),
           },
         });
-        signed++;
-        toast(`Approved ${signed} of ${r.authorizations.length}…`);
+        lines.push({ recipient: a.recipient, outcome: signedLineOutcome(t, true) });
+        toast(`Approved ${++approved} of ${r.authorizations.length}…`);
       } catch (e) {
         // Reported per line rather than aborting silently: the ones already
         // signed are real payments and the user must know which.
-        failures.push(`${a.recipient}: ${plain(e.message)}`);
+        lines.push({ recipient: a.recipient, outcome: submitted ? signedLineOutcome(e, false) : "not_sent", why: plain(e.message) });
       }
     }
-    toast(
-      failures.length
-        ? `${signed} of ${r.authorizations.length} sent. Not sent: ${failures.join("; ")}`
-        : `All ${signed} payment${signed === 1 ? "" : "s"} approved and sent to the bank.`,
-      failures.length > 0,
-    );
+    const done = signedRunToast(r.authorizations.length, lines);
+    toast(done.text, done.error);
   },
 };

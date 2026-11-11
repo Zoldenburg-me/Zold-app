@@ -21,7 +21,7 @@ export const contactsById = (orgId: string) =>
 const lineReport = (transfers: Transfer[]) => {
   // A holder name is free text and comes from suppliers: it must not write a heading of its own.
   const line = (t: Transfer, why?: string) =>
-    `${t.recipientName.replace(/[.:]/g, "")} €${t.sendEur.toFixed(2)}${why ? ` (${why})` : ""}`;
+    `${t.recipientName.replace(/[.:,()€]/g, "").slice(0, 70)} €${t.sendEur.toFixed(2)}${why ? ` (${why})` : ""}`;
   const sent: string[] = [];
   const notSent: string[] = [];
   const waiting: string[] = [];
