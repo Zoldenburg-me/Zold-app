@@ -46,7 +46,7 @@ const { initStore, store } = await import("../services/api/src/store.js");
 const { createOrgRouter } = await import("../services/api/src/routes/orgs.js");
 const { createBusinessRouter } = await import("../services/api/src/routes/business.js");
 const { createPaymentRequest } = await import("../services/api/src/routes/payment-requests.js");
-const { monthOf } = await import("../services/api/src/domain/income-invoices.js");
+const { monthOf, dayOf } = await import("../services/api/src/domain/income-invoices.js");
 type LedgerEntry = import("../services/api/src/domain/types.js").LedgerEntry;
 type Invoice = import("../services/api/src/domain/types.js").Invoice;
 
@@ -59,7 +59,8 @@ const check = (name: string, fn: () => void | Promise<void>) =>
 
 initStore();
 const NOW = new Date().toISOString();
-const TODAY = NOW.slice(0, 10);
+// The issue date is the day in the org's reporting zone (org_1: Europe/Berlin), not the UTC day.
+const TODAY = dayOf(NOW, "Europe/Berlin");
 const DAO = `0x${"da".repeat(20)}`;
 const STREAM = `0x${"5e".repeat(20)}`;
 const OTHER_DAO = `0x${"0d".repeat(20)}`;
