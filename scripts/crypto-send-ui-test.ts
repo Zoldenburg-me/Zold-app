@@ -1,7 +1,8 @@
 /**
  * The app's Send to a crypto wallet: the full resolved address is on screen
  * before anything is signed, Send waits for the "I checked" tick, and the
- * address shown is the one the server is told to pay (confirmedAddress).
+ * address shown is the one the server is told to pay (confirmedAddress), and
+ * once /authorize was sent an unknown outcome allows no second send.
  *
  * Runs the real classic scripts in load order with a stub DOM. Offline.
  */
@@ -139,6 +140,36 @@ await t("a refused send says why and moves nowhere", async () => {
   assert.equal(err.hidden, false);
   assert.match(err.textContent, /address changed/);
   assert.equal(run(`__went.length`), 0);
+});
+
+await t("a lost /authorize answer: no second send, and the screen says it can't confirm the payment", async () => {
+  run(`phWallet = { to: "alice.eth", token: "USDC", amount: "25.5", name: "alice.eth", address: "${ADDR}" }; __calls = []; __went = [];
+    api = async (p, b) => { __calls.push([p, b]); if (p.endsWith("/authorize")) { const e = new Error("you appear to be offline. Zold could not be reached"); e.offline = true; throw e; } return { id: "s3", safeExecution: { credentialId: "c", challenge: "ch" } }; }`);
+  const btn = el(); const ok = el({ checked: true }); const err = el();
+  const root = { querySelector: (s: string) => (s === "#ph-wal-send" ? btn : s === "#ph-wal-ok" ? ok : s === "#ph-wal-err" ? err : el()) };
+  run(`PH["send/wallet-check"]`).bind(root);
+  const settle = () => new Promise((r) => setTimeout(r, 10));
+  btn.onclick(); await settle();
+  assert.equal(run(`__calls.length`), 2, "created, then /authorize was sent");
+  btn.onclick(); await settle();
+  ok.onchange();
+  assert.equal(run(`__calls.length`), 2, "a second press makes no new send");
+  assert.equal(btn.getAttribute("aria-disabled"), "true", "Send stays off");
+  const html = flat(run(`PH["send/wallet-check"].html()`));
+  assert.match(html, /We can’t confirm this payment/);
+  assert.match(html, /id="ph-check-activity"/);
+  assert.doesNotMatch(html, /id="ph-wal-send"/, "no Send button on the redrawn screen");
+  assert.doesNotMatch(html, /Nothing was sent/);
+});
+
+await t("a refusal from Zold after /authorize was sent still lets the person fix it and send", async () => {
+  run(`phWallet = { to: "alice.eth", token: "USDC", amount: "25.5", name: "alice.eth", address: "${ADDR}" }; __calls = [];
+    api = async (p, b) => { __calls.push([p, b]); if (p.endsWith("/authorize")) { const e = new Error("alice.eth now points to a different address — nothing was sent; check it and start again"); e.status = 409; e.body = { error: e.message, code: "ADDRESS_CHANGED" }; throw e; } return { id: "s4", safeExecution: { credentialId: "c", challenge: "ch" } }; }`);
+  const btn = el(); const err = el();
+  await run(`phWalletSubmit`)(btn, err);
+  assert.match(err.textContent, /different address/);
+  assert.equal(btn.getAttribute("aria-disabled"), null);
+  assert.match(flat(run(`PH["send/wallet-check"].html()`)), /id="ph-wal-send"/);
 });
 
 await t("a name is looked up and the resolved address goes to the check screen", async () => {

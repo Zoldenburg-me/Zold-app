@@ -195,6 +195,10 @@ PH["send/wallet-check"] = {
   html() {
     const w = phWallet;
     if (!w.address) return `${phTop("Check the address", "send")}${phMain(Z.note({ text: "Enter who to pay first." }) + Z.button({ variant: "primary", full: true, label: "Send to a wallet", href: "#send/wallet" }))}`;
+    if (w.unconfirmed) return `${phTop("Payment result", "home")}${phMain(`
+      <span class="z-tile z-tile--a z-tile--lg" aria-hidden="true">${Z.icon("hourglass_top")}</span>
+      <div class="z-intro"><h2 class="z-title">We can’t confirm this payment</h2><p class="z-sub">We couldn’t check what happened to this payment, so it may have gone out. Don’t send it again until you’ve checked Activity: a payment that went out is listed there.</p></div>
+    `)}${phFoot(`${Z.button({ variant: "primary", full: true, label: "Check Activity", id: "ph-check-activity" })}<a class="z-link-btn" href="#home">Back to Home</a>`)}`;
     return `${phTop("Check the address", "send")}${phMain(`
       ${Z.kv([
         ...(w.name ? [{ key: "Name", value: w.name }] : []),
@@ -209,10 +213,16 @@ PH["send/wallet-check"] = {
     `)}${phFoot(Z.button({ variant: "primary", full: true, label: `Send ${w.amount} ${phWalletSym(w.token)}`, id: "ph-wal-send", disabledReason: undefined }))}`;
   },
   bind(root) {
+    // As send/error's: a reload reads Activity afresh.
+    const check = root.querySelector("#ph-check-activity");
+    if (check) check.onclick = () => {
+      history.replaceState(null, "", `${location.pathname}${location.search}#activity`);
+      location.reload();
+    };
     const btn = root.querySelector("#ph-wal-send");
     const ok = root.querySelector("#ph-wal-ok");
     if (!btn || !ok) return;
-    const sync = () => { if (ok.checked) btn.removeAttribute("aria-disabled"); else btn.setAttribute("aria-disabled", "true"); };
+    const sync = () => { if (ok.checked && !phWallet.unconfirmed) btn.removeAttribute("aria-disabled"); else btn.setAttribute("aria-disabled", "true"); };
     ok.onchange = sync;
     sync();
     btn.onclick = () => { if (!ok.checked) { ok.focus(); return; } phWalletSubmit(btn, root.querySelector("#ph-wal-err")); };
@@ -223,20 +233,30 @@ PH["send/wallet-check"] = {
    the passkey signs the Safe operation paying exactly that address, then
    submit (the server resolves a name once more first). */
 async function phWalletSubmit(btn, errEl) {
-  if (Z.isDisabled(btn)) return;
+  const w = phWallet;
+  if (Z.isDisabled(btn) || w.unconfirmed) return;
   errEl.hidden = true;
   Z.setLoading(btn, true);
-  const w = phWallet;
+  let authorizeSent = false;
   try {
     const created = await api(`/api/users/${encodeURIComponent(user.id)}/crypto-sends`, { to: w.to, token: w.token, amount: w.amount, confirmedAddress: w.address });
     const execution = await safeExecutionAssertion({ safeExecution: created.safeExecution });
     if (!execution) throw new Error("This account can’t approve the payment with a passkey here.");
+    authorizeSent = true;
     const sent = await api(`/api/crypto-sends/${encodeURIComponent(created.id)}/authorize`, { executionAssertion: execution });
     phPutCryptoSend(sent);
     refresh();
     phGo("send/wallet-done", sent.id, { replace: true });
   } catch (e) {
     Z.setLoading(btn, false);
+    // Until Zold has refused it, /authorize may have paid: a retry would be a
+    // new send, signed afresh, that nothing on the server stops.
+    if (authorizeSent && !(e?.status < 500 && typeof e.body?.error === "string")) {
+      w.unconfirmed = true;
+      btn.setAttribute("aria-disabled", "true");
+      phGo("send/wallet-check", null, { replace: true });
+      return;
+    }
     errEl.textContent = e?.name === "NotAllowedError"
       ? Z.byDevice("Face ID or fingerprint was cancelled. Nothing was sent.", "The passkey prompt was cancelled. Nothing was sent.")
       : e.message;
