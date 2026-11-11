@@ -248,6 +248,200 @@ await check("/app: a gated /authorize reaches the send error screen, with its me
   run(`phSend.error = null;`);
 });
 
+// Drives phSubmit to /authorize, which answers `authorize`; the read that follows answers `read`.
+const CREATED_T = { id: "t2", state: "CREATED", createdAt: "2026-11-05T00:00:00Z", recipientName: "Ana", sendEur: 5, auth: { deadline: 1 } };
+const json = (status: number, body: object) => response(status, JSON.stringify(body), "application/json");
+const lostBody = () => response(200, "", "application/json", { json: async () => { throw new TypeError("body stream failed"); } });
+async function driveSend(authorize: () => any, read: () => any, execution = `async () => null`) {
+  freshTab();
+  calls.length = 0;
+  const screens: string[] = [];
+  ctx.__screen = (name: string) => screens.push(name);
+  ctx.__deviceLibReady({ deviceAddress: async () => "0xa", destinationCommitment: () => "0xd", signTypedData: async () => "0xs" });
+  run(`user = { id: "u" }; hist.length = 0; phSend.error = null; phSend.failed = null; refresh = async () => {};
+    phSend.payee = { name: "Ana", iban: "DE00" }; phSend.quote = { id: "q" };
+    phSendBlocked = () => null; registerDeviceKey = async () => {};
+    safeExecutionAssertion = ${execution}; moneriumRedeemAssertion = async () => null;
+    phGo = (name) => globalThis.__screen(name);`);
+  answer = () => {
+    const { url } = calls.at(-1);
+    if (url === "/api/transfers") return json(200, { ...CREATED_T, authorization: { authorizer: "0xA", typedData: { message: { destination: "0xD" } } } });
+    return url.endsWith("/authorize") ? authorize() : read();
+  };
+  ctx.__el = stub;
+  await run(`phSubmit(__el, __el)`);
+  return screens;
+}
+const errorScreen = () => run(`PH["send/error"].html("t2")`) as string;
+const refused = () => json(409, { error: "transfer has no authorization terms" });
+
+await check("/app send: a state that could not be read is not \"Nothing was sent\", offers no retry, and points to Activity", async () => {
+  for (const authorize of [opaque, lostBody, () => { throw new TypeError("network"); }]) {
+    const screens = await driveSend(authorize, () => { throw new TypeError("network"); });
+    assert.deepEqual(screens, ["send/error"]);
+    const html = errorScreen();
+    assert.doesNotMatch(html, /Nothing was sent|not debited/);
+    assert.match(html, /We can’t confirm this payment/);
+    assert.match(html, /listed there/);
+    assert.match(html, /ph-check-activity/);
+    assert.doesNotMatch(html, /ph-again/);
+    assert.equal(run(`hist.length`), 0, "Activity must not list a row Zold never gave");
+  }
+});
+
+await check("/app send: Check Activity reloads onto Activity, which is how a refused write's hold ends", async () => {
+  await driveSend(opaque, opaque);
+  const buttons: Record<string, any> = { "#ph-check-activity": {} };
+  run(`PH["send/error"]`).bind({ querySelector: (q: string) => buttons[q] ?? null }, "t2");
+  let to = "";
+  const replaceState = ctx.history.replaceState;
+  ctx.history.replaceState = (_s: unknown, _t: string, url: string) => { to = url; };
+  buttons["#ph-check-activity"].onclick();
+  ctx.history.replaceState = replaceState;
+  assert.match(to, /#activity$/);
+  assert.equal(reloads, 1);
+});
+
+await check("/app send: a page with no record of the payment loads, then is unknown too", async () => {
+  await driveSend(opaque, opaque);
+  run(`phSend.failed = null; histLoaded = false; histLoadFailed = false`);
+  assert.doesNotMatch(errorScreen(), /We can’t confirm|Nothing was sent/);
+  assert.notEqual(run(`PH["send/error"].live("t2")`), (run(`histLoaded = true`), run(`PH["send/error"].live("t2")`)), "loading the list redraws");
+  assert.match(errorScreen(), /We can’t confirm this payment/);
+});
+
+await check("/app send: a lost /authorize answer read back as unsigned CREATED proves nothing: the request may still be arriving", async () => {
+  for (const authorize of [
+    () => { throw new TypeError("network"); },
+    lostBody,
+    () => response(502, "<html>Bad gateway</html>", "text/html"),
+    () => json(500, { error: "Something went wrong on our side. Check whether it went through before trying again." }),
+    () => response(503, JSON.stringify({ error: "offline" }), "application/json", { headers: { get: (k: string) => (k === "x-zold-offline" ? "1" : "application/json") } }),
+  ]) {
+    await driveSend(authorize, () => json(200, CREATED_T));
+    const html = errorScreen();
+    assert.doesNotMatch(html, /Nothing was sent|not debited|ph-again/);
+    assert.match(html, /We can’t confirm this payment/);
+    assert.equal(run(`hist.length`), 0, "an unsigned row in hist would outrank the unknown");
+  }
+});
+
+await check("/app send: Zold's own refusal followed by a failed read is still unknown", async () => {
+  for (const authorize of [refused, () => json(502, { error: "payout failed", id: "t2", state: "FAILED" })]) {
+    await driveSend(authorize, () => { throw new TypeError("network"); });
+    assert.match(errorScreen(), /We can’t confirm this payment/);
+  }
+});
+
+await check("/app send: a signature that never left says \"Nothing was sent\" with its reason, even when the read fails", async () => {
+  await driveSend(opaque, () => { throw new TypeError("network"); }, `async () => { throw Object.assign(new Error("x"), { name: "NotAllowedError" }); }`);
+  const html = errorScreen();
+  assert.equal(calls.some((c) => c.url.endsWith("/authorize")), false);
+  assert.match(html, /Nothing was sent/);
+  assert.match(html, /You cancelled/);
+  assert.match(html, /ph-again/);
+});
+
+await check("/app send: a signature that never left, read back as unsigned CREATED, says \"Nothing was sent\"", async () => {
+  await driveSend(opaque, () => json(200, CREATED_T), `async () => { throw Object.assign(new Error("x"), { name: "NotAllowedError" }); }`);
+  const html = errorScreen();
+  assert.equal(calls.some((c) => c.url.endsWith("/authorize")), false);
+  assert.match(html, /Nothing was sent/);
+  assert.match(html, /ph-again/);
+});
+
+await check("/app send: the error screen redraws when a payment it fell through to progress for changes at the bank", async () => {
+  await driveSend(lostBody, () => json(200, { ...CREATED_T, state: "PAYOUT_SUBMITTED", sepa: { state: "pending" } }));
+  const before = run(`PH["send/error"].live("t2")`);
+  run(`hist[0].sepa = { state: "processed" }`);
+  assert.notEqual(run(`PH["send/error"].live("t2")`), before);
+});
+
+await check("/app send: a state read as unsigned CREATED is \"Nothing was sent\", and stays so when Activity's next load drops the row", async () => {
+  await driveSend(refused, () => json(200, CREATED_T));
+  assert.match(errorScreen(), /Nothing was sent/);
+  assert.match(errorScreen(), /ph-again/);
+  run(`hist.length = 0`);
+  assert.match(errorScreen(), /Nothing was sent/);
+});
+
+await check("/app send: a lost /authorize answer read back signed or moving shows progress, never \"Nothing was sent\"", async () => {
+  for (const moved of [
+    { ...CREATED_T, auth: { deadline: 1, authorizedAt: "2026-11-05T00:00:01Z" } },
+    { ...CREATED_T, moneriumRedeem: { signedAt: "2026-11-05T00:00:01Z" } },
+    { ...CREATED_T, state: "PAYOUT_SUBMITTED" },
+    { ...CREATED_T, state: "DEBITED" },
+  ]) {
+    await driveSend(lostBody, () => json(200, moved));
+    const html = errorScreen();
+    assert.doesNotMatch(html, /Nothing was sent|ph-again/);
+    assert.match(html, /z-timeline/);
+  }
+});
+
+await check("/app send: a read that failed is replaced by the real state once Activity lists it", async () => {
+  await driveSend(lostBody, () => { throw new TypeError("network"); });
+  run(`hist.push({ ...phSend.failed, unread: undefined, state: "PAID" })`);
+  assert.match(errorScreen(), /z-timeline/);
+});
+
+await check("/app send: refused, returned and reviewed payments keep their words", async () => {
+  await driveSend(refused, () => json(200, { ...CREATED_T, state: "FAILED" }));
+  assert.match(errorScreen(), /Nothing was sent/);
+  await driveSend(refused, () => json(200, { ...CREATED_T, state: "FAILED", txs: [{ step: "safe.transfer(fee)" }] }));
+  assert.match(errorScreen(), /This payment failed/);
+  await driveSend(refused, () => json(200, { ...CREATED_T, state: "REFUNDED" }));
+  assert.match(errorScreen(), /REFUNDED/);
+  await driveSend(refused, () => json(200, { ...CREATED_T, state: "MANUAL_REVIEW" }));
+  assert.match(errorScreen(), /We’re checking this payment/);
+});
+
+await check("/app api: a 2xx whose body is lost throws; a write says to check first, a read to try again", async () => {
+  freshTab();
+  answer = lostBody;
+  for (const call of [`api("/api/orgs", { name: "x" })`, `api("/api/orgs/x", undefined, "DELETE")`]) {
+    const e: any = await run(call).catch((x: any) => x);
+    assert.match(e.message, /Check before you try it again/);
+    assert.equal(e.offline, true);
+  }
+  assert.match((await run(`api("/api/orgs")`).catch((x: any) => x)).message, /Try again\.$/);
+  assert.match((await run(`api("/api/x", undefined, "GET")`).catch((x: any) => x)).message, /Try again\.$/);
+  assert.ok(unspent(), "a lost body is not a gate: no reload");
+});
+
+await check("/app api: a lost body at start-up keeps the session and says offline", async () => {
+  freshTab();
+  answer = lostBody;
+  await resume();
+  assert.equal(landed, "state:offline");
+  assert.ok(sessionKept());
+});
+
+await check("/app api: a lost write's body ends its hold", async () => {
+  freshTab();
+  answer = lostBody;
+  await run(`api("/api/orgs", { name: "x" })`).catch(() => {});
+  answer = opaque;
+  assert.equal(await settled(run(`api("/api/session")`)), PENDING, "the read may reload: no hold is left");
+  assert.equal(reloads, 1);
+});
+
+await check("/app api: 204 is empty on purpose, and an error with a lost body keeps its status", async () => {
+  freshTab();
+  answer = () => response(204, "", null);
+  assert.deepEqual({ ...(await run(`api("/api/session", undefined, "DELETE")`)) }, {});
+  answer = () => response(500, "", "application/json");
+  assert.equal((await run(`api("/api/orgs", { name: "x" })`).catch((x: any) => x)).status, 500);
+});
+
+await check("/app: the card's and sign-up's own reads fail closed on a lost body too", async () => {
+  freshTab();
+  answer = lostBody;
+  assert.match((await run(`gpApi("/account")`).catch((x: any) => x)).message, /Try again\.$/);
+  assert.match((await run(`gpApi("/connection", undefined, "DELETE")`).catch((x: any) => x)).message, /Check before you try it again/);
+  for (const f of ["app/core.js", "app/dashboard.js", "app/onboarding.js"]) assert.doesNotMatch(read(f), /\.json\(\)\.catch\(\(\) => \(\{\}\)\)/);
+});
+
 await check("/app: a write sent while the page reloads is refused before it leaves", async () => {
   freshTab();
   answer = opaque;

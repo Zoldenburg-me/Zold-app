@@ -146,7 +146,8 @@ async function api(path, body, method, extraHeaders) {
     err.offline = true;
     throw err;
   }
-  const data = await res.json().catch(() => ({}));
+  let bodyLost = false;
+  const data = await res.json().catch(() => { bodyLost = true; return {}; });
   try {
     await Z.refuseForeignAnswer(res, data);
   } catch (e) {
@@ -169,6 +170,13 @@ async function api(path, body, method, extraHeaders) {
     err.code = data.code;
     err.body = data;
     throw err;
+  }
+  // Not an empty success: the caller must not act on {}. Offline, so a lost
+  // /api/session keeps the session. Only DELETE /api/session answers 204.
+  if (bodyLost && res.status !== 204) {
+    setReachable(false);
+    const write = body || (method && method !== "GET");
+    throw Object.assign(new Error(`Zold’s answer didn’t arrive. ${write ? "Check before you try it again." : "Try again."}`), { offline: true });
   }
   return data;
 }
