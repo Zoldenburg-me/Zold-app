@@ -32,6 +32,7 @@
     "safe-address-ui:test": "tsx scripts/safe-address-ui-test.ts",
     "crypto-send:test": "tsx scripts/crypto-send-test.ts",
     "crypto-send-ui:test": "tsx scripts/crypto-send-ui-test.ts",
+    "send-link-ui:test": "tsx scripts/send-link-ui-test.ts",
     "country:policy:test": "tsx scripts/country-policy-test.ts",
     "env:number:test": "tsx scripts/env-number-test.ts",
     "audit:deps": "npm audit",
