@@ -14,23 +14,28 @@ import express from "express";
 import { store } from "../../store.js";
 import { ContactError, chainName } from "../../domain/contacts.js";
 import { CHAIN_ID } from "../../config.js";
-import { mailAvailable, sendInvoiceSubmitted } from "../../adapters/mailer.js";
+import { mailAvailable, sendInvoiceSubmitted, sendSendLinkFilled } from "../../adapters/mailer.js";
 import {
   InvoiceError,
   assertTransition as assertInvoiceTransition,
   hashToken,
   supplierView,
   validateLines,
+  validateSendLinkSubmit,
+  assertSendLinkLimit,
 } from "../../domain/invoices.js";
 import { passwordMatches } from "../../domain/passwords.js";
 import { forgetFailure, recordFailure, tooManyFailures } from "../../http/policy.js";
 import { invoiceBankOf, parsePayTo } from "./shared.js";
 import { openLinkPath, payLinkLapsed } from "./invoice-pay-link.js";
+import { syncInvoicePayment } from "./state.js";
 import type { Invoice } from "../../domain/types.js";
 
 /** Wrong passwords one link absorbs, from any number of addresses, per window. */
 const PASSWORD_FAILURES_MAX = 10;
 const PASSWORD_FAILURE_WINDOW_MS = 15 * 60_000;
+const SEND_LIMIT_MISSES_MAX = 5;
+const SEND_LIMIT_MISS_WINDOW_MS = 24 * 60 * 60_000;
 const DUE_DATE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 
 const payorName = (invoice: Invoice) =>
@@ -75,7 +80,18 @@ const issuerExtras = (invoice: Invoice) => {
 /** The issued document exactly as the link holder sees it; the owner's
  *  print view (routes/business/invoices.ts) reads the same projection. */
 export const linkInvoiceView = (invoice: Invoice) =>
-  supplierView(invoice, payorName(invoice), issuerExtras(invoice));
+  supplierView(payeeState(invoice), payorName(invoice), issuerExtras(invoice));
+
+/** A send link tied to a payment the payer has not yet signed reads as
+ *  still waiting to the payee: nothing is on its way until it is signed. */
+const payeeState = (invoice: Invoice): Invoice => {
+  if (!invoice.sendLink || invoice.state !== "PAYING") return invoice;
+  const p = invoice.payment;
+  const send = p?.cryptoSendId ? store.findCryptoSend(p.cryptoSendId) : undefined;
+  const t = p?.transferId ? store.findTransfer(p.transferId) : undefined;
+  const unsigned = send ? send.state === "CREATED" : !!t && t.state === "CREATED" && !t.auth?.authorizedAt && !t.moneriumRedeem?.signedAt;
+  return unsigned ? { ...invoice, state: "SUBMITTED" } : invoice;
+};
 
 /** The chains a supplier may name for a wallet payout: the one this
  *  deployment runs on, the only one the payor's account holds money on. */
@@ -88,7 +104,7 @@ export const payoutChains = () => [{ chainId: CHAIN_ID, name: chainName(CHAIN_ID
  */
 export async function notifyRequester(
   invoice: Invoice,
-  { mailOn = mailAvailable(), send = sendInvoiceSubmitted } = {},
+  { mailOn = mailAvailable(), send = invoice.sendLink ? (to: string) => sendSendLinkFilled(to) : sendInvoiceSubmitted } = {},
 ): Promise<"sent" | "off" | "no-email" | "failed"> {
   if (!mailOn) return "off";
   // All of it in the try: this runs unawaited, and an unhandled rejection exits the API.
@@ -118,7 +134,9 @@ export function createInvoiceLinkRouter(): express.Router {
     res: express.Response,
   ): Promise<Invoice | undefined> => {
     const token = String(req.params.token ?? "");
-    const invoice = store.findInvoiceByLinkHash(hashToken(token));
+    const found = store.findInvoiceByLinkHash(hashToken(token));
+    // The payee's receipt follows the payment too, not only the owner's list.
+    const invoice = found ? syncInvoicePayment(found) : undefined;
     if (!invoice || invoice.state === "DELETED" || invoice.state === "DRAFT") {
       res.status(404).json({ error: "That invoice link is not valid." });
       return undefined;
@@ -158,9 +176,53 @@ export function createInvoiceLinkRouter(): express.Router {
     if (!invoice) return;
     if (invoice.state !== "LINK_CREATED") {
       return res.status(409).json({
-        error: "This invoice was already submitted. Submitted invoices are timestamped and locked.",
+        error: invoice.sendLink
+          ? "This link was already filled in."
+          : "This invoice was already submitted. Submitted invoices are timestamped and locked.",
         invoice: linkInvoiceView(invoice),
       });
+    }
+    if (invoice.sendLink) {
+      // The limit is hidden; asking over it says only "too much". Counting misses
+      // keeps that from finding the limit by trying amount after amount, and the
+      // limit is checked last, so no other refusal answers for free.
+      // shortcut: the count is per link and in memory, so anyone holding the URL can
+      // lock the payee out for 24 h and a restart clears it; persist it per client
+      // once a link is abused.
+      const missKey = `send-limit:${invoice.id}`;
+      if (tooManyFailures(missKey, SEND_LIMIT_MISSES_MAX)) {
+        return res.status(429).json({ error: "Too many amounts over this link's limit. Ask the person who sent it for a new link." });
+      }
+      try {
+        const { lines, total, name } = validateSendLinkSubmit(req.body);
+        const raw = req.body?.payTo;
+        // The account holder is the person filling the link in: one name, not two fields.
+        const payTo = parsePayTo(raw && typeof raw === "object" && raw.kind === "bank" ? { kind: "bank", bank: { ...(raw.bank ?? raw), holderName: name } } : raw, "EUR");
+        if (!payTo) return res.status(400).json({ error: "Say where to send the money: an IBAN or a wallet address." });
+        if (payTo.kind === "wallet" && !payoutChains().some((c) => c.chainId === payTo.chainId)) {
+          return res.status(400).json({ error: `A wallet must be on ${payoutChains().map((c) => c.name).join(" or ")}.` });
+        }
+        try { assertSendLinkLimit(invoice.sendLink, total); } catch (err) {
+          recordFailure(missKey, SEND_LIMIT_MISS_WINDOW_MS);
+          throw err;
+        }
+        assertInvoiceTransition(invoice.state, "SUBMITTED");
+        const updated = store.updateInvoice(invoice.id, {
+          state: "SUBMITTED",
+          // The number is the SEPA reference the payer's transfer carries.
+          supplier: { orgName: name, email: "", invoiceNumber: `LINK-${invoice.id.slice(4, 12).toUpperCase()}` },
+          lines,
+          total,
+          payTo,
+          submittedAt: new Date().toISOString(),
+        });
+        res.json({ invoice: linkInvoiceView(updated) });
+        void notifyRequester(updated);
+      } catch (err) {
+        if (err instanceof InvoiceError || err instanceof ContactError) return res.status(400).json({ error: err.message, ...(err instanceof InvoiceError && err.code ? { code: err.code } : {}) });
+        throw err;
+      }
+      return;
     }
     try {
       const { lines, total } = validateLines(req.body?.lines);
@@ -205,7 +267,7 @@ export function createInvoiceLinkRouter(): express.Router {
       res.json({ invoice: linkInvoiceView(updated) });
       void notifyRequester(updated);
     } catch (err) {
-      if (err instanceof InvoiceError || err instanceof ContactError) return res.status(400).json({ error: err.message });
+      if (err instanceof InvoiceError || err instanceof ContactError) return res.status(400).json({ error: err.message, ...(err instanceof InvoiceError && err.code ? { code: err.code } : {}) });
       throw err;
     }
   });

@@ -121,6 +121,7 @@ async function phLoadHomeData() {
       if (still()) phCache.invoices = read;
     }).finally(() => { if (still()) phHomeReads.invoices = false; }));
   }
+  if (phCache.sendLinks === undefined && !phSendLinksLoading) reads.push(phLoadSendLinks());
   if (!reads.length) return;
   await Promise.all(reads);
   if (phRoute?.name === "home") phRender();
@@ -158,6 +159,73 @@ function phInvoicesCard() {
     <div class="z-checklist__head"><h2 id="ph-inv-title">Invoices</h2>${open ? `<span class="z-fig">${open.count} open</span>` : ""}</div>
     <div style="padding:14px"><p class="z-hint" style="margin:0 0 12px">${open ? esc(owed) : "Your invoices could not be read just now."}</p>
       <div class="z-actions">${PH_INVOICE_ROLES.includes(inv.org.role) ? link("invoice-new", "Create invoice", "primary") : ""}${link("invoices", "See all")}</div></div></section>`;
+}
+
+/* Send links: a link this person shares; whoever gets it fills in the amount,
+   up to the limit, and where to be paid, and this person pays it from Send.
+   They live in the personal space. The link itself is shown once when made:
+   the server keeps only a hash of it, so it is held here for this visit only. */
+let phSendLinkUrls = {};
+
+/* A payment that went out for a link but was not yet recorded on it, per device and person. */
+const phSendLinkPaidKey = () => `zold-send-link-paid:${user?.id || ""}`;
+function phSendLinkPaid() {
+  try { return JSON.parse(localStorage.getItem(phSendLinkPaidKey()) || "{}") || {}; } catch { return {}; }
+}
+function phSendLinkPaidStore(id, v) {
+  const all = phSendLinkPaid();
+  if (v) all[id] = v; else delete all[id];
+  try { localStorage.setItem(phSendLinkPaidKey(), JSON.stringify(all)); } catch { /* private mode: the warning lasts this page only */ }
+}
+
+let phSendLinksLoading = null;
+function phLoadSendLinks() {
+  const who = user?.id;
+  return (phSendLinksLoading ??= (async () => {
+    try {
+      try { await phLoadOrgs(); } catch {
+        if (user?.id === who) phCache.sendLinks = { org: null, error: true };
+        return;
+      }
+      if (user?.id !== who) return;
+      const org = phPersonalOrg();
+      if (!phCan(org, "invoices")) { phCache.sendLinks = { org: null }; return; }
+      try {
+        // Only links this person made: the server ties a payment only from the link's maker.
+        let list = ((await api(`/api/orgs/${encodeURIComponent(org.id)}/invoices`)).invoices || [])
+          .filter((i) => i.sendLink && i.createdByMemberId === org.memberId);
+        // A payment that went out but was not recorded on its link: record it now, or forget it once the link moved on.
+        for (const [id, p] of Object.entries(phSendLinkPaid())) {
+          const inv = list.find((i) => i.id === id);
+          if (!inv || inv.state !== "SUBMITTED") { phSendLinkPaidStore(id, null); continue; }
+          try {
+            const r = await api(`/api/orgs/${encodeURIComponent(p.orgId)}/invoices/${encodeURIComponent(id)}/paying`, p.payment);
+            phSendLinkPaidStore(id, null);
+            list = list.map((i) => (i.id === id ? r.invoice : i));
+          } catch (e) {
+            // A payment that failed or was never signed frees the link; anything else keeps Pay off.
+            if (e?.body?.code === "PAYMENT_DEAD") phSendLinkPaidStore(id, null);
+          }
+        }
+        if (user?.id === who) phCache.sendLinks = { org, list };
+      } catch { if (user?.id === who) phCache.sendLinks = { org, error: true }; }
+    } finally { phSendLinksLoading = null; }
+  })());
+}
+/* Filled in and waiting for this person to pay. Nothing to pay: no card. */
+function phSendLinksCard() {
+  const filled = (phCache.sendLinks?.list || []).filter((i) => i.state === "SUBMITTED");
+  if (!filled.length) return "";
+  return Z.listGroup({
+    label: "Send links to pay",
+    rows: filled.map((i) => Z.row({
+      lead: Z.avatar({ name: i.supplier?.orgName || "" }),
+      title: i.supplier?.orgName || "Someone",
+      sub: i.lines?.[0]?.description || "Filled in your link",
+      right: esc(phEur(Number(i.total))),
+      href: phHref("send/link", i.id),
+    })),
+  });
 }
 
 const phRecoveryBannerKey = (u) => `zold-hide-recovery-banner:${u.id}`;
@@ -229,6 +297,7 @@ PH.home = {
             <span class="z-row__main"><span class="z-row__title">${esc(phEur(inflight.sendEur))} to ${esc(inflight.recipientName || "")}</span>
             <span class="z-row__sub">Waiting for the bank to confirm</span></span>${Z.icon("chevron_right", "z-row__chev")}</a>` : ""}
         ${checklist}
+        ${phSendLinksCard()}
         ${phInvoicesCard()}
         ${phActivityList(hist.slice(0, 5), {
           label: "Recent activity",

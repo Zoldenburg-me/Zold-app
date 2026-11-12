@@ -33,3 +33,4 @@ organisations ─┬─ members (role, status, invite)
 - Ledger accountCode: set by a rule (`accountCodeAuto`) or a person (PATCH).
 - Ledger `valuation`: set once when an unvalued wallet row is valued by a price retry, with its source.
 - Invoice link tokens are stored hashed (linkTokenHash); sessions by tokenHash.
+- A send link is an Invoice with `sendLink {maxTotal, note}`; its payment is `payment.transferId` or `payment.cryptoSendId`, tied by /paying.

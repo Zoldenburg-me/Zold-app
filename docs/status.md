@@ -211,6 +211,17 @@ Say this plainly rather than letting the surface imply otherwise:
   and invoice links are never sent by Zold; routes return the token to the
   caller and say so. Do not add a "we emailed them"
   string for those without routing them through the mailer.
+- **No send link has been paid.** A send link (`Invoice.sendLink`, the
+  payee's page `/send/<token>`, the app's Send → "Send a link") has run only
+  in `send-link:test` and against a local preview: the payee's form, the
+  hidden limit and the receipt. Tying a real SEPA transfer or crypto send to
+  one (`POST /api/orgs/:org/invoices/:id/paying`) and its move to PAID have
+  run only on stubbed transfers. The link has no expiry, the payer sees its URL
+  only in the session that made it, and a payment for any other amount than
+  the one asked is refused before the debit. Whoever opens the link first
+  fills it in; after that its page shows the destination masked. Five amounts
+  over the limit lock its submit for a day. The payee's name and IBAN or
+  wallet are stored on the invoice row.
 - **Imported-wallet sync has run only against local hardhat** (2026-10-03:
   mints in and a send out were booked, unpriced). It has never read mainnet,
   and the DefiLlama price feed has never been called live. A wallet syncs only

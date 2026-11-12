@@ -31,8 +31,8 @@ json → securityHeaders → originPolicy → /api rate limit → pages → rout
 | /api | routes/operator-auth.ts | /admin/auth/*: enrolment, login, step-up challenge, add passkey, logout, me |
 | /api | routes/email-verification.ts, faucet.ts, admin.ts | codes, testnet faucet, operator stats |
 | /api/orgs | routes/orgs.ts (27) | orgs, plans, members, invites, accounts, contacts, wallets and their ownership proof (challenge, prove, re-check) |
-| /api/orgs | routes/business.ts → business/* | drafts (four-eyes runs), invoices, invoicing (§14 UStG; issue-outgoing is the one issue path), income-invoices (payer rules, monthly drafts from wallet receipts, issuing a draft), payment-links, bookkeeping (coa, rules, ledger, holdings, realised gains, revalue), bookkeeping-export (statement, Belege, Lexware, ZIP), integrations (GetMyInvoices) |
-| /api/invoice-links | business/invoice-links.ts | supplier fills an invoice by token |
+| /api/orgs | routes/business.ts → business/* | drafts (four-eyes runs), invoices (a send link's POST …/:id/paying ties a transfer or crypto send to it), invoicing (§14 UStG; issue-outgoing is the one issue path), income-invoices (payer rules, monthly drafts from wallet receipts, issuing a draft), payment-links, bookkeeping (coa, rules, ledger, holdings, realised gains, revalue), bookkeeping-export (statement, Belege, Lexware, ZIP), integrations (GetMyInvoices) |
+| /api/invoice-links | business/invoice-links.ts | supplier fills an invoice by token; a send link (`sendLink`) takes amount ≤ its hidden limit, reason, IBAN or wallet, name |
 | /api/gnosis-pay | routes/gnosis-pay.ts | SIWE, account, transactions |
 | — | server.ts | GET /api/health, GET /api/rates |
 

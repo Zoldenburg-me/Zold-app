@@ -110,6 +110,21 @@ export async function sendInvoiceSubmitted(to: string, orgName: string): Promise
   });
 }
 
+/** A send link was filled in. No name, amount or destination: the address
+ *  may be read by someone else, and the app shows them after sign-in. */
+export async function sendSendLinkFilled(to: string): Promise<void> {
+  await smtp().sendMail({
+    from: EMAIL_VERIFICATION.smtp.from,
+    to,
+    subject: "Someone filled in your send link",
+    text:
+      `Someone filled in a send link you made in Zold.\n\n` +
+      `Open Zold to see the amount and where it goes, and to pay it. Nothing is sent until you approve it.\n\n` +
+      `This email has no link.\n\n` +
+      `Zoldenburg`,
+  });
+}
+
 /** "13 October 2026, 09:00 UTC": the same for every reader, whatever their zone. */
 const utcText = (d: Date) =>
   `${d.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" })}, ` +

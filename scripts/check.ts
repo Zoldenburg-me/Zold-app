@@ -118,6 +118,8 @@ const scripts = [
   "review-resolution:test",
   "invoicing:test",
   "invoicing-profile:test",
+  "send-link:test",
+  "send-link-ui:test",
   "async-errors:test",
   "input-errors:test",
   "vat:test",
