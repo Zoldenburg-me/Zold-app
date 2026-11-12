@@ -1,0 +1,136 @@
+/**
+ * Append-only audit log for decisions that must be explainable later.
+ *
+ * In: the segment decision and its inputs, the US questionnaire answers,
+ * consent events, partner account ids, and partner webhook events: what a
+ * regulator or a user would need to reconstruct why an account was refused.
+ *
+ * Never in (enforced by sanitise()): a PAN, a bank account number, an OAuth
+ * token, a session token. `redact()` stores `sha256:<12 hex>`, enough to show
+ * two entries concern the same value without revealing it.
+ *
+ * There is no update or delete method, and there must not be one.
+ *
+ * Storage is the same JSON store as everything else: fine for a demo or a
+ * small deployment, not a tamper-evident ledger. A real deployment ships these
+ * to an append-only sink.
+ */
+import { createHash, randomUUID } from "node:crypto";
+
+export type AuditKind =
+  | "segment.decided"
+  | "user.name_changed"
+  | "segment.changed_by_admin"
+  | "us_questions.answered"
+  | "consent.given"
+  | "partner.account_created"
+  | "partner.webhook_received"
+  | "partner.call_refused"
+  /** A user connected or removed credentials of their own for a partner. */
+  | "partner.credentials_connected"
+  | "partner.credentials_removed"
+  /** A Monerium connect refused: the login had no profile of the signup's kind. */
+  | "partner.connect_refused"
+  /** A user moved their existing Monerium IBAN to this Safe (PATCH /ibans). */
+  | "partner.iban_moved"
+  /** A re-read found the account's IBAN paying into another address or chain
+   *  at Monerium, so it was taken off the account (verifyIbanBinding). */
+  | "partner.iban_moved_elsewhere"
+  /** Belege pushed to an accounting inbox; counts only, never a key. */
+  | "partner.documents_pushed"
+  /** An org account's Monerium profile was checked (adopt, fund, re-check or
+   *  execution): which profile, which kind, and whether it passed. */
+  | "account.monerium_profile_checked"
+  /** An operator read an account's Monerium data live, on the account's own
+   *  connection (admin dashboard). Which operator, which profile. */
+  | "operator.monerium_read"
+  /** An imported wallet's ownership proof was checked on its chain: prove or
+   *  re-check, and what the chain answered. */
+  | "wallet.ownership_checked"
+  /** The account's payment key (authorizer) was bound or replaced, with a
+   *  passkey step-up for the new address: old and new address. */
+  | "user.authorizer_bound"
+  | "org.payment_review_changed"
+  /** The payout IBAN printed on invoices changed: last four characters only. */
+  | "org.invoice_iban_changed"
+  /** An operator took a transfer out of MANUAL_REVIEW: the state chosen, the
+   *  note, and which operator (a hash of the token). */
+  | "operator.transfer_review_resolved"
+  /** An admin request, by operator id and name: every change, and each read
+   *  of a path once per operator in ten minutes (operators/gate.ts). */
+  | "operator.request"
+  /** An operator enrolled from a host-started link, or added a passkey. */
+  | "operator.enrolled"
+  | "operator.passkey_added"
+  /** An admin change refused for its approval (missing, wrong, replayed),
+   *  and whether the session was ended for it. Never the header or body. */
+  | "operator.step_up_refused"
+  /** An operator signed in with a passkey, and which one (its label). */
+  | "operator.signed_in"
+  /** An operator issued a new service credential; the previous one keeps
+   *  working until `previousValidUntil`. Ids only, never a token. */
+  | "service.credential_rotated"
+  /** The checkout service read a transfer: which credential, which id, and
+   *  whether it was served or answered 404. */
+  | "service.checkout_transfer_read"
+  /** The checkout service called a merchant-link route: which credential,
+   *  which link, and the outcome. Never the link code or secret. */
+  | "service.merchant_link_preview"
+  | "service.merchant_link_exchange"
+  | "service.merchant_link_read"
+  | "service.merchant_request_create"
+  | "service.merchant_request_read"
+  | "service.merchant_request_cancel"
+  /** A member issued a link code for a shop, or revoked a merchant link. */
+  | "merchant_link.code_issued"
+  | "merchant_link.revoked";
+
+export interface AuditEntry {
+  id: string;
+  at: string;
+  kind: AuditKind;
+  userId?: string;
+  /** Free-form, already redacted by the caller via `redact`. */
+  data: Record<string, unknown>;
+}
+
+/** One-way, stable, and short enough to read. Same input -> same digest, so two
+ *  entries about one value can be tied together without holding the value. */
+export function redact(value: unknown): string {
+  return `sha256:${createHash("sha256").update(String(value)).digest("hex").slice(0, 12)}`;
+}
+
+/** Keys that must never be written in the clear, whatever a caller passes. */
+const FORBIDDEN = /^(pan|panNumber|accountNumber|bankAccount|iban|token|jwt|apiKey|sessionToken|password|secret)$/i;
+
+/**
+ * Copy a record, hashing anything whose key looks sensitive.
+ *
+ * A denylist, because with an allowlist a caller's new field would be dropped
+ * from the audit trail with no error. Forbidden keys are hashed, not omitted,
+ * so the entry still records that e.g. a PAN was involved.
+ */
+export function sanitise(data: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(data)) {
+    if (FORBIDDEN.test(k)) out[k] = redact(v);
+    else if (v && typeof v === "object" && !Array.isArray(v)) out[k] = sanitise(v as Record<string, unknown>);
+    else out[k] = v;
+  }
+  return out;
+}
+
+
+export function auditEntry(
+  kind: AuditKind,
+  data: Record<string, unknown>,
+  userId?: string,
+): AuditEntry {
+  return {
+    id: randomUUID(),
+    at: new Date().toISOString(),
+    kind,
+    ...(userId ? { userId } : {}),
+    data: sanitise(data),
+  };
+}

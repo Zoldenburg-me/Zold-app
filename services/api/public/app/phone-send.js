@@ -1,0 +1,607 @@
+/**
+ * The phone app: Send (payee, amount, review, progress).
+ *
+ * Classic script after app/phone.js, which holds the router (PH, phGo,
+ * phRender) and the shared pieces these screens use. Declarations and wiring
+ * only: nothing here runs at load. app/main.js stays last.
+ */
+
+/* ==========================================================================
+   Send
+   ========================================================================== */
+
+/* The send in progress. The IBAN is what the device signs a commitment over,
+   so it is always on screen before the approval. */
+let phSend = { payee: null, amount: "", reference: "", quote: null, transferId: null, error: null };
+
+/* People this account has paid, newest first, one per IBAN. */
+function phPayees() {
+  const seen = new Map();
+  for (const t of hist) {
+    if (t.kind === "funding" || t.rail !== "sepa" || !t.recipientIban) continue;
+    const key = String(t.recipientIban).replace(/\s+/g, "").toUpperCase();
+    if (!seen.has(key)) seen.set(key, { key, name: t.recipientName || "", iban: key, count: 0, payments: [] });
+    const p = seen.get(key);
+    p.count += 1;
+    p.payments.push(t);
+  }
+  return [...seen.values()];
+}
+
+/* Why sending is closed, and the one thing that opens it. null: open. */
+function phSendBlocked(u = user) {
+  if (!HAS("onchain_balance")) return { text: "Sending is not part of this account.", action: null };
+  if (!bankOffered(u) && !kycApproved(u)) return { text: "Bank transfers open once your identity is verified, and this account has no bank account to verify it with.", action: null };
+  if (!kycApproved(u) || !u?.iban) return { text: "Bank transfers open once Monerium has verified you and your IBAN is active.", action: { id: "ph-send-verify", label: "Verify your identity" } };
+  return null;
+}
+
+const phWalletRow = () => Z.row({ lead: Z.iconTile({ icon: "account_balance_wallet", tone: "p" }), title: "Crypto wallet", sub: `EURe or ${usdSym()} to an ENS name or 0x address`, href: "#send/wallet" });
+
+function phPayeeRow(p, href) {
+  return Z.row({ lead: Z.avatar({ name: p.name }), title: p.name || "Payee", sub: phMaskIban(p.iban), href });
+}
+
+PH.send = {
+  title: "Send",
+  tab: "send",
+  live: () => `${user?.kycStatus}|${user?.iban}|${phHistSig()}`,
+  html() {
+    const blocked = phSendBlocked();
+    const payees = phPayees();
+    const q = phQuery;
+    return `${phTop("Send")}${phMain(`
+      ${blocked ? `${Z.note({ tone: "a", text: blocked.text })}${blocked.action ? Z.button({ variant: "primary", full: true, label: blocked.action.label, id: blocked.action.id }) : ""}${caps.cryptoSend && HAS("onchain_balance") ? Z.listGroup({ label: "New payment", rows: [phWalletRow()] }) : ""}` : `
+      <form class="z-search" role="search" onsubmit="return false">
+        <label class="z-sr" for="ph-sq">Search people you’ve paid</label>${Z.icon("search")}
+        <input class="z-search__input" id="ph-sq" type="search" name="q" autocomplete="off" spellcheck="false" placeholder="Name or IBAN…" value="">
+      </form>
+      <div id="ph-send-matches"></div>
+      ${payees.length ? `<section class="z-group" aria-labelledby="ph-recent"><div class="z-group__head"><h2 class="z-eyebrow" id="ph-recent">Recent</h2></div>
+        <div class="z-rail">${payees.slice(0, 6).map((p) => `<a class="z-rail__item" href="${phHref("send/amount", p.key)}">${Z.avatar({ name: p.name })}<span>${esc(phFirst(p.name) || "Payee")}</span></a>`).join("")}</div></section>` : ""}
+      ${Z.listGroup({
+        label: "New payment",
+        rows: [
+          Z.row({ lead: Z.iconTile({ icon: "account_balance", tone: "p" }), title: "Bank transfer", sub: "To any IBAN in Europe, no Zold fee", right: Z.tag("Beta"), href: "#send/new" }),
+          caps.cryptoSend
+            ? phWalletRow()
+            : Z.soonRow({ lead: Z.iconTile({ icon: "account_balance_wallet" }), title: "Crypto wallet", sub: `Send digital dollars (${usdSym()}) to a wallet` }),
+        ],
+      })}
+      ${Z.listGroup({
+        label: "People you’ve paid",
+        rows: payees.map((p) => phPayeeRow(p, phHref("send/amount", p.key))),
+        empty: { text: "The people you pay appear here." },
+      })}`}
+    `)}`;
+  },
+  bind(root) {
+    // A new send starts clean; the amount screen fills in from the payee.
+    phSend = { payee: null, amount: "", reference: "", quote: null, transferId: null, error: null };
+    const v = root.querySelector("#ph-send-verify");
+    if (v) v.onclick = () => enterKycReview(user?.name || "Account");
+    const q = root.querySelector("#ph-sq");
+    if (!q) return;
+    q.oninput = () => {
+      const needle = q.value.trim().toLowerCase().replace(/\s+/g, "");
+      const out = root.querySelector("#ph-send-matches");
+      if (!needle) { out.innerHTML = ""; return; }
+      const hits = phPayees().filter((p) => p.name.toLowerCase().replace(/\s+/g, "").includes(needle) || p.iban.toLowerCase().includes(needle));
+      const looksIban = /^[a-z]{2}\d{2}[a-z0-9]{8,}$/i.test(needle);
+      out.innerHTML = Z.listGroup({
+        rows: [
+          ...hits.map((p) => phPayeeRow(p, phHref("send/amount", p.key))),
+          ...(looksIban && !hits.length ? [Z.row({ lead: Z.iconTile({ icon: "add" }), title: "Pay a new IBAN", sub: Z.groupIban(needle.toUpperCase()), href: `#send/new/${encodeURIComponent(needle.toUpperCase())}` })] : []),
+        ],
+        empty: { text: "Nobody you’ve paid matches that.", action: { href: "#send/new", label: "New bank transfer" } },
+      });
+    };
+  },
+};
+
+/* A new payee: name and IBAN. No design of its own; built from the field and
+   the pinned action, like the onboarding forms. */
+PH["send/new"] = {
+  title: "New bank transfer",
+  html(prefill) {
+    const p = phSend.payee && !phSend.payee.fromHistory ? phSend.payee : null;
+    return `${phTop("New bank transfer", "send")}<form id="ph-new" class="z-app__form" novalidate>${phMain(`
+      <div class="z-form">
+        ${Z.field({ id: "ph-new-name", label: "Their full name", name: "name", autocomplete: "off", placeholder: "Name on their account…", value: p?.name || "", required: true })}
+        ${Z.field({ id: "ph-new-iban", label: "IBAN", name: "iban", autocomplete: "off", spellcheck: false, placeholder: "DE89 3704 0044 0532 0130 00…", value: p?.iban ? Z.groupIban(p.iban) : prefill ? Z.groupIban(prefill) : "", required: true })}
+      </div>
+      ${Z.note({ text: `Check the name and IBAN with them. Your ${Z.byDevice("Face ID", "passkey")} approves the payment to exactly this IBAN.` })}
+    `)}${phFoot(Z.button({ variant: "primary", full: true, label: "Continue", type: "submit" }))}</form>`;
+  },
+  bind(root) {
+    root.querySelector("#ph-new").onsubmit = (e) => {
+      e.preventDefault();
+      const name = root.querySelector("#ph-new-name");
+      const iban = root.querySelector("#ph-new-iban");
+      const clean = iban.value.replace(/\s+/g, "").toUpperCase();
+      Z.setFieldError(name, name.value.trim() ? "" : "Enter the name on their account.");
+      Z.setFieldError(iban, /^[A-Z]{2}\d{2}[A-Z0-9]{8,30}$/.test(clean) ? "" : "Enter an IBAN, like DE89 3704 0044 0532 0130 00.");
+      if (Z.focusFirstError(root)) return;
+      phSend = { payee: { name: name.value.trim(), iban: clean }, amount: "", reference: "", quote: null, transferId: null, error: null };
+      phGo("send/amount", "new");
+    };
+  },
+};
+
+/* ==========================================================================
+   Send to a crypto wallet
+   ========================================================================== */
+
+/* The wallet send in progress. `address` is what the check screen showed and
+   the server must still resolve to at create and again before submitting. */
+let phWallet = { to: "", token: "EURE", amount: "", name: null, address: null };
+
+const phWalletSym = (token) => (token === "USDC" ? usdSym() : "EURe");
+/* 0x address in groups of four, as an IBAN is shown, so it can be read aloud. */
+const phGroupAddress = (a) => `0x ${String(a).slice(2).replace(/(.{4})/g, "$1 ").trim()}`;
+
+PH["send/wallet"] = {
+  title: "Send to a crypto wallet",
+  html() {
+    const w = phWallet;
+    if (!caps.cryptoSend) return `${phTop("Send to a crypto wallet", "send")}${phMain(Z.note({ text: "Sending to a crypto wallet isn’t available here." }) + Z.button({ variant: "primary", full: true, label: "Back to Send", href: "#send" }))}`;
+    return `${phTop("Send to a crypto wallet", "send")}<form id="ph-wal" class="z-app__form" novalidate>${phMain(`
+      <div class="z-form">
+        ${Z.field({ id: "ph-wal-to", label: "To", name: "to", spellcheck: false, placeholder: caps.ensLookup ? "name.eth or 0x…" : "0x…", value: w.to, required: true, hint: caps.ensLookup ? "An ENS name or a wallet address." : "A wallet address." })}
+        ${Z.select({ id: "ph-wal-token", label: "Token", name: "token", value: w.token, options: [{ value: "EURE", label: "EURe (euro)" }, { value: "USDC", label: `${usdSym()} (dollar)` }] })}
+        ${Z.field({ id: "ph-wal-amount", label: "Amount", name: "amount", inputmode: "decimal", placeholder: "0.00…", value: w.amount, required: true })}
+      </div>
+      ${Z.note({ text: `Sent on ${phChainName(caps.chainId)} from your account, with no Zold fee. A wallet payment can’t be called back.` })}
+      <p class="z-err" id="ph-wal-err" role="alert" hidden></p>
+    `)}${phFoot(Z.button({ variant: "primary", full: true, label: "Check the address", type: "submit", id: "ph-wal-next" }))}</form>`;
+  },
+  bind(root) {
+    const form = root.querySelector("#ph-wal");
+    if (!form) return;
+    const next = root.querySelector("#ph-wal-next");
+    const err = root.querySelector("#ph-wal-err");
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      if (Z.isDisabled(next)) return;
+      const to = root.querySelector("#ph-wal-to");
+      const amount = root.querySelector("#ph-wal-amount");
+      const typed = to.value.trim();
+      const amt = amount.value.trim().replace(",", ".");
+      const isAddr = /^0x[0-9a-fA-F]{40}$/.test(typed);
+      Z.setFieldError(to, isAddr || (caps.ensLookup && /^[^\s.]+(\.[^\s.]+)+$/.test(typed)) ? "" : caps.ensLookup ? "Enter an ENS name like name.eth, or a 0x address." : "Enter a 0x address of 40 characters.");
+      Z.setFieldError(amount, /^\d{1,12}(\.\d{1,6})?$/.test(amt) && Number(amt) > 0 ? "" : "Enter an amount, like 25 or 25.50.");
+      if (Z.focusFirstError(root)) return;
+      err.hidden = true;
+      phWallet = { to: typed, token: root.querySelector("#ph-wal-token").value, amount: amt, name: null, address: null };
+      if (isAddr) { phWallet.address = typed; phGo("send/wallet-check"); return; }
+      Z.setLoading(next, true);
+      try {
+        const r = await api(`/api/ens/lookup?name=${encodeURIComponent(typed)}`);
+        phWallet.name = r.name;
+        phWallet.address = r.address;
+        phGo("send/wallet-check");
+      } catch (e2) {
+        Z.setLoading(next, false);
+        err.textContent = e2.message;
+        err.hidden = false;
+      }
+    };
+  },
+};
+
+/* The address in full before anything is signed. Sending asks for a tick,
+   because the passkey approves exactly this address and nothing can undo it. */
+PH["send/wallet-check"] = {
+  title: "Check the address",
+  html() {
+    const w = phWallet;
+    if (!w.address) return `${phTop("Check the address", "send")}${phMain(Z.note({ text: "Enter who to pay first." }) + Z.button({ variant: "primary", full: true, label: "Send to a wallet", href: "#send/wallet" }))}`;
+    return `${phTop("Check the address", "send")}${phMain(`
+      ${Z.kv([
+        ...(w.name ? [{ key: "Name", value: w.name }] : []),
+        { key: "Address", value: phGroupAddress(w.address), mono: true },
+        { key: "Network", value: phChainName(caps.chainId) },
+        { key: "Amount", value: `${w.amount} ${phWalletSym(w.token)}`, strong: true },
+        { key: "Zold fee", value: "None" },
+      ])}
+      ${Z.note({ tone: "a", text: w.name ? `Compare the address with the one ${w.name}’s owner gave you. We check the name again just before sending and stop if it points anywhere else.` : "Compare every character with the address they gave you. A payment to a wrong address can’t be recovered." })}
+      <label class="z-check" for="ph-wal-ok"><input id="ph-wal-ok" type="checkbox"><span>I checked this address with them.</span></label>
+      <p class="z-err" id="ph-wal-err" role="alert" hidden></p>
+    `)}${phFoot(Z.button({ variant: "primary", full: true, label: `Send ${w.amount} ${phWalletSym(w.token)}`, id: "ph-wal-send", disabledReason: undefined }))}`;
+  },
+  bind(root) {
+    const btn = root.querySelector("#ph-wal-send");
+    const ok = root.querySelector("#ph-wal-ok");
+    if (!btn || !ok) return;
+    const sync = () => { if (ok.checked) btn.removeAttribute("aria-disabled"); else btn.setAttribute("aria-disabled", "true"); };
+    ok.onchange = sync;
+    sync();
+    btn.onclick = () => { if (!ok.checked) { ok.focus(); return; } phWalletSubmit(btn, root.querySelector("#ph-wal-err")); };
+  },
+};
+
+/* Create (the server resolves again and must match the address shown), then
+   the passkey signs the Safe operation paying exactly that address, then
+   submit (the server resolves a name once more first). */
+async function phWalletSubmit(btn, errEl) {
+  if (Z.isDisabled(btn)) return;
+  errEl.hidden = true;
+  Z.setLoading(btn, true);
+  const w = phWallet;
+  try {
+    const created = await api(`/api/users/${encodeURIComponent(user.id)}/crypto-sends`, { to: w.to, token: w.token, amount: w.amount, confirmedAddress: w.address });
+    const execution = await safeExecutionAssertion({ safeExecution: created.safeExecution });
+    if (!execution) throw new Error("This account can’t approve the payment with a passkey here.");
+    const sent = await api(`/api/crypto-sends/${encodeURIComponent(created.id)}/authorize`, { executionAssertion: execution });
+    phPutCryptoSend(sent);
+    refresh();
+    phGo("send/wallet-done", sent.id, { replace: true });
+  } catch (e) {
+    Z.setLoading(btn, false);
+    errEl.textContent = e?.name === "NotAllowedError"
+      ? Z.byDevice("Face ID or fingerprint was cancelled. Nothing was sent.", "The passkey prompt was cancelled. Nothing was sent.")
+      : e.message;
+    errEl.hidden = false;
+  }
+}
+
+/* Put a crypto send into the activity list, new or updated, as the server lists it. */
+function phPutCryptoSend(s) {
+  const row = { kind: "crypto_out", at: s.createdAt, ...s };
+  if (hist.some((x) => x.id === s.id)) updateHistory(row); else addHistory(row);
+}
+
+PH["send/wallet-done"] = {
+  title: "Wallet payment",
+  live: (id) => { const s = hist.find((x) => x.id === id); return s ? `${s.state}|${histLoaded}` : `none|${histLoaded}`; },
+  html(id) {
+    // From Activity, so the result is still there after a reload.
+    const s = hist.find((x) => x.id === id && x.kind === "crypto_out");
+    if (!s && id && !histLoaded && !histLoadFailed) return `${phTop("Wallet payment", "activity")}${phMain(Z.skeletonRows(3, "Loading the payment…"))}`;
+    if (!s) return `${phTop("Wallet payment", "send")}${phMain(Z.note({ text: "No wallet payment is open." }))}`;
+    const sent = s.state === "SENT";
+    const title = sent ? "Sent" : s.state === "SUBMITTED" ? "Sent, not yet confirmed" : "Not sent";
+    const lede = sent
+      ? `${s.amount} ${phWalletSym(s.token)} went to ${s.name || "the address"} on ${phChainName(caps.chainId)}.`
+      : s.state === "SUBMITTED" ? "The network took the payment but hasn’t confirmed it yet. It may still land; check your balance before trying again."
+        : s.error || "Nothing left your account.";
+    return `${Z.topbar({ srTitle: title, back: { href: "#home", label: "Back to Home" } })}${phMain(`
+      <span class="z-tile z-tile--${sent ? "p" : "a"} z-tile--lg" aria-hidden="true">${Z.icon(sent ? "check" : "hourglass_top")}</span>
+      <div class="z-intro"><h2 class="z-title">${esc(title)}</h2><p class="z-sub">${esc(lede)}</p></div>
+      ${Z.kv([
+        ...(s.name ? [{ key: "Name", value: s.name }] : []),
+        { key: "Address", value: phGroupAddress(s.to), mono: true },
+        ...(s.txHash ? [{ key: "Transaction", value: s.txHash, mono: true }] : []),
+      ])}
+    `)}${phFoot(Z.button({ variant: "primary", full: true, label: "Done", href: "#home" }))}`;
+  },
+};
+
+/** The payee for the amount step: from history by IBAN, or the one typed. */
+function phPayeeFor(arg) {
+  if (arg && arg !== "new") {
+    const p = phPayees().find((x) => x.key === String(arg).toUpperCase());
+    if (p) return { name: p.name, iban: p.iban, fromHistory: true };
+  }
+  return phSend.payee;
+}
+
+let phQuoteSeq = 0, phQuoteTimer = null;
+
+/* The key-value rows without the card, as the amount screen draws them. */
+const phFlatKv = (rows) => Z.kv(rows).replace('class="z-kv z-card"', 'class="z-kv z-kv--flat"');
+
+function phQuoteRows(q, payee) {
+  const first = phFirst(payee?.name) || "They";
+  return phFlatKv([
+    { key: "Zold fee", value: q ? phEur(q.fixedFeeEur) : phEur(0) },
+    { key: "Exchange", value: "None, euro to euro" },
+    { key: "Sent as", value: "Bank transfer" },
+    { key: `${first} receives`, value: q ? phEur(q.receiveEur) : "Enter an amount" },
+  ]);
+}
+
+/* What the amount screen says is available, and why an amount is refused
+   before pricing. An unread balance refuses every amount: it cannot be
+   checked, and €0.00 would be a guess. */
+const phAvailableText = () => {
+  const bal = knownBalance(user);
+  return bal === null ? `${UNREAD_BALANCE}. Reload to try again.` : `Available ${phEur(bal)}`;
+};
+function phAmountRefusal(n) {
+  const bal = knownBalance(user);
+  if (bal === null) return { label: UNREAD_BALANCE, error: "Your balance could not be read just now, so this amount cannot be checked. Reload to try again." };
+  if (n > bal) return { label: "More than your balance", error: `You have ${phEur(bal)}.` };
+  return null;
+}
+
+PH["send/amount"] = {
+  title: "Amount",
+  // Redraw once, when a payee named in the URL is found in the loaded history.
+  live: (arg) => `${!!phPayeeFor(arg)}|${histLoaded}`,
+  html(arg) {
+    const payee = phPayeeFor(arg);
+    if (!payee && arg && arg !== "new" && !histLoaded && !histLoadFailed) return `${phTop("Amount", "send")}${phMain(Z.skeletonRows(2, "Loading…"))}`;
+    if (!payee) return `${phTop("Amount", "send")}${phMain(Z.note({ text: "Pick who to pay first." }) + Z.button({ variant: "primary", full: true, label: "Choose a person", href: "#send" }))}`;
+    const blocked = phSendBlocked();
+    return `${phTop("Amount", "send")}<form id="ph-amt" class="z-app__form" novalidate>${phMain(`
+      <div class="z-chip-payee">${Z.avatar({ name: payee.name })}<span class="z-row__title">${esc(payee.name)}</span><span class="z-mono z-dim" translate="no">•••• ${esc(payee.iban.slice(-4))}</span></div>
+      ${blocked ? Z.note({ tone: "a", text: blocked.text }) : ""}
+      <div class="z-amount-in">
+        <label for="ph-amount" class="z-amount-in__label">You send</label>
+        <div class="z-amount-in__box"><span class="z-amount-in__cur" aria-hidden="true">€</span>
+          <input id="ph-amount" name="amount" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00…" value="${esc(phSend.amount)}" aria-describedby="ph-amount-hint ph-amount-err"></div>
+        <p class="z-hint z-fig" id="ph-amount-hint">${esc(phAvailableText())}</p>
+        <p class="z-err" id="ph-amount-err" role="alert" hidden></p>
+      </div>
+      <div id="ph-quote" aria-live="polite">${phQuoteRows(null, payee)}</div>
+      ${Z.field({ id: "ph-ref", label: "Reference", optional: true, name: "reference", autocomplete: "off", placeholder: "What it’s for…", maxlength: 140, value: phSend.reference, hint: "Shown on their bank statement." })}
+    `)}${phFoot(Z.button({ variant: "primary", full: true, label: "Enter an amount", type: "submit", id: "ph-amt-next", disabledReason: undefined }))}</form>`;
+  },
+  bind(root, arg) {
+    const payee = phPayeeFor(arg);
+    if (!payee) return;
+    phSend.payee = payee;
+    const input = root.querySelector("#ph-amount");
+    const next = root.querySelector("#ph-amt-next");
+    const err = root.querySelector("#ph-amount-err");
+    const setNext = (label, ok) => {
+      next.querySelector("span").textContent = label;
+      if (ok) next.removeAttribute("aria-disabled"); else next.setAttribute("aria-disabled", "true");
+    };
+    const showErr = (msg) => { err.textContent = msg || ""; err.hidden = !msg; if (msg) input.setAttribute("aria-invalid", "true"); else input.removeAttribute("aria-invalid"); };
+    const price = async () => {
+      const typed = input.value.trim();
+      phSend.amount = typed;
+      phSend.quote = null;
+      const seq = ++phQuoteSeq;
+      showErr("");
+      root.querySelector("#ph-quote").innerHTML = phQuoteRows(null, payee);
+      if (!typed) { setNext("Enter an amount", false); return; }
+      const n = parseEurInput(typed);
+      if (!(n > 0)) { setNext("Enter an amount", false); showErr(eurInputError(typed)); return; }
+      if (phSendBlocked()) { setNext("Sending is not open yet", false); return; }
+      const refusal = phAmountRefusal(n);
+      if (refusal) { setNext(refusal.label, false); showErr(refusal.error); return; }
+      setNext("Pricing…", false);
+      try {
+        const q = await api("/api/quotes", { userId: user.id, rail: "sepa", sendEur: n });
+        if (seq !== phQuoteSeq) return;
+        phSend.quote = q;
+        root.querySelector("#ph-quote").innerHTML = phQuoteRows(q, payee);
+        setNext("Review", true);
+      } catch (e) {
+        if (seq !== phQuoteSeq) return;
+        setNext("Enter an amount", false);
+        showErr(e.message);
+      }
+    };
+    input.oninput = () => { clearTimeout(phQuoteTimer); phQuoteTimer = setTimeout(price, 450); };
+    root.querySelector("#ph-ref").oninput = (e) => { phSend.reference = e.target.value; };
+    root.querySelector("#ph-amt").onsubmit = (e) => {
+      e.preventDefault();
+      if (Z.isDisabled(next) || !phSend.quote) { input.focus(); return; }
+      phSend.reference = root.querySelector("#ph-ref").value.trim();
+      phGo("send/review");
+    };
+    if (input.value) price(); else setNext("Enter an amount", false);
+  },
+};
+
+/* Same IBAN, however it is spaced or cased. */
+const phSameIban = (a, b) => Boolean(a && b) && String(a).replace(/\s+/g, "").toUpperCase() === String(b).replace(/\s+/g, "").toUpperCase();
+
+PH["send/review"] = {
+  title: "Review payment",
+  html() {
+    const { payee, quote: q } = phSend;
+    if (!payee || !q) return `${phTop("Review payment", "send")}${phMain(Z.note({ text: "This payment has no price yet. Enter the amount again." }) + Z.button({ variant: "primary", full: true, label: "Back to Send", href: "#send" }))}`;
+    const first = phFirst(payee.name) || "They";
+    return `${phTop("Review payment", "send/amount")}${phMain(`
+      ${Z.kv([
+        { key: "Payee", value: payee.name },
+        { key: "IBAN", value: Z.groupIban(payee.iban), mono: true },
+        ...(phSend.reference ? [{ key: "Reference", value: phSend.reference }] : []),
+        { key: "Sent as", valueHtml: `Bank transfer ${Z.tag("Beta")}` },
+        { key: "From", value: `${ownAccountKind()} account` },
+        { key: "Zold fee", value: phEur(q.fixedFeeEur) },
+        { key: "Exchange", value: "None, euro to euro" },
+        { key: `${first} receives`, value: phEur(q.receiveEur) },
+      ])}
+      <div class="z-total"><p class="z-eyebrow">You send</p>${phBalanceFig(q.sendEur)}</div>
+      ${phSameIban(payee.iban, user?.iban) ? Z.note({ tone: "a", icon: "sync_alt", text: "This is your own IBAN. The money leaves and comes back to this account, minus the Zold fee." }) : ""}
+      ${Z.note({ icon: "verified_user", text: `Your ${Z.byDevice("Face ID", "passkey")} approves this amount to this IBAN only. If either changes, nothing is sent.` })}
+      <details class="z-disclose"><summary>Technical details${Z.icon("expand_more")}</summary>${Z.kv([
+        { key: "Price", value: q.id, mono: true },
+        { key: "Price valid until", value: phFull(q.expiresAt) },
+      ])}</details>
+      <p class="z-err" id="ph-rev-err" role="alert" hidden></p>
+    `)}${phFoot(Z.button({ variant: "primary", full: true, icon: "fingerprint", label: Z.byDevice("Approve with Face ID", "Approve with biometrics"), id: "ph-approve" }) + Z.button({ variant: "secondary", full: true, label: "Change amount", href: "#send/amount" }))}`;
+  },
+  bind(root) {
+    const b = root.querySelector("#ph-approve");
+    if (b) b.onclick = () => phSubmit(b, root.querySelector("#ph-rev-err"));
+  },
+};
+
+/* The display figure for a single amount (review, results). */
+function phBalanceFig(value) {
+  const m = /^€([\d,]+)(\.\d{2})$/.exec(phEur(value));
+  return `<p class="z-balance__fig z-fig"><span class="z-balance__cur">€</span>${esc(m ? m[1] : "")}<span class="z-balance__cents">${esc(m ? m[2] : "")}</span></p>`;
+}
+
+/**
+ * Create, sign, authorise. The same guarantees as before this redesign: the
+ * device recomputes the payout commitment and refuses to sign when the
+ * server's terms name a different recipient, and the passkey signs the Safe
+ * operation that is the debit.
+ */
+async function phSubmit(btn, errEl) {
+  if (Z.isDisabled(btn)) return;
+  errEl.hidden = true;
+  Z.setLoading(btn, true);
+  const { payee, quote: q } = phSend;
+  let created = null;
+  let authorizeSent = false;
+  try {
+    if (phSendBlocked()) throw new Error(phSendBlocked().text);
+    await registerDeviceKey(user);
+    const recipient = { recipientName: payee.name, recipientIban: payee.iban };
+    created = await api("/api/transfers", { quoteId: q.id, ...recipient, ...(phSend.reference ? { reference: phSend.reference } : {}) });
+    phSend.transferId = created.id;
+    const dev = await deviceLib;
+    const addr = await dev.deviceAddress(credId(), { bound: created.authorization.authorizer });
+    if (created.authorization.authorizer.toLowerCase() !== addr.toLowerCase()) {
+      throw new Error("The payment key changed while this payment was being set up. Nothing was sent; try again.");
+    }
+    const expected = dev.destinationCommitment("sepa", { iban: recipient.recipientIban, name: recipient.recipientName });
+    if (created.authorization.typedData.message.destination.toLowerCase() !== expected.toLowerCase()) {
+      throw new Error("The payment terms name a different recipient from the one you entered. Nothing was approved.");
+    }
+    const signature = await dev.signTypedData(created.authorization.typedData, credId(), created.authorization.authorizer);
+    const execution = await safeExecutionAssertion(created.authorization);
+    const redeem = await moneriumRedeemAssertion(created.authorization);
+    authorizeSent = true;
+    const t = await api(`/api/transfers/${created.id}/authorize`, {
+      signature,
+      ...(execution ? { executionAssertion: execution } : {}),
+      ...(redeem ? { moneriumRedeemAssertion: redeem } : {}),
+    });
+    phPutTransfer(t);
+    refresh();
+    phGo("send/progress", t.id, { replace: true });
+  } catch (e) {
+    Z.setLoading(btn, false);
+    if (!created) {
+      // Nothing was created: say why here, on the screen the user is on.
+      errEl.textContent = e?.name === "NotAllowedError" ? Z.byDevice("Face ID or fingerprint was cancelled. Nothing was sent.", "The passkey prompt was cancelled. Nothing was sent.") : e.message;
+      errEl.hidden = false;
+      return;
+    }
+    // A transfer exists: its own state decides what the user is told.
+    phSend.error = e?.name === "NotAllowedError" ? Z.byDevice("You cancelled Face ID or fingerprint.", "You cancelled the passkey prompt.") : e.message;
+    // Until Zold has refused it, /authorize may still be arriving: an unsigned
+    // read then proves nothing, and a retry is a second payment nothing would stop.
+    const refused = e?.status < 500 && typeof e.body?.error === "string";
+    // Kept here too: Activity's next load drops an unsigned CREATED from hist.
+    try {
+      const fresh = await api(`/api/transfers/${created.id}`);
+      if (authorizeSent && !refused && phUnsent(fresh)) phSend.failed = { ...fresh, unread: true };
+      else { phSend.failed = fresh; phPutTransfer(fresh); }
+    } catch { phSend.failed = authorizeSent ? { ...created, unread: true } : created; }
+    phGo("send/error", created.id, { replace: true });
+  }
+}
+
+/* Not signed, so not listed in Activity: transfers/activity.ts draws the same line. */
+function phUnsent(t) {
+  return t.state === "CREATED" && !t.auth?.authorizedAt && !t.moneriumRedeem?.signedAt;
+}
+
+/* Put a transfer into the activity list, new or updated. */
+function phPutTransfer(t) {
+  const row = { kind: "transfer", at: t.createdAt, ...t };
+  if (hist.some((x) => x.id === t.id)) updateHistory(row); else addHistory(row);
+}
+
+/* Progress: approved, sent to the bank, paid. Paid only when the API says so. */
+function phTimeline(t) {
+  const approved = !!(t.auth?.authorizedAt || t.moneriumRedeem?.signedAt) || !["CREATED"].includes(t.state);
+  const sent = ["PAYOUT_SUBMITTED", "PAID"].includes(t.state);
+  const paid = t.state === "PAID";
+  const time = (iso) => (iso ? new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit" }).format(new Date(iso)) : "");
+  const steps = [
+    { t: "Approved", d: approved ? `With your ${Z.byDevice("Face ID", "passkey")}${t.auth?.authorizedAt ? `, ${time(t.auth.authorizedAt)}` : ""}` : "Waiting for your approval", done: approved },
+    { t: "Sent to their bank", d: sent ? "Left your account. Waiting for the bank to confirm." : "Next, once approved", done: sent },
+    { t: "Paid", d: paid ? `Their bank confirmed${t.updatedAt ? `, ${time(t.updatedAt)}` : ""}` : "We mark it paid when the bank confirms", done: paid },
+  ];
+  const now = steps.findIndex((s) => !s.done);
+  return `<ol class="z-timeline">${steps.map((s, i) => `<li class="${s.done ? "is-done" : i === now ? "is-now" : ""}">
+      <span class="z-timeline__mark" aria-hidden="true">${s.done ? Z.icon("check") : ""}</span>
+      <span class="z-timeline__main"><span class="z-timeline__title">${esc(s.t)}<span class="z-sr">${s.done ? ", done" : i === now ? ", in progress" : ", not yet"}</span></span><span class="z-timeline__sub">${esc(s.d)}</span></span></li>`).join("")}</ol>`;
+}
+
+PH["send/progress"] = {
+  title: "Payment progress",
+  live: (id) => { const t = hist.find((x) => x.id === id); return t ? `${t.state}|${t.sepa?.state}` : "none"; },
+  html(id) {
+    const t = hist.find((x) => x.id === id);
+    if (!t) return `${phTop("", "home")}${phMain(Z.skeletonRows(3, "Loading the payment…"))}`;
+    if (["FAILED", "REFUNDED", "MANUAL_REVIEW"].includes(t.state)) return PH["send/error"].html(id);
+    return `${Z.topbar({ srTitle: "Payment progress", back: { href: "#home", label: "Back to Home" } })}${phMain(`
+      <div>${Z.tag(phTxWord(t))}${phBalanceFig(t.sendEur)}<p class="z-sub">to ${esc(t.recipientName || "")}</p></div>
+      <div aria-live="polite">${phTimeline(t)}</div>
+      <details class="z-disclose"><summary>Technical details${Z.icon("expand_more")}</summary>${Z.kv([
+        { key: "Payment ID", value: t.id, mono: true },
+        ...(t.sepa?.orderId ? [{ key: "Monerium order", value: t.sepa.orderId, mono: true }, { key: "Order state", value: t.sepa.state || "" }] : []),
+      ])}</details>
+    `)}${phFoot(`<div class="z-pair">${t.state !== "CREATED" ? Z.button({ icon: "ios_share", label: "Share receipt", href: phHref("share", t.id) }) : ""}${Z.button({ variant: "primary", label: "Done", href: "#home", className: t.state === "CREATED" ? "z-btn--full" : "" })}</div>`)}`;
+  },
+  bind(root, id) {
+    if (!hist.some((x) => x.id === id) && id) {
+      api(`/api/transfers/${encodeURIComponent(id)}`).then((t) => { phPutTransfer(t); phRender(); }).catch(() => {});
+    }
+  },
+};
+
+/* Nothing was sent, or we do not know yet: words from the state Zold answered
+   with. Every hist row is such an answer; a state that could not be read is
+   never "nothing was sent", and a person who may have paid gets no retry. */
+PH["send/error"] = {
+  title: "Payment result",
+  live: (id) => { const t = hist.find((x) => x.id === id); return t ? `${t.state}|${t.sepa?.state}` : `none|${histLoaded}|${histLoadFailed}`; },
+  html(id) {
+    const listed = hist.find((x) => x.id === id);
+    const t = listed || (phSend.failed?.id === id ? phSend.failed : {});
+    if (!t.state && !histLoaded && !histLoadFailed) return `${phTop("", "home")}${phMain(Z.skeletonRows(3, "Loading the payment…"))}`;
+    const unknown = !listed && (!t.state || t.unread);
+    // An answer lost after the debit started, then read back: it is on its way.
+    if (!unknown && !phUnsent(t) && !["FAILED", "REFUNDED", "MANUAL_REVIEW"].includes(t.state)) return PH["send/progress"].html(id);
+    const review = t.state === "MANUAL_REVIEW";
+    const refunded = t.state === "REFUNDED";
+    // FAILED after money left the Safe is on its way back (the server
+    // compensates it); FAILED before that moved nothing. The debit steps are
+    // the server's DEBIT_STEP: an intent step ("0x") is not money that left.
+    const returning = t.state === "FAILED" && (t.txs || []).some((x) => x.step === "safe.transfer(orchestrator)" || x.step === "safe.transfer(fee)");
+    const title = unknown ? "We can’t confirm this payment" : review ? "We’re checking this payment" : returning ? "This payment failed" : "Nothing was sent";
+    const lede = unknown
+      ? "We couldn’t check what happened to this payment, so it may have gone out. Don’t send it again until you’ve checked Activity: a payment that went out is listed there."
+      : review
+      ? "We can’t tell yet whether it reached the bank, so nothing is refunded automatically. Write to support@zoldhq.com and we’ll look into it."
+      : refunded ? `It was refused, and ${phEur(t.refund?.amountEur ?? t.sendEur)} is back in your account.`
+        : returning ? "The money that left your account is being returned. It shows as refunded once it is back."
+          : phSend.error || t.error || "The payment was stopped before any money left your account.";
+    const word = review ? "IN REVIEW" : refunded ? "REFUNDED" : t.state === "FAILED" ? "FAILED" : null;
+    const sub = unknown || review ? "outcome not known yet" : refunded ? "refunded" : returning ? "being returned" : "not debited";
+    return `${Z.topbar({ srTitle: title, back: { href: "#home", label: "Back to Home" } })}${phMain(`
+      <span class="z-tile z-tile--a z-tile--lg" aria-hidden="true">${Z.icon(unknown || review ? "hourglass_top" : "sync_problem")}</span>
+      <div class="z-intro"><h2 class="z-title">${esc(title)}</h2><p class="z-sub">${esc(lede)}</p></div>
+      ${t.recipientName ? `<div class="z-card">${Z.row({ lead: Z.avatar({ name: t.recipientName }), title: t.recipientName, sub: `${phEur(t.sendEur)} · ${sub}`, right: word ? Z.tag(word) : "" })}</div>` : ""}
+    `)}${phFoot(unknown
+      ? `${Z.button({ variant: "primary", full: true, label: "Check Activity", id: "ph-check-activity" })}<a class="z-link-btn" href="#home">Back to Home</a>`
+      : review
+      ? Z.button({ variant: "primary", full: true, label: "Back to Home", href: "#home" })
+      : `${Z.button({ variant: "primary", full: true, label: "Review again", id: "ph-again" })}<a class="z-link-btn" href="#home">Back to Home</a>`)}`;
+  },
+  bind(root, id) {
+    // A reload, not a hash change: it reads Activity afresh and passes any gate
+    // that refused the write, which holds its own reload until the person acts.
+    const check = root.querySelector("#ph-check-activity");
+    if (check) check.onclick = () => {
+      history.replaceState(null, "", `${location.pathname}${location.search}#activity`);
+      location.reload();
+    };
+    const b = root.querySelector("#ph-again");
+    if (!b) return;
+    b.onclick = () => {
+      const t = hist.find((x) => x.id === id);
+      // A new approval needs a new price: back to the amount, filled in.
+      if (t?.recipientIban) phSend.payee = { name: t.recipientName, iban: String(t.recipientIban).replace(/\s+/g, "").toUpperCase() };
+      if (t?.sendEur) phSend.amount = String(t.sendEur);
+      if (t?.reference) phSend.reference = t.reference;
+      phSend.error = null;
+      phGo("send/amount", "new");
+    };
+  },
+};
+

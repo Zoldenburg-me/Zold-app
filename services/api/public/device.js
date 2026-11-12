@@ -1,0 +1,446 @@
+/**
+ * Device key (browser side).
+ *
+ * The key that authorizes payments is generated in this browser and never
+ * sent anywhere. The server learns only the address. The key signs the
+ * payment's exact terms (amount, payee commitment, deadline), so nothing can
+ * be swapped after the user approves.
+ *
+ * assertDeviceAuthorization() in orchestrator.ts verifies the signature in
+ * the API process, not in bytecode. The server cannot forge a signature but
+ * it is the one checking, so this protects against a stolen session and a
+ * swapped payee, not against a compromised server.
+ *
+ * Where the authenticator supports WebAuthn's PRF extension, the key IS the
+ * passkey's: PRF gives 32 bytes only this passkey can produce for a fixed
+ * salt, and HKDF turns them into the private key (v2). localStorage holds only
+ * the address, so clearing site data loses nothing: the same passkey derives
+ * the same key again. Every payment needs a fresh ceremony to derive it.
+ * Keys made before v2 are random and stored AES-GCM-wrapped under the same
+ * PRF output (v1); they keep working where they are stored.
+ *
+ * The stored blob records its `protection`, which the app reads back.
+ *
+ * Crypto is vendored @noble/secp256k1 + @noble/hashes (audited, no build
+ * step; see /vendor). Signing is RFC6979 deterministic with low-s enforced,
+ * as ecrecover's EIP-2 check requires.
+ */
+import { keccak_256 } from "./vendor/hashes/sha3.js";
+import * as secp from "./vendor/secp256k1.js";
+
+/** One slot per passkey credential, so a second account signing up in this
+ *  browser gets its own key instead of being bound to the first account's. */
+const KEY_SLOT = "zold-device-key";
+const slotFor = (credentialId) => `${KEY_SLOT}:${credentialId}`;
+/** The slot from before the Zoll -> Zold rename. The device key is bound as
+ *  the account's authorizer, and dropping this slot would make the account
+ *  bind a new one before it can spend. Read the old name once and carry it
+ *  forward. */
+const LEGACY_KEY_SLOT = "zoll-device-key";
+/**
+ * Fixed PRF input: the same salt must yield the same wrapping key every time.
+ *
+ * Don't rename this string. It is an input to the key derivation, so a change
+ * derives a different AES key and every device key already wrapped on a
+ * user's authenticator becomes undecryptable. That is why it keeps the old
+ * spelling after the Zoll -> Zold rename. A new spelling needs a versioned
+ * migration that unwraps with the old salt first.
+ */
+const PRF_SALT = new TextEncoder().encode("zoll/device-key/v1");
+
+const bytesToHex = (b) => "0x" + Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+const hexToBytes = (h) => {
+  const s = h.replace(/^0x/, "");
+  return Uint8Array.from({ length: s.length / 2 }, (_, i) => parseInt(s.substr(i * 2, 2), 16));
+};
+const b64 = (b) => btoa(String.fromCharCode(...new Uint8Array(b)));
+const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+/* An open prompt holds back the reload ui.js does when a gate answers /api. */
+const passkeyGet = (options) => {
+  const prompt = navigator.credentials.get(options);
+  globalThis.Z?.holdReload?.(prompt);
+  return prompt;
+};
+
+const b64urlToBytes = (s) =>
+  Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+const concat = (...arrs) => {
+  const out = new Uint8Array(arrs.reduce((n, a) => n + a.length, 0));
+  let o = 0;
+  for (const a of arrs) { out.set(a, o); o += a.length; }
+  return out;
+};
+
+/* ---------- payout destination commitment ---------- */
+
+/**
+ * Recompute the destination commitment the server folded into the terms, from
+ * the recipient the user actually entered. Signing only proceeds when this
+ * matches the server's — so a server that swapped the IBAN or phone in the
+ * signed terms is caught here, before the passkey ever unlocks the key.
+ * Covers the recipient NAME as well as the account identifier: on the cash rail
+ * the name is what the anchor is told and what the collector presents with ID,
+ * so leaving it out left the field that decides who gets the money unsigned.
+ *
+ * Must stay byte-identical to destinationCommitment() in chain.ts.
+ */
+export function destinationCommitment(rail, target) {
+  const name = (target.name ?? "").trim().replace(/\s+/g, " ").toUpperCase();
+  let preimage;
+  if (rail === "sepa") {
+    preimage = `sepa|iban=${(target.iban ?? "").replace(/\s/g, "").toUpperCase()}`;
+  } else {
+    preimage = `cash|phone=${(target.phone ?? "").trim()}`;
+  }
+  return bytesToHex(keccak_256(new TextEncoder().encode(`${preimage}|name=${name}`)));
+}
+
+/* ---------- EIP-712 ---------- */
+
+/** One abi.encode word (32 bytes) for the atomic types EIP-712 needs here. */
+function word(type, value) {
+  if (type === "bytes32") return hexToBytes(value);
+  if (type === "address") return concat(new Uint8Array(12), hexToBytes(value));
+  if (type === "uint256") return hexToBytes("0x" + BigInt(value).toString(16).padStart(64, "0"));
+  if (type === "string") return keccak_256(new TextEncoder().encode(value)); // dynamic: hash
+  throw new Error(`unsupported EIP-712 type ${type}`);
+}
+
+function structHash(typeName, fields, values) {
+  const typeString = `${typeName}(${fields.map((f) => `${f.type} ${f.name}`).join(",")})`;
+  return keccak_256(concat(
+    keccak_256(new TextEncoder().encode(typeString)),
+    ...fields.map((f) => word(f.type, values[f.name])),
+  ));
+}
+
+/** EIP-712 digest for the flat typed data the API hands back. */
+export function eip712Digest(typedData) {
+  const domainSep = structHash("EIP712Domain", [
+    { name: "name", type: "string" },
+    { name: "version", type: "string" },
+    { name: "chainId", type: "uint256" },
+    { name: "verifyingContract", type: "address" },
+  ], typedData.domain);
+  const messageHash = structHash(
+    typedData.primaryType,
+    typedData.types[typedData.primaryType],
+    typedData.message,
+  );
+  return keccak_256(concat(Uint8Array.of(0x19, 0x01), domainSep, messageHash));
+}
+
+/* ---------- passkey-derived wrapping key ---------- */
+
+/**
+ * Ask the authenticator to evaluate the PRF for our salt. Returns 32 bytes
+ * that only this passkey can produce, or null when the ceremony succeeded but
+ * the authenticator has no PRF support. A browser with no WebAuthn throws
+ * NO_WEBAUTHN: no ceremony ran, so nothing says the key may go unprotected.
+ * A cancelled, refused or timed-out ceremony THROWS PASSKEY_CANCELLED (the
+ * browser's error as its cause): that says nothing about PRF support, so it
+ * must not be read as "store the key unprotected".
+ * On timeout the pending prompt is aborted; the race still settles for an
+ * embedded browser view that ignores the abort and never resolves.
+ */
+const PASSKEY_CANCELLED = "The passkey prompt was cancelled or timed out. Nothing was stored; try again.";
+const NO_WEBAUTHN = "This browser cannot use passkeys, so the payment key cannot be created or unlocked here.";
+/* Long enough for a Mac password, a security key or a phone by QR code, as
+   PASSKEY_TIMEOUT_MS in app/core.js. */
+const PRF_TIMEOUT_MS = 120000;
+
+async function prfSecret(credentialId, { timeoutMs = PRF_TIMEOUT_MS } = {}) {
+  if (!credentialId) return null;
+  if (!window.PublicKeyCredential) throw new Error(NO_WEBAUTHN);
+  const abort = new AbortController();
+  const timedOut = new Error("passkey timeout");
+  let timer;
+  try {
+    const assertion = await Promise.race([
+      passkeyGet({
+        publicKey: {
+          challenge: crypto.getRandomValues(new Uint8Array(32)),
+          allowCredentials: [{ type: "public-key", id: b64urlToBytes(credentialId) }],
+          userVerification: "required",
+          timeout: timeoutMs,
+          extensions: { prf: { eval: { first: PRF_SALT } } },
+        },
+        signal: abort.signal,
+      }),
+      new Promise((_, rej) => {
+        timer = setTimeout(() => {
+          abort.abort();
+          rej(timedOut);
+        }, timeoutMs);
+      }),
+    ]);
+    if (!assertion) throw new Error("the passkey prompt returned nothing");
+    const first = assertion.getClientExtensionResults?.().prf?.results?.first;
+    return first ? new Uint8Array(first) : null;
+  } catch (cause) {
+    const cancelled = cause?.name === "NotAllowedError" || cause?.name === "AbortError" || cause === timedOut;
+    throw cancelled ? new Error(PASSKEY_CANCELLED, { cause }) : cause;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** The v2 private key: HKDF over the PRF output, retried with a counter in
+ *  the (astronomically unlikely) case the bytes are not a valid scalar. */
+async function derivedPrivateKey(secret) {
+  const base = await crypto.subtle.importKey("raw", secret, "HKDF", false, ["deriveBits"]);
+  for (let i = 0; ; i++) {
+    const bits = new Uint8Array(await crypto.subtle.deriveBits(
+      { name: "HKDF", hash: "SHA-256", salt: PRF_SALT, info: new TextEncoder().encode(`zold/device-key/v2/secp256k1/${i}`) },
+      base,
+      256,
+    ));
+    if (secp.utils.isValidPrivateKey(bits)) return bytesToHex(bits);
+  }
+}
+
+/** HKDF the PRF output into an AES-GCM key (v1 wrapped keys). */
+async function wrappingKey(secret) {
+  const base = await crypto.subtle.importKey("raw", secret, "HKDF", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    { name: "HKDF", hash: "SHA-256", salt: PRF_SALT, info: new TextEncoder().encode("aes-gcm") },
+    base,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"],
+  );
+}
+
+export async function wrapKey(privHex, secret) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    await wrappingKey(secret),
+    new TextEncoder().encode(privHex),
+  );
+  return { v: 1, protection: "prf", iv: b64(iv), ct: b64(ct) };
+}
+
+export async function unwrapKey(blob, secret) {
+  const plain = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: unb64(blob.iv) },
+    await wrappingKey(secret),
+    unb64(blob.ct),
+  );
+  return new TextDecoder().decode(plain);
+}
+
+/* ---------- key lifecycle ---------- */
+
+const parseBlob = (raw) => {
+  if (!raw) return null;
+  if (raw.startsWith("0x")) return { v: 1, protection: "none", key: raw }; // pre-PRF format
+  // A record that cannot be read is still a record: it may be a wrapped key the
+  // account is bound to. Report it as damaged rather than absent, so nothing
+  // mints a new key over it.
+  try { return JSON.parse(raw); } catch { return { damaged: true, protection: null }; }
+};
+
+/**
+ * The key from before per-credential slots: one unscoped slot per browser.
+ * Taken only by an account whose bound authorizer IS that key, so a new
+ * account in the same browser can never pick up someone else's key. A
+ * plaintext one is copied, not moved: before per-credential slots every
+ * account this browser created was bound to that one key, and each still
+ * needs it. A PRF-wrapped one opens for one passkey only, so once that passkey
+ * has unwrapped it into its own slot the unscoped copy is deleted (adoptLegacy):
+ * left behind, it would outlive a rotation as a key bound to nothing.
+ */
+const readLegacySlot = (bound) => {
+  const legacy = localStorage.getItem(LEGACY_KEY_SLOT);
+  if (legacy && !localStorage.getItem(KEY_SLOT)) {
+    localStorage.setItem(KEY_SLOT, legacy);
+    localStorage.removeItem(LEGACY_KEY_SLOT);
+  }
+  const blob = parseBlob(localStorage.getItem(KEY_SLOT));
+  // A damaged or addressless record cannot be shown to be this account's key.
+  if (!blob || !bound || blob.credentialId || blob.damaged) return null;
+  let address = blob.address;
+  try { address ??= addressOf(blob.key); } catch { return null; } // no key, or not hex
+
+  return address?.toLowerCase() === bound.toLowerCase() ? { ...blob, address } : null;
+};
+
+/** This credential's key; `bound` (the account's authorizer address) lets an
+ *  unscoped key from before per-credential slots be carried forward. A
+ *  PRF-wrapped one is carried forward only once this credential has unwrapped
+ *  it (unlock): another passkey on the same account could never open it. */
+const readSlot = (credentialId, bound) => {
+  const own = credentialId ? parseBlob(localStorage.getItem(slotFor(credentialId))) : null;
+  if (own) return own;
+  const legacy = readLegacySlot(bound);
+  if (legacy && credentialId && legacy.protection !== "prf") writeSlot(credentialId, legacy);
+  return legacy;
+};
+const writeSlot = (credentialId, blob) =>
+  localStorage.setItem(slotFor(credentialId), JSON.stringify({ ...blob, credentialId }));
+/* Asks the browser not to evict the slot under storage pressure (a user
+   clearing site data still removes it). Only from createKey, which follows a
+   passkey prompt, so no page load asks. */
+const keepStorage = () => {
+  try { Promise.resolve(globalThis.navigator?.storage?.persist?.()).catch(() => {}); } catch {}
+};
+/** Move an unscoped PRF-wrapped key into this credential's slot, deleting the
+ *  unscoped copy only once the slot reads back holding the same ciphertext. */
+const adoptLegacy = (credentialId, blob) => {
+  writeSlot(credentialId, blob);
+  const back = parseBlob(localStorage.getItem(slotFor(credentialId)));
+  if (back?.credentialId === credentialId && blob.ct && back.ct === blob.ct) localStorage.removeItem(KEY_SLOT);
+};
+
+function freshPrivateKey() {
+  let priv;
+  do { priv = crypto.getRandomValues(new Uint8Array(32)); } while (!secp.utils.isValidPrivateKey(priv));
+  return bytesToHex(priv);
+}
+
+const addressOf = (privHex) =>
+  bytesToHex(keccak_256(secp.getPublicKey(hexToBytes(privHex), false).slice(1)).slice(12));
+
+/** Does this browser hold the key bound as the account's authorizer? */
+export function holdsKey(credentialId, bound) {
+  const blob = bound ? readSlot(credentialId, bound) : null;
+  if (!blob || blob.damaged) return false;
+  let address = blob.address;
+  try { address ??= addressOf(blob.key); } catch { return false; }
+  return address.toLowerCase() === bound.toLowerCase();
+}
+
+/** Is a device key already present in this browser, and how is it held? */
+export function keyStatus(credentialId, bound) {
+  const blob = readSlot(credentialId, bound);
+  return { present: !!blob, protection: blob?.protection ?? null, ...(blob?.damaged ? { damaged: true } : {}) };
+}
+
+/**
+ * Create the device key: derived from the passkey's PRF output when the
+ * authenticator supports it (the same passkey always gives the same key), a
+ * random key stored in the clear when it does not. Returns the address plus how the key ended up protected, so
+ * the caller can tell the user the truth.
+ *
+ * `requirePrf` refuses instead of storing a key the passkey cannot protect:
+ * nothing is written, and the error says why.
+ *
+ * Never writes over a readable stored key that may be the account's bound
+ * authorizer. A damaged record is replaced when the caller says so
+ * (`replaceDamaged`): it cannot be read, so it is nobody's usable key. So is a
+ * readable one whose address is not `staleFor`, the account's bound key: it
+ * is replaced, so a browser holding an old unbound key derives the passkey's
+ * key instead of binding the old one back.
+ *
+ * A cancelled or timed-out passkey prompt throws and stores nothing.
+ */
+export async function createKey(credentialId, { requirePrf = false, replaceDamaged = false, staleFor } = {}) {
+  if (!credentialId) throw new Error("a passkey is needed before this browser can hold a spending key");
+  const existing = readSlot(credentialId);
+  const stale = !!staleFor && !!existing && !existing.damaged && !holdsKey(credentialId, staleFor);
+  if (existing && !(existing.damaged && replaceDamaged) && !stale) {
+    throw new Error("a spending key is already stored in this browser; it is not replaced");
+  }
+  const secret = await prfSecret(credentialId);
+  if (secret) {
+    const address = addressOf(await derivedPrivateKey(secret));
+    writeSlot(credentialId, { v: 2, protection: "prf", derived: true, address });
+    keepStorage();
+    return { address, protection: "prf" };
+  }
+  if (requirePrf) {
+    throw new Error("this device's authenticator does not support the PRF extension, so the spending key could not be protected");
+  }
+  const privHex = freshPrivateKey();
+  writeSlot(credentialId, { v: 1, protection: "none", key: privHex, address: addressOf(privHex) });
+  keepStorage();
+  return { address: addressOf(privHex), protection: "none" };
+}
+
+/** The device address, without needing to unwrap (cached alongside the blob).
+ *  With no key yet it makes one, with the same options as createKey.
+ *  `bound` is the account's authorizer address, as readSlot takes it. */
+export async function deviceAddress(credentialId, { bound, ...options } = {}) {
+  const blob = readSlot(credentialId, bound);
+  // A bound account's key is made by registerDeviceKey, which binds what it
+  // makes; minting one here would just shadow the bound one.
+  if (!blob && bound) throw new Error("payment approval is not set up in this browser yet");
+  if (!blob) return (await createKey(credentialId, options)).address;
+  if (blob.damaged) throw new Error("the spending key stored in this browser is damaged");
+  if (blob.address) return blob.address;
+  return addressOf(blob.key); // pre-PRF plaintext blob with no cached address
+}
+
+/* The authenticator, named for this device by ui.js where the page loads it. */
+const passkeyName = () => globalThis.Z?.passkeyName?.() ?? "passkey";
+
+/**
+ * Unlock the private key for one signature. With PRF this triggers the
+ * authenticator — the passkey is the gate, not a formality.
+ */
+async function unlock(credentialId, bound) {
+  const blob = readSlot(credentialId, bound);
+  if (!blob) throw new Error("no device key in this browser");
+  if (blob.damaged) throw new Error("the spending key stored in this browser is damaged");
+  if (blob.protection !== "prf") return blob.key;
+  const secret = await prfSecret(credentialId).catch((e) => {
+    if (e.message === PASSKEY_CANCELLED || e.message === NO_WEBAUTHN) return null; // same answer as absent
+    throw e;
+  });
+  if (!secret) throw new Error(`your ${passkeyName()} is needed to approve this payment — the payment key stays locked without it`);
+  if (blob.derived) {
+    const privHex = await derivedPrivateKey(secret).catch(() => null);
+    if (!privHex || addressOf(privHex) !== blob.address?.toLowerCase()) throw new Error(`could not unlock the payment key with this ${passkeyName()}`);
+    return privHex;
+  }
+  try {
+    const privHex = await unwrapKey(blob, secret);
+    if (!blob.credentialId && credentialId) adoptLegacy(credentialId, blob); // legacy key, now proven this passkey's
+    return privHex;
+  } catch {
+    throw new Error(`could not unlock the payment key with this ${passkeyName()}`);
+  }
+}
+
+/** Sign the payment terms; returns r||s||v, the shape ecrecover expects.
+ *  `authorizer` is the address the terms name as signer. */
+export async function signTypedData(typedData, credentialId, authorizer) {
+  const privHex = await unlock(credentialId, authorizer);
+  const [sig, recovery] = await secp.sign(eip712Digest(typedData), hexToBytes(privHex), {
+    der: false,
+    recovered: true,
+  });
+  return bytesToHex(concat(sig, Uint8Array.of(27 + recovery)));
+}
+
+const b64url = (buf) =>
+  btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+/**
+ * A user-verified passkey assertion over a challenge the server issued, in the
+ * shape the API takes for `executionAssertion` and `moneriumRedeemAssertion`.
+ * Undefined when there is nothing to approve (no challenge on this transfer).
+ */
+export async function passkeyAssertion(req) {
+  if (!req?.challenge || !req?.credentialId) return undefined;
+  const cred = await passkeyGet({
+    publicKey: {
+      challenge: b64urlToBytes(req.challenge),
+      allowCredentials: [{ type: "public-key", id: b64urlToBytes(req.credentialId) }],
+      userVerification: "required",
+      timeout: 60000,
+    },
+  });
+  return {
+    credentialId: req.credentialId,
+    authenticatorData: b64url(cred.response.authenticatorData),
+    clientDataJSON: b64url(cred.response.clientDataJSON),
+    signature: b64url(cred.response.signature),
+  };
+}
+
+// Hand the API to the classic script, which loaded before this module.
+if (window.__deviceLibReady) {
+  window.__deviceLibReady({ createKey, deviceAddress, signTypedData, keyStatus, holdsKey, destinationCommitment, passkeyAssertion });
+}

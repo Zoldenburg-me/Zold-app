@@ -1,0 +1,31 @@
+{
+  "name": "zold",
+  "license": "Apache-2.0",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Zoldenburg — cross-border remittance infrastructure (Zold app: stablecoin in, local payout rails out)",
+  "type": "module",
+  "scripts": {
+    "start": "tsx services/api/src/server.ts",
+    "operator:enrol": "tsx services/api/src/operators/enrol-cli.ts"
+  },
+  "dependencies": {
+    "@stellar/stellar-sdk": "^16.1.0",
+    "@turnkey/api-key-stamper": "0.6.17",
+    "@turnkey/crypto": "2.13.2",
+    "@turnkey/http": "6.6.0",
+    "abstractionkit": "^0.4.0",
+    "express": "^4.19.0",
+    "lz-string": "1.5.0",
+    "nodemailer": "^10.0.13",
+    "safe-recovery-service-sdk": "^0.0.4",
+    "viem": "^2.21.0",
+    "tsx": "^4.19.0"
+  },
+  "overrides": {
+    "adm-zip": "0.6.1"
+  },
+  "optionalDependencies": {
+    "@esbuild/darwin-x64": "^0.28.1"
+  }
+}

@@ -1,0 +1,494 @@
+/**
+ * The database: one JSON file, loaded at start, rewritten on every change.
+ *
+ * A demo-scale store. Everything goes through the methods in store.ts, so
+ * swapping in a real database is a change in one place. It is not safe for
+ * concurrent writers: the whole file is rewritten, so two processes on one
+ * path lose each other's writes.
+ *
+ * The migrations run at load and are idempotent, each keyed on the row it
+ * would create, because this holds a money ledger.
+ */
+import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { IS_PRODUCTION, ROOT } from "../config.js";
+import { DEFAULT_CHART, DEFAULT_RULES } from "../domain/coa.js";
+import { defaultLabel, initialStatusFor } from "../domain/accounts.js";
+import type {
+  Account,
+  AccountRule,
+  ChartAccount,
+  Contact,
+  DraftPayment,
+  ImportedWallet,
+  Invoice,
+  LedgerEntry,
+  Member,
+  Organisation,
+} from "../domain/types.js";
+import type {
+  ConversionSweep,
+  MerchantLink,
+  Operator,
+  OperatorSession,
+  CryptoDeposit,
+  CryptoSend,
+  MoneriumIssueRecord,
+  PaymentRequest,
+  Quote,
+  ReceiptShare,
+  RecoveryRequest,
+  ServiceCredential,
+  Session,
+  ShopifyConnection,
+  StoredDocument,
+  Transfer,
+  User,
+} from "./types.js";
+
+export interface Db {
+  users: User[];
+  quotes: Quote[];
+  transfers: Transfer[];
+  sessions: Session[];
+  /** Admin dashboard operators and their sessions (operators/). */
+  operators: Operator[];
+  operatorSessions: OperatorSession[];
+  /** Hashed bearer credentials of our own services (checkout-service.ts). */
+  serviceCredentials: ServiceCredential[];
+  /** Public shareable receipts, keyed by an unguessable slug. */
+  receiptShares: ReceiptShare[];
+  /** Account documents (receipts, statements, balance and ownership letters):
+   *  frozen snapshots under a verification code. See documents.ts. */
+  documents: StoredDocument[];
+  /** Payment requests (pay links): an amount somebody asked to be paid, the
+   *  ways it can be paid, and what arrived against it. See payment-requests.ts. */
+  paymentRequests: PaymentRequest[];
+  /** Shopify stores connected to an organisation as a payments app. The access
+   *  token is encrypted at rest and never leaves this process. */
+  shopifyConnections: ShopifyConnection[];
+  /** An org's consent that the checkout service opens requests for one
+   *  Shopify shop (merchant-links.ts). Revoked, never deleted. */
+  merchantLinks: MerchantLink[];
+  /** Monerium issue-order ids already reflected in local receipt state. */
+  processedMoneriumOrders: string[];
+  /** Monerium webhook delivery ids already accepted. */
+  processedMoneriumWebhooks: string[];
+  /** The bank facts of each processed issue order, for the statement line. */
+  moneriumIssueOrders: MoneriumIssueRecord[];
+  /** Monthly leftover sweeps (bookkeeping/statement.ts). */
+  conversionSweeps: ConversionSweep[];
+  /** Inbound crypto seen at a user's account, and what became of it. */
+  cryptoDeposits: CryptoDeposit[];
+  cryptoSends: CryptoSend[];
+  /** Append-only audit trail: segment decisions, consents, partner events. */
+  audit: import("../audit.js").AuditEntry[];
+  /** Managed KYC guardian recovery requests. */
+  recoveryRequests: RecoveryRequest[];
+  /**
+   * Last block scanned for inbound crypto, per chain id.
+   *
+   * Kept as a string because JSON has no bigint. Per chain because
+   * deployments.json is too: a testnet cursor must not be read as a local one
+   * and skip every block on a fresh chain.
+   */
+  cryptoDepositCursor: Record<string, string>;
+
+  // ── The organisation domain (docs/business-accounts.md) ───────────────────
+  //
+  // A User is only a login identity; the tenant that holds money is an
+  // Organisation, and a user reaches one through a Member row. Users that
+  // predate organisations are migrated into a personal org of one on first
+  // start — see migrateUsersToOrganisations().
+  organisations: Organisation[];
+  members: Member[];
+  accounts: Account[];
+  importedWallets: ImportedWallet[];
+  contacts: Contact[];
+  drafts: DraftPayment[];
+  invoices: Invoice[];
+  chartAccounts: ChartAccount[];
+  accountRules: AccountRule[];
+  ledger: LedgerEntry[];
+}
+
+/**
+ * Where the store lives. TRANSF_DB_PATH overrides it.
+ *
+ * Tests point this somewhere disposable because they reset the database on
+ * every run. A test run on the live file once wiped a Safe owner key on Base
+ * Sepolia and stranded the account, so tests must not be able to reach the
+ * working database.
+ */
+export const DB_PATH = process.env.TRANSF_DB_PATH
+  ? path.resolve(process.env.TRANSF_DB_PATH)
+  : path.join(ROOT, "data", "db.json");
+export const DATA_DIR = path.dirname(DB_PATH);
+
+export let db: Db = {
+  users: [],
+  quotes: [],
+  transfers: [],
+  sessions: [],
+  operators: [],
+  operatorSessions: [],
+  serviceCredentials: [],
+  receiptShares: [],
+  documents: [],
+  paymentRequests: [],
+  shopifyConnections: [],
+  merchantLinks: [],
+  processedMoneriumOrders: [],
+  processedMoneriumWebhooks: [],
+  moneriumIssueOrders: [],
+  conversionSweeps: [],
+  cryptoDeposits: [],
+  cryptoSends: [],
+  audit: [],
+  recoveryRequests: [],
+  cryptoDepositCursor: {},
+  organisations: [],
+  members: [],
+  accounts: [],
+  importedWallets: [],
+  contacts: [],
+  drafts: [],
+  invoices: [],
+  chartAccounts: [],
+  accountRules: [],
+  ledger: [],
+};
+
+export function initStore() {
+  // 700 only when we create it: TRANSF_DB_PATH may sit in a shared dir such as the OS temp dir.
+  mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+  if (existsSync(DB_PATH)) {
+    db = JSON.parse(readFileSync(DB_PATH, "utf8"));
+    db.sessions ??= [];
+    db.operators ??= [];
+    db.operatorSessions ??= [];
+    db.serviceCredentials ??= [];
+    db.receiptShares ??= [];
+    db.documents ??= [];
+    db.paymentRequests ??= [];
+    db.shopifyConnections ??= [];
+    db.merchantLinks ??= [];
+    db.processedMoneriumOrders ??= [];
+    db.processedMoneriumWebhooks ??= [];
+    db.moneriumIssueOrders ??= [];
+    db.conversionSweeps ??= [];
+    db.cryptoDeposits ??= [];
+    db.cryptoSends ??= [];
+    db.audit ??= [];
+    db.recoveryRequests ??= [];
+    db.cryptoDepositCursor ??= {};
+    db.organisations ??= [];
+    db.members ??= [];
+    db.accounts ??= [];
+    db.importedWallets ??= [];
+    db.contacts ??= [];
+    db.drafts ??= [];
+    db.invoices ??= [];
+    db.chartAccounts ??= [];
+    db.accountRules ??= [];
+    db.ledger ??= [];
+    if (IS_PRODUCTION) {
+      const custodial = db.users.filter((u) => (u.paymentPage as any)?.depositPrivateKey);
+      if (custodial.length) {
+        throw new Error(
+          `production store contains ${custodial.length} account(s) with API-held payment-page key material; ` +
+            "activate non-custodial payment pages before startup",
+        );
+      }
+    }
+    migrateUsersToOrganisations();
+    stripSenderProfiles();
+    migrateCryptoDepositHolding(db.cryptoDeposits, db.users);
+    for (const q of db.quotes) q.status ??= "OPEN";
+    for (const s of db.sessions) s.expiresAt ??= new Date(Date.parse(s.createdAt) + 24 * 60 * 60 * 1000).toISOString();
+    pruneSessions();
+    persist();
+  } else {
+    persist();
+  }
+}
+
+/** Load the store only to read it, for a report: no migration, no write, and
+ *  no directory or file created. Throws when there is no store at DB_PATH. */
+export function loadStoreReadOnly() {
+  if (!existsSync(DB_PATH)) throw new Error(`no store at ${DB_PATH}`);
+  db = { ...db, ...JSON.parse(readFileSync(DB_PATH, "utf8")) };
+}
+
+/**
+ * Drop sessions that can no longer authenticate anything. Kept forever, every
+ * request would pay for them twice: a linear scan to find the live one, and a
+ * full re-serialisation of the file on write.
+ */
+export function pruneSessions(retainMs = 24 * 60 * 60 * 1000) {
+  const cutoff = Date.now() - retainMs;
+  db.sessions = db.sessions.filter((s) => {
+    const dead = s.revokedAt ? Date.parse(s.revokedAt) : Date.parse(s.expiresAt);
+    return !(Number.isFinite(dead) && dead < cutoff);
+  });
+}
+
+/**
+ * Deposits written with the single `state` field, which meant both "settled"
+ * and "swapped", get `settledAt` and `holding` instead. Only those two fields
+ * change; nothing is deleted and no invoice row is rewritten.
+ *
+ * A CONVERTED row was already written onto its invoice, pay link and books,
+ * so it keeps `updatedAt` as its settlement time. A DETECTED or REFUSED row
+ * never was, so `settledAt` stays absent and the poller's sweep writes it
+ * once. An UNCONFIRMED row (a swap sent, never confirmed) becomes
+ * `unconfirmed`. A REFUSED row with no swap behind it was refused at detection (KYC,
+ * the floor, no Safe), which no longer happens: that money is simply held.
+ */
+export function migrateCryptoDepositHolding(deposits: CryptoDeposit[], users: User[]): void {
+  for (const d of deposits as (CryptoDeposit & { state?: string })[]) {
+    const state = d.state;
+    // Migrated already. A row with neither field (a hand-written or partial
+    // row) is treated as just detected rather than left without a holding.
+    if (state === undefined && d.holding !== undefined) continue;
+    const page = users.find((u) => u.id === d.userId)?.paymentPage;
+    const target = page?.settlementAsset ?? "EURE";
+    if (state === "CONVERTED") {
+      d.settledAt ??= d.updatedAt;
+      d.holding =
+        d.token !== "USDC" ? "none"
+        : d.settlementAsset === "EURE" ? "converted"
+        : target === "USDC" ? "none"
+        : "held";
+    } else if (state === "UNCONFIRMED") {
+      // A swap was sent and never confirmed: it may have landed, so it is not
+      // offered again until someone checks the chain.
+      d.holding = "unconfirmed";
+    } else if (state === "REFUSED") {
+      const swapTried = !!d.conversion || d.txs.some((t) => t.step.startsWith("safe.swap"));
+      d.holding = d.token !== "USDC" ? "none" : swapTried ? "refused" : target === "USDC" ? "none" : "held";
+    } else {
+      d.holding = d.token !== "USDC" || target === "USDC" ? "none" : "awaiting_approval";
+    }
+    if (d.holding !== "converted") d.settlementAsset = d.token;
+    delete d.state;
+  }
+}
+
+/**
+ * Give every user created before organisations existed a personal
+ * organisation of one.
+ *
+ * Those users have a real IBAN and on-chain address (some on Base Sepolia
+ * hold credited EUR), so the org's EUR account takes the user's `iban` and
+ * `address` verbatim; never re-issue them. Its status is derived from the
+ * user's funding state, so a user who never finished provisioning does not
+ * get an account that claims to be open.
+ *
+ * Idempotent (keyed on a member row existing for the user), so it is safe on
+ * every start, and it never touches a user who already has an org.
+ */
+/**
+ * Delete stored Travel Rule sender profiles (Sep 2026).
+ *
+ * `user.senderProfile` held identity-document numbers, birth dates and home
+ * addresses for the anchor leg of the cash rail — a rail no deployment has
+ * ever opened. Keeping the most sensitive data in the system for a purpose
+ * that cannot run fails data minimisation, so the field is gone from the
+ * type and any row that still carries one (the Travel Rule harness wrote
+ * some) is stripped on load. Originator data is collected per transfer when
+ * an anchor is actually integrated; see adapters/moneygram.ts SenderDetails.
+ */
+function stripSenderProfiles() {
+  let stripped = 0;
+  for (const user of db.users as unknown as Array<Record<string, unknown>>) {
+    if ("senderProfile" in user) {
+      delete user.senderProfile;
+      stripped++;
+    }
+  }
+  if (stripped) console.log(`[store] removed stored sender profiles from ${stripped} user row(s)`);
+}
+
+function migrateUsersToOrganisations() {
+  let migrated = 0;
+  for (const user of db.users) {
+    if (db.members.some((m) => m.userId === user.id)) continue;
+    // A company login has no personal space (POST /api/orgs refuses one): its
+    // Safe and IBAN are the company's, and its owner opens the business org.
+    if (user.accountType === "company") continue;
+
+    const now = user.createdAt ?? new Date().toISOString();
+    const org: Organisation = {
+      id: `org_${randomUUID()}`,
+      type: "personal",
+      name: user.name || "Personal",
+      email: user.email,
+      address: user.country ? { country: user.country.toUpperCase() } : undefined,
+      reporting: {
+        currency: "EUR",
+        timeZone: "Europe/Berlin",
+        costBasisMethod: "FIFO",
+      },
+      // The user's KYC decision is an account-issuance verification and nothing
+      // more. It is deliberately NOT copied onto fiat_payout or cards: those
+      // are separate partners' decisions and we were never given them.
+      verifications: {
+        account_issuance: {
+          capability: "account_issuance",
+          status:
+            user.kycStatus === "approved"
+              ? "approved"
+              : user.kycStatus === "rejected"
+                ? "rejected"
+                : user.kycStatus === "manual_review"
+                  ? "in_review"
+                  : "unverified",
+          provider: user.kyc?.provider === "monerium" ? "monerium" : "manual",
+          applicantId: user.kyc?.applicantId,
+          decidedAt: user.kyc?.checkedAt,
+          reason: user.kyc?.reason,
+        },
+      },
+      createdAt: now,
+      updatedAt: new Date().toISOString(),
+    };
+    db.organisations.push(org);
+
+    db.members.push({
+      id: `mem_${randomUUID()}`,
+      orgId: org.id,
+      userId: user.id,
+      email: user.email ?? "",
+      name: user.name,
+      role: "owner",
+      status: "active",
+      invitedAt: now,
+      acceptedAt: now,
+    });
+
+    // Carry the existing EUR account across rather than opening a new one.
+    const funded = user.funding?.status === "active" && Boolean(user.iban);
+    const initial = initialStatusFor("EUR");
+    db.accounts.push({
+      id: `acc_${randomUUID()}`,
+      orgId: org.id,
+      currency: "EUR",
+      label: defaultLabel("EUR"),
+      status: funded ? "active" : initial.status,
+      provider: "monerium",
+      identifier: user.iban ? { iban: user.iban } : {},
+      address: user.address,
+      // This account IS that user's Safe, so it is spendable by exactly the
+      // person holding its device key — see Account.backingUserId.
+      backingUserId: user.id,
+      gate: funded ? undefined : initial.gate,
+      detail: user.funding?.detail,
+      createdAt: now,
+      updatedAt: new Date().toISOString(),
+    });
+
+    seedChartOfAccounts(org.id, now);
+    migrated++;
+  }
+  if (migrated) {
+    console.log(
+      `[store] migrated ${migrated} user(s) into personal organisations ` +
+        "(existing IBANs and addresses carried forward, not re-issued)",
+    );
+  }
+}
+
+/** The default chart and rules, so smart categorisation works on day one. */
+export function seedChartOfAccounts(orgId: string, at = new Date().toISOString()) {
+  if (db.chartAccounts.some((c) => c.orgId === orgId)) return;
+  for (const a of DEFAULT_CHART) {
+    db.chartAccounts.push({
+      id: `coa_${randomUUID()}`,
+      orgId,
+      code: a.code,
+      name: a.name,
+      type: a.type,
+      archived: false,
+      createdAt: at,
+    });
+  }
+  for (const r of DEFAULT_RULES) {
+    db.accountRules.push({
+      id: `rule_${randomUUID()}`,
+      orgId,
+      scope: "default",
+      match: { txType: r.txType },
+      direction: r.direction,
+      accountCode: r.accountCode,
+      createdAt: at,
+    });
+  }
+}
+
+/* Every write rewrites the whole file, synchronously, and syncs it, so the state
+ * survives a host crash as well as a process exit before the caller goes on to
+ * the chain or a partner: recovery reads a missing intent as "nothing was sent". A loop of writes inside
+ * one request runs in `batched` and lands as one write at its end; nothing is
+ * deferred past the call that made it.
+ *
+ * Written without indentation: the serialise blocks the event loop, and on a
+ * 57 MB store indented JSON took 168 ms a write against 70 ms compact. Read it
+ * with `jq .` when a person needs to. */
+let batchDepth = 0;
+let batchDirty = false;
+
+export function persist() {
+  if (batchDepth > 0) {
+    batchDirty = true;
+    return;
+  }
+  const tmp = DB_PATH + ".tmp";
+  // Owner-only. The chmod covers a .tmp left by a crash, whose old mode
+  // openSync's `mode` would keep.
+  try {
+    const file = openSync(tmp, "w", 0o600);
+    writeFileSync(file, JSON.stringify(db));
+    fsyncSync(file);
+    closeSync(file);
+    chmodSync(tmp, 0o600);
+    renameSync(tmp, DB_PATH);
+    // The rename is only durable once the directory holding it is.
+    const dir = openSync(DATA_DIR, "r");
+    fsyncSync(dir);
+    closeSync(dir);
+  } catch (err) {
+    // Memory now holds a change the disk refused. Serving on would answer
+    // from it, and the next good write would land it after the caller saw an
+    // error. Exit before any response goes out, so the supervisor restarts from
+    // what is on disk: the last good db.json, or this change if only the
+    // directory sync failed, after the rename. The code only: the message can
+    // carry data.
+    const e = err as NodeJS.ErrnoException | undefined;
+    console.error(`FATAL store write failed (${e?.code ?? e?.name}) — the API is exiting`);
+    // No second copy of the store left behind; we are exiting either way.
+    try { rmSync(tmp, { force: true }); } catch {}
+    process.exit(1);
+  }
+}
+
+/** Run `fn` with its writes collected into one, written before this returns
+ *  (also when `fn` throws, so a partial batch is never only in memory).
+ *  Synchronous only: an await inside would hold writes across I/O. */
+export function batched<T>(fn: () => T): T {
+  batchDepth++;
+  try {
+    const out = fn();
+    if (out && typeof (out as { then?: unknown }).then === "function") {
+      throw new Error("batched() takes a synchronous function");
+    }
+    return out;
+  } finally {
+    batchDepth--;
+    if (batchDepth === 0 && batchDirty) {
+      batchDirty = false;
+      persist();
+    }
+  }
+}
