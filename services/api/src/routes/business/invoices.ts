@@ -14,6 +14,7 @@
 import express from "express";
 import { randomUUID } from "node:crypto";
 import { store } from "../../store.js";
+import { expiredUnsigned } from "../../orchestrator.js";
 import { activity, validateLine } from "../../domain/drafts.js";
 import {
   InvoiceError,
@@ -291,6 +292,8 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
     if (!requirePermission(ctx, res, "invoices.manage")) return;
     const found = store.findInvoice(String(req.params.invoiceId));
     if (!found || found.orgId !== ctx.org.id || !found.sendLink) return res.status(404).json({ error: "no such send link" });
+    // The link's maker pays it: another member's payment could hold it in PAYING.
+    if (found.createdByMemberId !== ctx.member.id) return res.status(403).json({ error: "Only the person who made this link can pay it." });
     const invoice = syncInvoicePayment(found);
     if (invoice.state !== "SUBMITTED") {
       return res.status(409).json({ error: invoice.state === "LINK_CREATED" ? "Nobody has filled this link in yet." : "This link is already being paid or is paid." });
@@ -311,7 +314,7 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
       }
       // What arrives, not what is debited: a SEPA fee comes out of the debit.
       if (Math.abs((t.receiveEur ?? 0) * 100 - owed) > 1e-6) return res.status(409).json({ error: `That payment is not the €${invoice.total} the link asks for.` });
-      if (t.state === "FAILED" || t.state === "REFUNDED") return res.status(409).json({ error: "That payment did not go through.", code: "PAYMENT_DEAD" });
+      if (t.state === "FAILED" || t.state === "REFUNDED" || expiredUnsigned(t)) return res.status(409).json({ error: "That payment did not go through.", code: "PAYMENT_DEAD" });
       if (t.createdAt < invoice.submittedAt!) return res.status(409).json({ error: "That payment was made before the link was filled in." });
     } else {
       const s = store.findCryptoSend(cryptoSendId!);

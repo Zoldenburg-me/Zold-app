@@ -3,7 +3,9 @@
  * arrives, so the prefilled debit is raised by the fee once and priced again,
  * the second quote delivers exactly the link amount, a raised debit over the
  * balance is refused before pricing, and an amount that delivers anything else
- * is refused before the debit.
+ * is refused before the debit. Around it: the "already sent" note is per person,
+ * only the links this person made are offered, and an unreadable account list
+ * says so instead of loading forever.
  *
  * Runs the real classic scripts in load order with a stub DOM. Offline.
  */
@@ -72,14 +74,16 @@ const el = (extra: any = {}) => {
 };
 
 /** A €11.45 link to pay, a SEPA fee of `fee`, and `balance` in the account. Binds the amount screen. */
-const open = async (fee: number, balance: number) => {
+const open = async (fee: number | number[], balance: number) => {
+  const fees = JSON.stringify(Array.isArray(fee) ? fee : [fee]);
   run(`user = { id: "u1", kycStatus: "approved", iban: "${IBAN}", balanceEur: ${balance} };
     __quotes = []; __calls = [];
     api = async (p, b) => {
       __calls.push([p, b]);
       if (p !== "/api/quotes") throw new Error("unexpected call " + p);
       __quotes.push(b.sendEur);
-      return { id: "q" + __quotes.length, sendEur: b.sendEur, fixedFeeEur: ${fee}, receiveEur: Math.round((b.sendEur - ${fee}) * 100) / 100 };
+      const fees = ${fees}, fee = fees[Math.min(__quotes.length, fees.length) - 1];
+      return { id: "q" + __quotes.length, sendEur: b.sendEur, fixedFeeEur: fee, receiveEur: Math.round((b.sendEur - fee) * 100) / 100 };
     };
     phSend = { payee: { name: "Ana Lima", iban: "${PAYEE_IBAN}" }, amount: "11.45", reference: "Dinner", quote: null, transferId: null, error: null,
       sendLink: { orgId: "o1", id: "inv1", cents: 1145, iban: "${PAYEE_IBAN}", address: "" } };`);
@@ -136,6 +140,51 @@ await t("a quote that delivers less than the link asks is refused before anythin
   assert.match(errEl.textContent, /This link asks for €11\.45 to arrive/);
   assert.match(errEl.textContent, /Nothing was sent/);
   assert.equal(run(`__calls.length`), 0, "no transfer was created");
+});
+
+await t("a fee that changed between the two quotes leaves Review off, with the reason", async () => {
+  const { input, next, err, quote } = await open([0.99, 1.5], 50);
+  assert.deepEqual([...run(`__quotes`)], [11.45, 12.44], "raised once, not chased");
+  assert.equal(input.value, "12.44");
+  assert.equal(run(`phSend.quote`), null, "nothing to review");
+  assert.equal(next.span.textContent, "Not what the link asks");
+  assert.equal(next.getAttribute("aria-disabled"), "true");
+  assert.equal(err.hidden, false);
+  assert.match(err.textContent, /asks for €11\.45 to arrive, and this amount gets €10\.94 there/);
+  assert.match(quote.innerHTML, /10\.94/, "what would arrive is still shown");
+});
+
+await t("a payment noted as sent for a link is kept per person on this device", () => {
+  run(`localStorage.clear(); user = { id: "u1" }; phSendLinkPaidStore("inv1", { orgId: "o1", payment: { transferId: "t1" } })`);
+  assert.ok(run(`localStorage.getItem("zold-send-link-paid:u1")`));
+  run(`user = { id: "u2" }`);
+  assert.deepEqual(JSON.parse(run(`JSON.stringify(phSendLinkPaid())`)), {}, "another account does not see it");
+  run(`phSendLinkPaidStore("inv9", null)`);
+  run(`user = { id: "u1" }`);
+  assert.deepEqual(Object.keys(run(`phSendLinkPaid()`)), ["inv1"], "and cannot erase it");
+});
+
+await t("only the links this person made are listed to pay", async () => {
+  run(`localStorage.clear(); user = { id: "u1" }; phSendLinksLoading = null; phCache.sendLinks = undefined;
+    phLoadOrgs = async () => {};
+    phCache.orgs = [{ id: "o1", type: "personal", memberId: "m1", capabilities: { invoices: { allowed: true } } }];
+    api = async () => ({ invoices: [
+      { id: "a", sendLink: {}, createdByMemberId: "m1", state: "SUBMITTED", total: "5.00" },
+      { id: "b", sendLink: {}, createdByMemberId: "m2", state: "SUBMITTED", total: "6.00" },
+      { id: "c", createdByMemberId: "m1", state: "SUBMITTED", total: "7.00" },
+    ] });`);
+  await run(`phLoadSendLinks()`);
+  assert.deepEqual(JSON.parse(run(`JSON.stringify(phCache.sendLinks.list.map((i) => i.id))`)), ["a"]);
+});
+
+await t("when the account list cannot be read, the send-link screens say so instead of loading forever", async () => {
+  run(`phSendLinksLoading = null; phCache.sendLinks = undefined; phLoadOrgs = async () => { throw new Error("offline"); };`);
+  await run(`phLoadSendLinks()`);
+  assert.equal(run(`phCache.sendLinks.error`), true);
+  const html = run(`PH["send/link"].html("new")`).replace(/\s+/g, " ");
+  assert.match(html, /could not be read just now/);
+  assert.doesNotMatch(html, /Set up your personal space/);
+  assert.doesNotMatch(html, /Loading/);
 });
 
 console.log(`\nsend-link-ui: ${pass} checks passed`);

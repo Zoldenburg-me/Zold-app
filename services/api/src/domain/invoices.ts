@@ -139,13 +139,13 @@ export function validateSendLinkCreate(input: unknown): NonNullable<Invoice["sen
   return { maxTotal: (cents / 100).toFixed(2), ...(note ? { note } : {}) };
 }
 
-/** What the payee sends back through a send link: an amount within the limit,
- *  what it was for (the line), and their name. Where to pay is parsePayTo's. */
-export function validateSendLinkSubmit(link: NonNullable<Invoice["sendLink"]>, input: unknown) {
+/** What the payee sends back through a send link: an amount, what it was for
+ *  (the line), and their name. Where to pay is parsePayTo's; the limit is
+ *  assertSendLinkLimit's, checked after everything else. */
+export function validateSendLinkSubmit(input: unknown) {
   const r = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
   const cents = euroCents(r.amount);
   if (cents === null || cents <= 0) throw new InvoiceError("Type an amount like 11.45.");
-  if (cents > centsOf(link.maxTotal)) throw new InvoiceError("That is more than this link allows. Check the amount with the person who sent it.", "OVER_LIMIT");
   const forWhat = String(r.forWhat ?? "").trim();
   if (!forWhat) throw new InvoiceError("Say in a few words what it was for.");
   if (forWhat.length > 80) throw new InvoiceError("What it was for is limited to 80 characters.");
@@ -153,6 +153,12 @@ export function validateSendLinkSubmit(link: NonNullable<Invoice["sendLink"]>, i
   if (name.length < 2 || name.length > 70) throw new InvoiceError("Type your name, 2 to 70 characters.");
   const amount = (cents / 100).toFixed(2);
   return { lines: [{ description: forWhat, quantity: "1", unitPrice: amount, amount }], total: amount, name };
+}
+
+/** Last of a send link's checks: any refusal before it is the same for every
+ *  amount, so only an over-limit answer (counted) says anything about the limit. */
+export function assertSendLinkLimit(link: NonNullable<Invoice["sendLink"]>, total: string) {
+  if (centsOf(total) > centsOf(link.maxTotal)) throw new InvoiceError("That is more than this link allows. Check the amount with the person who sent it.", "OVER_LIMIT");
 }
 
 export function validateLines(input: unknown): { lines: InvoiceLine[]; total: string } {

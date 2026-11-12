@@ -175,6 +175,7 @@ await check("five amounts over the limit lock the link's submit; the limit never
   const locked = await fill(l.token);
   assert.equal(locked.status, 429, JSON.stringify(locked.data));
   assert.ok(!JSON.stringify(locked.data).includes("13"), locked.data.error);
+  assert.match(locked.data.error, /for a new link/);
 });
 
 await check("a filled-in link shows its destination masked; the payer's list has it in full", async () => {
@@ -322,6 +323,49 @@ await check("only a filled-in send link can be tied to a payment", async () => {
   assert.equal((await call("POST", `/api/orgs/org_p/invoices/${plain.data.invoice.id}/paying`, "u_tony", { transferId: transfer() })).status, 404, "an ordinary invoice link");
   const stranger = await call("POST", `/api/orgs/org_p/invoices/${open.id}/paying`, "u_other", { transferId: transfer({ userId: "u_other" }) });
   assert.ok(stranger.status === 403 || stranger.status === 404, `someone outside the org: ${stranger.status}`);
+});
+
+await check("the limit is checked last: a refusal for anything else is the same far under and far over it, and is not a miss", async () => {
+  const l = await newLink("13");
+  for (const over of [{ forWhat: "" }, { name: "B" }, { payTo: { kind: "bank", bank: { iban: "DE00370400440532013000" } } }, { payTo: null }, { payTo: { kind: "wallet", chainId: 1, address: WALLET } }]) {
+    const low = await fill(l.token, { amount: "0.01", ...over });
+    const high = await fill(l.token, { amount: "9999.99", ...over });
+    assert.equal(low.status, 400, JSON.stringify(low.data));
+    assert.deepEqual([high.status, high.data], [low.status, low.data], `${JSON.stringify(over)}: the answer does not depend on the amount`);
+  }
+  const ok = await fill(l.token, { amount: "13" });
+  assert.equal(ok.status, 200, `ten refusals, none counted as a miss: ${JSON.stringify(ok.data)}`);
+});
+
+await check("a wallet send past its deadline cannot be claimed, so it never goes out while its link reads to pay", async () => {
+  const l = await newLink("13");
+  await fill(l.token, { payTo: { kind: "wallet", chainId: CHAIN_ID, address: WALLET } });
+  const id = cryptoSend({ state: "CREATED" });
+  assert.equal((await call("POST", `/api/orgs/org_p/invoices/${l.id}/paying`, "u_tony", { cryptoSendId: id })).status, 200);
+  (store.findCryptoSend(id) as any).deadline = Math.floor(Date.now() / 1000) - 1;
+  assert.equal((await listed(l.id)).state, "SUBMITTED", "the link is to pay again");
+  assert.equal(store.claimCryptoSend(id), false, "authorize can no longer claim it");
+  assert.equal(store.findCryptoSend(id)?.state, "CREATED");
+});
+
+await check("a bank payment whose approval window closed unsigned does not tie", async () => {
+  const l = await newLink("13");
+  await fill(l.token);
+  const expired = transfer({ auth: { deadline: Math.floor(Date.now() / 1000) - 1 } });
+  const r = await call("POST", `/api/orgs/org_p/invoices/${l.id}/paying`, "u_tony", { transferId: expired });
+  assert.equal(r.status, 409, JSON.stringify(r.data));
+  assert.equal(r.data.code, "PAYMENT_DEAD");
+  assert.equal((await listed(l.id)).state, "SUBMITTED");
+});
+
+await check("another member of the personal org cannot tie their payment to the maker's link", async () => {
+  store.addMember({ id: "m_other_p", orgId: "org_p", userId: "u_other", email: "", role: "payer", status: "active", invitedAt: now, acceptedAt: now });
+  const l = await newLink("13");
+  await fill(l.token);
+  const r = await call("POST", `/api/orgs/org_p/invoices/${l.id}/paying`, "u_other", { transferId: transfer({ userId: "u_other" }) });
+  assert.equal(r.status, 403, JSON.stringify(r.data));
+  assert.equal((await listed(l.id)).state, "SUBMITTED", "the link stays the maker's to pay");
+  assert.equal((await call("POST", `/api/orgs/org_p/invoices/${l.id}/paying`, "u_tony", { transferId: transfer() })).status, 200);
 });
 
 server.close();

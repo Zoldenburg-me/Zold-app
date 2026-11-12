@@ -426,6 +426,13 @@ PH["send/amount"] = {
           input.value = ((sl.cents + Math.round(q.fixedFeeEur * 100)) / 100).toFixed(2);
           return price();
         }
+        // The server ties only exactly what the link asks to arrive; anything else is a dead end.
+        if (sl && Math.round(q.receiveEur * 100) !== sl.cents) {
+          root.querySelector("#ph-quote").innerHTML = phQuoteRows(q, payee);
+          setNext("Not what the link asks", false);
+          showErr(`This link asks for ${phEur(sl.cents / 100)} to arrive, and this amount gets ${phEur(q.receiveEur)} there. Change the amount so that exactly ${phEur(sl.cents / 100)} arrives.`);
+          return;
+        }
         phSend.quote = q;
         root.querySelector("#ph-quote").innerHTML = phQuoteRows(q, payee);
         setNext("Review", true);
@@ -696,17 +703,6 @@ function phSendLinkUnsent(tie, refused) {
   phCache.sendLinks = undefined;
 }
 
-/* A payment that went out for a link but was not yet recorded on it, per device. */
-const PH_SL_PAID_KEY = "zold-send-link-paid";
-function phSendLinkPaid() {
-  try { return JSON.parse(localStorage.getItem(PH_SL_PAID_KEY) || "{}") || {}; } catch { return {}; }
-}
-function phSendLinkPaidStore(id, v) {
-  const all = phSendLinkPaid();
-  if (v) all[id] = v; else delete all[id];
-  try { localStorage.setItem(PH_SL_PAID_KEY, JSON.stringify(all)); } catch { /* private mode: the warning lasts this page only */ }
-}
-
 /* Before the debit: the server ties only a payment of exactly what was asked,
    to where it was asked, so anything else is refused here, not after. */
 function phSendLinkMatches(tie, { cents, iban, address }) {
@@ -754,6 +750,7 @@ PH["send/link"] = {
     const s = phCache.sendLinks;
     if (s === undefined) return `${phTop("Send a link", "send")}${phMain(Z.skeletonRows(2, "Loading…"))}`;
     if (id === "new") {
+      if (!s.org && s.error) return `${phTop("Send a link", "send")}${phMain(Z.note({ tone: "a", text: "Your send links could not be read just now. Reload to try again." }))}`;
       if (!s.org) {
         return `${phTop("Send a link", "send")}${phMain(`
           ${Z.note({ text: "Send links live in your personal space in Zold, next to your invoices. Set it up once, then come back here." })}

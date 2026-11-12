@@ -166,17 +166,34 @@ function phInvoicesCard() {
    They live in the personal space. The link itself is shown once when made:
    the server keeps only a hash of it, so it is held here for this visit only. */
 let phSendLinkUrls = {};
+
+/* A payment that went out for a link but was not yet recorded on it, per device and person. */
+const phSendLinkPaidKey = () => `zold-send-link-paid:${user?.id || ""}`;
+function phSendLinkPaid() {
+  try { return JSON.parse(localStorage.getItem(phSendLinkPaidKey()) || "{}") || {}; } catch { return {}; }
+}
+function phSendLinkPaidStore(id, v) {
+  const all = phSendLinkPaid();
+  if (v) all[id] = v; else delete all[id];
+  try { localStorage.setItem(phSendLinkPaidKey(), JSON.stringify(all)); } catch { /* private mode: the warning lasts this page only */ }
+}
+
 let phSendLinksLoading = null;
 function phLoadSendLinks() {
   const who = user?.id;
   return (phSendLinksLoading ??= (async () => {
     try {
-      await phLoadOrgs();
+      try { await phLoadOrgs(); } catch {
+        if (user?.id === who) phCache.sendLinks = { org: null, error: true };
+        return;
+      }
       if (user?.id !== who) return;
       const org = phPersonalOrg();
       if (!phCan(org, "invoices")) { phCache.sendLinks = { org: null }; return; }
       try {
-        let list = ((await api(`/api/orgs/${encodeURIComponent(org.id)}/invoices`)).invoices || []).filter((i) => i.sendLink);
+        // Only links this person made: the server ties a payment only from the link's maker.
+        let list = ((await api(`/api/orgs/${encodeURIComponent(org.id)}/invoices`)).invoices || [])
+          .filter((i) => i.sendLink && i.createdByMemberId === org.memberId);
         // A payment that went out but was not recorded on its link: record it now, or forget it once the link moved on.
         for (const [id, p] of Object.entries(phSendLinkPaid())) {
           const inv = list.find((i) => i.id === id);

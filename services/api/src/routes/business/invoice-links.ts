@@ -22,6 +22,7 @@ import {
   supplierView,
   validateLines,
   validateSendLinkSubmit,
+  assertSendLinkLimit,
 } from "../../domain/invoices.js";
 import { passwordMatches } from "../../domain/passwords.js";
 import { forgetFailure, recordFailure, tooManyFailures } from "../../http/policy.js";
@@ -183,24 +184,27 @@ export function createInvoiceLinkRouter(): express.Router {
     }
     if (invoice.sendLink) {
       // The limit is hidden; asking over it says only "too much". Counting misses
-      // keeps that from finding the limit by trying amount after amount.
+      // keeps that from finding the limit by trying amount after amount, and the
+      // limit is checked last, so no other refusal answers for free.
+      // shortcut: the count is per link and in memory, so anyone holding the URL can
+      // lock the payee out for 24 h and a restart clears it; persist it per client
+      // once a link is abused.
       const missKey = `send-limit:${invoice.id}`;
       if (tooManyFailures(missKey, SEND_LIMIT_MISSES_MAX)) {
-        return res.status(429).json({ error: "Too many amounts over this link's limit. Ask the person who sent it how much to ask for." });
+        return res.status(429).json({ error: "Too many amounts over this link's limit. Ask the person who sent it for a new link." });
       }
       try {
-        let checked;
-        try { checked = validateSendLinkSubmit(invoice.sendLink, req.body); } catch (err) {
-          if (err instanceof InvoiceError && err.code === "OVER_LIMIT") recordFailure(missKey, SEND_LIMIT_MISS_WINDOW_MS);
-          throw err;
-        }
-        const { lines, total, name } = checked;
+        const { lines, total, name } = validateSendLinkSubmit(req.body);
         const raw = req.body?.payTo;
         // The account holder is the person filling the link in: one name, not two fields.
         const payTo = parsePayTo(raw && typeof raw === "object" && raw.kind === "bank" ? { kind: "bank", bank: { ...(raw.bank ?? raw), holderName: name } } : raw, "EUR");
         if (!payTo) return res.status(400).json({ error: "Say where to send the money: an IBAN or a wallet address." });
         if (payTo.kind === "wallet" && !payoutChains().some((c) => c.chainId === payTo.chainId)) {
           return res.status(400).json({ error: `A wallet must be on ${payoutChains().map((c) => c.name).join(" or ")}.` });
+        }
+        try { assertSendLinkLimit(invoice.sendLink, total); } catch (err) {
+          recordFailure(missKey, SEND_LIMIT_MISS_WINDOW_MS);
+          throw err;
         }
         assertInvoiceTransition(invoice.state, "SUBMITTED");
         const updated = store.updateInvoice(invoice.id, {
