@@ -121,7 +121,7 @@ async function phLoadHomeData() {
       if (still()) phCache.invoices = read;
     }).finally(() => { if (still()) phHomeReads.invoices = false; }));
   }
-  if (phCache.sendLinks === undefined && !phSendLinksLoading) reads.push(phLoadSendLinks());
+  if (phSendLinksStale() && !phSendLinksLoading) reads.push(phLoadSendLinks());
   if (!reads.length) return;
   await Promise.all(reads);
   if (phRoute?.name === "home") phRender();
@@ -179,6 +179,11 @@ function phSendLinkPaidStore(id, v) {
 }
 
 let phSendLinksLoading = null;
+let phSendLinksAt = 0;
+/* A link fills in on someone else's phone: a read older than this is read again when Home or Send opens. */
+const PH_SEND_LINKS_FRESH_MS = 30_000;
+const phSendLinksStale = () => phCache.sendLinks === undefined || Date.now() - phSendLinksAt > PH_SEND_LINKS_FRESH_MS;
+const phSendLinksSig = () => (phCache.sendLinks === undefined ? "u" : JSON.stringify((phCache.sendLinks.list || []).map((i) => `${i.id}:${i.state}`)));
 function phLoadSendLinks() {
   const who = user?.id;
   return (phSendLinksLoading ??= (async () => {
@@ -209,7 +214,7 @@ function phLoadSendLinks() {
         }
         if (user?.id === who) phCache.sendLinks = { org, list };
       } catch { if (user?.id === who) phCache.sendLinks = { org, error: true }; }
-    } finally { phSendLinksLoading = null; }
+    } finally { phSendLinksLoading = null; phSendLinksAt = Date.now(); } // a failed read too, or every redraw would read again
   })());
 }
 /* Filled in and waiting for this person to pay. Nothing to pay: no card. */
@@ -263,7 +268,7 @@ PH.home = {
   tab: "home",
   live: () => JSON.stringify([user?.balanceEur, user?.iban, user?.moneriumIbanElsewhere?.iban, user?.kycStatus, user?.monerium?.connectedAt, user?.passkeySafe?.status,
     user?.passkeySafe?.recovery?.status, user?.passkeySafe?.candideRecovery?.guardianStatus, user?.passkeySafe?.recoveryChoice?.choice, user?.zoldenburgArmed, caps.zoldenburgEnrolment, user?.emailVerifiedAt, caps.emailVerification, user?.segment?.gate, caps.emailSmsRecovery, caps.zoldenburgRecovery, realMoney, phHistSig(),
-    user?.ensName, phCache.signers?.owners?.length, signersState?.owners?.length, phCache.invoices?.error, phCache.invoices?.list && JSON.stringify(phOpenInvoices(phCache.invoices.list))]),
+    user?.ensName, phCache.signers?.owners?.length, signersState?.owners?.length, phCache.invoices?.error, phCache.invoices?.list && JSON.stringify(phOpenInvoices(phCache.invoices.list)), phSendLinksSig()]),
   html() {
     const u = user || {};
     const name = ownAccountName(u) || "Account";

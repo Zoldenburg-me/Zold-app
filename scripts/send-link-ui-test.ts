@@ -187,4 +187,47 @@ await t("when the account list cannot be read, the send-link screens say so inst
   assert.doesNotMatch(html, /Loading/);
 });
 
+const LINKS = `[
+  { id: "w", sendLink: { maxTotal: "20.00", note: "Taxi" }, createdByMemberId: "m1", state: "LINK_CREATED", total: "0.00", createdAt: "2026-11-12T08:00:00Z" },
+  { id: "f", sendLink: { maxTotal: "13.00" }, createdByMemberId: "m1", state: "SUBMITTED", total: "11.45", supplier: { orgName: "Bob Example" }, lines: [{ description: "Dinner" }], createdAt: "2026-11-12T09:00:00Z" },
+  { id: "p", sendLink: { maxTotal: "9.00" }, createdByMemberId: "m1", state: "PAID", total: "8.00", supplier: { orgName: "Cleo" }, lines: [{ description: "Cake" }], createdAt: "2026-11-11T09:00:00Z" },
+]`;
+const withLinks = async (list: string) => {
+  run(`localStorage.clear(); user = { id: "u1", kycStatus: "approved", iban: "${IBAN}" }; phSendLinksLoading = null; phCache.sendLinks = undefined;
+    phLoadOrgs = async () => {};
+    phCache.orgs = [{ id: "o1", type: "personal", memberId: "m1", capabilities: { invoices: { allowed: true } } }];
+    __reads = 0; api = async () => { __reads++; return { invoices: ${list} }; };`);
+  await run(`phLoadSendLinks()`);
+};
+
+await t("the Send screen lists every send link this person made, newest first, with its state", async () => {
+  await withLinks(LINKS);
+  const html = run(`PH.send.html()`).replace(/\s+/g, " ");
+  assert.match(html, /Your send links/);
+  const order = ["Bob Example", "Taxi", "Cleo"].map((x) => html.indexOf(x));
+  assert.ok(order.every((i) => i > 0) && order[0] < order[1] && order[1] < order[2], `newest first: ${order}`);
+  assert.match(html, /Ready to pay/);
+  assert.match(html, /Waiting for them/);
+  assert.match(html, /Up to €20\.00/);
+  assert.match(html, /#send\/link\/f/);
+});
+
+await t("a filled-in link is on Home at desktop width too, ready to pay", async () => {
+  await withLinks(LINKS);
+  run(`hist.length = 0; histLoaded = true;`);
+  const html = run(`PH.home.desk.html()`).replace(/\s+/g, " ");
+  assert.match(html, /Send links to pay/);
+  assert.match(html, /Bob Example/);
+});
+
+await t("links are read again once the last read is 30 seconds old, so a link filled in elsewhere shows up", async () => {
+  await withLinks(LINKS);
+  assert.equal(run(`phSendLinksStale()`), false, "fresh after a read");
+  run(`phSendLinksAt = Date.now() - 31000`);
+  assert.equal(run(`phSendLinksStale()`), true, "old: read again");
+  run(`phLoadOrgs = async () => { throw new Error("offline"); }`);
+  await run(`phLoadSendLinks()`);
+  assert.equal(run(`phSendLinksStale()`), false, "a failed read waits too, or every redraw would read again");
+});
+
 console.log(`\nsend-link-ui: ${pass} checks passed`);
