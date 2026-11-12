@@ -14,12 +14,18 @@
    so it is always on screen before the approval. */
 let phSend = { payee: null, amount: "", reference: "", quote: null, transferId: null, error: null };
 
-/* Set when an /authorize answer was lost: that payment may have gone out, so
-   no send screen offers an approval again until a reload has read Activity.
-   Outside phSend and phWallet, which going back to a form replaces. */
+/* "pending" while an /authorize is unanswered, true once its answer was lost:
+   that payment may go out, or have gone out, so no send screen offers an
+   approval until it answers or a reload has read Activity. Outside phSend and
+   phWallet, which going back to a form replaces. */
 let phUnconfirmed = false;
 
 function phUnconfirmedHtml() {
+  // No Check Activity while waiting: the reload would drop the answer.
+  if (phUnconfirmed === "pending") return `${phTop("Payment result", "home")}${phMain(`
+      <span class="z-tile z-tile--a z-tile--lg" aria-hidden="true">${Z.icon("hourglass_top")}</span>
+      <div class="z-intro"><h2 class="z-title">Waiting for your last payment</h2><p class="z-sub">Zold hasn’t answered yet, so it may go out. You can send again once it has; a payment that went out is listed in Activity.</p></div>
+    `)}${phFoot(Z.button({ variant: "primary", full: true, label: "Back to Home", href: "#home" }))}`;
   return `${phTop("Payment result", "home")}${phMain(`
       <span class="z-tile z-tile--a z-tile--lg" aria-hidden="true">${Z.icon("hourglass_top")}</span>
       <div class="z-intro"><h2 class="z-title">We can’t confirm this payment</h2><p class="z-sub">We couldn’t check what happened to this payment, so it may have gone out. Don’t send it again until you’ve checked Activity: a payment that went out is listed there.</p></div>
@@ -257,8 +263,10 @@ async function phWalletSubmit(btn, errEl) {
     const execution = await safeExecutionAssertion({ safeExecution: created.safeExecution });
     if (!execution) throw new Error("This account can’t approve the payment with a passkey here.");
     authorizeSent = true;
+    phUnconfirmed = "pending";
     const sent = await api(`/api/crypto-sends/${encodeURIComponent(created.id)}/authorize`, { executionAssertion: execution });
     authorizeSent = false; // answered: what follows only draws it
+    phUnconfirmed = false;
     phPutCryptoSend(sent);
     refresh();
     phGo("send/wallet-done", sent.id, { replace: true });
@@ -268,8 +276,8 @@ async function phWalletSubmit(btn, errEl) {
     // new send, signed afresh, that nothing on the server stops. A 409 with no
     // code is "already submitted": it went out.
     const refused = e?.status < 500 && typeof e.body?.error === "string" && !(e.status === 409 && !e.body.code);
+    if (authorizeSent) phUnconfirmed = !refused;
     if (authorizeSent && !refused) {
-      phUnconfirmed = true;
       btn.setAttribute("aria-disabled", "true");
       phGo("send/wallet-check", null, { replace: true });
       return;
@@ -500,11 +508,13 @@ async function phSubmit(btn, errEl) {
     const execution = await safeExecutionAssertion(created.authorization);
     const redeem = await moneriumRedeemAssertion(created.authorization);
     authorizeSent = true;
+    phUnconfirmed = "pending";
     const t = await api(`/api/transfers/${created.id}/authorize`, {
       signature,
       ...(execution ? { executionAssertion: execution } : {}),
       ...(redeem ? { moneriumRedeemAssertion: redeem } : {}),
     });
+    phUnconfirmed = false;
     phPutTransfer(t);
     refresh();
     phGo("send/progress", t.id, { replace: true });
@@ -527,7 +537,7 @@ async function phSubmit(btn, errEl) {
       if (authorizeSent && !refused && phUnsent(fresh)) phSend.failed = { ...fresh, unread: true };
       else { phSend.failed = fresh; phPutTransfer(fresh); }
     } catch { phSend.failed = authorizeSent ? { ...created, unread: true } : created; }
-    if (phSend.failed.unread) phUnconfirmed = true;
+    if (authorizeSent) phUnconfirmed = !!phSend.failed.unread;
     phGo("send/error", created.id, { replace: true });
   }
 }

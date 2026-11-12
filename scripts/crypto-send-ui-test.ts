@@ -177,6 +177,35 @@ await t("after a lost /authorize answer, going back to the form and checking the
   assert.equal(run(`__calls.length`), 0, "no new send");
 });
 
+await t("while /authorize waits, going back and sending again makes no second send, and the screen says it is waiting", async () => {
+  run(`phUnconfirmed = false; __calls = []; __went = []; phWallet = { to: "alice.eth", token: "USDC", amount: "25.5", name: "alice.eth", address: "${ADDR}" };
+    api = (p, b) => { __calls.push([p, b]); if (p.endsWith("/authorize")) return new Promise(() => {}); if (p.startsWith("/api/ens/")) return Promise.resolve({ name: "alice.eth", address: "${ADDR}", chainId: 8453 }); return Promise.resolve({ id: "s7", safeExecution: { credentialId: "c", challenge: "ch" } }); }`);
+  run(`phWalletSubmit`)(el(), el());
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(run(`__calls.length`), 2, "created, and /authorize is waiting");
+  const fields: Record<string, any> = { "#ph-wal-to": el({ value: "alice.eth" }), "#ph-wal-amount": el({ value: "25.5" }), "#ph-wal-token": el({ value: "USDC" }) };
+  const form = el(); const next = el();
+  run(`PH["send/wallet"]`).bind({ querySelector: (s: string) => (s === "#ph-wal" ? form : s === "#ph-wal-next" ? next : fields[s] ?? el()), querySelectorAll: () => [] });
+  await form.onsubmit({ preventDefault() {} });
+  const html = flat(run(`PH["send/wallet-check"].html()`));
+  assert.doesNotMatch(html, /id="ph-wal-send"/);
+  assert.match(html, /Waiting for your last payment/);
+  assert.doesNotMatch(html, /We can’t confirm|ph-check-activity/, "a reload now would drop the answer");
+  await run(`phWalletSubmit`)(el(), el());
+  assert.equal(run(`__calls.filter(([p]) => p.endsWith("/crypto-sends")).length`), 1, "no second create");
+});
+
+await t("once the waiting /authorize answers, Send is offered again", async () => {
+  run(`phUnconfirmed = false; api = (p) => p.endsWith("/authorize") ? new Promise((r) => { globalThis.__answer = r; }) : Promise.resolve({ id: "s8", safeExecution: { credentialId: "c", challenge: "ch" } });`);
+  const done = run(`phWalletSubmit`)(el(), el());
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(run(`phUnconfirmed`), "pending");
+  ctx.__answer({ id: "s8", state: "SENT", to: ADDR, token: "USDC", amount: "25.5", txHash: "0xef" });
+  await done;
+  assert.equal(run(`phUnconfirmed`), false);
+  assert.match(flat(run(`PH["send/wallet-check"].html()`)), /id="ph-wal-send"/);
+});
+
 for (const [name, fail] of [
   ["a Zold 5xx with a JSON body", `Object.assign(new Error("Something went wrong on our side."), { status: 500, body: { error: "Something went wrong on our side." } })`],
   ["the service worker's offline 503", `Object.assign(new Error("offline"), { status: 503, offline: true, body: { error: "offline" } })`],
