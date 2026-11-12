@@ -459,7 +459,7 @@ const OB_ASK = {
     choices: () => [{ label: "No other name", patch: { tradingName: "", noTrading: true }, shown: "" }],
     done: () => !!obDraft.tradingName || obDraft.noTrading,
     take: (v) => (v ? { tradingName: v, noTrading: false } : "Type the trading name, or tap “No other name”."),
-    chip: () => (obDraft.tradingName ? `Trades as ${obDraft.tradingName}` : ""),
+    chip: () => (obDraft.tradingName ? `Trades as ${obDraft.tradingName}` : "No other name"),
   },
   incorp: {
     say: () => "Which country is it registered in?",
@@ -522,6 +522,14 @@ const OB_CHAT_ORDER = {
   b: ["legalName", "tradingName", "incorp", "fullName", "country", "email", "companyUsNexus", "usPerson", "authorised", "terms"],
 };
 const obPath = () => (obDraft.type === "company" ? "b" : "p");
+
+/* A new account type. The business path keeps the full name in `given`, so
+   moving to the personal path asks first and last name again; the consents
+   are asked again on either. */
+function obPickType(type) {
+  if (obDraft.type === type) return;
+  obSaveDraft({ type, terms: false, authorised: false, ...(obDraft.type === "company" ? { given: "", family: "" } : {}) });
+}
 
 /* The question to ask on this path: one being changed, a refused email, or
    the first unanswered one. null: everything is answered. */
@@ -788,6 +796,7 @@ function obChatBind(root) {
   });
   let lastPuff = 0;
   input?.addEventListener("input", () => {
+    obDraftTouched = true; // an answer typed but not sent: "Leave site?" asks
     const err = root.querySelector("#ob-chat-err");
     if (err && !err.hidden) { err.hidden = true; input.removeAttribute("aria-invalid"); }
     const t = performance.now();
@@ -945,7 +954,7 @@ OB["account-type"] = {
       const b = e.target.closest?.("[data-choice]");
       if (!b) return;
       const type = b.dataset.choice === "1" ? "company" : "individual";
-      if (obDraft.type !== type) obSaveDraft({ type, terms: false, authorised: false });
+      obPickType(type);
       obNwMood = "happy";
       obGo(type === "company" ? "b-about" : "p-about");
     });
