@@ -222,25 +222,12 @@ const obAlert = (id = "ob-err") => `<div class="z-alert hidden" role="alert" id=
 /* Both legal links open in a new tab, so an answer typed on this screen stays. */
 const LEGAL_LINKS = `<a href="/legal" target="_blank" rel="noopener">Terms</a> and <a href="/privacy" target="_blank" rel="noopener">Privacy notice</a>`;
 
-function obYesNo(name, question, value, errorText) {
-  const r = (v, label) => `<label><input type="radio" name="${name}" value="${v}"${value === (v === "yes") && value !== null ? " checked" : ""}>${label}</label>`;
-  return `<fieldset class="z-q" id="q-${name}"${errorText ? ' aria-invalid="true"' : ""} aria-describedby="q-${name}-err"><legend>Required</legend>`
-    + `<span class="z-q__text" id="q-${name}-text">${esc(question)}</span>`
-    + `<div class="z-yn" role="radiogroup" aria-labelledby="q-${name}-text">${r("yes", "Yes")}${r("no", "No")}</div>`
-    + `<p class="z-err" id="q-${name}-err"${errorText ? "" : " hidden"}>${esc(errorText || "")}</p></fieldset>`;
-}
-
 function obSetQuestionError(root, name, message) {
   const fs = root.querySelector(`#q-${name}`);
   const err = root.querySelector(`#q-${name}-err`);
   if (!fs || !err) return;
   if (message) { fs.setAttribute("aria-invalid", "true"); err.textContent = message; err.hidden = false; }
   else { fs.removeAttribute("aria-invalid"); err.hidden = true; }
-}
-
-function obRadio(root, name) {
-  const v = root.querySelector(`input[name="${name}"]:checked`)?.value;
-  return v === "yes" ? true : v === "no" ? false : null;
 }
 
 /* Focus the first field with an error, or the first unanswered question. */
@@ -291,7 +278,7 @@ let obDraftTouched = false;
 const obDraft = (() => {
   const empty = {
     type: null, given: "", family: "", email: "", country: "", usPerson: null, companyUsNexus: null,
-    legalName: "", tradingName: "", incorp: "", terms: false, authorised: false, social: null,
+    legalName: "", tradingName: "", noTrading: false, incorp: "", terms: false, authorised: false, social: null,
   };
   try { return { ...empty, ...JSON.parse(sessionStorage.getItem(OB_DRAFT_KEY) || "{}") }; } catch { return empty; }
 })();
@@ -347,18 +334,6 @@ function countryOptions() {
 }
 const countryName = (code) => countryOptions().find((c) => c.code === code)?.name || code || "";
 
-/* No country is pre-selected. The browser's locale is a guess about the
-   language someone reads, not where they live, and a pre-filled residence is
-   an answer nobody gave. */
-function obCountrySelect(o) {
-  return Z.select({
-    ...o,
-    autocomplete: o.autocomplete || "off",
-    required: true,
-    options: [{ value: "", label: "Choose a country", disabled: true }, ...countryOptions().map((c) => ({ value: c.code, label: c.name }))],
-  });
-}
-
 /* ==========================================================================
    Install (PWA). Shown before the account exists, never after: on iPhone the
    Home Screen app keeps its own storage, and the device key lives there.
@@ -382,6 +357,447 @@ function obCreateStart() {
     if (isAndroid()) return obGo("install-android");
   }
   obGo("account-type");
+}
+
+/* ==========================================================================
+   Signup as a chat with the narwhal
+   Each signup screen is one stretch of one conversation: the narwhal asks a
+   question at a time, an answer is saved to obDraft once it passes the check
+   the form had, and the router, the guards and obCreateAccount are unchanged.
+   Answers given so far sit under the narwhal as chips; tapping one asks that
+   question again.
+   ========================================================================== */
+
+const OB_NARWHAL = `<svg viewBox="-10 -60 410 380" focusable="false">
+  <defs><clipPath id="obnw-tusk"><path d="M150 105L80-45 167 98Z"/></clipPath></defs>
+  <path d="M150 105L80-45 167 98Z" fill="#f6f2e8"/>
+  <g clip-path="url(#obnw-tusk)" stroke="#8c8578" stroke-width="2.5" stroke-linecap="round"><path d="M139 89L156 72M131 74L148 57M123 60L140 43M115 45L132 28M108 30L125 14M100 16L117-1M92 1L109-15"/></g>
+  <g stroke="#141217" stroke-width="4.5" stroke-linejoin="round">
+    <path d="M150 105L80-45 167 98Z" fill="none" stroke-width="4" stroke-linejoin="miter" stroke-miterlimit="12"/>
+    <path class="ob-nw__tail" d="M310 180C345 160 380 145 390 160 395 168 385 185 365 190 388 202 392 220 382 228 370 235 340 215 305 200Z" fill="#f4f4f6"/>
+    <path d="M85 175C85 110 140 90 220 90 295 90 330 135 330 195 330 255 270 275 195 275 115 275 85 240 85 175Z" fill="#faf9f6"/>
+    <path d="M150 220C140 250 120 262 105 255 95 248 102 230 125 212Z" fill="#faf9f6"/>
+  </g>
+  <g class="ob-nw__look"><circle class="ob-nw__eye" cx="132" cy="165" r="5" fill="#141217"/><circle class="ob-nw__eye" cx="182" cy="165" r="5" fill="#141217"/></g>
+  <g class="ob-nw__blush" opacity=".8"><ellipse cx="118" cy="178" rx="8" ry="5" fill="#f4bacd"/><ellipse cx="196" cy="178" rx="8" ry="5" fill="#f4bacd"/></g>
+  <path class="ob-nw__smile" d="M150 174Q157 184 164 174" stroke="#141217" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+  <path class="ob-nw__open" d="M147 173Q157 192 167 173Z" fill="#141217" stroke="#141217" stroke-width="2.5" stroke-linejoin="round"/>
+  <path class="ob-nw__frown" d="M150 182Q157 173 164 182" stroke="#141217" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+</svg>`;
+
+let obNwSeen = false;   // the narwhal swims in once per page load, then stays
+let obNwMood = "";      // its reaction on the next render: happy | sad
+let obChatEdit = null;  // a question asked again after its chip was tapped
+let obChatLast = null;  // { key, text }: the answer just given, which floats up to its chip
+let obTypeRun = 0;      // a newer render stops an older one's typing
+const obReduced = () => !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+const obFirst = () => obDraft.given.trim().split(/\s+/)[0] || "";
+
+/* A typed country: its name in the reader's language, its code, or the start
+   of exactly one name. */
+function obCountryFrom(v) {
+  const t = v.trim().toLowerCase();
+  if (!t) return null;
+  const all = countryOptions();
+  const exact = all.find((c) => c.name.toLowerCase() === t || c.code.toLowerCase() === t);
+  if (exact) return exact.code;
+  const starts = all.filter((c) => c.name.toLowerCase().startsWith(t));
+  return starts.length === 1 ? starts[0].code : null;
+}
+
+// A flag emoji is the code's two letters as regional indicators.
+const obFlag = (code) => String.fromCodePoint(...[...code].map((ch) => 0x1f1a5 + ch.charCodeAt(0)));
+
+/* The country list fades out at an edge only while there is more to scroll
+   past it, as far as there is left (up to 48px). */
+function obFadeBind(root) {
+  const box = root.querySelector(".ob-fade"), list = root.querySelector(".ob-fade__scroll");
+  if (!box || !list) return () => {};
+  const fade = () => {
+    const below = list.scrollHeight - list.clientHeight - list.scrollTop;
+    box.style.setProperty("--fade-top", `${Math.min(48, Math.max(0, list.scrollTop))}px`);
+    box.style.setProperty("--fade-bottom", `${Math.min(48, Math.max(0, below))}px`);
+  };
+  list.addEventListener("scroll", fade, { passive: true });
+  list.querySelector(".is-on")?.scrollIntoView({ block: "center" });
+  fade();
+  return fade;
+}
+
+const OB_YES_NO =(key, yes, no) => [{ label: "Yes", patch: { [key]: true }, shown: yes }, { label: "No", patch: { [key]: false }, shown: no }];
+
+/* Every question: what the narwhal says, how it is answered, when it counts as
+   answered (the same rules as each screen's done()), and the chip it leaves. */
+const OB_ASK = {
+  given: {
+    say: () => "Hi! I’m the Zold narwhal. What’s your first name?",
+    tip: "Middle names too, as on your ID. It’s the name you’ll give Monerium.",
+    input: { autocomplete: "given-name", maxlength: 60, placeholder: "Miriam" },
+    done: () => !!obDraft.given.trim(),
+    take: (v) => (v ? { given: v } : "Enter your first name, as it is on your ID."),
+    chip: () => obDraft.given,
+  },
+  family: {
+    say: () => `Nice to meet you, ${obFirst()}! And your last name?`,
+    input: { autocomplete: "family-name", maxlength: 60, placeholder: "Zoldenburg" },
+    done: () => !!obDraft.family.trim(),
+    take: (v) => (v ? { family: v } : "Enter your last name, as it is on your ID."),
+    chip: () => obDraft.family,
+  },
+  legalName: {
+    say: () => "Hi! I’m the Zold narwhal. What’s the company’s legal name?",
+    tip: "Exactly as registered, with the legal form.",
+    input: { autocomplete: "organization", maxlength: 120, placeholder: "Lindner Holzbau GmbH" },
+    done: () => obDraft.legalName.trim().length >= 2,
+    take: (v) => (v.length >= 2 ? { legalName: v } : "Enter the company’s registered name."),
+    chip: () => obDraft.legalName,
+  },
+  tradingName: {
+    say: () => `Do customers know ${obDraft.legalName} by another name?`,
+    tip: "A trading name, if there is one.",
+    input: { maxlength: 120, placeholder: "Lindner Holz" },
+    choices: () => [{ label: "No other name", patch: { tradingName: "", noTrading: true }, shown: "" }],
+    done: () => !!obDraft.tradingName || obDraft.noTrading,
+    take: (v) => (v ? { tradingName: v, noTrading: false } : "Type the trading name, or tap “No other name”."),
+    chip: () => (obDraft.tradingName ? `Trades as ${obDraft.tradingName}` : ""),
+  },
+  incorp: {
+    say: () => "Which country is it registered in?",
+    country: "incorp",
+    done: () => !!obDraft.incorp,
+    chip: () => `Registered in ${countryName(obDraft.incorp)}`,
+  },
+  fullName: {
+    say: () => "And your full name? You’ll be the company’s first owner.",
+    tip: "Add teammates after the account opens.",
+    input: { autocomplete: "name", maxlength: 120, placeholder: "Miriam Zoldenburg" },
+    done: () => !!obDraft.given.trim(),
+    // One name on this path; the API takes the full name as one string.
+    take: (v) => (v ? { given: v, family: "" } : "Enter your full name."),
+    chip: () => obFullName(),
+  },
+  email: {
+    say: () => (obDraft.type === "company" ? `Thanks, ${obFirst()}. Your work email?` : `Which email should I use, ${obFirst()}?`),
+    tip: `Recovery and sign-in help find your account by it.${obDraft.type === "company" ? "" : " No newsletters."}`,
+    input: { type: "email", inputmode: "email", autocomplete: "email", maxlength: 254, placeholder: "miriam@example.com" },
+    done: () => EMAIL_RE.test(obDraft.email),
+    take: (v) => (!v ? "Enter your email address." : EMAIL_RE.test(v) ? { email: v } : "Enter an email address like miriam@example.com."),
+    chip: () => obDraft.email,
+  },
+  country: {
+    say: () => (obDraft.type === "company" ? "Where do you live?" : "Which country do you live in?"),
+    country: "country",
+    done: () => !!obDraft.country,
+    chip: () => countryName(obDraft.country),
+  },
+  companyUsNexus: {
+    say: () => "Is the company incorporated in the US, or is any owner of 25% or more a US person?",
+    choices: () => OB_YES_NO("companyUsNexus", "US link", "No US link"),
+    done: () => obDraft.companyUsNexus !== null,
+    chip: () => (obDraft.companyUsNexus ? "Company: US link" : "Company: no US link"),
+  },
+  usPerson: {
+    say: () => "Are you a US citizen, a Green Card holder, or a US tax resident?",
+    choices: () => OB_YES_NO("usPerson", "US person", "Not a US person"),
+    done: () => obDraft.usPerson !== null,
+    chip: () => (obDraft.usPerson ? "US person" : "Not a US person"),
+  },
+  authorised: {
+    say: () => `Are you authorised to open an account for ${obCompany()}?`,
+    tip: "Only someone who may act for the company can open its account.",
+    choices: () => [{ label: "Yes, I’m authorised", patch: { authorised: true }, shown: "Authorised" }],
+    done: () => obDraft.authorised,
+    chip: () => "Authorised",
+  },
+  terms: {
+    say: () => "Last question: do you accept Zold’s Terms?",
+    tipHtml: () => `Read the ${LEGAL_LINKS} first. They open in a new tab.`,
+    choices: () => [{ label: "I accept the Terms", patch: { terms: true }, shown: "Terms accepted" }],
+    done: () => obDraft.terms,
+    chip: () => "Terms accepted",
+  },
+};
+const OB_CHAT_ORDER = {
+  p: ["given", "family", "email", "country", "usPerson", "terms"],
+  b: ["legalName", "tradingName", "incorp", "fullName", "country", "email", "companyUsNexus", "usPerson", "authorised", "terms"],
+};
+const obPath = () => (obDraft.type === "company" ? "b" : "p");
+
+/* The question to ask on this path: one being changed, a refused email, or
+   the first unanswered one. null: everything is answered. */
+function obChatKey(p) {
+  if (obEmailInUse) return "email";
+  if (obChatEdit && OB_CHAT_ORDER[p].includes(obChatEdit)) return obChatEdit;
+  return OB_CHAT_ORDER[p].find((k) => !OB_ASK[k].done()) || null;
+}
+
+/* The answers so far. Gone once the account exists: the draft is spent then. */
+function obChatChips() {
+  if (user?.id || !obDraft.type) return "";
+  const chips = OB_CHAT_ORDER[obPath()].filter((k) => OB_ASK[k].done()).map((k) => [k, OB_ASK[k].chip()]).filter(([, t]) => t);
+  if (!chips.length) return "";
+  return `<ul class="ob-chips" aria-label="Your answers">${chips.map(([k, t]) =>
+    `<li><button type="button" class="ob-chip" data-edit="${k}"><span class="z-sr">Change: </span>${esc(t)}</button></li>`).join("")}</ul>`;
+}
+
+/* After the about step: one chip for all the answers, which opens them. */
+function obChatSummary() {
+  if (user?.id || !obDraft.type) return "";
+  const n = OB_CHAT_ORDER[obPath()].filter((k) => OB_ASK[k].done()).length;
+  return n ? `<ul class="ob-chips"><li><button type="button" class="ob-chip" data-edit="">Your ${n} answers · Change</button></li></ul>` : "";
+}
+
+/* One stretch of the chat: the narwhal, what it says, the chips, and the dock
+   at the bottom (a chat bar, answer buttons, or the screen's one action). */
+function obChat({ title, head, say, tip = "", tipHtml = "", extra = "", dock, chips = "all" }) {
+  const mood = obNwMood;
+  obNwMood = "";
+  return `${head}
+    <main id="main" class="z-screen__main ob-chat">
+      <h1 class="z-sr" tabindex="-1">${esc(title)}</h1>
+      <div class="ob-host">
+        <div class="ob-nw${obNwSeen ? "" : " is-in"}${mood ? ` is-${mood}` : ""}" aria-hidden="true"><div class="ob-nw__act">${OB_NARWHAL}</div></div>
+        <p class="ob-say"><span class="z-sr">${esc(say)}</span><span class="ob-say__typed" aria-hidden="true" data-text="${esc(say)}">${esc(say)}</span>${tip || tipHtml ? `<span class="ob-say__tip">${tipHtml || esc(tip)}</span>` : ""}</p>
+      </div>
+      ${chips === "all" ? obChatChips() : chips === "summary" ? obChatSummary() : ""}
+      ${extra}
+    </main>
+    ${dock ? `<div class="z-screen__foot ob-dock">${dock}</div>` : ""}`;
+}
+
+const obChatChoices = (opts, id = "") => `<div class="ob-choices"${id ? ` id="${id}"` : ""}>${opts.map((o, i) =>
+  `<button type="button" class="ob-choice" data-choice="${i}" style="--i:${i}">${esc(o.label)}${o.sub ? `<span>${esc(o.sub)}</span>` : ""}</button>`).join("")}</div>`;
+
+/* The chat bar. Its form is #ob-form and its arrow #btn-next, as the forms
+   were, so obBindForm and the email-code confirm work on it unchanged. */
+function obComposer({ id = "ob-answer", label, value = "", type = "text", inputmode = "", autocomplete = "off", maxlength = 120, placeholder = "", error = "" }) {
+  return `<form class="ob-composer" id="ob-form" novalidate>
+      <input class="ob-composer__input" id="${id}" name="${id}" type="${type}" aria-label="${esc(label)}" value="${esc(value)}" maxlength="${maxlength}"
+        autocomplete="${autocomplete}" placeholder="${esc(placeholder)}" spellcheck="false" autocapitalize="${type === "email" ? "off" : "sentences"}"${inputmode ? ` inputmode="${inputmode}"` : ""} aria-describedby="ob-chat-err"${error ? ' aria-invalid="true"' : ""}>
+      <button class="ob-send" id="btn-next" type="submit" aria-label="Send">${Z.icon("arrow_upward")}</button>
+    </form>
+    <p class="z-err ob-chat-err" id="ob-chat-err"${error ? "" : " hidden"}>${esc(error)}</p>`;
+}
+
+/* The dock for one question. */
+function obAskDock(key) {
+  const q = OB_ASK[key];
+  const label = q.say();
+  if (q.country) {
+    const now = obDraft[q.country];
+    const rows = countryOptions().map((c) =>
+      `<button type="button" class="ob-country${c.code === now ? " is-on" : ""}" data-code="${c.code}"><span aria-hidden="true">${obFlag(c.code)}</span>${esc(c.name)}</button>`).join("");
+    return `<div class="ob-fade"><div class="ob-fade__scroll" id="ob-countries" role="group" aria-label="Countries">${rows}<p class="ob-country-none" hidden>No country matches.</p></div></div>
+      ${obComposer({ label, value: countryName(now), autocomplete: "country-name", placeholder: "Search countries" })}`;
+  }
+  const choices = q.choices ? obChatChoices(q.choices()) : "";
+  if (!q.input) return choices;
+  let error = "";
+  if (key === "email" && obEmailInUse) error = "An account already uses this email. Sign in instead, or recover it if you lost your phone.";
+  const value = key === "fullName" ? obFullName() : key === "legalName" || key === "tradingName" || key === "given" || key === "family" || key === "email" ? obDraft[key] : "";
+  return `${choices}${obComposer({ label, value, error, ...q.input })}`;
+}
+
+/* The about screen of path p, as a chat. */
+function obAboutChat(p) {
+  const key = obChatKey(p);
+  const back = "account-type";
+  const head = obSignupProgress(`${p}-about`, p === "b" ? "About the company" : "About you", back);
+  const title = p === "b" ? "The company and you" : "About you";
+  if (!key) {
+    return obChat({ title, head, say: "That’s everything I need. Tap an answer to change it, or carry on.",
+      dock: Z.button({ variant: "primary", full: true, label: "Continue", id: "btn-next" }) });
+  }
+  const q = OB_ASK[key];
+  // Buttons alone answer in the conversation, under the question; only the chat bar docks.
+  const answer = obAskDock(key), inChat = !q.input && !q.country;
+  return obChat({ title, head, say: q.say(), tip: q.tip || "", tipHtml: q.tipHtml?.() || "", extra: inChat ? answer : "", dock: inChat ? "" : answer });
+}
+
+/* After an answer: the next question on this screen, or the next screen. */
+function obChatNext(p) {
+  if (obChatKey(p)) return obRender({ focus: false });
+  obGo(obSignupSteps()[2]);
+}
+
+function obBindAbout(root, p) {
+  const key = obChatKey(p);
+  obEmailInUse = false;
+  obChatBind(root);
+  if (!key) {
+    const go = root.querySelector("#btn-next");
+    if (go) go.onclick = () => obGo(obSignupSteps()[2]);
+    return;
+  }
+  const q = OB_ASK[key];
+  const take = (patch, text) => {
+    if (typeof patch === "string") return obChatRefuse(root, patch);
+    obSaveDraft(patch);
+    obChatEdit = null;
+    obNwMood = "happy";
+    obChatLast = text ? { key, text } : null;
+    obChatNext(p);
+  };
+  const choices = q.choices?.() || [];
+  root.querySelector(".ob-choices")?.addEventListener("click", (e) => {
+    const b = e.target.closest?.("[data-choice]");
+    if (!b) return;
+    const o = choices[Number(b.dataset.choice)];
+    take(o.patch, o.shown);
+  });
+  if (q.country) {
+    const list = root.querySelector("#ob-countries"), input = root.querySelector("#ob-answer");
+    const fade = obFadeBind(root);
+    list?.addEventListener("click", (e) => {
+      const b = e.target.closest?.("[data-code]");
+      if (b) take({ [q.country]: b.dataset.code }, countryName(b.dataset.code));
+    });
+    // Typing narrows the list to the names that contain it (or the exact code),
+    // those that start with it first.
+    input?.addEventListener("input", () => {
+      const t = input.value.trim().toLowerCase();
+      let shown = 0;
+      list.querySelectorAll("[data-code]").forEach((b) => {
+        const name = b.lastChild.textContent.toLowerCase();
+        const hit = !t || name.includes(t) || b.dataset.code.toLowerCase() === t;
+        b.hidden = !hit;
+        b.style.order = t && !name.startsWith(t) ? 1 : "";
+        shown += hit;
+      });
+      list.querySelector(".ob-country-none").hidden = shown > 0;
+      list.scrollTop = 0;
+      fade();
+    });
+  }
+  root.querySelector("#ob-form")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const v = root.querySelector("#ob-answer").value.trim().replace(/\s+/g, " ");
+    if (q.country) {
+      const code = obCountryFrom(v);
+      return take(code ? { [q.country]: code } : v ? "I don’t know that country. Pick one from the list." : "Type the country, then pick it from the list.", code && countryName(code));
+    }
+    take(q.take(v), v);
+  });
+}
+
+/* A refused answer: the narwhal shakes its head and the chat bar says why. */
+function obChatRefuse(root, msg) {
+  const err = root.querySelector("#ob-chat-err"), input = root.querySelector("#ob-form input");
+  if (err) { err.textContent = msg; err.hidden = false; }
+  input?.setAttribute("aria-invalid", "true");
+  input?.focus();
+  obNwReact(root, "sad");
+  const bar = root.querySelector(".ob-composer");
+  if (bar) { bar.classList.remove("is-shake"); void bar.offsetWidth; bar.classList.add("is-shake"); }
+}
+
+function obNwReact(root, mood) {
+  const nw = root.querySelector(".ob-nw");
+  if (!nw) return;
+  nw.classList.remove("is-happy", "is-sad");
+  void nw.offsetWidth;
+  nw.classList.add(`is-${mood}`);
+  setTimeout(() => nw.classList.remove(`is-${mood}`), 1000);
+}
+
+function obBlowhole(root) {
+  const r = root.querySelector(".ob-nw svg")?.getBoundingClientRect();
+  return r ? { x: r.left + r.width * 0.585, y: r.top + r.height * 0.38 } : null;
+}
+
+/* A small bubble from the blowhole. */
+function obPuff(x, y, size, dx, dy, ms) {
+  if (obReduced()) return;
+  const p = document.createElement("div");
+  p.className = "ob-puff";
+  Object.assign(p.style, { left: `${x - size / 2}px`, top: `${y - size / 2}px`, width: `${size}px`, height: `${size}px` });
+  document.body.append(p);
+  p.animate([{ transform: "translate(0,0) scale(.4)", opacity: 0 }, { opacity: 0.7, offset: 0.2 }, { transform: `translate(${dx}px,${dy}px) scale(1)`, opacity: 0 }],
+    { duration: ms, easing: "cubic-bezier(.2,.6,.4,1)" }).onfinish = () => p.remove();
+}
+
+/* The answer just given rises from the chat bar and pops onto its chip. */
+function obFloatUp(root, last) {
+  const chip = root.querySelector(`.ob-chip[data-edit="${last.key}"]`), dock = root.querySelector(".ob-dock");
+  if (!chip || !dock || obReduced()) return;
+  const from = dock.getBoundingClientRect(), to = chip.getBoundingClientRect();
+  const b = document.createElement("div");
+  b.className = "ob-ansbub";
+  b.textContent = last.text;
+  document.body.append(b);
+  const w = b.offsetWidth, h = b.offsetHeight;
+  const x0 = from.left + 16, y0 = from.top, x1 = to.left + to.width / 2 - w / 2, y1 = to.top + to.height / 2 - h / 2;
+  b.animate([
+    { transform: `translate(${x0}px,${y0}px) scale(.6)`, opacity: 0 },
+    { transform: `translate(${x0}px,${y0 - 30}px) scale(1)`, opacity: 1, offset: 0.2 },
+    { transform: `translate(${(x0 + x1) / 2 + 18}px,${(y0 + y1) / 2}px) scale(1.04)`, offset: 0.6 },
+    { transform: `translate(${x1}px,${y1}px) scale(1)`, opacity: 1 },
+  ], { duration: 800, easing: "cubic-bezier(.3,.7,.3,1)", fill: "forwards" }).onfinish = () => {
+    b.remove();
+    chip.classList.add("is-new");
+    const cx = to.left + to.width / 2, cy = to.top + to.height / 2;
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      obPuff(cx + Math.cos(a) * to.width * 0.4, cy + Math.sin(a) * to.height * 0.5, 5 + Math.random() * 6, Math.cos(a) * 30, Math.sin(a) * 22 - 14, 550);
+    }
+  };
+}
+
+/* What every chat screen does once drawn: the narwhal arrives (once), types
+   its line, the last answer floats up, chips reopen their question, and
+   typing in the chat bar makes it blow bubbles. */
+function obChatBind(root) {
+  const typed = root.querySelector(".ob-say__typed");
+  if (!typed) return;
+  // A bubble still flying from the last screen (a paused background tab never finishes it).
+  document.querySelectorAll(".ob-ansbub").forEach((b) => b.remove());
+  const run = ++obTypeRun;
+  const bubble = root.querySelector(".ob-say");
+  const input = root.querySelector("#ob-form input");
+  const arrived = obNwSeen;
+  obNwSeen = true;
+  const text = typed.dataset.text || "";
+  const focus = () => { if (run === obTypeRun && input && !Z.onPhone()) input.focus({ preventScroll: true }); };
+  if (obReduced()) focus();
+  else {
+    typed.textContent = "";
+    bubble.classList.add("is-typing");
+    (async () => {
+      await new Promise((r) => setTimeout(r, arrived ? 120 : 1100));
+      for (let i = 1; i <= text.length; i++) {
+        if (run !== obTypeRun) return;
+        typed.textContent = text.slice(0, i);
+        await new Promise((r) => setTimeout(r, 22));
+      }
+      bubble.classList.remove("is-typing");
+      focus();
+    })();
+    if (!arrived) {
+      setTimeout(() => {
+        for (let i = 0; i < 4; i++) setTimeout(() => { const o = obBlowhole(root); if (o) obPuff(o.x, o.y, 8 + i * 3, 6 - i * 4, -60 - i * 12, 1100); }, i * 110);
+      }, 1300);
+    }
+  }
+  if (obChatLast) { const last = obChatLast; obChatLast = null; requestAnimationFrame(() => obFloatUp(root, last)); }
+  root.querySelector(".ob-chips")?.addEventListener("click", (e) => {
+    const c = e.target.closest?.("[data-edit]");
+    if (!c) return;
+    obChatEdit = c.dataset.edit || null;
+    const about = `${obPath()}-about`;
+    if (obScreen === about) obRender({ focus: false }); else obGo(about);
+  });
+  let lastPuff = 0;
+  input?.addEventListener("input", () => {
+    const err = root.querySelector("#ob-chat-err");
+    if (err && !err.hidden) { err.hidden = true; input.removeAttribute("aria-invalid"); }
+    const t = performance.now();
+    if (t - lastPuff < 90) return;
+    lastPuff = t;
+    const o = obBlowhole(root);
+    if (o) obPuff(o.x + (Math.random() - 0.5) * 6, o.y, 5 + Math.random() * 7, (Math.random() - 0.5) * 24, -50 - Math.random() * 30, 900);
+  });
+  input?.addEventListener("focus", () => root.querySelector(".ob-nw")?.classList.add("is-looking"));
+  input?.addEventListener("blur", () => root.querySelector(".ob-nw")?.classList.remove("is-looking"));
 }
 
 /* ==========================================================================
@@ -511,21 +927,28 @@ OB["account-type"] = {
   kind: "form",
   title: "Choose an account type",
   done: () => !!obDraft.type,
-  html: () => `${obBackHead("auth")}
-    <main id="main" class="z-screen__main">
-      ${obIntro("Who is this account for?", "We ask different questions for each. You can add the other kind later.")}
-      <nav aria-label="Account type" class="z-form z-form--tight">
-        ${[["individual", "p-about", "person", "Personal", "An account in your own name.", "Own IBAN, sending and getting paid, payment links"],
-          ["company", "b-about", "domain", "Business", "An account in your company’s name.", "Team approvals, invoices and books"]]
-          .map(([t, href, ic, title, text, more]) => `<a class="z-option" href="#${href}" data-type="${t}">${Z.iconTile({ icon: ic, tone: "p" })}<span class="z-option__main"><span class="z-option__title">${title}</span><span class="z-option__text">${text}</span><span class="z-option__more">${more}</span></span>${Z.icon("chevron_right")}</a>`).join("")}
-      </nav>
-    </main>
-    <p class="z-screen__alt" style="padding:16px 24px 28px">Already have an account? <a href="#auth">Sign in</a></p>`,
+  html: () => obChat({
+    title: "Who is this account for?",
+    head: obBackHead("auth"),
+    say: "Hey! I’m the Zold narwhal. Who is this account for?",
+    tip: "I ask different questions for each. You can add the other kind later.",
+    chips: false,
+    extra: `${obChatChoices([
+      { label: "Personal", sub: "In your own name: an IBAN, sending, getting paid, payment links" },
+      { label: "Business", sub: "In your company’s name: team approvals, invoices and books" },
+    ])}
+      <p class="z-screen__alt">Already have an account? <a href="#auth">Sign in</a></p>`,
+  }),
   bind: (root) => {
-    // Set the path before the router's own link handler runs (capture phase).
-    root.querySelectorAll("[data-type]").forEach((a) => a.addEventListener("click", () => {
-      if (obDraft.type !== a.dataset.type) obSaveDraft({ type: a.dataset.type, terms: false, authorised: false });
-    }, true));
+    obChatBind(root);
+    root.querySelector(".ob-choices")?.addEventListener("click", (e) => {
+      const b = e.target.closest?.("[data-choice]");
+      if (!b) return;
+      const type = b.dataset.choice === "1" ? "company" : "individual";
+      if (obDraft.type !== type) obSaveDraft({ type, terms: false, authorised: false });
+      obNwMood = "happy";
+      obGo(type === "company" ? "b-about" : "p-about");
+    });
   },
 };
 
@@ -535,53 +958,27 @@ OB["p-about"] = {
   title: "Personal: about you",
   done: () => !!(obDraft.given.trim() && obDraft.family.trim() && EMAIL_RE.test(obDraft.email) && obDraft.country
     && obDraft.usPerson !== null && obDraft.terms),
-  html: () => `${obSignupProgress("p-about", "About you", "account-type")}
-    <main id="main" class="z-screen__main">
-      ${obIntro("About you", "Use the name on your ID, the same one you’ll give Monerium.")}
-      <form class="z-form" id="ob-form" novalidate>
-        ${Z.field({ id: "given", name: "given-name", label: "First and middle names", autocomplete: "given-name", value: obDraft.given, maxlength: 60, placeholder: "Miriam…" })}
-        ${Z.field({ id: "family", name: "family-name", label: "Last name", autocomplete: "family-name", value: obDraft.family, maxlength: 60, placeholder: "Zoldenburg…" })}
-        ${obEmailField(obDraft.email, "Email", "Recovery and sign-in help find your account by it. No newsletters.")}
-        ${obCountrySelect({ id: "country", name: "country", label: "Country of residence", autocomplete: "country", value: obDraft.country })}
-        ${obYesNo("usPerson", "Are you a US citizen, a Green Card holder, or a US tax resident?", obDraft.usPerson)}
-        ${obTermsCheck()}
-      </form>
-    </main>
-    <div class="z-screen__foot">${obSubmit()}</div>`,
-  bind: (root) => obBindForm(root, () => {
-    const given = root.querySelector("#given"), family = root.querySelector("#family"), country = root.querySelector("#country");
-    const usPerson = obRadio(root, "usPerson");
-    Z.setFieldError(given, given.value.trim() ? "" : "Enter your first name, as it is on your ID.");
-    Z.setFieldError(family, family.value.trim() ? "" : "Enter your last name, as it is on your ID.");
-    const email = obCheckEmail(root);
-    Z.setFieldError(country, country.value ? "" : "Choose the country you live in.");
-    obSetQuestionError(root, "usPerson", usPerson === null ? "Answer yes or no." : "");
-    if (obFocusError(root) || !email || !obCheckTerms(root)) return;
-    obSaveDraft({ given: given.value.trim(), family: family.value.trim(), email, country: country.value, usPerson, terms: true });
-    obGo(obSignupSteps()[2]);
-  }),
+  html: () => obAboutChat("p"),
+  bind: (root) => obBindAbout(root, "p"),
 };
 
 OB["p-passkey"] = {
   kind: "form",
   title: "Personal: set up sign-in",
   done: () => false,
-  html: () => `${obSignupProgress("p-passkey", "Sign-in", user?.id ? null : obSignupSteps("individual").at(-2))}
-    <main id="main" class="z-screen__main">
-      <span class="z-mark z-mark--icon" aria-hidden="true">${Z.icon("passkey")}</span>
-      ${Z.onPhone()
-        ? obIntro("Set up Face ID or fingerprint", "It creates a sign-in key that never leaves this phone.")
-        : obIntro("Set up biometric sign-in", "Your browser will ask to save a passkey. Approve it with Touch ID or Windows Hello. A computer without either offers your phone or a security key instead.")}
-      <ul class="z-points">
-        <li>${Z.icon("lock")}<span>It’s the only key to your account. Zold never sees it.</span></li>
-        <li>${Z.icon("password")}<span>No Zold password to remember or leak.</span></li>
-        ${obRecoveryPoint()}
-      </ul>
-      ${obSetupSteps()}
-      ${obAlert()}
-    </main>
-    <div class="z-screen__foot">${Z.button({ variant: "primary", full: true, icon: "fingerprint", label: obPasskeyLabel(), id: "btn-passkey" })}</div>`,
-  bind: (root) => { root.querySelector("#btn-passkey").onclick = (e) => obCreateAccount(e.currentTarget); },
+  html: () => obChat({
+    title: "Set up sign-in",
+    head: obSignupProgress("p-passkey", "Sign-in", user?.id ? null : obSignupSteps("individual").at(-2)),
+    say: `Last step${obFirst() ? `, ${obFirst()}` : ""}: ${Z.onPhone() ? "set up Face ID or fingerprint." : "set up biometric sign-in."}`,
+    tip: Z.onPhone() ? "The key never leaves this phone, and Zold never sees it." : "Your browser asks to save a passkey: approve it with Touch ID, Windows Hello, your phone or a security key.",
+    chips: "summary",
+    extra: `${obSetupSteps()}${obAlert()}`,
+    dock: Z.button({ variant: "primary", full: true, icon: "fingerprint", label: obPasskeyLabel(), id: "btn-passkey" }),
+  }),
+  bind: (root) => {
+    obChatBind(root);
+    root.querySelector("#btn-passkey").onclick = (e) => obCreateAccount(e.currentTarget);
+  },
 };
 
 /* ---- Business ------------------------------------------------------------ */
@@ -590,47 +987,8 @@ OB["b-about"] = {
   title: "Business: the company and you",
   done: () => !!(obDraft.legalName.trim().length >= 2 && obDraft.incorp && obDraft.given.trim() && EMAIL_RE.test(obDraft.email)
     && obDraft.country && obDraft.companyUsNexus !== null && obDraft.usPerson !== null && obDraft.terms && obDraft.authorised),
-  html: () => `${obSignupProgress("b-about", "About the company", "account-type")}
-    <main id="main" class="z-screen__main">
-      ${obIntro("The company and you", "The company exactly as registered. You’ll be its first owner; add teammates after the account opens.")}
-      <form class="z-form" id="ob-form" novalidate>
-        ${Z.field({ id: "legal-name", name: "organization", label: "Legal name, with the legal form", autocomplete: "organization", value: obDraft.legalName, maxlength: 120, placeholder: "Lindner Holzbau GmbH…" })}
-        ${Z.field({ id: "trading-name", name: "trading-name", label: "Trading name", optional: true, value: obDraft.tradingName, maxlength: 120, hint: "If customers know you by another name." })}
-        ${obCountrySelect({ id: "incorp", name: "incorporation-country", label: "Country of incorporation", value: obDraft.incorp })}
-        ${Z.field({ id: "b-name", name: "name", label: "Your full name", autocomplete: "name", value: obFullName(), maxlength: 120, placeholder: "Miriam Zoldenburg…" })}
-        ${obCountrySelect({ id: "country", name: "country", label: "Where you live", autocomplete: "country", value: obDraft.country })}
-        ${obEmailField(obDraft.email, "Work email", "Recovery and sign-in help find your account by it.")}
-        ${obYesNo("companyUsNexus", "Is the company incorporated in the US, or is any owner of 25% or more a US person?", obDraft.companyUsNexus)}
-        ${obYesNo("usPerson", "Are you a US citizen, a Green Card holder, or a US tax resident?", obDraft.usPerson)}
-        <label class="z-check" for="c-authorised"><input id="c-authorised" name="authorised" type="checkbox"${obDraft.authorised ? " checked" : ""} aria-describedby="c-authorised-err"><span>I’m authorised to open an account for this company.</span></label>
-        <p class="z-err" id="c-authorised-err" hidden></p>
-        ${obTermsCheck()}
-      </form>
-    </main>
-    <div class="z-screen__foot">${obSubmit()}</div>`,
-  bind: (root) => obBindForm(root, () => {
-    const legal = root.querySelector("#legal-name"), incorp = root.querySelector("#incorp");
-    const name = root.querySelector("#b-name"), country = root.querySelector("#country");
-    const nexus = obRadio(root, "companyUsNexus"), usPerson = obRadio(root, "usPerson");
-    const auth = root.querySelector("#c-authorised"), authErr = root.querySelector("#c-authorised-err");
-    Z.setFieldError(legal, legal.value.trim().length >= 2 ? "" : "Enter the company’s registered name.");
-    Z.setFieldError(incorp, incorp.value ? "" : "Choose the country the company is registered in.");
-    Z.setFieldError(name, name.value.trim() ? "" : "Enter your full name.");
-    Z.setFieldError(country, country.value ? "" : "Choose the country you live in.");
-    const email = obCheckEmail(root);
-    obSetQuestionError(root, "companyUsNexus", nexus === null ? "Answer yes or no." : "");
-    obSetQuestionError(root, "usPerson", usPerson === null ? "Answer yes or no." : "");
-    if (!auth.checked) { authErr.textContent = "Confirm you may open an account for the company."; authErr.hidden = false; auth.setAttribute("aria-invalid", "true"); }
-    else { authErr.hidden = true; auth.removeAttribute("aria-invalid"); }
-    if (obFocusError(root) || !email || !obCheckTerms(root)) return;
-    // One name field on this path; the API takes the full name as one string.
-    obSaveDraft({
-      legalName: legal.value.trim(), tradingName: root.querySelector("#trading-name").value.trim(), incorp: incorp.value,
-      given: name.value.trim(), family: "", country: country.value, email,
-      companyUsNexus: nexus, usPerson, authorised: true, terms: true,
-    });
-    obGo(obSignupSteps()[2]);
-  }),
+  html: () => obAboutChat("b"),
+  bind: (root) => obBindAbout(root, "b"),
 };
 
 /* ---- Recovery login (Google or Apple) ---------------------------------------
@@ -649,26 +1007,20 @@ function obSocialScreen(p) {
     kind: "form",
     title: "Recovery login",
     done: () => !obSocialOffered() || !!obSocial || obDraft.social === "skip",
-    html: () => `${obSignupProgress(`${p}-social`, "Recovery", `${p}-about`)}
-    <main id="main" class="z-screen__main">
-      <span class="z-mark z-mark--icon" aria-hidden="true">${Z.icon("restore")}</span>
-      ${obIntro("Add a way back in", `Lose this ${obDevice()}, keep your account: your Google or Apple login, or a code to your email, can move it to a new one.`)}
-      <ul class="z-points">
-        <li>${Z.icon("lock")}<span>It can’t send your money. Only your ${Z.passkeyName()} approves payments.</span></li>
-        <li>${Z.icon("schedule")}<span>A move to a new ${obDevice()} waits first, and this one can cancel it.</span></li>
-        <li>${Z.icon("key")}<span>The login stays yours alone. Zold never holds its key.</span></li>
-      </ul>
-      ${obSocialOtp ? `<form class="z-form" id="ob-form" novalidate>
-        ${Z.field({ id: "ob-otp", name: "code", label: `Code sent to ${obDraft.email}`, inputmode: "numeric", autocomplete: "one-time-code", maxlength: 6, spellcheck: false, placeholder: "123456…" })}
-      </form>` : ""}
-      ${obAlert()}
-    </main>
-    <div class="z-screen__foot z-screen__foot--quiet">
-      ${obSocialOtp ? obSubmit("Confirm") : `<div class="z-providers z-providers--round" id="ob-social-btns">${caps.turnkeyLogins?.email ? Z.button({ variant: "secondary", icon: "mail", label: "Email", id: "btn-social-email" }) : ""}</div>`}
-      ${obSocialOtp ? `<button type="button" class="z-link-btn" id="btn-social-resend">Send a new code</button>` : ""}
-      <button type="button" class="z-link-btn" id="btn-social-skip">Skip for now</button>
-    </div>`,
+    html: () => obChat({
+      title: "Add a way back in",
+      head: obSignupProgress(`${p}-social`, "Recovery", `${p}-about`),
+      say: obSocialOtp ? `I sent a code to ${obDraft.email}. What is it?` : `Want a way back in, in case you lose this ${obDevice()}?`,
+      tip: obSocialOtp ? "It can take a minute to arrive." : `It can move your account to a new ${obDevice()}, never send your money.`,
+      chips: "summary",
+      extra: obAlert() + (obSocialOtp ? "" : `<div class="ob-choices" id="ob-social-btns">${caps.turnkeyLogins?.email ? `<button type="button" class="ob-choice" id="btn-social-email">Email me a code<span>To ${esc(obDraft.email)}</span></button>` : ""}<button type="button" class="ob-choice" id="btn-social-skip">Skip for now<span>Set up recovery later from Home</span></button></div>`),
+      dock: obSocialOtp
+        ? `${obComposer({ id: "ob-otp", label: `Code sent to ${obDraft.email}`, inputmode: "numeric", autocomplete: "one-time-code", maxlength: 6, placeholder: "123456" })}
+          <div class="ob-links"><button type="button" class="z-link-btn" id="btn-social-resend">Send a new code</button><button type="button" class="z-link-btn" id="btn-social-skip">Skip for now</button></div>`
+        : "",
+    }),
     bind: (root) => {
+      obChatBind(root);
       if (obSocialError) { obShowErr(new Error(obSocialError)); obSocialError = null; }
       import("/guardian/providers.js").then(({ providerButtons }) => {
         const slot = root.querySelector("#ob-social-btns");
@@ -791,30 +1143,23 @@ async function obAddSocialGuardian() {
   } catch { /* Home says recovery is not set up */ }
 }
 
-const obRecoveryPoint = () => `<li>${Z.icon("restore")}<span>${obSocial
-  ? `Your ${obSocialName()} is added in the same approval, so it can move the account to a new ${obDevice()}.`
-  : `Set up recovery from Home, in case you lose this ${obDevice()}.`}</span></li>`;
-
 OB["b-passkey"] = {
   kind: "form",
   title: "Business: set up sign-in",
   done: () => false,
-  html: () => `${obSignupProgress("b-passkey", "Sign-in", user?.id ? null : obSignupSteps("company").at(-2))}
-    <main id="main" class="z-screen__main">
-      <span class="z-mark z-mark--icon" aria-hidden="true">${Z.icon("passkey")}</span>
-      ${obIntro("Set up the company’s first approver", Z.onPhone()
-        ? `This phone becomes the first approver for ${esc(obCompany())}.`
-        : `This computer becomes the first approver for ${esc(obCompany())}. Your browser will ask to create a passkey: approve it with Touch ID, your computer’s password, your phone or a security key.`)}
-      <ul class="z-points">
-        <li>${Z.icon("lock")}<span>Company payments you draft need a teammate’s approval. Zold can’t approve any.</span></li>
-        <li>${Z.icon("group_add")}<span>Invite teammates and give each a role after the account opens.</span></li>
-        ${obRecoveryPoint()}
-      </ul>
-      ${obSetupSteps()}
-      ${obAlert()}
-    </main>
-    <div class="z-screen__foot">${Z.button({ variant: "primary", full: true, icon: "fingerprint", label: obPasskeyLabel(), id: "btn-passkey" })}</div>`,
-  bind: (root) => { root.querySelector("#btn-passkey").onclick = (e) => obCreateAccount(e.currentTarget); },
+  html: () => obChat({
+    title: "Set up the company’s first approver",
+    head: obSignupProgress("b-passkey", "Sign-in", user?.id ? null : obSignupSteps("company").at(-2)),
+    say: `Last step: make this ${obDevice()} the first approver for ${obCompany()}.`,
+    tip: "Company payments still need a teammate’s approval. Zold can’t approve any.",
+    chips: "summary",
+    extra: `${obSetupSteps()}${obAlert()}`,
+    dock: Z.button({ variant: "primary", full: true, icon: "fingerprint", label: obPasskeyLabel(), id: "btn-passkey" }),
+  }),
+  bind: (root) => {
+    obChatBind(root);
+    root.querySelector("#btn-passkey").onclick = (e) => obCreateAccount(e.currentTarget);
+  },
 };
 
 /* ---- Bringing in the company's existing Safe --------------------------------
@@ -1183,34 +1528,6 @@ function obImportDone(bound) {
 /* Shared form parts. */
 const obSubmit = (label = "Continue") =>
   Z.button({ variant: "primary", full: true, label, type: "submit", id: "btn-next" }).replace("<button", '<button form="ob-form"');
-
-function obEmailField(value, label = "Email", hint) {
-  const error = obEmailInUse ? "An account already uses this email. Sign in instead, or recover it if you lost your phone." : undefined;
-  obEmailInUse = false;
-  return Z.field({ id: "email", name: "email", type: "email", label, autocomplete: "email", inputmode: "email", value, maxlength: 254, placeholder: "miriam@example.com…", hint, error })
-    .replace('type="email"', 'type="email" autocapitalize="off"');
-}
-
-function obCheckEmail(root) {
-  const input = root.querySelector("#email");
-  const v = input.value.trim();
-  Z.setFieldError(input, !v ? "Enter your email address." : EMAIL_RE.test(v) ? "" : "Enter an email address like miriam@example.com.");
-  return EMAIL_RE.test(v) ? v : null;
-}
-
-function obTermsCheck() {
-  return `<label class="z-check" for="c-terms"><input id="c-terms" name="terms" type="checkbox"${obDraft.terms ? " checked" : ""} aria-describedby="c-terms-err"><span>I accept Zold’s ${LEGAL_LINKS.replace("and <a", "and have read the <a")}.</span></label>
-        <p class="z-err" id="c-terms-err" hidden></p>`;
-}
-function obCheckTerms(root) {
-  const box = root.querySelector("#c-terms"), err = root.querySelector("#c-terms-err");
-  if (box.checked) { err.hidden = true; box.removeAttribute("aria-invalid"); return true; }
-  err.textContent = "Accept the Terms to continue.";
-  err.hidden = false;
-  box.setAttribute("aria-invalid", "true");
-  obFocusError(root);
-  return false;
-}
 
 /* Submit on Enter and on the pinned button; fields clear their error as they change. */
 function obBindForm(root, onSubmit) {
