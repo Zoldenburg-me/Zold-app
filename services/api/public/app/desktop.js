@@ -270,6 +270,7 @@ PH.home.desk = {
           ${inflight ? phDeskInFlight(inflight) : ""}
           ${phDeskGetPaid(u)}
           ${phChecklist(u)}
+          ${phSendLinksCard()}
         </div>
       </div>
       ${phDeskActivity(hist.slice(0, 6), u)}
