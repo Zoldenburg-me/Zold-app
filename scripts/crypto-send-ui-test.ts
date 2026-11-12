@@ -162,13 +162,53 @@ await t("a lost /authorize answer: no second send, and the screen says it can't 
   assert.doesNotMatch(html, /Nothing was sent/);
 });
 
-await t("a refusal from Zold after /authorize was sent still lets the person fix it and send", async () => {
-  run(`phWallet = { to: "alice.eth", token: "USDC", amount: "25.5", name: "alice.eth", address: "${ADDR}" }; __calls = [];
-    api = async (p, b) => { __calls.push([p, b]); if (p.endsWith("/authorize")) { const e = new Error("alice.eth now points to a different address — nothing was sent; check it and start again"); e.status = 409; e.body = { error: e.message, code: "ADDRESS_CHANGED" }; throw e; } return { id: "s4", safeExecution: { credentialId: "c", challenge: "ch" } }; }`);
+await t("after a lost /authorize answer, going back to the form and checking the same address again offers no Send", async () => {
+  run(`__went = []; api = async (p) => ({ name: "alice.eth", address: "${ADDR}", chainId: 8453 }); Z = { ...Z, setFieldError() {}, focusFirstError: () => false }`);
+  const fields: Record<string, any> = { "#ph-wal-to": el({ value: "alice.eth" }), "#ph-wal-amount": el({ value: "25.5" }), "#ph-wal-token": el({ value: "USDC" }) };
+  const form = el(); const next = el();
+  run(`PH["send/wallet"]`).bind({ querySelector: (s: string) => (s === "#ph-wal" ? form : s === "#ph-wal-next" ? next : fields[s] ?? el()), querySelectorAll: () => [] });
+  await form.onsubmit({ preventDefault() {} });
+  assert.equal(run(`__went.at(-1)`), "send/wallet-check");
+  const html = flat(run(`PH["send/wallet-check"].html()`));
+  assert.match(html, /We can’t confirm this payment/);
+  assert.doesNotMatch(html, /id="ph-wal-send"/);
+  run(`__calls = []`);
+  await run(`phWalletSubmit`)(el(), el());
+  assert.equal(run(`__calls.length`), 0, "no new send");
+});
+
+for (const [name, fail] of [
+  ["a Zold 5xx with a JSON body", `Object.assign(new Error("Something went wrong on our side."), { status: 500, body: { error: "Something went wrong on our side." } })`],
+  ["the service worker's offline 503", `Object.assign(new Error("offline"), { status: 503, offline: true, body: { error: "offline" } })`],
+  ["a 409 \"already submitted\" (it went out)", `Object.assign(new Error("this send was already submitted"), { status: 409, body: { error: "this send was already submitted" } })`],
+] as const) {
+  await t(`after /authorize, ${name} is unknown: no Send`, async () => {
+    run(`phUnconfirmed = false; phWallet = { to: "alice.eth", token: "USDC", amount: "25.5", name: "alice.eth", address: "${ADDR}" };
+      api = async (p) => { if (p.endsWith("/authorize")) throw ${fail}; return { id: "s5", safeExecution: { credentialId: "c", challenge: "ch" } }; }`);
+    await run(`phWalletSubmit`)(el(), el());
+    assert.match(flat(run(`PH["send/wallet-check"].html()`)), /We can’t confirm this payment/);
+  });
+}
+
+await t("a cancelled passkey prompt sends nothing and keeps Send", async () => {
+  run(`phUnconfirmed = false; api = async () => ({ id: "s6", safeExecution: { credentialId: "c", challenge: "ch" } });
+    const real = safeExecutionAssertion; safeExecutionAssertion = async () => { throw Object.assign(new Error("x"), { name: "NotAllowedError" }); }; globalThis.__realSea = real;`);
   const btn = el(); const err = el();
   await run(`phWalletSubmit`)(btn, err);
+  run(`safeExecutionAssertion = globalThis.__realSea`);
+  assert.match(err.textContent, /cancelled/);
+  assert.equal(run(`Z.isDisabled`)(btn), false);
+  assert.match(flat(run(`PH["send/wallet-check"].html()`)), /id="ph-wal-send"/);
+});
+
+await t("a refusal from Zold after /authorize was sent still lets the person fix it and send", async () => {
+  run(`phUnconfirmed = false; phWallet = { to: "alice.eth", token: "USDC", amount: "25.5", name: "alice.eth", address: "${ADDR}" }; __calls = [];
+    api = async (p, b) => { __calls.push([p, b]); if (p.endsWith("/authorize")) { const e = new Error("alice.eth now points to a different address — nothing was sent; check it and start again"); e.status = 409; e.body = { error: e.message, code: "ADDRESS_CHANGED" }; throw e; } return { id: "s4", safeExecution: { credentialId: "c", challenge: "ch" } }; }`);
+  const btn = el(); const err = el();
+  btn.setAttribute("aria-busy", "true"); btn.removeAttribute("aria-busy");
+  await run(`phWalletSubmit`)(btn, err);
   assert.match(err.textContent, /different address/);
-  assert.equal(btn.getAttribute("aria-disabled"), null);
+  assert.equal(run(`Z.isDisabled`)(btn), false, "the spinner is off and Send is live");
   assert.match(flat(run(`PH["send/wallet-check"].html()`)), /id="ph-wal-send"/);
 });
 
