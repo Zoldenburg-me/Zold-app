@@ -74,13 +74,13 @@ function phPayeeRow(p, href) {
 PH.send = {
   title: "Send",
   tab: "send",
-  live: () => `${user?.kycStatus}|${user?.iban}|${phHistSig()}`,
+  live: () => `${user?.kycStatus}|${user?.iban}|${phHistSig()}|${phSendLinksSig()}`,
   html() {
     const blocked = phSendBlocked();
     const payees = phPayees();
     const q = phQuery;
     return `${phTop("Send")}${phMain(`
-      ${blocked ? `${Z.note({ tone: "a", text: blocked.text })}${blocked.action ? Z.button({ variant: "primary", full: true, label: blocked.action.label, id: blocked.action.id }) : ""}${HAS("onchain_balance") ? Z.listGroup({ label: "New payment", rows: [...(caps.cryptoSend ? [phWalletRow()] : []), phSendLinkRow()] }) : ""}` : `
+      ${blocked ? `${Z.note({ tone: "a", text: blocked.text })}${blocked.action ? Z.button({ variant: "primary", full: true, label: blocked.action.label, id: blocked.action.id }) : ""}${HAS("onchain_balance") ? Z.listGroup({ label: "New payment", rows: [...(caps.cryptoSend ? [phWalletRow()] : []), phSendLinkRow()] }) : ""}${phSendLinksList()}` : `
       <form class="z-search" role="search" onsubmit="return false">
         <label class="z-sr" for="ph-sq">Search people you’ve paid</label>${Z.icon("search")}
         <input class="z-search__input" id="ph-sq" type="search" name="q" autocomplete="off" spellcheck="false" placeholder="Name or IBAN…" value="">
@@ -98,6 +98,7 @@ PH.send = {
           phSendLinkRow(),
         ],
       })}
+      ${phSendLinksList()}
       ${Z.listGroup({
         label: "People you’ve paid",
         rows: payees.map((p) => phPayeeRow(p, phHref("send/amount", p.key))),
@@ -106,6 +107,7 @@ PH.send = {
     `)}`;
   },
   bind(root) {
+    if (phSendLinksStale() && !phSendLinksLoading) phLoadSendLinks().then(() => { if (phRoute?.name === "send") phRefresh(); });
     // A new send starts clean; the amount screen fills in from the payee.
     phSend = { payee: null, amount: "", reference: "", quote: null, transferId: null, error: null };
     const v = root.querySelector("#ph-send-verify");
@@ -733,6 +735,26 @@ function phPaySendLink(inv) {
     quote: null, transferId: null, error: null, sendLink: tie,
   };
   phGo("send/amount", "new");
+}
+
+/* Every send link this person made, newest first: waiting, ready to pay, paying, paid. */
+function phSendLinksList() {
+  const list = phCache.sendLinks?.list || [];
+  if (!list.length) return "";
+  return Z.listGroup({
+    label: "Your send links",
+    rows: [...list].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))).map((i) => {
+      const [w, tone] = phSendLinkWord(i);
+      const waiting = i.state === "LINK_CREATED";
+      return Z.row({
+        lead: waiting ? Z.iconTile({ icon: "add_link" }) : Z.avatar({ name: i.supplier?.orgName || "" }),
+        title: waiting ? (i.sendLink?.note || "Not filled in yet") : (i.supplier?.orgName || "Someone"),
+        sub: waiting ? `Up to ${phEur(Number(i.sendLink?.maxTotal))}` : `${phEur(Number(i.total))} · ${i.lines?.[0]?.description || ""}`,
+        right: Z.tag(w, tone),
+        href: phHref("send/link", i.id),
+      });
+    }),
+  });
 }
 
 const phSendLinkWord = (i) => ({
