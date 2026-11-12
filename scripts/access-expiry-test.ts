@@ -258,7 +258,8 @@ async function driveSend(authorize: () => any, read: () => any, execution = `asy
   const screens: string[] = [];
   ctx.__screen = (name: string) => screens.push(name);
   ctx.__deviceLibReady({ deviceAddress: async () => "0xa", destinationCommitment: () => "0xd", signTypedData: async () => "0xs" });
-  run(`user = { id: "u" }; hist.length = 0; phSend.error = null; phSend.failed = null; refresh = async () => {};
+  // freshTab reloads only ui.js; a real reload also clears phUnconfirmed.
+  run(`user = { id: "u" }; hist.length = 0; phSend.error = null; phSend.failed = null; phUnconfirmed = false; refresh = async () => {};
     phSend.payee = { name: "Ana", iban: "DE00" }; phSend.quote = { id: "q" };
     phSendBlocked = () => null; registerDeviceKey = async () => {};
     safeExecutionAssertion = ${execution}; moneriumRedeemAssertion = async () => null;
@@ -331,6 +332,51 @@ await check("/app send: Zold's own refusal followed by a failed read is still un
     await driveSend(authorize, () => { throw new TypeError("network"); });
     assert.match(errorScreen(), /We can’t confirm this payment/);
   }
+});
+
+await check("/app send: after a lost /authorize answer, going back or starting again offers no approval until a reload", async () => {
+  await driveSend(opaque, opaque);
+  // Back to the amount, Home → Send (a new phSend), or a contact: each ends on review.
+  run(`phSend = { payee: { name: "Ana", iban: "DE00" }, amount: "5", reference: "", quote: { id: "q2", sendEur: 5, receiveEur: 5, fixedFeeEur: 0 }, transferId: null, error: null }`);
+  const html = run(`PH["send/review"].html()`) as string;
+  assert.match(html, /We can’t confirm this payment/);
+  assert.match(html, /ph-check-activity/);
+  assert.doesNotMatch(html, /ph-approve/);
+  calls.length = 0;
+  await run(`phSubmit(__el, __el)`);
+  assert.equal(calls.length, 0, "no new transfer is created");
+});
+
+await check("/app send: while /authorize waits, review offers no approval and no new transfer is made", async () => {
+  freshTab();
+  calls.length = 0;
+  ctx.__screen = () => {};
+  ctx.__deviceLibReady({ deviceAddress: async () => "0xa", destinationCommitment: () => "0xd", signTypedData: async () => "0xs" });
+  run(`user = { id: "u" }; hist.length = 0; phSend.error = null; phSend.failed = null; phUnconfirmed = false; refresh = async () => {};
+    phSend.payee = { name: "Ana", iban: "DE00" }; phSend.quote = { id: "q" };
+    phSendBlocked = () => null; registerDeviceKey = async () => {};
+    safeExecutionAssertion = async () => null; moneriumRedeemAssertion = async () => null;
+    phGo = (name) => globalThis.__screen(name);`);
+  answer = () => calls.at(-1).url === "/api/transfers"
+    ? json(200, { ...CREATED_T, authorization: { authorizer: "0xA", typedData: { message: { destination: "0xD" } } } })
+    : new Promise(() => {});
+  ctx.__el = stub;
+  run(`phSubmit(__el, __el)`);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.ok(calls.some((c) => c.url.endsWith("/authorize")), "/authorize is waiting");
+  // Back to the amount, a new price, review again.
+  run(`phSend = { payee: { name: "Ana", iban: "DE00" }, amount: "5", reference: "", quote: { id: "q2", sendEur: 5, receiveEur: 5, fixedFeeEur: 0 }, transferId: null, error: null }`);
+  const html = run(`PH["send/review"].html()`) as string;
+  assert.doesNotMatch(html, /ph-approve/);
+  assert.match(html, /Waiting for your last payment/);
+  const before = calls.length;
+  await run(`phSubmit(__el, __el)`);
+  assert.equal(calls.length, before, "no new transfer is created");
+});
+
+await check("/app send: a refusal from Zold after /authorize leaves review open for the next try", async () => {
+  await driveSend(refused, () => json(200, CREATED_T));
+  assert.match(run(`PH["send/review"].html()`), /ph-approve/);
 });
 
 await check("/app send: a signature that never left says \"Nothing was sent\" with its reason, even when the read fails", async () => {
