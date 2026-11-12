@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="en">
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<link rel="stylesheet" href="/vendor/fonts/text.css" />
+<title>Get paid · Zold</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+<meta name="robots" content="noindex, nofollow" />
+<meta name="referrer" content="no-referrer" />
+
+<!--
+  A send link, from the payee's side: someone set a limit and shared the link;
+  the payee tells the narwhal how much, what for, and where to be paid. No
+  account and no wallet connection. Submitting sends nothing: the payer sees
+  the answers in the app and approves the payment with their passkey.
+
+  The path segment is a credential. The page loads nothing from another
+  origin, sends no referrer, and the service worker never caches it.
+-->
+<style>
+:root {
+  --bg: #f5f4f1;
+  --surface: #ffffff;
+  --ink: #141217;
+  --muted: #6b6570;
+  --line: #e2dfe4;
+  --accent: #b8285f;      /* berry: the send button only */
+  --accent-ink: #ffffff;
+  --sea: #dfecef;
+  --bad: #b3261e;
+  --paper: #fbfaf7;
+  --paper-ink: #1b1a1d;
+  --printer: #1c1a20;
+  --display: Outfit, Inter, system-ui, sans-serif;
+  --body: Inter, system-ui, -apple-system, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --ease: cubic-bezier(.16, 1, .3, 1);
+}
+@media (prefers-color-scheme: dark) { :root {
+  --bg: #121115; --surface: #1d1b21; --ink: #f1eef2; --muted: #a39ba5; --line: #2e2b33;
+  --accent: #e0558d; --accent-ink: #141217; --sea: #172328; --bad: #f2b8b5; --printer: #000; color-scheme: dark } }
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 400 16px/1.5 var(--body); overflow: hidden; -webkit-font-smoothing: antialiased; }
+.app { height: 100%; max-width: 560px; margin: 0 auto; display: grid; grid-template-rows: auto auto 1fr auto;
+  padding: max(12px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) 12px max(16px, env(safe-area-inset-left, 0px)); position: relative; }
+
+.bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; position: relative; z-index: 8; }
+.brand { font: 700 18px var(--display); letter-spacing: -.03em; }
+.ghost { font: 500 13px var(--body); color: var(--muted); background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; cursor: pointer; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Narwhal + speech. Three wrappers so swimming, reacting and bobbing never fight over one transform. */
+.host { display: flex; align-items: flex-end; gap: 10px; min-height: 132px; padding-top: 14px; position: relative; z-index: 6; }
+.nw { width: 112px; flex: none; transform: translateX(-140vw) rotate(-8deg); }
+.nw.in { animation: swim-in 1.4s var(--ease) forwards; }
+.nw svg { display: block; overflow: visible; }
+.nw.in svg { animation: bob 3.2s ease-in-out 1.4s infinite; }
+@keyframes swim-in { 0% { transform: translateX(-140vw) rotate(-8deg); } 70% { transform: translateX(8px) rotate(4deg); } 100% { transform: none; } }
+@keyframes bob { 50% { transform: translateY(-5px) rotate(-2deg); } }
+
+#tail { transform-box: fill-box; transform-origin: 0% 50%; animation: tail 1.3s ease-in-out infinite; }
+@keyframes tail { 50% { transform: rotate(12deg); } }
+.nw.happy #tail, .nw.spin #tail, .nw.lap #tail { animation-duration: .3s; }
+.eye { transform-box: fill-box; transform-origin: center; animation: blink 4.6s infinite; }
+@keyframes blink { 0%, 95%, 100% { transform: none; } 97.5% { transform: scaleY(.1); } }
+#look { transition: transform .35s var(--ease); }
+.nw.looking #look { transform: translate(5px, 8px); }
+#m-open, #m-frown { display: none; }
+.nw.happy #m-smile, .nw.spin #m-smile, .nw.sad #m-smile { display: none; }
+.nw.happy #m-open, .nw.spin #m-open { display: inline; }
+.nw.sad #m-frown { display: inline; }
+.nw.happy #blush, .nw.spin #blush { animation: glow .6s; }
+@keyframes glow { 50% { transform: scale(1.25); } }
+
+.nw.nod .act { animation: nod .5s ease-in-out; }
+.nw.happy .act { animation: hop .7s var(--ease); }
+.nw.spin .act { animation: flip .95s var(--ease); }
+.nw.sad .act { animation: no .55s ease-in-out; }
+.nw.lap .act { animation: lap 1.6s ease-in-out; }
+@keyframes nod { 30% { transform: rotate(-7deg) translateY(2px); } 60% { transform: rotate(3deg); } }
+@keyframes hop { 40% { transform: translateY(-22px) rotate(-12deg); } 70% { transform: translateY(0) rotate(4deg); } }
+@keyframes flip { 45% { transform: translateY(-34px) rotate(-200deg); } 100% { transform: rotate(-360deg); } }
+@keyframes no { 20% { transform: rotate(-9deg); } 40% { transform: rotate(8deg); } 60% { transform: rotate(-6deg); } 80% { transform: rotate(4deg); } }
+@keyframes lap { 25% { transform: translateX(34px) rotate(6deg); } 50% { transform: translateX(46px) scaleX(-1); } 75% { transform: translateX(14px) scaleX(-1) rotate(-4deg); } 100% { transform: none; } }
+
+.say { position: relative; flex: 1; min-width: 0; background: var(--surface); border: 2px solid var(--ink); border-radius: 18px 18px 18px 4px;
+  padding: 10px 14px; font: 500 17px/1.35 var(--display); min-height: 48px; opacity: 0; transform: scale(.9); transform-origin: left bottom; transition: opacity .25s, transform .35s var(--ease); margin: 0 0 30px; overflow-wrap: anywhere; }
+.say.on { opacity: 1; transform: none; }
+.say .tip { display: block; margin-top: 6px; font: 400 14px/1.45 var(--body); color: var(--muted); }
+
+.stage { display: grid; align-content: center; justify-items: center; gap: 10px; text-align: center; min-height: 0; padding-block: 8px; }
+.amount { font: 700 clamp(56px, 18vw, 96px)/1 var(--display); letter-spacing: -.04em; font-variant-numeric: tabular-nums; }
+.amount small { font-size: .45em; color: var(--muted); letter-spacing: 0; vertical-align: .55em; margin-right: 2px; }
+.amount.empty { color: var(--line); }
+.facts { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; min-height: 32px; }
+.fact { background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; font-size: 14px; animation: pop .4s var(--ease); max-width: 100%; overflow-wrap: anywhere; }
+.fact b { font-weight: 600; }
+@keyframes pop { from { opacity: 0; transform: translateY(8px) scale(.95); } }
+
+.dock { display: grid; gap: 8px; padding-bottom: env(safe-area-inset-bottom, 0px); transform: translateY(140%); transition: transform .5s var(--ease); }
+.dock.on { transform: none; }
+.choices { display: flex; flex-wrap: wrap; gap: 8px; }
+.choice { font: 500 15px var(--body); color: var(--ink); background: var(--surface); border: 1.5px solid var(--ink); border-radius: 14px; padding: 8px 14px; cursor: pointer; text-align: left; animation: pop .35s var(--ease) backwards; }
+.choice span { display: block; font-size: 12px; color: var(--muted); font-weight: 400; }
+.choice:hover { background: var(--sea); }
+.composer { display: flex; gap: 8px; align-items: center; background: var(--surface); border: 2px solid var(--ink); border-radius: 20px; padding: 6px 6px 6px 16px; }
+.composer input { flex: 1; min-width: 0; border: 0; background: none; color: var(--ink); font: 500 17px var(--body); padding: 8px 0; }
+.composer input:focus-visible { outline: none; }
+.composer:focus-within { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent); }
+.send { flex: none; width: 42px; height: 42px; border-radius: 50%; border: 0; background: var(--accent); color: var(--accent-ink); cursor: pointer; display: grid; place-items: center; }
+.send:disabled { opacity: .4; cursor: progress; }
+.err { min-height: 20px; font-size: 13px; color: var(--bad); padding-left: 6px; }
+.composer.shake { animation: shake .35s; }
+@keyframes shake { 25% { transform: translateX(-6px); } 75% { transform: translateX(6px); } }
+
+.puff { position: fixed; z-index: 9; pointer-events: none; border: 2px solid var(--ink); border-radius: 50%; opacity: .6; }
+.puff::after { content: ""; position: absolute; left: 18%; top: 18%; width: 26%; height: 26%; border-radius: 50%; background: var(--ink); opacity: .45; }
+.ansbub { position: fixed; z-index: 9; pointer-events: none; background: color-mix(in srgb, var(--sea) 70%, var(--surface)); border: 2px solid var(--ink); border-radius: 999px;
+  padding: 10px 18px; font: 600 18px var(--display); white-space: nowrap; max-width: 80vw; overflow: hidden; text-overflow: ellipsis; }
+canvas.bubbles { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 7; }
+
+.finale { position: absolute; inset: 0; z-index: 4; display: grid; align-content: start; justify-items: center; padding: 160px max(16px, env(safe-area-inset-left, 0px)) 16px; background: color-mix(in srgb, var(--bg) 94%, transparent); overflow-y: auto; animation: pop .4s var(--ease); }
+.printer { width: min(340px, 100%); background: var(--printer); border-radius: 18px; padding: 14px 16px 22px; color: #f1eef2; position: relative; z-index: 2; box-shadow: 0 10px 30px rgb(0 0 0 / .18); }
+.printer .row { display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
+.printer .dot { width: 8px; height: 8px; border-radius: 50%; background: #5a5560; }
+.printer.on .dot { background: #5bd18b; animation: blinkdot 1s steps(2) infinite; }
+.printer.tapped { animation: jolt .25s; }
+@keyframes jolt { 40% { transform: translateY(3px) rotate(-1deg); } }
+.printer .slot { position: absolute; left: 14px; right: 14px; bottom: 8px; height: 6px; border-radius: 3px; background: #000; }
+@keyframes blinkdot { 50% { opacity: .3; } }
+.feed { width: min(300px, calc(100% - 40px)); overflow: hidden; margin-top: -10px; position: relative; z-index: 1; }
+.paper { background: var(--paper); color: var(--paper-ink); font: 400 12.5px/1.55 var(--mono); padding: 22px 18px 30px; transform: translateY(-100%);
+  -webkit-mask: linear-gradient(#000 0 0) top / 100% calc(100% - 10px) no-repeat, conic-gradient(from -45deg at bottom, #0000, #000 1deg 89deg, #0000 90deg) bottom / 14px 10px repeat-x;
+          mask: linear-gradient(#000 0 0) top / 100% calc(100% - 10px) no-repeat, conic-gradient(from -45deg at bottom, #0000, #000 1deg 89deg, #0000 90deg) bottom / 14px 10px repeat-x;
+  box-shadow: inset 0 14px 12px -10px rgb(0 0 0 / .25); }
+.paper.go { animation: print 2.6s linear forwards; }
+.paper.shown { transform: none; }
+@keyframes print { 0% { transform: translateY(-100%); } 22% { transform: translateY(-74%); } 28% { transform: translateY(-73%); } 52% { transform: translateY(-44%); } 58% { transform: translateY(-43%); } 84% { transform: translateY(-10%); } 90% { transform: translateY(-9%); } 100% { transform: none; } }
+.paper .c { text-align: center; }
+.paper .hr { border-top: 1px dashed currentColor; opacity: .5; margin: 10px 0; }
+.paper .kv { display: flex; justify-content: space-between; gap: 12px; }
+.paper .kv span:last-child { text-align: right; overflow-wrap: anywhere; }
+.paper .big { font-weight: 600; font-size: 15px; }
+.paper .logo { font: 700 22px var(--display); letter-spacing: -.03em; }
+.after { margin-top: 16px; text-align: center; font-size: 14px; color: var(--muted); max-width: 34ch; opacity: 0; }
+.after.on { opacity: 1; animation: pop .5s var(--ease); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-delay: 0s !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+</style>
+
+<div class="app" id="app">
+  <div class="bar">
+    <span class="brand">Zold</span>
+    <button type="button" class="ghost" id="sound" aria-pressed="true">Sound on</button>
+  </div>
+
+  <div class="host">
+    <div class="nw" id="nw" aria-hidden="true"><div id="nw-move"><div class="act">
+      <svg viewBox="-10 -60 410 380">
+        <defs><clipPath id="nw-tusk"><path d="M150 105L80-45 167 98Z"/></clipPath></defs>
+        <path d="M150 105L80-45 167 98Z" fill="#f6f2e8"/>
+        <g clip-path="url(#nw-tusk)" stroke="#8c8578" stroke-width="2.5" stroke-linecap="round"><path d="M139 89L156 72M131 74L148 57M123 60L140 43M115 45L132 28M108 30L125 14M100 16L117-1M92 1L109-15"/></g>
+        <g stroke="#141217" stroke-width="4.5" stroke-linejoin="round">
+          <path d="M150 105L80-45 167 98Z" fill="none" stroke-width="4" stroke-linejoin="miter" stroke-miterlimit="12"/>
+          <path id="tail" d="M310 180C345 160 380 145 390 160 395 168 385 185 365 190 388 202 392 220 382 228 370 235 340 215 305 200Z" fill="#f4f4f6"/>
+          <path d="M85 175C85 110 140 90 220 90 295 90 330 135 330 195 330 255 270 275 195 275 115 275 85 240 85 175Z" fill="#faf9f6"/>
+          <path d="M150 220C140 250 120 262 105 255 95 248 102 230 125 212Z" fill="#faf9f6"/>
+        </g>
+        <g id="look"><circle class="eye" cx="132" cy="165" r="5" fill="#141217"/><circle class="eye" cx="182" cy="165" r="5" fill="#141217"/></g>
+        <g id="blush" opacity=".8"><ellipse cx="118" cy="178" rx="8" ry="5" fill="#f4bacd"/><ellipse cx="196" cy="178" rx="8" ry="5" fill="#f4bacd"/></g>
+        <path id="m-smile" d="M150 174Q157 184 164 174" stroke="#141217" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+        <path id="m-open" d="M147 173Q157 192 167 173Z" fill="#141217" stroke="#141217" stroke-width="2.5" stroke-linejoin="round"/>
+        <path id="m-frown" d="M150 182Q157 173 164 182" stroke="#141217" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+      </svg>
+    </div></div></div>
+    <p class="say" id="say" aria-live="polite"><span id="say-text"></span></p>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="amount empty" id="amount"><small>€</small>0.00</div>
+    <div class="facts" id="facts"></div>
+  </div>
+
+  <form class="dock" id="dock" autocomplete="off">
+    <div class="choices" id="choices" hidden></div>
+    <div class="composer" id="composer">
+      <input id="answer" aria-label="Your answer" />
+      <button class="send" id="send" type="submit" aria-label="Send answer">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+      </button>
+    </div>
+    <div class="err" id="err" role="alert"></div>
+  </form>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const TOKEN = decodeURIComponent(location.pathname.split("/")[2] || "");
+const REDUCED = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const sleep = (ms) => new Promise((r) => setTimeout(r, REDUCED ? 0 : ms));
+let run = 0, state = { pending: null };
+let PAYER = "", PAYER_FIRST = "", CHAIN = null;
+
+const fmt = (n) => n.toFixed(2);
+function parseAmount(s) {
+  const t = s.replace(/[€\s]/g, "").replace(",", ".");
+  if (!/^\d{1,7}(\.\d{1,2})?$/.test(t)) return null;
+  return Math.round(Number(t) * 100) / 100;
+}
+function ibanOk(s) {
+  const t = s.replace(/\s+/g, "").toUpperCase();
+  if (!/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(t)) return null;
+  const digits = (t.slice(4) + t.slice(0, 4)).replace(/[A-Z]/g, (c) => c.charCodeAt(0) - 55);
+  let r = 0;
+  for (const d of digits) r = (r * 10 + Number(d)) % 97;
+  return r === 1 ? t : null;
+}
+const maskIban = (i) => `${i.slice(0, 4)} •••• ${i.slice(-4)}`;
+const maskAddr = (a) => `${a.slice(0, 6)}…${a.slice(-4)}`;
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+async function api(method, path, body) {
+  const res = await fetch(path, { method, headers: body ? { "content-type": "application/json" } : {}, ...(body ? { body: JSON.stringify(body) } : {}), credentials: "omit", referrerPolicy: "no-referrer" });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { const e = new Error(data.error || "Something went wrong. Try again."); e.status = res.status; e.body = data; throw e; }
+  return data;
+}
+
+/* ---------- sound and vibration ----------
+   Synthesized with Web Audio, so nothing is loaded. Browsers keep audio silent
+   until the first tap or key press. Vibration works on Android; iPhones have none. */
+let ac = null, unlocked = false, feel = true;
+try { feel = localStorage.getItem("zold-send-sound") !== "off"; } catch { /* private mode: default on */ }
+function audio() {
+  if (!feel || !unlocked) return null;
+  try { ac ??= new (window.AudioContext || window.webkitAudioContext)(); } catch { return null; }
+  if (ac.state === "suspended") ac.resume();
+  return ac;
+}
+function tone(f0, f1, ms, type = "sine", vol = .12, delay = 0) {
+  const a = audio(); if (!a) return;
+  const t = a.currentTime + delay / 1000, end = t + ms / 1000;
+  const o = a.createOscillator(), g = a.createGain();
+  o.type = type;
+  o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, end);
+  g.gain.setValueAtTime(.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + .006); g.gain.exponentialRampToValueAtTime(.0001, end);
+  o.connect(g).connect(a.destination); o.start(t); o.stop(end + .02);
+}
+function noise(ms, vol, delay = 0, freq = 2000, q = 1) {
+  const a = audio(); if (!a) return;
+  const t = a.currentTime + delay / 1000, len = Math.ceil(a.sampleRate * ms / 1000);
+  const buf = a.createBuffer(1, len, a.sampleRate), d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  const s = a.createBufferSource(), f = a.createBiquadFilter(), g = a.createGain();
+  s.buffer = buf; f.type = "bandpass"; f.frequency.value = freq; f.Q.value = q;
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(.0001, t + ms / 1000);
+  s.connect(f).connect(g).connect(a.destination); s.start(t);
+}
+function buzz(pattern) {
+  // Like sound, only after a tap or key press: browsers refuse it before one.
+  if (!feel || !unlocked) return;
+  try { navigator.vibrate?.(pattern); } catch { /* not allowed here */ }
+}
+/* The print animation moves in four feeds with short pauses (@keyframes print, 2.6s). */
+const PRINT_FEEDS = [[0, 572], [728, 624], [1508, 676], [2340, 260]];
+const sfx = {
+  blip: () => tone(1300 + Math.random() * 500, 900, 45, "sine", .035),
+  pop: (p = 1) => { tone(700 * p, 260 * p, 80, "sine", .16); noise(25, .05, 0, 4000, 2); },
+  tick: (i) => tone(880 + i * 60, 880 + i * 60, 30, "triangle", .05),
+  good: () => { tone(660, 660, 90, "triangle", .09); tone(990, 990, 160, "triangle", .09, 90); buzz(12); },
+  bad: () => { tone(200, 130, 220, "square", .05); buzz([30, 50, 30]); },
+  tap: () => { noise(35, .3, 0, 1600, 1.5); tone(180, 120, 60, "sine", .12); buzz(15); },
+  print: () => {
+    const pulses = [];
+    let at = 0;
+    for (const [start, len] of PRINT_FEEDS) {
+      // on/off pairs always end on an "off", so a pause stretches that last off
+      if (start > at && pulses.length) { pulses[pulses.length - 1] += start - at; at = start; }
+      for (let k = 0; k + 50 <= len; k += 50) {
+        noise(28, .07, start + k, 900, .8); tone(70, 70, 28, "sawtooth", .03, start + k);
+        pulses.push(20, 30);
+      }
+      at = start + len - (len % 50);
+    }
+    buzz(pulses);
+  },
+  done: () => { [523, 659, 784, 1047].forEach((f, i) => tone(f, f, 260, "triangle", .08, i * 110)); buzz([20, 80, 40]); },
+};
+
+/* ---------- the narwhal's body language ---------- */
+const nw = $("#nw");
+let reactTimer = 0, idleTimer = 0;
+function react(kind, ms = 900) {
+  clearTimeout(reactTimer);
+  nw.classList.remove("nod", "happy", "spin", "sad", "lap");
+  void nw.offsetWidth;
+  nw.classList.add(kind);
+  if (kind === "happy" || kind === "spin") sfx.good();
+  reactTimer = setTimeout(() => nw.classList.remove(kind), ms);
+}
+/* Quiet for a while: a small lap. */
+function idle() {
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => { if (!document.getElementById("finale")) { react("lap", 1700); idle(); } }, 7000);
+}
+function blowhole() {
+  const r = nw.querySelector("svg").getBoundingClientRect();
+  return { x: r.left + r.width * 0.585, y: r.top + r.height * 0.38 };
+}
+function puff(x, y, size, dx, dy, ms) {
+  if (REDUCED) return;
+  const p = document.createElement("div");
+  p.className = "puff";
+  Object.assign(p.style, { left: `${x - size / 2}px`, top: `${y - size / 2}px`, width: `${size}px`, height: `${size}px` });
+  document.body.append(p);
+  p.animate([{ transform: "translate(0,0) scale(.4)", opacity: 0 }, { opacity: .7, offset: .2 }, { transform: `translate(${dx}px,${dy}px) scale(1)`, opacity: 0 }],
+    { duration: ms, easing: "cubic-bezier(.2,.6,.4,1)" }).onfinish = () => p.remove();
+}
+
+async function say(text, tip) {
+  const my = ++run, el = $("#say-text");
+  $("#say").classList.add("on");
+  react("nod", 500);
+  el.textContent = "";
+  if (REDUCED) el.textContent = text;
+  else for (let i = 1; i <= text.length; i++) { if (my !== run) return; el.textContent = text.slice(0, i); await sleep(24); }
+  if (tip && my === run) { const t = document.createElement("span"); t.className = "tip"; t.textContent = tip; el.append(t); }
+}
+
+/* An answer rises from the chat box in a bubble and pops where it belongs. */
+async function floatUp(text, target) {
+  if (REDUCED) return;
+  const from = $("#composer").getBoundingClientRect(), to = target.getBoundingClientRect();
+  const b = document.createElement("div");
+  b.className = "ansbub"; b.textContent = text;
+  document.body.append(b);
+  const w = b.offsetWidth, h = b.offsetHeight;
+  const x0 = from.left + 16, y0 = from.top, x1 = to.left + to.width / 2 - w / 2, y1 = to.top + to.height / 2 - h / 2;
+  b.style.left = "0px"; b.style.top = "0px";
+  await b.animate([
+    { transform: `translate(${x0}px,${y0}px) scale(.6)`, opacity: 0 },
+    { transform: `translate(${x0}px,${y0 - 30}px) scale(1)`, opacity: 1, offset: .2 },
+    { transform: `translate(${(x0 + x1) / 2 + 18}px,${(y0 + y1) / 2}px) scale(1.04)`, offset: .6 },
+    { transform: `translate(${x1}px,${y1}px) scale(1.08)` },
+  ], { duration: 900, easing: "cubic-bezier(.3,.7,.3,1)", fill: "forwards" }).finished;
+  const cx = x1 + w / 2, cy = y1 + h / 2;
+  sfx.pop(); buzz(8);
+  b.animate([{ transform: `translate(${x1}px,${y1}px) scale(1.08)`, opacity: 1 }, { transform: `translate(${x1}px,${y1}px) scale(1.5)`, opacity: 0 }],
+    { duration: 220, fill: "forwards" }).onfinish = () => b.remove();
+  for (let i = 0; i < 10; i++) {
+    const a = (i / 10) * Math.PI * 2;
+    puff(cx + Math.cos(a) * w * .35, cy + Math.sin(a) * h * .5, 6 + Math.random() * 8, Math.cos(a) * 40, Math.sin(a) * 30 - 20, 600);
+  }
+  await sleep(120);
+}
+
+/* The burst before the receipt. */
+function burst(ms) {
+  if (REDUCED) return Promise.resolve();
+  const c = document.createElement("canvas"); c.className = "bubbles"; $("#app").append(c);
+  const dpr = devicePixelRatio || 1, W = c.clientWidth, H = c.clientHeight;
+  c.width = W * dpr; c.height = H * dpr;
+  const g = c.getContext("2d"); g.scale(dpr, dpr);
+  const ink = getComputedStyle(document.documentElement).getPropertyValue("--ink").trim();
+  for (let i = 0; i < 14; i++) setTimeout(() => sfx.pop(.7 + Math.random() * .9), 150 + i * 85 + Math.random() * 60);
+  buzz([10, 60, 10, 60, 10, 60, 10]);
+  const bs = Array.from({ length: 70 }, () => ({ x: Math.random() * W, y: H + Math.random() * H * .6, r: 4 + Math.random() * 22, v: 3 + Math.random() * 4, p: Math.random() * 6.28 }));
+  const t0 = performance.now();
+  return new Promise((done) => (function frame(t) {
+    g.clearRect(0, 0, W, H);
+    let alive = 0;
+    for (const b of bs) {
+      b.y -= b.v; b.p += .05;
+      if (b.y + b.r < 0) continue;
+      alive++;
+      const x = b.x + Math.sin(b.p) * 6;
+      g.beginPath(); g.arc(x, b.y, b.r, 0, 6.283); g.lineWidth = 2; g.strokeStyle = ink; g.globalAlpha = .55; g.stroke();
+      g.beginPath(); g.arc(x - b.r * .35, b.y - b.r * .35, b.r * .22, 0, 6.283); g.fillStyle = ink; g.globalAlpha = .35; g.fill();
+    }
+    g.globalAlpha = 1;
+    if (t - t0 > ms) done();
+    if (alive && t - t0 < 5000) requestAnimationFrame(frame); else { c.remove(); done(); }
+  })(t0));
+}
+
+/* ---------- questions ---------- */
+function ask({ label, placeholder = "", mode = "text", autocomplete = "off" }) {
+  $("#choices").hidden = true;
+  $("#composer").hidden = false;
+  const input = $("#answer");
+  // Asked again after a refusal: keep what they typed and why it was refused, so they can fix it.
+  const again = state.refused;
+  state.refused = false;
+  if (!again) { input.value = ""; $("#err").textContent = ""; }
+  input.placeholder = placeholder; input.setAttribute("aria-label", label);
+  input.inputMode = mode; input.autocomplete = autocomplete;
+  $("#send").disabled = false;
+  $("#dock").classList.add("on");
+  setTimeout(() => input.focus({ preventScroll: true }), REDUCED ? 0 : 350);
+  idle();
+  return new Promise((resolve) => (state.pending = resolve));
+}
+function choose(options) {
+  $("#composer").hidden = true;
+  $("#err").textContent = "";
+  const box = $("#choices");
+  box.innerHTML = "";
+  options.forEach((o, i) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "choice"; b.style.animationDelay = `${i * 80}ms`;
+    b.innerHTML = `${esc(o.label)}<span>${esc(o.sub)}</span>`;
+    b.onclick = () => state.pending(o.id);
+    b.onmouseenter = () => nw.classList.add("looking");
+    b.onmouseleave = () => nw.classList.remove("looking");
+    box.append(b);
+  });
+  box.hidden = false;
+  $("#dock").classList.add("on");
+  idle();
+  return new Promise((resolve) => (state.pending = resolve));
+}
+function refuse(msg) {
+  state.refused = true;
+  $("#err").textContent = msg;
+  react("sad", 1400);
+  sfx.bad();
+  const c = $("#composer"); c.classList.remove("shake"); void c.offsetWidth; c.classList.add("shake");
+}
+function fact(html) { const f = document.createElement("span"); f.className = "fact"; f.innerHTML = html; $("#facts").append(f); }
+function countUp(to) {
+  const el = $("#amount"); el.classList.remove("empty");
+  const t0 = performance.now(), dur = REDUCED ? 1 : 700;
+  let ticks = 0;
+  (function tick(t) {
+    const k = Math.min(1, (t - t0) / dur), e = 1 - Math.pow(1 - k, 3);
+    if (k < 1 && k * 10 >= ticks) sfx.tick(ticks++);
+    el.innerHTML = `<small>€</small>${fmt(to * e)}`;
+    if (k < 1) requestAnimationFrame(tick);
+  })(t0);
+}
+async function until(prompt, check) {
+  for (;;) {
+    const v = (await prompt()).trim();
+    const out = check(v);
+    if (out.ok) return out.value;
+    refuse(out.msg);
+  }
+}
+
+/* ---------- the conversation ---------- */
+// The limit is never sent to this page (it would read as the amount to ask for); the server refuses above it.
+async function askAmount() {
+  const n = await until(() => ask({ label: "Amount in euro", placeholder: "e.g. 11.45", mode: "decimal" }), (v) => {
+    const n = parseAmount(v);
+    if (n === null) return { msg: "Type an amount like 11.45." };
+    if (n <= 0) return { msg: "The amount has to be more than €0." };
+    return { ok: true, value: n };
+  });
+  react("spin", 1000);
+  countUp(n);
+  return n;
+}
+
+async function flow(link) {
+  nw.classList.add("in");
+  await sleep(1300);
+  react("happy");
+  for (let i = 0; i < 4; i++) { const o = blowhole(); puff(o.x, o.y, 8 + i * 3, 6 - i * 4, -60 - i * 12, 1100); await sleep(110); }
+  await say(`Hey! ${PAYER_FIRST} wants to send you money.`, link.note ? `${PAYER_FIRST}’s note: “${link.note}”` : undefined);
+  await sleep(link.note ? 1600 : 900);
+  await say("How much should it be?");
+  let amount = await askAmount();
+  await sleep(500);
+
+  await say("Nice. What was it for?");
+  const forWhat = await until(() => ask({ label: "What it was for", placeholder: "e.g. Dinner at Lotti" }), (v) =>
+    !v ? { msg: "Say in a few words what it was for." } : v.length > 80 ? { msg: "Keep it under 80 characters." } : { ok: true, value: v });
+  react("happy");
+  await floatUp(forWhat, $("#facts"));
+  fact(`For <b>${esc(forWhat)}</b>`);
+  await sleep(300);
+
+  const options = [];
+  if (CHAIN) options.push({ id: "wallet", label: "Crypto wallet", sub: `Arrives in seconds · EURe on ${CHAIN.name}` });
+  options.push({ id: "iban", label: "Bank account", sub: "IBAN · SEPA transfer" });
+  await say("How do you want to receive it?", CHAIN ? "Tip: a crypto wallet gets the money in seconds. A bank account (IBAN) goes by SEPA transfer." : undefined);
+  const method = options.length > 1 ? await choose(options) : "iban";
+  nw.classList.remove("looking");
+  react("happy");
+
+  let payTo, show, kind, name;
+  if (method === "wallet") {
+    await say("Paste your wallet address.", `It has to be an address on ${CHAIN.name}. The money arrives as EURe.`);
+    const a = await until(() => ask({ label: "Wallet address", placeholder: "0x…" }), (v) =>
+      /^0x[0-9a-fA-F]{40}$/.test(v) ? { ok: true, value: v } : { msg: "A wallet address starts with 0x and has 40 more characters." });
+    payTo = { kind: "wallet", chainId: CHAIN.chainId, address: a };
+    kind = `Wallet on ${CHAIN.name}`; show = maskAddr(a);
+    react("happy");
+    await say(`And your name, so ${PAYER_FIRST} knows who it’s for?`, `${PAYER_FIRST} sees what you enter here, and Zold keeps it with this request.`);
+  } else {
+    await say("What’s your IBAN?");
+    const i = await until(() => ask({ label: "IBAN", placeholder: "DE89 3704 0044 0532 0130 00" }), (v) => {
+      const ok = ibanOk(v);
+      return ok ? { ok: true, value: ok } : { msg: "That IBAN doesn’t check out. Look for a missing or swapped digit." };
+    });
+    payTo = { kind: "bank", bank: { iban: i } };
+    kind = "Bank account"; show = maskIban(i);
+    react("happy");
+    await say("And the name on that account?", `${PAYER_FIRST} sees what you enter here, and Zold keeps it with this request.`);
+  }
+  name = await until(() => ask({ label: method === "iban" ? "Account holder name" : "Your name", placeholder: "Bob Example", autocomplete: "name" }), (v) =>
+    v.length >= 2 && v.length <= 70 ? { ok: true, value: v } : { msg: method === "iban" ? "Type the name as your bank shows it." : "Type your name, 2 to 70 characters." });
+
+  react("happy");
+  await floatUp(show, $("#facts"));
+  fact(`To <b>${esc(show)}</b>`);
+
+  // The server is the judge: the limit (only it knows it), the IBAN and the wallet.
+  let done;
+  for (;;) {
+    $("#send").disabled = true;
+    try {
+      done = await api("POST", `/api/invoice-links/${encodeURIComponent(TOKEN)}/submit`, { amount: fmt(amount), forWhat, name, payTo });
+      break;
+    } catch (e) {
+      if (e.status === 409) { $("#dock").classList.remove("on"); await say("This link was already filled in."); await printReceipt(e.body.invoice, { animate: false }); return; }
+      if (e.body?.code === "OVER_LIMIT") {
+        react("sad", 1400); sfx.bad();
+        await say(e.message, "Type a smaller amount and it goes again.");
+        amount = await askAmount();
+        continue;
+      }
+      // Answers the server refused, or a dropped connection: say so and let them send again.
+      refuse(e.message);
+      await say("That didn’t go through.", `${e.message} Press the arrow to try again, or reload to start over.`);
+      await ask({ label: "Press the arrow to try again", placeholder: "Press the arrow to try again" });
+    }
+  }
+  // Sent: nothing below may say it failed.
+  $("#dock").classList.remove("on");
+  clearTimeout(idleTimer);
+  await say(`That’s everything! ${PAYER_FIRST} can see it now.`);
+  react("spin", 1000);
+  await burst(1400);
+  await printReceipt(done.invoice, { animate: true });
+}
+
+/* The narwhal swims to the printer, taps it, and the receipt feeds out. */
+async function printReceipt(inv, { animate }) {
+  if (!inv) return;
+  const line = inv.lines?.[0];
+  const to = inv.payTo?.kind === "wallet"
+    ? { kind: "Wallet", show: maskAddr(inv.payTo.address || "") }
+    : { kind: "Bank account", show: inv.payTo?.bank?.iban ? maskIban(inv.payTo.bank.iban) : "" };
+  const when = new Date(inv.submittedAt || Date.now()).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+  const waiting = inv.state === "SUBMITTED";
+  const paying = inv.state === "PAYING";
+  const paid = inv.state === "PAID" || inv.state === "RECONCILED";
+  const f = document.createElement("div");
+  f.className = "finale"; f.id = "finale";
+  f.innerHTML = `
+    <div class="printer" id="printer"><div class="row"><span>Zold</span><span class="dot" aria-hidden="true"></span></div><div class="slot"></div></div>
+    <div class="feed"><div class="paper" id="paper">
+      <div class="c logo">Zold</div>
+      <div class="c">PAYMENT REQUEST</div>
+      <div class="c">${esc(when)} · ${esc(inv.supplier?.invoiceNumber || "")}</div>
+      <div class="hr"></div>
+      <div class="kv"><span>FROM</span><span>${esc(PAYER)}</span></div>
+      <div class="kv"><span>FOR</span><span>${esc(line?.description || "")}</span></div>
+      <div class="kv"><span>TO</span><span>${esc(inv.supplier?.orgName || "")}</span></div>
+      <div class="kv"><span>${esc(to.kind.toUpperCase())}</span><span>${esc(to.show)}</span></div>
+      <div class="hr"></div>
+      <div class="kv big"><span>AMOUNT</span><span>€${esc(inv.total)}</span></div>
+      <div class="hr"></div>
+      <div class="c">${paid ? "PAID" : paying ? "ON ITS WAY" : waiting ? `WAITING FOR ${esc(PAYER_FIRST.toUpperCase())}` : esc(inv.state)}</div>
+      ${waiting ? `<div class="c">No money has moved yet.</div>` : ""}
+    </div></div>
+    <p class="after" id="after">${paid ? `${esc(PAYER_FIRST)} has paid this.` : paying ? `${esc(PAYER_FIRST)} has started this payment. You’ll see the money once it arrives.` : `${esc(PAYER_FIRST)} approves it in Zold with biometrics. You’ll see the money once it’s sent.`}</p>`;
+  $("#app").append(f);
+  $("#say").classList.remove("on");
+  const printer = $("#printer"), move = $("#nw-move");
+  if (!animate || REDUCED) {
+    $("#paper").classList.add("shown");
+    $("#after").classList.add("on");
+    return;
+  }
+  const n = move.getBoundingClientRect(), p = printer.getBoundingClientRect();
+  const dx = p.left + 30 - n.left, dy = p.top - n.top - n.height * 0.72;
+  await move.animate([{ transform: "none" }, { transform: `translate(${dx * .6}px,${dy * .4 - 30}px) rotate(-10deg)`, offset: .5 }, { transform: `translate(${dx}px,${dy}px) rotate(14deg)` }],
+    { duration: 1100, easing: "cubic-bezier(.4,0,.2,1)", fill: "forwards" }).finished;
+  for (let i = 0; i < 2; i++) {
+    await move.animate([{ transform: `translate(${dx}px,${dy}px) rotate(14deg)` }, { transform: `translate(${dx}px,${dy + 10}px) rotate(24deg)` }, { transform: `translate(${dx}px,${dy}px) rotate(14deg)` }],
+      { duration: 260, fill: "forwards" }).finished;
+    printer.classList.remove("tapped"); void printer.offsetWidth; printer.classList.add("tapped");
+    sfx.tap();
+  }
+  move.animate([{ transform: `translate(${dx}px,${dy}px) rotate(14deg)` }, { transform: `translate(${dx - 8}px,${dy - 6}px) rotate(0deg)` }], { duration: 500, fill: "forwards" });
+  printer.classList.add("on");
+  $("#paper").classList.add("go");
+  sfx.print();
+  await sleep(2600);
+  react("happy", 1000);
+  sfx.done();
+  $("#after").classList.add("on");
+}
+
+/* ---------- wiring ---------- */
+const input = $("#answer");
+let lastPuff = 0;
+input.addEventListener("focus", () => nw.classList.add("looking"));
+input.addEventListener("blur", () => nw.classList.remove("looking"));
+input.addEventListener("input", () => {
+  idle();
+  if ($("#err").textContent) $("#err").textContent = "";
+  const t = performance.now();
+  if (t - lastPuff < 90) return;
+  lastPuff = t;
+  sfx.blip();
+  const o = blowhole();
+  puff(o.x + (Math.random() - .5) * 6, o.y, 5 + Math.random() * 7, (Math.random() - .5) * 24, -50 - Math.random() * 30, 900);
+});
+$("#dock").addEventListener("submit", (e) => {
+  e.preventDefault();
+  if (state.pending && !$("#composer").hidden && !$("#send").disabled) state.pending(input.value);
+});
+const unlock = () => { unlocked = true; audio(); };
+addEventListener("pointerdown", unlock, { once: true, capture: true });
+addEventListener("keydown", unlock, { once: true, capture: true });
+const soundBtn = $("#sound");
+const drawSound = () => { soundBtn.setAttribute("aria-pressed", String(feel)); soundBtn.textContent = feel ? "Sound on" : "Sound off"; };
+drawSound();
+soundBtn.onclick = () => {
+  feel = !feel;
+  try { localStorage.setItem("zold-send-sound", feel ? "on" : "off"); } catch { /* not kept: fine */ }
+  if (!feel) buzz(0);
+  drawSound();
+};
+
+(async () => {
+  let r;
+  try {
+    r = await api("GET", `/api/invoice-links/${encodeURIComponent(TOKEN)}`);
+  } catch (e) {
+    nw.classList.add("in");
+    await sleep(1300);
+    react("sad", 1400);
+    await say(e.status === 404 ? "This link doesn’t work." : "I couldn’t open this link just now.",
+      e.status === 404 ? "Ask the person who sent it for a new one." : `${e.message} Reload the page to try again.`);
+    return;
+  }
+  const inv = r.invoice;
+  if (!inv.sendLink) { location.replace(`/invoice/${encodeURIComponent(TOKEN)}`); return; }
+  PAYER = inv.payor?.name || "Someone";
+  PAYER_FIRST = PAYER.split(/\s+/)[0];
+  CHAIN = (r.payoutChains || [])[0] || null;
+  document.title = `${PAYER_FIRST} wants to pay you · Zold`;
+  if (inv.state !== "LINK_CREATED") {
+    nw.classList.add("in");
+    await sleep(1300);
+    await say("This link was already filled in.");
+    await printReceipt(inv, { animate: false });
+    return;
+  }
+  await flow(inv.sendLink);
+})().catch(async (e) => {
+  console.error(e);
+  $("#dock").classList.remove("on");
+  await say("Something went wrong on this page.", "Reload it to try again. If you already sent your details, the link says so.");
+});
+</script>
+</html>

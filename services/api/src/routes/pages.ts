@@ -125,6 +125,7 @@ export function createPageRouter() {
       "Disallow: /r/",
       "Disallow: /v/",
       "Disallow: /invoice/",
+      "Disallow: /send/",
       "Disallow: /guardian",
       "Disallow: /recovery",
     ];
@@ -172,6 +173,7 @@ export function createPageRouter() {
   );
   /** The supplier's invoice view, reached with a one-time link and no account. */
   router.get("/invoice/:token", (_req, res) => res.sendFile(path.join(pub, "invoice.html")));
+  router.get("/send/:token", (_req, res) => res.sendFile(path.join(pub, "send.html")));
   /** An account document, re-verified on every visit. */
   router.get("/v/:code", (_req, res) => res.sendFile(path.join(pub, "document.html")));
   /** A payment page, and a payment request against it. */

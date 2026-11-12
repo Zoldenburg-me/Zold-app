@@ -42,7 +42,7 @@
 let phRoute = null;            // { name, arg }
 let phSig = "";                // what the open screen was drawn from, for the poll
 const phCache = { deposits: null, links: null, methods: null, orgs: null, contacts: null, bic: undefined, bicFor: "", currencyPending: null,
-  signers: undefined, soon: null, walletQr: null, invoices: undefined };
+  signers: undefined, soon: null, walletQr: null, invoices: undefined, sendLinks: undefined };
 
 /* A link into Zold Business: it opens the organisation it last had, so a
    link for one names it first (see the click listener below). */

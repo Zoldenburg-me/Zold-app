@@ -867,7 +867,8 @@ export const store = {
    */
   claimCryptoSend(id: string) {
     const s = db.cryptoSends.find((x) => x.id === id);
-    if (!s || s.state !== "CREATED" || s.authorizedAt) return false;
+    // Past its deadline the link it pays may already read it as never sent.
+    if (!s || s.state !== "CREATED" || s.authorizedAt || Date.now() / 1000 > s.deadline) return false;
     const now = new Date().toISOString();
     Object.assign(s, { state: "SUBMITTED", authorizedAt: now, updatedAt: now });
     persist();

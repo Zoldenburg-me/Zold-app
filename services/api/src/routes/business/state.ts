@@ -76,6 +76,27 @@ export const withExecutionState = (draft: DraftPayment) => {
  */
 export const syncInvoicePayment = (invoice: Invoice): Invoice => {
   if (invoice.state !== "PAYING") return invoice;
+  const send = invoice.payment?.cryptoSendId ? store.findCryptoSend(invoice.payment.cryptoSendId) : undefined;
+  if (send) {
+    if (send.state === "SENT") {
+      return store.updateInvoice(invoice.id, {
+        state: "PAID",
+        payment: { ...invoice.payment, paidAt: send.updatedAt, txHash: send.txHash },
+      });
+    }
+    // An unsigned send past its deadline can never be submitted.
+    if (send.state === "FAILED" || (send.state === "CREATED" && send.deadline * 1000 < Date.now())) {
+      return store.updateInvoice(invoice.id, {
+        state: "SUBMITTED",
+        payment: { ...invoice.payment, cryptoSendId: undefined },
+      });
+    }
+    return invoice;
+  }
+  // A send that no longer exists can never pay the link: it is to pay again.
+  if (invoice.payment?.cryptoSendId) {
+    return store.updateInvoice(invoice.id, { state: "SUBMITTED", payment: { ...invoice.payment, cryptoSendId: undefined } });
+  }
   const transfer = invoice.payment?.transferId ? store.findTransfer(invoice.payment.transferId) : undefined;
   if (transfer) {
     if (transfer.state === "PAID") {

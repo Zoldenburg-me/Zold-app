@@ -24,7 +24,9 @@ import type {
 import type { CryptoDeposit } from "../store.js";
 import { chainName } from "./contacts.js";
 
-export class InvoiceError extends Error {}
+export class InvoiceError extends Error {
+  constructor(message: string, readonly code?: "OVER_LIMIT") { super(message); }
+}
 
 /** Locked on submit, per Gnosis: "once submitted, invoices are timestamped and
  *  locked". Deletion is only legal while nobody has been paid. SUBMITTED ->
@@ -110,6 +112,54 @@ export function tokenMatches(token: string, hash: string): boolean {
 }
 
 const AMOUNT_RE = /^\d+(\.\d{1,8})?$/;
+
+/** The highest limit a send link may carry. The daily cap still applies when
+ *  it is paid; this only keeps a typo from printing a five-figure link. */
+export const SEND_LINK_MAX_EUR = 10_000;
+const EURO_RE = /^\d{1,7}(\.\d{1,2})?$/;
+const euroCents = (raw: unknown): number | null => {
+  const s = String(raw ?? "").trim().replace(/[€\s]/g, "").replace(",", ".");
+  return EURO_RE.test(s) ? Math.round(Number(s) * 100) : null;
+};
+export const centsOf = (decimal: string) => Math.round(Number(decimal) * 100);
+
+const maskedPayTo = (p: Invoice["payTo"]): Invoice["payTo"] =>
+  !p ? p
+    : p.kind === "wallet"
+      ? { kind: "wallet", chainId: p.chainId, ...(p.address ? { address: `${p.address.slice(0, 6)}…${p.address.slice(-4)}` as `0x${string}` } : {}) }
+      : { kind: "bank", ...(p.bank ? { bank: { holderName: p.bank.holderName, iban: `${(p.bank.iban ?? "").slice(0, 4)}••••${(p.bank.iban ?? "").slice(-4)}` } as NonNullable<Invoice["payTo"]>["bank"] } : {}) };
+
+export function validateSendLinkCreate(input: unknown): NonNullable<Invoice["sendLink"]> {
+  const r = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+  const cents = euroCents(r.maxTotal);
+  if (cents === null || cents <= 0) throw new InvoiceError("The limit must be an amount in euro, like 13 or 13.50.");
+  if (cents > SEND_LINK_MAX_EUR * 100) throw new InvoiceError(`The limit can be at most €${SEND_LINK_MAX_EUR}.`);
+  const note = r.note == null ? "" : String(r.note).trim();
+  if (note.length > 80) throw new InvoiceError("The note is limited to 80 characters.");
+  return { maxTotal: (cents / 100).toFixed(2), ...(note ? { note } : {}) };
+}
+
+/** What the payee sends back through a send link: an amount, what it was for
+ *  (the line), and their name. Where to pay is parsePayTo's; the limit is
+ *  assertSendLinkLimit's, checked after everything else. */
+export function validateSendLinkSubmit(input: unknown) {
+  const r = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+  const cents = euroCents(r.amount);
+  if (cents === null || cents <= 0) throw new InvoiceError("Type an amount like 11.45.");
+  const forWhat = String(r.forWhat ?? "").trim();
+  if (!forWhat) throw new InvoiceError("Say in a few words what it was for.");
+  if (forWhat.length > 80) throw new InvoiceError("What it was for is limited to 80 characters.");
+  const name = String(r.name ?? "").trim();
+  if (name.length < 2 || name.length > 70) throw new InvoiceError("Type your name, 2 to 70 characters.");
+  const amount = (cents / 100).toFixed(2);
+  return { lines: [{ description: forWhat, quantity: "1", unitPrice: amount, amount }], total: amount, name };
+}
+
+/** Last of a send link's checks: any refusal before it is the same for every
+ *  amount, so only an over-limit answer (counted) says anything about the limit. */
+export function assertSendLinkLimit(link: NonNullable<Invoice["sendLink"]>, total: string) {
+  if (centsOf(total) > centsOf(link.maxTotal)) throw new InvoiceError("That is more than this link allows. Check the amount with the person who sent it.", "OVER_LIMIT");
+}
 
 export function validateLines(input: unknown): { lines: InvoiceLine[]; total: string } {
   if (!Array.isArray(input) || !input.length) {
@@ -224,7 +274,10 @@ export function supplierView(
     currency: invoice.currency,
     total: invoice.total,
     dueDate: invoice.dueDate,
-    payTo: invoice.payTo,
+    // A filled-in send link answers anyone holding its URL: the destination goes out masked.
+    payTo: invoice.sendLink && invoice.state !== "LINK_CREATED" ? maskedPayTo(invoice.payTo) : invoice.payTo,
+    // The payee never sees the limit: it would read as the amount to ask for.
+    ...(invoice.sendLink ? { sendLink: { note: invoice.sendLink.note } } : {}),
     submittedAt: invoice.submittedAt,
     paidAt: invoice.payment?.paidAt,
     txHash: invoice.payment?.txHash,
@@ -444,7 +497,7 @@ export function assertDeletable(invoice: Invoice) {
   if (invoice.direction === "outgoing") {
     throw new InvoiceError("An invoice you issued stays in your records and cannot be deleted.");
   }
-  if (invoice.payment?.transferId || invoice.payment?.paidAt || invoice.settlements?.length) {
+  if (invoice.payment?.transferId || invoice.payment?.cryptoSendId || invoice.payment?.paidAt || invoice.settlements?.length) {
     throw new InvoiceError(
       "This invoice has a payment against it and cannot be deleted. Reconcile it instead.",
     );
