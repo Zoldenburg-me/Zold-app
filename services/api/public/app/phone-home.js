@@ -185,7 +185,10 @@ function phLoadSendLinks() {
             const r = await api(`/api/orgs/${encodeURIComponent(p.orgId)}/invoices/${encodeURIComponent(id)}/paying`, p.payment);
             phSendLinkPaidStore(id, null);
             list = list.map((i) => (i.id === id ? r.invoice : i));
-          } catch { /* still refused: the link keeps Pay off and says why */ }
+          } catch (e) {
+            // A payment that failed or was never signed frees the link; anything else keeps Pay off.
+            if (e?.body?.code === "PAYMENT_DEAD") phSendLinkPaidStore(id, null);
+          }
         }
         if (user?.id === who) phCache.sendLinks = { org, list };
       } catch { if (user?.id === who) phCache.sendLinks = { org, error: true }; }

@@ -235,6 +235,8 @@ async function phWalletSubmit(btn, errEl) {
     const created = await api(`/api/users/${encodeURIComponent(user.id)}/crypto-sends`, { to: w.to, token: w.token, amount: w.amount, confirmedAddress: w.address });
     const execution = await safeExecutionAssertion({ safeExecution: created.safeExecution });
     if (!execution) throw new Error("This account can’t approve the payment with a passkey here.");
+    // Recorded before /authorize: if its answer is lost, the link still knows this payment.
+    if (w.sendLink) phSendLinkPaidStore(w.sendLink.id, { orgId: w.sendLink.orgId, payment: { cryptoSendId: created.id } });
     const sent = await api(`/api/crypto-sends/${encodeURIComponent(created.id)}/authorize`, { executionAssertion: execution });
     phPutCryptoSend(sent);
     refresh();
@@ -242,6 +244,7 @@ async function phWalletSubmit(btn, errEl) {
     phGo("send/wallet-done", sent.id, { replace: true });
   } catch (e) {
     Z.setLoading(btn, false);
+    if (w.sendLink) phSendLinkUnsent(w.sendLink, e);
     errEl.textContent = e?.name === "NotAllowedError"
       ? Z.byDevice("Face ID or fingerprint was cancelled. Nothing was sent.", "The passkey prompt was cancelled. Nothing was sent.")
       : e.message;
@@ -449,7 +452,7 @@ async function phSubmit(btn, errEl) {
   let authorizeSent = false;
   try {
     if (phSendBlocked()) throw new Error(phSendBlocked().text);
-    if (phSend.sendLink) phSendLinkMatches(phSend.sendLink, { cents: Math.round(Number(q.sendEur) * 100), iban: payee.iban });
+    if (phSend.sendLink) phSendLinkMatches(phSend.sendLink, { cents: Math.round(Number(q.receiveEur) * 100), iban: payee.iban });
     await registerDeviceKey(user);
     const recipient = { recipientName: payee.name, recipientIban: payee.iban };
     created = await api("/api/transfers", { quoteId: q.id, ...recipient, ...(phSend.reference ? { reference: phSend.reference } : {}) });
@@ -467,6 +470,8 @@ async function phSubmit(btn, errEl) {
     const execution = await safeExecutionAssertion(created.authorization);
     const redeem = await moneriumRedeemAssertion(created.authorization);
     authorizeSent = true;
+    // Recorded before /authorize: if its answer is lost, the link still knows this payment.
+    if (phSend.sendLink) phSendLinkPaidStore(phSend.sendLink.id, { orgId: phSend.sendLink.orgId, payment: { transferId: created.id } });
     const t = await api(`/api/transfers/${created.id}/authorize`, {
       signature,
       ...(execution ? { executionAssertion: execution } : {}),
@@ -478,6 +483,7 @@ async function phSubmit(btn, errEl) {
     phGo("send/progress", t.id, { replace: true });
   } catch (e) {
     Z.setLoading(btn, false);
+    if (phSend.sendLink && authorizeSent) phSendLinkUnsent(phSend.sendLink, e);
     if (!created) {
       // Nothing was created: say why here, on the screen the user is on.
       errEl.textContent = e?.name === "NotAllowedError" ? Z.byDevice("Face ID or fingerprint was cancelled. Nothing was sent.", "The passkey prompt was cancelled. Nothing was sent.") : e.message;
@@ -632,6 +638,13 @@ async function phTieSendLink(tie, payment) {
   phCache.sendLinks = undefined;
 }
 
+/* /authorize failed. A definite refusal sent nothing, so the link is to pay again;
+   any other failure may have sent it, so the record stays and the next load ties it. */
+function phSendLinkUnsent(tie, e) {
+  if (e?.name === "NotAllowedError" || (e?.status < 500 && typeof e?.body?.error === "string")) phSendLinkPaidStore(tie.id, null);
+  phCache.sendLinks = undefined;
+}
+
 /* A payment that went out for a link but was not yet recorded on it, per device. */
 const PH_SL_PAID_KEY = "zold-send-link-paid";
 function phSendLinkPaid() {
@@ -649,7 +662,7 @@ function phSendLinkMatches(tie, { cents, iban, address }) {
   const same = cents === tie.cents && (iban !== undefined
     ? String(iban).replace(/\s+/g, "").toUpperCase() === tie.iban
     : String(address).toLowerCase() === tie.address);
-  if (!same) throw new Error(`This link asks for ${phEur(tie.cents / 100)} to the details they gave. Pay exactly that, or go back and decline the link. Nothing was sent.`);
+  if (!same) throw new Error(`This link asks for ${phEur(tie.cents / 100)} to arrive at the details they gave. Send so exactly that arrives, or go back and decline the link. Nothing was sent.`);
 }
 
 /* Open the send screen already filled in with what they asked for. Every

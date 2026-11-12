@@ -104,6 +104,8 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
       sendLink = req.body?.sendLink ? validateSendLinkCreate(req.body.sendLink) : undefined;
       // /paying ties the caller's own payment, so a send link lives only in their personal org.
       if (sendLink && ctx.org.type !== "personal") throw new InvoiceError("Send links are made from your personal account.");
+      // send.html has no password step: a protected send link could never be filled in.
+      if (sendLink && password) throw new InvoiceError("A send link cannot have a password.");
     } catch (err) {
       if (err instanceof InvoiceError) return res.status(400).json({ error: err.message });
       throw err;
@@ -307,8 +309,9 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
       if (payTo?.kind !== "bank" || !t.recipientIban || normaliseIban(t.recipientIban) !== normaliseIban(payTo.bank?.iban ?? "")) {
         return res.status(409).json({ error: "That payment goes to a different account than the one on the link." });
       }
-      if (Math.abs(t.sendEur * 100 - owed) > 1e-6) return res.status(409).json({ error: `That payment is not the €${invoice.total} the link asks for.` });
-      if (t.state === "FAILED" || t.state === "REFUNDED") return res.status(409).json({ error: "That payment did not go through." });
+      // What arrives, not what is debited: a SEPA fee comes out of the debit.
+      if (Math.abs((t.receiveEur ?? 0) * 100 - owed) > 1e-6) return res.status(409).json({ error: `That payment is not the €${invoice.total} the link asks for.` });
+      if (t.state === "FAILED" || t.state === "REFUNDED") return res.status(409).json({ error: "That payment did not go through.", code: "PAYMENT_DEAD" });
       if (t.createdAt < invoice.submittedAt!) return res.status(409).json({ error: "That payment was made before the link was filled in." });
     } else {
       const s = store.findCryptoSend(cryptoSendId!);
@@ -320,7 +323,11 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
       if (s.token !== "EURE" || !/^\d+(\.\d{1,2}0*)?$/.test(s.amount) || centsOf(s.amount) !== owed) {
         return res.status(409).json({ error: `That payment is not the €${invoice.total} in EURe the link asks for.` });
       }
-      if (s.state === "FAILED" || s.state === "CREATED") return res.status(409).json({ error: "That payment was not sent." });
+      // An unsigned send may be one whose /authorize answer was lost; it ties
+      // until its deadline, and syncInvoicePayment frees the link after that.
+      if (s.state === "FAILED" || (s.state === "CREATED" && s.deadline * 1000 < Date.now())) {
+        return res.status(409).json({ error: "That payment was not sent.", code: "PAYMENT_DEAD" });
+      }
       if (s.createdAt < invoice.submittedAt!) return res.status(409).json({ error: "That payment was made before the link was filled in." });
     }
     const updated = store.updateInvoice(invoice.id, {

@@ -27,6 +27,7 @@ import { passwordMatches } from "../../domain/passwords.js";
 import { forgetFailure, recordFailure, tooManyFailures } from "../../http/policy.js";
 import { invoiceBankOf, parsePayTo } from "./shared.js";
 import { openLinkPath, payLinkLapsed } from "./invoice-pay-link.js";
+import { syncInvoicePayment } from "./state.js";
 import type { Invoice } from "../../domain/types.js";
 
 /** Wrong passwords one link absorbs, from any number of addresses, per window. */
@@ -121,7 +122,9 @@ export function createInvoiceLinkRouter(): express.Router {
     res: express.Response,
   ): Promise<Invoice | undefined> => {
     const token = String(req.params.token ?? "");
-    const invoice = store.findInvoiceByLinkHash(hashToken(token));
+    const found = store.findInvoiceByLinkHash(hashToken(token));
+    // The payee's receipt follows the payment too, not only the owner's list.
+    const invoice = found ? syncInvoicePayment(found) : undefined;
     if (!invoice || invoice.state === "DELETED" || invoice.state === "DRAFT") {
       res.status(404).json({ error: "That invoice link is not valid." });
       return undefined;

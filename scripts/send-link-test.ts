@@ -89,7 +89,7 @@ const listed = async (id: string) => (await call("GET", "/api/orgs/org_p/invoice
 let seq = 0;
 const transfer = (over: Record<string, unknown> = {}) => {
   const id = `tr_${++seq}`;
-  store.addTransfer({ id, userId: "u_tony", rail: "sepa", recipientName: "Bob Example", recipientIban: IBAN, sendEur: 11.45, state: "CREATED", createdAt: new Date().toISOString(), updatedAt: now, ...over } as any);
+  store.addTransfer({ id, userId: "u_tony", rail: "sepa", recipientName: "Bob Example", recipientIban: IBAN, sendEur: 11.45, receiveEur: 11.45, state: "CREATED", createdAt: new Date().toISOString(), updatedAt: now, ...over } as any);
   return id;
 };
 const cryptoSend = (over: Record<string, unknown> = {}) => {
@@ -106,6 +106,23 @@ await check("a send link is a euro link at /send/ with its limit in cents", asyn
   assert.match(r.data.linkPath, /^\/send\/.+/);
   assert.equal(r.data.invoice.currency, "EUR", "a send link is paid from euro whatever the request says");
   assert.deepEqual(r.data.invoice.sendLink, { maxTotal: "13.50", note: "Dinner" });
+});
+
+await check("a send link cannot have a password: its page has no password step", async () => {
+  const r = await call("POST", "/api/orgs/org_p/invoices", "u_tony", { sendLink: { maxTotal: "20" }, password: "correct horse battery staple 42" });
+  assert.equal(r.status, 400, JSON.stringify(r.data));
+  assert.match(r.data.error, /cannot have a password/);
+});
+
+await check("a wallet send whose authorize answer was lost still ties, and the payee's page sees it paid", async () => {
+  const l = await newLink("13");
+  await fill(l.token, { payTo: { kind: "wallet", chainId: CHAIN_ID, address: WALLET } });
+  const unsigned = cryptoSend({ state: "CREATED" });
+  const r = await call("POST", `/api/orgs/org_p/invoices/${l.id}/paying`, "u_tony", { cryptoSendId: unsigned });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal((await call("GET", `/api/invoice-links/${l.token}`)).data.invoice.state, "PAYING");
+  store.updateCryptoSend(unsigned, { state: "SENT", txHash: `0x${"aa".repeat(32)}` as `0x${string}` });
+  assert.equal((await call("GET", `/api/invoice-links/${l.token}`)).data.invoice.state, "PAID", "the payee's own read follows the payment");
 });
 
 await check("a send link is made only in a personal org", async () => {
@@ -228,10 +245,11 @@ await check("a bank payment ties on only if it is the caller's, to the link's IB
   const path = `/api/orgs/org_p/invoices/${l.id}/paying`;
   assert.equal((await call("POST", path, "u_tony", { transferId: transfer({ userId: "u_other" }) })).status, 404, "someone else's payment");
   assert.equal((await call("POST", path, "u_tony", { transferId: transfer({ recipientIban: OTHER_IBAN }) })).status, 409, "another IBAN");
-  assert.equal((await call("POST", path, "u_tony", { transferId: transfer({ sendEur: 11.44 }) })).status, 409, "a cent short");
+  assert.equal((await call("POST", path, "u_tony", { transferId: transfer({ sendEur: 11.44, receiveEur: 11.44 }) })).status, 409, "a cent short");
   assert.equal((await call("POST", path, "u_tony", { transferId: transfer({ state: "FAILED" }) })).status, 409, "a failed payment");
   assert.equal((await call("POST", path, "u_tony", { transferId: transfer({ createdAt: now }) })).status, 409, "made before the link was filled in");
-  assert.equal((await call("POST", path, "u_tony", { transferId: transfer({ sendEur: 11.454 }) })).status, 409, "a fraction of a cent over");
+  assert.equal((await call("POST", path, "u_tony", { transferId: transfer({ sendEur: 11.454, receiveEur: 11.454 }) })).status, 409, "a fraction of a cent over");
+  assert.equal((await call("POST", path, "u_tony", { transferId: transfer({ receiveEur: 10.95 }) })).status, 409, "a fee taken out of what arrives");
   assert.equal((await call("POST", path, "u_tony", {})).status, 400, "no payment named");
   assert.equal(store.findInvoice(l.id)?.state, "SUBMITTED");
 
@@ -270,7 +288,7 @@ await check("a wallet payment ties on only to the link's address, in EURe, for e
   assert.equal((await call("POST", path, "u_tony", { cryptoSendId: cryptoSend({ token: "USDC" }) })).status, 409, "dollars");
   assert.equal((await call("POST", path, "u_tony", { cryptoSendId: cryptoSend({ amount: "11.454" }) })).status, 409, "a fraction of a cent over");
   assert.equal((await call("POST", path, "u_tony", { cryptoSendId: cryptoSend({ userId: "u_other" }) })).status, 404, "someone else's send");
-  assert.equal((await call("POST", path, "u_tony", { cryptoSendId: cryptoSend({ state: "CREATED" }) })).status, 409, "never signed");
+  assert.equal((await call("POST", path, "u_tony", { cryptoSendId: cryptoSend({ state: "CREATED", deadline: Math.floor(Date.now() / 1000) - 1 }) })).status, 409, "never signed, past its deadline");
   assert.equal((await call("POST", path, "u_tony", { cryptoSendId: cryptoSend({ createdAt: now }) })).status, 409, "made before the link was filled in");
   assert.equal((await call("POST", path, "u_tony", { transferId: transfer() })).status, 409, "a bank payment for a wallet link");
 

@@ -558,7 +558,8 @@ async function printReceipt(inv, { animate }) {
     ? { kind: "Wallet", show: maskAddr(inv.payTo.address || "") }
     : { kind: "Bank account", show: inv.payTo?.bank?.iban ? maskIban(inv.payTo.bank.iban) : "" };
   const when = new Date(inv.submittedAt || Date.now()).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
-  const waiting = inv.state === "SUBMITTED" || inv.state === "PAYING";
+  const waiting = inv.state === "SUBMITTED";
+  const paying = inv.state === "PAYING";
   const paid = inv.state === "PAID" || inv.state === "RECONCILED";
   const f = document.createElement("div");
   f.className = "finale"; f.id = "finale";
@@ -576,10 +577,10 @@ async function printReceipt(inv, { animate }) {
       <div class="hr"></div>
       <div class="kv big"><span>AMOUNT</span><span>€${esc(inv.total)}</span></div>
       <div class="hr"></div>
-      <div class="c">${paid ? "PAID" : waiting ? `WAITING FOR ${esc(PAYER_FIRST.toUpperCase())}` : esc(inv.state)}</div>
-      ${paid ? "" : `<div class="c">No money has moved yet.</div>`}
+      <div class="c">${paid ? "PAID" : paying ? "ON ITS WAY" : waiting ? `WAITING FOR ${esc(PAYER_FIRST.toUpperCase())}` : esc(inv.state)}</div>
+      ${waiting ? `<div class="c">No money has moved yet.</div>` : ""}
     </div></div>
-    <p class="after" id="after">${paid ? `${esc(PAYER_FIRST)} has paid this.` : `${esc(PAYER_FIRST)} approves it in Zold with biometrics. You’ll see the money once it’s sent.`}</p>`;
+    <p class="after" id="after">${paid ? `${esc(PAYER_FIRST)} has paid this.` : paying ? `${esc(PAYER_FIRST)} has started this payment. You’ll see the money once it arrives.` : `${esc(PAYER_FIRST)} approves it in Zold with biometrics. You’ll see the money once it’s sent.`}</p>`;
   $("#app").append(f);
   $("#say").classList.remove("on");
   const printer = $("#printer"), move = $("#nw-move");
