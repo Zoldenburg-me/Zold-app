@@ -183,7 +183,12 @@ let phSendLinksAt = 0;
 /* A link fills in on someone else's phone: a read older than this is read again when Home or Send opens. */
 const PH_SEND_LINKS_FRESH_MS = 30_000;
 const phSendLinksStale = () => phCache.sendLinks === undefined || Date.now() - phSendLinksAt > PH_SEND_LINKS_FRESH_MS;
-const phSendLinksSig = () => (phCache.sendLinks === undefined ? "u" : JSON.stringify((phCache.sendLinks.list || []).map((i) => `${i.id}:${i.state}`)));
+/* The links' part of Home's and Send's live signature. Live runs on every 5 s
+   refresh, so a screen left open also reads stale links again. */
+function phSendLinksSig() {
+  if (phSendLinksStale() && !phSendLinksLoading && user?.id) phLoadSendLinks().then(() => phRefresh());
+  return phCache.sendLinks === undefined ? "u" : JSON.stringify((phCache.sendLinks.list || []).map((i) => `${i.id}:${i.state}`));
+}
 function phLoadSendLinks() {
   const who = user?.id;
   return (phSendLinksLoading ??= (async () => {

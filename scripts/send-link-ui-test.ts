@@ -230,4 +230,15 @@ await t("links are read again once the last read is 30 seconds old, so a link fi
   assert.equal(run(`phSendLinksStale()`), false, "a failed read waits too, or every redraw would read again");
 });
 
+await t("a Send screen left open reads stale links again on the 5-second refresh", async () => {
+  await withLinks(LINKS);
+  run(`phSendLinksAt = Date.now() - 31000; __reads = 0;`);
+  run(`PH.send.live()`);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(run(`__reads`), 1, "the refresh's live() read the links again");
+  run(`PH.send.live()`);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(run(`__reads`), 1, "fresh again: no second read");
+});
+
 console.log(`\nsend-link-ui: ${pass} checks passed`);
