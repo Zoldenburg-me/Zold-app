@@ -419,6 +419,13 @@ PH["send/amount"] = {
       try {
         const q = await api("/api/quotes", { userId: user.id, rail: "sepa", sendEur: n });
         if (seq !== phQuoteSeq) return;
+        // A send link names what arrives; a fee comes out of the debit, so the
+        // prefilled link amount is raised by the fee once and priced again.
+        const sl = phSend.sendLink;
+        if (sl && q.fixedFeeEur > 0 && Math.round(n * 100) === sl.cents && Math.round(q.receiveEur * 100) < sl.cents) {
+          input.value = ((sl.cents + Math.round(q.fixedFeeEur * 100)) / 100).toFixed(2);
+          return price();
+        }
         phSend.quote = q;
         root.querySelector("#ph-quote").innerHTML = phQuoteRows(q, payee);
         setNext("Review", true);

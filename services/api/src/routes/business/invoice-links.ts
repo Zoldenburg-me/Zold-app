@@ -79,7 +79,18 @@ const issuerExtras = (invoice: Invoice) => {
 /** The issued document exactly as the link holder sees it; the owner's
  *  print view (routes/business/invoices.ts) reads the same projection. */
 export const linkInvoiceView = (invoice: Invoice) =>
-  supplierView(invoice, payorName(invoice), issuerExtras(invoice));
+  supplierView(payeeState(invoice), payorName(invoice), issuerExtras(invoice));
+
+/** A send link tied to a payment the payer has not yet signed reads as
+ *  still waiting to the payee: nothing is on its way until it is signed. */
+const payeeState = (invoice: Invoice): Invoice => {
+  if (!invoice.sendLink || invoice.state !== "PAYING") return invoice;
+  const p = invoice.payment;
+  const send = p?.cryptoSendId ? store.findCryptoSend(p.cryptoSendId) : undefined;
+  const t = p?.transferId ? store.findTransfer(p.transferId) : undefined;
+  const unsigned = send ? send.state === "CREATED" : !!t && t.state === "CREATED" && !t.auth?.authorizedAt && !t.moneriumRedeem?.signedAt;
+  return unsigned ? { ...invoice, state: "SUBMITTED" } : invoice;
+};
 
 /** The chains a supplier may name for a wallet payout: the one this
  *  deployment runs on, the only one the payor's account holds money on. */

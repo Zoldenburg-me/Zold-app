@@ -120,7 +120,10 @@ await check("a wallet send whose authorize answer was lost still ties, and the p
   const unsigned = cryptoSend({ state: "CREATED" });
   const r = await call("POST", `/api/orgs/org_p/invoices/${l.id}/paying`, "u_tony", { cryptoSendId: unsigned });
   assert.equal(r.status, 200, JSON.stringify(r.data));
-  assert.equal((await call("GET", `/api/invoice-links/${l.token}`)).data.invoice.state, "PAYING");
+  assert.equal((await call("GET", `/api/invoice-links/${l.token}`)).data.invoice.state, "SUBMITTED", "unsigned: nothing is on its way yet");
+  assert.equal(store.findInvoice(l.id)?.state, "PAYING", "but the payer's side keeps Pay off");
+  store.updateCryptoSend(unsigned, { state: "SUBMITTED" });
+  assert.equal((await call("GET", `/api/invoice-links/${l.token}`)).data.invoice.state, "PAYING", "signed: on its way");
   store.updateCryptoSend(unsigned, { state: "SENT", txHash: `0x${"aa".repeat(32)}` as `0x${string}` });
   assert.equal((await call("GET", `/api/invoice-links/${l.token}`)).data.invoice.state, "PAID", "the payee's own read follows the payment");
 });
