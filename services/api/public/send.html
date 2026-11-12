@@ -535,6 +535,7 @@ async function flow(link) {
         amount = await askAmount();
         continue;
       }
+      if (e.status === 429) { $("#dock").classList.remove("on"); react("sad", 1400); sfx.bad(); await say(e.message); return; }
       // Answers the server refused, or a dropped connection: say so and let them send again.
       refuse(e.message);
       await say("That didn’t go through.", `${e.message} Press the arrow to try again, or reload to start over.`);

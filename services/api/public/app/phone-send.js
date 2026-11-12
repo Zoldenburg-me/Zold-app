@@ -806,7 +806,9 @@ PH["send/link"] = {
   },
   bind(root, id) {
     if (phCache.sendLinks === undefined) {
-      phLoadSendLinks().then(() => { if (phRoute?.name === "send/link") phRender(); });
+      phLoadSendLinks()
+        .catch(() => { phCache.sendLinks ??= { org: null, error: true }; })
+        .then(() => { if (phRoute?.name === "send/link") phRender(); });
       return;
     }
     const err = root.querySelector("#ph-sl-err");

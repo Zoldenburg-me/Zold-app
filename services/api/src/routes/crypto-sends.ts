@@ -347,7 +347,7 @@ export function createCryptoSendsRouter({
         return res.status(503).json({ error: SCREENING_DOWN_ERROR, code: "SCREENING_UNAVAILABLE" });
       }
       if (!store.claimCryptoSend(send.id)) {
-        if (Date.now() / 1000 > send.deadline) return res.status(410).json({ error: "the approval window closed — start the send again" });
+        if (store.findCryptoSend(send.id)?.state === "CREATED" && Date.now() / 1000 > send.deadline) return res.status(410).json({ error: "the approval window closed — start the send again" });
         return res.status(409).json({ error: "this send was already submitted" });
       }
       pendingCryptoSends.delete(send.id);
