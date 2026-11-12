@@ -15,7 +15,7 @@ core → dashboard → transactions → profile → recovery → monerium → on
   → settings → desktop (≥1024px)
   → errors → pwa → main
 ```
-Screens: onboarding into #ob-root; phone screens into #ph-root; desktop fills PH_DESK.
+Screens: onboarding into #ob-root (signup is a narwhal chat: `obChat`, questions in `OB_ASK`); phone screens into #ph-root; desktop fills PH_DESK.
 
 ## /business — Zold Business (business/*.js, ES modules; works at phone width)
 ```

@@ -180,6 +180,11 @@ sequenceDiagram
   M-->>Z: IBAN for this Safe address → kycStatus=approved
 ```
 
+Signup is a chat with the narwhal: it asks one question at a time, a typed
+answer or a tapped button passes the same check a form field would, and the
+answers so far sit under it as chips that reopen their question
+(`public/app/onboarding.js`, `OB_ASK`).
+
 1. **Account.** Email is required, because it is the recovery handle. A
    *segment* is decided at signup and is immutable from the client: EU_FULL,
    ONCHAIN_NO_CARD, IN_COLLECTIONS, WALLET_ONLY or BLOCKED_*. It drives which partners may
