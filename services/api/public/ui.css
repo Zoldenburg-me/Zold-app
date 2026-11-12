@@ -800,8 +800,72 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; z-index: 210; heig
 .z-providers { display: grid; gap: var(--z-space-3); margin: 24px 0; }
 .z-provider { width: 100%; gap: 12px; font-weight: 500; background: var(--z-surface); }
 .z-provider__mark { width: 20px; height: 20px; flex: none; }
-/* Round marks with the name under them (the onboarding recovery step). */
-.z-providers--round { align-self: stretch; grid-template-columns: repeat(auto-fit, 88px); justify-content: center; gap: var(--z-space-6); }
-.z-providers--round .z-btn { flex-direction: column; width: auto; min-height: 0; padding: 0; gap: var(--z-space-2); border: 0; background: none; font-size: 13.5px; font-weight: 500; }
-.z-providers--round .z-btn > :first-child { box-sizing: border-box; display: grid; place-items: center; width: 56px; height: 56px; padding: 17px; border: 1px solid var(--z-line-strong); border-radius: 50%; background: var(--z-surface); font-size: 22px; transition: border-color .15s ease; }
-.z-providers--round .z-btn:hover > :first-child { border-color: var(--z-line-hover); }
+/* Signup as a chat with the narwhal (app/onboarding.js, obChat). Three
+   wrappers so swimming, reacting and bobbing never fight over one transform. */
+/* The conversation sits a little above the middle, replies under the question; only the chat bar docks. */
+.ob-chat { gap: var(--z-space-5); justify-content: center; padding-bottom: 6vh; }
+.ob-host { display: flex; align-items: flex-end; gap: 10px; min-height: 120px; }
+.ob-nw { width: 104px; flex: none; }
+.ob-nw.is-in { animation: ob-swim 1.3s var(--z-ease) both; }
+.ob-nw svg { display: block; width: 100%; height: auto; overflow: visible; animation: ob-bob 3.2s ease-in-out 1.3s infinite; }
+@keyframes ob-swim { 0% { transform: translateX(-120vw) rotate(-8deg); } 70% { transform: translateX(8px) rotate(4deg); } 100% { transform: none; } }
+@keyframes ob-bob { 50% { transform: translateY(-5px) rotate(-2deg); } }
+.ob-nw__tail { transform-box: fill-box; transform-origin: 0% 50%; animation: ob-tail 1.3s ease-in-out infinite; }
+@keyframes ob-tail { 50% { transform: rotate(12deg); } }
+.ob-nw.is-happy .ob-nw__tail { animation-duration: .3s; }
+.ob-nw__eye { transform-box: fill-box; transform-origin: center; animation: ob-blink 4.6s infinite; }
+@keyframes ob-blink { 0%, 95%, 100% { transform: none; } 97.5% { transform: scaleY(.1); } }
+.ob-nw__look { transition: transform .35s var(--z-ease); }
+.ob-nw.is-looking .ob-nw__look { transform: translate(5px, 8px); }
+.ob-nw__open, .ob-nw__frown { display: none; }
+.ob-nw.is-happy .ob-nw__smile, .ob-nw.is-sad .ob-nw__smile { display: none; }
+.ob-nw.is-happy .ob-nw__open, .ob-nw.is-sad .ob-nw__frown { display: inline; }
+.ob-nw.is-happy .ob-nw__act { animation: ob-hop .7s var(--z-ease); }
+.ob-nw.is-sad .ob-nw__act { animation: ob-no .55s ease-in-out; }
+@keyframes ob-hop { 40% { transform: translateY(-20px) rotate(-12deg); } 70% { transform: translateY(0) rotate(4deg); } }
+@keyframes ob-no { 20% { transform: rotate(-9deg); } 40% { transform: rotate(8deg); } 60% { transform: rotate(-6deg); } 80% { transform: rotate(4deg); } }
+
+.ob-say { flex: 1; min-width: 0; margin: 0 0 28px; padding: 10px 14px; border: 2px solid var(--z-text); border-radius: 18px 18px 18px 4px; background: var(--z-surface); font: 500 17px/1.35 var(--z-heading); overflow-wrap: anywhere; animation: ob-pop .35s var(--z-ease) backwards; }
+.ob-say__tip { display: block; margin-top: 6px; font: 400 14px/1.45 var(--z-font); color: var(--z-dim); transition: opacity .3s; }
+.ob-say.is-typing .ob-say__tip { opacity: 0; }
+.ob-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.ob-chip { max-width: 100%; padding: 4px 12px; border: 1px solid var(--z-line-strong); border-radius: var(--z-radius-pill); background: var(--z-surface); color: var(--z-text); font: 400 14px var(--z-font); overflow-wrap: anywhere; cursor: pointer; }
+.ob-chip:hover { border-color: var(--z-line-hover); }
+.ob-chip.is-new { border-color: var(--z-pink); animation: ob-pop .4s var(--z-ease); }
+@keyframes ob-pop { from { opacity: 0; transform: translateY(8px) scale(.95); } }
+
+.ob-dock { gap: var(--z-space-2); }
+.ob-choices { display: flex; flex-wrap: wrap; gap: 8px; }
+.ob-choice { flex: 1 1 140px; padding: 9px 14px; border: 1.5px solid var(--z-text); border-radius: 14px; background: var(--z-surface); color: var(--z-text); font: 500 15px var(--z-font); text-align: left; cursor: pointer; animation: ob-pop .35s var(--z-ease) calc(var(--i, 0) * 80ms) backwards; }
+/* A plain reply (Yes, No) is a short pill; one with a line under it is a card. */
+.ob-choice:not(:has(span)) { flex: 0 1 auto; min-width: 96px; padding: 9px 22px; border-radius: var(--z-radius-pill); text-align: center; }
+.ob-choice span { display: block; font-size: 12.5px; font-weight: 400; color: var(--z-dim); }
+.ob-choice:hover, .ob-choices .z-provider:hover { background: var(--z-pink-tint); }
+.ob-choices .z-provider { flex: 1 1 140px; justify-content: flex-start; min-height: 0; padding: 9px 14px; border: 1.5px solid var(--z-text); border-radius: 14px; background: var(--z-surface); color: var(--z-text); font: 500 15px var(--z-font); }
+.ob-composer { display: flex; align-items: center; gap: 8px; padding: 5px 5px 5px 16px; border: 2px solid var(--z-text); border-radius: 22px; background: var(--z-surface); }
+.ob-composer:focus-within { box-shadow: 0 0 0 3px var(--z-pink-tint); }
+.ob-composer.is-shake { animation: ob-shake .35s; }
+@keyframes ob-shake { 25% { transform: translateX(-6px); } 75% { transform: translateX(6px); } }
+.ob-composer__input { flex: 1; min-width: 0; padding: 8px 0; border: 0; background: none; color: var(--z-text); font: 500 17px var(--z-font); }
+.ob-composer__input:focus, .ob-composer__input:focus-visible { outline: none; box-shadow: none; }
+.ob-send { flex: none; display: grid; place-items: center; width: 42px; height: 42px; padding: 0; border: 0; border-radius: 50%; background: var(--z-pink); color: #fff; cursor: pointer; }
+.ob-send[aria-busy="true"] { opacity: .5; cursor: progress; }
+.ob-chat-err { margin: 0; padding-left: 8px; }
+.ob-links { display: flex; justify-content: center; gap: var(--z-space-5); }
+
+.ob-puff { position: fixed; z-index: 30; width: 10px; height: 10px; border: 2px solid var(--z-text); border-radius: 50%; opacity: .6; pointer-events: none; }
+.ob-ansbub { position: fixed; left: 0; top: 0; z-index: 30; max-width: 80vw; padding: 8px 16px; border: 2px solid var(--z-text); border-radius: var(--z-radius-pill); background: var(--z-pink-tint); color: var(--z-text); font: 600 16px var(--z-heading); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) {
+  .ob-nw, .ob-nw *, .ob-say, .ob-chip, .ob-choice, .ob-composer { animation: none !important; transition: none !important; }
+}
+
+/* The country list: a scroll box whose edges fade while there is more past them. */
+.ob-fade { --fade-top: 0px; --fade-bottom: 0px; border: 1.5px solid var(--z-line-strong); border-radius: 14px; background: var(--z-surface); overflow: hidden; }
+.ob-fade__scroll { display: flex; flex-direction: column; max-height: min(15rem, 32vh); overflow-y: auto; overscroll-behavior: contain; padding: 4px;
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 var(--fade-top), #000 calc(100% - var(--fade-bottom)), transparent);
+  mask-image: linear-gradient(to bottom, transparent, #000 var(--fade-top), #000 calc(100% - var(--fade-bottom)), transparent); }
+.ob-country { display: flex; align-items: center; gap: 10px; flex: none; padding: 8px 10px; border: 0; border-radius: 10px; background: none; color: var(--z-text); font: 500 15px var(--z-font); text-align: left; cursor: pointer; }
+.ob-country[hidden] { display: none; }
+.ob-country span { font-size: 18px; line-height: 1; }
+.ob-country:hover, .ob-country.is-on { background: var(--z-pink-tint); }
+.ob-country-none { order: 2; margin: 0; padding: 8px 10px; color: var(--z-dim); font-size: 14px; }
