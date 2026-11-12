@@ -751,10 +751,23 @@ export interface Invoice {
     address?: `0x${string}`;
     bank?: Omit<ContactBankAccount, "id">;
   };
+  /**
+   * A send link: the payer set a limit, and the payee fills in the amount,
+   * what it was for and where to be paid, in euro, as one line. Paid from the
+   * app's own send screens, then tied to the link (POST .../paying).
+   */
+  sendLink?: {
+    /** Decimal euro, two places. */
+    maxTotal: string;
+    /** The payer's own words for the payee, shown on the link. */
+    note?: string;
+  };
   payment?: {
     /** The draft that pays this invoice, from "Pay" on the invoice. */
     draftId?: string;
     transferId?: string;
+    /** The wallet send that pays a send link. */
+    cryptoSendId?: string;
     txHash?: string;
     paidAt?: string;
     /** Set when someone marks it paid outside the platform. */

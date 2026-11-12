@@ -36,6 +36,7 @@ function phSendBlocked(u = user) {
   return null;
 }
 
+const phSendLinkRow = () => Z.row({ lead: Z.iconTile({ icon: "add_link", tone: "p" }), title: "Send a link", sub: "They fill in the amount, up to your limit, and where to send it", href: "#send/link/new" });
 const phWalletRow = () => Z.row({ lead: Z.iconTile({ icon: "account_balance_wallet", tone: "p" }), title: "Crypto wallet", sub: `EURe or ${usdSym()} to an ENS name or 0x address`, href: "#send/wallet" });
 
 function phPayeeRow(p, href) {
@@ -51,7 +52,7 @@ PH.send = {
     const payees = phPayees();
     const q = phQuery;
     return `${phTop("Send")}${phMain(`
-      ${blocked ? `${Z.note({ tone: "a", text: blocked.text })}${blocked.action ? Z.button({ variant: "primary", full: true, label: blocked.action.label, id: blocked.action.id }) : ""}${caps.cryptoSend && HAS("onchain_balance") ? Z.listGroup({ label: "New payment", rows: [phWalletRow()] }) : ""}` : `
+      ${blocked ? `${Z.note({ tone: "a", text: blocked.text })}${blocked.action ? Z.button({ variant: "primary", full: true, label: blocked.action.label, id: blocked.action.id }) : ""}${HAS("onchain_balance") ? Z.listGroup({ label: "New payment", rows: [...(caps.cryptoSend ? [phWalletRow()] : []), phSendLinkRow()] }) : ""}` : `
       <form class="z-search" role="search" onsubmit="return false">
         <label class="z-sr" for="ph-sq">Search people you’ve paid</label>${Z.icon("search")}
         <input class="z-search__input" id="ph-sq" type="search" name="q" autocomplete="off" spellcheck="false" placeholder="Name or IBAN…" value="">
@@ -66,6 +67,7 @@ PH.send = {
           caps.cryptoSend
             ? phWalletRow()
             : Z.soonRow({ lead: Z.iconTile({ icon: "account_balance_wallet" }), title: "Crypto wallet", sub: `Send digital dollars (${usdSym()}) to a wallet` }),
+          phSendLinkRow(),
         ],
       })}
       ${Z.listGroup({
@@ -229,12 +231,14 @@ async function phWalletSubmit(btn, errEl) {
   Z.setLoading(btn, true);
   const w = phWallet;
   try {
+    if (w.sendLink) phSendLinkMatches(w.sendLink, { cents: Math.round(Number(w.amount) * 100), address: w.address });
     const created = await api(`/api/users/${encodeURIComponent(user.id)}/crypto-sends`, { to: w.to, token: w.token, amount: w.amount, confirmedAddress: w.address });
     const execution = await safeExecutionAssertion({ safeExecution: created.safeExecution });
     if (!execution) throw new Error("This account can’t approve the payment with a passkey here.");
     const sent = await api(`/api/crypto-sends/${encodeURIComponent(created.id)}/authorize`, { executionAssertion: execution });
     phPutCryptoSend(sent);
     refresh();
+    if (w.sendLink) await phTieSendLink(w.sendLink, { cryptoSendId: sent.id });
     phGo("send/wallet-done", sent.id, { replace: true });
   } catch (e) {
     Z.setLoading(btn, false);
@@ -445,6 +449,7 @@ async function phSubmit(btn, errEl) {
   let authorizeSent = false;
   try {
     if (phSendBlocked()) throw new Error(phSendBlocked().text);
+    if (phSend.sendLink) phSendLinkMatches(phSend.sendLink, { cents: Math.round(Number(q.sendEur) * 100), iban: payee.iban });
     await registerDeviceKey(user);
     const recipient = { recipientName: payee.name, recipientIban: payee.iban };
     created = await api("/api/transfers", { quoteId: q.id, ...recipient, ...(phSend.reference ? { reference: phSend.reference } : {}) });
@@ -469,6 +474,7 @@ async function phSubmit(btn, errEl) {
     });
     phPutTransfer(t);
     refresh();
+    if (phSend.sendLink) await phTieSendLink(phSend.sendLink, { transferId: t.id });
     phGo("send/progress", t.id, { replace: true });
   } catch (e) {
     Z.setLoading(btn, false);
@@ -605,3 +611,193 @@ PH["send/error"] = {
   },
 };
 
+
+/* ==========================================================================
+   Send links: make one, share it, pay what was filled in
+   ========================================================================== */
+
+/* Record which payment pays a filled-in link. The payment has already gone
+   out by now, so a refusal here never undoes it: it is said, and the link
+   stays to pay. The server checks the payment goes where the link says, for
+   the amount it says. */
+async function phTieSendLink(tie, payment) {
+  // Kept until the server takes it, so a failed tie can't leave the link offering Pay again.
+  phSendLinkPaidStore(tie.id, { orgId: tie.orgId, payment });
+  try {
+    await api(`/api/orgs/${encodeURIComponent(tie.orgId)}/invoices/${encodeURIComponent(tie.id)}/paying`, payment);
+    phSendLinkPaidStore(tie.id, null);
+  } catch (e) {
+    Z.announce(`The payment went out, but it could not be marked on the send link: ${e.message}`);
+  }
+  phCache.sendLinks = undefined;
+}
+
+/* A payment that went out for a link but was not yet recorded on it, per device. */
+const PH_SL_PAID_KEY = "zold-send-link-paid";
+function phSendLinkPaid() {
+  try { return JSON.parse(localStorage.getItem(PH_SL_PAID_KEY) || "{}") || {}; } catch { return {}; }
+}
+function phSendLinkPaidStore(id, v) {
+  const all = phSendLinkPaid();
+  if (v) all[id] = v; else delete all[id];
+  try { localStorage.setItem(PH_SL_PAID_KEY, JSON.stringify(all)); } catch { /* private mode: the warning lasts this page only */ }
+}
+
+/* Before the debit: the server ties only a payment of exactly what was asked,
+   to where it was asked, so anything else is refused here, not after. */
+function phSendLinkMatches(tie, { cents, iban, address }) {
+  const same = cents === tie.cents && (iban !== undefined
+    ? String(iban).replace(/\s+/g, "").toUpperCase() === tie.iban
+    : String(address).toLowerCase() === tie.address);
+  if (!same) throw new Error(`This link asks for ${phEur(tie.cents / 100)} to the details they gave. Pay exactly that, or go back and decline the link. Nothing was sent.`);
+}
+
+/* Open the send screen already filled in with what they asked for. Every
+   check on that screen still runs, and the passkey approves what it shows. */
+function phPaySendLink(inv) {
+  const tie = {
+    orgId: phCache.sendLinks.org.id, id: inv.id, cents: Math.round(Number(inv.total) * 100),
+    iban: String(inv.payTo?.bank?.iban || "").replace(/\s+/g, "").toUpperCase(),
+    address: String(inv.payTo?.address || "").toLowerCase(),
+  };
+  if (inv.payTo?.kind === "wallet") {
+    phWallet = { to: inv.payTo.address, token: "EURE", amount: inv.total, name: null, address: inv.payTo.address, sendLink: tie };
+    phGo("send/wallet-check");
+    return;
+  }
+  const b = inv.payTo?.bank || {};
+  phSend = {
+    payee: { name: b.holderName || inv.supplier?.orgName || "", iban: String(b.iban || "").replace(/\s+/g, "").toUpperCase() },
+    amount: inv.total,
+    reference: `${inv.lines?.[0]?.description || ""} ${inv.supplier?.invoiceNumber || ""}`.trim().slice(0, 140),
+    quote: null, transferId: null, error: null, sendLink: tie,
+  };
+  phGo("send/amount", "new");
+}
+
+const phSendLinkWord = (i) => ({
+  LINK_CREATED: ["Waiting for them", "n"],
+  SUBMITTED: ["Ready to pay", "p"],
+  PAYING: ["Paying", "a"],
+  PAID: ["Paid", "p"],
+  RECONCILED: ["Paid", "p"],
+})[i.state] || [i.state, "n"];
+
+PH["send/link"] = {
+  title: (id) => (id === "new" ? "Send a link" : "Send link"),
+  live: () => (phCache.sendLinks === undefined ? "u" : JSON.stringify((phCache.sendLinks.list || []).map((i) => `${i.id}:${i.state}`))),
+  html(id) {
+    const s = phCache.sendLinks;
+    if (s === undefined) return `${phTop("Send a link", "send")}${phMain(Z.skeletonRows(2, "Loading…"))}`;
+    if (id === "new") {
+      if (!s.org) {
+        return `${phTop("Send a link", "send")}${phMain(`
+          ${Z.note({ text: "Send links live in your personal space in Zold, next to your invoices. Set it up once, then come back here." })}
+          ${user?.accountType === "company" ? "" : Z.button({ variant: "primary", full: true, label: "Set up your personal space", href: "/business?setup=invoices" })}`)}`;
+      }
+      return `${phTop("Send a link", "send")}<form id="ph-sl" class="z-app__form" novalidate>${phMain(`
+        <div class="z-form">
+          ${Z.field({ id: "ph-sl-max", label: "Up to (euros)", name: "max", inputmode: "decimal", autocomplete: "off", placeholder: "13.00…", required: true, hint: "They can ask for this much or less." })}
+          ${Z.field({ id: "ph-sl-note", label: "Note for them", optional: true, name: "note", autocomplete: "off", maxlength: 80, placeholder: "Dinner on Friday…" })}
+        </div>
+        ${Z.note({ text: "Share the link with them. They say how much and where to send it: an IBAN or a crypto wallet. Nothing leaves your account until you approve it." })}
+        <p class="z-err" id="ph-sl-err" role="alert" hidden></p>
+      `)}${phFoot(Z.button({ variant: "primary", full: true, label: "Create link", type: "submit" }))}</form>`;
+    }
+    const inv = (s.list || []).find((x) => x.id === id);
+    if (!inv) return `${phTop("Send link", "send")}${phMain(s.error ? Z.note({ tone: "a", text: "Your send links could not be read just now. Reload to try again." }) : Z.note({ text: "This send link is not on your account." }))}`;
+    const [w, tone] = phSendLinkWord(inv);
+    const url = phSendLinkUrls[inv.id];
+    const head = `<div class="z-txhead">
+        <p class="z-txhead__amt z-fig">${esc(inv.state === "LINK_CREATED" ? `Up to ${phEur(Number(inv.sendLink.maxTotal))}` : phEur(Number(inv.total)))}</p>
+        <p class="z-sub">${esc(inv.sendLink.note || "")}</p>
+        ${Z.tag(w, tone)}
+      </div>`;
+    if (inv.state === "LINK_CREATED") {
+      return `${phTop("Send link", "send")}${phMain(`
+        ${head}
+        ${url
+          ? `<div class="z-card">${Z.copyRow({ label: "Link", value: url, display: url.replace(/^https?:\/\//, ""), mono: true })}</div>
+             ${Z.note({ text: "Copy or share it now: Zold shows a link only once and keeps no readable copy." })}`
+          : Z.note({ text: "The link was shown once, when you made it. If you no longer have it, delete this one and make a new one." })}
+        <p class="z-err" id="ph-sl-err" role="alert" hidden></p>
+      `)}${phFoot(`<div class="z-pair">${Z.button({ icon: "delete", label: "Delete", id: "ph-sl-del", className: url ? "" : "z-btn--full" })}${url ? Z.button({ variant: "primary", icon: "ios_share", label: "Share", id: "ph-sl-share" }) : ""}</div>`)}`;
+    }
+    const wallet = inv.payTo?.kind === "wallet";
+    const rows = [
+      { key: "From your link to", value: inv.supplier?.orgName },
+      { key: "For", value: inv.lines?.[0]?.description },
+      wallet
+        ? { key: `Wallet (${inv.payTo.chainName || phChainName(caps.chainId)})`, value: phGroupAddress(inv.payTo.address), mono: true }
+        : { key: "IBAN", value: Z.groupIban(inv.payTo?.bank?.iban), mono: true },
+      { key: "Amount", value: phEur(Number(inv.total)), strong: true },
+    ];
+    if (inv.state === "SUBMITTED") {
+      const sent = phSendLinkPaid()[inv.id];
+      const blocked = sent ? "You already sent a payment for this link, and it is not yet marked on it. Check Activity before you pay again." : wallet ? (caps.cryptoSend ? null : "Wallet payments aren’t open on this account.") : phSendBlocked()?.text;
+      const foot = phFoot(`<div class="z-pair">${Z.button({ icon: "close", label: "Decline", id: "ph-sl-del", className: blocked ? "z-btn--full" : "" })}${blocked ? "" : Z.button({ variant: "primary", icon: "arrow_outward", label: `Pay ${phEur(Number(inv.total))}`, id: "ph-sl-pay" })}</div>`);
+      return `${phTop("Send link", "send")}${phMain(`${head}${Z.kv(rows)}
+        ${blocked ? Z.note({ tone: "a", text: blocked }) : Z.note({ text: "You see the payment in full and approve it before anything is sent." })}
+        <p class="z-err" id="ph-sl-err" role="alert" hidden></p>`)}${foot}`;
+    }
+    return `${phTop("Send link", "send")}${phMain(`${head}${Z.kv(rows)}
+      ${inv.state === "PAYING" ? Z.note({ text: "Your payment is on its way. This link shows Paid once the money has moved." }) : ""}`)}`;
+  },
+  bind(root, id) {
+    if (phCache.sendLinks === undefined) {
+      phLoadSendLinks().then(() => { if (phRoute?.name === "send/link") phRender(); });
+      return;
+    }
+    const err = root.querySelector("#ph-sl-err");
+    const fail = (x) => { if (err) { err.textContent = x.message; err.hidden = false; } };
+    const form = root.querySelector("#ph-sl");
+    if (form) {
+      form.onsubmit = async (e) => {
+        e.preventDefault();
+        const btn = form.querySelector('button[type="submit"]');
+        if (Z.isDisabled(btn)) return;
+        const max = root.querySelector("#ph-sl-max");
+        const note = root.querySelector("#ph-sl-note");
+        const n = parseEurInput(max.value.trim());
+        Z.setFieldError(max, n > 0 ? "" : eurInputError(max.value.trim(), "13,00"));
+        if (Z.focusFirstError(form)) return;
+        Z.setLoading(btn, true);
+        try {
+          const org = phCache.sendLinks.org;
+          const r = await api(`/api/orgs/${encodeURIComponent(org.id)}/invoices`, { sendLink: { maxTotal: n.toFixed(2), ...(note.value.trim() ? { note: note.value.trim() } : {}) } });
+          phSendLinkUrls[r.invoice.id] = `${location.origin}${r.linkPath}`;
+          phCache.sendLinks = { org, list: [r.invoice, ...(phCache.sendLinks.list || [])] };
+          phGo("send/link", r.invoice.id, { replace: true });
+        } catch (x) {
+          Z.setLoading(btn, false);
+          fail(x);
+        }
+      };
+      return;
+    }
+    const inv = (phCache.sendLinks.list || []).find((x) => x.id === id);
+    if (!inv) return;
+    const share = root.querySelector("#ph-sl-share");
+    if (share) share.onclick = () => phShare("Send link",
+      `${inv.sendLink.note ? `${inv.sendLink.note}. ` : ""}I’d like to pay you, up to ${phEur(Number(inv.sendLink.maxTotal))}. Tell me how much and where to send it:`,
+      phSendLinkUrls[inv.id]);
+    const pay = root.querySelector("#ph-sl-pay");
+    if (pay) pay.onclick = () => phPaySendLink(inv);
+    const del = root.querySelector("#ph-sl-del");
+    if (del) del.onclick = () => phConfirm({
+      id: "ph-sl-confirm",
+      title: inv.state === "LINK_CREATED" ? "Delete this link?" : "Decline and delete?",
+      text: inv.state === "LINK_CREATED" ? "The link stops working. Nothing was paid." : "Nothing is paid, and the link stops working. They will need a new link from you.",
+      confirm: "Delete",
+      trigger: del,
+      onConfirm: async () => {
+        try {
+          await api(`/api/orgs/${encodeURIComponent(phCache.sendLinks.org.id)}/invoices/${encodeURIComponent(inv.id)}`, undefined, "DELETE");
+          delete phSendLinkUrls[inv.id];
+          phCache.sendLinks = undefined;
+          phGo("send", undefined, { replace: true });
+        } catch (x) { fail(x); }
+      },
+    });
+  },
+};

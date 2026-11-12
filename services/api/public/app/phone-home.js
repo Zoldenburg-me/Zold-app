@@ -121,6 +121,7 @@ async function phLoadHomeData() {
       if (still()) phCache.invoices = read;
     }).finally(() => { if (still()) phHomeReads.invoices = false; }));
   }
+  if (phCache.sendLinks === undefined && !phSendLinksLoading) reads.push(phLoadSendLinks());
   if (!reads.length) return;
   await Promise.all(reads);
   if (phRoute?.name === "home") phRender();
@@ -158,6 +159,53 @@ function phInvoicesCard() {
     <div class="z-checklist__head"><h2 id="ph-inv-title">Invoices</h2>${open ? `<span class="z-fig">${open.count} open</span>` : ""}</div>
     <div style="padding:14px"><p class="z-hint" style="margin:0 0 12px">${open ? esc(owed) : "Your invoices could not be read just now."}</p>
       <div class="z-actions">${PH_INVOICE_ROLES.includes(inv.org.role) ? link("invoice-new", "Create invoice", "primary") : ""}${link("invoices", "See all")}</div></div></section>`;
+}
+
+/* Send links: a link this person shares; whoever gets it fills in the amount,
+   up to the limit, and where to be paid, and this person pays it from Send.
+   They live in the personal space. The link itself is shown once when made:
+   the server keeps only a hash of it, so it is held here for this visit only. */
+let phSendLinkUrls = {};
+let phSendLinksLoading = null;
+function phLoadSendLinks() {
+  const who = user?.id;
+  return (phSendLinksLoading ??= (async () => {
+    try {
+      await phLoadOrgs();
+      if (user?.id !== who) return;
+      const org = phPersonalOrg();
+      if (!phCan(org, "invoices")) { phCache.sendLinks = { org: null }; return; }
+      try {
+        let list = ((await api(`/api/orgs/${encodeURIComponent(org.id)}/invoices`)).invoices || []).filter((i) => i.sendLink);
+        // A payment that went out but was not recorded on its link: record it now, or forget it once the link moved on.
+        for (const [id, p] of Object.entries(phSendLinkPaid())) {
+          const inv = list.find((i) => i.id === id);
+          if (!inv || inv.state !== "SUBMITTED") { phSendLinkPaidStore(id, null); continue; }
+          try {
+            const r = await api(`/api/orgs/${encodeURIComponent(p.orgId)}/invoices/${encodeURIComponent(id)}/paying`, p.payment);
+            phSendLinkPaidStore(id, null);
+            list = list.map((i) => (i.id === id ? r.invoice : i));
+          } catch { /* still refused: the link keeps Pay off and says why */ }
+        }
+        if (user?.id === who) phCache.sendLinks = { org, list };
+      } catch { if (user?.id === who) phCache.sendLinks = { org, error: true }; }
+    } finally { phSendLinksLoading = null; }
+  })());
+}
+/* Filled in and waiting for this person to pay. Nothing to pay: no card. */
+function phSendLinksCard() {
+  const filled = (phCache.sendLinks?.list || []).filter((i) => i.state === "SUBMITTED");
+  if (!filled.length) return "";
+  return Z.listGroup({
+    label: "Send links to pay",
+    rows: filled.map((i) => Z.row({
+      lead: Z.avatar({ name: i.supplier?.orgName || "" }),
+      title: i.supplier?.orgName || "Someone",
+      sub: i.lines?.[0]?.description || "Filled in your link",
+      right: esc(phEur(Number(i.total))),
+      href: phHref("send/link", i.id),
+    })),
+  });
 }
 
 const phRecoveryBannerKey = (u) => `zold-hide-recovery-banner:${u.id}`;
@@ -229,6 +277,7 @@ PH.home = {
             <span class="z-row__main"><span class="z-row__title">${esc(phEur(inflight.sendEur))} to ${esc(inflight.recipientName || "")}</span>
             <span class="z-row__sub">Waiting for the bank to confirm</span></span>${Z.icon("chevron_right", "z-row__chev")}</a>` : ""}
         ${checklist}
+        ${phSendLinksCard()}
         ${phInvoicesCard()}
         ${phActivityList(hist.slice(0, 5), {
           label: "Recent activity",

@@ -2,8 +2,12 @@
  * Incoming invoices: the Invoice-Me link a supplier fills in, paying one, and
  * reconciling one paid elsewhere.
  *
- * An invoice is paid through a draft; there is no second payment path. The
- * supplier is matched to a contact by IBAN, else a new contact is created.
+ * An invoice is paid through a draft. A send link (`sendLink`, one line the
+ * payee fills in under the payer's limit) is the one exception: it is paid
+ * from the app's own send screens, and POST .../paying ties that transfer or
+ * wallet send to it after checking it pays exactly what the payee asked, to
+ * exactly where. The supplier is matched to a contact by IBAN, else a new
+ * contact is created.
  * Self-declared supplier details are never merged into a trusted contact
  * (that is how invoice fraud works).
  */
@@ -16,9 +20,11 @@ import {
   assertDeletable,
   assertPayable,
   assertTransition as assertInvoiceTransition,
+  centsOf,
   ownerInvoiceView,
   isOverdue,
   newLinkToken,
+  validateSendLinkCreate,
 } from "../../domain/invoices.js";
 import { hashPassword, passwordProblem } from "../../domain/passwords.js";
 import { normaliseIban, validateBankAccount } from "../../domain/contacts.js";
@@ -93,6 +99,15 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
       const problem = passwordProblem(password, [ctx.org.name]);
       if (problem) return res.status(400).json({ error: `Link password refused: ${problem}` });
     }
+    let sendLink;
+    try {
+      sendLink = req.body?.sendLink ? validateSendLinkCreate(req.body.sendLink) : undefined;
+      // /paying ties the caller's own payment, so a send link lives only in their personal org.
+      if (sendLink && ctx.org.type !== "personal") throw new InvoiceError("Send links are made from your personal account.");
+    } catch (err) {
+      if (err instanceof InvoiceError) return res.status(400).json({ error: err.message });
+      throw err;
+    }
     const passwordHash = password ? await hashPassword(password) : undefined;
     const { token, hash } = newLinkToken();
     const now = new Date().toISOString();
@@ -103,8 +118,10 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
       linkPasswordHash: passwordHash,
       state: "LINK_CREATED",
       lines: [],
-      currency: String(req.body?.currency ?? ctx.org.reporting.currency).toUpperCase(),
+      // A send link is paid from a euro balance, whatever the org reports in.
+      currency: sendLink ? "EUR" : String(req.body?.currency ?? ctx.org.reporting.currency).toUpperCase(),
       total: "0.00",
+      ...(sendLink ? { sendLink } : {}),
       dueDate: typeof req.body?.dueDate === "string" ? req.body.dueDate : undefined,
       createdByMemberId: ctx.member.id,
       createdAt: now,
@@ -114,7 +131,7 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
       invoice: ownerInvoiceView(invoice),
       // Returned once. We store only the hash, so this cannot be recovered.
       linkToken: token,
-      linkPath: `/invoice/${token}`,
+      linkPath: sendLink ? `/send/${token}` : `/invoice/${token}`,
       note: "Send this link to your supplier. It is shown once — we store only its hash.",
     });
   });
@@ -256,6 +273,61 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
         ? "A draft was created. A second person reviews it, then the account holder signs it."
         : "A draft was created. The account holder signs it to send.",
     });
+  });
+
+  /**
+   * Tie the caller's own payment to a filled-in send link. The payment was
+   * made on the app's send screens; this only records which one pays the link,
+   * after checking it is the caller's, goes to the payee's destination and is
+   * the amount the payee asked for. From then on the link follows the payment
+   * (syncInvoicePayment), so it reads PAID only once the money has moved.
+   */
+  r.post("/:orgId/invoices/:invoiceId/paying", (req, res) => {
+    const ctx = ctxOf(req, res);
+    if (!ctx) return;
+    if (!requireCapability(ctx, res, "invoices")) return;
+    if (!requirePermission(ctx, res, "invoices.manage")) return;
+    const found = store.findInvoice(String(req.params.invoiceId));
+    if (!found || found.orgId !== ctx.org.id || !found.sendLink) return res.status(404).json({ error: "no such send link" });
+    const invoice = syncInvoicePayment(found);
+    if (invoice.state !== "SUBMITTED") {
+      return res.status(409).json({ error: invoice.state === "LINK_CREATED" ? "Nobody has filled this link in yet." : "This link is already being paid or is paid." });
+    }
+    const transferId = typeof req.body?.transferId === "string" ? req.body.transferId : undefined;
+    const cryptoSendId = typeof req.body?.cryptoSendId === "string" ? req.body.cryptoSendId : undefined;
+    if (!transferId === !cryptoSendId) return res.status(400).json({ error: "Name one payment: transferId or cryptoSendId." });
+    const taken = store.invoices.some((i) => i.id !== invoice.id && ((transferId && i.payment?.transferId === transferId) || (cryptoSendId && i.payment?.cryptoSendId === cryptoSendId)));
+    if (taken) return res.status(409).json({ error: "That payment already pays another link." });
+    const owed = centsOf(invoice.total);
+    const payTo = invoice.payTo;
+
+    if (transferId) {
+      const t = store.findTransfer(transferId);
+      if (!t || t.userId !== ctx.userId) return res.status(404).json({ error: "no such payment" });
+      if (payTo?.kind !== "bank" || !t.recipientIban || normaliseIban(t.recipientIban) !== normaliseIban(payTo.bank?.iban ?? "")) {
+        return res.status(409).json({ error: "That payment goes to a different account than the one on the link." });
+      }
+      if (Math.abs(t.sendEur * 100 - owed) > 1e-6) return res.status(409).json({ error: `That payment is not the €${invoice.total} the link asks for.` });
+      if (t.state === "FAILED" || t.state === "REFUNDED") return res.status(409).json({ error: "That payment did not go through." });
+      if (t.createdAt < invoice.submittedAt!) return res.status(409).json({ error: "That payment was made before the link was filled in." });
+    } else {
+      const s = store.findCryptoSend(cryptoSendId!);
+      if (!s || s.userId !== ctx.userId) return res.status(404).json({ error: "no such payment" });
+      if (payTo?.kind !== "wallet" || !payTo.address || s.to.toLowerCase() !== payTo.address.toLowerCase()) {
+        return res.status(409).json({ error: "That payment goes to a different wallet than the one on the link." });
+      }
+      // Whole cents only: "11.454" would round onto the link's €11.45.
+      if (s.token !== "EURE" || !/^\d+(\.\d{1,2}0*)?$/.test(s.amount) || centsOf(s.amount) !== owed) {
+        return res.status(409).json({ error: `That payment is not the €${invoice.total} in EURe the link asks for.` });
+      }
+      if (s.state === "FAILED" || s.state === "CREATED") return res.status(409).json({ error: "That payment was not sent." });
+      if (s.createdAt < invoice.submittedAt!) return res.status(409).json({ error: "That payment was made before the link was filled in." });
+    }
+    const updated = store.updateInvoice(invoice.id, {
+      state: "PAYING",
+      payment: { ...invoice.payment, ...(transferId ? { transferId } : { cryptoSendId }) },
+    });
+    res.json({ invoice: ownerInvoiceView(syncInvoicePayment(updated)) });
   });
 
   /** Mark an invoice settled outside the platform (manual reconciliation). */
