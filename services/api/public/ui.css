@@ -800,34 +800,13 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; z-index: 210; heig
 .z-providers { display: grid; gap: var(--z-space-3); margin: 24px 0; }
 .z-provider { width: 100%; gap: 12px; font-weight: 500; background: var(--z-surface); }
 .z-provider__mark { width: 20px; height: 20px; flex: none; }
-/* Signup as a chat with the narwhal (app/onboarding.js, obChat). Three
-   wrappers so swimming, reacting and bobbing never fight over one transform. */
+/* Signup as a chat with the narwhal (app/onboarding.js, obChat). The narwhal,
+   its speech bubble and its effects: narwhal/narwhal.css. */
 /* The conversation sits a little above the middle, replies under the question; only the chat bar docks. */
 .ob-chat { gap: var(--z-space-5); justify-content: center; padding-bottom: 6vh; }
-.ob-host { display: flex; align-items: flex-end; gap: 10px; min-height: 120px; }
-.ob-nw { width: 104px; flex: none; }
-.ob-nw.is-in { animation: ob-swim 1.3s var(--z-ease) both; }
-.ob-nw svg { display: block; width: 100%; height: auto; overflow: visible; animation: ob-bob 3.2s ease-in-out 1.3s infinite; }
-@keyframes ob-swim { 0% { transform: translateX(-120vw) rotate(-8deg); } 70% { transform: translateX(8px) rotate(4deg); } 100% { transform: none; } }
-@keyframes ob-bob { 50% { transform: translateY(-5px) rotate(-2deg); } }
-.ob-nw__tail { transform-box: fill-box; transform-origin: 0% 50%; animation: ob-tail 1.3s ease-in-out infinite; }
-@keyframes ob-tail { 50% { transform: rotate(12deg); } }
-.ob-nw.is-happy .ob-nw__tail { animation-duration: .3s; }
-.ob-nw__eye { transform-box: fill-box; transform-origin: center; animation: ob-blink 4.6s infinite; }
-@keyframes ob-blink { 0%, 95%, 100% { transform: none; } 97.5% { transform: scaleY(.1); } }
-.ob-nw__look { transition: transform .35s var(--z-ease); }
-.ob-nw.is-looking .ob-nw__look { transform: translate(5px, 8px); }
-.ob-nw__open, .ob-nw__frown { display: none; }
-.ob-nw.is-happy .ob-nw__smile, .ob-nw.is-sad .ob-nw__smile { display: none; }
-.ob-nw.is-happy .ob-nw__open, .ob-nw.is-sad .ob-nw__frown { display: inline; }
-.ob-nw.is-happy .ob-nw__act { animation: ob-hop .7s var(--z-ease); }
-.ob-nw.is-sad .ob-nw__act { animation: ob-no .55s ease-in-out; }
-@keyframes ob-hop { 40% { transform: translateY(-20px) rotate(-12deg); } 70% { transform: translateY(0) rotate(4deg); } }
-@keyframes ob-no { 20% { transform: rotate(-9deg); } 40% { transform: rotate(8deg); } 60% { transform: rotate(-6deg); } 80% { transform: rotate(4deg); } }
-
-.ob-say { flex: 1; min-width: 0; margin: 0 0 28px; padding: 10px 14px; border: 2px solid var(--z-text); border-radius: 18px 18px 18px 4px; background: var(--z-surface); font: 500 17px/1.35 var(--z-heading); overflow-wrap: anywhere; animation: ob-pop .35s var(--z-ease) backwards; }
-.ob-say__tip { display: block; margin-top: 6px; font: 400 14px/1.45 var(--z-font); color: var(--z-dim); transition: opacity .3s; }
-.ob-say.is-typing .ob-say__tip { opacity: 0; }
+.ob-host { --nw-size: 104px; min-height: 120px; }
+/* The bubble speaks in the screen's own text size, not narwhal.css's 17px. */
+.ob-say { margin-bottom: 28px; font: inherit; }
 .ob-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .ob-chip { max-width: 100%; padding: 4px 12px; border: 1px solid var(--z-line-strong); border-radius: var(--z-radius-pill); background: var(--z-surface); color: var(--z-text); font: 400 14px var(--z-font); overflow-wrap: anywhere; cursor: pointer; }
 .ob-chip:hover { border-color: var(--z-line-hover); }
@@ -853,10 +832,8 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; z-index: 210; heig
 .ob-chat-err { margin: 0; padding-left: 8px; }
 .ob-links { display: flex; justify-content: center; gap: var(--z-space-5); }
 
-.ob-puff { position: fixed; z-index: 30; width: 10px; height: 10px; border: 2px solid var(--z-text); border-radius: 50%; opacity: .6; pointer-events: none; }
-.ob-ansbub { position: fixed; left: 0; top: 0; z-index: 30; max-width: 80vw; padding: 8px 16px; border: 2px solid var(--z-text); border-radius: var(--z-radius-pill); background: var(--z-pink-tint); color: var(--z-text); font: 600 16px var(--z-heading); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
 @media (prefers-reduced-motion: reduce) {
-  .ob-nw, .ob-nw *, .ob-say, .ob-chip, .ob-choice, .ob-composer { animation: none !important; transition: none !important; }
+  .ob-chip, .ob-choice, .ob-composer { animation: none !important; transition: none !important; }
 }
 
 /* The country list: a scroll box whose edges fade while there is more past them. */

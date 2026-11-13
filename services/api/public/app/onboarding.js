@@ -368,29 +368,13 @@ function obCreateStart() {
    question again.
    ========================================================================== */
 
-const OB_NARWHAL = `<svg viewBox="-10 -60 410 380" focusable="false">
-  <defs><clipPath id="obnw-tusk"><path d="M150 105L80-45 167 98Z"/></clipPath></defs>
-  <path d="M150 105L80-45 167 98Z" fill="#f6f2e8"/>
-  <g clip-path="url(#obnw-tusk)" stroke="#8c8578" stroke-width="2.5" stroke-linecap="round"><path d="M139 89L156 72M131 74L148 57M123 60L140 43M115 45L132 28M108 30L125 14M100 16L117-1M92 1L109-15"/></g>
-  <g stroke="#141217" stroke-width="4.5" stroke-linejoin="round">
-    <path d="M150 105L80-45 167 98Z" fill="none" stroke-width="4" stroke-linejoin="miter" stroke-miterlimit="12"/>
-    <path class="ob-nw__tail" d="M310 180C345 160 380 145 390 160 395 168 385 185 365 190 388 202 392 220 382 228 370 235 340 215 305 200Z" fill="#f4f4f6"/>
-    <path d="M85 175C85 110 140 90 220 90 295 90 330 135 330 195 330 255 270 275 195 275 115 275 85 240 85 175Z" fill="#faf9f6"/>
-    <path d="M150 220C140 250 120 262 105 255 95 248 102 230 125 212Z" fill="#faf9f6"/>
-  </g>
-  <g class="ob-nw__look"><circle class="ob-nw__eye" cx="132" cy="165" r="5" fill="#141217"/><circle class="ob-nw__eye" cx="182" cy="165" r="5" fill="#141217"/></g>
-  <g class="ob-nw__blush" opacity=".8"><ellipse cx="118" cy="178" rx="8" ry="5" fill="#f4bacd"/><ellipse cx="196" cy="178" rx="8" ry="5" fill="#f4bacd"/></g>
-  <path class="ob-nw__smile" d="M150 174Q157 184 164 174" stroke="#141217" stroke-width="3.5" stroke-linecap="round" fill="none"/>
-  <path class="ob-nw__open" d="M147 173Q157 192 167 173Z" fill="#141217" stroke="#141217" stroke-width="2.5" stroke-linejoin="round"/>
-  <path class="ob-nw__frown" d="M150 182Q157 173 164 182" stroke="#141217" stroke-width="3.5" stroke-linecap="round" fill="none"/>
-</svg>`;
 
 let obNwSeen = false;   // the narwhal swims in once per page load, then stays
 let obNwMood = "";      // its reaction on the next render: happy | sad
 let obChatEdit = null;  // a question asked again after its chip was tapped
 let obChatLast = null;  // { key, text }: the answer just given, which floats up to its chip
 let obTypeRun = 0;      // a newer render stops an older one's typing
-const obReduced = () => !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+const obReduced = () => Narwhal.reduced();
 const obFirst = () => obDraft.given.trim().split(/\s+/)[0] || "";
 
 /* A typed country: its name in the reader's language, its code, or the start
@@ -563,9 +547,9 @@ function obChat({ title, head, say, tip = "", tipHtml = "", extra = "", dock, ch
   return `${head}
     <main id="main" class="z-screen__main ob-chat">
       <h1 class="z-sr" tabindex="-1">${esc(title)}</h1>
-      <div class="ob-host">
-        <div class="ob-nw${obNwSeen ? "" : " is-in"}${mood ? ` is-${mood}` : ""}" aria-hidden="true"><div class="ob-nw__act">${OB_NARWHAL}</div></div>
-        <p class="ob-say"><span class="z-sr">${esc(say)}</span><span class="ob-say__typed" aria-hidden="true" data-text="${esc(say)}">${esc(say)}</span>${tip || tipHtml ? `<span class="ob-say__tip">${tipHtml || esc(tip)}</span>` : ""}</p>
+      <div class="nw-host ob-host">
+        ${Narwhal.html({ state: obNwSeen ? "" : "in", mood })}
+        <p class="nw-say is-pop ob-say"><span class="z-sr">${esc(say)}</span><span class="ob-say__typed" aria-hidden="true" data-text="${esc(say)}">${esc(say)}</span>${tip || tipHtml ? `<span class="nw-say__tip">${tipHtml || esc(tip)}</span>` : ""}</p>
       </div>
       ${chips === "all" ? obChatChips() : chips === "summary" ? obChatSummary() : ""}
       ${extra}
@@ -694,61 +678,15 @@ function obChatRefuse(root, msg) {
   if (err) { err.textContent = msg; err.hidden = false; }
   input?.setAttribute("aria-invalid", "true");
   input?.focus();
-  obNwReact(root, "sad");
+  Narwhal.react(root.querySelector(".nw"), "sad", 1000);
   const bar = root.querySelector(".ob-composer");
   if (bar) { bar.classList.remove("is-shake"); void bar.offsetWidth; bar.classList.add("is-shake"); }
 }
 
-function obNwReact(root, mood) {
-  const nw = root.querySelector(".ob-nw");
-  if (!nw) return;
-  nw.classList.remove("is-happy", "is-sad");
-  void nw.offsetWidth;
-  nw.classList.add(`is-${mood}`);
-  setTimeout(() => nw.classList.remove(`is-${mood}`), 1000);
-}
-
-function obBlowhole(root) {
-  const r = root.querySelector(".ob-nw svg")?.getBoundingClientRect();
-  return r ? { x: r.left + r.width * 0.585, y: r.top + r.height * 0.38 } : null;
-}
-
-/* A small bubble from the blowhole. */
-function obPuff(x, y, size, dx, dy, ms) {
-  if (obReduced()) return;
-  const p = document.createElement("div");
-  p.className = "ob-puff";
-  Object.assign(p.style, { left: `${x - size / 2}px`, top: `${y - size / 2}px`, width: `${size}px`, height: `${size}px` });
-  document.body.append(p);
-  p.animate([{ transform: "translate(0,0) scale(.4)", opacity: 0 }, { opacity: 0.7, offset: 0.2 }, { transform: `translate(${dx}px,${dy}px) scale(1)`, opacity: 0 }],
-    { duration: ms, easing: "cubic-bezier(.2,.6,.4,1)" }).onfinish = () => p.remove();
-}
-
 /* The answer just given rises from the chat bar and pops onto its chip. */
 function obFloatUp(root, last) {
-  const chip = root.querySelector(`.ob-chip[data-edit="${last.key}"]`), dock = root.querySelector(".ob-dock");
-  if (!chip || !dock || obReduced()) return;
-  const from = dock.getBoundingClientRect(), to = chip.getBoundingClientRect();
-  const b = document.createElement("div");
-  b.className = "ob-ansbub";
-  b.textContent = last.text;
-  document.body.append(b);
-  const w = b.offsetWidth, h = b.offsetHeight;
-  const x0 = from.left + 16, y0 = from.top, x1 = to.left + to.width / 2 - w / 2, y1 = to.top + to.height / 2 - h / 2;
-  b.animate([
-    { transform: `translate(${x0}px,${y0}px) scale(.6)`, opacity: 0 },
-    { transform: `translate(${x0}px,${y0 - 30}px) scale(1)`, opacity: 1, offset: 0.2 },
-    { transform: `translate(${(x0 + x1) / 2 + 18}px,${(y0 + y1) / 2}px) scale(1.04)`, offset: 0.6 },
-    { transform: `translate(${x1}px,${y1}px) scale(1)`, opacity: 1 },
-  ], { duration: 800, easing: "cubic-bezier(.3,.7,.3,1)", fill: "forwards" }).onfinish = () => {
-    b.remove();
-    chip.classList.add("is-new");
-    const cx = to.left + to.width / 2, cy = to.top + to.height / 2;
-    for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * Math.PI * 2;
-      obPuff(cx + Math.cos(a) * to.width * 0.4, cy + Math.sin(a) * to.height * 0.5, 5 + Math.random() * 6, Math.cos(a) * 30, Math.sin(a) * 22 - 14, 550);
-    }
-  };
+  const chip = root.querySelector(`.ob-chip[data-edit="${last.key}"]`);
+  Narwhal.floatUp(last.text, root.querySelector(".ob-dock"), chip, { ms: 800, puffs: 8 }).then(() => chip?.classList.add("is-new"));
 }
 
 /* What every chat screen does once drawn: the narwhal arrives (once), types
@@ -757,10 +695,10 @@ function obFloatUp(root, last) {
 function obChatBind(root) {
   const typed = root.querySelector(".ob-say__typed");
   if (!typed) return;
-  // A bubble still flying from the last screen (a paused background tab never finishes it).
-  document.querySelectorAll(".ob-ansbub").forEach((b) => b.remove());
+  Narwhal.clearAnswers();
   const run = ++obTypeRun;
-  const bubble = root.querySelector(".ob-say");
+  const bubble = root.querySelector(".nw-say");
+  const nw = root.querySelector(".nw");
   const input = root.querySelector("#ob-form input");
   const arrived = obNwSeen;
   obNwSeen = true;
@@ -771,20 +709,12 @@ function obChatBind(root) {
     typed.textContent = "";
     bubble.classList.add("is-typing");
     (async () => {
-      await new Promise((r) => setTimeout(r, arrived ? 120 : 1100));
-      for (let i = 1; i <= text.length; i++) {
-        if (run !== obTypeRun) return;
-        typed.textContent = text.slice(0, i);
-        await new Promise((r) => setTimeout(r, 22));
-      }
+      await Narwhal.wait(arrived ? 120 : 1100);
+      if (!(await Narwhal.type(typed, text, { ms: 22, alive: () => run === obTypeRun }))) return;
       bubble.classList.remove("is-typing");
       focus();
     })();
-    if (!arrived) {
-      setTimeout(() => {
-        for (let i = 0; i < 4; i++) setTimeout(() => { const o = obBlowhole(root); if (o) obPuff(o.x, o.y, 8 + i * 3, 6 - i * 4, -60 - i * 12, 1100); }, i * 110);
-      }, 1300);
-    }
+    if (!arrived) setTimeout(() => Narwhal.spout(nw), 1300);
   }
   if (obChatLast) { const last = obChatLast; obChatLast = null; requestAnimationFrame(() => obFloatUp(root, last)); }
   root.querySelector(".ob-chips")?.addEventListener("click", (e) => {
@@ -794,19 +724,11 @@ function obChatBind(root) {
     const about = `${obPath()}-about`;
     if (obScreen === about) obRender({ focus: false }); else obGo(about);
   });
-  let lastPuff = 0;
-  input?.addEventListener("input", () => {
+  Narwhal.watch(nw, input, () => {
     obDraftTouched = true; // an answer typed but not sent: "Leave site?" asks
     const err = root.querySelector("#ob-chat-err");
     if (err && !err.hidden) { err.hidden = true; input.removeAttribute("aria-invalid"); }
-    const t = performance.now();
-    if (t - lastPuff < 90) return;
-    lastPuff = t;
-    const o = obBlowhole(root);
-    if (o) obPuff(o.x + (Math.random() - 0.5) * 6, o.y, 5 + Math.random() * 7, (Math.random() - 0.5) * 24, -50 - Math.random() * 30, 900);
   });
-  input?.addEventListener("focus", () => root.querySelector(".ob-nw")?.classList.add("is-looking"));
-  input?.addEventListener("blur", () => root.querySelector(".ob-nw")?.classList.remove("is-looking"));
 }
 
 /* ==========================================================================
