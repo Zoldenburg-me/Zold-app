@@ -142,6 +142,7 @@ export async function loadOrg(id) {
 
 /* The codes GET /api/shopify/callback redirects with (routes/shopify.ts). */
 const SHOPIFY_ERRORS = {
+  NOT_SET_UP: "Shopify is not set up here yet, so the store was not connected.",
   INSTALL_OTHER_BROWSER: "Finish connecting the store in the browser where you started it, from Apps.",
   SHOP_CONNECTED_ELSEWHERE: "This store is connected to a different organisation.",
   SHOP_LINKED_THROUGH_CHECKOUT: "This store is linked through the Zold checkout. Disconnect it there first.",

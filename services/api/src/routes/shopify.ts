@@ -451,7 +451,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       const base = baseUrlFor(req);
       const back = (params: Record<string, string>) => res.redirect(`${base}/business?${new URLSearchParams({ view: "shopify", ...params })}`);
       const q = req.query as Record<string, unknown>;
-      if (!SHOPIFY.enabled) return back({ error: "Shopify is not configured on this deployment" });
+      if (!SHOPIFY.enabled) return back({ error: "Shopify is not configured on this deployment", code: "NOT_SET_UP" });
       if (!verifyQueryHmac(q, SHOPIFY.apiSecret)) return back({ error: "the install callback did not verify — try connecting again" });
       const shop = normaliseShop(String(q.shop ?? ""));
       const pending = pendingInstalls.get(String(q.state ?? ""));
@@ -491,7 +491,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       try {
         enc = SECRETS.shopifyAccessToken.seal(connectionId, token.accessToken);
       } catch (err) {
-        if (err instanceof EncryptionUnavailableError) return back({ error: err.message });
+        if (err instanceof EncryptionUnavailableError) return back({ error: err.message, code: "NOT_SET_UP" });
         throw err;
       }
       const refusedLate = installRefusal(pending);
