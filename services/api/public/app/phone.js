@@ -357,7 +357,9 @@ function phInWord(t) {
 /* A crypto send in Activity: to whom, how much, and what the chain said.
    SUBMITTED is "checking": sent, and not yet seen included. */
 const phCryptoOutWho = (t) => t.name || `${String(t.to).slice(0, 6)}…${String(t.to).slice(-4)}`;
-const phCryptoOutAmount = (t) => Z.amount({ value: Number(t.amount), currency: t.token === "USDC" ? usdSym() : "EURe", direction: t.state === "FAILED" ? undefined : "out" });
+/* A wallet send's token as it is shown: USDC_TEST is Circle's test USDC, sendable only on a staging chain. */
+const phWalletSym = (token) => (token === "USDC" ? usdSym() : token === "USDC_TEST" ? "testnet USDC" : "EURe");
+const phCryptoOutAmount = (t) => Z.amount({ value: Number(t.amount), currency: phWalletSym(t.token), direction: t.state === "FAILED" ? undefined : "out" });
 const phCryptoOutWord = (t) => (t.state === "SENT" ? "SENT" : t.state === "SUBMITTED" ? "CHECKING" : "FAILED");
 
 /** One activity row: a transfer out, a crypto send, or money in. */

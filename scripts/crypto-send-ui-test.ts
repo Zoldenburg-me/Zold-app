@@ -82,6 +82,14 @@ await t("the Send screen offers the crypto wallet as a real row", () => {
   assert.match(html, /EURe or USDC to an ENS name or 0x address/);
 });
 
+await t("the token picker offers testnet USDC only where the API takes it", () => {
+  assert.doesNotMatch(flat(run(`PH["send/wallet"].html()`)), /USDC_TEST/);
+  run(`caps = { ...caps, cryptoSendTestUsdc: true }`);
+  assert.match(flat(run(`PH["send/wallet"].html()`)), /value="USDC_TEST"[^>]*>Testnet USDC \(dollar\)/);
+  assert.match(flat(run(`String(phCryptoOutAmount({ amount: "2", token: "USDC_TEST", state: "SENT" }))`)), /testnet USDC/);
+  run(`caps = { ...caps, cryptoSendTestUsdc: false }`);
+});
+
 await t("with the switch off, the row is the old soon row and the form does not open", () => {
   run(`caps = { ...caps, cryptoSend: false }`);
   const html = flat(run(`PH.send.html()`));
