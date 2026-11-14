@@ -25,19 +25,66 @@ const users = [
   user("none", undefined),
 ];
 
-const asked: string[] = [];
-let calls = 0;
-const n = await sweepMissingVerifiers(users, async (owner) => {
-  calls++;
-  asked.push(`${owner.x}`);
-  if (calls === 1) return "0xhash"; // deployed now
-  throw new Error("relay key has no ETH"); // the second fails; the sweep goes on
-});
-assert.equal(calls, 2, "only active recovered or imported Safes are swept");
-assert.equal(n, 1, "a failed deploy is not counted");
-assert.equal(asked[0], BigInt(key.x).toString(), "the stored passkey key is the verifier's owner");
-assert.equal(await sweepMissingVerifiers(users, async () => undefined), 0, "already deployed: nothing to do");
+const { deployVerifierForOwner } = await import("../services/api/src/recovery/recovered-passkey.js");
+type Io = Parameters<typeof sweepMissingVerifiers>[1] & {};
+/** A chain where nothing is deployed until a sent deploy confirms. */
+const chain = (opts: { confirm?: boolean; failSend?: boolean } = {}) => {
+  const sent: string[] = [];
+  const code = new Set<string>();
+  let release: (s: string) => void = () => {};
+  const io: Io = {
+    enabled: () => true,
+    isDeployed: async (a) => code.has(a.toLowerCase()),
+    send: async (tx) => {
+      if (opts.failSend) throw new Error("relay key has no ETH");
+      sent.push(tx.data);
+      return `0x${String(sent.length).padStart(64, "0")}` as `0x${string}`;
+    },
+    receipt: () => (opts.confirm ? Promise.resolve("success") : new Promise((ok) => { release = ok; })),
+  };
+  return { io, sent, code, opts, release: (s: string) => release(s) };
+};
+
+// Each Safe has its own key here, so each has its own verifier.
+const keyed = (i: number) => ({ x: "0x" + String(i).repeat(64).slice(0, 64), y: key.y });
+const swept = [
+  user("recovered", { status: "active", address: "0xaa", passkeyPublicKey: keyed(1), recoveredAt: "2026-11-01T00:00:00Z" }),
+  user("imported", { status: "active", address: "0xbb", passkeyPublicKey: keyed(2), importedAt: "2026-11-01T00:00:00Z" }),
+  user("fresh", { status: "active", address: "0xcc", passkeyPublicKey: keyed(3) }),
+  user("pending", { status: "pending", address: "0xdd", passkeyPublicKey: keyed(4), recoveredAt: "2026-11-01T00:00:00Z" }),
+  user("none", undefined),
+];
+{
+  const c = chain({ confirm: true });
+  // The stub never puts code anywhere, so a confirmed receipt with no code is still a failure.
+  assert.equal(await sweepMissingVerifiers(swept, c.io), 0, "a receipt without code at the address is not a deploy");
+  assert.equal(c.sent.length, 2, "only active recovered or imported Safes are swept");
+}
+{
+  const c = chain({ failSend: true });
+  assert.equal(await sweepMissingVerifiers(swept, c.io), 0, "a failed send is logged, and the sweep goes on");
+}
 console.log("   ok  the sweep deploys only active recovered or imported Safes, and one failure does not stop it");
+
+{
+  // A deploy that never confirms is sent once: not again by the request path, nor by the next sweep.
+  const c = chain();
+  const owner = { x: BigInt(keyed(5).x), y: BigInt(key.y) };
+  const one = [user("stuck", { status: "active", address: "0xee", passkeyPublicKey: keyed(5), recoveredAt: "2026-11-01T00:00:00Z" })];
+  const first = sweepMissingVerifiers(one, c.io);
+  await new Promise((ok) => setTimeout(ok, 10));
+  assert.equal(c.sent.length, 1);
+  assert.equal(await sweepMissingVerifiers(one, c.io), 0, "a second run while the first waits does nothing");
+  assert.equal(await deployVerifierForOwner(owner, c.io), undefined, "a request path skips a deploy in flight");
+  assert.equal(c.sent.length, 1, "still one send");
+  c.release("reverted");
+  await first;
+  await new Promise((ok) => setTimeout(ok, 10));
+  c.opts.confirm = true;
+  await sweepMissingVerifiers(one, c.io);
+  assert.equal(c.sent.length, 2, "once the chain answered, a later sweep may try again");
+}
+console.log("   ok  a deploy in flight is sent once, whichever path asks again");
 
 const e = new SafeVerifierMissingError("0x2504a2ace3f9e25f8c4eb92d4982fb879004638e");
 assert.equal(e.status, 409);
@@ -52,7 +99,7 @@ const server = readFileSync(new URL("../services/api/src/server.ts", import.meta
 assert.match(server, /err instanceof SafeVerifierMissingError\) \{\n    return res\.status\(err\.status\)/, "the error handler answers it, not a 500");
 assert.match(server, /setInterval\(runVerifierSweep/, "the sweep runs on a timer");
 const passkey = readFileSync(new URL("../services/api/src/recovery/recovered-passkey.ts", import.meta.url), "utf8");
-assert.match(passkey, /waitForTransactionReceipt/, "a deploy waits for its receipt");
-console.log("   ok  both prepares check it, the handler answers it, the sweep is scheduled, the deploy waits for its receipt");
+assert.doesNotMatch(passkey.slice(passkey.indexOf("export async function deployVerifierForOwner"), passkey.indexOf("async function confirmVerifier")), /await io\.receipt/, "a request path never waits for the receipt");
+console.log("   ok  both prepares check it, the handler answers it, the sweep is scheduled, a request path does not wait for the receipt");
 
-console.log("\nverifier-sweep: 3/3 checks passed");
+console.log("\nverifier-sweep: 4/4 checks passed");

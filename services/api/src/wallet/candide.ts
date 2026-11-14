@@ -776,6 +776,7 @@ export async function signMessageAsPasskeySafe(
   if (account.accountAddress.toLowerCase() !== safeAddress.toLowerCase()) {
     throw new Error("passkey Safe plan does not match the address being linked");
   }
+  await assertVerifierOnChain(plan, passkeyOwner);
   const webauthnAddr = passkeyAccountAddress(passkeyOwner);
   const passkeySignature = SafeAccount.createWebAuthnSignature(webauthnSignatureFromAssertion(assertion));
   const pairs: SignerSignaturePair[] = [

@@ -50,44 +50,79 @@ export function relayReader() {
  * the relay key, on the app chain — skipped (and said so) when the
  * smart-account chain is not the app chain, which only happens locally.
  */
-export async function deployVerifierForOwner(owner: { x: bigint; y: bigint }): Promise<string | undefined> {
-  if (HARNESS.enabled) return undefined;
-  if (BigInt(CHAIN_ID) !== BigInt(CANDIDE.chainId)) return undefined;
-  const verifier = passkeyAccountAddress(owner);
-  if (await isDeployed(verifier)) return undefined;
+export interface VerifierChain {
+  enabled(): boolean;
+  isDeployed(address: string): Promise<boolean>;
+  send(tx: { to: `0x${string}`; data: `0x${string}`; value: bigint }): Promise<`0x${string}`>;
+  /** Resolves "success" or "reverted"; rejects when the wait times out. */
+  receipt(hash: `0x${string}`): Promise<string>;
+}
+
+const VERIFIER_RECEIPT_TIMEOUT_MS = 120_000;
+const chainIo: VerifierChain = {
+  enabled: () => !HARNESS.enabled && BigInt(CHAIN_ID) === BigInt(CANDIDE.chainId),
+  isDeployed,
+  send: (tx) => relayWallet().sendTransaction(tx),
+  receipt: async (hash) =>
+    (await relayReader().waitForTransactionReceipt({ hash, timeout: VERIFIER_RECEIPT_TIMEOUT_MS })).status,
+};
+
+/** Verifiers with a deploy sent and not yet answered: one send each, from any path. */
+const inFlight = new Map<string, Promise<string>>();
+
+export async function deployVerifierForOwner(owner: { x: bigint; y: bigint }, io: VerifierChain = chainIo): Promise<string | undefined> {
+  if (!io.enabled()) return undefined;
+  const verifier = passkeyAccountAddress(owner).toLowerCase();
+  if (inFlight.has(verifier)) return undefined;
+  if (await io.isDeployed(verifier)) return undefined;
+  if (inFlight.has(verifier)) return undefined; // another path sent it during the read
   const tx = deployWebAuthnVerifierTransaction(owner);
-  const hash = await relayWallet().sendTransaction({ to: tx.to as `0x${string}`, data: tx.data as `0x${string}`, value: tx.value });
-  // Sent is not deployed: a revert or a dropped tx leaves the Safe's owner without code.
-  const receipt = await relayReader().waitForTransactionReceipt({ hash, timeout: 120_000 });
-  if (receipt.status !== "success" || !(await isDeployed(verifier))) {
+  const sending = io.send({ to: tx.to as `0x${string}`, data: tx.data as `0x${string}`, value: tx.value });
+  // Held until the chain answers or the wait times out, so a dropped tx is retried by a later sweep.
+  const answered = sending.then((hash) => io.receipt(hash));
+  inFlight.set(verifier, answered);
+  answered.catch(() => {}).finally(() => inFlight.delete(verifier));
+  return sending;
+}
+
+/** Sent is not deployed: a revert or a dropped tx leaves the Safe's owner without code. */
+async function confirmVerifier(owner: { x: bigint; y: bigint }, hash: string, io: VerifierChain): Promise<void> {
+  const verifier = passkeyAccountAddress(owner);
+  const status = await (inFlight.get(verifier.toLowerCase()) ?? io.receipt(hash as `0x${string}`));
+  if (status !== "success" || !(await io.isDeployed(verifier))) {
     throw new Error(`verifier ${verifier} deploy ${hash} did not leave code at the address`);
   }
-  return hash;
 }
+
+let sweeping = false;
 
 /**
  * Deploy the verifier of every recovered or imported Safe whose owner has no
  * code yet: a deploy that failed at recovery time would otherwise make every
- * signature fail (AA24) forever. Permissionless; the relay key pays gas.
+ * signature fail (AA24) forever. Permissionless; the relay key pays gas. Only
+ * here does anything wait for the receipt: nobody is waiting on the sweep.
  */
-export async function sweepMissingVerifiers(
-  users: User[] = store.users,
-  deploy: (owner: { x: bigint; y: bigint }) => Promise<string | undefined> = deployVerifierForOwner,
-): Promise<number> {
+export async function sweepMissingVerifiers(users: User[] = store.users, io: VerifierChain = chainIo): Promise<number> {
+  if (sweeping) return 0; // the last run is still waiting on a receipt
+  sweeping = true;
   let deployed = 0;
-  for (const u of users) {
-    const plan = u.passkeySafe;
-    if (plan?.status !== "active" || (!plan.recoveredAt && !plan.importedAt)) continue;
-    const owner = webauthnOwnerFromStore(plan.passkeyPublicKey);
-    try {
-      const hash = await deploy(owner);
-      if (hash) {
+  try {
+    for (const u of users) {
+      const plan = u.passkeySafe;
+      if (plan?.status !== "active" || (!plan.recoveredAt && !plan.importedAt)) continue;
+      const owner = webauthnOwnerFromStore(plan.passkeyPublicKey);
+      try {
+        const hash = await deployVerifierForOwner(owner, io);
+        if (!hash) continue;
+        await confirmVerifier(owner, hash, io);
         deployed++;
         console.log(`verifier sweep: deployed ${passkeyAccountAddress(owner)} for Safe ${plan.address} (${hash})`);
+      } catch (err) {
+        console.error(`verifier sweep: Safe ${plan.address}: ${describeCause(err)}`);
       }
-    } catch (err) {
-      console.error(`verifier sweep: Safe ${plan.address}: ${describeCause(err)}`);
     }
+  } finally {
+    sweeping = false;
   }
   return deployed;
 }

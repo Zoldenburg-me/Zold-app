@@ -159,7 +159,8 @@ Say this plainly rather than letting the surface imply otherwise:
   so every operation failed with AA24. `sweepMissingVerifiers` deploys
   such verifiers from the relay key every 10 minutes, and until one exists
   the prepare paths answer VERIFIER_MISSING before the passkey prompt.
-  `verifier-sweep:test` runs the sweep with a stubbed deploy only.
+  The sweep alone waits for the receipt, and a verifier with a deploy in
+  flight is sent once. `verifier-sweep:test` runs it against a stubbed chain only.
 - **Turnkey has never been called: no Google or Apple login has come back
   to `/guardian`, `/recovery` or signup, no email code has been sent, and no
   recovery passkey made.** Adding such a guardian and recovering with one run
