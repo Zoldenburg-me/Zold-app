@@ -110,6 +110,19 @@ export async function api(path, opts = {}) {
   return data;
 }
 
+/** Sign out, as the app's endSession does: the session ends on the server too,
+ *  so a copied token stops working now. Best effort: keepalive lets the DELETE
+ *  outlive the page load, and storage is cleared whatever the network says.
+ *  zoll-contacts is the app's contact cache, cleared with the session there. */
+export function signOut() {
+  if (token) {
+    fetch("/api/session", { method: "DELETE", headers: { authorization: `Bearer ${token}` }, keepalive: true }).catch(() => {});
+  }
+  token = null;
+  try { for (const k of ["zold-session", "zoll-session", "zoll-contacts"]) localStorage.removeItem(k); } catch { /* nothing to clear */ }
+  location.assign("/business");
+}
+
 /** Can the current org use this capability? Mirrors the server's verdict. */
 export const cap = (id) => org?.capabilities?.[id] ?? { allowed: false, label: id };
 /** Whether a payment needs a second person's approval before it is sent: the

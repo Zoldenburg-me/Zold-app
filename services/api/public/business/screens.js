@@ -377,7 +377,7 @@ export function invoiceDrawer(i, trigger) {
 export const bk = { month: null, lines: [], chart: null };
 
 META.books = () => ({
-  title: "Books",
+  title: "Statement",
   sub: bk.month ? `${new Intl.DateTimeFormat("en-GB", { month: "long", year: "numeric" }).format(new Date(`${bk.month}-15T12:00:00`))} · every euro in and out, with its booking receipt` : "Every euro in and out, with its booking receipt",
   actions: cap("export.ledger").allowed
     ? `${roleCan(org.role, "categorise") ? secondary("Create receipts", 'data-act="export-prepare"', "receipt") : ""}${secondary("Receipts as ZIP", 'data-act="export-zip"', "folder_zip")}${secondary("Lexware CSV", 'data-act="export-csv"', "download")}`

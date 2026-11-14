@@ -1,9 +1,10 @@
 /**
- * Zold Business → Home (public/business/home-model.js): Quick send, the
- * Security card, the set-up list and the Pending tab.
+ * Zold Business → Home (public/business/home-model.js): the accounts and
+ * contacts the send form offers, the Security card, the set-up list and the
+ * Pending tab.
  *
- * Pins: Quick send is refused with its reason when no account can pay, when
- * the contacts could not be read, or when no contact has an IBAN; a recovery
+ * Pins: no account pays that is gated, unbacked or waiting on its profile
+ * check, and no contact is paid without an IBAN; a recovery
  * or signer read that failed is "couldn't check", never on or off; a stranger
  * guardian is a warning even beside Zoldenburg's; the backup-key step is
  * unknown, not missing, when the signers could not be read, and keeps the
@@ -25,16 +26,14 @@ const links = { signers: "/s", recovery: "/r", alert: "/a" };
 const active = { status: "active", backingUserId: "u1", identifier: { iban: "DE00" } };
 const contact = { id: "c1", name: "Weber", bankAccounts: [{ iban: "DE11" }] };
 
-// ── Quick send ──────────────────────────────────────────────────────────────
+// ── What the send form offers ───────────────────────────────────────────────
 
-assert.equal(m.quickSendBlock([], [contact]), "no-account", "no account: refused");
-assert.equal(m.quickSendBlock([{ ...active, profile: { status: "needs_check" } }], [contact]), "no-account", "an account waiting on its profile check cannot pay");
-assert.equal(m.quickSendBlock([{ ...active, backingUserId: null }], [contact]), "no-account", "an account nobody backs cannot pay");
-assert.equal(m.quickSendBlock([active], null), "unread", "contacts unread: refused, not 'add one'");
-assert.equal(m.quickSendBlock(null, [contact]), "unread", "accounts unread: refused, not 'no account can pay'");
-assert.equal(m.quickSendBlock([active], [{ id: "c2", name: "X", bankAccounts: [] }]), "no-contact", "a contact without an IBAN cannot be paid");
-assert.equal(m.quickSendBlock([active], [contact]), null);
-assert.equal(m.quickSendBlock([{ ...active, status: "gated" }], [contact]), "no-account", "a gated account cannot pay, even with a backer");
+assert.equal(m.fundableAccounts([active]).length, 1);
+assert.equal(m.fundableAccounts([{ ...active, profile: { status: "needs_check" } }]).length, 0, "an account waiting on its profile check cannot pay");
+assert.equal(m.fundableAccounts([{ ...active, backingUserId: null }]).length, 0, "an account nobody backs cannot pay");
+assert.equal(m.fundableAccounts([{ ...active, status: "gated" }]).length, 0, "a gated account cannot pay, even with a backer");
+assert.equal(m.payableContacts([contact]).length, 1);
+assert.equal(m.payableContacts([{ id: "c2", name: "X", bankAccounts: [] }]).length, 0, "a contact without an IBAN cannot be paid");
 assert.equal(m.payableContacts([{ id: "c3", name: "Y" }]).length, 0, "a contact without bankAccounts is not payable, and does not throw");
 
 // ── Security ────────────────────────────────────────────────────────────────

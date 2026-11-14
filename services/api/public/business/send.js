@@ -16,7 +16,7 @@ import { loadMembers } from "./screens.js";
 import { META, RENDER } from "./views.js";
 import { fundableAccounts, payableContacts } from "./home-model.js";
 
-/** Picked before the form opens: a contact's Pay button, Home's Quick send, or what was typed before Add a contact. */
+/** Picked before the form opens: a contact's Pay button, or what was typed before Add a contact. */
 export const sendState = { contactId: null, amount: "", note: "", mode: "bank" };
 
 /** A contact's wallet on this deployment's network, or undefined. */
@@ -120,7 +120,7 @@ RENDER.send = async () => {
   const payable = crypto ? contacts.filter((c) => walletOf(c, net)) : payableContacts(contacts);
   const fundable = fundableAccounts(accounts);
   if (!fundable.length) {
-    // Nothing here can use Quick send's amount: a later New payment starts empty.
+    // Nothing here can use a carried amount: a later New payment starts empty.
     sendState.amount = "";
     sendState.note = "";
     return `<div class="gate"><h3>No account can pay yet</h3><p>${org.type === "business"
@@ -134,7 +134,7 @@ RENDER.send = async () => {
   const first = fundable.find((a) => a.backingUserId === me?.id) || fundable[0];
   const chosen = payable.find((c) => c.id === sendState.contactId)?.id;
   const action = reviewOn() ? "Submit for approval" : "Save payment";
-  // Quick send's amount, or what was typed before Add a contact, fills the form once; a later New payment starts empty.
+  // What was typed before Add a contact fills the form once; a later New payment starts empty.
   const amount = sendState.amount;
   const note = sendState.note;
 
