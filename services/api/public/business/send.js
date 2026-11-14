@@ -127,7 +127,7 @@ RENDER.send = async () => {
       : "Open an account and fund it from your own account first."}</p><div class="zb-actions">${linkBtn("Accounts", "accounts")}</div></div>`;
   }
   if (!payable.length && !crypto) {
-    return `<div class="gate"><h3>Add who you’re paying</h3><p>A payment goes to a contact with bank details, so a later change to them is caught before sending.</p><div class="zb-actions"><button type="button" class="z-btn z-btn--primary" data-act="new-contact">${Z.icon("person_add")}<span>Add contact</span></button></div></div>`;
+    return `<div class="gate"><h3>Add who you’re paying</h3><p>A payment goes to a contact with bank details, so a later change to them is caught before sending.</p><div class="zb-actions"><button type="button" class="z-btn z-btn--primary" data-act="new-contact">${Z.icon("person_add")}<span>Add contact</span></button>${cryptoOn ? `<button type="button" class="z-btn z-btn--secondary" data-act="send-mode" data-mode="crypto">${Z.icon("account_balance_wallet")}<span>Pay a crypto wallet</span></button>` : ""}</div></div>`;
   }
   const approvers = (members || []).filter((m) => m.status === "active" && m.id !== org.memberId && roleCan(m.role, "approve"));
   const first = fundable.find((a) => a.backingUserId === me?.id) || fundable[0];

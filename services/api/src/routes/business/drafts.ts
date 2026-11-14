@@ -47,6 +47,7 @@ import {
 import { CEILINGS, ceilingRefusal } from "../../domain/ceilings.js";
 import { knownError } from "../../http/known-errors.js";
 import { redactedMessage } from "../../http/log-cause.js";
+import { wrap } from "../util.js";
 import { requireCapability as requireUserCapability } from "../../http/guards.js";
 import { pendingCryptoSends } from "../../http/pending.js";
 import { createCryptoSendPreparer } from "../crypto-sends.js";
@@ -64,6 +65,22 @@ export interface OrgRoutes {
 /** Reads an account's EUR balance. The chain read in production; a suite
  *  that mounts this router without a chain passes its own. */
 export type BalanceReader = (address: `0x${string}`) => Promise<{ safeBalanceEur: number }>;
+
+/**
+ * Why a run with a wallet line can never be sent, or undefined. Checked at
+ * submit and at execution, so a run is not approved only to be refused.
+ */
+export function walletRunProblem(draft: DraftPayment): string | undefined {
+  if (!draft.lines.some((l) => l.destination.kind === "wallet")) return undefined;
+  const [line] = draft.lines;
+  const d = line.destination;
+  const contact = line.contactId ? store.findContact(line.contactId) : undefined;
+  return draft.lines.length !== 1 ? "A run that pays a wallet has exactly one line: two payments from one Safe cannot be signed at once."
+    : d.kind !== "wallet" || !d.address || !contact || contact.orgId !== draft.orgId ? "A wallet payment goes to a saved contact's wallet address."
+      : d.chainId !== CHAIN_ID ? `That wallet is on network ${d.chainId}; this account pays on network ${CHAIN_ID}.`
+        : !["EURE", "USDC"].includes(line.asset.toUpperCase()) ? "A wallet payment sends EURe or USDC."
+          : undefined;
+}
 
 export function createDraftRoutes(
   deps: OrgRoutes,
@@ -214,6 +231,10 @@ export function createDraftRoutes(
         draft: checked,
       });
     }
+    const walletProblem = walletRunProblem(checked);
+    if (walletProblem) {
+      return res.status(422).json({ error: `${walletProblem} Fix the line, then submit.`, problems: [{ lineId: checked.lines[0].id, reason: walletProblem }] });
+    }
     try {
       assertTransition(checked.state, "PENDING_REVIEW");
       res.json({
@@ -334,14 +355,8 @@ export function createDraftRoutes(
     if (!requireUserCapability(user, "onchain_balance", res)) return;
     const [line] = draft.lines;
     const d = line.destination;
-    const contact = line.contactId ? store.findContact(line.contactId) : undefined;
-    const problem =
-      draft.lines.length !== 1 ? "A run that pays a wallet has exactly one line: two payments from one Safe cannot be signed at once."
-        : d.kind !== "wallet" || !d.address || !contact || contact.orgId !== ctx.org.id ? "A wallet payment goes to a saved contact's wallet address."
-          : d.chainId !== CHAIN_ID ? `That wallet is on network ${d.chainId}; this account pays on network ${CHAIN_ID}.`
-            : !["EURE", "USDC"].includes(line.asset.toUpperCase()) ? "A wallet payment sends EURe or USDC."
-              : undefined;
-    if (problem) {
+    const problem = walletRunProblem(draft);
+    if (problem || !d.address) {
       return res.status(422).json({ error: `${problem} Nothing was created.`, problems: [{ lineId: line.id, reason: problem }] });
     }
     const reviewRequired = paymentReviewRequired(ctx.org);
@@ -408,7 +423,7 @@ export function createDraftRoutes(
    * is re-checked just before, since an address-book edit can land between
    * approval and execution.
    */
-  r.post("/:orgId/drafts/:draftId/execute", async (req, res) => {
+  r.post("/:orgId/drafts/:draftId/execute", wrap(async (req, res) => {
     const ctx = ctxOf(req, res);
     if (!ctx) return;
     if (!requirePermission(ctx, res, "transfers.execute")) return;
@@ -416,6 +431,15 @@ export function createDraftRoutes(
     const draft = store.findDraft(String(req.params.draftId));
     if (!draft || draft.orgId !== ctx.org.id) {
       return res.status(404).json({ error: "no such draft" });
+    }
+    // A run that is sending is answered as it reads, never re-planned.
+    if (draft.state === "EXECUTING") {
+      const shown = withExecutionState(draft);
+      return res.status(409).json({
+        error: shown.state === "FAILED"
+          ? "This payment run failed. Nothing more can be sent from it: create a new payment."
+          : shown.state === "EXECUTED" ? "This payment run was sent." : "This payment run is being sent.",
+      });
     }
     let checked = reconcileDrift(draft);
     const heldForDrift = () =>
@@ -713,7 +737,7 @@ export function createDraftRoutes(
       // Said plainly: the draft is not sent until every line is signed.
       note: `${authorizations.length} transfer(s) created. Each needs its own device signature — sign them and POST to each authorization's submitTo. Nothing has moved yet.`,
     });
-  });
+  }));
 
   /**
    * One draft, with its execution state derived from its transfers.

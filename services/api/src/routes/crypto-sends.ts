@@ -36,6 +36,8 @@ import { resolveEnsName, type EnsResolution } from "./ens.js";
 import { contactsById } from "./business/state.js";
 import { findDriftedLines } from "../domain/drafts.js";
 import { roleCan } from "../domain/roles.js";
+import { can } from "../domain/plans.js";
+import { accountIsSpendable } from "../domain/accounts.js";
 import { wrap } from "./util.js";
 
 /** How long the passkey prompt may wait, as for a transfer's terms. */
@@ -381,8 +383,17 @@ export function createCryptoSendsRouter({ requireUserSession, ...deps }: CryptoS
         const account = draft?.source.kind === "account" ? store.findAccount(draft.source.accountId) : undefined;
         const member = draft && store.membersOf(draft.orgId).find((m) => m.userId === send.userId && m.status === "active");
         // Read, not reconciled: the run is EXECUTING and stays so; this send failing fails it.
-        const drifted = !draft || findDriftedLines(draft, contactsById(draft.orgId)).length > 0;
-        if (drifted || account?.backingUserId !== send.userId || !member || !roleCan(member.role, "transfers.execute")) {
+        // The send must still be this run's, and pay what its line says now:
+        // a run reopened since could name another address.
+        const line = draft?.lines.length === 1 ? draft.lines[0] : undefined;
+        const bound = !!draft && draft.state === "EXECUTING" && !!draft.cryptoSendIds?.includes(send.id) && !!line
+          && line.destination.address?.toLowerCase() === send.to.toLowerCase()
+          && line.asset.toUpperCase() === send.token && Number(line.amount) === Number(send.amount);
+        const drifted = !bound || findDriftedLines(draft!, contactsById(draft!.orgId)).length > 0;
+        // What /execute checked, again: the org may lose the feature, the account may be frozen.
+        const org = draft && store.findOrganisation(draft.orgId);
+        const mayStill = !!org && can(org, "transfers.drafts").allowed && !!account && accountIsSpendable(account).ok;
+        if (drifted || !mayStill || account?.backingUserId !== send.userId || !member || !roleCan(member.role, "transfers.execute")) {
           store.updateCryptoSend(send.id, { state: "FAILED", error: drifted ? "the payee changed before the send" : "the sender may no longer send from this account" });
           pendingCryptoSends.delete(send.id);
           return res.status(409).json(drifted

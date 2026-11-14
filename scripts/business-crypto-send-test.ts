@@ -13,7 +13,12 @@
  *   - the personal crypto-send checks run on it (a sanctioned address is
  *     refused and the run is not claimed);
  *   - two wallet lines, a wallet on another network, and sending switched
- *     off are refused before anything is created.
+ *     off are refused before anything is created (at submit, and at execute);
+ *   - a run that is sending is never rewritten (no INVALID_DATA, so no second
+ *     send), and a send no longer bound to its run's line is refused;
+ *   - a frozen account, a wallet with a bad checksum, USDC at the mid, review
+ *     off, the invoice it pays, an expired approval, a lost claim race and an
+ *     unconfirmed send each read as they should; totals keep six places.
  *
  * Offline: Monerium is a local fake, the balance, rate and screen are stubs,
  * and the Safe operation is the hardhat harness stand-in.
@@ -60,6 +65,9 @@ const { createDraftRoutes } = await import("../services/api/src/routes/business/
 const { createCryptoSendsRouter, createCryptoSendPreparer } = await import("../services/api/src/routes/crypto-sends.js");
 const { resolveOrg } = await import("../services/api/src/routes/org-context.js");
 const { SECRETS } = await import("../services/api/src/stored-secrets.js");
+const { syncInvoicePayment } = await import("../services/api/src/routes/business/state.js");
+const { validateWallet } = await import("../services/api/src/domain/contacts.js");
+const { totalsByAsset } = await import("../services/api/src/domain/drafts.js");
 initStore();
 
 const SAFE = "0x1111111111111111111111111111111111111111";
@@ -207,17 +215,125 @@ try {
     assert.equal(store.findDraft(id)!.state, "REVIEWED", "nothing claimed; it can be sent once the screen clears");
   });
 
-  await t("two wallet lines, another network and an unknown token are refused before anything is created", async () => {
-    const before = store.cryptoSends.length;
-    for (const lines of [[walletLine(), walletLine()], [walletLine({ asset: "DAI" })]]) {
-      const x = await call("POST", `/orgs/org_1/drafts/${await approvedRun(lines)}/execute`, "u_owner");
-      assert.equal(x.status, 422, JSON.stringify(x.data));
-    }
+  await t("two wallet lines, another network and an unknown token are refused at submit, before review", async () => {
     store.updateContact("c_w", { wallets: [{ id: "cw_1", chainId: 31337, address: ALICE }, { id: "cw_2", chainId: 1, address: ALICE }] } as any);
-    const x = await call("POST", `/orgs/org_1/drafts/${await approvedRun([walletLine({ destination: { kind: "wallet", chainId: 1, address: ALICE, displayName: "Alice Studio" } })])}/execute`, "u_owner");
-    assert.equal(x.status, 422, JSON.stringify(x.data));
-    assert.match(x.data.error, /network 1/);
-    assert.equal(store.cryptoSends.length, before);
+    for (const lines of [[walletLine(), walletLine()], [walletLine({ asset: "DAI" })], [walletLine({ destination: { kind: "wallet", chainId: 1, address: ALICE, displayName: "Alice Studio" } })]]) {
+      const d = await call("POST", "/orgs/org_1/drafts", "u_owner", { source: { kind: "account", accountId: "acc_1" }, lines });
+      const sub = await call("POST", `/orgs/org_1/drafts/${d.data.draft.id}/submit`, "u_owner");
+      assert.equal(sub.status, 422, JSON.stringify(sub.data));
+      assert.equal(store.findDraft(d.data.draft.id)!.state, "DRAFT");
+    }
+    setWallet(ALICE);
+  });
+
+  await t("review off: the same refusal at execute, and a one-line run sends from DRAFT", async () => {
+    const org = store.findOrganisation("org_1")!;
+    org.paymentReview = { required: false } as any;
+    try {
+      const bad = await call("POST", "/orgs/org_1/drafts", "u_owner", { source: { kind: "account", accountId: "acc_1" }, lines: [walletLine(), walletLine()] });
+      assert.equal((await call("POST", `/orgs/org_1/drafts/${bad.data.draft.id}/execute`, "u_owner")).status, 422);
+      const d = await call("POST", "/orgs/org_1/drafts", "u_owner", { source: { kind: "account", accountId: "acc_1" }, lines: [walletLine()] });
+      const x = await call("POST", `/orgs/org_1/drafts/${d.data.draft.id}/execute`, "u_owner");
+      assert.equal(x.status, 201, JSON.stringify(x.data));
+    } finally {
+      delete (org as any).paymentReview;
+    }
+  });
+
+  await t("a run that is sending is never rewritten: an edited contact holds the send, and no second send follows", async () => {
+    const id = await approvedRun();
+    const [cs] = (await call("POST", `/orgs/org_1/drafts/${id}/execute`, "u_owner")).data.cryptoSends;
+    setWallet(MALLORY);
+    const again = await call("POST", `/orgs/org_1/drafts/${id}/execute`, "u_owner");
+    assert.equal(again.status, 409, JSON.stringify(again.data));
+    assert.equal(store.findDraft(id)!.state, "EXECUTING", "not INVALID_DATA, so it cannot be edited and sent again");
+    assert.equal((await call("PATCH", `/orgs/org_1/drafts/${id}`, "u_owner", {})).status, 409);
+    const s = await call("POST", `/crypto-sends/${cs.cryptoSendId}/authorize`, "u_owner", { executionAssertion: await passkey.assert(cs.safeExecution.challenge) });
+    setWallet(ALICE);
+    assert.equal(s.status, 409);
+    assert.equal(store.findCryptoSend(cs.cryptoSendId)!.state, "FAILED");
+  });
+
+  await t("a send whose run no longer names it, or names another address, is refused", async () => {
+    const id = await approvedRun();
+    const [cs] = (await call("POST", `/orgs/org_1/drafts/${id}/execute`, "u_owner")).data.cryptoSends;
+    // As if the run had been reopened and re-pointed by a path that bypassed the state machine.
+    store.updateDraft(id, { lines: [{ ...store.findDraft(id)!.lines[0], amount: "11" }] });
+    const s = await call("POST", `/crypto-sends/${cs.cryptoSendId}/authorize`, "u_owner", { executionAssertion: await passkey.assert(cs.safeExecution.challenge) });
+    assert.equal(s.status, 409, JSON.stringify(s.data));
+    assert.equal(s.data.code, "INVALID_DATA");
+    const id2 = await approvedRun();
+    const [cs2] = (await call("POST", `/orgs/org_1/drafts/${id2}/execute`, "u_owner")).data.cryptoSends;
+    store.updateDraft(id2, { state: "CANCELLED" });
+    const s2 = await call("POST", `/crypto-sends/${cs2.cryptoSendId}/authorize`, "u_owner", { executionAssertion: await passkey.assert(cs2.safeExecution.challenge) });
+    assert.equal(s2.status, 409);
+    assert.equal(store.findCryptoSend(cs2.cryptoSendId)!.state, "FAILED");
+  });
+
+  await t("an account frozen after execution cannot send", async () => {
+    const id = await approvedRun();
+    const [cs] = (await call("POST", `/orgs/org_1/drafts/${id}/execute`, "u_owner")).data.cryptoSends;
+    store.updateAccount("acc_1", { status: "frozen" } as any);
+    const s = await call("POST", `/crypto-sends/${cs.cryptoSendId}/authorize`, "u_owner", { executionAssertion: await passkey.assert(cs.safeExecution.challenge) });
+    store.updateAccount("acc_1", { status: "active" } as any);
+    assert.equal(s.status, 409, JSON.stringify(s.data));
+    assert.equal(s.data.code, "NOT_SENDER");
+  });
+
+  await t("USDC is capped at the mid and sent", async () => {
+    const id = await approvedRun([walletLine({ asset: "USDC", amount: "10" })]);
+    const [cs] = (await call("POST", `/orgs/org_1/drafts/${id}/execute`, "u_owner")).data.cryptoSends;
+    assert.equal(cs.token, "USDC");
+    assert.equal(store.findCryptoSend(cs.cryptoSendId)!.capEur, 8, "10 USDC at 1.25 USD per EUR");
+    const s = await call("POST", `/crypto-sends/${cs.cryptoSendId}/authorize`, "u_owner", { executionAssertion: await passkey.assert(cs.safeExecution.challenge) });
+    assert.equal(s.status, 200, JSON.stringify(s.data));
+  });
+
+  await t("the invoice a run pays follows its send: Paid when sent, waiting again when it fails", async () => {
+    for (const ok of [true, false]) {
+      const inv = `inv_${ok}`;
+      store.addInvoice({ id: inv, orgId: "org_1", state: "SUBMITTED", createdAt: now, updatedAt: now } as any);
+      const id = await approvedRun([walletLine({ invoiceId: inv })]);
+      store.updateInvoice(inv, { state: "PAYING", payment: { draftId: id } } as any);
+      const [cs] = (await call("POST", `/orgs/org_1/drafts/${id}/execute`, "u_owner")).data.cryptoSends;
+      assert.equal(store.findInvoice(inv)!.payment?.cryptoSendId, cs.cryptoSendId);
+      if (ok) await call("POST", `/crypto-sends/${cs.cryptoSendId}/authorize`, "u_owner", { executionAssertion: await passkey.assert(cs.safeExecution.challenge) });
+      else store.updateCryptoSend(cs.cryptoSendId, { state: "FAILED", error: "test" });
+      const after = syncInvoicePayment(store.findInvoice(inv)!);
+      assert.equal(after.state, ok ? "PAID" : "SUBMITTED");
+      if (!ok) assert.equal(after.payment?.draftId, undefined, "free to be paid by a new run");
+    }
+  });
+
+  await t("an expired approval reads FAILED, cannot be submitted, and the run says so", async () => {
+    const id = await approvedRun();
+    const [cs] = (await call("POST", `/orgs/org_1/drafts/${id}/execute`, "u_owner")).data.cryptoSends;
+    store.findCryptoSend(cs.cryptoSendId)!.deadline = Math.floor(Date.now() / 1000) - 1;
+    assert.equal((await call("GET", `/orgs/org_1/drafts/${id}`, "u_owner")).data.draft.state, "FAILED");
+    assert.equal((await call("POST", `/crypto-sends/${cs.cryptoSendId}/authorize`, "u_owner", { executionAssertion: await passkey.assert(cs.safeExecution.challenge) })).status, 410);
+    const x = await call("POST", `/orgs/org_1/drafts/${id}/execute`, "u_owner");
+    assert.equal(x.status, 409);
+    assert.match(x.data.error, /failed/i);
+  });
+
+  await t("two executes at once: one send survives, the loser's is failed; an unconfirmed send keeps the run sending", async () => {
+    const id = await approvedRun();
+    const both = await Promise.all([1, 2].map(() => call("POST", `/orgs/org_1/drafts/${id}/execute`, "u_owner")));
+    assert.deepEqual(both.map((r) => r.status).sort(), [201, 409], JSON.stringify(both.map((r) => r.data)));
+    const mine = store.cryptoSends.filter((c) => c.draftId === id);
+    assert.equal(mine.filter((c) => c.state === "CREATED").length, 1, "one signable send");
+    assert.ok(mine.every((c) => c.state === "CREATED" || c.state === "FAILED"));
+    const live = mine.find((c) => c.state === "CREATED")!;
+    store.updateCryptoSend(live.id, { state: "SUBMITTED" });
+    assert.equal((await call("GET", `/orgs/org_1/drafts/${id}`, "u_owner")).data.draft.state, "EXECUTING");
+  });
+
+  await t("a wallet with a bad checksum is refused; totals keep a token's six places", async () => {
+    assert.throws(() => validateWallet({ chainId: 1, address: "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAeD" }), /checksum/);
+    assert.equal(validateWallet({ chainId: 1, address: "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed" }).address, "0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed");
+    const d = { lines: [walletLine({ asset: "USDC", amount: "1.234567" }), walletLine({ asset: "USDC", amount: "0.000001" })] } as any;
+    assert.deepEqual(totalsByAsset(d), { USDC: "1.234568" });
+    assert.deepEqual(totalsByAsset({ lines: [{ destination: { kind: "bank" }, asset: "EUR", amount: "1.25" }, { destination: { kind: "bank" }, asset: "EUR", amount: "2.5" }] } as any), { EUR: "3.75" }, "bank lines still in cents");
   });
 
   await t("off unless CRYPTO_SEND_ENABLED=1", async () => {

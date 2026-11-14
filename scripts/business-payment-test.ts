@@ -144,6 +144,7 @@ assert.equal(m.runIdFrom("", null), null);
   assert.match(send, /const crypto = cryptoOn && sendState\.mode === "crypto";/);
   assert.match(send, /\$\{!cryptoOn \? "" :/, "off: no Crypto wallet row at all");
   assert.doesNotMatch(send, /soonRow/, "no Soon row for a built feature");
+  assert.match(send, /\$\{cryptoOn \? `<button[^`]*data-act="send-mode" data-mode="crypto"/, "with no IBAN contact, the gate still opens Crypto wallet");
   const actions = readFileSync(path.join(ROOT, "services/api/public/business/actions.js"), "utf8");
   assert.match(actions, /if \(r\.cryptoSends\?\.length\) return signCryptoRun\(r\.cryptoSends\);/);
 }
