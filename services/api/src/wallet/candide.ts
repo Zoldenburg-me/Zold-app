@@ -423,6 +423,7 @@ async function prepareSafeExecutionCore(
     throw new Error("passkey Safe must be deployed before a transfer can be executed from it");
   }
   await assertPasskeyAloneCanSign(account.accountAddress);
+  await assertVerifierOnChain(plan, passkeyOwner);
   return paidUserOperation(account, passkeyOwner, txs);
 }
 
@@ -546,6 +547,27 @@ export class SafeThresholdError extends Error {
   }
 }
 
+/** A recovered or imported Safe is owned by the passkey's verifier contract,
+ *  so a verifier with no code makes every signature fail on chain (AA24). */
+export class SafeVerifierMissingError extends Error {
+  readonly status = 409;
+  readonly code = "VERIFIER_MISSING";
+  constructor(verifier: string) {
+    super(
+      `this account's passkey verifier (${verifier}) is not on chain yet, so the Safe cannot check your passkey — ` +
+        `Zold deploys it within a few minutes; nothing was signed, try again then`,
+    );
+    this.name = "SafeVerifierMissingError";
+  }
+}
+
+/** Before the passkey prompt, not after the bundler refuses the signed op. */
+async function assertVerifierOnChain(plan: PasskeySafeDeploymentPlan, passkeyOwner: WebauthnPublicKey): Promise<void> {
+  if (!plan.recoveredAt && !plan.importedAt) return;
+  const verifier = passkeyAccountAddress(passkeyOwner);
+  if (!(await isDeployed(verifier))) throw new SafeVerifierMissingError(verifier);
+}
+
 async function assertPasskeyAloneCanSign(safeAddress: string): Promise<void> {
   const threshold = await safeThreshold(safeAddress);
   if (threshold > 1) {
@@ -615,6 +637,7 @@ export async function prepareSafeSetupOperation(
     throw new Error("passkey Safe must be deployed before its configuration can change");
   }
   await assertPasskeyAloneCanSign(account.accountAddress);
+  await assertVerifierOnChain(plan, passkeyOwner);
   return paidUserOperation(account, passkeyOwner, txs);
 }
 

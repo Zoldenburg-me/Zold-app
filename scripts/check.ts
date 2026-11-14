@@ -50,6 +50,7 @@ const scripts = [
   "persist-failure:test",
   "send-record-crash:test",
   "safe-op-uncertain:test",
+  "verifier-sweep:test",
   "device-key:test",
   "authorizer-bind:test",
   "passkey-safe:test",

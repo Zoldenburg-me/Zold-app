@@ -970,7 +970,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
           const owner = webauthnOwnerFromJwk(c.newPasskey.publicKey.jwk);
           if (owner) verifierDeployTxHash = await deployVerifierForOwner(owner);
         } catch (err: any) {
-          console.error(`recovery ${request.id}: verifier deploy failed (will matter at first use): ${describeCause(err)}`);
+          console.error(`recovery ${request.id}: verifier deploy failed (the verifier sweep retries it): ${describeCause(err)}`);
         }
         patch = {
           status: "GRACE_PERIOD",

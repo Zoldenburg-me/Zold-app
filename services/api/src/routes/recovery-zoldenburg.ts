@@ -1057,7 +1057,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
           const owner = webauthnOwnerFromJwk(r.zoldenburg!.newPasskey!.publicKey.jwk);
           if (owner) verifierDeployTxHash = await deployVerifierForOwner(owner);
         } catch (err: any) {
-          console.error(`recovery ${r.id}: verifier deploy failed (will matter at first use): ${describeCause(err)}`);
+          console.error(`recovery ${r.id}: verifier deploy failed (the verifier sweep retries it): ${describeCause(err)}`);
         }
         const updated = store.updateRecoveryRequest(r.id, {
           status: "GRACE_PERIOD",

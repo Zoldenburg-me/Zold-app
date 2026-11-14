@@ -59,6 +59,7 @@ import { createTurnkeyRecoveryRouter } from "./routes/recovery-turnkey-requests.
 import { sweepTurnkeyRecoveries } from "./recovery/turnkey-recovery.js";
 import { turnkeyGuardiansEnabled } from "./wallet/turnkey.js";
 import { sweepOwnerAlerts } from "./recovery/owner-alerts.js";
+import { sweepMissingVerifiers } from "./recovery/recovered-passkey.js";
 import { mailAvailable } from "./adapters/mailer.js";
 import { zoldenburgRecoveryEnabled } from "./recovery/zoldenburg-guardian.js";
 import { createDocumentsRouter } from "./routes/documents.js";
@@ -76,7 +77,7 @@ import {
   warnIfSmartAccountChainDiffers,
   publicClient,
   } from "./chain.js";
-import { CANDIDE, SafeGasError, SafeThresholdError } from "./wallet/candide.js";
+import { CANDIDE, SafeGasError, SafeThresholdError, SafeVerifierMissingError } from "./wallet/candide.js";
 import { routeAsyncRejections } from "./http/async-errors.js";
 import { describeCause, describeError, redactedMessage } from "./http/log-cause.js";
 import { recordServerError } from "./http/error-log.js";
@@ -280,7 +281,7 @@ app.use(((err, req, res, next) => {
     if (res.headersSent) return next(err);
     return res.status(mapped.status).json(mapped.body);
   }
-  const known = err instanceof SafeGasError || err instanceof SafeThresholdError;
+  const known = err instanceof SafeGasError || err instanceof SafeThresholdError || err instanceof SafeVerifierMissingError;
   const logged = known ? undefined : recordServerError(err, req);
   if (known) console.error(describeError(err));
   // A handler that already began answering cannot be given a 500 body: setting
@@ -295,6 +296,9 @@ app.use(((err, req, res, next) => {
     return res.status(err.status).json({ error: err.message });
   }
   if (err instanceof SafeThresholdError) {
+    return res.status(err.status).json({ error: err.message, code: err.code });
+  }
+  if (err instanceof SafeVerifierMissingError) {
     return res.status(err.status).json({ error: err.message, code: err.code });
   }
   const detail = redactedMessage(err);
@@ -329,6 +333,10 @@ sweepStrandedTransfers()
   .catch((e) => console.error(`Compensation sweep failed: ${describeCause(e)}`));
 setInterval(() => sweepStrandedTransfers().catch(() => {}), 5 * 60_000).unref();
 setInterval(() => settleUnconfirmedCryptoSends().catch(() => {}), 60_000).unref();
+// A recovered Safe whose verifier never landed cannot sign anything until it does.
+const runVerifierSweep = () => sweepMissingVerifiers().catch((e) => console.error(`verifier sweep failed: ${describeCause(e)}`));
+runVerifierSweep();
+setInterval(runVerifierSweep, 10 * 60_000).unref();
 // Tell the checkout service when one of its transfers moves (CHECKOUT_WEBHOOK_URL).
 if (startCheckoutWebhook()) console.log("checkout webhook: on");
 // Zoldenburg recoveries: pick up a signature made in Safe Cover, expire

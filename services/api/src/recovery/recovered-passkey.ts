@@ -15,8 +15,10 @@ import {
   isDeployed,
   passkeyAccountAddress,
   webauthnOwnerFromJwk,
+  webauthnOwnerFromStore,
   webauthnOwnerToStore,
 } from "../wallet/candide.js";
+import { describeCause } from "../http/log-cause.js";
 
 type NewPasskey = NonNullable<NonNullable<RecoveryRequest["candide"]>["newPasskey"]>;
 
@@ -54,7 +56,40 @@ export async function deployVerifierForOwner(owner: { x: bigint; y: bigint }): P
   const verifier = passkeyAccountAddress(owner);
   if (await isDeployed(verifier)) return undefined;
   const tx = deployWebAuthnVerifierTransaction(owner);
-  return relayWallet().sendTransaction({ to: tx.to as `0x${string}`, data: tx.data as `0x${string}`, value: tx.value });
+  const hash = await relayWallet().sendTransaction({ to: tx.to as `0x${string}`, data: tx.data as `0x${string}`, value: tx.value });
+  // Sent is not deployed: a revert or a dropped tx leaves the Safe's owner without code.
+  const receipt = await relayReader().waitForTransactionReceipt({ hash, timeout: 120_000 });
+  if (receipt.status !== "success" || !(await isDeployed(verifier))) {
+    throw new Error(`verifier ${verifier} deploy ${hash} did not leave code at the address`);
+  }
+  return hash;
+}
+
+/**
+ * Deploy the verifier of every recovered or imported Safe whose owner has no
+ * code yet: a deploy that failed at recovery time would otherwise make every
+ * signature fail (AA24) forever. Permissionless; the relay key pays gas.
+ */
+export async function sweepMissingVerifiers(
+  users: User[] = store.users,
+  deploy: (owner: { x: bigint; y: bigint }) => Promise<string | undefined> = deployVerifierForOwner,
+): Promise<number> {
+  let deployed = 0;
+  for (const u of users) {
+    const plan = u.passkeySafe;
+    if (plan?.status !== "active" || (!plan.recoveredAt && !plan.importedAt)) continue;
+    const owner = webauthnOwnerFromStore(plan.passkeyPublicKey);
+    try {
+      const hash = await deploy(owner);
+      if (hash) {
+        deployed++;
+        console.log(`verifier sweep: deployed ${passkeyAccountAddress(owner)} for Safe ${plan.address} (${hash})`);
+      }
+    } catch (err) {
+      console.error(`verifier sweep: Safe ${plan.address}: ${describeCause(err)}`);
+    }
+  }
+  return deployed;
 }
 
 /**
