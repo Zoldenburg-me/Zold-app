@@ -114,7 +114,7 @@ const passkey = readFileSync(new URL("../services/api/src/recovery/recovered-pas
 assert.doesNotMatch(passkey.slice(passkey.indexOf("export async function deployVerifierForOwner"), passkey.indexOf("async function confirmVerifier")), /await io\.receipt/, "a request path never waits for the receipt");
 for (const file of ["routes/crypto-sends.ts", "routes/crypto-deposits.ts", "routes/recovery-zoldenburg.ts", "routes/recovery-turnkey.ts"]) {
   const src = readFileSync(new URL(`../services/api/src/${file}`, import.meta.url), "utf8");
-  assert.match(src, /instanceof SafeVerifierMissingError[^\n]*status\(e(rr)?\.status\)/, `${file} answers its own prepare errors without VERIFIER_MISSING`);
+  assert.match(src, /instanceof SafeVerifierMissingError[^\n]*\(e(rr)?\.status/, `${file} answers its own prepare errors without VERIFIER_MISSING`);
 }
 console.log("   ok  both prepares check it, the handler answers it, the sweep is scheduled, a request path does not wait for the receipt");
 

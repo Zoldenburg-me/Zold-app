@@ -135,6 +135,7 @@ const scripts = [
   "ens:test",
   "safe-address-ui:test",
   "crypto-send:test",
+  "business:crypto-send:test",
   "crypto-send-ui:test",
   "tx:audit:test",
   "statement:test",

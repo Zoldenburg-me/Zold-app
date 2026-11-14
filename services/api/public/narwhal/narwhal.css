@@ -1,0 +1,106 @@
+/*
+ * The animated Zold narwhal (narwhal.js draws and drives it): its moods, the
+ * speech bubble, blowhole puffs, an answer floating up, the bubble burst, and
+ * the receipt printer it taps.
+ *
+ * A page sets the --nw-* tokens it wants to change; every one falls back to
+ * the app's --z-* token, then to the payment link page's colours.
+ *
+ * Three wrappers so swimming, reacting and bobbing never fight over one
+ * transform: .nw swims in, .nw__move carries it somewhere (the printer),
+ * .nw__act reacts, and the svg bobs.
+ */
+.nw, .nw-say, .nw-puff, .nw-answer, .nw-printer, .nw-paper {
+  --nw-ink-c: var(--nw-ink, var(--z-text, #141217));
+  --nw-surface-c: var(--nw-surface, var(--z-surface, #ffffff));
+  --nw-muted-c: var(--nw-muted, var(--z-dim, #6b6570));
+  --nw-ease-c: var(--nw-ease, cubic-bezier(.16, 1, .3, 1));
+}
+
+/* ---------- the narwhal ---------- */
+.nw { width: var(--nw-size, 112px); flex: none; }
+.nw.is-away { transform: translateX(-140vw) rotate(-8deg); }
+.nw.is-in { animation: nw-swim 1.4s var(--nw-ease-c) both; }
+.nw svg { display: block; width: 100%; height: auto; overflow: visible; animation: nw-bob 3.2s ease-in-out 1.4s infinite; }
+.nw.is-away svg { animation: none; }
+@keyframes nw-swim { 0% { transform: translateX(-140vw) rotate(-8deg); } 70% { transform: translateX(8px) rotate(4deg); } 100% { transform: none; } }
+@keyframes nw-bob { 50% { transform: translateY(-5px) rotate(-2deg); } }
+
+.nw__tail { transform-box: fill-box; transform-origin: 0% 50%; animation: nw-tail 1.3s ease-in-out infinite; }
+@keyframes nw-tail { 50% { transform: rotate(12deg); } }
+.nw.is-happy .nw__tail, .nw.is-spin .nw__tail, .nw.is-lap .nw__tail { animation-duration: .3s; }
+.nw__eye { transform-box: fill-box; transform-origin: center; animation: nw-blink 4.6s infinite; }
+@keyframes nw-blink { 0%, 95%, 100% { transform: none; } 97.5% { transform: scaleY(.1); } }
+.nw__look { transition: transform .35s var(--nw-ease-c); }
+.nw.is-looking .nw__look { transform: translate(5px, 8px); }
+
+/* The mouth: a smile at rest, open when happy, a frown when sad. */
+.nw__open, .nw__frown { display: none; }
+.nw.is-happy .nw__smile, .nw.is-spin .nw__smile, .nw.is-sad .nw__smile { display: none; }
+.nw.is-happy .nw__open, .nw.is-spin .nw__open, .nw.is-sad .nw__frown { display: inline; }
+.nw__blush { transform-box: fill-box; transform-origin: center; }
+.nw.is-happy .nw__blush, .nw.is-spin .nw__blush { animation: nw-glow .6s; }
+@keyframes nw-glow { 50% { transform: scale(1.25); } }
+
+/* Moods (Narwhal.react). */
+.nw.is-nod .nw__act { animation: nw-nod .5s ease-in-out; }
+.nw.is-happy .nw__act { animation: nw-hop .7s var(--nw-ease-c); }
+.nw.is-spin .nw__act { animation: nw-flip .95s var(--nw-ease-c); }
+.nw.is-sad .nw__act { animation: nw-no .55s ease-in-out; }
+.nw.is-lap .nw__act { animation: nw-lap 1.6s ease-in-out; }
+@keyframes nw-nod { 30% { transform: rotate(-7deg) translateY(2px); } 60% { transform: rotate(3deg); } }
+@keyframes nw-hop { 40% { transform: translateY(-22px) rotate(-12deg); } 70% { transform: translateY(0) rotate(4deg); } }
+@keyframes nw-flip { 45% { transform: translateY(-34px) rotate(-200deg); } 100% { transform: rotate(-360deg); } }
+@keyframes nw-no { 20% { transform: rotate(-9deg); } 40% { transform: rotate(8deg); } 60% { transform: rotate(-6deg); } 80% { transform: rotate(4deg); } }
+@keyframes nw-lap { 25% { transform: translateX(34px) rotate(6deg); } 50% { transform: translateX(46px) scaleX(-1); } 75% { transform: translateX(14px) scaleX(-1) rotate(-4deg); } 100% { transform: none; } }
+
+/* ---------- what it says ---------- */
+.nw-host { display: flex; align-items: flex-end; gap: 10px; }
+.nw-say { flex: 1; min-width: 0; margin: 0 0 30px; padding: 10px 14px; border: 2px solid var(--nw-ink-c); border-radius: 18px 18px 18px 4px; background: var(--nw-surface-c); color: var(--nw-ink-c);
+  font: 500 17px/1.35 var(--nw-font, var(--z-font, Inter, system-ui, sans-serif)); overflow-wrap: anywhere; transform-origin: left bottom; transition: opacity .25s, transform .35s var(--nw-ease-c); }
+/* Not said anything yet: the bubble waits, then grows in. */
+.nw-say.is-hidden { opacity: 0; transform: scale(.9); }
+/* Drawn already speaking: it pops in. */
+.nw-say.is-pop { animation: nw-pop .35s var(--nw-ease-c) backwards; }
+.nw-say__tip { display: block; margin-top: 6px; font: 400 14px/1.45 var(--nw-body, var(--z-font, Inter, system-ui, sans-serif)); color: var(--nw-muted-c); transition: opacity .3s; }
+.nw-say.is-typing .nw-say__tip { opacity: 0; }
+@keyframes nw-pop { from { opacity: 0; transform: translateY(8px) scale(.95); } }
+
+/* ---------- blowhole puffs, an answer floating up, the burst ---------- */
+.nw-puff { position: fixed; z-index: 30; pointer-events: none; border: 2px solid var(--nw-ink-c); border-radius: 50%; opacity: .6; }
+.nw-puff::after { content: ""; position: absolute; left: 18%; top: 18%; width: 26%; height: 26%; border-radius: 50%; background: var(--nw-ink-c); opacity: .45; }
+.nw-answer { position: fixed; left: 0; top: 0; z-index: 30; pointer-events: none; max-width: 80vw; padding: 10px 18px; border: 2px solid var(--nw-ink-c); border-radius: 999px;
+  background: var(--nw-answer-bg, var(--z-pink-tint, #dfecef)); color: var(--nw-ink-c); font: 600 18px var(--nw-font, var(--z-font, Inter, system-ui, sans-serif));
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nw-burst { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 7; }
+
+/* ---------- the receipt printer (Narwhal.print) ---------- */
+.nw-printer { width: min(340px, 100%); background: var(--nw-printer, #1c1a20); border-radius: 18px; padding: 14px 16px 22px; color: #f1eef2; position: relative; z-index: 2; box-shadow: 0 10px 30px rgb(0 0 0 / .18); }
+.nw-printer__row { display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
+.nw-printer__dot { width: 8px; height: 8px; border-radius: 50%; background: #5a5560; }
+.nw-printer.is-on .nw-printer__dot { background: #5bd18b; animation: nw-blinkdot 1s steps(2) infinite; }
+.nw-printer.is-tapped { animation: nw-jolt .25s; }
+.nw-printer__slot { position: absolute; left: 14px; right: 14px; bottom: 8px; height: 6px; border-radius: 3px; background: #000; }
+@keyframes nw-jolt { 40% { transform: translateY(3px) rotate(-1deg); } }
+@keyframes nw-blinkdot { 50% { opacity: .3; } }
+.nw-feed { width: min(300px, calc(100% - 40px)); overflow: hidden; margin-top: -10px; position: relative; z-index: 1; }
+.nw-paper { background: var(--nw-paper, #fbfaf7); color: var(--nw-paper-ink, #1b1a1d); font: 400 12.5px/1.55 var(--nw-mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace); padding: 22px 18px 30px; transform: translateY(-100%);
+  -webkit-mask: linear-gradient(#000 0 0) top / 100% calc(100% - 10px) no-repeat, conic-gradient(from -45deg at bottom, #0000, #000 1deg 89deg, #0000 90deg) bottom / 14px 10px repeat-x;
+          mask: linear-gradient(#000 0 0) top / 100% calc(100% - 10px) no-repeat, conic-gradient(from -45deg at bottom, #0000, #000 1deg 89deg, #0000 90deg) bottom / 14px 10px repeat-x;
+  box-shadow: inset 0 14px 12px -10px rgb(0 0 0 / .25); }
+/* Four feeds with short pauses; narwhal.js times its sound to these (PRINT_FEEDS). */
+.nw-paper.is-printing { animation: nw-print 2.6s linear forwards; }
+.nw-paper.is-shown { transform: none; }
+@keyframes nw-print { 0% { transform: translateY(-100%); } 22% { transform: translateY(-74%); } 28% { transform: translateY(-73%); } 52% { transform: translateY(-44%); } 58% { transform: translateY(-43%); } 84% { transform: translateY(-10%); } 90% { transform: translateY(-9%); } 100% { transform: none; } }
+.nw-paper__c { text-align: center; }
+.nw-paper__hr { border-top: 1px dashed currentColor; opacity: .5; margin: 10px 0; }
+.nw-paper__kv { display: flex; justify-content: space-between; gap: 12px; }
+.nw-paper__kv span:last-child { text-align: right; overflow-wrap: anywhere; }
+.nw-paper__big { font-weight: 600; font-size: 15px; }
+.nw-paper__logo { font: 700 22px var(--nw-font, var(--z-font, Inter, system-ui, sans-serif)); letter-spacing: -.03em; }
+
+@media (prefers-reduced-motion: reduce) {
+  .nw, .nw *, .nw-say, .nw-printer, .nw-printer *, .nw-paper { animation: none !important; transition: none !important; }
+  .nw.is-away { transform: none; }
+  .nw-paper { transform: none; }
+}

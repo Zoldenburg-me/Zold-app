@@ -495,6 +495,9 @@ export interface CryptoSend {
   userId: string;
   /** The ENS name, normalised, when the recipient was given by name. */
   name?: string;
+  /** The business payment run it pays, when it is one: its payee is a saved
+   *  contact, re-checked before submission. */
+  draftId?: string;
   to: `0x${string}`;
   token: "EURE" | "USDC";
   /** Token units as a decimal string, e.g. "12.5". */

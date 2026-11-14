@@ -167,7 +167,7 @@
   function row(o) {
     const soon = !!o.soon;
     const right = soon ? tag("Soon") : o.right || "";
-    const body = `${o.lead || ""}<span class="z-row__main"><span class="z-row__title">${esc(o.title)}</span>`
+    const body = `${o.lead || ""}<span class="z-row__main"><span class="z-row__title"${o.scramble ? " data-z-scramble" : ""}>${esc(o.title)}</span>`
       + `${o.sub ? `<span class="z-row__sub">${esc(o.sub)}</span>` : ""}</span>`
       + `${right ? `<span class="z-row__right">${right}</span>` : ""}`
       + `${o.href && !soon && o.chevron !== false ? icon("chevron_right", "z-row__chev") : ""}`;
@@ -243,7 +243,7 @@
   /** A label over a value with a 44px copy button. The value is what gets copied. */
   function copyRow(o) {
     return `<div class="z-copy"><span class="z-copy__main"><span class="z-copy__label">${esc(o.label)}</span>`
-      + `<span class="z-copy__value${o.mono ? " z-mono" : ""}" translate="no">${esc(o.display ?? o.value)}</span></span>`
+      + `<span class="z-copy__value${o.mono ? " z-mono" : ""}" translate="no"${o.scramble ? " data-z-scramble" : ""}>${esc(o.display ?? o.value)}</span></span>`
       + `<button class="z-iconbtn" type="button" data-z-copy="${esc(o.value)}" aria-label="Copy ${esc(o.label)}">${icon("content_copy")}</button></div>`;
   }
 
@@ -307,6 +307,40 @@
     inerted.forEach((el) => { el.inert = false; });
     if (trigger && document.contains(trigger)) trigger.focus();
   }
+
+  /* ---- Scramble-in ------------------------------------------------ */
+
+  /* Text marked data-z-scramble reveals left to right through symbols, once
+     per render, in at most 48 steps. Screen readers get the real text only. */
+  const SCRAMBLE_CHARS = "-_~`!@#$%^&*()+=[]{}|;:,.<>?";
+  function scramble(el) {
+    el.removeAttribute("data-z-scramble");
+    const text = el.textContent;
+    const segs = window.Intl?.Segmenter ? [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text)].map((s) => s.segment) : [...text];
+    if (!segs.length || reduceMotion()) return;
+    el.innerHTML = `<span aria-hidden="true"></span><span class="z-sr">${esc(text)}</span>`;
+    const shown = el.firstChild, step = Math.ceil(segs.length / 48);
+    let n = 0;
+    const paint = () => { shown.textContent = segs.map((c, i) => (i < n || !c.trim() ? c : SCRAMBLE_CHARS[Math.floor(Math.random() * SCRAMBLE_CHARS.length)])).join(""); };
+    paint();
+    const t = setInterval(() => {
+      n = Math.min(segs.length, n + step);
+      if (n < segs.length) return paint();
+      clearInterval(t);
+      el.textContent = text;
+    }, 32);
+  }
+  // Only added elements are searched: the reveal's own text swaps add text nodes.
+  const scrambleAdded = (records) => {
+    for (const r of records) for (const node of r.addedNodes) {
+      if (node.nodeType !== 1) continue;
+      if (node.hasAttribute("data-z-scramble")) scramble(node);
+      node.querySelectorAll("[data-z-scramble]").forEach(scramble);
+    }
+  };
+  // Absent in the node test harness that loads this file.
+  if (window.MutationObserver) new MutationObserver(scrambleAdded)
+    .observe(document.documentElement, { childList: true, subtree: true });
 
   /* ---- The passkey prompt, named for this device ---------------------- */
 

@@ -3,6 +3,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <link rel="stylesheet" href="/vendor/fonts/text.css" />
+<link rel="stylesheet" href="/narwhal/narwhal.css" />
 <title>Get paid · Zold</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
 <meta name="robots" content="noindex, nofollow" />
@@ -28,17 +29,18 @@
   --accent-ink: #ffffff;
   --sea: #dfecef;
   --bad: #b3261e;
-  --paper: #fbfaf7;
-  --paper-ink: #1b1a1d;
-  --printer: #1c1a20;
   --display: Outfit, Inter, system-ui, sans-serif;
   --body: Inter, system-ui, -apple-system, sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --ease: cubic-bezier(.16, 1, .3, 1);
+  /* The shared narwhal (narwhal/narwhal.css) in this page's colours. */
+  --nw-ink: var(--ink); --nw-surface: var(--surface); --nw-muted: var(--muted); --nw-ease: var(--ease);
+  --nw-font: var(--display); --nw-body: var(--body); --nw-mono: var(--mono);
+  --nw-answer-bg: color-mix(in srgb, var(--sea) 70%, var(--surface));
 }
 @media (prefers-color-scheme: dark) { :root {
   --bg: #121115; --surface: #1d1b21; --ink: #f1eef2; --muted: #a39ba5; --line: #2e2b33;
-  --accent: #e0558d; --accent-ink: #141217; --sea: #172328; --bad: #f2b8b5; --printer: #000; color-scheme: dark } }
+  --accent: #e0558d; --accent-ink: #141217; --sea: #172328; --bad: #f2b8b5; --nw-printer: #000; color-scheme: dark } }
 
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
@@ -52,44 +54,9 @@ body { background: var(--bg); color: var(--ink); font: 400 16px/1.5 var(--body);
 button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
-/* Narwhal + speech. Three wrappers so swimming, reacting and bobbing never fight over one transform. */
-.host { display: flex; align-items: flex-end; gap: 10px; min-height: 132px; padding-top: 14px; position: relative; z-index: 6; }
-.nw { width: 112px; flex: none; transform: translateX(-140vw) rotate(-8deg); }
-.nw.in { animation: swim-in 1.4s var(--ease) forwards; }
-.nw svg { display: block; overflow: visible; }
-.nw.in svg { animation: bob 3.2s ease-in-out 1.4s infinite; }
-@keyframes swim-in { 0% { transform: translateX(-140vw) rotate(-8deg); } 70% { transform: translateX(8px) rotate(4deg); } 100% { transform: none; } }
-@keyframes bob { 50% { transform: translateY(-5px) rotate(-2deg); } }
-
-#tail { transform-box: fill-box; transform-origin: 0% 50%; animation: tail 1.3s ease-in-out infinite; }
-@keyframes tail { 50% { transform: rotate(12deg); } }
-.nw.happy #tail, .nw.spin #tail, .nw.lap #tail { animation-duration: .3s; }
-.eye { transform-box: fill-box; transform-origin: center; animation: blink 4.6s infinite; }
-@keyframes blink { 0%, 95%, 100% { transform: none; } 97.5% { transform: scaleY(.1); } }
-#look { transition: transform .35s var(--ease); }
-.nw.looking #look { transform: translate(5px, 8px); }
-#m-open, #m-frown { display: none; }
-.nw.happy #m-smile, .nw.spin #m-smile, .nw.sad #m-smile { display: none; }
-.nw.happy #m-open, .nw.spin #m-open { display: inline; }
-.nw.sad #m-frown { display: inline; }
-.nw.happy #blush, .nw.spin #blush { animation: glow .6s; }
-@keyframes glow { 50% { transform: scale(1.25); } }
-
-.nw.nod .act { animation: nod .5s ease-in-out; }
-.nw.happy .act { animation: hop .7s var(--ease); }
-.nw.spin .act { animation: flip .95s var(--ease); }
-.nw.sad .act { animation: no .55s ease-in-out; }
-.nw.lap .act { animation: lap 1.6s ease-in-out; }
-@keyframes nod { 30% { transform: rotate(-7deg) translateY(2px); } 60% { transform: rotate(3deg); } }
-@keyframes hop { 40% { transform: translateY(-22px) rotate(-12deg); } 70% { transform: translateY(0) rotate(4deg); } }
-@keyframes flip { 45% { transform: translateY(-34px) rotate(-200deg); } 100% { transform: rotate(-360deg); } }
-@keyframes no { 20% { transform: rotate(-9deg); } 40% { transform: rotate(8deg); } 60% { transform: rotate(-6deg); } 80% { transform: rotate(4deg); } }
-@keyframes lap { 25% { transform: translateX(34px) rotate(6deg); } 50% { transform: translateX(46px) scaleX(-1); } 75% { transform: translateX(14px) scaleX(-1) rotate(-4deg); } 100% { transform: none; } }
-
-.say { position: relative; flex: 1; min-width: 0; background: var(--surface); border: 2px solid var(--ink); border-radius: 18px 18px 18px 4px;
-  padding: 10px 14px; font: 500 17px/1.35 var(--display); min-height: 48px; opacity: 0; transform: scale(.9); transform-origin: left bottom; transition: opacity .25s, transform .35s var(--ease); margin: 0 0 30px; overflow-wrap: anywhere; }
-.say.on { opacity: 1; transform: none; }
-.say .tip { display: block; margin-top: 6px; font: 400 14px/1.45 var(--body); color: var(--muted); }
+/* The narwhal and what it says: narwhal/narwhal.css. */
+.host { min-height: 132px; padding-top: 14px; position: relative; z-index: 6; }
+.host .nw-say { min-height: 48px; }
 
 .stage { display: grid; align-content: center; justify-items: center; gap: 10px; text-align: center; min-height: 0; padding-block: 8px; }
 .amount { font: 700 clamp(56px, 18vw, 96px)/1 var(--display); letter-spacing: -.04em; font-variant-numeric: tabular-nums; }
@@ -116,35 +83,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .composer.shake { animation: shake .35s; }
 @keyframes shake { 25% { transform: translateX(-6px); } 75% { transform: translateX(6px); } }
 
-.puff { position: fixed; z-index: 9; pointer-events: none; border: 2px solid var(--ink); border-radius: 50%; opacity: .6; }
-.puff::after { content: ""; position: absolute; left: 18%; top: 18%; width: 26%; height: 26%; border-radius: 50%; background: var(--ink); opacity: .45; }
-.ansbub { position: fixed; z-index: 9; pointer-events: none; background: color-mix(in srgb, var(--sea) 70%, var(--surface)); border: 2px solid var(--ink); border-radius: 999px;
-  padding: 10px 18px; font: 600 18px var(--display); white-space: nowrap; max-width: 80vw; overflow: hidden; text-overflow: ellipsis; }
-canvas.bubbles { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 7; }
 
 .finale { position: absolute; inset: 0; z-index: 4; display: grid; align-content: start; justify-items: center; padding: 160px max(16px, env(safe-area-inset-left, 0px)) 16px; background: color-mix(in srgb, var(--bg) 94%, transparent); overflow-y: auto; animation: pop .4s var(--ease); }
-.printer { width: min(340px, 100%); background: var(--printer); border-radius: 18px; padding: 14px 16px 22px; color: #f1eef2; position: relative; z-index: 2; box-shadow: 0 10px 30px rgb(0 0 0 / .18); }
-.printer .row { display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
-.printer .dot { width: 8px; height: 8px; border-radius: 50%; background: #5a5560; }
-.printer.on .dot { background: #5bd18b; animation: blinkdot 1s steps(2) infinite; }
-.printer.tapped { animation: jolt .25s; }
-@keyframes jolt { 40% { transform: translateY(3px) rotate(-1deg); } }
-.printer .slot { position: absolute; left: 14px; right: 14px; bottom: 8px; height: 6px; border-radius: 3px; background: #000; }
-@keyframes blinkdot { 50% { opacity: .3; } }
-.feed { width: min(300px, calc(100% - 40px)); overflow: hidden; margin-top: -10px; position: relative; z-index: 1; }
-.paper { background: var(--paper); color: var(--paper-ink); font: 400 12.5px/1.55 var(--mono); padding: 22px 18px 30px; transform: translateY(-100%);
-  -webkit-mask: linear-gradient(#000 0 0) top / 100% calc(100% - 10px) no-repeat, conic-gradient(from -45deg at bottom, #0000, #000 1deg 89deg, #0000 90deg) bottom / 14px 10px repeat-x;
-          mask: linear-gradient(#000 0 0) top / 100% calc(100% - 10px) no-repeat, conic-gradient(from -45deg at bottom, #0000, #000 1deg 89deg, #0000 90deg) bottom / 14px 10px repeat-x;
-  box-shadow: inset 0 14px 12px -10px rgb(0 0 0 / .25); }
-.paper.go { animation: print 2.6s linear forwards; }
-.paper.shown { transform: none; }
-@keyframes print { 0% { transform: translateY(-100%); } 22% { transform: translateY(-74%); } 28% { transform: translateY(-73%); } 52% { transform: translateY(-44%); } 58% { transform: translateY(-43%); } 84% { transform: translateY(-10%); } 90% { transform: translateY(-9%); } 100% { transform: none; } }
-.paper .c { text-align: center; }
-.paper .hr { border-top: 1px dashed currentColor; opacity: .5; margin: 10px 0; }
-.paper .kv { display: flex; justify-content: space-between; gap: 12px; }
-.paper .kv span:last-child { text-align: right; overflow-wrap: anywhere; }
-.paper .big { font-weight: 600; font-size: 15px; }
-.paper .logo { font: 700 22px var(--display); letter-spacing: -.03em; }
 .after { margin-top: 16px; text-align: center; font-size: 14px; color: var(--muted); max-width: 34ch; opacity: 0; }
 .after.on { opacity: 1; animation: pop .5s var(--ease); }
 
@@ -159,26 +99,9 @@ canvas.bubbles { position: absolute; inset: 0; width: 100%; height: 100%; pointe
     <button type="button" class="ghost" id="sound" aria-pressed="true">Sound on</button>
   </div>
 
-  <div class="host">
-    <div class="nw" id="nw" aria-hidden="true"><div id="nw-move"><div class="act">
-      <svg viewBox="-10 -60 410 380">
-        <defs><clipPath id="nw-tusk"><path d="M150 105L80-45 167 98Z"/></clipPath></defs>
-        <path d="M150 105L80-45 167 98Z" fill="#f6f2e8"/>
-        <g clip-path="url(#nw-tusk)" stroke="#8c8578" stroke-width="2.5" stroke-linecap="round"><path d="M139 89L156 72M131 74L148 57M123 60L140 43M115 45L132 28M108 30L125 14M100 16L117-1M92 1L109-15"/></g>
-        <g stroke="#141217" stroke-width="4.5" stroke-linejoin="round">
-          <path d="M150 105L80-45 167 98Z" fill="none" stroke-width="4" stroke-linejoin="miter" stroke-miterlimit="12"/>
-          <path id="tail" d="M310 180C345 160 380 145 390 160 395 168 385 185 365 190 388 202 392 220 382 228 370 235 340 215 305 200Z" fill="#f4f4f6"/>
-          <path d="M85 175C85 110 140 90 220 90 295 90 330 135 330 195 330 255 270 275 195 275 115 275 85 240 85 175Z" fill="#faf9f6"/>
-          <path d="M150 220C140 250 120 262 105 255 95 248 102 230 125 212Z" fill="#faf9f6"/>
-        </g>
-        <g id="look"><circle class="eye" cx="132" cy="165" r="5" fill="#141217"/><circle class="eye" cx="182" cy="165" r="5" fill="#141217"/></g>
-        <g id="blush" opacity=".8"><ellipse cx="118" cy="178" rx="8" ry="5" fill="#f4bacd"/><ellipse cx="196" cy="178" rx="8" ry="5" fill="#f4bacd"/></g>
-        <path id="m-smile" d="M150 174Q157 184 164 174" stroke="#141217" stroke-width="3.5" stroke-linecap="round" fill="none"/>
-        <path id="m-open" d="M147 173Q157 192 167 173Z" fill="#141217" stroke="#141217" stroke-width="2.5" stroke-linejoin="round"/>
-        <path id="m-frown" d="M150 182Q157 173 164 182" stroke="#141217" stroke-width="3.5" stroke-linecap="round" fill="none"/>
-      </svg>
-    </div></div></div>
-    <p class="say" id="say" aria-live="polite"><span id="say-text"></span></p>
+  <div class="host nw-host" id="host">
+    <!-- The narwhal goes here (Narwhal.html, narwhal/narwhal.js). -->
+    <p class="nw-say is-hidden" id="say" aria-live="polite"><span id="say-text"></span></p>
   </div>
 
   <div class="stage" id="stage">
@@ -198,6 +121,7 @@ canvas.bubbles { position: absolute; inset: 0; width: 100%; height: 100%; pointe
   </form>
 </div>
 
+<script src="/narwhal/narwhal.js"></script>
 <script>
 const $ = (s) => document.querySelector(s);
 const TOKEN = decodeURIComponent(location.pathname.split("/")[2] || "");
@@ -233,162 +157,29 @@ async function api(method, path, body) {
   return data;
 }
 
-/* ---------- sound and vibration ----------
-   Synthesized with Web Audio, so nothing is loaded. Browsers keep audio silent
-   until the first tap or key press. Vibration works on Android; iPhones have none. */
-let ac = null, unlocked = false, feel = true;
-try { feel = localStorage.getItem("zold-send-sound") !== "off"; } catch { /* private mode: default on */ }
-function audio() {
-  if (!feel || !unlocked) return null;
-  try { ac ??= new (window.AudioContext || window.webkitAudioContext)(); } catch { return null; }
-  if (ac.state === "suspended") ac.resume();
-  return ac;
-}
-function tone(f0, f1, ms, type = "sine", vol = .12, delay = 0) {
-  const a = audio(); if (!a) return;
-  const t = a.currentTime + delay / 1000, end = t + ms / 1000;
-  const o = a.createOscillator(), g = a.createGain();
-  o.type = type;
-  o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, end);
-  g.gain.setValueAtTime(.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + .006); g.gain.exponentialRampToValueAtTime(.0001, end);
-  o.connect(g).connect(a.destination); o.start(t); o.stop(end + .02);
-}
-function noise(ms, vol, delay = 0, freq = 2000, q = 1) {
-  const a = audio(); if (!a) return;
-  const t = a.currentTime + delay / 1000, len = Math.ceil(a.sampleRate * ms / 1000);
-  const buf = a.createBuffer(1, len, a.sampleRate), d = buf.getChannelData(0);
-  for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
-  const s = a.createBufferSource(), f = a.createBiquadFilter(), g = a.createGain();
-  s.buffer = buf; f.type = "bandpass"; f.frequency.value = freq; f.Q.value = q;
-  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(.0001, t + ms / 1000);
-  s.connect(f).connect(g).connect(a.destination); s.start(t);
-}
-function buzz(pattern) {
-  // Like sound, only after a tap or key press: browsers refuse it before one.
-  if (!feel || !unlocked) return;
-  try { navigator.vibrate?.(pattern); } catch { /* not allowed here */ }
-}
-/* The print animation moves in four feeds with short pauses (@keyframes print, 2.6s). */
-const PRINT_FEEDS = [[0, 572], [728, 624], [1508, 676], [2340, 260]];
-const sfx = {
-  blip: () => tone(1300 + Math.random() * 500, 900, 45, "sine", .035),
-  pop: (p = 1) => { tone(700 * p, 260 * p, 80, "sine", .16); noise(25, .05, 0, 4000, 2); },
-  tick: (i) => tone(880 + i * 60, 880 + i * 60, 30, "triangle", .05),
-  good: () => { tone(660, 660, 90, "triangle", .09); tone(990, 990, 160, "triangle", .09, 90); buzz(12); },
-  bad: () => { tone(200, 130, 220, "square", .05); buzz([30, 50, 30]); },
-  tap: () => { noise(35, .3, 0, 1600, 1.5); tone(180, 120, 60, "sine", .12); buzz(15); },
-  print: () => {
-    const pulses = [];
-    let at = 0;
-    for (const [start, len] of PRINT_FEEDS) {
-      // on/off pairs always end on an "off", so a pause stretches that last off
-      if (start > at && pulses.length) { pulses[pulses.length - 1] += start - at; at = start; }
-      for (let k = 0; k + 50 <= len; k += 50) {
-        noise(28, .07, start + k, 900, .8); tone(70, 70, 28, "sawtooth", .03, start + k);
-        pulses.push(20, 30);
-      }
-      at = start + len - (len % 50);
-    }
-    buzz(pulses);
-  },
-  done: () => { [523, 659, 784, 1047].forEach((f, i) => tone(f, f, 260, "triangle", .08, i * 110)); buzz([20, 80, 40]); },
-};
+/* Sound and vibration: Narwhal.sfx (narwhal/narwhal.js), silent until the first tap or key press. */
+Narwhal.sound.start("zold-send-sound");
+const { sfx, buzz } = Narwhal;
 
 /* ---------- the narwhal's body language ---------- */
+$("#host").insertAdjacentHTML("afterbegin", Narwhal.html({ state: "away", id: "nw" }));
 const nw = $("#nw");
-let reactTimer = 0, idleTimer = 0;
-function react(kind, ms = 900) {
-  clearTimeout(reactTimer);
-  nw.classList.remove("nod", "happy", "spin", "sad", "lap");
-  void nw.offsetWidth;
-  nw.classList.add(kind);
-  if (kind === "happy" || kind === "spin") sfx.good();
-  reactTimer = setTimeout(() => nw.classList.remove(kind), ms);
-}
-/* Quiet for a while: a small lap. */
-function idle() {
-  clearTimeout(idleTimer);
-  idleTimer = setTimeout(() => { if (!document.getElementById("finale")) { react("lap", 1700); idle(); } }, 7000);
-}
-function blowhole() {
-  const r = nw.querySelector("svg").getBoundingClientRect();
-  return { x: r.left + r.width * 0.585, y: r.top + r.height * 0.38 };
-}
-function puff(x, y, size, dx, dy, ms) {
-  if (REDUCED) return;
-  const p = document.createElement("div");
-  p.className = "puff";
-  Object.assign(p.style, { left: `${x - size / 2}px`, top: `${y - size / 2}px`, width: `${size}px`, height: `${size}px` });
-  document.body.append(p);
-  p.animate([{ transform: "translate(0,0) scale(.4)", opacity: 0 }, { opacity: .7, offset: .2 }, { transform: `translate(${dx}px,${dy}px) scale(1)`, opacity: 0 }],
-    { duration: ms, easing: "cubic-bezier(.2,.6,.4,1)" }).onfinish = () => p.remove();
-}
+const react = (kind, ms) => Narwhal.react(nw, kind, ms);
+/* Quiet for a while: a small lap, until the receipt is up. */
+const idle = () => Narwhal.idle(nw, () => !document.getElementById("finale"));
 
 async function say(text, tip) {
   const my = ++run, el = $("#say-text");
-  $("#say").classList.add("on");
+  $("#say").classList.remove("is-hidden");
   react("nod", 500);
-  el.textContent = "";
-  if (REDUCED) el.textContent = text;
-  else for (let i = 1; i <= text.length; i++) { if (my !== run) return; el.textContent = text.slice(0, i); await sleep(24); }
-  if (tip && my === run) { const t = document.createElement("span"); t.className = "tip"; t.textContent = tip; el.append(t); }
+  if (!(await Narwhal.type(el, text, { alive: () => my === run }))) return;
+  if (tip) { const t = document.createElement("span"); t.className = "nw-say__tip"; t.textContent = tip; el.append(t); }
 }
 
 /* An answer rises from the chat box in a bubble and pops where it belongs. */
-async function floatUp(text, target) {
-  if (REDUCED) return;
-  const from = $("#composer").getBoundingClientRect(), to = target.getBoundingClientRect();
-  const b = document.createElement("div");
-  b.className = "ansbub"; b.textContent = text;
-  document.body.append(b);
-  const w = b.offsetWidth, h = b.offsetHeight;
-  const x0 = from.left + 16, y0 = from.top, x1 = to.left + to.width / 2 - w / 2, y1 = to.top + to.height / 2 - h / 2;
-  b.style.left = "0px"; b.style.top = "0px";
-  await b.animate([
-    { transform: `translate(${x0}px,${y0}px) scale(.6)`, opacity: 0 },
-    { transform: `translate(${x0}px,${y0 - 30}px) scale(1)`, opacity: 1, offset: .2 },
-    { transform: `translate(${(x0 + x1) / 2 + 18}px,${(y0 + y1) / 2}px) scale(1.04)`, offset: .6 },
-    { transform: `translate(${x1}px,${y1}px) scale(1.08)` },
-  ], { duration: 900, easing: "cubic-bezier(.3,.7,.3,1)", fill: "forwards" }).finished;
-  const cx = x1 + w / 2, cy = y1 + h / 2;
-  sfx.pop(); buzz(8);
-  b.animate([{ transform: `translate(${x1}px,${y1}px) scale(1.08)`, opacity: 1 }, { transform: `translate(${x1}px,${y1}px) scale(1.5)`, opacity: 0 }],
-    { duration: 220, fill: "forwards" }).onfinish = () => b.remove();
-  for (let i = 0; i < 10; i++) {
-    const a = (i / 10) * Math.PI * 2;
-    puff(cx + Math.cos(a) * w * .35, cy + Math.sin(a) * h * .5, 6 + Math.random() * 8, Math.cos(a) * 40, Math.sin(a) * 30 - 20, 600);
-  }
-  await sleep(120);
-}
-
+const floatUp = (text, target) => Narwhal.floatUp(text, $("#composer"), target);
 /* The burst before the receipt. */
-function burst(ms) {
-  if (REDUCED) return Promise.resolve();
-  const c = document.createElement("canvas"); c.className = "bubbles"; $("#app").append(c);
-  const dpr = devicePixelRatio || 1, W = c.clientWidth, H = c.clientHeight;
-  c.width = W * dpr; c.height = H * dpr;
-  const g = c.getContext("2d"); g.scale(dpr, dpr);
-  const ink = getComputedStyle(document.documentElement).getPropertyValue("--ink").trim();
-  for (let i = 0; i < 14; i++) setTimeout(() => sfx.pop(.7 + Math.random() * .9), 150 + i * 85 + Math.random() * 60);
-  buzz([10, 60, 10, 60, 10, 60, 10]);
-  const bs = Array.from({ length: 70 }, () => ({ x: Math.random() * W, y: H + Math.random() * H * .6, r: 4 + Math.random() * 22, v: 3 + Math.random() * 4, p: Math.random() * 6.28 }));
-  const t0 = performance.now();
-  return new Promise((done) => (function frame(t) {
-    g.clearRect(0, 0, W, H);
-    let alive = 0;
-    for (const b of bs) {
-      b.y -= b.v; b.p += .05;
-      if (b.y + b.r < 0) continue;
-      alive++;
-      const x = b.x + Math.sin(b.p) * 6;
-      g.beginPath(); g.arc(x, b.y, b.r, 0, 6.283); g.lineWidth = 2; g.strokeStyle = ink; g.globalAlpha = .55; g.stroke();
-      g.beginPath(); g.arc(x - b.r * .35, b.y - b.r * .35, b.r * .22, 0, 6.283); g.fillStyle = ink; g.globalAlpha = .35; g.fill();
-    }
-    g.globalAlpha = 1;
-    if (t - t0 > ms) done();
-    if (alive && t - t0 < 5000) requestAnimationFrame(frame); else { c.remove(); done(); }
-  })(t0));
-}
+const burst = (ms) => Narwhal.burst($("#app"), ms);
 
 /* ---------- questions ---------- */
 function ask({ label, placeholder = "", mode = "text", autocomplete = "off" }) {
@@ -417,8 +208,8 @@ function choose(options) {
     b.type = "button"; b.className = "choice"; b.style.animationDelay = `${i * 80}ms`;
     b.innerHTML = `${esc(o.label)}<span>${esc(o.sub)}</span>`;
     b.onclick = () => state.pending(o.id);
-    b.onmouseenter = () => nw.classList.add("looking");
-    b.onmouseleave = () => nw.classList.remove("looking");
+    b.onmouseenter = () => Narwhal.look(nw, true);
+    b.onmouseleave = () => Narwhal.look(nw, false);
     box.append(b);
   });
   box.hidden = false;
@@ -469,10 +260,9 @@ async function askAmount() {
 }
 
 async function flow(link) {
-  nw.classList.add("in");
-  await sleep(1300);
+  await Narwhal.swimIn(nw);
   react("happy");
-  for (let i = 0; i < 4; i++) { const o = blowhole(); puff(o.x, o.y, 8 + i * 3, 6 - i * 4, -60 - i * 12, 1100); await sleep(110); }
+  await Narwhal.spout(nw);
   await say(`Hey! ${PAYER_FIRST} wants to send you money.`, link.note ? `${PAYER_FIRST}’s note: “${link.note}”` : undefined);
   await sleep(link.note ? 1600 : 900);
   await say("How much should it be?");
@@ -492,7 +282,7 @@ async function flow(link) {
   options.push({ id: "iban", label: "Bank account", sub: "IBAN · SEPA transfer" });
   await say("How do you want to receive it?", CHAIN ? "Tip: a crypto wallet gets the money in seconds. A bank account (IBAN) goes by SEPA transfer." : undefined);
   const method = options.length > 1 ? await choose(options) : "iban";
-  nw.classList.remove("looking");
+  Narwhal.look(nw, false);
   react("happy");
 
   let payTo, show, kind, name;
@@ -546,7 +336,7 @@ async function flow(link) {
   }
   // Sent: nothing below may say it failed.
   $("#dock").classList.remove("on");
-  clearTimeout(idleTimer);
+  Narwhal.still(nw);
   await say(`That’s everything! ${PAYER_FIRST} can see it now.`);
   react("spin", 1000);
   await burst(1400);
@@ -567,90 +357,51 @@ async function printReceipt(inv, { animate }) {
   const f = document.createElement("div");
   f.className = "finale"; f.id = "finale";
   f.innerHTML = `
-    <div class="printer" id="printer"><div class="row"><span>Zold</span><span class="dot" aria-hidden="true"></span></div><div class="slot"></div></div>
-    <div class="feed"><div class="paper" id="paper">
-      <div class="c logo">Zold</div>
-      <div class="c">PAYMENT REQUEST</div>
-      <div class="c">${esc(when)} · ${esc(inv.supplier?.invoiceNumber || "")}</div>
-      <div class="hr"></div>
-      <div class="kv"><span>FROM</span><span>${esc(PAYER)}</span></div>
-      <div class="kv"><span>FOR</span><span>${esc(line?.description || "")}</span></div>
-      <div class="kv"><span>TO</span><span>${esc(inv.supplier?.orgName || "")}</span></div>
-      <div class="kv"><span>${esc(to.kind.toUpperCase())}</span><span>${esc(to.show)}</span></div>
-      <div class="hr"></div>
-      <div class="kv big"><span>AMOUNT</span><span>€${esc(inv.total)}</span></div>
-      <div class="hr"></div>
-      <div class="c">${paid ? "PAID" : paying ? "ON ITS WAY" : waiting ? `WAITING FOR ${esc(PAYER_FIRST.toUpperCase())}` : esc(inv.state)}</div>
-      ${waiting ? `<div class="c">No money has moved yet.</div>` : ""}
+    ${Narwhal.printerHtml()}
+    <div class="nw-feed"><div class="nw-paper" id="paper">
+      <div class="nw-paper__c nw-paper__logo">Zold</div>
+      <div class="nw-paper__c">PAYMENT REQUEST</div>
+      <div class="nw-paper__c">${esc(when)} · ${esc(inv.supplier?.invoiceNumber || "")}</div>
+      <div class="nw-paper__hr"></div>
+      <div class="nw-paper__kv"><span>FROM</span><span>${esc(PAYER)}</span></div>
+      <div class="nw-paper__kv"><span>FOR</span><span>${esc(line?.description || "")}</span></div>
+      <div class="nw-paper__kv"><span>TO</span><span>${esc(inv.supplier?.orgName || "")}</span></div>
+      <div class="nw-paper__kv"><span>${esc(to.kind.toUpperCase())}</span><span>${esc(to.show)}</span></div>
+      <div class="nw-paper__hr"></div>
+      <div class="nw-paper__kv nw-paper__big"><span>AMOUNT</span><span>€${esc(inv.total)}</span></div>
+      <div class="nw-paper__hr"></div>
+      <div class="nw-paper__c">${paid ? "PAID" : paying ? "ON ITS WAY" : waiting ? `WAITING FOR ${esc(PAYER_FIRST.toUpperCase())}` : esc(inv.state)}</div>
+      ${waiting ? `<div class="nw-paper__c">No money has moved yet.</div>` : ""}
     </div></div>
     <p class="after" id="after">${paid ? `${esc(PAYER_FIRST)} has paid this.` : paying ? `${esc(PAYER_FIRST)} has started this payment. You’ll see the money once it arrives.` : `${esc(PAYER_FIRST)} approves it in Zold with biometrics. You’ll see the money once it’s sent.`}</p>`;
   $("#app").append(f);
-  $("#say").classList.remove("on");
-  const printer = $("#printer"), move = $("#nw-move");
-  if (!animate || REDUCED) {
-    $("#paper").classList.add("shown");
-    $("#after").classList.add("on");
-    return;
-  }
-  const n = move.getBoundingClientRect(), p = printer.getBoundingClientRect();
-  const dx = p.left + 30 - n.left, dy = p.top - n.top - n.height * 0.72;
-  await move.animate([{ transform: "none" }, { transform: `translate(${dx * .6}px,${dy * .4 - 30}px) rotate(-10deg)`, offset: .5 }, { transform: `translate(${dx}px,${dy}px) rotate(14deg)` }],
-    { duration: 1100, easing: "cubic-bezier(.4,0,.2,1)", fill: "forwards" }).finished;
-  for (let i = 0; i < 2; i++) {
-    await move.animate([{ transform: `translate(${dx}px,${dy}px) rotate(14deg)` }, { transform: `translate(${dx}px,${dy + 10}px) rotate(24deg)` }, { transform: `translate(${dx}px,${dy}px) rotate(14deg)` }],
-      { duration: 260, fill: "forwards" }).finished;
-    printer.classList.remove("tapped"); void printer.offsetWidth; printer.classList.add("tapped");
-    sfx.tap();
-  }
-  move.animate([{ transform: `translate(${dx}px,${dy}px) rotate(14deg)` }, { transform: `translate(${dx - 8}px,${dy - 6}px) rotate(0deg)` }], { duration: 500, fill: "forwards" });
-  printer.classList.add("on");
-  $("#paper").classList.add("go");
-  sfx.print();
-  await sleep(2600);
-  react("happy", 1000);
-  sfx.done();
+  $("#say").classList.add("is-hidden");
+  if (animate) await Narwhal.print(nw, f.querySelector(".nw-printer"), $("#paper"));
+  else $("#paper").classList.add("is-shown");
   $("#after").classList.add("on");
 }
 
 /* ---------- wiring ---------- */
 const input = $("#answer");
-let lastPuff = 0;
-input.addEventListener("focus", () => nw.classList.add("looking"));
-input.addEventListener("blur", () => nw.classList.remove("looking"));
-input.addEventListener("input", () => {
+Narwhal.watch(nw, input, () => {
   idle();
   if ($("#err").textContent) $("#err").textContent = "";
-  const t = performance.now();
-  if (t - lastPuff < 90) return;
-  lastPuff = t;
-  sfx.blip();
-  const o = blowhole();
-  puff(o.x + (Math.random() - .5) * 6, o.y, 5 + Math.random() * 7, (Math.random() - .5) * 24, -50 - Math.random() * 30, 900);
 });
 $("#dock").addEventListener("submit", (e) => {
   e.preventDefault();
   if (state.pending && !$("#composer").hidden && !$("#send").disabled) state.pending(input.value);
 });
-const unlock = () => { unlocked = true; audio(); };
-addEventListener("pointerdown", unlock, { once: true, capture: true });
-addEventListener("keydown", unlock, { once: true, capture: true });
 const soundBtn = $("#sound");
-const drawSound = () => { soundBtn.setAttribute("aria-pressed", String(feel)); soundBtn.textContent = feel ? "Sound on" : "Sound off"; };
+const drawSound = () => { const on = Narwhal.sound.on; soundBtn.setAttribute("aria-pressed", String(on)); soundBtn.textContent = on ? "Sound on" : "Sound off"; };
 drawSound();
-soundBtn.onclick = () => {
-  feel = !feel;
-  try { localStorage.setItem("zold-send-sound", feel ? "on" : "off"); } catch { /* not kept: fine */ }
-  if (!feel) buzz(0);
-  drawSound();
-};
+soundBtn.onclick = () => { Narwhal.sound.on = !Narwhal.sound.on; drawSound(); };
 
 (async () => {
   let r;
   try {
     r = await api("GET", `/api/invoice-links/${encodeURIComponent(TOKEN)}`);
   } catch (e) {
-    nw.classList.add("in");
-    await sleep(1300);
+    await Narwhal.swimIn(nw);
     react("sad", 1400);
     await say(e.status === 404 ? "This link doesn’t work." : "I couldn’t open this link just now.",
       e.status === 404 ? "Ask the person who sent it for a new one." : `${e.message} Reload the page to try again.`);
@@ -663,8 +414,7 @@ soundBtn.onclick = () => {
   CHAIN = (r.payoutChains || [])[0] || null;
   document.title = `${PAYER_FIRST} wants to pay you · Zold`;
   if (inv.state !== "LINK_CREATED") {
-    nw.classList.add("in");
-    await sleep(1300);
+    await Narwhal.swimIn(nw);
     await say("This link was already filled in.");
     await printReceipt(inv, { animate: false });
     return;

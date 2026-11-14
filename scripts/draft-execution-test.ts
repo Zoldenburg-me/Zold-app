@@ -381,22 +381,23 @@ try {
     return { r, after };
   };
 
-  const walletLine = await preflight([
-    {
-      destination: {
-        kind: "wallet",
-        chainId: 31337,
-        address: "0x1111111111111111111111111111111111111111",
-        displayName: "Someone",
+  // A wallet run is a crypto send (business:crypto-send:test). One with no
+  // saved contact can never be sent, so submit refuses it before review.
+  const walletDraft = (
+    await ok("POST", `/api/orgs/${org.id}/drafts`, {
+      token: ownerToken,
+      body: {
+        source: { kind: "account", accountId: funded.account.id },
+        lines: [{ destination: { kind: "wallet", chainId: 31337, address: "0x1111111111111111111111111111111111111111", displayName: "Someone" }, asset: "EURE", amount: "10.00" }],
       },
-      asset: "EUR",
-      amount: "10.00",
-    },
-  ]);
-  check("paying a wallet from an issued account is refused, not attempted", () => {
-    assert.equal(walletLine.r.status, 422);
-    assert.match(walletLine.r.data.problems[0].reason, /token-to-token/i);
-    assert.equal(walletLine.after.draft.state, "REVIEWED", "and the draft is untouched");
+    })
+  ).draft;
+  const walletSubmit = await call("POST", `/api/orgs/${org.id}/drafts/${walletDraft.id}/submit`, { token: ownerToken });
+  const walletAfter = await ok("GET", `/api/orgs/${org.id}/drafts/${walletDraft.id}`, { token: ownerToken });
+  check("a wallet line with no saved contact is refused at submit, not attempted", () => {
+    assert.equal(walletSubmit.status, 422, JSON.stringify(walletSubmit.data));
+    assert.match(walletSubmit.data.problems[0].reason, /saved contact/);
+    assert.equal(walletAfter.draft.state, "DRAFT", "and the draft is untouched");
   });
 
   // SEPA is free by default; this suite pins SEPA_FEE_EUR so the fee
