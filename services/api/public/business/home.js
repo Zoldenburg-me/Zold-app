@@ -6,7 +6,8 @@
  * Rules for what this file shows:
  * - There is no company balance. Only the account backed by YOUR own account
  *   shows a figure; another names the member who backs it.
- * - Money in and out is summed from the statement lines Books shows. An org
+ * - Money in and out is summed from the statement lines Books counts: not a
+ *   move between the org's own accounts, not an unproven conversion. An org
  *   without Books gets no chart, never a row of zeros.
  * - Money out is Sent, never Paid: the bank's confirmation is not on a line.
  * - Quick send only opens the send form (send.js), filled in; it sends nothing.
@@ -14,11 +15,11 @@
  *   company, from what Access reads (access-model.js).
  */
 import { $, Z, api, cap, ensureMe, esc, eur, gateHtml, maskIban, me, org, ownSafe, refreshMe, roleCan, safeAddressHtml, setView, view, when, ymd } from "./core.js";
-import { META, RENDER, moneriumLink } from "./views.js";
-import { side, submittedInvoices, waitingForMe } from "./nav.js";
+import { META, RENDER, linkBtn, moneriumLink } from "./views.js";
+import { submittedInvoices, waitingForMe } from "./nav.js";
 import { draftTag, draftTitle, draftTotal, invAmount, loadMembers, memberName } from "./screens.js";
 import { APP_LINKS, isOwnCompanyOrg, loadAccess } from "./access-model.js";
-import { hasIban, noIbanStep, payableContacts, pendingRuns, quickSendBlock, securityRows, setupOpen, setupSteps } from "./home-model.js";
+import { countedLines, hasIban, noIbanStep, payableContacts, pendingRuns, quickSendBlock, securityRows, setupOpen, setupSteps } from "./home-model.js";
 import { sendState } from "./send.js";
 import { runLink } from "./payment.js";
 import { runIdForLine } from "./payment-model.js";
@@ -38,7 +39,6 @@ const LINE_WORD = { sepa_in: "Received", sepa_out: "Sent", sepa_out_reversal: "R
 /* What the page remembers between redraws of one section. */
 const hs = { period: "30d", tab: "all", month: null };
 
-const linkBtn = (label, view, icon, variant = "secondary") => `<a class="z-btn z-btn--${variant}" href="?view=${esc(view)}" data-view-link="${esc(view)}">${icon ? Z.icon(icon) : ""}<span>${esc(label)}</span></a>`;
 const isoDay = (d) => d.toISOString().slice(0, 10);
 export const cents = (lines, dir) => lines.reduce((n, l) => n + (dir === "in" ? Math.max(l.amountCents, 0) : Math.max(-l.amountCents, 0)), 0);
 const sumEur = (d) => Number(d.totals?.EUR || d.totals?.EURe || 0);
@@ -176,7 +176,7 @@ function activity(all, limit = ACTIVITY_ROWS, runs = null) {
       return `<tr><td class="z-dim">${esc(when(ymd(l.valueDate)))}</td>
         <td><span class="z-tbl__who">${Z.avatar({ name: who })}${run ? runLink(run, esc(who)) : `<a class="z-tbl__link" href="?view=books" data-view-link="books">${esc(who)}</a>`}</span></td>
         <td>${l.note ? esc(l.note) : l.reference ? esc(l.reference) : '<span class="z-dim">No memo</span>'}</td>
-        <td>${Z.tag(LINE_WORD[l.event] || (inbound ? "Received" : "Sent"))}</td>
+        <td>${Z.tag(LINE_WORD[l.event] || (inbound ? "Received" : "Sent"))}${l.unexecuted ? ` ${Z.tag("Unproven", "amber")}` : ""}</td>
         <td class="z-tbl__num">${Z.amount({ value: Math.abs(l.amountCents) / 100, direction: inbound ? "in" : "out" })}</td></tr>`;
     });
   const all_ = limit === Infinity;
@@ -303,7 +303,7 @@ function checklistCard(steps) {
 
 function statCard(id, title, view, cells) {
   return `<section class="z-card zb-side-card" aria-labelledby="${id}"><div class="zb-side-card__head"><h2 id="${id}">${title}</h2><a href="?view=${view}" data-view-link="${view}">View all</a></div>
-    <dl class="zb-h-stats">${cells.map(([label, n, amount, tone]) => `<div><dt>${label}</dt><dd class="${tone || ""}"><b>${n}</b><span>${esc(eur(amount))}</span></dd></div>`).join("")}</dl></section>`;
+    <dl class="zb-h-stats">${cells.map(([label, n, amount, tone, other]) => `<div><dt>${label}</dt><dd class="${tone || ""}"><b>${n}</b><span>${esc(eur(amount))}${other ? ` + ${other} not in euros` : ""}</span></dd></div>`).join("")}</dl></section>`;
 }
 
 /* ── Screen ───────────────────────────────────────────────────────────────── */
@@ -315,7 +315,7 @@ function headerActions(waiting) {
   const sm = (html) => html.replace('class="z-btn ', 'class="z-btn z-btn--sm ');
   return [
     drafts ? sm(linkBtn("New payment", "send", "arrow_outward", waiting ? "secondary" : "primary")) : "",
-    cap("invoices").allowed ? `<button type="button" class="z-btn z-btn--sm z-btn--secondary" data-act="issue-invoice">${Z.icon("receipt_long")}<span>Issue invoice</span></button>` : "",
+    cap("invoices").allowed && roleCan(org.role, "invoices") ? `<button type="button" class="z-btn z-btn--sm z-btn--secondary" data-act="issue-invoice">${Z.icon("receipt_long")}<span>Issue invoice</span></button>` : "",
     sm(linkBtn("Request payment", "get-paid", "south_west")),
   ].join("");
 }
@@ -346,6 +346,9 @@ RENDER.overview = async () => {
   const invoices = inv.status === "fulfilled" && inv.value ? inv.value.invoices : null;
   const lines = st.status === "fulfilled" && st.value ? st.value.lines : null;
   const months = st.status === "fulfilled" && st.value ? st.value.months : [];
+  // Own-account moves are neither income nor expense; an unproven conversion is in no sum either.
+  const counted = lines && countedLines(lines);
+  const summed = counted && counted.filter((l) => !l.unexecuted);
   const contacts = ct.status === "fulfilled" && ct.value ? ct.value.contacts : null;
   // Security and set-up are about the login's own account: only in its own company.
   const access = ax.status === "fulfilled" && acc.status === "fulfilled" && isOwnCompanyOrg(me, org, accounts) ? ax.value : null;
@@ -356,17 +359,19 @@ RENDER.overview = async () => {
   const cards = [];
   if (invoices) {
     const out = invoices.filter((i) => i.direction === "outgoing" && i.state !== "DELETED");
-    const open = out.filter((i) => !["PAID", "RECONCILED"].includes(i.state));
+    const open = out.filter((i) => !["PAID", "RECONCILED", "DRAFT"].includes(i.state));
     const late = open.filter((i) => i.overdue);
     const paid = out.filter((i) => ["PAID", "RECONCILED"].includes(i.state) && within(i.payment?.paidAt || i.payment?.manual?.at, 30));
-    const total = (list) => list.reduce((n, i) => n + invAmount(i).value, 0);
-    cards.push(statCard("home-inv", "Invoices", "invoices", [["Open", open.length, total(open)], ["Overdue", late.length, total(late), late.length ? "is-late" : ""], ["Paid, last 30 days", paid.length, total(paid)]]));
+    // Euros are summed; an invoice in another currency is counted beside the sum, never added into it.
+    const inEur = (i) => invAmount(i).currency === "EUR";
+    const cell = (label, list, tone = "") => [label, list.length, list.filter(inEur).reduce((n, i) => n + invAmount(i).value, 0), tone, list.filter((i) => !inEur(i)).length];
+    cards.push(statCard("home-inv", "Invoices", "invoices", [cell("Open", open), cell("Overdue", late, late.length ? "is-late" : ""), cell("Paid, last 30 days", paid)]));
   }
   if (cap("transfers.drafts").allowed) {
     const by = (s) => runs.filter((d) => d.state === s);
     const total = (list) => list.reduce((n, d) => n + sumEur(d), 0);
     // What left the account, from the statement; without Books, the runs marked sent.
-    const out30 = (lines || []).filter((l) => l.amountCents < 0 && within(ymd(l.valueDate), 30));
+    const out30 = (summed || []).filter((l) => l.amountCents < 0 && within(ymd(l.valueDate), 30));
     const sent = lines
       ? ["Sent, last 30 days", out30.length, cents(out30, "out") / 100]
       : ["Sent", by("EXECUTED").length, total(by("EXECUTED"))];
@@ -374,11 +379,11 @@ RENDER.overview = async () => {
   }
 
   const html = `<div id="hm-root"><div class="zb-h-actions">${headerActions(waitingForMe(runs).length + submittedInvoices(invoices).length)}</div>
-    <div class="zb-h-top">${balanceCard(accounts, lines, acc.status === "fulfilled")}<div class="zb-stack">${sends ? quickSendCard(acc.status === "fulfilled" ? accounts : null, contacts) : ""}${accountsCard(accounts, acc.status === "fulfilled")}</div></div>
-    ${attention({ waiting: waitingForMe(runs), invoices, lines, accounts })}
+    <div class="zb-h-top">${balanceCard(accounts, summed, acc.status === "fulfilled")}<div class="zb-stack">${sends ? quickSendCard(acc.status === "fulfilled" ? accounts : null, contacts) : ""}${accountsCard(accounts, acc.status === "fulfilled")}</div></div>
+    ${attention({ waiting: waitingForMe(runs), invoices, lines: counted, accounts })}
     ${setup.length ? `<div class="zb-grid2">${setup.join("")}</div>` : ""}
     ${cards.length ? `<div class="zb-grid2">${cards.join("")}</div>` : ""}
-    ${lines && months.length ? `<section class="zb-h-section" id="hm-move" aria-labelledby="home-move">${movement(lines, months)}</section>` : ""}
+    ${lines && months.length ? `<section class="zb-h-section" id="hm-move" aria-labelledby="home-move">${movement(summed, months)}</section>` : ""}
     ${lines ? `<section class="zb-h-section" id="hm-act" aria-labelledby="home-act">${activity(lines, ACTIVITY_ROWS, pendingTab)}</section>` : ""}</div>`;
 
   return {
@@ -400,12 +405,12 @@ RENDER.overview = async () => {
         if (!b || !lines) return;
         // Redraw only the section, then put focus back on the control that was pressed.
         let again;
-        if (b.dataset.hp) { hs.period = b.dataset.hp; box.querySelector("#hm-flow").innerHTML = flowCard(lines); again = `[data-hp="${hs.period}"]`; }
+        if (b.dataset.hp) { hs.period = b.dataset.hp; box.querySelector("#hm-flow").innerHTML = flowCard(summed); again = `[data-hp="${hs.period}"]`; }
         else if (b.dataset.ht) { hs.tab = b.dataset.ht; box.querySelector("#hm-act").innerHTML = activity(lines, ACTIVITY_ROWS, pendingTab); again = `[data-ht="${hs.tab}"]`; }
         else if (b.dataset.hm) {
           const back = b.getAttribute("aria-label");
           hs.month = b.dataset.hm;
-          box.querySelector("#hm-move").innerHTML = movement(lines, months);
+          box.querySelector("#hm-move").innerHTML = movement(summed, months);
           again = `[data-hm][aria-label="${back}"]:not([disabled])`;
         }
         box.querySelector(again)?.focus();

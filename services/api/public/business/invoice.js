@@ -23,7 +23,7 @@ let profile = null;          // GET /invoicing/profile, for the paper
 let checkSeq = 0;
 
 const draftKey = () => `zold-web-invoice-draft:${org.id}`;
-export function storedDraft() {
+function storedDraft() {
   try { return JSON.parse(localStorage.getItem(draftKey()) || "null"); } catch { return null; }
 }
 export function storeDraft() {
@@ -169,7 +169,7 @@ RENDER["invoice-new"] = async () => {
         <span><b>The customer is a business</b>Then their VAT ID can go on the invoice, and VAT may be theirs to pay, not yours.</span></label>
       <div class="zb-row zb-row--2">
         <div><label for="inv-r-country">Country</label>${countrySelect("inv-r-country", r.country || org.address?.country)}</div>
-        ${r.isBusiness ? `<div>${f("inv-r-vat", "Customer’s VAT ID", r.vatId, `placeholder="${esc(vatExample(d, r.country || org.address?.country))}" spellcheck="false" aria-describedby="inv-vat-status"`).replace(/^<div>|<\/div>$/g, "")}
+        ${r.isBusiness ? `<div><label for="inv-r-vat">Customer’s VAT ID</label><input id="inv-r-vat" name="inv-r-vat" autocomplete="off" value="${esc(r.vatId ?? "")}" placeholder="${esc(vatExample(d, r.country || org.address?.country))}" spellcheck="false" aria-describedby="inv-vat-status" />
           <p class="zb-hint" id="inv-vat-status" aria-live="polite" style="margin-top:6px"></p></div>` : ""}
       </div>
       <div class="zb-row zb-row--3">

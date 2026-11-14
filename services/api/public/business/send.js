@@ -13,16 +13,15 @@
  */
 import { Z, api, cap, chainId, esc, eur, gateHtml, maskIban, me, org, reviewOn, roleCan, usdSymbol } from "./core.js";
 import { loadMembers } from "./screens.js";
-import { META, RENDER } from "./views.js";
+import { META, RENDER, linkBtn } from "./views.js";
 import { fundableAccounts, payableContacts } from "./home-model.js";
 
-/** Picked before the form opens: a contact's Pay button, or Home's Quick send. */
-export const sendState = { contactId: null, amount: "", mode: "bank" };
+/** Picked before the form opens: a contact's Pay button, Home's Quick send, or what was typed before Add a contact. */
+export const sendState = { contactId: null, amount: "", note: "", mode: "bank" };
 
 /** A contact's wallet on this deployment's network, or undefined. */
 export const walletOf = (c, net = chainId) => (c.wallets || []).find((w) => w.chainId === net);
 
-const linkBtn = (label, view, icon) => `<a class="z-btn z-btn--secondary" href="?view=${esc(view)}" data-view-link="${esc(view)}">${icon ? Z.icon(icon) : ""}<span>${esc(label)}</span></a>`;
 const last4 = (iban) => `•••• ${String(iban || "").replace(/\s+/g, "").slice(-4)}`;
 /** A contact list long enough to need a search box. */
 const FIND_FROM = 6;
@@ -122,6 +121,7 @@ RENDER.send = async () => {
   if (!fundable.length) {
     // Nothing here can use Quick send's amount: a later New payment starts empty.
     sendState.amount = "";
+    sendState.note = "";
     return `<div class="gate"><h3>No account can pay yet</h3><p>${org.type === "business"
       ? `Connect ${esc(org.name)}’s Monerium profile to an account first.`
       : "Open an account and fund it from your own account first."}</p><div class="zb-actions">${linkBtn("Accounts", "accounts")}</div></div>`;
@@ -133,8 +133,9 @@ RENDER.send = async () => {
   const first = fundable.find((a) => a.backingUserId === me?.id) || fundable[0];
   const chosen = payable.find((c) => c.id === sendState.contactId)?.id;
   const action = reviewOn() ? "Submit for approval" : "Save payment";
-  // Quick send's amount fills the form once; a later New payment starts empty.
+  // Quick send's amount, or what was typed before Add a contact, fills the form once; a later New payment starts empty.
   const amount = sendState.amount;
+  const note = sendState.note;
 
   const addRow = crypto
     ? `<button type="button" class="zb-pick-row zb-pick-row--add" data-act="new-wallet-contact">${Z.iconTile({ icon: "person_add" })}<span class="z-row__main"><span class="z-row__title">Add a wallet contact</span><span class="z-row__sub">An ENS name or 0x address, saved with the contact, so a later change to it is caught before sending.</span></span></button>`
@@ -150,7 +151,7 @@ RENDER.send = async () => {
         </div></fieldset>
       ${crypto ? `<fieldset class="zb-fieldset"><legend>Send</legend><div class="zb-picks">${tokenPick("EURE", "EURe")}${tokenPick("USDC", usdSymbol)}</div></fieldset>` : ""}
       <div><label for="d-amt">${crypto ? "Amount" : "Amount in euros"}</label><input id="d-amt" name="amount" inputmode="decimal" autocomplete="off" placeholder="250.00…" value="${esc(amount)}" /></div>
-      <div><label for="d-note">Note <span class="desc">(for you; not sent ${crypto ? "with the payment" : "to the bank"})</span></label><input id="d-note" name="reference" autocomplete="off" maxlength="140" placeholder="October timber…" /></div>
+      <div><label for="d-note">Note <span class="desc">(for you; not sent ${crypto ? "with the payment" : "to the bank"})</span></label><input id="d-note" name="reference" autocomplete="off" maxlength="140" placeholder="October timber…" value="${esc(note)}" /></div>
       <p class="zb-err" id="send-err" role="alert"></p>
       <div class="zb-actions"><button type="button" class="z-btn z-btn--primary" data-act="send-create"><span>${action}</span></button>${linkBtn("Cancel", "payments")}</div>
     </form>
@@ -166,6 +167,7 @@ RENDER.send = async () => {
     bind(box) {
       // Cleared only by the render that is shown: a superseded one never binds.
       sendState.amount = "";
+      sendState.note = "";
       const form = box.querySelector("#send-form");
       const draw = () => { box.querySelector("#send-summary").innerHTML = summary(form, fundable, payable, approvers, crypto && net); };
       draw();

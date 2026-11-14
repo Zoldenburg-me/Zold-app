@@ -131,19 +131,6 @@ export function gateHtml(id) {
     <div class="needs">${esc(v.reason || "")}</div></div>`;
 }
 
-// ── navigation ─────────────────────────────────────────────────────────────
-
-
-export const fmtMoney = (cents, currency = "EUR") => {
-  try {
-    return new Intl.NumberFormat("de-DE", { style: "currency", currency }).format((cents ?? 0) / 100);
-  } catch {
-    // An unknown code must not blank the panel while someone is still typing it.
-    return `${((cents ?? 0) / 100).toFixed(2)} ${currency}`;
-  }
-};
-export const fmtEur = (cents) => fmtMoney(cents, "EUR");
-
 /** Money in the app's words (English UI): "€1,480.00", real minus sign. */
 export const eur = (value, currency = "EUR") => Z.formatMoney(Number(value) || 0, currency);
 
@@ -191,14 +178,28 @@ export const safeAddressHtml = (s) => {
 
 /* What each role may do, as the API's permission table has it. */
 export const ROLE_WORD = { owner: "Owner", admin: "Admin", payer: "Payer", accountant: "Accountant", viewer: "Viewer" };
+/* Each key is one server permission set (src/domain/roles.ts): propose =
+ * drafts.create, approve = drafts.review, send = transfers.execute, categorise =
+ * ledger.categorise + coa.manage + reports.run, invoices = invoices.manage,
+ * contacts = contacts.manage, wallets / members / accounts = wallets.manage /
+ * members.invite + update / accounts.open. */
+const ADMIN_CAN = { propose: true, approve: true, send: true, categorise: true, wallets: true, invoices: true, contacts: true, members: true, accounts: true };
 export const ROLE_CAN = {
-  owner: { propose: true, approve: true, send: true, categorise: true, wallets: true, invoices: true },
-  admin: { propose: true, approve: true, send: true, categorise: true, wallets: true, invoices: true },
-  payer: { propose: true, approve: false, send: true, categorise: false, wallets: false, invoices: true },
-  accountant: { propose: true, approve: false, send: false, categorise: true, wallets: false, invoices: false },
-  viewer: { propose: false, approve: false, send: false, categorise: false, wallets: false, invoices: false },
+  owner: ADMIN_CAN,
+  admin: ADMIN_CAN,
+  payer: { propose: true, send: true, invoices: true, contacts: true },
+  accountant: { propose: true, categorise: true, contacts: true },
+  viewer: {},
 };
 export const roleCan = (role, what) => !!ROLE_CAN[role]?.[what];
+
+/** device.js, or a refusal after 3 s: a module that never loads must not leave
+ *  a button busy for ever. */
+export function deviceLib() {
+  let timer;
+  const late = new Promise((_, no) => { timer = setTimeout(() => no(new Error("This page did not finish loading. Reload and try again.")), 3000); });
+  return Promise.race([window.__deviceLib, late]).finally(() => clearTimeout(timer));
+}
 
 /** May this member act on a supplier invoice: Pay (a draft, `propose`) when
  *  it has an IBAN, else Mark paid or Reconcile (invoices.manage, `invoices`). */
@@ -278,6 +279,14 @@ export let recoveryUnknown = false;
  *  own company only (nav.js). A recorded "declined" is said on Access only. */
 export let recoveryNone = false;
 export async function readRecovery() {
+  try {
+    await ensureMe();
+  } catch {
+    // Who is signed in is unread, so whether their Safe is being recovered is too.
+    recoveryPending = recoveryNone = false;
+    recoveryUnknown = true;
+    return;
+  }
   if (!me?.id || me.passkeySafe?.status !== "active") {
     // No Safe to recover: nothing from an earlier read stays up.
     recoveryPending = recoveryUnknown = recoveryNone = false;
@@ -285,7 +294,7 @@ export async function readRecovery() {
   }
   let r;
   try {
-    const [c, z] = await readGuardians(me.id, api);
+    const [c, z] = await readGuardians(me.id, api, readHealth);
     r = recoveryStatus(c, z);
   } catch {
     // An answer of an unexpected shape is a check that failed, never none.
@@ -320,6 +329,14 @@ export async function refreshMe() {
     me = rest;
   }
   return me;
+}
+/** GET /api/health, read once per page load (boot) and reused: which
+ *  recovery guardians this deployment runs. A failed read is retried next call,
+ *  and until one answers the guardians are unknown (readGuardians). */
+let healthPromise = null;
+export function readHealth() {
+  healthPromise ??= api("/api/health").catch((e) => { healthPromise = null; throw e; });
+  return healthPromise;
 }
 export const setTestMode = (v) => { testMode = v; };
 export const setChainId = (v) => { chainId = v; };

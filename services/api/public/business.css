@@ -14,15 +14,15 @@ button:focus-visible, a:focus-visible, select:focus-visible, input[type="checkbo
 .zb-main:focus { outline: none; }
 .hidden { display: none !important; }
 [hidden] { display: none !important; }
-.mono, .z-mono { font-family: var(--z-mono); font-size: 13px; }
+.mono { font-family: var(--z-mono); font-size: 13px; }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
 
 /* ── Form controls ─────────────────────────────────────────────────────── */
 label { display: block; margin: 14px 0 6px; font-size: 13px; font-weight: 600; color: var(--z-text); }
 input, select, textarea {
-  width: 100%; min-height: 44px; padding: 0 14px; border-radius: var(--z-radius-md);
+  width: 100%; min-height: var(--z-input-h); padding: 0 14px; border-radius: var(--z-radius-md);
   border: 1px solid var(--z-line-strong); background: var(--z-field); color: var(--z-text);
-  font: 400 15px/1.3 var(--z-font);
+  font: 400 16px/1.3 var(--z-font);
 }
 textarea { min-height: 88px; padding: 12px 14px; resize: vertical; }
 select { padding-right: 36px; }
@@ -35,19 +35,12 @@ input[type="checkbox"] { width: 18px; min-height: 18px; height: 18px; padding: 0
 .zb-check span { font-weight: 400; color: var(--z-dim); }
 .zb-check b { display: block; font-weight: 600; color: var(--z-text); }
 
-/* Older buttons (plain <button>, .ghost, .sm) as v2 buttons: a plain one is
-   secondary; the pink primary is only ever .z-btn--primary. */
 button { font-family: var(--z-font); cursor: pointer; }
-button:not([class*="z-"]):not([class*="zb-"]), a.btn {
-  display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; padding: 0 16px;
-  border-radius: var(--z-radius-control); border: 1px solid var(--z-line-strong); background: var(--z-ghost);
-  color: var(--z-text); font-size: 14px; font-weight: 600; white-space: nowrap; transition: border-color var(--z-ease);
-}
-button:not([class*="z-"]):not([class*="zb-"]):hover:not(:disabled), a.btn:hover { border-color: var(--z-line-hover); color: var(--z-text); }
-button:not([class*="z-"]):not([class*="zb-"]).sm, a.btn.sm { min-height: 32px; padding: 0 12px; font-size: 13px; }
-button:not([class*="z-"]):not([class*="zb-"]).danger { color: var(--z-amber); border-color: var(--z-amber-border); }
 button:disabled { opacity: .5; cursor: not-allowed; }
-.z-btn--sm { min-height: 36px; padding: 0 14px; font-size: 13.5px; box-shadow: none; }
+/* Destructive buttons: .z-btn.zb-danger out-ranks ui.css whatever the load order. */
+.z-btn.zb-danger { color: var(--z-red); border-color: var(--z-red); }
+.z-btn.zb-danger:hover { color: var(--z-red); border-color: var(--z-red); }
+.z-btn--primary.zb-danger, .z-btn--primary.zb-danger:hover { background: var(--z-red); border-color: var(--z-red); color: var(--z-bg); }
 
 /* ── Shell: the sidebar (ui.css) and the page ──────────────────────────── */
 .zb { display: grid; grid-template-columns: 256px minmax(0, 1fr); min-height: 100vh; }
@@ -58,8 +51,9 @@ button:disabled { opacity: .5; cursor: not-allowed; }
    phone it is what Menu opens. */
 .zb-side__menu { display: contents; }
 .zb .zb-side .zb-menu-btn { display: none; }
-#tabs .z-bnav button { position: relative; display: grid; align-content: center; justify-items: center; gap: 4px; border: 0; background: none; font: 500 12px var(--z-font); color: var(--z-dim); }
-#tabs .z-bnav button:hover, #tabs .z-bnav button[aria-current="page"] { color: var(--z-text); }
+.z-bnav__btn { position: relative; display: grid; align-content: center; justify-items: center; gap: 4px; border: 0; background: none; font: 500 12px var(--z-font); color: var(--z-dim); transition: color .15s ease; }
+.z-bnav__btn:hover { color: var(--z-text); }
+.z-bnav__btn[aria-current="page"] { color: var(--z-pink); }
 #tabs .zb-tabs__lock { position: absolute; top: 10px; left: calc(50% + 6px); font-size: 14px; color: var(--z-dim); }
 @media (min-width: 1024px) { #tabs { display: none; } }
 
@@ -70,7 +64,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   .zb { grid-template-columns: minmax(0, 1fr); }
   .zb .zb-side { position: sticky; top: 0; z-index: 30; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; height: auto; padding: 8px 12px; border-right: 0; border-bottom: 1px solid var(--z-line); background: var(--z-sunk); overflow: visible; }
   .zb .zb-side .z-side__brand { padding: 0 4px; }
-  .zb #side-org .z-side__org { min-height: 44px; padding: 4px 8px; }
+  .zb #side-org .z-side__org { min-height: var(--z-touch); padding: 4px 8px; }
   .zb #side-org .z-side__org .z-avatar { width: 30px; height: 30px; }
   .zb .zb-side .zb-menu-btn { display: inline-grid; }
   .zb:not(.is-menu) .zb-side__menu { display: none; }
@@ -101,6 +95,9 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .zb-stack { display: flex; flex-direction: column; gap: var(--z-space-5); }
 .zb-h2 { margin: 0; font: 600 18px/1.3 var(--z-font); letter-spacing: -.02em; color: var(--z-heading); }
 .zb-hint { margin: 0; font-size: 13.5px; color: var(--z-dim); }
+.zb-inline { display: flex; align-items: center; gap: 10px; }
+.zb-summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.zb-summary::-webkit-details-marker { display: none; }
 /* A receipt left off a draft: what it was, then why, on two lines. */
 .zb-left { padding: 10px 14px; font-size: 14px; }
 .zb-left .desc { margin: 2px 0 0; }
@@ -143,7 +140,7 @@ button.z-tbl__link { padding: 0; border: 0; background: none; font: inherit; col
 .z-tbl .zb-sub2 { display: block; font-size: 12.5px; color: var(--z-dim); font-weight: 400; }
 .z-tbl .zb-cellact { display: flex; gap: var(--z-space-2); justify-content: flex-end; position: relative; z-index: 1; }
 .z-tbl td .z-btn, .z-tbl td button, .z-tbl td select, .z-tbl td a.btn { position: relative; z-index: 1; }
-.z-tbl select.zb-inline { width: auto; min-height: 32px; height: 32px; padding: 0 30px 0 12px; border-radius: var(--z-radius-control); font-size: 13px; }
+.z-tbl select.zb-inline { display: inline-block; width: auto; min-height: 32px; height: 32px; padding: 0 30px 0 12px; border-radius: var(--z-radius-control); font-size: 13px; }
 .z-tbl td.zb-due--late { color: var(--z-amber); }
 .zb-memo { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 12px; border-radius: var(--z-radius-control); border: 1px dashed var(--z-line-strong); background: none; font-size: 13px; font-weight: 500; color: var(--z-dim); }
 .zb-memo:hover { border-color: var(--z-line-hover); color: var(--z-text); }
@@ -166,35 +163,12 @@ button.z-tbl__link { padding: 0; border: 0; background: none; font: inherit; col
 .zb-notes { display: flex; flex-direction: column; gap: var(--z-space-3); margin-top: 18px; }
 
 /* Home. */
-.zb-home { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap: var(--z-space-5); align-items: start; }
-.zb-home__col { display: flex; flex-direction: column; gap: var(--z-space-5); }
-.zb-bal { display: flex; flex-direction: column; gap: 18px; padding: var(--z-space-6); }
-.zb-bal__label { margin: 0; font-size: 14px; color: var(--z-dim); }
-.zb-bal .z-balance__fig { font-size: 60px; }
-.zb-bal .z-balance__cur { font-size: 34px; }
-.zb-bal .z-balance__cents { font-size: 32px; }
-.zb-accgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--z-space-3); }
-.zb-acc { display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; border-radius: var(--z-radius-card); border: 1px solid var(--z-line); background: var(--z-ghost); color: var(--z-text); }
-a.zb-acc:hover { border-color: var(--z-line-hover); color: var(--z-text); }
-.zb-acc__name { font-size: 13.5px; color: var(--z-dim); }
-.zb-acc__fig { font-size: 22px; font-weight: 600; letter-spacing: -.02em; color: var(--z-heading); font-variant-numeric: tabular-nums; }
-.zb-acc .z-mono { font-size: 12px; color: var(--z-dim); }
 .zb-side-card { display: flex; flex-direction: column; gap: var(--z-space-3); padding: var(--z-space-5); }
 .zb-side-card__head { display: flex; align-items: center; justify-content: space-between; gap: var(--z-space-3); }
 .zb-side-card__head h2 { margin: 0; font: 600 15.5px/1.3 var(--z-font); color: var(--z-heading); }
-.zb-kv { display: flex; justify-content: space-between; gap: var(--z-space-3); font-size: 14.5px; color: var(--z-dim); }
-.zb-kv b { font-weight: 500; color: var(--z-text); font-variant-numeric: tabular-nums; }
-.zb-kv b.is-late { color: var(--z-amber); }
-.zb-team { display: flex; flex-wrap: wrap; gap: var(--z-space-2); }
-.zb-review { display: flex; align-items: center; gap: var(--z-space-4); padding: 18px 20px; margin-bottom: var(--z-space-5); border-radius: var(--z-radius-card); border: 1px solid var(--z-pink-border); background: var(--z-pink-tint); }
-.zb-review > .z-tile { flex: none; }
-.zb-review__main { flex: 1; min-width: 0; }
-.zb-review__main b { display: block; font-size: 16px; font-weight: 600; color: var(--z-heading); }
-.zb-review__main span { font-size: 13.5px; color: var(--z-dim); }
-@media (max-width: 1199px) { .zb-home { grid-template-columns: minmax(0, 1fr); } .zb-home__col { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); align-items: start; } }
 
 /* Cards in a grid (Connections, plans, get paid). */
-.zb-grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: var(--z-space-4); }
+.zb-grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: var(--z-space-4); }
 .zb-conn { display: flex; flex-direction: column; gap: 14px; padding: var(--z-space-5); }
 .zb-conn__head { display: flex; align-items: center; gap: var(--z-space-3); }
 .zb-conn__head .z-row__main { flex: 1; }
@@ -218,11 +192,6 @@ h2.zb-conn__group--first { margin-top: 0; }
 .zb-doc-create label { margin-top: 0; }
 
 /* Settings: one tile per area, each opens its own screen. */
-.zb-tiles { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: var(--z-space-4); }
-.zb-tile { display: flex; align-items: center; gap: var(--z-space-3); padding: var(--z-space-5); color: inherit; text-decoration: none; height: 100%; }
-.zb-tile:hover { border-color: var(--z-line-strong); }
-.zb-tile:focus-visible { outline: 2px solid var(--z-pink-border); outline-offset: 2px; }
-.zb-tile .z-row__main { flex: 1; min-width: 0; }
 .zb-addr3 { display: grid; grid-template-columns: 140px 1fr 200px; gap: 12px; }
 @media (max-width: 720px) { .zb-addr3 { grid-template-columns: minmax(0, 1fr); } }
 .zb-steps { margin: 0; padding-left: 20px; font-size: 14.5px; line-height: 1.9; }
@@ -262,6 +231,14 @@ h2.zb-conn__group--first { margin-top: 0; }
 .zb-paper__foot { margin-top: 28px !important; padding-top: 18px; border-top: 1px solid var(--z-line-hover); }
 .zb-paper__missing { font-weight: 600; }
 
+/* Phone: the invoice form and the paper drop their columns; a line gives its description a full row. */
+@media (max-width: 599px) {
+  .zb-editor .zb-row--2, .zb-editor .zb-row--3, .zb-paper__meta { grid-template-columns: minmax(0, 1fr); }
+  .zb-editor .zb-row--line { grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) var(--z-touch); }
+  .zb-editor .zb-row--line > :first-child { grid-column: 1 / -1; }
+  .zb-paper { padding: var(--z-space-5); }
+}
+
 /* ── The older classes, in v2 dress ─────────────────────────────────────── */
 .card { margin-bottom: var(--z-space-4); padding: var(--z-space-5); border-radius: var(--z-radius-card); border: 1px solid var(--z-line); background: var(--z-card); }
 .card h2 { margin: 0 0 4px; font: 600 16px/1.3 var(--z-font); color: var(--z-heading); }
@@ -292,7 +269,6 @@ h2.zb-conn__group--first { margin-top: 0; }
 .banner button, .banner .z-btn { flex: none; margin-left: auto; }
 .empty { padding: 28px 16px; text-align: center; font-size: 14.5px; color: var(--z-dim); }
 .row-actions { display: flex; flex-wrap: wrap; gap: var(--z-space-2); }
-.stat { padding: var(--z-space-5); border-radius: var(--z-radius-card); border: 1px solid var(--z-line); background: var(--z-card); }
 
 /* The one native modal (core.js dialog()), drawn as a v2 dialog. */
 dialog { width: calc(100% - 32px); max-width: 480px; max-height: 92dvh; margin: auto; padding: var(--z-space-6); border-radius: var(--z-radius-sheet); border: 1px solid var(--z-line); background: var(--z-sheet); color: var(--z-text); box-shadow: var(--z-shadow-dialog); }
@@ -303,8 +279,10 @@ dialog .desc, dialog .zb-hint { font-size: 14.5px; color: var(--z-dim); }
 .dlg-err { margin-top: 14px; padding: 10px 14px; border-radius: var(--z-radius-sm); border: 1px solid var(--z-amber-border); background: var(--z-amber-tint); font-size: 14px; color: var(--z-amber); }
 .dlg-err:empty { display: none; }
 
-#toast { position: fixed; bottom: 20px; left: 50%; z-index: 400; max-width: 560px; padding: 12px 18px; border-radius: var(--z-radius-note); border: 1px solid var(--z-line-strong); background: var(--z-sheet); box-shadow: var(--z-shadow-dialog); font-size: 14.5px; transform: translateX(-50%); }
+#toast { position: fixed; bottom: 20px; left: 50%; z-index: 400; width: max-content; max-width: min(560px, calc(100vw - 32px)); padding: 12px 18px; border-radius: var(--z-radius-note); border: 1px solid var(--z-line-strong); background: var(--z-sheet); box-shadow: var(--z-shadow-dialog); font-size: 14.5px; transform: translateX(-50%); }
 #toast.bad { border-color: var(--z-amber-border); color: var(--z-amber); }
+/* Under 1024px the 76px tab bar shows: the toast sits above it. */
+@media (max-width: 1023px) { #toast { bottom: calc(76px + var(--z-space-4) + env(safe-area-inset-bottom, 0px)); } }
 
 /* ── Home (home.js) ─────────────────────────────────────────────────────── */
 .zb-h-attention { padding: var(--z-space-4) var(--z-space-5); margin-bottom: var(--z-space-5); }
@@ -321,7 +299,6 @@ dialog .desc, dialog .zb-hint { font-size: 14.5px; color: var(--z-dim); }
 .zb-h-chip { height: 32px; padding: 0 14px; font-size: 13px; border-color: var(--z-line-strong); background: var(--z-ghost); }
 .zb-h-pill[aria-pressed="true"], .zb-h-chip[aria-pressed="true"] { border-color: var(--z-pink-border); background: var(--z-pink-tint); color: var(--z-heading); }
 .zb-h-pill:hover, .zb-h-chip:hover { color: var(--z-text); }
-.zb-h-figs { display: flex; flex-wrap: wrap; gap: var(--z-space-8); }
 .zb-h-fig { display: flex; flex-direction: column; gap: 4px; }
 .zb-h-fig__label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--z-dim); }
 .zb-h-fig__value { font: 600 26px/1.1 var(--z-font); letter-spacing: -.03em; font-variant-numeric: tabular-nums; color: var(--z-text); }
@@ -335,9 +312,6 @@ dialog .desc, dialog .zb-hint { font-size: 14.5px; color: var(--z-dim); }
 .zb-h-bar { display: flex; gap: 4px; align-items: end; justify-content: center; height: 100%; }
 .zb-h-bar span { width: min(22px, 40%); border-radius: 6px 6px 2px 2px; }
 .zb-h-axis span { text-align: center; font-size: 12px; color: var(--z-dim); white-space: nowrap; overflow: hidden; }
-.zb-h-acc { display: flex; flex-direction: column; gap: 6px; padding: var(--z-space-4); border-radius: var(--z-radius-md); border: 1px solid var(--z-line); background: var(--z-field); }
-.zb-h-acc__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13.5px; }
-.zb-h-acc__fig { font: 600 22px/1.1 var(--z-font); letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
 .zb-h-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--z-space-3); margin: 0; }
 .zb-h-stats dt { font-size: 13px; color: var(--z-dim); }
 .zb-h-stats dd { display: flex; flex-direction: column; gap: 2px; margin: 4px 0 0; font-variant-numeric: tabular-nums; }
@@ -379,7 +353,7 @@ dialog .desc, dialog .zb-hint { font-size: 14.5px; color: var(--z-dim); }
 .zb-h-tops li { display: flex; align-items: center; gap: 12px; font-size: 14px; }
 .zb-h-tops li span:not(.z-avatar) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .zb-h-tops b { font-weight: 500; font-variant-numeric: tabular-nums; }
-@media (max-width: 720px) { .zb-h-stats { grid-template-columns: minmax(0, 1fr); } .zb-h-figs { gap: var(--z-space-4); } }
+@media (max-width: 720px) { .zb-h-stats { grid-template-columns: minmax(0, 1fr); } }
 .zb-h-pill, .zb-h-chip { white-space: nowrap; }
 #hm-flow .zb-side-card__head { flex-wrap: wrap; }
 .zb-h-att .z-row__title { white-space: normal; }
@@ -488,7 +462,7 @@ dialog .desc, dialog .zb-hint { font-size: 14.5px; color: var(--z-dim); }
 .zb-acard__act { margin-left: auto; }
 .zb-acard__iban { margin: 16px 0 12px; display: flex; flex-direction: column; gap: 6px; }
 .zb-acard__ibanrow { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.zb-acard__ibanrow .z-mono { font-size: 20px; letter-spacing: .02em; color: var(--z-heading); white-space: nowrap; }
+.zb-acard__ibanrow .z-mono { font-size: 20px; letter-spacing: .02em; color: var(--z-heading); overflow-wrap: anywhere; }
 @media (max-width: 599px) { .zb-acard__ibanrow .z-mono { font-size: 16px; } }
 
 /* Home, laid out like a bank dashboard: greeting, small actions, the balance

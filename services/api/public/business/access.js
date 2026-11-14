@@ -6,7 +6,7 @@
  * only in its own company; another member is told who does. Signer and
  * recovery changes open the app's own screen on the same sign-in (APP_LINKS).
  */
-import { Z, api, cap, day, ensureMe, esc, org, reviewOn, ROLE_CAN, ROLE_WORD } from "./core.js";
+import { Z, api, cap, day, deviceLib, ensureMe, esc, org, readHealth, reviewOn, ROLE_CAN, ROLE_WORD } from "./core.js";
 import { META, RENDER } from "./views.js";
 import { render } from "./shell.js";
 import { APP_LINKS, approvalView, deviceKeyView, isCompanyLogin, isOwnCompanyOrg, loadAccess } from "./access-model.js";
@@ -24,14 +24,11 @@ const rows = (list) => `<dl class="zb-set-rows">${list.map(([k, v]) => `<div><dt
 const addr = (a) => `<span class="z-mono zb-access__addr">${esc(a)}</span>`;
 
 /* This browser's payment key (device.js), the way the app's Security screen says it. */
-const DEVICE_LIB_WAIT_MS = 3000; // device.js that never loads must not hold up the whole screen
 async function deviceKeyRow(me) {
   let status = null;
-  let timer;
   try {
-    const lib = await Promise.race([window.__deviceLib, new Promise((_, no) => { timer = setTimeout(no, DEVICE_LIB_WAIT_MS); })]);
-    status = lib.keyStatus(me.passkey?.credentialId, me.authorizerAddress);
-  } catch { /* unread: said as unknown */ } finally { clearTimeout(timer); }
+    status = (await deviceLib()).keyStatus(me.passkey?.credentialId, me.authorizerAddress);
+  } catch { /* unread: said as unknown */ }
   return {
     none: "Not set up yet",
     unknown: "Couldn’t check this browser",
@@ -171,7 +168,7 @@ RENDER.access = async () => {
     return stack([pay, card("acc-member", "Sign-in and recovery", `<p>Only the company’s own sign-in can see and change who can sign for the company’s account and who can recover it. Ask the person who holds it.</p>
       <p class="zb-hint">Your own sign-in and recovery are in the app.</p>`, yours)]);
   }
-  const [a, keyRow] = await Promise.all([loadAccess(me, api), deviceKeyRow(me)]);
+  const [a, keyRow] = await Promise.all([loadAccess(me, api, readHealth), deviceKeyRow(me)]);
   if (a.noSafe) return stack([pay, card("acc-none", "No account yet", `<p class="zb-hint">This sign-in’s account isn’t set up yet, so there are no signers or recovery helpers to show. Finish setting it up in the app.</p>`, appBtn("Open the app", "/app"))]);
   return { html: stack([pay, signersCard(a, keyRow), recoveryCard(a.recovery)]), bind: retry };
 };

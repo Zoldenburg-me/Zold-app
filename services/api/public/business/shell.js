@@ -6,7 +6,7 @@
  * leak or be lost on the next render.
  */
 import {
-  $, api, esc, invoiceInputListener, org, orgs, readRecovery, recoveryPending, recoveryUnknown, setInvoiceInputListener, ensureMe, setOrg,
+  $, api, cap, esc, gateHtml, invoiceInputListener, org, orgs, readHealth, readRecovery, recoveryPending, recoveryUnknown, setInvoiceInputListener, ensureMe, setOrg,
   setChainId, setOrgs, setTestMode, setUsdSymbol, setView, toast, token, view,
 } from "./core.js";
 import { KNOWN, planBanner, refreshSide, renderNav, setMenu } from "./nav.js";
@@ -113,10 +113,12 @@ export async function render({ focus = false } = {}) {
   } catch (e) {
     if (mine !== seq) return;
     // A 409 naming a capability is the feature gate firing server-side. Show
-    // the same prompt rather than an error, so the two agree.
+    // the same prompt rather than an error, so the two agree; where this page
+    // still has the feature as allowed, the server's reason is the prompt.
     box.innerHTML = e.status === 409 && e.capability
-      ? `<div class="gate"><h3>${esc(e.capability || "Not available")}</h3>
-         <p>${esc(e.error)}</p></div>`
+      ? cap(e.capability).allowed
+        ? `<div class="gate"><h3>${esc(cap(e.capability).label)}</h3><p>${esc(e.error)}</p></div>`
+        : gateHtml(e.capability)
       : e.status === 403
         ? `<div class="gate"><h3>Not for your role</h3><p>${esc(e.error || "Your role in this organisation can’t open this.")}</p></div>`
         : `<div class="banner warn">${window.Z.icon("warning")}<span>${esc(e.message)}</span></div>`;
@@ -137,6 +139,15 @@ export async function loadOrg(id) {
 }
 
 // ── boot ───────────────────────────────────────────────────────────────────
+
+/* The codes GET /api/shopify/callback redirects with (routes/shopify.ts). */
+const SHOPIFY_ERRORS = {
+  NOT_SET_UP: "Shopify is not set up here yet, so the store was not connected.",
+  INSTALL_OTHER_BROWSER: "Finish connecting the store in the browser where you started it, from Apps.",
+  SHOP_CONNECTED_ELSEWHERE: "This store is connected to a different organisation.",
+  SHOP_LINKED_THROUGH_CHECKOUT: "This store is linked through the Zold checkout. Disconnect it there first.",
+  INSTALLER_NOT_ALLOWED: "Whoever started this install can no longer connect stores for the organisation. Start again from Apps.",
+};
 
 /* One of the three states is the page; the other two leave the DOM, so the
    page has one h1. */
@@ -189,7 +200,7 @@ export function watchRecovery() {
 
 export async function boot() {
   // Test mode follows the chain (GET /api/health realMoney), as in the app.
-  api("/api/health").then((h) => { setTestMode(!h.realMoney); setChainId(h.chainId); setUsdSymbol(h.capabilities?.usdToken?.symbol); renderNav(); const net = document.getElementById("own-safe-chain"); if (net) net.textContent = String(h.chainId ?? ""); }).catch(() => { /* no pill */ });
+  readHealth().then((h) => { setTestMode(!h.realMoney); setChainId(h.chainId); setUsdSymbol(h.capabilities?.usdToken?.symbol); renderNav(); const net = document.getElementById("own-safe-chain"); if (net) net.textContent = String(h.chainId ?? ""); }).catch(() => { /* no pill */ });
   if (!token) { only("#signed-out"); return; }
   let list;
   try {
@@ -205,9 +216,10 @@ export async function boot() {
     renderNav();
     // The personal-space banner needs to know who this is.
     paintBanner();
-    watchRecovery();
     return u;
   }).catch(() => null);
+  // Whether or not the session read works: a failed one is "couldn't check" (readRecovery).
+  watchRecovery();
   setOrgs(list.organisations);
   // ?setup=invoices: every "Invoice" tap without an organisation that can
   // invoice comes here (the app's Get paid, the org switcher, the banner), and
@@ -267,7 +279,8 @@ export async function boot() {
   // outcome in the query so the redirect from Shopify lands on an answer.
   const qs = new URLSearchParams(location.search);
   if (qs.get("view") && KNOWN.has(qs.get("view"))) setView(qs.get("view"), { push: false });
-  if (qs.get("error")) toast(qs.get("error"), true);
+  // The URL is anyone's to write: only the Shopify callback's codes are said in Zold's words.
+  if (qs.get("error")) toast(SHOPIFY_ERRORS[qs.get("code")] || "The Shopify store did not connect. Start again from Apps.", true);
   if (qs.get("shop")) toast(`Connected ${qs.get("shop")}.`);
   // Keep ?view= (it is the address of this screen); drop the one-shot
   // outcome parameters so a reload does not repeat the toast.

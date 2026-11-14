@@ -16,9 +16,12 @@ import { $, Z, api, cap, chainId, countrySelect, day, esc, eur, gateHtml, issuer
 export const RENDER = {};
 export const META = {};
 
-const primary = (label, attrs, icon) => `<button type="button" class="z-btn z-btn--primary" ${attrs}>${icon ? Z.icon(icon) : ""}<span>${esc(label)}</span></button>`;
-const secondary = (label, attrs, icon) => `<button type="button" class="z-btn z-btn--secondary" ${attrs}>${icon ? Z.icon(icon) : ""}<span>${esc(label)}</span></button>`;
-const linkBtn = (label, view, icon, variant = "secondary") => `<a class="z-btn z-btn--${variant}" href="?view=${esc(view)}" data-view-link="${esc(view)}">${icon ? Z.icon(icon) : ""}<span>${esc(label)}</span></a>`;
+export const primary = (label, attrs, icon) => `<button type="button" class="z-btn z-btn--primary" ${attrs}>${icon ? Z.icon(icon) : ""}<span>${esc(label)}</span></button>`;
+export const secondary = (label, attrs, icon) => `<button type="button" class="z-btn z-btn--secondary" ${attrs}>${icon ? Z.icon(icon) : ""}<span>${esc(label)}</span></button>`;
+export const linkBtn = (label, view, icon, variant = "secondary") => `<a class="z-btn z-btn--${variant}" href="?view=${esc(view)}" data-view-link="${esc(view)}">${icon ? Z.icon(icon) : ""}<span>${esc(label)}</span></a>`;
+export const table = (head, rows) => `<div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr>${head.map(([h, cls]) => `<th scope="col"${cls ? ` class="${cls}"` : ""}>${h ? esc(h) : `<span class="z-sr">Actions</span>`}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
+/** A transaction hash, shortened, with the whole hash on hover; "none" without one. */
+export const shortTx = (h) => (h ? `<span class="mono" title="${esc(h)}">${esc(h.slice(0, 10))}…${esc(h.slice(-6))}</span>` : "none");
 const card = (title, desc, inner, right = "") => `<section class="card"><div class="h"><div><h2>${esc(title)}</h2>${desc ? `<p class="desc">${desc}</p>` : ""}</div>${right}</div>${inner}</section>`;
 const statusTag = (s) => Z.tag(s === "active" ? "Active" : s === "gated" ? "Not open" : "Waiting");
 
@@ -50,7 +53,7 @@ export const moneriumLink = (label) => `<a class="z-btn z-btn--secondary z-btn--
 META.accounts = () => ({
   title: "Accounts",
   sub: "An account holds one currency and pays out on that currency’s own bank network.",
-  actions: secondary("Open an account", 'data-act="open-account"', "add"),
+  actions: roleCan(org.role, "accounts") ? secondary("Open an account", 'data-act="open-account"', "add") : "",
 });
 
 RENDER.accounts = async () => {
@@ -133,7 +136,7 @@ const walletSyncCell = (s = {}) => {
 };
 
 /** Whether the wallet is proven to be the organisation's, in words. */
-export const PROOF_WORD = { proven: "Proven", lapsed: "Proof lapsed", unproven: "Not proven", removed: "No longer imported" };
+const PROOF_WORD = { proven: "Proven", lapsed: "Proof lapsed", unproven: "Not proven", removed: "No longer imported" };
 const walletProofCell = (w) => {
   const o = w.ownership;
   if (w.proofState === "proven") return `${Z.tag("Proven", "mint")}<span class="zb-sub2">checked ${esc(day(o.checkedAt))}</span>`;
@@ -141,7 +144,7 @@ const walletProofCell = (w) => {
   return `${Z.tag("Not proven", "amber")}<span class="zb-sub2">receipts are not invoiced</span>`;
 };
 
-META.wallets = () => ({ title: "Wallets", sub: "Addresses you want counted in your books. Read only: Zold never holds a key for one.", actions: secondary("Import wallet", 'data-act="import-wallet"', "add") });
+META.wallets = () => ({ title: "Wallets", sub: "Addresses you want counted in your books. Read only: Zold never holds a key for one.", actions: roleCan(org.role, "wallets") ? secondary("Import wallet", 'data-act="import-wallet"', "add") : "" });
 RENDER.wallets = async () => {
   const [{ wallets }, acc] = await Promise.all([api(`/api/orgs/${org.id}/wallets`), api(`/api/orgs/${org.id}/accounts`).catch(() => null)]);
   const unproven = wallets.filter((w) => w.proofState !== "proven").length;
@@ -159,7 +162,7 @@ RENDER.wallets = async () => {
         <td>${walletProofCell(w)}</td>
         <td><div class="zb-cellact">${w.proofState === "proven" || !roleCan(org.role, "wallets") ? "" : `<button type="button" class="z-btn z-btn--primary z-btn--sm" data-act="prove-wallet" data-id="${esc(w.id)}">Prove<span class="z-sr">: ${esc(w.label)}</span></button>`}
           ${w.ownership && roleCan(org.role, "wallets") ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="recheck-wallet" data-id="${esc(w.id)}">Check again<span class="z-sr">: ${esc(w.label)}</span></button>` : ""}
-          <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="del-wallet" data-id="${esc(w.id)}">Remove<span class="z-sr">: ${esc(w.label)}</span></button></div></td></tr>`).join("")}</tbody></table></div>`
+          ${roleCan(org.role, "wallets") ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="del-wallet" data-id="${esc(w.id)}">Remove<span class="z-sr">: ${esc(w.label)}</span></button>` : ""}</div></td></tr>`).join("")}</tbody></table></div>`
     : `<div class="z-card"><p class="empty">No wallets imported.</p></div>`);
 };
 
@@ -268,12 +271,12 @@ RENDER.gains = async () => {
     ${booksNotes(d.notes)}`;
 };
 
-META.coa = () => ({ title: "Chart of accounts", sub: "Your categories, and the rules that sort transactions into them.", actions: `${booksBack()}${secondary("Add a category", 'data-act="new-coa"', "add")}` });
+META.coa = () => ({ title: "Chart of accounts", sub: "Your categories, and the rules that sort transactions into them.", actions: `${booksBack()}${roleCan(org.role, "categorise") ? secondary("Add a category", 'data-act="new-coa"', "add") : ""}` });
 RENDER.coa = async () => {
   if (!cap("coa.manage").allowed) return gateHtml("coa.manage");
   const { accounts, rules } = await api(`/api/orgs/${org.id}/chart-of-accounts`);
   return `<div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Code</th><th scope="col">Name</th><th scope="col">Type</th></tr></thead><tbody>${accounts.map((a) => `<tr><td class="z-mono">${esc(a.code)}</td><td>${esc(plain(a.name))}</td><td>${Z.tag(a.type)}</td></tr>`).join("")}</tbody></table></div>
-    <div class="zb-bar" style="margin:28px 0 12px"><div><h2 class="zb-h2">Rules</h2><p class="zb-hint">Most specific wins: contact, then wallet and currency, then the transaction type. Running them again never overwrites a category you set by hand.</p></div>${secondary("Run the rules again", 'data-act="apply-rules"', "refresh")}</div>
+    <div class="zb-bar" style="margin:28px 0 12px"><div><h2 class="zb-h2">Rules</h2><p class="zb-hint">Most specific wins: contact, then wallet and currency, then the transaction type. Running them again never overwrites a category you set by hand.</p></div>${roleCan(org.role, "categorise") ? secondary("Run the rules again", 'data-act="apply-rules"', "refresh") : ""}</div>
     ${rules.length ? `<div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Scope</th><th scope="col">Match</th><th scope="col">Direction</th><th scope="col">Category</th></tr></thead><tbody>${rules.map((r) => `<tr><td>${Z.tag(r.scope)}</td><td class="z-dim">${esc(JSON.stringify(r.match).replace(/[{}"]/g, ""))}</td><td>${esc(r.direction)}</td><td class="z-mono">${esc(r.accountCode)}</td></tr>`).join("")}</tbody></table></div>` : `<div class="z-card"><p class="empty">No rules yet.</p></div>`}`;
 };
 
@@ -300,24 +303,25 @@ RENDER.export = async () => {
     ? (await api(`/api/orgs/${org.id}/integrations`).catch(() => null))?.integrations : null;
   const withBeleg = d.lines.filter((l) => l.documentCode).length;
   const dis = withBeleg ? "" : ` disabled title="Create receipts for ${esc(exportMonth)} first"`;
+  const mayBook = roleCan(org.role, "categorise");
   return `${d.swapsHaveExecuted ? "" : `<div class="banner warn">${Z.icon("science")}<span>${esc(plain(d.note || ""))}</span></div>`}
-    <div class="zb-bar"><div style="display:flex;align-items:center;gap:10px"><label for="x-month" style="margin:0">Month</label>
+    <div class="zb-bar"><div class="zb-inline"><label for="x-month" style="margin:0">Month</label>
       <select id="x-month" style="width:auto">${months.map((m) => `<option ${m === exportMonth ? "selected" : ""}>${esc(m)}</option>`).join("")}</select></div>
       <div class="row-actions">
-        <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="export-rebuild">Rebuild lines</button>
-        <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="export-prepare">Create receipts for ${esc(exportMonth)}</button>
+        ${mayBook ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="export-rebuild">Rebuild lines</button>
+        <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="export-prepare">Create receipts for ${esc(exportMonth)}</button>` : ""}
         <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="export-csv"${dis}>Lexware CSV</button>
         <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="export-zip"${dis}>Receipts as ZIP</button>
-        ${integrations?.getmyinvoices?.connected ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="gmi-push"${dis}>Send to GetMyInvoices</button>` : ""}
+        ${mayBook && integrations?.getmyinvoices?.connected ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="gmi-push"${dis}>Send to GetMyInvoices</button>` : ""}
       </div></div>
-    <p class="zb-hint" style="margin-bottom:12px">${d.lines.length} line${d.lines.length === 1 ? "" : "s"}, ${withBeleg} with a receipt.${withBeleg || !d.lines.length ? "" : " The CSV and the ZIP open once a line has its receipt: press Create receipts."}${integrations && !integrations.getmyinvoices?.connected ? ` <a href="?view=integrations" data-view-link="integrations">Connect GetMyInvoices</a> to send the receipts there.` : ""}</p>
+    <p class="zb-hint" style="margin-bottom:12px">${d.lines.length} line${d.lines.length === 1 ? "" : "s"}, ${withBeleg} with a receipt.${withBeleg || !d.lines.length ? "" : " The CSV and the ZIP open once a line has its receipt: press Create receipts."}${mayBook && integrations && !integrations.getmyinvoices?.connected ? ` <a href="?view=integrations" data-view-link="integrations">Connect GetMyInvoices</a> to send the receipts there.` : ""}</p>
     ${d.lines.length ? `<div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Value date</th><th scope="col">Event</th><th scope="col">Who</th><th scope="col">Reference</th><th scope="col" class="z-tbl__num">Euros</th><th scope="col">Receipt</th></tr></thead><tbody>${d.lines.map((l) => `<tr>
         <td class="zb-top z-dim">${esc(day(ymd(l.valueDate)))}${l.bookingDate !== l.valueDate ? `<span class="zb-sub2">booked ${esc(day(ymd(l.bookingDate)))}</span>` : ""}</td>
         <td class="zb-top">${esc(EVENT_LABEL[l.event] || l.event)}${l.unexecuted ? ` ${Z.tag("Unproven", "amber")}` : ""}</td>
         <td class="zb-top">${esc(l.counterparty?.name || "")}<span class="zb-sub2 z-mono">${esc(l.counterparty?.iban ? maskIban(l.counterparty.iban) : l.counterparty?.address ? `${l.counterparty.address.slice(0, 10)}…` : "")}</span></td>
         <td class="zb-top">${esc(l.reference)}${l.ownTransfer ? `<span class="zb-sub2">Between my own accounts</span>` : ""}${l.links?.invoiceNumber ? `<span class="zb-sub2">Invoice ${esc(l.links.invoiceNumber)}</span>` : ""}</td>
         <td class="zb-top z-tbl__num">${Z.amount({ value: Math.abs(l.amountCents) / 100, direction: l.amountCents >= 0 ? "in" : "out" })}</td>
-        <td class="zb-top">${l.documentCode ? `<a class="zb-beleg" href="${esc(l.documentUrl)}" target="_blank" rel="noopener">${Z.icon("attach_file")}${esc(l.documentCode)}<span class="z-sr"> (opens in a new tab)</span></a>` : `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="line-beleg" data-line="${esc(l.id)}">Create<span class="z-sr"> a booking receipt</span></button>`}</td></tr>`).join("")}</tbody></table></div>`
+        <td class="zb-top">${l.documentCode ? `<a class="zb-beleg" href="${esc(l.documentUrl)}" target="_blank" rel="noopener">${Z.icon("attach_file")}${esc(l.documentCode)}<span class="z-sr"> (opens in a new tab)</span></a>` : mayBook ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="line-beleg" data-line="${esc(l.id)}">Create<span class="z-sr"> a booking receipt</span></button>` : '<span class="z-dim">None yet</span>'}</td></tr>`).join("")}</tbody></table></div>`
       : `<div class="z-card"><p class="empty">No statement lines in ${esc(exportMonth)}. Lines appear once money moves on an account backed by a member’s own account.</p></div>`}`;
 };
 
@@ -335,13 +339,15 @@ RENDER.integrations = async () => {
   if (!cap("integrations.accounting").allowed) return gateHtml("integrations.accounting");
   const r = await api(`/api/orgs/${org.id}/integrations`);
   const g = r.integrations.getmyinvoices;
+  // The key is the organisation's (org.update): owners and admins, the same people who manage members.
+  const mayConnect = roleCan(org.role, "members");
   const gmi = g.connected
     ? conn("GMI", "GetMyInvoices", `Connected to ${g.accountName || "your account"}${g.accountEmail ? ` (${g.accountEmail})` : ""} since ${day(g.connectedAt)}`, Z.tag("Beta"),
       "A month’s bank lines go to a manual bank account there, each with its booking receipt attached as a paid document. Sending twice adds nothing twice. Your accountant takes it from there.",
-      `${primary("Send a month’s receipts", 'data-act="gmi-push"', "upload")}${secondary("Remove key", 'data-act="gmi-disconnect"')}`, true)
+      `${roleCan(org.role, "categorise") ? primary("Send a month’s receipts", 'data-act="gmi-push"', "upload") : ""}${mayConnect ? secondary("Remove key", 'data-act="gmi-disconnect"') : ""}`, true)
     : conn("GMI", "GetMyInvoices", "API key · sends receipts each month", Z.tag("Beta"),
       "A month’s bank lines go to a manual bank account there, each with its booking receipt attached as a paid document. Sending twice adds nothing twice. Your accountant takes it from there.",
-      r.available ? primary("Connect", 'data-act="gmi-drawer"', "link") : `<p class="desc">Not available here: ${esc(plain(g.needs || ""))}.</p>`, true);
+      !r.available ? `<p class="desc">Not available here: ${esc(plain(g.needs || ""))}.</p>` : mayConnect ? primary("Connect", 'data-act="gmi-drawer"', "link") : '<p class="desc">An owner or admin connects it.</p>', true);
   return `<h2 class="z-eyebrow zb-conn__group zb-conn__group--first">Sends your books for you</h2>
     ${gmi}
     <h2 class="z-eyebrow zb-conn__group">File exports</h2>
@@ -352,10 +358,6 @@ RENDER.integrations = async () => {
     </div>
     <div class="zb-notes"><div class="zb-note">${Z.icon("person")}<span>Or give your accountant read-only access as a member with the Accountant role. They can export on their own.</span>${cap("members.manage").allowed ? linkBtn("Members", "members") : ""}</div></div>`;
 };
-
-/* ==========================================================================
-   Settings
-   ========================================================================== */
 
 /* ==========================================================================
    Documents: statements, balance confirmations, proofs of ownership and
@@ -426,8 +428,6 @@ RENDER.documents = async () => {
     <h2 class="zb-h2" style="margin:28px 0 12px">Issued</h2>${issued}
     <h2 class="zb-h2" style="margin:28px 0 12px">Receipts for payments</h2>${payments}`;
 };
-
-const table = (head, rows) => `<div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr>${head.map(([h, cls]) => `<th scope="col"${cls ? ` class="${cls}"` : ""}>${h ? esc(h) : `<span class="z-sr">Actions</span>`}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
 
 /* ==========================================================================
    Coming soon: what this organisation can't do yet, and why. The personal
@@ -532,12 +532,12 @@ RENDER.organisation = async () => {
  */
 export function jurisdictionBanner(j, disclaimer, notVerified) {
   const what = {
-    statutory: ["rules encoded to statute", "Active"],
-    directive: ["national tax rules aren’t checked. Zold checks only that your details and a unique invoice number are on the invoice.", "Not supported"],
-    structural: ["tax rules aren’t checked. Zold checks only that your details and a unique invoice number are on the invoice.", "Not supported"],
-  }[j.verification] || [j.verification, "Draft"];
-  return `<details class="card zb-juris"><summary style="cursor:pointer;display:flex;justify-content:space-between;gap:12px;align-items:center;list-style:none">
-      <span><b>${esc(j.countryName)}</b><span class="desc">: ${esc(what[0])}</span></span>${Z.icon("expand_more")}</summary>
+    statutory: "rules encoded to statute",
+    directive: "national tax rules aren’t checked. Zold checks only that your details and a unique invoice number are on the invoice.",
+    structural: "tax rules aren’t checked. Zold checks only that your details and a unique invoice number are on the invoice.",
+  }[j.verification];
+  return `<details class="card zb-juris"><summary class="zb-summary">
+      <span><b>${esc(j.countryName)}</b><span class="desc">: ${esc(what)}</span></span>${Z.icon("expand_more")}</summary>
     <p class="desc" style="margin:10px 0">${esc(plain(j.basis))} ${esc(plain(disclaimer))}</p>
     <p class="z-eyebrow" style="margin:10px 0 6px">Not checked by Zold</p>
     <ul class="desc" style="margin:0 0 0 18px">${(notVerified ?? []).map((x) => `<li>${esc(plain(x))}</li>`).join("")}</ul></details>`;
@@ -672,7 +672,7 @@ export function invoiceActions(i, payLink) {
 export function settlementRows(list) {
   if (!list?.length) return "";
   const n = (v, d = 2) => (v === undefined || v === null ? "unknown" : Number(v).toFixed(d));
-  const tx = (h) => (h ? `<span class="mono" title="${esc(h)}">${esc(h.slice(0, 10))}…${esc(h.slice(-6))}</span>` : "none");
+  const money = (v) => (v === undefined || v === null ? "unknown" : eur(v));
   return `<section class="card"><h2>How it was paid</h2>
     <p class="desc">Recorded when it happened. These are the figures your accountant books, not recalculated from today’s rates.</p>
     ${list.map((p) => p.method === "bank" ? `
@@ -682,14 +682,14 @@ export function settlementRows(list) {
         <p class="desc">Matched on ${esc(p.matchedOn === "payment-link" ? "the payment link code" : "the invoice number")} · ${esc(day(p.at))}</p>
       </div></div>` : p.method === "wallet-receipt" ? `
       <div class="issue">${Z.tag(p.asset || "Token")}<div>
-        <div>${esc(p.receivedAmount)} ${esc(p.asset)} received in your wallet · ${tx(p.txHash)}</div>
+        <div>${esc(p.receivedAmount)} ${esc(p.asset)} received in your wallet · ${shortTx(p.txHash)}</div>
         <p class="desc">Worth ${esc(eur(p.amountEur))} when it arrived · ${esc(day(p.at))}</p>
       </div></div>` : `
       <div class="issue">${Z.tag(p.receivedAsset || "Crypto")}<div>
-        <div>${esc(n(p.receivedAmount, 6))} ${esc(p.receivedAsset)} received · ${tx(p.receiptTxHash)}</div>
-        <p class="desc">Worth ${esc(eur(p.receiptAmountEur))} when it arrived${p.receiptRate ? ` · 1 EUR = ${esc(n(p.receiptRate, 4))} USD` : ""}${p.receiptRateProvider ? ` · ${esc(p.receiptRateProvider)}` : ""}</p>
+        <div>${esc(n(p.receivedAmount, 6))} ${esc(p.receivedAsset)} received · ${shortTx(p.receiptTxHash)}</div>
+        <p class="desc">Worth ${esc(money(p.receiptAmountEur))} when it arrived${p.receiptRate ? ` · 1 EUR = ${esc(n(p.receiptRate, 4))} USD` : ""}${p.receiptRateProvider ? ` · ${esc(p.receiptRateProvider)}` : ""}</p>
         ${p.conversion ? `<p class="desc">Converted at ${esc(n(p.conversion.rate, 4))}${p.conversion.midRate ? ` against a mid of ${esc(n(p.conversion.midRate, 4))}` : ""}${p.conversion.spreadEur === undefined ? "" : ` · spread ${esc(eur(p.conversion.spreadEur))}`}</p>
-          <p class="desc">Credited ${esc(eur(p.conversion.creditedEur))}${p.realisedGainEur === undefined ? " · gain not measurable, so none is claimed" : ` · realised ${p.realisedGainEur >= 0 ? "gain" : "loss"} ${esc(eur(Math.abs(p.realisedGainEur)))}`}</p>`
+          <p class="desc">Credited ${esc(money(p.conversion.creditedEur))}${p.realisedGainEur === undefined ? " · gain not measurable, so none is claimed" : ` · realised ${p.realisedGainEur >= 0 ? "gain" : "loss"} ${esc(eur(Math.abs(p.realisedGainEur)))}`}</p>`
           : `<p class="desc">Still held as ${esc(p.receivedAsset)}: bought, not yet sold, so there is no gain to report yet.</p>`}
       </div></div>`).join("")}
     <p class="desc" style="margin-top:10px">Network fees aren’t taken from what you receive, so they aren’t shown as a cost here.</p></section>`;

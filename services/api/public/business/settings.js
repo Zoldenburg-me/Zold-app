@@ -6,6 +6,7 @@
 import { Z, api, cap, ensureMe, esc, issuerFieldNames, issuerIds, me, org, plain } from "./core.js";
 import { META, RENDER, moneriumLink } from "./views.js";
 import { isOwnCompanyOrg } from "./access-model.js";
+import { shown } from "./nav.js";
 
 const ss = { sec: "org" };
 META.settings = () => ({ title: "Settings", sub: `${org.name}.`, actions: "" });
@@ -13,11 +14,13 @@ META.settings = () => ({ title: "Settings", sub: `${org.name}.`, actions: "" });
 function menu(accounts) {
   const here = (id, label) => `<button type="button" class="zb-set-menu__item" data-ss="${id}"${ss.sec === id ? ' aria-current="true"' : ""}>${esc(label)}</button>`;
   const away = (v, label) => `<a class="zb-set-menu__item" href="?view=${v}" data-view-link="${v}">${esc(label)}${Z.icon("arrow_forward", "zb-set-menu__out")}</a>`;
+  const own = isOwnCompanyOrg(me, org, accounts);
   const groups = [
     ["Company", [here("org", "Business profile"), cap("invoices").allowed ? away("invoicing-settings", "Invoicing profile") : ""]],
-    ["Team", [away("members", "Members and access"), away("access", "Who approves payments")]],
-    ["Account", [here("monerium", "Monerium"), isOwnCompanyOrg(me, org, accounts)
-      ? `${away("access", "Sign-in and recovery")}<a class="zb-set-menu__item" href="/app?from=business#page-settings">Payment page${Z.icon("open_in_new", "zb-set-menu__out")}<span class="z-sr"> (the app)</span></a>`
+    // Members only where the sidebar lists it; Access is one screen, for approvals and, in its own company, the login's sign-in.
+    ["Team", [shown({ capability: "members.manage" }) ? away("members", "Members and access") : "", away("access", own ? "Approvals, sign-in and recovery" : "Who approves payments")]],
+    ["Account", [here("monerium", "Monerium"), own
+      ? `<a class="zb-set-menu__item" href="/app?from=business#page-settings">Payment page${Z.icon("open_in_new", "zb-set-menu__out")}<span class="z-sr"> (the app)</span></a>`
       : `<a class="zb-set-menu__item" href="/app?from=business#security">Your sign-in and recovery${Z.icon("open_in_new", "zb-set-menu__out")}<span class="z-sr"> (the app)</span></a>`]],
     ["Connected", [away("apps", "Apps"), away("integrations", "Accounting connections")]],
   ];
