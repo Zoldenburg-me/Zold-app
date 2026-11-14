@@ -207,7 +207,7 @@ Say this plainly rather than letting the surface imply otherwise:
   confirmed (2026-10-10, a new test account, to a duck.com forwarding
   address); the request that first sent it came back as a gateway 502 with no
   body, and the cause was not found. No processing agreement with Brevo is
-  recorded here yet, and Brevo is not in the privacy notice. Invitations
+  recorded here yet; the privacy notice names Brevo as the mail provider. Invitations
   and invoice links are never sent by Zold; routes return the token to the
   caller and say so. Do not add a "we emailed them"
   string for those without routing them through the mailer.
