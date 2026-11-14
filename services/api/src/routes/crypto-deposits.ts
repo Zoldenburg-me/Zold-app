@@ -36,6 +36,7 @@ import { passkeySafeChallenge } from "../wallet/passkey-safe-plan.js";
 import {
   SafeOperationUncertainError,
   prepareTransferBatchExecution,
+  SafeVerifierMissingError,
   submitPasskeySafeOperationWithReceipt,
   type SubmittedOperation,
 } from "../wallet/candide.js";
@@ -256,6 +257,7 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
           expiresAt: new Date(expiresAt).toISOString(),
         });
       } catch (err: any) {
+        if (err instanceof SafeVerifierMissingError) return res.status(err.status).json({ error: err.message, code: err.code });
         res.status(502).json({ error: redactedMessage(err) });
       }
     }),
