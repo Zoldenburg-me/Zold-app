@@ -48,7 +48,7 @@ const ctx: any = {
 };
 ctx.window = ctx;
 vm.createContext(ctx);
-for (const f of ["ui.js", "app/core.js", "app/recovery.js", "app/monerium.js", "app/onboarding.js"]) {
+for (const f of ["ui.js", "app/core.js", "app/recovery.js", "app/monerium.js", "narwhal/narwhal.js", "app/onboarding.js"]) {
   vm.runInContext(readFileSync(path.join(PUB, f), "utf8"), ctx, { filename: f });
 }
 const run = (code: string) => vm.runInContext(code, ctx);

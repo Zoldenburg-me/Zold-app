@@ -79,7 +79,7 @@ const load = (f: string) => vm.runInContext(readFileSync(path.join(PUB, f), "utf
 load("ui.js");
 for (const f of [
   "app/core.js", "app/dashboard.js", "app/transactions.js", "app/profile.js", "app/recovery.js", "app/monerium.js",
-  "app/onboarding.js", "app/send.js", "app/signers.js", "app/phone.js", "app/phone-home.js", "app/phone-activity.js",
+  "narwhal/narwhal.js", "app/onboarding.js", "app/send.js", "app/signers.js", "app/phone.js", "app/phone-home.js", "app/phone-activity.js",
   "app/phone-send.js", "app/phone-add.js", "app/phone-getpaid.js", "app/phone-more.js", "app/settings.js", "app/desktop.js",
 ]) load(f);
 const run = (code: string) => vm.runInContext(code, ctx);

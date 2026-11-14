@@ -10,12 +10,17 @@ Companies are not here: a company login opening /app goes to /business
 Load order (index.html): nothing calls forward; app/main.js is last and does
 all await-then-render.
 ```
-core → dashboard → transactions → profile → recovery → monerium → onboarding
+core → dashboard → transactions → profile → recovery → monerium → narwhal → onboarding
   → send → signers → phone → phone-home/-activity/-send/-add/-getpaid/-more
   → settings → desktop (≥1024px)
   → errors → pwa → main
 ```
 Screens: onboarding into #ob-root (signup is a narwhal chat: `obChat`, questions in `OB_ASK`); phone screens into #ph-root; desktop fills PH_DESK.
+
+The animated narwhal: `narwhal/narwhal.js` (one global, `Narwhal`: drawing, moods, typing, puffs,
+answer float-up, bubble burst, receipt printer, synthesized sound) + `narwhal/narwhal.css` (`--nw-*`
+tokens fall back to `--z-*`). Used by signup (onboarding.js) and send.html. The landing hero's static
+copy and the landing page's line-drawn scroll narwhal (`landing/narwhal.js`) are separate drawings.
 
 ## /business — Zold Business (business/*.js, ES modules; works at phone width)
 ```
