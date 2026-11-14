@@ -283,8 +283,10 @@ async function phWalletSubmit(btn, errEl) {
     Z.setLoading(btn, false);
     // Until Zold has refused it, /authorize may have paid: a retry would be a
     // new send, signed afresh, that nothing on the server stops. A 409 with no
-    // code is "already submitted": it went out.
-    const refused = e?.status < 500 && typeof e.body?.error === "string" && !(e.status === 409 && !e.body.code);
+    // code is "already submitted": it went out. A send Zold marked FAILED (a
+    // 502 naming its state) is settled too: the bundler refused or it reverted.
+    const refused = (e?.body?.state === "FAILED" && typeof e.body.error === "string")
+      || (e?.status < 500 && typeof e.body?.error === "string" && !(e.status === 409 && !e.body.code));
     if (authorizeSent) phUnconfirmed = !refused;
     if (authorizeSent && w.sendLink) phSendLinkUnsent(w.sendLink, refused);
     if (authorizeSent && !refused) {
