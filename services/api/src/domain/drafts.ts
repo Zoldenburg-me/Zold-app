@@ -186,14 +186,16 @@ export function currentFingerprint(
  *  is rounded as execution sends it, so the approved total is the total
  *  debited: a bank line to cents, a wallet line to the token's six places. */
 export function totalsByAsset(draft: DraftPayment): Record<string, string> {
-  const totals: Record<string, { units: number; wallet: boolean }> = {};
+  // One scale for every line, millionths: a bank line is rounded to cents first.
+  const totals: Record<string, { micro: number; wallet: boolean }> = {};
   for (const line of draft.lines) {
     const wallet = line.destination.kind === "wallet";
-    const t = (totals[line.asset] ??= { units: 0, wallet });
-    t.units += wallet ? Math.round(Number(line.amount) * 1e6) : toCents(line.amount);
+    const t = (totals[line.asset] ??= { micro: 0, wallet: false });
+    t.wallet ||= wallet;
+    t.micro += wallet ? Math.round(Number(line.amount) * 1e6) : toCents(line.amount) * 10_000;
   }
   return Object.fromEntries(
-    Object.entries(totals).map(([asset, t]) => [asset, t.wallet ? String(Number((t.units / 1e6).toFixed(6))) : fromCents(t.units)]),
+    Object.entries(totals).map(([asset, t]) => [asset, t.wallet ? String(Number((t.micro / 1e6).toFixed(6))) : fromCents(t.micro / 10_000)]),
   );
 }
 

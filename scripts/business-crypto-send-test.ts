@@ -334,6 +334,10 @@ try {
     const d = { lines: [walletLine({ asset: "USDC", amount: "1.234567" }), walletLine({ asset: "USDC", amount: "0.000001" })] } as any;
     assert.deepEqual(totalsByAsset(d), { USDC: "1.234568" });
     assert.deepEqual(totalsByAsset({ lines: [{ destination: { kind: "bank" }, asset: "EUR", amount: "1.25" }, { destination: { kind: "bank" }, asset: "EUR", amount: "2.5" }] } as any), { EUR: "3.75" }, "bank lines still in cents");
+    const bank = { destination: { kind: "bank" }, asset: "EUR", amount: "1" };
+    const wallet = { destination: { kind: "wallet" }, asset: "EUR", amount: "1" };
+    assert.deepEqual(totalsByAsset({ lines: [bank, wallet] } as any), { EUR: "2" }, "mixed lines, bank first");
+    assert.deepEqual(totalsByAsset({ lines: [wallet, bank] } as any), { EUR: "2" }, "mixed lines, wallet first");
   });
 
   await t("off unless CRYPTO_SEND_ENABLED=1", async () => {
