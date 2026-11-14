@@ -168,7 +168,6 @@ PH["send/new"] = {
    the server must still resolve to at create and again before submitting. */
 let phWallet = { to: "", token: "EURE", amount: "", name: null, address: null };
 
-const phWalletSym = (token) => (token === "USDC" ? usdSym() : "EURe");
 /* 0x address in groups of four, as an IBAN is shown, so it can be read aloud. */
 const phGroupAddress = (a) => `0x ${String(a).slice(2).replace(/(.{4})/g, "$1 ").trim()}`;
 
@@ -180,7 +179,7 @@ PH["send/wallet"] = {
     return `${phTop("Send to a crypto wallet", "send")}<form id="ph-wal" class="z-app__form" novalidate>${phMain(`
       <div class="z-form">
         ${Z.field({ id: "ph-wal-to", label: "To", name: "to", spellcheck: false, placeholder: caps.ensLookup ? "name.eth or 0x…" : "0x…", value: w.to, required: true, hint: caps.ensLookup ? "An ENS name or a wallet address." : "A wallet address." })}
-        ${Z.select({ id: "ph-wal-token", label: "Token", name: "token", value: w.token, options: [{ value: "EURE", label: "EURe (euro)" }, { value: "USDC", label: `${usdSym()} (dollar)` }] })}
+        ${Z.select({ id: "ph-wal-token", label: "Token", name: "token", value: w.token, options: [{ value: "EURE", label: "EURe (euro)" }, { value: "USDC", label: `${usdSym()} (dollar)` }, ...(caps.cryptoSendTestUsdc ? [{ value: "USDC_TEST", label: "Testnet USDC (dollar)" }] : [])] })}
         ${Z.field({ id: "ph-wal-amount", label: "Amount", name: "amount", inputmode: "decimal", placeholder: "0.00…", value: w.amount, required: true })}
       </div>
       ${Z.note({ text: `Sent on ${phChainName(caps.chainId)} from your account, with no Zold fee. A wallet payment can’t be called back.` })}
