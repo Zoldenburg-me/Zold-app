@@ -545,10 +545,12 @@ await check("one block with more of the wallet's logs than the RPC returns is a 
       return base.getTransferLogs(q);
     },
   };
-  for (let run = 0; run < 5 && store.findImportedWallet(twice.id)!.sync.cursor !== "69"; run++) {
+  // A rate limit is not a range refusal: the window is held whole, never
+  // narrowed to read around the limited block.
+  for (let run = 0; run < 5; run++) {
     await syncWallet(store.findImportedWallet(twice.id)!, stalled, { value: fixedValue, lists: listedAll, now: () => NOW });
   }
-  assert.equal(store.findImportedWallet(twice.id)!.sync.cursor, "69", "held before the rate-limited block");
+  assert.equal(store.findImportedWallet(twice.id)!.sync.cursor, "50", "held at the rate-limited window");
   limited = false;
   for (let run = 0; run < 5 && store.findImportedWallet(twice.id)!.sync.status !== "synced"; run++) {
     await syncWallet(store.findImportedWallet(twice.id)!, stalled, { value: fixedValue, lists: listedAll, now: () => NOW });
