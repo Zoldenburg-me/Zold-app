@@ -499,7 +499,9 @@ export interface CryptoSend {
    *  contact, re-checked before submission. */
   draftId?: string;
   to: `0x${string}`;
-  token: "EURE" | "USDC";
+  /** USDC is the app's dollar token (usd-token.ts); USDC_TEST is Circle's
+   *  test USDC, sendable only on a staging chain. */
+  token: "EURE" | "USDC" | "USDC_TEST";
   /** Token units as a decimal string, e.g. "12.5". */
   amount: string;
   capEur: number;

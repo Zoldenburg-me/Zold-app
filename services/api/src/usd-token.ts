@@ -33,6 +33,18 @@ export function usdLabel() {
   return { symbol: read?.symbol ?? "USDC", name: read?.name ?? "USD Coin", staging: usdIsStaging() };
 }
 
+/** Circle's own test USDC, by test chain. */
+const CIRCLE_TEST_USDC: Record<number, `0x${string}`> = { 84532: "0x036CbD53842c5426634e7929541eC2318f3dCF7e" };
+
+/**
+ * A second dollar a staging deployment can send beside its zUSD: Circle's
+ * test USDC on this chain. Undefined wherever the app's dollar is not the
+ * staging one, so a real-money chain has one dollar token and no more.
+ */
+export function testUsdc(): `0x${string}` | undefined {
+  return usdIsStaging() ? CIRCLE_TEST_USDC[CHAIN_ID] : undefined;
+}
+
 export function usdToken() {
   return { address: addrs().usdc, decimals: 6, ...usdLabel() };
 }

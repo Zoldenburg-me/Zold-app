@@ -22,7 +22,7 @@ import { formatUnits, getAddress, isAddress, parseUnits } from "viem";
 import { CHAIN_ID, cryptoSendEnabled, ENS_GATEWAY, FX, SECURITY } from "../config.js";
 import { addrs, publicClient } from "../chain.js";
 import { eurPer } from "../rates.js";
-import { usdToken } from "../usd-token.js";
+import { testUsdc, usdToken } from "../usd-token.js";
 import { safeDebitBlocker, safeFundedEurToday } from "../orchestrator.js";
 import { store, type CryptoSend, type User } from "../store.js";
 import { requireCapability } from "../http/guards.js";
@@ -58,11 +58,14 @@ export interface CryptoSendDeps {
   usdPerEur?: () => Promise<number>;
   prepare?: typeof prepareTransferExecution;
   screen?: (address: `0x${string}`) => Promise<boolean>;
+  testUsdcAddress?: () => `0x${string}` | undefined;
 }
 
-const tokens = () => ({
-  EURE: { address: addrs().eure, decimals: 18 },
-  USDC: { address: usdToken().address, decimals: 6 },
+type SendToken = { address: `0x${string}`; decimals: number; label: string };
+const tokens = (test: `0x${string}` | undefined): Partial<Record<CryptoSend["token"], SendToken>> => ({
+  EURE: { address: addrs().eure, decimals: 18, label: "EURe" },
+  USDC: { address: usdToken().address, decimals: 6, label: usdToken().symbol },
+  ...(test ? { USDC_TEST: { address: test, decimals: 6, label: "testnet USDC" } } : {}),
 });
 
 /** A 0x address as given (checksum enforced when mixed case), or an ENS name. */
@@ -153,6 +156,7 @@ export function createCryptoSendPreparer({
   usdPerEur = () => eurPer("USD"),
   prepare = prepareTransferExecution,
   screen = isSanctioned,
+  testUsdcAddress = testUsdc,
 }: Omit<CryptoSendDeps, "requireUserSession">) {
   return async (user: User, input: CryptoSendInput): Promise<PreparedCryptoSend> => {
     const blocked = safeDebitBlocker(user);
@@ -161,9 +165,10 @@ export function createCryptoSendPreparer({
     }
     const safe = user.passkeySafe;
     const credentialId = user.passkey.credentialId;
-    const symbol = String(input.token ?? "").toUpperCase();
-    if (symbol !== "EURE" && symbol !== "USDC") return refuse(400, { error: "token must be EURE or USDC", code: "BAD_TOKEN" });
-    const token = tokens()[symbol];
+    const sendable = tokens(testUsdcAddress());
+    const symbol = String(input.token ?? "").toUpperCase() as CryptoSend["token"];
+    const token = Object.hasOwn(sendable, symbol) ? sendable[symbol] : undefined;
+    if (!token) return refuse(400, { error: "token must be EURE or USDC", code: "BAD_TOKEN" });
     const amountText = String(input.amount ?? "").trim();
     // Six places: USDC's own precision, and plenty for EURe.
     if (!/^\d{1,12}(\.\d{1,6})?$/.test(amountText)) {
@@ -183,7 +188,7 @@ export function createCryptoSendPreparer({
     if (own.includes(to.address.toLowerCase())) {
       return refuse(400, { error: "that is this account’s own address", code: "OWN_ADDRESS" });
     }
-    const tokenAddresses = Object.values(tokens()).map((t) => t.address.toLowerCase());
+    const tokenAddresses = Object.values(sendable).map((t) => t.address.toLowerCase());
     if (to.address === "0x0000000000000000000000000000000000000000" || tokenAddresses.includes(to.address.toLowerCase())) {
       return refuse(400, { error: "tokens sent to that address are lost", code: "BURN_ADDRESS" });
     }
@@ -197,10 +202,9 @@ export function createCryptoSendPreparer({
 
     const takes = pageAddressTakes(to.address, to.name);
     if (takes && !takes.some((t) => t.toLowerCase() === token.address.toLowerCase())) {
-      const sym = symbol === "EURE" ? "EURe" : usdToken().symbol;
       return refuse(409, {
         error: takes.length
-          ? `${to.name ?? "That address"} is a Zold payment page that does not take ${sym}; it would be stuck there. Send ${usdToken().symbol}, or ask them for their wallet address.`
+          ? `${to.name ?? "That address"} is a Zold payment page that does not take ${token.label}; it would be stuck there. Send ${usdToken().symbol}, or ask them for their wallet address.`
           : `${to.name ?? "That address"} is a Zold payment page that can't take payments from here right now; it would be stuck there. Ask them for their wallet address.`,
         code: "PAGE_TOKEN_REFUSED",
       });
@@ -246,7 +250,7 @@ export function createCryptoSendPreparer({
       if (gas && gas.token.toLowerCase() === token.address.toLowerCase() && balance < units + gas.units) {
         store.releaseCapHold(held.holdId);
         const most = balance > gas.units ? formatUnits(balance - gas.units, token.decimals) : "0";
-        const sym = symbol === "EURE" ? "EURe" : usdToken().symbol;
+        const sym = token.label;
         return refuse(409, {
           error: `gas for this payment is paid in ${sym} from the same balance; the most you can send is ${most} ${sym}`,
           code: "INSUFFICIENT_FOR_GAS",

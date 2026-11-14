@@ -50,7 +50,11 @@ let screenDown = false;
 const { prepareTransferExecution } = await import("../services/api/src/wallet/candide.js");
 // The harness stand-in, or one that also reports gas paid in a token.
 let gasInToken: { token: `0x${string}`; units: bigint } | undefined;
-const prepare: typeof prepareTransferExecution = async (...a) => ({ ...(await prepareTransferExecution(...a)), ...(gasInToken ? { gasTokenCost: gasInToken } : {}) });
+let preparedToken: string | undefined;
+// Circle's test USDC, where the deployment is a staging one; none here by default.
+const TEST_USDC = "0x7777777777777777777777777777777777777777" as const;
+let testUsdc: `0x${string}` | undefined;
+const prepare: typeof prepareTransferExecution = async (...a) => ({ ...(preparedToken = a[1], await prepareTransferExecution(...a)), ...(gasInToken ? { gasTokenCost: gasInToken } : {}) });
 const { buildActivity } = await import("../services/api/src/transfers/activity.js");
 const { projectStatementLines } = await import("../services/api/src/bookkeeping/statement.js");
 initStore();
@@ -122,6 +126,7 @@ app.use("/api", createCryptoSendsRouter({
   balanceOf: async () => balance,
   usdPerEur: async () => { if (rate === undefined) throw new Error("no rate"); return rate; },
   prepare,
+  testUsdcAddress: () => testUsdc,
   screen: async (a) => { if (screenDown) throw new Error("oracle down"); return sanctioned.has(a); },
 }));
 const server = app.listen(0, "127.0.0.1");
@@ -255,6 +260,20 @@ try {
     balance = 5n * 10n ** 18n;
     assert.equal((await create({ to: ALICE, confirmedAddress: ALICE })).data.code, "INSUFFICIENT_BALANCE");
     balance = 10n ** 30n;
+  });
+
+  await t("testnet USDC is a token only where the deployment has one, and is sent as itself", async () => {
+    const send = () => create({ to: ALICE, confirmedAddress: ALICE, token: "USDC_TEST", amount: "1.25" });
+    assert.equal((await send()).data.code, "BAD_TOKEN", "no staging dollar here, so no second one");
+    assert.equal((await create({ to: ALICE, confirmedAddress: ALICE, token: "constructor" })).data.code, "BAD_TOKEN");
+    testUsdc = TEST_USDC;
+    const r = await send();
+    assert.equal(r.status, 201, JSON.stringify(r.data));
+    assert.equal(preparedToken, TEST_USDC, "the passkey approves the test USDC, not the app's dollar");
+    assert.equal(r.data.capEur, 1, "valued as a dollar at the mid");
+    assert.equal(store.cryptoSends.find((c) => c.id === r.data.id)?.token, "USDC_TEST");
+    assert.equal((await create({ to: TEST_USDC, confirmedAddress: TEST_USDC })).data.code, "BURN_ADDRESS");
+    testUsdc = undefined;
   });
 
   await t("the daily cap counts USDC at the mid, and no rate means no send", async () => {
