@@ -33,6 +33,11 @@ import { prepareTransferExecution, SafeOperationUncertainError, submitPasskeySaf
 import { b64urlToBuf, verifyAssertionForChallenge } from "../webauthn.js";
 import { isSanctioned } from "../sanctions.js";
 import { resolveEnsName, type EnsResolution } from "./ens.js";
+import { contactsById } from "./business/state.js";
+import { findDriftedLines } from "../domain/drafts.js";
+import { roleCan } from "../domain/roles.js";
+import { can } from "../domain/plans.js";
+import { accountIsSpendable } from "../domain/accounts.js";
 import { wrap } from "./util.js";
 
 /** How long the passkey prompt may wait, as for a transfer's terms. */
@@ -130,14 +135,155 @@ export async function settleUnconfirmedCryptoSends(outcome = userOperationOutcom
   }
 }
 
-export function createCryptoSendsRouter({
-  requireUserSession,
+export type CryptoSendInput = { token: unknown; amount: unknown; to: unknown; confirmedAddress: unknown; draftId?: string };
+export type PreparedCryptoSend =
+  | { ok: true; send: CryptoSend; safeExecution: { credentialId: string; challenge: string } }
+  | { ok: false; status: number; body: { error: string; code?: string; [k: string]: unknown } };
+const refuse = (status: number, body: { error: string; code?: string; [k: string]: unknown }): PreparedCryptoSend => ({ ok: false, status, body });
+
+/**
+ * Every check a crypto send passes before the passkey sees it, and the
+ * prepared operation: the personal route and a business payment run both
+ * call this, so neither has a copy of the checks. The caller has already
+ * checked the session, that sending is on, and the user's Safe.
+ */
+export function createCryptoSendPreparer({
   resolveName = resolveEnsName,
   balanceOf = (token, holder) => publicClient.readContract({ address: token, abi: ERC20_BALANCE, functionName: "balanceOf", args: [holder] }),
   usdPerEur = () => eurPer("USD"),
   prepare = prepareTransferExecution,
   screen = isSanctioned,
-}: CryptoSendDeps) {
+}: Omit<CryptoSendDeps, "requireUserSession">) {
+  return async (user: User, input: CryptoSendInput): Promise<PreparedCryptoSend> => {
+    const blocked = safeDebitBlocker(user);
+    if (blocked || !user.passkey?.credentialId || !user.passkeySafe) {
+      return refuse(409, { error: blocked ?? "no passkey registered for this account", code: "NO_SAFE" });
+    }
+    const safe = user.passkeySafe;
+    const credentialId = user.passkey.credentialId;
+    const symbol = String(input.token ?? "").toUpperCase();
+    if (symbol !== "EURE" && symbol !== "USDC") return refuse(400, { error: "token must be EURE or USDC", code: "BAD_TOKEN" });
+    const token = tokens()[symbol];
+    const amountText = String(input.amount ?? "").trim();
+    // Six places: USDC's own precision, and plenty for EURe.
+    if (!/^\d{1,12}(\.\d{1,6})?$/.test(amountText)) {
+      return refuse(400, { error: "amount must be a number with at most 6 decimals", code: "BAD_AMOUNT" });
+    }
+    const units = parseUnits(amountText, token.decimals);
+    if (units <= 0n) return refuse(400, { error: "amount must be positive", code: "BAD_AMOUNT" });
+
+    const to = await recipient(String(input.to ?? "").trim(), resolveName);
+    if (!to.ok) return refuse(to.status, { error: to.error, code: to.code });
+    // The user confirmed one address on the check screen; send there or nowhere.
+    const confirmed = String(input.confirmedAddress ?? "");
+    if (!isAddress(confirmed, { strict: false }) || getAddress(confirmed) !== to.address) {
+      return refuse(409, { error: "the address changed since you checked it — check it again", code: "ADDRESS_CHANGED", address: to.address });
+    }
+    const own = [user.address, safe.address].map((a) => a.toLowerCase());
+    if (own.includes(to.address.toLowerCase())) {
+      return refuse(400, { error: "that is this account’s own address", code: "OWN_ADDRESS" });
+    }
+    const tokenAddresses = Object.values(tokens()).map((t) => t.address.toLowerCase());
+    if (to.address === "0x0000000000000000000000000000000000000000" || tokenAddresses.includes(to.address.toLowerCase())) {
+      return refuse(400, { error: "tokens sent to that address are lost", code: "BURN_ADDRESS" });
+    }
+
+    try {
+      if (await screen(to.address)) return refuse(403, { error: SANCTIONED_ERROR, code: "SANCTIONED" });
+    } catch (err) {
+      console.error(`crypto send: screening failed: ${describeCause(err)}`);
+      return refuse(503, { error: SCREENING_DOWN_ERROR, code: "SCREENING_UNAVAILABLE" });
+    }
+
+    const takes = pageAddressTakes(to.address, to.name);
+    if (takes && !takes.some((t) => t.toLowerCase() === token.address.toLowerCase())) {
+      const sym = symbol === "EURE" ? "EURe" : usdToken().symbol;
+      return refuse(409, {
+        error: takes.length
+          ? `${to.name ?? "That address"} is a Zold payment page that does not take ${sym}; it would be stuck there. Send ${usdToken().symbol}, or ask them for their wallet address.`
+          : `${to.name ?? "That address"} is a Zold payment page that can't take payments from here right now; it would be stuck there. Ask them for their wallet address.`,
+        code: "PAGE_TOKEN_REFUSED",
+      });
+    }
+    const amount = Number(formatUnits(units, token.decimals));
+    let capEur: number;
+    if (symbol === "EURE") capEur = amount;
+    else {
+      try {
+        capEur = amount / (await usdPerEur());
+      } catch {
+        // No rate, no send: the cap cannot be checked without one.
+        return refuse(503, { error: "no exchange rate to check your daily limit against — try again shortly", code: "NO_RATE" });
+      }
+    }
+    // Under a cent the books would show nothing (a €0.00 line reads as money in).
+    if (capEur < 0.01) {
+      return refuse(400, { error: "the smallest payment is worth €0.01", code: "BELOW_MINIMUM" });
+    }
+    let balance: bigint;
+    try {
+      balance = await balanceOf(token.address, safe.address);
+    } catch (err) {
+      console.error(`crypto send: balance read failed for ${user.id}: ${describeCause(err)}`);
+      return refuse(502, { error: "could not read your balance — try again", code: "BALANCE_UNAVAILABLE" });
+    }
+    if (balance < units) return refuse(409, { error: "that is more than your balance", code: "INSUFFICIENT_BALANCE" });
+
+    const held = store.holdDailyCap(user.id, capEur, FX.DAILY_CAP_EUR, () => safeFundedEurToday(user.id));
+    if (!held.ok) {
+      return refuse(409, {
+        error: `amount exceeds the daily limit of €${held.capEur.toFixed(2)} (€${held.usedEur.toFixed(2)} already used today)`,
+        code: "DAILY_CAP",
+      });
+    }
+    const id = randomUUID();
+    const deadline = Math.floor(Date.now() / 1000) + AUTH_WINDOW_SEC;
+    let challenge: string;
+    try {
+      const prepared = await prepare(safe, token.address, to.address, units);
+      // Gas paid in the token being sent comes out of the same balance.
+      const gas = prepared.gasTokenCost;
+      if (gas && gas.token.toLowerCase() === token.address.toLowerCase() && balance < units + gas.units) {
+        store.releaseCapHold(held.holdId);
+        const most = balance > gas.units ? formatUnits(balance - gas.units, token.decimals) : "0";
+        const sym = symbol === "EURE" ? "EURe" : usdToken().symbol;
+        return refuse(409, {
+          error: `gas for this payment is paid in ${sym} from the same balance; the most you can send is ${most} ${sym}`,
+          code: "INSUFFICIENT_FOR_GAS",
+          maxSendable: most,
+        });
+      }
+      challenge = passkeySafeChallenge(prepared.challenge);
+      prunePendingCryptoSends();
+      pendingCryptoSends.set(id, { userId: user.id, expiresAt: deadline * 1000, challenge, plan: safe, userOperation: prepared.userOperation });
+    } catch (err) {
+      store.releaseCapHold(held.holdId);
+      console.error(`crypto send: preparing the Safe operation failed for ${user.id}: ${describeCause(err)}`);
+      return refuse(502, { error: `could not prepare the payment: ${redactedMessage(err)}`, code: "PREPARE_FAILED" });
+    }
+    const now = new Date().toISOString();
+    const send: CryptoSend = {
+      id,
+      userId: user.id,
+      ...(to.name ? { name: to.name } : {}),
+      ...(input.draftId ? { draftId: input.draftId } : {}),
+      to: to.address,
+      token: symbol,
+      amount: formatUnits(units, token.decimals),
+      capEur,
+      state: "CREATED",
+      deadline,
+      createdAt: now,
+      updatedAt: now,
+    };
+    store.addCryptoSendUnderHold(send, held.holdId);
+    return { ok: true, send, safeExecution: { credentialId, challenge } };
+  };
+}
+
+export function createCryptoSendsRouter({ requireUserSession, ...deps }: CryptoSendDeps) {
+  const { resolveName = resolveEnsName, screen = isSanctioned } = deps;
+  const prepareSend = createCryptoSendPreparer(deps);
   const router = express.Router();
   const off = (res: express.Response) =>
     res.status(503).json({ error: "sending to a crypto wallet is not open on this deployment", code: "CRYPTO_SEND_OFF" });
@@ -150,127 +296,10 @@ export function createCryptoSendsRouter({
       const user = store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
       if (!requireCapability(user, "onchain_balance", res)) return;
-      const blocked = safeDebitBlocker(user);
-      if (blocked || !user.passkey?.credentialId || !user.passkeySafe) {
-        return res.status(409).json({ error: blocked ?? "no passkey registered for this account", code: "NO_SAFE" });
-      }
       const b = req.body ?? {};
-      const symbol = String(b.token ?? "").toUpperCase();
-      if (symbol !== "EURE" && symbol !== "USDC") return res.status(400).json({ error: "token must be EURE or USDC", code: "BAD_TOKEN" });
-      const token = tokens()[symbol];
-      const amountText = String(b.amount ?? "").trim();
-      // Six places: USDC's own precision, and plenty for EURe.
-      if (!/^\d{1,12}(\.\d{1,6})?$/.test(amountText)) {
-        return res.status(400).json({ error: "amount must be a number with at most 6 decimals", code: "BAD_AMOUNT" });
-      }
-      const units = parseUnits(amountText, token.decimals);
-      if (units <= 0n) return res.status(400).json({ error: "amount must be positive", code: "BAD_AMOUNT" });
-
-      const to = await recipient(String(b.to ?? "").trim(), resolveName);
-      if (!to.ok) return res.status(to.status).json({ error: to.error, code: to.code });
-      // The user confirmed one address on the check screen; send there or nowhere.
-      const confirmed = String(b.confirmedAddress ?? "");
-      if (!isAddress(confirmed, { strict: false }) || getAddress(confirmed) !== to.address) {
-        return res.status(409).json({ error: "the address changed since you checked it — check it again", code: "ADDRESS_CHANGED", address: to.address });
-      }
-      const own = [user.address, user.passkeySafe.address].map((a) => a.toLowerCase());
-      if (own.includes(to.address.toLowerCase())) {
-        return res.status(400).json({ error: "that is this account’s own address", code: "OWN_ADDRESS" });
-      }
-      const tokenAddresses = Object.values(tokens()).map((t) => t.address.toLowerCase());
-      if (to.address === "0x0000000000000000000000000000000000000000" || tokenAddresses.includes(to.address.toLowerCase())) {
-        return res.status(400).json({ error: "tokens sent to that address are lost", code: "BURN_ADDRESS" });
-      }
-
-      try {
-        if (await screen(to.address)) return res.status(403).json({ error: SANCTIONED_ERROR, code: "SANCTIONED" });
-      } catch (err) {
-        console.error(`crypto send: screening failed: ${describeCause(err)}`);
-        return res.status(503).json({ error: SCREENING_DOWN_ERROR, code: "SCREENING_UNAVAILABLE" });
-      }
-
-      const takes = pageAddressTakes(to.address, to.name);
-      if (takes && !takes.some((t) => t.toLowerCase() === token.address.toLowerCase())) {
-        const sym = symbol === "EURE" ? "EURe" : usdToken().symbol;
-        return res.status(409).json({
-          error: takes.length
-            ? `${to.name ?? "That address"} is a Zold payment page that does not take ${sym}; it would be stuck there. Send ${usdToken().symbol}, or ask them for their wallet address.`
-            : `${to.name ?? "That address"} is a Zold payment page that can't take payments from here right now; it would be stuck there. Ask them for their wallet address.`,
-          code: "PAGE_TOKEN_REFUSED",
-        });
-      }
-      const amount = Number(formatUnits(units, token.decimals));
-      let capEur: number;
-      if (symbol === "EURE") capEur = amount;
-      else {
-        try {
-          capEur = amount / (await usdPerEur());
-        } catch {
-          // No rate, no send: the cap cannot be checked without one.
-          return res.status(503).json({ error: "no exchange rate to check your daily limit against — try again shortly", code: "NO_RATE" });
-        }
-      }
-      // Under a cent the books would show nothing (a €0.00 line reads as money in).
-      if (capEur < 0.01) {
-        return res.status(400).json({ error: "the smallest payment is worth €0.01", code: "BELOW_MINIMUM" });
-      }
-      let balance: bigint;
-      try {
-        balance = await balanceOf(token.address, user.passkeySafe.address);
-      } catch (err) {
-        console.error(`crypto send: balance read failed for ${user.id}: ${describeCause(err)}`);
-        return res.status(502).json({ error: "could not read your balance — try again", code: "BALANCE_UNAVAILABLE" });
-      }
-      if (balance < units) return res.status(409).json({ error: "that is more than your balance", code: "INSUFFICIENT_BALANCE" });
-
-      const held = store.holdDailyCap(user.id, capEur, FX.DAILY_CAP_EUR, () => safeFundedEurToday(user.id));
-      if (!held.ok) {
-        return res.status(409).json({
-          error: `amount exceeds the daily limit of €${held.capEur.toFixed(2)} (€${held.usedEur.toFixed(2)} already used today)`,
-          code: "DAILY_CAP",
-        });
-      }
-      const id = randomUUID();
-      const deadline = Math.floor(Date.now() / 1000) + AUTH_WINDOW_SEC;
-      let challenge: string;
-      try {
-        const prepared = await prepare(user.passkeySafe, token.address, to.address, units);
-        // Gas paid in the token being sent comes out of the same balance.
-        const gas = prepared.gasTokenCost;
-        if (gas && gas.token.toLowerCase() === token.address.toLowerCase() && balance < units + gas.units) {
-          store.releaseCapHold(held.holdId);
-          const most = balance > gas.units ? formatUnits(balance - gas.units, token.decimals) : "0";
-          const sym = symbol === "EURE" ? "EURe" : usdToken().symbol;
-          return res.status(409).json({
-            error: `gas for this payment is paid in ${sym} from the same balance; the most you can send is ${most} ${sym}`,
-            code: "INSUFFICIENT_FOR_GAS",
-            maxSendable: most,
-          });
-        }
-        challenge = passkeySafeChallenge(prepared.challenge);
-        prunePendingCryptoSends();
-        pendingCryptoSends.set(id, { userId: user.id, expiresAt: deadline * 1000, challenge, plan: user.passkeySafe, userOperation: prepared.userOperation });
-      } catch (err) {
-        store.releaseCapHold(held.holdId);
-        console.error(`crypto send: preparing the Safe operation failed for ${user.id}: ${describeCause(err)}`);
-        return res.status(502).json({ error: `could not prepare the payment: ${redactedMessage(err)}`, code: "PREPARE_FAILED" });
-      }
-      const now = new Date().toISOString();
-      const send: CryptoSend = {
-        id,
-        userId: user.id,
-        ...(to.name ? { name: to.name } : {}),
-        to: to.address,
-        token: symbol,
-        amount: formatUnits(units, token.decimals),
-        capEur,
-        state: "CREATED",
-        deadline,
-        createdAt: now,
-        updatedAt: now,
-      };
-      store.addCryptoSendUnderHold(send, held.holdId);
-      res.status(201).json({ ...publicSend(send), safeExecution: { credentialId: user.passkey.credentialId, challenge } });
+      const r = await prepareSend(user, { token: b.token, amount: b.amount, to: b.to, confirmedAddress: b.confirmedAddress });
+      if (!r.ok) return res.status(r.status).json(r.body);
+      res.status(201).json({ ...publicSend(r.send), safeExecution: r.safeExecution });
     }),
   );
 
@@ -345,6 +374,32 @@ export function createCryptoSendsRouter({
       } catch (err) {
         console.error(`crypto send ${send.id}: screening failed: ${describeCause(err)}`);
         return res.status(503).json({ error: SCREENING_DOWN_ERROR, code: "SCREENING_UNAVAILABLE" });
+      }
+      // A payment run's payee is a saved contact and its signer the member
+      // whose Safe backs the account. Checked with nothing awaited before the
+      // claim, so an address-book edit cannot land in between.
+      if (send.draftId) {
+        const draft = store.findDraft(send.draftId);
+        const account = draft?.source.kind === "account" ? store.findAccount(draft.source.accountId) : undefined;
+        const member = draft && store.membersOf(draft.orgId).find((m) => m.userId === send.userId && m.status === "active");
+        // Read, not reconciled: the run is EXECUTING and stays so; this send failing fails it.
+        // The send must still be this run's, and pay what its line says now:
+        // a run reopened since could name another address.
+        const line = draft?.lines.length === 1 ? draft.lines[0] : undefined;
+        const bound = !!draft && draft.state === "EXECUTING" && !!draft.cryptoSendIds?.includes(send.id) && !!line
+          && line.destination.address?.toLowerCase() === send.to.toLowerCase()
+          && line.asset.toUpperCase() === send.token && Number(line.amount) === Number(send.amount);
+        const drifted = !bound || findDriftedLines(draft!, contactsById(draft!.orgId)).length > 0;
+        // What /execute checked, again: the org may lose the feature, the account may be frozen.
+        const org = draft && store.findOrganisation(draft.orgId);
+        const mayStill = !!org && can(org, "transfers.drafts").allowed && !!account && accountIsSpendable(account).ok;
+        if (drifted || !mayStill || account?.backingUserId !== send.userId || !member || !roleCan(member.role, "transfers.execute")) {
+          store.updateCryptoSend(send.id, { state: "FAILED", error: drifted ? "the payee changed before the send" : "the sender may no longer send from this account" });
+          pendingCryptoSends.delete(send.id);
+          return res.status(409).json(drifted
+            ? { error: "the payee’s details changed since this payment was approved — nothing was sent", code: "INVALID_DATA" }
+            : { error: "you can no longer send from this account — nothing was sent", code: "NOT_SENDER" });
+        }
       }
       if (!store.claimCryptoSend(send.id)) {
         if (store.findCryptoSend(send.id)?.state === "CREATED" && Date.now() / 1000 > send.deadline) return res.status(410).json({ error: "the approval window closed — start the send again" });

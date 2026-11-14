@@ -44,6 +44,18 @@ const lineReport = (transfers: Transfer[]) => {
  * Returns a view and writes nothing.
  */
 export const withExecutionState = (draft: DraftPayment) => {
+  if (draft.state === "EXECUTING" && draft.cryptoSendIds?.length) {
+    const sends = draft.cryptoSendIds.map((id) => store.findCryptoSend(id));
+    // An unsigned send past its deadline can never be submitted.
+    const dead = sends.filter((x) => !x || x.state === "FAILED" || (x.state === "CREATED" && x.deadline * 1000 < Date.now()));
+    const state: DraftState = dead.length ? "FAILED" : sends.every((x) => x?.state === "SENT") ? "EXECUTED" : draft.state;
+    return {
+      ...draft,
+      state,
+      cryptoSends: sends.map((x) => x && { id: x.id, state: x.state, ...(x.txHash ? { txHash: x.txHash } : {}) }),
+      ...(dead.length ? { failureReason: `Not sent: ${dead.map((x) => x?.error ?? (x ? "approval expired" : "send missing")).join("; ")}. Create a new payment to try again.` } : {}),
+    };
+  }
   if (draft.state !== "EXECUTING" || !draft.transferIds?.length) return draft;
   const transfers = draft.transferIds
     .map((id) => store.findTransfer(id))
@@ -88,14 +100,14 @@ export const syncInvoicePayment = (invoice: Invoice): Invoice => {
     if (send.state === "FAILED" || (send.state === "CREATED" && send.deadline * 1000 < Date.now())) {
       return store.updateInvoice(invoice.id, {
         state: "SUBMITTED",
-        payment: { ...invoice.payment, cryptoSendId: undefined },
+        payment: { ...invoice.payment, cryptoSendId: undefined, draftId: undefined },
       });
     }
     return invoice;
   }
   // A send that no longer exists can never pay the link: it is to pay again.
   if (invoice.payment?.cryptoSendId) {
-    return store.updateInvoice(invoice.id, { state: "SUBMITTED", payment: { ...invoice.payment, cryptoSendId: undefined } });
+    return store.updateInvoice(invoice.id, { state: "SUBMITTED", payment: { ...invoice.payment, cryptoSendId: undefined, draftId: undefined } });
   }
   const transfer = invoice.payment?.transferId ? store.findTransfer(invoice.payment.transferId) : undefined;
   if (transfer) {
@@ -133,6 +145,9 @@ export const releaseInvoicesOf = (draftId: string) => {
 
 /** Re-check a draft against the address book and park it if anything moved. */
 export const reconcileDrift = (draft: DraftPayment): DraftPayment => {
+  // Only a run not yet sending is parked: rewriting one that is sending would
+  // make it editable, and a second send could follow the first.
+  if (!["DRAFT", "PENDING_REVIEW", "REVIEWED", "INVALID_DATA"].includes(draft.state)) return draft;
   const drifted = findDriftedLines(draft, contactsById(draft.orgId));
   if (!drifted.length) return draft;
   return store.updateDraft(draft.id, {

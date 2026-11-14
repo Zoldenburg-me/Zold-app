@@ -7,6 +7,7 @@
  * wrong identifier does not bounce — it pays a stranger.
  */
 
+import { isAddress } from "viem";
 import { CURRENCY_REGISTRY, isCurrencyCode } from "./accounts.js";
 import type { ContactBankAccount, ContactWallet, CurrencyCode } from "./types.js";
 
@@ -146,6 +147,10 @@ export function validateWallet(raw: unknown): Omit<ContactWallet, "id"> {
   const address = String(input.address ?? "").trim();
   if (!ADDRESS_RE.test(address)) {
     throw new ContactError(`${address || "(empty)"} is not an EVM address.`);
+  }
+  // Mixed case is a checksum: a typo in it is refused, as the personal send refuses it.
+  if (!isAddress(address, { strict: true })) {
+    throw new ContactError(`${address} has a wrong checksum — copy it again.`);
   }
   const chainId = Number(input.chainId);
   if (!Number.isInteger(chainId) || chainId <= 0) {

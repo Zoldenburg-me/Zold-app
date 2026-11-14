@@ -528,6 +528,8 @@ export interface DraftPayment {
   invalidLineIds?: string[];
   /** Transfers created when executed, in line order. */
   transferIds?: string[];
+  /** Crypto sends created when executed: a run that pays a wallet. */
+  cryptoSendIds?: string[];
   failureReason?: string;
   activity: DraftActivity[];
   createdAt: string;
