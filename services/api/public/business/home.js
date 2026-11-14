@@ -309,7 +309,7 @@ function checklistCard(steps) {
 
 function statCard(id, title, view, cells) {
   return `<section class="z-card zb-side-card" aria-labelledby="${id}"><div class="zb-side-card__head"><h2 id="${id}">${title}</h2><a href="?view=${view}" data-view-link="${view}">View all</a></div>
-    <dl class="zb-h-stats">${cells.map(([label, n, amount, tone]) => `<div><dt>${label}</dt><dd class="${tone || ""}"><b>${n}</b><span>${esc(eur(amount))}</span></dd></div>`).join("")}</dl></section>`;
+    <dl class="zb-h-stats">${cells.map(([label, n, amount, tone, other]) => `<div><dt>${label}</dt><dd class="${tone || ""}"><b>${n}</b><span>${esc(eur(amount))}${other ? ` + ${other} not in euros` : ""}</span></dd></div>`).join("")}</dl></section>`;
 }
 
 /* ── Screen ───────────────────────────────────────────────────────────────── */
@@ -353,8 +353,10 @@ RENDER.overview = async () => {
     const open = out.filter((i) => !["PAID", "RECONCILED", "DRAFT"].includes(i.state));
     const late = open.filter((i) => i.overdue);
     const paid = out.filter((i) => ["PAID", "RECONCILED"].includes(i.state) && within(i.payment?.paidAt || i.payment?.manual?.at, 30));
-    const total = (list) => list.reduce((n, i) => n + invAmount(i).value, 0);
-    cards.push(statCard("home-inv", "Invoices", "invoices", [["Open", open.length, total(open)], ["Overdue", late.length, total(late), late.length ? "is-late" : ""], ["Paid, last 30 days", paid.length, total(paid)]]));
+    // Euros are summed; an invoice in another currency is counted beside the sum, never added into it.
+    const inEur = (i) => invAmount(i).currency === "EUR";
+    const cell = (label, list, tone = "") => [label, list.length, list.filter(inEur).reduce((n, i) => n + invAmount(i).value, 0), tone, list.filter((i) => !inEur(i)).length];
+    cards.push(statCard("home-inv", "Invoices", "invoices", [cell("Open", open), cell("Overdue", late, late.length ? "is-late" : ""), cell("Paid, last 30 days", paid)]));
   }
   if (cap("transfers.drafts").allowed) {
     const by = (s) => runs.filter((d) => d.state === s);

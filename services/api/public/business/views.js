@@ -312,9 +312,9 @@ RENDER.export = async () => {
         <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="export-prepare">Create receipts for ${esc(exportMonth)}</button>` : ""}
         <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="export-csv"${dis}>Lexware CSV</button>
         <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="export-zip"${dis}>Receipts as ZIP</button>
-        ${integrations?.getmyinvoices?.connected ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="gmi-push"${dis}>Send to GetMyInvoices</button>` : ""}
+        ${mayBook && integrations?.getmyinvoices?.connected ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="gmi-push"${dis}>Send to GetMyInvoices</button>` : ""}
       </div></div>
-    <p class="zb-hint" style="margin-bottom:12px">${d.lines.length} line${d.lines.length === 1 ? "" : "s"}, ${withBeleg} with a receipt.${withBeleg || !d.lines.length ? "" : " The CSV and the ZIP open once a line has its receipt: press Create receipts."}${integrations && !integrations.getmyinvoices?.connected ? ` <a href="?view=integrations" data-view-link="integrations">Connect GetMyInvoices</a> to send the receipts there.` : ""}</p>
+    <p class="zb-hint" style="margin-bottom:12px">${d.lines.length} line${d.lines.length === 1 ? "" : "s"}, ${withBeleg} with a receipt.${withBeleg || !d.lines.length ? "" : " The CSV and the ZIP open once a line has its receipt: press Create receipts."}${mayBook && integrations && !integrations.getmyinvoices?.connected ? ` <a href="?view=integrations" data-view-link="integrations">Connect GetMyInvoices</a> to send the receipts there.` : ""}</p>
     ${d.lines.length ? `<div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Value date</th><th scope="col">Event</th><th scope="col">Who</th><th scope="col">Reference</th><th scope="col" class="z-tbl__num">Euros</th><th scope="col">Receipt</th></tr></thead><tbody>${d.lines.map((l) => `<tr>
         <td class="zb-top z-dim">${esc(day(ymd(l.valueDate)))}${l.bookingDate !== l.valueDate ? `<span class="zb-sub2">booked ${esc(day(ymd(l.bookingDate)))}</span>` : ""}</td>
         <td class="zb-top">${esc(EVENT_LABEL[l.event] || l.event)}${l.unexecuted ? ` ${Z.tag("Unproven", "amber")}` : ""}</td>
@@ -339,13 +339,15 @@ RENDER.integrations = async () => {
   if (!cap("integrations.accounting").allowed) return gateHtml("integrations.accounting");
   const r = await api(`/api/orgs/${org.id}/integrations`);
   const g = r.integrations.getmyinvoices;
+  // The key is the organisation's (org.update): owners and admins, the same people who manage members.
+  const mayConnect = roleCan(org.role, "members");
   const gmi = g.connected
     ? conn("GMI", "GetMyInvoices", `Connected to ${g.accountName || "your account"}${g.accountEmail ? ` (${g.accountEmail})` : ""} since ${day(g.connectedAt)}`, Z.tag("Beta"),
       "A month’s bank lines go to a manual bank account there, each with its booking receipt attached as a paid document. Sending twice adds nothing twice. Your accountant takes it from there.",
-      `${primary("Send a month’s receipts", 'data-act="gmi-push"', "upload")}${secondary("Remove key", 'data-act="gmi-disconnect"')}`, true)
+      `${roleCan(org.role, "categorise") ? primary("Send a month’s receipts", 'data-act="gmi-push"', "upload") : ""}${mayConnect ? secondary("Remove key", 'data-act="gmi-disconnect"') : ""}`, true)
     : conn("GMI", "GetMyInvoices", "API key · sends receipts each month", Z.tag("Beta"),
       "A month’s bank lines go to a manual bank account there, each with its booking receipt attached as a paid document. Sending twice adds nothing twice. Your accountant takes it from there.",
-      r.available ? primary("Connect", 'data-act="gmi-drawer"', "link") : `<p class="desc">Not available here: ${esc(plain(g.needs || ""))}.</p>`, true);
+      !r.available ? `<p class="desc">Not available here: ${esc(plain(g.needs || ""))}.</p>` : mayConnect ? primary("Connect", 'data-act="gmi-drawer"', "link") : '<p class="desc">An owner or admin connects it.</p>', true);
   return `<h2 class="z-eyebrow zb-conn__group zb-conn__group--first">Sends your books for you</h2>
     ${gmi}
     <h2 class="z-eyebrow zb-conn__group">File exports</h2>

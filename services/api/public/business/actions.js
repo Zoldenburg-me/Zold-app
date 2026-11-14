@@ -237,6 +237,7 @@ function contactDrawer(el) {
   const pays = contactPayments(c);
   const open = ct.drafts.filter((d) => ["DRAFT", "PENDING_REVIEW", "REVIEWED", "INVALID_DATA", "REJECTED"].includes(d.state) && d.lines.some((l) => l.contactId === c.id));
   const canPay = cap("transfers.drafts").allowed && roleCan(org.role, "propose") && b?.iban;
+  const mayManage = roleCan(org.role, "contacts");
   const body = `${c.email ? `<p class="zb-hint">${esc(c.email)}</p>` : ""}
     ${b?.iban ? `<ul class="z-list z-card"><li>${Z.copyRow({ label: "IBAN", value: String(b.iban).replace(/\s+/g, ""), display: Z.groupIban(b.iban), mono: true })}</li>${b.holderName && b.holderName !== c.name ? `<li>${Z.copyRow({ label: "Account holder", value: b.holderName })}</li>` : ""}</ul>` : `<p class="zb-hint">No bank details yet.</p>`}
     ${open.length ? `<div class="zb-note zb-note--a">${Z.icon("warning")}<span>${open.length === 1 ? "A payment run uses" : `${open.length} payment runs use`} these bank details. Changing them sends ${open.length === 1 ? "it" : "them"} back to be checked again.</span></div>` : ""}
@@ -244,9 +245,9 @@ function contactDrawer(el) {
       ? `<dl class="z-kv z-card">${pays.slice(0, 8).map((p) => `<div><dt>${esc(day(p.at))}</dt><dd class="z-fig">−${esc(/^EUR/i.test(p.asset) ? eur(p.amount) : `${p.amount} ${p.asset}`)}</dd></div>`).join("")}</dl>`
       : '<p class="zb-hint">None yet.</p>'}</section>
     <div class="zb-actions">
-      <button type="button" class="z-btn z-btn--secondary" id="ct-edit">${Z.icon("edit")}<span>Edit</span></button>
+      ${mayManage ? `<button type="button" class="z-btn z-btn--secondary" id="ct-edit">${Z.icon("edit")}<span>Edit</span></button>` : ""}
       ${canPay ? `<button type="button" class="z-btn z-btn--primary" id="ct-pay">${Z.icon("arrow_outward")}<span>Pay ${esc(c.name)}</span></button>` : ""}
-      <button type="button" class="z-link-btn" id="ct-del">Delete contact</button>
+      ${mayManage ? '<button type="button" class="z-link-btn" id="ct-del">Delete contact</button>' : ""}
     </div>
     ${payerRuleSection(c)}`;
   const scrim = drawer("contact-drawer", c.name, body, el);
@@ -256,16 +257,17 @@ function contactDrawer(el) {
     setView("send");
     render({ focus: true });
   });
-  scrim.querySelector("#ct-edit").onclick = () => { Z.closeOverlay("contact-drawer"); editContact(c); };
+  if (!mayManage) return;
+  scrim.querySelector("#ct-edit")?.addEventListener("click", () => { Z.closeOverlay("contact-drawer"); editContact(c); });
   scrim.querySelector("#ct-rule")?.addEventListener("click", () => {
     Z.closeOverlay("contact-drawer");
     payerRuleDialog(c).catch((e) => toast(e.message, true));
   });
-  scrim.querySelector("#ct-del").onclick = () => {
+  scrim.querySelector("#ct-del")?.addEventListener("click", () => {
     Z.closeOverlay("contact-drawer");
     dialog(`Delete ${c.name}?`, `<p class="desc">Past payments keep their record. A payment run that still uses these details stops and has to be pointed somewhere else.</p>`,
       async () => { await api(`/api/orgs/${org.id}/contacts/${c.id}`, { method: "DELETE" }); toast("Contact deleted."); }, { okLabel: "Delete" });
-  };
+  });
 }
 
 function editContact(c) {
