@@ -8,8 +8,16 @@ import { errorText } from "./http/log-cause.js";
  */
 const LIMIT_RE = /more than \d+ results|query returned more|limit exceeded|limited to (a )?[\d,]+ (block )?range|block range|range (is )?too (large|wide)|too many (results|logs)|exceed/i;
 
+/** A rate limit or quota, in the words viem and the RPCs use. Alchemy's
+ *  ("exceeded its compute units per second capacity", "Monthly capacity limit
+ *  exceeded") also match LIMIT_RE; halving on one made every window one block
+ *  wide, which multiplied the calls that hit the limit. It is only a reason to
+ *  wait for the next tick. */
+const RATE_LIMIT_RE = /rate limit|request count|compute units|capacity|too many requests|status: 429/i;
+
 export function isLogRangeRefusal(e: unknown): boolean {
-  return LIMIT_RE.test(errorText(e));
+  const text = errorText(e);
+  return LIMIT_RE.test(text) && !RATE_LIMIT_RE.test(text);
 }
 
 /** A refusal that names a result COUNT, as opposed to a range, or a rate
@@ -23,18 +31,19 @@ export function isLogResultCapRefusal(e: unknown): boolean {
 
 /** Read the largest window from `fromBlock` (up to `maxSpan` blocks, never
  *  past `head`) the RPC will answer, halving on a range refusal. Any other
- *  error goes up. */
+ *  error goes up. `span` is the width that answered: pass it back as the next
+ *  `maxSpan` so the next window does not pay for the same refusals again. */
 export async function readLogWindow<T>(
   fromBlock: bigint,
   head: bigint,
   maxSpan: bigint,
   read: (fromBlock: bigint, toBlock: bigint) => Promise<T>,
-): Promise<{ toBlock: bigint; result: T }> {
+): Promise<{ toBlock: bigint; span: bigint; result: T }> {
   let span = maxSpan;
   for (;;) {
     const toBlock = head - fromBlock + 1n > span ? fromBlock + span - 1n : head;
     try {
-      return { toBlock, result: await read(fromBlock, toBlock) };
+      return { toBlock, span, result: await read(fromBlock, toBlock) };
     } catch (e) {
       if (span > 1n && isLogRangeRefusal(e)) {
         span = span / 2n;

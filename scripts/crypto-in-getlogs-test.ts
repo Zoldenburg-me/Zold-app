@@ -103,5 +103,76 @@ await check("a conversion's EURe output is not recorded as a deposit", async () 
   assert.equal(store.cryptoDeposits.filter((d: any) => d.userId === userId).length, before);
 });
 
+const { isLogRangeRefusal } = await import("../services/api/src/log-range.js");
+const ALCHEMY_RANGE = "Under the Free tier plan, you can make eth_getLogs requests with up to a 10 block range.";
+const ALCHEMY_CUPS = "Your app has exceeded its compute units per second capacity.";
+const ALCHEMY_MONTHLY = "Monthly capacity limit exceeded. Visit https://dashboard.alchemy.com/settings/billing to upgrade your scaling policy for continued service.";
+let heads = 0;
+const widths: bigint[] = [];
+const width = (q: { fromBlock: bigint; toBlock: bigint }) => q.toBlock - q.fromBlock + 1n;
+
+await check("Alchemy's range cap halves the window; its rate limits and quota do not", () => {
+  assert.equal(isLogRangeRefusal(new Error(ALCHEMY_RANGE)), true);
+  for (const m of [ALCHEMY_CUPS, ALCHEMY_MONTHLY, "rate limit exceeded", "HTTP request failed.\n\nStatus: 429"]) {
+    assert.equal(isLogRangeRefusal(new Error(m)), false, m);
+  }
+});
+
+await check("a rate-limited tick makes one getLogs and holds the cursor", async () => {
+  store.setCryptoDepositCursor("31337:safe-funding-v1", 1_010n);
+  client.getBlockNumber = async () => { heads++; return 1_030n; };
+  client.getLogs = async (q: any) => { widths.push(width(q)); throw new Error(ALCHEMY_CUPS); };
+  await assert.rejects(pollCryptoDepositsOnce(), /compute units/);
+  assert.deepEqual(widths, [10n], "no halving on a rate limit");
+  assert.equal(store.cryptoDepositCursor("31337:safe-funding-v1"), 1_010n);
+});
+
+await check("one head per tick, and full windows again once the limit lifts", async () => {
+  heads = 0;
+  widths.length = 0;
+  client.getLogs = async (q: any) => { widths.push(width(q)); return []; };
+  await pollCryptoDepositsOnce();
+  assert.equal(heads, 1, "getBlockNumber once for two windows");
+  assert.deepEqual(widths, [10n, 10n]);
+  assert.equal(store.cryptoDepositCursor("31337:safe-funding-v1"), 1_030n);
+});
+
+await check("the width the RPC answered is reused, not re-learned every window", async () => {
+  widths.length = 0;
+  client.getBlockNumber = async () => 1_036n;
+  client.getLogs = async (q: any) => {
+    widths.push(width(q));
+    if (width(q) > 4n) throw new Error(ALCHEMY_RANGE);
+    return [];
+  };
+  await pollCryptoDepositsOnce();
+  assert.deepEqual(widths, [6n, 5n, 2n, 2n, 2n]);
+  widths.length = 0;
+  client.getBlockNumber = async () => 1_040n;
+  await pollCryptoDepositsOnce();
+  assert.deepEqual(widths, [2n, 2n], "no refusals paid twice");
+});
+
+await check("a shrunk width grows back to maxBlockSpan once the RPC answers wide ranges again", async () => {
+  widths.length = 0;
+  client.getBlockNumber = async () => 1_200n;
+  client.getLogs = async (q: any) => { widths.push(width(q)); return []; };
+  for (let tick = 0; tick < 8 && !widths.includes(10n); tick++) await pollCryptoDepositsOnce();
+  assert.ok(widths.includes(10n), `never grew back: ${widths.join(",")}`);
+  assert.deepEqual([...widths].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)), widths, "never narrows while every call answers");
+});
+
+await check("caught up, a tick reads one window and the head once", async () => {
+  for (let tick = 0; tick < 3; tick++) {
+    const cursor = store.cryptoDepositCursor("31337:safe-funding-v1")!;
+    heads = 0;
+    widths.length = 0;
+    client.getBlockNumber = async () => { heads++; return cursor + 7n; };
+    await pollCryptoDepositsOnce();
+    assert.equal(heads, 1);
+    assert.deepEqual(widths, [7n]);
+  }
+});
+
 console.log(`\n${passed} passed, 0 failed`);
 process.exit(0);
