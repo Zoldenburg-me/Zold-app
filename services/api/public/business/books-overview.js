@@ -126,7 +126,9 @@ function scope(w, r) {
 
 function body(lines, months, chart, w) {
   const r = ranges(bo.period);
-  const now = inRange(lines, r), before = inRange(lines, r.prev);
+  // A line with no proven movement is in no figure, the same as on Home.
+  const moved = lines.filter((l) => !l.unexecuted);
+  const now = inRange(moved, r), before = inRange(moved, r.prev);
   const sc = scope(w, r);
   const own = now.length - counted(now).length;
   const inC = cents(now, "in"), outC = cents(now, "out"), net = inC - outC;

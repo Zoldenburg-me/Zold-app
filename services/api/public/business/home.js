@@ -15,7 +15,7 @@
  *   company, from what Access reads (access-model.js).
  */
 import { $, Z, api, cap, ensureMe, esc, eur, gateHtml, maskIban, me, org, ownSafe, refreshMe, roleCan, safeAddressHtml, setView, view, when, ymd } from "./core.js";
-import { META, RENDER, moneriumLink } from "./views.js";
+import { META, RENDER, linkBtn, moneriumLink } from "./views.js";
 import { submittedInvoices, waitingForMe } from "./nav.js";
 import { draftTag, draftTitle, draftTotal, invAmount, loadMembers, memberName } from "./screens.js";
 import { APP_LINKS, isOwnCompanyOrg, loadAccess } from "./access-model.js";
@@ -39,7 +39,6 @@ const LINE_WORD = { sepa_in: "Received", sepa_out: "Sent", sepa_out_reversal: "R
 /* What the page remembers between redraws of one section. */
 const hs = { period: "30d", tab: "all", month: null };
 
-const linkBtn = (label, view, icon, variant = "secondary") => `<a class="z-btn z-btn--${variant}" href="?view=${esc(view)}" data-view-link="${esc(view)}">${icon ? Z.icon(icon) : ""}<span>${esc(label)}</span></a>`;
 const isoDay = (d) => d.toISOString().slice(0, 10);
 export const cents = (lines, dir) => lines.reduce((n, l) => n + (dir === "in" ? Math.max(l.amountCents, 0) : Math.max(-l.amountCents, 0)), 0);
 const sumEur = (d) => Number(d.totals?.EUR || d.totals?.EURe || 0);

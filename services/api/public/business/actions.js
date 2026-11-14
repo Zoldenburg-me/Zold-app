@@ -429,13 +429,7 @@ export const ACTIONS = {
       toast(plain(r.note) || `${r.account.currency} account opened.`);
     }, { okLabel: "Open account" }),
   "new-contact": () => {
-    // From New payment: the dialog redraws the form, so what was typed rides in sendState.
     const fromSend = view === "send";
-    if (fromSend) {
-      sendState.amount = $("#d-amt")?.value.trim() || "";
-      sendState.note = $("#d-note")?.value.trim() || "";
-      sendState.contactId = $('#send-form input[name="contact"]:checked')?.value || null;
-    }
     dialog("Add contact",
     `${field("d-name", "Name", 'autocomplete="organization" placeholder="Druckerei Kessler…"')}
      ${field("d-email", 'Email <span class="desc">(optional)</span>', 'type="email" spellcheck="false" placeholder="buchhaltung@kessler.de…"')}
@@ -454,7 +448,12 @@ export const ACTIONS = {
           }] : [],
         },
       });
-      if (fromSend) sendState.contactId = r.contact.id;
+      // From New payment: saving redraws the form, so what was typed rides in sendState. Cancel stores nothing.
+      if (fromSend) {
+        sendState.amount = $("#d-amt")?.value.trim() || "";
+        sendState.note = $("#d-note")?.value.trim() || "";
+        sendState.contactId = r.contact.id;
+      }
       toast("Contact added.");
     }, { okLabel: "Add contact" });
   },

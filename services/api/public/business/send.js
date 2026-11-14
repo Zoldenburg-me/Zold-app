@@ -13,7 +13,7 @@
  */
 import { Z, api, cap, chainId, esc, eur, gateHtml, maskIban, me, org, reviewOn, roleCan, usdSymbol } from "./core.js";
 import { loadMembers } from "./screens.js";
-import { META, RENDER } from "./views.js";
+import { META, RENDER, linkBtn } from "./views.js";
 import { fundableAccounts, payableContacts } from "./home-model.js";
 
 /** Picked before the form opens: a contact's Pay button, Home's Quick send, or what was typed before Add a contact. */
@@ -22,7 +22,6 @@ export const sendState = { contactId: null, amount: "", note: "", mode: "bank" }
 /** A contact's wallet on this deployment's network, or undefined. */
 export const walletOf = (c, net = chainId) => (c.wallets || []).find((w) => w.chainId === net);
 
-const linkBtn = (label, view, icon) => `<a class="z-btn z-btn--secondary" href="?view=${esc(view)}" data-view-link="${esc(view)}">${icon ? Z.icon(icon) : ""}<span>${esc(label)}</span></a>`;
 const last4 = (iban) => `•••• ${String(iban || "").replace(/\s+/g, "").slice(-4)}`;
 /** A contact list long enough to need a search box. */
 const FIND_FROM = 6;
