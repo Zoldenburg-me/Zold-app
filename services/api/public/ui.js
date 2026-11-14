@@ -330,8 +330,16 @@
       el.textContent = text;
     }, 32);
   }
+  // Only added elements are searched: the reveal's own text swaps add text nodes.
+  const scrambleAdded = (records) => {
+    for (const r of records) for (const node of r.addedNodes) {
+      if (node.nodeType !== 1) continue;
+      if (node.hasAttribute("data-z-scramble")) scramble(node);
+      node.querySelectorAll("[data-z-scramble]").forEach(scramble);
+    }
+  };
   // Absent in the node test harness that loads this file.
-  if (window.MutationObserver) new MutationObserver(() => document.querySelectorAll("[data-z-scramble]").forEach(scramble))
+  if (window.MutationObserver) new MutationObserver(scrambleAdded)
     .observe(document.documentElement, { childList: true, subtree: true });
 
   /* ---- The passkey prompt, named for this device ---------------------- */
