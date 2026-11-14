@@ -45,7 +45,7 @@ const memberInitials = (id) => {
 
 export const draftTitle = (d) => (d.lines.length === 1 ? d.lines[0].destination?.displayName || "1 payment" : `${d.lines.length} payments`);
 export function draftTotal(d) {
-  const parts = Object.entries(d.totals || {}).map(([asset, v]) => (/^(EUR|EURe)$/i.test(asset) ? eur(v) : `${Number(v).toLocaleString("en-GB", { maximumFractionDigits: 6 })} ${asset === "USDC" ? usdSymbol : asset}`));
+  const parts = Object.entries(d.totals || {}).map(([asset, v]) => (asset === "EUR" ? eur(v) : `${Number(v).toLocaleString("en-GB", { maximumFractionDigits: 6 })} ${asset === "USDC" ? usdSymbol : /^EURe$/i.test(asset) ? "EURe" : asset}`));
   return parts.join(" + ");
 }
 export function draftTag(d) {

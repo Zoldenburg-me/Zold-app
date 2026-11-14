@@ -586,11 +586,16 @@ stateDiagram-v2
   creates **one SEPA transfer per line** through the same builder the app
   uses. Nothing moves in that call. Each transfer still needs its own
   signatures.
+- A run whose line pays a contact's wallet is one **crypto send** instead
+  (EURe or USDC, one line, from the Safe behind the account, through the same
+  checks as a personal crypto send). The backing member's passkey signs it at
+  `/crypto-sends/:id/authorize`, which checks the payee's fingerprint once
+  more. Off unless `CRYPTO_SEND_ENABLED=1`.
 - Gaps found while reading:
   - The business dashboard's Send appears unable to complete a passkey-Safe
     send, because it does not produce the passkey assertion.
-  - Bulk-CSV lines are always wallet destinations, and those are refused from
-    an issued account.
+  - Bulk-CSV lines are always wallet destinations with no saved contact, and
+    a wallet run pays only a saved contact, one line per run.
   - The draft drawer edits amounts and notes; there is no UI to re-point a
     line to another payee (cancel the run and start a new payment).
 

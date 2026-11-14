@@ -481,7 +481,8 @@ function cryptoOutLines(inp: StatementInputs): LineDraft[] {
       reference: c.name ?? `To ${c.to.slice(0, 10)}`,
       links: { txHashes: c.txHash ? [c.txHash] : [], ...(c.userOpHash ? { userOpHash: c.userOpHash } : {}) },
       txType: "payout",
-      tags: [c.token === "USDC" ? "usdc" : "eure", "crypto_out"],
+      // A business payment run sent from this Safe is tagged so it can be told apart.
+      tags: [c.token === "USDC" ? "usdc" : "eure", "crypto_out", ...(c.draftId ? ["business_run"] : [])],
       ...(c.token === "USDC"
         ? { note: `${c.amount} USDC sent, valued at the mid when sent (€${c.capEur.toFixed(2)}). The disposal gain or loss against its receipt value is not computed.` }
         : {}),

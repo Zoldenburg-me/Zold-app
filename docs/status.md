@@ -45,7 +45,9 @@ Say this plainly rather than letting the surface imply otherwise:
   Safe to an ENS name or 0x address (`routes/crypto-sends.ts`) has run only
   in `crypto-send:test`, against the hardhat stand-in for the Safe
   operation and stubs for the resolver, the sanctions screen and the
-  bundler's receipt. No name has been resolved, re-checked and paid for real.
+  bundler's receipt. A /business payment run to a contact's wallet
+  (`walletRun` in `routes/business/drafts.ts`, one line, from the backing
+  member's Safe) has run only in `business:crypto-send:test`. No name has been resolved, re-checked and paid for real.
   It is off unless `CRYPTO_SEND_ENABLED=1`. The Base sanctions oracle has
   answered a by-hand `isSanctioned` read (2026-11-03), never one from the
   route. The books carry a USDC send at the mid when sent, without its disposal

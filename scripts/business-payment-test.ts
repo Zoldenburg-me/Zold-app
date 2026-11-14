@@ -6,7 +6,8 @@
  * left out when it is gone; a rejected run is never counted as approved and
  * keeps its reason; two approvals are needed once a run went to review; the
  * sender is read from the "executing" step; the id in the address wins over
- * the one a link picked.
+ * the one a link picked; the Send screen offers Crypto wallet only where
+ * capabilities().cryptoSend is on, and a wallet run is signed as a crypto send.
  *
  * What this cannot show: the page in a browser. Offline.
  *
@@ -134,6 +135,18 @@ assert.equal(m.runIdFrom("", null), null);
   assert.match(actions, /signedLineOutcome\(t, true\)/);
   assert.match(actions, /signedRunToast\(r\.authorizations\.length, lines\)/);
   assert.doesNotMatch(actions, /sent to the bank/, "only signedRunToast may say sent to the bank");
+}
+
+// ── Send: Crypto wallet only where the API sends to wallets ──────────────────
+{
+  const send = readFileSync(path.join(ROOT, "services/api/public/business/send.js"), "utf8");
+  assert.match(send, /const cryptoOn = health\?\.capabilities\?\.cryptoSend === true;/);
+  assert.match(send, /const crypto = cryptoOn && sendState\.mode === "crypto";/);
+  assert.match(send, /\$\{!cryptoOn \? "" :/, "off: no Crypto wallet row at all");
+  assert.doesNotMatch(send, /soonRow/, "no Soon row for a built feature");
+  assert.match(send, /\$\{cryptoOn \? `<button[^`]*data-act="send-mode" data-mode="crypto"/, "with no IBAN contact, the gate still opens Crypto wallet");
+  const actions = readFileSync(path.join(ROOT, "services/api/public/business/actions.js"), "utf8");
+  assert.match(actions, /if \(r\.cryptoSends\?\.length\) return signCryptoRun\(r\.cryptoSends\);/);
 }
 
 console.log("business payment: ok");
