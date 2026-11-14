@@ -225,6 +225,16 @@ for (const [name, fail] of [
   });
 }
 
+await t("after /authorize, a 502 naming state FAILED is a failure: its reason, and Send again", async () => {
+  run(`phUnconfirmed = false; phWallet = { to: "alice.eth", token: "USDC", amount: "25.5", name: "alice.eth", address: "${ADDR}" };
+    api = async (p) => { if (p.endsWith("/authorize")) { const e = new Error("the bundler refused the operation, so nothing was sent: AA24 signature error"); e.status = 502; e.body = { id: "s9", state: "FAILED", error: e.message }; throw e; } return { id: "s9", safeExecution: { credentialId: "c", challenge: "ch" } }; }`);
+  const btn = el(); const err = el();
+  await run(`phWalletSubmit`)(btn, err);
+  assert.match(err.textContent, /nothing was sent: AA24/);
+  assert.equal(run(`phUnconfirmed`), false);
+  assert.match(flat(run(`PH["send/wallet-check"].html()`)), /id="ph-wal-send"/);
+});
+
 await t("a cancelled passkey prompt sends nothing and keeps Send", async () => {
   run(`phUnconfirmed = false; api = async () => ({ id: "s6", safeExecution: { credentialId: "c", challenge: "ch" } });
     const real = safeExecutionAssertion; safeExecutionAssertion = async () => { throw Object.assign(new Error("x"), { name: "NotAllowedError" }); }; globalThis.__realSea = real;`);
