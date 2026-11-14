@@ -52,7 +52,7 @@ Other rails are not engaged (`docs/roadmap.md` items 0–1).
   wallet.
 - **Crypto sends** (`routes/crypto-sends.ts`, off unless `CRYPTO_SEND_ENABLED=1`)
   are a wallet feature: EURe or USDC to an address the user chose, the only
-  route that does, with Send's bank rows closed as above. No route swaps
+  route that does (a /business wallet run goes through the same checks), with Send's bank rows closed as above. No route swaps
   between arbitrary tokens.
 
 ## Business features without KYC

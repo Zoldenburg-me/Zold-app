@@ -393,9 +393,10 @@ try {
       amount: "10.00",
     },
   ]);
-  check("paying a wallet from an issued account is refused, not attempted", () => {
-    assert.equal(walletLine.r.status, 422);
-    assert.match(walletLine.r.data.problems[0].reason, /token-to-token/i);
+  // A wallet run is a crypto send (business:crypto-send:test); off here, so refused.
+  check("paying a wallet with crypto sends off is refused, not attempted", () => {
+    assert.equal(walletLine.r.status, 503, JSON.stringify(walletLine.r.data));
+    assert.equal(walletLine.r.data.code, "CRYPTO_SEND_OFF");
     assert.equal(walletLine.after.draft.state, "REVIEWED", "and the draft is untouched");
   });
 

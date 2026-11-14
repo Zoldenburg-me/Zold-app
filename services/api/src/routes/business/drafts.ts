@@ -47,6 +47,13 @@ import {
 import { CEILINGS, ceilingRefusal } from "../../domain/ceilings.js";
 import { knownError } from "../../http/known-errors.js";
 import { redactedMessage } from "../../http/log-cause.js";
+import { requireCapability as requireUserCapability } from "../../http/guards.js";
+import { pendingCryptoSends } from "../../http/pending.js";
+import { createCryptoSendPreparer } from "../crypto-sends.js";
+import { CHAIN_ID, cryptoSendEnabled } from "../../config.js";
+import type { User } from "../../store.js";
+
+export type CryptoSendPreparer = ReturnType<typeof createCryptoSendPreparer>;
 
 /** Resolving the org and the caller's role for a request — injected so this
  *  module cannot acquire its own way of deciding who is calling. */
@@ -62,6 +69,7 @@ export function createDraftRoutes(
   deps: OrgRoutes,
   buildTransferFromQuote: TransferFactory,
   readBalances: BalanceReader = accountBalances,
+  prepareCryptoSend: CryptoSendPreparer = createCryptoSendPreparer({}),
 ): express.Router {
   const { ctxOf } = deps;
   const r = express.Router();
@@ -311,6 +319,83 @@ export function createDraftRoutes(
   });
 
   /**
+   * A run that pays a wallet is one crypto send: EURe or USDC from the Safe
+   * behind the account, to the contact's saved address, through the same
+   * checks as a personal crypto send (createCryptoSendPreparer). One line,
+   * because two operations prepared from one Safe share a nonce, so only the
+   * first could land. The member whose Safe it is signs it at
+   * /crypto-sends/:id/authorize, which re-checks the payee once more.
+   */
+  async function walletRun(ctx: OrgContext, res: express.Response, draft: DraftPayment, user: User) {
+    if (!cryptoSendEnabled()) {
+      return res.status(503).json({ error: "Sending to a crypto wallet is not open on this deployment.", code: "CRYPTO_SEND_OFF" });
+    }
+    if (!requireCapability(ctx, res, "transfers.drafts")) return;
+    if (!requireUserCapability(user, "onchain_balance", res)) return;
+    const [line] = draft.lines;
+    const d = line.destination;
+    const contact = line.contactId ? store.findContact(line.contactId) : undefined;
+    const problem =
+      draft.lines.length !== 1 ? "A run that pays a wallet has exactly one line: two payments from one Safe cannot be signed at once."
+        : d.kind !== "wallet" || !d.address || !contact || contact.orgId !== ctx.org.id ? "A wallet payment goes to a saved contact's wallet address."
+          : d.chainId !== CHAIN_ID ? `That wallet is on network ${d.chainId}; this account pays on network ${CHAIN_ID}.`
+            : !["EURE", "USDC"].includes(line.asset.toUpperCase()) ? "A wallet payment sends EURe or USDC."
+              : undefined;
+    if (problem) {
+      return res.status(422).json({ error: `${problem} Nothing was created.`, problems: [{ lineId: line.id, reason: problem }] });
+    }
+    const reviewRequired = paymentReviewRequired(ctx.org);
+    const claimable: DraftState[] = reviewRequired ? ["REVIEWED"] : ["DRAFT", "REVIEWED"];
+    if (!claimable.includes(draft.state)) {
+      return res.status(409).json({ error: reviewRequired
+        ? `This draft is ${draft.state}. This organisation requires a second person to review a payment before it can be sent.`
+        : `This draft is ${draft.state} and cannot be sent from that state.` });
+    }
+    const plannedAt = draft.updatedAt;
+    const prepared = await prepareCryptoSend(user, { token: line.asset, amount: line.amount, to: d.address, confirmedAddress: d.address, draftId: draft.id });
+    if (!prepared.ok) return res.status(prepared.status).json(prepared.body);
+    const { send } = prepared;
+    const drop = (why: string) => {
+      store.updateCryptoSend(send.id, { state: "FAILED", error: why });
+      pendingCryptoSends.delete(send.id);
+    };
+    // The checks above awaited the chain: an address-book edit may have landed.
+    const now = reconcileDrift(store.findDraft(draft.id) ?? draft);
+    if (now.state === "INVALID_DATA") {
+      drop("the payee changed before the send");
+      return res.status(409).json({ error: "Some recipients changed since this draft was approved. It has been held.", draft: now });
+    }
+    const claimed = store.claimDraftExecution(draft.id, claimable, plannedAt);
+    if (!claimed) {
+      drop("the payment run changed before the send");
+      return res.status(409).json({ error: "This draft changed while it was being prepared. Nothing was sent; check it and send again." });
+    }
+    const found = line.invoiceId ? store.findInvoice(line.invoiceId) : undefined;
+    if (found && found.orgId === ctx.org.id && found.state === "PAYING" && found.payment?.draftId === claimed.id) {
+      store.updateInvoice(found.id, { payment: { ...found.payment, cryptoSendId: send.id } });
+    }
+    const updated = store.updateDraft(claimed.id, {
+      cryptoSendIds: [send.id],
+      activity: [...claimed.activity, activity(ctx.member.id, "executing", "1 crypto send created, awaiting a passkey signature.")],
+    });
+    res.status(201).json({
+      draft: updated,
+      cryptoSends: [{
+        lineId: line.id,
+        cryptoSendId: send.id,
+        recipient: d.displayName,
+        to: send.to,
+        token: send.token,
+        amount: send.amount,
+        deadline: send.deadline,
+        safeExecution: prepared.safeExecution,
+        submitTo: `/api/crypto-sends/${send.id}/authorize`,
+      }],
+      note: "1 crypto send created. It needs a passkey signature — sign it and POST the assertion to submitTo. Nothing has moved yet.",
+    });
+  }
+
+  /**
    * Execute a reviewed draft: one transfer per line, each needing its own
    * device signature.
    *
@@ -403,6 +488,11 @@ export function createDraftRoutes(
       }
     }
 
+    // ── A run that pays a wallet: one crypto send from the backing Safe ───
+    if (checked.lines.some((l) => l.destination.kind === "wallet")) {
+      return walletRun(ctx, res, checked, user);
+    }
+
     // ── Plan every line BEFORE creating anything ──────────────────────────
     // A half-created batch consumes quotes and leaves transfers nobody asked
     // for, so every line is checked first and the whole draft is refused if any
@@ -421,14 +511,7 @@ export function createDraftRoutes(
 
     for (const line of checked.lines) {
       const d = line.destination;
-      if (d.kind === "wallet") {
-        problems.push({
-          lineId: line.id,
-          reason:
-            "Paying a wallet from an issued account is not wired — that is a token-to-token payment, not a payout rail.",
-        });
-        continue;
-      }
+      if (d.kind === "wallet") continue; // a wallet run returned above
       const contact = line.contactId ? store.findContact(line.contactId) : undefined;
       const bank = contact?.bankAccounts.find((b) => b.id === d.bankAccountId);
       if (!bank) {

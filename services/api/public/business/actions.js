@@ -6,9 +6,9 @@
  * and nowhere else. An action that opens a drawer returns "keep", so the
  * shell does not draw the page again under it.
  */
-import { $, Z, api, cap, day, dialog, esc, eur, maskIban, me, org, plain, reviewOn, roleCan, ROLE_WORD, setPersonalLater, setView, toast, token, view } from "./core.js";
+import { $, Z, api, cap, chainId, day, dialog, esc, eur, maskIban, me, org, plain, reviewOn, roleCan, ROLE_WORD, setPersonalLater, setView, toast, token, view } from "./core.js";
 import { docHref, docMonth, exportMonth, setExportMonth } from "./views.js";
-import { sendState } from "./send.js";
+import { sendAmount, sendState, walletOf } from "./send.js";
 import { forgetDraft, invoiceBody, invoiceDraft, readInvoiceEditor, setInvoiceDraft, storeDraft } from "./invoice.js";
 import { ap, bk, contactPayments, ct, draftTag, draftTitle, draftTotal, invoiceDrawer, iv, mayReview, memberName } from "./screens.js";
 import { loadOrg, render } from "./shell.js";
@@ -327,6 +327,29 @@ function openDocument(d) {
   const url = docHref(d?.url);
   if (url) window.open(url, "_blank", "noopener");
   toast("Document issued.");
+}
+
+/**
+ * Sign a run that pays a wallet: the passkey signs the Safe operation that
+ * moves exactly that token and amount to exactly that address, then the API
+ * checks the payee once more and submits it (routes/crypto-sends.ts).
+ */
+async function signCryptoRun(sends) {
+  const lib = await window.__deviceLib;
+  const out = [];
+  for (const a of sends) {
+    const name = a.recipient || "the wallet";
+    if (Date.now() / 1000 > Number(a.deadline)) { out.push(`${name}: not sent, approval expired`); continue; }
+    try {
+      const executionAssertion = await lib.passkeyAssertion(a.safeExecution);
+      const sent = await api(a.submitTo, { method: "POST", body: { executionAssertion } });
+      out.push(sent.state === "SENT" ? `Sent to ${name}.` : `${name}: sent to the network, not confirmed yet. Payments shows when it is.`);
+    } catch (e) {
+      out.push(`${name}: ${plain(e.message)}`);
+    }
+  }
+  const ok = out.every((t) => t.startsWith("Sent to"));
+  toast(out.join(" "), !ok);
 }
 
 export const ACTIONS = {
@@ -953,35 +976,68 @@ export const ACTIONS = {
   // ── Payment runs ─────────────────────────────────────────────────────────
   /** A new run of one payment: saved, then (with approvals) submitted, so it
    *  waits in Approvals for someone other than the drafter. */
+  /** Bank transfer or crypto wallet on the Send screen; the shell draws it again. */
+  "send-mode"(el) {
+    sendState.mode = el.dataset.mode === "crypto" ? "crypto" : "bank";
+    sendState.amount = $("#d-amt")?.value || "";
+  },
+  /** A payee with a wallet on this network: an ENS name is resolved here and
+   *  the address is what is saved, so the run pays the address shown. */
+  "new-wallet-contact": () => dialog("Add a wallet contact",
+    `${field("d-name", "Name", 'autocomplete="organization" placeholder="Druckerei Kessler…"')}
+     ${field("d-wallet", "ENS name or 0x address", 'spellcheck="false" autocomplete="off" placeholder="kessler.eth or 0x…"')}
+     <p class="desc">Only an address on this network. Tokens sent to an address on another network can be lost.</p>`,
+    async () => {
+      const typed = $("#d-wallet").value.trim();
+      let address = typed;
+      let label;
+      if (!/^0x[0-9a-fA-F]{40}$/.test(typed)) {
+        if (!typed.includes(".")) throw new Error("Enter an ENS name like kessler.eth, or an address: 0x and 40 hex characters.");
+        const found = await api(`/api/ens/lookup?name=${encodeURIComponent(typed)}`);
+        address = found.address;
+        label = found.name;
+      }
+      const net = (await api("/api/health")).chainId ?? chainId;
+      const { contact } = await api(`/api/orgs/${org.id}/contacts`, {
+        method: "POST",
+        body: { name: $("#d-name").value, wallets: [{ chainId: net, address, ...(label ? { label } : {}) }] },
+      });
+      sendState.contactId = contact.id;
+      toast(label ? `Contact added: ${label} is ${address}.` : "Contact added.");
+    }, { okLabel: "Add contact" }),
   async "send-create"() {
     const err = $("#send-err");
     err.textContent = "";
-    const amount = $("#d-amt").value.trim().replace(",", ".");
-    if (!/^\d+(\.\d{1,2})?$/.test(amount) || Number(amount) <= 0) {
-      err.textContent = "Enter an amount in euros and cents, like 250 or 250.00.";
+    const crypto = sendState.mode === "crypto" && !!$("#send-form input[name=token]");
+    const amount = sendAmount($("#d-amt").value, crypto);
+    if (!amount) {
+      err.textContent = crypto ? "Enter an amount, like 250 or 12.5 (at most 6 decimals)." : "Enter an amount in euros and cents, like 250 or 250.00.";
       $("#d-amt").focus();
       return "keep";
     }
     const picked = (name) => $(`#send-form input[name="${name}"]:checked`)?.value;
     if (!picked("contact")) { err.textContent = "Pick who you’re paying."; return "keep"; }
-    const { contacts } = await api(`/api/orgs/${org.id}/contacts`);
+    const [{ contacts }, health] = await Promise.all([api(`/api/orgs/${org.id}/contacts`), crypto ? api("/api/health") : null]);
     const c = contacts.find((x) => x.id === picked("contact"));
-    const b = c?.bankAccounts.find((x) => x.iban);
-    if (!b) { err.textContent = "That contact has no IBAN."; return "keep"; }
+    let line;
+    if (crypto) {
+      const w = c && walletOf(c, health.chainId);
+      if (!w) { err.textContent = "That contact has no wallet on this network."; return "keep"; }
+      line = { destination: { kind: "wallet", chainId: w.chainId, address: w.address, displayName: c.name }, asset: picked("token") === "USDC" ? "USDC" : "EURE" };
+    } else {
+      const b = c?.bankAccounts.find((x) => x.iban);
+      if (!b) { err.textContent = "That contact has no IBAN."; return "keep"; }
+      line = { destination: { kind: "bank", bankAccountId: b.id, displayName: b.holderName || c.name }, asset: "EUR" };
+    }
     const r = await api(`/api/orgs/${org.id}/drafts`, {
       method: "POST",
       body: {
         source: { kind: "account", accountId: picked("account") },
-        lines: [{
-          contactId: c.id,
-          destination: { kind: "bank", bankAccountId: b.id, displayName: b.holderName || c.name },
-          asset: "EUR",
-          amount,
-          note: $("#d-note").value.trim() || undefined,
-        }],
+        lines: [{ contactId: c.id, ...line, amount, note: $("#d-note").value.trim() || undefined }],
       },
     });
     sendState.contactId = null;
+    sendState.mode = "bank";
     if (reviewOn()) {
       await api(`/api/orgs/${org.id}/drafts/${r.draft?.id || r.id}/submit`, { method: "POST" });
       ap.tab = "waiting";
@@ -1034,6 +1090,7 @@ export const ACTIONS = {
              <td class="mono">${esc(l.amount)} ${esc(l.asset)}</td></tr>`).join("")}</tbody></table>`,
         null, { closeOnly: true });
     }
+    if (r.cryptoSends?.length) return signCryptoRun(r.cryptoSends);
     if (!r.authorizations?.length) return toast(r.note || "Nothing to approve.");
 
     const lib = await window.__deviceLib;

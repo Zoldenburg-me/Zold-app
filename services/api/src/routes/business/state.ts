@@ -44,6 +44,18 @@ const lineReport = (transfers: Transfer[]) => {
  * Returns a view and writes nothing.
  */
 export const withExecutionState = (draft: DraftPayment) => {
+  if (draft.state === "EXECUTING" && draft.cryptoSendIds?.length) {
+    const sends = draft.cryptoSendIds.map((id) => store.findCryptoSend(id));
+    // An unsigned send past its deadline can never be submitted.
+    const dead = sends.filter((x) => !x || x.state === "FAILED" || (x.state === "CREATED" && x.deadline * 1000 < Date.now()));
+    const state: DraftState = dead.length ? "FAILED" : sends.every((x) => x?.state === "SENT") ? "EXECUTED" : draft.state;
+    return {
+      ...draft,
+      state,
+      cryptoSends: sends.map((x) => x && { id: x.id, state: x.state, ...(x.txHash ? { txHash: x.txHash } : {}) }),
+      ...(dead.length ? { failureReason: `Not sent: ${dead.map((x) => x?.error ?? (x ? "approval expired" : "send missing")).join("; ")}. Create a new payment to try again.` } : {}),
+    };
+  }
   if (draft.state !== "EXECUTING" || !draft.transferIds?.length) return draft;
   const transfers = draft.transferIds
     .map((id) => store.findTransfer(id))
