@@ -170,9 +170,11 @@ let phSendLinkUrls = {};
 /* A payment that went out for a link but was not yet recorded on it, per device and person. */
 const phSendLinkPaidKey = () => `zold-send-link-paid:${user?.id || ""}`;
 function phSendLinkPaid() {
+  if (!user?.id) return {};
   try { return JSON.parse(localStorage.getItem(phSendLinkPaidKey()) || "{}") || {}; } catch { return {}; }
 }
 function phSendLinkPaidStore(id, v) {
+  if (!user?.id) return;
   const all = phSendLinkPaid();
   if (v) all[id] = v; else delete all[id];
   try { localStorage.setItem(phSendLinkPaidKey(), JSON.stringify(all)); } catch { /* private mode: the warning lasts this page only */ }

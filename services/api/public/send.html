@@ -224,8 +224,10 @@ const maskIban = (i) => `${i.slice(0, 4)} •••• ${i.slice(-4)}`;
 const maskAddr = (a) => `${a.slice(0, 6)}…${a.slice(-4)}`;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
+// Same-origin credentials: behind Cloudflare Access (app.zoldhq.com) a request
+// without its cookie is redirected to the Access login and fails as "offline".
 async function api(method, path, body) {
-  const res = await fetch(path, { method, headers: body ? { "content-type": "application/json" } : {}, ...(body ? { body: JSON.stringify(body) } : {}), credentials: "omit", referrerPolicy: "no-referrer" });
+  const res = await fetch(path, { method, headers: body ? { "content-type": "application/json" } : {}, ...(body ? { body: JSON.stringify(body) } : {}), referrerPolicy: "no-referrer" });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) { const e = new Error(data.error || "Something went wrong. Try again."); e.status = res.status; e.body = data; throw e; }
   return data;
@@ -535,6 +537,7 @@ async function flow(link) {
         amount = await askAmount();
         continue;
       }
+      if (e.status === 429) { $("#dock").classList.remove("on"); react("sad", 1400); sfx.bad(); await say(e.message); return; }
       // Answers the server refused, or a dropped connection: say so and let them send again.
       refuse(e.message);
       await say("That didn’t go through.", `${e.message} Press the arrow to try again, or reload to start over.`);
