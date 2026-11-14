@@ -28,19 +28,24 @@ const users = [
 const { deployVerifierForOwner } = await import("../services/api/src/recovery/recovered-passkey.js");
 type Io = Parameters<typeof sweepMissingVerifiers>[1] & {};
 /** A chain where nothing is deployed until a sent deploy confirms. */
-const chain = (opts: { confirm?: boolean; failSend?: boolean } = {}) => {
+const chain = (opts: { confirm?: boolean; failSend?: boolean; lands?: boolean } = {}) => {
   const sent: string[] = [];
   const code = new Set<string>();
+  // The deploy is for the verifier read just before it; with `lands`, a success puts code there.
+  let asked = "";
+  const landing = new Map<string, string>();
   let release: (s: string) => void = () => {};
   const io: Io = {
     enabled: () => true,
-    isDeployed: async (a) => code.has(a.toLowerCase()),
+    isDeployed: async (a) => { asked = a.toLowerCase(); return code.has(asked); },
     send: async (tx) => {
       if (opts.failSend) throw new Error("relay key has no ETH");
       sent.push(tx.data);
-      return `0x${String(sent.length).padStart(64, "0")}` as `0x${string}`;
+      const hash = `0x${String(sent.length).padStart(64, "0")}`;
+      landing.set(hash, asked);
+      return hash as `0x${string}`;
     },
-    receipt: () => (opts.confirm ? Promise.resolve("success") : new Promise((ok) => { release = ok; })),
+    receipt: (hash) => (opts.confirm ? Promise.resolve("success").then((s) => { if (opts.lands) code.add(landing.get(hash)!); return s; }) : new Promise((ok) => { release = ok; })),
   };
   return { io, sent, code, opts, release: (s: string) => release(s) };
 };
@@ -59,6 +64,13 @@ const swept = [
   // The stub never puts code anywhere, so a confirmed receipt with no code is still a failure.
   assert.equal(await sweepMissingVerifiers(swept, c.io), 0, "a receipt without code at the address is not a deploy");
   assert.equal(c.sent.length, 2, "only active recovered or imported Safes are swept");
+}
+{
+  const c = chain({ confirm: true, lands: true });
+  assert.equal(await sweepMissingVerifiers(swept, c.io), 2, "a confirmed deploy with code at the address counts");
+  assert.equal(c.code.size, 2);
+  assert.equal(await sweepMissingVerifiers(swept, c.io), 0, "an already deployed verifier is skipped");
+  assert.equal(c.sent.length, 2, "and nothing is sent for it");
 }
 {
   const c = chain({ failSend: true });
