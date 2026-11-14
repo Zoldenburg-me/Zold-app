@@ -32,6 +32,17 @@ const text = new SafeOperationUncertainError(hash, "no receipt");
 assert.ok(!text.message.includes("no receipt"));
 console.log("   ok  a string cause is not shown either");
 
+// A bundler refusal carries the bundler's reason, redacted, not abstractionkit's fixed line.
+const { BundlerRefusedError } = await import("../services/api/src/wallet/candide.js");
+const { AbstractionKitError } = await import("abstractionkit");
+const inner = new AbstractionKitError("INVALID_FIELDS", `AA24 signature error at ${KEY_URL}`, { errno: -32507, aaCode: "AA24" });
+const refusal = new BundlerRefusedError(new AbstractionKitError("BUNDLER_ERROR", "bundler eth_sendUserOperation rpc call failed", { cause: inner, errno: -32507, aaCode: "AA24" }));
+assert.match(refusal.message, /^the bundler refused the operation, so nothing was sent: AA24 signature error/);
+assert.ok(!refusal.message.includes("SECRET123") && !refusal.message.includes("bundler.example"), `the refusal names the URL: ${refusal.message}`);
+const paymaster = new BundlerRefusedError(new AbstractionKitError("BUNDLER_ERROR", "bundler eth_sendUserOperation rpc call failed", { cause: new Error("paymaster expired"), errno: -32500, aaCode: "AA32" }));
+assert.equal(paymaster.message, "the bundler refused the operation, so nothing was sent (AA32): paymaster expired");
+console.log("   ok  a bundler refusal names the bundler's reason and AA code, with URLs redacted");
+
 // The server log gets the cause's name and short message, never a URL.
 const { describeCause } = await import("../services/api/src/http/log-cause.js");
 const { HttpRequestError, InternalRpcError } = await import("viem");

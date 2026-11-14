@@ -150,6 +150,21 @@ function bundlerRefused(err: unknown): boolean {
   return typeof errno === "number" && errno !== -32603;
 }
 
+/** The bundler's own JSON-RPC refusal: the op was not taken. abstractionkit
+ *  puts the reason (an EntryPoint AAxx code, a paymaster refusal) on `cause`
+ *  under a fixed "rpc call failed" line, which alone says nothing; the message
+ *  carries that reason, redacted, because routes store and return it. */
+export class BundlerRefusedError extends Error {
+  constructor(cause: unknown) {
+    const aaCode = (cause as { aaCode?: unknown })?.aaCode;
+    const reason = redactedMessage((cause as { cause?: unknown })?.cause ?? cause);
+    super(
+      `the bundler refused the operation, so nothing was sent${typeof aaCode === "string" && !reason.includes(aaCode) ? ` (${aaCode})` : ""}: ${reason}`,
+      { cause },
+    );
+  }
+}
+
 /** The message is a fixed sentence plus the hash, because routes return it to
  *  the browser and a deposit stores it as its reason. The cause stays on
  *  `cause` for the server log only: a viem HTTP error names the bundler URL,
@@ -690,7 +705,7 @@ export async function submitPasskeySafeOperationWithReceipt(
         err,
       );
     }
-    throw err;
+    throw new BundlerRefusedError(err);
   }
   let receipt: Awaited<ReturnType<typeof response.included>>;
   try {
