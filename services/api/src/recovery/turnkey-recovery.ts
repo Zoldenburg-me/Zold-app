@@ -195,7 +195,7 @@ async function relayApproved(request: RecoveryRequest, sig: { r: string; s: stri
     const owner = webauthnOwnerFromJwk(t.newPasskey!.publicKey.jwk);
     if (owner) verifierDeployTxHash = await chain.deployVerifier(owner);
   } catch (err) {
-    console.error(`recovery ${request.id}: verifier deploy failed (will matter at first use): ${describeCause(err)}`);
+    console.error(`recovery ${request.id}: verifier deploy failed (the verifier sweep retries it): ${describeCause(err)}`);
   }
   console.log(`RECOVERY: ${request.id} approved by its Turnkey guardian and executed (${txHash}); finalizable after ${finalizeAfter.toISOString()}`);
   // The module holds one recovery; the account's other open requests are moot.
