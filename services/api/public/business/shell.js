@@ -7,7 +7,7 @@
  */
 import {
   $, api, cap, esc, gateHtml, invoiceInputListener, org, orgs, readHealth, readRecovery, recoveryPending, recoveryUnknown, setInvoiceInputListener, ensureMe, setOrg,
-  setChainId, setOrgs, setTestMode, setUsdSymbol, setView, toast, token, view,
+  setChainId, setOrgs, setTestMode, setUsdSymbol, setView, signOut, toast, token, view,
 } from "./core.js";
 import { KNOWN, planBanner, refreshSide, renderNav, setMenu } from "./nav.js";
 import { META, RENDER, setExportMonth } from "./views.js";
@@ -155,6 +155,8 @@ function only(sel) {
   for (const id of ["#signed-out", "#no-answer", "#no-orgs", "#app"]) {
     if (id === sel) $(id).classList.remove("hidden"); else $(id)?.remove();
   }
+  // The error screen has no sidebar or account chip: its own Sign out.
+  if (sel === "#no-answer") $("#na-signout")?.addEventListener("click", signOut);
 }
 
 /* A recovery started while this page is open must show without a reload:

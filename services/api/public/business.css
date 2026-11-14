@@ -55,7 +55,19 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .z-bnav__btn:hover { color: var(--z-text); }
 .z-bnav__btn[aria-current="page"] { color: var(--z-pink); }
 #tabs .zb-tabs__lock { position: absolute; top: 10px; left: calc(50% + 6px); font-size: 14px; color: var(--z-dim); }
-@media (min-width: 1024px) { #tabs { display: none; } }
+@media (min-width: 1024px) { #tabs, .zb #side-org, button.zb-signout { display: none; } }
+
+/* The account menu's chip: from 1024px, top right above every screen, in a
+   row of its own so it never covers the title or the header's buttons. */
+.zb-acctbar { display: none; }
+@media (min-width: 1024px) { .zb-acctbar { display: flex; justify-content: flex-end; margin: calc(var(--z-space-4) * -1) 0 var(--z-space-3); } }
+@media print { .zb-acctbar { display: none; } }
+.zb-chip-acct { display: inline-flex; align-items: center; gap: var(--z-space-2); max-width: 320px; min-height: var(--z-touch); padding: 4px 10px 4px 14px; border-radius: var(--z-radius-control); border: 1px solid var(--z-line-strong); background: var(--z-card); color: var(--z-text); text-align: left; transition: border-color var(--z-ease); }
+.zb-chip-acct:hover { border-color: var(--z-line-hover); }
+.zb-chip-acct__main { display: flex; flex-direction: column; min-width: 0; }
+.zb-chip-acct__kind { font-size: 11.5px; line-height: 1.3; color: var(--z-dim); }
+.zb-chip-acct__name { font-size: 14px; font-weight: 600; line-height: 1.3; color: var(--z-heading); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.zb-chip-acct > .z-ic { flex: none; font-size: 20px; color: var(--z-dim); }
 
 /* Under 1024px: the sidebar is a top bar (the mark, the organisation, Menu),
    the main stops are a tab bar at the bottom as in the app, and Menu opens
@@ -70,7 +82,6 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   .zb:not(.is-menu) .zb-side__menu { display: none; }
   .zb.is-menu .zb-side { position: fixed; inset: 0; align-content: start; overflow-y: auto; padding-bottom: calc(var(--z-space-6) + env(safe-area-inset-bottom, 0px)); }
   .zb.is-menu .zb-side__menu { display: flex; grid-column: 1 / -1; flex-direction: column; gap: 14px; padding-top: var(--z-space-2); }
-  .zb.is-menu #side-accounts { display: none; }
   .zb.is-menu .z-side__foot { margin-top: 0; }
   html:has(.zb.is-menu) { overflow: hidden; }
   .zb-main { padding: var(--z-space-5) var(--z-space-4) var(--z-space-8); }
@@ -83,6 +94,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   .zb .zb-note { flex-wrap: wrap; }
   .zb .zb-note > span:not(.z-ic) { flex: 1 1 calc(100% - 40px); }
   .zb .z-side__search .z-kbd { display: none; }
+  #side-new { display: none; }
 }
 
 .zb-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--z-space-5); margin-bottom: 22px; }
@@ -104,15 +116,11 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .zb-err { margin: 12px 0 0; padding: 10px 14px; border-radius: var(--z-radius-sm); border: 1px solid var(--z-amber-border); background: var(--z-amber-tint); font-size: 14px; color: var(--z-amber); }
 .zb-err:empty { display: none; }
 
-/* Sidebar extras: the org card as a button, the accounts list. */
-/* Banking and Books: one switch, two sidebars. */
-.zb-space { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; padding: 4px; border-radius: var(--z-radius-control); border: 1px solid var(--z-line-strong); background: var(--z-field); }
-.zb-space[hidden] { display: none; }
-.zb-space__btn { display: flex; align-items: center; justify-content: center; gap: 6px; height: 34px; border-radius: var(--z-radius-control); border: 1px solid transparent; font-size: 13.5px; font-weight: 500; color: var(--z-dim); transition: color var(--z-ease), background-color var(--z-ease); }
-.zb-space__btn .z-ic { font-size: 18px; }
-.zb-space__btn:hover { color: var(--z-text); }
-.zb-space__btn[aria-current="page"] { border-color: var(--z-pink-border); background: var(--z-pink-tint); font-weight: 600; color: var(--z-heading); }
-.zb-space__btn[aria-current="page"] .z-ic { color: var(--z-pink); }
+/* Sidebar extras: the org card as a button, New payment, the Books screens, the accounts list. */
+.zb-newpay { width: 100%; justify-content: center; }
+.zb-side__sub { display: flex; flex-direction: column; gap: 2px; margin: 2px 0 4px; padding-left: var(--z-space-6); }
+.zb .zb-side__sub .z-side__link { height: 32px; font-size: 13.5px; }
+button.zb-signout { width: 100%; background: none; text-align: left; }
 .zb-side .z-side__org { cursor: default; }
 .zb-side button.z-side__org { cursor: pointer; }
 .zb-accts { display: flex; flex-direction: column; gap: 2px; margin-top: var(--z-space-3); }
@@ -285,15 +293,12 @@ dialog .desc, dialog .zb-hint { font-size: 14.5px; color: var(--z-dim); }
 @media (max-width: 1023px) { #toast { bottom: calc(76px + var(--z-space-4) + env(safe-area-inset-bottom, 0px)); } }
 
 /* ── Home (home.js) ─────────────────────────────────────────────────────── */
-.zb-h-attention { padding: var(--z-space-4) var(--z-space-5); margin-bottom: var(--z-space-5); }
+.zb-h-attention { padding: var(--z-space-4) var(--z-space-5); }
 .zb-h-attention h2 { margin: 0 0 4px; font: 600 15.5px/1.3 var(--z-font); color: var(--z-heading); }
 .zb-h-attention ul { margin: 0; padding: 0; list-style: none; }
 .zb-h-att { display: flex; align-items: center; gap: var(--z-space-4); padding: var(--z-space-3) 0; border-top: 1px solid var(--z-line); }
 .zb-h-att:first-child { border-top: 0; }
 .zb-h-att .z-row__main { flex: 1; min-width: 0; }
-.zb-h-top { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap: var(--z-space-5); align-items: start; margin-bottom: var(--z-space-5); }
-@media (max-width: 1199px) { .zb-h-top { grid-template-columns: minmax(0, 1fr); } }
-.zb-h-top > :only-child { grid-column: 1 / -1; }
 .zb-h-pills { display: flex; gap: 4px; padding: 3px; border-radius: var(--z-radius-control); border: 1px solid var(--z-line-strong); background: var(--z-field); }
 .zb-h-pill, .zb-h-chip { height: 30px; padding: 0 12px; border-radius: var(--z-radius-control); border: 1px solid transparent; background: transparent; font: 600 12.5px/1 var(--z-font); color: var(--z-dim); cursor: pointer; }
 .zb-h-chip { height: 32px; padding: 0 14px; font-size: 13px; border-color: var(--z-line-strong); background: var(--z-ghost); }
@@ -355,7 +360,6 @@ dialog .desc, dialog .zb-hint { font-size: 14.5px; color: var(--z-dim); }
 .zb-h-tops b { font-weight: 500; font-variant-numeric: tabular-nums; }
 @media (max-width: 720px) { .zb-h-stats { grid-template-columns: minmax(0, 1fr); } }
 .zb-h-pill, .zb-h-chip { white-space: nowrap; }
-#hm-flow .zb-side-card__head { flex-wrap: wrap; }
 .zb-h-att .z-row__title { white-space: normal; }
 @media (max-width: 720px) { .zb-h-att { flex-wrap: wrap; } .zb-h-att .z-row__main { flex-basis: calc(100% - 60px); } .zb-h-att > .z-btn { margin-left: 56px; } }
 
@@ -465,11 +469,8 @@ dialog .desc, dialog .zb-hint { font-size: 14.5px; color: var(--z-dim); }
 .zb-acard__ibanrow .z-mono { font-size: 20px; letter-spacing: .02em; color: var(--z-heading); overflow-wrap: anywhere; }
 @media (max-width: 599px) { .zb-acard__ibanrow .z-mono { font-size: 16px; } }
 
-/* Home, laid out like a bank dashboard: greeting, small actions, the balance
-   card with its chart, the accounts beside it. */
-.zb-h-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: -6px 0 var(--z-space-5); }
-.zb-h-actions .z-btn--sm { min-height: 36px; padding: 0 14px; font-size: 13.5px; }
-.zb-h-actions .z-btn .z-ic { font-size: 16px; }
+/* Home: greeting, the balance card with its round actions, what needs
+   attention, accounts and activity, then the chart. */
 .zb-h-bal__head { display: flex; flex-direction: column; gap: 6px; }
 .zb-h-bal__label { font-size: 14px; color: var(--z-dim); }
 .zb-h-bal__fig { font: 600 36px/1.1 var(--z-font); letter-spacing: -.035em; font-variant-numeric: tabular-nums; color: var(--z-heading); }
@@ -495,3 +496,35 @@ dialog .desc, dialog .zb-hint { font-size: 14.5px; color: var(--z-dim); }
 /* A Safe address in full: it wraps on a phone rather than being shortened. */
 .zb-safe-addr { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 4px; }
 .zb-safe-addr .z-mono { font-size: 15px; color: var(--z-heading); overflow-wrap: anywhere; min-width: 0; }
+
+/* Home's blocks, one gap between each. */
+.zb-h-root { display: flex; flex-direction: column; gap: var(--z-space-5); }
+.zb-h-root > .zb-h-attention, .zb-h-root > .zb-h-section { margin: 0; }
+
+/* Balance card: the figure and its IBAN on the left, the round actions beside it. */
+.zb-h-bal__row { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--z-space-6); }
+.zb-h-bal__row > .zb-h-bal__head { flex: 1; min-width: 0; }
+
+/* Round actions: an icon in a circle, its label under it. */
+.zb-h-acts { display: flex; gap: var(--z-space-4); flex: none; }
+.zb-h-act {
+  display: flex; flex-direction: column; align-items: center; gap: var(--z-space-2);
+  min-width: 64px; min-height: var(--z-touch); padding: 0; border: 0; background: none;
+  font: 500 13px/1.2 var(--z-font); color: var(--z-text); text-decoration: none; cursor: pointer;
+}
+.zb-h-act__ic {
+  display: inline-grid; place-items: center; width: 48px; height: 48px; border-radius: var(--z-radius-pill);
+  border: 1px solid var(--z-line-strong); background: var(--z-ghost); color: var(--z-heading);
+  transition: border-color .15s ease;
+}
+.zb-h-act__ic .z-ic { font-size: 22px; }
+.zb-h-act:hover .zb-h-act__ic { border-color: var(--z-line-hover); }
+.zb-h-act:focus-visible { outline: none; }
+.zb-h-act:focus-visible .zb-h-act__ic { outline: 2px solid var(--z-pink); outline-offset: 2px; }
+.zb-h-act__label { white-space: nowrap; }
+
+@media (max-width: 599px) {
+  .zb-h-bal__row { flex-direction: column; gap: var(--z-space-5); }
+  .zb-h-acts { width: 100%; justify-content: space-between; gap: var(--z-space-2); }
+  .zb-h-act { flex: 1; min-width: 0; }
+}

@@ -1,6 +1,7 @@
 /**
- * Business Home, without the DOM: what Quick send, the Security card, the
- * setup checklist and the Pending tab may say. Only what the API returned
+ * Business Home, without the DOM: what the Security card, the setup
+ * checklist and the Pending tab may say, and which accounts and contacts the
+ * send form (send.js) offers. Only what the API returned
  * is ticked; a read that failed is never taken as done or as not done.
  *
  * No imports, so scripts/business-home-test.ts loads it in node.
@@ -16,15 +17,6 @@ export const fundableAccounts = (accounts) => accounts.filter((a) => a.status ==
 export const payableContacts = (contacts) => contacts.filter((c) => (c.bankAccounts || []).some((b) => b.iban));
 /** An account here that receives bank transfers. */
 export const hasIban = (accounts) => accounts.some((a) => a.status === "active" && a.identifier?.iban);
-
-/** Why Quick send cannot open the send form, or null when it can.
- *  `accounts` or `contacts` is null when it could not be read. */
-export function quickSendBlock(accounts, contacts) {
-  if (!accounts || !contacts) return "unread";
-  if (!fundableAccounts(accounts).length) return "no-account";
-  if (!payableContacts(contacts).length) return "no-contact";
-  return null;
-}
 
 /** Runs drafted here and not yet sent: with review off, a saved payment waits as DRAFT. */
 const PENDING = ["DRAFT", "PENDING_REVIEW", "REVIEWED", "EXECUTING"];
