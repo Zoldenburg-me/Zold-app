@@ -115,7 +115,7 @@ PH["get-paid"] = {
       ${links === null ? Z.skeletonRows(3, "Loading your links…") : `<section class="z-group">
         <div class="z-group__head"><h2 class="z-eyebrow">Your links</h2>${Z.tag("Beta")}</div>
         <ul class="z-list z-card">${links.length ? links.map((r) => { const [w, tone] = phLinkWord(r); return `<li>${Z.row({
-          lead: Z.iconTile({ icon: "link", tone: r.state === "OPEN" ? "p" : "n" }), title: r.description || "Any amount", sub: phLinkSub(r), right: Z.tag(w, tone), href: phHref("link", r.id),
+          lead: Z.iconTile({ icon: "link", tone: r.state === "OPEN" ? "p" : "n" }), title: r.description || "Any amount", scramble: true, sub: phLinkSub(r), right: Z.tag(w, tone), href: phHref("link", r.id),
         })}</li>`; }).join("") : `<li><div class="z-row z-row--empty"><span>No links yet. A link asks for an amount and shows how to pay it.</span></div></li>`}</ul></section>`}
       ${phCache.linksError ? Z.note({ tone: "a", text: phCache.linksError }) : ""}
     `)}`;
@@ -274,7 +274,7 @@ PH.link = {
         <p class="z-sub">${esc([r.description, r.state === "OPEN" ? `expires ${phDay(r.expiresAt)}` : ""].filter(Boolean).join(" · "))}</p>
         ${Z.tag(w, tone)}
       </div>
-      <div class="z-card">${Z.copyRow({ label: "Link", value: r.url, display: r.url.replace(/^https?:\/\//, ""), mono: true })}</div>
+      <div class="z-card">${Z.copyRow({ label: "Link", value: r.url, display: r.url.replace(/^https?:\/\//, ""), mono: true, scramble: true })}</div>
       ${Z.note({ text: "Share this link yourself. Zold doesn’t send emails or messages for you." })}
       ${r.methods.includes("bank") ? Z.kv([{ key: "Bank reference", value: r.code, mono: true }]) : ""}
       ${Z.listGroup({ label: "Received", rows: pays, empty: { text: "Nothing received yet." } })}
