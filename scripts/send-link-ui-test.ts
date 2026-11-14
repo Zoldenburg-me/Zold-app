@@ -162,6 +162,8 @@ await t("a payment noted as sent for a link is kept per person on this device", 
   run(`phSendLinkPaidStore("inv9", null)`);
   run(`user = { id: "u1" }`);
   assert.deepEqual(Object.keys(run(`phSendLinkPaid()`)), ["inv1"], "and cannot erase it");
+  run(`user = null; phSendLinkPaidStore("inv2", { orgId: "o1" })`);
+  assert.equal(run(`localStorage.getItem("zold-send-link-paid:")`), null, "signed out, nothing is kept");
 });
 
 await t("only the links this person made are listed to pay", async () => {
