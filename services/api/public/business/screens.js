@@ -12,24 +12,25 @@
  *   executed, an invoice Paid only when the API says so.
  */
 import {
-  $, Z, api, cap, day, esc, eur, gateHtml, maskIban, me, org, plain, reviewOn, roleCan, ROLE_CAN, ROLE_WORD, toast, when, ymd, usdSymbol,
+  $, Z, api, cap, day, esc, eur, gateHtml, maskIban, me, org, plain, reviewOn, roleCan, ROLE_CAN, ROLE_WORD, toast, view, when, ymd, usdSymbol,
 } from "./core.js";
-import { META, RENDER, invoiceActions, settlementRows } from "./views.js";
+import { META, RENDER, invoiceActions, linkBtn, primary, secondary, settlementRows, shortTx, table } from "./views.js";
 import { runLink } from "./payment.js";
 
-const primary = (label, attrs, icon) => `<button type="button" class="z-btn z-btn--primary" ${attrs}>${icon ? Z.icon(icon) : ""}<span>${esc(label)}</span></button>`;
-const secondary = (label, attrs, icon) => `<button type="button" class="z-btn z-btn--secondary" ${attrs}>${icon ? Z.icon(icon) : ""}<span>${esc(label)}</span></button>`;
-const linkBtn = (label, view, icon, variant = "secondary") => `<a class="z-btn z-btn--${variant}" href="?view=${esc(view)}" data-view-link="${esc(view)}">${icon ? Z.icon(icon) : ""}<span>${esc(label)}</span></a>`;
 const note = (text, icon = "info", tone = "") => `<div class="zb-note${tone ? ` zb-note--${tone}` : ""}">${Z.icon(icon)}<span>${text}</span></div>`;
-const table = (head, rows) => `<div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr>${head.map(([h, cls]) => `<th scope="col"${cls ? ` class="${cls}"` : ""}>${h ? esc(h) : `<span class="z-sr">Actions</span>`}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
 const empty = (text) => `<div class="z-card"><p class="empty">${text}</p></div>`;
 
 /* ── Members and payment runs, shared by several screens ─────────────────── */
 
 let members = null;          // this org's, read once per render that needs them
-export async function loadMembers() {
+/** This org's members, or [] when the read fails; `{ rethrow: true }` lets the
+ *  Members screen show the failure instead of an empty list. */
+export async function loadMembers({ rethrow = false } = {}) {
   if (!cap("members.manage").allowed && org.type === "personal") return [];
-  try { members = (await api(`/api/orgs/${org.id}/members`)).members; } catch { members = members || []; }
+  try { members = (await api(`/api/orgs/${org.id}/members`)).members; } catch (e) {
+    members = [];
+    if (rethrow) throw e;
+  }
   return members;
 }
 export function memberName(id) {
@@ -37,7 +38,7 @@ export function memberName(id) {
   const m = (members || []).find((x) => x.id === id);
   return m ? (m.name || m.email || "a member") : "a member";
 }
-const memberInitials = (id) => {
+const memberLabel = (id) => {
   if (id === org.memberId) return me?.name || "You";
   const m = (members || []).find((x) => x.id === id);
   return m?.name || m?.email || "?";
@@ -91,7 +92,7 @@ function apRow(d) {
   const reviewer = d.reviewedByMemberId ? memberName(d.reviewedByMemberId)
     : d.state === "PENDING_REVIEW" ? (may.allowed ? "you" : "an owner or admin") : "";
   let act = "";
-  if (d.state === "PENDING_REVIEW" && may.allowed) act = `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="review-draft" data-id="${esc(d.id)}">Review<span class="z-sr">: ${esc(draftTitle(d))}</span></button>`;
+  if (d.state === "PENDING_REVIEW" && may.allowed) act = `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="draft-detail" data-id="${esc(d.id)}">Review<span class="z-sr">: ${esc(draftTitle(d))}</span></button>`;
   if (d.state === "REVIEWED" && roleCan(org.role, "send")) act = `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="exec-draft" data-id="${esc(d.id)}">Send<span class="z-sr">: ${esc(draftTitle(d))}</span></button>`;
   if (d.state === "DRAFT" && roleCan(org.role, "propose")) {
     act = reviewOn()
@@ -100,7 +101,7 @@ function apRow(d) {
   }
   const cap1 = (s) => s.charAt(0).toUpperCase() + s.slice(1);
   return `<tr>
-    <td><span class="z-tbl__who">${Z.avatar({ name: memberInitials(d.createdByMemberId) })}<span><button type="button" class="z-tbl__link" data-act="draft-detail" data-id="${esc(d.id)}">${esc(draftTitle(d))}</button><span class="zb-sub2">${esc(lines)} · ${runLink(d.id, `Details<span class="z-sr">: ${esc(draftTitle(d))}</span>`)}</span></span></span></td>
+    <td><span class="z-tbl__who">${Z.avatar({ name: memberLabel(d.createdByMemberId) })}<span><button type="button" class="z-tbl__link" data-act="draft-detail" data-id="${esc(d.id)}">${esc(draftTitle(d))}</button><span class="zb-sub2">${esc(lines)} · ${runLink(d.id, `Details<span class="z-sr">: ${esc(draftTitle(d))}</span>`)}</span></span></span></td>
     <td>${reviewer ? esc(cap1(reviewer)) : '<span class="z-dim">None yet</span>'}</td>
     <td>${draftTag(d)}</td>
     <td class="z-tbl__num"><span class="z-amount">−${esc(draftTotal(d))}</span></td>
@@ -142,7 +143,7 @@ RENDER.payments = async () => {
 META.contacts = () => ({
   title: "Contacts",
   sub: "People and companies you pay. Payments read their bank details from here.",
-  actions: primary("Add contact", 'data-act="new-contact"', "person_add"),
+  actions: roleCan(org.role, "contacts") ? primary("Add contact", 'data-act="new-contact"', "person_add") : "",
 });
 
 export const ct = { contacts: [], drafts: [] };
@@ -179,24 +180,25 @@ RENDER.contacts = async () => {
 META.members = () => ({
   title: "Members",
   sub: "Whoever proposes a payment can’t approve it. The company always keeps at least one owner.",
-  actions: primary("Invite member", 'data-act="invite"', "person_add"),
+  actions: roleCan(org.role, "members") ? primary("Invite member", 'data-act="invite"', "person_add") : "",
 });
 
 RENDER.members = async () => {
   if (!cap("members.manage").allowed) return gateHtml("members.manage");
-  const list = await loadMembers();
+  const list = await loadMembers({ rethrow: true });
   const iAmOwner = org.role === "owner";
+  const mayManage = roleCan(org.role, "members");
   const rows = list.map((m) => {
     const you = m.id === org.memberId;
     const name = m.name || m.email || "Member";
     const roles = Object.keys(ROLE_WORD).filter((r) => r !== "owner" || iAmOwner || m.role === "owner");
     const role = !you && m.status !== "deactivated"
-      ? `<label class="z-sr" for="role-${esc(m.id)}">Role of ${esc(name)}</label><select class="zb-inline" id="role-${esc(m.id)}" data-role-of="${esc(m.id)}" data-was="${esc(m.role)}"${m.role === "owner" && !iAmOwner ? " disabled" : ""}>${roles.map((r) => `<option value="${r}"${r === m.role ? " selected" : ""}>${ROLE_WORD[r]}</option>`).join("")}</select>`
+      ? `<label class="z-sr" for="role-${esc(m.id)}">Role of ${esc(name)}</label><select class="zb-inline" id="role-${esc(m.id)}" data-role-of="${esc(m.id)}" data-was="${esc(m.role)}"${(m.role === "owner" && !iAmOwner) || !mayManage ? " disabled" : ""}>${roles.map((r) => `<option value="${r}"${r === m.role ? " selected" : ""}>${ROLE_WORD[r]}</option>`).join("")}</select>`
       : esc(ROLE_WORD[m.role] || m.role);
     const can = ROLE_CAN[m.role] || {};
     const chips = [["propose", "Propose"], ["approve", "Approve"], ["send", "Send"]].map(([k, w]) => `<span class="zb-chip${can[k] ? "" : " zb-chip--off"}">${w}<span class="z-sr">${can[k] ? "" : ": no"}</span></span>`).join("");
     const status = m.status === "active" ? Z.tag("Active") : m.status === "invited" ? Z.tag("Waiting") : Z.tag("Off");
-    const act = you ? "" : m.status === "active"
+    const act = you || !mayManage ? "" : m.status === "active"
       ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="deactivate" data-id="${esc(m.id)}">Remove<span class="z-sr">: ${esc(name)}</span></button>`
       : m.status === "deactivated" ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="reactivate" data-id="${esc(m.id)}">Add back<span class="z-sr">: ${esc(name)}</span></button>` : "";
     const sub = you ? "you" : m.status === "invited" && m.inviteExpiresAt ? [m.name ? m.email : "", `invite ends ${day(m.inviteExpiresAt)}`].filter(Boolean).join(" · ") : m.email || "";
@@ -259,7 +261,7 @@ const invIn = (f, i) => {
 META.invoices = () => ({
   title: "Invoices",
   sub: "",
-  actions: cap("invoices").allowed
+  actions: cap("invoices").allowed && roleCan(org.role, "invoices")
     ? `${secondary("Collect receipts", 'data-act="collect-receipts"', "account_balance_wallet")}${secondary("Request an invoice", 'data-act="new-invoice"', "move_to_inbox")}${primary("Issue invoice", 'data-act="issue-invoice"', "add")}`
     : "",
 });
@@ -301,17 +303,16 @@ RENDER.invoices = async () => {
 /* A draft made from wallet receipts: each receipt it bills, then the payer's
    rows of that month it leaves out, each with the reason. */
 function receiptDraftSections(i) {
-  const tx = (h) => (h ? `<span class="mono" title="${esc(h)}">${esc(h.slice(0, 10))}…${esc(h.slice(-6))}</span>` : "none");
   // An unpriced token is booked as SYMBOL@chain:address; the symbol is enough here.
   const tokenWord = (asset) => String(asset).split("@")[0];
   const fr = i.fromReceipts;
   const lines = i.lines.filter((l) => l.receipt);
   const billed = lines.length
-    ? `<dl class="z-kv z-card">${lines.map((l) => `<div><dt>${esc(day(l.receipt.at))} · ${esc(l.receipt.amount)} ${esc(l.receipt.asset)} · ${tx(l.receipt.txHash)}</dt><dd class="z-fig">${esc(eur(l.receipt.eurCents / 100))}</dd></div>`).join("")}</dl>`
+    ? `<dl class="z-kv z-card">${lines.map((l) => `<div><dt>${esc(day(l.receipt.at))} · ${esc(l.receipt.amount)} ${esc(l.receipt.asset)} · ${shortTx(l.receipt.txHash)}</dt><dd class="z-fig">${esc(eur(l.receipt.eurCents / 100))}</dd></div>`).join("")}</dl>`
     : '<p class="zb-hint">No receipt of this month can be invoiced.</p>';
   const left = fr.excluded.length
     ? `<section><h3 class="z-eyebrow" style="margin-bottom:8px">Not included</h3>
-        <ul class="z-list z-card">${fr.excluded.map((x) => `<li class="zb-left"><div>${esc(day(x.at))} · ${esc(x.amount)} ${esc(tokenWord(x.asset))}${x.txHash ? ` · ${tx(x.txHash)}` : ""}</div><p class="desc">${esc(x.reason)}</p></li>`).join("")}</ul></section>`
+        <ul class="z-list z-card">${fr.excluded.map((x) => `<li class="zb-left"><div>${esc(day(x.at))} · ${esc(x.amount)} ${esc(tokenWord(x.asset))}${x.txHash ? ` · ${shortTx(x.txHash)}` : ""}</div><p class="desc">${esc(x.reason)}</p></li>`).join("")}</ul></section>`
     : "";
   const gap = fr.mismatchCents
     ? note(`At this payer’s VAT rate no net amount plus VAT adds up to ${esc(eur(Number(i.total)))}, so the invoice would differ from the money by ${esc(eur(Math.abs(fr.mismatchCents) / 100))}. It can’t be issued from here.`, "warning", "a")
@@ -379,7 +380,7 @@ META.books = () => ({
   title: "Books",
   sub: bk.month ? `${new Intl.DateTimeFormat("en-GB", { month: "long", year: "numeric" }).format(new Date(`${bk.month}-15T12:00:00`))} · every euro in and out, with its booking receipt` : "Every euro in and out, with its booking receipt",
   actions: cap("export.ledger").allowed
-    ? `${secondary("Create receipts", 'data-act="export-prepare"', "receipt")}${secondary("Receipts as ZIP", 'data-act="export-zip"', "folder_zip")}${secondary("Lexware CSV", 'data-act="export-csv"', "download")}`
+    ? `${roleCan(org.role, "categorise") ? secondary("Create receipts", 'data-act="export-prepare"', "receipt") : ""}${secondary("Receipts as ZIP", 'data-act="export-zip"', "folder_zip")}${secondary("Lexware CSV", 'data-act="export-csv"', "download")}`
     : "",
 });
 
@@ -395,29 +396,29 @@ RENDER.books = async () => {
   ]);
   bk.lines = d.lines;
   bk.chart = chart;
-  // The header names the month; drawn again now that it is known.
-  const meta = META.books();
-  $("#view-sub").textContent = meta.sub;
+  // The header names the month; drawn again now that it is known, if Books is still shown.
+  if (view === "books") $("#view-sub").textContent = META.books().sub;
   const monthName = (m) => new Intl.DateTimeFormat("en-GB", { month: "long", year: "numeric" }).format(new Date(`${m}-15T12:00:00`));
   const pills = `<div class="zb-pills" role="group" aria-label="Month">${months.slice(0, 6).map((m) => `<button type="button" class="zb-pill" data-act="bk-month" data-m="${esc(m)}" aria-current="${m === bk.month}">${esc(monthName(m))}</button>`).join("")}</div>`;
+  const mayMark = roleCan(org.role, "categorise");
   const rows = [...d.lines].sort((a, b) => b.valueDate.localeCompare(a.valueDate)).map((l) => {
     const inbound = l.amountCents >= 0;
     const who = l.counterparty?.name || (inbound ? "Money in" : "Payment");
-    const mayMark = roleCan(org?.role, "categorise");
     const cat = l.ownTransfer
       ? `Between my own accounts<span class="zb-sub2">Not income or an expense</span>${mayMark ? `<button type="button" class="zb-memo" data-act="bk-own" data-id="${esc(l.id)}" data-own="false">Undo<span class="z-sr">: ${esc(who)} is not between my own accounts</span></button>` : ""}`
       : chart
-      ? `<label class="z-sr" for="cat-${esc(l.id)}">Category for ${esc(who)}, ${esc(day(ymd(l.valueDate)))}</label><select class="zb-inline" id="cat-${esc(l.id)}" data-cat-of="${esc(l.id)}" data-was="${esc(l.accountCode || "")}">
+      ? `<label class="z-sr" for="cat-${esc(l.id)}">Category for ${esc(who)}, ${esc(day(ymd(l.valueDate)))}</label><select class="zb-inline" id="cat-${esc(l.id)}" data-cat-of="${esc(l.id)}" data-was="${esc(l.accountCode || "")}"${mayMark ? "" : " disabled"}>
           ${l.accountCode ? "" : '<option value="" selected>Choose…</option>'}${chart.map((c) => `<option value="${esc(c.code)}"${c.code === l.accountCode ? " selected" : ""}>${esc(plain(c.name))}</option>`).join("")}</select>`
       : l.accountCode ? esc(l.accountCode) : '<span class="z-dim">None</span>';
     const markOwn = !l.ownTransfer && l.ownTransferAllowed && mayMark
       ? `<button type="button" class="zb-memo" data-act="bk-own" data-id="${esc(l.id)}" data-own="true">Between my own accounts<span class="z-sr">: ${esc(who)}, ${esc(day(ymd(l.valueDate)))}</span></button>` : "";
-    const memo = l.note
+    const memo = !mayMark ? esc(l.note || "")
+      : l.note
       ? `<button type="button" class="zb-memo zb-memo--set" data-act="bk-memo" data-id="${esc(l.id)}">${esc(l.note)}<span class="z-sr">, change the memo</span></button>`
       : `<button type="button" class="zb-memo" data-act="bk-memo" data-id="${esc(l.id)}">${Z.icon("edit_note")}Add memo<span class="z-sr"> for ${esc(who)}</span></button>`;
     const beleg = l.documentCode
       ? `<a class="zb-beleg" href="${esc(l.documentUrl)}" target="_blank" rel="noopener">${Z.icon("attach_file")}Receipt<span class="z-sr"> ${esc(l.documentCode)} (opens in a new tab)</span></a>`
-      : `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="line-beleg" data-line="${esc(l.id)}">Create<span class="z-sr"> a booking receipt for ${esc(who)}</span></button>`;
+      : mayMark ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="line-beleg" data-line="${esc(l.id)}">Create<span class="z-sr"> a booking receipt for ${esc(who)}</span></button>` : '<span class="z-dim">None yet</span>';
     return `<tr><td class="z-dim">${esc(day(ymd(l.valueDate)))}</td>
       <td><span class="z-tbl__who">${Z.avatar({ name: who })}<span>${esc(who)}${l.reference && l.reference !== l.note ? `<span class="zb-sub2">${esc(l.reference)}</span>` : ""}</span></span></td>
       <td>${memo}</td><td>${cat}${markOwn}</td><td>${beleg}${l.unexecuted ? ` ${Z.tag("Unproven", "amber")}` : ""}</td>

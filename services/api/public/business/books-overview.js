@@ -10,7 +10,7 @@
  * organisation's own addresses, is left out and said so.
  */
 import { Z, api, cap, esc, eur, gateHtml, org, plain } from "./core.js";
-import { META, RENDER } from "./views.js";
+import { META, RENDER, linkBtn } from "./views.js";
 import { MONTHS, barsHtml, cents, weeks } from "./home.js";
 import { countedLines as counted } from "./home-model.js";
 
@@ -37,13 +37,12 @@ function walletLines(entries) {
   const toLine = (e) => ({
     valueDate: e.at.slice(0, 10),
     amountCents: Math.round(Number(e.fiatValue) * 100) * (e.direction === "in" ? 1 : -1),
-    accountCode: e.accountCode, accountCodeAuto: e.accountCodeAuto, fromWallet: true,
+    accountCode: e.accountCode, accountCodeAuto: e.accountCodeAuto,
   });
   const day = (e) => ({ valueDate: e.at.slice(0, 10) });
   return { lines: valued.map(toLine), unvalued: rest.filter((e) => !valued.includes(e)).map(day), internal: internal.map(day) };
 }
 const isoDay = (d) => d.toISOString().slice(0, 10);
-const linkBtn = (label, view, icon) => `<a class="z-btn z-btn--secondary" href="?view=${esc(view)}" data-view-link="${esc(view)}">${icon ? Z.icon(icon) : ""}<span>${esc(label)}</span></a>`;
 const monthName = (m, long = true) => long
   ? new Intl.DateTimeFormat("en-GB", { month: "long", year: "numeric" }).format(new Date(`${m}-15T12:00:00`))
   : MONTHS[Number(m.slice(5, 7)) - 1];

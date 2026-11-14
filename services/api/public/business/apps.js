@@ -67,8 +67,12 @@ function ordersTable(d, custom, { viaCheckout = false, id = "app-orders" } = {})
   const told = (r) => r.resolvedAt ? Z.tag("Done")
     : r.state === "PAID" ? `${Z.tag("Not yet", "amber")}${r.resolveError ? `<p class="desc">${esc(plain(r.resolveError))}</p>` : ""}`
       : '<span class="z-dim">Not yet</span>';
+  // settledAsset: "EURE" converted, "USDC" kept (settledEur is its value on arrival), absent until settled.
+  const held = (p) => p.settledAsset === "EURE" ? ` → ${esc(eur(p.settledEur))}`
+    : p.settledAsset === "USDC" ? `, kept as ${usdSymbol}${p.settledEur !== undefined ? ` (worth ${esc(eur(p.settledEur))})` : ""}`
+      : ", not settled yet";
   const paid = (r) => r.payments?.length
-    ? r.payments.map((p) => `${esc(String(p.amountUsdc ?? ""))} ${usdSymbol}${p.settledEur !== undefined ? ` → ${esc(eur(p.settledEur))}` : ` (kept as ${usdSymbol})`}`).join("<br>")
+    ? r.payments.map((p) => `${esc(String(p.amountUsdc ?? ""))} ${usdSymbol}${held(p)}`).join("<br>")
     : r.state === "OPEN" ? "Waiting for payment" : "";
   return heading(id, title) + table(["When", "Order", "#Amount", "Paid", "Status", ...(viaCheckout ? [] : ["Marked paid in Shopify"]), ""], d.requests.map((r) => `<tr>
       <td class="z-dim">${esc(day(r.createdAt))}${r.test ? ` ${Z.tag("Test", "amber")}` : ""}</td>

@@ -27,7 +27,7 @@ export function quickSendBlock(accounts, contacts) {
 }
 
 /** Runs drafted here and not yet sent: with review off, a saved payment waits as DRAFT. */
-export const PENDING = ["DRAFT", "PENDING_REVIEW", "REVIEWED", "EXECUTING"];
+const PENDING = ["DRAFT", "PENDING_REVIEW", "REVIEWED", "EXECUTING"];
 export const pendingRuns = (runs) => runs.filter((d) => PENDING.includes(d.state));
 
 /**

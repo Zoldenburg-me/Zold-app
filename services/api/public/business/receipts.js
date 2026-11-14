@@ -7,7 +7,7 @@
 import { $, Z, api, cap, dialog, esc, eur, org, toast } from "./core.js";
 import { INVOICE_LANGUAGE_OPTIONS } from "./views.js";
 
-const field = (id, label, extra = "") => `<label for="${id}">${label}</label><input id="${id}" name="${id}" autocomplete="off" ${extra} />`;
+export const field = (id, label, extra = "") => `<label for="${id}">${label}</label><input id="${id}" name="${id}" autocomplete="off" ${extra} />`;
 
 const vatWord = (vat) => (vat.kind === "standard" ? `${vat.rate}% VAT` : `No VAT (${vat.reason.replace(/_/g, " ")})`);
 
