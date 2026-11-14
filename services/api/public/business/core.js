@@ -127,9 +127,11 @@ export function signOut() {
   location.assign("/business");
 }
 
-// Back after sign out can restore this page, balance and IBAN included, from the back-forward cache.
+// Back can restore this page, balance and IBAN included, from the back-forward cache
+// after its session ended or another person signed in: only the session it loaded with may see it.
+const loadedWith = token;
 addEventListener("pageshow", (e) => {
-  if (e.persisted && !localStorage.getItem("zold-session") && !localStorage.getItem("zoll-session")) location.reload();
+  if (e.persisted && (localStorage.getItem("zold-session") || localStorage.getItem("zoll-session")) !== loadedWith) location.reload();
 });
 
 /** Can the current org use this capability? Mirrors the server's verdict. */
