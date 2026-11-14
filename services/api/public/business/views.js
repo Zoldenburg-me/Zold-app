@@ -124,7 +124,7 @@ RENDER.accounts = async () => {
    Books: wallets, transactions, assets, chart of accounts, statement lines
    ========================================================================== */
 
-const booksBack = () => linkBtn("Books", "books", "arrow_back");
+const booksBack = () => linkBtn("Books", "books-overview", "arrow_back");
 
 /** What the sync has done with a wallet, in words. An error names its cause. */
 const walletSyncCell = (s = {}) => {

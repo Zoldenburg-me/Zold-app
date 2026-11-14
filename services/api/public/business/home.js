@@ -132,9 +132,8 @@ function balanceCard(accounts, read) {
     ? `<div class="zb-safe-addr"><span class="z-mono" translate="no">${esc(Z.groupIban(iban))}</span>
       <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="copy-text" data-text="${esc(String(iban).replace(/\s+/g, ""))}" data-said="IBAN copied">${Z.icon("content_copy")}<span>Copy<span class="z-sr"> IBAN</span></span></button></div>`
     : mine || safe ? `<p class="zb-hint">${mine?.profile?.status === "needs_check" ? "No IBAN yet. It needs its Monerium profile checked." : "No IBAN yet."}</p>` : "";
-  const more = read ? `<a class="zb-h-bal__more" href="?view=accounts" data-view-link="accounts">Account details</a>` : "";
   return `<section class="z-card zb-side-card zb-h-bal" aria-labelledby="home-bal"><h2 id="home-bal" class="z-sr">Balance</h2>
-    <div class="zb-h-bal__row"><div class="zb-h-bal__head">${head}${ibanRow}${more}${safe ? safeAddressHtml(safe) : ""}</div>${roundActions()}</div></section>`;
+    <div class="zb-h-bal__row"><div class="zb-h-bal__head">${head}${ibanRow}${safe ? safeAddressHtml(safe) : ""}</div>${roundActions()}</div></section>`;
 }
 
 /** Money in and out over a period, from the lines Books counts. */

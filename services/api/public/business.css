@@ -469,8 +469,8 @@ dialog .desc, dialog .zb-hint { font-size: 14.5px; color: var(--z-dim); }
 .zb-acard__ibanrow .z-mono { font-size: 20px; letter-spacing: .02em; color: var(--z-heading); overflow-wrap: anywhere; }
 @media (max-width: 599px) { .zb-acard__ibanrow .z-mono { font-size: 16px; } }
 
-/* Home, laid out like a bank dashboard: greeting, small actions, the balance
-   card with its chart, the accounts beside it. */
+/* Home: greeting, the balance card with its round actions, what needs
+   attention, accounts and activity, then the chart. */
 .zb-h-bal__head { display: flex; flex-direction: column; gap: 6px; }
 .zb-h-bal__label { font-size: 14px; color: var(--z-dim); }
 .zb-h-bal__fig { font: 600 36px/1.1 var(--z-font); letter-spacing: -.035em; font-variant-numeric: tabular-nums; color: var(--z-heading); }
@@ -504,8 +504,6 @@ dialog .desc, dialog .zb-hint { font-size: 14.5px; color: var(--z-dim); }
 /* Balance card: the figure and its IBAN on the left, the round actions beside it. */
 .zb-h-bal__row { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--z-space-6); }
 .zb-h-bal__row > .zb-h-bal__head { flex: 1; min-width: 0; }
-.zb-h-bal__more { align-self: flex-start; font-size: 14px; color: var(--z-dim); }
-.zb-h-bal__more:hover { color: var(--z-text); }
 
 /* Round actions: an icon in a circle, its label under it. */
 .zb-h-acts { display: flex; gap: var(--z-space-4); flex: none; }

@@ -21,20 +21,21 @@ const BOOKS = [
   { id: "documents", label: "Statements and documents", icon: "description" },
   { id: "integrations", label: "Connections", icon: "cable" },
 ];
+const SEND = { id: "send", label: "Send", icon: "arrow_outward", capability: "transfers.drafts" };
+const GET_PAID = { id: "get-paid", label: "Get paid", icon: "south_west" };
 const MAIN = [
   { id: "overview", label: "Home", icon: "home" },
   { id: "transactions", label: "Transactions", icon: "swap_vert", capability: "ledger.transactions" },
   { id: "payments", label: "Approvals", icon: "inbox", capability: "transfers.drafts" },
+  GET_PAID,
   { id: "invoices", label: "Invoices", icon: "receipt_long", capability: "invoices" },
   { id: "contacts", label: "Contacts", icon: "contacts" },
   { id: "books-overview", label: "Books", icon: "menu_book", capability: "ledger.transactions", books: true },
   { id: "members", label: "Members", icon: "group", capability: "members.manage" },
   { id: "apps", label: "Apps", icon: "apps" },
 ];
-const SEND = { id: "send", label: "Send", icon: "arrow_outward", capability: "transfers.drafts" };
-const GET_PAID = { id: "get-paid", label: "Get paid", icon: "south_west" };
 /** Every screen with a name, for Search. */
-export const VIEWS = [...MAIN, SEND, GET_PAID, ...BOOKS];
+export const VIEWS = [...MAIN, SEND, ...BOOKS];
 
 /** The phone's tab bar, the same on every screen; the rest is in Menu. */
 const TABS = [MAIN[0], MAIN[2], SEND, GET_PAID];
@@ -167,7 +168,7 @@ export function renderNav() {
     if (!v.books) return shown(v) ? link(named(v), active) : "";
     if (!books.length) return "";
     const head = link({ ...v, id: books[0].id, capability: books[0].capability }, "");
-    return inBooks ? `${head}<div class="zb-side__sub" role="group" aria-label="Books">${books.map((b) => link(b, active)).join("")}</div>` : head;
+    return inBooks ? `${head.replace("<a ", '<a aria-current="true" ')}<div class="zb-side__sub" role="group" aria-label="Books">${books.map((b) => link(b, active)).join("")}</div>` : head;
   }).join("");
 
   const sendLocked = !cap(SEND.capability).allowed;
@@ -188,7 +189,7 @@ export function renderNav() {
   const who = org.type === "personal" ? "Personal" : `Business · ${(ROLE_WORD[org.role] || org.role || "").toLowerCase()}`;
   const card = `${Z.avatar({ name: org.name, tone: "p" })}<span class="z-row__main"><span class="z-row__title">${esc(org.name)}</span><span class="z-row__sub">${esc(who)}</span></span>`;
   paint($("#side-org"), `<button type="button" class="z-side__org" id="org-btn" aria-haspopup="dialog" aria-expanded="false" aria-label="Account and organisations. Current: ${esc(org.name)}">${card}${Z.icon("unfold_more", "z-row__chev")}</button>`);
-  paint($("#acct"), `<button type="button" class="zb-chip-acct" id="acct-btn" aria-haspopup="dialog" aria-expanded="false"><span class="zb-chip-acct__main"><span class="zb-chip-acct__kind">${org.type === "personal" ? "Personal" : "Business"}</span><span class="zb-chip-acct__name">${esc(org.name)}</span></span>${Z.icon("expand_more")}</button>`);
+  paint($("#acct"), `<button type="button" class="zb-chip-acct" id="acct-btn" aria-haspopup="dialog" aria-expanded="false" aria-label="Account and organisations. Current: ${esc(org.name)}"><span class="zb-chip-acct__main"><span class="zb-chip-acct__kind">${org.type === "personal" ? "Personal" : "Business"}</span><span class="zb-chip-acct__name">${esc(org.name)}</span></span>${Z.icon("expand_more")}</button>`);
 
   const accts = side.accounts;
   $("#side-accounts").innerHTML = accts && accts.length

@@ -119,9 +119,18 @@ export function signOut() {
     fetch("/api/session", { method: "DELETE", headers: { authorization: `Bearer ${token}` }, keepalive: true }).catch(() => {});
   }
   token = null;
-  try { for (const k of ["zold-session", "zoll-session", "zoll-contacts"]) localStorage.removeItem(k); } catch { /* nothing to clear */ }
+  try {
+    // The unsent invoice drafts hold customer data: the next person on this browser must not be offered them.
+    const drafts = Object.keys(localStorage).filter((k) => k.startsWith("zold-web-invoice-draft:"));
+    for (const k of ["zold-session", "zoll-session", "zoll-contacts", ...drafts]) localStorage.removeItem(k);
+  } catch { /* nothing to clear */ }
   location.assign("/business");
 }
+
+// Back after sign out can restore this page, balance and IBAN included, from the back-forward cache.
+addEventListener("pageshow", (e) => {
+  if (e.persisted && !localStorage.getItem("zold-session") && !localStorage.getItem("zoll-session") && token) location.reload();
+});
 
 /** Can the current org use this capability? Mirrors the server's verdict. */
 export const cap = (id) => org?.capabilities?.[id] ?? { allowed: false, label: id };
