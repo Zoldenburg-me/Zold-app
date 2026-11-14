@@ -122,6 +122,7 @@
     "business:test": "tsx scripts/business-test.ts",
     "business:access:test": "tsx scripts/business-access-test.ts",
     "business:home:test": "tsx scripts/business-home-test.ts",
+    "business:signout-send:test": "tsx scripts/business-signout-send-test.ts",
     "business:payment:test": "tsx scripts/business-payment-test.ts",
     "phone:home-cards:test": "tsx scripts/phone-home-cards-ui-test.ts",
     "desktop:handle:test": "tsx scripts/desktop-handle-ui-test.ts",
