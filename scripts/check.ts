@@ -98,6 +98,7 @@ const scripts = [
   "business:test",
   "business:access:test",
   "business:home:test",
+  "business:signout-send:test",
   "business:payment:test",
   "phone:home-cards:test",
   "desktop:handle:test",
