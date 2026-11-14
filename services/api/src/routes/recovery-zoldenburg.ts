@@ -55,6 +55,7 @@ import {
   assertRecoveryModuleDeployed,
   passkeyAccountAddress,
   prepareSafeSetupOperation,
+  SafeVerifierMissingError,
   readRecoveryState,
   recoveryGracePeriodSeconds,
   safeOwners,
@@ -128,6 +129,7 @@ function fail(res: express.Response, err: unknown) {
   if (err instanceof ZoldenburgRecoveryError) {
     return res.status(err.status).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
   }
+  if (err instanceof SafeVerifierMissingError) return res.status(err.status).json({ error: err.message, code: err.code });
   // 503, not 502: Cloudflare replaces an origin 502's body with its own page.
   console.error(`recovery (zoldenburg): ${describeError(err)}`);
   return res.status(503).json({ error: shortErrorForClient(err) });
