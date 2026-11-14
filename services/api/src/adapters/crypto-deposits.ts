@@ -568,6 +568,19 @@ export function recordInvoiceSettlement(deposit: CryptoDeposit): void {
  * behind the cursor is never seen again.
  */
 let scanning = false;
+/**
+ * The getLogs width the RPC last answered (log-range.ts). Starting every
+ * window at maxBlockSpan paid for the same refusals each time: on Alchemy's
+ * free tier, seven per window.
+ *
+ * It grows back, doubling after GROW_AFTER windows in a row that the width
+ * itself cut short, so one refusal cannot pin the scanner to tiny windows. A
+ * caught-up scanner's windows end at the head, not at the width, so it never
+ * probes and pays nothing for this.
+ */
+let logSpan = CRYPTO_IN.maxBlockSpan;
+let fullWindows = 0;
+const GROW_AFTER = 4;
 
 const SCAN_CURSOR_KEY = () => `${CHAIN_ID}:safe-funding-v1`;
 /** Where the last applied rescan started, kept beside the cursor it moved. */
@@ -603,10 +616,26 @@ export async function pollCryptoDepositsOnce(): Promise<number> {
     // catches up in minutes rather than one window every pollMs.
     let found = 0;
     try {
-      for (let w = 0; w < CRYPTO_IN.windowsPerTick; w++) {
-        const r = await scanCryptoDeposits();
-        found += r.found;
-        if (!r.more) break;
+      // Nothing watched asks the chain nothing, and still counts as a scan.
+      if (watchedAddresses().length > 0) {
+        /**
+         * One head per tick, not per window: a tick reads the chain up to where
+         * it stood when the tick began, and the next tick goes on from there.
+         *
+         * cacheTime: 0 is load-bearing.
+         *
+         * viem caches getBlockNumber for its polling interval, so consecutive ticks
+         * can read the same stale head. For a cursor-driven scanner that is not a
+         * stale number, it is skipped blocks: the cursor is written from this value,
+         * so a head that lags behind the chain moves the window past deposits that
+         * were never scanned, and nothing ever goes back for them.
+         */
+        const head = await publicClient.getBlockNumber({ cacheTime: 0 });
+        for (let w = 0; w < CRYPTO_IN.windowsPerTick; w++) {
+          const r = await scanCryptoDeposits(head);
+          found += r.found;
+          if (!r.more) break;
+        }
       }
     } catch (err) {
       cryptoInScan.failingSince ??= new Date().toISOString();
@@ -620,21 +649,10 @@ export async function pollCryptoDepositsOnce(): Promise<number> {
   }
 }
 
-async function scanCryptoDeposits(): Promise<{ found: number; more: boolean }> {
+async function scanCryptoDeposits(head: bigint): Promise<{ found: number; more: boolean }> {
   const watched = watchedAddresses();
   if (watched.length === 0) return { found: 0, more: false };
   const cursorKey = SCAN_CURSOR_KEY();
-
-  /**
-   * cacheTime: 0 is load-bearing.
-   *
-   * viem caches getBlockNumber for its polling interval, so consecutive ticks
-   * can read the same stale head. For a cursor-driven scanner that is not a
-   * stale number, it is skipped blocks: the cursor is written from this value,
-   * so a head that lags behind the chain moves the window past deposits that
-   * were never scanned, and nothing ever goes back for them.
-   */
-  const head = await publicClient.getBlockNumber({ cacheTime: 0 });
   const safeHead = head - BigInt(CRYPTO_IN.confirmations);
   if (safeHead < 0n) return { found: 0, more: false };
 
@@ -657,7 +675,7 @@ async function scanCryptoDeposits(): Promise<{ found: number; more: boolean }> {
   ];
   // One getLogs naming both tokens, split by log.address below: a provider
   // that caps the range (Alchemy's free tier: 10 blocks) bills per call.
-  const { toBlock, result: logs } = await readLogWindow(fromBlock, safeHead, CRYPTO_IN.maxBlockSpan, (from, to) =>
+  const { toBlock, span, result: logs } = await readLogWindow(fromBlock, safeHead, logSpan, (from, to) =>
     publicClient.getLogs({
       address: tokens.map((t) => t.address),
       event: TRANSFER_EVENT,
@@ -665,6 +683,12 @@ async function scanCryptoDeposits(): Promise<{ found: number; more: boolean }> {
       fromBlock: from,
       toBlock: to,
     }));
+  if (span < logSpan) fullWindows = 0;
+  logSpan = span;
+  if (toBlock - fromBlock + 1n === span && span < CRYPTO_IN.maxBlockSpan && ++fullWindows >= GROW_AFTER) {
+    logSpan = span * 2n < CRYPTO_IN.maxBlockSpan ? span * 2n : CRYPTO_IN.maxBlockSpan;
+    fullWindows = 0;
+  }
   const logsByToken = tokens.map((t) => logs.filter((l) => l.address.toLowerCase() === t.address.toLowerCase()));
 
   const byAddress = new Map<string, WatchedAddress[]>();
