@@ -171,11 +171,13 @@ export function renderNav() {
   }).join("");
 
   const sendLocked = !cap(SEND.capability).allowed;
-  $("#side-new").innerHTML = shown(SEND)
+  // A role that cannot draft a payment gets no Send entry: the screen would only refuse it.
+  const maySend = shown(SEND) && roleCan(org.role, "propose");
+  $("#side-new").innerHTML = maySend
     ? `<a class="z-btn z-btn--primary zb-newpay" href="?view=send" data-view="send"${view === "send" ? ' aria-current="page"' : ""}>${Z.icon("add")}<span>New payment</span>${sendLocked ? `${Z.icon("lock")}<span class="z-sr"> (not available)</span>` : ""}</a>`
     : "";
 
-  const tabs = TABS.filter(shown).map(named);
+  const tabs = TABS.filter((t) => (t === SEND ? maySend : shown(t))).map(named);
   $("#tabs").innerHTML = `<nav class="z-bnav zb-tabs" aria-label="Quick" style="grid-template-columns:repeat(${tabs.length + 1},1fr)">${tabs.map((it) =>
     `<a href="?view=${esc(it.id)}" data-view="${esc(it.id)}"${it.id === active ? ' aria-current="page"' : ""}>${Z.icon(it.icon)}<span>${esc(it.label)}</span>`
     + `${it.capability && !cap(it.capability).allowed ? `${Z.icon("lock", "zb-tabs__lock")}<span class="z-sr"> (not available)</span>` : ""}`
