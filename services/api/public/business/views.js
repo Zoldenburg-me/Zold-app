@@ -124,7 +124,7 @@ RENDER.accounts = async () => {
    Books: wallets, transactions, assets, chart of accounts, statement lines
    ========================================================================== */
 
-const booksBack = () => linkBtn("Books", "books", "arrow_back");
+const booksBack = () => linkBtn("Books", "books-overview", "arrow_back");
 
 /** What the sync has done with a wallet, in words. An error names its cause. */
 const walletSyncCell = (s = {}) => {
@@ -271,7 +271,7 @@ RENDER.gains = async () => {
     ${booksNotes(d.notes)}`;
 };
 
-META.coa = () => ({ title: "Chart of accounts", sub: "Your categories, and the rules that sort transactions into them.", actions: `${booksBack()}${roleCan(org.role, "categorise") ? secondary("Add a category", 'data-act="new-coa"', "add") : ""}` });
+META.coa = () => ({ title: "Categories", sub: "Your categories, and the rules that sort transactions into them.", actions: `${booksBack()}${roleCan(org.role, "categorise") ? secondary("Add a category", 'data-act="new-coa"', "add") : ""}` });
 RENDER.coa = async () => {
   if (!cap("coa.manage").allowed) return gateHtml("coa.manage");
   const { accounts, rules } = await api(`/api/orgs/${org.id}/chart-of-accounts`);
@@ -292,7 +292,7 @@ const EVENT_LABEL = {
 export let exportMonth = null;
 export const setExportMonth = (v) => { exportMonth = v; };
 
-META.export = () => ({ title: "Statement lines", sub: "One line per event on the euro account, the way a PayPal or Stripe account appears in the books. Each line gets one booking receipt (Beleg): the signed document your accountant files against it.", actions: booksBack() });
+META.export = () => ({ title: "Export", sub: "One line per event on the euro account, the way a PayPal or Stripe account appears in the books. Each line gets one booking receipt (Beleg): the signed document your accountant files against it.", actions: booksBack() });
 RENDER.export = async () => {
   if (!cap("export.ledger").allowed) return gateHtml("export.ledger");
   const first = await api(`/api/orgs/${org.id}/bookkeeping/statement`);

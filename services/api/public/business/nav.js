@@ -1,46 +1,44 @@
 /**
- * The sidebar (design canvas "Desktop: Banking and Books") and the banner
- * row.
+ * The sidebar, the account menu and the banner row.
  *
- * Two spaces behind one switch. Banking: Home, Approvals, Send, Get paid,
- * Invoices, Contacts, Members, Apps, then the ACCOUNTS list, Coming soon and
- * Settings. Books: Overview, Statement, Wallets, Categories, Export,
- * Connections, then Settings.
+ * One list: Home, Transactions, Approvals, Invoices, Contacts, Books, Members,
+ * Apps, then the ACCOUNTS list, Coming soon and Settings. Books opens its own
+ * screens beneath it while one of them is shown. New payment sits above the
+ * list; Send and Get paid are the phone's tabs and are found by Search.
  * The older views keep their ?view= ids and sit under one of these (PARENT):
  * the ledger and assets under Statement, Shopify under Apps.
  */
-import { $, Z, api, cap, esc, eur, me, mayActOnInvoice, needsPersonalOrg, org, orgs, personalLater, recoveryNone, recoveryPending, recoveryUnknown, reviewOn, roleCan, ROLE_WORD, setView, testMode, toast, view } from "./core.js";
+import { $, Z, api, cap, esc, eur, me, mayActOnInvoice, needsPersonalOrg, org, orgs, personalLater, recoveryNone, recoveryPending, recoveryUnknown, reviewOn, roleCan, ROLE_WORD, setView, signOut, testMode, toast, view } from "./core.js";
 import { loadOrg, render } from "./shell.js";
 import { isOwnCompanyOrg } from "./access-model.js";
 
-const SPACES = {
-  banking: [
-    { id: "overview", label: "Home", icon: "home" },
-    { id: "payments", label: "Approvals", icon: "inbox", capability: "transfers.drafts" },
-    { id: "send", label: "Send", icon: "arrow_outward", capability: "transfers.drafts" },
-    { id: "get-paid", label: "Get paid", icon: "south_west" },
-    { id: "transactions", label: "Transactions", icon: "swap_vert", capability: "ledger.transactions" },
-    { id: "documents", label: "Statements", icon: "description" },
-    { id: "invoices", label: "Invoices", icon: "receipt_long", capability: "invoices" },
-    { id: "contacts", label: "Contacts", icon: "contacts" },
-    { id: "members", label: "Members", icon: "group", capability: "members.manage" },
-    { id: "apps", label: "Apps", icon: "apps" },
-  ],
-  books: [
-    { id: "books-overview", label: "Overview", icon: "monitoring", capability: "ledger.transactions" },
-    { id: "books", label: "Statement", icon: "list_alt", capability: "ledger.transactions" },
-    { id: "wallets", label: "Wallets", icon: "wallet", capability: "wallets.manage" },
-    { id: "coa", label: "Categories", icon: "category", capability: "coa.manage" },
-    { id: "export", label: "Export", icon: "download", capability: "export.ledger" },
-    { id: "integrations", label: "Connections", icon: "cable" },
-  ],
-};
-export const VIEWS = [...SPACES.banking, ...SPACES.books];
-/** Where the Banking and Books switch lands. */
-const SPACE_HOME = { banking: "overview", books: "books-overview" };
+const BOOKS = [
+  { id: "books-overview", label: "Overview", icon: "monitoring", capability: "ledger.transactions" },
+  { id: "books", label: "Statement", icon: "list_alt", capability: "ledger.transactions" },
+  { id: "wallets", label: "Wallets", icon: "wallet", capability: "wallets.manage" },
+  { id: "coa", label: "Categories", icon: "category", capability: "coa.manage" },
+  { id: "export", label: "Export", icon: "download", capability: "export.ledger" },
+  { id: "documents", label: "Statements and documents", icon: "description" },
+  { id: "integrations", label: "Connections", icon: "cable" },
+];
+const SEND = { id: "send", label: "Send", icon: "arrow_outward", capability: "transfers.drafts" };
+const GET_PAID = { id: "get-paid", label: "Get paid", icon: "south_west" };
+const MAIN = [
+  { id: "overview", label: "Home", icon: "home" },
+  { id: "transactions", label: "Transactions", icon: "swap_vert", capability: "ledger.transactions" },
+  { id: "payments", label: "Approvals", icon: "inbox", capability: "transfers.drafts" },
+  GET_PAID,
+  { id: "invoices", label: "Invoices", icon: "receipt_long", capability: "invoices" },
+  { id: "contacts", label: "Contacts", icon: "contacts" },
+  { id: "books-overview", label: "Books", icon: "menu_book", capability: "ledger.transactions", books: true },
+  { id: "members", label: "Members", icon: "group", capability: "members.manage" },
+  { id: "apps", label: "Apps", icon: "apps" },
+];
+/** Every screen with a name, for Search. */
+export const VIEWS = [...MAIN, SEND, ...BOOKS];
 
-/** The phone's tab bar: the first stops of each space; the rest are in Menu. */
-const TABS = { banking: ["overview", "payments", "send", "get-paid"], books: ["books-overview", "books", "export"] };
+/** The phone's tab bar, the same on every screen; the rest is in Menu. */
+const TABS = [MAIN[0], MAIN[2], SEND, GET_PAID];
 
 /* Under 1024px the sidebar is a top bar, and Menu opens the rest of it as a
    full-screen panel. Opening it is a history entry, so Back closes it, as do
@@ -61,7 +59,8 @@ export function setMenu(open, { viaHistory = true } = {}) {
   btn.querySelector(".z-ic").textContent = open ? "close" : "menu";
   if (open && !was) {
     history.pushState({ ...(history.state || {}), zbMenu: true }, "");
-    $("#side-menu").querySelector("a, button:not([hidden])")?.focus();
+    // The first control drawn: New payment is in the tab bar here, not the panel.
+    [...$("#side-menu").querySelectorAll("a, button")].find((el) => el.getClientRects().length)?.focus();
   }
   if (!open && was && (!document.activeElement || document.activeElement === document.body || $("#side-menu").contains(document.activeElement))) btn.focus();
   return !open && was && Boolean(history.state?.zbMenu);
@@ -84,15 +83,6 @@ const PARENT = {
 };
 /** Every view id the router accepts, including those without a nav item. */
 export const KNOWN = new Set([...VIEWS.map((v) => v.id), ...Object.keys(PARENT), "settings", "soon"]);
-
-/** The space a view lives in. Settings and Coming soon stay in the one you came from. */
-let lastSpace = "banking";
-function spaceOf(v) {
-  const item = PARENT[v] || v;
-  if (SPACES.books.some((it) => it.id === item)) lastSpace = "books";
-  else if (SPACES.banking.some((it) => it.id === item) || item === "accounts") lastSpace = "banking";
-  return lastSpace;
-}
 
 /* An unbuilt feature keeps its entry; a feature this kind of org can never
    have (a business-only entry in a personal org) leaves it out. */
@@ -153,45 +143,64 @@ function accountRight(a) {
   return iban ? `•••• ${String(iban).replace(/\s+/g, "").slice(-4)}` : "";
 }
 
+/* Only a changed trigger is redrawn, so an open menu keeps the button that
+   focus returns to and its aria-expanded. */
+function paint(el, html) {
+  if (!el || el.dataset.sig === html) return;
+  el.dataset.sig = html;
+  el.innerHTML = html;
+}
+
 export function renderNav() {
   if (!org) return;
   const active = PARENT[view] || view;
-  // No Books item this org can open: no switch, Banking alone.
-  const hasBooks = SPACES.books.some((v) => v.capability && shown(v));
-  const space = hasBooks ? spaceOf(view) : "banking";
   const waiting = waitingForMe(side.drafts).length;
   const submitted = submittedInvoices(side.invoices).length;
-  const items = SPACES[space].filter(shown).map((v) => ({
+  const named = (v) => ({
     ...v,
     label: v.id === "payments" && !reviewOn() ? "Payments" : v.label,
     badge: v.id === "payments" && waiting ? String(waiting) : v.id === "invoices" && submitted ? String(submitted) : "",
-  }));
-  $("#nav").innerHTML = items.map((it) => link(it, active)).join("");
-  const tabs = TABS[space].map((id) => items.find((it) => it.id === id)).filter(Boolean);
+  });
+  // Books opens the first of its screens this org has; while one is shown, all of them sit beneath it.
+  const books = BOOKS.filter(shown);
+  const inBooks = books.some((v) => v.id === active);
+  $("#nav").innerHTML = MAIN.map((v) => {
+    if (!v.books) return shown(v) ? link(named(v), active) : "";
+    if (!books.length) return "";
+    const head = link({ ...v, id: books[0].id, capability: books[0].capability }, "");
+    return inBooks ? `${head.replace("<a ", '<a aria-current="true" ')}<div class="zb-side__sub" role="group" aria-label="Books">${books.map((b) => link(b, active)).join("")}</div>` : head;
+  }).join("");
+
+  const sendLocked = !cap(SEND.capability).allowed;
+  // A role that cannot draft a payment gets no Send entry: the screen would only refuse it.
+  const maySend = shown(SEND) && roleCan(org.role, "propose");
+  $("#side-new").innerHTML = maySend
+    ? `<a class="z-btn z-btn--primary zb-newpay" href="?view=send" data-view="send"${view === "send" ? ' aria-current="page"' : ""}>${Z.icon("add")}<span>New payment</span>${sendLocked ? `${Z.icon("lock")}<span class="z-sr"> (not available)</span>` : ""}</a>`
+    : "";
+
+  const tabs = TABS.filter((t) => (t === SEND ? maySend : shown(t))).map(named);
   $("#tabs").innerHTML = `<nav class="z-bnav zb-tabs" aria-label="Quick" style="grid-template-columns:repeat(${tabs.length + 1},1fr)">${tabs.map((it) =>
-    `<a href="?view=${esc(it.id)}" data-view="${esc(it.id)}"${it.id === active ? ' aria-current="page"' : ""}>${Z.icon(it.icon)}<span>${esc(it.id === "overview" ? "Home" : it.label)}</span>`
+    `<a href="?view=${esc(it.id)}" data-view="${esc(it.id)}"${it.id === active ? ' aria-current="page"' : ""}>${Z.icon(it.icon)}<span>${esc(it.label)}</span>`
     + `${it.capability && !cap(it.capability).allowed ? `${Z.icon("lock", "zb-tabs__lock")}<span class="z-sr"> (not available)</span>` : ""}`
     + `${it.badge ? `<span class="z-bnav__badge"><span class="z-sr">, </span>${esc(it.badge)}<span class="z-sr"> waiting for you</span></span>` : ""}</a>`).join("")}
-    <button type="button" class="z-bnav__btn" data-menu${TABS[space].includes(active) ? "" : ' aria-current="page"'}>${Z.icon("menu")}<span>Menu</span></button></nav>`;
-  $("#nav").setAttribute("aria-label", space === "books" ? "Books" : "Main");
-  $("#side-space").innerHTML = hasBooks
-    ? [["banking", "Banking", "account_balance_wallet"], ["books", "Books", "menu_book"]].map(([id, label, icon]) =>
-      `<a class="zb-space__btn" href="?view=${SPACE_HOME[id]}" data-view="${SPACE_HOME[id]}"${space === id ? ' aria-current="page"' : ""}>${Z.icon(icon)}${label}</a>`).join("")
-    : "";
-  $("#side-space").hidden = !hasBooks;
+    <button type="button" class="z-bnav__btn" data-menu${tabs.some((it) => it.id === active) ? "" : ' aria-current="page"'}>${Z.icon("menu")}<span>Menu</span></button></nav>`;
 
+  // The phone's top bar: the organisation. From 1024px the account chip above the page instead.
   const who = org.type === "personal" ? "Personal" : `Business · ${(ROLE_WORD[org.role] || org.role || "").toLowerCase()}`;
   const card = `${Z.avatar({ name: org.name, tone: "p" })}<span class="z-row__main"><span class="z-row__title">${esc(org.name)}</span><span class="z-row__sub">${esc(who)}</span></span>`;
-  $("#side-org").innerHTML = `<button type="button" class="z-side__org" id="org-btn" aria-haspopup="dialog" aria-label="Switch organisation. Current: ${esc(org.name)}">${card}${Z.icon("unfold_more", "z-row__chev")}</button>`;
+  paint($("#side-org"), `<button type="button" class="z-side__org" id="org-btn" aria-haspopup="dialog" aria-expanded="false" aria-label="Account and organisations. Current: ${esc(org.name)}">${card}${Z.icon("unfold_more", "z-row__chev")}</button>`);
+  paint($("#acct"), `<button type="button" class="zb-chip-acct" id="acct-btn" aria-haspopup="dialog" aria-expanded="false" aria-label="Account and organisations. Current: ${esc(org.name)}"><span class="zb-chip-acct__main"><span class="zb-chip-acct__kind">${org.type === "personal" ? "Personal" : "Business"}</span><span class="zb-chip-acct__name">${esc(org.name)}</span></span>${Z.icon("expand_more")}</button>`);
 
   const accts = side.accounts;
-  $("#side-accounts").innerHTML = space === "banking" && accts && accts.length
+  $("#side-accounts").innerHTML = accts && accts.length
     ? `<section class="zb-accts" aria-labelledby="side-acc-h"><h2 class="z-eyebrow" id="side-acc-h">Accounts</h2>${accts.map((a) =>
       `<a class="zb-acct" href="?view=accounts" data-view="accounts"${view === "accounts" ? ' aria-current="page"' : ""}>${Z.icon("account_balance_wallet")}<span>${esc(a.label || a.currency)}</span><span class="zb-acct__right">${esc(accountRight(a))}</span></a>`).join("")}</section>`
     : "";
-  $("#side-foot").innerHTML = `${space === "banking" ? link({ id: "soon", icon: "hourglass_top", label: "Coming soon" }, active) : ""}
+  // Sign out shows here under 1024px only, as the Menu's last row; from 1024px it is in the account menu.
+  $("#side-foot").innerHTML = `${link({ id: "soon", icon: "hourglass_top", label: "Coming soon" }, active)}
     ${link({ id: "settings", icon: "settings", label: "Settings" }, active)}
-    <div id="side-test"></div>`;
+    <div id="side-test"></div>
+    <button type="button" class="z-side__link zb-signout" id="side-signout">${Z.icon("logout")}<span>Sign out</span></button>`;
   if (testMode !== undefined) $("#side-test").innerHTML = Z.testModePill(testMode);
 
   // A real link, so a modifier-click or middle-click opens the view in a new
@@ -206,31 +215,42 @@ export function renderNav() {
       render({ focus: true });
     };
   });
-  $("#org-btn").onclick = () => { setMenu(false); switchSheet($("#org-btn")); };
+  $("#org-btn").onclick = () => { setMenu(false); accountSheet($("#org-btn")); };
+  // #app, which holds the chip, leaves the page when start-up ends on an error screen.
+  const chip = $("#acct-btn");
+  if (chip) chip.onclick = () => accountSheet(chip);
+  $("#side-signout").onclick = signOut;
   $("#menu-btn").onclick = () => setMenu(!document.querySelector(".zb.is-menu"));
   $("#tabs [data-menu]").onclick = () => setMenu(true);
 }
 
-/** Pick an organisation: here, in place. The personal app is one link away,
- *  except for a company signup: its login's Safe is the company's, so the app
- *  would show the company's money under "personal". */
-function switchSheet(trigger) {
-  document.getElementById("org-switch")?.remove();
+/** The account menu: who is signed in, the organisations to switch between
+ *  (here, in place), the personal app, Settings, and Sign out last. The
+ *  personal app is one link away, except for a company signup: its login's
+ *  Safe is the company's, so the app would show the company's money under
+ *  "personal". */
+function accountSheet(trigger) {
+  document.getElementById("acct-menu")?.remove();
   const row = (o) => {
     const here = o.id === org.id;
     const sub = o.type === "personal" ? "Personal · books and invoices" : `Business · ${(ROLE_WORD[o.role] || o.role || "").toLowerCase()}`;
     return `<li><button type="button" class="z-row z-row--btn" data-org="${esc(o.id)}"${here ? ' aria-current="true"' : ""}>${Z.avatar({ name: o.name, tone: here ? "p" : "n" })}<span class="z-row__main"><span class="z-row__title">${esc(o.name)}</span><span class="z-row__sub">${esc(sub)}</span></span>${here ? `<span class="z-row__right">${Z.icon("check")}<span class="z-sr">(current)</span></span>` : ""}</button></li>`;
   };
+  const person = me && (me.name || me.email)
+    ? `<ul class="z-list z-card"><li>${Z.row({ lead: Z.avatar({ name: me.name || me.email, tone: "n" }), title: me.name || me.email, sub: me.name ? me.email : "" })}</li></ul>`
+    : "";
   document.body.insertAdjacentHTML("beforeend", Z.overlay({
-    id: "org-switch", title: "Switch organisation",
-    body: `<div class="z-sheet__body"><ul class="z-list z-card">${orgs.map(row).join("")}${needsPersonalOrg()
+    id: "acct-menu", title: "Your account",
+    body: `<div class="z-sheet__body">${person}<ul class="z-list z-card" aria-label="Organisations">${orgs.map(row).join("")}${needsPersonalOrg()
       ? `<li><button type="button" class="z-row z-row--btn" data-act="create-personal">${Z.iconTile({ icon: "add" })}<span class="z-row__main"><span class="z-row__title">Set up your personal space</span><span class="z-row__sub">Your own invoices and books</span></span></button></li>` : ""}</ul>
-      ${me?.accountType === "company" ? "" : `<ul class="z-list z-card"><li>${Z.row({ lead: Z.iconTile({ icon: "smartphone" }), title: "Your personal account", sub: "Home, send and get paid, in the app", href: "/app", right: Z.icon("open_in_new", "z-row__chev") })}</li></ul>`}</div>`,
+      ${me?.accountType === "company" ? "" : `<ul class="z-list z-card"><li>${Z.row({ lead: Z.iconTile({ icon: "smartphone" }), title: "Your personal account", sub: "Home, send and get paid, in the app", href: "/app", right: Z.icon("open_in_new", "z-row__chev") })}</li></ul>`}
+      <ul class="z-list z-card"><li><a class="z-row" href="?view=settings" data-view-link="settings">${Z.iconTile({ icon: "settings" })}<span class="z-row__main"><span class="z-row__title">Settings</span></span>${Z.icon("chevron_right", "z-row__chev")}</a></li>
+      <li><button type="button" class="z-row z-row--btn" id="acct-signout">${Z.iconTile({ icon: "logout" })}<span class="z-row__main"><span class="z-row__title">Sign out</span></span></button></li></ul></div>`,
   }));
-  const scrim = $("#org-switch");
+  const scrim = $("#acct-menu");
   scrim.querySelectorAll("[data-org]").forEach((b) => {
     b.onclick = async () => {
-      Z.closeOverlay("org-switch");
+      Z.closeOverlay("acct-menu");
       if (b.dataset.org === org.id) return;
       try {
         await loadOrg(b.dataset.org);
@@ -239,14 +259,22 @@ function switchSheet(trigger) {
       render({ focus: true });
     };
   });
-  Z.openOverlay("org-switch", trigger);
+  $("#acct-signout").onclick = signOut;
+  // The trigger says whether its menu is open; Z.closeOverlay takes is-open off on every way out.
+  trigger.setAttribute("aria-expanded", "true");
+  new MutationObserver((_, obs) => {
+    if (scrim.classList.contains("is-open")) return;
+    trigger.setAttribute("aria-expanded", "false");
+    obs.disconnect();
+  }).observe(scrim, { attributes: true, attributeFilter: ["class"] });
+  Z.openOverlay("acct-menu", trigger);
 }
 
-/* A person without a personal space is asked until they make one or say not now. */
+/* A person without a personal space is asked, on Home, until they make one or say not now. */
 function personalBanner() {
-  if (!needsPersonalOrg() || personalLater()) return "";
+  if (view !== "overview" || !needsPersonalOrg() || personalLater()) return "";
   return `<div class="banner info">${Z.icon("person")}<span>Your own invoices and books go in a <b>personal space</b>, next to the companies you work in.</span>
-    <button class="z-btn z-btn--primary z-btn--sm" data-act="create-personal">Set it up</button>
+    <button class="z-btn z-btn--secondary z-btn--sm" data-act="create-personal">Set it up</button>
     <button class="z-btn z-btn--quiet z-btn--sm" data-act="personal-later">Not now</button></div>`;
 }
 

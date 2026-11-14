@@ -110,6 +110,30 @@ export async function api(path, opts = {}) {
   return data;
 }
 
+/** Sign out, as the app's endSession does: the session ends on the server too,
+ *  so a copied token stops working now. Best effort: keepalive lets the DELETE
+ *  outlive the page load, and storage is cleared whatever the network says.
+ *  zoll-contacts is the app's contact cache, cleared with the session there. */
+export function signOut() {
+  if (token) {
+    fetch("/api/session", { method: "DELETE", headers: { authorization: `Bearer ${token}` }, keepalive: true }).catch(() => {});
+  }
+  token = null;
+  try {
+    // The unsent invoice drafts hold customer data: the next person on this browser must not be offered them.
+    const drafts = Object.keys(localStorage).filter((k) => k.startsWith("zold-web-invoice-draft:"));
+    for (const k of ["zold-session", "zoll-session", "zoll-contacts", ...drafts]) localStorage.removeItem(k);
+  } catch { /* nothing to clear */ }
+  location.assign("/business");
+}
+
+// Back can restore this page, balance and IBAN included, from the back-forward cache
+// after its session ended or another person signed in: only the session it loaded with may see it.
+const loadedWith = token;
+addEventListener("pageshow", (e) => {
+  if (e.persisted && (localStorage.getItem("zold-session") || localStorage.getItem("zoll-session")) !== loadedWith) location.reload();
+});
+
 /** Can the current org use this capability? Mirrors the server's verdict. */
 export const cap = (id) => org?.capabilities?.[id] ?? { allowed: false, label: id };
 /** Whether a payment needs a second person's approval before it is sent: the
