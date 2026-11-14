@@ -154,6 +154,15 @@ Say this plainly rather than letting the surface imply otherwise:
   the armed account and the recovery 1 €, plus their own check of the person.
 - **No Candide recovery service has been called** (stub only); no on-chain
   guardian add, execute or finalise, no real OTP.
+- **The verifier sweep has never deployed a verifier.** A recovered or
+  imported Safe is owned by its passkey's verifier contract. On Base Sepolia,
+  Safe `0x262F7F42120f2a0B07ff02924317CF552f5283AF`'s only owner
+  `0x2504a2ace3f9e25f8c4eb92d4982fb879004638e` had no code (read 2026-11-14),
+  so every operation failed with AA24. `sweepMissingVerifiers` deploys
+  such verifiers from the relay key every 10 minutes, and until one exists
+  the prepare paths answer VERIFIER_MISSING before the passkey prompt.
+  The sweep alone waits for the receipt, and a verifier with a deploy in
+  flight is sent once. `verifier-sweep:test` runs it against a stubbed chain only.
 - **Turnkey has never been called: no Google or Apple login has come back
   to `/guardian`, `/recovery` or signup, no email code has been sent, and no
   recovery passkey made.** Adding such a guardian and recovering with one run

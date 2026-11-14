@@ -38,6 +38,9 @@ import {
   prepareSafeSetupOperation,
   readRecoveryState,
   recoveryGuardianSetupTransactions,
+  SafeGasError,
+  SafeThresholdError,
+  SafeVerifierMissingError,
   submitPasskeySafeOperationWithReceipt,
   type PasskeySafeDeploymentPlan,
   type RecoveryModuleState,
@@ -475,6 +478,9 @@ const isClientSignature = (sig: any, key: string): sig is ClientSignature =>
  *  request, and the request carries the ID token and the browser key. */
 function sendError(res: express.Response, e: unknown) {
   if (e instanceof TurnkeyGuardianError) return res.status(e.status).json({ error: e.message, code: e.code });
+  // The Safe-side refusals name no secret and are the user's to act on.
+  if (e instanceof SafeVerifierMissingError || e instanceof SafeThresholdError) return res.status(e.status).json({ error: e.message, code: e.code });
+  if (e instanceof SafeGasError) return res.status(e.status).json({ error: e.message });
   const err = e as { name?: string; code?: unknown };
   console.error("[turnkey] request failed:", err?.name ?? typeof e, err?.code ?? "");
   res.status(502).json({ error: "Turnkey did not answer as expected; try again", code: "TURNKEY_FAILED" });

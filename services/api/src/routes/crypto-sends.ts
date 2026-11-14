@@ -29,7 +29,7 @@ import { requireCapability } from "../http/guards.js";
 import { pendingCryptoSends, prunePendingCryptoSends } from "../http/pending.js";
 import { redactedMessage, describeCause } from "../http/log-cause.js";
 import { passkeySafeChallenge } from "../wallet/passkey-safe-plan.js";
-import { prepareTransferExecution, SafeOperationUncertainError, submitPasskeySafeOperationWithReceipt, userOperationOutcome } from "../wallet/candide.js";
+import { prepareTransferExecution, SafeOperationUncertainError, SafeVerifierMissingError, submitPasskeySafeOperationWithReceipt, userOperationOutcome } from "../wallet/candide.js";
 import { b64urlToBuf, verifyAssertionForChallenge } from "../webauthn.js";
 import { isSanctioned } from "../sanctions.js";
 import { resolveEnsName, type EnsResolution } from "./ens.js";
@@ -258,6 +258,7 @@ export function createCryptoSendPreparer({
       pendingCryptoSends.set(id, { userId: user.id, expiresAt: deadline * 1000, challenge, plan: safe, userOperation: prepared.userOperation });
     } catch (err) {
       store.releaseCapHold(held.holdId);
+      if (err instanceof SafeVerifierMissingError) return refuse(err.status, { error: err.message, code: err.code });
       console.error(`crypto send: preparing the Safe operation failed for ${user.id}: ${describeCause(err)}`);
       return refuse(502, { error: `could not prepare the payment: ${redactedMessage(err)}`, code: "PREPARE_FAILED" });
     }
