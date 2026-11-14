@@ -129,7 +129,7 @@ export function signOut() {
 
 // Back after sign out can restore this page, balance and IBAN included, from the back-forward cache.
 addEventListener("pageshow", (e) => {
-  if (e.persisted && !localStorage.getItem("zold-session") && !localStorage.getItem("zoll-session") && token) location.reload();
+  if (e.persisted && !localStorage.getItem("zold-session") && !localStorage.getItem("zoll-session")) location.reload();
 });
 
 /** Can the current org use this capability? Mirrors the server's verdict. */
