@@ -9,11 +9,11 @@
  * The older views keep their ?view= ids and sit under one of these (PARENT):
  * the ledger and assets under Statement, Shopify under Apps.
  */
-import { $, Z, api, cap, esc, eur, me, mayActOnInvoice, needsPersonalOrg, org, orgs, personalLater, recoveryNone, recoveryPending, recoveryUnknown, reviewOn, roleCan, ROLE_WORD, setView, testMode, view } from "./core.js";
+import { $, Z, api, cap, esc, eur, me, mayActOnInvoice, needsPersonalOrg, org, orgs, personalLater, recoveryNone, recoveryPending, recoveryUnknown, reviewOn, roleCan, ROLE_WORD, setView, testMode, toast, view } from "./core.js";
 import { loadOrg, render } from "./shell.js";
 import { isOwnCompanyOrg } from "./access-model.js";
 
-export const SPACES = {
+const SPACES = {
   banking: [
     { id: "overview", label: "Home", icon: "home" },
     { id: "payments", label: "Approvals", icon: "inbox", capability: "transfers.drafts" },
@@ -78,7 +78,7 @@ matchMedia("(min-width: 1024px)").addEventListener("change", (e) => {
 });
 
 /** Which nav item an older view belongs to. */
-export const PARENT = {
+const PARENT = {
   ledger: "books", assets: "books", gains: "books",
   shopify: "apps", "invoice-new": "invoices", "invoicing-settings": "settings", organisation: "settings", access: "settings", accounts: "accounts", payment: "payments",
 };
@@ -87,7 +87,7 @@ export const KNOWN = new Set([...VIEWS.map((v) => v.id), ...Object.keys(PARENT),
 
 /** The space a view lives in. Settings and Coming soon stay in the one you came from. */
 let lastSpace = "banking";
-export function spaceOf(v) {
+function spaceOf(v) {
   const item = PARENT[v] || v;
   if (SPACES.books.some((it) => it.id === item)) lastSpace = "books";
   else if (SPACES.banking.some((it) => it.id === item) || item === "accounts") lastSpace = "banking";
@@ -96,7 +96,7 @@ export function spaceOf(v) {
 
 /* An unbuilt feature keeps its entry; a feature this kind of org can never
    have (a business-only entry in a personal org) leaves it out. */
-function shown(v) {
+export function shown(v) {
   const verdict = v.capability ? cap(v.capability) : { allowed: true };
   return !v.capability || verdict.allowed || verdict.unavailable;
 }
@@ -172,7 +172,7 @@ export function renderNav() {
     `<a href="?view=${esc(it.id)}" data-view="${esc(it.id)}"${it.id === active ? ' aria-current="page"' : ""}>${Z.icon(it.icon)}<span>${esc(it.id === "overview" ? "Home" : it.label)}</span>`
     + `${it.capability && !cap(it.capability).allowed ? `${Z.icon("lock", "zb-tabs__lock")}<span class="z-sr"> (not available)</span>` : ""}`
     + `${it.badge ? `<span class="z-bnav__badge"><span class="z-sr">, </span>${esc(it.badge)}<span class="z-sr"> waiting for you</span></span>` : ""}</a>`).join("")}
-    <button type="button" data-menu${TABS[space].includes(active) ? "" : ' aria-current="page"'}>${Z.icon("menu")}<span>Menu</span></button></nav>`;
+    <button type="button" class="z-bnav__btn" data-menu${TABS[space].includes(active) ? "" : ' aria-current="page"'}>${Z.icon("menu")}<span>Menu</span></button></nav>`;
   $("#nav").setAttribute("aria-label", space === "books" ? "Books" : "Main");
   $("#side-space").innerHTML = hasBooks
     ? [["banking", "Banking", "account_balance_wallet"], ["books", "Books", "menu_book"]].map(([id, label, icon]) =>
@@ -232,7 +232,9 @@ function switchSheet(trigger) {
     b.onclick = async () => {
       Z.closeOverlay("org-switch");
       if (b.dataset.org === org.id) return;
-      await loadOrg(b.dataset.org);
+      try {
+        await loadOrg(b.dataset.org);
+      } catch (e) { toast(e.message, true); return; }
       setView("overview");
       render({ focus: true });
     };

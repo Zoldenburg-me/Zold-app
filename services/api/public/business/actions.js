@@ -6,13 +6,13 @@
  * and nowhere else. An action that opens a drawer returns "keep", so the
  * shell does not draw the page again under it.
  */
-import { $, Z, api, cap, chainId, day, dialog, esc, eur, maskIban, me, org, plain, reviewOn, roleCan, ROLE_WORD, setPersonalLater, setView, toast, token, view } from "./core.js";
+import { $, Z, api, cap, chainId, day, deviceLib, dialog, esc, eur, maskIban, me, org, plain, reviewOn, roleCan, ROLE_WORD, setPersonalLater, setView, toast, token, view } from "./core.js";
 import { docHref, docMonth, exportMonth, setExportMonth } from "./views.js";
 import { sendAmount, sendState, walletOf } from "./send.js";
 import { forgetDraft, invoiceBody, invoiceDraft, readInvoiceEditor, setInvoiceDraft, storeDraft } from "./invoice.js";
 import { ap, bk, contactPayments, ct, draftTag, draftTitle, draftTotal, invoiceDrawer, iv, mayReview, memberName } from "./screens.js";
 import { loadOrg, render } from "./shell.js";
-import { payerRuleDialog, payerRuleSection, runSummary } from "./receipts.js";
+import { field, payerRuleDialog, payerRuleSection, runSummary } from "./receipts.js";
 import { signedLineOutcome, signedRunToast } from "./payment-model.js";
 
 /** A file the API serves behind the bearer header, which a navigation
@@ -27,8 +27,6 @@ async function download(path, filename) {
   URL.revokeObjectURL(url);
 }
 
-/* The month an export acts on: Books' month there, the statement's month on
-   the statement screen. */
 /** When a Safe's books start; the same rule as domain/safe-books.ts. */
 function safeBooksStart(u) {
   const safe = u?.passkeySafe;
@@ -36,18 +34,19 @@ function safeBooksStart(u) {
   return safe?.createdAt ?? u?.createdAt;
 }
 
-/** A fresh passkey approval for a change the server gates on one
- *  (verifyPasskeyStepUp). Undefined when the account has no passkey, and the
- *  server then says why it refuses. */
-/** A passkey approval for one named action; the server refuses it for any other. */
+/** A fresh passkey approval for one named action the server gates on one
+ *  (verifyPasskeyStepUp), refused for any other. Undefined when the account
+ *  has no passkey, and the server then says why it refuses. */
 async function passkeyStepUp(action) {
   const session = await api("/api/session");
   const credentialId = session.passkey?.credentialId;
   if (!credentialId) return undefined;
   const { challenge } = await api("/api/webauthn/challenge", { method: "POST", body: { purpose: "step_up", action } });
-  return (await window.__deviceLib).passkeyAssertion({ challenge, credentialId });
+  return (await deviceLib()).passkeyAssertion({ challenge, credentialId });
 }
 
+/* The month an export acts on: Books' month there, the statement's month on
+   the statement screen. */
 function monthChosen() {
   const v = $("#x-month")?.value || (view === "books" ? bk.month : exportMonth);
   setExportMonth(v);
@@ -76,20 +75,18 @@ function shopAddress(sel) {
   return shop;
 }
 
-const field = (id, label, extra = "") => `<label for="${id}">${label}</label><input id="${id}" name="${id}" autocomplete="off" ${extra} />`;
-
 /* ── Payment runs ─────────────────────────────────────────────────────── */
 
 /** One run in a drawer: who drafted it, each line, and, when this person may
  *  review it, Approve and Send back. Four eyes is the server's call too. */
 async function draftDrawer(el) {
-  const [{ drafts }, { contacts }] = await Promise.all([
-    api(`/api/orgs/${org.id}/drafts`),
+  const [{ draft, totals }, { contacts }] = await Promise.all([
+    api(`/api/orgs/${org.id}/drafts/${encodeURIComponent(el.dataset.id)}`),
     // Only to show the IBAN next to each payee; the review still works without.
     api(`/api/orgs/${org.id}/contacts`).catch(() => ({ contacts: [] })),
   ]);
-  const d = drafts.find((x) => x.id === el.dataset.id);
-  if (!d) throw new Error("This payment run no longer exists.");
+  // The single-run route returns the totals beside the run, not in it.
+  const d = { ...draft, totals };
   const ibanOf = (l) => {
     const c = contacts.find((x) => x.id === l.contactId);
     const b = c?.bankAccounts?.find((x) => x.id === l.destination.bankAccountId);
@@ -240,6 +237,7 @@ function contactDrawer(el) {
   const pays = contactPayments(c);
   const open = ct.drafts.filter((d) => ["DRAFT", "PENDING_REVIEW", "REVIEWED", "INVALID_DATA", "REJECTED"].includes(d.state) && d.lines.some((l) => l.contactId === c.id));
   const canPay = cap("transfers.drafts").allowed && roleCan(org.role, "propose") && b?.iban;
+  const mayManage = roleCan(org.role, "contacts");
   const body = `${c.email ? `<p class="zb-hint">${esc(c.email)}</p>` : ""}
     ${b?.iban ? `<ul class="z-list z-card"><li>${Z.copyRow({ label: "IBAN", value: String(b.iban).replace(/\s+/g, ""), display: Z.groupIban(b.iban), mono: true })}</li>${b.holderName && b.holderName !== c.name ? `<li>${Z.copyRow({ label: "Account holder", value: b.holderName })}</li>` : ""}</ul>` : `<p class="zb-hint">No bank details yet.</p>`}
     ${open.length ? `<div class="zb-note zb-note--a">${Z.icon("warning")}<span>${open.length === 1 ? "A payment run uses" : `${open.length} payment runs use`} these bank details. Changing them sends ${open.length === 1 ? "it" : "them"} back to be checked again.</span></div>` : ""}
@@ -247,9 +245,9 @@ function contactDrawer(el) {
       ? `<dl class="z-kv z-card">${pays.slice(0, 8).map((p) => `<div><dt>${esc(day(p.at))}</dt><dd class="z-fig">−${esc(/^EUR/i.test(p.asset) ? eur(p.amount) : `${p.amount} ${p.asset}`)}</dd></div>`).join("")}</dl>`
       : '<p class="zb-hint">None yet.</p>'}</section>
     <div class="zb-actions">
-      <button type="button" class="z-btn z-btn--secondary" id="ct-edit">${Z.icon("edit")}<span>Edit</span></button>
+      ${mayManage ? `<button type="button" class="z-btn z-btn--secondary" id="ct-edit">${Z.icon("edit")}<span>Edit</span></button>` : ""}
       ${canPay ? `<button type="button" class="z-btn z-btn--primary" id="ct-pay">${Z.icon("arrow_outward")}<span>Pay ${esc(c.name)}</span></button>` : ""}
-      <button type="button" class="z-link-btn" id="ct-del">Delete contact</button>
+      ${mayManage ? '<button type="button" class="z-link-btn" id="ct-del">Delete contact</button>' : ""}
     </div>
     ${payerRuleSection(c)}`;
   const scrim = drawer("contact-drawer", c.name, body, el);
@@ -259,16 +257,17 @@ function contactDrawer(el) {
     setView("send");
     render({ focus: true });
   });
-  scrim.querySelector("#ct-edit").onclick = () => { Z.closeOverlay("contact-drawer"); editContact(c); };
+  if (!mayManage) return;
+  scrim.querySelector("#ct-edit")?.addEventListener("click", () => { Z.closeOverlay("contact-drawer"); editContact(c); });
   scrim.querySelector("#ct-rule")?.addEventListener("click", () => {
     Z.closeOverlay("contact-drawer");
     payerRuleDialog(c).catch((e) => toast(e.message, true));
   });
-  scrim.querySelector("#ct-del").onclick = () => {
+  scrim.querySelector("#ct-del")?.addEventListener("click", () => {
     Z.closeOverlay("contact-drawer");
     dialog(`Delete ${c.name}?`, `<p class="desc">Past payments keep their record. A payment run that still uses these details stops and has to be pointed somewhere else.</p>`,
       async () => { await api(`/api/orgs/${org.id}/contacts/${c.id}`, { method: "DELETE" }); toast("Contact deleted."); }, { okLabel: "Delete" });
-  };
+  });
 }
 
 function editContact(c) {
@@ -281,10 +280,12 @@ function editContact(c) {
      <p class="desc" style="margin-top:12px">Changing the IBAN sends any payment run that uses it back to be checked again.</p>`,
     async () => {
       const iban = $("#d-iban").value.trim();
+      // A new IBAN drops the old one's BIC: it belongs to the old bank.
+      const norm = (x) => String(x || "").replace(/\s+/g, "").toUpperCase();
       const bankAccounts = iban
-        ? [{ ...(b || { currency: "EUR", country: iban.slice(0, 2).toUpperCase() }), iban, holderName: $("#d-holder").value.trim() || $("#d-name").value.trim() }, ...c.bankAccounts.filter((x) => x !== b)]
+        ? [{ ...(b || { currency: "EUR", country: iban.slice(0, 2).toUpperCase() }), ...(b && norm(b.iban) !== norm(iban) ? { bic: undefined } : {}), iban, holderName: $("#d-holder").value.trim() || $("#d-name").value.trim() }, ...c.bankAccounts.filter((x) => x !== b)]
         : c.bankAccounts.filter((x) => x !== b);
-      await api(`/api/orgs/${org.id}/contacts/${c.id}`, { method: "PATCH", body: { name: $("#d-name").value.trim(), email: $("#d-email").value.trim() || undefined, bankAccounts } });
+      await api(`/api/orgs/${org.id}/contacts/${c.id}`, { method: "PATCH", body: { name: $("#d-name").value.trim(), email: $("#d-email").value.trim(), bankAccounts } });
       toast("Saved.");
     }, { okLabel: "Save" });
 }
@@ -335,7 +336,7 @@ function openDocument(d) {
  * checks the payee once more and submits it (routes/crypto-sends.ts).
  */
 async function signCryptoRun(sends) {
-  const lib = await window.__deviceLib;
+  const lib = await deviceLib();
   const out = [];
   for (const a of sends) {
     const name = a.recipient || "the wallet";
@@ -369,7 +370,7 @@ export const ACTIONS = {
     let d = await api(`/api/users/${me.id}/documents/ownership`, { method: "POST", body: {} });
     if (d.safeSignature) {
       // The account's own signature: the part a screenshot cannot fake.
-      const lib = await window.__deviceLib;
+      const lib = await deviceLib();
       const sig = await lib.passkeyAssertion(d.safeSignature);
       d = await api(d.safeSignature.submitTo, { method: "POST", body: sig });
     }
@@ -391,7 +392,6 @@ export const ACTIONS = {
   "bk-month"(el) { bk.month = el.dataset.m; },
 
   "draft-detail": async (el) => { await draftDrawer(el); return "keep"; },
-  "review-draft": async (el) => { await draftDrawer(el); return "keep"; },
   "contact-detail": (el) => { contactDrawer(el); return "keep"; },
   "invoice-detail": (el) => {
     const i = iv.invoices.find((x) => x.id === el.dataset.id);
@@ -428,7 +428,9 @@ export const ACTIONS = {
       const r = await api(`/api/orgs/${org.id}/accounts`, { method: "POST", body: { currency: $("#d-cur").value, label: $("#d-label").value } });
       toast(plain(r.note) || `${r.account.currency} account opened.`);
     }, { okLabel: "Open account" }),
-  "new-contact": () => dialog("Add contact",
+  "new-contact": () => {
+    const fromSend = view === "send";
+    dialog("Add contact",
     `${field("d-name", "Name", 'autocomplete="organization" placeholder="Druckerei Kessler…"')}
      ${field("d-email", 'Email <span class="desc">(optional)</span>', 'type="email" spellcheck="false" placeholder="buchhaltung@kessler.de…"')}
      ${field("d-iban", "IBAN", 'spellcheck="false" placeholder="DE89 3704 0044 0532 0130 00…"')}
@@ -436,7 +438,7 @@ export const ACTIONS = {
      ${field("d-country", "Country", 'maxlength="2" placeholder="DE…"')}`,
     async () => {
       const iban = $("#d-iban").value.trim();
-      await api(`/api/orgs/${org.id}/contacts`, {
+      const r = await api(`/api/orgs/${org.id}/contacts`, {
         method: "POST",
         body: {
           name: $("#d-name").value, email: $("#d-email").value || undefined,
@@ -446,10 +448,14 @@ export const ACTIONS = {
           }] : [],
         },
       });
+      // From New payment: saving redraws the form, so what was typed rides in sendState. Cancel stores nothing.
+      if (fromSend) {
+        sendState.amount = $("#d-amt")?.value.trim() || "";
+        sendState.note = $("#d-note")?.value.trim() || "";
+        sendState.contactId = r.contact.id;
+      }
       toast("Contact added.");
-    }, { okLabel: "Add contact" }),
-  async "del-contact"(el) {
-    await api(`/api/orgs/${org.id}/contacts/${el.dataset.id}`, { method: "DELETE" });
+    }, { okLabel: "Add contact" });
   },
   "import-wallet": () => dialog("Import a wallet",
     `<p class="desc">Read only. Zold never holds a key for an imported wallet.</p>
@@ -912,14 +918,17 @@ export const ACTIONS = {
   async "gmi-push"() {
     const [{ months }, banks, { integrations }] = await Promise.all([
       api(`/api/orgs/${org.id}/bookkeeping/statement`),
-      api(`/api/orgs/${org.id}/integrations/getmyinvoices/bank-accounts`).then((r) => r.bankAccounts.filter((b) => b.accountType === "CUSTOM")).catch(() => []),
+      // A failed read is said as such, not as "no manual bank account".
+      api(`/api/orgs/${org.id}/integrations/getmyinvoices/bank-accounts`).then((r) => r.bankAccounts.filter((b) => b.accountType === "CUSTOM")).catch((e) => ({ error: plain(e.message) })),
       api(`/api/orgs/${org.id}/integrations`),
     ]);
     if (!months.length) return toast("There are no statement lines yet, so there is nothing to send.");
     const preset = view === "export" ? monthChosen() : months[0];
     const picked = integrations.getmyinvoices?.bankAccountUid;
     const name = (m) => new Intl.DateTimeFormat("en-GB", { month: "long", year: "numeric" }).format(new Date(`${m}-15T12:00:00`));
-    const bankField = banks.length
+    const bankField = banks.error
+      ? `<p class="zb-hint" style="margin-top:12px">The bank accounts in GetMyInvoices could not be read: ${esc(banks.error)} Only the receipts go up unless that is fixed before you send.</p>`
+      : banks.length
       ? `<label for="gmi-bank">Bank account in GetMyInvoices</label><select id="gmi-bank" name="bank">${banks.map((b) => `<option value="${esc(String(b.bankAccountUid))}"${b.bankAccountUid === picked ? " selected" : ""}>${esc(b.name || `Account ${b.bankAccountUid}`)}</option>`).join("")}</select>`
       : `<p class="zb-hint" style="margin-top:12px">GetMyInvoices has no manual bank account yet, so only the receipts go up. Add one there (Bank accounts → add a manual account, e.g. “Zold”) and send again to add the bank lines.</p>`;
     dialog("Send to GetMyInvoices", `<p class="desc">Each bank line of the month goes to the bank account you pick, with its booking receipt attached as the document. Lines without one get one first. Anything already there is skipped, never doubled.</p>
@@ -943,7 +952,9 @@ export const ACTIONS = {
         ].filter(([k]) => k > 0);
         const body = r.results.length
           ? `<ul class="zb-next" style="margin-top:10px">${rows.map(([k, t]) => `<li><b>${k}</b>&nbsp;${esc(t)}</li>`).join("")}</ul>
-             ${r.bankAccountUid ? "" : `<p class="desc" style="margin-top:12px">No bank lines were added: GetMyInvoices has no manual bank account to add them to. Add one there and send again.</p>`}`
+             ${r.bankAccountUid ? "" : r.bankAccountsError
+               ? `<p class="desc" style="margin-top:12px">No bank lines were added: the bank accounts in GetMyInvoices could not be read (${esc(plain(r.bankAccountsError))}). Send again later.</p>`
+               : `<p class="desc" style="margin-top:12px">No bank lines were added: GetMyInvoices has no manual bank account to add them to. Add one there and send again.</p>`}`
           : `<p class="desc">${esc(name(month))} has no bank lines.</p>`;
         setTimeout(() => dialog(`${name(month)} sent to GetMyInvoices`, body, null, { closeOnly: true }), 0);
       }, { okLabel: "Send" });
@@ -1039,7 +1050,15 @@ export const ACTIONS = {
     sendState.contactId = null;
     sendState.mode = "bank";
     if (reviewOn()) {
-      await api(`/api/orgs/${org.id}/drafts/${r.draft?.id || r.id}/submit`, { method: "POST" });
+      try {
+        await api(`/api/orgs/${org.id}/drafts/${r.draft.id}/submit`, { method: "POST" });
+      } catch (e) {
+        // The draft exists: staying on the form would make a second press draft it again.
+        ap.tab = "drafts";
+        setView("payments");
+        toast(`Saved as a draft, but not submitted: ${plain(e.message)} Submit it from Drafts.`, true);
+        return;
+      }
       ap.tab = "waiting";
       toast("Submitted. Someone other than you approves it next.");
     } else {
@@ -1085,19 +1104,19 @@ export const ACTIONS = {
     if (r.unsigned) {
       return dialog("Approve in your own wallet",
         `<p class="desc">${esc(r.note)}</p>
-         <table><thead><tr><th>To</th><th>Amount</th></tr></thead><tbody>${r.lines
+         <div class="z-tbl-wrap"><table class="z-tbl"><thead><tr><th>To</th><th>Amount</th></tr></thead><tbody>${r.lines
            .map((l) => `<tr><td>${esc(l.destination.displayName)}</td>
-             <td class="mono">${esc(l.amount)} ${esc(l.asset)}</td></tr>`).join("")}</tbody></table>`,
+             <td class="mono">${esc(l.amount)} ${esc(l.asset)}</td></tr>`).join("")}</tbody></table></div>`,
         null, { closeOnly: true });
     }
     if (r.cryptoSends?.length) return signCryptoRun(r.cryptoSends);
     if (!r.authorizations?.length) return toast(r.note || "Nothing to approve.");
 
-    const lib = await window.__deviceLib;
+    const lib = await deviceLib();
     // The passkey that wraps this browser's device key, from the session:
     // nothing writes it to storage.
-    const me = await api("/api/session");
-    const credentialId = me.passkey?.credentialId;
+    const session = await api("/api/session");
+    const credentialId = session.passkey?.credentialId;
     if (!credentialId) throw new Error("This account has no passkey here, so nothing can be approved.");
     let approved = 0;
     const lines = [];

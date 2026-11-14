@@ -7,7 +7,7 @@
  * Where the API would refuse (no account, no page, no way to get paid), the
  * button is switched off with the reason beside it, not a button that fails.
  */
-import { $, Z, api, cap, day, esc, eur, me, org, view } from "./core.js";
+import { $, Z, api, cap, day, esc, eur, org, roleCan, view } from "./core.js";
 import { META, RENDER } from "./views.js";
 
 const MAKES_LINKS = new Set(["owner", "admin", "payer"]); // invoices.manage
@@ -39,7 +39,7 @@ function pageFix(payLink, page) {
 }
 
 function headerActions(block) {
-  const invoice = cap("invoices").allowed
+  const invoice = cap("invoices").allowed && roleCan(org.role, "invoices")
     ? `<button type="button" class="z-btn z-btn--secondary" data-act="issue-invoice">${Z.icon("receipt_long")}<span>Issue invoice</span></button>`
     : "";
   if (!MAKES_LINKS.has(org.role)) return invoice;

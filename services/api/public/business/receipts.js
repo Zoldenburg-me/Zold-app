@@ -4,10 +4,10 @@
  * is drawn with the other invoices (screens.js); the actions that start a
  * run or issue a draft are in actions.js.
  */
-import { $, Z, api, cap, dialog, esc, eur, org, toast } from "./core.js";
+import { $, Z, api, cap, dialog, esc, eur, org, roleCan, toast } from "./core.js";
 import { INVOICE_LANGUAGE_OPTIONS } from "./views.js";
 
-const field = (id, label, extra = "") => `<label for="${id}">${label}</label><input id="${id}" name="${id}" autocomplete="off" ${extra} />`;
+export const field = (id, label, extra = "") => `<label for="${id}">${label}</label><input id="${id}" name="${id}" autocomplete="off" ${extra} />`;
 
 const vatWord = (vat) => (vat.kind === "standard" ? `${vat.rate}% VAT` : `No VAT (${vat.reason.replace(/_/g, " ")})`);
 
@@ -23,7 +23,7 @@ export function payerRuleSection(c) {
         <div><dt>Tax line</dt><dd>${esc(vatWord(r.vat))}</dd></div>
         <div><dt>Pays from</dt><dd>${c.wallets.length} address${c.wallets.length === 1 ? "" : "es"}</dd></div></dl>`
       : `<p class="zb-hint">Not set. With a payer rule, what this contact pays into your imported wallets is collected into one draft invoice a month.</p>`}
-    <div class="zb-actions"><button type="button" class="z-btn z-btn--secondary" id="ct-rule">${Z.icon("receipt_long")}<span>${r ? "Edit payer rule" : "Set payer rule"}</span></button></div></section>`;
+    ${roleCan(org.role, "invoices") ? `<div class="zb-actions"><button type="button" class="z-btn z-btn--secondary" id="ct-rule">${Z.icon("receipt_long")}<span>${r ? "Edit payer rule" : "Set payer rule"}</span></button></div>` : ""}</section>`;
 }
 
 /* "1 0xabc…" per line. A line that names an address the contact already has

@@ -19,7 +19,7 @@ export const APP_LINKS = {
 };
 
 /** A request at one of these is a recovery under way. */
-export const OPEN_REQUEST = ["PASSKEY_PENDING", "OTP_PENDING", "KYC_PENDING", "REVIEW_PENDING", "GRACE_PERIOD"];
+const OPEN_REQUEST = ["PASSKEY_PENDING", "OTP_PENDING", "KYC_PENDING", "REVIEW_PENDING", "GRACE_PERIOD"];
 
 export const isCompanyLogin = (me) => me?.accountType === "company";
 
@@ -57,10 +57,11 @@ const lower = (a) => String(a || "").toLowerCase();
  * Both guardians' answers, [candide, zoldenburg]. A guardian's routes exist
  * only where it is switched on (GET /api/health capabilities), so only those
  * are asked: undefined is "off here", null is "asked and failed". Health
- * unread: both null, since which guardians are on is unknown.
+ * unread: both null, since which guardians are on is unknown. `health`
+ * reads GET /api/health; /business passes its page-wide read (core.js).
  */
-export async function readGuardians(id, api) {
-  const caps = (await api("/api/health").catch(() => null))?.capabilities;
+export async function readGuardians(id, api, health = () => api("/api/health")) {
+  const caps = (await Promise.resolve().then(health).catch(() => null))?.capabilities;
   if (!caps) return [null, null];
   const ask = (on, path) => (on ? api(`/api/users/${encodeURIComponent(id)}/recovery/${path}`).catch(() => null) : Promise.resolve(undefined));
   return Promise.all([ask(caps.emailSmsRecovery, "candide"), ask(caps.zoldenburgRecovery, "zoldenburg")]);
@@ -158,12 +159,12 @@ export function deviceKeyView(me, status) {
 }
 
 /** Everything Access shows, or null for a member who is not the company login. */
-export async function loadAccess(me, api) {
+export async function loadAccess(me, api, health) {
   if (!isCompanyLogin(me) || !me.id) return null;
   if (me.passkeySafe?.status !== "active") return { noSafe: true, signers: null, signersError: null, recovery: null };
   const [s, g] = await Promise.allSettled([
     api(`/api/users/${encodeURIComponent(me.id)}/safe/signers`),
-    readGuardians(me.id, api),
+    readGuardians(me.id, api, health),
   ]);
   const [c, z] = g.status === "fulfilled" ? g.value : [null, null];
   return {

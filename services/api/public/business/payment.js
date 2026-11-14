@@ -32,8 +32,6 @@ const kv = (k, v) => `<div class="zb-kv"><span>${esc(k)}</span><b>${v}</b></div>
 const copyable = (value, label, shown = value) => `<span class="zb-pd-copy"><span class="z-mono" translate="no">${esc(shown)}</span><button class="z-iconbtn z-iconbtn--bare" type="button" data-z-copy="${esc(value)}" aria-label="Copy ${esc(label)}">${Z.icon("content_copy")}</button></span>`;
 const ROLE = { drafted: "Drafted", approved: "Approved", rejected: "Sent back" };
 const upper = (t) => t.charAt(0).toUpperCase() + t.slice(1);
-/** Shown in groups of four, copied without spaces. */
-const grouped = (iban) => iban.replace(/\s+/g, "").replace(/(.{4})(?=.)/g, "$1 ");
 
 META.payment = () => ({
   title: "Payment",
@@ -50,7 +48,7 @@ function linesHtml(run, contacts, invoices) {
     const ref = bankReference(l, run, org.name, invoices);
     return `${many ? `<h3 class="zb-h3">Payment ${i + 1} of ${run.lines.length}</h3>` : ""}
       ${kv("Beneficiary", esc(p.name))}
-      ${p.iban ? kv("IBAN", copyable(p.iban.replace(/\s+/g, ""), "IBAN", grouped(p.iban))) : ""}
+      ${p.iban ? kv("IBAN", copyable(p.iban.replace(/\s+/g, ""), "IBAN", Z.groupIban(p.iban))) : ""}
       ${p.bic ? kv("BIC", `<span class="z-mono">${esc(p.bic)}</span>`) : ""}
       ${p.wallet ? kv("Wallet", copyable(p.wallet, "wallet address")) : ""}
       ${ref ? kv("Bank reference", `${copyable(ref, "bank reference")}${["EXECUTING", "EXECUTED", "FAILED"].includes(run.state) ? '<br><span class="z-dim">Built from today’s organisation name</span>' : ""}`) : ""}
@@ -70,7 +68,7 @@ function approvalsCard(run) {
   const may = mayReview(run);
   // The same actions, on the same conditions, as the run's row in Approvals (screens.js apRow).
   const btn = (act, label) => `<button type="button" class="z-btn z-btn--primary" data-act="${act}" data-id="${esc(run.id)}">${label}</button>`;
-  const act = run.state === "PENDING_REVIEW" && may.allowed ? btn("review-draft", "Review")
+  const act = run.state === "PENDING_REVIEW" && may.allowed ? btn("draft-detail", "Review")
     : run.state === "REVIEWED" && roleCan(org.role, "send") ? btn("exec-draft", "Send")
     : run.state === "DRAFT" && roleCan(org.role, "propose") ? (reviewOn() ? btn("submit-draft", "Submit") : roleCan(org.role, "send") ? btn("exec-draft", "Send") : "")
     : run.state === "PENDING_REVIEW" ? `<p class="zb-hint">${esc(may.reason)}</p>` : "";
