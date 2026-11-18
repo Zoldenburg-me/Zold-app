@@ -17,6 +17,7 @@ import { LIMITS, can, capabilityMatrix, type CapabilityId } from "../domain/plan
 import { roleCan, type Permission } from "../domain/roles.js";
 import { paymentReviewRequired } from "../domain/payment-review.js";
 import { issuerTaxIds } from "../domain/invoicing.js";
+import { entityLocked, orgEntity } from "../domain/org-entity.js";
 import type { Member, Organisation } from "../domain/types.js";
 
 export interface OrgContext {
@@ -111,6 +112,8 @@ export function publicOrg(org: Organisation, member?: Member) {
   return {
     id: org.id,
     type: org.type,
+    // Business orgs only; `entityLocked` says whether an owner may still change it.
+    ...(org.type === "business" ? { entity: orgEntity(org), entityLocked: entityLocked(store.accountsOf(org.id)) } : {}),
     name: org.name,
     legalName: org.legalName,
     taxId: org.taxId,

@@ -278,7 +278,7 @@ let obDraftTouched = false;
 const obDraft = (() => {
   const empty = {
     type: null, given: "", family: "", email: "", country: "", usPerson: null, companyUsNexus: null,
-    legalName: "", tradingName: "", noTrading: false, incorp: "", terms: false, authorised: false, social: null,
+    legalName: "", tradingName: "", noTrading: false, entity: null, incorp: "", terms: false, authorised: false, social: null,
   };
   try { return { ...empty, ...JSON.parse(sessionStorage.getItem(OB_DRAFT_KEY) || "{}") }; } catch { return empty; }
 })();
@@ -436,6 +436,16 @@ const OB_ASK = {
     take: (v) => (v.length >= 2 ? { legalName: v } : "Enter the company’s registered name."),
     chip: () => obDraft.legalName,
   },
+  entity: {
+    say: () => `Is ${obDraft.legalName} a company of its own, or do you trade under your own name?`,
+    tip: "A GmbH, UG, AG or Ltd is a company. It can’t change once the euro account is set up.",
+    choices: () => [
+      { label: "A company", patch: { entity: "company" }, shown: "Company" },
+      { label: "I’m a sole trader", patch: { entity: "sole_trader" }, shown: "Sole trader" },
+    ],
+    done: () => obDraft.entity === "company" || obDraft.entity === "sole_trader",
+    chip: () => (obDraft.entity === "company" ? "A company" : "Sole trader"),
+  },
   tradingName: {
     say: () => `Do customers know ${obDraft.legalName} by another name?`,
     tip: "A trading name, if there is one.",
@@ -503,7 +513,7 @@ const OB_ASK = {
 };
 const OB_CHAT_ORDER = {
   p: ["given", "family", "email", "country", "usPerson", "terms"],
-  b: ["legalName", "tradingName", "incorp", "fullName", "country", "email", "companyUsNexus", "usPerson", "authorised", "terms"],
+  b: ["legalName", "entity", "tradingName", "incorp", "fullName", "country", "email", "companyUsNexus", "usPerson", "authorised", "terms"],
 };
 const obPath = () => (obDraft.type === "company" ? "b" : "p");
 
@@ -916,7 +926,7 @@ OB["p-passkey"] = {
 OB["b-about"] = {
   kind: "form",
   title: "Business: the company and you",
-  done: () => !!(obDraft.legalName.trim().length >= 2 && obDraft.incorp && obDraft.given.trim() && EMAIL_RE.test(obDraft.email)
+  done: () => !!(obDraft.legalName.trim().length >= 2 && OB_ASK.entity.done() && obDraft.incorp && obDraft.given.trim() && EMAIL_RE.test(obDraft.email)
     && obDraft.country && obDraft.companyUsNexus !== null && obDraft.usPerson !== null && obDraft.terms && obDraft.authorised),
   html: () => obAboutChat("b"),
   bind: (root) => obBindAbout(root, "b"),
@@ -1617,9 +1627,10 @@ let obEmailInUse = false;
 async function obEnsureOrg() {
   const { organisations = [] } = await api("/api/orgs");
   if (organisations.some((o) => o.type === "business")) return;
-  if (!obDraft.legalName || !obDraft.incorp) return; // answers gone (another tab): the owner adds it from /business
+  if (!obDraft.legalName || !obDraft.incorp || !OB_ASK.entity.done()) return; // answers gone (another tab): the owner adds it from /business
   await api("/api/orgs", {
     type: "business",
+    entity: obDraft.entity,
     name: obDraft.tradingName || obDraft.legalName,
     legalName: obDraft.legalName,
     country: obDraft.incorp,

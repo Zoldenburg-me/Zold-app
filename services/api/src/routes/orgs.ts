@@ -49,6 +49,7 @@ import { CEILINGS, ceilingRefusal } from "../domain/ceilings.js";
 import { paymentReviewRequired } from "../domain/payment-review.js";
 import { verifyPasskeyStepUp } from "./auth.js";
 import { clearsSignupTaxId, issuerIdentityFrom } from "./business/shared.js";
+import { entityLocked, isOrgEntity, orgEntity } from "../domain/org-entity.js";
 
 const INVITE_TTL_MS = 3 * 24 * 60 * 60 * 1000; // Gnosis expired invites at 3 days
 
@@ -164,8 +165,16 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     const session = requireSession(req, res);
     if (!session) return;
 
-    const { name, type, country, legalName, taxId, email, timeZone } = req.body ?? {};
+    const { name, type, country, legalName, taxId, email, timeZone, entity } = req.body ?? {};
     const orgType: OrgType = type === "business" ? "business" : "personal";
+    // Company or sole trader decides who will own the org's money, so a
+    // business org states it; a personal one is its person and has none.
+    if (orgType === "business" && !isOrgEntity(entity)) {
+      return res.status(400).json({ code: "ENTITY_REQUIRED", error: "Say whether the business is a company or a sole trader.", field: "entity" });
+    }
+    if (orgType === "personal" && entity !== undefined) {
+      return res.status(400).json({ code: "ENTITY_PERSONAL", error: "A personal space is not a company or a sole trader.", field: "entity" });
+    }
     // Printed on invoices and documents: the same rule as a person's name.
     const orgName = cleanName(name, { min: 2, max: ORG_NAME_MAX });
     if (orgName === null) {
@@ -219,6 +228,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     const org: Organisation = {
       id: `org_${randomUUID()}`,
       type: orgType,
+      ...(orgType === "business" ? { entity } : {}),
       name: orgName,
       legalName: orgLegalName,
       taxId: typeof taxId === "string" ? taxId.trim() : undefined,
@@ -307,6 +317,28 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
         code: "PERSONAL_ORG_NAME",
         error: "Your personal space is named after you. Change your name in the Zold app, under Profile.",
       });
+    }
+    // Only an owner changes it, and only until an EUR account has somewhere
+    // for money to land (domain/org-entity.ts). The same value is let through,
+    // as Settings sends every field.
+    if (b.entity !== undefined && b.entity !== orgEntity(ctx.org)) {
+      if (ctx.org.type !== "business") {
+        return res.status(400).json({ code: "ENTITY_PERSONAL", error: "A personal space is not a company or a sole trader.", field: "entity" });
+      }
+      if (!isOrgEntity(b.entity)) {
+        return res.status(400).json({ code: "ENTITY_INVALID", error: "The business is a company or a sole trader.", field: "entity" });
+      }
+      if (ctx.member.role !== "owner") {
+        return res.status(403).json({ code: "OWNER_ONLY", error: "Only an owner can change whether the business is a company or a sole trader." });
+      }
+      if (entityLocked(store.accountsOf(ctx.org.id))) {
+        return res.status(409).json({
+          code: "ENTITY_LOCKED",
+          error: "The euro account is already set up, so whether the business is a company or a sole trader can no longer change.",
+          field: "entity",
+        });
+      }
+      patch.entity = b.entity;
     }
     if (typeof b.legalName === "string" && !sameName(b.legalName, ctx.org.legalName ?? "")) {
       // Empty clears it; anything else follows the name rule.

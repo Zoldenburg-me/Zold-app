@@ -554,7 +554,7 @@ await check("a stored copy of the other kind still refuses in the list", async (
 await check("a company signup's first business org gets a gated EUR account that names no API flag", async () => {
   addUser("u_signup", CORP_PENDING, 5);
   store.updateUser("u_signup", { accountType: "company" } as any);
-  const r = await call("POST", "/api/orgs", "u_signup", { type: "business", name: "Acme Technik", legalName: "Acme Technik GmbH", country: "DE" });
+  const r = await call("POST", "/api/orgs", "u_signup", { entity: "sole_trader", type: "business", name: "Acme Technik", legalName: "Acme Technik GmbH", country: "DE" });
   assert.equal(r.status, 201, JSON.stringify(r.data));
   const accts = store.accountsOf(r.data.organisation.id);
   assert.equal(accts.length, 1);
@@ -566,9 +566,9 @@ await check("a company signup's first business org gets a gated EUR account that
 });
 
 await check("a second business org, or one made by a personal signup, opens no account by itself", async () => {
-  const second = await call("POST", "/api/orgs", "u_signup", { type: "business", name: "Other Co", country: "DE" });
+  const second = await call("POST", "/api/orgs", "u_signup", { entity: "sole_trader", type: "business", name: "Other Co", country: "DE" });
   assert.equal(store.accountsOf(second.data.organisation.id).length, 0);
-  const personal = await call("POST", "/api/orgs", "u_personal", { type: "business", name: "Side Co", country: "DE" });
+  const personal = await call("POST", "/api/orgs", "u_personal", { entity: "sole_trader", type: "business", name: "Side Co", country: "DE" });
   assert.equal(store.accountsOf(personal.data.organisation.id).length, 0);
 });
 
@@ -580,12 +580,12 @@ await check("a company login cannot make a personal org: its Safe is the company
 
 await check("an organisation name with a hidden direction mark is refused, at creation and on rename", async () => {
   addUser("u_names", PERSONAL, 7);
-  const made = await call("POST", "/api/orgs", "u_names", { type: "business", name: "Acme\u202e GmbH", country: "DE" });
+  const made = await call("POST", "/api/orgs", "u_names", { entity: "sole_trader", type: "business", name: "Acme\u202e GmbH", country: "DE" });
   assert.equal(made.status, 400, JSON.stringify(made.data));
   assert.equal(made.data.code, "NAME_INVALID");
-  const legal = await call("POST", "/api/orgs", "u_names", { type: "business", name: "Acme", legalName: "Acme\u2066 GmbH", country: "DE" });
+  const legal = await call("POST", "/api/orgs", "u_names", { entity: "sole_trader", type: "business", name: "Acme", legalName: "Acme\u2066 GmbH", country: "DE" });
   assert.equal(legal.status, 400, JSON.stringify(legal.data));
-  const ok = await call("POST", "/api/orgs", "u_names", { type: "business", name: "  Acme   Technik ", country: "DE" });
+  const ok = await call("POST", "/api/orgs", "u_names", { entity: "sole_trader", type: "business", name: "  Acme   Technik ", country: "DE" });
   assert.equal(ok.status, 201, JSON.stringify(ok.data));
   assert.equal(ok.data.organisation.name, "Acme Technik");
   const renamed = await call("PATCH", `/api/orgs/${ok.data.organisation.id}`, "u_names", { name: "Ac\u00adme" });
@@ -645,6 +645,80 @@ await check("a person has one personal org: a second is refused", async () => {
   const again = await call("POST", "/api/orgs", "u_fresh", { type: "personal", name: "Fresh 2", country: "DE" });
   assert.equal(again.status, 409, JSON.stringify(again.data));
   assert.equal(again.data.code, "PERSONAL_ORG_EXISTS");
+});
+
+await check("a business org states company or sole trader at creation; a personal one states neither", async () => {
+  addUser("u_entity", PERSONAL, 8);
+  for (const entity of [undefined, "", "gmbh", "Company"]) {
+    const r = await call("POST", "/api/orgs", "u_entity", { type: "business", name: "No Entity", country: "DE", ...(entity === undefined ? {} : { entity }) });
+    assert.equal(r.status, 400, `${entity}: ${JSON.stringify(r.data)}`);
+    assert.equal(r.data.code, "ENTITY_REQUIRED");
+    assert.equal(r.data.field, "entity");
+  }
+  const personal = await call("POST", "/api/orgs", "u_entity", { type: "personal", name: "Me", country: "DE", entity: "sole_trader" });
+  assert.equal(personal.status, 400, JSON.stringify(personal.data));
+  assert.equal(personal.data.code, "ENTITY_PERSONAL");
+  assert.equal(store.organisationsForUser("u_entity").length, 0, "a refused create stores nothing");
+  for (const entity of ["company", "sole_trader"] as const) {
+    const r = await call("POST", "/api/orgs", "u_entity", { type: "business", name: `Made ${entity}`, country: "DE", entity });
+    assert.equal(r.status, 201, JSON.stringify(r.data));
+    assert.equal(store.findOrganisation(r.data.organisation.id)!.entity, entity);
+    assert.equal(r.data.organisation.entity, entity);
+    assert.equal(r.data.organisation.entityLocked, false);
+  }
+});
+
+await check("the read model: a business row without entity reads as sole_trader, a personal one has no entity field", async () => {
+  addOrg("org_no_entity", "business", "u_entity", "Legacy GmbH");
+  const r = await call("GET", "/api/orgs/org_no_entity", "u_entity");
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.organisation.entity, "sole_trader");
+  assert.equal(store.findOrganisation("org_no_entity")!.entity, undefined, "read, not written");
+  const personal = await call("POST", "/api/orgs", "u_entity", { type: "personal", name: "Me", country: "DE" });
+  assert.equal(personal.status, 201, JSON.stringify(personal.data));
+  assert.ok(!("entity" in personal.data.organisation) && !("entityLocked" in personal.data.organisation));
+  const list = await call("GET", "/api/orgs", "u_entity");
+  const byId = new Map(list.data.organisations.map((o: any) => [o.id, o]));
+  assert.equal((byId.get("org_no_entity") as any).entity, "sole_trader");
+  assert.equal((byId.get(personal.data.organisation.id) as any).entity, undefined);
+  const refused = await call("PATCH", `/api/orgs/${personal.data.organisation.id}`, "u_entity", { entity: "company" });
+  assert.equal(refused.status, 400, JSON.stringify(refused.data));
+  assert.equal(refused.data.code, "ENTITY_PERSONAL");
+});
+
+await check("an owner changes the entity until an EUR account is funded; then it is locked", async () => {
+  addOrg("org_lock", "business", "u_entity", "Lock GmbH");
+  store.addMember({ id: "m_org_lock_admin", orgId: "org_lock", userId: "u_corp", email: "", role: "admin", status: "active", invitedAt: now, acceptedAt: now });
+  const byAdmin = await call("PATCH", "/api/orgs/org_lock", "u_corp", { entity: "company" });
+  assert.equal(byAdmin.status, 403, JSON.stringify(byAdmin.data));
+  assert.equal(byAdmin.data.code, "OWNER_ONLY");
+  const invalid = await call("PATCH", "/api/orgs/org_lock", "u_entity", { entity: "partnership" });
+  assert.equal(invalid.status, 400, JSON.stringify(invalid.data));
+  assert.equal(invalid.data.code, "ENTITY_INVALID");
+  // A gated EUR account with nothing behind it does not lock it.
+  addGatedEur("acc_lock", "org_lock");
+  const changed = await call("PATCH", "/api/orgs/org_lock", "u_entity", { entity: "company" });
+  assert.equal(changed.status, 200, JSON.stringify(changed.data));
+  assert.equal(changed.data.organisation.entity, "company");
+  assert.equal(store.findOrganisation("org_lock")!.entity, "company");
+  // A backer's Safe bound to it (as POST .../fund does): locked.
+  store.updateAccount("acc_lock", { backingUserId: "u_entity" });
+  assert.equal((await call("GET", "/api/orgs/org_lock", "u_entity")).data.organisation.entityLocked, true);
+  const locked = await call("PATCH", "/api/orgs/org_lock", "u_entity", { entity: "sole_trader", taxId: "DE999" });
+  assert.equal(locked.status, 409, JSON.stringify(locked.data));
+  assert.equal(locked.data.code, "ENTITY_LOCKED");
+  assert.equal(store.findOrganisation("org_lock")!.entity, "company");
+  assert.notEqual(store.findOrganisation("org_lock")!.taxId, "DE999", "a refused save changes nothing");
+  // Settings sends every field: the same value saves the rest.
+  const same = await call("PATCH", "/api/orgs/org_lock", "u_entity", { entity: "company", taxId: "DE999" });
+  assert.equal(same.status, 200, JSON.stringify(same.data));
+  assert.equal(store.findOrganisation("org_lock")!.taxId, "DE999");
+  // An IBAN alone locks it too.
+  addOrg("org_lock_iban", "business", "u_entity", "Iban GmbH");
+  store.addAccount({ id: "acc_lock_iban", orgId: "org_lock_iban", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: { iban: "DE89370400440532013000" }, createdAt: now, updatedAt: now } as any);
+  const ibanLocked = await call("PATCH", "/api/orgs/org_lock_iban", "u_entity", { entity: "company" });
+  assert.equal(ibanLocked.status, 409, JSON.stringify(ibanLocked.data));
+  assert.equal(ibanLocked.data.code, "ENTITY_LOCKED");
 });
 
 await check("a personal space keeps its person's name: renaming it in /business is refused, other fields save", async () => {

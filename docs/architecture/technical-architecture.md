@@ -867,6 +867,13 @@ flowchart LR
   the check reads `needs_check` and no row is rewritten. On the hardhat
   harness a user with no Monerium profile stands in with one of the needed
   kind.
+- A business org is a `company` or a `sole_trader` (`Organisation.entity`,
+  `domain/org-entity.ts`): `POST /api/orgs` with type business answers 400
+  `ENTITY_REQUIRED` without one, and a personal org takes none
+  (`ENTITY_PERSONAL`). An owner may change it with `PATCH /api/orgs/:id`
+  until an EUR account has a backer or an IBAN; then 409 `ENTITY_LOCKED`. A
+  row without the field reads as `sole_trader`. Both kinds behave the same for
+  now; the company's own Safe is `docs/company-owned-safe-design.md` §5.
 - A person has at most one personal org, and a company login none (its Safe
   is the company's): `POST /api/orgs` answers 409 `PERSONAL_ORG_EXISTS` /
   `PERSONAL_ORG_COMPANY_LOGIN`. Signup creates none; `/business` asks a

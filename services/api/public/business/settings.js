@@ -46,7 +46,9 @@ function orgSection() {
   const names = issuerFieldNames(a.country);
   const d = org.issuerDetails || {};
   return section("Business profile", "Who you are on every invoice you issue. The country decides which invoicing rules apply.",
-    rows([["Name", org.name], ["Legal name", org.legalName], ["Address", address], ["Country", country],
+    rows([["Name", org.name], ["Legal name", org.legalName],
+      ["Legal form", org.entity === "company" ? "Company" : org.entity === "sole_trader" ? "Sole trader" : ""],
+      ["Address", address], ["Country", country],
       [names.vatId, ids.vatId, true], [names.taxNumber, ids.taxNumber, true],
       ["Registration", [d.registerCourt, d.registerNumber].filter(Boolean).join(" ")], ["Notification email", org.notificationEmail]])
     + (address ? "" : `<p class="zb-hint">No address yet. Invoices need one.</p>`), edit);

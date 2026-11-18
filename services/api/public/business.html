@@ -58,6 +58,15 @@
           <option value="personal">Personal: one person</option>
           <option value="business">Business: members, roles and approvals</option>
         </select>
+        <div id="new-org-entity-row" class="hidden">
+          <label for="new-org-entity">Legal form</label>
+          <select id="new-org-entity" name="entity">
+            <option value="">Choose…</option>
+            <option value="company">Company: its own legal person (GmbH, UG, AG, Ltd…)</option>
+            <option value="sole_trader">Sole trader: you trade under your own name</option>
+          </select>
+          <p class="desc">It can’t change once the euro account is set up.</p>
+        </div>
         <label for="new-org-country">Country</label><input id="new-org-country" name="country" autocomplete="country" placeholder="DE…" maxlength="2" />
         <label for="new-org-email">Email on your invoices <span class="desc">(optional)</span></label><input id="new-org-email" name="email" type="email" autocomplete="email" spellcheck="false" placeholder="you@example.com…" />
         <div class="zb-actions"><button type="submit" class="z-btn z-btn--primary" id="new-org-go">Create</button></div>

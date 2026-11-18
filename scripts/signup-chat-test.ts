@@ -48,7 +48,7 @@ for (const f of ["ui.js", "app/core.js", "app/recovery.js", "app/monerium.js", "
 const run = (code: string) => vm.runInContext(code, ctx);
 
 const EMPTY = { type: null, given: "", family: "", email: "", country: "", usPerson: null, companyUsNexus: null,
-  legalName: "", tradingName: "", noTrading: false, incorp: "", terms: false, authorised: false, social: null };
+  legalName: "", tradingName: "", noTrading: false, entity: null, incorp: "", terms: false, authorised: false, social: null };
 const reset = (over: any = {}) => { ctx.__d = { ...EMPTY, ...over }; run("Object.assign(obDraft, __d); obChatEdit = null; obEmailInUse = false"); };
 const next = (p: "p" | "b") => run(`obChatKey("${p}")`);
 const draft = () => JSON.parse(run("JSON.stringify(obDraft)"));
@@ -88,6 +88,7 @@ test("business path order; 'No other name' answers the trading name and leaves a
   reset({ type: "company" });
   const seen: string[] = [];
   seen.push(next("b")); assert.equal(typeof say("X"), "string"); say("Lindner Holzbau GmbH");
+  seen.push(next("b")); tap("A company");
   seen.push(next("b")); assert.equal(typeof say(""), "string"); tap("No other name");
   seen.push(next("b")); pick("incorp", "DE");
   seen.push(next("b")); say("Miriam Zoldenburg");
@@ -97,8 +98,10 @@ test("business path order; 'No other name' answers the trading name and leaves a
   seen.push(next("b")); tap("No");
   seen.push(next("b")); tap("Yes, I’m authorised");
   seen.push(next("b")); tap("I accept the Terms");
-  assert.deepEqual(seen, ["legalName", "tradingName", "incorp", "fullName", "country", "email", "companyUsNexus", "usPerson", "authorised", "terms"]);
+  assert.deepEqual(seen, ["legalName", "entity", "tradingName", "incorp", "fullName", "country", "email", "companyUsNexus", "usPerson", "authorised", "terms"]);
   assert.equal(next("b"), null);
+  assert.equal(draft().entity, "company");
+  assert.equal(run("OB_ASK.entity.chip()"), "A company");
   assert.equal(run('OB["b-about"].done()'), true);
   assert.equal(run("OB_ASK.tradingName.chip()"), "No other name");
   // Its chip reopens it, and a typed name replaces the choice.
@@ -107,6 +110,35 @@ test("business path order; 'No other name' answers the trading name and leaves a
   say("Lindner Holz");
   assert.deepEqual([draft().tradingName, draft().noTrading], ["Lindner Holz", false]);
 });
+
+test("business path: company or sole trader is asked and required", () => {
+  const full = { type: "company", legalName: "L GmbH", noTrading: true, incorp: "DE", given: "Miriam Zoldenburg", family: "",
+    country: "DE", email: "m@example.com", companyUsNexus: false, usPerson: false, authorised: true, terms: true };
+  reset(full);
+  assert.equal(next("b"), "entity");
+  assert.equal(run('OB["b-about"].done()'), false, "no entity: the about step is not done");
+  tap("I’m a sole trader");
+  assert.equal(draft().entity, "sole_trader");
+  assert.equal(next("b"), null);
+  assert.equal(run('OB["b-about"].done()'), true);
+});
+
+{
+  // The company's org is made with the answer; without it (another tab cleared it), none is made.
+  const full = { type: "company", legalName: "L GmbH", noTrading: true, incorp: "DE", given: "Miriam Zoldenburg", family: "", email: "m@example.com" };
+  run("__realApi = api");
+  ctx.__posts = [];
+  run(`api = async (url, body) => { if (body) { __posts.push({ url, body }); return {}; } return { organisations: [] }; }`);
+  reset({ ...full, entity: "sole_trader" });
+  await run("obEnsureOrg()");
+  assert.equal(ctx.__posts.length, 1);
+  assert.deepEqual([ctx.__posts[0].body.type, ctx.__posts[0].body.entity], ["business", "sole_trader"]);
+  reset(full);
+  await run("obEnsureOrg()");
+  assert.equal(ctx.__posts.length, 1, "no entity: no org");
+  run("api = __realApi");
+  n++; console.log("  ok  the company's org is created with its entity, and not without one");
+}
 
 test("every answered chip reopens its own question", () => {
   reset({ type: "individual", given: "Miriam", family: "Z", email: "m@example.com", country: "DE", usPerson: false, terms: true });
