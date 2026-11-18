@@ -142,6 +142,7 @@ const scripts = [
   "safe-address-ui:test",
   "crypto-send:test",
   "business:crypto-send:test",
+  "org-crypto-send:test",
   "crypto-send-ui:test",
   "tx:audit:test",
   "statement:test",

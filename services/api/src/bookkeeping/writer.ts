@@ -91,7 +91,8 @@ interface Rows {
 const storeRows: Rows = {
   transfersOf: (id) => store.transfers.filter((t) => t.userId === id),
   depositsOf: (id) => withoutConversionOutputs(store.cryptoDeposits.filter((d) => d.userId === id)),
-  cryptoSendsOf: (id) => store.cryptoSends.filter((c) => c.userId === id),
+  // A company send's userId is who queued it; it is the company's money.
+  cryptoSendsOf: (id) => store.cryptoSends.filter((c) => c.userId === id && !c.safeOpId),
   issueOrdersOf: (id) => store.moneriumIssueOrders.filter((o) => o.userId === id),
   sweepsOf: (id) => store.conversionSweeps.filter((s) => s.userId === id),
   paymentRequestsOf: (id) => store.paymentRequestsForUser(id),
@@ -120,7 +121,7 @@ function groupedRows(): Rows {
   // A conversion's EURe output is not income (transfers/activity.ts).
   const deposits = groupBy(withoutConversionOutputs(store.cryptoDeposits), (d) => d.userId);
   const issueOrders = groupBy(store.moneriumIssueOrders, (o) => o.userId);
-  const cryptoSends = groupBy(store.cryptoSends, (c) => c.userId);
+  const cryptoSends = groupBy(store.cryptoSends.filter((c) => !c.safeOpId), (c) => c.userId);
   const sweeps = groupBy(store.conversionSweeps, (s) => s.userId);
   const paymentRequests = groupBy(store.paymentRequests, (r) => r.userId);
   const invoices = groupBy(store.invoices, (i) => i.orgId);

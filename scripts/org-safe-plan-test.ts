@@ -14,12 +14,13 @@
  *   - the public org projection carries no plan;
  *   - the personal path still refuses at threshold 2, directly and through
  *     prepareSafeOperation, and takes no signer list;
- *   - the org path reads the threshold from the chain and skips the
- *     passkey-alone guard: a signer not on the plan or too few signers are
- *     refused before anything is built.
+ *   - the org path reads the owners and the threshold from the chain and
+ *     skips the passkey-alone guard: a signer the plan names but the chain no
+ *     longer lists, or too few signers, are refused before anything is built;
+ *     an owner the chain lists but the plan does not is accepted.
  *
- * Offline: the chain is a fake JSON-RPC that answers eth_getCode and
- * getThreshold and refuses everything else.
+ * Offline: the chain is a fake JSON-RPC that answers eth_getCode, getOwners
+ * and getThreshold and refuses everything else.
  * Run: npm run org-safe-plan:test
  */
 import "./_test-env.js";
@@ -32,6 +33,7 @@ import express from "express";
 import { makeSoftwarePasskey } from "./_software-passkey.js";
 
 let threshold = 2;
+let chainOwners: string[] = [];
 const reads: string[] = [];
 const rpc = express().use(express.json());
 rpc.post("/", (req, res) => {
@@ -41,6 +43,11 @@ rpc.post("/", (req, res) => {
   if (method === "eth_call" && String(params?.[0]?.data).startsWith("0xe75235b8")) {
     reads.push(String(params[0].to).toLowerCase());
     return res.json({ jsonrpc: "2.0", id, result: `0x${threshold.toString(16).padStart(64, "0")}` });
+  }
+  // getOwners()
+  if (method === "eth_call" && String(params?.[0]?.data).startsWith("0xa0e67e2b")) {
+    const word = (h: string) => h.replace(/^0x/, "").toLowerCase().padStart(64, "0");
+    return res.json({ jsonrpc: "2.0", id, result: `0x${word("20")}${word(chainOwners.length.toString(16))}${chainOwners.map(word).join("")}` });
   }
   res.json({ jsonrpc: "2.0", id, error: { code: -32601, message: `fake chain: ${method} not served` } });
 });
@@ -65,6 +72,7 @@ const {
   prepareSafeOperation,
   prepareTransferExecution,
   smartAccountForPasskey,
+  passkeyAccountAddress,
   transferExecutionTransactions,
   webauthnOwnerFromJwk,
   webauthnOwnerToStore,
@@ -205,13 +213,20 @@ await check("personal still refuses at threshold 2", async () => {
   await assert.rejects(prepareSafeOperation(personal, txs, [anna]), /takes no signer list/);
 });
 
-await check("the org path reads the chain's threshold and refuses too few or foreign signers", async () => {
+await check("the org path reads the chain's owners and threshold and refuses too few or stale signers", async () => {
   const stored = orgSafePlan(store.findOrganisation("org_co")!);
   threshold = 2;
   reads.length = 0;
   await assert.rejects(prepareSafeOperation(stored, txs, []), /must be an owner/);
-  await assert.rejects(prepareSafeOperation({ ...stored, owners: [webauthnOwnerToStore(anna)] }, txs, [anna, bert]), /must be an owner/);
-  assert.equal(reads.length, 0, "refused before the chain is asked");
+  assert.equal(reads.length, 0, "no signer named: refused before the chain is asked");
+  // The plan names anna and bert; the chain no longer lists bert (#39): the
+  // plan alone never makes a signer.
+  chainOwners = [passkeyAccountAddress(anna)];
+  await assert.rejects(prepareSafeOperation(stored, txs, [anna, bert]), /must be an owner of the Safe on chain/);
+  // An owner the chain lists but the plan does not (added later) is a signer.
+  chainOwners = [passkeyAccountAddress(anna), passkeyAccountAddress(bert), passkeyAccountAddress(cara)];
+  await assert.rejects(prepareSafeOperation(stored, txs, [anna, cara]), (e: unknown) => !/must be an owner/.test(String((e as Error).message)));
+  reads.length = 0;
   await assert.rejects(prepareSafeOperation(stored, txs, [anna]), (e: unknown) =>
     e instanceof SafeThresholdError && /needs 2 owner signatures and 1 were named/.test(e.message));
   assert.deepEqual(reads, [ORG_SAFE.toLowerCase()], "the threshold is the chain's, read at the plan's address");
