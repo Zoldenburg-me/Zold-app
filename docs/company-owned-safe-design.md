@@ -1,6 +1,6 @@
 # Company-owned Safe for business orgs (design)
 
-Owner-approved 2026-11-18 (PR #35). Code references checked against main 33ad7b25 (2026-11-18).
+Owner-approved 2026-11-18 (PR #35). Code references checked against main d9823253 (2026-11-18).
 
 **The owner's decision:** "the Ownership of a safe From a corprate account should always belong to the company not to the person who made the safe or the passkey! for a freelance! who dont have a seperate legal identity we dont care! if he comingle funds or not!!"
 
@@ -15,14 +15,14 @@ Owner-approved 2026-11-18 (PR #35). Code references checked against main 33ad7b2
   - Removing or deactivating the backing member changes nothing on chain. The money stays in their Safe and they can still spend it.
   - An extra owner added through `routes/safe-signers.ts` stays on chain after their membership ends. Those routes are narrow: `/users/:id/safe/...` on the caller's own `passkeySafe` (`:69-76`), at most two owners (`:190-191`), the passkey can't be removed (`:211`), the threshold can only be raised (`:229`), and pending ops are an in-process map with a five-minute TTL (`:50,57-60`). Only their chain *reads* carry over to the org Safe; every org write is new.
   - The backer keeps listing and revoking the org's Belege through personal routes (row 13). A Beleg belongs to a person: `StoredDocument.userId` is the owner and `orgId` is an optional label (`documents.ts:160-166`); listing is `documentsForUser` (`store.ts:590-592`) and revocation requires `doc.userId === user.id` (`routes/documents.ts:487-497`).
-- A Safe has exactly one signer Zold collects from: the passkey. At threshold > 1, `assertPasskeyAloneCanSign` refuses every op Zold submits on the personal path (409 `SAFE_NEEDS_MORE_SIGNATURES`, `wallet/candide.ts:580`). Recovery doesn't pass through it, and nothing stops another owner signing in Safe{Wallet}. Zold has no way to collect a second person's signature.
+- A Safe has exactly one signer Zold collects from: the passkey. At threshold > 1, `assertPasskeyAloneCanSign` refuses every op Zold submits on the personal path (409 `SAFE_NEEDS_MORE_SIGNATURES`, `wallet/candide.ts:637`). Recovery doesn't pass through it, and nothing stops another owner signing in Safe{Wallet}. Zold has no way to collect a second person's signature.
 - Candide recovery (`finalizeRecovery`) replaces the WHOLE owner set (`docs/recovery-and-signers.md`).
 - `wouldOrphanOrg` (`domain/roles.ts:126`) protects the last owner membership, but not the last on-chain signer.
 
 ## 2. Target model
 
 ### 2.1 Two kinds of business org
-- New field: `Organisation.entity: "company" | "sole_trader"`, chosen at org creation and locked once money may have somewhere to land: a stored org Safe plan (a deployment may have landed before it was confirmed; #192, in review), or an EUR account with a Safe address, a backer or an IBAN (`entityLocked`, `domain/org-entity.ts`).
+- New field: `Organisation.entity: "company" | "sole_trader"`, chosen at org creation and locked once money may have somewhere to land: a stored org Safe plan (a deployment may have landed before it was confirmed; #192), or an EUR account with a Safe address, a backer or an IBAN (`entityLocked`, `domain/org-entity.ts:25-30`).
 - **sole_trader** (freelancer, no separate legal person): keeps today's model exactly. Their own Safe backs the org. No separation of funds is built; the owner said they don't care about commingling.
 - **company**: the org's EUR account sits on its own Safe, the **org Safe**, owned by the company. The rest of this note is about `company` orgs.
 - **No existing orgs to classify.** Zold is redeployed from zero (owner, 2026-11-18), so every business org picks its `entity` at creation (§6, Q3).
@@ -96,7 +96,7 @@ Zold is redeployed from zero (owner, 2026-11-18). No business account is backed 
 ## 5. Order of work
 1. The `entity` field, chosen at org creation. All existing behaviour stays for sole_trader.
 2. Pending-op multi-signature queue (§2.4) with tests, behind a flag. Built: #187, behind `ORG_SAFE_QUEUE_ENABLED`.
-3. Org Safe with **one owner** at threshold 1: the owner who opens the account (owner, 2026-11-18). The plan is stored on the org (#190) and the org-scoped read route and member → signer mapping exist (#193, §7.1(11)–(12)). Deploying it at account opening is in review (#192). Still to build: paying from it through the queue (step 2) from day one, never through the personal path and its `assertPasskeyAloneCanSign` check (`wallet/candide.ts:580`).
+3. Org Safe with **one owner** at threshold 1: the owner who opens the account (owner, 2026-11-18). The plan is stored on the org (#190) and the org-scoped read route and member → signer mapping exist (#193, §7.1(11)–(12)). Deploying it at account opening is built (#192). Still to build: paying from it through the queue (step 2) from day one, never through the personal path and its `assertPasskeyAloneCanSign` check (`wallet/candide.ts:637`).
    - **Deferred: more than one owner**: §2.3's add/remove flow, applying Q1's default threshold and Q6's drop rule as answered. Because payments already go through the queue, adding an owner later is the invite-and-passkey flow plus an add-owner op the current owners sign there (`addOwnerTransaction`, `wallet/safe-signers.ts:158`). Payments, the API and the threshold logic do not change.
 4. Monerium link and IBAN for the org Safe (§3.3), issued at account opening.
 5. Org-scoped Zoldenburg recovery enrolment from the company's IBAN (§6, Q7).
