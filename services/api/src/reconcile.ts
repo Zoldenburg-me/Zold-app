@@ -23,6 +23,7 @@ import { moneriumSandboxEnabled } from "./config.js";
 import { store } from "./store.js";
 import { eur } from "./chain.js";
 import { listProcessedIssueOrders } from "./adapters/monerium-sandbox.js";
+import { moneyInHolder } from "./bookkeeping/money-in.js";
 
 export type FindingKind = "UNMIRRORED" | "PHANTOM" | "CONVERSION_OVERLAP";
 
@@ -61,8 +62,9 @@ export async function reconcile(): Promise<ReconcileReport> {
 
     for (const order of moneriumOrders) {
       if (mirrored.has(order.id)) continue;
-      // Deposits for addresses we don't manage aren't ours to mirror.
-      if (!store.findUserByAddress(order.address)) continue;
+      // Deposits for addresses we don't manage aren't ours to mirror. One
+      // that names more than one holder is ours and unbooked: reported.
+      if (moneyInHolder(order.address).kind === "none") continue;
       findings.push({
         kind: "UNMIRRORED",
         detail: `Monerium processed issue order ${order.id} for ${order.address} but the app never recorded it`,

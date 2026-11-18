@@ -191,7 +191,7 @@ export async function moneriumOverview(live: boolean) {
       .slice()
       .sort((a, b) => Date.parse(b.processedAt) - Date.parse(a.processedAt))
       .slice(0, 300)
-      .map((r) => ({ ...r, counterpartyIban: maskIdentifier(r.counterpartyIban), userName: names.get(r.userId) })),
+      .map((r) => ({ ...r, counterpartyIban: maskIdentifier(r.counterpartyIban), userName: r.userId ? names.get(r.userId) : undefined })),
     redeemOrders: redeemOrdersOf().slice(0, 300).map((r) => ({ ...r, userName: names.get(r.userId) })),
     audit: moneriumAudit(undefined, 300).map((e) => ({ ...e, userName: e.userId ? names.get(e.userId) : undefined })),
   };
