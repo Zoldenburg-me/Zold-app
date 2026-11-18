@@ -367,7 +367,7 @@ await check("signup: skipping after a login then using the passkey adds no guard
   setUser(null);
   run(`Object.assign(obDraft, {
     type: "company", given: "Mira", family: "Z", email: "m@example.test", country: "DE",
-    usPerson: false, companyUsNexus: false, legalName: "Example", incorp: "DE",
+    usPerson: false, companyUsNexus: false, legalName: "Example", entity: "company", incorp: "DE",
     terms: true, authorised: true, social: null,
   }); obSocial = { provider: "google", idToken: "tok", publicKey: "pk" }`);
   const skip: any = {};

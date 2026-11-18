@@ -176,7 +176,7 @@ try {
   const org = (
     await ok("POST", "/api/orgs", {
       token: ownerToken,
-      body: { name: "Acme GmbH", type: "business", country: "DE" },
+      body: { name: "Acme GmbH", entity: "sole_trader", type: "business", country: "DE" },
     })
   ).organisation;
 

@@ -235,10 +235,16 @@ export async function boot() {
     if (u?.accountType === "company") $("#new-org-type option[value=personal]")?.remove();
     else if (u?.name) $("#new-org-name").defaultValue = u.name;
     if (u?.country) $("#new-org-country").defaultValue = u.country;
+    // A business says whether it is a company or a sole trader; a personal space is neither.
+    const showEntity = () => $("#new-org-entity-row")?.classList.toggle("hidden", $("#new-org-type").value !== "business");
+    $("#new-org-type").onchange = showEntity;
+    showEntity();
     $("#new-org").onsubmit = async (e) => {
       e.preventDefault();
       const typed = $("#new-org-name").value.trim();
       const type = $("#new-org-type").value;
+      const entity = $("#new-org-entity").value;
+      if (type === "business" && !entity) return toast("Choose whether the business is a company or a sole trader.", true);
       const email = $("#new-org-email").value.trim();
       if (!$("#new-org-email").checkValidity()) return toast("Enter an email address, or leave it empty.", true);
       try {
@@ -248,6 +254,7 @@ export async function boot() {
             // A personal space is named after its person; what they typed is the name on invoices.
             ...(type === "personal" ? { name: u?.name || typed, legalName: typed } : { name: typed }),
             type,
+            ...(type === "business" ? { entity } : {}),
             country: $("#new-org-country").value,
             ...(email ? { email } : {}),
             timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,

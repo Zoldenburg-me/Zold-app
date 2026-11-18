@@ -51,7 +51,7 @@ async function createOrg(asUser: string, type: "business" | "personal", n: numbe
   const res = await fetch(API, {
     method: "POST",
     headers: { "content-type": "application/json", "x-user": asUser },
-    body: JSON.stringify({ name: `${type} org ${n}`, type, country: "DE" }),
+    body: JSON.stringify({ name: `${type} org ${n}`, type, country: "DE", ...(type === "business" ? { entity: "sole_trader" } : {}) }),
   });
   return { status: res.status, body: await res.json().catch(() => ({})) };
 }
