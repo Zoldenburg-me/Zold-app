@@ -7,10 +7,12 @@
  *     passkey yet", not a signer; an invited member is skipped; a deactivated
  *     owner still on chain is named and flagged; an owner no member matches
  *     is listed as added outside Zold; a re-bound passkey names the old
- *     owner by its label and says the passkey changed; two members with one
+ *     owner by its label and says the passkey changed, and without a stored
+ *     label never claims a passkey change; two members with one
  *     address are one owner; the label never makes anyone a signer;
  *   - the op view's projection of the join (safe-ops.ts) names only active
  *     owner members by their passkey;
+ *   - a member is named by name, or by email without one;
  *   - memberForOwner / ownerAddressOfMember search this org only, by the
  *     login passkey;
  *   - GET /api/orgs/:orgId/safe: a viewer reads it; a non-member gets a 404;
@@ -110,6 +112,15 @@ await check("a re-bound passkey: the old owner is named by its label, the new ke
   assert.deepEqual(j.members, [{ memberId: "anna", name: "anna", passkey: true, signerAddress: A(2), onChain: false, oldSignerOnChain: A(1) }]);
 });
 
+await check("no stored label: a re-bound passkey's old owner is never called a passkey change", () => {
+  // Nothing writes Member.signerAddress in this PR (the deploy and adding an
+  // owner do, elsewhere), so the unset label is the state production has.
+  const j = orgSigners([M("anna", { passkeyAddress: A(2) })], [A(1)]);
+  assert.deepEqual(j.owners, [{ address: A(1), note: "added_outside_zold" }]);
+  assert.deepEqual(j.unknown, [A(1)]);
+  assert.deepEqual(j.members, [{ memberId: "anna", name: "anna", passkey: true, signerAddress: A(2), onChain: false }]);
+});
+
 await check("the label never makes a signer: the op view leaves a label-only match unnamed", () => {
   const rows = opSigners([M("anna", { passkeyAddress: A(2), label: A(1) })], [A(1)], []);
   assert.deepEqual(rows, [{ address: A(1), signed: false }]);
@@ -152,15 +163,15 @@ for (const p of ["anna", "bert", "vera", "nina", "olga"]) {
     addr[p] = passkeyOwnerAddressOfJwk(keys[p].jwk)!;
   }
   store.addUser({
-    id: `u_${p}`, name: p[0].toUpperCase() + p.slice(1), country: "DE", kycStatus: "approved",
+    id: `u_${p}`, ...(p === "bert" ? {} : { name: p[0].toUpperCase() + p.slice(1) }), country: "DE", kycStatus: "approved",
     ...(keys[p] ? { passkey: { credentialId: keys[p].credentialId, publicKey: { alg: "ES256", jwk: keys[p].jwk }, signCount: 0, rpId: "localhost", createdAt: now } } : {}),
     createdAt: now,
   } as any);
 }
-const member = (id: string, orgId: string, userId: string, role: string) =>
-  store.addMember({ id, orgId, userId, email: "", role, status: "active", invitedAt: now, acceptedAt: now } as any);
+const member = (id: string, orgId: string, userId: string, role: string, email = "") =>
+  store.addMember({ id, orgId, userId, email, role, status: "active", invitedAt: now, acceptedAt: now } as any);
 member("m_anna", "org_co", "u_anna", "owner");
-member("m_bert", "org_co", "u_bert", "owner"); // no passkey yet
+member("m_bert", "org_co", "u_bert", "owner", "bert@co.example"); // no passkey yet, no name
 member("m_vera", "org_co", "u_vera", "viewer");
 member("m_st", "org_st", "u_anna", "owner");
 member("m_pers", "org_pers", "u_anna", "owner");
@@ -222,6 +233,7 @@ await check("a viewer reads owners, threshold and each owner member's status", a
   assert.deepEqual(r.data.unknown, [addr.olga, addr.nina], "an owner of another org's Safe is unknown here");
   assert.ok(!JSON.stringify(r.data).includes("Olga") && !JSON.stringify(r.data).includes("m_olga"), "no other org's member is named");
   assert.deepEqual(r.data.members.map((m: any) => [m.memberId, m.passkey, m.onChain]), [["m_anna", true, true], ["m_bert", false, false]]);
+  assert.equal(r.data.members[1].name, "bert@co.example", "a member without a name is shown by email");
 });
 
 await check("a non-member gets a 404", async () => {

@@ -9,7 +9,7 @@
 import { Z, api, cap, day, deviceLib, ensureMe, esc, org, readHealth, reviewOn, ROLE_CAN, ROLE_WORD } from "./core.js";
 import { META, RENDER } from "./views.js";
 import { render } from "./shell.js";
-import { APP_LINKS, approvalView, deviceKeyView, isCompanyLogin, isCompanyOrg, isOwnCompanyOrg, loadAccess, loadOrgSafe } from "./access-model.js";
+import { APP_LINKS, approvalView, deviceKeyView, isCompanyLogin, isCompanyOrg, isOwnCompanyOrg, loadAccess, loadOrgSafe, ORG_RECOVERY } from "./access-model.js";
 
 const settingsBack = `<a class="z-btn z-btn--secondary" href="?view=settings" data-view-link="settings">${Z.icon("arrow_back")}<span>Settings</span></a>`;
 const appBtn = (label, href, variant = "secondary") =>
@@ -79,6 +79,8 @@ function orgSignersCard(s) {
     : "";
   return card("acc-sign", title, `${outside}${rows([["Account", addr(s.safeAddress)], ["Signatures needed", esc(s.needed)], ...s.owners.map(owner), ...waiting])}`);
 }
+
+const orgRecoveryCard = (yours) => card("acc-rec", "Recovery", ORG_RECOVERY.map((l) => `<p>${esc(l)}</p>`).join(""), yours);
 
 const guardianRow = (g) => {
   if (g.kind === "zoldenburg") return ["Zoldenburg UG", "Checks the person against Monerium’s identity check, and approves from a hardware wallet. Zold’s servers never hold that key."];
@@ -175,7 +177,8 @@ RENDER.access = async () => {
     api(`/api/orgs/${org.id}/members`).then((r) => r.members, () => null),
   ]);
   const pay = approvalsCard(members);
-  if (isCompanyOrg(org)) return { html: stack([pay, orgSignersCard(await loadOrgSafe(org.id, api))]), bind: retry };
+  const yours = `<a class="z-btn z-btn--secondary z-btn--sm" href="/app?from=business#security">Your sign-in and recovery${Z.icon("open_in_new")}<span class="z-sr"> (the app)</span></a>`;
+  if (isCompanyOrg(org)) return { html: stack([pay, orgSignersCard(await loadOrgSafe(org.id, api)), orgRecoveryCard(yours)]), bind: retry };
   // Every role reads the accounts, so a failed read is a failure, not a no.
   if (isCompanyLogin(me) && org.type === "business" && !acc) {
     return {
@@ -184,7 +187,6 @@ RENDER.access = async () => {
       bind: retry,
     };
   }
-  const yours = `<a class="z-btn z-btn--secondary z-btn--sm" href="/app?from=business#security">Your sign-in and recovery${Z.icon("open_in_new")}<span class="z-sr"> (the app)</span></a>`;
   if (org.type === "personal") return stack([pay, card("acc-member", "Sign-in and recovery", `<p class="zb-hint">Your sign-in and recovery are in the app.</p>`, yours)]);
   if (!isOwnCompanyOrg(me, org, acc)) {
     return stack([pay, card("acc-member", "Sign-in and recovery", `<p>Only the company’s own sign-in can see and change who can sign for the company’s account and who can recover it. Ask the person who holds it.</p>

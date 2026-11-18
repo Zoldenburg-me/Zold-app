@@ -50,7 +50,7 @@ export function signerMembersOf(orgId: string): SignerMember[] {
       memberId: m.id,
       role: m.role,
       status: m.status,
-      name: user?.name,
+      name: user?.name || m.name || m.email,
       hasUser: !!user,
       passkeyAddress: user ? ownerAddressOfMember(m) : null,
       ...(m.signerAddress ? { label: m.signerAddress } : {}),

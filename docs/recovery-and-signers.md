@@ -34,9 +34,12 @@ guardian built behind `TURNKEY_GUARDIANS`: `recovery-guardians-plan.md`.
   (`GET /api/orgs/:orgId/safe`, any member; join in `domain/org-signers.ts`,
   reads in `wallet/org-signers.ts`). Each on-chain owner is matched to an org
   member by the address their login passkey signs as, then by
-  `Member.signerAddress`, a label Zold writes when it adds the owner: it names
-  an old owner after a passkey change and never makes anyone a signer. An
-  owner no member matches is listed as added outside Zold. A failed read, or
+  `Member.signerAddress`, a label for the owner Zold added: it names an old
+  owner after a passkey change and never makes anyone a signer. Nothing on
+  main writes it yet (the deploy sets the first owner's, adding an owner sets
+  later ones); unset, that old owner is listed as added outside Zold, never
+  as a passkey change. An owner no member matches is listed as added outside
+  Zold. A failed read, or
   a threshold above the owner count, answers 502, never an empty owner set.
 - **Zoldenburg is a recovery guardian only by the user's choice**, made in
   Security (one passkey-signed op). Signup does not offer it. Deployment adds

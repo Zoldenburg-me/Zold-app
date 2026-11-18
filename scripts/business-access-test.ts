@@ -10,7 +10,8 @@
  * guardian Zold did not set up is still listed; a second owner at threshold
  * 2 says Zold cannot send; only active owners and admins approve, and
  * unread members are never "no one"; an unencrypted payment key says so; a
- * company org reads its own Safe's signers, and a failed read is not none.
+ * company org reads its own Safe's signers, and a failed read is not none;
+ * its Access page says what recovery is for the company's Safe.
  *
  * What this cannot show: the screen in a browser, or a real chain read.
  * Offline.
@@ -18,6 +19,7 @@
  *   npm run business:access:test
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -248,6 +250,14 @@ assert.equal(m.isCompanyLogin(null), false);
   assert.equal(failed.status, "unknown", "a failed read is not no signers");
   assert.equal(failed.error, "Couldn’t check the company’s Safe on chain");
   assert.equal((await m.loadOrgSafe("o1", async () => ({ state: "set_up", owners: [], threshold: 1 }))).status, "unknown", "no owners is a misread");
+
+  // Recovery is said for a company org, not dropped: the page promises it.
+  assert.match(m.ORG_RECOVERY[0], /hasn’t set up recovery for the company’s Safe/);
+  assert.match(m.ORG_RECOVERY.join(" "), /other owners can replace that signer in Safe\{Wallet\}/);
+  assert.match(m.ORG_RECOVERY.join(" "), /no one can recover the company’s Safe/);
+  const view = readFileSync(path.join(ROOT, "services/api/public/business/access.js"), "utf8");
+  const branch = view.split("\n").find((l) => l.includes("if (isCompanyOrg(org))")) || "";
+  assert.match(branch, /orgSignersCard\(.*orgRecoveryCard\(/, "a company org's Access page shows its signers and then recovery");
 }
 
 // ── whose company this is ───────────────────────────────────────────────────

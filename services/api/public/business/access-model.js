@@ -202,6 +202,15 @@ export function orgSafeView(s, error = null) {
   };
 }
 
+/** Recovery for a company org's Safe (company-owned-safe-design.md §3.4).
+ *  Zold adds no recovery helper to it yet, so this is a statement, not a read. */
+export const ORG_RECOVERY = [
+  "Zold hasn’t set up recovery for the company’s Safe.",
+  "If an owner loses their passkey, the other owners can replace that signer in Safe{Wallet}, with as many signatures as the Safe needs.",
+  "If fewer owners are left than the signatures it needs, no one can recover the company’s Safe.",
+  "Your own sign-in’s recovery is in the app. It doesn’t change who signs for the company’s Safe.",
+];
+
 export async function loadOrgSafe(orgId, api) {
   try {
     return orgSafeView(await api(`/api/orgs/${encodeURIComponent(orgId)}/safe`));
