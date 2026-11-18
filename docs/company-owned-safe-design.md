@@ -22,7 +22,7 @@ Owner-approved 2026-11-18 (PR #35). Code references checked against main 33ad7b2
 ## 2. Target model
 
 ### 2.1 Two kinds of business org
-- New field: `Organisation.entity: "company" | "sole_trader"`, chosen at org creation and locked once an EUR account has somewhere for money to land: a Safe address, a backer or an IBAN (`entityLocked`, `domain/org-entity.ts:24-25`).
+- New field: `Organisation.entity: "company" | "sole_trader"`, chosen at org creation and locked once money may have somewhere to land: a stored org Safe plan (a deployment may have landed before it was confirmed; #192, in review), or an EUR account with a Safe address, a backer or an IBAN (`entityLocked`, `domain/org-entity.ts`).
 - **sole_trader** (freelancer, no separate legal person): keeps today's model exactly. Their own Safe backs the org. No separation of funds is built; the owner said they don't care about commingling.
 - **company**: the org's EUR account sits on its own Safe, the **org Safe**, owned by the company. The rest of this note is about `company` orgs.
 - **No existing orgs to classify.** Zold is redeployed from zero (owner, 2026-11-18), so every business org picks its `entity` at creation (§6, Q3).
@@ -96,8 +96,8 @@ Zold is redeployed from zero (owner, 2026-11-18). No business account is backed 
 ## 5. Order of work
 1. The `entity` field, chosen at org creation. All existing behaviour stays for sole_trader.
 2. Pending-op multi-signature queue (§2.4) with tests, behind a flag. Built: #187, behind `ORG_SAFE_QUEUE_ENABLED`.
-3. Org Safe with **one owner** at threshold 1: the owner who opens the account (owner, 2026-11-18). The plan is stored on the org (#190) and the org-scoped read route and member → signer mapping exist (#193, §7.1(11)–(12)). Still to build: deploying it, and paying from it through the queue (step 2) from day one, never through the personal path and its `assertPasskeyAloneCanSign` check (`wallet/candide.ts:580`).
-   - **Deferred: more than one owner** (§2.3's membership-driven owner changes, the threshold choice in Q1, and Q6). Because payments already go through the queue, adding an owner later is the invite-and-passkey flow plus an add-owner op the current owners sign there (`addOwnerTransaction`, `wallet/safe-signers.ts:158`). Payments, the API and the threshold logic do not change.
+3. Org Safe with **one owner** at threshold 1: the owner who opens the account (owner, 2026-11-18). The plan is stored on the org (#190) and the org-scoped read route and member → signer mapping exist (#193, §7.1(11)–(12)). Deploying it at account opening is in review (#192). Still to build: paying from it through the queue (step 2) from day one, never through the personal path and its `assertPasskeyAloneCanSign` check (`wallet/candide.ts:580`).
+   - **Deferred: more than one owner**: §2.3's add/remove flow, applying Q1's default threshold and Q6's drop rule as answered. Because payments already go through the queue, adding an owner later is the invite-and-passkey flow plus an add-owner op the current owners sign there (`addOwnerTransaction`, `wallet/safe-signers.ts:158`). Payments, the API and the threshold logic do not change.
 4. Monerium link and IBAN for the org Safe (§3.3), issued at account opening.
 5. Org-scoped Zoldenburg recovery enrolment from the company's IBAN (§6, Q7).
 6. Company orgs never take the personal-backer path; AGENTS.md and docs changes.
