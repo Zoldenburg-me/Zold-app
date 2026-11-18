@@ -29,15 +29,15 @@ Cross-checked on 2026-11-18 against main 3a15b56 and Florentine's code map (boar
 - **company**: the org's EUR account sits on its own Safe, the **org Safe**, owned by the company. The rest of this note is about `company` orgs.
 - Existing business orgs fall into three buckets (§6, Q3):
   - a backer with a `corporate` profile → company;
-  - a backer with no profile, or one pending a check (`needs_check`, `monerium-profile.ts:213-219`; execution refuses them with `MONERIUM_PROFILE_UNVERIFIED`, `drafts.ts:501-507`) → ask the owner;
+  - a backer with no profile, a profile of the wrong kind, or one Monerium has not approved (`needs_check`, `monerium-profile.ts:213-224`; execution refuses them with `MONERIUM_PROFILE_UNVERIFIED`, `drafts.ts:501-507`) → ask the owner;
   - a gated wallet-tier row (a backer, no profile, no IBAN) → not a company account; nothing to migrate.
 
 ### 2.2 The org Safe
 - One Safe per company org, deployed by Zold at account opening, with the org as its holder of record.
 - **Owners on chain** = the passkey signers of members with the `owner` role, one WebAuthn signer per member. Zold adds a passkey to the Safe only for an `owner`; it never adds a payer, admin, accountant, viewer or AI agent. Payers (in practice accountants or bookkeepers) and admins prepare and queue payments as drafts; only owners sign.
   - Zold never holds an owner key. The AGENTS.md invariant "never add a co-owner that Zold holds" stays.
-- **The chain is the truth.** Zold reads the owner set and the threshold from the Safe on every visit, like `safe-signers` today, and never enforces a threshold of its own: a 1-of-1 Safe needs one signature, a 2-of-4 Safe needs two. A signature from anyone who is not an owner on chain does nothing, so Zold's roles decide only whose passkey Zold adds or removes. Owners added or removed outside Zold are shown as the chain has them.
-- **Recovery guardian**: the Zoldenburg guardian (hardware wallet) only. One guardian per Safe stays (`recovery/one-guardian.ts:1-24` refuses a second), and Turnkey guardians belong to people (`/users/:id/...` routes), so they aren't offered on an org Safe. How the guardian is armed for a company is open (Q7). See §3.4 for why Candide's module needs care.
+- **The chain is the truth.** Zold reads the owner set and the threshold from the Safe on every visit, like `safe-signers` today, and never enforces a threshold of its own: a 1-of-1 Safe needs one signature, a 2-of-4 Safe needs two. A signature from anyone who is not an owner on chain does nothing, so Zold's roles decide only whose passkey Zold adds or removes. Owners added or removed outside Zold (for example in Safe{Wallet}) are shown as the chain has them and flagged in the Access card.
+- **Recovery guardian**: the Zoldenburg guardian (hardware wallet) only. Zold deploys this Safe, so no Candide email/SMS guardian is added to it, and Turnkey guardians belong to people (`/users/:id/...` routes), so they aren't offered either. How the guardian is armed for a company is open (Q7). See §3.4 for why Candide's module needs care.
 
 ### 2.3 Membership drives the owner set, in one flow
 - **Granting a signing role** = invite accepted, passkey bound, then an `addOwnerWithThreshold` op signed by the current owners up to the threshold. The member becomes a signer only when the chain shows it.
@@ -59,7 +59,7 @@ Cross-checked on 2026-11-18 against main 3a15b56 and Florentine's code map (boar
   - anyone can see who signed and who hasn't.
 - The existing payment drafts (`routes/business/drafts.ts`) become the UI for this. Today they are different objects from a signature:
   - Review is a policy flag on the org, evaluated per draft (`domain/payment-review.ts:14-18`, applied at `drafts.ts:220,362,608`), not a signature.
-  - One draft is N transfers, one per line (`drafts.ts:520-533`). So owners either sign N ops, or one batched op whose digest covers every line. This note proposes one batched op per draft: one signature per owner per draft.
+  - One draft is N transfers, one per line (`drafts.ts:520-533`). So owners either sign N ops, or one batched op whose digest covers every line. This note proposes one batched op per draft (one Safe `multiSend`): one signature per owner per draft. Consequence: a draft becomes all-or-nothing. One reverting line reverts the whole draft, where today each transfer stands or falls alone and a failure partway leaves the draft `FAILED` (`drafts.ts:520-533`, `scripts/draft-batch-failure-test.ts:1-8`). The owner decides whether a draft pays all its lines or none.
   - Execution re-reads the backing profile and can refuse a draft that was already reviewed (`drafts.ts:500-513`), or hold it as `INVALID_DATA` when its facts drifted (`:528-529`). A signature already collected can't be withdrawn, so when an execution-time check fails after signing, the queued op is invalidated and its signatures discarded, the same shape as `INVALID_DATA`. The draft must be signed again.
 - On an org Safe the owners' signatures are the approval. Whether the off-chain review flag stays as an extra step before signing is part of Q1's follow-up.
 - The invariant "No debit without a user signature" still holds, at n-of-m. The API still disposes of nothing.
@@ -72,7 +72,7 @@ Cross-checked on 2026-11-18 against main 3a15b56 and Florentine's code map (boar
 - `Account.backedSince` (`types.ts:300`, read in `bookkeeping/writer.ts:64`) and `safeBooksStart` (`domain/safe-books.ts:15`) already model "from when this Safe's movements are this account's". The org Safe starts its own books at deployment, and the personal Safe's books for the org end at the cut-over instant. Statements show one continuous account, with the cut-over as a transfer between two addresses of the same account, not as income or expense.
 
 ### 3.2 Payment links, Shopify, crypto-in, `orgsBackedBy`
-- `orgsBackedBy(userId)` (`payment-requests.ts:192`) answers "is this Safe the org's?" by person. For company orgs it becomes "is this address the org Safe?" (`orgOfAddress`).
+- `orgsBackedBy(userId)` (`payment-requests.ts:192`, called at `:157,209,316,328,691`) answers "is this Safe the org's?" by person, for personal orgs as well (`docs/wallet-tier.md:65`). For company orgs it must also answer "is this address the org Safe?" (`orgOfAddress`): a dual answer during and after the migration, not a replacement.
 - Row 7 (Brief E) keeps working: it requires the deposit to land in the org's account. Today that means the backer's Safe; after migration, the org Safe.
 - The crypto-in watched addresses add the org Safe. The payment-page deposit address and the Shopify payee point at the org Safe.
 
@@ -89,14 +89,15 @@ Cross-checked on 2026-11-18 against main 3a15b56 and Florentine's code map (boar
 ### 3.5 AGENTS.md invariants to change (the owner sees each one)
 - "The passkey is the Safe's only owner. The plan type is `threshold: 1` only." This stays true for personal and sole_trader Safes. For an org Safe: members' passkeys are the only owners, at the org's threshold, and Zold holds none.
 - "Zold never collects its [second owner's] signature, so at threshold > 1 every op is refused." This stays true for personal Safes. Org Safes collect member signatures through the pending-op queue.
-- "Four eyes": for an org Safe at 2-of-n, the review is the second on-chain signature.
+- "Four eyes": on an org Safe the control is the owners' signatures at the on-chain threshold (§2.4). The off-chain review flag is a separate step; whether it stays before signing is open.
 - "An org can never lose its last owner": add "and its Safe never loses its last signer, and the threshold never exceeds the signers left".
-- New invariant: **membership and on-chain signer set change together**. Nobody is shown as removed while they can still sign.
+- New invariant: **Zold never changes membership or the on-chain signer set without the other.** Nobody is shown as removed while they can still sign. This covers Zold's own writes only: a change made elsewhere, such as an owner added in Safe{Wallet}, is shown as the chain has it and flagged in the Access card (§2.2).
 - "Gating is a read-time filter, never a write-time delete" (`AGENTS.md:132-135`) stays, and covers the removal: nothing is deleted while the chain still has the signer.
 
 ## 4. Migration of existing business accounts backed by a personal Safe
 For each `company` org with a `backingUserId`:
 1. Deploy the org Safe with the backer's passkey signer (if the backer is an `owner`), plus the other `owner` members as they bind. Threshold 1 at deployment; after that Zold follows whatever the chain has.
+   - A Safe can't be deployed with no owner (today's plan is one passkey owner at `threshold: 1`, `wallet/candide.ts:205-211`, `wallet/passkey-safe-plan.ts:25-31`). So an org migrates only once at least one `owner` has a bound passkey. Until then /admin shows "waiting for an owner to bind a passkey". Zold never deploys with a placeholder owner of its own; that would break §2.2.
 2. Link the org Safe to the corporate Monerium profile and get its IBAN (moved or new).
 3. Move the funds: the backer signs one transfer of the org's EURe from their personal Safe to the org Safe.
    - What counts as the org's: the backer's whole balance, or the org-attributed balance from `safe-books`? See Q5.
@@ -119,12 +120,12 @@ For each `company` org with a `backingUserId`:
 This is M2-sized. M1 is unaffected except that row 13, #105(b) and "backer offboarding" are now part of this work.
 
 ## 6. Questions for the owner
-1. **Who signs?** Is the `owner` role owner only, or owner and payer? Default threshold: 1-of-n, or 2-of-n once there are 2+ signers?
+1. **Default threshold**: 1-of-n, or 2-of-n once there are 2+ signers? (Who signs is settled: only owners.)
    - **Answered 2026-11-14 (board #118, events 733–734):** only owners sign; one signature is enough by default; Zold follows whatever threshold the Safe has on chain. Keep the five roles. Split `transfers.execute`: prepare and queue stays with payer and admin, signing is owner only. MD and CFO are owners, finance staff are payers, an AI agent is a payer without a signature. Per-member limits come later. This replaces "owner, and payer if the policy allows" in §2.2.
 2. **Sole traders**: today a business org can't be backed by a personal profile: `expectedProfileKind("business")` is `corporate` (`domain/monerium-profile.ts:45-47`) and `judgeProfile` refuses the other kind. So "sole_trader keeps today's model" holds only for a freelancer registered at Monerium as a company. May a sole trader use a corporate profile, or does Monerium need another profile kind for them? Otherwise sole-trader business orgs stay unfundable, as they are now.
 3. **Existing business orgs** without a confirmed corporate profile: the real set is backed rows with no profile or one pending a check (execution already refuses them), plus gated wallet-tier rows with nothing to migrate (§2.1). Treat the first group as sole_trader, or ask each one?
 4. **Monerium IBAN**: move the company's IBAN to the org Safe, or have support open a second Monerium profile for the company and issue a new IBAN there? A profile holds one IBAN (`routes/monerium.ts:715-731`). The move is built (`:856-1019`) but needs the company's own Monerium login and stops the old address receiving. A second profile has no self-serve path: support opens it by hand (`SEPARATE_ACCOUNT_CONTACT`, `domain/monerium-profile.ts:48-50`). That is an ops commitment, and customers' saved bank details change.
-5. **Migration funds**: move the backer's whole Safe balance, or only what the books attribute to the org since `backedSince`?
+5. **Migration funds**: move the backer's whole Safe balance, or only what the books attribute to the org since `backedSince`? The adoption dialog already promises the whole balance: the account "then belongs to X, with everything on it" (`business/actions.js:495-499`). Choosing "only what the books attribute" reverses that promise to every current backer, and the dialog copy changes with it.
 6. **Removal while a payment is pending**: if a removed member's signature is already on a queued op, drop it (safer) or let the op go through?
    - **Answered 2026-11-14 (board #118, event 735):** drop it. The queued op is signed again by the current owners; it follows the on-chain signer set.
 7. **Recovery for companies**: Zoldenburg is the only guardian. The 1 € enrolment that arms it is user-scoped and needs a user's IBAN (`routes/recovery-zoldenburg-enrolment.ts:53`); an org has no IBAN of its own. Keep the enrolment on the backer's IBAN (it survives the migration), or build an org-scoped enrolment, which is new work and a new money movement?
@@ -151,12 +152,18 @@ Still open: Q2, Q3, Q4, Q5, Q7.
 7. **The UI promises the personal model in writing**: "Only your passkey can approve its payments" (`business/actions.js:498`), "Only X sees this account's balance" (`business/home.js:129`), "Zold never collects another signer's" (`business/access.js:59`). Screens to change: `views.js:59-137`, `home.js:108-135,255-275`, `settings.js:54-70`, `access.js:41-66`, `access-model.js:36-53`, `send.js:30-60`. `access-model.js` is the tested seam for an org signer set.
 8. **Payers who aren't signers**: is every payment a signed pending op, or does the org Safe get an Allowance-module limit for payers? Q1's "per-member limits later" points at this.
    - **Answered 2026-11-18 (owner):** every payment is a signed pending op. A payer who isn't an owner is in practice an accountant or bookkeeper: they set payments up as drafts, nothing more. No Allowance module and no payer spending now; per-member limits are a later decision.
+9. **`backingMemberName` is an API field**, projected by `accountView` (`routes/orgs.ts:104-118`) and shown as the "Backing user" column in admin (`admin/monerium.js:63`). Both change meaning on migration.
+10. **The 403 refusals are user-visible copy.** The UI renders server refusals verbatim (`business/core.js:78-100`, `business/shell.js:112-126`), so the wording at `drafts.ts:485-490` and `crypto-sends.ts:401` must change with the model.
+11. **A member → signer address mapping is needed, and is now load-bearing.** The passkey owner address is derived, not stored (`passkeyAccountAddress`, `wallet/safe-signers.ts:87-89`). §2.2's "shown as the chain has them" and §2.3's "removal pending, can still sign" both join a member row to a chain owner, and the queue must record which member signed (Q6). Persist the mapping.
+12. **An org-scoped read route for owners and threshold.** Today's route reads the caller's own `passkeySafe` (`routes/safe-signers.ts:69-76`). The member list (`business/screens.js:193-205`) and the Access card (`business/access.js:41-66`) need the org Safe's owners, threshold and each member's signer status. No new permission key is needed: only `owner` signs, so `ROLE_CAN` (`business/core.js:211-217`) stays as it is.
+13. **The send form offers nothing for an org-Safe row.** `fundableAccounts` filters on `a.backingUserId` (`business/home-model.js:15`), pinned by `business-home-test.ts:26-33`.
 
 ### 7.4 Tests to write before the migration
 - Backer deactivation.
 - HTTP tests for the Safe-owner routes (`routes/safe-signers.ts:164-345`; only the pure builders are tested).
 - `move-iban` end to end.
 - The org-Safe variant of `drafts.ts:485`.
+- Suites that assert the backer shape and break silently: `business-home-test.ts:26-33` (unbacked accounts are unfundable), `pay-page-test.ts:468-474` (the public projection leaks no `backingUserId`), `merchant-links-test.ts:514-522` (the only test that clears `backingUserId`), `payment-review-test.ts:464-500` (deactivate and re-invite), `draft-execution-test.ts:190,224,323-330` (the funding pair and "reviewer cannot sign").
 - About 15 suites build "business org + EUR account + `backingUserId`" by hand; a fixture helper changes them in one place.
 
 ### 7.5 Docs to rewrite when it is built
