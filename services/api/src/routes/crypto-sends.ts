@@ -36,6 +36,7 @@ import { resolveEnsName, type EnsResolution } from "./ens.js";
 import { contactsById } from "./business/state.js";
 import { findDriftedLines } from "../domain/drafts.js";
 import { roleCan } from "../domain/roles.js";
+import { orgEntity } from "../domain/org-entity.js";
 import { can } from "../domain/plans.js";
 import { accountIsSpendable } from "../domain/accounts.js";
 import { wrap } from "./util.js";
@@ -398,7 +399,7 @@ export function createCryptoSendsRouter({ requireUserSession, ...deps }: CryptoS
         // What /execute checked, again: the org may lose the feature, the account may be frozen.
         const org = draft && store.findOrganisation(draft.orgId);
         const mayStill = !!org && can(org, "transfers.drafts").allowed && !!account && accountIsSpendable(account).ok;
-        if (drifted || !mayStill || account?.backingUserId !== send.userId || !member || !roleCan(member.role, "transfers.execute")) {
+        if (drifted || !mayStill || account?.backingUserId !== send.userId || !member || !roleCan(member.role, "transfers.sign", orgEntity(org!))) {
           store.updateCryptoSend(send.id, { state: "FAILED", error: drifted ? "the payee changed before the send" : "the sender may no longer send from this account" });
           pendingCryptoSends.delete(send.id);
           return res.status(409).json(drifted

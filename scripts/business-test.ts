@@ -106,11 +106,14 @@ check("every capability is returned, refused ones with reasons", () => {
 
 console.log("\nRoles");
 
-check("a viewer cannot send and an accountant cannot execute", () => {
-  assert.equal(roleCan("viewer", "transfers.execute"), false);
-  assert.equal(roleCan("accountant", "transfers.execute"), false);
+check("a viewer cannot send and an accountant cannot queue or sign", () => {
+  assert.equal(roleCan("viewer", "transfers.queue"), false);
+  assert.equal(roleCan("accountant", "transfers.queue"), false);
+  assert.equal(roleCan("accountant", "transfers.sign"), false);
   assert.equal(roleCan("accountant", "coa.manage"), true);
-  assert.equal(roleCan("payer", "transfers.execute"), true);
+  assert.equal(roleCan("payer", "transfers.queue"), true);
+  assert.equal(roleCan("payer", "transfers.sign"), true, "a sole trader's payer still sends");
+  assert.equal(roleCan("payer", "transfers.sign", "company"), false, "a company's payer queues; an owner signs");
   assert.equal(roleCan("payer", "coa.manage"), false, "money and books stay apart");
 });
 

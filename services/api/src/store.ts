@@ -1146,6 +1146,10 @@ export const store = {
   accountsOf(orgId: string) {
     return db.accounts.filter((a) => a.orgId === orgId);
   },
+  accountsAtAddress(address: string) {
+    const a = address.toLowerCase();
+    return db.accounts.filter((x) => x.address?.toLowerCase() === a);
+  },
   updateAccount(id: string, patch: Partial<Account>) {
     const a = db.accounts.find((x) => x.id === id);
     if (!a) throw new Error(`unknown account ${id}`);
