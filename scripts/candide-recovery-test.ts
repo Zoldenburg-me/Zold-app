@@ -317,6 +317,18 @@ try {
     throw new Error("API did not come up");
   };
   await waitForApi();
+  // server.ts runs the recovery sweep once 5 s after boot; RECOVERY_SWEEP_MS
+  // pushes every later run out of the test. That one run must land before a
+  // recovery enters its grace period, or it finalizes during the 2.5 s wait
+  // and the "nothing reached Candide" check counts the sweep, not the caller.
+  const bootSweepDue = Date.now() + 5_000;
+  const afterBootSweep = async () => {
+    await new Promise((r) => setTimeout(r, Math.max(0, bootSweepDue - Date.now())));
+    // A due timer runs in the timers phase before the loop polls again, so a
+    // request answered after the due time, then one more, means it has run.
+    await fetch(`${API}/api/health`);
+    await fetch(`${API}/api/health`);
+  };
 
   opKit = await operatorKit({ base: API, origin: API, rpId: "localhost", dataDir: path.dirname(process.env.TRANSF_DB_PATH!) });
   const health = await call("/api/health");
@@ -626,6 +638,7 @@ try {
     assert.equal(seen.creates.length, 0);
   });
 
+  await afterBootSweep();
   await t("the last channel verified: Candide signs, the recovery is created and executed, the grace period starts", async () => {
     const r = await rc(`/api/recovery/candide/${recovery.id}/otp`, { challengeId: recovery.candide.auths[1].challengeId, otp: OTP });
     assert.equal(r.status, 200, JSON.stringify(r.data));
