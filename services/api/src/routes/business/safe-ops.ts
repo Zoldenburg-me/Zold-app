@@ -15,6 +15,8 @@ import { bufToB64url } from "../../webauthn.js";
 import { checkOpAssertion } from "../../http/passkey-assertion.js";
 import { canCancelSafeOp, signerRefusal, type SafeChainView } from "../../domain/safe-op-queue.js";
 import { passkeyOwnerAddressOfJwk } from "../../wallet/safe-signers.js";
+import { opSigners } from "../../domain/org-signers.js";
+import { signerMembersOf } from "../../wallet/org-signers.js";
 import { webauthnOwnerFromJwk, webauthnOwnerToStore } from "../../wallet/candide.js";
 import {
   SafeOpRefusal,
@@ -54,24 +56,11 @@ export function publicSafeOp(op: PendingSafeOp) {
 }
 
 /** The live part: the Safe's owners as the chain has them, matched to the
- *  org's owner members, and the threshold. */
+ *  org's owner members (domain/org-signers.ts), and the threshold. */
 function signerView(ctx: OrgContext, op: PendingSafeOp, view: SafeChainView) {
-  const byAddress = new Map<string, { memberId: string; name?: string }>();
-  for (const m of store.membersOf(ctx.org.id)) {
-    if (m.status !== "active" || m.role !== "owner") continue;
-    const user = userOf(m);
-    const jwk = user?.passkey?.publicKey?.jwk;
-    const address = jwk ? passkeyOwnerAddressOfJwk(jwk) : null;
-    if (address) byAddress.set(address.toLowerCase(), { memberId: m.id, name: user?.name });
-  }
-  const signed = new Set(op.signatures.map((s) => s.ownerAddress.toLowerCase()));
   return {
     threshold: view.threshold,
-    owners: view.owners.map((address) => ({
-      address,
-      ...(byAddress.get(address.toLowerCase()) ?? {}),
-      signed: signed.has(address.toLowerCase()),
-    })),
+    owners: opSigners(signerMembersOf(ctx.org.id), view.owners, op.signatures.map((s) => s.ownerAddress)),
   };
 }
 

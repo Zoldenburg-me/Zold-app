@@ -2,8 +2,8 @@
  * /api/orgs/:orgId: the business surface, composed from route modules.
  *
  * One router per subject, mounted on the same path: drafts, incoming invoices,
- * issued invoices, bookkeeping, integrations, payment links and the org
- * Safe's signature queue. They share the derived-state helpers in
+ * issued invoices, bookkeeping, integrations, payment links, the org
+ * Safe's signature queue and its owners. They share the derived-state helpers in
  * ./business/state.ts and the request helpers in ./business/shared.ts, so the cross-cutting rules (four eyes, INVALID_DATA,
  * gating as a read-time filter) each live in one place.
  *
@@ -26,6 +26,7 @@ import { createIntegrationRoutes } from "./business/integrations.js";
 import { createPaymentLinkRoutes } from "./business/payment-links.js";
 import { createOrgPaymentPageRoutes } from "./business/org-payment-page.js";
 import { createSafeOpRoutes } from "./business/safe-ops.js";
+import { createOrgSafeRoutes } from "./business/org-safe.js";
 import type { TransferFactory } from "./business/shared.js";
 
 export type { TransferFactory } from "./business/shared.js";
@@ -50,6 +51,7 @@ export function createBusinessRouter(
   r.use(createPaymentLinkRoutes(deps));
   r.use(createOrgPaymentPageRoutes(deps));
   r.use(createSafeOpRoutes(deps));
+  r.use(createOrgSafeRoutes(deps));
 
   return r;
 }
