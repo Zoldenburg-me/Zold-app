@@ -34,6 +34,8 @@ import type { MoneriumOrderLike } from "../documents.js";
 import { mergeStatementLines, projectStatementLines, type StatementInputs } from "./statement.js";
 import { describeCause } from "../http/log-cause.js";
 import { withoutConversionOutputs } from "../transfers/activity.js";
+import type { MoneyInHolder } from "./money-in.js";
+import type { Account } from "../domain/types.js";
 
 /**
  * Rule 2. No dex, LI.FI, RFQ or CoW swap has executed with real money, so a
@@ -78,6 +80,7 @@ interface Rows {
   depositsOf(userId: string): CryptoDeposit[];
   cryptoSendsOf(userId: string): CryptoSend[];
   issueOrdersOf(userId: string): MoneriumIssueRecord[];
+  issueOrdersOfAccount(accountId: string): MoneriumIssueRecord[];
   sweepsOf(userId: string): ConversionSweep[];
   paymentRequestsOf(userId: string): PaymentRequest[];
   invoicesOf(orgId: string): Invoice[];
@@ -93,6 +96,7 @@ const storeRows: Rows = {
   depositsOf: (id) => withoutConversionOutputs(store.cryptoDeposits.filter((d) => d.userId === id)),
   cryptoSendsOf: (id) => store.cryptoSends.filter((c) => c.userId === id),
   issueOrdersOf: (id) => store.moneriumIssueOrders.filter((o) => o.userId === id),
+  issueOrdersOfAccount: (id) => store.moneriumIssueOrders.filter((o) => o.accountId === id),
   sweepsOf: (id) => store.conversionSweeps.filter((s) => s.userId === id),
   paymentRequestsOf: (id) => store.paymentRequestsForUser(id),
   invoicesOf: (orgId) => store.invoicesOf(orgId),
@@ -120,6 +124,7 @@ function groupedRows(): Rows {
   // A conversion's EURe output is not income (transfers/activity.ts).
   const deposits = groupBy(withoutConversionOutputs(store.cryptoDeposits), (d) => d.userId);
   const issueOrders = groupBy(store.moneriumIssueOrders, (o) => o.userId);
+  const accountIssueOrders = groupBy(store.moneriumIssueOrders, (o) => o.accountId);
   const cryptoSends = groupBy(store.cryptoSends, (c) => c.userId);
   const sweeps = groupBy(store.conversionSweeps, (s) => s.userId);
   const paymentRequests = groupBy(store.paymentRequests, (r) => r.userId);
@@ -132,6 +137,7 @@ function groupedRows(): Rows {
     depositsOf: (id) => deposits.get(id) ?? [],
     cryptoSendsOf: (id) => cryptoSends.get(id) ?? [],
     issueOrdersOf: (id) => issueOrders.get(id) ?? [],
+    issueOrdersOfAccount: (id) => accountIssueOrders.get(id) ?? [],
     sweepsOf: (id) => sweeps.get(id) ?? [],
     paymentRequestsOf: (id) => paymentRequests.get(id) ?? [],
     invoicesOf: (orgId) => invoices.get(orgId) ?? [],
@@ -184,7 +190,32 @@ function inputsFor(user: User, rows: Rows): StatementInputs | undefined {
 export function writeStatementLinesFor(user: User, rows: Rows = storeRows): { added: number; updated: number } {
   const inp = inputsFor(user, rows);
   if (!inp) return { added: 0, updated: 0 };
-  const since = booksFor(user.id)?.since;
+  return writeProjected(inp, booksFor(user.id)?.since, rows);
+}
+
+/**
+ * A company account on its own Safe: no person's movements are its, so its
+ * lines are the bank credits booked to the account itself. Paying out from
+ * it is not built, so there is nothing else to project.
+ */
+export function writeAccountStatementLines(account: Account, rows: Rows = storeRows): { added: number; updated: number } {
+  const inp: StatementInputs = {
+    orgId: account.orgId,
+    accountId: account.id,
+    safeAddress: account.address!,
+    timeZone: zoneOf(account.orgId),
+    transfers: [],
+    deposits: [],
+    issueOrders: rows.issueOrdersOfAccount(account.id),
+    sweeps: [],
+    invoices: rows.invoicesOf(account.orgId),
+    paymentRequests: [],
+    swapsHaveExecuted: rows.swapsHaveExecuted(),
+  };
+  return writeProjected(inp, undefined, rows);
+}
+
+function writeProjected(inp: StatementInputs, since: string | undefined, rows: Rows): { added: number; updated: number } {
   // Nothing from before the Safe's books start: an imported Safe's earlier life is not the account's.
   const projected = projectStatementLines(inp).filter((e) => !since || e.at >= since);
   const existing = rows.ledgerOf(inp.orgId);
@@ -221,6 +252,16 @@ export function writeStatementLines(): { added: number; updated: number } {
           console.error(`bookkeeping: could not write statement lines for ${u.id}: ${describeCause(err)}`);
         }
       }
+      for (const a of store.accounts) {
+        if (!rows.issueOrdersOfAccount(a.id).length || !a.address) continue;
+        try {
+          const r = writeAccountStatementLines(a, rows);
+          added += r.added;
+          updated += r.updated;
+        } catch (err: any) {
+          console.error(`bookkeeping: could not write statement lines for account ${a.id}: ${describeCause(err)}`);
+        }
+      }
     });
     if (added || updated) console.log(`bookkeeping: ${added} statement line(s) added, ${updated} refreshed`);
     return { added, updated };
@@ -234,7 +275,7 @@ export function writeStatementLines(): { added: number; updated: number } {
  * issue order the poller sees on our chain, so an order mirrored before this
  * table existed still gets its line on the next poll. Idempotent on the id.
  */
-export function noteMoneriumIssue(order: MoneriumOrderLike, user: User): MoneriumIssueRecord | undefined {
+export function noteMoneriumIssue(order: MoneriumOrderLike, holder: MoneyInHolder): MoneriumIssueRecord | undefined {
   const amountEur = Number(order.amount);
   if (!(amountEur > 0)) return undefined;
   const d = order.counterpart?.details ?? {};
@@ -242,7 +283,7 @@ export function noteMoneriumIssue(order: MoneriumOrderLike, user: User): Moneriu
   const processedAt = order.meta?.processedAt ?? order.meta?.placedAt ?? order.placedAt ?? order.createdAt ?? new Date().toISOString();
   return store.recordMoneriumIssue({
     orderId: order.id,
-    userId: user.id,
+    ...(holder.kind === "user" ? { userId: holder.user.id } : { accountId: holder.account.id }),
     amountEur,
     ...(name ? { counterpartyName: name } : {}),
     ...(order.counterpart?.identifier?.iban ? { counterpartyIban: order.counterpart.identifier.iban } : {}),
