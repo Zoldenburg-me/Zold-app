@@ -48,6 +48,7 @@
     "safe-op-queue:test": "tsx scripts/safe-op-queue-test.ts",
     "org-safe-plan:test": "tsx scripts/org-safe-plan-test.ts",
     "org-signers:test": "tsx scripts/org-signers-test.ts",
+    "role-table:test": "tsx scripts/role-table-test.ts",
     "safe-import:test": "tsx scripts/safe-import-test.ts",
     "safe:import-tx": "tsx scripts/safe-import-owner-tx.ts",
     "safe-import:ui:test": "tsx scripts/safe-import-ui-test.ts",

@@ -136,7 +136,7 @@ export function signersView(s) {
  * Who approves payments, from GET /api/orgs/:id/members (every role reads
  * it). Only active members count: an invite or a removed member approves
  * nothing and is no owner. `canApprove(role)` is the console's role table
- * (core.js ROLE_CAN). Unread members (null) is null, never "no approvers".
+ * (role-table.js). Unread members (null) is null, never "no approvers".
  */
 export function approvalView(members, canApprove) {
   if (!Array.isArray(members)) return null;

@@ -1521,7 +1521,7 @@ Settings (`config/checkout-service.ts`; a bad webhook URL or secret refuses star
 | `POST /:orgId/drafts/:d/submit` (review policy on, or C(transfers.approvals)) | Submit for review. |
 | `POST /:orgId/drafts/:d/review` (PENDING_REVIEW, four eyes) | Approve or reject. No plan check: a waiting draft stays reviewable after a downgrade. |
 | `POST /:orgId/drafts/:d/cancel` (P(drafts.create) or P(drafts.review)) | Cancel before execution starts: kept as CANCELLED, invoices it was paying are released. 409 from EXECUTING on. |
-| `POST /:orgId/drafts/:d/execute` (P(transfers.execute), backing user) | Execute. Sends only REVIEWED while the review policy is on; refused if the draft was written while it was being planned. |
+| `POST /:orgId/drafts/:d/execute` (P(transfers.queue), backing user) | Execute. Sends only REVIEWED while the review policy is on; refused if the draft was written while it was being planned. |
 | `POST /:orgId/drafts/import-csv` (C(transfers.bulkCsv)) | Parse CSV lines. |
 
 **Invoices** (`/orgs`)

@@ -205,6 +205,32 @@ try {
     assert.equal(store.findCryptoSend(cs.cryptoSendId)!.state, "FAILED");
   });
 
+  await t("transfers.sign: a payer who backs a sole trader's account still sends; on a company org only an owner signs", async () => {
+    const org = store.findOrganisation("org_1")!;
+    const m = store.membersOf("org_1").find((r) => r.userId === "u_owner")!;
+    m.role = "payer";
+    try {
+      const id = await approvedRun();
+      const x = await call("POST", `/orgs/org_1/drafts/${id}/execute`, "u_owner");
+      assert.equal(x.status, 201, JSON.stringify(x.data));
+      const [cs] = x.data.cryptoSends;
+      // A company account is never backed by a member (design note §4); the
+      // sign check refuses it anyway, after the queue gate let the payer in.
+      org.entity = "company";
+      const s = await call("POST", `/crypto-sends/${cs.cryptoSendId}/authorize`, "u_owner", { executionAssertion: await passkey.assert(cs.safeExecution.challenge) });
+      assert.equal(s.status, 409, JSON.stringify(s.data));
+      assert.equal(s.data.code, "NOT_SENDER");
+      delete org.entity;
+      const id2 = await approvedRun();
+      const [cs2] = (await call("POST", `/orgs/org_1/drafts/${id2}/execute`, "u_owner")).data.cryptoSends;
+      const ok2 = await call("POST", `/crypto-sends/${cs2.cryptoSendId}/authorize`, "u_owner", { executionAssertion: await passkey.assert(cs2.safeExecution.challenge) });
+      assert.equal(ok2.status, 200, JSON.stringify(ok2.data));
+    } finally {
+      m.role = "owner";
+      delete org.entity;
+    }
+  });
+
   await t("the crypto-send checks run: a sanctioned address is refused and the run is not claimed", async () => {
     const id = await approvedRun();
     sanctioned.add(ALICE);

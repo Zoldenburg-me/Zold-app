@@ -6,7 +6,7 @@
  * on a Business plan could send money because the feature "is included".
  */
 
-import type { Role } from "./types.js";
+import type { OrgEntity, Role } from "./types.js";
 
 export type Permission =
   | "org.read"
@@ -27,7 +27,12 @@ export type Permission =
   | "drafts.create"
   | "drafts.review"
   | "transfers.read"
-  | "transfers.execute"
+  /** Start a reviewed draft and put its operation in the queue. */
+  | "transfers.queue"
+  /** Sign the operation with your passkey. On a company org this is the role
+   *  half only: the passkey must also be an owner on the Safe
+   *  (signerRefusal, domain/safe-op-queue.ts). */
+  | "transfers.sign"
   | "invoices.read"
   | "invoices.manage"
   | "ledger.read"
@@ -64,7 +69,8 @@ const PAYER: Permission[] = [
   ...VIEWER,
   "contacts.manage",
   "drafts.create",
-  "transfers.execute",
+  "transfers.queue",
+  "transfers.sign",
   "invoices.manage",
 ];
 
@@ -93,8 +99,21 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   owner: OWNER,
 };
 
-export function roleCan(role: Role, permission: Permission): boolean {
-  return ROLE_PERMISSIONS[role]?.includes(permission) ?? false;
+/**
+ * A company's Safe is signed by its owners only (design note §2.2, Q1):
+ * payers and admins draft and queue, and an AI agent is a payer, so it never
+ * signs. Everything else is the table above. Personal and sole_trader orgs
+ * keep that table: there the payer's own Safe pays, so queue and sign are one
+ * step.
+ */
+export const COMPANY_ROLE_PERMISSIONS: Record<Role, Permission[]> = Object.fromEntries(
+  Object.entries(ROLE_PERMISSIONS).map(([role, ps]) => [role, role === "owner" ? ps : ps.filter((p) => p !== "transfers.sign")]),
+) as Record<Role, Permission[]>;
+
+/** `entity` is orgEntity(org): only "company" chooses the company table. */
+export function roleCan(role: Role, permission: Permission, entity?: OrgEntity): boolean {
+  const table = entity === "company" ? COMPANY_ROLE_PERMISSIONS : ROLE_PERMISSIONS;
+  return table[role]?.includes(permission) ?? false;
 }
 
 /**
