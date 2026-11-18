@@ -27,6 +27,7 @@ import { buildTransferFromQuote } from "../transfers/build.js";
 import { userTransfer } from "../transfers/user-transfer.js";
 import { buildActivity } from "../transfers/activity.js";
 import { passkeySafeChallenge } from "../wallet/passkey-safe-plan.js";
+import { isCompanySafe } from "../wallet/org-signers.js";
 import { safeMessageHash, signMessageAsPasskeySafe } from "../wallet/candide.js";
 import { authorizerBindingTypedData } from "../chain.js";
 import { b64urlToBuf, consumeChallenge, issueChallenge, stepUpBinding, verifyAssertionForChallenge } from "../webauthn.js";
@@ -316,6 +317,14 @@ export function createTransferRouter(deps: TransferDeps) {
         }
       }
       let user = store.findUser(transfer.userId)!;
+      // A company's Safe is signed by its owners in the org's queue, never by
+      // one account's passkey here: refused before any assertion is read.
+      if (isCompanySafe(user.address)) {
+        return res.status(403).json({
+          code: "COMPANY_SAFE",
+          error: "This Safe belongs to a company. Its owners sign its payments in the company's queue, not here.",
+        });
+      }
       if (!requireKycApproved(user, res)) return;
       // User-signed execution: when creation prepared one, the transfer can
       // only debit through the UserOperation the passkey approves.

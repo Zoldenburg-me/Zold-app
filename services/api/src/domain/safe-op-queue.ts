@@ -72,9 +72,10 @@ export function checkAgainstChain(op: PendingSafeOp, chain: SafeChainView, now =
   };
 }
 
-/** Who may put an op in the queue: anyone who may draft a payment. */
+/** Who may put an op in the queue: payers, admins and owners. An accountant
+ *  drafts; it does not queue. Only a company org has a queue. */
 export function canQueueSafeOp(role: Member["role"]): boolean {
-  return roleCan(role, "drafts.create");
+  return roleCan(role, "transfers.queue", "company");
 }
 
 /**
@@ -86,7 +87,7 @@ export function signerRefusal(
   ownerAddress: `0x${string}` | null,
   chainOwners: `0x${string}`[],
 ): { status: number; code: string; error: string } | undefined {
-  if (member.status !== "active" || member.role !== "owner") {
+  if (member.status !== "active" || !roleCan(member.role, "transfers.sign", "company")) {
     return { status: 403, code: "NOT_A_SIGNER", error: `Only an owner signs this account's operations; your role (${member.role}) drafts and queues them.` };
   }
   if (!ownerAddress) {

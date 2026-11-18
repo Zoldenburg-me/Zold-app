@@ -426,7 +426,9 @@ export function createDraftRoutes(
   r.post("/:orgId/drafts/:draftId/execute", wrap(async (req, res) => {
     const ctx = ctxOf(req, res);
     if (!ctx) return;
-    if (!requirePermission(ctx, res, "transfers.execute")) return;
+    // Queue, not sign: on a company org a payer starts the run and an owner
+    // signs it. Elsewhere the payer's own Safe pays and the table gives both.
+    if (!requirePermission(ctx, res, "transfers.queue")) return;
 
     const draft = store.findDraft(String(req.params.draftId));
     if (!draft || draft.orgId !== ctx.org.id) {

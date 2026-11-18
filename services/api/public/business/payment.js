@@ -69,8 +69,8 @@ function approvalsCard(run) {
   // The same actions, on the same conditions, as the run's row in Approvals (screens.js apRow).
   const btn = (act, label) => `<button type="button" class="z-btn z-btn--primary" data-act="${act}" data-id="${esc(run.id)}">${label}</button>`;
   const act = run.state === "PENDING_REVIEW" && may.allowed ? btn("draft-detail", "Review")
-    : run.state === "REVIEWED" && roleCan(org.role, "send") ? btn("exec-draft", "Send")
-    : run.state === "DRAFT" && roleCan(org.role, "propose") ? (reviewOn() ? btn("submit-draft", "Submit") : roleCan(org.role, "send") ? btn("exec-draft", "Send") : "")
+    : run.state === "REVIEWED" && roleCan(org.role, "sign") ? btn("exec-draft", "Send")
+    : run.state === "DRAFT" && roleCan(org.role, "propose") ? (reviewOn() ? btn("submit-draft", "Submit") : roleCan(org.role, "sign") ? btn("exec-draft", "Send") : "")
     : run.state === "PENDING_REVIEW" ? `<p class="zb-hint">${esc(may.reason)}</p>` : "";
   return `<section class="z-card zb-side-card" aria-labelledby="pd-appr"><div class="zb-side-card__head"><h2 id="pd-appr">Approvals</h2><span class="z-fig">${a.have} of ${a.needed}</span></div>
     ${a.needed > 1 ? '<p class="zb-hint">Whoever drafts a payment can’t approve it.</p>' : ""}

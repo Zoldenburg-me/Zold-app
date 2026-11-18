@@ -643,7 +643,9 @@ export const ACTIONS = {
   },
   invite: () => {
     const roles = Object.keys(ROLE_WORD).filter((r) => r !== "owner" || org.role === "owner");
-    const says = { viewer: "Viewer: sees everything, changes nothing", accountant: "Accountant: books and exports, no money", payer: "Payer: proposes and sends", admin: "Admin: proposes, approves, sends, invites", owner: "Owner: everything, including turning review off" };
+    const says = org.entity === "company"
+      ? { viewer: "Viewer: sees everything, changes nothing", accountant: "Accountant: books and exports, no money", payer: "Payer: proposes payments; an owner signs them", admin: "Admin: proposes, approves, invites; an owner signs", owner: "Owner: everything, including signing payments and turning review off" }
+      : { viewer: "Viewer: sees everything, changes nothing", accountant: "Accountant: books and exports, no money", payer: "Payer: proposes and sends", admin: "Admin: proposes, approves, sends, invites", owner: "Owner: everything, including turning review off" };
     dialog("Invite a member",
       `<p class="desc">Send the link yourself. Zold doesn’t send emails. It works once and ends in 3 days.</p>
        ${field("d-email", "Their email", 'type="email" spellcheck="false" autocomplete="email" placeholder="sara@lindner-holzbau.de…"')}

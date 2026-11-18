@@ -6,7 +6,7 @@
  * only in its own company; another member is told who does. Signer and
  * recovery changes open the app's own screen on the same sign-in (APP_LINKS).
  */
-import { Z, api, cap, day, deviceLib, ensureMe, esc, org, readHealth, reviewOn, ROLE_CAN, ROLE_WORD } from "./core.js";
+import { Z, api, cap, day, deviceLib, ensureMe, esc, org, readHealth, reviewOn, roleCan, ROLE_WORD } from "./core.js";
 import { META, RENDER } from "./views.js";
 import { render } from "./shell.js";
 import { APP_LINKS, approvalView, deviceKeyView, isCompanyLogin, isCompanyOrg, isOwnCompanyOrg, loadAccess, loadOrgSafe, ORG_RECOVERY } from "./access-model.js";
@@ -118,14 +118,15 @@ function recoveryCard(r) {
   return card("acc-rec", "Recovery", `${strangers(r.guardians)}<p class="zb-hint">If the sign-in key is lost, a recovery helper can move the account to a new one, after a waiting period in which this sign-in can stop it.</p>${guardianRows(r.guardians)}`, manage);
 }
 
-/* What each role may do with a payment, said from ROLE_CAN, the table the
-   rest of the console reads. */
-const VERBS = [["propose", "drafts", "draft"], ["approve", "approves", "approve"], ["send", "sends", "send"]];
+/* What each role may do with a payment, said from roleCan, the table the
+   rest of the console reads. A company's owners sign; elsewhere the payer sends. */
+const verbs = () => [["propose", "drafts", "draft"], ["approve", "approves", "approve"],
+  org?.entity === "company" ? ["sign", "signs", "sign"] : ["sign", "sends", "send"]];
 const joined = (ws, conj) => (ws.length > 1 ? `${ws.slice(0, -1).join(", ")} ${conj} ${ws.at(-1)}` : ws[0] || "");
 function roleSentence(role) {
-  const can = ROLE_CAN[role] || {};
-  const yes = joined(VERBS.filter(([k]) => can[k]).map(([, does]) => does), "and");
-  const no = joined(VERBS.filter(([k]) => !can[k]).map(([, , verb]) => verb), "or");
+  const vs = verbs();
+  const yes = joined(vs.filter(([k]) => roleCan(role, k)).map(([, does]) => does), "and");
+  const no = joined(vs.filter(([k]) => !roleCan(role, k)).map(([, , verb]) => verb), "or");
   const first = yes ? `${yes.charAt(0).toUpperCase()}${yes.slice(1)} payments.` : "Sees payments.";
   return `${first}${no ? ` Can’t ${no}.` : ""}`;
 }
@@ -136,7 +137,7 @@ function approvalsCard(members) {
   const on = reviewOn();
   const offered = cap("transfers.approvals").allowed;
   const pr = org.paymentReview || {};
-  const v = approvalView(members, (r) => Boolean(ROLE_CAN[r]?.approve));
+  const v = approvalView(members, (r) => roleCan(r, "approve"));
   const second = on
     ? `<b>On.</b> A payment drafted in Zold Business isn’t sent until someone other than its drafter approves it, whatever their role. Editing someone’s draft makes you its drafter. This is a Zold rule: Zold checks it, the account on chain does not.`
     : offered

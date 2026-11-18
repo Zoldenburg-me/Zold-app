@@ -12,7 +12,7 @@
  *   executed, an invoice Paid only when the API says so.
  */
 import {
-  $, Z, api, cap, day, esc, eur, gateHtml, maskIban, me, org, plain, reviewOn, roleCan, ROLE_CAN, ROLE_WORD, toast, view, when, ymd, usdSymbol,
+  $, Z, api, cap, day, esc, eur, gateHtml, maskIban, me, org, plain, reviewOn, roleCan, ROLE_WORD, toast, view, when, ymd, usdSymbol,
 } from "./core.js";
 import { META, RENDER, invoiceActions, linkBtn, primary, secondary, settlementRows, shortTx, table } from "./views.js";
 import { runLink } from "./payment.js";
@@ -93,11 +93,11 @@ function apRow(d) {
     : d.state === "PENDING_REVIEW" ? (may.allowed ? "you" : "an owner or admin") : "";
   let act = "";
   if (d.state === "PENDING_REVIEW" && may.allowed) act = `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="draft-detail" data-id="${esc(d.id)}">Review<span class="z-sr">: ${esc(draftTitle(d))}</span></button>`;
-  if (d.state === "REVIEWED" && roleCan(org.role, "send")) act = `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="exec-draft" data-id="${esc(d.id)}">Send<span class="z-sr">: ${esc(draftTitle(d))}</span></button>`;
+  if (d.state === "REVIEWED" && roleCan(org.role, "sign")) act = `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="exec-draft" data-id="${esc(d.id)}">Send<span class="z-sr">: ${esc(draftTitle(d))}</span></button>`;
   if (d.state === "DRAFT" && roleCan(org.role, "propose")) {
     act = reviewOn()
       ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="submit-draft" data-id="${esc(d.id)}">Submit<span class="z-sr">: ${esc(draftTitle(d))}</span></button>`
-      : roleCan(org.role, "send") ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="exec-draft" data-id="${esc(d.id)}">Send<span class="z-sr">: ${esc(draftTitle(d))}</span></button>` : "";
+      : roleCan(org.role, "sign") ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="exec-draft" data-id="${esc(d.id)}">Send<span class="z-sr">: ${esc(draftTitle(d))}</span></button>` : "";
   }
   const cap1 = (s) => s.charAt(0).toUpperCase() + s.slice(1);
   return `<tr>
@@ -183,6 +183,8 @@ META.members = () => ({
   actions: roleCan(org.role, "members") ? primary("Invite member", 'data-act="invite"', "person_add") : "",
 });
 
+/* A company's owners sign its payments; elsewhere the payer sends them. */
+const CHIPS = () => [["propose", "Propose"], ["approve", "Approve"], ["sign", org.entity === "company" ? "Sign" : "Send"]];
 RENDER.members = async () => {
   if (!cap("members.manage").allowed) return gateHtml("members.manage");
   const list = await loadMembers({ rethrow: true });
@@ -195,8 +197,7 @@ RENDER.members = async () => {
     const role = !you && m.status !== "deactivated"
       ? `<label class="z-sr" for="role-${esc(m.id)}">Role of ${esc(name)}</label><select class="zb-inline" id="role-${esc(m.id)}" data-role-of="${esc(m.id)}" data-was="${esc(m.role)}"${(m.role === "owner" && !iAmOwner) || !mayManage ? " disabled" : ""}>${roles.map((r) => `<option value="${r}"${r === m.role ? " selected" : ""}>${ROLE_WORD[r]}</option>`).join("")}</select>`
       : esc(ROLE_WORD[m.role] || m.role);
-    const can = ROLE_CAN[m.role] || {};
-    const chips = [["propose", "Propose"], ["approve", "Approve"], ["send", "Send"]].map(([k, w]) => `<span class="zb-chip${can[k] ? "" : " zb-chip--off"}">${w}<span class="z-sr">${can[k] ? "" : ": no"}</span></span>`).join("");
+    const chips = CHIPS().map(([k, w]) => `<span class="zb-chip${roleCan(m.role, k) ? "" : " zb-chip--off"}">${w}<span class="z-sr">${roleCan(m.role, k) ? "" : ": no"}</span></span>`).join("");
     const status = m.status === "active" ? Z.tag("Active") : m.status === "invited" ? Z.tag("Waiting") : Z.tag("Off");
     const act = you || !mayManage ? "" : m.status === "active"
       ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="deactivate" data-id="${esc(m.id)}">Remove<span class="z-sr">: ${esc(name)}</span></button>`
@@ -216,8 +217,7 @@ RENDER.members = async () => {
             sel.dataset.was = sel.value;
             Z.announce(`Role changed to ${ROLE_WORD[sel.value]}.`);
             const chips = sel.closest("tr").querySelector(".zb-chips");
-            const can = ROLE_CAN[sel.value] || {};
-            chips.querySelectorAll(".zb-chip").forEach((c, i) => c.classList.toggle("zb-chip--off", !can[["propose", "approve", "send"][i]]));
+            chips.querySelectorAll(".zb-chip").forEach((c, i) => c.classList.toggle("zb-chip--off", !roleCan(sel.value, CHIPS()[i][0])));
           } catch (e) {
             sel.value = sel.dataset.was;
             toast(plain(e.message), true);

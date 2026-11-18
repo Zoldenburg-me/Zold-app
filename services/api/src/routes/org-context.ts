@@ -63,7 +63,7 @@ export function requirePermission(
   res: express.Response,
   permission: Permission,
 ): boolean {
-  if (roleCan(ctx.member.role, permission)) return true;
+  if (roleCan(ctx.member.role, permission, orgEntity(ctx.org))) return true;
   res.status(403).json({
     error: `Your role (${ctx.member.role}) cannot do this.`,
     role: ctx.member.role,

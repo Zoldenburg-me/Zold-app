@@ -7,6 +7,7 @@
  * `org` and the few places that reassign call a setter.
  */
 import { render } from "./shell.js";
+import { roleTableFor } from "./role-table.js";
 import { isCompanyLogin, ownSafeHere, readGuardians, recoveryStatus } from "./access-model.js";
 
 export const $ = (s) => document.querySelector(s);
@@ -200,22 +201,10 @@ export const safeAddressHtml = (s) => {
   <p class="zb-hint">Send only EURe${testMode === true ? " on Base Sepolia, the test network" : testMode === false ? " on Base" : ""} to this ${name ? "name or address: both reach the same account" : "address"}.</p>`;
 };
 
-/* What each role may do, as the API's permission table has it. */
+/* Role names; what each may do is role-table.js. */
 export const ROLE_WORD = { owner: "Owner", admin: "Admin", payer: "Payer", accountant: "Accountant", viewer: "Viewer" };
-/* Each key is one server permission set (src/domain/roles.ts): propose =
- * drafts.create, approve = drafts.review, send = transfers.execute, categorise =
- * ledger.categorise + coa.manage + reports.run, invoices = invoices.manage,
- * contacts = contacts.manage, wallets / members / accounts = wallets.manage /
- * members.invite + update / accounts.open. */
-const ADMIN_CAN = { propose: true, approve: true, send: true, categorise: true, wallets: true, invoices: true, contacts: true, members: true, accounts: true };
-export const ROLE_CAN = {
-  owner: ADMIN_CAN,
-  admin: ADMIN_CAN,
-  payer: { propose: true, send: true, invoices: true, contacts: true },
-  accountant: { propose: true, categorise: true, contacts: true },
-  viewer: {},
-};
-export const roleCan = (role, what) => !!ROLE_CAN[role]?.[what];
+/* The table for the open org: entity, never type, since a sole trader is a business too. */
+export const roleCan = (role, what) => !!roleTableFor(org?.entity)[role]?.[what];
 
 /** device.js, or a refusal after 3 s: a module that never loads must not leave
  *  a button busy for ever. */

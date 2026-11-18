@@ -5,6 +5,7 @@
  */
 import { store } from "../store.js";
 import { OrgSafePlanRefusal, orgSafePlan } from "../domain/org-safe-plan.js";
+import { orgEntity } from "../domain/org-entity.js";
 import { assertReadableSafeState } from "../domain/safe-op-queue.js";
 import { orgSigners, type OrgSigners, type SignerMember } from "../domain/org-signers.js";
 import type { Member, Organisation } from "../domain/types.js";
@@ -39,6 +40,16 @@ export function memberForOwner(orgId: string, address: string): Member | undefin
     if (m.status !== "active" || m.role !== "owner") return false;
     const a = ownerAddressOfMember(m);
     return !!a && a.toLowerCase() === address.toLowerCase();
+  });
+}
+
+/** Whether `address` is a company org's Safe. Its owners sign it through the
+ *  org's queue (routes/business/safe-ops.ts, signerRefusal); no route that
+ *  signs with one account's passkey may move it. */
+export function isCompanySafe(address: string): boolean {
+  return store.accountsAtAddress(address).some((a) => {
+    const org = store.findOrganisation(a.orgId);
+    return !!org && orgEntity(org) === "company";
   });
 }
 
