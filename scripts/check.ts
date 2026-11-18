@@ -57,6 +57,7 @@ const scripts = [
   "safe-signers:test",
   "safe-op-queue:test",
   "org-safe-plan:test",
+  "org-signers:test",
   "safe-import:test",
   "safe-import:ui:test",
   "signup-chat:test",

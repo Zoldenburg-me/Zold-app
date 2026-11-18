@@ -22,7 +22,8 @@ export type OrgEntity = "company" | "sole_trader";
  * owner set changes with membership, so the address stops matching any owner
  * set it could be computed from. `owners` are the passkeys Zold added; the
  * chain's owner set and threshold are the truth and are read from the Safe on
- * every use, so neither is stored here. Written only through
+ * every use, so neither is stored here. `owners` is not the member mapping:
+ * which member an owner address belongs to is domain/org-signers.ts. Written only through
  * store.setOrgSafePlan; personal and sole_trader orgs have none.
  */
 export interface OrgSafePlan {
@@ -238,6 +239,12 @@ export interface Member {
   invitedAt: string;
   acceptedAt?: string;
   deactivatedAt?: string;
+  /** Company orgs: the Safe owner address Zold last added for this member's
+   *  passkey. A label, never a grant: whether an address signs is the chain's
+   *  answer (safeOwners), and whether this member may sign is signerRefusal's
+   *  over the passkey they log in with. Kept so an old owner still on chain
+   *  after a passkey change is named (domain/org-signers.ts). */
+  signerAddress?: `0x${string}`;
 }
 
 // ── Accounts ────────────────────────────────────────────────────────────────

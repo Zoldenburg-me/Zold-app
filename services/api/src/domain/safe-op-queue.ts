@@ -40,14 +40,18 @@ export interface ChainCheck {
   thresholdMet: boolean;
 }
 
-/**
- * Check a PENDING op against the chain. Fails closed on a view the Safe could
- * not have (no owners, a threshold below 1 or above the owner count).
- */
-export function checkAgainstChain(op: PendingSafeOp, chain: SafeChainView, now = Date.now()): ChainCheck {
+/** Throws on an owner set and threshold the Safe could not have (no owners, a
+ *  threshold below 1 or above the owner count): a misread, never "nobody". */
+export function assertReadableSafeState(safeAddress: string, chain: Pick<SafeChainView, "owners" | "threshold">): void {
   if (!chain.owners.length || !Number.isInteger(chain.threshold) || chain.threshold < 1 || chain.threshold > chain.owners.length) {
-    throw new Error(`unreadable Safe state for ${op.safeAddress}: ${chain.owners.length} owners, threshold ${chain.threshold}`);
+    throw new Error(`unreadable Safe state for ${safeAddress}: ${chain.owners.length} owners, threshold ${chain.threshold}`);
   }
+}
+
+/** Check a PENDING op against the chain. Fails closed on an unreadable view
+ *  (assertReadableSafeState). */
+export function checkAgainstChain(op: PendingSafeOp, chain: SafeChainView, now = Date.now()): ChainCheck {
+  assertReadableSafeState(op.safeAddress, chain);
   const owners = new Set(chain.owners.map((o) => o.toLowerCase()));
   const keep = op.signatures.filter((s) => owners.has(s.ownerAddress.toLowerCase()));
   const dropped = op.signatures.filter((s) => !owners.has(s.ownerAddress.toLowerCase()));

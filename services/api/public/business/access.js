@@ -9,7 +9,7 @@
 import { Z, api, cap, day, deviceLib, ensureMe, esc, org, readHealth, reviewOn, ROLE_CAN, ROLE_WORD } from "./core.js";
 import { META, RENDER } from "./views.js";
 import { render } from "./shell.js";
-import { APP_LINKS, approvalView, deviceKeyView, isCompanyLogin, isOwnCompanyOrg, loadAccess } from "./access-model.js";
+import { APP_LINKS, approvalView, deviceKeyView, isCompanyLogin, isCompanyOrg, isOwnCompanyOrg, loadAccess, loadOrgSafe } from "./access-model.js";
 
 const settingsBack = `<a class="z-btn z-btn--secondary" href="?view=settings" data-view-link="settings">${Z.icon("arrow_back")}<span>Settings</span></a>`;
 const appBtn = (label, href, variant = "secondary") =>
@@ -57,6 +57,27 @@ function signersCard(a, keyRow) {
   const locked = s.zoldCanSend ? "" : `<div class="banner warn">${Z.icon("lock")}<span><b>Zold can’t send from this account.</b> ${why} Send from Safe{Wallet} instead.</span></div>`;
   const safe = s.safeAppUrl ? `<p class="zb-hint"><a href="${esc(s.safeAppUrl)}" target="_blank" rel="noopener">Open the account in Safe{Wallet}</a></p>` : "";
   return card("acc-sign", "Who can sign for the account", `${locked}${rows(list)}${safe}`, change);
+}
+
+/* A company org's own Safe, read from chain on every visit. */
+const OWNER_NOTE = {
+  passkey_changed: "This login’s passkey changed; the Safe still lists the old signer",
+  not_an_owner: "No longer an owner here; the Safe still lists their key",
+  added_outside_zold: "Added outside Zold",
+};
+function orgSignersCard(s) {
+  const title = "Who can sign for the account";
+  if (s.status === "not_set_up") return card("acc-sign", title, `<p class="zb-hint">The company’s Safe isn’t set up yet, so no one signs for it.</p>`);
+  if (s.status === "unknown") {
+    return card("acc-sign", title, `<div class="banner warn">${Z.icon("help")}<span><b>Couldn’t check who can sign.</b> ${esc(s.error.replace(/[.\s]+$/, ""))}. This is not the same as no one.</span></div>`,
+      `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="access-retry">Try again</button>`);
+  }
+  const owner = (o) => [o.memberId ? o.name || "A member" : "Unknown signer", `${addr(o.address)}${o.note ? `<br>${esc(OWNER_NOTE[o.note] || o.note)}` : ""}`];
+  const waiting = s.members.filter((m) => !m.onChain).map((m) => [m.name || "An owner", m.passkey ? "Not a signer yet" : "No passkey yet"]);
+  const outside = s.unknown.length
+    ? `<div class="banner warn">${Z.icon("warning")}<span><b>A signer Zold didn’t add is on this account.</b> It signs like any other. If no one at the company added it, remove it in Safe{Wallet}.</span></div>`
+    : "";
+  return card("acc-sign", title, `${outside}${rows([["Account", addr(s.safeAddress)], ["Signatures needed", esc(s.needed)], ...s.owners.map(owner), ...waiting])}`);
 }
 
 const guardianRow = (g) => {
@@ -154,6 +175,7 @@ RENDER.access = async () => {
     api(`/api/orgs/${org.id}/members`).then((r) => r.members, () => null),
   ]);
   const pay = approvalsCard(members);
+  if (isCompanyOrg(org)) return { html: stack([pay, orgSignersCard(await loadOrgSafe(org.id, api))]), bind: retry };
   // Every role reads the accounts, so a failed read is a failure, not a no.
   if (isCompanyLogin(me) && org.type === "business" && !acc) {
     return {
