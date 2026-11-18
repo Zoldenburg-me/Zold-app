@@ -113,8 +113,8 @@ await check("a re-bound passkey: the old owner is named by its label, the new ke
 });
 
 await check("no stored label: a re-bound passkey's old owner is never called a passkey change", () => {
-  // Nothing writes Member.signerAddress in this PR (the deploy and adding an
-  // owner do, elsewhere), so the unset label is the state production has.
+  // The deploy labels only the deploying owner and nothing else writes
+  // Member.signerAddress, so an unset label is the state every other owner has.
   const j = orgSigners([M("anna", { passkeyAddress: A(2) })], [A(1)]);
   assert.deepEqual(j.owners, [{ address: A(1), note: "added_outside_zold" }]);
   assert.deepEqual(j.unknown, [A(1)]);
@@ -211,7 +211,7 @@ await check("before the deployment: 200 not_set_up, no chain read", async () => 
   const r = await get("org_co", "u_vera");
   assert.equal(r.status, 200);
   assert.deepEqual(r.data, { state: "not_set_up" });
-  store.setOrgSafePlan("org_co", { kind: "org", address: SAFE, owners: [{ x: COORD(), y: COORD() }], createdAt: now });
+  store.setOrgSafePlan("org_co", { kind: "org", status: "active", address: SAFE, owners: [{ x: COORD(), y: COORD() }], createdAt: now });
   const planned = await get("org_co", "u_vera");
   assert.deepEqual(planned.data, { state: "not_set_up" }, "a plan with no account at its address is not deployed");
   assert.equal(stub.reads, 0);

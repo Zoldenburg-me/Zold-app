@@ -186,6 +186,16 @@ await check("a Safe that is not one of the org's accounts is refused", async () 
   assert.equal(store.safeOpsOf("org_2").length, 0);
 });
 
+await check("an org whose account has no address yet (its Safe not deployed) queues nothing", async () => {
+  reset();
+  store.addOrganisation({ id: "org_nosafe", type: "business", entity: "company", name: "Neu GmbH", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now } as any);
+  store.addMember({ id: "m_anna3", orgId: "org_nosafe", userId: "u_anna", email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now } as any);
+  store.addAccount({ id: "acc_nosafe", orgId: "org_nosafe", currency: "EUR", label: "EUR", status: "gated", provider: "monerium", identifier: {}, createdAt: now, updatedAt: now } as any);
+  assert.throws(() => queueSafeOp({ org: store.findOrganisation("org_nosafe")!, member: store.findMember("m_anna3")!, safeAddress: SAFE, kind: "payment", summary: "x", prepared: preparedFor(0n) }),
+    (e: any) => e instanceof SafeOpRefusal && e.code === "NOT_THE_ORG_SAFE");
+  assert.equal(store.safeOpsOf("org_nosafe").length, 0);
+});
+
 await check("a mismatched bundle is refused at queue: digest, nonce or sender", async () => {
   reset();
   const before = store.safeOpsOf("org_1").length;

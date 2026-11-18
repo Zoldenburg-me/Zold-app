@@ -29,7 +29,7 @@ import {
   type UserOperationV9,
   type WebauthnPublicKey,
 } from "abstractionkit";
-import { decodeFunctionResult, encodeFunctionData, hashTypedData } from "viem";
+import { decodeFunctionResult, encodeFunctionData, hashTypedData, keccak256, stringToHex } from "viem";
 
 /**
  * The only shortcuts are the HARNESS ones (config.ts): fake challenges and a
@@ -239,6 +239,63 @@ export interface BrowserPasskeyAssertion {
 
 export function passkeyAccountAddress(owner: WebauthnPublicKey): `0x${string}` {
   return SafeAccount.createWebAuthnSignerVerifierAddress(owner.x, owner.y) as `0x${string}`;
+}
+
+/** The address a stored passkey owner ({x, y}) signs a Safe as. */
+export function ownerAddressOfStored(owner: { x: string; y: string }): `0x${string}` {
+  return passkeyAccountAddress(webauthnOwnerFromStore(owner));
+}
+
+/**
+ * A company org's Safe at deployment: the creator's passkey as its one owner,
+ * under a CREATE2 salt of the org's own. Without the salt, the same passkey
+ * alone derives the address of its holder's personal Safe (salt 0), and the
+ * company's money would land there.
+ */
+export function orgSafeAccountFor(owner: WebauthnPublicKey, orgId: string): SafeAccount {
+  return SafeAccount.initializeNewAccount([owner], { c2Nonce: BigInt(keccak256(stringToHex(`zold/org-safe/v1:${orgId}`))) });
+}
+
+/** The deployment-time account of an org plan, checked against the stored
+ *  address. Only a plan with its one first owner deploys: owners added later
+ *  are added on chain, and the address no longer derives from them. */
+function orgSafeDeploymentAccount(plan: OrgSafePlan, orgId: string): { account: SafeAccount; passkeyOwner: WebauthnPublicKey } {
+  if (plan.owners.length !== 1) throw new Error("an org Safe is deployed with its one first owner");
+  const passkeyOwner = webauthnOwnerFromStore(plan.owners[0]);
+  const account = orgSafeAccountFor(passkeyOwner, orgId);
+  if (account.accountAddress.toLowerCase() !== plan.address.toLowerCase()) {
+    throw new Error("org Safe plan does not match the address its owner and org derive");
+  }
+  return { account, passkeyOwner };
+}
+
+/**
+ * The UserOperation that deploys an org Safe, signed by its first owner. No
+ * module and no guardian rides it (design note §2.2: Zold adds no Candide
+ * guardian to an org Safe). `challenge` is "0x" when the Safe is already on
+ * chain, so a retry after an unconfirmed submit finds it instead of resending.
+ */
+export async function prepareOrgSafeDeployment(plan: OrgSafePlan, orgId: string): Promise<PreparedSafeOperation> {
+  const { account, passkeyOwner } = orgSafeDeploymentAccount(plan, orgId);
+  if (allowSimulation()) throw new Error("org Safe deployment needs a real chain — the local harness has no bundler");
+  if (await isDeployed(account.accountAddress)) {
+    return { safeAddress: account.accountAddress as `0x${string}`, challenge: "0x", userOperation: {} as UserOperationV9 };
+  }
+  const noop: MetaTransaction = { to: account.accountAddress, value: 0n, data: "0x" };
+  return paidUserOperation(account, passkeyOwner, [noop]);
+}
+
+/** Send the org Safe's deployment with its first owner's assertion. Errors as
+ *  sendSignedOperation: BundlerRefusedError or SafeOperationUncertainError. */
+export async function submitOrgSafeDeployment(
+  plan: OrgSafePlan,
+  orgId: string,
+  userOperation: UserOperationV9,
+  assertion: BrowserPasskeyAssertion,
+): Promise<SubmittedOperation> {
+  const { account, passkeyOwner } = orgSafeDeploymentAccount(plan, orgId);
+  if (allowSimulation()) throw new Error("org Safe deployment needs a real chain — the local harness has no bundler");
+  return signWithPasskeyAndSend(account, passkeyOwner, userOperation, assertion);
 }
 
 export function safeMessageHash(safeAddress: string, message: string): `0x${string}` {
@@ -740,6 +797,15 @@ export async function submitPasskeySafeOperationWithReceipt(
     // Both hashes are hash-shaped so a test's stub chain can answer the receipt.
     return { userOpHash: `0x${"0".repeat(63)}1`, txHash: `0x${"0".repeat(64)}`, blockNumber: 0, gasCostWei: "0", gasPaidBy, success: true };
   }
+  return signWithPasskeyAndSend(account, passkeyOwner, userOperation, assertion);
+}
+
+async function signWithPasskeyAndSend(
+  account: SafeAccount,
+  passkeyOwner: WebauthnPublicKey,
+  userOperation: UserOperationV9,
+  assertion: BrowserPasskeyAssertion,
+): Promise<SubmittedOperation> {
   const deployed = await isDeployed(account.accountAddress);
   const passkeySigner = fromSafeWebauthn({
     publicKey: passkeyOwner,
@@ -752,7 +818,7 @@ export async function submitPasskeySafeOperationWithReceipt(
     [passkeySigner],
     CANDIDE.chainId,
   );
-  return sendSignedOperation(account, userOperation, gasPaidBy);
+  return sendSignedOperation(account, userOperation, gasPaidByMode());
 }
 
 /** Send a signed op and wait for its receipt. A refusal the bundler states is

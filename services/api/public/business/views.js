@@ -58,7 +58,7 @@ META.accounts = () => ({
 
 RENDER.accounts = async () => {
   // The Zold account card needs the session, read again for a balance that moved.
-  const [{ accounts, currencies, adoption, profileWait, mayManageAccounts }] = await Promise.all([api(`/api/orgs/${org.id}/accounts`), refreshMe().catch(() => null)]);
+  const [{ accounts, currencies, adoption, profileWait, mayManageAccounts, orgSafeDeploy }] = await Promise.all([api(`/api/orgs/${org.id}/accounts`), refreshMe().catch(() => null)]);
   const who = org.type === "business" ? "the company profile" : "your profile";
   const waitHtml = profileWait
     ? `${Z.tag("Waiting for Monerium", "amber")} Monerium had ${who} as ${esc(plain(profileWait.state))} on ${esc(new Date(profileWait.at).toLocaleString())}.`
@@ -70,7 +70,13 @@ RENDER.accounts = async () => {
     const ident = a.identifier?.iban || a.identifier?.accountNumber || a.identifier?.mobile || "";
     const identLabel = a.identifier?.iban ? "IBAN" : a.identifier?.accountNumber ? "Account number" : a.identifier?.mobile ? "Mobile" : "IBAN";
     const mine = a.backingUserId && me && a.backingUserId === me.id;
-    const action = !a.backingUserId && a.currency === "EUR"
+    const company = org.entity === "company";
+    const action = company && a.currency === "EUR" && !a.address
+      ? orgSafeDeploy?.allowed
+        ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="deploy-safe">Set up the company’s Safe</button>`
+        : orgSafeDeploy?.reason ? `<p class="desc">${esc(plain(orgSafeDeploy.reason))}</p>` : ""
+      : company ? ""
+      : !a.backingUserId && a.currency === "EUR"
       ? adoption?.allowed
         ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="fund-account" data-id="${esc(a.id)}">${adoption.wallet ? "Connect your wallet" : profileWait ? "Check with Monerium again" : org.type === "business" ? "Connect the company’s IBAN" : "Fund from my account"}</button>`
         : adoption?.reason ? `<p class="desc">${esc(plain(adoption.reason))}</p>${ownMonerium ? moneriumLink("Connect Monerium") : ""}` : ""
@@ -79,7 +85,7 @@ RENDER.accounts = async () => {
       a.gate ? ["Not open because", `${esc(plain(a.gate.reason))}<br>Needs: ${esc(plain(a.gate.needs))}`] : null,
       !a.backingUserId && a.currency === "EUR" && waitHtml ? ["Monerium", waitHtml] : null,
       // Gated with a backer: a wallet with no IBAN, paid into and never sent from by bank.
-      a.backingUserId ? a.status === "gated" ? ["Paid into", mine ? "Your wallet" : "A member’s wallet"] : ["Spends from", mine ? "Your own account" : "A member’s own account"] : null,
+      a.backingUserId && !company ? a.status === "gated" ? ["Paid into", mine ? "Your wallet" : "A member’s wallet"] : ["Spends from", mine ? "Your own account" : "A member’s own account"] : null,
       ...profileRows(a, mayManageAccounts),
       mine && a.currency === "EUR" && a.status === "active" ? ["Documents", `<a href="?view=documents" data-view-link="documents">Statements and documents</a>`] : null,
     ].filter(Boolean);
@@ -445,7 +451,7 @@ RENDER.soon = async () => {
   const lead = Z.iconTile({ icon: "hourglass_top", tone: "a" });
   const euroClosed = accounts !== null && !accounts.some((a) => a.currency === "EUR" && a.status === "active");
   const rows = [
-    ...(euroClosed ? [Z.row({ lead, title: "Euro account", sub: org.type === "business" ? "Opens once the company’s IBAN is connected" : "Opens once your IBAN is connected", href: "?view=accounts" })] : []),
+    ...(euroClosed ? [Z.row({ lead, title: "Euro account", sub: org.entity === "company" ? "Issuing the company’s IBAN onto its Safe is not yet live" : org.type === "business" ? "Opens once the company’s IBAN is connected" : "Opens once your IBAN is connected", href: "?view=accounts" })] : []),
     ...(later.length ? [Z.row({ lead, title: "Accounts in other currencies", sub: `${later.length > 1 ? `${later.slice(0, -1).join(", ")} and ${later.at(-1)}` : later[0]}: waiting on an account provider`, soon: true })] : []),
     Z.row({ lead, title: "More countries", sub: "Bank transfers reach Europe only, for now", soon: true }),
     Z.row({ lead, title: "Paying a crypto wallet", sub: "Not built yet", soon: true }),

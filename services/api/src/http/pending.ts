@@ -11,6 +11,7 @@
  */
 import type { preparePasskeySafeDeployment } from "../wallet/candide.js";
 import type { User } from "../store.js";
+import type { OrgSafePlan } from "../domain/types.js";
 
 export type PendingPasskeySafeDeployment =
   Awaited<ReturnType<typeof preparePasskeySafeDeployment>>["userOperation"];
@@ -21,6 +22,13 @@ export const pendingPasskeySafeDeployments = new Map<
   /** `challenge`: what the passkey signs (base64url), checked before the
    *  operation goes to the bundler. */
   { userId: string; expiresAt: number; userOperation: PendingPasskeySafeDeployment; challenge: string }
+>();
+
+/** A company org's Safe deployment awaiting its first owner's passkey: bound
+ *  to the org and the member who prepared it, and to the plan it deploys. */
+export const pendingOrgSafeDeployments = new Map<
+  string,
+  { orgId: string; memberId: string; expiresAt: number; userOperation: PendingPasskeySafeDeployment; challenge: string; plan: OrgSafePlan }
 >();
 
 /**
@@ -79,6 +87,8 @@ export const prunePendingTransferExecutions = (now = Date.now()) =>
   pruneExpired(pendingTransferExecutions, now);
 export const prunePendingPasskeySafeDeployments = (now = Date.now()) =>
   pruneExpired(pendingPasskeySafeDeployments, now);
+export const prunePendingOrgSafeDeployments = (now = Date.now()) =>
+  pruneExpired(pendingOrgSafeDeployments, now);
 export const prunePendingMoneriumLinkSignatures = (now = Date.now()) =>
   pruneExpired(pendingMoneriumLinkSignatures, now);
 export const prunePendingCryptoSends = (now = Date.now()) => pruneExpired(pendingCryptoSends, now);

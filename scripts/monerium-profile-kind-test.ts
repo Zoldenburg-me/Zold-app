@@ -534,7 +534,7 @@ console.log("\nCompany signup");
 
 await check("a stored 'pending' copy does not hide the button: the list offers it and the live check connects the IBAN", async () => {
   // Stored at activation, before Monerium approved; Monerium now says approved.
-  addUser("u_stale", CORP, 4);
+  addUser("u_stale", CORP, 9);
   store.updateUser("u_stale", { monerium: { ...store.findUser("u_stale")!.monerium!, profiles: [{ id: CORP.id, kind: "corporate", state: "pending" }] } } as any);
   addOrg("org_stale", "business", "u_stale", "Acme Technik GmbH");
   addGatedEur("acc_stale", "org_stale");
@@ -563,6 +563,19 @@ await check("a company signup's first business org gets a gated EUR account that
   assert.equal(accts[0].backingUserId, undefined, "no IBAN is connected until the owner's live check passes");
   assert.doesNotMatch(JSON.stringify(accts[0].gate), /useMyAccount|provisioning/);
   assert.match(accts[0].gate!.needs, /company’s IBAN/);
+});
+
+await check("a company signup's first company org gets its gated EUR account with no address: the Safe comes from the deployment", async () => {
+  addUser("u_signup_co", CORP_PENDING, 6);
+  store.updateUser("u_signup_co", { accountType: "company" } as any);
+  const r = await call("POST", "/api/orgs", "u_signup_co", { entity: "company", type: "business", name: "Acme Bau", legalName: "Acme Bau GmbH", country: "DE" });
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  const accts = store.accountsOf(r.data.organisation.id);
+  assert.equal(accts.length, 1);
+  assert.equal(accts[0].status, "gated");
+  assert.equal(accts[0].address, undefined, "never the creator's Safe");
+  assert.equal(accts[0].backingUserId, undefined);
+  assert.match(accts[0].gate!.reason, /Safe is not set up/);
 });
 
 await check("a second business org, or one made by a personal signup, opens no account by itself", async () => {

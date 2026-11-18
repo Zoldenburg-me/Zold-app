@@ -46,6 +46,7 @@ import {
   requireUserSession,
   } from "./http/sessions.js";
 import { createOrgRouter } from "./routes/orgs.js";
+import { createOrgSafeDeploymentRoutes } from "./routes/org-safe-deployment.js";
 import { createBusinessRouter, createInvoiceLinkRouter } from "./routes/business.js";
 import { createGnosisPayRouter } from "./routes/gnosis-pay.js";
 import { formatReport, reconcile } from "./reconcile.js";
@@ -128,6 +129,7 @@ app.use("/api", createOperatorAuthRouter());
  * responses go through an allowlist view for that reason.
  */
 app.use("/api/orgs", createOrgRouter(requireSession));
+app.use("/api/orgs", createOrgSafeDeploymentRoutes(requireSession));
 app.use("/api/orgs", createBusinessRouter(requireSession, buildTransferFromQuote));
 app.use("/api/invoice-links", createInvoiceLinkRouter());
 app.use("/api/gnosis-pay", createGnosisPayRouter(requireSession));

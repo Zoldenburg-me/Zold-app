@@ -120,7 +120,8 @@ function balanceCard(accounts, read) {
   const mine = accounts.find((a) => a.status === "active" && a.backingUserId && me && a.backingUserId === me.id);
   const safe = read ? ownSafe(accounts) : null;
   const fig = (mine || safe) && typeof me.balanceEur === "number";
-  const other = !mine && accounts.find((a) => a.backingUserId);
+  // A company's account has no backer, so no person to name.
+  const other = !mine && org.entity !== "company" && accounts.find((a) => a.backingUserId);
   const label = mine ? `${mine.label || mine.currency} balance` : safe?.company ? "Company Zold account" : "Your Zold account";
   const head = fig
     ? `<span class="zb-h-bal__label">${esc(label)}</span><span class="zb-h-bal__fig">${bigEur(me.balanceEur)}</span>`
@@ -250,6 +251,8 @@ function attention({ waiting, invoices, lines, accounts }) {
 /** Why there is no IBAN yet, and the one step that moves it on. Only the
  *  login whose own account backs this organisation connects Monerium for it. */
 function noIbanHtml(accounts) {
+  // A company's account is its own Safe; no step issues its IBAN yet.
+  if (org.entity === "company") return `<p class="zb-hint">No IBAN yet. Issuing the company’s IBAN onto its Safe is not yet live.</p>${linkBtn("Accounts", "accounts")}`;
   const step = noIbanStep(org.type === "personal" || isOwnCompanyOrg(me, org, accounts), me);
   const whose = org.type === "personal" ? "you" : esc(org.name);
   if (step === "not-own") return `<p class="zb-hint">No IBAN yet. Monerium issues one once it has verified ${whose}, and only the company’s own login can connect it.</p>${linkBtn("Accounts", "accounts")}`;

@@ -16,7 +16,7 @@ import { randomUUID } from "node:crypto";
 import { batched, db, persist, pruneSessions, seedChartOfAccounts } from "./store/db.js";
 import { nextProfileHistory } from "./domain/monerium-identity.js";
 import { orgEntity } from "./domain/org-entity.js";
-import { isOrgSafePlan } from "./domain/org-safe-plan.js";
+import { copyOrgSafePlan, isOrgSafePlan } from "./domain/org-safe-plan.js";
 import { auditEntry } from "./audit.js";
 import type {
   Account,
@@ -1074,7 +1074,26 @@ export const store = {
     if (o.safe && o.safe.address.toLowerCase() !== plan.address.toLowerCase()) {
       throw new Error(`organisation ${orgId} already has its Safe at ${o.safe.address}`);
     }
-    o.safe = { kind: "org", address: plan.address, owners: plan.owners.map((w) => ({ x: w.x, y: w.y })), createdAt: o.safe?.createdAt ?? plan.createdAt };
+    if (o.safe?.status === "active" && plan.status !== "active") throw new Error(`organisation ${orgId}'s Safe is deployed; it cannot go back to planned`);
+    o.safe = { ...copyOrgSafePlan(plan), createdAt: o.safe?.createdAt ?? plan.createdAt };
+    o.updatedAt = new Date().toISOString();
+    persist();
+    return o;
+  },
+  /**
+   * Re-plan a company's Safe whose deploying owner has left, at a new
+   * address. Only a `planned` plan at `oldAddress`, and only once the caller
+   * has read the chain and found nothing there: no money can be at a Safe
+   * that does not exist. A deployed Safe is never re-pointed.
+   */
+  replaceUndeployedOrgSafePlan(orgId: string, oldAddress: string, plan: OrgSafePlan) {
+    const o = db.organisations.find((x) => x.id === orgId);
+    if (!o) throw new Error(`unknown organisation ${orgId}`);
+    if (!o.safe || o.safe.status !== "planned" || o.safe.address.toLowerCase() !== oldAddress.toLowerCase()) {
+      throw new Error(`organisation ${orgId} has no planned Safe at ${oldAddress} to replace`);
+    }
+    if (!isOrgSafePlan(plan) || plan.status !== "planned") throw new Error("a replacement Safe plan is a valid, planned one");
+    o.safe = copyOrgSafePlan(plan);
     o.updatedAt = new Date().toISOString();
     persist();
     return o;

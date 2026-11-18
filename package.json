@@ -47,6 +47,7 @@
     "safe-signers:test": "tsx scripts/safe-signers-test.ts",
     "safe-op-queue:test": "tsx scripts/safe-op-queue-test.ts",
     "org-safe-plan:test": "tsx scripts/org-safe-plan-test.ts",
+    "org-safe-deploy:test": "tsx scripts/org-safe-deploy-test.ts",
     "org-signers:test": "tsx scripts/org-signers-test.ts",
     "safe-import:test": "tsx scripts/safe-import-test.ts",
     "safe:import-tx": "tsx scripts/safe-import-owner-tx.ts",
