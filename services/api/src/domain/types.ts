@@ -22,8 +22,8 @@ export type OrgEntity = "company" | "sole_trader";
  * owner set changes with membership, so the address stops matching any owner
  * set it could be computed from. `owners` are the passkeys Zold added; the
  * chain's owner set and threshold are the truth and are read from the Safe on
- * every use, so neither is stored here. `owners` is not the member mapping
- * (which member a key belongs to): that is read from the members' passkeys.
+ * every use, so neither is stored here. `owners` is not the member mapping:
+ * which member an owner address belongs to is domain/org-signers.ts.
  * `planned` until the deployment is confirmed on chain; a plan stored
  * `planned` is one whose deployment may have landed, so a retry re-reads the
  * chain. Written only through store.setOrgSafePlan; personal and sole_trader

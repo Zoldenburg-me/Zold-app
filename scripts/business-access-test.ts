@@ -9,7 +9,9 @@
  * reads nothing, and the company login reads only in its own company; a
  * guardian Zold did not set up is still listed; a second owner at threshold
  * 2 says Zold cannot send; only active owners and admins approve, and
- * unread members are never "no one"; an unencrypted payment key says so.
+ * unread members are never "no one"; an unencrypted payment key says so; a
+ * company org reads its own Safe's signers, and a failed read is not none;
+ * its Access page says what recovery is for the company's Safe.
  *
  * What this cannot show: the screen in a browser, or a real chain read.
  * Offline.
@@ -17,6 +19,7 @@
  *   npm run business:access:test
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -226,6 +229,35 @@ assert.equal(m.isCompanyLogin(null), false);
 {
   const out = await m.loadAccess({ id: "c1", accountType: "company", passkeySafe: { status: "planned" } }, async () => { throw new Error("no call expected"); });
   assert.equal(out.noSafe, true, "no Safe yet: nothing to read, said so");
+}
+
+// ── a company org's own Safe (GET /api/orgs/:id/safe) ───────────────────────
+
+{
+  assert.equal(m.isCompanyOrg({ type: "business", entity: "company" }), true);
+  assert.equal(m.isCompanyOrg({ type: "business", entity: "sole_trader" }), false, "a sole trader spends from a member's Safe");
+  assert.equal(m.isCompanyOrg({ type: "personal" }), false);
+  const calls: string[] = [];
+  const set = { state: "set_up", safeAddress: "0xS", threshold: 2, owners: [{ address: "0xA", memberId: "m1", name: "Anna" }, { address: "0xB", note: "added_outside_zold" }], unknown: ["0xB"], members: [{ memberId: "m2", name: "Bert", passkey: false, signerAddress: null, onChain: false }] };
+  const out = await m.loadOrgSafe("o1", async (p: string) => (calls.push(p), set));
+  assert.deepEqual(calls, ["/api/orgs/o1/safe"], "the org's route, not the login's own Safe");
+  assert.equal(out.status, "set_up");
+  assert.equal(out.needed, "2 of 2");
+  assert.deepEqual(out.unknown, ["0xB"], "an owner added outside Zold is listed");
+  assert.equal(out.members[0].passkey, false, "an owner with no passkey is said, not dropped");
+  assert.equal((await m.loadOrgSafe("o1", async () => ({ state: "not_set_up" }))).status, "not_set_up");
+  const failed = await m.loadOrgSafe("o1", async () => { throw new Error("Couldn’t check the company’s Safe on chain"); });
+  assert.equal(failed.status, "unknown", "a failed read is not no signers");
+  assert.equal(failed.error, "Couldn’t check the company’s Safe on chain");
+  assert.equal((await m.loadOrgSafe("o1", async () => ({ state: "set_up", owners: [], threshold: 1 }))).status, "unknown", "no owners is a misread");
+
+  // Recovery is said for a company org, not dropped: the page promises it.
+  assert.match(m.ORG_RECOVERY[0], /hasn’t set up recovery for the company’s Safe/);
+  assert.match(m.ORG_RECOVERY.join(" "), /other owners can replace that signer in Safe\{Wallet\}/);
+  assert.match(m.ORG_RECOVERY.join(" "), /no one can recover the company’s Safe/);
+  const view = readFileSync(path.join(ROOT, "services/api/public/business/access.js"), "utf8");
+  const branch = view.split("\n").find((l) => l.includes("if (isCompanyOrg(org))")) || "";
+  assert.match(branch, /orgSignersCard\(.*orgRecoveryCard\(/, "a company org's Access page shows its signers and then recovery");
 }
 
 // ── whose company this is ───────────────────────────────────────────────────
