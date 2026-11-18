@@ -243,6 +243,12 @@ export interface Member {
   invitedAt: string;
   acceptedAt?: string;
   deactivatedAt?: string;
+  /** Company orgs: the Safe owner address Zold last added for this member's
+   *  passkey. A label, never a grant: whether an address signs is the chain's
+   *  answer (safeOwners), and whether this member may sign is signerRefusal's
+   *  over the passkey they log in with. Kept so an old owner still on chain
+   *  after a passkey change is named (domain/org-signers.ts). */
+  signerAddress?: `0x${string}`;
 }
 
 // ── Accounts ────────────────────────────────────────────────────────────────

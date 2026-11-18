@@ -451,7 +451,7 @@ RENDER.soon = async () => {
   const lead = Z.iconTile({ icon: "hourglass_top", tone: "a" });
   const euroClosed = accounts !== null && !accounts.some((a) => a.currency === "EUR" && a.status === "active");
   const rows = [
-    ...(euroClosed ? [Z.row({ lead, title: "Euro account", sub: org.type === "business" ? "Opens once the company’s IBAN is connected" : "Opens once your IBAN is connected", href: "?view=accounts" })] : []),
+    ...(euroClosed ? [Z.row({ lead, title: "Euro account", sub: org.entity === "company" ? "Issuing the company’s IBAN onto its Safe is not yet live" : org.type === "business" ? "Opens once the company’s IBAN is connected" : "Opens once your IBAN is connected", href: "?view=accounts" })] : []),
     ...(later.length ? [Z.row({ lead, title: "Accounts in other currencies", sub: `${later.length > 1 ? `${later.slice(0, -1).join(", ")} and ${later.at(-1)}` : later[0]}: waiting on an account provider`, soon: true })] : []),
     Z.row({ lead, title: "More countries", sub: "Bank transfers reach Europe only, for now", soon: true }),
     Z.row({ lead, title: "Paying a crypto wallet", sub: "Not built yet", soon: true }),

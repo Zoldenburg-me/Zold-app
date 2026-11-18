@@ -85,10 +85,16 @@ function noIbanGate(type: OrgType): NonNullable<Account["gate"]> {
 }
 
 /** A company's EUR account before its own Safe exists (deployed by an owner,
- *  POST .../safe/deployment), and after it, until Monerium issues the IBAN. */
+ *  POST .../safe/deployment). */
 const ORG_SAFE_GATE: NonNullable<Account["gate"]> = {
   reason: "The company’s Safe is not set up yet, so nothing can be paid into or sent from this account.",
-  needs: "an owner to set up the company’s Safe with their passkey, then the company’s IBAN from Monerium.",
+  needs: "an owner to set up the company’s Safe with their passkey. Issuing the company’s IBAN onto it is not yet live.",
+};
+/** A company's EUR account once its Safe exists. No route issues a company's
+ *  IBAN onto its Safe yet, so nothing here says one can be connected. */
+const ORG_IBAN_GATE: NonNullable<Account["gate"]> = {
+  reason: "The company’s Safe is set up, but issuing the company’s IBAN onto it is not yet live, so nothing can be sent from this account.",
+  needs: "the company’s IBAN on its Safe, which is not yet live.",
 };
 
 const OWNER_ONLY_FUNDING = "Only an owner can connect their account or wallet to this organisation.";
@@ -107,7 +113,7 @@ const WALLET_GATE: NonNullable<Account["gate"]> = {
  */
 function gateOf(org: Pick<Organisation, "type" | "entity">, a: Account): Account["gate"] {
   if (a.status !== "gated") return undefined;
-  if (a.currency === "EUR" && orgEntity(org) === "company" && !a.address) return ORG_SAFE_GATE;
+  if (a.currency === "EUR" && orgEntity(org) === "company") return a.address ? ORG_IBAN_GATE : ORG_SAFE_GATE;
   if (a.currency === "EUR" && !a.backingUserId) return noIbanGate(org.type);
   return initialStatusFor(a.currency).gate ?? a.gate;
 }

@@ -25,6 +25,7 @@ import type { Account, OrgSafePlan } from "../domain/types.js";
 import {
   BundlerRefusedError,
   SafeOperationUncertainError,
+  isDeployed,
   orgSafeAccountFor,
   ownerAddressOfStored,
   passkeyAccountAddress,
@@ -45,8 +46,9 @@ import { wrap } from "./util.js";
 export interface OrgSafeChain {
   prepare: typeof prepareOrgSafeDeployment;
   submit: typeof submitOrgSafeDeployment;
+  isDeployed: typeof isDeployed;
 }
-const liveChain: OrgSafeChain = { prepare: prepareOrgSafeDeployment, submit: submitOrgSafeDeployment };
+const liveChain: OrgSafeChain = { prepare: prepareOrgSafeDeployment, submit: submitOrgSafeDeployment, isDeployed };
 
 type Refusal = { status: number; code: string; error: string };
 
@@ -59,13 +61,27 @@ function passkeyOwnerOf(user: User | undefined) {
   return pk && pk.alg === "ES256" ? webauthnOwnerFromJwk(pk.jwk) : null;
 }
 
+/** Whether an active owner of the org still logs in with the passkey this
+ *  stored plan was made from. */
+function planOwnerStillHere(orgId: string, plan: OrgSafePlan): boolean {
+  const at = ownerAddressOfStored(plan.owners[0]).toLowerCase();
+  return store.membersOf(orgId).some((m) => {
+    if (m.status !== "active" || m.role !== "owner" || !m.userId) return false;
+    const owner = passkeyOwnerOf(store.findUser(m.userId));
+    return owner ? passkeyAccountAddress(owner).toLowerCase() === at : false;
+  });
+}
+
 /**
  * The plan this caller may deploy, or why not. A stored plan (one whose
  * deployment may have landed) is the only one: its owner must be this
  * caller's passkey. With none stored, the plan is derived from this caller's
  * passkey and the org, and is written only once a submit may have landed.
+ * One exception: a `planned` plan whose owner is no longer an active owner
+ * here would strand the company, so another owner derives a new plan, marked
+ * `replaces`; the route reads the chain before using it.
  */
-function deployable(ctx: OrgContext, user: User | undefined, accounts = store.accountsOf(ctx.org.id)): { plan: OrgSafePlan; account: Account } | Refusal {
+function deployable(ctx: OrgContext, user: User | undefined, accounts = store.accountsOf(ctx.org.id)): { plan: OrgSafePlan; account: Account; replaces?: `0x${string}` } | Refusal {
   if (orgEntity(ctx.org) !== "company") {
     return { status: 409, code: "NOT_A_COMPANY", error: "Only a company has its own Safe; this organisation's account is backed by a member's own Safe." };
   }
@@ -76,7 +92,10 @@ function deployable(ctx: OrgContext, user: User | undefined, accounts = store.ac
   }
   const owner = passkeyOwnerOf(user);
   const ownerAddress = owner ? passkeyAccountAddress(owner) : null;
-  const stored = ctx.org.safe ? copyOrgSafePlan(ctx.org.safe) : undefined;
+  let stored = ctx.org.safe ? copyOrgSafePlan(ctx.org.safe) : undefined;
+  const orphaned = stored?.status === "planned" && !account.address && !planOwnerStillHere(ctx.org.id, stored);
+  const replaces = orphaned ? stored!.address : undefined;
+  if (orphaned) stored = undefined;
   const plan: OrgSafePlan | undefined = stored ?? (owner
     ? { kind: "org", status: "planned", address: orgSafeAccountFor(owner, ctx.org.id).accountAddress as `0x${string}`, owners: [webauthnOwnerToStore(owner)], createdAt: new Date().toISOString() }
     : undefined);
@@ -91,7 +110,7 @@ function deployable(ctx: OrgContext, user: User | undefined, accounts = store.ac
   const elsewhere = store.accounts.some((a) => a.orgId !== ctx.org.id && a.address?.toLowerCase() === at) ||
     store.users.some((u) => u.address?.toLowerCase() === at || u.passkeySafe?.address.toLowerCase() === at);
   if (elsewhere) return { status: 409, code: "SAFE_IN_OTHER_ORG", error: "This Safe address is already in use elsewhere, so it can't be the company's." };
-  return { plan: plan!, account };
+  return { plan: plan!, account, ...(replaces ? { replaces } : {}) };
 }
 
 /** What GET .../accounts says about setting the Safe up, so the console
@@ -100,13 +119,19 @@ export function orgSafeDeployOffer(ctx: OrgContext, user: User | undefined, acco
   const eur = accounts.find((a) => a.currency === "EUR");
   if (eur?.address && ctx.org.safe?.status === "active") return { allowed: false, code: "DEPLOYED" };
   const r = deployable(ctx, user, accounts);
-  return "plan" in r ? { allowed: true } : { allowed: false, reason: r.error, code: r.code };
+  if ("plan" in r) return { allowed: true };
+  // The queue's wording is about signing operations; on Accounts it is this.
+  const reason = r.code === "NOT_A_SIGNER" ? "Only an owner can set up the company’s Safe." : r.error;
+  return { allowed: false, reason, code: r.code };
 }
 
-/** Record a Safe the chain has: plan active, the account's address set. The
- *  account stays `gated`: it has no IBAN until Monerium issues one. */
-function finish(orgId: string, plan: OrgSafePlan, accountId: string) {
+/** Record a Safe the chain has: plan active, the account's address set, and
+ *  the deploying owner's member row labelled with the owner address the Safe
+ *  was deployed with (a label; the chain says who signs). The account stays
+ *  `gated`: it has no IBAN until Monerium issues one. */
+function finish(orgId: string, plan: OrgSafePlan, accountId: string, memberId: string) {
   store.setOrgSafePlan(orgId, { ...plan, status: "active" });
+  store.updateMember(memberId, { signerAddress: ownerAddressOfStored(plan.owners[0]) });
   const account = store.findAccount(accountId)!;
   if (!account.address) store.updateAccount(accountId, { address: plan.address });
   return store.findAccount(accountId)!;
@@ -128,6 +153,20 @@ export function createOrgSafeDeploymentRoutes(requireSession: SessionResolver, c
     }
     const d = deployable(ctx, user);
     if (!("plan" in d)) return res.status(d.status).json({ error: d.error, code: d.code });
+    if (d.replaces) {
+      // The plan's owner has left. Re-planned only where the chain has no
+      // Safe at the old address; a read that fails refuses.
+      let there: boolean;
+      try {
+        there = await chain.isDeployed(d.replaces);
+      } catch (err) {
+        return res.status(502).json({ error: `The company's planned Safe could not be checked on chain: ${redactedMessage(err)}`, code: "ORG_SAFE_PREPARE_FAILED" });
+      }
+      if (there) {
+        return res.status(409).json({ error: "The company's Safe was deployed with the passkey of an owner who is no longer in the company, so it can't be set up again from here.", code: "ORG_SAFE_OWNER_GONE" });
+      }
+      store.replaceUndeployedOrgSafePlan(ctx.org.id, d.replaces, d.plan);
+    }
     let prepared: Awaited<ReturnType<OrgSafeChain["prepare"]>>;
     try {
       prepared = await chain.prepare(d.plan, ctx.org.id);
@@ -136,7 +175,7 @@ export function createOrgSafeDeploymentRoutes(requireSession: SessionResolver, c
     }
     if (prepared.challenge === "0x") {
       // Already on chain (an earlier submit landed unconfirmed): record it.
-      const account = finish(ctx.org.id, d.plan, d.account.id);
+      const account = finish(ctx.org.id, d.plan, d.account.id, ctx.member.id);
       return res.json({ safeAddress: d.plan.address, status: "active", accountId: account.id });
     }
     prunePendingOrgSafeDeployments();
@@ -207,7 +246,7 @@ export function createOrgSafeDeploymentRoutes(requireSession: SessionResolver, c
         store.setOrgSafePlan(ctx.org.id, pending.plan);
         return res.status(502).json({ error: `The deployment ${op.userOpHash} was included but reverted. Try again.`, code: "SAFE_OP_REVERTED", deployOpHash: op.userOpHash });
       }
-      const account = finish(ctx.org.id, pending.plan, d.account.id);
+      const account = finish(ctx.org.id, pending.plan, d.account.id, ctx.member.id);
       res.status(201).json({ safeAddress: pending.plan.address, status: "active", accountId: account.id, deployOpHash: op.userOpHash });
     } finally {
       submitting.delete(ctx.org.id);

@@ -15,7 +15,11 @@
  *     submit keeps the plan planned (and locks the entity), and a retry that
  *     finds the Safe on chain ("0x") finishes it: plan active, address set,
  *     account still gated; a replay is a no-op;
- *   - the happy path: sign, submit, plan active, address set, still gated;
+ *   - the happy path: sign, submit, plan active, address set, still gated,
+ *     and the deploying owner's Member.signerAddress is the Safe's owner;
+ *   - a planned plan whose owner has left is re-planned by another owner
+ *     only where the chain has nothing at its address; a read that fails, or
+ *     a Safe that is there, refuses;
  *   - a request is bound to the org and the member, and is used once; a
  *     passkey changed since the prepare is refused;
  *   - no Safe already another org's or a person's becomes this company's, and
@@ -46,7 +50,7 @@ const { createOrgRouter, safeTakenBy } = await import("../services/api/src/route
 const { createOrgSafeDeploymentRoutes } = await import("../services/api/src/routes/org-safe-deployment.js");
 const { accountIsSpendable } = await import("../services/api/src/domain/accounts.js");
 const { walletConnectable } = await import("../services/api/src/domain/wallet-tier.js");
-const { BundlerRefusedError, SafeOperationUncertainError, orgSafeAccountFor, smartAccountForPasskey, webauthnOwnerFromJwk } =
+const { BundlerRefusedError, SafeOperationUncertainError, orgSafeAccountFor, ownerAddressOfStored, passkeyAccountAddress, smartAccountForPasskey, webauthnOwnerFromJwk } =
   await import("../services/api/src/wallet/candide.js");
 initStore();
 
@@ -77,7 +81,7 @@ const addEur = (id: string, orgId: string, extra: object = {}) =>
 
 // ── the fake chain ──────────────────────────────────────────────────────────
 type Outcome = "ok" | "refused" | "uncertain" | "reverted";
-const chain = { deployed: new Set<string>(), outcome: "ok" as Outcome, prepares: 0, submits: 0 };
+const chain = { deployed: new Set<string>(), outcome: "ok" as Outcome, prepares: 0, submits: 0, readFails: false };
 const fakeChain = {
   prepare: async (plan: any) => {
     chain.prepares++;
@@ -90,6 +94,10 @@ const fakeChain = {
     if (chain.outcome !== "reverted") chain.deployed.add(plan.address.toLowerCase());
     if (chain.outcome === "uncertain") throw new SafeOperationUncertainError(`0x${"ee".repeat(32)}`, "timeout");
     return { userOpHash: `0x${"ab".repeat(32)}`, success: chain.outcome === "ok", gasPaidBy: "sponsored" as const };
+  },
+  isDeployed: async (address: string) => {
+    if (chain.readFails) throw new Error("eth_getCode failed (503)");
+    return chain.deployed.has(address.toLowerCase());
   },
 };
 
@@ -140,6 +148,8 @@ await check("a company signup's first org gets a gated EUR account with no addre
   const forAdmin = await call("GET", `/api/orgs/${orgId}/accounts`, "adam");
   assert.equal(forAdmin.data.orgSafeDeploy.allowed, false);
   assert.equal(forAdmin.data.orgSafeDeploy.code, "NOT_A_SIGNER");
+  assert.equal(forAdmin.data.orgSafeDeploy.reason, "Only an owner can set up the company’s Safe.");
+  assert.match(list.data.accounts[0].gate.needs, /not yet live/);
 });
 
 await check("only an owner whose passkey can sign deploys: admin, payer, passkey-less owner and non-member are refused", async () => {
@@ -215,6 +225,8 @@ await check("an unconfirmed submit keeps the plan planned; the retry finds the S
   assert.equal(a.address, start.data.safeAddress);
   assert.equal(a.status, "gated", "no IBAN yet");
   assert.equal(store.findOrganisation(orgId)!.safe!.status, "active");
+  const annaRow = store.memberFor(orgId, "anna")!;
+  assert.equal(annaRow.signerAddress!.toLowerCase(), passkeyAccountAddress(ownerKey("anna")).toLowerCase(), "the retry labels the deploying owner too");
   assert.doesNotMatch(accountIsSpendable(a, store.findOrganisation(orgId)!).reason!, /Safe is not set up/);
   const before = chain.prepares;
   const replay = await prepare(orgId, "anna");
@@ -223,7 +235,9 @@ await check("an unconfirmed submit keeps the plan planned; the retry finds the S
   assert.equal(chain.prepares, before, "a deployed Safe is not prepared again");
   const list = await call("GET", `/api/orgs/${orgId}/accounts`, "anna");
   assert.equal(list.data.orgSafeDeploy.allowed, false);
-  assert.match(list.data.accounts[0].gate.reason, /No IBAN/);
+  assert.match(list.data.accounts[0].gate.reason, /IBAN onto it is not yet live/, "no IBAN step is promised");
+  assert.doesNotMatch(list.data.accounts[0].gate.needs, /connect/i);
+  assert.match(accountIsSpendable(a, store.findOrganisation(orgId)!).reason!, /not yet live/);
 });
 
 await check("the happy path: sign, submit, plan active, address set, still gated", async () => {
@@ -242,6 +256,10 @@ await check("the happy path: sign, submit, plan active, address set, still gated
   const org = store.findOrganisation("org_two")!;
   assert.equal(org.safe!.status, "active");
   assert.equal(org.safe!.owners.length, 1);
+  const signer = store.findMember("m_org_two_anna")!.signerAddress!;
+  assert.equal(signer.toLowerCase(), passkeyAccountAddress(ownerKey("anna")).toLowerCase(), "the label is the address the Safe was deployed with");
+  assert.equal(signer.toLowerCase(), ownerAddressOfStored(org.safe!.owners[0]).toLowerCase());
+  assert.equal(store.findMember("m_org_two_bert")!.signerAddress, undefined, "only the deploying owner is labelled");
   const a = store.findAccount("acc_two")!;
   assert.equal(a.address, start.data.safeAddress);
   assert.equal(a.status, "gated");
@@ -260,6 +278,46 @@ await check("a passkey changed since the prepare is refused, and nothing is writ
   assert.equal(r.status, 409, JSON.stringify(r.data));
   assert.equal(r.data.code, "ORG_SAFE_CHANGED");
   assert.equal(store.findOrganisation("org_three")!.safe, undefined);
+});
+
+await check("a planned plan whose owner left is re-planned by another owner, only where the chain has nothing there", async () => {
+  addOrg("org_orphan", { entity: "company" });
+  await addUser("ilse");
+  await addUser("jan");
+  addMember("org_orphan", "ilse", "owner");
+  addMember("org_orphan", "jan", "owner");
+  addEur("acc_orphan", "org_orphan");
+  chain.outcome = "uncertain";
+  const first = await prepare("org_orphan", "ilse");
+  assert.equal((await submit(first.data, "ilse")).data.code, "SAFE_OP_UNCONFIRMED");
+  const old = store.findOrganisation("org_orphan")!.safe!.address;
+  assert.equal((await prepare("org_orphan", "jan")).data.code, "NOT_ON_CHAIN_OWNER", "while ilse is an owner, her plan stands");
+  store.updateMember("m_org_orphan_ilse", { status: "deactivated" });
+  // The unconfirmed op did land: the Safe is there, with a passkey that left.
+  const offer = await call("GET", "/api/orgs/org_orphan/accounts", "jan");
+  assert.equal(offer.data.orgSafeDeploy.allowed, true);
+  chain.readFails = true;
+  const unread = await prepare("org_orphan", "jan");
+  assert.equal(unread.status, 502, JSON.stringify(unread.data));
+  assert.equal(store.findOrganisation("org_orphan")!.safe!.address, old, "a failed read changes nothing");
+  chain.readFails = false;
+  const landed = await prepare("org_orphan", "jan");
+  assert.equal(landed.status, 409, JSON.stringify(landed.data));
+  assert.equal(landed.data.code, "ORG_SAFE_OWNER_GONE");
+  assert.equal(store.findOrganisation("org_orphan")!.safe!.address, old);
+  // It did not land: jan re-plans at his own address and deploys.
+  chain.deployed.delete(old.toLowerCase());
+  chain.outcome = "ok";
+  const start = await prepare("org_orphan", "jan");
+  assert.equal(start.status, 201, JSON.stringify(start.data));
+  const mine = orgSafeAccountFor(ownerKey("jan"), "org_orphan").accountAddress.toLowerCase();
+  assert.equal(start.data.safeAddress.toLowerCase(), mine);
+  assert.notEqual(mine, old.toLowerCase());
+  const done = await submit(start.data, "jan");
+  assert.equal(done.status, 201, JSON.stringify(done.data));
+  assert.equal(store.findOrganisation("org_orphan")!.safe!.status, "active");
+  assert.equal(store.findAccount("acc_orphan")!.address!.toLowerCase(), mine);
+  assert.throws(() => store.replaceUndeployedOrgSafePlan("org_orphan", mine, { ...store.findOrganisation("org_orphan")!.safe!, status: "planned" }), /no planned Safe/, "a deployed Safe is never re-planned");
 });
 
 await check("a bad assertion is refused before the chain", async () => {

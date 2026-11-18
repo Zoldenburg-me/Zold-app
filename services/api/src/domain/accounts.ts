@@ -336,8 +336,11 @@ export function accountIsSpendable(account: Account, org?: Pick<Organisation, "t
   if (account.status !== "active") {
     // An EUR account without an IBAN gives the current reason, not the
     // wording stored when it was opened.
-    const why = account.currency === "EUR" && org && orgEntity(org) === "company" && !account.address
+    const company = account.currency === "EUR" && org && orgEntity(org) === "company";
+    const why = company && !account.address
       ? "The company’s Safe is not set up yet, so nothing can be sent from it"
+      : company
+        ? "Issuing the company’s IBAN onto its Safe is not yet live, so nothing can be sent from it"
       : account.currency === "EUR" && !account.backingUserId
         ? "No IBAN is connected to this account yet, so nothing can be sent from it"
         : account.gate?.reason.replace(/\.$/, "");

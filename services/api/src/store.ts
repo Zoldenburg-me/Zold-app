@@ -1080,6 +1080,24 @@ export const store = {
     persist();
     return o;
   },
+  /**
+   * Re-plan a company's Safe whose deploying owner has left, at a new
+   * address. Only a `planned` plan at `oldAddress`, and only once the caller
+   * has read the chain and found nothing there: no money can be at a Safe
+   * that does not exist. A deployed Safe is never re-pointed.
+   */
+  replaceUndeployedOrgSafePlan(orgId: string, oldAddress: string, plan: OrgSafePlan) {
+    const o = db.organisations.find((x) => x.id === orgId);
+    if (!o) throw new Error(`unknown organisation ${orgId}`);
+    if (!o.safe || o.safe.status !== "planned" || o.safe.address.toLowerCase() !== oldAddress.toLowerCase()) {
+      throw new Error(`organisation ${orgId} has no planned Safe at ${oldAddress} to replace`);
+    }
+    if (!isOrgSafePlan(plan) || plan.status !== "planned") throw new Error("a replacement Safe plan is a valid, planned one");
+    o.safe = copyOrgSafePlan(plan);
+    o.updatedAt = new Date().toISOString();
+    persist();
+    return o;
+  },
   /** Every org a user can reach, with the membership that grants it. */
   organisationsForUser(userId: string) {
     return db.members

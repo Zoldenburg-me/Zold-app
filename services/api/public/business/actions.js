@@ -517,7 +517,7 @@ export const ACTIONS = {
         }
         await api(start.submitTo, { method: "POST", body: signed });
       }
-      setTimeout(() => toast(`${org.name}’s Safe is set up. Its IBAN comes from Monerium next.`), 0);
+      setTimeout(() => toast(`${org.name}’s Safe is set up.`), 0);
     }, { okLabel: "Set up" });
     return "keep";
   },
