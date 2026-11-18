@@ -1207,3 +1207,64 @@ export interface ReceiptShareFields {
   /** Whether the settlement route section exists on the page at all. */
   route: boolean;
 }
+
+/**
+ * One owner's passkey approval of a queued Safe operation. The assertion is
+ * kept as sent, base64url, because the relay rebuilds the Safe signature from
+ * it; `ownerAddress` is the WebAuthn verifier the chain lists as an owner.
+ */
+export interface SafeOpSignature {
+  memberId: string;
+  userId: string;
+  ownerAddress: `0x${string}`;
+  /** The P-256 key that signed, so the relay does not depend on the key the
+   *  member holds later. */
+  passkeyPublicKey: { x: string; y: string };
+  authenticatorData: string;
+  clientDataJSON: string;
+  signature: string;
+  signedAt: string;
+}
+
+export type SafeOpState =
+  | "PENDING"
+  | "RELAYING"
+  | "EXECUTED"
+  | "FAILED"
+  | "MANUAL_REVIEW"
+  | "EXPIRED"
+  | "INVALIDATED"
+  | "CANCELLED";
+
+/**
+ * An org Safe operation waiting for its owners' signatures
+ * (domain/safe-op-queue.ts). Prepared once: `digest` is the EIP-712 hash
+ * every owner signs and `userOperation` the op it covers, so nothing about
+ * the op changes after the first signature. The threshold is never stored;
+ * it is read from the Safe every time.
+ */
+export interface PendingSafeOp {
+  id: string;
+  orgId: string;
+  safeAddress: `0x${string}`;
+  chainId: number;
+  /** What the op does, for the queue's list ("payment", "add-owner", ...). */
+  kind: string;
+  summary: string;
+  digest: `0x${string}`;
+  /** The UserOperation as JSON, bigints tagged (domain/safe-op-queue.ts). */
+  userOperation: string;
+  /** The EntryPoint nonce the op was built on, decimal. */
+  nonce: string;
+  createdByMemberId: string;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
+  state: SafeOpState;
+  signatures: SafeOpSignature[];
+  /** Signatures taken off because the signer is no longer an owner on chain. */
+  dropped: { memberId: string; ownerAddress: `0x${string}`; droppedAt: string; reason: string }[];
+  reason?: string;
+  userOpHash?: string;
+  txHash?: string;
+}

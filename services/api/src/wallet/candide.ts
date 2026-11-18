@@ -20,6 +20,7 @@ import {
   SocialRecoveryModuleGracePeriodSelector,
   calculateUserOperationMaxGasCost,
   createUserOperationHash,
+  fetchAccountNonce,
   fromSafeWebauthn,
   getSafeMessageEip712Data,
   webauthnSignatureFromAssertion,
@@ -715,6 +716,17 @@ export async function submitPasskeySafeOperationWithReceipt(
     [passkeySigner],
     CANDIDE.chainId,
   );
+  return sendSignedOperation(account, userOperation, gasPaidBy);
+}
+
+/** Send a signed op and wait for its receipt. A refusal the bundler states is
+ *  BundlerRefusedError; anything after that may have landed and is
+ *  SafeOperationUncertainError. */
+async function sendSignedOperation(
+  account: SafeAccount,
+  userOperation: UserOperationV9,
+  gasPaidBy: SubmittedOperation["gasPaidBy"],
+): Promise<SubmittedOperation> {
   let response: Awaited<ReturnType<typeof account.sendUserOperation>>;
   try {
     response = await account.sendUserOperation(userOperation, bundler());
@@ -749,6 +761,76 @@ export async function submitPasskeySafeOperationWithReceipt(
       : {}),
     gasPaidBy,
   };
+}
+
+// ---------------------------------------------------------------------------
+// org Safes: several owners, each signing with their own passkey
+// (domain/safe-op-queue.ts). No assertPasskeyAloneCanSign here: the threshold
+// is the chain's and the queue collects as many signatures as it asks for.
+
+const gasPaidByMode = (): SubmittedOperation["gasPaidBy"] =>
+  CANDIDE.gas.mode === "sponsored" ? "sponsored" : CANDIDE.gas.mode === "native" ? "safe-native" : "safe-token";
+
+/**
+ * Build an org Safe operation once, for `signers` to sign: the threshold's
+ * worth of owner passkeys, so gas is estimated for that many signatures.
+ * Refused on the harness chain (no bundler) and for an undeployed Safe.
+ */
+export async function prepareMultiOwnerSafeOperation(
+  safeAddress: `0x${string}`,
+  txs: MetaTransaction[],
+  signers: WebauthnPublicKey[],
+): Promise<PreparedSafeOperation & { nonce: bigint }> {
+  if (!txs.length) throw new Error("a Safe operation needs at least one transaction");
+  if (!signers.length) throw new Error("a Safe operation needs at least one signer");
+  if (allowSimulation()) throw new Error("org Safe operations need a real chain — the local harness has no bundler");
+  if (!(await isDeployed(safeAddress))) throw new Error("the org Safe must be deployed before an operation can be queued");
+  const account = new SafeAccount(safeAddress);
+  const userOperation = await account.createUserOperation(txs, rpc(), bundler(), { expectedSigners: signers });
+  const { userOperation: finalOp, gasTokenCost } = await payGas(account, userOperation);
+  return {
+    safeAddress,
+    challenge: account.getUserOperationEip712Hash(finalOp, CANDIDE.chainId) as `0x${string}`,
+    userOperation: finalOp,
+    nonce: finalOp.nonce,
+    ...(gasTokenCost ? { gasTokenCost } : {}),
+  };
+}
+
+/** The EntryPoint's next nonce for the Safe under `nonce`'s key. An op whose
+ *  nonce is below it can never execute. */
+export async function safeEntryPointNonce(safeAddress: `0x${string}`, nonce: bigint): Promise<bigint> {
+  const key = nonce >> 64n;
+  if (key > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("unsupported nonce key");
+  return fetchAccountNonce(rpc(), new SafeAccount(safeAddress).entrypointAddress, safeAddress, Number(key));
+}
+
+/**
+ * Relay an org Safe operation with every owner signature collected for it.
+ * The digest is recomputed from the stored op and must be the one the owners
+ * signed, so a rewritten row cannot borrow their signatures.
+ */
+export async function submitMultiOwnerSafeOperation(
+  safeAddress: `0x${string}`,
+  userOperation: UserOperationV9,
+  digest: `0x${string}`,
+  signed: { publicKey: WebauthnPublicKey; assertion: BrowserPasskeyAssertion }[],
+): Promise<SubmittedOperation> {
+  if (allowSimulation()) throw new Error("org Safe operations need a real chain — the local harness has no bundler");
+  const account = new SafeAccount(safeAddress);
+  const recomputed = account.getUserOperationEip712Hash(userOperation, CANDIDE.chainId);
+  if (recomputed.toLowerCase() !== digest.toLowerCase()) throw new Error("the stored operation does not match the digest its owners signed");
+  if (!(await isDeployed(safeAddress))) throw new Error("the org Safe is not deployed");
+  const signers = signed.map(({ publicKey, assertion }) =>
+    fromSafeWebauthn({
+      publicKey,
+      isInit: false,
+      accountClass: SafeAccount,
+      getAssertion: async () => webauthnSignatureFromAssertion(assertion),
+    }),
+  );
+  userOperation.signature = await account.signUserOperationWithSigners(userOperation, signers, CANDIDE.chainId);
+  return sendSignedOperation(account, userOperation, gasPaidByMode());
 }
 
 /** The bundler's answer for an operation it took; null while it has no receipt. */

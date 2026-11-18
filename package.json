@@ -45,6 +45,7 @@
     "authorizer-bind:test": "tsx scripts/authorizer-bind-test.ts",
     "passkey-safe:test": "tsx scripts/passkey-safe-plan-test.ts",
     "safe-signers:test": "tsx scripts/safe-signers-test.ts",
+    "safe-op-queue:test": "tsx scripts/safe-op-queue-test.ts",
     "safe-import:test": "tsx scripts/safe-import-test.ts",
     "safe:import-tx": "tsx scripts/safe-import-owner-tx.ts",
     "safe-import:ui:test": "tsx scripts/safe-import-ui-test.ts",

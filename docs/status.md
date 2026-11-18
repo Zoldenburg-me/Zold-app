@@ -54,6 +54,13 @@ Say this plainly rather than letting the surface imply otherwise:
   gain or loss against the receipt value. An unconfirmed submission settles
   from the bundler's receipt; an operation the bundler dropped has none, and
   stays SUBMITTED and unbooked.
+- **The org Safe signature queue has never run on a chain.** No org Safe
+  exists and nothing queues an op; it is off unless
+  `ORG_SAFE_QUEUE_ENABLED=1`. `safe-op-queue:test` runs it against a fake
+  chain and software passkeys. Building one Safe signature from several
+  WebAuthn owners (`submitMultiOwnerSafeOperation`) has never reached a
+  bundler, and whether a sponsored paymaster's signature outlives an op that
+  waits hours for its owners is unchecked.
 - **One real swap has run: 1 USDC to EURe in the earlier owner Safe on Base
   mainnet (2026-10-11).** Read back on chain 2026-10-12, before the 1 €
   below arrived: the Safe held 0 USDC and 0.8914 EURe. Which venue filled it and the gas it used are in

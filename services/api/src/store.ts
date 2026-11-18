@@ -40,10 +40,12 @@ import type {
   OperatorCredential,
   OperatorSession,
   PaymentRequest,
+  PendingSafeOp,
   Quote,
   ReceiptShare,
   RecoveryRequest,
   ReviewResolutionState,
+  SafeOpSignature,
   ServiceCredential,
   Session,
   ShopifyConnection,
@@ -290,6 +292,79 @@ export const store = {
   },
   recoveryRequestsForUser(userId: string) {
     return db.recoveryRequests.filter((r) => r.userId === userId);
+  },
+
+  addSafeOp(op: PendingSafeOp) {
+    db.safeOps.push(op);
+    persist();
+    return op;
+  },
+  findSafeOp(id: string) {
+    return db.safeOps.find((o) => o.id === id);
+  },
+  safeOpsOf(orgId: string) {
+    return db.safeOps.filter((o) => o.orgId === orgId);
+  },
+  /**
+   * End a PENDING op (expired, invalidated, cancelled). Only a PENDING op is
+   * written: every other state is the op's last word or belongs to the relay
+   * (finishSafeOp), so nothing moves a finished op backwards.
+   */
+  endPendingSafeOp(id: string, patch: { state: "EXPIRED" | "INVALIDATED" | "CANCELLED"; reason: string }) {
+    const o = db.safeOps.find((x) => x.id === id);
+    if (!o || o.state !== "PENDING") return null;
+    Object.assign(o, patch, { updatedAt: new Date().toISOString() });
+    persist();
+    return o;
+  },
+  /** Take the signatures of these owner addresses off a PENDING op, and say
+   *  why. Filters the row as stored, so a signature added meanwhile stays. */
+  dropSafeOpSignatures(id: string, ownerAddresses: string[], reason: string, at = new Date().toISOString()) {
+    const o = db.safeOps.find((x) => x.id === id);
+    if (!o || o.state !== "PENDING") return null;
+    const gone = new Set(ownerAddresses.map((a) => a.toLowerCase()));
+    const dropped = o.signatures.filter((s) => gone.has(s.ownerAddress.toLowerCase()));
+    if (!dropped.length) return o;
+    o.signatures = o.signatures.filter((s) => !gone.has(s.ownerAddress.toLowerCase()));
+    o.dropped.push(...dropped.map((s) => ({ memberId: s.memberId, ownerAddress: s.ownerAddress, droppedAt: at, reason })));
+    o.updatedAt = at;
+    persist();
+    return o;
+  },
+  /**
+   * Add one owner's signature, synchronously: the state check, the duplicate
+   * check and the write happen with no await between, so two parallel
+   * submissions by one owner cannot both land. Null when the op is not
+   * PENDING or that member or owner address has signed already.
+   */
+  addSafeOpSignature(id: string, sig: SafeOpSignature): PendingSafeOp | null {
+    const o = db.safeOps.find((x) => x.id === id);
+    if (!o || o.state !== "PENDING") return null;
+    const owner = sig.ownerAddress.toLowerCase();
+    if (o.signatures.some((s) => s.memberId === sig.memberId || s.ownerAddress.toLowerCase() === owner)) return null;
+    o.signatures.push(sig);
+    o.updatedAt = sig.signedAt;
+    persist();
+    return o;
+  },
+  /** Claim a PENDING op for its one relay, same shape as claimDraftExecution.
+   *  Null when somebody else claimed it, or it is no longer pending. */
+  claimSafeOpRelay(id: string): PendingSafeOp | null {
+    const o = db.safeOps.find((x) => x.id === id);
+    if (!o || o.state !== "PENDING") return null;
+    o.state = "RELAYING";
+    o.updatedAt = new Date().toISOString();
+    persist();
+    return o;
+  },
+  /** The relay's outcome. Only a RELAYING op is finished, and only once. */
+  finishSafeOp(id: string, patch: Pick<PendingSafeOp, "state"> & Partial<Pick<PendingSafeOp, "reason" | "userOpHash" | "txHash">>) {
+    const o = db.safeOps.find((x) => x.id === id);
+    if (!o || o.state !== "RELAYING") throw new Error(`safe op ${id} is not relaying`);
+    if (patch.state === "PENDING" || patch.state === "RELAYING") throw new Error("a relay ends in a final state");
+    Object.assign(o, patch, { updatedAt: new Date().toISOString() });
+    persist();
+    return o;
   },
   findUserByAddress(address: string) {
     return db.users.find((u) => u.address.toLowerCase() === address.toLowerCase());

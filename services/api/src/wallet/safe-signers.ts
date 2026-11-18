@@ -23,7 +23,7 @@
  */
 import { AllowanceModule, type MetaTransaction } from "abstractionkit";
 import { decodeFunctionResult, encodeFunctionData, getAddress } from "viem";
-import { candideRpc, ethCall, passkeyAccountAddress, safeOwners, safeThreshold, webauthnOwnerFromStore, isDeployed } from "./candide.js";
+import { candideRpc, ethCall, passkeyAccountAddress, safeOwners, safeThreshold, webauthnOwnerFromJwk, webauthnOwnerFromStore, isDeployed } from "./candide.js";
 
 /** Safe's official AllowanceModule v0.1.1 (safe-modules-deployments), the one
  *  Safe{Wallet} reads for Spending limits on Base. abstractionkit labels this
@@ -86,6 +86,13 @@ export interface SafeSignerState {
 
 export function passkeyOwnerAddress(passkeyPublicKey: { x: string; y: string }): `0x${string}` {
   return getAddress(passkeyAccountAddress(webauthnOwnerFromStore(passkeyPublicKey)));
+}
+
+/** The owner address a login passkey signs as, from the key the assertion is
+ *  verified with; null for a key that is not P-256. */
+export function passkeyOwnerAddressOfJwk(jwk: JsonWebKey): `0x${string}` | null {
+  const owner = webauthnOwnerFromJwk(jwk);
+  return owner ? getAddress(passkeyAccountAddress(owner)) : null;
 }
 
 export async function allowanceModuleEnabled(safeAddress: string): Promise<boolean> {
