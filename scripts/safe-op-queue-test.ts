@@ -6,6 +6,8 @@
  *   - the flag: off, nothing is queued and every route refuses;
  *   - the threshold is the chain's: a 2-of-3 Safe relays on the second
  *     owner's signature, not the first, and a 1-of-1 on the first;
+ *   - queueing: only the org's own Safe, and only an op whose digest, sender
+ *     and nonce agree;
  *   - only an owner whose passkey is an owner on chain signs: a payer, an
  *     admin, and an owner member whose passkey is not on the Safe are refused;
  *   - a duplicate signature is refused, also when sent twice at once;
@@ -52,7 +54,7 @@ const { createSafeOpRoutes } = await import("../services/api/src/routes/business
 const { queueSafeOp, relayIfReady, SafeOpRefusal } = await import("../services/api/src/wallet/org-safe-queue.js");
 const { checkAgainstChain, decodeUserOperation, encodeUserOperation, SAFE_OP_TTL_MS } = await import("../services/api/src/domain/safe-op-queue.js");
 const { passkeyOwnerAddressOfJwk } = await import("../services/api/src/wallet/safe-signers.js");
-const { BundlerRefusedError, SafeOperationUncertainError, submitMultiOwnerSafeOperation } = await import("../services/api/src/wallet/candide.js");
+const { BundlerRefusedError, SafeOperationUncertainError, safeOperationDigest, submitMultiOwnerSafeOperation } = await import("../services/api/src/wallet/candide.js");
 initStore();
 
 let passed = 0;
@@ -80,6 +82,8 @@ for (const p of people) {
   const role = p === "admin" ? "admin" : p === "payer" ? "payer" : "owner";
   store.addMember({ id: `m_${p}`, orgId: "org_1", userId: `u_${p}`, email: "", role, status: "active", invitedAt: now, acceptedAt: now } as any);
 }
+// The Safe is the org's own account; queueSafeOp refuses any other.
+store.addAccount({ id: "acc_1", orgId: "org_1", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: SAFE, createdAt: now, updatedAt: now } as any);
 // A second org, to check one org never reaches another's op.
 store.addOrganisation({ id: "org_2", type: "business", name: "Other AG", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now } as any);
 store.addMember({ id: "m_anna2", orgId: "org_2", userId: "u_anna", email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now } as any);
@@ -117,10 +121,21 @@ const call = async (method: string, p: string, user: string, body?: unknown) => 
 
 const org = () => store.findOrganisation("org_1")!;
 const member = (p: string) => store.findMember(`m_${p}`)!;
+// A complete UserOperation, so its digest is the real EIP-712 hash; random
+// callData keeps each op's digest distinct.
+const userOp = (nonce: bigint, sender: `0x${string}` = SAFE): any => ({
+  sender, nonce, factory: null, factoryData: null, callData: `0x${randomBytes(8).toString("hex")}`, callGasLimit: 123456789012345678901234567890n,
+  verificationGasLimit: 1n, preVerificationGas: 1n, maxFeePerGas: 1n, maxPriorityFeePerGas: 1n, paymaster: null,
+  paymasterVerificationGasLimit: null, paymasterPostOpGasLimit: null, paymasterData: null, signature: "0x",
+});
+const preparedFor = (nonce: bigint, safe: `0x${string}` = SAFE) => {
+  const userOperation = userOp(nonce, safe);
+  return { challenge: safeOperationDigest(safe, userOperation), userOperation, nonce };
+};
 const queue = (by = "payer", nonce = chain.nonce, extra: Partial<{ now: number }> = {}) =>
   queueSafeOp({
     org: org(), member: member(by), safeAddress: SAFE, kind: "payment", summary: "Pay 120 EURe to Lieferant GmbH",
-    prepared: { challenge: `0x${randomBytes(32).toString("hex")}`, userOperation: { sender: SAFE, nonce, callGasLimit: 123456789012345678901234567890n, signature: "0x" }, nonce },
+    prepared: preparedFor(nonce),
     ...extra,
   });
 const challengeOf = (op: { digest: string }) => Buffer.from(op.digest.slice(2), "hex").toString("base64url");
@@ -151,11 +166,42 @@ await check("payers and admins queue; a viewer cannot; a personal org cannot", a
   assert.equal(queue("payer").state, "PENDING");
   assert.equal(queue("admin").state, "PENDING");
   store.addMember({ id: "m_viewer", orgId: "org_1", userId: "u_dora", email: "", role: "viewer", status: "active", invitedAt: now, acceptedAt: now } as any);
-  assert.throws(() => queueSafeOp({ org: org(), member: store.findMember("m_viewer")!, safeAddress: SAFE, kind: "payment", summary: "x", prepared: { challenge: `0x${"11".repeat(32)}`, userOperation: {}, nonce: 0n } }),
+  assert.throws(() => queueSafeOp({ org: org(), member: store.findMember("m_viewer")!, safeAddress: SAFE, kind: "payment", summary: "x", prepared: preparedFor(0n) }),
     (e: any) => e.code === "CANNOT_QUEUE");
   store.addOrganisation({ id: "org_p", type: "personal", name: "Me", plan: "free", reporting: {}, verifications: {}, createdAt: now, updatedAt: now } as any);
-  assert.throws(() => queueSafeOp({ org: store.findOrganisation("org_p")!, member: member("anna"), safeAddress: SAFE, kind: "payment", summary: "x", prepared: { challenge: `0x${"11".repeat(32)}`, userOperation: {}, nonce: 0n } }),
+  assert.throws(() => queueSafeOp({ org: store.findOrganisation("org_p")!, member: member("anna"), safeAddress: SAFE, kind: "payment", summary: "x", prepared: preparedFor(0n) }),
     (e: any) => e.code === "NOT_A_BUSINESS");
+});
+
+await check("a Safe that is not one of the org's accounts is refused", async () => {
+  reset();
+  const before = store.safeOpsOf("org_1").length;
+  const FOREIGN = `0x${randomBytes(20).toString("hex")}` as `0x${string}`;
+  assert.throws(() => queueSafeOp({ org: org(), member: member("payer"), safeAddress: FOREIGN, kind: "payment", summary: "x", prepared: preparedFor(0n, FOREIGN) }),
+    (e: any) => e instanceof SafeOpRefusal && e.code === "NOT_THE_ORG_SAFE");
+  // org_1's Safe is not org_2's, even for a member of both.
+  assert.throws(() => queueSafeOp({ org: store.findOrganisation("org_2")!, member: store.findMember("m_anna2")!, safeAddress: SAFE, kind: "payment", summary: "x", prepared: preparedFor(0n) }),
+    (e: any) => e.code === "NOT_THE_ORG_SAFE");
+  assert.equal(store.safeOpsOf("org_1").length, before);
+  assert.equal(store.safeOpsOf("org_2").length, 0);
+});
+
+await check("a mismatched bundle is refused at queue: digest, nonce or sender", async () => {
+  reset();
+  const before = store.safeOpsOf("org_1").length;
+  const q = (prepared: any) => () => queueSafeOp({ org: org(), member: member("payer"), safeAddress: SAFE, kind: "payment", summary: "x", prepared });
+  const mismatch = (e: any) => e instanceof SafeOpRefusal && e.code === "OP_MISMATCH";
+  const good = preparedFor(0n);
+  assert.throws(q({ ...good, challenge: `0x${randomBytes(32).toString("hex")}` }), mismatch, "another digest");
+  assert.throws(q({ ...good, userOperation: { ...good.userOperation, callData: "0xdeadbeef" } }), mismatch, "the op changed under its digest");
+  assert.throws(q({ ...good, nonce: 1n }), mismatch, "a nonce the op does not carry");
+  const other = `0x${randomBytes(20).toString("hex")}` as `0x${string}`;
+  const foreignOp = userOp(0n, other);
+  assert.throws(q({ challenge: safeOperationDigest(SAFE, foreignOp), userOperation: foreignOp, nonce: 0n }), mismatch, "an op for another sender");
+  assert.throws(q({ ...good, userOperation: {} }), mismatch, "an empty op");
+  assert.throws(q({ ...good, userOperation: null }), mismatch, "no op");
+  assert.equal(store.safeOpsOf("org_1").length, before);
+  assert.equal(q(good)().state, "PENDING");
 });
 
 // ── the threshold ───────────────────────────────────────────────────────────

@@ -4,10 +4,6 @@
  * The rules are in domain/safe-op-queue.ts; this file adds the store and the
  * chain. Behind ORG_SAFE_QUEUE_ENABLED; personal and sole-trader Safes never
  * come here and keep assertPasskeyAloneCanSign.
- *
- * shortcut: the caller of queueSafeOp vouches that `safeAddress` is the org's
- * own Safe. No org Safe exists before M2.3, which owns that binding and is
- * the only caller.
  */
 import { randomUUID } from "node:crypto";
 import type { UserOperationV9 } from "abstractionkit";
@@ -29,6 +25,7 @@ import {
   CANDIDE,
   SafeOperationUncertainError,
   safeEntryPointNonce,
+  safeOperationDigest,
   safeOwners,
   safeThreshold,
   submitMultiOwnerSafeOperation,
@@ -84,13 +81,18 @@ export function assertQueueOpen(): void {
 /**
  * Queue an op prepared once (prepareMultiOwnerSafeOperation): its digest and
  * nonce are fixed from here on. A member who may draft queues it; nobody's
- * signature comes with it, the creator's included.
+ * signature comes with it, the creator's included. Refused unless the Safe is
+ * one of the org's own accounts and {challenge, userOperation, nonce} agree:
+ * the digest recomputed from the op, and the op's own sender and nonce.
  */
 export function queueSafeOp(args: {
   org: Organisation;
   member: Member;
   safeAddress: `0x${string}`;
   kind: string;
+  /** Caller-supplied free text, for the queue's list only. Built server-side,
+   *  never a client body field, and never the only thing an owner reads before
+   *  signing: the sign view renders the decoded calls. */
   summary: string;
   prepared: { challenge: `0x${string}`; userOperation: unknown; nonce: bigint };
   now?: number;
@@ -102,6 +104,18 @@ export function queueSafeOp(args: {
     throw new SafeOpRefusal(403, "CANNOT_QUEUE", `Your role (${member.role}) cannot queue payments.`);
   }
   if (!/^0x[0-9a-fA-F]{64}$/.test(prepared.challenge)) throw new Error("a queued op needs its 32-byte digest");
+  const safe = args.safeAddress.toLowerCase();
+  if (!store.accountsOf(org.id).some((a) => a.address?.toLowerCase() === safe)) {
+    throw new SafeOpRefusal(409, "NOT_THE_ORG_SAFE", "This Safe is not one of the organisation's accounts.");
+  }
+  const op = prepared.userOperation as Partial<UserOperationV9> | null;
+  let digest: string | null = null;
+  if (op && typeof op === "object" && typeof op.sender === "string" && op.sender.toLowerCase() === safe && op.nonce === prepared.nonce) {
+    try { digest = safeOperationDigest(args.safeAddress, op as UserOperationV9); } catch { digest = null; }
+  }
+  if (!digest || digest.toLowerCase() !== prepared.challenge.toLowerCase()) {
+    throw new SafeOpRefusal(409, "OP_MISMATCH", "The operation does not match its digest, Safe or nonce.");
+  }
   const now = args.now ?? Date.now();
   return store.addSafeOp({
     id: `sop_${randomUUID()}`,

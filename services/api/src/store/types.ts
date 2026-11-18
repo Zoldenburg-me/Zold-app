@@ -1250,6 +1250,9 @@ export interface PendingSafeOp {
   chainId: number;
   /** What the op does, for the queue's list ("payment", "add-owner", ...). */
   kind: string;
+  /** Caller-supplied free text for the list (queueSafeOp). Display only: an
+   *  owner signs `digest`, and the sign view shows the decoded calls, never
+   *  this line alone. */
   summary: string;
   digest: `0x${string}`;
   /** The UserOperation as JSON, bigints tagged (domain/safe-op-queue.ts). */

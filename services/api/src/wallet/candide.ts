@@ -805,6 +805,11 @@ export async function safeEntryPointNonce(safeAddress: `0x${string}`, nonce: big
   return fetchAccountNonce(rpc(), new SafeAccount(safeAddress).entrypointAddress, safeAddress, Number(key));
 }
 
+/** The EIP-712 hash every owner of `safeAddress` signs for `userOperation`. Offline. */
+export function safeOperationDigest(safeAddress: `0x${string}`, userOperation: UserOperationV9): `0x${string}` {
+  return new SafeAccount(safeAddress).getUserOperationEip712Hash(userOperation, CANDIDE.chainId) as `0x${string}`;
+}
+
 /**
  * Relay an org Safe operation with every owner signature collected for it.
  * The digest is recomputed from the stored op and must be the one the owners
@@ -818,8 +823,9 @@ export async function submitMultiOwnerSafeOperation(
 ): Promise<SubmittedOperation> {
   if (allowSimulation()) throw new Error("org Safe operations need a real chain — the local harness has no bundler");
   const account = new SafeAccount(safeAddress);
-  const recomputed = account.getUserOperationEip712Hash(userOperation, CANDIDE.chainId);
-  if (recomputed.toLowerCase() !== digest.toLowerCase()) throw new Error("the stored operation does not match the digest its owners signed");
+  if (safeOperationDigest(safeAddress, userOperation).toLowerCase() !== digest.toLowerCase()) {
+    throw new Error("the stored operation does not match the digest its owners signed");
+  }
   if (!(await isDeployed(safeAddress))) throw new Error("the org Safe is not deployed");
   const signers = signed.map(({ publicKey, assertion }) =>
     fromSafeWebauthn({
