@@ -39,6 +39,7 @@ const scripts = [
   "monerium:oauth:test",
   "monerium:apikeys:test",
   "monerium:iban-binding:test",
+  "monerium:money-in:test",
   "monerium:profile:test",
   "monerium:ratelimit:test",
   "display-name:test",

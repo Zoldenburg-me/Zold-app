@@ -11,7 +11,7 @@ import express from "express";
 import { store } from "../../store.js";
 import { requireCapability, requirePermission, type OrgContext } from "../org-context.js";
 import { isMonth, linesInMonth, ownTransferAllowed } from "../../bookkeeping/statement.js";
-import { statementLinesOf, swapsHaveExecuted, writeStatementLinesFor } from "../../bookkeeping/writer.js";
+import { statementLinesOf, swapsHaveExecuted, writeAccountStatementLines, writeStatementLinesFor } from "../../bookkeeping/writer.js";
 import { issueBelegForLine } from "../../bookkeeping/issue.js";
 import { belegFileName, belegPdf, UNEXECUTED_NOTE } from "../../bookkeeping/beleg.js";
 import { lexwareCsvBytes, lexwareRow } from "../../bookkeeping/lexware.js";
@@ -97,8 +97,9 @@ export function createBookkeepingExportRoutes(deps: OrgRoutes): express.Router {
     let updated = 0;
     for (const a of store.accountsOf(ctx.org.id)) {
       const u = a.backingUserId ? store.findUser(a.backingUserId) : undefined;
-      if (!u) continue;
-      const r2 = writeStatementLinesFor(u);
+      // A company's own Safe has no backing user: its lines are its own.
+      if (!u && !a.address) continue;
+      const r2 = u ? writeStatementLinesFor(u) : writeAccountStatementLines(a);
       added += r2.added;
       updated += r2.updated;
     }

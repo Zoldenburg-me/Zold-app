@@ -36,7 +36,9 @@ import { dayOf } from "../domain/income-invoices.js";
 export interface StatementInputs {
   orgId: string;
   accountId: string;
-  userId: string;
+  /** The person whose Safe this is; absent for a company's own Safe, whose
+   *  account is the holder (bookkeeping/money-in.ts). */
+  userId?: string;
   /** The Safe whose movements these are. */
   safeAddress: string;
   /** The org's reporting time zone: a line's booking and value days are its days. */
@@ -138,7 +140,8 @@ function requestFor(inp: StatementInputs, id?: string, memo?: string): PaymentRe
 function sepaInLines(inp: StatementInputs): LineDraft[] {
   const out: LineDraft[] = [];
   for (const o of inp.issueOrders) {
-    if (o.userId !== inp.userId || !(o.amountEur > 0)) continue;
+    const mine = o.accountId ? o.accountId === inp.accountId : !!inp.userId && o.userId === inp.userId;
+    if (!mine || !(o.amountEur > 0)) continue;
     const req = requestFor(inp, undefined, o.memo);
     const inv = invoiceByRef(inp.invoices, `monerium:${o.orderId}`) ?? (req?.invoiceId ? inp.invoices.find((i) => i.id === req.invoiceId) : undefined);
     // The chain's view of the same money: the mint into the Safe.

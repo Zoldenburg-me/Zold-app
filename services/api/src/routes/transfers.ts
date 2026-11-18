@@ -179,7 +179,7 @@ export function createTransferRouter(deps: TransferDeps) {
       const user = store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
       if (!requireUserSession(req, res, user.id)) return;
-      const mine = <T extends { userId: string }>(rows: T[]) => rows.filter((r) => r.userId === user.id);
+      const mine = <T extends { userId?: string }>(rows: T[]) => rows.filter((r) => r.userId === user.id);
       res.json({
         activity: buildActivity({
           transfers: mine(store.transfers),

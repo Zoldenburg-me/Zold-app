@@ -424,9 +424,9 @@ await check("first run writes the receipt and the disposal with rule-mapped code
 await check("a human's account code survives a later fact change; the Monerium issue snapshot is recorded once", () => {
   const row = store.ledgerOf("org_1").find((e) => e.statement!.key === "deposit:d-1:held")!;
   store.updateLedgerEntry(row.id, { accountCode: "4100", accountCodeAuto: false });
-  const rec = noteMoneriumIssue({ id: "ord-9", kind: "issue", amount: "20.00", address: SAFE, memo: "hello", meta: { state: "processed", processedAt: "2026-09-12T08:00:00.000Z" }, counterpart: { identifier: { iban: "DE02120300000000202051" }, details: { name: "Kunde AG" } } }, user);
+  const rec = noteMoneriumIssue({ id: "ord-9", kind: "issue", amount: "20.00", address: SAFE, memo: "hello", meta: { state: "processed", processedAt: "2026-09-12T08:00:00.000Z" }, counterpart: { identifier: { iban: "DE02120300000000202051" }, details: { name: "Kunde AG" } } }, { kind: "user", user });
   assert.ok(rec);
-  assert.equal(noteMoneriumIssue({ id: "ord-9", kind: "issue", amount: "999", address: SAFE, meta: { state: "processed" } }, user)!.amountEur, 20, "the first snapshot wins");
+  assert.equal(noteMoneriumIssue({ id: "ord-9", kind: "issue", amount: "999", address: SAFE, meta: { state: "processed" } }, { kind: "user", user })!.amountEur, 20, "the first snapshot wins");
   const r = writeStatementLines();
   assert.equal(r.added, 1);
   const rows = store.ledgerOf("org_1");

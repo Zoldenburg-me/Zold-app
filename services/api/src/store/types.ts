@@ -681,7 +681,11 @@ export interface CryptoDeposit {
  */
 export interface MoneriumIssueRecord {
   orderId: string;
-  userId: string;
+  /** Exactly one of the two: the person whose Safe was paid (their books
+   *  follow the user, bookkeeping/writer.ts booksFor), or the company
+   *  account whose own Safe was (bookkeeping/money-in.ts). */
+  userId?: string;
+  accountId?: string;
   amountEur: number;
   counterpartyName?: string;
   counterpartyIban?: string;
