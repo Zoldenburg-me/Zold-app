@@ -31,14 +31,14 @@ Cross-checked on 2026-11-18 against main 3a15b56 and Florentine's code map (boar
 
 ### 2.2 The org Safe
 - One Safe per company org, deployed by Zold at account opening, with the org as its holder of record.
-- **Owners on chain** = the passkey signers of the members whose role has the new permission `account.sign` (owner, and payer if the policy allows), one WebAuthn signer per member.
+- **Owners on chain** = the passkey signers of members with the `owner` role, one WebAuthn signer per member. Zold adds a passkey to the Safe only for an `owner`; it never adds a payer, admin, accountant, viewer or AI agent. Payers (in practice accountants or bookkeepers) and admins prepare and queue payments as drafts; only owners sign.
   - Zold never holds an owner key. The AGENTS.md invariant "never add a co-owner that Zold holds" stays.
-- **Threshold policy** is set per org by its owners: 1-of-n by default, 2-of-n for four eyes. It's stored in the org and read from the chain on every visit, like `safe-signers` today.
+- **The chain is the truth.** Zold reads the owner set and the threshold from the Safe on every visit, like `safe-signers` today, and never enforces a threshold of its own: a 1-of-1 Safe needs one signature, a 2-of-4 Safe needs two. A signature from anyone who is not an owner on chain does nothing, so Zold's roles decide only whose passkey Zold adds or removes. Owners added or removed outside Zold are shown as the chain has them.
 - **Recovery guardian**: the Zoldenburg guardian (hardware wallet, armed by a 1 € transfer from a company bank account in the company's name), plus optionally the owners' own Turnkey guardians. See §3.4 for why Candide's module needs care.
 
 ### 2.3 Membership drives the owner set, in one flow
 - **Granting a signing role** = invite accepted, passkey bound, then an `addOwnerWithThreshold` op signed by the current owners up to the threshold. The member becomes a signer only when the chain shows it.
-- **Removing or deactivating a member, or downgrading them out of `account.sign`** = a `removeOwner` op in the same flow.
+- **Removing or deactivating a member, or downgrading them out of the `owner` role** = a `removeOwner` op in the same flow.
   - The membership change and the on-chain removal are one pending action.
   - Until the chain confirms the removal, the app shows them as **"removal pending, can still sign"**, never as removed.
   - If the removal fails, the membership change is rolled back to "pending", not silently applied.
@@ -88,7 +88,7 @@ Cross-checked on 2026-11-18 against main 3a15b56 and Florentine's code map (boar
 
 ## 4. Migration of existing business accounts backed by a personal Safe
 For each `company` org with a `backingUserId`:
-1. Deploy the org Safe with the backer's passkey signer, plus the other `account.sign` members as they bind. Threshold 1 until the owners choose otherwise.
+1. Deploy the org Safe with the backer's passkey signer (if the backer is an `owner`), plus the other `owner` members as they bind. Threshold 1 at deployment; after that Zold follows whatever the chain has.
 2. Link the org Safe to the corporate Monerium profile and get its IBAN (moved or new).
 3. Move the funds: the backer signs one transfer of the org's EURe from their personal Safe to the org Safe.
    - What counts as the org's: the backer's whole balance, or the org-attributed balance from `safe-books`? See Q5.
@@ -107,7 +107,7 @@ For each `company` org with a `backingUserId`:
 This is M2-sized. M1 is unaffected except that row 13, #105(b) and "backer offboarding" are now part of this work.
 
 ## 6. Questions for the owner
-1. **Who signs?** Is `account.sign` owner only, or owner and payer? Default threshold: 1-of-n, or 2-of-n once there are 2+ signers?
+1. **Who signs?** Is the `owner` role owner only, or owner and payer? Default threshold: 1-of-n, or 2-of-n once there are 2+ signers?
    - **Answered 2026-11-14 (board #118, events 733–734):** only owners sign; one signature is enough by default; Zold follows whatever threshold the Safe has on chain. Keep the five roles. Split `transfers.execute`: prepare and queue stays with payer and admin, signing is owner only. MD and CFO are owners, finance staff are payers, an AI agent is a payer without a signature. Per-member limits come later. This replaces "owner, and payer if the policy allows" in §2.2.
 2. **Sole traders**: a freelancer's business org is backed by their personal Safe. Monerium's personal terms (§16, cited in code) may not allow business use of a personal profile. Does a sole trader need a Monerium corporate or business profile, or is a personal profile fine for them?
 3. **Existing business orgs** with a non-corporate profile: treat them as sole_trader, or ask each one?
@@ -138,6 +138,7 @@ Still open: Q2, Q3, Q4, Q5, Q7.
 6. **`backingUserId` has about 15 read sites, and three decide who can move money**: `drafts.ts:485`, `crypto-sends.ts:401`, spendability (`domain/accounts.ts:338`). Payment pages, invoice pay-links (`invoice-pay-link.ts:109-114`), Shopify (`shopify.ts:249-250`) and the bookkeeping export (`bookkeeping-export.ts:99-137`) all resolve a person. Each is a decision, not a rename.
 7. **The UI promises the personal model in writing**: "Only your passkey can approve its payments" (`business/actions.js:498`), "Only X sees this account's balance" (`business/home.js:129`), "Zold never collects another signer's" (`business/access.js:59`). Screens to change: `views.js:59-137`, `home.js:108-135,255-275`, `settings.js:54-70`, `access.js:41-66`, `access-model.js:36-53`, `send.js:30-60`. `access-model.js` is the tested seam for an org signer set.
 8. **Payers who aren't signers**: is every payment a signed pending op, or does the org Safe get an Allowance-module limit for payers? Q1's "per-member limits later" points at this.
+   - **Answered 2026-11-18 (owner):** every payment is a signed pending op. A payer who isn't an owner is in practice an accountant or bookkeeper: they set payments up as drafts, nothing more. No Allowance module and no payer spending now; per-member limits are a later decision.
 
 ### 7.4 Tests to write before the migration
 - Backer deactivation.
