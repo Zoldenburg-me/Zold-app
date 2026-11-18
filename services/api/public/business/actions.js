@@ -500,6 +500,27 @@ export const ACTIONS = {
       </ul>`, connect, { okLabel: "Connect" });
     return "keep";
   },
+  /* A company's own Safe, deployed with this owner's passkey as its first
+     owner. The passkey prompt is the onboarding one (app/onboarding.js). */
+  async "deploy-safe"() {
+    dialog(`Set up ${org.name}’s Safe?`, `<ul class="zb-next" style="margin-top:6px">
+        <li>${Z.icon("domain")}<span>${esc(org.name)} gets a Safe of its own. Your personal account stays separate.</span></li>
+        <li>${Z.icon("fingerprint")}<span>Your ${Z.passkeyName()} becomes its first signer. Approve once to set it up.</span></li>
+      </ul>`, async () => {
+      const start = await api(`/api/orgs/${org.id}/safe/deployment`, { method: "POST" });
+      if (start.requestId) {
+        let signed;
+        try {
+          signed = await (await deviceLib()).passkeyAssertion(start);
+        } catch (e) {
+          throw new Error(e.name === "NotAllowedError" ? Z.byDevice("Face ID was cancelled.", "The passkey prompt was cancelled.") : e.message);
+        }
+        await api(start.submitTo, { method: "POST", body: signed });
+      }
+      setTimeout(() => toast(`${org.name}’s Safe is set up. Its IBAN comes from Monerium next.`), 0);
+    }, { okLabel: "Set up" });
+    return "keep";
+  },
   async "invoice-pay-link"(el) {
     // No methods sent: the server takes every way the company's account may be
     // paid on this link, which is the payee's, not this member's. It picks the

@@ -17,6 +17,7 @@
  */
 
 import { dataEncryptionProblem } from "../config/data-keys.js";
+import { orgEntity } from "./org-entity.js";
 import type {
   Account,
   AccountIdentifier,
@@ -320,7 +321,7 @@ export function defaultLabel(currency: CurrencyCode): string {
  * registry must agree: a row can say `active` from an older deployment where
  * the provider was configured, and the registry is the current truth.
  */
-export function accountIsSpendable(account: Account): {
+export function accountIsSpendable(account: Account, org?: Pick<Organisation, "type" | "entity">): {
   ok: boolean;
   reason?: string;
 } {
@@ -335,9 +336,11 @@ export function accountIsSpendable(account: Account): {
   if (account.status !== "active") {
     // An EUR account without an IBAN gives the current reason, not the
     // wording stored when it was opened.
-    const why = account.currency === "EUR" && !account.backingUserId
-      ? "No IBAN is connected to this account yet, so nothing can be sent from it"
-      : account.gate?.reason.replace(/\.$/, "");
+    const why = account.currency === "EUR" && org && orgEntity(org) === "company" && !account.address
+      ? "The company’s Safe is not set up yet, so nothing can be sent from it"
+      : account.currency === "EUR" && !account.backingUserId
+        ? "No IBAN is connected to this account yet, so nothing can be sent from it"
+        : account.gate?.reason.replace(/\.$/, "");
     return {
       ok: false,
       reason: `This ${def.name} account is ${account.status}${why ? ` — ${why}` : ""}.`,

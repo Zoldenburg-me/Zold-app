@@ -6,8 +6,9 @@
  *   - round-trip: a company org's plan is stored on the Organisation, survives
  *     a reload from disk, and is addressed (its address is not derived);
  *   - only setOrgSafePlan writes it: not updateOrganisation, not for a
- *     personal or sole_trader org, not with a malformed shape, and never to a
- *     different address once stored;
+ *     personal or sole_trader org, not with a malformed shape (the zero
+ *     address, no status), never to a different address once stored, and
+ *     never back to planned once active; what is read or written is a copy;
  *   - a company org with no plan is refused by name, and the resolver takes no
  *     user, so there is no caller's Safe to fall back to;
  *   - the public org projection carries no plan;
@@ -99,7 +100,7 @@ addOrg("org_sole", { entity: "sole_trader" });
 addOrg("org_legacy", {});
 store.addOrganisation({ id: "org_me", type: "personal", name: "Me", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now } as any, false);
 
-const plan = { kind: "org" as const, address: ORG_SAFE, owners: [webauthnOwnerToStore(anna), webauthnOwnerToStore(bert)], createdAt: now };
+const plan = { kind: "org" as const, status: "planned" as const, address: ORG_SAFE, owners: [webauthnOwnerToStore(anna), webauthnOwnerToStore(bert)], createdAt: now };
 
 await check("a company org's plan round-trips through the store and a reload from disk", () => {
   store.setOrgSafePlan("org_co", plan);
@@ -125,6 +126,25 @@ await check("the owner list may change; the address never does", () => {
   assert.equal(store.findOrganisation("org_co")!.safe!.address, ORG_SAFE);
 });
 
+await check("a deployed plan never goes back to planned", () => {
+  store.setOrgSafePlan("org_co", { ...plan, owners: store.findOrganisation("org_co")!.safe!.owners, status: "active" });
+  assert.throws(() => store.setOrgSafePlan("org_co", { ...plan, status: "planned" }), /cannot go back to planned/);
+  assert.equal(store.findOrganisation("org_co")!.safe!.status, "active");
+});
+
+await check("the plan read and the plan written are copies, never the stored row", () => {
+  const read = orgSafePlan(store.findOrganisation("org_co")!);
+  read.owners.push({ x: "0x00", y: "0x00" });
+  read.owners[0].x = "0x00";
+  const stored = store.findOrganisation("org_co")!.safe!;
+  assert.notEqual(stored.owners[0].x, "0x00");
+  assert.ok(stored.owners.every((o) => o.x !== "0x00"));
+  const given = { ...plan, owners: plan.owners.map((o) => ({ ...o })), status: "active" as const };
+  store.setOrgSafePlan("org_co", given);
+  given.owners[0].x = "0x00";
+  assert.notEqual(store.findOrganisation("org_co")!.safe!.owners[0].x, "0x00");
+});
+
 await check("only setOrgSafePlan writes a plan, and only for a company", () => {
   assert.throws(() => store.updateOrganisation("org_bare", { safe: plan }), /setOrgSafePlan only/);
   for (const id of ["org_sole", "org_legacy", "org_me"]) {
@@ -137,6 +157,9 @@ await check("a malformed plan is refused, not repaired", () => {
   const bad = [
     { ...plan, kind: "personal" },
     { ...plan, address: "0x5afe" },
+    { ...plan, address: "0x0000000000000000000000000000000000000000" },
+    { ...plan, status: undefined },
+    { ...plan, status: "deployed" },
     { ...plan, owners: [] },
     { ...plan, owners: [plan.owners[0], { ...plan.owners[0], x: plan.owners[0].x.toUpperCase().replace("0X", "0x") }] },
     { ...plan, owners: [{ x: "0x01", y: plan.owners[0].y }] },

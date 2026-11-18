@@ -16,7 +16,7 @@ import { randomUUID } from "node:crypto";
 import { batched, db, persist, pruneSessions, seedChartOfAccounts } from "./store/db.js";
 import { nextProfileHistory } from "./domain/monerium-identity.js";
 import { orgEntity } from "./domain/org-entity.js";
-import { isOrgSafePlan } from "./domain/org-safe-plan.js";
+import { copyOrgSafePlan, isOrgSafePlan } from "./domain/org-safe-plan.js";
 import { auditEntry } from "./audit.js";
 import type {
   Account,
@@ -1074,7 +1074,8 @@ export const store = {
     if (o.safe && o.safe.address.toLowerCase() !== plan.address.toLowerCase()) {
       throw new Error(`organisation ${orgId} already has its Safe at ${o.safe.address}`);
     }
-    o.safe = { kind: "org", address: plan.address, owners: plan.owners.map((w) => ({ x: w.x, y: w.y })), createdAt: o.safe?.createdAt ?? plan.createdAt };
+    if (o.safe?.status === "active" && plan.status !== "active") throw new Error(`organisation ${orgId}'s Safe is deployed; it cannot go back to planned`);
+    o.safe = { ...copyOrgSafePlan(plan), createdAt: o.safe?.createdAt ?? plan.createdAt };
     o.updatedAt = new Date().toISOString();
     persist();
     return o;

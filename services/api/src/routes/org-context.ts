@@ -113,7 +113,7 @@ export function publicOrg(org: Organisation, member?: Member) {
     id: org.id,
     type: org.type,
     // Business orgs only; `entityLocked` says whether an owner may still change it.
-    ...(org.type === "business" ? { entity: orgEntity(org), entityLocked: entityLocked(store.accountsOf(org.id)) } : {}),
+    ...(org.type === "business" ? { entity: orgEntity(org), entityLocked: entityLocked(org, store.accountsOf(org.id)) } : {}),
     name: org.name,
     legalName: org.legalName,
     taxId: org.taxId,

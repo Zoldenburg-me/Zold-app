@@ -120,7 +120,8 @@ function balanceCard(accounts, read) {
   const mine = accounts.find((a) => a.status === "active" && a.backingUserId && me && a.backingUserId === me.id);
   const safe = read ? ownSafe(accounts) : null;
   const fig = (mine || safe) && typeof me.balanceEur === "number";
-  const other = !mine && accounts.find((a) => a.backingUserId);
+  // A company's account has no backer, so no person to name.
+  const other = !mine && org.entity !== "company" && accounts.find((a) => a.backingUserId);
   const label = mine ? `${mine.label || mine.currency} balance` : safe?.company ? "Company Zold account" : "Your Zold account";
   const head = fig
     ? `<span class="zb-h-bal__label">${esc(label)}</span><span class="zb-h-bal__fig">${bigEur(me.balanceEur)}</span>`
