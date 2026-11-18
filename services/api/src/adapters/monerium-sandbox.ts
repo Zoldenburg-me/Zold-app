@@ -27,6 +27,7 @@ import { keccak256, toHex } from "viem";
 import { moneriumAmountString, moneriumRedeemMessage, normalizeIban } from "../sepa.js";
 import { attributeMoneriumOrder, attributeMoneriumOrderToInvoice } from "../routes/payment-requests.js";
 import { noteMoneriumIssue, writeStatementLines } from "../bookkeeping/writer.js";
+import { moneyInHolder, type MoneyInHolder } from "../bookkeeping/money-in.js";
 import { moneriumOrderProcessed } from "../domain/monerium-order.js";
 import { describeCause } from "../http/log-cause.js";
 import { can } from "../domain/segments.js";
@@ -40,8 +41,21 @@ function keepIssueFacts(order: MoneriumOrder): void {
   if (order.kind !== "issue" || !isProcessed(order)) return;
   if (order.chain !== MONERIUM.chain) return;
   if (String(order.currency ?? "eur").toLowerCase() !== "eur") return;
-  const user = store.findUserByAddress(order.address);
-  if (user) noteMoneriumIssue(order, user);
+  const holder = bookableHolder(order);
+  if (holder) noteMoneriumIssue(order, holder);
+}
+
+/** Who a deposit is booked to, or undefined. An address naming more than one
+ *  holder books nothing and says so once per order: never a guess. */
+const unbookableWarned = new Set<string>();
+function bookableHolder(order: MoneriumOrder): MoneyInHolder | undefined {
+  const r = moneyInHolder(String(order.address ?? ""));
+  if (r.kind === "user" || r.kind === "account") return r;
+  if (r.kind === "unbookable" && !unbookableWarned.has(order.id)) {
+    unbookableWarned.add(order.id);
+    console.warn(`monerium: issue order ${order.id} not booked: ${r.reason}`);
+  }
+  return undefined;
 }
 
 /**
@@ -456,8 +470,8 @@ async function mirrorOrder(order: MoneriumOrder): Promise<MirrorOutcome> {
   if (String(order.currency ?? "eur").toLowerCase() !== "eur") return "ignored";
   if (store.isOrderProcessed(order.id)) return "duplicate";
   if (recording.has(order.id)) return "unavailable";
-  const user = store.findUserByAddress(order.address);
-  if (!user) return "ignored";
+  const holder = bookableHolder(order);
+  if (!holder) return "ignored";
   const amount = Number(order.amount);
   if (!(amount > 0)) return "ignored";
   recording.add(order.id);
@@ -479,15 +493,16 @@ async function mirrorOrder(order: MoneriumOrder): Promise<MirrorOutcome> {
         // Test fixture, hardhat only: the harnesses' stub Monerium reports an
         // order and the local MockToken stands in for the mint. Unreachable on
         // any real-money chain (HARNESS needs chain 31337).
-        await mintLocalTestEure(user.address, amount, `monerium:${order.id}`);
+        await mintLocalTestEure(holder.kind === "user" ? holder.user.address : holder.account.address!, amount, `monerium:${order.id}`);
       } else {
         console.warn(`monerium: order ${order.id} is on a chain where Monerium issues no EURe (${CHAIN_ID}); not recorded`);
         return "ignored";
       }
     }
     store.markOrderProcessed(order.id);
-    noteMoneriumIssue(order, user);
-    console.log(`monerium: recorded issue order ${order.id} (€${amount}) for ${user.name}`);
+    noteMoneriumIssue(order, holder);
+    const who = holder.kind === "user" ? holder.user.name : `${holder.org.name}'s account ${holder.account.id}`;
+    console.log(`monerium: recorded issue order ${order.id} (€${amount}) for ${who}`);
     return "recorded";
   } finally {
     recording.delete(order.id);
