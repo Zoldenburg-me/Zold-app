@@ -2,14 +2,16 @@
 
 Zold lead, 2026-10-25. Code read on main a001d0e8. Nothing gets built before the owner approves this note.
 
+Cross-checked on 2026-11-18 against main 3a15b56 and Florentine's code map (board #118). §1–§6 are the original text with stale references fixed inline; §7 lists what changed since and what the note misses.
+
 **The owner's decision:** "the Ownership of a safe From a corprate account should always belong to the company not to the person who made the safe or the passkey! for a freelance! who dont have a seperate legal identity we dont care! if he comingle funds or not!!"
 
 ## 1. What exists today
 
 - `OrgType` is `"personal" | "business"` (`domain/types.ts:14`). Nothing says whether a business org is a legal entity or a sole proprietor.
 - A business org's EUR `Account` has `backingUserId` (`types.ts:294`): the member whose own passkey Safe receives the money and whose device key signs its debits.
-  - It is set by `POST /orgs/:orgId/accounts/:accountId/fund` (`routes/orgs.ts:~757`) from the caller's own Safe, IBAN and Monerium profile. A business account must be backed by a `corporate` Monerium profile.
-  - A wallet-tier owner can instead connect their own Safe with no IBAN. Only an owner can do that; an admin can still `fund`, which is #105(b).
+  - It is set by `POST /orgs/:orgId/accounts` with adoption (`routes/orgs.ts:634-752`) or `POST /orgs/:orgId/accounts/:accountId/fund` (`routes/orgs.ts:763-856`) from the caller's own Safe, IBAN and Monerium profile. A business account must be backed by a `corporate` Monerium profile.
+  - A wallet-tier owner can instead connect their own Safe with no IBAN. Since #502 (8981d90c, 2026-10-27) only an owner can back a business account, on both routes (403 `OWNER_ONLY`, `routes/orgs.ts:685`, `:791`). That settles #105(b) for new accounts; accounts an admin already backs are not repaired and belong to the migration (§4).
   - Nothing unbinds or replaces a backer. The type's own comment says per-org Safe provisioning "is not built".
 - Membership and money are disconnected:
   - Removing or deactivating the backing member changes nothing on chain. The money stays in their Safe and they can still spend it.
@@ -59,8 +61,8 @@ Zold lead, 2026-10-25. Code read on main a001d0e8. Nothing gets built before the
 
 ### 3.1 Belege, books, invoices
 - Belege, invoices, payment links, statements and the ledger already carry `orgId`. They belong to the org, not the backer.
-- `bookkeeping/issue.ts:78` stamps `userId = backingUserId` on a Beleg. For company orgs, Belege are listed and revoked only through org-scoped routes, gated on membership and role (this settles row 13).
-- `backedSince` and `domain/safe-books.ts` already model "from when this Safe's movements are this account's". The org Safe starts its own books at deployment, and the personal Safe's books for the org end at the cut-over instant. Statements show one continuous account, with the cut-over as a transfer between two addresses of the same account, not as income or expense.
+- `bookkeeping/issue.ts:34,44` stamps `userId = backingUserId` on a Beleg, and the backer reaches them through the personal `/users/:id/documents` routes (`routes/documents.ts:329-515`). For company orgs, Belege are listed and revoked only through org-scoped routes, gated on membership and role (this settles row 13).
+- `Account.backedSince` (`types.ts:300`, read in `bookkeeping/writer.ts:64`) and `safeBooksStart` (`domain/safe-books.ts:15`) already model "from when this Safe's movements are this account's". The org Safe starts its own books at deployment, and the personal Safe's books for the org end at the cut-over instant. Statements show one continuous account, with the cut-over as a transfer between two addresses of the same account, not as income or expense.
 
 ### 3.2 Payment links, Shopify, crypto-in, `orgsBackedBy`
 - `orgsBackedBy(userId)` (`payment-requests.ts:192`) answers "is this Safe the org's?" by person. For company orgs it becomes "is this address the org Safe?" (`orgOfAddress`).
@@ -106,9 +108,43 @@ This is M2-sized. M1 is unaffected except that row 13, #105(b) and "backer offbo
 
 ## 6. Questions for the owner
 1. **Who signs?** Is `account.sign` owner only, or owner and payer? Default threshold: 1-of-n, or 2-of-n once there are 2+ signers?
+   - **Answered 2026-11-14 (board #118, events 733–734):** only owners sign; one signature is enough by default; Zold follows whatever threshold the Safe has on chain. Keep the five roles. Split `transfers.execute`: prepare and queue stays with payer and admin, signing is owner only. MD and CFO are owners, finance staff are payers, an AI agent is a payer without a signature. Per-member limits come later. This replaces "owner, and payer if the policy allows" in §2.2.
 2. **Sole traders**: a freelancer's business org is backed by their personal Safe. Monerium's personal terms (§16, cited in code) may not allow business use of a personal profile. Does a sole trader need a Monerium corporate or business profile, or is a personal profile fine for them?
 3. **Existing business orgs** with a non-corporate profile: treat them as sole_trader, or ask each one?
 4. **Monerium IBAN**: does Monerium let us move the existing IBAN to the org Safe, or is it a new IBAN? A new IBAN means customers' saved bank details change. This needs to be confirmed with Monerium.
 5. **Migration funds**: move the backer's whole Safe balance, or only what the books attribute to the org since `backedSince`?
 6. **Removal while a payment is pending**: if a removed member's signature is already on a queued op, drop it (safer) or let the op go through?
+   - **Answered 2026-11-14 (board #118, event 735):** drop it. The queued op is signed again by the current owners; it follows the on-chain signer set.
 7. **Recovery for companies**: Zoldenburg-only guardian, armed from a company bank account. OK?
+
+Still open: Q2, Q3, Q4, Q5, Q7.
+
+## 7. Cross-check against main 3a15b56 and the code map (2026-11-18)
+
+### 7.1 Still true
+- `OrgType` (`types.ts:14`), `backingUserId` (`types.ts:294`), `wouldOrphanOrg` (`roles.ts:126`), `orgsBackedBy` (`payment-requests.ts:192`), `assertPasskeyAloneCanSign` (`wallet/candide.ts:571`), `recovery/one-guardian.ts`, `finalizeRecovery` (`recovery/candide-guardian.ts:358`).
+- No route unbinds a backer (`routes/orgs.ts:787-789`). Row 13 is still open: Belege are issued under the backer (§3.1).
+
+### 7.2 Changed since the note
+- #105(b) is closed for new accounts by #502 (§1). Admin-backed legacy rows remain; migration step 1 must find them.
+- #501 left Shopify paying into the backer's own payment page, not the org's, so a company has two pages. §3.2 must pick one.
+
+### 7.3 What the note misses
+1. **Deactivating the backer locks the company out but not the backer.** `resolveOrg` answers 404 for a deactivated member (`org-context.ts:52-55`), and only the backer may execute (`drafts.ts:485`, `crypto-sends.ts:401`). The company can't pay; the ex-member still holds the only key. No test covers this today.
+2. **The threshold can't be lowered today.** `routes/safe-signers.ts:9-21`: no route lowers it, and at 2 Zold can't sign. §2.3's "lower the threshold in the same op" needs the pending-op queue first.
+3. **The queue needs durable storage.** Today's pending ops are an in-memory map with a minutes-long TTL (`routes/safe-signers.ts:57-60`), and payment-review drafts collect no signature (`drafts.ts:429-513`). §2.4 must store signed ops, the owner set they were collected against, a TTL, and invalidation when the owner set changes (Q6).
+4. **The Monerium link needs the queue too.** `POST /addresses` takes one EIP-1271 signature built from one passkey (`routes/monerium.ts:228`). At threshold > 1 it needs all owners, so §5 step 4 depends on step 2.
+5. **One IBAN per Monerium profile.** `POST /ibans` returns 304 when the profile has one (`routes/monerium.ts:715-731`). Moving it is built (`move-iban`, `PATCH /ibans`, `:856-1019`), but it needs the company's own Monerium login (`:883-895`) and stops the old address receiving. The IBAN cascade `store.ts:173-190` re-points every account the user backs, so the migration must decide what it does. This informs Q4.
+6. **`backingUserId` has about 15 read sites, and three decide who can move money**: `drafts.ts:485`, `crypto-sends.ts:401`, spendability (`domain/accounts.ts:338`). Payment pages, invoice pay-links (`invoice-pay-link.ts:109-114`), Shopify (`shopify.ts:249-250`) and the bookkeeping export (`bookkeeping-export.ts:99-137`) all resolve a person. Each is a decision, not a rename.
+7. **The UI promises the personal model in writing**: "Only your passkey can approve its payments" (`business/actions.js:498`), "Only X sees this account's balance" (`business/home.js:129`), "Zold never collects another signer's" (`business/access.js:59`). Screens to change: `views.js:59-137`, `home.js:108-135,255-275`, `settings.js:54-70`, `access.js:41-66`, `access-model.js:36-53`, `send.js:30-60`. `access-model.js` is the tested seam for an org signer set.
+8. **Payers who aren't signers**: is every payment a signed pending op, or does the org Safe get an Allowance-module limit for payers? Q1's "per-member limits later" points at this.
+
+### 7.4 Tests to write before the migration
+- Backer deactivation.
+- HTTP tests for the Safe-owner routes (`routes/safe-signers.ts:164-345`; only the pure builders are tested).
+- `move-iban` end to end.
+- The org-Safe variant of `drafts.ts:485`.
+- About 15 suites build "business org + EUR account + `backingUserId`" by hand; a fixture helper changes them in one place.
+
+### 7.5 Docs to rewrite when it is built
+`product-architecture.md:115,122,135-145,648,696,782-783`, `technical-architecture.md:830,886-890,1213,1221`, `wallet-tier.md:65`, `CODEMAPS/data.md:21`, `CODEMAPS/frontend.md:32-35`, `status.md:50`, `recovery-and-signers.md` (an org Safe section), `roadmap.md` (M2), and `AGENTS.md:116-123,128-137` within its 12,000-character budget. A user-visible change also owes a PR on `Zoldenburg-me/zold-docs`.
