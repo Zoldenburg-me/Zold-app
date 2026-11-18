@@ -27,10 +27,7 @@ Cross-checked on 2026-11-18 against main 3a15b56 and Florentine's code map (boar
 - New field: `Organisation.entity: "company" | "sole_trader"`, chosen at org creation and locked once the account is funded.
 - **sole_trader** (freelancer, no separate legal person): keeps today's model exactly. Their own Safe backs the org. No separation of funds is built; the owner said they don't care about commingling.
 - **company**: the org's EUR account sits on its own Safe, the **org Safe**, owned by the company. The rest of this note is about `company` orgs.
-- Existing business orgs fall into three buckets (§6, Q3):
-  - a backer with a `corporate` profile → company;
-  - a backer with no profile, a profile of the wrong kind, or one Monerium has not approved (`needs_check`, `monerium-profile.ts:213-224`; execution refuses them with `MONERIUM_PROFILE_UNVERIFIED`, `drafts.ts:501-507`) → ask the owner;
-  - a gated wallet-tier row (a backer, no profile, no IBAN) → not a company account; nothing to migrate.
+- **No existing orgs to classify.** Zold is redeployed from zero (owner, 2026-11-18), so every business org picks its `entity` at creation (§6, Q3).
 
 ### 2.2 The org Safe
 - One Safe per company org, deployed by Zold at account opening, with the org as its holder of record.
@@ -78,7 +75,7 @@ Cross-checked on 2026-11-18 against main 3a15b56 and Florentine's code map (boar
 
 ### 3.3 Monerium IBAN
 - The IBAN belongs to the Monerium corporate profile and is attributed to an address. The org Safe has to be linked to that corporate profile; Monerium requires a signature from the address, which for a Safe means EIP-1271 at the threshold.
-- Then either the existing IBAN moves to the org Safe, or a new IBAN is issued (§6, Q4). The address-matched activation rule stays: the account is `active` only when Monerium attributes an IBAN to the org Safe.
+- Monerium gives a profile one IBAN (§6, Q4), so the company's IBAN is issued straight onto the org Safe when the account opens. There is nothing to move and no second profile. The address-matched activation rule stays: the account is `active` only when Monerium attributes an IBAN to the org Safe.
 
 ### 3.4 Recovery
 - Candide's `finalizeRecovery` replaces every owner. On a company Safe that would remove every member to restore one, so:
@@ -94,43 +91,35 @@ Cross-checked on 2026-11-18 against main 3a15b56 and Florentine's code map (boar
 - New invariant: **Zold never changes membership or the on-chain signer set without the other.** Nobody is shown as removed while they can still sign. This covers Zold's own writes only: a change made elsewhere, such as an owner added in Safe{Wallet}, is shown as the chain has it and flagged in the Access card (§2.2).
 - "Gating is a read-time filter, never a write-time delete" (`AGENTS.md:132-135`) stays, and covers the removal: nothing is deleted while the chain still has the signer.
 
-## 4. Migration of existing business accounts backed by a personal Safe
-For each `company` org with a `backingUserId`:
-1. Deploy the org Safe with the backer's passkey signer (if the backer is an `owner`), plus the other `owner` members as they bind. Threshold 1 at deployment; after that Zold follows whatever the chain has.
-   - A Safe can't be deployed with no owner (today's plan is one passkey owner at `threshold: 1`, `wallet/candide.ts:205-211`, `wallet/passkey-safe-plan.ts:25-31`). So an org migrates only once at least one `owner` has a bound passkey. Until then /admin shows "waiting for an owner to bind a passkey". Zold never deploys with a placeholder owner of its own; that would break §2.2.
-2. Link the org Safe to the corporate Monerium profile and get its IBAN (moved or new).
-3. Move the funds: the backer signs one transfer of the org's EURe from their personal Safe to the org Safe.
-   - What counts as the org's: the backer's whole balance, or the org-attributed balance from `safe-books`? See Q5.
-   - It must book as an internal transfer between two addresses of the same account. That is a new rule: no code path books an account transfer as `internal_transfer` today. Only the imported-wallet sync produces it (`domain/wallet-transfers.ts:128-136`); account rows come from the Monerium statement as `transfer_in`, `payout`, … (`bookkeeping/statement.ts`). Without the rule the cut-over books as a transfer out plus a transfer in, as income and expense.
-4. Rebind atomically: the account's `address` becomes the org Safe, and `backingUserId` is cleared. No route does this today (`routes/orgs.ts:787-789`), and it is more than one field:
-   - release the `safeTakenBy` claim so the former backer's Safe is free again (`routes/orgs.ts:123-134`);
-   - exclude the row from the IBAN cascade (`store.ts:173-190`), or a later personal IBAN move rewrites the org's account;
-   - keep `backedSince` meaningful (`bookkeeping/writer.ts:57-64`), or the cut-over date is lost;
-   - payment links, Shopify and the deposit address point at the org Safe, and the watched-address set includes both addresses for a grace period, so late payments to the old address are still recorded.
-5. Belege stay valid: frozen snapshots, re-verified on visit. New Belege name the org Safe. The cut-over appears on the statement.
-- Fail closed at every step. Until step 4 the old binding stays fully working. A partial migration is resumable and shows its step in /admin.
+## 4. Migration: none
+Zold is redeployed from zero (owner, 2026-11-18). No business account is backed by a personal Safe at launch, so there is no cut-over, no fund move and no rebind. A company org gets its org Safe and IBAN at account opening; a sole_trader org uses the owner's own Safe as today. The cut-over and dual-address wording in §3.1 and §3.2 doesn't apply. `backingUserId` is never set on a company org's account.
 
 ## 5. Order of work, once approved
-1. The `entity` field and its classification. All existing behaviour stays for sole_trader.
+1. The `entity` field, chosen at org creation. All existing behaviour stays for sole_trader.
 2. Pending-op multi-signature queue (§2.4) with tests, behind a flag. The largest piece; everything else needs it.
 3. Org Safe deployment plus membership-driven owner changes and guards (§2.2, §2.3).
-4. Monerium link and IBAN for the org Safe (§3.3); needs Q4 answered.
-5. Migration tool (§4).
-6. Remove the personal-backer path for company orgs, and the AGENTS.md and docs changes.
+4. Monerium link and IBAN for the org Safe (§3.3), issued at account opening.
+5. Org-scoped Zoldenburg recovery enrolment from the company's IBAN (§6, Q7).
+6. Company orgs never take the personal-backer path; AGENTS.md and docs changes.
 This is M2-sized. M1 is unaffected except that row 13, #105(b) and "backer offboarding" are now part of this work.
 
 ## 6. Questions for the owner
 1. **Default threshold**: 1-of-n, or 2-of-n once there are 2+ signers? (Who signs is settled: only owners.)
    - **Answered 2026-11-14 (board #118, events 733–734):** only owners sign; one signature is enough by default; Zold follows whatever threshold the Safe has on chain. Keep the five roles. Split `transfers.execute`: prepare and queue stays with payer and admin, signing is owner only. MD and CFO are owners, finance staff are payers, an AI agent is a payer without a signature. Per-member limits come later. This replaces "owner, and payer if the policy allows" in §2.2.
 2. **Sole traders**: today a business org can't be backed by a personal profile: `expectedProfileKind("business")` is `corporate` (`domain/monerium-profile.ts:45-47`) and `judgeProfile` refuses the other kind. So "sole_trader keeps today's model" holds only for a freelancer registered at Monerium as a company. May a sole trader use a corporate profile, or does Monerium need another profile kind for them? Otherwise sole-trader business orgs stay unfundable, as they are now.
+   - **Answered 2026-11-18 (owner):** for now, a sole trader also needs a Monerium business (corporate) profile, which matches today's `expectedProfileKind("business")`. No personal-profile path for business orgs.
 3. **Existing business orgs** without a confirmed corporate profile: the real set is backed rows with no profile or one pending a check (execution already refuses them), plus gated wallet-tier rows with nothing to migrate (§2.1). Treat the first group as sole_trader, or ask each one?
+   - **Answered 2026-11-18 (owner):** not applicable. Zold is redeployed from zero, so there are no existing orgs; `entity` is chosen at creation.
 4. **Monerium IBAN**: move the company's IBAN to the org Safe, or have support open a second Monerium profile for the company and issue a new IBAN there? A profile holds one IBAN (`routes/monerium.ts:715-731`). The move is built (`:856-1019`) but needs the company's own Monerium login and stops the old address receiving. A second profile has no self-serve path: support opens it by hand (`SEPARATE_ACCOUNT_CONTACT`, `domain/monerium-profile.ts:48-50`). That is an ops commitment, and customers' saved bank details change.
+   - **Answered 2026-11-18 (owner):** Monerium gives only one IBAN. With the fresh start, the company's IBAN is issued onto the org Safe at account opening; nothing moves and there is no second profile.
 5. **Migration funds**: move the backer's whole Safe balance, or only what the books attribute to the org since `backedSince`? The adoption dialog already promises the whole balance: the account "then belongs to X, with everything on it" (`business/actions.js:495-499`). Choosing "only what the books attribute" reverses that promise to every current backer, and the dialog copy changes with it.
+   - **Answered 2026-11-18 (owner):** not applicable. There is no migration (§4).
 6. **Removal while a payment is pending**: if a removed member's signature is already on a queued op, drop it (safer) or let the op go through?
    - **Answered 2026-11-14 (board #118, event 735):** drop it. The queued op is signed again by the current owners; it follows the on-chain signer set.
 7. **Recovery for companies**: Zoldenburg is the only guardian. The 1 € enrolment that arms it is user-scoped and needs a user's IBAN (`routes/recovery-zoldenburg-enrolment.ts:53`); an org has no IBAN of its own. Keep the enrolment on the backer's IBAN (it survives the migration), or build an org-scoped enrolment, which is new work and a new money movement?
+   - **Answered 2026-11-18 (owner):** yes: Zoldenburg is the only guardian for company Safes. It is armed by a 1 € transfer from the company's own IBAN (the org Safe's IBAN), which means an org-scoped enrolment. That is new work (§5 step 5).
 
-Still open: Q2, Q3, Q4, Q5, Q7.
+All seven questions answered (2026-11-18). Ready for the owner's approval.
 
 ## 7. Cross-check against main 3a15b56 and the code map (2026-11-18)
 
