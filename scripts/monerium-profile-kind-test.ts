@@ -719,6 +719,13 @@ await check("an owner changes the entity until an EUR account is funded; then it
   const ibanLocked = await call("PATCH", "/api/orgs/org_lock_iban", "u_entity", { entity: "company" });
   assert.equal(ibanLocked.status, 409, JSON.stringify(ibanLocked.data));
   assert.equal(ibanLocked.data.code, "ENTITY_LOCKED");
+  // A Safe address alone locks it: an org Safe exists before its IBAN.
+  addOrg("org_lock_safe", "business", "u_entity", "Safe GmbH");
+  store.addAccount({ id: "acc_lock_safe", orgId: "org_lock_safe", currency: "EUR", label: "EUR", status: "pending", provider: "monerium", address: "0x00000000000000000000000000000000000000b2", identifier: {}, createdAt: now, updatedAt: now } as any);
+  assert.equal((await call("GET", "/api/orgs/org_lock_safe", "u_entity")).data.organisation.entityLocked, true);
+  const safeLocked = await call("PATCH", "/api/orgs/org_lock_safe", "u_entity", { entity: "company" });
+  assert.equal(safeLocked.status, 409, JSON.stringify(safeLocked.data));
+  assert.equal(safeLocked.data.code, "ENTITY_LOCKED");
 });
 
 await check("a personal space keeps its person's name: renaming it in /business is refused, other fields save", async () => {

@@ -1,6 +1,7 @@
 /**
  * Zold Business → Settings → Access (public/business/access-model.js): who
- * can sign for a company login's Safe and who can recover it.
+ * can sign for a company login's Safe and who can recover it; and Settings →
+ * Business profile (settings-model.js): who is offered the legal form change.
  *
  * Pins the rules that are easy to break unnoticed: a recovery check that
  * failed, or was only half answered, is never "none"; a guardian the chain
@@ -311,5 +312,18 @@ assert.equal(m.isCompanyLogin(null), false);
 assert.equal(m.APP_LINKS.signers, "/app?from=business#signers");
 assert.equal(m.APP_LINKS.recovery, "/app?from=business#recovery-settings");
 assert.equal(m.APP_LINKS.alert, "/app?from=business#recovery-alert");
+
+// ── mayChangeEntity ─────────────────────────────────────────────────────────
+
+{
+  const s: any = await import(pathToFileURL(path.join(ROOT, "services/api/public/business/settings-model.js")).href);
+  const biz = { type: "business", role: "owner", entity: "sole_trader", entityLocked: false };
+  assert.equal(s.mayChangeEntity(biz), true, "an owner, before the lock: offered");
+  assert.equal(s.mayChangeEntity({ ...biz, entityLocked: true }), false, "locked: hidden");
+  assert.equal(s.mayChangeEntity({ ...biz, entityLocked: undefined }), false, "no flag reads as locked");
+  assert.equal(s.mayChangeEntity({ ...biz, role: "admin" }), false, "an admin: hidden (OWNER_ONLY)");
+  assert.equal(s.mayChangeEntity({ type: "personal", role: "owner" }), false, "a personal org has no legal form");
+  assert.equal(s.mayChangeEntity(null), false);
+}
 
 console.log("business access: ok");

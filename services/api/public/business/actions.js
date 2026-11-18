@@ -961,6 +961,19 @@ export const ACTIONS = {
   },
   "gmi-disconnect": () => dialog("Remove the GetMyInvoices key?", `<p class="desc">Nothing already uploaded is touched.</p>`,
     async () => { await api(`/api/orgs/${org.id}/integrations/getmyinvoices`, { method: "DELETE" }); toast("Key removed."); }, { okLabel: "Remove key" }),
+  /** Company or sole trader: an owner, until the euro account is set up
+   *  (the API answers 409 ENTITY_LOCKED after that). */
+  "org-entity": () => dialog("Legal form", `<label for="d-entity">Legal form</label>
+      <select id="d-entity">
+        <option value="company"${org.entity === "company" ? " selected" : ""}>Company: its own legal person (GmbH, UG, AG, Ltd…)</option>
+        <option value="sole_trader"${org.entity === "sole_trader" ? " selected" : ""}>Sole trader: you trade under your own name</option>
+      </select>
+      <p class="desc">It can’t change once the euro account is set up.</p>`,
+    async () => {
+      await api(`/api/orgs/${org.id}`, { method: "PATCH", body: { entity: $("#d-entity").value } });
+      await loadOrg(org.id);
+      toast("Saved.");
+    }),
   async "save-org"() {
     const body = {
       name: $("#s-name").value, legalName: $("#s-legal").value,

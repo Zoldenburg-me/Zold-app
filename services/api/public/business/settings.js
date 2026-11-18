@@ -6,6 +6,7 @@
 import { Z, api, cap, ensureMe, esc, issuerFieldNames, issuerIds, me, org, plain } from "./core.js";
 import { META, RENDER, moneriumLink } from "./views.js";
 import { isOwnCompanyOrg } from "./access-model.js";
+import { mayChangeEntity } from "./settings-model.js";
 import { shown } from "./nav.js";
 
 const ss = { sec: "org" };
@@ -51,7 +52,9 @@ function orgSection() {
       ["Address", address], ["Country", country],
       [names.vatId, ids.vatId, true], [names.taxNumber, ids.taxNumber, true],
       ["Registration", [d.registerCourt, d.registerNumber].filter(Boolean).join(" ")], ["Notification email", org.notificationEmail]])
-    + (address ? "" : `<p class="zb-hint">No address yet. Invoices need one.</p>`), edit);
+    + (address ? "" : `<p class="zb-hint">No address yet. Invoices need one.</p>`)
+    + (mayChangeEntity(org) ? `<div class="zb-actions"><button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="org-entity">Change legal form</button></div>
+      <p class="zb-hint">It can’t change once the euro account is set up.</p>` : ""), edit);
 }
 
 function moneriumSection(accounts) {
