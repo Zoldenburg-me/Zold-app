@@ -15,6 +15,8 @@
 import { randomUUID } from "node:crypto";
 import { batched, db, persist, pruneSessions, seedChartOfAccounts } from "./store/db.js";
 import { nextProfileHistory } from "./domain/monerium-identity.js";
+import { orgEntity } from "./domain/org-entity.js";
+import { isOrgSafePlan } from "./domain/org-safe-plan.js";
 import { auditEntry } from "./audit.js";
 import type {
   Account,
@@ -27,6 +29,7 @@ import type {
   LedgerEntry,
   Member,
   Organisation,
+  OrgSafePlan,
 } from "./domain/types.js";
 import { OPERATOR_REFUND_STEP, REVIEW_RESOLUTION_STATES } from "./store/types.js";
 import { matchesPayoutEvidence } from "./transfers/review-evidence.js";
@@ -1050,9 +1053,29 @@ export const store = {
     return db.organisations.find((o) => o.id === id);
   },
   updateOrganisation(id: string, patch: Partial<Organisation>) {
+    if ("safe" in patch) throw new Error("an org Safe plan is written through setOrgSafePlan only");
     const o = db.organisations.find((x) => x.id === id);
     if (!o) throw new Error(`unknown organisation ${id}`);
     Object.assign(o, patch, { updatedAt: new Date().toISOString() });
+    persist();
+    return o;
+  },
+  /**
+   * Store a company org's own Safe. Refused for any other org, for a plan of
+   * the wrong shape, and for a different address once one is stored: the money
+   * is on that Safe, so re-pointing the org would leave it behind. The owner
+   * list may change (membership drives it); the address never does.
+   */
+  setOrgSafePlan(orgId: string, plan: OrgSafePlan) {
+    const o = db.organisations.find((x) => x.id === orgId);
+    if (!o) throw new Error(`unknown organisation ${orgId}`);
+    if (orgEntity(o) !== "company") throw new Error(`organisation ${orgId} is not a company and has no Safe of its own`);
+    if (!isOrgSafePlan(plan)) throw new Error("not a valid org Safe plan");
+    if (o.safe && o.safe.address.toLowerCase() !== plan.address.toLowerCase()) {
+      throw new Error(`organisation ${orgId} already has its Safe at ${o.safe.address}`);
+    }
+    o.safe = { kind: "org", address: plan.address, owners: plan.owners.map((w) => ({ x: w.x, y: w.y })), createdAt: o.safe?.createdAt ?? plan.createdAt };
+    o.updatedAt = new Date().toISOString();
     persist();
     return o;
   },

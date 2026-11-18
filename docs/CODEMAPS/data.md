@@ -15,7 +15,8 @@ Personal side
 - processedMoneriumOrders / processedMoneriumWebhooks (idempotency)
 - recoveryRequests · safeOps (org Safe ops awaiting owner signatures; ended, never deleted) · shopifyConnections · merchantLinks (revoked, never deleted; secret sealed) · audit
 
-Organisations
+Organisations (`entity` company | sole_trader; a company's own Safe is `safe`,
+addressed, written only by setOrgSafePlan, never in users.passkeySafe)
 ```
 organisations ─┬─ members (role, status, invite)
                ├─ accounts (currency, backingUserId → users, backedSince, gate, profile)
