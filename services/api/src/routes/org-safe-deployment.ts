@@ -17,6 +17,7 @@
  */
 import express from "express";
 import { randomUUID } from "node:crypto";
+import { auditEntry } from "../audit.js";
 import { store, type User } from "../store.js";
 import { orgEntity } from "../domain/org-entity.js";
 import { copyOrgSafePlan, isOrgSafePlan } from "../domain/org-safe-plan.js";
@@ -166,6 +167,7 @@ export function createOrgSafeDeploymentRoutes(requireSession: SessionResolver, c
         return res.status(409).json({ error: "The company's Safe was deployed with the passkey of an owner who is no longer in the company, so it can't be set up again from here.", code: "ORG_SAFE_OWNER_GONE" });
       }
       store.replaceUndeployedOrgSafePlan(ctx.org.id, d.replaces, d.plan);
+      store.audit(auditEntry("org_safe.replanned", { orgId: ctx.org.id, replaced: d.replaces, address: d.plan.address }, ctx.userId));
     }
     let prepared: Awaited<ReturnType<OrgSafeChain["prepare"]>>;
     try {

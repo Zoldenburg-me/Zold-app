@@ -313,6 +313,8 @@ await check("a planned plan whose owner left is re-planned by another owner, onl
   const mine = orgSafeAccountFor(ownerKey("jan"), "org_orphan").accountAddress.toLowerCase();
   assert.equal(start.data.safeAddress.toLowerCase(), mine);
   assert.notEqual(mine, old.toLowerCase());
+  const replanned = store.auditFor("jan").filter((e) => e.kind === "org_safe.replanned");
+  assert.deepEqual(replanned.map((e) => e.data), [{ orgId: "org_orphan", replaced: old, address: start.data.safeAddress }], "the re-plan is audited once, with both addresses");
   const done = await submit(start.data, "jan");
   assert.equal(done.status, 201, JSON.stringify(done.data));
   assert.equal(store.findOrganisation("org_orphan")!.safe!.status, "active");
