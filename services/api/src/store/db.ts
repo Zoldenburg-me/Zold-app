@@ -38,6 +38,7 @@ import type {
   PaymentRequest,
   Quote,
   ReceiptShare,
+  PendingSafeOp,
   RecoveryRequest,
   ServiceCredential,
   Session,
@@ -86,6 +87,8 @@ export interface Db {
   audit: import("../audit.js").AuditEntry[];
   /** Managed KYC guardian recovery requests. */
   recoveryRequests: RecoveryRequest[];
+  /** Org Safe operations waiting for their owners' signatures. */
+  safeOps: PendingSafeOp[];
   /**
    * Last block scanned for inbound crypto, per chain id.
    *
@@ -147,6 +150,7 @@ export let db: Db = {
   cryptoSends: [],
   audit: [],
   recoveryRequests: [],
+  safeOps: [],
   cryptoDepositCursor: {},
   organisations: [],
   members: [],
@@ -182,6 +186,7 @@ export function initStore() {
     db.cryptoSends ??= [];
     db.audit ??= [];
     db.recoveryRequests ??= [];
+    db.safeOps ??= [];
     db.cryptoDepositCursor ??= {};
     db.organisations ??= [];
     db.members ??= [];

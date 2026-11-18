@@ -98,3 +98,10 @@ export const CRYPTO_IN = {
  * it follows the environment as set.
  */
 export const cryptoSendEnabled = () => process.env.CRYPTO_SEND_ENABLED === "1";
+
+/**
+ * The multi-signature queue for org Safes (routes/business/safe-ops.ts): off
+ * unless ORG_SAFE_QUEUE_ENABLED=1. While off nothing is queued and every
+ * safe-ops route refuses. Personal and sole-trader Safes never use it.
+ */
+export const orgSafeQueueEnabled = () => process.env.ORG_SAFE_QUEUE_ENABLED === "1";

@@ -15,6 +15,21 @@ guardian built behind `TURNKEY_GUARDIANS`: `recovery-guardians-plan.md`.
   drops the second owner and resets the threshold — but leaves Allowance-module
   delegates in place. Spending limits use Safe's AllowanceModule v0.1.1
   (`0xAA46…091C`); Zold only sets them and never spends through one.
+- **An org Safe collects its owners' signatures through a queue**, off
+  unless `ORG_SAFE_QUEUE_ENABLED=1` (`wallet/org-safe-queue.ts`, rules in
+  `domain/safe-op-queue.ts`, routes `/api/orgs/:orgId/safe-ops`). An op is
+  prepared once (`prepareMultiOwnerSafeOperation`) and stored with its digest,
+  UserOperation and nonce; each owner signs the digest with their own
+  passkey. Only an active `owner` member whose passkey is an owner on chain
+  signs; payers, accountants and admins queue. The threshold is read from the
+  Safe every time and never stored. A signature whose signer is no longer an
+  owner on chain is dropped (owner, Q6); an op past its 72-hour expiry, or
+  whose nonce the Safe has moved past, ends. It is relayed once, by the
+  signature that meets the threshold; the relay recomputes the digest from
+  the stored op. A stated bundler refusal or a revert is FAILED, anything else
+  MANUAL_REVIEW. Personal and sole-trader Safes never use it and keep
+  `assertPasskeyAloneCanSign`. Nothing queues an op yet: payments and owner
+  changes on an org Safe are M2.3.
 - **Zoldenburg is a recovery guardian only by the user's choice**, made in
   Security (one passkey-signed op). Signup does not offer it. Deployment adds
   a guardian only when the user logged in with Google, Apple or an email code at signup
