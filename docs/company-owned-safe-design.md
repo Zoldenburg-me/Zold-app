@@ -58,7 +58,7 @@ Cross-checked on 2026-11-18 against main 3a15b56 and Florentine's code map (boar
   - Review is a policy flag on the org, evaluated per draft (`domain/payment-review.ts:14-18`, applied at `drafts.ts:220,362,608`), not a signature.
   - One draft is N transfers, one per line (`drafts.ts:520-533`). So owners either sign N ops, or one batched op whose digest covers every line. This note proposes one batched op per draft (one Safe `multiSend`): one signature per owner per draft. Consequence: a draft becomes all-or-nothing. One reverting line reverts the whole draft, where today each transfer stands or falls alone and a failure partway leaves the draft `FAILED` (`drafts.ts:520-533`, `scripts/draft-batch-failure-test.ts:1-8`). The owner decides whether a draft pays all its lines or none.
   - Execution re-reads the backing profile and can refuse a draft that was already reviewed (`drafts.ts:500-513`), or hold it as `INVALID_DATA` when its facts drifted (`:528-529`). A signature already collected can't be withdrawn, so when an execution-time check fails after signing, the queued op is invalidated and its signatures discarded, the same shape as `INVALID_DATA`. The draft must be signed again.
-- On an org Safe the owners' signatures are the approval. Whether the off-chain review flag stays as an extra step before signing is open (§6, Q8).
+- On an org Safe the owners' signatures are the approval. There is no off-chain review step before signing on an org Safe (§6, Q8).
 - The invariant "No debit without a user signature" still holds, at n-of-m. The API still disposes of nothing.
 
 ## 3. Effects
@@ -86,7 +86,7 @@ Cross-checked on 2026-11-18 against main 3a15b56 and Florentine's code map (boar
 ### 3.5 AGENTS.md invariants to change (the owner sees each one)
 - "The passkey is the Safe's only owner. The plan type is `threshold: 1` only." This stays true for personal and sole_trader Safes. For an org Safe: members' passkeys are the only owners, at the org's threshold, and Zold holds none.
 - "Zold never collects its [second owner's] signature, so at threshold > 1 every op is refused." This stays true for personal Safes. Org Safes collect member signatures through the pending-op queue.
-- "Four eyes": on an org Safe the control is the owners' signatures at the on-chain threshold (§2.4). The off-chain review flag is a separate step; whether it stays before signing is open.
+- "Four eyes": on an org Safe the control is the owners' signatures at the on-chain threshold (§2.4). That is the only four-eyes control: the off-chain review flag is not used on an org Safe (Q8).
 - "An org can never lose its last owner": add "and its Safe never loses its last signer, and the threshold never exceeds the signers left".
 - New invariant: **Zold never changes membership or the on-chain signer set without the other.** Nobody is shown as removed while they can still sign. This covers Zold's own writes only: a change made elsewhere, such as an owner added in Safe{Wallet}, is shown as the chain has it and flagged in the Access card (§2.2).
 - "Gating is a read-time filter, never a write-time delete" (`AGENTS.md:132-135`) stays, and covers the removal: nothing is deleted while the chain still has the signer.
@@ -119,9 +119,9 @@ This is M2-sized. M1 is unaffected except that row 13, #105(b) and "backer offbo
 7. **Recovery for companies**: Zoldenburg is the only guardian. The 1 € enrolment that arms it is user-scoped and needs a user's IBAN (`routes/recovery-zoldenburg-enrolment.ts:53`); an org has no IBAN of its own. Keep the enrolment on the backer's IBAN (it survives the migration), or build an org-scoped enrolment, which is new work and a new money movement?
    - **Answered 2026-11-18 (owner):** yes: Zoldenburg is the only guardian for company Safes. It is armed by a 1 € transfer from the company's own IBAN (the org Safe's IBAN), which means an org-scoped enrolment. That is new work (§5 step 5).
 
-8. **Review step on an org Safe**: does the off-chain review flag stay as a step before owners sign, or is the on-chain threshold the only four-eyes control? (Open; §2.4, §3.5.)
+8. **Review step on an org Safe**: does the off-chain review flag stay as a step before owners sign, or is the on-chain threshold the only four-eyes control? **Answer: the on-chain threshold only; no off-chain review step on an org Safe.** (§2.4, §3.5.)
 
-Q1–Q7 answered (2026-11-18). Q8 is open.
+All eight questions answered (2026-11-18).
 
 ## 7. Cross-check against main 3a15b56 and the code map (2026-11-18)
 
