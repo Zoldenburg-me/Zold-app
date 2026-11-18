@@ -55,7 +55,7 @@ Owner-approved 2026-11-18 (PR #35). Code references checked against main d982325
   - anyone can see who signed and who hasn't.
 - The existing payment drafts (`routes/business/drafts.ts`) become the UI for this. Today they are different objects from a signature:
   - Review is a policy flag on the org, evaluated per draft (`domain/payment-review.ts:14-18`, applied at `drafts.ts:220,362,608`), not a signature.
-  - One draft is N transfers, one per line (`drafts.ts:520-533`). So owners either sign N ops, or one batched op whose digest covers every line. This note proposes one batched op per draft (one Safe `multiSend`): one signature per owner per draft. Consequence: a draft becomes all-or-nothing. One reverting line reverts the whole draft, where today each transfer stands or falls alone and a failure partway leaves the draft `FAILED` (`drafts.ts:520-533`, `scripts/draft-batch-failure-test.ts:1-8`). The owner decides whether a draft pays all its lines or none (§6, Q9).
+  - One draft is N transfers, one per line (`drafts.ts:520-533`). So owners either sign N ops, or one batched op whose digest covers every line. Each draft is one batched op (one Safe `multiSend`): one signature per owner per draft (owner, Q9). Consequence: a draft is all-or-nothing. One reverting line reverts the whole draft, where today each transfer stands or falls alone and a failure partway leaves the draft `FAILED` (`drafts.ts:520-533`, `scripts/draft-batch-failure-test.ts:1-8`).
   - Execution re-reads the backing profile and can refuse a draft that was already reviewed (`drafts.ts:500-513`), or hold it as `INVALID_DATA` when its facts drifted (`:528-529`). A signature already collected can't be withdrawn, so when an execution-time check fails after signing, the queued op is invalidated and its signatures discarded, the same shape as `INVALID_DATA`. The draft must be signed again.
 - On an org Safe the owners' signatures are the approval. There is no off-chain review step before signing on an org Safe (§6, Q8), so `paymentReviewRequired` (`domain/payment-review.ts:14-18`) must return false for an org Safe whatever the org's `paymentReview` setting or plan. Today it returns an owner's choice when one is set, and otherwise true for a business org on the business plan or its trial.
 - The invariant "No debit without a user signature" still holds, at n-of-m. The API still disposes of nothing.
@@ -121,9 +121,9 @@ This is M2-sized. Row 13 (§3.1) is part of it.
 
 8. **Review step on an org Safe**: does the off-chain review flag stay as a step before owners sign, or is the on-chain threshold the only four-eyes control? **Answer: the on-chain threshold only; no off-chain review step on an org Safe.** (§2.4, §3.5.)
 
-9. **Drafts**: one batched op per draft (all lines or none), or one op per line (each line stands or falls alone, as today)? §2.4 proposes one batched op. (Open.)
+9. **Drafts**: one batched op per draft (all lines or none), or one op per line (each line stands or falls alone, as today)? **Answer: one batched op per draft; a draft pays all its lines or none.** (§2.4.)
 
-Q1–Q8 answered (2026-11-18). Q9 is open.
+All nine questions answered (2026-11-18).
 
 ## 7. Gaps found against the code (Florentine's code map, board #118)
 
