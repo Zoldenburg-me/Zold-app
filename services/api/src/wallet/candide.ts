@@ -39,6 +39,7 @@ import { decodeFunctionResult, encodeFunctionData, hashTypedData } from "viem";
  * a chain with real money.
  */
 import { HARNESS } from "../config.js";
+import type { OrgSafePlan } from "../domain/types.js";
 import { partnerTimeout } from "../http.js";
 import { redactedMessage, errorText } from "../http/log-cause.js";
 const allowSimulation = () => HARNESS.enabled;
@@ -206,7 +207,10 @@ export function smartAccountForPasskey(passkeyOwner: WebauthnPublicKey): SafeAcc
   return SafeAccount.initializeNewAccount([passkeyOwner]);
 }
 
+/** A person's Safe: one passkey, threshold 1 (User.passkeySafe). Rows
+ *  without `kind` are personal. */
 export interface PasskeySafeDeploymentPlan {
+  kind?: "personal";
   address: `0x${string}`;
   threshold: 1;
   passkeyPublicKey: { x: string; y: string };
@@ -222,6 +226,10 @@ export interface PasskeySafeDeploymentPlan {
    *  like a recovered one, but never called "recovered". */
   importedAt?: string;
 }
+
+/** Either kind of Safe Zold prepares operations for. The kind decides who
+ *  signs: see prepareSafeOperation. */
+export type SafePlan = PasskeySafeDeploymentPlan | OrgSafePlan;
 
 export interface BrowserPasskeyAssertion {
   authenticatorData: Uint8Array;
@@ -673,6 +681,34 @@ export async function prepareTransferBatchExecution(
   },
 ): Promise<{ safeAddress: `0x${string}`; challenge: `0x${string}`; userOperation: UserOperationV9 }> {
   return prepareSafeExecutionCore(plan, transferSwapBatchTransactions(args));
+}
+
+/**
+ * Prepare an operation for either kind of Safe. The plan's kind is the
+ * decision about the passkey-alone guard, so no caller can skip it by
+ * accident: a personal plan (personal and sole_trader orgs) goes through
+ * prepareSafeExecutionCore and keeps the threshold-1 refusal; an org plan goes
+ * to prepareMultiOwnerSafeOperation for `signers`, which must be owners on the
+ * plan and at least as many as the threshold the chain reports now.
+ */
+export async function prepareSafeOperation(
+  plan: SafePlan,
+  txs: MetaTransaction[],
+  signers: WebauthnPublicKey[] = [],
+): Promise<PreparedSafeOperation> {
+  if (plan.kind !== "org") {
+    if (signers.length) throw new Error("a personal Safe is signed by its own passkey; it takes no signer list");
+    return prepareSafeExecutionCore(plan, txs);
+  }
+  const owners = new Set(plan.owners.map((o) => `${BigInt(o.x)}:${BigInt(o.y)}`));
+  if (!signers.length || signers.some((s) => !owners.has(`${s.x}:${s.y}`))) {
+    throw new Error("every signer of an org Safe operation must be an owner on the org's Safe plan");
+  }
+  const threshold = await safeThreshold(plan.address);
+  if (signers.length < threshold) {
+    throw new SafeThresholdError(`this Safe needs ${threshold} owner signatures and ${signers.length} were named`);
+  }
+  return prepareMultiOwnerSafeOperation(plan.address, txs, signers);
 }
 
 /**
