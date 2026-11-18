@@ -17,6 +17,21 @@ export type OrgType = "personal" | "business";
  *  their own name (sole_trader). See domain/org-entity.ts. */
 export type OrgEntity = "company" | "sole_trader";
 
+/**
+ * A company org's own Safe (design note §2.2). Addressed, never derived: the
+ * owner set changes with membership, so the address stops matching any owner
+ * set it could be computed from. `owners` are the passkeys Zold added; the
+ * chain's owner set and threshold are the truth and are read from the Safe on
+ * every use, so neither is stored here. Written only through
+ * store.setOrgSafePlan; personal and sole_trader orgs have none.
+ */
+export interface OrgSafePlan {
+  kind: "org";
+  address: `0x${string}`;
+  owners: { x: string; y: string }[];
+  createdAt: string;
+}
+
 /** Monerium's profile kinds (GET /profiles `kind`). */
 export type MoneriumProfileKind = "personal" | "corporate";
 
@@ -66,6 +81,8 @@ export interface Organisation {
   type: OrgType;
   /** Business orgs only, chosen at creation; read it through orgEntity(). */
   entity?: OrgEntity;
+  /** Company orgs only; read it through orgSafePlan() (domain/org-safe-plan.ts). */
+  safe?: OrgSafePlan;
   /** Display name. For a business this is the trading name; `legalName` is
    *  what appears on an invoice. */
   name: string;
