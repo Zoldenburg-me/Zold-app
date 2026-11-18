@@ -174,3 +174,47 @@ export async function loadAccess(me, api, health) {
     recovery: recoveryStatus(c, z),
   };
 }
+
+/** A company org has its own Safe (GET /api/orgs/:id/safe); a sole trader's
+ *  and a personal org's account is a member's own Safe. */
+export const isCompanyOrg = (org) => org?.type === "business" && org.entity === "company";
+
+/**
+ * A company org's Safe, from GET /api/orgs/:id/safe (every member reads it).
+ *  - not_set_up: the Safe is not deployed yet
+ *  - unknown:    the read failed, or answered no owners: never "no signers"
+ *  - set_up:     owners and threshold as the chain has them, each matched to
+ *                a member where one is (domain/org-signers.ts)
+ */
+export function orgSafeView(s, error = null) {
+  if (s?.state === "not_set_up") return { status: "not_set_up" };
+  if (s?.state !== "set_up" || !Array.isArray(s.owners) || !s.owners.length || !Number.isInteger(s.threshold)) {
+    return { status: "unknown", error: error || "Couldn’t read who can sign for the company’s Safe." };
+  }
+  return {
+    status: "set_up",
+    safeAddress: s.safeAddress,
+    threshold: s.threshold,
+    needed: `${s.threshold} of ${s.owners.length}`,
+    owners: s.owners,
+    unknown: s.unknown || [],
+    members: s.members || [],
+  };
+}
+
+/** Recovery for a company org's Safe (company-owned-safe-design.md §3.4).
+ *  Zold adds no recovery helper to it yet, so this is a statement, not a read. */
+export const ORG_RECOVERY = [
+  "Zold hasn’t set up recovery for the company’s Safe.",
+  "If an owner loses their passkey, the other owners can replace that signer in Safe{Wallet}, with as many signatures as the Safe needs.",
+  "If fewer owners are left than the signatures it needs, no one can recover the company’s Safe.",
+  "Your own sign-in’s recovery is in the app. It doesn’t change who signs for the company’s Safe.",
+];
+
+export async function loadOrgSafe(orgId, api) {
+  try {
+    return orgSafeView(await api(`/api/orgs/${encodeURIComponent(orgId)}/safe`));
+  } catch (err) {
+    return orgSafeView(null, String(err?.message || "") || null);
+  }
+}

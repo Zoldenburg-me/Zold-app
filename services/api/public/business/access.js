@@ -9,7 +9,7 @@
 import { Z, api, cap, day, deviceLib, ensureMe, esc, org, readHealth, reviewOn, ROLE_CAN, ROLE_WORD } from "./core.js";
 import { META, RENDER } from "./views.js";
 import { render } from "./shell.js";
-import { APP_LINKS, approvalView, deviceKeyView, isCompanyLogin, isOwnCompanyOrg, loadAccess } from "./access-model.js";
+import { APP_LINKS, approvalView, deviceKeyView, isCompanyLogin, isCompanyOrg, isOwnCompanyOrg, loadAccess, loadOrgSafe, ORG_RECOVERY } from "./access-model.js";
 
 const settingsBack = `<a class="z-btn z-btn--secondary" href="?view=settings" data-view-link="settings">${Z.icon("arrow_back")}<span>Settings</span></a>`;
 const appBtn = (label, href, variant = "secondary") =>
@@ -58,6 +58,29 @@ function signersCard(a, keyRow) {
   const safe = s.safeAppUrl ? `<p class="zb-hint"><a href="${esc(s.safeAppUrl)}" target="_blank" rel="noopener">Open the account in Safe{Wallet}</a></p>` : "";
   return card("acc-sign", "Who can sign for the account", `${locked}${rows(list)}${safe}`, change);
 }
+
+/* A company org's own Safe, read from chain on every visit. */
+const OWNER_NOTE = {
+  passkey_changed: "This login’s passkey changed; the Safe still lists the old signer",
+  not_an_owner: "No longer an owner here; the Safe still lists their key",
+  added_outside_zold: "Added outside Zold",
+};
+function orgSignersCard(s) {
+  const title = "Who can sign for the account";
+  if (s.status === "not_set_up") return card("acc-sign", title, `<p class="zb-hint">The company’s Safe isn’t set up yet, so no one signs for it.</p>`);
+  if (s.status === "unknown") {
+    return card("acc-sign", title, `<div class="banner warn">${Z.icon("help")}<span><b>Couldn’t check who can sign.</b> ${esc(s.error.replace(/[.\s]+$/, ""))}. This is not the same as no one.</span></div>`,
+      `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="access-retry">Try again</button>`);
+  }
+  const owner = (o) => [o.memberId ? o.name || "A member" : "Unknown signer", `${addr(o.address)}${o.note ? `<br>${esc(OWNER_NOTE[o.note] || o.note)}` : ""}`];
+  const waiting = s.members.filter((m) => !m.onChain).map((m) => [m.name || "An owner", m.passkey ? "Not a signer yet" : "No passkey yet"]);
+  const outside = s.unknown.length
+    ? `<div class="banner warn">${Z.icon("warning")}<span><b>A signer Zold didn’t add is on this account.</b> It signs like any other. If no one at the company added it, remove it in Safe{Wallet}.</span></div>`
+    : "";
+  return card("acc-sign", title, `${outside}${rows([["Account", addr(s.safeAddress)], ["Signatures needed", esc(s.needed)], ...s.owners.map(owner), ...waiting])}`);
+}
+
+const orgRecoveryCard = (yours) => card("acc-rec", "Recovery", ORG_RECOVERY.map((l) => `<p>${esc(l)}</p>`).join(""), yours);
 
 const guardianRow = (g) => {
   if (g.kind === "zoldenburg") return ["Zoldenburg UG", "Checks the person against Monerium’s identity check, and approves from a hardware wallet. Zold’s servers never hold that key."];
@@ -154,6 +177,8 @@ RENDER.access = async () => {
     api(`/api/orgs/${org.id}/members`).then((r) => r.members, () => null),
   ]);
   const pay = approvalsCard(members);
+  const yours = `<a class="z-btn z-btn--secondary z-btn--sm" href="/app?from=business#security">Your sign-in and recovery${Z.icon("open_in_new")}<span class="z-sr"> (the app)</span></a>`;
+  if (isCompanyOrg(org)) return { html: stack([pay, orgSignersCard(await loadOrgSafe(org.id, api)), orgRecoveryCard(yours)]), bind: retry };
   // Every role reads the accounts, so a failed read is a failure, not a no.
   if (isCompanyLogin(me) && org.type === "business" && !acc) {
     return {
@@ -162,7 +187,6 @@ RENDER.access = async () => {
       bind: retry,
     };
   }
-  const yours = `<a class="z-btn z-btn--secondary z-btn--sm" href="/app?from=business#security">Your sign-in and recovery${Z.icon("open_in_new")}<span class="z-sr"> (the app)</span></a>`;
   if (org.type === "personal") return stack([pay, card("acc-member", "Sign-in and recovery", `<p class="zb-hint">Your sign-in and recovery are in the app.</p>`, yours)]);
   if (!isOwnCompanyOrg(me, org, acc)) {
     return stack([pay, card("acc-member", "Sign-in and recovery", `<p>Only the company’s own sign-in can see and change who can sign for the company’s account and who can recover it. Ask the person who holds it.</p>
