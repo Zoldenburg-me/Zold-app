@@ -1,9 +1,7 @@
 # machine-local toolchain & deps
 .toolchain/
 node_modules
-.claude/*
-# The agent deny rules are shared; everything else under .claude/ is local.
-!.claude/settings.json
+.claude/
 .DS_Store
 
 # secrets & local state — never commit
