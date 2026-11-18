@@ -24,7 +24,7 @@ Cross-checked on 2026-11-18 against main 3a15b56 and Florentine's code map (boar
 ## 2. Target model
 
 ### 2.1 Two kinds of business org
-- New field: `Organisation.entity: "company" | "sole_trader"`, chosen at org creation and locked once the account is funded.
+- New field: `Organisation.entity: "company" | "sole_trader"`, chosen at org creation and locked once an EUR account has somewhere for money to land: a Safe address or an IBAN (`domain/org-entity.ts`, `entityLocked`).
 - **sole_trader** (freelancer, no separate legal person): keeps today's model exactly. Their own Safe backs the org. No separation of funds is built; the owner said they don't care about commingling.
 - **company**: the org's EUR account sits on its own Safe, the **org Safe**, owned by the company. The rest of this note is about `company` orgs.
 - **No existing orgs to classify.** Zold is redeployed from zero (owner, 2026-11-18), so every business org picks its `entity` at creation (§6, Q3).
@@ -56,9 +56,9 @@ Cross-checked on 2026-11-18 against main 3a15b56 and Florentine's code map (boar
   - anyone can see who signed and who hasn't.
 - The existing payment drafts (`routes/business/drafts.ts`) become the UI for this. Today they are different objects from a signature:
   - Review is a policy flag on the org, evaluated per draft (`domain/payment-review.ts:14-18`, applied at `drafts.ts:220,362,608`), not a signature.
-  - One draft is N transfers, one per line (`drafts.ts:520-533`). So owners either sign N ops, or one batched op whose digest covers every line. This note proposes one batched op per draft (one Safe `multiSend`): one signature per owner per draft. Consequence: a draft becomes all-or-nothing. One reverting line reverts the whole draft, where today each transfer stands or falls alone and a failure partway leaves the draft `FAILED` (`drafts.ts:520-533`, `scripts/draft-batch-failure-test.ts:1-8`). The owner decides whether a draft pays all its lines or none.
+  - One draft is N transfers, one per line (`drafts.ts:520-533`). So owners either sign N ops, or one batched op whose digest covers every line. This note proposes one batched op per draft (one Safe `multiSend`): one signature per owner per draft. Consequence: a draft becomes all-or-nothing. One reverting line reverts the whole draft, where today each transfer stands or falls alone and a failure partway leaves the draft `FAILED` (`drafts.ts:520-533`, `scripts/draft-batch-failure-test.ts:1-8`). The owner decides whether a draft pays all its lines or none (§6, Q9).
   - Execution re-reads the backing profile and can refuse a draft that was already reviewed (`drafts.ts:500-513`), or hold it as `INVALID_DATA` when its facts drifted (`:528-529`). A signature already collected can't be withdrawn, so when an execution-time check fails after signing, the queued op is invalidated and its signatures discarded, the same shape as `INVALID_DATA`. The draft must be signed again.
-- On an org Safe the owners' signatures are the approval. There is no off-chain review step before signing on an org Safe (§6, Q8).
+- On an org Safe the owners' signatures are the approval. There is no off-chain review step before signing on an org Safe (§6, Q8), so `paymentReviewRequired` (`domain/payment-review.ts:14-18`) must return false for an org Safe whatever the org's `paymentReview` setting or plan; today it returns true for a business org on the business plan or its trial.
 - The invariant "No debit without a user signature" still holds, at n-of-m. The API still disposes of nothing.
 
 ## 3. Effects
@@ -96,8 +96,9 @@ Zold is redeployed from zero (owner, 2026-11-18). No business account is backed 
 
 ## 5. Order of work, once approved
 1. The `entity` field, chosen at org creation. All existing behaviour stays for sole_trader.
-2. Pending-op multi-signature queue (§2.4) with tests, behind a flag. The largest piece; everything else needs it.
-3. Org Safe deployment plus membership-driven owner changes and guards (§2.2, §2.3).
+2. Pending-op multi-signature queue (§2.4) with tests, behind a flag. Built: #187, behind `ORG_SAFE_QUEUE_ENABLED`.
+3. Org Safe deployment with **one owner** at threshold 1: the owner who opens the account. The org Safe is stored on the org, not in `User.passkeySafe`, and every payment from it goes through the queue (step 2) from day one, never through the personal path and its `assertPasskeyAloneCanSign` check (`wallet/candide.ts:572`). Scope (owner, 2026-11-18): one owner for now.
+   - **Deferred: more than one owner** (§2.3's membership-driven owner changes, the threshold choice in Q1, and Q6). Because step 3 already pays through the queue, adding an owner later is an add-owner op the current owners sign there (`addOwnerTransaction`, `wallet/safe-signers.ts:158`), plus a stored member → signer mapping (§7.3(11)) and the org-scoped read route and screens (§7.3(12)). Payments, the API and the threshold logic do not change.
 4. Monerium link and IBAN for the org Safe (§3.3), issued at account opening.
 5. Org-scoped Zoldenburg recovery enrolment from the company's IBAN (§6, Q7).
 6. Company orgs never take the personal-backer path; AGENTS.md and docs changes.
@@ -121,7 +122,9 @@ This is M2-sized. M1 is unaffected except that row 13, #105(b) and "backer offbo
 
 8. **Review step on an org Safe**: does the off-chain review flag stay as a step before owners sign, or is the on-chain threshold the only four-eyes control? **Answer: the on-chain threshold only; no off-chain review step on an org Safe.** (§2.4, §3.5.)
 
-All eight questions answered (2026-11-18).
+9. **Drafts**: one batched op per draft (all lines or none), or one op per line (each line stands or falls alone, as today)? §2.4 proposes one batched op. (Open.)
+
+Q1–Q8 answered (2026-11-18). Q9 is open.
 
 ## 7. Cross-check against main 3a15b56 and the code map (2026-11-18)
 
