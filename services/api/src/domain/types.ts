@@ -13,6 +13,10 @@ import type { InvoiceLanguage } from "./invoicing.js";
 
 export type OrgType = "personal" | "business";
 
+/** A business org is a legal person (company) or a person trading under
+ *  their own name (sole_trader). See domain/org-entity.ts. */
+export type OrgEntity = "company" | "sole_trader";
+
 /** Monerium's profile kinds (GET /profiles `kind`). */
 export type MoneriumProfileKind = "personal" | "corporate";
 
@@ -60,6 +64,8 @@ export interface Verification {
 export interface Organisation {
   id: string;
   type: OrgType;
+  /** Business orgs only, chosen at creation; read it through orgEntity(). */
+  entity?: OrgEntity;
   /** Display name. For a business this is the trading name; `legalName` is
    *  what appears on an invoice. */
   name: string;
