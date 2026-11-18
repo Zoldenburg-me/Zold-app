@@ -274,6 +274,10 @@ assert.equal(m.isCompanyLogin(null), false);
   assert.equal(m.isOwnCompanyOrg(login, { ...own, role: "admin" }, [{ backingUserId: "u9" }]), false, "a member elsewhere");
   assert.equal(m.isOwnCompanyOrg(login, { ...own, role: "viewer" }, []), false);
   assert.equal(m.isOwnCompanyOrg(login, own, [{ backingUserId: "u9" }]), false, "owner, but it spends from someone else");
+  // A company org spends from its own Safe, not the login's: no Monerium link or payment page from the login.
+  assert.equal(m.isOwnCompanyOrg(login, { ...own, entity: "company" }, []), false, "owner of a company org");
+  assert.equal(m.isOwnCompanyOrg(login, { ...own, entity: "company" }, [{ backingUserId: "c1" }]), false, "company org, even a legacy backed account");
+  assert.equal(m.ownSafeHere({ ...login, address: "0xc1", passkeySafe: { status: "active" } }, { ...own, entity: "company" }, []), null, "the login's Safe is not a company org's account");
   // Unread accounts say nothing; a person's login or a personal space never.
   assert.equal(m.isOwnCompanyOrg(login, own, null), false);
   assert.equal(m.isOwnCompanyOrg({ id: "u2", accountType: "individual" }, own, []), false);

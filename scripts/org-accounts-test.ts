@@ -127,6 +127,26 @@ await check("an account whose row stored other wording shows the current reason"
   assert.doesNotMatch(JSON.stringify(a), /not built|funding identity/);
   assert.match(accountIsSpendable(a).reason!, /No IBAN is connected/);
 });
+await check("a company's account reads as having no Safe yet, and is never funded from a member", async () => {
+  addOrg("org_gmbh", "business", "Lindner Bau");
+  store.updateOrganisation("org_gmbh", { entity: "company" });
+  member("m6", "org_gmbh", "u_co", "owner");
+  member("m7", "org_gmbh", "u_admin", "admin");
+  store.addAccount({ id: "acc_gmbh", orgId: "org_gmbh", currency: "EUR", label: "main", status: "gated", provider: "monerium", identifier: {}, createdAt: now, updatedAt: now } as any);
+  const r = await call("GET", "/api/orgs/org_gmbh/accounts");
+  const a = r.body.accounts.find((x: any) => x.id === "acc_gmbh");
+  assert.match(a.gate.reason, /Safe is not set up/);
+  assert.match(accountIsSpendable(a, store.findOrganisation("org_gmbh")!).reason!, /Safe is not set up yet/);
+  assert.equal(r.body.adoption.code, "COMPANY_OWN_SAFE");
+  // The new code, for owner and admin alike: not OWNER_ONLY.
+  for (const u of ["u_co", "u_admin"]) {
+    const f = await call("POST", "/api/orgs/org_gmbh/accounts/acc_gmbh/fund", undefined, u);
+    assert.equal(f.status, 409, u);
+    assert.equal(f.body.code, "COMPANY_OWN_SAFE", u);
+  }
+  assert.equal(store.findAccount("acc_gmbh")!.backingUserId, undefined);
+  assert.equal(store.findAccount("acc_gmbh")!.address, undefined);
+});
 await check("a company profile still pending at Monerium is on the screen, with when that was seen", async () => {
   const r = await call("GET", "/api/orgs/org_new/accounts");
   assert.deepEqual(r.body.profileWait, { state: "pending", at: "2026-10-01T09:00:00.000Z" });

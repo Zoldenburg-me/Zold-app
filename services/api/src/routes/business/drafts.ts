@@ -472,7 +472,7 @@ export function createDraftRoutes(
     if (!account || account.orgId !== ctx.org.id) {
       return res.status(404).json({ error: "This draft's funding account no longer exists." });
     }
-    const spendable = accountIsSpendable(account);
+    const spendable = accountIsSpendable(account, ctx.org);
     if (!spendable.ok) return res.status(409).json({ error: spendable.reason });
     if (!account.backingUserId) {
       return res.status(409).json({

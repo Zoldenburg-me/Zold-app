@@ -30,9 +30,11 @@ export const isCompanyLogin = (me) => me?.accountType === "company";
  * when the login owns this business organisation and no account here spends
  * from someone else's. `accounts` is GET /api/orgs/:id/accounts; unread
  * (null) is no, so nothing is said about an organisation not yet read.
+ * A company org (entity "company") is never: its account is its own Safe,
+ * not any login's.
  */
 export function isOwnCompanyOrg(me, org, accounts) {
-  if (!isCompanyLogin(me) || !me.id || org?.type !== "business" || !Array.isArray(accounts)) return false;
+  if (!isCompanyLogin(me) || !me.id || org?.type !== "business" || org.entity === "company" || !Array.isArray(accounts)) return false;
   if (accounts.some((a) => a.backingUserId === me.id)) return true;
   return org.role === "owner" && !accounts.some((a) => a.backingUserId);
 }

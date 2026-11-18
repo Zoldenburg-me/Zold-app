@@ -13,6 +13,8 @@
  */
 import type { User } from "../store/types.js";
 import { can } from "./segments.js";
+import { orgEntity } from "./org-entity.js";
+import type { Organisation } from "./types.js";
 
 export function walletBlocker(user: Pick<User, "segment">): string | null {
   if (can(user.segment?.value ?? "EU_FULL", "onchain_balance")) return null;
@@ -24,9 +26,14 @@ export function walletBlocker(user: Pick<User, "segment">): string | null {
  * account its payments arrive in: no IBAN, and none on offer (the segment has
  * no Monerium, or Monerium refused it), with a deployed Safe. Mirrors the
  * app's `bankOffered()`. An account that can still get an IBAN connects that
- * instead, through the Monerium profile check.
+ * instead, through the Monerium profile check. Never for a company: its
+ * account is the org's own Safe, not a member's.
  */
-export function walletConnectable<U extends Pick<User, "segment" | "kycStatus" | "iban" | "passkeySafe">>(user: U | undefined): user is U {
+export function walletConnectable<U extends Pick<User, "segment" | "kycStatus" | "iban" | "passkeySafe">>(
+  user: U | undefined,
+  org: Pick<Organisation, "type" | "entity">,
+): user is U {
+  if (orgEntity(org) === "company") return false;
   if (!user || user.iban || user.passkeySafe?.status !== "active") return false;
   return !can(user.segment?.value ?? "EU_FULL", "monerium") || user.kycStatus === "rejected";
 }
