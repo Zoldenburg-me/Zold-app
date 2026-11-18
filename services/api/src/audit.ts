@@ -83,7 +83,8 @@ export type AuditKind =
   | "service.merchant_request_cancel"
   /** A member issued a link code for a shop, or revoked a merchant link. */
   | "merchant_link.code_issued"
-  | "merchant_link.revoked";
+  | "merchant_link.revoked"
+  | "org_safe.replanned";
 
 export interface AuditEntry {
   id: string;

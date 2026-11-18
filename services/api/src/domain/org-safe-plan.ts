@@ -21,7 +21,8 @@ const COORD = /^0x[0-9a-fA-F]{64}$/;
 export function isOrgSafePlan(v: unknown): v is OrgSafePlan {
   const p = v as Partial<OrgSafePlan> | null;
   if (!p || typeof p !== "object" || p.kind !== "org") return false;
-  if (typeof p.address !== "string" || !ADDRESS.test(p.address)) return false;
+  if (p.status !== "planned" && p.status !== "active") return false;
+  if (typeof p.address !== "string" || !ADDRESS.test(p.address) || BigInt(p.address) === 0n) return false;
   if (typeof p.createdAt !== "string" || !Number.isFinite(Date.parse(p.createdAt))) return false;
   if (!Array.isArray(p.owners) || !p.owners.length) return false;
   const seen = new Set<string>();
@@ -45,5 +46,10 @@ export function orgSafePlan(org: Pick<Organisation, "type" | "entity" | "safe">)
   if (!isOrgSafePlan(org.safe)) {
     throw new OrgSafePlanRefusal(409, "ORG_SAFE_UNREADABLE", "This company's Safe record is unreadable, so nothing can be paid from it.");
   }
-  return org.safe;
+  return copyOrgSafePlan(org.safe);
+}
+
+/** A copy: a caller that edits or stashes the plan never edits the stored row. */
+export function copyOrgSafePlan(plan: OrgSafePlan): OrgSafePlan {
+  return { kind: "org", status: plan.status, address: plan.address, owners: plan.owners.map((o) => ({ x: o.x, y: o.y })), createdAt: plan.createdAt };
 }

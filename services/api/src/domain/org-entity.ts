@@ -18,9 +18,13 @@ export function orgEntity(org: Pick<Organisation, "type" | "entity">): OrgEntity
 /**
  * The entity is locked once an EUR account has somewhere for money to land: a
  * Safe address (an org Safe exists before its IBAN), a backer's Safe bound to
- * it (POST .../fund or adoption) or an IBAN. Changing it after that would
- * change who owns money that is already there.
+ * it (POST .../fund or adoption) or an IBAN, or a stored org Safe plan (its
+ * deployment may have landed before it was confirmed). Changing it after that
+ * would change who owns money that is already there.
  */
-export function entityLocked(accounts: readonly Pick<Account, "currency" | "address" | "backingUserId" | "identifier">[]): boolean {
-  return accounts.some((a) => a.currency === "EUR" && (!!a.address || !!a.backingUserId || !!a.identifier?.iban));
+export function entityLocked(
+  org: Pick<Organisation, "safe">,
+  accounts: readonly Pick<Account, "currency" | "address" | "backingUserId" | "identifier">[],
+): boolean {
+  return !!org.safe || accounts.some((a) => a.currency === "EUR" && (!!a.address || !!a.backingUserId || !!a.identifier?.iban));
 }

@@ -50,6 +50,7 @@ import { paymentReviewRequired } from "../domain/payment-review.js";
 import { verifyPasskeyStepUp } from "./auth.js";
 import { clearsSignupTaxId, issuerIdentityFrom } from "./business/shared.js";
 import { entityLocked, isOrgEntity, orgEntity } from "../domain/org-entity.js";
+import { orgSafeDeployOffer } from "./org-safe-deployment.js";
 
 const INVITE_TTL_MS = 3 * 24 * 60 * 60 * 1000; // Gnosis expired invites at 3 days
 
@@ -83,7 +84,22 @@ function noIbanGate(type: OrgType): NonNullable<Account["gate"]> {
       };
 }
 
+/** A company's EUR account before its own Safe exists (deployed by an owner,
+ *  POST .../safe/deployment). */
+const ORG_SAFE_GATE: NonNullable<Account["gate"]> = {
+  reason: "The company’s Safe is not set up yet, so nothing can be paid into or sent from this account.",
+  needs: "an owner to set up the company’s Safe with their passkey. Issuing the company’s IBAN onto it is not yet live.",
+};
+/** A company's EUR account once its Safe exists. No route issues a company's
+ *  IBAN onto its Safe yet, so nothing here says one can be connected. */
+const ORG_IBAN_GATE: NonNullable<Account["gate"]> = {
+  reason: "The company’s Safe is set up, but issuing the company’s IBAN onto it is not yet live, so nothing can be sent from this account.",
+  needs: "the company’s IBAN on its Safe, which is not yet live.",
+};
+
 const OWNER_ONLY_FUNDING = "Only an owner can connect their account or wallet to this organisation.";
+/** A company is never funded from a member's own account or wallet. */
+const COMPANY_OWN_SAFE = "A company’s account is its own Safe, not a member’s account or wallet, so nothing can be connected to it.";
 /** A business account backed by a wallet-tier Safe: paid into, never sent from by bank. */
 const WALLET_GATE: NonNullable<Account["gate"]> = {
   reason: "No IBAN is connected, so nothing can be sent from this account by bank. Payment links pay into the connected wallet.",
@@ -95,8 +111,9 @@ const WALLET_GATE: NonNullable<Account["gate"]> = {
  * stored `gate` keeps the wording it was opened with, so it is only the
  * fallback.
  */
-function gateOf(org: Pick<Organisation, "type">, a: Account): Account["gate"] {
+function gateOf(org: Pick<Organisation, "type" | "entity">, a: Account): Account["gate"] {
   if (a.status !== "gated") return undefined;
+  if (a.currency === "EUR" && orgEntity(org) === "company") return a.address ? ORG_IBAN_GATE : ORG_SAFE_GATE;
   if (a.currency === "EUR" && !a.backingUserId) return noIbanGate(org.type);
   return initialStatusFor(a.currency).gate ?? a.gate;
 }
@@ -117,15 +134,18 @@ function accountView(org: Organisation, a: Account) {
 
 /**
  * A Safe belongs to one organisation: the company whose active account it
- * backs. The person's own (personal) space does not count, since connecting
- * the Safe to a company is how it moves there. Returns that company, if it is
- * not `orgId`.
+ * backs, or whose own Safe it is (a company account's `address`, matched so an
+ * org Safe a member imported as their own can never back another org). The
+ * person's own (personal) space does not count, since connecting the Safe to a
+ * company is how it moves there. Returns that company, if it is not `orgId`.
  */
-export function safeTakenBy(userId: string, orgId: string): { id: string; name: string } | undefined {
+export function safeTakenBy(user: { id: string; address?: string }, orgId: string): { id: string; name: string } | undefined {
+  const safe = user.address?.toLowerCase();
   for (const a of store.accounts) {
     // `gated` with a backer and no IBAN: a wallet-tier Safe connected (POST .../fund).
     const wallet = a.status === "gated" && !a.identifier?.iban;
-    if (a.backingUserId !== userId || a.orgId === orgId || (a.status !== "active" && !wallet)) continue;
+    const mine = a.backingUserId === user.id || (!!safe && a.address?.toLowerCase() === safe);
+    if (!mine || a.orgId === orgId || (a.status !== "active" && !wallet)) continue;
     const other = store.findOrganisation(a.orgId);
     if (other?.type === "business") return { id: other.id, name: other.name };
   }
@@ -282,7 +302,8 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
         status: "gated",
         provider: CURRENCY_REGISTRY.EUR.provider,
         identifier: {},
-        gate: noIbanGate("business"),
+        // A company's account has no address until its own Safe is deployed.
+        gate: orgEntity(org) === "company" ? ORG_SAFE_GATE : noIbanGate("business"),
         createdAt: now,
         updatedAt: now,
       });
@@ -331,7 +352,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       if (ctx.member.role !== "owner") {
         return res.status(403).json({ code: "OWNER_ONLY", error: "Only an owner can change whether the business is a company or a sole trader." });
       }
-      if (entityLocked(store.accountsOf(ctx.org.id))) {
+      if (entityLocked(ctx.org, store.accountsOf(ctx.org.id))) {
         return res.status(409).json({
           code: "ENTITY_LOCKED",
           error: "The euro account is already set up, so whether the business is a company or a sole trader can no longer change.",
@@ -638,11 +659,14 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     if (!requirePermission(ctx, res, "accounts.read")) return;
     const accounts = store.accountsOf(ctx.org.id);
     const caller = store.findUser(ctx.userId);
-    const adoption = !roleCan(ctx.member.role, "accounts.open")
+    const company = orgEntity(ctx.org) === "company";
+    const adoption = company
+      ? { allowed: false, reason: COMPANY_OWN_SAFE, code: "COMPANY_OWN_SAFE" }
+      : !roleCan(ctx.member.role, "accounts.open")
       ? { allowed: false, reason: `Your role (${ctx.member.role}) cannot open or fund accounts.` }
       : ctx.org.type === "business" && ctx.member.role !== "owner"
         ? { allowed: false, reason: OWNER_ONLY_FUNDING }
-        : ctx.org.type === "business" && walletConnectable(caller)
+        : ctx.org.type === "business" && walletConnectable(caller, ctx.org)
           ? { allowed: true, wallet: true }
           : adoptionHint(ctx.org, caller);
     res.json({
@@ -655,6 +679,9 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       // Monerium has not approved the caller's profile yet (as last seen), so
       // connecting would be refused until it does.
       ...(adoption.allowed ? { profileWait: profileWait(caller) } : {}),
+      // A company's own Safe, while its EUR account has none: whether this
+      // member may set it up (POST .../safe/deployment would accept them).
+      ...(company ? { orgSafeDeploy: orgSafeDeployOffer(ctx, caller ?? undefined, accounts) } : {}),
       mayManageAccounts: roleCan(ctx.member.role, "accounts.open"),
       currencies: currencyAvailability(),
       // What a second account would cost, so the UI can show the ceiling
@@ -676,6 +703,17 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       });
     }
     const existing = store.accountsOf(ctx.org.id);
+    const company = orgEntity(ctx.org) === "company";
+    // One Safe per company, so one EUR account: a second would have no Safe to point at.
+    if (company && currency === "EUR" && existing.some((a) => a.currency === "EUR")) {
+      return res.status(409).json({
+        code: "COMPANY_ONE_EUR_ACCOUNT",
+        error: "A company has one euro account, on its own Safe. It is listed on Accounts even while it is not open.",
+      });
+    }
+    if (company && req.body?.useMyAccount === true) {
+      return res.status(409).json({ error: COMPANY_OWN_SAFE, code: "COMPANY_OWN_SAFE" });
+    }
     if (existing.some((a) => a.currency === currency)) {
       return res
         .status(409)
@@ -710,6 +748,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     const callerFunded =
       caller && caller.iban && caller.funding?.status === "active" ? caller : undefined;
     const wantsAdoption =
+      !company &&
       currency === "EUR" &&
       Boolean(callerFunded) &&
       (ctx.org.type === "personal" || req.body?.useMyAccount === true);
@@ -727,7 +766,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     // refuses the whole request: nothing is opened half-adopted.
     let profileRecord: NonNullable<Account["moneriumProfile"]> | undefined;
     let profileWarning: string | undefined;
-    const takenBy = wantsAdoption ? safeTakenBy(callerFunded!.id, ctx.org.id) : undefined;
+    const takenBy = wantsAdoption ? safeTakenBy(callerFunded!, ctx.org.id) : undefined;
     if (takenBy) return res.status(409).json({ error: safeTakenError(takenBy), code: "SAFE_IN_OTHER_ORG" });
     if (wantsAdoption) {
       const checked = await checkBackingProfile(ctx.org, callerFunded!);
@@ -741,14 +780,14 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       if (store.accountsOf(ctx.org.id).some((a) => a.currency === currency)) {
         return res.status(409).json({ error: `This organisation already has a ${currency} account.` });
       }
-      const lateTaken = safeTakenBy(callerFunded!.id, ctx.org.id);
+      const lateTaken = safeTakenBy(callerFunded!, ctx.org.id);
       if (lateTaken) return res.status(409).json({ error: safeTakenError(lateTaken), code: "SAFE_IN_OTHER_ORG" });
     }
 
     const status = wantsAdoption ? "active" : "gated";
     const gate = wantsAdoption
       ? undefined
-      : (initial.gate ?? noIbanGate(ctx.org.type));
+      : (initial.gate ?? (company ? ORG_SAFE_GATE : noIbanGate(ctx.org.type)));
 
     const account = store.addAccount({
       id: `acc_${randomUUID()}`,
@@ -801,6 +840,9 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     if (!account || account.orgId !== ctx.org.id) {
       return res.status(404).json({ error: "no such account" });
     }
+    if (orgEntity(ctx.org) === "company") {
+      return res.status(409).json({ error: COMPANY_OWN_SAFE, code: "COMPANY_OWN_SAFE" });
+    }
     if (account.backingUserId) {
       return res.status(409).json({
         error:
@@ -826,8 +868,8 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     // where the business is paid. The row stays `gated`: there is no IBAN, so
     // nothing is sent from it by bank, and no Monerium profile to check.
     const walletCaller = store.findUser(ctx.userId);
-    if (ctx.org.type === "business" && walletConnectable(walletCaller)) {
-      const taken = safeTakenBy(walletCaller.id, ctx.org.id);
+    if (ctx.org.type === "business" && walletConnectable(walletCaller, ctx.org)) {
+      const taken = safeTakenBy(walletCaller, ctx.org.id);
       if (taken) return res.status(409).json({ error: safeTakenError(taken), code: "SAFE_IN_OTHER_ORG" });
       const connected = store.updateAccount(account.id, {
         address: walletCaller.address,
@@ -851,7 +893,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       });
     }
 
-    const takenBy = safeTakenBy(caller.id, ctx.org.id);
+    const takenBy = safeTakenBy(caller, ctx.org.id);
     if (takenBy) return res.status(409).json({ error: safeTakenError(takenBy), code: "SAFE_IN_OTHER_ORG" });
 
     // The account stays gated on any refusal, including Monerium not
@@ -865,7 +907,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     if (store.findAccount(account.id)?.backingUserId) {
       return res.status(409).json({ error: "This account was funded by another request while we checked with Monerium." });
     }
-    const lateTaken = safeTakenBy(caller.id, ctx.org.id);
+    const lateTaken = safeTakenBy(caller, ctx.org.id);
     if (lateTaken) return res.status(409).json({ error: safeTakenError(lateTaken), code: "SAFE_IN_OTHER_ORG" });
 
     const funded = store.updateAccount(account.id, {
