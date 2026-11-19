@@ -32,6 +32,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import express from "express";
 import { makeSoftwarePasskey } from "./_software-passkey.js";
+import { NOW, activeEurAccount, businessOrg, member } from "./_org-fixtures.js";
 
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-biz-crypto-")), "db.json");
 process.env.CRYPTO_SEND_ENABLED = "1";
@@ -94,10 +95,10 @@ store.addUser({
   createdAt: now,
 } as any);
 store.addUser({ id: "u_admin", name: "Admin", country: "DE", kycStatus: "approved", address: `0x${"bb".repeat(20)}`, createdAt: now } as any);
-store.addOrganisation({ id: "org_1", type: "business", name: "Zoldenburg UG", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now } as any);
-store.addMember({ id: "m_owner", orgId: "org_1", userId: "u_owner", email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now } as any);
-store.addMember({ id: "m_admin", orgId: "org_1", userId: "u_admin", email: "", role: "admin", status: "active", invitedAt: now, acceptedAt: now } as any);
-store.addAccount({ id: "acc_1", orgId: "org_1", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: SAFE, backingUserId: "u_owner", moneriumProfile: { id: PROFILE_ID, kind: "corporate", name: "Zoldenburg UG", checkedAt: now }, createdAt: now, updatedAt: now } as any);
+store.addOrganisation(businessOrg("org_1", "Zoldenburg UG"));
+store.addMember(member("m_owner", "org_1", "u_owner", "owner"));
+store.addMember(member("m_admin", "org_1", "u_admin", "admin"));
+store.addAccount(activeEurAccount("acc_1", "org_1", { address: SAFE, backingUserId: "u_owner" }, { label: "EUR", moneriumProfile: { id: PROFILE_ID, kind: "corporate", name: "Zoldenburg UG", checkedAt: NOW } }));
 store.addContact({ id: "c_w", orgId: "org_1", name: "Alice Studio", wallets: [{ id: "cw_1", chainId: 31337, address: ALICE }], bankAccounts: [], createdAt: now, updatedAt: now } as any);
 
 const app = express();

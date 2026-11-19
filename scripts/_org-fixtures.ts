@@ -15,14 +15,15 @@ export const REPORTING = { currency: "EUR", timeZone: "Europe/Berlin", costBasis
 
 // ── Store rows ──────────────────────────────────────────────────────────────
 
-/** A business org. No `entity` is the row a business org had before entities
- *  existed, which orgEntity reads as sole_trader. */
-export function businessOrg(id: string, name: string, opts: { entity?: OrgEntity; legalName?: string } = {}): Organisation {
+/** A business org, on the business plan unless `plan` says otherwise. No
+ *  `entity` is the row a business org had before entities existed, which
+ *  orgEntity reads as sole_trader. */
+export function businessOrg(id: string, name: string, opts: { entity?: OrgEntity; legalName?: string; plan?: Organisation["plan"] } = {}): Organisation {
   return {
     id, type: "business", name,
     ...(opts.entity ? { entity: opts.entity } : {}),
     ...(opts.legalName ? { legalName: opts.legalName } : {}),
-    plan: "business", reporting: { ...REPORTING }, verifications: {}, createdAt: NOW, updatedAt: NOW,
+    plan: opts.plan ?? "business", reporting: { ...REPORTING }, verifications: {}, createdAt: NOW, updatedAt: NOW,
   } as Organisation;
 }
 
@@ -44,11 +45,18 @@ export function gatedEurAccount(id: string, orgId: string, extra: Partial<Accoun
   return { id, orgId, currency: "EUR", label: "main", status: "gated", provider: "monerium", identifier: {}, createdAt: NOW, updatedAt: NOW, ...extra } as Account;
 }
 
-/** A euro account with its IBAN, spending from `backingUserId`'s Safe. */
-export function activeEurAccount(id: string, orgId: string, opts: { iban: string; address: `0x${string}`; backingUserId: string }): Account {
+/** An active euro account at `address`: with `iban`, its IBAN; with
+ *  `backingUserId`, spending from that member's Safe. */
+export function activeEurAccount(
+  id: string, orgId: string,
+  opts: { iban?: string; address: `0x${string}`; backingUserId?: string },
+  extra: Partial<Account> = {},
+): Account {
   return {
     id, orgId, currency: "EUR", label: "main", status: "active", provider: "monerium",
-    identifier: { iban: opts.iban }, address: opts.address, backingUserId: opts.backingUserId, createdAt: NOW, updatedAt: NOW,
+    identifier: opts.iban ? { iban: opts.iban } : {}, address: opts.address,
+    ...(opts.backingUserId ? { backingUserId: opts.backingUserId } : {}),
+    createdAt: NOW, updatedAt: NOW, ...extra,
   } as Account;
 }
 
