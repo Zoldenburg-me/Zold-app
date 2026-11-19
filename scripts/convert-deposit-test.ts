@@ -200,6 +200,8 @@ await check("the convert route writes the intent before submitting and clears it
   const route = src.slice(src.indexOf('"/users/:id/crypto-deposits/:depositId/convert"'));
   const intent = route.indexOf("conversionIntent: {");
   assert.ok(intent > 0 && intent < route.indexOf("submitPasskeySafeOperationWithReceipt("), "the intent is on disk before the swap is submitted");
+  assert.match(route.slice(intent, route.indexOf("submitPasskeySafeOperationWithReceipt(")), /paymaster: pending\.userOperation\.paymaster/,
+    "it names the paymaster, so a later settle does not count USDC gas as swap input");
   const uncertain = route.slice(route.indexOf("instanceof SafeOperationUncertainError"), route.indexOf('holding: "refused", reason'));
   assert.doesNotMatch(uncertain, /conversionIntent/, "an uncertain submit keeps its intent");
   assert.match(route, /holding: "refused", reason, conversionIntent: undefined/, "a stated refusal clears it");

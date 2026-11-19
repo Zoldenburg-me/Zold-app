@@ -624,6 +624,8 @@ export interface CryptoDeposit {
     safeAddress: string;
     /** The Safe operation's nonce, which finds it on chain. */
     nonce?: string;
+    /** Who took gas in USDC, so a later settle does not count it as swap input. */
+    paymaster?: string;
     quote: { provider: string; rate: string; minOut: string };
   };
   creditedEur?: number;

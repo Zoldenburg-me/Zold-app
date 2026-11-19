@@ -46,6 +46,7 @@ import { buildCryptoSettlement, settlementUpdate } from "../domain/invoices.js";
 import { writeStatementLines } from "../bookkeeping/writer.js";
 import { readLogWindow } from "../log-range.js";
 import { conversionOutputs } from "../transfers/conversion-outputs.js";
+import { userOperationOutcome } from "../wallet/candide.js";
 
 /** The ERC-20 event, declared here rather than pulled from the mock's ABI —
  *  the real USDC emits the same signature and this path must not depend on our
@@ -548,6 +549,71 @@ export async function settleConvertedDeposit(
 }
 
 /**
+ * Resolve conversions whose submit was uncertain. The route parks such a row
+ * with the userOpHash, which no EURe log carries, so the scanner could not
+ * tell the swap's output from money in. Once the bundler has a receipt, the
+ * swap step names the transaction (the scanner then leaves its output alone)
+ * and the row is settled against its conversion intent, as the route would
+ * have done. No receipt, or no answer: the row stays as it is. Included but
+ * reverted: nothing converted, and the row stays unconfirmed for review.
+ * Runs before a scan, so the step is on the row before its logs are read.
+ */
+export async function settleUnconfirmedConversions(outcome = userOperationOutcome): Promise<void> {
+  for (const d of [...store.cryptoDeposits]) {
+    const step = d.holding === "unconfirmed" ? d.txs.find((t) => t.step === "safe.swap(usdc->eure).unconfirmed") : undefined;
+    if (!step) continue;
+    const userOpHash = step.hash;
+    let op: Awaited<ReturnType<typeof outcome>>;
+    try {
+      op = await outcome(userOpHash);
+    } catch (err) {
+      console.error(`crypto-in: deposit ${d.id}: receipt read for swap ${userOpHash} failed: ${describeCause(err)}`);
+      continue;
+    }
+    if (!op) continue;
+    const rest = d.txs.filter((t) => t !== step);
+    if (!op.success) {
+      store.updateCryptoDeposit(d.id, {
+        reason: `the swap ${userOpHash} was included but reverted — nothing was converted; it is being checked before it is offered again`,
+        txs: [...rest, { step: "safe.swap(usdc->eure).reverted", hash: op.txHash }, { step: "userOperation", hash: userOpHash }],
+      });
+      continue;
+    }
+    const txs = [...rest, { step: "safe.swap(usdc->eure)", hash: op.txHash }, { step: "userOperation", hash: userOpHash }];
+    const executed = store.updateCryptoDeposit(d.id, { reason: "the swap went through; recording what arrived", txs });
+    const user = store.findUser(d.userId);
+    const intent = d.conversionIntent;
+    // Without the signed quote there is no floor to settle against.
+    if (!user || !intent) continue;
+    try {
+      const receipt = await publicClient.getTransactionReceipt({ hash: op.txHash as `0x${string}` });
+      // The block before the swap: what the Safe held when it ran.
+      const before = (await publicClient.readContract({
+        address: addrs().eure, abi: abis.MockToken, functionName: "balanceOf", args: [user.address as `0x${string}`],
+        blockNumber: receipt.blockNumber - 1n,
+      })) as bigint;
+      const asked = BigInt(intent.amountUnits);
+      const took = await usdcSwappedIn(op.txHash, userOpHash, user.address, intent.paymaster);
+      const amountIn = took === undefined || took <= 0n || took > asked ? asked : took;
+      const at = await publicClient.getBlock({ blockNumber: receipt.blockNumber })
+        .then((b) => new Date(Number(b.timestamp) * 1000).toISOString(), () => undefined);
+      await settleConvertedDeposit(
+        executed, user,
+        { provider: intent.quote.provider, rate: BigInt(intent.quote.rate), minOut: BigInt(intent.quote.minOut) },
+        before, txs,
+        { userOpHash, txHash: op.txHash, blockNumber: Number(receipt.blockNumber), ...(at ? { at } : {}), amountInUnits: amountIn.toString() },
+      );
+      store.updateCryptoDeposit(d.id, { conversionIntent: undefined });
+    } catch (err) {
+      console.error(`crypto-in: deposit ${d.id}: swap ${op.txHash} executed but was not recorded: ${describeCause(err)}`);
+      store.updateCryptoDeposit(d.id, {
+        reason: "the swap went through, but what arrived could not be recorded — it is being checked and will not be offered again",
+      });
+    }
+  }
+}
+
+/**
  * Write the payment back onto the invoice it settles.
  *
  * The invoice is the Beleg and the deposit the Zahlung; German bookkeeping
@@ -601,7 +667,7 @@ export const cryptoInScan: {
   rescan?: { fromBlock: string; state: RescanState };
 } = {};
 
-export async function pollCryptoDepositsOnce(): Promise<number> {
+export async function pollCryptoDepositsOnce(outcome = userOperationOutcome): Promise<number> {
   if (!CRYPTO_IN.enabled) return 0;
   /**
    * One scan at a time.
@@ -636,6 +702,9 @@ export async function pollCryptoDepositsOnce(): Promise<number> {
          * were never scanned, and nothing ever goes back for them.
          */
         const head = await publicClient.getBlockNumber({ cacheTime: 0 });
+        // After the head is read: a swap the bundler has no receipt for now
+        // lands past it, outside this tick's window.
+        await settleUnconfirmedConversions(outcome);
         for (let w = 0; w < CRYPTO_IN.windowsPerTick; w++) {
           const r = await scanCryptoDeposits(head);
           found += r.found;
