@@ -1297,4 +1297,7 @@ export interface PendingSafeOp {
   reason?: string;
   userOpHash?: string;
   txHash?: string;
+  /** The guardian a "recovery-guardian" op adds, as queued (org-recovery.ts).
+   *  Absent on ops queued before the field existed. */
+  guardianAddress?: `0x${string}`;
 }

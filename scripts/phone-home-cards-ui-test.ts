@@ -229,4 +229,26 @@ await t("Zold name: shown with copy on Home and in the account details only when
   run("hist.length = 0");
 });
 
+await t("BIC: a failed read is a miss, not \"no BIC\"; the next open reads again and shows it", async () => {
+  setUser(done, `phCache.bic = undefined; phCache.bicFor = ""; __bicCalls = 0;
+    api = (p) => p.endsWith("/bic") ? (++__bicCalls === 1 ? Promise.reject(new Error("network")) : Promise.resolve({ bic: "MONEDEFF" })) : Promise.resolve({});`);
+  const gp = () => flat(run(`PH["get-paid/details"].html()`));
+  assert.equal(await run("phLoadBic()"), null, "the failed read shows no BIC this time");
+  assert.match(gp(), /z-skel/, "the next open is still loading the BIC, not showing none");
+  assert.equal(await run("phLoadBic()"), "MONEDEFF", "the next open reads again");
+  assert.equal(run("__bicCalls"), 2);
+  assert.match(gp(), /data-z-copy="MONEDEFF"/);
+  assert.match(run("phDetailsText(user, phCache.bic)"), /BIC: MONEDEFF/);
+  assert.equal(await run("phLoadBic()"), "MONEDEFF");
+  assert.equal(run("__bicCalls"), 2, "a good BIC is read once");
+});
+
+await t("BIC: a failed read never overwrites a good cached BIC, nor keeps another IBAN's", async () => {
+  setUser(done, `phCache.bic = "MONEDEFF"; phCache.bicFor = "${IBAN}"; api = () => Promise.reject(new Error("network"));`);
+  assert.equal(await run("phLoadBic()"), "MONEDEFF");
+  setUser({ ...done, iban: "DE02120300000000202051" });
+  assert.equal(await run("phLoadBic()"), null);
+  assert.equal(run("phCache.bic"), undefined, "the old IBAN's BIC is not shown or copied for the new one");
+});
+
 console.log(`phone home cards: ${pass} passed`);
