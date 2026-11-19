@@ -785,7 +785,11 @@ export interface Transfer {
     signature?: `0x${string}`;
     signedAt?: string;
   };
-  txs: { step: string; hash: string }[];
+  /** Each step's transaction. A compensation's reverse swap
+   *  ("liquidity.<venue>.usdc-eure"), once measured, names the EURe log
+   *  indexes it delivered to the Safe (`outputLogIndexes`): that is the
+   *  refund, not money in. */
+  txs: { step: string; hash: string; outputLogIndexes?: number[] }[];
   /** Internal JIT liquidity execution details. This records how value moved
    *  into the settlement asset for the payout rail; it is not a swap product. */
   liquidity?: {
