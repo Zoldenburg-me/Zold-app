@@ -624,6 +624,8 @@ export interface CryptoDeposit {
     safeAddress: string;
     /** The Safe operation's nonce, which finds it on chain. */
     nonce?: string;
+    /** Who took gas in USDC, so a later settle does not count it as swap input. */
+    paymaster?: string;
     quote: { provider: string; rate: string; minOut: string };
   };
   creditedEur?: number;
@@ -1209,7 +1211,7 @@ export interface Session {
 /** Owned by their own modules; re-exported so `store` names one shape. */
 export type { StoredDocument } from "../documents.js";
 export type { PaymentRequest } from "../payment-requests.js";
-export type { ShopifyConnection } from "../shopify/types.js";
+export type { ShopifyConnection, ShopifyDelivery } from "../shopify/types.js";
 
 export interface ReceiptShare {
   id: string;

@@ -627,6 +627,139 @@ try {
     const { withoutConversionOutputs } = await import("../services/api/src/transfers/activity.js");
     check("and the scanner's row stays the one record of that EURe",
       withoutConversionOutputs(store.cryptoDeposits.filter((x) => x.userId === max.id), []).filter((x) => x.token === "EURE").length === 1);
+
+    // The route's uncertain submit parks the row with the userOpHash, which no
+    // EURe log carries. The poll resolves it to the transaction first, so the
+    // swap's output is not booked as money in and the deposit is credited once.
+    const { ENTRYPOINT_V9 } = await import("abstractionkit");
+    const realReceipt = publicClient.getTransactionReceipt;
+    /** The bundle's own UserOperationEvent, which a deployer mint lacks. */
+    const opOfTx = new Map<string, string>();
+    (publicClient as any).getTransactionReceipt = async (args: { hash: `0x${string}` }) => {
+      const r = await realReceipt(args);
+      const op = opOfTx.get(args.hash.toLowerCase());
+      if (!op) return r;
+      const event = { ...r.logs[0], address: ENTRYPOINT_V9, data: "0x", logIndex: r.logs.length,
+        topics: ["0x49628fd1471006c1482da88028e9ce4dbb080b815c9b0344d39e5a8e6ec1419f", op] };
+      return { ...r, logs: [...r.logs, event] };
+    };
+    const parkUncertain = async (name: string) => {
+      const user = addUser(name, { withSafe: true });
+      const parked = settleOnArrival(await seedReadyDeposit(user, 100));
+      const op = `0x${randomBytes(32).toString("hex")}`;
+      store.updateCryptoDeposit(parked.id, {
+        holding: "unconfirmed",
+        conversionIntent: {
+          at: new Date().toISOString(), amountUnits: parked.amountUnits, safeAddress: user.address,
+          quote: { provider: quote.provider, rate: quote.rate.toString(), minOut: quote.minOut.toString() },
+        },
+        txs: [...parked.txs, { step: "safe.swap(usdc->eure).unconfirmed", hash: op }],
+      });
+      return { user, id: parked.id, op, row: () => store.cryptoDeposits.find((x) => x.id === parked.id)! };
+    };
+    const eureOf = (userId: string) => store.cryptoDeposits.filter((x) => x.userId === userId && x.token === "EURE");
+
+    const noa = await parkUncertain("Uncertain Noa");
+    await pollCryptoDepositsOnce(async () => null);
+    check("an unresolved userOp leaves the deposit unconfirmed", noa.row().holding === "unconfirmed" && noa.row().txs.some((t) => t.step.endsWith(".unconfirmed")));
+    const noaTx = await mintEure(noa.user.address, 87.88);
+    opOfTx.set(noaTx.toLowerCase(), noa.op);
+    const lands = async (h: string) => (h === noa.op ? { success: true, txHash: noaTx } : null);
+    await pollCryptoDepositsOnce(lands);
+    check("once it resolves, the swap's output is not booked as a deposit", eureOf(noa.user.id).length === 0, JSON.stringify(eureOf(noa.user.id)));
+    const noaD = noa.row();
+    check("and the deposit is credited what the swap delivered", noaD.holding === "converted" && noaD.creditedEur === 87.88, `${noaD.holding} ${noaD.creditedEur} ${noaD.reason ?? ""}`);
+    check("its swap step names the transaction and the logs it delivered",
+      noaD.txs.some((t) => t.step === "safe.swap(usdc->eure)" && t.hash === noaTx && t.outputLogIndexes?.length === 1), JSON.stringify(noaD.txs));
+    check("and the intent is cleared", noaD.conversionIntent === undefined);
+    await pollCryptoDepositsOnce(lands);
+    check("a later poll changes nothing", eureOf(noa.user.id).length === 0 && noa.row().creditedEur === 87.88 && noa.row().txs.length === noaD.txs.length);
+
+    // Included but reverted: nothing converted, and nothing is guessed. The
+    // row waits for a person; EURe that does arrive is money in.
+    const ota = await parkUncertain("Reverted Ota");
+    await mintEure(ota.user.address, 12);
+    const otaTx = `0x${randomBytes(32).toString("hex")}`;
+    await pollCryptoDepositsOnce(async (h) => (h === ota.op ? { success: false, txHash: otaTx } : null));
+    const otaD = ota.row();
+    check("a reverted userOp is left unconfirmed for review", otaD.holding === "unconfirmed" && /reverted/.test(otaD.reason ?? "") && !otaD.creditedEur && otaD.txs.some((t) => t.step === "safe.swap(usdc->eure).reverted" && t.hash === otaTx), `${otaD.holding} ${otaD.reason ?? ""}`);
+    check("and is not offered for conversion again", /may still land/.test(depositConversionBlocker(store.findUser(ota.user.id)!, otaD) ?? ""));
+    check("other EURe in its user's Safe is booked as money in", eureOf(ota.user.id).length === 1 && eureOf(ota.user.id)[0].creditedEur === 12);
+
+    // The bundler lags: the scanner books the swap's output as money in while
+    // the op is unresolved, and the op resolves after. That row stays the one
+    // record of the EURe; the USDC row is left for review, not credited.
+    const userEure = (userId: string) => withoutConversionOutputs(store.cryptoDeposits.filter((x) => x.userId === userId), []).filter((x) => x.token === "EURE");
+    const lateResolve = async (name: string, opts: { intent: boolean }) => {
+      const u = await parkUncertain(name);
+      if (!opts.intent) store.updateCryptoDeposit(u.id, { conversionIntent: undefined });
+      const tx = await mintEure(u.user.address, 87.88);
+      opOfTx.set(tx.toLowerCase(), u.op);
+      await pollCryptoDepositsOnce(async () => null);
+      const bookedFirst = eureOf(u.user.id).length === 1;
+      await pollCryptoDepositsOnce(async (h) => (h === u.op ? { success: true, txHash: tx } : null));
+      return { ...u, tx, bookedFirst };
+    };
+    const lateChecks = async (label: string, u: Awaited<ReturnType<typeof lateResolve>>, reason: RegExp) => {
+      const d = u.row();
+      check(`${label}: the scanner booked the output while the op was unresolved`, u.bookedFirst);
+      check(`${label}: exactly one EURe deposit, kept in the books`,
+        eureOf(u.user.id).length === 1 && userEure(u.user.id).length === 1 && userEure(u.user.id)[0].txHash === u.tx,
+        JSON.stringify(eureOf(u.user.id)));
+      check(`${label}: the USDC row is refused for review, nothing credited`,
+        d.holding === "refused" && !d.creditedEur && reason.test(d.reason ?? ""), `${d.holding} ${d.creditedEur} ${d.reason ?? ""}`);
+      check(`${label}: its swap step names the transaction and claims none of its logs`,
+        d.txs.some((t) => t.step === "safe.swap(usdc->eure)" && t.hash === u.tx && t.outputLogIndexes?.length === 0)
+          && !d.txs.some((t) => t.step.endsWith(".unconfirmed")), JSON.stringify(d.txs));
+      check(`${label}: not offered for conversion again`, depositConversionBlocker(store.findUser(u.user.id)!, d) !== null);
+      await pollCryptoDepositsOnce(async () => null);
+      check(`${label}: a later poll changes nothing`, userEure(u.user.id).length === 1 && u.row().holding === "refused" && u.row().txs.length === d.txs.length);
+    };
+    const lia = await lateResolve("Late Lia", { intent: true });
+    await lateChecks("booked first, then resolved", lia, /already recorded as a deposit/);
+    check("and it is under review", /under review/.test(depositConversionBlocker(store.findUser(lia.user.id)!, lia.row()) ?? ""));
+
+    // A row parked before the intent was kept (#163) has no floor to settle
+    // against. Its swap landed long ago and the scanner booked the output.
+    const leo = await lateResolve("Legacy Leo", { intent: false });
+    await lateChecks("no intent, booked first", leo, /signed quote was not kept/);
+    check("and it is under review", /under review/.test(depositConversionBlocker(store.findUser(leo.user.id)!, leo.row()) ?? ""));
+
+    // No intent, resolved before the scanner reached it: the output is the
+    // swap's, named by log index, and never booked as money in.
+    const lou = await parkUncertain("Legacy Lou");
+    store.updateCryptoDeposit(lou.id, { conversionIntent: undefined });
+    const louTx = await mintEure(lou.user.address, 87.88);
+    opOfTx.set(louTx.toLowerCase(), lou.op);
+    await pollCryptoDepositsOnce(async (h) => (h === lou.op ? { success: true, txHash: louTx } : null));
+    const louD = lou.row();
+    check("no intent, resolved first: refused for review, nothing credited",
+      louD.holding === "refused" && !louD.creditedEur && /under review/.test(depositConversionBlocker(store.findUser(lou.user.id)!, louD) ?? ""),
+      `${louD.holding} ${louD.reason ?? ""}`);
+    check("and its step names the swap's output logs, which are not booked",
+      louD.txs.some((t) => t.step === "safe.swap(usdc->eure)" && t.hash === louTx && t.outputLogIndexes?.length === 1) && eureOf(lou.user.id).length === 0,
+      JSON.stringify(louD.txs));
+
+    // Settling throws (a non-archive RPC refusing the balance at the block
+    // before the swap) after the scanner booked the output: refused for
+    // review, and the booked EURe stays in the books.
+    const realRead = publicClient.readContract;
+    const lex = await parkUncertain("Archiveless Lex");
+    const lexTx = await mintEure(lex.user.address, 87.88);
+    opOfTx.set(lexTx.toLowerCase(), lex.op);
+    await pollCryptoDepositsOnce(async () => null);
+    const lexBooked = eureOf(lex.user.id).length === 1;
+    (publicClient as any).readContract = async (args: any) => {
+      if (args.blockNumber !== undefined && args.functionName === "balanceOf") throw new Error("missing trie node");
+      return realRead(args);
+    };
+    try {
+      await pollCryptoDepositsOnce(async (h) => (h === lex.op ? { success: true, txHash: lexTx } : null));
+    } finally {
+      (publicClient as any).readContract = realRead;
+    }
+    await lateChecks("settling throws", { ...lex, tx: lexTx, bookedFirst: lexBooked }, /could not be recorded/);
+    (publicClient as any).getTransactionReceipt = realReceipt;
   }
 
   console.log("15/15 a reverse-swap refund is not also booked as a deposit…");

@@ -345,6 +345,7 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
             amountUnits: unconvertedUnits(current).toString(),
             safeAddress: user.address,
             ...(pending.userOperation.nonce !== undefined ? { nonce: pending.userOperation.nonce.toString() } : {}),
+            ...(pending.userOperation.paymaster ? { paymaster: pending.userOperation.paymaster } : {}),
             quote: pending.quote,
           },
         });

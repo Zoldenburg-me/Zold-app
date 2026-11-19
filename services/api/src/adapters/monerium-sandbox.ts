@@ -235,6 +235,9 @@ export function ibanActivationRefusal(user: User): { error: string; code: string
     return { error: "a bank account is not part of your account", code: "IBAN_NOT_OFFERED" };
   }
   if (user.kycStatus === "approved") return undefined;
+  if (user.kycStatus === "manual_review") {
+    return { error: "Monerium is still reviewing this account, so there is no IBAN yet", code: "IBAN_NOT_OFFERED" };
+  }
   if (user.kycStatus !== "pending") {
     return { error: "we can’t open a bank account for this account", code: "IBAN_NOT_OFFERED" };
   }

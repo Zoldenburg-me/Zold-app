@@ -21,6 +21,21 @@ function ibanSwitchedOff(u = user) {
   return !!u && kycApproved(u) && !u.iban && bankOffered(u) && !ibanMovedAway(u);
 }
 
+/* Whether this account may switch on an IBAN at all, as the API decides
+   (ibanActivationRefusal): a bank account is offered, and Monerium approved
+   it or it is pending. Under review or rejected is not offered one. */
+function ibanActivationOffered(u = user) {
+  return !!u && bankOffered(u) && (kycApproved(u) || u.kycStatus === "pending");
+}
+
+/* Connected, and Monerium is still reviewing it: there is no IBAN to get or
+   switch on yet, and nothing to redo. Every "Verify your identity" says this
+   instead of opening the IBAN sign-in. */
+const IBAN_UNDER_REVIEW = "Monerium is still reviewing this account. No IBAN yet.";
+function ibanUnderReview(u = user) {
+  return !!u && hasConnectedMonerium(u) && bankOffered(u) && !ibanActivationOffered(u);
+}
+
 function ibanMovedAway(u = user) {
   return !!u && kycApproved(u) && !u.iban && u.funding?.status === "iban_pending" && !!u.moneriumIbanElsewhere?.iban;
 }

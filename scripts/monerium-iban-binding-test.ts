@@ -19,6 +19,7 @@
  */
 import "./_test-env.js";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -40,6 +41,8 @@ const ibansOf = new Map<string, any[]>();
 const fake = { down: false, reads: 0, calls: 0 };
 /** The user's own API keys (client credentials) and the token they mint. */
 const KEYS = { clientId: "own-keys-client", clientSecret: "own-keys-secret-0001", token: "tok-own-keys" };
+/** OAuth authorization codes and the bearer token each one exchanges for. */
+const OAUTH_CODES = new Map<string, string>();
 
 const monerium = createServer((req, res) => {
   fake.calls++;
@@ -51,6 +54,11 @@ const monerium = createServer((req, res) => {
     req.on("data", (c) => (raw += c));
     req.on("end", () => {
       const form = new URLSearchParams(raw);
+      // An OAuth callback's code exchange: the code names the token it mints.
+      if (form.get("grant_type") === "authorization_code") {
+        const minted = OAUTH_CODES.get(form.get("code") ?? "");
+        return minted ? send(200, { access_token: minted, token_type: "Bearer", expires_in: 3600 }) : send(400, { error: "invalid_grant" });
+      }
       if (form.get("client_id") !== KEYS.clientId || form.get("client_secret") !== KEYS.clientSecret) return send(401, { error: "invalid_client" });
       send(200, { access_token: KEYS.token, token_type: "Bearer", expires_in: 3600 });
     });
@@ -297,6 +305,13 @@ await check("only an approved account, or a pending one with its own Monerium co
  * then refused: Monerium rejected it, is reviewing it, or its segment has no
  * bank account.
  */
+/** The funding detail a refused account is shown: under review is not told "can't". */
+const REFUSAL_DETAIL = {
+  rejected: /can’t open a bank account/,
+  manual_review: /^Monerium is still reviewing this account, so there is no IBAN yet$/,
+  "wallet-only": /bank account is not part of your account/,
+} as const;
+
 async function addRefused(n: number, refusal: "rejected" | "manual_review" | "wallet-only") {
   const u = addUser(n);
   const key = await makeSoftwarePasskey(`gate-${n}`, ORIGIN);
@@ -322,7 +337,7 @@ await check("the poller does not attach an IBAN to a pending activation the acco
     const after = await refreshPendingIban(store.findUser(u.id)!);
     assert.equal(after.iban, "", `${u.id}: no IBAN attached`);
     assert.equal(after.funding?.status, "provisioning", `${u.id}: no longer shown as an IBAN being issued`);
-    assert.match(after.funding?.detail ?? "", /bank account/, u.id);
+    assert.match(after.funding?.detail ?? "", /bank account|still reviewing this account, so there is no IBAN yet/, u.id);
     const reads = fake.reads;
     await refreshPendingIban(after);
     assert.equal(fake.reads, reads, `${u.id}: not re-read on the next tick`);
@@ -360,10 +375,66 @@ for (const [n, refusal] of [[16, "rejected"], [17, "manual_review"], [18, "walle
     assert.equal(after.iban, undefined, "the IBAN Monerium lists on this Safe is not kept");
     assert.notEqual(after.funding?.status, "active");
     assert.equal(after.kycStatus, refusal);
-    assert.match(after.funding?.detail ?? "", /can’t open a bank account/);
+    assert.match(after.funding?.detail ?? "", REFUSAL_DETAIL[refusal]);
     assert.ok(!publicUser(after).iban, "and no bank details are shown");
   });
 }
+
+/**
+ * Finish an OAuth connect for this user over HTTP: the state and nonce the
+ * start route would have stored, the cookie it would have set, and a code
+ * the fake Monerium exchanges for `token`.
+ */
+async function oauthCallback(userId: string, token: string) {
+  const state = `state-${userId}`, nonce = `nonce-${userId}`, code = `code-${userId}`;
+  OAUTH_CODES.set(code, token);
+  store.updateUser(userId, {
+    moneriumConnect: {
+      state, codeVerifier: `verifier-${userId}`, redirectUri: "http://localhost/api/monerium/oauth/callback",
+      nonceHash: createHash("sha256").update(nonce).digest("hex"), createdAt: new Date().toISOString(),
+    },
+  } as any);
+  const r = await fetch(`${API}/api/monerium/oauth/callback?state=${state}&code=${code}`, {
+    redirect: "manual", headers: { cookie: `zold_monerium_connect=${nonce}` },
+  });
+  return { status: r.status, location: r.headers.get("location") };
+}
+
+for (const [n, refusal] of [[31, "rejected"], [32, "manual_review"]] as const) {
+  await check(`${refusal}: the OAuth callback stores the connection but promises no IBAN`, async () => {
+    const u = await addRefused(n, refusal);
+    // A field from an earlier IBAN must not ride along; the address verdict does.
+    store.updateUser(u.id, { funding: { ...store.findUser(u.id)!.funding!, addressUnlinkable: true, ibanIssuedAt: "2026-01-01" } } as any);
+    const before = store.findUser(u.id)!;
+    const r = await oauthCallback(u.id, u.token);
+    assert.equal(r.status, 302);
+    assert.equal(r.location, "/app?monerium=connected");
+    const after = store.findUser(u.id)!;
+    assert.ok(after.monerium?.accessTokenEnc, "the token is stored as before");
+    assert.equal(after.monerium?.profileId, PROFILE);
+    assert.equal(after.kycStatus, refusal);
+    assert.notEqual(after.funding?.status, "provisioning", "no IBAN is being provisioned");
+    assert.notEqual(after.funding?.status, "iban_pending");
+    assert.notEqual(after.funding?.status, "active");
+    assert.match(after.funding?.detail ?? "", REFUSAL_DETAIL[refusal]);
+    assert.deepEqual(Object.keys(after.funding ?? {}).sort(), ["addressUnlinkable", "detail", "mode", "moneriumProfileId", "status"]);
+    assert.deepEqual(after.kyc, before.kyc, "no \"activate IBAN with passkey\" verdict is recorded");
+    assert.equal(after.iban, undefined, "a refused account keeps no IBAN");
+    assert.ok(!publicUser(after).iban);
+  });
+}
+
+await check("pending: the OAuth callback still sets the account up for IBAN activation", async () => {
+  const u = addUser(33);
+  store.updateUser(u.id, { kycStatus: "pending", iban: "", monerium: undefined, funding: { mode: "sandbox", status: "kyc_pending" } } as any);
+  ibansOf.set(u.token, []);
+  const r = await oauthCallback(u.id, u.token);
+  assert.equal(r.location, "/app?monerium=connected");
+  const after = store.findUser(u.id)!;
+  assert.ok(after.monerium?.accessTokenEnc);
+  assert.equal(after.funding?.status, "provisioning");
+  assert.match(after.kyc?.reason ?? "", /activate IBAN with passkey/);
+});
 
 console.log("\nOrganisation accounts");
 

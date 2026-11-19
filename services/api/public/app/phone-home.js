@@ -55,6 +55,7 @@ function phChecklist(u) {
     { title: "IBAN active",
       sub: u.iban && approved ? "Ready to receive bank transfers."
         : movedAway ? `${IBAN_MOVED_AWAY.title} ${IBAN_MOVED_AWAY.sub}`
+        : !ibanActivationOffered(u) ? IBAN_UNDER_REVIEW
         : wait ? (wait.support ? "Needs Monerium support. Tap for details." : `Requested. ${wait.idCheck ? "Monerium is checking your ID." : "Monerium is issuing it."} Nothing to do.`)
         : ibanSwitchedOff(u) ? IBAN_SWITCHED_OFF
         : "Follows your verification.",
@@ -63,7 +64,7 @@ function phChecklist(u) {
       // A support case keeps a button to the screen that explains it.
       action: movedAway ? { id: "ph-ck-iban-back", label: "Move back" }
         : ibanSwitchedOff(u) ? { id: "ph-ck-verify2", label: "Switch on" }
-        : connected && !approved && (!wait || wait.support) ? { id: "ph-ck-verify2", label: wait ? "Details" : "Activate" } : null },
+        : connected && !approved && ibanActivationOffered(u) && (!wait || wait.support) ? { id: "ph-ck-verify2", label: wait ? "Details" : "Activate" } : null },
     ] : []),
   ];
   const open = items.some((i) => !i.done);
@@ -658,6 +659,8 @@ function phDetailsBody(u, bic, { loadingBic = false } = {}) {
         ? ibanSwitchedOff(u)
           ? `<p class="z-sub">${esc(IBAN_SWITCHED_OFF)}</p>
             ${Z.button({ variant: hasWallet ? "secondary" : "primary", full: true, label: "Switch on your IBAN", id: "ph-det-verify" })}`
+          : ibanUnderReview(u)
+          ? `<p class="z-sub">${esc(IBAN_UNDER_REVIEW)}</p>`
           : `<p class="z-sub">Your IBAN appears here once Monerium has verified you and issued it.</p>
           ${Z.button({ variant: hasWallet ? "secondary" : "primary", full: true, label: "Verify your identity", id: "ph-det-verify" })}`
         : ""}`;
