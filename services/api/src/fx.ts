@@ -36,7 +36,7 @@ async function corridorRates(fiat: "KES") {
   // swapper contract directly here would keep quoting the mock's price after a
   // deployment switched to RFQ, which looks completely healthy while being
   // wrong. The quote binding re-checks the rate against the same provider at execution.
-  const { rate, raw } = await liquidityProvider().indicativeRate("EURE_TO_USDC");
+  const { rate, raw } = await liquidityProvider().indicativeRate("EURE_TO_USDC", { fresh: true });
   const usdFiat = await usdPer(fiat); // live: what a partner settles at
   const marketMid = await eurPer(fiat); // live: true EUR->fiat mid, reference only
   const allIn = rate * usdFiat * (1 - FX.SPREAD_BPS / 10_000);

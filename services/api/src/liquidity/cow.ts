@@ -23,12 +23,13 @@ import {
   LiquidityExecution,
   LiquidityProvider,
   LiquidityQuote,
+  IndicativeRateOptions,
   LiquiditySide,
   MAX_SLIPPAGE_BPS,
   } from "./contract.js";
 
 export class CowLiquidityProvider implements LiquidityProvider {
-  private indicative: { at: number; rate: number; raw: bigint } | null = null;
+  private indicative = new Map<LiquiditySide, { at: number; rate: number; raw: bigint }>();
 
   private tokens(side: LiquiditySide) {
     const a = addrs();
@@ -110,10 +111,11 @@ export class CowLiquidityProvider implements LiquidityProvider {
     );
   }
 
-  async indicativeRate(side: LiquiditySide) {
+  async indicativeRate(side: LiquiditySide, opts: IndicativeRateOptions = {}) {
     const now = Date.now();
-    if (this.indicative && now - this.indicative.at < LIQUIDITY.INDICATIVE_TTL_MS) {
-      return { rate: this.indicative.rate, raw: this.indicative.raw };
+    const hit = opts.fresh ? undefined : this.indicative.get(side);
+    if (hit && now - hit.at < LIQUIDITY.INDICATIVE_TTL_MS) {
+      return { rate: hit.rate, raw: hit.raw };
     }
     const probe = await this.quote(
       side,
@@ -123,7 +125,7 @@ export class CowLiquidityProvider implements LiquidityProvider {
     );
     const raw = probe.rate;
     const rate = Number(raw) / 1e6;
-    this.indicative = { at: now, rate, raw };
+    this.indicative.set(side, { at: now, rate, raw });
     return { rate, raw };
   }
 }

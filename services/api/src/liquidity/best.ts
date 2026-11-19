@@ -22,13 +22,14 @@ import {
   LiquidityProvider,
   LiquidityProviderId,
   LiquidityQuote,
+  IndicativeRateOptions,
   LiquiditySide,
   SafeSwapContext,
   SafeSwapPlan,
   } from "./contract.js";
 
 export class BestExecutionProvider implements LiquidityProvider {
-  private indicative: { at: number; rate: number; raw: bigint } | null = null;
+  private indicative = new Map<LiquiditySide, { at: number; rate: number; raw: bigint }>();
 
   /** Venues may be injected. Tests need that because config is frozen at first
    *  import, so a later env change would test the default venues instead. */
@@ -155,16 +156,17 @@ export class BestExecutionProvider implements LiquidityProvider {
     return { ...winners[0], quote: { ...winners[0].quote, routing } };
   }
 
-  async indicativeRate(side: LiquiditySide) {
+  async indicativeRate(side: LiquiditySide, opts: IndicativeRateOptions = {}) {
     const now = Date.now();
-    if (this.indicative && now - this.indicative.at < LIQUIDITY.INDICATIVE_TTL_MS) {
-      return { rate: this.indicative.rate, raw: this.indicative.raw };
+    const hit = opts.fresh ? undefined : this.indicative.get(side);
+    if (hit && now - hit.at < LIQUIDITY.INDICATIVE_TTL_MS) {
+      return { rate: hit.rate, raw: hit.raw };
     }
-    const rates = await Promise.allSettled(this.venues().map((v) => v.provider.indicativeRate(side)));
+    const rates = await Promise.allSettled(this.venues().map((v) => v.provider.indicativeRate(side, opts)));
     const ok = rates.filter((r): r is PromiseFulfilledResult<{ rate: number; raw: bigint }> => r.status === "fulfilled");
     if (!ok.length) throw new Error("no venue could supply an indicative rate");
     const best = ok.map((r) => r.value).sort((a, b) => b.rate - a.rate)[0];
-    this.indicative = { at: now, ...best };
+    this.indicative.set(side, { at: now, ...best });
     return best;
   }
 }

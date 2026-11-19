@@ -133,6 +133,7 @@
     "enrolment:test": "tsx scripts/zoldenburg-enrolment-test.ts",
     "recovery-bank:test": "tsx scripts/zoldenburg-bank-check-test.ts",
     "best:test": "tsx scripts/best-execution-test.ts",
+    "liquidity-provider:test": "tsx scripts/liquidity-provider-test.ts",
     "dex:setup": "tsx scripts/dex-setup.ts",
     "business:test": "tsx scripts/business-test.ts",
     "business:access:test": "tsx scripts/business-access-test.ts",

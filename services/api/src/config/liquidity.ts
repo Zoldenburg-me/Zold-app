@@ -56,7 +56,9 @@ export const LIQUIDITY = {
   BEBOP_CONTRACTS: (process.env.BEBOP_CONTRACTS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean),
   /** Nominal EURe size used to probe an indicative rate for receipts. */
   PROBE_EUR: envNumber("LIQUIDITY_PROBE_EUR", 100, { min: 1 }),
-  /** How long an indicative (display-only) rate may be reused. */
+  /** How long an indicative rate may be reused by a caller that does not ask
+   *  for a fresh one. Money paths (quote lock, quote binding, compensation)
+   *  always read fresh. */
   INDICATIVE_TTL_MS: envNumber("LIQUIDITY_INDICATIVE_TTL_MS", 60_000, { min: 0 }),
   /**
    * CoW Protocol. Intent-based rather than RFQ: you sign an order and solvers
