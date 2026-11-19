@@ -30,14 +30,12 @@
  *   transfer belongs with a compliance provider.
  */
 import { randomUUID } from "node:crypto";
-import { ENTRYPOINT_V9 } from "abstractionkit";
-import { decodeEventLog } from "viem";
 import { usdToken } from "../usd-token.js";
 import { CHAIN_ID, CRYPTO_IN } from "../config.js";
 import { store, type CryptoDeposit, type User } from "../store.js";
 import { describeCause } from "../http/log-cause.js";
 import { abis, addrs, eur, usd, publicClient } from "../chain.js";
-import { balanceAfterWrite } from "../liquidity.js";
+import { balanceAfterWrite, deliveredFromReceipt, tokenTransfers, TRANSFER_EVENT } from "../liquidity.js";
 import { safeDebitBlocker } from "../orchestrator.js";
 import { walletBlocker } from "../domain/wallet-tier.js";
 import { midRates, referenceRate } from "../rates.js";
@@ -47,18 +45,6 @@ import { writeStatementLines } from "../bookkeeping/writer.js";
 import { readLogWindow } from "../log-range.js";
 import { conversionOutputs } from "../transfers/conversion-outputs.js";
 
-/** The ERC-20 event, declared here rather than pulled from the mock's ABI —
- *  the real USDC emits the same signature and this path must not depend on our
- *  own token's artifact. */
-const TRANSFER_EVENT = {
-  type: "event",
-  name: "Transfer",
-  inputs: [
-    { indexed: true, name: "from", type: "address" },
-    { indexed: true, name: "to", type: "address" },
-    { indexed: false, name: "value", type: "uint256" },
-  ],
-} as const;
 
 interface WatchedAddress {
   user: User;
@@ -302,47 +288,6 @@ export function settleOnArrival(deposit: CryptoDeposit): CryptoDeposit {
   return settled;
 }
 
-const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
-/** The EntryPoint's BeforeExecution() and UserOperationEvent(bytes32,...).
- *  A bundle executes its userOps in order after BeforeExecution, and each
- *  op's logs end with its own UserOperationEvent. */
-const BEFORE_EXECUTION_TOPIC = "0xbb47ee3e183a558b1a2ff0874b079f3fc5478b7454eacf2bfc5af2ff5878f972";
-const USER_OP_EVENT_TOPIC = "0x49628fd1471006c1482da88028e9ce4dbb080b815c9b0344d39e5a8e6ec1419f";
-/** The EntryPoint the Safe's userOps go through (UserOperationV9). */
-const ENTRY_POINT = ENTRYPOINT_V9.toLowerCase();
-
-/**
- * Transfer logs of one token in one transaction's receipt. When the
- * transaction is an EntryPoint bundle, only the logs of `userOpHash`'s own
- * execution count: another party's userOp in the same bundle may send the
- * same token to the same Safe. Undefined when there is no receipt to read, or
- * a userOp is named or present but that one's event is not in the receipt.
- */
-export async function tokenTransfers(txHash: string | undefined, token: string, userOpHash: string | null | undefined) {
-  if (!txHash || !/^0x[0-9a-fA-F]{64}$/.test(txHash)) return undefined;
-  const receipt = await publicClient.getTransactionReceipt({ hash: txHash as `0x${string}` });
-  let logs = receipt.logs;
-  // Markers count only from the EntryPoint itself: any contract in the bundle
-  // can emit a log shaped like one. receipt.to may be a bundler's own contract.
-  const marker = (i: number, topic: string) =>
-    logs[i].address.toLowerCase() === ENTRY_POINT && logs[i].topics[0] === topic;
-  const end = logs.findIndex((l, i) => marker(i, USER_OP_EVENT_TOPIC) && l.topics[1]?.toLowerCase() === userOpHash?.toLowerCase());
-  if (end >= 0) {
-    let start = end - 1;
-    while (start >= 0 && !marker(start, USER_OP_EVENT_TOPIC) && !marker(start, BEFORE_EXECUTION_TOPIC)) start--;
-    logs = logs.slice(start + 1, end);
-  } else if (userOpHash || logs.some((_, i) => marker(i, USER_OP_EVENT_TOPIC))) {
-    // A userOp whose own event is not in this receipt: nothing here is its.
-    return undefined;
-  }
-  const transfers: { from: string; to: string; value: bigint; logIndex: number }[] = [];
-  for (const log of logs) {
-    if (log.address.toLowerCase() !== token.toLowerCase() || log.topics[0] !== TRANSFER_TOPIC) continue;
-    const { args } = decodeEventLog({ abi: [TRANSFER_EVENT], data: log.data, topics: log.topics });
-    transfers.push({ from: args.from.toLowerCase(), to: args.to.toLowerCase(), value: args.value, logIndex: Number(log.logIndex) });
-  }
-  return transfers;
-}
 
 /**
  * USDC a swap took from the Safe, read from the swap's own Transfer logs.
@@ -376,9 +321,7 @@ export async function eureSwappedOut(
   userOpHash: string | null | undefined,
   safe: string,
 ): Promise<{ wei: bigint; logIndexes: number[] } | undefined> {
-  const s = safe.toLowerCase();
-  const transfers = (await tokenTransfers(txHash, addrs().eure, userOpHash))?.filter((t) => t.to === s && t.from !== s);
-  return transfers && { wei: transfers.reduce((n, t) => n + t.value, 0n), logIndexes: transfers.map((t) => t.logIndex) };
+  return deliveredFromReceipt(txHash, addrs().eure, safe, userOpHash);
 }
 
 /**
@@ -737,11 +680,12 @@ async function scanCryptoDeposits(head: bigint): Promise<{ found: number; more: 
       const ownPage = match.user.paymentPage?.depositAddress?.toLowerCase();
       if (match.source === "safe" && ownPage && ownPage !== to && from === ownPage) continue;
       const user = match.user;
-      // A conversion's EURe output is the user's money changing form, not
-      // money in (transfers/activity.ts lists the same rule). Another EURe
+      // A conversion's EURe output, or a failed transfer's reverse-swap
+      // refund, is the user's money changing form, not money in
+      // (transfers/activity.ts lists the same rule). Another EURe
       // log in the same bundle is money in. Read now, not before this scan's
       // awaits: a conversion settled meanwhile has named its output.
-      if (token.token === "EURE" && conversionOutputs(store.cryptoDeposits)(txHash, logIndex, user.id)) continue;
+      if (token.token === "EURE" && conversionOutputs(store.cryptoDeposits, store.transfers)(txHash, logIndex, user.id)) continue;
       const now = new Date().toISOString();
       /**
        * The acquisition value, stamped once at detection with the rate's
