@@ -148,10 +148,13 @@ await t("connected and under review: Home's IBAN row has no Activate, and its bu
 // Every other button that once led to the IBAN sign-in ("Verify your
 // identity", Coming soon's Check) says the account is under review instead,
 // and the Monerium screen itself no longer pitches "Get your IBAN".
-await t("connected and under review: no entry point offers the IBAN sign-in", () => {
-  run(`user = ${JSON.stringify(connectedAs("manual_review"))}; caps = { ...caps, sandbox: true, moneriumOAuth: true }; capsLoaded = true;
-    phPayVia = "bank"; phCache.soon = [];`);
+// Not connected yet changes nothing: the API refuses the IBAN either way.
+const unconnected = (kycStatus: string) => ({ ...connectedAs(kycStatus), monerium: undefined, funding: undefined });
+await t("under review, connected or not: no entry point offers the IBAN sign-in", () => {
   const flat = (code: string) => String(run(code)).replace(/\s+/g, " ");
+  for (const [who, u] of [["connected", connectedAs("manual_review")], ["not connected", unconnected("manual_review")]] as const) {
+  run(`user = ${JSON.stringify(u)}; caps = { ...caps, sandbox: true, moneriumOAuth: true }; capsLoaded = true;
+    phPayVia = "bank"; phCache.soon = [];`);
   const screens: Record<string, string> = {
     "desktop Home": flat("phDeskBalance(user)"),
     "account details": flat("phDetailsBody(user, null)"),
@@ -161,9 +164,17 @@ await t("connected and under review: no entry point offers the IBAN sign-in", ()
     "Monerium screen": flat("OB.monerium.title + ' ' + OB.monerium.html()"),
   };
   for (const [where, html] of Object.entries(screens)) {
-    assert.doesNotMatch(html, /Verify your identity|Get your IBAN|ph-det-verify|ph-soon-iban|ph-send-verify|btn-monerium-existing|Continue with Monerium/, where);
-    assert.match(html, /Monerium is still reviewing this account/, where);
+    assert.doesNotMatch(html, /Verify your identity|Get your IBAN|ph-det-verify|ph-soon-iban|ph-send-verify|btn-monerium-existing|Continue with Monerium/, `${who}: ${where}`);
+    assert.match(html, /Monerium is still reviewing this account/, `${who}: ${where}`);
   }
+  // Home's checklist keeps the step's title, but no Start and no Activate.
+  const home = flat("PH.home.html()");
+  assert.doesNotMatch(home, /id="ph-ck-verify2?"/, `${who}: Home checklist`);
+  assert.match(home, /Monerium is still reviewing this account/, `${who}: Home checklist`);
+  }
+  run(`user = ${JSON.stringify(unconnected("pending"))};`);
+  assert.match(flat("PH.home.html()"), /id="ph-ck-verify"/, "a pending account not yet connected keeps Start");
+  assert.match(flat("OB.monerium.title + ' ' + OB.monerium.html()"), /Get your IBAN.*Continue with Monerium/, "a pending account not yet connected keeps the sign-in");
   run(`user = ${JSON.stringify(connectedAs("pending"))};`);
   assert.match(flat("phDeskBalance(user)"), /Verify your identity/, "a pending account keeps its button");
   assert.match(flat("PH.soon.html()"), /id="ph-soon-iban"/, "a pending account keeps Check");

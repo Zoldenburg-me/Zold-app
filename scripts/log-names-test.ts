@@ -8,8 +8,8 @@
  *      `.payeeName`, …) or bare (`${name}`, `firstName` after a destructure),
  *      or a whole person or company object (`user`, `JSON.stringify(org)`).
  *      Every `*name`, `*_name` and plural `*names` counts as a person's
- *      unless the word before it is on a short non-person list (`fileName`,
- *      `chainName`, `hostname`): an unknown prefix fails closed.
+ *      unless the word before it is on a short non-person list (`chainName`,
+ *      `hostname`): an unknown prefix fails closed.
  *      Error class names anywhere, and Shopify order names (an order number
  *      like #1001) in routes/shopify.ts only, are the names a log may print.
  *      It reads source text, so it does not see a name or a person reached
@@ -73,22 +73,25 @@ function codeOf(s: string): string {
 //   a bare name:   `name`, `firstName`, `legalName` (a destructured name);
 //   (both also plural, `names`/`firstNames`, and snake case, `first_name`;
 //   both skipped only when the last word before "name" is non-person, so
-//   `fileName` and `chainName` pass and `payorName` or `signupName` does not);
+//   `chainName` passes and `payorName` or `signupName` does not);
 //   a whole person or company object as a value: `user`, `req.user`,
 //   `JSON.stringify(org)`, `{ member }` (but `user.id` is fine).
 const NAME_FIELD = /([\w$\])]+)\??\.(\w*[nN]ames?)\b/g;
 const BARE_NAME = /(?<![\w$.])(\w*[nN]ames?)\b(?!\s*:(?!:))/g;
 const PERSON = "user|users|member|members|holder|org|orgs|organization|customer|sender|recipient|payee|beneficiary|owner|guardian|profile|person|contact|company";
 // The words before "name" that never name a person, a company or an order.
-// Matched against the whole last word of the prefix (`belegFileName` ->
-// `file`, `first_name` -> `first`), so `profileName` is not `file` and
-// `trailName` is not `rail`. Anything not here is a person's name.
-// ens/dns: an ENS domain; authenticator: a passkey's device model;
+// Matched against the whole last word of the prefix (`sourceChainName` ->
+// `chain`, `first_name` -> `first`, `DNSName` -> `dns`), so `trailName` is
+// not `rail`. Anything not here is a person's name. `file` and `ens` are not
+// here: an uploaded Beleg's file name and an ENS name (from the payment-page
+// handle) are often the person's own name.
+// dns: a DNS name; authenticator: a passkey's device model;
 // gateway: Shopify's payment_gateway_names; region/country/display-names
 // are Intl lookups; rail, bank, provider, app, wallet, status are labels.
-const NON_PERSON = new Set(["file", "chain", "host", "path", "dir", "function", "country", "region", "provider", "rail", "bank", "app", "wallet", "status", "ens", "dns", "authenticator", "gateway"]);
+const NON_PERSON = new Set(["chain", "host", "path", "dir", "function", "country", "region", "provider", "rail", "bank", "app", "wallet", "status", "dns", "authenticator", "gateway"]);
 const personShaped = (id: string) => {
-  const words = id.replace(/_?names?$/i, "").split(/_|(?=[A-Z])/).filter(Boolean);
+  // An acronym is one word: `DNSName` -> DNS, `IBANHolderName` -> IBAN, Holder.
+  const words = id.replace(/_?names?$/i, "").split(/_|(?<=[a-z\d])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])/).filter(Boolean);
   return !NON_PERSON.has((words.pop() ?? "").toLowerCase());
 };
 const PERSON_VALUE = new RegExp(`(?<![\\w$])(${PERSON})\\b(?!\\s*(\\?\\.|\\.|\\[|:(?!:)))`, "g");
@@ -176,8 +179,8 @@ assert.ok(!caught("`${userId} ${orgId} ${usersCount}`"));
 assert.ok(!caught("`for ${bookHolderLabel(holder)}`"));
 assert.ok(caught("`for ${bookHolderLabel(holder)} ${holder}`"));
 assert.ok(caught("`order ${r.source.orderName}`", "routes/business.ts"), "orderName outside Shopify");
-// only person-shaped names: a file, chain or bare Shopify order name passes
-assert.ok(!caught("`wrote ${fileName}`"));
+// only person-shaped names: a chain or bare Shopify order name passes
+assert.ok(caught("`wrote ${fileName}`"), "a file name can be a person's");
 assert.ok(!caught("`rpc for ${chainName} (${cfg.chainName})`"));
 assert.ok(!caught("`shopify: order ${orderName} at ${shop}`", "routes/shopify.ts"));
 assert.ok(caught("`order ${orderName}`", "routes/business.ts"), "bare orderName outside Shopify");
@@ -189,13 +192,13 @@ assert.ok(caught("`partner ${p.partnerName}`"), "p.partnerName");
 assert.ok(caught("`holder ${p.holderName}`"), "p.holderName");
 // every other name fails closed: the identifiers in this codebase that hold a
 // person's or company's name, and plurals, snake case and unknown prefixes
-for (const id of ["payorName", "counterpartName", "signupName", "inviteName", "rawName", "operatorName", "moneriumVerifiedName", "moneriumName", "impersonatedName", "first_name", "last_name", "names", "firstNames", "memberNames", "placeholderName", "rpcClientName"]) {
+for (const id of ["payorName", "counterpartName", "signupName", "inviteName", "rawName", "operatorName", "moneriumVerifiedName", "moneriumName", "impersonatedName", "first_name", "last_name", "names", "firstNames", "memberNames", "placeholderName", "rpcClientName", "fileName", "filename", "belegFileName", "fileNames", "ensName", "ENSName", "IBANHolderName"]) {
   assert.ok(caught(`\`for \${${id}}\``), `bare ${id}`);
   assert.ok(caught(`\`for \${x.${id}}\``), `field ${id}`);
 }
 assert.ok(caught("`for ${user.names}`"), "user.names");
 // the non-person words pass, bare and as a field, and only as a whole word
-for (const id of ["fileName", "filename", "belegFileName", "fileNames", "chainName", "sourceChainName", "hostname", "pathname", "dirname", "__dirname", "functionName", "countryName", "regionNames", "providerName", "railName", "bankName", "appName", "walletName", "statusName", "ensName", "authenticatorName", "payment_gateway_names"]) {
+for (const id of ["chainName", "sourceChainName", "hostname", "pathname", "dirname", "__dirname", "functionName", "countryName", "regionNames", "providerName", "railName", "bankName", "appName", "walletName", "statusName", "dnsName", "DNSName", "RPCHostName", "authenticatorName", "payment_gateway_names"]) {
   assert.ok(!caught(`\`for \${${id}}\``), `bare ${id}`);
   assert.ok(!caught(`\`for \${x.${id}}\``), `field ${id}`);
 }

@@ -784,7 +784,9 @@ async function compensateTransferOnce(id: string): Promise<Transfer> {
   });
 }
 
-async function compensationRate(t: Transfer): Promise<bigint> {
+/** The EURe→USDC rate a post-swap refund is sized at: the executed rate,
+ *  else the quote's locked rate, else a fresh venue read (never the cache). */
+export async function compensationRate(t: Transfer): Promise<bigint> {
   if (t.liquidity?.rate) {
     const rate = BigInt(t.liquidity.rate);
     if (rate > 0n) return rate;

@@ -6,21 +6,21 @@
  * src/domain/invoicing.ts; toPrecision(15) drops float noise.
  *
  * A value the server refuses (AMOUNT_RE: digits, at most 8 decimals, no sign
- * or exponent; a quantity above zero) gives null, and the form shows no
- * number for it. An empty field counts as zero while the person is typing.
+ * or exponent; a quantity above zero; an empty field) gives null, and the
+ * form shows no number for it. AMOUNT_RE is the server's own pattern
+ * (invoices.ts); invoice-form-test checks the two are equal.
  */
-const AMOUNT_RE = /^\d+(\.\d{1,8})?$/;
+export const AMOUNT_RE = /^\d+(\.\d{1,8})?$/;
 
 const amount = (raw) => {
   const s = String(raw ?? "").trim();
-  if (s === "") return 0;
   return AMOUNT_RE.test(s) ? Number(s) : null;
 };
 
 export const lineNetCents = (quantity, unitPrice) => {
   const q = amount(quantity);
   const p = amount(unitPrice);
-  if (q === null || p === null || (q <= 0 && String(quantity ?? "").trim() !== "")) return null;
+  if (q === null || p === null || q <= 0) return null;
   return Math.round(Number((p * q * 100).toPrecision(15)));
 };
 

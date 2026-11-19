@@ -28,12 +28,12 @@ function ibanActivationOffered(u = user) {
   return !!u && bankOffered(u) && (kycApproved(u) || u.kycStatus === "pending");
 }
 
-/* Connected, and Monerium is still reviewing it: there is no IBAN to get or
-   switch on yet, and nothing to redo. Every "Verify your identity" says this
-   instead of opening the IBAN sign-in. */
+/* Monerium is still reviewing it, connected or not: there is no IBAN to get
+   or switch on yet, and nothing to redo (the API refuses one either way).
+   Every "Verify your identity" says this instead of opening the IBAN sign-in. */
 const IBAN_UNDER_REVIEW = "Monerium is still reviewing this account. No IBAN yet.";
 function ibanUnderReview(u = user) {
-  return !!u && hasConnectedMonerium(u) && bankOffered(u) && !ibanActivationOffered(u);
+  return !!u && bankOffered(u) && !ibanActivationOffered(u);
 }
 
 function ibanMovedAway(u = user) {
