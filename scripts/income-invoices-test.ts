@@ -700,6 +700,47 @@ await check("the customer's view of an issued invoice has the printed columns an
   assert.ok(!("fromReceipts" in view) && !("settlements" in view));
 });
 
+console.log("\nIssue date at the Berlin midnight boundary");
+
+// Fixed instants half an hour after midnight in Berlin, when the UTC day is
+// still the previous one: winter (CET, UTC+1), summer (CEST, UTC+2) and the
+// turn of the year.
+const WINTER = new Date("2026-01-15T23:30:00Z");
+const SUMMER = new Date("2026-07-15T22:30:00Z");
+const NEW_YEAR = new Date("2026-12-31T23:30:00Z");
+
+await check("dayOf reads 00:30 Berlin as the Berlin day, in winter, in summer and across the year", () => {
+  assert.equal(dayOf(WINTER.toISOString(), "Europe/Berlin"), "2026-01-16");
+  assert.equal(dayOf(SUMMER.toISOString(), "Europe/Berlin"), "2026-07-16");
+  assert.equal(dayOf(NEW_YEAR.toISOString(), "Europe/Berlin"), "2027-01-01");
+});
+
+await check("a draft made at 00:30 Berlin is dated the Berlin day and numbered in the Berlin year", async () => {
+  const { draftFrom } = await import("../services/api/src/routes/business/shared.js");
+  const org = store.findOrganisation("org_1")!;
+  const winter = draftFrom(org, {}, WINTER);
+  assert.equal(winter.issueDate, "2026-01-16");
+  assert.match(winter.number!, /^RE-2026-/);
+  assert.equal(draftFrom(org, {}, SUMMER).issueDate, "2026-07-16");
+  const newYear = draftFrom(org, {}, NEW_YEAR);
+  assert.equal(newYear.issueDate, "2027-01-01");
+  assert.match(newYear.number!, /^RE-2027-/, "the number's year is the Berlin year, not 2026");
+});
+
+await check("a typed invoice without an issue date takes the Berlin day; one with an issue date keeps it", async () => {
+  const { draftFrom } = await import("../services/api/src/routes/business/shared.js");
+  const org = store.findOrganisation("org_1")!;
+  const typed = {
+    recipient: { name: "Example DAO Foundation", country: "CH" },
+    lines: [{ description: "Consulting", quantity: "1", unitPrice: "100.00" }],
+  };
+  assert.equal(draftFrom(org, typed, WINTER).issueDate, "2026-01-16");
+  assert.equal(draftFrom(org, typed, NEW_YEAR).issueDate, "2027-01-01");
+  const dated = draftFrom(org, { ...typed, issueDate: "2026-12-31" }, NEW_YEAR);
+  assert.equal(dated.issueDate, "2026-12-31");
+  assert.match(dated.number!, /^RE-2026-/, "a typed date picks the number's year");
+});
+
 server.close();
 rpcServer.closeAllConnections();
 rpcServer.close();
