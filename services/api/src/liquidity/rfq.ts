@@ -17,6 +17,7 @@ import {
   LiquidityExecution,
   LiquidityProvider,
   LiquidityQuote,
+  IndicativeRateOptions,
   LiquiditySide,
   SafeSwapContext,
   SafeSwapPlan,
@@ -29,7 +30,7 @@ import {
   } from "./contract.js";
 
 export class RfqLiquidityProvider implements LiquidityProvider {
-  private indicative: { at: number; rate: number; raw: bigint } | null = null;
+  private indicative = new Map<LiquiditySide, { at: number; rate: number; raw: bigint }>();
 
   /** Tests name the tokens; production reads EURe and USDC from deployments.json. */
   constructor(private readonly addrs: () => VenueTokens = defaultTokens) {}
@@ -220,10 +221,11 @@ export class RfqLiquidityProvider implements LiquidityProvider {
     };
   }
 
-  async indicativeRate(side: LiquiditySide) {
+  async indicativeRate(side: LiquiditySide, opts: IndicativeRateOptions = {}) {
     const now = Date.now();
-    if (this.indicative && now - this.indicative.at < LIQUIDITY.INDICATIVE_TTL_MS) {
-      return { rate: this.indicative.rate, raw: this.indicative.raw };
+    const hit = opts.fresh ? undefined : this.indicative.get(side);
+    if (hit && now - hit.at < LIQUIDITY.INDICATIVE_TTL_MS) {
+      return { rate: hit.rate, raw: hit.raw };
     }
     // A nominal-size probe: a maker's price is size-dependent, so a receipt
     // built from a 1-wei quote would not resemble a real trade.
@@ -236,7 +238,7 @@ export class RfqLiquidityProvider implements LiquidityProvider {
     // rate is tokenOut(6dp) per 1e18 tokenIn — same convention as the swapper.
     const raw = probe.rate;
     const rate = Number(raw) / 1e6;
-    this.indicative = { at: now, rate, raw };
+    this.indicative.set(side, { at: now, rate, raw });
     return { rate, raw };
   }
 }
