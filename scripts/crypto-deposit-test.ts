@@ -627,6 +627,65 @@ try {
     const { withoutConversionOutputs } = await import("../services/api/src/transfers/activity.js");
     check("and the scanner's row stays the one record of that EURe",
       withoutConversionOutputs(store.cryptoDeposits.filter((x) => x.userId === max.id)).filter((x) => x.token === "EURE").length === 1);
+
+    // The route's uncertain submit parks the row with the userOpHash, which no
+    // EURe log carries. The poll resolves it to the transaction first, so the
+    // swap's output is not booked as money in and the deposit is credited once.
+    const { ENTRYPOINT_V9 } = await import("abstractionkit");
+    const realReceipt = publicClient.getTransactionReceipt;
+    /** The bundle's own UserOperationEvent, which a deployer mint lacks. */
+    const opOfTx = new Map<string, string>();
+    (publicClient as any).getTransactionReceipt = async (args: { hash: `0x${string}` }) => {
+      const r = await realReceipt(args);
+      const op = opOfTx.get(args.hash.toLowerCase());
+      if (!op) return r;
+      const event = { ...r.logs[0], address: ENTRYPOINT_V9, data: "0x", logIndex: r.logs.length,
+        topics: ["0x49628fd1471006c1482da88028e9ce4dbb080b815c9b0344d39e5a8e6ec1419f", op] };
+      return { ...r, logs: [...r.logs, event] };
+    };
+    const parkUncertain = async (name: string) => {
+      const user = addUser(name, { withSafe: true });
+      const parked = settleOnArrival(await seedReadyDeposit(user, 100));
+      const op = `0x${randomBytes(32).toString("hex")}`;
+      store.updateCryptoDeposit(parked.id, {
+        holding: "unconfirmed",
+        conversionIntent: {
+          at: new Date().toISOString(), amountUnits: parked.amountUnits, safeAddress: user.address,
+          quote: { provider: quote.provider, rate: quote.rate.toString(), minOut: quote.minOut.toString() },
+        },
+        txs: [...parked.txs, { step: "safe.swap(usdc->eure).unconfirmed", hash: op }],
+      });
+      return { user, id: parked.id, op, row: () => store.cryptoDeposits.find((x) => x.id === parked.id)! };
+    };
+    const eureOf = (userId: string) => store.cryptoDeposits.filter((x) => x.userId === userId && x.token === "EURE");
+
+    const noa = await parkUncertain("Uncertain Noa");
+    await pollCryptoDepositsOnce(async () => null);
+    check("an unresolved userOp leaves the deposit unconfirmed", noa.row().holding === "unconfirmed" && noa.row().txs.some((t) => t.step.endsWith(".unconfirmed")));
+    const noaTx = await mintEure(noa.user.address, 87.88);
+    opOfTx.set(noaTx.toLowerCase(), noa.op);
+    const lands = async (h: string) => (h === noa.op ? { success: true, txHash: noaTx } : null);
+    await pollCryptoDepositsOnce(lands);
+    check("once it resolves, the swap's output is not booked as a deposit", eureOf(noa.user.id).length === 0, JSON.stringify(eureOf(noa.user.id)));
+    const noaD = noa.row();
+    check("and the deposit is credited what the swap delivered", noaD.holding === "converted" && noaD.creditedEur === 87.88, `${noaD.holding} ${noaD.creditedEur} ${noaD.reason ?? ""}`);
+    check("its swap step names the transaction and the logs it delivered",
+      noaD.txs.some((t) => t.step === "safe.swap(usdc->eure)" && t.hash === noaTx && t.outputLogIndexes?.length === 1), JSON.stringify(noaD.txs));
+    check("and the intent is cleared", noaD.conversionIntent === undefined);
+    await pollCryptoDepositsOnce(lands);
+    check("a later poll changes nothing", eureOf(noa.user.id).length === 0 && noa.row().creditedEur === 87.88 && noa.row().txs.length === noaD.txs.length);
+
+    // Included but reverted: nothing converted, and nothing is guessed. The
+    // row waits for a person; EURe that does arrive is money in.
+    const ota = await parkUncertain("Reverted Ota");
+    await mintEure(ota.user.address, 12);
+    const otaTx = `0x${randomBytes(32).toString("hex")}`;
+    await pollCryptoDepositsOnce(async (h) => (h === ota.op ? { success: false, txHash: otaTx } : null));
+    const otaD = ota.row();
+    check("a reverted userOp is left unconfirmed for review", otaD.holding === "unconfirmed" && /reverted/.test(otaD.reason ?? "") && !otaD.creditedEur && otaD.txs.some((t) => t.step === "safe.swap(usdc->eure).reverted" && t.hash === otaTx), `${otaD.holding} ${otaD.reason ?? ""}`);
+    check("and is not offered for conversion again", /may still land/.test(depositConversionBlocker(store.findUser(ota.user.id)!, otaD) ?? ""));
+    check("other EURe in its user's Safe is booked as money in", eureOf(ota.user.id).length === 1 && eureOf(ota.user.id)[0].creditedEur === 12);
+    (publicClient as any).getTransactionReceipt = realReceipt;
   }
 
   console.log(`\ncrypto deposits: ${passed}/${passed} checks passed`);

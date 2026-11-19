@@ -483,6 +483,43 @@ await check("only the logs a swap delivered are conversion output; an unsettled 
   assert.ok(legacy(tx, 1, u.id) && !legacy(tx, 1, "someone-else"), "a row from before indexes: its whole transaction, its own user");
 });
 
+await check("an uncertain swap names its transaction once its userOp resolves, and stays put until then", async () => {
+  const { conversionOutputs } = await import("../services/api/src/transfers/conversion-outputs.js");
+  const { settleUnconfirmedConversions } = await import("../services/api/src/adapters/crypto-deposits.js");
+  const u = mkUser();
+  const op = "0x" + "e1".repeat(32);
+  const tx = "0x" + "f1".repeat(32);
+  // The route's uncertain submit: the userOpHash, not the transaction's hash.
+  const d = mkDeposit(u.id, { holding: "unconfirmed", txs: [{ step: "safe.swap(usdc->eure).unconfirmed", hash: op }] });
+  const row = () => store.cryptoDeposits.find((x) => x.id === d.id)!;
+  const answer = (outcome: { success: boolean; txHash: string } | null) => async (h: string) => (h === op ? outcome : null);
+
+  await settleUnconfirmedConversions(answer(null));
+  assert.equal(row().holding, "unconfirmed", "no receipt yet: still unconfirmed");
+  assert.deepEqual(row().txs, d.txs, "and the userOp step is left for the next sweep");
+  await settleUnconfirmedConversions(async () => { throw new Error("bundler down"); });
+  assert.deepEqual(row().txs, d.txs, "an unreadable answer changes nothing");
+
+  await settleUnconfirmedConversions(answer({ success: true, txHash: tx }));
+  assert.ok(row().txs.some((t) => t.step === "safe.swap(usdc->eure)" && t.hash === tx), "the swap step names the transaction");
+  assert.ok(row().txs.some((t) => t.step === "userOperation" && t.hash === op), "the userOp hash is kept beside it");
+  assert.ok(!row().txs.some((t) => t.step.endsWith(".unconfirmed")), "nothing is left to resolve");
+  const outputs = conversionOutputs(store.cryptoDeposits);
+  assert.ok(outputs(tx, 1, u.id), "the arriving EURe is the swap's output, not money in");
+  assert.ok(!outputs(tx, 1, "someone-else"), "and never another user's payment in the same bundle");
+  assert.equal(row().holding, "unconfirmed", "with no intent to settle against, it waits for review");
+  assert.match(depositConversionBlocker(u, row())!, /may still land/i, "and is not offered again");
+
+  const rev = mkDeposit(u.id, { holding: "unconfirmed", txs: [{ step: "safe.swap(usdc->eure).unconfirmed", hash: "0x" + "e2".repeat(32) }] });
+  const revTx = "0x" + "f2".repeat(32);
+  await settleUnconfirmedConversions(async (h) => (h === rev.txs[0].hash ? { success: false, txHash: revTx } : null));
+  const reverted = store.cryptoDeposits.find((x) => x.id === rev.id)!;
+  assert.equal(reverted.holding, "unconfirmed", "a reverted swap is left for review, not offered again");
+  assert.match(reverted.reason ?? "", /reverted/);
+  assert.ok(reverted.txs.some((t) => t.step === "safe.swap(usdc->eure).reverted" && t.hash === revTx));
+  assert.ok(!conversionOutputs(store.cryptoDeposits)(revTx, 1, u.id), "a reverted swap delivered nothing to leave out");
+});
+
 await check("a row with neither state nor holding is migrated, not skipped", () => {
   const rows: any[] = [
     { id: "bare", userId: "eu", token: "USDC", txs: [] },
