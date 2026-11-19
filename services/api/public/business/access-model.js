@@ -204,14 +204,50 @@ export function orgSafeView(s, error = null) {
   };
 }
 
-/** Recovery for a company org's Safe (company-owned-safe-design.md §3.4).
- *  Zold adds no recovery helper to it yet, so this is a statement, not a read. */
+/** Recovery for a company org's Safe (company-owned-safe-design.md §3.4),
+ *  with no guardian on it. */
 export const ORG_RECOVERY = [
   "Zold hasn’t set up recovery for the company’s Safe.",
   "If an owner loses their passkey, the other owners can replace that signer in Safe{Wallet}, with as many signatures as the Safe needs.",
   "If fewer owners are left than the signatures it needs, no one can recover the company’s Safe.",
   "Your own sign-in’s recovery is in the app. It doesn’t change who signs for the company’s Safe.",
 ];
+
+/** Zoldenburg is on the company's Safe as its recovery guardian, but not
+ *  armed: arming needs a 1 € from the company's IBAN, which isn't built. */
+export const ORG_RECOVERY_UNARMED = [
+  "Zoldenburg UG is the recovery guardian of the company’s Safe, but it isn’t armed until the company’s IBAN is set up. Until then Zoldenburg won’t sign a recovery, so no one can recover the Safe through it.",
+  "If an owner loses their passkey, the other owners can replace that signer in Safe{Wallet}, with as many signatures as the Safe needs.",
+  "Your own sign-in’s recovery is in the app. It doesn’t change who signs for the company’s Safe.",
+];
+
+/**
+ * A company org's recovery, from GET /api/orgs/:id/recovery (every member).
+ *  - unknown:  the read failed: never "no guardian"
+ *  - pending:  a recovery is under way on the company's Safe
+ *  - unarmed:  Zoldenburg is on the module (armed is never true yet)
+ *  - none:     no Zoldenburg guardian; `queued` when its setup op waits for
+ *              the owners' signatures
+ * `otherGuardians` are guardians Zold didn't add: shown, never hidden.
+ */
+export function orgRecoveryView(r, error = null) {
+  if (r?.state === "not_set_up") return { status: "none", queued: false, otherGuardians: [] };
+  if (r?.state !== "set_up" || !Array.isArray(r.guardians)) {
+    return { status: "unknown", error: error || "Couldn’t check the company’s Safe’s recovery." };
+  }
+  const otherGuardians = r.otherGuardians || [];
+  if (r.pendingRecovery) return { status: "pending", pending: r.pendingRecovery, otherGuardians };
+  if (r.guardianOnChain) return { status: "unarmed", addedAt: r.addedAt || null, otherGuardians };
+  return { status: "none", queued: !!r.setupOp, otherGuardians };
+}
+
+export async function loadOrgRecovery(orgId, api) {
+  try {
+    return orgRecoveryView(await api(`/api/orgs/${encodeURIComponent(orgId)}/recovery`));
+  } catch (err) {
+    return orgRecoveryView(null, String(err?.message || "") || null);
+  }
+}
 
 export async function loadOrgSafe(orgId, api) {
   try {

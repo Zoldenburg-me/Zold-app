@@ -256,8 +256,27 @@ assert.equal(m.isCompanyLogin(null), false);
   assert.match(m.ORG_RECOVERY.join(" "), /other owners can replace that signer in Safe\{Wallet\}/);
   assert.match(m.ORG_RECOVERY.join(" "), /no one can recover the company’s Safe/);
   const view = readFileSync(path.join(ROOT, "services/api/public/business/access.js"), "utf8");
-  const branch = view.split("\n").find((l) => l.includes("if (isCompanyOrg(org))")) || "";
+  const at = view.indexOf("if (isCompanyOrg(org))");
+  const branch = at < 0 ? "" : view.slice(at, view.indexOf("\n  }\n", at));
+  assert.match(branch, /loadOrgRecovery\(org\.id, api\)/, "a company org's recovery is read from its own route");
   assert.match(branch, /orgSignersCard\(.*orgRecoveryCard\(/, "a company org's Access page shows its signers and then recovery");
+
+  // The company's recovery, from GET /api/orgs/:id/recovery: chain-read, never armed yet.
+  const rcalls: string[] = [];
+  const base = { state: "set_up", guardians: [], otherGuardians: [], guardianOnChain: false, pendingRecovery: null, armed: false, setupOp: null };
+  assert.equal((await m.loadOrgRecovery("o1", async (p: string) => (rcalls.push(p), base))).status, "none");
+  assert.deepEqual(rcalls, ["/api/orgs/o1/recovery"]);
+  assert.equal((await m.loadOrgRecovery("o1", async () => ({ ...base, setupOp: { id: "sop_1" } }))).queued, true, "a queued setup is said");
+  const unarmed = await m.loadOrgRecovery("o1", async () => ({ ...base, guardians: ["0xZ"], guardianOnChain: true }));
+  assert.equal(unarmed.status, "unarmed");
+  assert.match(m.ORG_RECOVERY_UNARMED[0], /isn’t armed until the company’s IBAN is set up/);
+  assert.match(m.ORG_RECOVERY_UNARMED[0], /won’t sign a recovery/);
+  const foreign = await m.loadOrgRecovery("o1", async () => ({ ...base, guardians: ["0xZ", "0xF"], guardianOnChain: true, otherGuardians: ["0xF"] }));
+  assert.deepEqual(foreign.otherGuardians, ["0xF"], "a guardian Zold didn't add is flagged, not hidden");
+  assert.equal((await m.loadOrgRecovery("o1", async () => ({ ...base, pendingRecovery: { executeAfter: 1 } }))).status, "pending");
+  const unread = await m.loadOrgRecovery("o1", async () => { throw new Error("Couldn’t check the company’s Safe’s recovery on chain"); });
+  assert.equal(unread.status, "unknown", "a failed read is not no guardian");
+  assert.equal((await m.loadOrgRecovery("o1", async () => ({ state: "not_set_up" }))).status, "none");
 }
 
 // ── whose company this is ───────────────────────────────────────────────────

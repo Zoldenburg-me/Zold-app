@@ -88,6 +88,10 @@ export interface Organisation {
   entity?: OrgEntity;
   /** Company orgs only; read it through orgSafePlan() (domain/org-safe-plan.ts). */
   safe?: OrgSafePlan;
+  /** Company orgs only: Zoldenburg added as the org Safe's recovery guardian
+   *  by an executed queue op (wallet/org-recovery.ts). A label for the UI;
+   *  the recovery module on chain is the truth. */
+  recovery?: { guardianAddress: `0x${string}`; addedAt: string };
   /** Display name. For a business this is the trading name; `legalName` is
    *  what appears on an invoice. */
   name: string;
