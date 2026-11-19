@@ -194,6 +194,27 @@ async function approveChange(path, method, bodyText) {
   return bytesToB64url(new TextEncoder().encode(JSON.stringify(a)));
 }
 
+/* An /api answer Zold did not write: whatever stands in front of the API
+   (Cloudflare Access) answered, so the request never reached Zold and says
+   nothing about the operator session. Zold's own 401 and 403 always carry
+   { error }. public/ui.js holds the same rule for /app and /business. */
+function isForeignAnswer(res, data) {
+  if (res.type === 'opaqueredirect') return true;
+  if (res.status === 401 || res.status === 403) return typeof data?.error !== 'string';
+  const type = res.headers?.get('content-type');
+  return Boolean(res.ok && type && !type.includes('json'));
+}
+
+/** A write may have reached Zold, so the operator checks before sending it
+ *  again; a read is retried by the next refresh. */
+function foreignAnswerError(method) {
+  const err = new ApiError(0, method === 'GET'
+    ? 'Zold can’t be reached from here. Reload the page, or try again in a minute.'
+    : 'Zold didn’t answer this. Reload the page, then check before you try it again.');
+  err.foreign = true;
+  return err;
+}
+
 async function api(path, options = {}) {
   const token = operatorSession;
   if (!token) { setAuth('none'); throw new ApiError(401, 'Sign in with your operator passkey.'); }
@@ -205,8 +226,11 @@ async function api(path, options = {}) {
   const res = await fetch(path, {
     ...options,
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...approval, ...(options.headers || {}) },
+    redirect: 'manual',
   });
   const data = await res.json().catch(() => ({}));
+  // The session and the pill stay as they were: the gate said nothing about them.
+  if (isForeignAnswer(res, data)) throw foreignAnswerError(method);
   if (res.status === 401) {
     // An Access refusal leaves the session alone: signing in to Access again
     // is enough. main.js redraws the sign-in controls on the event.
@@ -229,6 +253,15 @@ async function api(path, options = {}) {
     rejectedToken = null;
     setAuth('ok');
   }
+  if (!res.ok) throw new ApiError(res.status, data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+/** The ceremonies that open a session carry no bearer. */
+async function authPost(path, body) {
+  const res = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}), redirect: 'manual' });
+  const data = await res.json().catch(() => ({}));
+  if (isForeignAnswer(res, data)) throw foreignAnswerError('POST');
   if (!res.ok) throw new ApiError(res.status, data.error || `HTTP ${res.status}`);
   return data;
 }

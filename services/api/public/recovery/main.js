@@ -19,6 +19,7 @@ import { providerButtons } from "../guardian/providers.js";
 import { byDevice, passkeyName } from "../guardian/device-words.js";
 import { approveWith, finishApprove } from "./approve.js";
 import { bankStepChanged, bankStepHtml, checkAnswerText, issuedFor, keepIssued } from "./bank-step.js";
+import { UNREACHABLE, refuseForeignAnswer } from "../foreign-answer.js";
 import {
   EMAIL_KEY, SECRET_KEY, TICKET_KEY, currentAuth, endedText, finalizeAfter, requestPath, saveFor, savedFor, screenFor, startRecovery,
 } from "./flow.js";
@@ -27,16 +28,24 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const b64urlToBytes = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(s.length / 4) * 4, "=")), (c) => c.charCodeAt(0));
 const bytesToB64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 
-async function api(path, body, headers = {}) {
-  const r = await fetch(path, {
-    method: body === undefined ? "GET" : "POST",
-    headers: { ...(body === undefined ? {} : { "content-type": "application/json" }), ...headers },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw Object.assign(new Error(data.error || `request failed (${r.status})`), { status: r.status, code: data.code, body: data });
-  return data;
+/** The page's API client over `fetchFn`. An answer Zold did not write throws,
+ *  so it never stands in for the request (a {} reads as "this recovery ended"). */
+export function apiOver(fetchFn) {
+  return async (path, body, headers = {}) => {
+    const r = await fetchFn(path, {
+      method: body === undefined ? "GET" : "POST",
+      headers: { ...(body === undefined ? {} : { "content-type": "application/json" }), ...headers },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      redirect: "manual",
+    });
+    const data = await r.json().catch(() => ({}));
+    refuseForeignAnswer(r, data, body !== undefined);
+    if (!r.ok) throw Object.assign(new Error(data.error || `request failed (${r.status})`), { status: r.status, code: data.code, body: data });
+    return data;
+  };
 }
+
+const api = apiOver((path, init) => fetch(path, init));
 
 /** "2d 21h", "5h 12m", "12m". */
 function leftText(ms) {
@@ -421,6 +430,11 @@ async function boot() {
     },
   };
 
+  // No health answer is not "recovery is off": say what is known.
+  if (!health) {
+    el.innerHTML = `<h1 tabindex="-1">Get your account back</h1><p>${esc(UNREACHABLE)}</p><p><a href="/app">Back to sign in</a></p>`;
+    return;
+  }
   if (!caps.emailSmsRecovery && !caps.zoldenburgRecovery && !caps.turnkeyGuardians) {
     el.innerHTML = `<h1 tabindex="-1">Account recovery isn’t available right now</h1><p>Write to support@zoldhq.com and we’ll help.</p><p><a href="/app">Back to sign in</a></p>`;
     return;
