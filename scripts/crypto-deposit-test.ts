@@ -75,7 +75,7 @@ const check = (label: string, cond: boolean, detail = "") => {
 };
 
 try {
-  console.log("1/14 chain + deploy…");
+  console.log("1/15 chain + deploy…");
   await waitRpc();
   const dep = spawnSync(process.execPath, [bin("tsx"), "scripts/deploy.ts"], {
     cwd: ROOT,
@@ -241,7 +241,7 @@ try {
     });
   }
 
-  console.log("2/14 nobody opted in — the chain is not even read…");
+  console.log("2/15 nobody opted in — the chain is not even read…");
   {
     const before = store.cryptoDepositCursor(cursorKey);
     const n = await pollCryptoDepositsOnce();
@@ -249,7 +249,7 @@ try {
     check("and no cursor is written", store.cryptoDepositCursor(cursorKey) === before);
   }
 
-  console.log("3/14 a real inbound transfer is detected and attributed…");
+  console.log("3/15 a real inbound transfer is detected and attributed…");
   const ann = addUser("Crypto Ann");
   // The first poll only establishes the cursor: transfers from before the
   // account opted in are deliberately not swept up.
@@ -276,7 +276,7 @@ try {
     check("nothing was settled", (await safeBalanceOf(ann.address)) === 0);
   }
 
-  console.log("4/14 a ready deposit parks for a signature, then settles what ARRIVED…");
+  console.log("4/15 a ready deposit parks for a signature, then settles what ARRIVED…");
   const bo = addUser("Crypto Bo", { withSafe: true });
   {
     /**
@@ -325,7 +325,7 @@ try {
     check("the balance is spendable in the Safe", Math.abs(bal - 87.88) < 0.001, `EUR ${bal}`);
   }
 
-  console.log("5/14 the same deposit is never credited twice…");
+  console.log("5/15 the same deposit is never credited twice…");
   {
     const d = store.cryptoDeposits.find((x) => x.userId === bo.id && x.holding === "converted")!;
     const balBefore = await safeBalanceOf(bo.address);
@@ -349,7 +349,7 @@ try {
     check("and no duplicate row appears", store.cryptoDeposits.length === countBefore);
   }
 
-  console.log("6/14 dust is left alone, direct Safe funding is only recorded…");
+  console.log("6/15 dust is left alone, direct Safe funding is only recorded…");
   {
     const dusty = addUser("Dusty", { withSafe: true });
     const d = settleOnArrival(await seedReadyDeposit(dusty, 0.25));
@@ -369,7 +369,7 @@ try {
     check("and keeps a zero EUR balance", (await safeBalanceOf(optedOut.address)) === 0);
   }
 
-  console.log("7/14 a venue price off the market is refused before the swap…");
+  console.log("7/15 a venue price off the market is refused before the swap…");
   {
     // The convert route runs assertRateSane BEFORE it submits the signed swap
     // (routes/crypto-deposits.ts). That is where a mispriced venue is stopped.
@@ -410,7 +410,7 @@ try {
     }
   }
 
-  console.log("8/14 a USDC-settled page does not turn the payment into euros…");
+  console.log("8/15 a USDC-settled page does not turn the payment into euros…");
   {
     const dana = addUser("Crypto Dana", { settlementAsset: "USDC" });
     const seeded = await seedReadyDeposit(dana, 25);
@@ -421,7 +421,7 @@ try {
     check("the USDC amount is recorded", d.creditedUsdc === 25, `${d.creditedUsdc}`);
   }
 
-  console.log("9/14 a direct EURe transfer to the Safe appears as funding activity…");
+  console.log("9/15 a direct EURe transfer to the Safe appears as funding activity…");
   {
     const eva = addUser("Crypto Eva", { autoConvert: false });
     await sendEure(eva.address, 30);
@@ -434,7 +434,7 @@ try {
     );
   }
 
-  console.log("10/14 held USDC converts later; spent USDC is refused before a quote…");
+  console.log("10/15 held USDC converts later; spent USDC is refused before a quote…");
   {
     const hal = addUser("Held Hal", { withSafe: true, autoConvert: false });
     await sendUsdc(hal.paymentPage.depositAddress, 40);
@@ -461,7 +461,7 @@ try {
     check("a deposit whose USDC is no longer in the Safe is refused in words", /holds 40 USDC, less than the 60 USDC/.test(why ?? "") && /may have been spent/.test(why ?? ""), why ?? "none");
   }
 
-  console.log("11/14 the sweep settles what was missed, once, and leaves held deposits alone…");
+  console.log("11/15 the sweep settles what was missed, once, and leaves held deposits alone…");
   {
     const gil = addUser("Sweep Gil", { withSafe: true });
     const missed = await seedReadyDeposit(gil, 12);
@@ -473,7 +473,7 @@ try {
     check("a second sweep touches nothing", again === 0 && store.cryptoDeposits.find((x) => x.id === missed.id)!.updatedAt === stamp);
   }
 
-  console.log("12/14 a forwarder page with auto-convert off records the payment once…");
+  console.log("12/15 a forwarder page with auto-convert off records the payment once…");
   {
     // Seen on a live page: auto-convert off, no open payment request, payment
     // to the forwarder address. The page was not watched, and the forwarder's
@@ -496,7 +496,7 @@ try {
     );
   }
 
-  console.log("13/14 a rescan records what the cursor passed, once…");
+  console.log("13/15 a rescan records what the cursor passed, once…");
   {
     // A payment the scanner passed without recording: it reached an address
     // that was not watched yet. The cursor moves past it, and nothing goes back.
@@ -532,7 +532,7 @@ try {
     check("so the cursor stays where the scan left it", store.cryptoDepositCursor(cursorKey) === caughtUp);
   }
 
-  console.log("14/14 EURe from another transaction during the swap is booked once…");
+  console.log("14/15 EURe from another transaction during the swap is booked once…");
   {
     // The conversion credits what the swap's own Transfer logs delivered to
     // the Safe. A SEPA mint landing between the before and after balance reads
@@ -626,7 +626,7 @@ try {
     check("output the scanner already booked is not credited twice", raced.holding === "refused" && !raced.creditedEur && /already recorded as a deposit/.test(raced.reason ?? ""), `${raced.holding} ${raced.reason ?? ""}`);
     const { withoutConversionOutputs } = await import("../services/api/src/transfers/activity.js");
     check("and the scanner's row stays the one record of that EURe",
-      withoutConversionOutputs(store.cryptoDeposits.filter((x) => x.userId === max.id)).filter((x) => x.token === "EURE").length === 1);
+      withoutConversionOutputs(store.cryptoDeposits.filter((x) => x.userId === max.id), []).filter((x) => x.token === "EURE").length === 1);
 
     // The route's uncertain submit parks the row with the userOpHash, which no
     // EURe log carries. The poll resolves it to the transaction first, so the
@@ -689,7 +689,7 @@ try {
     // The bundler lags: the scanner books the swap's output as money in while
     // the op is unresolved, and the op resolves after. That row stays the one
     // record of the EURe; the USDC row is left for review, not credited.
-    const userEure = (userId: string) => withoutConversionOutputs(store.cryptoDeposits.filter((x) => x.userId === userId)).filter((x) => x.token === "EURE");
+    const userEure = (userId: string) => withoutConversionOutputs(store.cryptoDeposits.filter((x) => x.userId === userId), []).filter((x) => x.token === "EURE");
     const lateResolve = async (name: string, opts: { intent: boolean }) => {
       const u = await parkUncertain(name);
       if (!opts.intent) store.updateCryptoDeposit(u.id, { conversionIntent: undefined });
@@ -760,6 +760,154 @@ try {
     }
     await lateChecks("settling throws", { ...lex, tx: lexTx, bookedFirst: lexBooked }, /could not be recorded/);
     (publicClient as any).getTransactionReceipt = realReceipt;
+  }
+
+  console.log("15/15 a reverse-swap refund is not also booked as a deposit…");
+  {
+    // The real compensation path, with the venue's execute standing in for a
+    // maker: an EURe Transfer from an address that is not our swapper (the
+    // scanner skips that one by sender), so the output looks like any payment.
+    const orch = await import("../services/api/src/orchestrator.js");
+    const { FxSwapperLiquidityProvider } = await import("../services/api/src/liquidity/fx-swapper.js");
+    const { buildActivity } = await import("../services/api/src/transfers/activity.js");
+    const { projectStatementLines } = await import("../services/api/src/bookkeeping/statement.js");
+    const maker = `0x${"7a".repeat(20)}` as `0x${string}`;
+    const payer = `0x${"7b".repeat(20)}` as `0x${string}`;
+    await sendEure(maker, 1000);
+    await sendEure(payer, 1000);
+    for (const who of [maker, payer]) {
+      await rpc("hardhat_impersonateAccount", [who]);
+      await rpc("hardhat_setBalance", [who, "0xDE0B6B3A7640000"]);
+    }
+    const eureTransfer = (from: `0x${string}`, to: `0x${string}`, amount: number) =>
+      rpc("eth_sendTransaction", [{
+        from,
+        to: addrs().eure,
+        data: encodeFunctionData({ abi: abis.MockToken, functionName: "transfer", args: [to, eur.toWei(amount)] }),
+      }]) as Promise<`0x${string}`>;
+    /** What execute does on this run: the maker's delivery, plus optionally
+     *  someone else's EURe to the same Safe in the same block. */
+    let venue: {
+      deliverEur: number; coInflowEur?: number; outflowEur?: number; deliverTo?: `0x${string}`; noSwapStep?: boolean;
+      swapHash?: `0x${string}`; coHash?: `0x${string}`;
+    };
+    const realExecute = FxSwapperLiquidityProvider.prototype.execute;
+    FxSwapperLiquidityProvider.prototype.execute = async function (quote, to) {
+      const sameBlock = venue.coInflowEur || venue.outflowEur;
+      if (sameBlock) await rpc("evm_setAutomine", [false]);
+      venue.swapHash = await eureTransfer(maker, venue.deliverTo ?? to!, venue.deliverEur);
+      if (venue.coInflowEur) venue.coHash = await eureTransfer(payer, to!, venue.coInflowEur);
+      if (venue.outflowEur) venue.coHash = await eureTransfer(to!, payer, venue.outflowEur);
+      if (sameBlock) {
+        await rpc("evm_mine", []);
+        await rpc("evm_setAutomine", [true]);
+      }
+      await publicClient.waitForTransactionReceipt({ hash: venue.swapHash });
+      if (venue.coHash) await publicClient.waitForTransactionReceipt({ hash: venue.coHash });
+      return {
+        quote,
+        amountOut: eur.toWei(venue.deliverEur),
+        txs: venue.noSwapStep ? [] : [{ step: "liquidity.fx-swapper.usdc-eure", hash: venue.swapHash }],
+      };
+    };
+
+    /** A cash transfer the user's Safe funded: debited, swapped to USDC, then failed. */
+    const failedTransfer = (user: any) => {
+      const now = new Date().toISOString();
+      const id = randomUUID();
+      store.addTransfer({
+        id, userId: user.id, quoteId: randomUUID(), rail: "cash", recipientName: "R", recipientPhone: "+254700000000",
+        state: "FAILED", error: "forced failure", sendEur: 30, receiveKes: 1000, fundingSource: "safe", usdcOut: 30,
+        txs: [{ step: orch.DEBIT_STEP.safe, hash: `0x${"11".repeat(32)}` }, { step: "liquidity.fx-swapper.eure-usdc", hash: `0x${"22".repeat(32)}` }],
+        createdAt: now, updatedAt: now,
+      } as any);
+      return id;
+    };
+    const eureIn = (user: any) => store.cryptoDeposits.filter((x) => x.userId === user.id && x.token === "EURE");
+    const activityFunding = (user: any) =>
+      buildActivity({
+        transfers: store.transfers.filter((t) => t.userId === user.id),
+        deposits: store.cryptoDeposits.filter((x) => x.userId === user.id),
+        issues: [],
+      }).filter((r: any) => r.kind === "funding" && r.token === "EURE");
+    const bookIn = (user: any) =>
+      projectStatementLines({
+        orgId: "o", accountId: "a", userId: user.id, safeAddress: user.address, timeZone: "UTC",
+        transfers: store.transfers.filter((t) => t.userId === user.id),
+        deposits: store.cryptoDeposits.filter((x) => x.userId === user.id),
+        issueOrders: [], sweeps: [], invoices: [], paymentRequests: [], swapsHaveExecuted: false,
+      }).filter((l) => l.statement?.event === "eure_in");
+
+    try {
+      // Delivers the whole send back, so no fee leg runs: the refund is the swap's output alone.
+      const rae = addUser("Refunded Rae", { withSafe: true });
+      await pollCryptoDepositsOnce();
+      venue = { deliverEur: 30 };
+      const done = await orch.compensateTransfer(failedTransfer(rae));
+      check("the reverse swap refunds", done.state === "REFUNDED", `${done.state} ${done.error ?? ""}`);
+      check("by exactly what its Transfer log delivered", done.refund?.amountEur === 30, `${done.refund?.amountEur}`);
+      const swapStep = done.txs.find((x) => x.hash === venue.swapHash) as any;
+      check("and the swap step names the log it delivered", Array.isArray(swapStep?.outputLogIndexes) && swapStep.outputLogIndexes.length === 1, JSON.stringify(swapStep));
+      await pollCryptoDepositsOnce();
+      check("the scanner does not book the refund as money in", eureIn(rae).length === 0, JSON.stringify(eureIn(rae).map((x) => x.amountEur)));
+      check("activity shows no EURe deposit for it", activityFunding(rae).length === 0);
+      check("and the books have no money-in line for it", bookIn(rae).length === 0);
+
+      // Someone else's EURe lands in the same block: it is money in, and not refund.
+      const cas = addUser("Co-inflow Cas", { withSafe: true });
+      await pollCryptoDepositsOnce();
+      venue = { deliverEur: 30, coInflowEur: 12.5 };
+      const co = await orch.compensateTransfer(failedTransfer(cas));
+      check("with a co-inflow in the same block the reverse swap still refunds", co.state === "REFUNDED", `${co.state} ${co.error ?? ""}`);
+      check("the refund is the swap's output, not the balance delta", co.refund?.amountEur === 30, `${co.refund?.amountEur}`);
+      await pollCryptoDepositsOnce();
+      const casIn = eureIn(cas);
+      check("the co-inflow is booked as a deposit, alone", casIn.length === 1 && casIn[0].txHash === venue.coHash && casIn[0].amountEur === 12.5, JSON.stringify(casIn.map((x) => [x.txHash, x.amountEur])));
+      check("activity shows the co-inflow once", activityFunding(cas).length === 1);
+      check("and the books carry it as the one money-in line", bookIn(cas).length === 1 && bookIn(cas)[0].statement!.amountCents === 1250);
+
+      // The venue reported no swap transaction: there is no receipt to measure,
+      // so nothing is guessed from the balance.
+      const noa = addUser("Unmeasured Noa", { withSafe: true });
+      await pollCryptoDepositsOnce();
+      venue = { deliverEur: 30, noSwapStep: true };
+      const blind = await orch.compensateTransfer(failedTransfer(noa));
+      check("no swap receipt to read leaves the refund for review", blind.state === "MANUAL_REVIEW" && !blind.refund && /receipt/.test(blind.error ?? ""), `${blind.state} ${blind.error ?? ""}`);
+
+      // The swap's logs deliver nothing to the Safe (the venue paid elsewhere):
+      // whatever the Safe's balance did, nothing is refunded.
+      const ira = addUser("Misdelivered Ira", { withSafe: true });
+      await pollCryptoDepositsOnce();
+      venue = { deliverEur: 30, deliverTo: payer, coInflowEur: 30 };
+      const elsewhere = await orch.compensateTransfer(failedTransfer(ira));
+      check("a swap that delivered no EURe to the Safe is left for review, even with EURe arriving", elsewhere.state === "MANUAL_REVIEW" && !elsewhere.refund && /no EURe/.test(elsewhere.error ?? ""), `${elsewhere.state} ${elsewhere.error ?? ""}`);
+
+      // EURe leaves the Safe in the swap's block: the delta is under the logs.
+      const ola = addUser("Spending Ola", { withSafe: true });
+      await sendEure(ola.address, 20);
+      await rpc("hardhat_impersonateAccount", [ola.address]);
+      await rpc("hardhat_setBalance", [ola.address, "0xDE0B6B3A7640000"]);
+      await pollCryptoDepositsOnce();
+      venue = { deliverEur: 30, outflowEur: 15 };
+      const short = await orch.compensateTransfer(failedTransfer(ola));
+      check("a balance delta under the logged output is left for review", short.state === "MANUAL_REVIEW" && !short.refund && /balance shows only/.test(short.error ?? ""), `${short.state} ${short.error ?? ""}`);
+      await pollCryptoDepositsOnce();
+      check("and its output is still the refund's, not money in", !eureIn(ola).some((x) => x.txHash === venue.swapHash), JSON.stringify(eureIn(ola).map((x) => x.amountEur)));
+    } finally {
+      FxSwapperLiquidityProvider.prototype.execute = realExecute;
+    }
+
+    // The marker itself, for a scan that lands between the swap and its measurement.
+    const { conversionOutputs } = await import("../services/api/src/transfers/conversion-outputs.js");
+    const tx = `0x${"ab".repeat(32)}`;
+    const reverse = (outputLogIndexes?: number[]) =>
+      ({ userId: "u-r", txs: [{ step: "liquidity.dex.usdc-eure", hash: tx, ...(outputLogIndexes ? { outputLogIndexes } : {}) }] }) as any;
+    const measured = conversionOutputs([], [reverse([3])]);
+    check("a measured reverse swap marks only its own logs", measured(tx, 3, "u-r") && !measured(tx, 4, "u-r"));
+    const unmeasured = conversionOutputs([], [reverse()]);
+    check("an unmeasured one covers its transaction for that user only", unmeasured(tx, 9, "u-r") && !unmeasured(tx, 9, "u-other"));
+    const forward = conversionOutputs([], [{ userId: "u-r", txs: [{ step: "liquidity.dex.eure-usdc", hash: tx }] } as any]);
+    check("a forward swap marks nothing", !forward(tx, 0, "u-r"));
   }
 
   console.log(`\ncrypto deposits: ${passed}/${passed} checks passed`);

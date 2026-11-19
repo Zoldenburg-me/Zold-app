@@ -121,7 +121,8 @@ const { store, initStore } = await import("../services/api/src/store.js");
 const { addrs } = await import("../services/api/src/chain.js");
 const { createCryptoDepositRouter } = await import("../services/api/src/routes/crypto-deposits.js");
 const { FxSwapperLiquidityProvider } = await import("../services/api/src/liquidity/fx-swapper.js");
-const { eureSwappedOut, pollCryptoDepositsOnce, tokenTransfers } = await import("../services/api/src/adapters/crypto-deposits.js");
+const { eureSwappedOut, pollCryptoDepositsOnce } = await import("../services/api/src/adapters/crypto-deposits.js");
+const { tokenTransfers } = await import("../services/api/src/liquidity.js");
 
 initStore();
 usdcAddress = addrs().usdc.toLowerCase();
