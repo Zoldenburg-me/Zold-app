@@ -24,7 +24,7 @@ const storage = () => {
   return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, String(v)), removeItem: (k: string) => void m.delete(k), clear: () => m.clear() };
 };
 const ctx: any = {
-  console, setTimeout, clearTimeout, setInterval, clearInterval, URL, Blob, Intl, TextEncoder, btoa, atob, JSON, Promise,
+  console, setTimeout, clearTimeout, setInterval, clearInterval, URL, URLSearchParams, Blob, Intl, TextEncoder, btoa, atob, JSON, Promise,
   addEventListener() {}, removeEventListener() {},
   PublicKeyCredential: function PublicKeyCredential() {},
   matchMedia: () => ({ matches: false, addEventListener() {} }),
@@ -104,6 +104,45 @@ await t("a connected account under review is not told to get an IBAN", () => {
   assert.equal(copy("manual_review")[0], "MANUAL REVIEW");
   assert.doesNotMatch(copy("manual_review").join(" "), /IBAN/);
   assert.equal(copy("rejected")[0], "WALLET");
+});
+
+// Back from Monerium's sign-in (/app?monerium=connected) the API refuses an
+// IBAN to an account under review (ibanActivationRefusal), so the app must not
+// open "Switch on your IBAN" or offer Activate on Home. A pending one still does.
+const connectedAs = (kycStatus: string) => ({
+  id: "u2", name: "Kim", kycStatus, iban: "", address: "0x1111111111111111111111111111111111111111",
+  passkey: { credentialId: "cred" }, passkeySafe: { status: "active", address: "0x1111111111111111111111111111111111111111" },
+  monerium: { method: "oauth", connectedAt: "2026-11-19T00:00:00Z", profileId: "p1", profiles: [{ id: "p1", kind: "personal", state: "approved" }] },
+  funding: { mode: "sandbox", status: kycStatus === "pending" ? "provisioning" : "kyc_pending", moneriumProfileId: "p1",
+    detail: kycStatus === "pending" ? "smart wallet deployed — approve IBAN issuance with your passkey" : "Monerium is still reviewing this account, so there is no IBAN yet" },
+});
+const returnFromMonerium = async (u: any) => {
+  ctx.location.search = "?monerium=connected";
+  ctx.location.hash = "";
+  run(`sessionToken = "tok"; __went = []; obSocialReturn = async () => {}; obShow = () => {};
+    obGo = (n) => { __went.push(obGuard(n)); }; enterDashboard = () => { __went.push("home"); };
+    renderUser = (u) => { user = u; }; api = async () => (${JSON.stringify(u)});`);
+  await run("resumeSession(Promise.resolve())");
+  ctx.location.search = "";
+  return run("JSON.stringify(__went)");
+};
+
+await t("connected and under review: back from Monerium lands on Home, not on Switch on your IBAN", async () => {
+  assert.equal(await returnFromMonerium(connectedAs("manual_review")), JSON.stringify(["home"]));
+  assert.equal(await returnFromMonerium(connectedAs("pending")), JSON.stringify(["activate"]), "a pending account still activates");
+});
+
+await t("connected and under review: Home's IBAN row has no Activate, and its buttons never open the activate step", () => {
+  run(`user = ${JSON.stringify(connectedAs("manual_review"))}; caps = { ...caps, sandbox: true }; capsLoaded = true;`);
+  const home = run("PH.home.html()").replace(/\s+/g, " ");
+  assert.doesNotMatch(home, /id="ph-ck-verify2"/);
+  assert.doesNotMatch(home, />Activate</);
+  assert.match(home, /Monerium is still reviewing this account\. No IBAN yet\./);
+  run(`__went = []; obShow = () => {}; obGo = (n) => { __went.push(obGuard(n)); };`);
+  run(`enterKycReview("Kim"); obGo("activate");`);
+  assert.equal(run("JSON.stringify(__went)"), JSON.stringify(["monerium", "monerium"]));
+  run(`user = ${JSON.stringify(connectedAs("pending"))};`);
+  assert.match(run("PH.home.html()"), /id="ph-ck-verify2"/, "a pending account keeps Activate");
 });
 
 console.log(`\nAPP COPY UI TEST PASSED — ${pass}/${pass}`);

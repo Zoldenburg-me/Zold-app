@@ -21,6 +21,13 @@ function ibanSwitchedOff(u = user) {
   return !!u && kycApproved(u) && !u.iban && bankOffered(u) && !ibanMovedAway(u);
 }
 
+/* Whether this account may switch on an IBAN at all, as the API decides
+   (ibanActivationRefusal): a bank account is offered, and Monerium approved
+   it or it is pending. Under review or rejected is not offered one. */
+function ibanActivationOffered(u = user) {
+  return !!u && bankOffered(u) && (kycApproved(u) || u.kycStatus === "pending");
+}
+
 function ibanMovedAway(u = user) {
   return !!u && kycApproved(u) && !u.iban && u.funding?.status === "iban_pending" && !!u.moneriumIbanElsewhere?.iban;
 }
