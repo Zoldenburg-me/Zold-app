@@ -37,6 +37,7 @@
     "send-link-ui:test": "tsx scripts/send-link-ui-test.ts",
     "country:policy:test": "tsx scripts/country-policy-test.ts",
     "env:number:test": "tsx scripts/env-number-test.ts",
+    "log-pii:test": "tsx scripts/log-pii-test.ts",
     "audit:deps": "npm audit",
     "check": "tsx scripts/check.ts",
     "check:live": "CHECK_LIVE=1 tsx scripts/check.ts",

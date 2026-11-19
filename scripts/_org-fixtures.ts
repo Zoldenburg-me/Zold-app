@@ -46,7 +46,8 @@ export function gatedEurAccount(id: string, orgId: string, extra: Partial<Accoun
 }
 
 /** An active euro account at `address`: with `iban`, its IBAN; with
- *  `backingUserId`, spending from that member's Safe. */
+ *  `backingUserId`, spending from that member's Safe. With no
+ *  `backingUserId`, a company's: the Safe at `address` is its own. */
 export function activeEurAccount(
   id: string, orgId: string,
   opts: { iban?: string; address: `0x${string}`; backingUserId?: string },

@@ -30,6 +30,7 @@ import { invoiceBankOf, parsePayTo } from "./shared.js";
 import { openLinkPath, payLinkLapsed } from "./invoice-pay-link.js";
 import { syncInvoicePayment } from "./state.js";
 import type { Invoice } from "../../domain/types.js";
+import { liveCryptoSend } from "../../wallet/org-debit.js";
 
 /** Wrong passwords one link absorbs, from any number of addresses, per window. */
 const PASSWORD_FAILURES_MAX = 10;
@@ -87,7 +88,8 @@ export const linkInvoiceView = (invoice: Invoice) =>
 const payeeState = (invoice: Invoice): Invoice => {
   if (!invoice.sendLink || invoice.state !== "PAYING") return invoice;
   const p = invoice.payment;
-  const send = p?.cryptoSendId ? store.findCryptoSend(p.cryptoSendId) : undefined;
+  const stored = p?.cryptoSendId ? store.findCryptoSend(p.cryptoSendId) : undefined;
+  const send = stored && liveCryptoSend(stored);
   const t = p?.transferId ? store.findTransfer(p.transferId) : undefined;
   const unsigned = send ? send.state === "CREATED" : !!t && t.state === "CREATED" && !t.auth?.authorizedAt && !t.moneriumRedeem?.signedAt;
   return unsigned ? { ...invoice, state: "SUBMITTED" } : invoice;

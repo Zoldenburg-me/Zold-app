@@ -745,8 +745,9 @@ export async function prepareTransferBatchExecution(
  * decision about the passkey-alone guard, so no caller can skip it by
  * accident: a personal plan (personal and sole_trader orgs) goes through
  * prepareSafeExecutionCore and keeps the threshold-1 refusal; an org plan goes
- * to prepareMultiOwnerSafeOperation for `signers`, which must be owners on the
- * plan and at least as many as the threshold the chain reports now.
+ * to prepareMultiOwnerSafeOperation for `signers`, which must be owners of the
+ * Safe as the chain has them now (never plan.owners, which is the deployment's
+ * list) and at least as many as the chain's threshold.
  */
 export async function prepareSafeOperation(
   plan: SafePlan,
@@ -757,11 +758,12 @@ export async function prepareSafeOperation(
     if (signers.length) throw new Error("a personal Safe is signed by its own passkey; it takes no signer list");
     return prepareSafeExecutionCore(plan, txs);
   }
-  const owners = new Set(plan.owners.map((o) => `${BigInt(o.x)}:${BigInt(o.y)}`));
-  if (!signers.length || signers.some((s) => !owners.has(`${s.x}:${s.y}`))) {
-    throw new Error("every signer of an org Safe operation must be an owner on the org's Safe plan");
+  if (!signers.length) throw new Error("every signer of an org Safe operation must be an owner of the Safe on chain");
+  const [owners, threshold] = await Promise.all([safeOwners(plan.address), safeThreshold(plan.address)]);
+  const onChain = new Set(owners.map((o) => o.toLowerCase()));
+  if (signers.some((s) => !onChain.has(passkeyAccountAddress(s).toLowerCase()))) {
+    throw new Error("every signer of an org Safe operation must be an owner of the Safe on chain");
   }
-  const threshold = await safeThreshold(plan.address);
   if (signers.length < threshold) {
     throw new SafeThresholdError(`this Safe needs ${threshold} owner signatures and ${signers.length} were named`);
   }
