@@ -703,7 +703,7 @@ async function compensateTransferOnce(id: string): Promise<Transfer> {
         const total = Math.floor((eurBack + feeBack) * 100) / 100;
         const lost = Math.max(0, safeMovedEur(t) - total);
         console.log(
-          `Compensation: reverse-swapped and returned €${total} to ${user.name}'s Safe for transfer ${t.id} (post-swap)`,
+          `Compensation: reverse-swapped and returned €${total} to user ${user.id}'s Safe for transfer ${t.id} (post-swap)`,
         );
         return store.updateTransfer(id, {
           state: "REFUNDED",
@@ -741,7 +741,7 @@ async function compensateTransferOnce(id: string): Promise<Transfer> {
     txs.push({ step: "safe.refundTransfer", hash: refundHash });
     store.updateTransfer(id, { txs }); // on record before anything else can fail
     console.log(
-      `Compensation: returned €${safeRefundEur} to ${user.name}'s Safe for transfer ${t.id} (Safe-funded)`,
+      `Compensation: returned €${safeRefundEur} to user ${user.id}'s Safe for transfer ${t.id} (Safe-funded)`,
     );
     return store.updateTransfer(id, {
       state: "REFUNDED",
