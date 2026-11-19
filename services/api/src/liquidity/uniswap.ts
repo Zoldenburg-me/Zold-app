@@ -19,6 +19,7 @@ import {
   LiquidityExecution,
   LiquidityProvider,
   LiquidityQuote,
+  IndicativeRateOptions,
   LiquiditySide,
   SafeSwapContext,
   SafeSwapPlan,
@@ -27,7 +28,7 @@ import {
   } from "./contract.js";
 
 export class DexLiquidityProvider implements LiquidityProvider {
-  private indicative: { at: number; rate: number; raw: bigint } | null = null;
+  private indicative = new Map<LiquiditySide, { at: number; rate: number; raw: bigint }>();
 
   private tokens(side: LiquiditySide) {
     const a = addrs();
@@ -238,15 +239,16 @@ export class DexLiquidityProvider implements LiquidityProvider {
   }
 
   /** Cached probe, so typing in the amount box is not a quote storm. */
-  async indicativeRate(side: LiquiditySide) {
+  async indicativeRate(side: LiquiditySide, opts: IndicativeRateOptions = {}) {
     const now = Date.now();
-    if (this.indicative && now - this.indicative.at < LIQUIDITY.INDICATIVE_TTL_MS) {
-      return { rate: this.indicative.rate, raw: this.indicative.raw };
+    const hit = opts.fresh ? undefined : this.indicative.get(side);
+    if (hit && now - hit.at < LIQUIDITY.INDICATIVE_TTL_MS) {
+      return { rate: hit.rate, raw: hit.raw };
     }
     const probe = eur.toWei(LIQUIDITY.PROBE_EUR);
     const q = await this.quote(side, side === "EURE_TO_USDC" ? probe : usd.toUnits(LIQUIDITY.PROBE_EUR), `indicative-${now}`, new Date(now + 60_000).toISOString());
     const out = { rate: Number(q.rate) / 1e6, raw: q.rate };
-    this.indicative = { at: now, ...out };
+    this.indicative.set(side, { at: now, ...out });
     return out;
   }
 }

@@ -200,14 +200,23 @@ export interface LiquidityProvider {
     ctx: SafeSwapContext,
   ): Promise<SafeSwapPlan>;
   /**
-   * A cheap, display-only EUR->USD rate for building a receipt, as a float and
-   * in the swapper's 6dp integer form.
+   * A cheap EUR->USD rate at the nominal probe size, as a float and in the
+   * swapper's 6dp integer form. Cached per side for
+   * LIQUIDITY.INDICATIVE_TTL_MS unless `fresh` is set.
    *
    * Separate from quote(), which is firm, per-amount and short-lived; with a
    * real market maker it uses rate limit and may be a commitment. Don't
    * replace this with a constant: the receipt would show a price nobody honours.
    */
-  indicativeRate(side: LiquiditySide): Promise<{ rate: number; raw: bigint }>;
+  indicativeRate(side: LiquiditySide, opts?: IndicativeRateOptions): Promise<{ rate: number; raw: bigint }>;
+}
+
+export interface IndicativeRateOptions {
+  /** Skip every cache (best's and each venue's) and probe the venues now.
+   *  Every money path sets it: the quote's locked rate, the quote-binding
+   *  check and the compensation fallback. A cached read there would compare
+   *  the locked rate against a copy of itself. */
+  fresh?: boolean;
 }
 
 /**
