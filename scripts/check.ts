@@ -87,6 +87,7 @@ const scripts = [
   "jit:test",
   "dex:test",
   "lifi:test",
+  "venue-receipt:test",
   "forwarder:test",
   "wallet-register:test",
   "email:test",

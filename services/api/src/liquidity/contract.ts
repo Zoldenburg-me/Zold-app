@@ -375,3 +375,31 @@ export async function deliveredFromReceipt(
   const transfers = (await tokenTransfers(txHash, token, userOpHash))?.filter((t) => t.to === r && t.from !== r);
   return transfers && { wei: transfers.reduce((n, t) => n + t.value, 0n), logIndexes: transfers.map((t) => t.logIndex) };
 }
+
+/**
+ * Settle a swap from its own receipt: what `txHash` delivered of `token` to
+ * `to` (deliveredFromReceipt), with the balance delta since `before` as the
+ * check. A larger delta is someone else's money arriving in the same window
+ * and is not output; a smaller one means the token left `to` while the swap
+ * ran, or the read is behind. No receipt, or a short delta, refuses: the
+ * caller must not settle on a guess.
+ */
+export async function settleFromReceipt(
+  venue: string,
+  txHash: string | undefined,
+  token: `0x${string}`,
+  to: `0x${string}`,
+  before: bigint,
+  userOpHash?: string | null,
+): Promise<bigint> {
+  const output = await deliveredFromReceipt(txHash, token, to, userOpHash);
+  if (!output) throw new Error(`${venue}: no transaction receipt to measure what the swap delivered to ${to} — refusing to settle`);
+  const after = await balanceAfterWrite(token, to, before, before + output.wei);
+  if (after - before < output.wei) {
+    throw new Error(
+      `${venue}: the swap delivered ${output.wei} to ${to}, but its balance shows only ${after - before} more — ` +
+        `the token may have left ${to} while it ran, or the read is behind; refusing to settle`,
+    );
+  }
+  return output.wei;
+}

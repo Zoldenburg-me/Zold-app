@@ -27,7 +27,7 @@ import {
   applySurplus,
   assertMinOutBound,
   assertVenueTarget,
-  balanceAfterWrite,
+  settleFromReceipt,
   defaultTokens,
   type VenueTokens,
   } from "./contract.js";
@@ -165,10 +165,10 @@ export class LifiLiquidityProvider implements LiquidityProvider {
     const receipt = await publicClient.waitForTransactionReceipt({ hash: swapHash });
     if (receipt.status !== "success") throw new Error("lifi route reverted");
 
-    // Measured, past replica lag. LI.FI's slippage bound is enforced inside
-    // its own contract, but what the rest of the transfer settles against is
-    // what actually arrived.
-    const delivered = (await balanceAfterWrite(quote.lifi.toToken, to, before)) - before;
+    // Measured. LI.FI's slippage bound is enforced inside its own contract,
+    // but what the rest of the transfer settles against is what the route's
+    // own Transfer logs delivered, with the balance delta as the check.
+    const delivered = await settleFromReceipt("lifi", swapHash, quote.lifi.toToken, to, before);
     if (delivered < quote.minOut) {
       throw new Error(`lifi swap delivered ${delivered} below the quoted floor ${quote.minOut} — refusing to settle`);
     }

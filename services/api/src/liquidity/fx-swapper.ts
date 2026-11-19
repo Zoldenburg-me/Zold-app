@@ -14,6 +14,7 @@ import {
   LiquidityQuote,
   LiquiditySide,
   MAX_SLIPPAGE_BPS,
+  settleFromReceipt,
   waitForAllowanceVisibility,
 } from "./contract.js";
 
@@ -55,6 +56,7 @@ export class FxSwapperLiquidityProvider implements LiquidityProvider {
     }
     const a = addrs();
     const token = quote.side === "EURE_TO_USDC" ? a.eure : a.usdc;
+    const tokenOut = quote.side === "EURE_TO_USDC" ? a.usdc : a.eure;
     const swapFunction = quote.side === "EURE_TO_USDC" ? "swapExactIn" : "swapReverseExactIn";
     const approveStep = `${quote.tokenIn.toLowerCase()}.approve(swapper)`;
     const swapStep =
@@ -62,6 +64,12 @@ export class FxSwapperLiquidityProvider implements LiquidityProvider {
         ? "liquidity.fx-swapper.eure-usdc"
         : "liquidity.fx-swapper.usdc-eure";
 
+    const before = (await publicClient.readContract({
+      address: tokenOut,
+      abi: abis.MockToken,
+      functionName: "balanceOf",
+      args: [to],
+    })) as bigint;
     const approveHash = await writeAndWait(orchestratorWallet, {
       address: token,
       abi: abis.MockToken,
@@ -75,9 +83,12 @@ export class FxSwapperLiquidityProvider implements LiquidityProvider {
       functionName: swapFunction,
       args: [quote.amountIn, quote.minOut, to],
     });
+    // The swapper pays at its posted rate, but what it paid is read from its
+    // own Transfer logs, as on every venue.
+    const amountOut = await settleFromReceipt("fx-swapper", swapHash, tokenOut, to, before);
     return {
       quote,
-      amountOut: quote.expectedOut,
+      amountOut,
       txs: [
         { step: approveStep, hash: approveHash },
         { step: swapStep, hash: swapHash },

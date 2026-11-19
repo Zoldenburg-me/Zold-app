@@ -126,6 +126,7 @@
     "sepa:test": "tsx scripts/sepa-reference-test.ts",
     "dex:test": "tsx scripts/dex-test.ts",
     "lifi:test": "tsx scripts/lifi-test.ts",
+    "venue-receipt:test": "tsx scripts/venue-receipt-test.ts",
     "forwarder:test": "tsx scripts/candide-forwarder-test.ts",
     "wallet-register:test": "tsx scripts/wallet-register-test.ts",
     "email:test": "tsx scripts/email-verification-test.ts",

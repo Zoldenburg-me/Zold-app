@@ -29,6 +29,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { Account, Horizon, Keypair, WebAuth } from "@stellar/stellar-sdk";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+import { ENTRYPOINT_V9 } from "abstractionkit";
 import { hardhatNode } from "./_free-port.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -47,7 +48,12 @@ interface Scenario {
   seen?: (r: Row) => boolean;
   /** Monerium answers the redeem with this status, and nothing crashes. */
   redeemStatus?: number;
-  expect: { state: string; refunded: boolean; sends: string[] };
+  /** Nothing crashes: the executor's own end state is the result. */
+  noCrash?: boolean;
+  /** USDC the batch delivers to the recipient, and another deposit's USDC
+   *  reaching the same address while it runs. Default 10 and 0. */
+  batchUsdc?: { delivered: number; coInflow: number };
+  expect: { state: string; refunded: boolean; sends: string[]; usdcOut?: number; error?: RegExp };
 }
 
 const SCENARIOS: Record<string, Scenario> = {
@@ -106,6 +112,23 @@ const SCENARIOS: Record<string, Scenario> = {
     kind: "batch",
     crashOn: (r) => r.state === "BRIDGED",
     expect: { state: "MANUAL_REVIEW", refunded: false, sends: [] },
+  },
+  // Not a crash: the recipient is Bridge's deposit address, which other
+  // deposits reach too. The batch settles what its own logs delivered.
+  "batch delivers 10 while 5 more reaches the recipient": {
+    kind: "batch",
+    noCrash: true,
+    batchUsdc: { delivered: 10, coInflow: 5 },
+    crashOn: () => false,
+    // The stub anchor then refuses the payout, after Bridge holds the deposit.
+    expect: { state: "MANUAL_REVIEW", refunded: false, sends: [], usdcOut: 10, error: /funds already reached Bridge/ },
+  },
+  "batch delivers 8 of the 10 Bridge needs, a co-inflow covers the gap": {
+    kind: "batch",
+    noCrash: true,
+    batchUsdc: { delivered: 8, coInflow: 5 },
+    crashOn: () => false,
+    expect: { state: "MANUAL_REVIEW", refunded: false, sends: [], error: /delivered 8000000 USDC units to Bridge, below the 10000000/ },
   },
   "refund landed, its record write fails": {
     kind: "refund",
@@ -338,12 +361,30 @@ async function child(which: string, name: string) {
   const realRename = fs.renameSync;
   let seen = 0;
   let delivered = false;
+  let batchTx: Promise<`0x${string}`> | undefined;
+  // The fake batch's receipt is the delivery mint's, inside the fake userOp's
+  // own execution, as an EntryPoint bundle would carry it.
+  const { HARNESS_SAFE_EXECUTION } = orch;
+  const realReceipt = publicClient.getTransactionReceipt.bind(publicClient);
+  (publicClient as any).getTransactionReceipt = async ({ hash }: { hash: `0x${string}` }) => {
+    if (hash !== HARNESS_SAFE_EXECUTION.txHash || !batchTx) return realReceipt({ hash });
+    const r = await realReceipt({ hash: await batchTx });
+    const userOpEvent = {
+      address: ENTRYPOINT_V9, data: "0x", logIndex: r.logs.length,
+      topics: ["0x49628fd1471006c1482da88028e9ce4dbb080b815c9b0344d39e5a8e6ec1419f", HARNESS_SAFE_EXECUTION.userOpHash],
+    };
+    return { ...r, logs: [...r.logs, userOpEvent] };
+  };
   fs.renameSync = ((from: any, to: any) => {
     const r = dbm.db.transfers.find((x) => x.id === id) as unknown as Row;
     // The fake batch moves nothing, so its output lands here, after the executor read the balance before it.
     if (scenario.kind === "batch" && r.state === "DEBITED" && !delivered) {
       delivered = true;
-      void mint(addrs().usdc, DEPOSIT, usd.toUnits(10));
+      const { delivered: out, coInflow } = scenario.batchUsdc ?? { delivered: 10, coInflow: 0 };
+      batchTx = mint(addrs().usdc, DEPOSIT, usd.toUnits(out)).then(async (hash) => {
+        if (coInflow) await mint(addrs().usdc, DEPOSIT, usd.toUnits(coInflow));
+        return hash;
+      });
     }
     const crash = scenario.crashOn(r, seen);
     if (scenario.seen?.(r)) seen++;
@@ -370,7 +411,8 @@ async function child(which: string, name: string) {
     else await orch.executeTransfer(t, user, auth, execution);
   }
   const refundedEur = eur.fromWei((await balance(addrs().eure, address)) - safeBefore);
-  console.log(`NOCRASH the armed write never happened; the transfer ended ${store.findTransfer(id)?.state}, refunded €${refundedEur}: ${store.findTransfer(id)?.error}`);
+  const end = store.findTransfer(id);
+  console.log(`NOCRASH the armed write never happened; the transfer ended ${end?.state}, refunded €${refundedEur}, usdcOut ${end?.usdcOut}: ${end?.error}`);
   process.exit(0);
 }
 
@@ -423,11 +465,17 @@ async function parent() {
       const sendLog = path.join(dir, `${randomUUID()}.log`);
       appendFileSync(sendLog, "");
       const send = run(["send", name], dbPath, sendLog);
-      if (scenario.redeemStatus) {
-        const [, state, refundedEur] = send.stdout.match(/^NOCRASH .*ended (\w+), refunded €([\d.]+)/m) ?? [];
-        const ok = state === scenario.expect.state && Number(refundedEur) > 0 === scenario.expect.refunded;
+      if (scenario.redeemStatus || scenario.noCrash) {
+        const [, state, refundedEur, usdcOut, error] = send.stdout.match(/^NOCRASH .*ended (\w+), refunded €([\d.]+), usdcOut (\S+): (.*)$/m) ?? [];
+        const sends = readFileSync(sendLog, "utf8").split("\n").filter(Boolean);
+        const ok =
+          state === scenario.expect.state &&
+          Number(refundedEur) > 0 === scenario.expect.refunded &&
+          JSON.stringify(sends) === JSON.stringify(scenario.expect.sends) &&
+          (scenario.expect.usdcOut === undefined || Number(usdcOut) === scenario.expect.usdcOut) &&
+          (!scenario.expect.error || scenario.expect.error.test(error ?? ""));
         if (!ok) failures.push(name);
-        console.log(`  ${ok ? "ok  " : "FAIL"} ${name} -> ${state}, refunded €${refundedEur}\n${ok ? "" : send.stdout + send.stderr}`.trimEnd());
+        console.log(`  ${ok ? "ok  " : "FAIL"} ${name} -> ${state}, refunded €${refundedEur}, usdcOut ${usdcOut}\n${ok ? "" : send.stdout + send.stderr}`.trimEnd());
         continue;
       }
       if (send.status !== 1 || !/FATAL store write failed \(EIO\)/.test(send.stderr)) {

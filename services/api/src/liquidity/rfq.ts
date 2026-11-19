@@ -24,7 +24,7 @@ import {
   MAX_SLIPPAGE_BPS,
   assertMinOutBound,
   assertVenueTarget,
-  balanceAfterWrite,
+  settleFromReceipt,
   defaultTokens,
   type VenueTokens,
   } from "./contract.js";
@@ -174,8 +174,9 @@ export class RfqLiquidityProvider implements LiquidityProvider {
     const receipt = await publicClient.waitForTransactionReceipt({ hash: swapHash });
     if (receipt.status !== "success") throw new Error("RFQ settlement reverted");
     // Measured, not copied from the quote: a fill at the maker's minimum is
-    // still a fill, and the transfer must settle against what arrived.
-    const delivered = (await balanceAfterWrite(tokenOut, to, before)) - before;
+    // still a fill, and the transfer must settle against what arrived — the
+    // settlement's own Transfer logs, with the balance delta as the check.
+    const delivered = await settleFromReceipt("RFQ", swapHash, tokenOut, to, before);
     if (delivered < quote.minOut) {
       throw new Error(`RFQ settlement delivered ${delivered} below the quoted floor ${quote.minOut} — refusing to settle`);
     }
