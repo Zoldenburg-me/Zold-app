@@ -31,6 +31,6 @@ if (!name || !email) {
 }
 
 const token = startEnrolment(name, email);
-console.log(`Enrolment for ${name} written to ${ENROLMENT_FILE}; it expires in ${OPERATOR.enrolmentTtlMs / 60_000} minutes.`);
+console.log(`Enrolment written to ${ENROLMENT_FILE}; it expires in ${OPERATOR.enrolmentTtlMs / 60_000} minutes.`);
 console.log("Open this link signed in to Cloudflare Access as that email, then clear your terminal's scrollback:");
 console.log(`\n  ${OPERATOR.adminOrigin}/admin#enrol=${token}\n`);
