@@ -24,6 +24,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import express from "express";
+import { NOW, activeEurAccount, businessOrg, member } from "./_org-fixtures.js";
 
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-draft-fail-")), "db.json");
 process.env.TRANSF_CHAIN_ID = "31337";
@@ -109,10 +110,10 @@ store.addUser({
   createdAt: now,
 } as any);
 store.addUser({ id: "u_reviewer", name: "Reviewer", country: "DE", kycStatus: "approved", address: `0x${"bb".repeat(20)}`, createdAt: now } as any);
-store.addOrganisation({ id: "org_1", type: "business", name: "Zoldenburg UG", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now } as any);
-store.addMember({ id: "m_owner", orgId: "org_1", userId: "u_owner", email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now } as any);
-store.addMember({ id: "m_reviewer", orgId: "org_1", userId: "u_reviewer", email: "", role: "admin", status: "active", invitedAt: now, acceptedAt: now } as any);
-store.addAccount({ id: "acc_1", orgId: "org_1", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: SAFE, backingUserId: "u_owner", moneriumProfile: { id: PROFILE_ID, kind: "corporate", name: "Zoldenburg UG", checkedAt: now }, createdAt: now, updatedAt: now } as any);
+store.addOrganisation(businessOrg("org_1", "Zoldenburg UG"));
+store.addMember(member("m_owner", "org_1", "u_owner", "owner"));
+store.addMember(member("m_reviewer", "org_1", "u_reviewer", "admin"));
+store.addAccount(activeEurAccount("acc_1", "org_1", { address: SAFE, backingUserId: "u_owner" }, { label: "EUR", moneriumProfile: { id: PROFILE_ID, kind: "corporate", name: "Zoldenburg UG", checkedAt: NOW } }));
 
 const contact = (id: string, name: string, iban: string) => {
   const c = {

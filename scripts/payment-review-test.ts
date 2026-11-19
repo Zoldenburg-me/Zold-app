@@ -24,6 +24,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import express from "express";
+import type { Organisation, Role } from "../services/api/src/domain/types.js";
+import { businessOrg, gatedEurAccount, member } from "./_org-fixtures.js";
 
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-payment-review-")), "db.json");
 process.env.TRANSF_CHAIN_ID = "31337";
@@ -123,12 +125,12 @@ store.addUser({
 } as any);
 for (const id of ["u_admin", "u_payer", "u_viewer"]) store.addUser({ id, name: id, country: "DE", kycStatus: "approved", createdAt: now } as any);
 
-function addOrg(id: string, plan: string, over: Record<string, unknown> = {}) {
-  store.addOrganisation({ id, type: "business", name: "Acme Technik GmbH", legalName: "Acme Technik GmbH", plan, reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now, ...over } as any);
+function addOrg(id: string, plan: Organisation["plan"]) {
+  store.addOrganisation(businessOrg(id, "Acme Technik GmbH", { legalName: "Acme Technik GmbH", plan }));
   for (const [userId, role] of [["u_owner", "owner"], ["u_admin", "admin"], ["u_payer", "payer"], ["u_viewer", "viewer"]]) {
-    store.addMember({ id: `m_${id}_${userId}`, orgId: id, userId, email: "", role: role as any, status: "active", invitedAt: now, acceptedAt: now });
+    store.addMember(member(`m_${id}_${userId}`, id, userId, role as Role));
   }
-  store.addAccount({ id: `acc_${id}`, orgId: id, currency: "EUR", label: "EUR", status: "gated", provider: "monerium", identifier: {}, gate: { reason: "no funding identity", needs: "a member's account" }, createdAt: now, updatedAt: now });
+  store.addAccount(gatedEurAccount(`acc_${id}`, id, { label: "EUR", gate: { reason: "no funding identity", needs: "a member's account" } }));
   store.addContact({ id: `c_${id}`, orgId: id, name: "Supplier GmbH", wallets: [], bankAccounts: [{ id: `ba_${id}`, currency: "EUR", country: "DE", iban: "DE02120300000000202051", holderName: "Supplier GmbH" }], createdAt: now, updatedAt: now } as any);
 }
 
@@ -463,11 +465,11 @@ function addProvenUser(id: string) {
   return email;
 }
 function addReviewOrg(id: string, members: [string, string][]) {
-  store.addOrganisation({ id, type: "business", name: "Rejoin GmbH", legalName: "Rejoin GmbH", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now } as any);
+  store.addOrganisation(businessOrg(id, "Rejoin GmbH", { legalName: "Rejoin GmbH" }));
   for (const [userId, role] of members) {
-    store.addMember({ id: `m_${id}_${userId}`, orgId: id, userId, email: "", role: role as any, status: "active", invitedAt: now, acceptedAt: now });
+    store.addMember(member(`m_${id}_${userId}`, id, userId, role as Role));
   }
-  store.addAccount({ id: `acc_${id}`, orgId: id, currency: "EUR", label: "EUR", status: "gated", provider: "monerium", identifier: {}, gate: { reason: "no funding identity", needs: "a member's account" }, createdAt: now, updatedAt: now });
+  store.addAccount(gatedEurAccount(`acc_${id}`, id, { label: "EUR", gate: { reason: "no funding identity", needs: "a member's account" } }));
   const supplier = store.findContact("c_org_a")!;
   store.addContact({ ...supplier, id: `c_${id}`, orgId: id, bankAccounts: [{ ...supplier.bankAccounts[0], id: `ba_${id}` }] } as any);
 }
