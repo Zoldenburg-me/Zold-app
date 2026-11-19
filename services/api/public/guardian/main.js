@@ -20,6 +20,7 @@ import { OAUTH_STATE_KEY, readReturn, startLogin } from "./oauth.js";
 import { providerButtons } from "./providers.js";
 import { afterCheck, checkEnrolment, enrolmentHtml, issueEnrolmentCode } from "./enrolment.js";
 import { byDevice } from "./device-words.js";
+import { UNREACHABLE, WRITE_UNANSWERED, readAnswer, readHealth } from "../foreign-answer.js";
 
 
 /**
@@ -85,12 +86,14 @@ export async function finishAdd(guardian, { api, userId, passkeyGet, beforePassk
 /**
  * Any other guardian change: ask the API for the op, approve it with the
  * passkey, submit. An answer without a challenge needed no op (the chain
- * already says so). Returns {ok: true, result} or {ok: false, reason}.
+ * already says so); an empty answer is not one of those, and never a success.
+ * Returns {ok: true, result} or {ok: false, reason}.
  */
 export async function runPasskeyOp(prepPath, body, { api, passkeyGet }) {
   try {
     const prep = await api(prepPath, body);
-    if (!prep?.challenge) return { ok: true, result: prep };
+    if (!prep || typeof prep !== "object" || !Object.keys(prep).length) return { ok: false, reason: WRITE_UNANSWERED };
+    if (!prep.challenge) return { ok: true, result: prep };
     let assertion;
     try {
       assertion = await passkeyGet(prep);
@@ -196,14 +199,17 @@ async function passkeyGet(prep) {
   };
 }
 
-function apiWith(token) {
+/** The page's API client. An answer Zold did not write throws, so it never
+ *  stands in for one (a {} once read as "Zoldenburg is added"). */
+export function apiWith(token, fetchFn = (path, init) => fetch(path, init)) {
   return async (path, body) => {
-    const r = await fetch(path, {
+    const r = await fetchFn(path, {
       method: body === undefined ? "GET" : "POST",
       headers: { authorization: `Bearer ${token}`, ...(body === undefined ? {} : { "content-type": "application/json" }) },
       body: body === undefined ? undefined : JSON.stringify(body),
+      redirect: "manual",
     });
-    const data = await r.json().catch(() => ({}));
+    const data = await readAnswer(r, body !== undefined);
     if (!r.ok) throw Object.assign(new Error(data.error || `request failed (${r.status})`), { code: data.code, status: r.status });
     return data;
   };
@@ -280,13 +286,17 @@ async function boot() {
   const show = (html) => (el.innerHTML = html);
   let token = null;
   try { token = localStorage.getItem("zold-session"); } catch { /* storage blocked */ }
-  const health = await fetch("/api/health").then((r) => r.json()).catch(() => null);
+  const health = await readHealth();
   const caps = health?.capabilities ?? {};
+  if (!health) return show(`<h1>Your recovery helper</h1><p>${esc(UNREACHABLE)}</p><p><a href="/app">Back to Zold</a></p>`);
   if (!caps.zoldenburgRecovery && !caps.turnkeyGuardians) return show(`<h1>Your recovery helper</h1><p>Recovery helpers aren’t available right now.</p><p><a href="/app">Back to Zold</a></p>`);
   if (!token) return show(`<h1>Sign in first</h1><p>Open Zold and sign in, then come back to Security → Recovery.</p><p><a href="/app">Open Zold</a></p>`);
   const api = apiWith(token);
   let me;
-  try { me = await api("/api/session"); } catch { return show(`<h1>Sign in first</h1><p>Your session has ended. Sign in again, then come back here.</p><p><a href="/app">Open Zold</a></p>`); }
+  try { me = await api("/api/session"); } catch (e) {
+    if (e.foreign) return show(`<h1>Your recovery helper</h1><p>${esc(e.message)}</p><p><a href="/app">Back to Zold</a></p>`);
+    return show(`<h1>Sign in first</h1><p>Your session has ended. Sign in again, then come back here.</p><p><a href="/app">Open Zold</a></p>`);
+  }
 
   const stamper = new IndexedDbStamper();
   const env = {

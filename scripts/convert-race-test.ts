@@ -185,6 +185,7 @@ try {
   const swaps = d.txs.filter((t) => t.step === "safe.swap(usdc->eure)");
   assert.equal(swaps.length, 1, `the deposit records ${swaps.length} swaps`);
   assert.equal(d.holding, "converted");
+  assert.equal(d.conversionIntent, undefined, "a recorded conversion leaves no intent behind");
   const won = both.find((r) => r.status === 200)!.data.deposit;
   assert.equal(d.creditedEur, won.creditedEur, "credited once: the one measured delivery");
   console.log("  ok  the same signed conversion submitted twice at once converts and credits once");

@@ -707,6 +707,13 @@ flowchart LR
   to the paymaster in USDC; a balance delta would also count a payment that
   arrived in the same block. With no receipt to read, the whole remainder is
   taken as swapped.
+- Before the swap is submitted, the route writes `conversionIntent` on the
+  deposit; a row that carries one is never offered again. It is cleared on a
+  stated bundler refusal, a reverted swap, and once settling records the
+  result. A refused write after the swap exits the process, and the restart
+  finds the intent rather than a convertible row; a refused intent write exits
+  before anything is sent. `convert-crash-test.ts` proves both with a real
+  exit. Nothing reconciles a stuck intent: it stays blocked until checked.
 - After the swap executes, the route marks the deposit `unconfirmed` with the
   swap step before settling. If settling then fails, it stays `unconfirmed`
   and is never offered again; there is no rate check after the swap that can

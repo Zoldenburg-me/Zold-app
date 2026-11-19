@@ -226,6 +226,7 @@ export async function queueOrgGuardianSetup(args: {
       kind: GUARDIAN_OP_KIND,
       summary: `${state.moduleEnabled ? "" : "Enable the recovery module and "}${state.moduleEnabled ? "Add" : "add"} Zoldenburg UG (${guardian}) as the Safe’s recovery guardian`,
       prepared,
+      guardianAddress: guardian,
     });
     return { op, created: true };
   } catch (err) {
@@ -246,7 +247,10 @@ type SignRefusal = { status: number; code: string; error: string; invalidate?: s
 export async function guardianSetupSignRefusal(op: PendingSafeOp, chain: OrgRecoveryChain = liveOrgRecoveryChain): Promise<SignRefusal | undefined> {
   if (op.kind !== GUARDIAN_OP_KIND) return undefined;
   const guardian = zoldenburgGuardianAddress();
-  if (!guardian || !low(op.userOperation).includes(low(guardian).slice(2))) {
+  // The guardian stored when the op was queued; an op queued before that field
+  // existed falls back to finding the address in its UserOperation.
+  const adds = (g: string) => (op.guardianAddress ? low(op.guardianAddress) === low(g) : low(op.userOperation).includes(low(g).slice(2)));
+  if (!guardian || !adds(guardian)) {
     return { status: 409, code: "RECOVERY_UNAVAILABLE", error: "This deployment no longer offers the guardian this operation adds. Nothing was signed.", invalidate: "the deployment's guardian changed" };
   }
   let state: RecoveryModuleState;

@@ -30,8 +30,9 @@ export function redactUrls(text: string): string {
  *
  * An IBAN is a SEPA country code, two check digits, then either one compact
  * run of exactly that country's length or groups of four with single spaces
- * cut at that length; the word after it (`… 0130 00 INVALID`) and a
- * reference that is too short for its country stay. An order id, a hex
+ * cut at that length, in either case, and it must pass the mod-97 check; the
+ * word after it (`… 0130 00 INVALID`), a reference that is too short for its
+ * country and one of the right shape that fails the check stay. An order id, a hex
  * address or a tx hash is not one.
  *
  * A phone is `+` or `00` and a country code, or a national number with a
@@ -56,7 +57,7 @@ const IBAN_LENGTH: Record<string, number> = {
 const SEPA = Object.keys(IBAN_LENGTH).join("|");
 const IBAN_PATTERN = new RegExp(
   `\\b(?:${SEPA})\\d{2}(?:[A-Z0-9]{11,30}|(?: [A-Z0-9]{4}){2,7}(?: [A-Z0-9]{1,3})?)(?![A-Za-z0-9])`,
-  "g",
+  "gi",
 );
 const PHONE_SEP = String.raw`(?: ?[/-] ?| )`;
 const PHONE_GROUP = String.raw`(?:\(\d{1,5}\)|\d+)`;
@@ -89,16 +90,32 @@ export function maskPhone(phone: string): string {
   return `+${"•".repeat(Math.max(0, digits.length - 3))}${digits.slice(-3)}`;
 }
 
+/** ISO 13616 mod-97: the first four characters moved to the end, letters as
+ *  10 to 35, the number mod 97 is 1. */
+function ibanChecksumOk(iban: string): boolean {
+  const s = (iban.slice(4) + iban.slice(0, 4)).toUpperCase();
+  let rem = 0;
+  for (const c of s) {
+    const v = parseInt(c, 36);
+    rem = v < 10 ? (rem * 10 + v) % 97 : (rem * 100 + v) % 97;
+  }
+  return rem === 1;
+}
+
 /** Masks the country's IBAN length of a spaced match and keeps the groups
- *  after it; a shorter match, or a compact one of another length, is not an
- *  IBAN. */
+ *  after it; a shorter match, a compact one of another length, or one that
+ *  fails the checksum is not an IBAN. */
 function maskIbanMatch(match: string): string {
-  const want = IBAN_LENGTH[match.slice(0, 2)];
-  if (!match.includes(" ")) return match.length === want ? maskIban(match) : match;
-  let seen = 0;
-  let end = 0;
-  while (end < match.length && seen < want) if (match[end++] !== " ") seen++;
-  return seen < want ? match : maskIban(match.slice(0, end)) + match.slice(end);
+  const want = IBAN_LENGTH[match.slice(0, 2).toUpperCase()];
+  let end = match.length;
+  if (match.includes(" ")) {
+    let seen = 0;
+    end = 0;
+    while (end < match.length && seen < want) if (match[end++] !== " ") seen++;
+    if (seen < want) return match;
+  } else if (match.length !== want) return match;
+  const iban = match.slice(0, end);
+  return ibanChecksumOk(iban.replace(/ /g, "")) ? maskIban(iban) + match.slice(end) : match;
 }
 
 function maskPhoneMatch(match: string): string {
