@@ -96,7 +96,7 @@ interface Rows {
 
 const storeRows: Rows = {
   transfersOf: (id) => store.transfers.filter((t) => t.userId === id),
-  depositsOf: (id) => withoutConversionOutputs(store.cryptoDeposits.filter((d) => d.userId === id)),
+  depositsOf: (id) => withoutConversionOutputs(store.cryptoDeposits.filter((d) => d.userId === id), store.transfers.filter((t) => t.userId === id)),
   // A company send's userId is who queued it; it is the company's money.
   cryptoSendsOf: (id) => store.cryptoSends.filter((c) => c.userId === id && !c.safeOpId),
   issueOrdersOf: (id) => store.moneriumIssueOrders.filter((o) => o.userId === id),
@@ -135,7 +135,7 @@ function companySends(sends: readonly CryptoSend[], account: Account): CryptoSen
 function groupedRows(): Rows {
   const transfers = groupBy(store.transfers, (t) => t.userId);
   // A conversion's EURe output is not income (transfers/activity.ts).
-  const deposits = groupBy(withoutConversionOutputs(store.cryptoDeposits), (d) => d.userId);
+  const deposits = groupBy(withoutConversionOutputs(store.cryptoDeposits, store.transfers), (d) => d.userId);
   const issueOrders = groupBy(store.moneriumIssueOrders, (o) => o.userId);
   const accountIssueOrders = groupBy(store.moneriumIssueOrders, (o) => o.accountId);
   const cryptoSends = groupBy(store.cryptoSends.filter((c) => !c.safeOpId), (c) => c.userId);

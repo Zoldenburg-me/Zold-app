@@ -100,9 +100,10 @@ Each of these was a bug once.
   must be 0, and you approve the spender the maker **NAMES** (`approvalTarget`,
   not `tx.to`).
 - **Amounts out are MEASURED**, never copied from the quote. A crypto-in
-  conversion credits the swap receipt's EURe Transfer logs into the Safe; its
-  balance delta is only a check (more: recorded, less: review). Other venues
-  still measure a balance delta.
+  conversion and a reverse-swap refund settle from the swap's EURe Transfer
+  logs into the Safe (`deliveredFromReceipt`), never booked as money in; the
+  balance delta is a check (less: review). Venue execute and the batch
+  recipient still use a delta.
 - **Compensation is asymmetric on purpose**: only a definite refusal refunds (Monerium: 401 or 403); a
   timeout, a duplicate-transfer revert, or any failure after Bridge holds the
   deposit is MANUAL_REVIEW. `store.updateTransfer` refuses to move a
