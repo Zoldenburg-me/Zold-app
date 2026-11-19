@@ -1137,7 +1137,7 @@ flowchart LR
   plaintext.
 - Collections:
   - users, quotes, transfers, sessions
-  - receiptShares, documents, paymentRequests, shopifyConnections
+  - receiptShares, documents, paymentRequests, shopifyConnections, shopifyDeliveries
   - processedMoneriumOrders, processedMoneriumWebhooks
   - cryptoDeposits, cryptoDepositCursor
   - audit, recoveryRequests

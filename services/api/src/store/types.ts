@@ -1209,7 +1209,7 @@ export interface Session {
 /** Owned by their own modules; re-exported so `store` names one shape. */
 export type { StoredDocument } from "../documents.js";
 export type { PaymentRequest } from "../payment-requests.js";
-export type { ShopifyConnection } from "../shopify/types.js";
+export type { ShopifyConnection, ShopifyDelivery } from "../shopify/types.js";
 
 export interface ReceiptShare {
   id: string;

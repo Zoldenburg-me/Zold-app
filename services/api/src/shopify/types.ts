@@ -38,3 +38,19 @@ export interface ShopifyConnection {
   lastSessionAt?: string;
   updatedAt: string;
 }
+
+/**
+ * A Shopify webhook delivery we have seen, by Shopify's delivery id
+ * (X-Shopify-Webhook-Id), bound to the shop it first arrived under. The app
+ * secret is shared and the shop header is unsigned, so this binding is what
+ * stops a captured delivery being replayed under another store's name. Kept
+ * 72 hours, past Shopify's 48-hour retry window.
+ */
+export interface ShopifyDelivery {
+  id: string;
+  shop: string;
+  /** ISO time it first arrived. */
+  at: string;
+  /** Answered without a server error; a redelivery is then acknowledged unprocessed. */
+  handled: boolean;
+}

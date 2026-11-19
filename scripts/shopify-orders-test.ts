@@ -554,6 +554,52 @@ await check("a delivery signed for one store and replayed under another store's 
     store.removeShopifyConnection(store.findShopifyConnectionByShop(SHOP_B)!.id);
   }
 });
+await check("after a restart, a delivery replayed under another store's name is still refused; the same store's replay is a duplicate; a new delivery opens", async () => {
+  const first = store.findShopifyConnectionByShop(SHOP)!;
+  store.addShopifyConnection({ ...first, id: randomUUID(), shop: SHOP_B });
+  const o = order();
+  const id = randomUUID();
+  assert.equal((await webhook("orders/create", o, SHOP, undefined, id)).status, 200);
+  // A restart: the store reloads from its file, the router module starts fresh.
+  initStore();
+  const fresh: typeof import("../services/api/src/routes/shopify.js") = await import(`../services/api/src/routes/shopify.js?restart=${randomUUID()}` as string);
+  const app2 = express();
+  app2.use(express.json({ verify: (req, _res, buf) => { (req as any).rawBody = buf; } }));
+  app2.use("/api", fresh.createShopifyRouter(() => undefined));
+  const server2 = app2.listen(0, "127.0.0.1");
+  await new Promise<void>((r) => server2.once("listening", () => r()));
+  const API2 = `http://127.0.0.1:${(server2.address() as any).port}`;
+  const hook2 = async (payload: unknown, shop: string, deliveryId: string, topic = "orders/create") => {
+    const raw = JSON.stringify(payload);
+    const res = await fetch(`${API2}/api/shopify/webhooks/orders`, { method: "POST", headers: { "content-type": "application/json", "shopify-hmac-sha256": signBody(raw, "shpss_test_secret"), "shopify-shop-domain": shop, "x-shopify-topic": topic, "x-shopify-webhook-id": deliveryId }, body: raw });
+    return { status: res.status, body: await res.json() as any };
+  };
+  try {
+    const before = store.paymentRequests.length;
+    const replay = await hook2(o, SHOP_B, id);
+    assert.equal(replay.status, 401, JSON.stringify(replay.body));
+    assert.equal(store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP_B), undefined, "the replay opened a request at the other store");
+    assert.equal(store.paymentRequests.length, before);
+    const same = await hook2(o, SHOP, id, "orders/cancelled");
+    assert.equal(same.status, 200);
+    assert.equal(same.body.duplicate, true, JSON.stringify(same.body));
+    assert.equal(store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP)!.state, "OPEN");
+    const o2 = order();
+    const created = await hook2(o2, SHOP_B, randomUUID());
+    assert.equal(created.status, 200, JSON.stringify(created.body));
+    assert.ok(store.findPaymentRequestBySource("shopify", o2.admin_graphql_api_id, SHOP_B), "a new delivery opened nothing");
+  } finally {
+    server2.close();
+    store.removeShopifyConnection(store.findShopifyConnectionByShop(SHOP_B)!.id);
+  }
+});
+await check("delivery ids are kept 72 hours, then dropped", async () => {
+  const old = new Date(Date.now() - 73 * 3_600_000).toISOString();
+  store.recordShopifyDelivery({ id: "stale-delivery", shop: SHOP, at: old, handled: true });
+  assert.ok(store.shopifyDelivery("stale-delivery"));
+  store.recordShopifyDelivery({ id: randomUUID(), shop: SHOP, at: new Date().toISOString(), handled: false });
+  assert.equal(store.shopifyDelivery("stale-delivery"), undefined);
+});
 
 console.log("\nDashboard");
 await check("the org view says custom-app mode, lists the webhook endpoint, each store's signed email link, the orders with their names, and never the token", async () => {
