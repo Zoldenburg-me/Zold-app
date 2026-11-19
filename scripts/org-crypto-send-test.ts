@@ -17,14 +17,16 @@
  *   - a payee edit after queueing invalidates the op at the first signature;
  *   - an org Safe not deployed refuses before anything is created;
  *   - the personal route refuses a company Safe, and the company send is not
- *     signed at /crypto-sends/:id/authorize.
+ *     signed at /crypto-sends/:id/authorize;
+ *   - an executed send is booked on the company account's statement, never on
+ *     the queuing member's own books.
  *
  * The sole-trader and personal paths are covered unchanged by
  * business-crypto-send:test and crypto-send:test.
  *
  * Offline: the chain (owners, threshold, nonce, relay) and the prepared
- * operation are fakes, the balance, rate and screen are stubs, passkeys are
- * software keys.
+ * operation are fakes, the balance, rate, screen and token list are stubs
+ * (no deployments.json needed), passkeys are software keys.
  * Run: npm run org-crypto-send:test
  */
 import "./_test-env.js";
@@ -54,6 +56,7 @@ const { liveCryptoSend, orgSafeSpentEurToday } = await import("../services/api/s
 const { passkeyOwnerAddressOfJwk } = await import("../services/api/src/wallet/safe-signers.js");
 const { safeOperationDigest } = await import("../services/api/src/wallet/candide.js");
 const { FX } = await import("../services/api/src/config.js");
+const { writeStatementLines } = await import("../services/api/src/bookkeeping/writer.js");
 initStore();
 
 let passed = 0;
@@ -130,6 +133,7 @@ const stubs = {
   usdPerEur: async () => 1.25,
   screen: async (a: string) => sanctioned.has(a.toLowerCase()),
   testUsdcAddress: () => undefined,
+  sendTokens: () => ({ EURE: { address: "0xe0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0" as const, decimals: 18, label: "EURe" } }),
 };
 
 const app = express();
@@ -178,6 +182,7 @@ const sign = async (p: string, opId: string) => {
 };
 const live = (id: string) => liveCryptoSend(store.findCryptoSend(id)!);
 const draftState = async (id: string) => (await call("GET", `/orgs/org_1/drafts/${id}`, "u_payer")).data.draft.state;
+let sentId = "";
 const reset = () => {
   chain.owners = [addr.anna, addr.bert]; chain.threshold = 1; chain.nonce = 0n; chain.relays = [];
   chain.relayResult = () => ({ userOpHash: `0x${"ab".repeat(32)}`, txHash: `0x${"cd".repeat(32)}`, success: true, gasPaidBy: "sponsored" });
@@ -218,7 +223,29 @@ try {
     assert.equal(live(send.cryptoSendId).state, "SENT");
     assert.equal(live(send.cryptoSendId).txHash, `0x${"cd".repeat(32)}`);
     assert.equal(await draftState(draftId), "EXECUTED");
+    sentId = send.cryptoSendId;
     chain.nonce = 1n;
+  });
+
+  await check("an executed send is booked on the company's statement, not the queuer's", async () => {
+    // The payer also has books of their own: a personal account backed by their Safe.
+    store.addOrganisation({ id: "org_p", type: "personal", name: "payer", plan: "personal", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now } as any);
+    store.addAccount({ id: "acc_p", orgId: "org_p", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, backingUserId: "u_payer", createdAt: now, updatedAt: now } as any);
+    writeStatementLines();
+    const key = `cryptosend:${sentId}`;
+    const line = store.ledgerOf("org_1").find((e) => e.statement?.key === key);
+    assert.ok(line, "the company's books carry the send");
+    assert.equal(line!.direction, "out");
+    assert.equal(Number(line!.amount), 10);
+    assert.deepEqual(line!.source, { kind: "account", accountId: "acc_1" });
+    assert.ok(!store.ledgerOf("org_p").some((e) => e.statement?.key === key), "the queuer's books do not");
+    // A queued send that has not executed is not booked yet.
+    reset();
+    chain.nonce = 1n;
+    const { send } = await queued();
+    writeStatementLines();
+    assert.ok(!store.ledgerOf("org_1").some((e) => e.statement?.key === `cryptosend:${send.cryptoSendId}`));
+    reset();
   });
 
   await check("signers come from the chain's owners, not plan.owners or the caller", async () => {

@@ -72,6 +72,8 @@ export interface CryptoSendDeps {
   prepare?: typeof prepareTransferExecution;
   screen?: (address: `0x${string}`) => Promise<boolean>;
   testUsdcAddress?: () => `0x${string}` | undefined;
+  /** The tokens a send may move; by default deployments.json's EURe and USDC. */
+  sendTokens?: () => Partial<Record<CryptoSend["token"], SendToken>>;
   /** A company send: the org Safe's owners and threshold, and its prepare. */
   orgSafeReader?: OrgSafeReader;
   prepareOrg?: OrgDebitPrepare;
@@ -189,8 +191,8 @@ type PreparerDeps = Omit<CryptoSendDeps, "requireUserSession">;
  * payer's Safe. The personal and the company preparer both call this, so
  * neither has a copy of the checks.
  */
-async function checkSend(payer: SendPayer, input: CryptoSendInput, deps: Required<Pick<PreparerDeps, "resolveName" | "balanceOf" | "usdPerEur" | "screen" | "testUsdcAddress">>): Promise<CheckedSend | Refused> {
-  const sendable = tokens(deps.testUsdcAddress());
+async function checkSend(payer: SendPayer, input: CryptoSendInput, deps: Required<Pick<PreparerDeps, "resolveName" | "balanceOf" | "usdPerEur" | "screen" | "sendTokens">>): Promise<CheckedSend | Refused> {
+  const sendable = deps.sendTokens();
   const symbol = String(input.token ?? "").toUpperCase() as CryptoSend["token"];
   const token = Object.hasOwn(sendable, symbol) ? sendable[symbol] : undefined;
   if (!token) return refuse(400, { error: "token must be EURE or USDC", code: "BAD_TOKEN" });
@@ -285,7 +287,8 @@ const withDefaults = ({
   usdPerEur = () => eurPer("USD"),
   screen = isSanctioned,
   testUsdcAddress = testUsdc,
-}: PreparerDeps) => ({ resolveName, balanceOf, usdPerEur, screen, testUsdcAddress });
+  sendTokens = () => tokens(testUsdcAddress()),
+}: PreparerDeps) => ({ resolveName, balanceOf, usdPerEur, screen, sendTokens });
 
 const COMPANY_SAFE_REFUSAL = refuse(403, {
   error: "This Safe belongs to a company. Its owners sign its payments in the company's queue, not here.",
