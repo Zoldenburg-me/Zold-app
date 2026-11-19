@@ -10,7 +10,8 @@
  * unknown, not missing, when the signers could not be read, and keeps the
  * set-up card open; only the company's own login is told to connect Monerium;
  * only unsent runs are pending; a company whose euro account is not live
- * says what it waits for, never that no account is connected, and only a
+ * says what it waits for, a live one shows its IBAN with no backer, a failed
+ * read says it failed, never that no account is connected, and only a
  * company's card says it.
  *
  * What this cannot show: the screen in a browser. Offline.
@@ -119,15 +120,20 @@ assert.equal(done(m.setupSteps({ passkey: { credentialId: "k" } }, [], { noSafe:
   const noSafe = { ...gatedEurAccount("acc_c", "org_c"), gate: { reason: "The company’s Safe is not set up yet, so nothing can be paid into or sent from this account." } };
   const safeNoIban = { ...gatedEurAccount("acc_c", "org_c", { address: `0x${"cc".repeat(20)}` }), gate: { reason: "The company’s Safe is set up, but issuing the company’s IBAN onto it is not yet live, so nothing can be sent from this account." } };
   const company = companyOrg("org_c", "Lindner Bau");
-  assert.match(m.companyAccountNote(company, [noSafe]), /Safe is not set up yet/, "no Safe yet: says so");
-  assert.match(m.companyAccountNote(company, [safeNoIban]), /Safe is set up, but issuing the company’s IBAN/, "Safe deployed, no IBAN: says the IBAN is not live");
-  assert.equal(m.companyAccountNote(company, [gatedEurAccount("acc_c", "org_c")]), "The company’s account is not live yet.", "a gate without a reason still never reads as no account");
-  assert.equal(m.companyAccountNote(company, []), null, "no euro account: the card's own wording");
-  assert.equal(m.companyAccountNote(company, null), null, "accounts unread: nothing said");
-  assert.equal(m.companyAccountNote(company, [{ ...safeNoIban, status: "active" }]), null, "a live account is not waiting");
-  assert.equal(m.companyAccountNote(businessOrg("org_s", "Weber", { entity: "sole_trader" }), [noSafe]), null, "a sole trader's card is unchanged");
-  assert.equal(m.companyAccountNote(businessOrg("org_l", "Weber"), [noSafe]), null, "a business row with no entity is a sole trader");
-  assert.equal(m.companyAccountNote({ ...personalOrg("org_p", "Sara"), role: "owner" }, [noSafe]), null, "a personal card is unchanged");
+  const live = activeEurAccount("acc_c", "org_c", { iban: "DE89370400440532013000", address: `0x${"cc".repeat(20)}` });
+  assert.equal(live.backingUserId, undefined, "a company's live account has no backer");
+  assert.deepEqual(m.companyBalance(company, [noSafe]), { note: noSafe.gate.reason }, "no Safe yet: says so");
+  assert.match(m.companyBalance(company, [safeNoIban]).note, /Safe is set up, but issuing the company’s IBAN/, "Safe deployed, no IBAN: says the IBAN is not live");
+  assert.deepEqual(m.companyBalance(company, [gatedEurAccount("acc_c", "org_c")]), { note: "The company’s account is not live yet." }, "a gate without a reason still never reads as no account");
+  assert.equal(m.companyBalance(company, []), null, "no euro account: the card's own wording");
+  assert.deepEqual(m.companyBalance(company, null), { note: "The company’s account could not be read just now. Reload to try again." }, "accounts unread: says the read failed, not that there is no account");
+  assert.doesNotMatch(m.companyBalance(company, null).note, /No account/, "a failed read is not no account");
+  assert.deepEqual(m.companyBalance(company, [live]), { iban: "DE89370400440532013000" }, "live, no backer: its IBAN, no figure, no note");
+  assert.deepEqual(m.companyBalance(company, [{ ...live, identifier: {} }]), { iban: null }, "live without an IBAN on the row: no IBAN yet");
+  assert.equal(m.companyBalance(businessOrg("org_s", "Weber", { entity: "sole_trader" }), [noSafe]), null, "a sole trader's card is unchanged");
+  assert.equal(m.companyBalance(businessOrg("org_s", "Weber", { entity: "sole_trader" }), null), null, "a sole trader's failed read keeps its own wording");
+  assert.equal(m.companyBalance(businessOrg("org_l", "Weber"), [noSafe]), null, "a business row with no entity is a sole trader");
+  assert.equal(m.companyBalance({ ...personalOrg("org_p", "Sara"), role: "owner" }, [noSafe]), null, "a personal card is unchanged");
 }
 
 // ── Pending ─────────────────────────────────────────────────────────────────
