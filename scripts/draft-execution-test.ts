@@ -16,6 +16,7 @@ import { rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { newDevice, registerDevice } from "./device.js";
+import { bankContactBody, bankLine as line, soleTraderBody } from "./_org-fixtures.js";
 
 const PIN = { USD: 1.1379, INR: 109.87, KES: 147.53 };
 process.env.TRANSF_RATES_FIXED ??= JSON.stringify(PIN);
@@ -176,7 +177,7 @@ try {
   const org = (
     await ok("POST", "/api/orgs", {
       token: ownerToken,
-      body: { name: "Acme GmbH", entity: "sole_trader", type: "business", country: "DE" },
+      body: soleTraderBody("Acme GmbH"),
     })
   ).organisation;
 
@@ -233,46 +234,15 @@ try {
   const contact = (
     await ok("POST", `/api/orgs/${org.id}/contacts`, {
       token: ownerToken,
-      body: {
-        name: "Supplier Ltd",
-        bankAccounts: [
-          {
-            currency: "EUR",
-            country: "DE",
-            holderName: "Supplier Ltd",
-            iban: "DE89370400440532013000",
-          },
-        ],
-      },
+      body: bankContactBody("Supplier Ltd", "DE", "DE89370400440532013000"),
     })
   ).contact;
   const secondContact = (
     await ok("POST", `/api/orgs/${org.id}/contacts`, {
       token: ownerToken,
-      body: {
-        name: "Contractor BV",
-        bankAccounts: [
-          {
-            currency: "EUR",
-            country: "NL",
-            holderName: "Contractor BV",
-            iban: "NL91ABNA0417164300",
-          },
-        ],
-      },
+      body: bankContactBody("Contractor BV", "NL", "NL91ABNA0417164300"),
     })
   ).contact;
-
-  const line = (c: any, amount: string) => ({
-    contactId: c.id,
-    destination: {
-      kind: "bank",
-      bankAccountId: c.bankAccounts[0].id,
-      displayName: c.bankAccounts[0].holderName,
-    },
-    asset: "EUR",
-    amount,
-  });
 
   const draft = (
     await ok("POST", `/api/orgs/${org.id}/drafts`, {
