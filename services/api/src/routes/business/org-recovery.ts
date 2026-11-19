@@ -4,7 +4,8 @@
  *
  *  - GET: every member who may read accounts. The module read from chain on
  *    every visit: { state, available, guardian, moduleEnabled, guardians,
- *    guardianOnChain, otherGuardians, pendingRecovery, armed: false, ... }.
+ *    guardianOnChain, otherGuardians, pendingRecovery, armed: false,
+ *    setupOp, queueOpen, ... }.
  *    502 RECOVERY_UNREADABLE when the chain cannot be read: never "none".
  *  - POST /guardian: an owner queues the setup op for the owners to sign at
  *    /orgs/:orgId/safe-ops. 201 with the op when queued; 200 with the open op,

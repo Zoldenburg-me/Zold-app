@@ -9,7 +9,7 @@
 import { Z, api, cap, day, deviceLib, ensureMe, esc, org, readHealth, reviewOn, roleCan, ROLE_WORD } from "./core.js";
 import { META, RENDER } from "./views.js";
 import { render } from "./shell.js";
-import { APP_LINKS, approvalView, deviceKeyView, isCompanyLogin, isCompanyOrg, isOwnCompanyOrg, loadAccess, loadOrgRecovery, loadOrgSafe, ORG_RECOVERY, ORG_RECOVERY_UNARMED } from "./access-model.js";
+import { APP_LINKS, approvalView, deviceKeyView, isCompanyLogin, isCompanyOrg, isOwnCompanyOrg, loadAccess, loadOrgRecovery, loadOrgSafe, ORG_RECOVERY, ORG_RECOVERY_NOT_OFFERED, ORG_RECOVERY_UNARMED } from "./access-model.js";
 
 const settingsBack = `<a class="z-btn z-btn--secondary" href="?view=settings" data-view-link="settings">${Z.icon("arrow_back")}<span>Settings</span></a>`;
 const appBtn = (label, href, variant = "secondary") =>
@@ -95,8 +95,13 @@ function orgRecoveryCard(r, yours) {
     return card("acc-rec", "Recovery", `<div class="banner warn">${Z.icon("warning")}<span><b>A recovery is under way on the company’s Safe.</b> It would replace every signer.${until} If no one at the company started it, contact support@zoldhq.com now: Zold can’t cancel it from here yet.</span></div>${others}`, yours);
   }
   if (r.status === "unarmed") return card("acc-rec", "Recovery", `${others}${lines(ORG_RECOVERY_UNARMED)}`, yours);
-  const queued = r.queued ? `<p class="zb-hint">Adding Zoldenburg UG as the guardian is waiting for the owners’ signatures.</p>` : "";
-  return card("acc-rec", "Recovery", `${others}${lines(ORG_RECOVERY)}${queued}`, yours);
+  if (!r.offered) return card("acc-rec", "Recovery", `${others}${lines(ORG_RECOVERY_NOT_OFFERED)}`, yours);
+  const queued = r.queued ? `<p class="zb-hint">Adding Zoldenburg UG as the guardian is queued and waiting for the owners’ signatures. Zold Business has no screen to sign it yet.</p>` : "";
+  // Owners only, as the API refuses anyone else (POST …/recovery/guardian).
+  const setUp = r.canSetUp && org.role === "owner"
+    ? `<div class="zb-actions" style="margin-top:0"><button type="button" class="z-btn z-btn--primary z-btn--sm" data-act="org-recovery-setup">Set up recovery</button>${yours}</div>`
+    : yours;
+  return card("acc-rec", "Recovery", `${others}${lines(ORG_RECOVERY)}${queued}`, setUp);
 }
 
 const guardianRow = (g) => {
