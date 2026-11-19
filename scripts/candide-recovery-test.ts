@@ -234,6 +234,24 @@ const stub = createServer((req, res) => {
 });
 
 let opKit: OperatorKit | undefined;
+async function rpc(method: string, params: unknown[]) {
+  const res = await fetch(RPC_URL, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) });
+  const body = await res.json();
+  if (body.error) throw new Error(`${method}: ${JSON.stringify(body.error)}`);
+  return body.result;
+}
+
+/** Put code at `safe` that answers every call, getOwners() included, with
+ *  `owners`; "0x" removes it and the harness assumes the recovered set again. */
+async function plantOwners(safe: string, owners: string[] | null) {
+  if (!owners) return rpc("hardhat_setCode", [safe, "0x"]);
+  const word = (hex: string) => hex.replace(/^0x/, "").toLowerCase().padStart(64, "0");
+  const payload = word("20") + word(owners.length.toString(16)) + owners.map(word).join("");
+  const len = (payload.length / 2).toString(16).padStart(4, "0");
+  // PUSH2 len, PUSH1 14, PUSH1 0, CODECOPY, PUSH2 len, PUSH1 0, RETURN; the payload follows the 14 bytes.
+  return rpc("hardhat_setCode", [safe, `0x61${len}600e600039${"61" + len}6000f3${payload}`]);
+}
+
 async function call(pathname: string, body?: any, method?: string, bearer = token, extra: Record<string, string> = {}) {
   // The operator calls through a passkey session; a change gets a fresh
   // approval.
@@ -685,11 +703,42 @@ try {
     assert.equal(seen.finalizes.length, 0, "nothing reached Candide");
   });
 
+  const STRAY = "0x00000000000000000000000000000000BADBAD01";
+  for (const [name, onChain] of [
+    ["the new owner plus one the recovery meant to remove", () => [seen.creates[0].newOwners[0], STRAY]],
+    ["a Safe still missing the new owner", () => [STRAY]],
+  ] as const) {
+    await t(`finalization refuses ${name}: nothing is bound, the request stays in its grace period`, async () => {
+      await plantOwners(safeAddress, onChain());
+      try {
+        const r = await rc(`/api/recovery/candide/${recovery.id}/finalize`, {});
+        assert.equal(r.status, 502, JSON.stringify(r.data));
+        assert.equal(r.data.status, "GRACE_PERIOD");
+        assert.match(r.data.error, /do not show the recovered set/);
+        assert.ok(!r.text.includes("sessionToken"));
+        assert.equal((await rc(`/api/recovery/candide/${recovery.id}`)).data.status, "GRACE_PERIOD", "still finalizable once the chain agrees");
+        const c = await call("/api/webauthn/challenge", { purpose: "login" }, undefined, "");
+        assert.equal((await call("/api/passkey/login", await newPasskey.assert(c.data.challenge), undefined, "")).status, 404, "the new passkey is not bound");
+      } finally {
+        await plantOwners(safeAddress, null);
+      }
+    });
+  }
+
   await t("after the grace period, finalization binds the new passkey and hands out NO session", async () => {
-    const r = await rc(`/api/recovery/candide/${recovery.id}/finalize`, {});
+    const before = seen.finalizes.length;
+    // On chain the owner is exactly the new passkey, in another case than the request holds.
+    const owner: string = seen.creates[0].newOwners[0];
+    await plantOwners(safeAddress, [owner === owner.toLowerCase() ? owner.toUpperCase().replace(/^0X/, "0x") : owner.toLowerCase()]);
+    let r;
+    try {
+      r = await rc(`/api/recovery/candide/${recovery.id}/finalize`, {});
+    } finally {
+      await plantOwners(safeAddress, null);
+    }
     assert.equal(r.status, 200, JSON.stringify(r.data));
     assert.equal(r.data.status, "FINALIZED");
-    assert.equal(seen.finalizes.length, 1);
+    assert.equal(seen.finalizes.length, before + 1);
     assert.equal(seen.finalizes[0].id, "rec-1");
     assert.equal(r.data.account, undefined, "no account payload");
     assert.ok(!r.text.includes("sessionToken"), "no bearer session from the no-session route");
@@ -816,6 +865,17 @@ try {
     // A request past the owner's codes is on chain: only the owner's passkey can cancel it.
     const late = await call(`/api/admin/recoveries/candide/${recovery.id}/reject`, { reason: "too late" }, "POST", OPERATOR);
     assert.equal(late.status, 409, JSON.stringify(late.data));
+  });
+
+  await t("the owner check is set equality: order and case ignored, a repeat or an extra refused", async () => {
+    const { sameOwnerSet } = await import("../services/api/src/routes/recovery-candide.js");
+    const a = "0x000000000000000000000000000000000000aBcD", b = "0x0000000000000000000000000000000000001234";
+    assert.equal(sameOwnerSet([b.toUpperCase().replace(/^0X/, "0x"), a], [a.toLowerCase(), b]), true);
+    assert.equal(sameOwnerSet([a, b], [a]), false, "extra owner");
+    assert.equal(sameOwnerSet([a], [a, b]), false, "missing owner");
+    assert.equal(sameOwnerSet([a, b], [a, a]), false, "a repeated new owner does not count twice");
+    assert.equal(sameOwnerSet([a, a], [a, b]), false);
+    assert.equal(sameOwnerSet([], []), false, "an empty set recovers nothing");
   });
 
   console.log(`\nCANDIDE RECOVERY TEST PASSED — ${pass}/${pass}`);

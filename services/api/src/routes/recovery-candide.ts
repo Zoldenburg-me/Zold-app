@@ -36,6 +36,7 @@ import { operatorLabel, requireOperator } from "../http/guards.js";
 import {
   CANDIDE,
   assertRecoveryModuleDeployed,
+  hasCode,
   isDeployed,
   passkeyAccountAddress,
   prepareSafeSetupOperation,
@@ -321,7 +322,10 @@ export async function finalizeCandideRecovery(
   }
 
   let owners: string[];
-  if (HARNESS.enabled) {
+  // The harness has no bundler, so its Safe is usually not on chain and the
+  // recovered set is assumed; where the harness chain does hold code at the
+  // Safe, its owners are read like anywhere else.
+  if (HARNESS.enabled && !(await hasCode(request.safeAddress))) {
     owners = finalizeError ? [] : newOwners;
   } else {
     try {
@@ -331,7 +335,7 @@ export async function finalizeCandideRecovery(
       finalizeError = `${finalizeError ? `${finalizeError}; ` : ""}could not read Safe owners: ${redactedMessage(err).slice(0, 120)}`;
     }
   }
-  const recovered = newOwners.length > 0 && newOwners.every((o) => owners.includes(o));
+  const recovered = sameOwnerSet(owners, newOwners);
   if (!recovered) {
     return store.updateRecoveryRequest(request.id, {
       candide: {
@@ -351,6 +355,15 @@ export async function finalizeCandideRecovery(
     factors: { ...request.factors, otp: "passed" },
     candide: { ...c, finalizeAttempts: attempts, finalizeError: undefined },
   });
+}
+
+/** The Safe's owners are exactly the recovered set: no owner missing, none
+ *  extra, order and case ignored. A repeated new owner fails closed. */
+export function sameOwnerSet(owners: string[], newOwners: string[]): boolean {
+  const want = new Set(newOwners.map((a) => a.toLowerCase()));
+  const have = new Set(owners.map((a) => a.toLowerCase()));
+  return want.size > 0 && want.size === newOwners.length && have.size === owners.length
+    && have.size === want.size && [...have].every((o) => want.has(o));
 }
 
 /** Finalize every recovery whose grace period has run. The service sponsors

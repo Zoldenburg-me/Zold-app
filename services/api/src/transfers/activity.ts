@@ -88,9 +88,10 @@ const bankRowFromMint = (d: CryptoDeposit): ActivityRow => ({
   amountEur: d.amountEur!,
 });
 
-/** Deposits that are money in: every one but a conversion's EURe output. */
-export function withoutConversionOutputs(deposits: CryptoDeposit[]): CryptoDeposit[] {
-  const isConversionOutput = conversionOutputs(deposits);
+/** Deposits that are money in: every one but a conversion's EURe output,
+ *  a failed transfer's reverse-swap refund included. */
+export function withoutConversionOutputs(deposits: CryptoDeposit[], transfers: Transfer[]): CryptoDeposit[] {
+  const isConversionOutput = conversionOutputs(deposits, transfers);
   return deposits.filter((d) => !(d.token === "EURE" && isConversionOutput(d.txHash, d.logIndex, d.userId)));
 }
 
@@ -119,7 +120,7 @@ const fundingRow = (d: CryptoDeposit): ActivityRow => ({
 /** One user's rows, newest first. The caller has already scoped every source to the user. */
 export function buildActivity({ transfers, deposits, issues, cryptoSends = [] }: ActivitySources): ActivityRow[] {
   const unclaimed = [...issues];
-  const depositRows = withoutConversionOutputs(deposits).flatMap((d): ActivityRow[] => {
+  const depositRows = withoutConversionOutputs(deposits, transfers).flatMap((d): ActivityRow[] => {
     if (!isAcceptedMint(d)) return [fundingRow(d)];
     const i = unclaimed.findIndex((o) => mintMatchesIssue(d, o));
     if (i < 0) return [bankRowFromMint(d)];
