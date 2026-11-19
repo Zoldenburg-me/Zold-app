@@ -61,6 +61,17 @@ for (const line of ["ref DE123456789012345 paid", "DE89370400440532013000ABC"]) 
 }
 console.log("   ok  an IBAN stops at its country's length; the next word and a short reference stay");
 
+// #206: either case is an IBAN; one of the right shape that fails mod-97 is not.
+assert.equal(redactPii("iban de89370400440532013000 refused"), "iban de89…3000 refused");
+assert.equal(redactPii("iban De89 3704 0044 0532 0130 00 refused"), "iban De89…3000 refused");
+assert.equal(redactPii("iban fr14 2004 1010 0505 0001 3m02 606 refused"), "iban fr14…2606 refused");
+assert.equal(redactPii("iban GB82WEST12345698765432 refused"), "iban GB82…5432 refused");
+for (const line of ["ref DE12345678901234567890 paid", "ref DE00 1234 5678 9012 3456 78 paid", "ref de88370400440532013000 paid"]) {
+  assert.equal(redactPii(line), line, `masked a reference that fails mod-97: ${line}`);
+}
+console.log("   ok  an IBAN in any case is masked; a reference of an IBAN's shape that fails mod-97 stays");
+
+
 // #203 L2: national, 00-prefixed and bracketed phones; plus-addressed, percent, uppercase and quoted emails.
 const phones: Array<[string, string]> = [
   ["call +49 (0)30 1234567 now", "call +•••••••••567 now"],

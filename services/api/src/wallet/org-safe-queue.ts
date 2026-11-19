@@ -95,6 +95,8 @@ export function queueSafeOp(args: {
    *  signing: the sign view renders the decoded calls. */
   summary: string;
   prepared: { challenge: `0x${string}`; userOperation: unknown; nonce: bigint };
+  /** The guardian a recovery-guardian op adds; checked again before each signature. */
+  guardianAddress?: `0x${string}`;
   now?: number;
 }): PendingSafeOp {
   assertQueueOpen();
@@ -134,6 +136,7 @@ export function queueSafeOp(args: {
     state: "PENDING",
     signatures: [],
     dropped: [],
+    ...(args.guardianAddress ? { guardianAddress: args.guardianAddress } : {}),
   });
 }
 
