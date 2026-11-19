@@ -9,7 +9,7 @@
 import { Z, api, cap, day, deviceLib, ensureMe, esc, org, readHealth, reviewOn, roleCan, ROLE_WORD } from "./core.js";
 import { META, RENDER } from "./views.js";
 import { render } from "./shell.js";
-import { APP_LINKS, approvalView, deviceKeyView, isCompanyLogin, isCompanyOrg, isOwnCompanyOrg, loadAccess, loadOrgSafe, ORG_RECOVERY } from "./access-model.js";
+import { APP_LINKS, approvalView, deviceKeyView, isCompanyLogin, isCompanyOrg, isOwnCompanyOrg, loadAccess, loadOrgRecovery, loadOrgSafe, ORG_RECOVERY, ORG_RECOVERY_UNARMED } from "./access-model.js";
 
 const settingsBack = `<a class="z-btn z-btn--secondary" href="?view=settings" data-view-link="settings">${Z.icon("arrow_back")}<span>Settings</span></a>`;
 const appBtn = (label, href, variant = "secondary") =>
@@ -80,7 +80,24 @@ function orgSignersCard(s) {
   return card("acc-sign", title, `${outside}${rows([["Account", addr(s.safeAddress)], ["Signatures needed", esc(s.needed)], ...s.owners.map(owner), ...waiting])}`);
 }
 
-const orgRecoveryCard = (yours) => card("acc-rec", "Recovery", ORG_RECOVERY.map((l) => `<p>${esc(l)}</p>`).join(""), yours);
+/* A company org's own Safe's recovery, read from chain on every visit. */
+function orgRecoveryCard(r, yours) {
+  const lines = (ls) => ls.map((l) => `<p>${esc(l)}</p>`).join("");
+  const others = r.otherGuardians?.length
+    ? `<div class="banner warn">${Z.icon("warning")}<span><b>A recovery helper Zold didn’t set up is on the company’s Safe.</b> It can start a recovery that would replace every signer. If no one at the company added it, remove it in Safe{Wallet}.</span></div>${rows(r.otherGuardians.map((a) => ["Not set up in Zold", addr(a)]))}`
+    : "";
+  if (r.status === "unknown") {
+    return card("acc-rec", "Recovery", `<div class="banner warn">${Z.icon("help")}<span><b>Couldn’t check recovery.</b> ${esc(r.error.replace(/[.\s]+$/, ""))}. This is not the same as none.</span></div>`,
+      `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="access-retry">Try again</button>`);
+  }
+  if (r.status === "pending") {
+    const until = r.pending?.executeAfter ? ` It can complete after ${esc(fullDate(new Date(r.pending.executeAfter * 1000)))}.` : "";
+    return card("acc-rec", "Recovery", `<div class="banner warn">${Z.icon("warning")}<span><b>A recovery is under way on the company’s Safe.</b> It would replace every signer.${until} If no one at the company started it, contact support@zoldhq.com now: Zold can’t cancel it from here yet.</span></div>${others}`, yours);
+  }
+  if (r.status === "unarmed") return card("acc-rec", "Recovery", `${others}${lines(ORG_RECOVERY_UNARMED)}`, yours);
+  const queued = r.queued ? `<p class="zb-hint">Adding Zoldenburg UG as the guardian is waiting for the owners’ signatures.</p>` : "";
+  return card("acc-rec", "Recovery", `${others}${lines(ORG_RECOVERY)}${queued}`, yours);
+}
 
 const guardianRow = (g) => {
   if (g.kind === "zoldenburg") return ["Zoldenburg UG", "Checks the person against Monerium’s identity check, and approves from a hardware wallet. Zold’s servers never hold that key."];
@@ -179,7 +196,10 @@ RENDER.access = async () => {
   ]);
   const pay = approvalsCard(members);
   const yours = `<a class="z-btn z-btn--secondary z-btn--sm" href="/app?from=business#security">Your sign-in and recovery${Z.icon("open_in_new")}<span class="z-sr"> (the app)</span></a>`;
-  if (isCompanyOrg(org)) return { html: stack([pay, orgSignersCard(await loadOrgSafe(org.id, api)), orgRecoveryCard(yours)]), bind: retry };
+  if (isCompanyOrg(org)) {
+    const [safe, rec] = await Promise.all([loadOrgSafe(org.id, api), loadOrgRecovery(org.id, api)]);
+    return { html: stack([pay, orgSignersCard(safe), orgRecoveryCard(rec, yours)]), bind: retry };
+  }
   // Every role reads the accounts, so a failed read is a failure, not a no.
   if (isCompanyLogin(me) && org.type === "business" && !acc) {
     return {

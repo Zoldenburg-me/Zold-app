@@ -27,6 +27,7 @@ import { createPaymentLinkRoutes } from "./business/payment-links.js";
 import { createOrgPaymentPageRoutes } from "./business/org-payment-page.js";
 import { createSafeOpRoutes } from "./business/safe-ops.js";
 import { createOrgSafeRoutes } from "./business/org-safe.js";
+import { createOrgRecoveryRoutes } from "./business/org-recovery.js";
 import type { TransferFactory } from "./business/shared.js";
 
 export type { TransferFactory } from "./business/shared.js";
@@ -52,6 +53,7 @@ export function createBusinessRouter(
   r.use(createOrgPaymentPageRoutes(deps));
   r.use(createSafeOpRoutes(deps));
   r.use(createOrgSafeRoutes(deps));
+  r.use(createOrgRecoveryRoutes(deps));
 
   return r;
 }

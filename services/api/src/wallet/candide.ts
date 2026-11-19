@@ -1110,17 +1110,26 @@ export async function readRecoveryState(
       pending: null,
     };
   }
+  return readRecoveryModule(plan.address, moduleAddress);
+}
+
+/**
+ * The recovery module's state for any Safe, by address: always the chain,
+ * never a stored plan. A company's Safe (wallet/org-recovery.ts) is read
+ * through this; a personal one through readRecoveryState.
+ */
+export async function readRecoveryModule(safeAddress: `0x${string}`, moduleAddress: `0x${string}`): Promise<RecoveryModuleState> {
   const enabledRaw = await ethCall(
-    plan.address,
+    safeAddress,
     encodeFunctionData({ abi: SAFE_READ_ABI, functionName: "isModuleEnabled", args: [moduleAddress] }),
   );
   const moduleEnabled = decodeFunctionResult({ abi: SAFE_READ_ABI, functionName: "isModuleEnabled", data: enabledRaw }) as boolean;
   if (!moduleEnabled) return { moduleAddress, moduleEnabled, guardians: [], threshold: 0, pending: null };
   const srm = new SocialRecoveryModule(moduleAddress);
   const [guardians, threshold, request] = await Promise.all([
-    srm.getGuardians(rpc(), plan.address),
-    srm.threshold(rpc(), plan.address),
-    srm.getRecoveryRequest(rpc(), plan.address),
+    srm.getGuardians(rpc(), safeAddress),
+    srm.threshold(rpc(), safeAddress),
+    srm.getRecoveryRequest(rpc(), safeAddress),
   ]);
   const executeAfter = Number(request.executeAfter);
   return {
