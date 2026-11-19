@@ -176,6 +176,7 @@ function phPayBody(u) {
       return `<p class="z-hint">${esc(IBAN_SWITCHED_OFF)}</p>
       ${Z.button({ variant: "primary", full: true, label: "Switch on your IBAN", id: "ph-det-verify" })}`;
     }
+    if (ibanUnderReview(u)) return `<p class="z-hint">${esc(IBAN_UNDER_REVIEW)}</p>`;
     return `<p class="z-hint">Your IBAN appears here once Monerium has verified you and issued it.</p>
       ${Z.button({ variant: "primary", full: true, label: "Verify your identity", id: "ph-det-verify" })}`;
   }
