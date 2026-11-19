@@ -18,6 +18,7 @@
  */
 import { BRIDGE, FX, railFeeEur } from "./config.js";
 import { DEBIT_STEP, safeMovedEur } from "./transfers/safe-moved.js";
+import { isReverseSwapStep } from "./transfers/conversion-outputs.js";
 import { usdIsStaging } from "./usd-token.js";
 import { MONERIUM_NOT_CONNECTED, moneriumLiveFor } from "./adapters/monerium-connection.js";
 import { verifyTypedData } from "viem";
@@ -34,6 +35,7 @@ import {
   prepareTransferLiquidity,
   serializeExecution,
   balanceAfterWrite,
+  deliveredFromReceipt,
 } from "./liquidity.js";
 import {
   abis,
@@ -665,8 +667,12 @@ async function compensateTransferOnce(id: string): Promise<Transfer> {
       /**
        * Reverse the swap and give the euros back. The user bears the round
        * trip's rate movement as an itemized deduction: both legs at execution
-       * prices, the received amount measured as a Safe balance delta. If the
-       * reversal fails the transfer goes to MANUAL_REVIEW.
+       * prices, the received amount summed from the swap's own EURe Transfer
+       * logs into the Safe. The Safe's balance delta is only a check: EURe
+       * from anyone else in the same window is the scanner's to book, and the
+       * swap step names its output logs so the scanner does not book the
+       * refund as money in. If the reversal fails, or there is no receipt to
+       * measure, the transfer goes to MANUAL_REVIEW.
        */
       try {
         const provider = liquidityProvider();
@@ -689,9 +695,23 @@ async function compensateTransferOnce(id: string): Promise<Transfer> {
         recordOutboundIntent(id, txs, "safe.refundTransfer.pending");
         const back = await provider.execute(rq, user.address as `0x${string}`);
         txs.push(...back.txs);
-        const receivedWei =
-          (await balanceAfterWrite(addrs().eure, user.address as `0x${string}`, before)) - before;
+        // On record before measuring: until the step names its output logs,
+        // the scanner leaves every EURe log in the swap's transaction alone.
+        store.updateTransfer(id, { txs });
+        const swap = back.txs.find((x) => isReverseSwapStep(x.step));
+        const output = await deliveredFromReceipt(swap?.hash, addrs().eure, user.address);
+        if (!swap || !output) throw new Error("the reverse swap has no transaction receipt to measure what it delivered");
+        swap.outputLogIndexes = output.logIndexes;
+        store.updateTransfer(id, { txs });
+        const receivedWei = output.wei;
         if (receivedWei <= 0n) throw new Error("reverse swap delivered no EURe to the Safe");
+        const after = await balanceAfterWrite(addrs().eure, user.address as `0x${string}`, before, before + receivedWei);
+        if (after - before < receivedWei) {
+          throw new Error(
+            `the reverse swap delivered €${eur.fromWei(receivedWei)}, but the Safe's balance shows only ` +
+              `€${eur.fromWei(after - before)} more — EURe may have left the Safe while it ran, or the read is behind`,
+          );
+        }
         const eurBack = eur.fromWei(receivedWei);
         // The fee remainder never left EURe; hand it back too.
         const feeBack = Math.min(fee, Math.max(0, safeMovedEur(t) - eurBack));
