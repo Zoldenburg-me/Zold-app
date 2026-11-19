@@ -98,6 +98,14 @@ Zold is redeployed from zero (owner, 2026-11-18). No business account is backed 
 2. Pending-op multi-signature queue (§2.4) with tests, behind a flag. Built: #187, behind `ORG_SAFE_QUEUE_ENABLED`.
 3. Org Safe with **one owner** at threshold 1: the owner who opens the account (owner, 2026-11-18). The plan is stored on the org (#190) and the org-scoped read route and member → signer mapping exist (#193, §7.1(11)–(12)). Deploying it at account opening is built (#192). Still to build: paying from it through the queue (step 2) from day one, never through the personal path and its `assertPasskeyAloneCanSign` check (`wallet/candide.ts:637`).
    - **Deferred: more than one owner**: §2.3's add/remove flow, applying Q1's default threshold and Q6's drop rule as answered. Because payments already go through the queue, adding an owner later is the invite-and-passkey flow plus an add-owner op the current owners sign there (`addOwnerTransaction`, `wallet/safe-signers.ts:158`). Payments, the API and the threshold logic do not change.
+   - **Owner decisions for the multi-owner flow (2026-11-18/19, from the Step 4 pre-map on #188):**
+     1. Removing an owner without a replacement may lower the threshold (2-of-3 → 2-of-2). The remaining owners sign the change.
+     2. The owner being removed may sign their own removal; every current on-chain owner's signature counts.
+     3. Deactivating a member removes their signer on chain at once, in the same flow; there's no "paused signer" state. Until the chain confirms it, they show as "removal pending, can still sign".
+     4. Downgrading `owner` → `admin`/`payer` is the same as removal: they keep org access and lose signing.
+     5. Only an owner may start an owner change (add, remove, downgrade), as today (`routes/orgs.ts:544-555`). Admins queue payments, never signer changes.
+     6. Zold never removes the last passkey signer (guards G1/G4). If the chain shows the org Safe has lost its Zold passkey signer, for example because it was removed in Safe{Wallet}, the Access card says so, and an owner-role member can start guardian recovery. That replaces the whole owner set with a new passkey signer (Candide `finalizeRecovery`). Still to verify: whether an owner left on the Safe can cancel the recovery during the grace period. If so, the UI and docs say it.
+     7. If a new owner's add-op fails, they stay an owner member without a signer, shown as "waiting for the chain", with a Retry that an owner signs. No automatic retry.
 4. Monerium link and IBAN for the org Safe (§3.3), issued at account opening.
 5. Org-scoped Zoldenburg recovery enrolment from the company's IBAN (§6, Q7).
 6. Company orgs never take the personal-backer path; AGENTS.md and docs changes.
