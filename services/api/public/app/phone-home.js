@@ -611,7 +611,8 @@ PH["recovery-alert"] = {
    Account details (a sheet over Home)
    ========================================================================== */
 
-/* The BIC Monerium lists for this IBAN. Read once per IBAN. */
+/* The BIC Monerium lists for this IBAN. Read once per IBAN; a failed read
+   is left a miss, so the next open of the details reads again. */
 async function phLoadBic() {
   const iban = user?.iban || "";
   if (!iban || !user?.id) return null;
@@ -620,11 +621,13 @@ async function phLoadBic() {
   try {
     const r = await api(`/api/users/${user.id}/bic`);
     phCache.bic = r.bic || null;
+    phCache.bicFor = iban;
+    return phCache.bic;
   } catch {
-    phCache.bic = null;
+    // Never another IBAN's BIC for this one; a good one for it is kept.
+    if (phCache.bicFor !== iban) phCache.bic = undefined;
+    return null;
   }
-  phCache.bicFor = iban;
-  return phCache.bic;
 }
 
 /* The account's ENS name, with copy. The API sends ensName only where its
