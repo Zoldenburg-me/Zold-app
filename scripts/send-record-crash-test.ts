@@ -410,7 +410,8 @@ async function parent() {
     const rpc = async (method: string, params: unknown[] = []) =>
       (await (await fetch(node.url, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        // A pooled socket goes stale while spawnSync blocks the loop; a fresh one per call avoids ECONNRESET.
+        headers: { "content-type": "application/json", connection: "close" },
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
       })).json()).result;
     let snapshot = await rpc("evm_snapshot");
