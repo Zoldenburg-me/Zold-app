@@ -506,10 +506,18 @@ export interface CryptoSend {
   amount: string;
   capEur: number;
   /** CREATED: waiting for the passkey. SUBMITTED: claimed and sent to the
-   *  bundler. SENT: included and succeeded. FAILED: refused or reverted. */
+   *  bundler. SENT: included and succeeded. FAILED: refused or reverted.
+   *  A company send's state is its op's (liveCryptoSend, wallet/org-debit.ts);
+   *  stored, it stays CREATED until a receipt check settles a MANUAL_REVIEW op. */
   state: "CREATED" | "SUBMITTED" | "SENT" | "FAILED";
-  /** Unix seconds; an unsigned send expires then and stops counting. */
+  /** Unix seconds; an unsigned send expires then and stops counting. A
+   *  company send's is its op's expiry. */
   deadline: number;
+  /** A company's send: the org Safe op its owners sign in the queue
+   *  (wallet/org-safe-queue.ts), and the org. `userId` is then the member who
+   *  queued it, for attribution only: it is never that person's money. */
+  safeOpId?: string;
+  orgId?: string;
   createdAt: string;
   updatedAt: string;
   authorizedAt?: string;

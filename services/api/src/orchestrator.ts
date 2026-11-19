@@ -147,9 +147,11 @@ export function safeFundedEurToday(userId: string, now = new Date()): number {
     )
     .reduce((sum, t) => sum + t.sendEur, 0) + store.cryptoSends
     // Crypto sends share the budget; an expired unsigned one can never debit.
+    // A company's send is the org Safe's budget (orgSafeSpentEurToday).
     .filter(
       (c) =>
         c.userId === userId &&
+        !c.safeOpId &&
         c.createdAt.slice(0, 10) === day &&
         c.state !== "FAILED" &&
         !(c.state === "CREATED" && nowSec > c.deadline),

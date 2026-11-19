@@ -165,6 +165,7 @@ const scripts = [
 // is named in the output, never passed over in silence.
 const plannedSuites = ["org-owner-changes", "org-draft-queue", "org-crypto-send", "org-iban", "org-documents", "org-recovery"];
 for (const name of plannedSuites) {
+  if (scripts.includes(`${name}:test`)) continue;
   if (existsSync(new URL(`./${name}-test.ts`, import.meta.url))) scripts.push(`${name}:test`);
   else console.log(`check: ${name}:test is not written yet`);
 }

@@ -185,7 +185,8 @@ export function createTransferRouter(deps: TransferDeps) {
           transfers: mine(store.transfers),
           deposits: mine(store.cryptoDeposits),
           issues: mine(store.moneriumIssueOrders),
-          cryptoSends: mine(store.cryptoSends),
+          // A company send the user queued is the company's money, not theirs.
+          cryptoSends: mine(store.cryptoSends.filter((c) => !c.safeOpId)),
         }),
       });
     }),

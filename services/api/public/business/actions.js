@@ -1145,6 +1145,8 @@ export const ACTIONS = {
              <td class="mono">${esc(l.amount)} ${esc(l.asset)}</td></tr>`).join("")}</tbody></table></div>`,
         null, { closeOnly: true });
     }
+    // A company's send is queued for its owners; nobody signs it here.
+    if (r.safeOp) return toast(r.note);
     if (r.cryptoSends?.length) return signCryptoRun(r.cryptoSends);
     if (!r.authorizations?.length) return toast(r.note || "Nothing to approve.");
 

@@ -473,7 +473,8 @@ function cryptoLines(inp: StatementInputs): LineDraft[] {
 function cryptoOutLines(inp: StatementInputs): LineDraft[] {
   return (inp.cryptoSends ?? [])
     // SENT only: lines are never deleted, and a SUBMITTED send may still fail.
-    .filter((c) => c.userId === inp.userId && c.state === "SENT")
+    // A company send (safeOpId) is the account's; its userId only says who queued it.
+    .filter((c) => (c.safeOpId ? !inp.userId && c.orgId === inp.orgId : !!inp.userId && c.userId === inp.userId) && c.state === "SENT")
     .map((c) => ({
       event: "crypto_out" as const,
       key: `cryptosend:${c.id}`,

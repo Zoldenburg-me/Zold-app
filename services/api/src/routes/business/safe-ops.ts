@@ -6,7 +6,9 @@
  * signature is still missing. Only an owner whose passkey is an owner of the
  * Safe on chain signs; the op is relayed by the signature that meets the
  * Safe's own threshold. Nothing here creates an op: payments and owner
- * changes queue theirs (M2.3).
+ * changes queue theirs (M2.3). Before a signature is taken, the op's own
+ * re-checks run (companySendSignRefusal for a crypto send): one that can
+ * never pass invalidates the op.
  */
 import express from "express";
 import { store, type PendingSafeOp } from "../../store.js";
@@ -27,6 +29,7 @@ import {
   type SafeOpChain,
 } from "../../wallet/org-safe-queue.js";
 import { requirePermission, type OrgContext } from "../org-context.js";
+import { companySendSignRefusal } from "../crypto-sends.js";
 import { wrap } from "../util.js";
 import type { OrgRoutes } from "./drafts.js";
 
@@ -66,7 +69,14 @@ function signerView(ctx: OrgContext, op: PendingSafeOp, view: SafeChainView) {
 
 const challengeOf = (op: PendingSafeOp) => bufToB64url(Buffer.from(op.digest.slice(2), "hex"));
 
-export function createSafeOpRoutes(deps: OrgRoutes, chain: SafeOpChain = liveSafeOpChain): express.Router {
+/** An op's own re-checks before a signature (a refusal; `invalidate` ends the op). */
+export type BeforeSign = (op: PendingSafeOp) => Promise<{ status: number; code: string; error: string; invalidate?: string } | undefined>;
+
+export function createSafeOpRoutes(
+  deps: OrgRoutes,
+  chain: SafeOpChain = liveSafeOpChain,
+  beforeSign: BeforeSign = (op) => companySendSignRefusal(op),
+): express.Router {
   const r = express.Router();
 
   /** Flag, org, role and the op, or the refusal. */
@@ -154,6 +164,11 @@ export function createSafeOpRoutes(deps: OrgRoutes, chain: SafeOpChain = liveSaf
       if (refusal) return res.status(refusal.status).json({ error: refusal.error, code: refusal.code });
       if (op.signatures.some((s) => s.memberId === ctx.member.id || s.ownerAddress.toLowerCase() === ownerAddress!.toLowerCase())) {
         return res.status(409).json({ error: "You have signed this operation already.", code: "ALREADY_SIGNED" });
+      }
+      const blocked = await beforeSign(op);
+      if (blocked) {
+        if (blocked.invalidate) store.endPendingSafeOp(op.id, { state: "INVALIDATED", reason: blocked.invalidate });
+        return res.status(blocked.status).json({ error: blocked.error, code: blocked.code });
       }
       if (!(await checkOpAssertion(user!, req.body, challengeOf(op), res))) return;
       const added = store.addSafeOpSignature(op.id, {
