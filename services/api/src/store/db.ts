@@ -43,6 +43,7 @@ import type {
   ServiceCredential,
   Session,
   ShopifyConnection,
+  ShopifyDelivery,
   StoredDocument,
   Transfer,
   User,
@@ -69,6 +70,8 @@ export interface Db {
   /** Shopify stores connected to an organisation as a payments app. The access
    *  token is encrypted at rest and never leaves this process. */
   shopifyConnections: ShopifyConnection[];
+  /** Shopify webhook delivery ids and the shop each is bound to, for 72 hours. */
+  shopifyDeliveries: ShopifyDelivery[];
   /** An org's consent that the checkout service opens requests for one
    *  Shopify shop (merchant-links.ts). Revoked, never deleted. */
   merchantLinks: MerchantLink[];
@@ -141,6 +144,7 @@ export let db: Db = {
   documents: [],
   paymentRequests: [],
   shopifyConnections: [],
+  shopifyDeliveries: [],
   merchantLinks: [],
   processedMoneriumOrders: [],
   processedMoneriumWebhooks: [],
@@ -177,6 +181,7 @@ export function initStore() {
     db.documents ??= [];
     db.paymentRequests ??= [];
     db.shopifyConnections ??= [];
+    db.shopifyDeliveries ??= [];
     db.merchantLinks ??= [];
     db.processedMoneriumOrders ??= [];
     db.processedMoneriumWebhooks ??= [];
