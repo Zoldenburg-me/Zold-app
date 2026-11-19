@@ -1116,6 +1116,12 @@ export const ACTIONS = {
       },
       { okLabel: "Turn off" });
   },
+  /** Queue adding Zoldenburg as the company Safe's recovery guardian, for
+   *  the owners to sign. Owner only; the API decides. */
+  async "org-recovery-setup"() {
+    const r = await api(`/api/orgs/${org.id}/recovery/guardian`, { method: "POST" });
+    toast(r.note || (r.op ? "Adding Zoldenburg UG is already queued for the owners’ signatures." : "Zoldenburg UG is already the guardian of the company’s Safe."));
+  },
   async "review-on"() {
     await api(`/api/orgs/${org.id}/payment-review`, { method: "POST", body: { required: true } });
     await loadOrg(org.id);

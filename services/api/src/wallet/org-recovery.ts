@@ -11,6 +11,9 @@
  *    adds Zoldenburg at threshold 1, prepared for the chain's owners and
  *    queued for their signatures. Idempotent: an open setup op, or the
  *    guardian already on chain, queues nothing.
+ *  - guardianSetupSignRefusal: the same one-guardian and no-pending rules,
+ *    re-read from the module before each owner's signature (and so before
+ *    the signature that relays it): the op may wait days in the queue.
  *  - Organisation.recovery is written once an executed setup op exists and
  *    the chain lists the guardian. It labels the UI; the chain is the truth.
  */
@@ -20,6 +23,8 @@ import type { Account, Member, OrgSafePlan, Organisation } from "../domain/types
 import { OrgSafePlanRefusal, orgSafePlan } from "../domain/org-safe-plan.js";
 import { zoldenburgGuardianAddress, zoldenburgRecoveryEnabled } from "../recovery/zoldenburg-guardian.js";
 import { otherGuardianListed } from "../recovery/one-guardian.js";
+import { redactedMessage } from "../http/log-cause.js";
+import { orgSafeQueueEnabled } from "../config.js";
 import {
   CANDIDE,
   assertRecoveryModuleDeployed,
@@ -112,6 +117,8 @@ export type OrgRecoveryView =
       armed: false;
       addedAt: string | null;
       setupOp: { id: string; state: PendingSafeOp["state"]; expiresAt: string } | null;
+      /** The org Safe queue is switched on, so a setup could be queued. */
+      queueOpen: boolean;
     };
 
 /** The company's recovery as the chain has it. Throws OrgSafePlanRefusal for
@@ -140,6 +147,7 @@ export async function readOrgRecovery(org: Organisation, chain: OrgRecoveryChain
     armed: false,
     addedAt: recovery?.addedAt ?? null,
     setupOp: open ? { id: open.id, state: open.state, expiresAt: open.expiresAt } : null,
+    queueOpen: orgSafeQueueEnabled(),
   };
 }
 
@@ -224,4 +232,38 @@ export async function queueOrgGuardianSetup(args: {
     if (err instanceof SafeOpRefusal) throw new OrgRecoveryRefusal(err.status, err.code, err.message);
     throw err;
   }
+}
+
+type SignRefusal = { status: number; code: string; error: string; invalidate?: string };
+
+/**
+ * Before an owner signs a recovery-guardian op (routes/business/safe-ops.ts):
+ * the deployment still offers the guardian the op adds, and the module, read
+ * now, lists neither it nor another guardian and holds no recovery. Any of
+ * those ends the op (an owner can queue a fresh one once it is resolved); a
+ * read that fails refuses this signature only.
+ */
+export async function guardianSetupSignRefusal(op: PendingSafeOp, chain: OrgRecoveryChain = liveOrgRecoveryChain): Promise<SignRefusal | undefined> {
+  if (op.kind !== GUARDIAN_OP_KIND) return undefined;
+  const guardian = zoldenburgGuardianAddress();
+  if (!guardian || !low(op.userOperation).includes(low(guardian).slice(2))) {
+    return { status: 409, code: "RECOVERY_UNAVAILABLE", error: "This deployment no longer offers the guardian this operation adds. Nothing was signed.", invalidate: "the deployment's guardian changed" };
+  }
+  let state: RecoveryModuleState;
+  try {
+    state = await chain.read(op.safeAddress);
+  } catch (err) {
+    console.error(`recovery-guardian op ${op.id}: module read failed before a signature: ${redactedMessage(err)}`);
+    return { status: 502, code: "RECOVERY_UNREADABLE", error: "Couldn’t check the company’s Safe’s recovery on chain. Nothing was signed; try again." };
+  }
+  if (state.guardians.some((g) => low(g) === low(guardian))) {
+    return { status: 409, code: "ALREADY_GUARDIAN", error: "Zoldenburg is already the Safe’s recovery guardian. Nothing was signed.", invalidate: "the guardian is already on the Safe" };
+  }
+  if (otherGuardianListed(state.guardians, guardian)) {
+    return { status: 409, code: "OTHER_GUARDIAN", error: "A recovery guardian Zold didn’t add is now on the company’s Safe. Nothing was signed: remove it in Safe{Wallet}, then set up recovery again.", invalidate: "another guardian is on the Safe" };
+  }
+  if (state.pending) {
+    return { status: 409, code: "RECOVERY_PENDING", error: "A recovery is pending on the company’s Safe. Nothing was signed: cancel it, then set up recovery again.", invalidate: "a recovery is pending on the Safe" };
+  }
+  return undefined;
 }

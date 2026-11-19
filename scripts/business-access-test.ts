@@ -263,13 +263,39 @@ assert.equal(m.isCompanyLogin(null), false);
 
   // The company's recovery, from GET /api/orgs/:id/recovery: chain-read, never armed yet.
   const rcalls: string[] = [];
-  const base = { state: "set_up", guardians: [], otherGuardians: [], guardianOnChain: false, pendingRecovery: null, armed: false, setupOp: null };
-  assert.equal((await m.loadOrgRecovery("o1", async (p: string) => (rcalls.push(p), base))).status, "none");
+  const base = { state: "set_up", available: true, queueOpen: true, guardians: [], otherGuardians: [], guardianOnChain: false, pendingRecovery: null, armed: false, setupOp: null };
+  const none = await m.loadOrgRecovery("o1", async (p: string) => (rcalls.push(p), base));
+  assert.equal(none.status, "none");
+  assert.equal(none.offered, true);
+  assert.equal(none.canSetUp, true, "an owner may queue the setup");
   assert.deepEqual(rcalls, ["/api/orgs/o1/recovery"]);
-  assert.equal((await m.loadOrgRecovery("o1", async () => ({ ...base, setupOp: { id: "sop_1" } }))).queued, true, "a queued setup is said");
+  const queued = await m.loadOrgRecovery("o1", async () => ({ ...base, setupOp: { id: "sop_1" } }));
+  assert.equal(queued.queued, true, "a queued setup is said");
+  assert.equal(queued.canSetUp, false, "nothing to queue beside an open op");
+  assert.equal((await m.loadOrgRecovery("o1", async () => ({ ...base, otherGuardians: ["0xF"], guardians: ["0xF"] }))).canSetUp, false, "a foreign guardian refuses the setup, so no button");
+  assert.equal((await m.loadOrgRecovery("o1", async () => ({ ...base, queueOpen: false }))).canSetUp, false, "queue off: the API would refuse");
+  // No Zoldenburg guardian in this deployment: "not offered", never "not set up".
+  for (const r of [{ ...base, available: false }, { ...base, available: undefined }, { state: "not_set_up", available: false }]) {
+    const v = await m.loadOrgRecovery("o1", async () => r);
+    assert.equal(v.status, "none");
+    assert.equal(v.offered, false, JSON.stringify(r));
+    assert.equal(v.canSetUp, false);
+  }
+  assert.match(m.ORG_RECOVERY_NOT_OFFERED[0], /doesn’t offer Zoldenburg UG/);
+  assert.doesNotMatch(m.ORG_RECOVERY_NOT_OFFERED.join(" "), /hasn’t set up recovery/);
+  assert.equal((await m.loadOrgRecovery("o1", async () => ({ state: "not_set_up", available: true }))).canSetUp, false, "no Safe yet: nothing to add a guardian to");
+  // The card: the not-offered copy, and the button only for an owner when canSetUp, wired to the queue route.
+  const card = view.slice(view.indexOf("function orgRecoveryCard"), view.indexOf("const guardianRow"));
+  assert.match(card, /if \(!r\.offered\) return card\([^\n]*ORG_RECOVERY_NOT_OFFERED/);
+  assert.match(card, /r\.canSetUp && org\.role === "owner"[\s\S]*data-act="org-recovery-setup"/);
+  const actions = readFileSync(path.join(ROOT, "services/api/public/business/actions.js"), "utf8");
+  const act = actions.slice(actions.indexOf('async "org-recovery-setup"'));
+  assert.match(act.slice(0, 300), /api\(`\/api\/orgs\/\$\{org\.id\}\/recovery\/guardian`, \{ method: "POST" \}\)/, "the button queues through the existing route");
   const unarmed = await m.loadOrgRecovery("o1", async () => ({ ...base, guardians: ["0xZ"], guardianOnChain: true }));
   assert.equal(unarmed.status, "unarmed");
-  assert.match(m.ORG_RECOVERY_UNARMED[0], /isn’t armed until the company’s IBAN is set up/);
+  assert.match(m.ORG_RECOVERY_UNARMED[0], /isn’t armed yet/);
+  assert.match(m.ORG_RECOVERY_UNARMED[0], /1 € enrolment payment from the company’s IBAN/);
+  assert.doesNotMatch(m.ORG_RECOVERY_UNARMED[0], /until the company’s IBAN is set up/, "the IBAN alone does not arm it");
   assert.match(m.ORG_RECOVERY_UNARMED[0], /won’t sign a recovery/);
   const foreign = await m.loadOrgRecovery("o1", async () => ({ ...base, guardians: ["0xZ", "0xF"], guardianOnChain: true, otherGuardians: ["0xF"] }));
   assert.deepEqual(foreign.otherGuardians, ["0xF"], "a guardian Zold didn't add is flagged, not hidden");
