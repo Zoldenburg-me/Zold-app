@@ -556,6 +556,9 @@ export async function settleConvertedDeposit(
  * and the row is settled against its conversion intent, as the route would
  * have done. No receipt, or no answer: the row stays as it is. Included but
  * reverted: nothing converted, and the row stays unconfirmed for review.
+ * Landed but not settled (no intent, or a failed read while settling): the
+ * row is refused for review, never credited. The step always carries the
+ * swap's output log indexes, empty when the scanner booked them first.
  * Runs before a scan, so the step is on the row before its logs are read.
  */
 export async function settleUnconfirmedConversions(outcome = userOperationOutcome): Promise<void> {
@@ -579,12 +582,41 @@ export async function settleUnconfirmedConversions(outcome = userOperationOutcom
       });
       continue;
     }
-    const txs = [...rest, { step: "safe.swap(usdc->eure)", hash: op.txHash }, { step: "userOperation", hash: userOpHash }];
-    const executed = store.updateCryptoDeposit(d.id, { reason: "the swap went through; recording what arrived", txs });
     const user = store.findUser(d.userId);
+    if (!user) continue;
+    /**
+     * The swap's own EURe logs, read before the step is rewritten. A swap
+     * step never lands on the row without them: one without would make every
+     * EURe log in the transaction conversion output, and EURe the scanner
+     * already booked from it would drop out of the books. A failed read
+     * leaves the row as it is, for the next poll.
+     */
+    let output: Awaited<ReturnType<typeof eureSwappedOut>>;
+    try {
+      output = await eureSwappedOut(op.txHash, userOpHash, user.address);
+    } catch (err) {
+      console.error(`crypto-in: deposit ${d.id}: output read for swap ${op.txHash} failed: ${describeCause(err)}`);
+      continue;
+    }
+    if (!output) continue;
+    // Output the scanner booked first stays its record, as settling would leave it.
+    const booked = output.logIndexes.some((i) => store.findCryptoDeposit(op.txHash, i));
+    const txs = [
+      ...rest,
+      { step: "safe.swap(usdc->eure)", hash: op.txHash, outputLogIndexes: booked ? [] : output.logIndexes },
+      { step: "userOperation", hash: userOpHash },
+    ];
     const intent = d.conversionIntent;
     // Without the signed quote there is no floor to settle against.
-    if (!user || !intent) continue;
+    if (!intent) {
+      store.updateCryptoDeposit(d.id, {
+        holding: "refused",
+        reason: "the swap went through, but its signed quote was not kept — nothing has been credited; it is being checked and will not be offered again",
+        txs,
+      });
+      continue;
+    }
+    const executed = store.updateCryptoDeposit(d.id, { reason: "the swap went through; recording what arrived", txs });
     try {
       const receipt = await publicClient.getTransactionReceipt({ hash: op.txHash as `0x${string}` });
       // The block before the swap: what the Safe held when it ran.
@@ -607,7 +639,8 @@ export async function settleUnconfirmedConversions(outcome = userOperationOutcom
     } catch (err) {
       console.error(`crypto-in: deposit ${d.id}: swap ${op.txHash} executed but was not recorded: ${describeCause(err)}`);
       store.updateCryptoDeposit(d.id, {
-        reason: "the swap went through, but what arrived could not be recorded — it is being checked and will not be offered again",
+        holding: "refused",
+        reason: "the swap went through, but what arrived could not be recorded — nothing has been credited; it is being checked and will not be offered again",
       });
     }
   }

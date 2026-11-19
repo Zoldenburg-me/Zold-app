@@ -487,6 +487,7 @@ await check("only the logs a swap delivered are conversion output; an unsettled 
 
 await check("an uncertain swap names its transaction once its userOp resolves, and stays put until then", async () => {
   const { conversionOutputs } = await import("../services/api/src/transfers/conversion-outputs.js");
+  const { ENTRYPOINT_V9 } = await import("abstractionkit");
   const { settleUnconfirmedConversions } = await import("../services/api/src/adapters/crypto-deposits.js");
   const u = mkUser();
   const op = "0x" + "e1".repeat(32);
@@ -502,15 +503,38 @@ await check("an uncertain swap names its transaction once its userOp resolves, a
   await settleUnconfirmedConversions(async () => { throw new Error("bundler down"); });
   assert.deepEqual(row().txs, d.txs, "an unreadable answer changes nothing");
 
-  await settleUnconfirmedConversions(answer({ success: true, txHash: tx }));
-  assert.ok(row().txs.some((t) => t.step === "safe.swap(usdc->eure)" && t.hash === tx), "the swap step names the transaction");
+  // Landed, but its receipt cannot be read: the step is not rewritten, so it
+  // never claims the whole transaction, and the next sweep tries again.
+  const { publicClient, addrs } = await import("../services/api/src/chain.js");
+  const realReceipt = publicClient.getTransactionReceipt;
+  (publicClient as any).getTransactionReceipt = async () => { throw new Error("rpc down"); };
+  try {
+    await settleUnconfirmedConversions(answer({ success: true, txHash: tx }));
+    assert.deepEqual(row().txs, d.txs, "an unreadable output changes nothing");
+    // The bundle: the swap's EURe to the Safe at log 1, then the op's event.
+    const word = (a: string) => "0x" + a.slice(2).toLowerCase().padStart(64, "0");
+    (publicClient as any).getTransactionReceipt = async () => ({
+      blockNumber: 10n,
+      logs: [
+        { address: addrs().eure, logIndex: 1, data: "0x" + (87n * 10n ** 18n).toString(16).padStart(64, "0"),
+          topics: ["0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef", word("0x" + "77".repeat(20)), word(u.address)] },
+        { address: ENTRYPOINT_V9, logIndex: 2, data: "0x", topics: ["0x49628fd1471006c1482da88028e9ce4dbb080b815c9b0344d39e5a8e6ec1419f", op] },
+      ],
+    });
+    await settleUnconfirmedConversions(answer({ success: true, txHash: tx }));
+  } finally {
+    (publicClient as any).getTransactionReceipt = realReceipt;
+  }
+  assert.ok(row().txs.some((t) => t.step === "safe.swap(usdc->eure)" && t.hash === tx && t.outputLogIndexes?.join() === "1"),
+    "the swap step names the transaction and the logs it delivered");
   assert.ok(row().txs.some((t) => t.step === "userOperation" && t.hash === op), "the userOp hash is kept beside it");
   assert.ok(!row().txs.some((t) => t.step.endsWith(".unconfirmed")), "nothing is left to resolve");
   const outputs = conversionOutputs(store.cryptoDeposits);
   assert.ok(outputs(tx, 1, u.id), "the arriving EURe is the swap's output, not money in");
-  assert.ok(!outputs(tx, 1, "someone-else"), "and never another user's payment in the same bundle");
-  assert.equal(row().holding, "unconfirmed", "with no intent to settle against, it waits for review");
-  assert.match(depositConversionBlocker(u, row())!, /may still land/i, "and is not offered again");
+  assert.ok(!outputs(tx, 3, u.id), "and any other EURe log in the bundle is money in");
+  assert.equal(row().holding, "refused", "with no intent to settle against, it is left for review");
+  assert.ok(!row().creditedEur, "and nothing is credited");
+  assert.match(depositConversionBlocker(u, row())!, /under review/i, "and is not offered again");
 
   const rev = mkDeposit(u.id, { holding: "unconfirmed", txs: [{ step: "safe.swap(usdc->eure).unconfirmed", hash: "0x" + "e2".repeat(32) }] });
   const revTx = "0x" + "f2".repeat(32);
