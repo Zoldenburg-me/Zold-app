@@ -78,7 +78,9 @@ const BARE_NAME = /(?<![\w$.])(\w*[nN]ame)\b(?!\s*:(?!:))/g;
 const PERSON = "user|users|member|members|holder|org|orgs|organization|customer|sender|recipient|payee|beneficiary|owner|guardian|profile|person|contact|company";
 // What comes before "name" in a person-shaped name. `order` is here so an
 // order name is caught outside routes/shopify.ts, bare as well as a field.
-const PERSON_PREFIX = new RegExp(`(^|${PERSON}|first|last|full|legal|display|given|family|middle|nick|sur|account|merchant|business|trade|party|payer|receiver|signer|client|employee|order)$`, "i");
+// The payment-side roles are prefixes only, not whole-object values, so a
+// bare `tenant` or `director` is not read as a person.
+const PERSON_PREFIX = new RegExp(`(^|${PERSON}|first|last|full|legal|display|given|family|middle|nick|sur|account|merchant|business|trade|party|payer|receiver|signer|client|employee|partner|supplier|vendor|contractor|buyer|seller|debtor|creditor|landlord|tenant|representative|director|order)$`, "i");
 const personShaped = (id: string) => PERSON_PREFIX.test(id.slice(0, -4));
 const PERSON_VALUE = new RegExp(`(?<![\\w$])(${PERSON})\\b(?!\\s*(\\?\\.|\\.|\\[|:(?!:)))`, "g");
 // Names that are not a person's or a company's, by receiver or identifier.
@@ -170,10 +172,12 @@ assert.ok(!caught("`wrote ${fileName}`"));
 assert.ok(!caught("`rpc for ${chainName} (${cfg.chainName})`"));
 assert.ok(!caught("`shopify: order ${orderName} at ${shop}`", "routes/shopify.ts"));
 assert.ok(caught("`order ${orderName}`", "routes/business.ts"), "bare orderName outside Shopify");
-for (const id of ["firstName", "lastName", "legalName", "displayName", "userName", "username", "fullName", "payeeName", "accountHolderName", "companyName"]) {
+for (const id of ["firstName", "lastName", "legalName", "displayName", "userName", "username", "fullName", "payeeName", "accountHolderName", "companyName", "partnerName", "holderName", "vendorName", "debtorName", "creditorName"]) {
   assert.ok(caught(`\`for \${${id}}\``), `bare ${id}`);
   assert.ok(caught(`\`for \${x.${id}}\``), `field ${id}`);
 }
+assert.ok(caught("`partner ${p.partnerName}`"), "p.partnerName");
+assert.ok(caught("`holder ${p.holderName}`"), "p.holderName");
 
 // 3. the issue-order line names its holder through the label.
 const sandbox = readFileSync(path.join(SRC, "adapters/monerium-sandbox.ts"), "utf8");
