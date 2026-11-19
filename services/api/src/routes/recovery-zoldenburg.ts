@@ -953,16 +953,16 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
     "/admin/recoveries/guardian-check",
     wrap(async (req, res) => {
       if (!requireOperator(req, res)) return;
-      const guardian = assertZoldenburgRecoveryEnabled();
+      const guardianAddress = assertZoldenburgRecoveryEnabled();
       const issuedAt = typeof req.body?.issuedAt === "string" ? req.body.issuedAt : "";
       const age = Date.now() - Date.parse(issuedAt);
       if (!Number.isFinite(age) || age < -60_000 || age > 15 * 60_000) {
         return res.status(400).json({ error: "the check expired — start it again", code: "STALE" });
       }
       const digest = hashTypedData(guardianCheckTypedData(issuedAt) as any);
-      await assertGuardianSignature(digest, req.body?.signature, guardian);
-      console.log(`RECOVERY: guardian wallet check passed for ${guardian} (${operatorLabel(req)})`);
-      res.json({ ok: true, guardianAddress: guardian });
+      await assertGuardianSignature(digest, req.body?.signature, guardianAddress);
+      console.log(`RECOVERY: guardian wallet check passed for ${guardianAddress} (${operatorLabel(req)})`);
+      res.json({ ok: true, guardianAddress });
     }),
   );
 
