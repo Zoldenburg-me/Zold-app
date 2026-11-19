@@ -52,6 +52,7 @@ import type {
   ServiceCredential,
   Session,
   ShopifyConnection,
+  ShopifyDelivery,
   StoredDocument,
   Transfer,
   User,
@@ -742,6 +743,23 @@ export const store = {
   },
   shopifyConnectionsForOrg(orgId: string) {
     return db.shopifyConnections.filter((c) => c.orgId === orgId);
+  },
+  shopifyDelivery(id: string): ShopifyDelivery | undefined {
+    return db.shopifyDeliveries.find((d) => d.id === id);
+  },
+  /** Record a delivery the first time it arrives, dropping those past 72 hours. */
+  recordShopifyDelivery(d: ShopifyDelivery) {
+    const stale = Date.now() - 72 * 3_600_000;
+    db.shopifyDeliveries = db.shopifyDeliveries.filter((x) => Date.parse(x.at) > stale);
+    db.shopifyDeliveries.push(d);
+    persist();
+    return d;
+  },
+  markShopifyDeliveryHandled(id: string) {
+    const d = db.shopifyDeliveries.find((x) => x.id === id);
+    if (!d || d.handled) return;
+    d.handled = true;
+    persist();
   },
 
   // ── Merchant links (merchant-links.ts) ────────────────────────────────────

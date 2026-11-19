@@ -110,20 +110,9 @@ export function externalHttpUrl(raw: unknown): string | undefined {
 // header that picks the connection is not covered by the signature. A signed
 // body is therefore bound to the first shop it arrived under, by Shopify's
 // delivery id: the same id under another shop is refused, and a redelivery of
-// one already handled is acknowledged without being processed again. Shopify
-// retries for 48 hours, so ids are kept 72; in memory, so after a restart the
-// order-level idempotency (shop + order id) is what holds.
-
-const DELIVERY_TTL_MS = 72 * 3_600_000;
-const DELIVERIES_MAX = 50_000;
-const deliveries = new Map<string, { shop: string; at: number; handled: boolean }>();
-
-function pruneDeliveries(now: number) {
-  for (const [id, d] of deliveries) {
-    if (deliveries.size <= DELIVERIES_MAX && now - d.at < DELIVERY_TTL_MS) break;
-    deliveries.delete(id);
-  }
-}
+// one already handled is acknowledged without being processed again. The
+// binding is in the store (store.shopifyDelivery), so it holds across a
+// restart; Shopify retries for 48 hours and ids are kept 72.
 
 /** Requests being opened right now, by shop and Shopify id: a concurrent
  *  delivery of the same order or session waits for the first one's request
@@ -676,19 +665,16 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       if (!c) return;
       const deliveryId = String(req.header("x-shopify-webhook-id") ?? "").trim();
       if (!deliveryId || deliveryId.length > 200) return res.status(400).json({ error: "X-Shopify-Webhook-Id is required" });
-      const now = Date.now();
-      pruneDeliveries(now);
-      const seen = deliveries.get(deliveryId);
+      const seen = store.shopifyDelivery(deliveryId);
       if (seen && seen.shop !== c.shop) {
         return res.status(401).json({ error: "this delivery was signed for another store" });
       }
       if (seen?.handled) return res.status(200).json({ ok: true, duplicate: true });
-      if (!seen) deliveries.set(deliveryId, { shop: c.shop, at: now, handled: false });
+      if (!seen) store.recordShopifyDelivery({ id: deliveryId, shop: c.shop, at: new Date().toISOString(), handled: false });
       // Handled once it has been answered without a server error; a failed one
       // is processed again on Shopify's retry.
       res.once("finish", () => {
-        const d = deliveries.get(deliveryId);
-        if (d && res.statusCode < 500) d.handled = true;
+        if (res.statusCode < 500) store.markShopifyDeliveryHandled(deliveryId);
       });
       const topic = String(req.header("x-shopify-topic") ?? "");
       const o = req.body ?? {};

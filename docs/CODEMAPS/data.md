@@ -13,7 +13,7 @@ Personal side
 - paymentRequests (source: app | shopify; `source.linkId` when the checkout opened it) · receiptShares · documents
 - cryptoDeposits (arrivedAt = block time) · conversionSweeps · moneriumIssueOrders
 - processedMoneriumOrders / processedMoneriumWebhooks (idempotency)
-- recoveryRequests · safeOps (org Safe ops awaiting owner signatures; ended, never deleted) · shopifyConnections · merchantLinks (revoked, never deleted; secret sealed) · audit
+- recoveryRequests · safeOps (org Safe ops awaiting owner signatures; ended, never deleted) · shopifyConnections · shopifyDeliveries (webhook delivery id → shop, 72 h) · merchantLinks (revoked, never deleted; secret sealed) · audit
 
 Organisations (`entity` company | sole_trader; a company's own Safe is `safe`,
 addressed, written only by setOrgSafePlan, never in users.passkeySafe)
