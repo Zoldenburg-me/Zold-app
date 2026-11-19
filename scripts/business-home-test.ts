@@ -117,7 +117,7 @@ assert.equal(done(m.setupSteps({ passkey: { credentialId: "k" } }, [], { noSafe:
 {
   // The gate as GET .../accounts words it (routes/orgs.ts gateOf).
   const noSafe = { ...gatedEurAccount("acc_c", "org_c"), gate: { reason: "The company’s Safe is not set up yet, so nothing can be paid into or sent from this account." } };
-  const safeNoIban = { ...gatedEurAccount("acc_c", "org_c", { address: `0x${"cc".repeat(20)}` }), gate: { reason: "The company’s Safe is set up, but issuing the company’s IBAN onto it is not yet live, so nothing can be sent from this account." } };
+  const safeNoIban = { ...gatedEurAccount("acc_c", "org_c", { address: `0x${"cc".repeat(20)}` }), gate: { reason: "The company’s Safe is set up, but issuing the company’s IBAN onto it is not yet live, so no bank transfer can go into or out of this account. A payment to a crypto wallet is queued for the owners to sign." } };
   const company = companyOrg("org_c", "Lindner Bau");
   assert.match(m.companyAccountNote(company, [noSafe]), /Safe is not set up yet/, "no Safe yet: says so");
   assert.match(m.companyAccountNote(company, [safeNoIban]), /Safe is set up, but issuing the company’s IBAN/, "Safe deployed, no IBAN: says the IBAN is not live");
