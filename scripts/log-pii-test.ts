@@ -49,6 +49,40 @@ assert.equal(describeCause(new Error("no account for bo.ross@mail.example.com"))
 assert.equal(redactPii("call +31612345678 or +44 20 7946 0958."), "call +••••••••678 or +•••••••••958.");
 console.log("   ok  compact, spaced and non-German IBANs, multi-dot email domains and phones are masked");
 
+// #203 L1: an IBAN is bounded by its country's length and its groups of four.
+assert.equal(redactPii("IBAN DE89 3704 0044 0532 0130 00 INVALID"), "IBAN DE89…3000 INVALID");
+assert.equal(redactPii("DE89 3704 0044 0532 0130 00 and more words"), "DE89…3000 and more words");
+assert.equal(redactPii("BE68 5390 0754 7034 FAIL"), "BE68…7034 FAIL");
+assert.equal(redactPii("NO93 8601 1117 947 closed"), "NO93…7947 closed");
+assert.equal(redactPii("MT84 MALT 0110 0001 2345 MTLC AST0 01S rejected"), "MT84…001S rejected");
+assert.equal(redactPii("(DE89370400440532013000)"), "(DE89…3000)");
+for (const line of ["ref DE123456789012345 paid", "DE89370400440532013000ABC"]) {
+  assert.equal(redactPii(line), line, `masked a non-IBAN: ${line}`);
+}
+console.log("   ok  an IBAN stops at its country's length; the next word and a short reference stay");
+
+// #203 L2: national, 00-prefixed and bracketed phones; plus-addressed, percent, uppercase and quoted emails.
+const phones: Array<[string, string]> = [
+  ["call +49 (0)30 1234567 now", "call +•••••••••567 now"],
+  ["call 0049-30-1234567 now", "call +••••••••••567 now"],
+  ["call 030/1234567 now", "call +•••••••567 now"],
+  ["call (030) 123 4567 now", "call +•••••••567 now"],
+  ["call +1 (555) 123-4567 now", "call +••••••••567 now"],
+  ["(tel +49 151 12345678)", "(tel +••••••••••678)"],
+  ["+49 151 12345678 1795048251 at", "+••••••••••678 1795048251 at"],
+];
+for (const [raw, want] of phones) assert.equal(redactPii(raw), want, raw);
+const emails: Array<[string, string]> = [
+  ["to ada+zold@example.com", "to ad••••••@example.com"],
+  ["to foo%bar@example.com", "to fo•••••@example.com"],
+  ["to ADA@EXAMPLE.COM.", "to AD•@EXAMPLE.COM."],
+  ['to "ada@example.com" and <bo@sub.example.org>', 'to "ad•@example.com" and <b•@sub.example.org>'],
+  ["to [ada.l@example.co.uk], (ada@example.com)", "to [ad•••@example.co.uk], (ad•@example.com)"],
+];
+for (const [raw, want] of emails) assert.equal(redactPii(raw), want, raw);
+assert.equal(describeCause(new Error("to Ada.L+x@Mail.Example.COM")), "Error: to Ad•••••@<host>");
+console.log("   ok  national, 00-prefixed and bracketed phones and plus, percent, uppercase and quoted emails are masked");
+
 // A stack frame keeps redacting its URL and masks what it carries.
 const framed = new Error("boom");
 framed.stack = [
@@ -81,6 +115,11 @@ const keep = [
   "balance delta +1000000000000000000 wei",
   "counterpart.identifier.iban is required",
   "2+2 = 4 and 10+12345678 lines",
+  "settled 2026-11-19T12:05:30Z, due 05-11-2026 and 05/11/2026",
+  "order 000123456 and id 0301234567 and 0.0012345678 ETH",
+  "amount 1,234,567.89 EUR, nonce 00042",
+  "hash 0xdeadbeef00491234567890 and uuid 0049abcd-3012-4567-8901-234567890123",
+  "v0.12.3 at 12:00, 3 of 10 - 1234567 left",
 ];
 for (const line of keep) {
   assert.equal(redactPii(line), line, `masked a non-PII line: ${line}`);
@@ -88,12 +127,15 @@ for (const line of keep) {
   // describeCause also replaces bare hosts, and a dotted field path reads as one.
   if (!line.includes("counterpart.")) assert.equal(describeCause(new Error(line)), `Error: ${line}`);
 }
-console.log("   ok  amounts, block numbers, tx hashes, 0x addresses and order ids are not masked");
+console.log("   ok  amounts, block numbers, dates, timestamps, tx hashes, 0x addresses and ids are not masked");
 
 // Masking runs after the line is cut to MAX_LOGGED, so a huge echoed body stays cheap.
 const t0 = Date.now();
 describeCause(new Error("DE89 ".repeat(50_000) + "a.".repeat(50_000) + "@" + "+1 ".repeat(50_000)));
 redactedMessage(new Error("x".repeat(200_000) + "@"));
+redactPii("+1" + "1".repeat(498) + "x");
+redactPii("0049" + " 1".repeat(248) + "x");
+redactPii("DE89" + " ABCD".repeat(100) + "x");
 assert.ok(Date.now() - t0 < 1000, "masking a long message is bounded");
 console.log("   ok  masking is bounded on a long message");
 

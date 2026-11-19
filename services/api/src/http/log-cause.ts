@@ -28,15 +28,47 @@ export function redactUrls(text: string): string {
  * Personal data a provider's error can echo: an email, an IBAN, a phone
  * number. Each is replaced by a mask that still says which one it was.
  *
- * An IBAN needs a SEPA country code and two check digits, so an order id, a
- * hex address or a tx hash is not one; a phone needs a leading + and 8 to 15
- * digits, so an amount or a block number is not one. An email's domain may
- * already be `<host>`, since redactUrls runs first.
+ * An IBAN is a SEPA country code, two check digits, then either one compact
+ * run of exactly that country's length or groups of four with single spaces
+ * cut at that length; the word after it (`… 0130 00 INVALID`) and a
+ * reference that is too short for its country stay. An order id, a hex
+ * address or a tx hash is not one.
+ *
+ * A phone is `+` or `00` and a country code, or a national number with a
+ * leading 0 (`030/1234567`, `(030) 123 4567`), then digit groups separated by
+ * a space, `-` or `/`, with an optional `(0)` trunk and parentheses around the
+ * area code; 8 to 15 digits, 16 with the trunk. A `00` or national number
+ * needs a separator, and a national one a subscriber group of three or more
+ * digits, so an amount, an id, a date, a timestamp or a block number is not
+ * one; a compact national number (`0301234567`) is not covered. Groups past
+ * the digit limit are left unmasked rather than the whole match.
+ *
+ * An email's local part may carry `+` and `%`; its domain may already be
+ * `<host>`, since redactUrls runs first.
  */
-const EMAIL_PATTERN = /[\w.+-]+@(?:<host>|[\w-]+(?:\.[\w-]+)*\.[A-Za-z]{2,})/g;
-const SEPA = "AD|AT|BE|BG|CH|CY|CZ|DE|DK|EE|ES|FI|FR|GB|GG|GI|GR|HR|HU|IE|IM|IS|IT|JE|LI|LT|LU|LV|MC|MT|NL|NO|PL|PT|RO|SE|SI|SK|SM|VA";
-const IBAN_PATTERN = new RegExp(`\\b(?:${SEPA})\\d{2}(?: ?[A-Z0-9]){11,30}(?![A-Za-z0-9])`, "g");
-const PHONE_PATTERN = /(?<![\w+])\+\d(?:[ -]?\d){7,14}(?![\d-])/g;
+const EMAIL_PATTERN = /[\w.%+-]+@(?:<host>|[\w-]+(?:\.[\w-]+)*\.[A-Za-z]{2,})/g;
+const IBAN_LENGTH: Record<string, number> = {
+  AD: 24, AT: 20, BE: 16, BG: 22, CH: 21, CY: 28, CZ: 24, DE: 22, DK: 18, EE: 20,
+  ES: 24, FI: 18, FR: 27, GB: 22, GG: 22, GI: 23, GR: 27, HR: 21, HU: 28, IE: 22,
+  IM: 22, IS: 26, IT: 27, JE: 22, LI: 21, LT: 20, LU: 20, LV: 21, MC: 27, MT: 31,
+  NL: 18, NO: 15, PL: 28, PT: 25, RO: 24, SE: 24, SI: 19, SK: 24, SM: 27, VA: 22,
+};
+const SEPA = Object.keys(IBAN_LENGTH).join("|");
+const IBAN_PATTERN = new RegExp(
+  `\\b(?:${SEPA})\\d{2}(?:[A-Z0-9]{11,30}|(?: [A-Z0-9]{4}){2,7}(?: [A-Z0-9]{1,3})?)(?![A-Za-z0-9])`,
+  "g",
+);
+const PHONE_SEP = String.raw`(?: ?[/-] ?| )`;
+const PHONE_GROUP = String.raw`(?:\(\d{1,5}\)|\d+)`;
+const PHONE_PATTERN = new RegExp(
+  String.raw`(?<![\w.,+/-])(?:` +
+    String.raw`\+[1-9]\d{0,2}(?:${PHONE_SEP}?\(0\))?${PHONE_SEP}?${PHONE_GROUP}(?:${PHONE_SEP}${PHONE_GROUP}){0,5}` +
+    String.raw`|00[1-9]\d{0,2}(?:${PHONE_SEP}?\(0\))?(?:${PHONE_SEP}${PHONE_GROUP}){1,6}` +
+    String.raw`|(?:\(0\d{1,4}\)|0\d{1,4})${PHONE_SEP}\d{3,}(?:${PHONE_SEP}${PHONE_GROUP}){0,4}` +
+    String.raw`)(?![\w/-])`,
+  "g",
+);
+const PHONE_LAST_GROUP = new RegExp(`${PHONE_SEP}${PHONE_GROUP}$`);
 
 /** a•••@domain: the shape recovery/candide-guardian.ts maskTarget shows. */
 export function maskEmail(email: string): string {
@@ -57,8 +89,29 @@ export function maskPhone(phone: string): string {
   return `+${"•".repeat(Math.max(0, digits.length - 3))}${digits.slice(-3)}`;
 }
 
+/** Masks the country's IBAN length of a spaced match and keeps the groups
+ *  after it; a shorter match, or a compact one of another length, is not an
+ *  IBAN. */
+function maskIbanMatch(match: string): string {
+  const want = IBAN_LENGTH[match.slice(0, 2)];
+  if (!match.includes(" ")) return match.length === want ? maskIban(match) : match;
+  let seen = 0;
+  let end = 0;
+  while (end < match.length && seen < want) if (match[end++] !== " ") seen++;
+  return seen < want ? match : maskIban(match.slice(0, end)) + match.slice(end);
+}
+
+function maskPhoneMatch(match: string): string {
+  const digitCount = (s: string) => s.replace(/\D/g, "").length;
+  const max = /\(0\)/.test(match) ? 16 : 15;
+  let phone = match;
+  while (digitCount(phone) > max && PHONE_LAST_GROUP.test(phone)) phone = phone.replace(PHONE_LAST_GROUP, "");
+  const n = digitCount(phone);
+  return n < 8 || n > max ? match : maskPhone(phone) + match.slice(phone.length);
+}
+
 export function redactPii(text: string): string {
-  return text.replace(EMAIL_PATTERN, maskEmail).replace(IBAN_PATTERN, maskIban).replace(PHONE_PATTERN, maskPhone);
+  return text.replace(EMAIL_PATTERN, maskEmail).replace(IBAN_PATTERN, maskIbanMatch).replace(PHONE_PATTERN, maskPhoneMatch);
 }
 
 /** Only this much of a line is redacted and logged: the host pattern
