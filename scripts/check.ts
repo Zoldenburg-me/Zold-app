@@ -130,6 +130,7 @@ const scripts = [
   "admin:ui:test",
   "review-resolution:test",
   "invoicing:test",
+  "invoice-form:test",
   "invoicing-profile:test",
   "send-link:test",
   "send-link-ui:test",
