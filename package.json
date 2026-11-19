@@ -107,6 +107,7 @@
     "monerium:apikeys:test": "tsx scripts/monerium-apikeys-test.ts",
     "monerium:iban-binding:test": "tsx scripts/monerium-iban-binding-test.ts",
     "monerium:money-in:test": "tsx scripts/monerium-money-in-test.ts",
+    "log-names:test": "tsx scripts/log-names-test.ts",
     "monerium:profile:test": "tsx scripts/monerium-profile-kind-test.ts",
     "payment-review:test": "tsx scripts/payment-review-test.ts",
     "deposit-invoice-link:test": "tsx scripts/deposit-invoice-link-test.ts",
