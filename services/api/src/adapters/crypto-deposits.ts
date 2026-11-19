@@ -202,6 +202,11 @@ export function depositConversionBlocker(user: User, deposit: CryptoDeposit): st
   if (deposit.holding === "unconfirmed") {
     return "a conversion of this deposit was sent and may still land — it has to be checked on chain before it can be converted again";
   }
+  // Written before the swap was submitted and never cleared: the process
+  // stopped before the outcome was recorded, so the swap may have landed.
+  if (deposit.conversionIntent) {
+    return "a conversion of this deposit was started and its outcome was not recorded — it has to be checked on chain before it can be converted again";
+  }
   if (deposit.holding === "none") return "this deposit is already in your settlement currency, so there is nothing to convert";
   // Refused after the swap executed (it delivered nothing, or less than the
   // floor): that USDC is spent, and a second swap would spend other USDC.

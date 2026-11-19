@@ -186,6 +186,29 @@ await check("the convert route parks an uncertain submit as unconfirmed and refu
     "an included-but-reverted swap moved nothing and is refused before settlement");
 });
 
+await check("a deposit with an unrecorded conversion intent is not offered again, whatever its holding", () => {
+  const u = mkUser();
+  const quote = { provider: "dex", rate: "1137900", minOut: "1" };
+  for (const holding of ["held", "awaiting_approval", "refused"]) {
+    const d = mkDeposit(u.id, { holding, conversionIntent: { at: "2026-11-19T00:00:00.000Z", amountUnits: "500000000", safeAddress: u.address, quote } });
+    assert.match(depositConversionBlocker(u, d)!, /outcome was not recorded/i, holding);
+  }
+});
+
+await check("the convert route writes the intent before submitting and clears it only once settled or refused", () => {
+  const src = readFileSync("services/api/src/routes/crypto-deposits.ts", "utf8");
+  const route = src.slice(src.indexOf('"/users/:id/crypto-deposits/:depositId/convert"'));
+  const intent = route.indexOf("conversionIntent: {");
+  assert.ok(intent > 0 && intent < route.indexOf("submitPasskeySafeOperationWithReceipt("), "the intent is on disk before the swap is submitted");
+  const uncertain = route.slice(route.indexOf("instanceof SafeOperationUncertainError"), route.indexOf('holding: "refused", reason'));
+  assert.doesNotMatch(uncertain, /conversionIntent/, "an uncertain submit keeps its intent");
+  assert.match(route, /holding: "refused", reason, conversionIntent: undefined/, "a stated refusal clears it");
+  assert.match(route, /submitted\.success !== true[\s\S]{0,300}conversionIntent: undefined/, "a reverted swap clears it");
+  const executed = route.slice(route.indexOf("const executed ="), route.indexOf("settleConvertedDeposit("));
+  assert.doesNotMatch(executed, /conversionIntent/, "the post-swap unconfirmed write keeps it");
+  assert.match(route, /settleConvertedDeposit\([\s\S]{0,600}conversionIntent: undefined/, "settling clears it");
+});
+
 await check("a deposit already in the settlement currency has nothing to convert", () => {
   const u = mkUser();
   assert.match(depositConversionBlocker(u, mkDeposit(u.id, { holding: "none" }))!, /settlement currency/i);

@@ -613,6 +613,19 @@ export interface CryptoDeposit {
   holding: CryptoHolding;
   /** Why it is held or refused, in words a support person can act on. */
   reason?: string;
+  /**
+   * Written before the conversion's Safe operation is submitted, cleared when
+   * it is refused or its result is recorded. A row that still carries one
+   * after a restart may have been swapped, so it is not offered again.
+   */
+  conversionIntent?: {
+    at: string;
+    amountUnits: string;
+    safeAddress: string;
+    /** The Safe operation's nonce, which finds it on chain. */
+    nonce?: string;
+    quote: { provider: string; rate: string; minOut: string };
+  };
   creditedEur?: number;
   /** USDC the account holds from this deposit; cleared once converted
    *  (`amountUsdc` keeps the received figure). */
