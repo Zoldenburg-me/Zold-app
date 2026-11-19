@@ -146,7 +146,9 @@ Say this plainly rather than letting the surface imply otherwise:
   arrived through one.
 - **No Zoldenburg recovery has run on chain**: no guardian added, no relayed
   signature, no finalisation, and Safe Cover has not been used against a Zold
-  Safe. `recovery:test` runs the flow under the harness only.
+  Safe. `recovery:test` runs the flow under the harness only. Adding
+  Zoldenburg to a company's Safe through the queue has never run on chain
+  either; `org-recovery:test` plays the module, the queue and the relay.
 - **One real 1 € enrolment has been paid, and whether it armed the account
   is not checked here.** The owner's euro reached the earlier owner Safe
   on Base mainnet (above); matching it to the code, the live name match and the

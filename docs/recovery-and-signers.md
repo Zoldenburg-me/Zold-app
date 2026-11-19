@@ -41,6 +41,21 @@ guardian built behind `TURNKEY_GUARDIANS`: `recovery-guardians-plan.md`.
   added outside Zold, never as a passkey change. An owner no member matches is listed as added outside
   Zold. A failed read, or
   a threshold above the owner count, answers 502, never an empty owner set.
+- **Zoldenburg is the only recovery guardian of a company's Safe, and is
+  not armed yet** (`wallet/org-recovery.ts`, `routes/business/org-recovery.ts`).
+  `GET /api/orgs/:orgId/recovery` (any member) reads the module by the Safe's
+  address on every visit; a guardian Zold did not add is listed in
+  `otherGuardians`, and a failed read answers 502, never "no guardian". An
+  owner queues the setup with `POST …/recovery/guardian`: one op of kind
+  `recovery-guardian` (enable the module where needed, add Zoldenburg at
+  threshold 1), prepared for the chain's owners and signed at the Safe's
+  threshold in the queue. An open setup op, or the guardian already on chain,
+  queues nothing; another guardian or a pending recovery refuses it.
+  `Organisation.recovery` is written once the op executed and the chain lists
+  the guardian; it labels the UI only. `armed` is always false: the
+  org-scoped 1 € from the company's IBAN is not built, so `/admin/recoveries`
+  refuses to sign for the company's Safe (NOT_ARMED). No route removes the
+  guardian from a company's Safe yet.
 - **Zoldenburg is a recovery guardian only by the user's choice**, made in
   Security (one passkey-signed op). Signup does not offer it. Deployment adds
   a guardian only when the user logged in with Google, Apple or an email code at signup
