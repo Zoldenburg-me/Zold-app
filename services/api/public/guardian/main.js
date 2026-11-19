@@ -20,7 +20,7 @@ import { OAUTH_STATE_KEY, readReturn, startLogin } from "./oauth.js";
 import { providerButtons } from "./providers.js";
 import { afterCheck, checkEnrolment, enrolmentHtml, issueEnrolmentCode } from "./enrolment.js";
 import { byDevice } from "./device-words.js";
-import { UNREACHABLE, WRITE_UNANSWERED, refuseForeignAnswer } from "../foreign-answer.js";
+import { UNREACHABLE, WRITE_UNANSWERED, readAnswer, readHealth } from "../foreign-answer.js";
 
 
 /**
@@ -209,8 +209,7 @@ export function apiWith(token, fetchFn = (path, init) => fetch(path, init)) {
       body: body === undefined ? undefined : JSON.stringify(body),
       redirect: "manual",
     });
-    const data = await r.json().catch(() => ({}));
-    refuseForeignAnswer(r, data, body !== undefined);
+    const data = await readAnswer(r, body !== undefined);
     if (!r.ok) throw Object.assign(new Error(data.error || `request failed (${r.status})`), { code: data.code, status: r.status });
     return data;
   };
@@ -287,7 +286,7 @@ async function boot() {
   const show = (html) => (el.innerHTML = html);
   let token = null;
   try { token = localStorage.getItem("zold-session"); } catch { /* storage blocked */ }
-  const health = await fetch("/api/health").then((r) => r.json()).catch(() => null);
+  const health = await readHealth();
   const caps = health?.capabilities ?? {};
   if (!health) return show(`<h1>Your recovery helper</h1><p>${esc(UNREACHABLE)}</p><p><a href="/app">Back to Zold</a></p>`);
   if (!caps.zoldenburgRecovery && !caps.turnkeyGuardians) return show(`<h1>Your recovery helper</h1><p>Recovery helpers aren’t available right now.</p><p><a href="/app">Back to Zold</a></p>`);

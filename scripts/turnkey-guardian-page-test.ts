@@ -45,6 +45,7 @@ const flow = await import(pathToFileURL(path.join(PUB, "recovery/flow.js")).href
 const page = await import(pathToFileURL(path.join(PUB, "guardian/main.js")).href);
 const logins = await import(pathToFileURL(path.join(PUB, "guardian/logins.js")).href);
 const recoveryPage = await import(pathToFileURL(path.join(PUB, "recovery/main.js")).href);
+const foreignAnswer = await import(pathToFileURL(path.join(PUB, "foreign-answer.js")).href);
 
 let failed = 0;
 let passed = 0;
@@ -748,25 +749,33 @@ await check("a guardian change: an empty answer (a gate's page read as {}) is ne
 // ---------------------------------------------------------------------------
 console.log("answers Zold did not write");
 
-const gateFetch = (answer: { status: number; type?: string; contentType?: string; body?: unknown }) => {
+const gateFetch = (answer: { status: number; type?: string; contentType?: string | null; body?: unknown }) => {
   const seen: any[] = [];
   const fetchFn = async (p: string, init: any) => {
     seen.push({ p, init });
-    const contentType = answer.contentType ?? "application/json";
+    const contentType = answer.contentType === undefined ? "application/json" : answer.contentType;
+    const text = answer.body === undefined ? "" : typeof answer.body === "string" ? answer.body : JSON.stringify(answer.body);
     return {
       status: answer.status, ok: answer.status >= 200 && answer.status < 300, type: answer.type ?? "basic",
       headers: { get: (h: string) => (h.toLowerCase() === "content-type" ? contentType : null) },
-      json: async () => { if (!contentType.includes("json")) throw new SyntaxError("Unexpected token '<'"); return answer.body; },
+      text: async () => text,
+      json: async () => JSON.parse(text),
     };
   };
   return { fetchFn, seen };
 };
-const GATE_PAGE = { status: 200, contentType: "text/html; charset=utf-8" };
+const GATE_PAGE = { status: 200, contentType: "text/html; charset=utf-8", body: "<html>Sign in</html>" };
+/** Lost or unlabelled answers: an empty 200, and a page with no content-type. */
+const LOST = [{ status: 200, body: "" }, { status: 200, body: " \n" }, { status: 200, contentType: null }, { status: 200, contentType: null, body: "<html>Sign in</html>" }];
 
 await check("/guardian: a gate's HTML 200, a bare 401 or a redirect rejects; Zold's own answers pass", async () => {
-  for (const a of [GATE_PAGE, { status: 401, body: {} }, { status: 0, type: "opaqueredirect" }]) {
+  for (const a of [GATE_PAGE, ...LOST, { status: 401, body: {} }, { status: 0, type: "opaqueredirect" }]) {
     const { fetchFn } = gateFetch(a);
-    await assert.rejects(page.apiWith("tok", fetchFn)("/api/session"), (e: any) => e.foreign === true && /try again in a minute/.test(e.message));
+    await assert.rejects(page.apiWith("tok", fetchFn)("/api/session"), (e: any) => e.foreign === true && /try again in a minute/.test(e.message), JSON.stringify(a));
+  }
+  for (const a of LOST) {
+    const { fetchFn } = gateFetch(a);
+    await assert.rejects(page.apiWith("tok", fetchFn)("/api/users/u1/recovery/zoldenburg", { acknowledged: true }), (e: any) => e.foreign === true && /check before/.test(e.message), JSON.stringify(a));
   }
   const { fetchFn: write } = gateFetch(GATE_PAGE);
   await assert.rejects(page.apiWith("tok", write)("/api/users/u1/recovery/zoldenburg", { acknowledged: true }), (e: any) => e.foreign === true && /check before/.test(e.message));
@@ -785,8 +794,24 @@ await check("/recovery: a gate's HTML 200 rejects, and starting says so instead 
     flow.startRecovery("a@b.c", { api, caps: { zoldenburgRecovery: true }, secret: "" }),
     (e: any) => e.foreign === true && /check before/.test(e.message) && !/can.t continue/.test(e.message),
   );
+  for (const a of LOST) {
+    const lost = recoveryPage.apiOver(gateFetch(a).fetchFn);
+    await assert.rejects(lost("/api/recovery/zoldenburg/r1", undefined, {}), (e: any) => e.foreign === true && /try again in a minute/.test(e.message), JSON.stringify(a));
+    await assert.rejects(lost("/api/recovery/zoldenburg", { email: "a@b.c" }, {}), (e: any) => e.foreign === true && /check before/.test(e.message), JSON.stringify(a));
+  }
+  const { fetchFn: unlabelled } = gateFetch({ status: 200, contentType: null, body: { id: "r1" } });
+  assert.deepEqual(await recoveryPage.apiOver(unlabelled)("/api/recovery/zoldenburg/r1"), { id: "r1" }, "Zold's JSON passes without a content-type");
   const { fetchFn: zold } = gateFetch({ status: 404, body: { error: "recovery not found" } });
   await assert.rejects(recoveryPage.apiOver(zold)("/api/recovery/zoldenburg/r1"), (e: any) => !e.foreign && e.status === 404);
+});
+
+await check("/recovery and /guardian: a health answer with no capabilities is not an answer", async () => {
+  for (const a of [{ status: 200, body: {} }, { status: 200, body: "" }, GATE_PAGE, { status: 200, body: { ok: true } }]) {
+    assert.equal(await foreignAnswer.readHealth(gateFetch(a).fetchFn), null, JSON.stringify(a));
+  }
+  const { fetchFn, seen } = gateFetch({ status: 200, body: { capabilities: {} } });
+  assert.deepEqual(await foreignAnswer.readHealth(fetchFn), { capabilities: {} }, "Zold's answer with every capability off still reads as off");
+  assert.equal(seen[0].p, "/api/health");
 });
 
 console.log("email and passkey logins");

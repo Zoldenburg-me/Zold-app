@@ -150,6 +150,9 @@ function dist(obj, toneOf = () => 'plain') {
 
 const authPill = document.getElementById('authPill');
 const authText = document.getElementById('authText');
+const signInBtn = document.getElementById('signInBtn');
+const addPasskeyBtn = document.getElementById('addPasskeyBtn');
+const signOutBtn = document.getElementById('signOutBtn');
 /** The last session the server refused. The background refresh does not
  *  resend it. */
 let rejectedToken = null;
@@ -166,11 +169,25 @@ function setOperatorSession(token) {
   else sessionStorage.removeItem(SESSION_KEY);
 }
 
+/* 'unreachable': an answer Zold did not write, so nothing is known about the
+   session and the pill claims neither signed in nor signed out. */
+let authState = 'none';
 function setAuth(state) {
+  authState = state;
   authPill.className = `auth ${state === 'ok' ? 'ok' : state === 'bad' ? 'bad' : ''}`;
   authText.textContent = state === 'bad' ? 'Unauthorized'
+    : state === 'unreachable' ? 'Zold unreachable'
     : state !== 'ok' ? 'Signed out'
     : operatorName || 'Signed in';
+}
+
+/** `state` is what the caller knows about a session that exists. */
+function showAuth(state = 'ok') {
+  const on = Boolean(operatorSession);
+  signInBtn.hidden = on;
+  addPasskeyBtn.hidden = !on;
+  signOutBtn.hidden = !on;
+  setAuth(on ? state : 'none');
 }
 
 /** Stale rows under a dead session read as live ops data: drop them. */
@@ -215,6 +232,19 @@ function foreignAnswerError(method) {
   return err;
 }
 
+/** The body of an answer Zold wrote, or a foreign-answer throw. Zold answers
+ *  every 2xx with JSON, so an empty 2xx (an answer lost on the way) and a body
+ *  that is not JSON are not Zold's, whatever the content-type says. */
+async function readAnswer(res, method) {
+  const text = await res.text().catch(() => '');
+  let data = {};
+  if (text.trim()) {
+    try { data = JSON.parse(text); } catch { throw foreignAnswerError(method); }
+  } else if (res.ok) throw foreignAnswerError(method);
+  if (isForeignAnswer(res, data)) throw foreignAnswerError(method);
+  return data ?? {};
+}
+
 async function api(path, options = {}) {
   const token = operatorSession;
   if (!token) { setAuth('none'); throw new ApiError(401, 'Sign in with your operator passkey.'); }
@@ -228,9 +258,8 @@ async function api(path, options = {}) {
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...approval, ...(options.headers || {}) },
     redirect: 'manual',
   });
-  const data = await res.json().catch(() => ({}));
+  const data = await readAnswer(res, method);
   // The session and the pill stay as they were: the gate said nothing about them.
-  if (isForeignAnswer(res, data)) throw foreignAnswerError(method);
   if (res.status === 401) {
     // An Access refusal leaves the session alone: signing in to Access again
     // is enough. main.js redraws the sign-in controls on the event.
@@ -260,10 +289,20 @@ async function api(path, options = {}) {
 /** The ceremonies that open a session carry no bearer. */
 async function authPost(path, body) {
   const res = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}), redirect: 'manual' });
-  const data = await res.json().catch(() => ({}));
-  if (isForeignAnswer(res, data)) throw foreignAnswerError('POST');
+  const data = await readAnswer(res, 'POST');
   if (!res.ok) throw new ApiError(res.status, data.error || `HTTP ${res.status}`);
   return data;
+}
+
+/** Who is signed in. A failed read keeps what api() made of it (a dead
+ *  session is cleared there), and a gate's answer claims no session state. */
+async function loadMe() {
+  operatorName = '';
+  let state = 'ok';
+  if (operatorSession) {
+    try { operatorName = (await api('/api/admin/auth/me')).operator?.name || ''; } catch (err) { state = err.foreign ? 'unreachable' : authState; }
+  }
+  showAuth(state);
 }
 
 /* ---------- loaders shared by several views ---------- */

@@ -12,29 +12,9 @@ let badgesAt = 0;
 // Any same-origin script can read localStorage: no operator token stays there.
 localStorage.removeItem('zold_operator_token');
 
-const signInBtn = document.getElementById('signInBtn');
-const addPasskeyBtn = document.getElementById('addPasskeyBtn');
-const signOutBtn = document.getElementById('signOutBtn');
-
-function showAuth() {
-  const on = Boolean(operatorSession);
-  signInBtn.hidden = on;
-  addPasskeyBtn.hidden = !on;
-  signOutBtn.hidden = !on;
-  setAuth(on ? 'ok' : 'none');
-}
-
 function showProblem(err) {
   const msg = err?.name === 'NotAllowedError' ? 'The passkey prompt was closed or timed out.' : (err?.message || String(err));
   viewRoot.insertAdjacentHTML('afterbegin', `<div class="note bad">${esc(msg)}</div>`);
-}
-
-async function loadMe() {
-  operatorName = '';
-  if (operatorSession) {
-    try { operatorName = (await api('/api/admin/auth/me')).operator?.name || ''; } catch { /* a dead session is cleared by api() */ }
-  }
-  showAuth();
 }
 
 async function signIn() {
@@ -97,7 +77,7 @@ function showEnrolment() {
   });
 }
 
-window.addEventListener('operator-session-ended', showAuth);
+window.addEventListener('operator-session-ended', () => showAuth());
 signInBtn.addEventListener('click', signIn);
 signOutBtn.addEventListener('click', signOut);
 addPasskeyBtn.addEventListener('click', addPasskey);

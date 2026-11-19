@@ -19,7 +19,7 @@ import { providerButtons } from "../guardian/providers.js";
 import { byDevice, passkeyName } from "../guardian/device-words.js";
 import { approveWith, finishApprove } from "./approve.js";
 import { bankStepChanged, bankStepHtml, checkAnswerText, issuedFor, keepIssued } from "./bank-step.js";
-import { UNREACHABLE, refuseForeignAnswer } from "../foreign-answer.js";
+import { UNREACHABLE, readAnswer, readHealth } from "../foreign-answer.js";
 import {
   EMAIL_KEY, SECRET_KEY, TICKET_KEY, currentAuth, endedText, finalizeAfter, requestPath, saveFor, savedFor, screenFor, startRecovery,
 } from "./flow.js";
@@ -38,8 +38,7 @@ export function apiOver(fetchFn) {
       body: body === undefined ? undefined : JSON.stringify(body),
       redirect: "manual",
     });
-    const data = await r.json().catch(() => ({}));
-    refuseForeignAnswer(r, data, body !== undefined);
+    const data = await readAnswer(r, body !== undefined);
     if (!r.ok) throw Object.assign(new Error(data.error || `request failed (${r.status})`), { status: r.status, code: data.code, body: data });
     return data;
   };
@@ -65,7 +64,7 @@ async function boot() {
   const returnedHash = location.hash;
   if (returnedHash) history.replaceState(null, "", location.pathname);
   const el = document.getElementById("r-body");
-  const health = await fetch("/api/health").then((r) => r.json()).catch(() => null);
+  const health = await readHealth();
   const caps = health?.capabilities ?? {};
 
   // `gen` counts renders: a poll that started before the latest one drops its answer.
