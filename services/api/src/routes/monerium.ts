@@ -476,26 +476,42 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         return res.redirect("/app?monerium=refused");
       }
       const profileId = pick.profile.id;
+      // An account Zold may not bank (rejected, manual_review, a segment
+      // without a bank account) is still connected, but is told no IBAN is
+      // coming, records no "activate IBAN" verdict, and keeps no IBAN.
+      const refused = ibanActivationRefusal(user);
+      const notOffered = refused?.code === "IBAN_NOT_OFFERED";
       // An IBAN from another profile is not carried into this connection.
-      const dropIban = Boolean(user.iban) && !storedIbanOnProfile(user, snapshot.ibans, profileId);
+      const dropIban = Boolean(user.iban) && (notOffered || !storedIbanOnProfile(user, snapshot.ibans, profileId));
 
       store.updateUser(user.id, {
         moneriumConnect: undefined,
         moneriumRefusal: undefined,
         ...(dropIban ? { iban: undefined } : {}),
-        kyc: {
-          provider: "monerium",
-          onboardingPath: "existing_monerium",
-          checkedAt: undefined,
-          applicantId: profileId,
-          reason: "existing Monerium account connected; activate IBAN with passkey",
-        },
-        funding: {
-          mode: "sandbox",
-          status: "provisioning",
-          moneriumProfileId: profileId,
-          detail: "smart wallet deployed — approve IBAN issuance with your passkey",
-        },
+        ...(notOffered
+          ? {
+              funding: {
+                ...(user.funding ?? { mode: "sandbox" as const }),
+                status: "kyc_pending" as const,
+                moneriumProfileId: profileId,
+                detail: refused.error,
+              },
+            }
+          : {
+              kyc: {
+                provider: "monerium" as const,
+                onboardingPath: "existing_monerium" as const,
+                checkedAt: undefined,
+                applicantId: profileId,
+                reason: "existing Monerium account connected; activate IBAN with passkey",
+              },
+              funding: {
+                mode: "sandbox" as const,
+                status: "provisioning" as const,
+                moneriumProfileId: profileId,
+                detail: "smart wallet deployed — approve IBAN issuance with your passkey",
+              },
+            }),
         monerium: {
           connectedAt: new Date().toISOString(),
           profileId,

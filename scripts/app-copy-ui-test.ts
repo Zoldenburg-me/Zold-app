@@ -96,4 +96,14 @@ await t("a refused copy says to copy by hand and never shows Copied", async () =
   assert.match(String(run("__said.at(-1)")), /Could not copy/);
 });
 
+// Copy a connected account reads on Home and the dashboard: only a pending
+// account, which activates its own IBAN, is told to get one.
+await t("a connected account under review is not told to get an IBAN", () => {
+  const copy = (kycStatus: string) => run(`kycCopy(${JSON.stringify(kycStatus)}, { kycStatus: ${JSON.stringify(kycStatus)}, monerium: { connectedAt: "2026-11-19T00:00:00Z" } })`);
+  assert.equal(copy("pending")[1], "Get your IBAN");
+  assert.equal(copy("manual_review")[0], "MANUAL REVIEW");
+  assert.doesNotMatch(copy("manual_review").join(" "), /IBAN/);
+  assert.equal(copy("rejected")[0], "WALLET");
+});
+
 console.log(`\nAPP COPY UI TEST PASSED — ${pass}/${pass}`);
