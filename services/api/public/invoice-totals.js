@@ -1,11 +1,38 @@
 /**
- * The supplier invoice form's arithmetic, kept to what the server issues
- * (computeTotals in src/domain/invoicing.ts): each line rounded to cents once,
- * after multiplying, then the cents summed. toPrecision(15) drops float noise.
- * An empty field counts as zero while the person is still typing.
+ * The supplier invoice form's arithmetic, kept to what the server stores on
+ * submit (validateLines in src/domain/invoices.ts, POST
+ * /api/invoice-links/:token/submit): each line rounded to cents once, after
+ * multiplying, then the cents summed. The rounding is lineNetCents in
+ * src/domain/invoicing.ts; toPrecision(15) drops float noise.
+ *
+ * A value the server refuses (AMOUNT_RE: digits, at most 8 decimals, no sign
+ * or exponent; a quantity above zero) gives null, and the form shows no
+ * number for it. An empty field counts as zero while the person is typing.
  */
-export const lineNetCents = (quantity, unitPrice) =>
-  Math.round(Number((Number(unitPrice || 0) * Number(quantity || 0) * 100).toPrecision(15)));
+const AMOUNT_RE = /^\d+(\.\d{1,8})?$/;
 
-export const formTotalCents = (lines) =>
-  lines.reduce((s, l) => s + lineNetCents(l.quantity, l.unitPrice), 0);
+const amount = (raw) => {
+  const s = String(raw ?? "").trim();
+  if (s === "") return 0;
+  return AMOUNT_RE.test(s) ? Number(s) : null;
+};
+
+export const lineNetCents = (quantity, unitPrice) => {
+  const q = amount(quantity);
+  const p = amount(unitPrice);
+  if (q === null || p === null || (q <= 0 && String(quantity ?? "").trim() !== "")) return null;
+  return Math.round(Number((p * q * 100).toPrecision(15)));
+};
+
+export const formTotalCents = (lines) => {
+  let total = 0;
+  for (const l of lines) {
+    const cents = lineNetCents(l.quantity, l.unitPrice);
+    if (cents === null) return null;
+    total += cents;
+  }
+  return total;
+};
+
+/** Cents as the form prints them, or a dash for a line the server would refuse. */
+export const formatCents = (cents) => (cents === null ? "—" : (cents / 100).toFixed(2));

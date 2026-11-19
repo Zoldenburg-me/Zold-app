@@ -304,6 +304,16 @@ export interface InvoiceTotals {
 }
 
 /**
+ * A line's net amount in cents. Round once, after multiplying: a sub-cent unit
+ * price (10000 × €0.004) must not be rounded to whole cents first.
+ * toPrecision(15) drops float noise (1 × 1.005 is 100.49999… cents raw).
+ * Shared by computeTotals, validateLines (invoice-link submit) and, mirrored
+ * line for line, public/invoice-totals.js (the supplier form).
+ */
+export const lineNetCents = (quantity: number, unitPrice: number) =>
+  Math.round(Number((unitPrice * quantity * 100).toPrecision(15)));
+
+/**
  * Compute a line-by-line total with the per-rate breakdown §14 Abs. 4 Nr. 8
  * requires. VAT is rounded once per rate bucket, not per line — rounding each
  * line and summing drifts against what the tax office recomputes.
@@ -327,9 +337,7 @@ export function computeTotals(
     if (unitPrice < 0) {
       throw new InvoiceComplianceError(`Line ${i + 1} has a negative unit price.`);
     }
-    // Round once, after multiplying: a sub-cent unit price (10000 × €0.004)
-    // must not be rounded to whole cents first. toPrecision(15) drops float noise.
-    const netCents = Math.round(Number((unitPrice * qty * 100).toPrecision(15)));
+    const netCents = lineNetCents(qty, unitPrice);
     // When exempt, every line is 0% whatever the line says. The treatment
     // belongs to the invoice; a stray line rate would be a §14c error.
     const appliedRate: VatRate = treatment.kind === "exempt" ? 0 : (line.vatRate ?? treatment.rate);

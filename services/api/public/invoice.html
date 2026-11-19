@@ -137,7 +137,7 @@
 </div>
 
 <script type="module">
-import { lineNetCents, formTotalCents } from "/invoice-totals.js";
+import { lineNetCents, formTotalCents, formatCents } from "/invoice-totals.js";
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -391,8 +391,8 @@ const lineRows = () => lines.map((l, i) => `<tr>
   <td style="width:110px"><input data-i="${i}" data-f="unitPrice" value="${esc(l.unitPrice)}" placeholder="0.00" inputmode="decimal" aria-label="Line ${i + 1} unit price" /></td>
   <td style="width:100px" class="num">${lineAmount(l)}</td>
 </tr>`).join("");
-const lineAmount = (l) => (lineNetCents(l.quantity, l.unitPrice) / 100).toFixed(2);
-const total = () => (formTotalCents(lines) / 100).toFixed(2);
+const lineAmount = (l) => formatCents(lineNetCents(l.quantity, l.unitPrice));
+const total = () => formatCents(formTotalCents(lines));
 
 function renderForm(inv) {
   $("#content").innerHTML = `
