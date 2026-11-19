@@ -336,6 +336,18 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
         } catch (err: any) {
           return res.status(503).json({ error: redactedMessage(err) });
         }
+        // On disk BEFORE the swap is submitted: if a later write is refused
+        // (the process exits), the restart finds this and does not offer the
+        // deposit again. Refused here, the process exits with nothing sent.
+        store.updateCryptoDeposit(deposit.id, {
+          conversionIntent: {
+            at: new Date().toISOString(),
+            amountUnits: unconvertedUnits(current).toString(),
+            safeAddress: user.address,
+            ...(pending.userOperation.nonce !== undefined ? { nonce: pending.userOperation.nonce.toString() } : {}),
+            quote: pending.quote,
+          },
+        });
         let submitted: SubmittedOperation;
         try {
           // The browser sends base64url; the Safe signature needs the bytes,
@@ -359,7 +371,7 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
             });
             return res.status(502).json({ error: reason, code: "SAFE_OP_UNCONFIRMED", userOpHash: err.userOpHash });
           }
-          parkDeposit(deposit.id, { holding: "refused", reason });
+          parkDeposit(deposit.id, { holding: "refused", reason, conversionIntent: undefined });
           return res.status(502).json({ error: reason });
         }
         // Included but reverted: the chain undid the swap, so nothing moved and
@@ -369,6 +381,7 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
           parkDeposit(deposit.id, {
             holding: "refused",
             reason,
+            conversionIntent: undefined,
             txs: [...current.txs, { step: "safe.swap(usdc->eure).reverted", hash: submitted.txHash ?? submitted.userOpHash ?? "0x" }],
           });
           return res.status(502).json({ error: reason });
@@ -408,6 +421,8 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
             before, txs,
             await conversionFacts(submitted, amountIn.toString()),
           );
+          // Recorded: the swap step is on the row, so the intent has done its job.
+          settled = store.updateCryptoDeposit(deposit.id, { conversionIntent: undefined });
         } catch (err: any) {
           const reason = redactedMessage(err);
           console.error(`convert: swap ${submitted.txHash ?? submitted.userOpHash} executed but was not recorded:`, describeCause(err));
