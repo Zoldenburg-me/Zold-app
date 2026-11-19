@@ -72,7 +72,8 @@ Say this plainly rather than letting the surface imply otherwise:
   gas. The swap's EURe output reaches the Safe as a Transfer like any
   other; Activity, the books and the watcher leave out a recorded
   conversion's transaction, so it is not a second payment. A partial fill, a refusal
-  and an unconfirmed conversion have run only on hardhat. Automatic
+  and an unconfirmed conversion have run only on hardhat, and a conversion
+  intent left by a crash only in `convert-crash-test`. Automatic
   conversion with "ask me" off has never run. The receipt and disposal
   statement lines have not been reviewed by a Steuerberater.
 - **The cash rail has never opened.** Bridge live mode is entirely unexercised,
