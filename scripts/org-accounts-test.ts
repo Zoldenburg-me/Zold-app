@@ -22,6 +22,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import express from "express";
+import { NOW, activeEurAccount, businessOrg, companyOrg, gatedEurAccount, member, personalOrg } from "./_org-fixtures.js";
 
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-org-accounts-")), "db.json");
 process.env.TRANSF_CHAIN_ID = "31337";
@@ -44,10 +45,9 @@ async function check(name: string, fn: () => void | Promise<void>) {
 }
 
 initStore();
-const now = new Date().toISOString();
-const SAFE = `0x${"aa".repeat(20)}`;
+const now = NOW;
+const SAFE = `0x${"aa".repeat(20)}` as const;
 const IBAN = "DE89370400440532013000";
-const reporting = { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" } as const;
 
 // A company signup: their Safe holds the company's IBAN, and the snapshot
 // taken at connect has the corporate profile pending.
@@ -60,30 +60,21 @@ store.addUser({
 } as any);
 store.addUser({ id: "u_admin", name: "Jonas Weber", country: "DE", kycStatus: "approved", address: `0x${"bb".repeat(20)}`, createdAt: now } as any);
 
-const addOrg = (id: string, type: "business" | "personal", name: string, legalName?: string) =>
-  store.addOrganisation({ id, type, name, ...(legalName ? { legalName } : {}), plan: "business", reporting, verifications: {}, createdAt: now, updatedAt: now } as any);
-addOrg("org_new", "business", "Lindner Neu");
-addOrg("org_co", "business", "Lindner", "Lindner Holzbau GmbH");
-addOrg("org_p", "personal", "Sara Lindner");
-const member = (id: string, orgId: string, userId: string, role: string) =>
-  store.addMember({ id, orgId, userId, email: "", role, status: "active", invitedAt: now, acceptedAt: now } as any);
-member("m1", "org_new", "u_co", "owner");
-member("m2", "org_co", "u_co", "owner");
-member("m3", "org_co", "u_admin", "admin");
-member("m4", "org_p", "u_co", "owner");
+store.addOrganisation(businessOrg("org_new", "Lindner Neu"));
+store.addOrganisation(businessOrg("org_co", "Lindner", { legalName: "Lindner Holzbau GmbH" }));
+store.addOrganisation(personalOrg("org_p", "Sara Lindner"));
+store.addMember(member("m1", "org_new", "u_co", "owner"));
+store.addMember(member("m2", "org_co", "u_co", "owner"));
+store.addMember(member("m3", "org_co", "u_admin", "admin"));
+store.addMember(member("m4", "org_p", "u_co", "owner"));
 store.addUser({ id: "u_view", name: "Birgit Falk", country: "DE", kycStatus: "approved", address: `0x${"cc".repeat(20)}`, createdAt: now } as any);
-member("m5", "org_co", "u_view", "viewer");
+store.addMember(member("m5", "org_co", "u_view", "viewer"));
 
 // A row whose stored gate text is not the current wording.
-store.addAccount({
-  id: "acc_old", orgId: "org_new", currency: "EUR", label: "main", status: "gated", provider: "monerium", identifier: {},
+store.addAccount(gatedEurAccount("acc_old", "org_new", {
   gate: { reason: "This account has no funding identity, so nothing can be sent from it.", needs: "per-organisation account provisioning, which is not built." },
-  createdAt: now, updatedAt: now,
-} as any);
-store.addAccount({
-  id: "acc_co", orgId: "org_co", currency: "EUR", label: "main", status: "active", provider: "monerium",
-  identifier: { iban: IBAN }, address: SAFE, backingUserId: "u_co", createdAt: now, updatedAt: now,
-} as any);
+}));
+store.addAccount(activeEurAccount("acc_co", "org_co", { iban: IBAN, address: SAFE, backingUserId: "u_co" }));
 store.addInvoice({
   id: "inv_1", direction: "outgoing", orgId: "org_co", linkTokenHash: "x", state: "SUBMITTED", lines: [], currency: "EUR", total: "119.00",
   supplier: { orgName: "Lindner Holzbau GmbH", email: "", invoiceNumber: "RE-2026-0007" },
@@ -128,11 +119,10 @@ await check("an account whose row stored other wording shows the current reason"
   assert.match(accountIsSpendable(a).reason!, /No IBAN is connected/);
 });
 await check("a company's account reads as having no Safe yet, and is never funded from a member", async () => {
-  addOrg("org_gmbh", "business", "Lindner Bau");
-  store.updateOrganisation("org_gmbh", { entity: "company" });
-  member("m6", "org_gmbh", "u_co", "owner");
-  member("m7", "org_gmbh", "u_admin", "admin");
-  store.addAccount({ id: "acc_gmbh", orgId: "org_gmbh", currency: "EUR", label: "main", status: "gated", provider: "monerium", identifier: {}, createdAt: now, updatedAt: now } as any);
+  store.addOrganisation(companyOrg("org_gmbh", "Lindner Bau"));
+  store.addMember(member("m6", "org_gmbh", "u_co", "owner"));
+  store.addMember(member("m7", "org_gmbh", "u_admin", "admin"));
+  store.addAccount(gatedEurAccount("acc_gmbh", "org_gmbh"));
   const r = await call("GET", "/api/orgs/org_gmbh/accounts");
   const a = r.body.accounts.find((x: any) => x.id === "acc_gmbh");
   assert.match(a.gate.reason, /Safe is not set up/);
@@ -260,7 +250,7 @@ await check("a viewer cannot claim the company's page", async () => {
   assert.equal(r.status, 403);
 });
 await check("a personal organisation cannot claim a company page", async () => {
-  store.addAccount({ id: "acc_p", orgId: "org_p", currency: "EUR", label: "main", status: "active", provider: "monerium", identifier: { iban: IBAN }, address: SAFE, backingUserId: "u_co", createdAt: now, updatedAt: now } as any);
+  store.addAccount(activeEurAccount("acc_p", "org_p", { iban: IBAN, address: SAFE, backingUserId: "u_co" }));
   const r = await call("POST", "/api/orgs/org_p/payment-page", { handle: "sara-lindner" });
   assert.equal(r.status, 409, JSON.stringify(r.body));
   assert.equal(r.body.code, "PAGE_NOT_AVAILABLE");

@@ -18,6 +18,18 @@ export const payableContacts = (contacts) => contacts.filter((c) => (c.bankAccou
 /** An account here that receives bank transfers. */
 export const hasIban = (accounts) => accounts.some((a) => a.status === "active" && a.identifier?.iban);
 
+/** What the balance card says for a company whose euro account is not live:
+ *  the account's own gate, which the server words from what it lacks (no
+ *  Safe yet, or a Safe waiting for its IBAN). A company's account is its own
+ *  Safe, not a login's, so the card has no figure for it. Null for any other
+ *  organisation, a company with no euro account, or one that is live. */
+export function companyAccountNote(org, accounts) {
+  if (org?.entity !== "company" || !Array.isArray(accounts)) return null;
+  const a = accounts.find((x) => x.currency === "EUR");
+  if (!a || a.status === "active") return null;
+  return a.gate?.reason || "The company’s account is not live yet.";
+}
+
 /** Runs drafted here and not yet sent: with review off, a saved payment waits as DRAFT. */
 const PENDING = ["DRAFT", "PENDING_REVIEW", "REVIEWED", "EXECUTING"];
 export const pendingRuns = (runs) => runs.filter((d) => PENDING.includes(d.state));

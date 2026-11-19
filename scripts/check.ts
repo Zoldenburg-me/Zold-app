@@ -11,6 +11,7 @@
  * still get a green check that means what it says.
  */
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { freePort } from "./_free-port.js";
 import { urlForLog } from "../services/api/src/http/log-safe.js";
 
@@ -158,6 +159,16 @@ const scripts = [
   "exact-output:test",
   "gmi:test",
 ];
+// The company-owned Safe's suites (M2), named once here and in package.json:
+// org-owner-changes (step 4), org-draft-queue (6), org-crypto-send (7),
+// org-iban (8), org-documents (9), org-recovery (10). Each runs once its file
+// exists, so the step that writes one edits neither file; one not written yet
+// is named in the output, never passed over in silence.
+const plannedSuites = ["org-owner-changes", "org-draft-queue", "org-crypto-send", "org-iban", "org-documents", "org-recovery"];
+for (const name of plannedSuites) {
+  if (existsSync(new URL(`./${name}-test.ts`, import.meta.url))) scripts.push(`${name}:test`);
+  else console.log(`check: ${name}:test is not written yet`);
+}
 const liveScripts = ["anchor:test", "travelrule:test", "trustline:test", "recovery:fork:test"];
 if (process.env.CHECK_LIVE === "1") scripts.push(...liveScripts);
 
