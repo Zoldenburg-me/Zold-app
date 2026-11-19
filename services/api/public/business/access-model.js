@@ -213,10 +213,16 @@ export const ORG_RECOVERY = [
   "Your own sign-in’s recovery is in the app. It doesn’t change who signs for the company’s Safe.",
 ];
 
+/** The deployment has no Zoldenburg guardian to offer (`available: false`). */
+export const ORG_RECOVERY_NOT_OFFERED = [
+  "This deployment doesn’t offer Zoldenburg UG as a recovery guardian for the company’s Safe.",
+  ...ORG_RECOVERY.slice(1),
+];
+
 /** Zoldenburg is on the company's Safe as its recovery guardian, but not
- *  armed: arming needs a 1 € from the company's IBAN, which isn't built. */
+ *  armed: arming is a 1 € enrolment from the company's IBAN, not built. */
 export const ORG_RECOVERY_UNARMED = [
-  "Zoldenburg UG is the recovery guardian of the company’s Safe, but it isn’t armed until the company’s IBAN is set up. Until then Zoldenburg won’t sign a recovery, so no one can recover the Safe through it.",
+  "Zoldenburg UG is the recovery guardian of the company’s Safe, but it isn’t armed yet. Arming it takes a 1 € enrolment payment from the company’s IBAN, which Zold hasn’t built. Until then Zoldenburg won’t sign a recovery, so no one can recover the Safe through it.",
   "If an owner loses their passkey, the other owners can replace that signer in Safe{Wallet}, with as many signatures as the Safe needs.",
   "Your own sign-in’s recovery is in the app. It doesn’t change who signs for the company’s Safe.",
 ];
@@ -226,19 +232,24 @@ export const ORG_RECOVERY_UNARMED = [
  *  - unknown:  the read failed: never "no guardian"
  *  - pending:  a recovery is under way on the company's Safe
  *  - unarmed:  Zoldenburg is on the module (armed is never true yet)
- *  - none:     no Zoldenburg guardian; `queued` when its setup op waits for
- *              the owners' signatures
+ *  - none:     no Zoldenburg guardian; `offered` only when the deployment
+ *              has one (`available: true`); `queued` when its setup op waits
+ *              for the owners' signatures; `canSetUp` when an owner may queue
+ *              it (deployed Safe, offered, queue on, nothing queued, no other
+ *              guardian)
  * `otherGuardians` are guardians Zold didn't add: shown, never hidden.
  */
 export function orgRecoveryView(r, error = null) {
-  if (r?.state === "not_set_up") return { status: "none", queued: false, otherGuardians: [] };
+  const offered = r?.available === true;
+  if (r?.state === "not_set_up") return { status: "none", offered, queued: false, canSetUp: false, otherGuardians: [] };
   if (r?.state !== "set_up" || !Array.isArray(r.guardians)) {
     return { status: "unknown", error: error || "Couldn’t check the company’s Safe’s recovery." };
   }
   const otherGuardians = r.otherGuardians || [];
   if (r.pendingRecovery) return { status: "pending", pending: r.pendingRecovery, otherGuardians };
   if (r.guardianOnChain) return { status: "unarmed", addedAt: r.addedAt || null, otherGuardians };
-  return { status: "none", queued: !!r.setupOp, otherGuardians };
+  const queued = !!r.setupOp;
+  return { status: "none", offered, queued, canSetUp: offered && r.queueOpen === true && !queued && otherGuardians.length === 0, otherGuardians };
 }
 
 export async function loadOrgRecovery(orgId, api) {

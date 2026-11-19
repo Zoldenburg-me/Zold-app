@@ -7,8 +7,9 @@
  * Safe on chain signs; the op is relayed by the signature that meets the
  * Safe's own threshold. Nothing here creates an op: payments and owner
  * changes queue theirs (M2.3). Before a signature is taken, the op's own
- * re-checks run (companySendSignRefusal for a crypto send): one that can
- * never pass invalidates the op.
+ * re-checks run (companySendSignRefusal for a crypto send,
+ * guardianSetupSignRefusal for a recovery guardian): one that can never pass
+ * invalidates the op.
  */
 import express from "express";
 import { store, type PendingSafeOp } from "../../store.js";
@@ -30,6 +31,7 @@ import {
 } from "../../wallet/org-safe-queue.js";
 import { requirePermission, type OrgContext } from "../org-context.js";
 import { companySendSignRefusal } from "../crypto-sends.js";
+import { guardianSetupSignRefusal, liveOrgRecoveryChain, type OrgRecoveryChain } from "../../wallet/org-recovery.js";
 import { wrap } from "../util.js";
 import type { OrgRoutes } from "./drafts.js";
 
@@ -72,10 +74,14 @@ const challengeOf = (op: PendingSafeOp) => bufToB64url(Buffer.from(op.digest.sli
 /** An op's own re-checks before a signature (a refusal; `invalidate` ends the op). */
 export type BeforeSign = (op: PendingSafeOp) => Promise<{ status: number; code: string; error: string; invalidate?: string } | undefined>;
 
+/** Every kind's re-checks; a kind with none passes. */
+export const opSignRefusal = (recoveryChain: OrgRecoveryChain = liveOrgRecoveryChain): BeforeSign =>
+  async (op) => (await companySendSignRefusal(op)) ?? (await guardianSetupSignRefusal(op, recoveryChain));
+
 export function createSafeOpRoutes(
   deps: OrgRoutes,
   chain: SafeOpChain = liveSafeOpChain,
-  beforeSign: BeforeSign = (op) => companySendSignRefusal(op),
+  beforeSign: BeforeSign = opSignRefusal(),
 ): express.Router {
   const r = express.Router();
 

@@ -17,6 +17,10 @@
  *   - a guardian Zold did not add is flagged on the read and refuses the
  *     setup; a pending recovery refuses it; queue off and no guardian
  *     configured refuse before anything is built;
+ *   - the same rules are re-read before each owner's signature: another
+ *     guardian, a pending recovery, the guardian already on chain or no
+ *     longer offered end the op unsigned and unrelayed; a failed read
+ *     refuses that signature only;
  *   - an unarmed guardian cannot be made to sign: /admin/recoveries refuses
  *     a request naming the company's Safe (NOT_ARMED).
  *
@@ -47,7 +51,7 @@ process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS = GUARDIAN;
 
 const { initStore, store } = await import("../services/api/src/store.js");
 const { resolveOrg } = await import("../services/api/src/routes/org-context.js");
-const { createSafeOpRoutes } = await import("../services/api/src/routes/business/safe-ops.js");
+const { createSafeOpRoutes, opSignRefusal } = await import("../services/api/src/routes/business/safe-ops.js");
 const { createOrgRecoveryRoutes } = await import("../services/api/src/routes/business/org-recovery.js");
 const { createZoldenburgRecoveryRouter } = await import("../services/api/src/routes/recovery-zoldenburg.js");
 const { setOperator } = await import("../services/api/src/operators/principal.js");
@@ -119,11 +123,12 @@ const opChain = {
     return { userOpHash: `0x${"ab".repeat(32)}`, txHash: `0x${"cd".repeat(32)}`, success: true, gasPaidBy: "sponsored" } as any;
   },
 };
+// The callData carries the batched txs' data, as a Safe executeBatch does.
 const prepares: { txs: { to: string; data: string; value: bigint }[]; signers: string[] }[] = [];
 const prepare = async (plan: any, txs: any[], signers: any[]) => {
   prepares.push({ txs, signers: signers.map((s) => `${s.x}:${s.y}`) });
   const userOperation: any = {
-    sender: plan.address, nonce: safeChain.nonce, factory: null, factoryData: null, callData: `0x${randomBytes(8).toString("hex")}`, callGasLimit: 1n,
+    sender: plan.address, nonce: safeChain.nonce, factory: null, factoryData: null, callData: `0x${randomBytes(8).toString("hex")}${txs.map((t) => t.data.slice(2)).join("")}`, callGasLimit: 1n,
     verificationGasLimit: 1n, preVerificationGas: 1n, maxFeePerGas: 1n, maxPriorityFeePerGas: 1n, paymaster: null,
     paymasterVerificationGasLimit: null, paymasterPostOpGasLimit: null, paymasterData: null, signature: "0x",
   };
@@ -138,7 +143,7 @@ const requireSession = (req: any, res: any) => (who(req) ? { userId: who(req) } 
 const deps = { ctxOf: (req: any, res: any) => resolveOrg(req, res, requireSession as any) };
 app.use((req: any, _res, next) => { if (req.header("x-operator")) setOperator(req, { id: "op1", name: "Operator", sessionId: "s1" }); next(); });
 app.use("/api/orgs", createOrgRecoveryRoutes(deps, { chain: recoveryChain, orgSafeReader: opChain, prepare }));
-app.use("/api/orgs", createSafeOpRoutes(deps, opChain as any));
+app.use("/api/orgs", createSafeOpRoutes(deps, opChain as any, opSignRefusal(recoveryChain)));
 app.use("/api", createZoldenburgRecoveryRouter({ requireUserSession: (req, res, userId) => (who(req) === userId ? { id: "s" } : (res.status(403).json({ error: "not yours" }), undefined)) }));
 app.use((err: unknown, _req: any, res: any, _next: any) => res.status(500).json({ error: String((err as Error)?.stack ?? err) }));
 const server = app.listen(0, "127.0.0.1");
@@ -149,7 +154,7 @@ const call = async (method: string, p: string, user: string, body?: unknown, ext
   return { status: res.status, data: (await res.json().catch(() => ({}))) as any };
 };
 const challengeOf = (op: { digest: string }) => Buffer.from(op.digest.slice(2), "hex").toString("base64url");
-const sign = async (p: string, opId: string) => call("POST", `/orgs/org_1/safe-ops/${opId}/signatures`, `u_${p}`, await keys[p].assert(challengeOf(store.findSafeOp(opId)!)));
+const sign = async (p: string, opId: string, org = "org_1") => call("POST", `/orgs/${org}/safe-ops/${opId}/signatures`, `u_${p}`, await keys[p].assert(challengeOf(store.findSafeOp(opId)!)));
 const setup = (p: string, org = "org_1") => call("POST", `/orgs/${org}/recovery/guardian`, `u_${p}`);
 const read = (p: string, org = "org_1") => call("GET", `/orgs/${org}/recovery`, `u_${p}`);
 const strip = (a: string) => a.toLowerCase().replace(/^0x/, "");
@@ -167,6 +172,7 @@ try {
     assert.equal(r.data.pendingRecovery, null);
     assert.equal(r.data.armed, false);
     assert.equal(r.data.setupOp, null);
+    assert.equal(r.data.queueOpen, true, "the card offers the setup only where the queue would take it");
   });
 
   await check("before deployment it is not_set_up; a sole trader's is NOT_A_COMPANY; a failed read is 502, never none", async () => {
@@ -291,6 +297,63 @@ try {
     assert.equal(noneRead.data.available, false);
     assert.equal(prepares.length, 1);
     assert.equal(store.safeOpsOf("org_2").length, 0);
+  });
+
+  await check("before a signature the module is read again: a failed read refuses, a changed module ends the op", async () => {
+    const relays = safeChain.relays.length;
+    const queue = async () => {
+      const q = await setup("anna", "org_2");
+      assert.equal(q.status, 201, JSON.stringify(q.data));
+      return q.data.op.id as string;
+    };
+    const refusedAndEnded = async (id: string, code: string) => {
+      const r = await sign("anna", id, "org_2");
+      assert.equal(r.status, 409, JSON.stringify(r.data));
+      assert.equal(r.data.code, code);
+      const op = store.findSafeOp(id)!;
+      assert.equal(op.state, "INVALIDATED", code);
+      assert.equal(op.signatures.length, 0, "no signature is taken");
+    };
+
+    let id = await queue();
+    readFails = true;
+    const down = await sign("anna", id, "org_2");
+    readFails = false;
+    assert.equal(down.status, 502, JSON.stringify(down.data));
+    assert.equal(down.data.code, "RECOVERY_UNREADABLE");
+    assert.equal(store.findSafeOp(id)!.state, "PENDING", "a failed read refuses this signature only");
+    assert.equal(store.findSafeOp(id)!.signatures.length, 0);
+
+    // An owner adds their own guardian in Safe{Wallet} while the op waits.
+    modules[SAFE2.toLowerCase()] = { moduleEnabled: true, guardians: [FOREIGN], pending: null };
+    await refusedAndEnded(id, "OTHER_GUARDIAN");
+
+    modules[SAFE2.toLowerCase()] = fresh();
+    id = await queue();
+    modules[SAFE2.toLowerCase()] = { moduleEnabled: true, guardians: [], pending: { newOwners: [addr.anna], newThreshold: 1, executeAfter: 99 } };
+    await refusedAndEnded(id, "RECOVERY_PENDING");
+
+    modules[SAFE2.toLowerCase()] = fresh();
+    id = await queue();
+    modules[SAFE2.toLowerCase()] = { moduleEnabled: true, guardians: [GUARDIAN], pending: null };
+    await refusedAndEnded(id, "ALREADY_GUARDIAN");
+
+    modules[SAFE2.toLowerCase()] = fresh();
+    id = await queue();
+    const g = (CANDIDE as any).recoveryGuardianAddress;
+    (CANDIDE as any).recoveryGuardianAddress = FOREIGN;
+    try { await refusedAndEnded(id, "RECOVERY_UNAVAILABLE"); }
+    finally { (CANDIDE as any).recoveryGuardianAddress = g; }
+
+    // The last owner's signature is the one that relays: it is re-checked too.
+    id = await queue();
+    assert.equal((await sign("anna", id, "org_2")).status, 201);
+    modules[SAFE2.toLowerCase()] = { moduleEnabled: true, guardians: [FOREIGN], pending: null };
+    const last = await sign("bert", id, "org_2");
+    assert.equal(last.data.code, "OTHER_GUARDIAN");
+    assert.equal(store.findSafeOp(id)!.state, "INVALIDATED");
+    assert.equal(safeChain.relays.length, relays, "nothing relayed");
+    modules[SAFE2.toLowerCase()] = fresh();
   });
 
   await check("the unarmed guardian cannot be made to sign: /admin/recoveries refuses the company's Safe", async () => {
