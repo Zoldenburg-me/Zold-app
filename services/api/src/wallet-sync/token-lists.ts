@@ -9,6 +9,8 @@
  * class is fixed once written.
  */
 import { WALLET_SYNC } from "../config.js";
+import { redactedMessage } from "../http/log-cause.js";
+import { urlForLog } from "../http/log-safe.js";
 
 export interface TokenListSet {
   has(chainId: number, address: string): boolean;
@@ -41,8 +43,8 @@ export async function loadTokenLists(now = Date.now()): Promise<TokenListsResult
     try {
       copies.set(url, { keys: await fetchList(url), loadedAt: now });
     } catch (e) {
-      const why = e instanceof Error ? e.message : "did not answer";
-      console.warn(`token list ${url}: ${why}${copy ? " (keeping the last copy)" : ""}`);
+      const why = e instanceof Error ? redactedMessage(e) : "did not answer";
+      console.warn(`token list ${urlForLog(url)}: ${why}${copy ? " (keeping the last copy)" : ""}`);
       if (!copy) missing.push(url);
     }
   }

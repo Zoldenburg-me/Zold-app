@@ -1,6 +1,7 @@
 /**
  * One line for a server log about an error's cause: its name and short
- * message, with every URL, bare host and network target replaced. A viem HTTP
+ * message, with every URL, bare host and network target replaced and every
+ * email, IBAN and phone masked (redactPii). A viem HTTP
  * error's full message names the URL it called, Node's DNS and socket errors
  * name the host or address bare, and a bundler or RPC endpoint can carry an
  * API key in its path or subdomain, so the raw cause never goes to the log.
@@ -23,6 +24,43 @@ export function redactUrls(text: string): string {
     .replace(IP_PATTERN, "<host>");
 }
 
+/**
+ * Personal data a provider's error can echo: an email, an IBAN, a phone
+ * number. Each is replaced by a mask that still says which one it was.
+ *
+ * An IBAN needs a SEPA country code and two check digits, so an order id, a
+ * hex address or a tx hash is not one; a phone needs a leading + and 8 to 15
+ * digits, so an amount or a block number is not one. An email's domain may
+ * already be `<host>`, since redactUrls runs first.
+ */
+const EMAIL_PATTERN = /[\w.+-]+@(?:<host>|[\w-]+(?:\.[\w-]+)*\.[A-Za-z]{2,})/g;
+const SEPA = "AD|AT|BE|BG|CH|CY|CZ|DE|DK|EE|ES|FI|FR|GB|GG|GI|GR|HR|HU|IE|IM|IS|IT|JE|LI|LT|LU|LV|MC|MT|NL|NO|PL|PT|RO|SE|SI|SK|SM|VA";
+const IBAN_PATTERN = new RegExp(`\\b(?:${SEPA})\\d{2}(?: ?[A-Z0-9]){11,30}(?![A-Za-z0-9])`, "g");
+const PHONE_PATTERN = /(?<![\w+])\+\d(?:[ -]?\d){7,14}(?![\d-])/g;
+
+/** a•••@domain: the shape recovery/candide-guardian.ts maskTarget shows. */
+export function maskEmail(email: string): string {
+  const [local = "", domain = ""] = email.split("@");
+  const head = local.slice(0, Math.min(2, Math.max(1, local.length - 1)));
+  return `${head}${"•".repeat(Math.max(1, local.length - head.length))}@${domain}`;
+}
+
+/** DE89…3000: first four and last four, spaces dropped. */
+export function maskIban(iban: string): string {
+  const compact = iban.replace(/\s/g, "");
+  return `${compact.slice(0, 4)}…${compact.slice(-4)}`;
+}
+
+/** +••••••••••678: the last three digits. */
+export function maskPhone(phone: string): string {
+  const digits = phone.replace(/\D/g, "");
+  return `+${"•".repeat(Math.max(0, digits.length - 3))}${digits.slice(-3)}`;
+}
+
+export function redactPii(text: string): string {
+  return text.replace(EMAIL_PATTERN, maskEmail).replace(IBAN_PATTERN, maskIban).replace(PHONE_PATTERN, maskPhone);
+}
+
 /** Only this much of a line is redacted and logged: the host pattern
  *  backtracks quadratically on long dotted or hyphenated runs, and an RPC or
  *  bundler can echo a large body into an error message. */
@@ -38,7 +76,7 @@ function firstLine(cause: unknown): string {
 }
 
 export function describeCause(cause: unknown): string {
-  return redactUrls(firstLine(cause).slice(0, MAX_LOGGED));
+  return redactPii(redactUrls(firstLine(cause).slice(0, MAX_LOGGED)));
 }
 
 /**
@@ -49,7 +87,7 @@ export function describeCause(cause: unknown): string {
 export function callFrames(err: unknown): string[] {
   const stack = typeof (err as { stack?: unknown })?.stack === "string" ? (err as { stack: string }).stack : "";
   const frames = stack.split("\n").map((l) => l.trim()).filter((l) => l.startsWith("at ")).slice(0, 8);
-  return frames.map((f) => redactUrls(f.slice(0, MAX_LOGGED)));
+  return frames.map((f) => redactPii(redactUrls(f.slice(0, MAX_LOGGED))));
 }
 
 /** describeCause plus the stack's call frames, for a log line that needs to
@@ -78,7 +116,8 @@ function originOrPlaceholder(url: string): string {
 /**
  * An error's own words, for a stored row or a response body: the first line
  * of its short message, without the error's name, with every URL, network
- * target and IP address replaced. Dotted words stay, so a field path such as
+ * target and IP address replaced, and every email, IBAN and phone masked
+ * (redactPii). Dotted words stay, so a field path such as
  * `counterpart.identifier.iban` still says which field failed; a key-bearing
  * host appears in a URL or after a network error code, and both are replaced.
  * `keepHosts` cuts each URL to its origin instead, for a message that must
@@ -96,7 +135,7 @@ export function redactedMessage(err: unknown, opts: { keepHosts?: boolean } = {}
   const out = opts.keepHosts
     ? line.replace(URL_PATTERN, originOrPlaceholder)
     : line.replace(URL_PATTERN, "<url>").replace(NET_TARGET_PATTERN, "$1 <host>").replace(IP_PATTERN, "<host>");
-  return out.trim() || "unknown error";
+  return redactPii(out).trim() || "unknown error";
 }
 
 /** One line safe to show the caller: URLs removed, hosts kept (a WebAuthn
