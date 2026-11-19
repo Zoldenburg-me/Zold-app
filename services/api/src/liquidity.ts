@@ -36,8 +36,24 @@ export * from "./liquidity/contract.js";
 export { BestExecutionProvider };
 
 /** One venue by id. Separate from liquidityProvider() so best execution can
- *  dispatch to the venue that actually priced a quote. */
+ *  dispatch to the venue that actually priced a quote.
+ *
+ *  One instance per id for the life of the process: each venue's indicative
+ *  rate cache lives on the instance, so a fresh one per call never hit. Best
+ *  resolves its venues through here and shares them. No venue holds per-user
+ *  state; quotes and executions carry their own. */
+const providers = new Map<LiquidityProviderId, LiquidityProvider>();
+
 export function providerById(id: LiquidityProviderId): LiquidityProvider {
+  let provider = providers.get(id);
+  if (!provider) {
+    provider = buildProvider(id);
+    providers.set(id, provider);
+  }
+  return provider;
+}
+
+function buildProvider(id: LiquidityProviderId): LiquidityProvider {
   switch (id) {
     case "fx-swapper": return new FxSwapperLiquidityProvider();
     case "rfq": return new RfqLiquidityProvider();

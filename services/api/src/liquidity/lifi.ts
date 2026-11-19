@@ -20,6 +20,7 @@ import {
   LiquidityExecution,
   LiquidityProvider,
   LiquidityQuote,
+  IndicativeRateOptions,
   LiquiditySide,
   SafeSwapContext,
   SafeSwapPlan,
@@ -33,7 +34,7 @@ import {
 import { redactedMessage } from "../http/log-cause.js";
 
 export class LifiLiquidityProvider implements LiquidityProvider {
-  private indicative: { at: number; rate: number; raw: bigint } | null = null;
+  private indicative = new Map<LiquiditySide, { at: number; rate: number; raw: bigint }>();
 
   /** Tests name the tokens; production reads EURe and USDC from deployments.json. */
   constructor(private readonly addrs: () => VenueTokens = defaultTokens) {}
@@ -211,15 +212,16 @@ export class LifiLiquidityProvider implements LiquidityProvider {
     };
   }
 
-  async indicativeRate(side: LiquiditySide) {
+  async indicativeRate(side: LiquiditySide, opts: IndicativeRateOptions = {}) {
     const now = Date.now();
-    if (this.indicative && now - this.indicative.at < LIQUIDITY.INDICATIVE_TTL_MS) {
-      return { rate: this.indicative.rate, raw: this.indicative.raw };
+    const hit = opts.fresh ? undefined : this.indicative.get(side);
+    if (hit && now - hit.at < LIQUIDITY.INDICATIVE_TTL_MS) {
+      return { rate: hit.rate, raw: hit.raw };
     }
     const probe = side === "EURE_TO_USDC" ? eur.toWei(LIQUIDITY.PROBE_EUR) : usd.toUnits(LIQUIDITY.PROBE_EUR);
     const q = await this.quote(side, probe, `indicative-${now}`, new Date(now + 60_000).toISOString());
     const out = { rate: Number(q.rate) / 1e6, raw: q.rate };
-    this.indicative = { at: now, ...out };
+    this.indicative.set(side, { at: now, ...out });
     return out;
   }
 }

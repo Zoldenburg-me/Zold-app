@@ -102,7 +102,7 @@ export async function assertQuoteRateBinding(transfer: Transfer): Promise<void> 
   // Ask the provider that will actually fill the swap, not the FxSwapper
   // contract: a deployment pricing through a market maker must be checked
   // against a number something is going to trade at.
-  const { raw: live } = await liquidityProvider().indicativeRate("EURE_TO_USDC");
+  const { raw: live } = await liquidityProvider().indicativeRate("EURE_TO_USDC", { fresh: true });
   const driftBps = (live > locked ? live - locked : locked - live) * 10_000n / locked;
   if (driftBps > BigInt(FX.QUOTE_BINDING_BPS)) {
     throw new Error(
@@ -794,7 +794,7 @@ async function compensationRate(t: Transfer): Promise<bigint> {
     const rate = BigInt(quote.lockedSwapRate);
     if (rate > 0n) return rate;
   }
-  return (await liquidityProvider().indicativeRate("EURE_TO_USDC")).raw;
+  return (await liquidityProvider().indicativeRate("EURE_TO_USDC", { fresh: true })).raw;
 }
 
 const STRANDED_MS = 10 * 60_000;
