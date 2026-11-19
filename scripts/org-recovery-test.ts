@@ -123,12 +123,14 @@ const opChain = {
     return { userOpHash: `0x${"ab".repeat(32)}`, txHash: `0x${"cd".repeat(32)}`, success: true, gasPaidBy: "sponsored" } as any;
   },
 };
-// The callData carries the batched txs' data, as a Safe executeBatch does.
+// The callData carries the batched txs' data, as a Safe executeBatch does;
+// bareCallData leaves it out, so nothing in the op names the guardian.
+let bareCallData = false;
 const prepares: { txs: { to: string; data: string; value: bigint }[]; signers: string[] }[] = [];
 const prepare = async (plan: any, txs: any[], signers: any[]) => {
   prepares.push({ txs, signers: signers.map((s) => `${s.x}:${s.y}`) });
   const userOperation: any = {
-    sender: plan.address, nonce: safeChain.nonce, factory: null, factoryData: null, callData: `0x${randomBytes(8).toString("hex")}${txs.map((t) => t.data.slice(2)).join("")}`, callGasLimit: 1n,
+    sender: plan.address, nonce: safeChain.nonce, factory: null, factoryData: null, callData: `0x${randomBytes(8).toString("hex")}${bareCallData ? "" : txs.map((t) => t.data.slice(2)).join("")}`, callGasLimit: 1n,
     verificationGasLimit: 1n, preVerificationGas: 1n, maxFeePerGas: 1n, maxPriorityFeePerGas: 1n, paymaster: null,
     paymasterVerificationGasLimit: null, paymasterPostOpGasLimit: null, paymasterData: null, signature: "0x",
   };
@@ -353,6 +355,51 @@ try {
     assert.equal(last.data.code, "OTHER_GUARDIAN");
     assert.equal(store.findSafeOp(id)!.state, "INVALIDATED");
     assert.equal(safeChain.relays.length, relays, "nothing relayed");
+    modules[SAFE2.toLowerCase()] = fresh();
+  });
+
+  await check("the guardian is matched by the field stored on the op; an op without it falls back to its UserOperation", async () => {
+    const queue = async (bare: boolean) => {
+      modules[SAFE2.toLowerCase()] = fresh();
+      bareCallData = bare;
+      try {
+        const q = await setup("anna", "org_2");
+        assert.equal(q.status, 201, JSON.stringify(q.data));
+        return q.data.op.id as string;
+      } finally { bareCallData = false; }
+    };
+    const end = (id: string) => store.endPendingSafeOp(id, { state: "CANCELLED", reason: "test" });
+    const refused = async (id: string) => {
+      const r = await sign("anna", id, "org_2");
+      assert.equal(r.status, 409, JSON.stringify(r.data));
+      assert.equal(r.data.code, "RECOVERY_UNAVAILABLE");
+      assert.equal(store.findSafeOp(id)!.state, "INVALIDATED");
+      assert.equal(store.findSafeOp(id)!.signatures.length, 0, "no signature is taken");
+    };
+
+    // The UserOperation does not name the guardian; the stored field does.
+    let id = await queue(true);
+    let op = store.findSafeOp(id)!;
+    assert.equal(op.guardianAddress?.toLowerCase(), GUARDIAN, "the guardian is stored on the op");
+    assert.ok(!op.userOperation.toLowerCase().includes(strip(GUARDIAN)), "the op itself does not name it");
+    assert.equal((await sign("anna", id, "org_2")).status, 201, "the stored field matches the deployment's guardian");
+    end(id);
+
+    // The UserOperation names the guardian, but the stored field is another one.
+    id = await queue(false);
+    op = store.findSafeOp(id)!;
+    assert.ok(op.userOperation.toLowerCase().includes(strip(GUARDIAN)));
+    op.guardianAddress = FOREIGN;
+    await refused(id);
+
+    // An op queued before the field existed: the substring check decides.
+    id = await queue(false);
+    delete store.findSafeOp(id)!.guardianAddress;
+    assert.equal((await sign("anna", id, "org_2")).status, 201, "a legacy op that names the guardian may be signed");
+    end(id);
+    id = await queue(true);
+    delete store.findSafeOp(id)!.guardianAddress;
+    await refused(id);
     modules[SAFE2.toLowerCase()] = fresh();
   });
 
