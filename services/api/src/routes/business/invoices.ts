@@ -38,6 +38,7 @@ import {
 import { CEILINGS, ceilingRefusal } from "../../domain/ceilings.js";
 import { linkInvoiceView } from "./invoice-links.js";
 import { payLinkOffer } from "./invoice-pay-link.js";
+import { liveCryptoSend } from "../../wallet/org-debit.js";
 
 /** Resolving the org and the caller's role for a request — injected so this
  *  module cannot acquire its own way of deciding who is calling. */
@@ -317,8 +318,9 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
       if (t.state === "FAILED" || t.state === "REFUNDED" || expiredUnsigned(t)) return res.status(409).json({ error: "That payment did not go through.", code: "PAYMENT_DEAD" });
       if (t.createdAt < invoice.submittedAt!) return res.status(409).json({ error: "That payment was made before the link was filled in." });
     } else {
-      const s = store.findCryptoSend(cryptoSendId!);
-      if (!s || s.userId !== ctx.userId) return res.status(404).json({ error: "no such payment" });
+      const found = store.findCryptoSend(cryptoSendId!);
+      const s = found && liveCryptoSend(found);
+      if (!s || s.userId !== ctx.userId || (s.orgId && s.orgId !== ctx.org.id)) return res.status(404).json({ error: "no such payment" });
       if (payTo?.kind !== "wallet" || !payTo.address || s.to.toLowerCase() !== payTo.address.toLowerCase()) {
         return res.status(409).json({ error: "That payment goes to a different wallet than the one on the link." });
       }

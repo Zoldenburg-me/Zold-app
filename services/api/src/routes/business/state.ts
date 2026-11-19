@@ -10,6 +10,7 @@
 import { store, type Transfer } from "../../store.js";
 import { activity, findDriftedLines } from "../../domain/drafts.js";
 import { expiredUnsigned } from "../../orchestrator.js";
+import { liveCryptoSend } from "../../wallet/org-debit.js";
 import type { DraftPayment, DraftState, Invoice } from "../../domain/types.js";
 
 /** The org's address book, keyed by id, for the drift fingerprint check. */
@@ -45,14 +46,15 @@ const lineReport = (transfers: Transfer[]) => {
  */
 export const withExecutionState = (draft: DraftPayment) => {
   if (draft.state === "EXECUTING" && draft.cryptoSendIds?.length) {
-    const sends = draft.cryptoSendIds.map((id) => store.findCryptoSend(id));
+    // A company send reads its state from its op.
+    const sends = draft.cryptoSendIds.map((id) => store.findCryptoSend(id)).map((x) => x && liveCryptoSend(x));
     // An unsigned send past its deadline can never be submitted.
     const dead = sends.filter((x) => !x || x.state === "FAILED" || (x.state === "CREATED" && x.deadline * 1000 < Date.now()));
     const state: DraftState = dead.length ? "FAILED" : sends.every((x) => x?.state === "SENT") ? "EXECUTED" : draft.state;
     return {
       ...draft,
       state,
-      cryptoSends: sends.map((x) => x && { id: x.id, state: x.state, ...(x.txHash ? { txHash: x.txHash } : {}) }),
+      cryptoSends: sends.map((x) => x && { id: x.id, state: x.state, ...(x.safeOpId ? { safeOpId: x.safeOpId } : {}), ...(x.txHash ? { txHash: x.txHash } : {}) }),
       ...(dead.length ? { failureReason: `Not sent: ${dead.map((x) => x?.error ?? (x ? "approval expired" : "send missing")).join("; ")}. Create a new payment to try again.` } : {}),
     };
   }
@@ -88,7 +90,8 @@ export const withExecutionState = (draft: DraftPayment) => {
  */
 export const syncInvoicePayment = (invoice: Invoice): Invoice => {
   if (invoice.state !== "PAYING") return invoice;
-  const send = invoice.payment?.cryptoSendId ? store.findCryptoSend(invoice.payment.cryptoSendId) : undefined;
+  const stored = invoice.payment?.cryptoSendId ? store.findCryptoSend(invoice.payment.cryptoSendId) : undefined;
+  const send = stored && liveCryptoSend(stored);
   if (send) {
     if (send.state === "SENT") {
       return store.updateInvoice(invoice.id, {

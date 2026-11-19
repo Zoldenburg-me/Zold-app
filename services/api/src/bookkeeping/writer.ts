@@ -36,6 +36,7 @@ import { describeCause } from "../http/log-cause.js";
 import { withoutConversionOutputs } from "../transfers/activity.js";
 import type { MoneyInHolder } from "./money-in.js";
 import type { Account } from "../domain/types.js";
+import { liveCryptoSend } from "../wallet/org-debit.js";
 
 /**
  * Rule 2. No dex, LI.FI, RFQ or CoW swap has executed with real money, so a
@@ -81,6 +82,8 @@ interface Rows {
   cryptoSendsOf(userId: string): CryptoSend[];
   issueOrdersOf(userId: string): MoneriumIssueRecord[];
   issueOrdersOfAccount(accountId: string): MoneriumIssueRecord[];
+  /** A company's sends from this account's Safe, each in its op's state. */
+  cryptoSendsOfAccount(account: Account): CryptoSend[];
   sweepsOf(userId: string): ConversionSweep[];
   paymentRequestsOf(userId: string): PaymentRequest[];
   invoicesOf(orgId: string): Invoice[];
@@ -94,9 +97,11 @@ interface Rows {
 const storeRows: Rows = {
   transfersOf: (id) => store.transfers.filter((t) => t.userId === id),
   depositsOf: (id) => withoutConversionOutputs(store.cryptoDeposits.filter((d) => d.userId === id)),
-  cryptoSendsOf: (id) => store.cryptoSends.filter((c) => c.userId === id),
+  // A company send's userId is who queued it; it is the company's money.
+  cryptoSendsOf: (id) => store.cryptoSends.filter((c) => c.userId === id && !c.safeOpId),
   issueOrdersOf: (id) => store.moneriumIssueOrders.filter((o) => o.userId === id),
   issueOrdersOfAccount: (id) => store.moneriumIssueOrders.filter((o) => o.accountId === id),
+  cryptoSendsOfAccount: (a) => companySends(store.cryptoSends, a),
   sweepsOf: (id) => store.conversionSweeps.filter((s) => s.userId === id),
   paymentRequestsOf: (id) => store.paymentRequestsForUser(id),
   invoicesOf: (orgId) => store.invoicesOf(orgId),
@@ -118,6 +123,14 @@ function groupBy<T>(rows: readonly T[], key: (row: T) => string | undefined): Ma
   return out;
 }
 
+/** A company send is the account's when its op spends from the account's Safe. */
+function companySends(sends: readonly CryptoSend[], account: Account): CryptoSend[] {
+  const safe = account.address?.toLowerCase();
+  return sends
+    .filter((c) => c.safeOpId && c.orgId === account.orgId && !!safe && store.findSafeOp(c.safeOpId)?.safeAddress.toLowerCase() === safe)
+    .map((c) => liveCryptoSend(c));
+}
+
 /** Valid for one synchronous sweep: nothing else writes these tables meanwhile. */
 function groupedRows(): Rows {
   const transfers = groupBy(store.transfers, (t) => t.userId);
@@ -125,7 +138,8 @@ function groupedRows(): Rows {
   const deposits = groupBy(withoutConversionOutputs(store.cryptoDeposits), (d) => d.userId);
   const issueOrders = groupBy(store.moneriumIssueOrders, (o) => o.userId);
   const accountIssueOrders = groupBy(store.moneriumIssueOrders, (o) => o.accountId);
-  const cryptoSends = groupBy(store.cryptoSends, (c) => c.userId);
+  const cryptoSends = groupBy(store.cryptoSends.filter((c) => !c.safeOpId), (c) => c.userId);
+  const orgSends = groupBy(store.cryptoSends.filter((c) => c.safeOpId), (c) => c.orgId);
   const sweeps = groupBy(store.conversionSweeps, (s) => s.userId);
   const paymentRequests = groupBy(store.paymentRequests, (r) => r.userId);
   const invoices = groupBy(store.invoices, (i) => i.orgId);
@@ -138,6 +152,7 @@ function groupedRows(): Rows {
     cryptoSendsOf: (id) => cryptoSends.get(id) ?? [],
     issueOrdersOf: (id) => issueOrders.get(id) ?? [],
     issueOrdersOfAccount: (id) => accountIssueOrders.get(id) ?? [],
+    cryptoSendsOfAccount: (a) => companySends(orgSends.get(a.orgId) ?? [], a),
     sweepsOf: (id) => sweeps.get(id) ?? [],
     paymentRequestsOf: (id) => paymentRequests.get(id) ?? [],
     invoicesOf: (orgId) => invoices.get(orgId) ?? [],
@@ -195,8 +210,8 @@ export function writeStatementLinesFor(user: User, rows: Rows = storeRows): { ad
 
 /**
  * A company account on its own Safe: no person's movements are its, so its
- * lines are the bank credits booked to the account itself. Paying out from
- * it is not built, so there is nothing else to project.
+ * lines are the bank credits booked to the account itself and the sends its
+ * owners signed from its Safe.
  */
 export function writeAccountStatementLines(account: Account, rows: Rows = storeRows): { added: number; updated: number } {
   const inp: StatementInputs = {
@@ -210,6 +225,7 @@ export function writeAccountStatementLines(account: Account, rows: Rows = storeR
     sweeps: [],
     invoices: rows.invoicesOf(account.orgId),
     paymentRequests: [],
+    cryptoSends: rows.cryptoSendsOfAccount(account),
     swapsHaveExecuted: rows.swapsHaveExecuted(),
   };
   return writeProjected(inp, undefined, rows);
@@ -253,7 +269,7 @@ export function writeStatementLines(): { added: number; updated: number } {
         }
       }
       for (const a of store.accounts) {
-        if (!rows.issueOrdersOfAccount(a.id).length || !a.address) continue;
+        if (!a.address || (!rows.issueOrdersOfAccount(a.id).length && !rows.cryptoSendsOfAccount(a).length)) continue;
         try {
           const r = writeAccountStatementLines(a, rows);
           added += r.added;

@@ -50,11 +50,15 @@ import { redactedMessage } from "../../http/log-cause.js";
 import { wrap } from "../util.js";
 import { requireCapability as requireUserCapability } from "../../http/guards.js";
 import { pendingCryptoSends } from "../../http/pending.js";
-import { createCryptoSendPreparer } from "../crypto-sends.js";
+import { createCompanyCryptoSendPreparer, createCryptoSendPreparer, type CryptoSendInput } from "../crypto-sends.js";
 import { CHAIN_ID, cryptoSendEnabled } from "../../config.js";
 import type { User } from "../../store.js";
+import type { Account } from "../../domain/types.js";
+import { orgEntity } from "../../domain/org-entity.js";
+import { publicSafeOp } from "./safe-ops.js";
 
 export type CryptoSendPreparer = ReturnType<typeof createCryptoSendPreparer>;
+export type CompanyCryptoSendPreparer = ReturnType<typeof createCompanyCryptoSendPreparer>;
 
 /** Resolving the org and the caller's role for a request — injected so this
  *  module cannot acquire its own way of deciding who is calling. */
@@ -87,6 +91,7 @@ export function createDraftRoutes(
   buildTransferFromQuote: TransferFactory,
   readBalances: BalanceReader = accountBalances,
   prepareCryptoSend: CryptoSendPreparer = createCryptoSendPreparer({}),
+  prepareCompanySend: CompanyCryptoSendPreparer = createCompanyCryptoSendPreparer({}),
 ): express.Router {
   const { ctxOf } = deps;
   const r = express.Router();
@@ -346,13 +351,17 @@ export function createDraftRoutes(
    * because two operations prepared from one Safe share a nonce, so only the
    * first could land. The member whose Safe it is signs it at
    * /crypto-sends/:id/authorize, which re-checks the payee once more.
+   *
+   * A company's run leaves from its org Safe instead: the caller queues one
+   * op (createCompanyCryptoSendPreparer) and signs nothing; the owners sign it
+   * at /orgs/:orgId/safe-ops, which re-checks the payee before each signature.
    */
-  async function walletRun(ctx: OrgContext, res: express.Response, draft: DraftPayment, user: User) {
+  async function walletRun(ctx: OrgContext, res: express.Response, draft: DraftPayment, payer: { user: User } | { account: Account }) {
     if (!cryptoSendEnabled()) {
       return res.status(503).json({ error: "Sending to a crypto wallet is not open on this deployment.", code: "CRYPTO_SEND_OFF" });
     }
     if (!requireCapability(ctx, res, "transfers.drafts")) return;
-    if (!requireUserCapability(user, "onchain_balance", res)) return;
+    if ("user" in payer && !requireUserCapability(payer.user, "onchain_balance", res)) return;
     const [line] = draft.lines;
     const d = line.destination;
     const problem = walletRunProblem(draft);
@@ -367,12 +376,20 @@ export function createDraftRoutes(
         : `This draft is ${draft.state} and cannot be sent from that state.` });
     }
     const plannedAt = draft.updatedAt;
-    const prepared = await prepareCryptoSend(user, { token: line.asset, amount: line.amount, to: d.address, confirmedAddress: d.address, draftId: draft.id });
+    const input: CryptoSendInput = { token: line.asset, amount: line.amount, to: d.address, confirmedAddress: d.address, draftId: draft.id };
+    const prepared = "user" in payer
+      ? await prepareCryptoSend(payer.user, input)
+      : await prepareCompanySend({ org: ctx.org, member: ctx.member, userId: ctx.userId, account: payer.account, input });
     if (!prepared.ok) return res.status(prepared.status).json(prepared.body);
     const { send } = prepared;
+    const op = "op" in prepared ? prepared.op : undefined;
+    // A company send fails with its op (liveCryptoSend); nobody signs it after.
     const drop = (why: string) => {
-      store.updateCryptoSend(send.id, { state: "FAILED", error: why });
-      pendingCryptoSends.delete(send.id);
+      if (op) store.endPendingSafeOp(op.id, { state: "INVALIDATED", reason: why });
+      else {
+        store.updateCryptoSend(send.id, { state: "FAILED", error: why });
+        pendingCryptoSends.delete(send.id);
+      }
     };
     // The checks above awaited the chain: an address-book edit may have landed.
     const now = reconcileDrift(store.findDraft(draft.id) ?? draft);
@@ -391,8 +408,28 @@ export function createDraftRoutes(
     }
     const updated = store.updateDraft(claimed.id, {
       cryptoSendIds: [send.id],
-      activity: [...claimed.activity, activity(ctx.member.id, "executing", "1 crypto send created, awaiting a passkey signature.")],
+      activity: [...claimed.activity, activity(ctx.member.id, "executing", op
+        ? "1 crypto send queued, waiting for the owners to sign."
+        : "1 crypto send created, awaiting a passkey signature.")],
     });
+    if (op) {
+      return res.status(201).json({
+        draft: updated,
+        cryptoSends: [{
+          lineId: line.id,
+          cryptoSendId: send.id,
+          recipient: d.displayName,
+          to: send.to,
+          token: send.token,
+          amount: send.amount,
+          deadline: send.deadline,
+          state: "CREATED",
+          safeOpId: op.id,
+        }],
+        safeOp: publicSafeOp(op),
+        note: "1 crypto send queued. It is waiting for the owners to sign it in the company's queue. Nothing has moved yet.",
+      });
+    }
     res.status(201).json({
       draft: updated,
       cryptoSends: [{
@@ -403,7 +440,7 @@ export function createDraftRoutes(
         token: send.token,
         amount: send.amount,
         deadline: send.deadline,
-        safeExecution: prepared.safeExecution,
+        safeExecution: "safeExecution" in prepared ? prepared.safeExecution : undefined,
         submitTo: `/api/crypto-sends/${send.id}/authorize`,
       }],
       note: "1 crypto send created. It needs a passkey signature — sign it and POST the assertion to submitTo. Nothing has moved yet.",
@@ -472,6 +509,13 @@ export function createDraftRoutes(
     if (!account || account.orgId !== ctx.org.id) {
       return res.status(404).json({ error: "This draft's funding account no longer exists." });
     }
+    // A company's wallet run pays from its org Safe: it needs the Safe, not a
+    // backer, an IBAN or a Monerium profile (createCompanyCryptoSendPreparer
+    // refuses an org Safe that is not set up). A company's bank run is not
+    // built yet and is refused below as before.
+    if (orgEntity(ctx.org) === "company" && checked.lines.some((l) => l.destination.kind === "wallet")) {
+      return walletRun(ctx, res, checked, { account });
+    }
     const spendable = accountIsSpendable(account, ctx.org);
     if (!spendable.ok) return res.status(409).json({ error: spendable.reason });
     if (!account.backingUserId) {
@@ -516,7 +560,7 @@ export function createDraftRoutes(
 
     // ── A run that pays a wallet: one crypto send from the backing Safe ───
     if (checked.lines.some((l) => l.destination.kind === "wallet")) {
-      return walletRun(ctx, res, checked, user);
+      return walletRun(ctx, res, checked, { user });
     }
 
     // ── Plan every line BEFORE creating anything ──────────────────────────
