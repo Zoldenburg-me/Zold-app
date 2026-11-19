@@ -60,6 +60,7 @@ function phPayees() {
 function phSendBlocked(u = user) {
   if (!HAS("onchain_balance")) return { text: "Sending is not part of this account.", action: null };
   if (!bankOffered(u) && !kycApproved(u)) return { text: "Bank transfers open once your identity is verified, and this account has no bank account to verify it with.", action: null };
+  if (ibanUnderReview(u)) return { text: `Bank transfers open once your IBAN is active. ${IBAN_UNDER_REVIEW}`, action: null };
   if (!kycApproved(u) || !u?.iban) return { text: "Bank transfers open once Monerium has verified you and your IBAN is active.", action: { id: "ph-send-verify", label: "Verify your identity" } };
   return null;
 }

@@ -61,8 +61,8 @@ function obFinish(view) {
 function enterKycReview(_name) {
   obShow();
   // A connected account activates (or switches back on) its IBAN; the rest
-  // connect Monerium first.
-  const activate = hasConnectedMonerium(user) && (!kycApproved(user) || ibanSwitchedOff(user));
+  // connect Monerium first. One under review is not offered an IBAN.
+  const activate = hasConnectedMonerium(user) && ibanActivationOffered(user) && (!kycApproved(user) || ibanSwitchedOff(user));
   obGo(obNextAfterAccount() || (activate ? "activate" : "monerium"), { replace: true });
 }
 
@@ -110,6 +110,7 @@ function obGuard(name) {
     if (!signedUp) return "auth";
     if (name === "email") return caps.emailVerification && user.email && !user.emailVerifiedAt ? name : obNextAfterAccount() || "monerium";
     if (name === "monerium-keys") return caps.moneriumApiKeys && (!kycApproved(user) || !user.iban) ? name : obNextAfterAccount() || "monerium";
+    if (name === "activate") return ibanActivationOffered(user) ? name : obNextAfterAccount() || "monerium";
     return name;
   }
   if (kind === "import") {
@@ -1744,8 +1745,21 @@ OB.email = {
 /* ---- Monerium ---------------------------------------------------------------- */
 OB.monerium = {
   kind: "after",
-  title: "Get your IBAN",
+  get title() { return ibanUnderReview(user) ? "Under review" : "Get your IBAN"; },
   html: () => {
+    // Connected and under review: nothing to sign in to again, no IBAN to
+    // promise. Any old link or button that still lands here sees this.
+    if (ibanUnderReview(user)) {
+      return `${obAfterProgress("monerium", "Your IBAN")}
+      <main id="main" class="z-screen__main">
+        ${obIntro("Monerium is still reviewing this account", "There is no IBAN yet, and nothing to redo here. You can keep using Zold as a wallet: receive and hold digital dollars and euros, convert dollars to euros, get paid through your payment page, and send invoices.")}
+        ${obAlert()}
+      </main>
+      <div class="z-screen__foot">
+        ${Z.button({ variant: "primary", full: true, label: "Back to Home", id: "btn-kyc-dashboard" })}
+        ${Z.button({ variant: "quiet", full: true, label: "Email support", href: "mailto:support@zoldhq.com" })}
+      </div>`;
+    }
     const rejected = user?.kycStatus === "rejected";
     if (rejected) {
       return `${obAfterProgress("monerium", "Your IBAN")}
@@ -2494,7 +2508,8 @@ async function resumeSession(capabilitiesLoaded) {
     await capabilitiesLoaded;
     const next = obNextAfterAccount();
     // Back from Monerium's sign-in: the activate step (or why it refused).
-    if (!next && fromMonerium && bankOffered(user) && !kycApproved(user) && !ibanWait(user)) return enterKycReview();
+    // An account under review has nothing to activate: Home says why.
+    if (!next && fromMonerium && ibanActivationOffered(user) && !kycApproved(user) && !ibanWait(user)) return enterKycReview();
     // "Do this later" on the Monerium step opened the app: a reload on an app
     // screen stays in the app, whose Home offers the step again. An IBAN that
     // is requested waits on Monerium, not on the person: Home, not the gate.

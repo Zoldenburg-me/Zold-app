@@ -81,7 +81,7 @@ const kycCopy = (status = "pending", u = user) => {
       ? ["WALLET", "No bank account for now", "We can’t open a bank account for you at the moment, because our banking partner can’t onboard you. You can keep using Zold as a wallet."]
       : ["WALLET", "Wallet account", "Bank accounts aren’t available where you live yet. You can use Zold as a wallet."];
   }
-  if (status !== "approved" && hasConnectedMonerium(u)) {
+  if (status === "pending" && hasConnectedMonerium(u)) {
     return ["MONERIUM", "Get your IBAN", "Your Monerium account is connected. One approval links your account to it and asks Monerium for the IBAN."];
   }
   return ({
