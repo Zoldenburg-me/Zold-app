@@ -137,6 +137,7 @@
 </div>
 
 <script type="module">
+import { lineNetCents, formTotalCents, formatCents } from "/invoice-totals.js";
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -388,9 +389,10 @@ const lineRows = () => lines.map((l, i) => `<tr>
   <td><input data-i="${i}" data-f="description" value="${esc(l.description)}" placeholder="What you did" aria-label="Line ${i + 1} description" /></td>
   <td style="width:80px"><input data-i="${i}" data-f="quantity" value="${esc(l.quantity)}" inputmode="decimal" aria-label="Line ${i + 1} quantity" /></td>
   <td style="width:110px"><input data-i="${i}" data-f="unitPrice" value="${esc(l.unitPrice)}" placeholder="0.00" inputmode="decimal" aria-label="Line ${i + 1} unit price" /></td>
-  <td style="width:100px" class="num">${(Number(l.quantity || 0) * Number(l.unitPrice || 0)).toFixed(2)}</td>
+  <td style="width:100px" class="num">${lineAmount(l)}</td>
 </tr>`).join("");
-const total = () => lines.reduce((s, l) => s + Number(l.quantity || 0) * Number(l.unitPrice || 0), 0).toFixed(2);
+const lineAmount = (l) => formatCents(lineNetCents(l.quantity, l.unitPrice));
+const total = () => formatCents(formTotalCents(lines));
 
 function renderForm(inv) {
   $("#content").innerHTML = `
@@ -429,8 +431,7 @@ function renderForm(inv) {
     lines[Number(el.dataset.i)][el.dataset.f] = el.value;
     $("#total").textContent = `${total()} ${inv.currency}`;
     $("#lines").querySelectorAll("tr").forEach((tr, i) => {
-      tr.lastElementChild.textContent =
-        (Number(lines[i].quantity || 0) * Number(lines[i].unitPrice || 0)).toFixed(2);
+      tr.lastElementChild.textContent = lineAmount(lines[i]);
     });
   });
   $("#add-line").onclick = () => {
