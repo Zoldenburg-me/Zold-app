@@ -23,6 +23,7 @@ import type {
 } from "./types.js";
 import type { CryptoDeposit } from "../store.js";
 import { chainName } from "./contacts.js";
+import { lineNetCents } from "./invoicing.js";
 
 export class InvoiceError extends Error {
   constructor(message: string, readonly code?: "OVER_LIMIT") { super(message); }
@@ -184,8 +185,9 @@ export function validateLines(input: unknown): { lines: InvoiceLine[]; total: st
       throw new InvoiceError(`Line ${i + 1} has an unusable unit price.`);
     }
     // Integer cents, rounded once per line: summing floats drifts against
-    // what the supplier's own software computed.
-    const cents = Math.round(Number(quantity) * Number(unitPrice) * 100);
+    // what the supplier's own software computed. The same rounding as
+    // computeTotals and the form (public/invoice-totals.js).
+    const cents = lineNetCents(Number(quantity), Number(unitPrice));
     totalCents += cents;
     return { description, quantity, unitPrice, amount: (cents / 100).toFixed(2) };
   });
