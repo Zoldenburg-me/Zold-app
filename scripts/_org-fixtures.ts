@@ -44,11 +44,13 @@ export function gatedEurAccount(id: string, orgId: string, extra: Partial<Accoun
   return { id, orgId, currency: "EUR", label: "main", status: "gated", provider: "monerium", identifier: {}, createdAt: NOW, updatedAt: NOW, ...extra } as Account;
 }
 
-/** A euro account with its IBAN, spending from `backingUserId`'s Safe. */
-export function activeEurAccount(id: string, orgId: string, opts: { iban: string; address: `0x${string}`; backingUserId: string }): Account {
+/** A euro account with its IBAN, spending from `backingUserId`'s Safe. With
+ *  no `backingUserId`, a company's: the Safe at `address` is its own. */
+export function activeEurAccount(id: string, orgId: string, opts: { iban: string; address: `0x${string}`; backingUserId?: string }): Account {
   return {
     id, orgId, currency: "EUR", label: "main", status: "active", provider: "monerium",
-    identifier: { iban: opts.iban }, address: opts.address, backingUserId: opts.backingUserId, createdAt: NOW, updatedAt: NOW,
+    identifier: { iban: opts.iban }, address: opts.address,
+    ...(opts.backingUserId ? { backingUserId: opts.backingUserId } : {}), createdAt: NOW, updatedAt: NOW,
   } as Account;
 }
 
