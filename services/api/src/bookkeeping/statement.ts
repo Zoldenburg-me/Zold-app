@@ -281,7 +281,7 @@ function eureInLines(inp: StatementInputs): LineDraft[] {
   // A swap's output by log: another userOp's EURe in the same bundle is
   // money in.
   for (const d of inp.deposits) for (const x of d.txs) if (x.step !== "safe.swap(usdc->eure)") booked.add(x.hash.toLowerCase());
-  const isConversionOutput = conversionOutputs(inp.deposits);
+  const isConversionOutput = conversionOutputs(inp.deposits, inp.transfers);
   const out: LineDraft[] = [];
   for (const d of inp.deposits) {
     if (d.userId !== inp.userId || d.token !== "EURE" || !((d.amountEur ?? 0) > 0)) continue;

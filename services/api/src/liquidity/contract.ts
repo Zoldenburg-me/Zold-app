@@ -13,6 +13,8 @@
  * mid and what we deliver; unrecorded positive slippage would make that number
  * understate what we take.
  */
+import { ENTRYPOINT_V9 } from "abstractionkit";
+import { decodeEventLog } from "viem";
 import { LIQUIDITY } from "../config.js";
 import {
   abis,
@@ -290,4 +292,77 @@ export function applySurplus(
     return { amountOut: quote.expectedOut, surplus: { amount: raw.toString(), keptBy: "treasury" } };
   }
   return { amountOut, surplus: { amount: raw.toString(), keptBy: "user" } };
+}
+
+/** The ERC-20 event, declared here rather than pulled from the mock's ABI —
+ *  the real USDC emits the same signature and this path must not depend on our
+ *  own token's artifact. */
+export const TRANSFER_EVENT = {
+  type: "event",
+  name: "Transfer",
+  inputs: [
+    { indexed: true, name: "from", type: "address" },
+    { indexed: true, name: "to", type: "address" },
+    { indexed: false, name: "value", type: "uint256" },
+  ],
+} as const;
+
+const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+/** The EntryPoint's BeforeExecution() and UserOperationEvent(bytes32,...).
+ *  A bundle executes its userOps in order after BeforeExecution, and each
+ *  op's logs end with its own UserOperationEvent. */
+const BEFORE_EXECUTION_TOPIC = "0xbb47ee3e183a558b1a2ff0874b079f3fc5478b7454eacf2bfc5af2ff5878f972";
+const USER_OP_EVENT_TOPIC = "0x49628fd1471006c1482da88028e9ce4dbb080b815c9b0344d39e5a8e6ec1419f";
+/** The EntryPoint the Safe's userOps go through (UserOperationV9). */
+const ENTRY_POINT = ENTRYPOINT_V9.toLowerCase();
+
+/**
+ * Transfer logs of one token in one transaction's receipt. When the
+ * transaction is an EntryPoint bundle, only the logs of `userOpHash`'s own
+ * execution count: another party's userOp in the same bundle may send the
+ * same token to the same Safe. Undefined when there is no receipt to read, or
+ * a userOp is named or present but that one's event is not in the receipt.
+ */
+export async function tokenTransfers(txHash: string | undefined, token: string, userOpHash: string | null | undefined) {
+  if (!txHash || !/^0x[0-9a-fA-F]{64}$/.test(txHash)) return undefined;
+  const receipt = await publicClient.getTransactionReceipt({ hash: txHash as `0x${string}` });
+  let logs = receipt.logs;
+  // Markers count only from the EntryPoint itself: any contract in the bundle
+  // can emit a log shaped like one. receipt.to may be a bundler's own contract.
+  const marker = (i: number, topic: string) =>
+    logs[i].address.toLowerCase() === ENTRY_POINT && logs[i].topics[0] === topic;
+  const end = logs.findIndex((l, i) => marker(i, USER_OP_EVENT_TOPIC) && l.topics[1]?.toLowerCase() === userOpHash?.toLowerCase());
+  if (end >= 0) {
+    let start = end - 1;
+    while (start >= 0 && !marker(start, USER_OP_EVENT_TOPIC) && !marker(start, BEFORE_EXECUTION_TOPIC)) start--;
+    logs = logs.slice(start + 1, end);
+  } else if (userOpHash || logs.some((_, i) => marker(i, USER_OP_EVENT_TOPIC))) {
+    // A userOp whose own event is not in this receipt: nothing here is its.
+    return undefined;
+  }
+  const transfers: { from: string; to: string; value: bigint; logIndex: number }[] = [];
+  for (const log of logs) {
+    if (log.address.toLowerCase() !== token.toLowerCase() || log.topics[0] !== TRANSFER_TOPIC) continue;
+    const { args } = decodeEventLog({ abi: [TRANSFER_EVENT], data: log.data, topics: log.topics });
+    transfers.push({ from: args.from.toLowerCase(), to: args.to.toLowerCase(), value: args.value, logIndex: Number(log.logIndex) });
+  }
+  return transfers;
+}
+
+/**
+ * What one transaction delivered of `token` to `to`, summed from its own
+ * Transfer logs (scoped to `userOpHash` in a bundle), with the log indexes.
+ * A balance delta would also count anything else that reached `to` in the
+ * same window; `to` moving the token to itself delivers nothing. Undefined
+ * when there is no receipt to read: the caller must not guess.
+ */
+export async function deliveredFromReceipt(
+  txHash: string | undefined,
+  token: string,
+  to: string,
+  userOpHash?: string | null,
+): Promise<{ wei: bigint; logIndexes: number[] } | undefined> {
+  const r = to.toLowerCase();
+  const transfers = (await tokenTransfers(txHash, token, userOpHash))?.filter((t) => t.to === r && t.from !== r);
+  return transfers && { wei: transfers.reduce((n, t) => n + t.value, 0n), logIndexes: transfers.map((t) => t.logIndex) };
 }
