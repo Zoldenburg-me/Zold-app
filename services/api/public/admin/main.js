@@ -12,37 +12,9 @@ let badgesAt = 0;
 // Any same-origin script can read localStorage: no operator token stays there.
 localStorage.removeItem('zold_operator_token');
 
-const signInBtn = document.getElementById('signInBtn');
-const addPasskeyBtn = document.getElementById('addPasskeyBtn');
-const signOutBtn = document.getElementById('signOutBtn');
-
-/** The ceremonies that open a session carry no bearer. */
-async function authPost(path, body) {
-  const res = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(res.status, data.error || `HTTP ${res.status}`);
-  return data;
-}
-
-function showAuth() {
-  const on = Boolean(operatorSession);
-  signInBtn.hidden = on;
-  addPasskeyBtn.hidden = !on;
-  signOutBtn.hidden = !on;
-  setAuth(on ? 'ok' : 'none');
-}
-
 function showProblem(err) {
   const msg = err?.name === 'NotAllowedError' ? 'The passkey prompt was closed or timed out.' : (err?.message || String(err));
   viewRoot.insertAdjacentHTML('afterbegin', `<div class="note bad">${esc(msg)}</div>`);
-}
-
-async function loadMe() {
-  operatorName = '';
-  if (operatorSession) {
-    try { operatorName = (await api('/api/admin/auth/me')).operator?.name || ''; } catch { /* a dead session is cleared by api() */ }
-  }
-  showAuth();
 }
 
 async function signIn() {
@@ -105,7 +77,7 @@ function showEnrolment() {
   });
 }
 
-window.addEventListener('operator-session-ended', showAuth);
+window.addEventListener('operator-session-ended', () => showAuth());
 signInBtn.addEventListener('click', signIn);
 signOutBtn.addEventListener('click', signOut);
 addPasskeyBtn.addEventListener('click', addPasskey);
@@ -146,7 +118,7 @@ async function refresh(force) {
     updatedAt.textContent = `Updated ${new Date().toLocaleTimeString()}`;
   } catch (err) {
     if (mine === seq) {
-      viewRoot.innerHTML = `<div class="note ${err.status === 401 ? 'warn' : 'bad'}">${esc(err.status === 401 ? 'Sign in with your operator passkey.' : err.status === 503 ? err.message : `Could not load: ${err.message}`)}</div>`;
+      viewRoot.innerHTML = `<div class="note ${err.status === 401 ? 'warn' : 'bad'}">${esc(err.status === 401 ? 'Sign in with your operator passkey.' : err.status === 503 || err.foreign ? err.message : `Could not load: ${err.message}`)}</div>`;
     }
   } finally {
     inFlight--;
