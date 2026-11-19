@@ -145,4 +145,29 @@ await t("connected and under review: Home's IBAN row has no Activate, and its bu
   assert.match(run("PH.home.html()"), /id="ph-ck-verify2"/, "a pending account keeps Activate");
 });
 
+// Every other button that once led to the IBAN sign-in ("Verify your
+// identity", Coming soon's Check) says the account is under review instead,
+// and the Monerium screen itself no longer pitches "Get your IBAN".
+await t("connected and under review: no entry point offers the IBAN sign-in", () => {
+  run(`user = ${JSON.stringify(connectedAs("manual_review"))}; caps = { ...caps, sandbox: true, moneriumOAuth: true }; capsLoaded = true;
+    phPayVia = "bank"; phCache.soon = [];`);
+  const flat = (code: string) => String(run(code)).replace(/\s+/g, " ");
+  const screens: Record<string, string> = {
+    "desktop Home": flat("phDeskBalance(user)"),
+    "account details": flat("phDetailsBody(user, null)"),
+    "Get paid": flat("phPayBody(user)"),
+    "Coming soon": flat("PH.soon.html()"),
+    "Send": flat("JSON.stringify(phSendBlocked(user))"),
+    "Monerium screen": flat("OB.monerium.title + ' ' + OB.monerium.html()"),
+  };
+  for (const [where, html] of Object.entries(screens)) {
+    assert.doesNotMatch(html, /Verify your identity|Get your IBAN|ph-det-verify|ph-soon-iban|ph-send-verify|btn-monerium-existing|Continue with Monerium/, where);
+    assert.match(html, /Monerium is still reviewing this account/, where);
+  }
+  run(`user = ${JSON.stringify(connectedAs("pending"))};`);
+  assert.match(flat("phDeskBalance(user)"), /Verify your identity/, "a pending account keeps its button");
+  assert.match(flat("PH.soon.html()"), /id="ph-soon-iban"/, "a pending account keeps Check");
+  assert.match(flat("OB.monerium.title + ' ' + OB.monerium.html()"), /Get your IBAN.*Continue with Monerium/, "a pending account keeps the sign-in");
+});
+
 console.log(`\nAPP COPY UI TEST PASSED — ${pass}/${pass}`);

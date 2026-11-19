@@ -490,11 +490,14 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         ...(dropIban ? { iban: undefined } : {}),
         ...(notOffered
           ? {
+              // Named fields only: the mode, and the address verdict, which
+              // stays true of the address. Nothing tied to an IBAN carries over.
               funding: {
-                ...(user.funding ?? { mode: "sandbox" as const }),
+                mode: user.funding?.mode ?? ("sandbox" as const),
                 status: "kyc_pending" as const,
                 moneriumProfileId: profileId,
                 detail: refused.error,
+                ...(user.funding?.addressUnlinkable ? { addressUnlinkable: true } : {}),
               },
             }
           : {

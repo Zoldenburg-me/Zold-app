@@ -1745,8 +1745,21 @@ OB.email = {
 /* ---- Monerium ---------------------------------------------------------------- */
 OB.monerium = {
   kind: "after",
-  title: "Get your IBAN",
+  get title() { return ibanUnderReview(user) ? "Under review" : "Get your IBAN"; },
   html: () => {
+    // Connected and under review: nothing to sign in to again, no IBAN to
+    // promise. Any old link or button that still lands here sees this.
+    if (ibanUnderReview(user)) {
+      return `${obAfterProgress("monerium", "Your IBAN")}
+      <main id="main" class="z-screen__main">
+        ${obIntro("Monerium is still reviewing this account", "There is no IBAN yet, and nothing to redo here. You can keep using Zold as a wallet: receive and hold digital dollars and euros, convert dollars to euros, get paid through your payment page, and send invoices.")}
+        ${obAlert()}
+      </main>
+      <div class="z-screen__foot">
+        ${Z.button({ variant: "primary", full: true, label: "Back to Home", id: "btn-kyc-dashboard" })}
+        ${Z.button({ variant: "quiet", full: true, label: "Email support", href: "mailto:support@zoldhq.com" })}
+      </div>`;
+    }
     const rejected = user?.kycStatus === "rejected";
     if (rejected) {
       return `${obAfterProgress("monerium", "Your IBAN")}

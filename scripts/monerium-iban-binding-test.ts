@@ -403,6 +403,8 @@ async function oauthCallback(userId: string, token: string) {
 for (const [n, refusal] of [[31, "rejected"], [32, "manual_review"]] as const) {
   await check(`${refusal}: the OAuth callback stores the connection but promises no IBAN`, async () => {
     const u = await addRefused(n, refusal);
+    // A field from an earlier IBAN must not ride along; the address verdict does.
+    store.updateUser(u.id, { funding: { ...store.findUser(u.id)!.funding!, addressUnlinkable: true, ibanIssuedAt: "2026-01-01" } } as any);
     const before = store.findUser(u.id)!;
     const r = await oauthCallback(u.id, u.token);
     assert.equal(r.status, 302);
@@ -415,6 +417,7 @@ for (const [n, refusal] of [[31, "rejected"], [32, "manual_review"]] as const) {
     assert.notEqual(after.funding?.status, "iban_pending");
     assert.notEqual(after.funding?.status, "active");
     assert.match(after.funding?.detail ?? "", REFUSAL_DETAIL[refusal]);
+    assert.deepEqual(Object.keys(after.funding ?? {}).sort(), ["addressUnlinkable", "detail", "mode", "moneriumProfileId", "status"]);
     assert.deepEqual(after.kyc, before.kyc, "no \"activate IBAN with passkey\" verdict is recorded");
     assert.equal(after.iban, undefined, "a refused account keeps no IBAN");
     assert.ok(!publicUser(after).iban);
