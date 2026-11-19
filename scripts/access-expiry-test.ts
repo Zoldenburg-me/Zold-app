@@ -316,6 +316,7 @@ await check("/app send: a lost /authorize answer read back as unsigned CREATED p
     () => { throw new TypeError("network"); },
     lostBody,
     () => response(502, "<html>Bad gateway</html>", "text/html"),
+    () => response(429, "", null), // a 4xx is a refusal only with Zold's error string
     () => json(500, { error: "Something went wrong on our side. Check whether it went through before trying again." }),
     () => response(503, JSON.stringify({ error: "offline" }), "application/json", { headers: { get: (k: string) => (k === "x-zold-offline" ? "1" : "application/json") } }),
   ]) {
