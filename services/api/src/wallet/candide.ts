@@ -979,6 +979,11 @@ export async function signMessageAsPasskeySafe(
 
 export async function isDeployed(address: string): Promise<boolean> {
   if (allowSimulation()) return true;
+  return hasCode(address);
+}
+
+/** Whether the smart-account chain holds code at `address`, simulation or not. */
+export async function hasCode(address: string): Promise<boolean> {
   const res = await fetch(CANDIDE.rpcUrl, {
     signal: partnerTimeout(),
     method: "POST",
