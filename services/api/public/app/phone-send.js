@@ -82,7 +82,7 @@ PH.send = {
     const q = phQuery;
     return `${phTop("Send")}${phMain(`
       ${blocked ? `${Z.note({ tone: "a", text: blocked.text })}${blocked.action ? Z.button({ variant: "primary", full: true, label: blocked.action.label, id: blocked.action.id }) : ""}${HAS("onchain_balance") ? Z.listGroup({ label: "New payment", rows: [...(caps.cryptoSend ? [phWalletRow()] : []), phSendLinkRow()] }) : ""}${phSendLinksList()}` : `
-      <form class="z-search" role="search" onsubmit="return false">
+      <form class="z-search" role="search" data-z-nosubmit>
         <label class="z-sr" for="ph-sq">Search people you’ve paid</label>${Z.icon("search")}
         <input class="z-search__input" id="ph-sq" type="search" name="q" autocomplete="off" spellcheck="false" placeholder="Name or IBAN…" value="">
       </form>

@@ -486,7 +486,7 @@ function issuerFieldsHtml(country) {
 }
 
 RENDER.organisation = async () => {
-  return { html: `<form class="card" id="org-form" onsubmit="return false">
+  return { html: `<form class="card" id="org-form" data-z-nosubmit>
       <div class="grid g2">
         <div><label for="s-name">Name</label><input id="s-name" name="organization" autocomplete="organization" value="${esc(org.name)}"${org.type === "personal"
           ? ' readonly aria-describedby="s-name-hint" /><p class="zb-hint" id="s-name-hint">Your personal space is named after you. Change your name in the Zold app, under Profile.</p>' : " />"}</div>

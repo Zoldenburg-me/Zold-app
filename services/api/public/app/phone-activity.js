@@ -60,7 +60,7 @@ PH.activity = {
   html(arg) {
     const filter = PH_FILTERS.some(([k]) => k === arg) ? arg : "all";
     return `${phTop("Activity")}${phMain(`
-      <form class="z-search" role="search" onsubmit="return false">
+      <form class="z-search" role="search" data-z-nosubmit>
         <label class="z-sr" for="ph-q">Search payments</label>${Z.icon("search")}
         <input class="z-search__input" id="ph-q" type="search" name="q" autocomplete="off" spellcheck="false" placeholder="Search payments…" value="${esc(phQuery)}">
       </form>

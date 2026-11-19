@@ -36,7 +36,7 @@ function connectBlock(d) {
 function appCard(d, custom) {
   const block = d.available ? connectBlock(d) : "";
   const connect = block || (d.available
-    ? `<form class="zb-app__form" onsubmit="return false"><label for="sh-shop">${d.connections.length ? "Connect another store" : "Store address"}</label>
+    ? `<form class="zb-app__form" data-z-nosubmit><label for="sh-shop">${d.connections.length ? "Connect another store" : "Store address"}</label>
         <div class="zb-app__row"><input id="sh-shop" name="shop" autocomplete="off" spellcheck="false" placeholder="my-store.myshopify.com…" />
         <button type="button" class="z-btn z-btn--primary" data-act="shopify-connect">Connect store</button></div>
         <p class="zb-hint">You approve the app at Shopify. The store’s access key is stored encrypted and never shown.${custom ? " Connecting subscribes Zold to the store’s new orders." : ""}</p></form>`
@@ -112,7 +112,7 @@ function setUp(d, custom) {
 // ── Through the checkout service (merchant links) ──────────────────────
 
 function linkCard(m) {
-  const connect = connectBlock(m) || `<form class="zb-app__form" onsubmit="return false"><label for="ml-shop">${m.links.some((l) => !l.revokedAt) ? "Connect another store" : "Store address"}</label>
+  const connect = connectBlock(m) || `<form class="zb-app__form" data-z-nosubmit><label for="ml-shop">${m.links.some((l) => !l.revokedAt) ? "Connect another store" : "Store address"}</label>
         <div class="zb-app__row"><input id="ml-shop" name="shop" autocomplete="off" spellcheck="false" placeholder="my-store.myshopify.com…" />
         <button type="button" class="z-btn z-btn--primary" data-act="merchant-link-connect">Connect store</button></div>
         <p class="zb-hint">You approve the app at Shopify on the Zold checkout. The store’s access key stays with the checkout, stored encrypted, and is never shown.</p></form>`;

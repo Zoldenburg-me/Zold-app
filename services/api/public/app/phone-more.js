@@ -43,7 +43,7 @@ PH.contacts = {
     const list = phContactList();
     const loading = phCache.orgs === null && !histLoaded;
     return `${phTop("Contacts", "more")}${phMain(`
-      <form class="z-search" role="search" onsubmit="return false">
+      <form class="z-search" role="search" data-z-nosubmit>
         <label class="z-sr" for="ph-cq">Search contacts</label>${Z.icon("search")}
         <input class="z-search__input" id="ph-cq" type="search" name="q" autocomplete="off" spellcheck="false" placeholder="Search people and companies…">
       </form>
