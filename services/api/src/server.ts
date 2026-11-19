@@ -500,8 +500,8 @@ app.listen(API_PORT, API_HOST, () => {
   if (CUSTODY.requireNonCustodial) {
     console.log("CUSTODY: REQUIRE_NON_CUSTODIAL=1 — a transfer that would use the orchestrator is refused.");
   }
-  for (const name of UNREAD_DEPLOYER_KEYS) {
-    console.warn(`NOTE: ${name} is set but the server never signs with it off the local chain — remove it from this host.`);
+  for (const key of UNREAD_DEPLOYER_KEYS) {
+    console.warn(`NOTE: ${key} is set but the server never signs with it off the local chain — remove it from this host.`);
   }
   if (process.env.CANDIDE_COSIGNER_KEY) {
     console.warn("NOTE: CANDIDE_COSIGNER_KEY is set but nothing reads it any more — remove it from the environment.");

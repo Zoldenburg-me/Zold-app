@@ -3,10 +3,13 @@
  *
  *   1. bookHolderLabel names a money-in holder by id only, for a person and
  *      for a company account, never by the user's or the org's name;
- *   2. a source guard: no console call under services/api/src interpolates a
- *      name field (`.name`, `.displayName`, `.legalName`, …). Error class
- *      names and Shopify order names (an order number like #1001) are the
- *      only names a log may print, by receiver;
+ *   2. a source guard: no console call under services/api/src prints a name
+ *      field (`.name`, `.displayName`, `.legalName`, …), a bare name
+ *      (`${name}`, `firstName` after a destructure) or a whole person or
+ *      company object (`user`, `JSON.stringify(org)`). Error class names
+ *      anywhere, and Shopify order names (an order number like #1001) in
+ *      routes/shopify.ts only, are the names a log may print. It reads
+ *      source text, so a name reached through another variable is not seen;
  *   3. the Monerium issue-order line goes through bookHolderLabel.
  *
  * Run: npm run log-names:test
@@ -36,9 +39,57 @@ for (const label of [bookHolderLabel({ kind: "user", user }), bookHolderLabel({ 
 
 // 2. source guard over every console call (multi-line arguments included).
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../services/api/src");
+
+// The code of a call with string text blanked and `${…}` kept, so a word
+// inside a message ("name missing") is not an identifier.
+function codeOf(s: string): string {
+  let out = "";
+  const stack: string[] = []; // open quotes; "}" marks a `${` we are inside
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    const q = stack[stack.length - 1];
+    if (q === '"' || q === "'" || q === "`") {
+      if (ch === "\\") { out += "  "; i++; continue; }
+      if (ch === q) { stack.pop(); out += ch; continue; }
+      if (q === "`" && ch === "$" && s[i + 1] === "{") { stack.push("}"); out += "${"; i++; continue; }
+      out += ch === "\n" ? ch : " ";
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") stack.push(ch);
+    else if (ch === "{") stack.push("{");
+    else if (ch === "}" && (q === "}" || q === "{")) stack.pop();
+    out += ch;
+  }
+  return out;
+}
+
+// Three rules, each over the code of one console call:
+//   a name field:  `user.name`, `holder.org.legalName`, `u?.displayName`;
+//   a bare name:   `name`, `firstName`, `legalName` (a destructured name);
+//   a whole person or company object as a value: `user`, `req.user`,
+//   `JSON.stringify(org)`, `{ member }` (but `user.id` is fine).
 const NAME_FIELD = /([\w$\])]+)\??\.(\w*[nN]ame)\b/g;
-// receiver.field pairs that are not a person's or a company's name.
-const ALLOWED = new Set(["err.name", "e.name", "o.name", "source.orderName"]);
+const BARE_NAME = /(?<![\w$.])(\w*[nN]ame)\b(?!\s*:(?!:))/g;
+const PERSON = "user|users|member|members|holder|org|orgs|organization|customer|sender|recipient|payee|beneficiary|owner|guardian|profile|person|contact|company";
+const PERSON_VALUE = new RegExp(`(?<![\\w$])(${PERSON})\\b(?!\\s*(\\?\\.|\\.|\\[|:(?!:)))`, "g");
+// Names that are not a person's or a company's, by receiver or identifier.
+const ALLOWED = new Set(["err.name", "e.name", "error.name"]);
+// Shopify's order name is an order number (#1001), not a person: allowed in
+// that file only, so `o.name` anywhere else is caught.
+const ALLOWED_IN: Record<string, Set<string>> = { "routes/shopify.ts": new Set(["o.name", "source.orderName"]) };
+// A person handed to a formatter that prints an id or an address only.
+const ID_ONLY = /\b(bookHolderLabel|passkeyAccountAddress)\(\s*\w+\s*\)/g;
+
+function nameHits(callText: string, file = ""): string[] {
+  const code = codeOf(callText).replace(ID_ONLY, "");
+  const allowed = (k: string) => ALLOWED.has(k) || ALLOWED_IN[file]?.has(k);
+  const hits: string[] = [];
+  for (const n of code.matchAll(NAME_FIELD)) if (!allowed(`${n[1]}.${n[2]}`)) hits.push(n[0]);
+  for (const n of code.matchAll(BARE_NAME)) if (!allowed(n[1])) hits.push(n[0]);
+  for (const n of code.matchAll(PERSON_VALUE)) hits.push(n[0]);
+  return hits;
+}
+
 const files: string[] = [];
 const walk = (dir: string) => {
   for (const f of readdirSync(dir)) {
@@ -54,6 +105,7 @@ const offenders: string[] = [];
 let calls = 0;
 for (const file of files) {
   const src = readFileSync(file, "utf8");
+  const rel = path.relative(SRC, file).split(path.sep).join("/");
   const call = /console\.(log|warn|error|info|debug)\s*\(/g;
   for (let m; (m = call.exec(src)); ) {
     let i = call.lastIndex;
@@ -62,25 +114,51 @@ for (const file of files) {
       else if (src[i] === ")") depth--;
     }
     calls++;
-    for (const n of src.slice(m.index, i).matchAll(NAME_FIELD)) {
-      if (ALLOWED.has(`${n[1]}.${n[2]}`)) continue;
+    for (const hit of nameHits(src.slice(call.lastIndex, i - 1), rel)) {
       const line = src.slice(0, m.index).split("\n").length;
-      offenders.push(`${path.relative(SRC, file)}:${line}: ${n[0]}`);
+      offenders.push(`${rel}:${line}: ${hit}`);
     }
   }
 }
 assert.ok(calls > 100, `the guard found the console calls (${calls})`);
-assert.deepEqual(offenders, [], `a log call prints a name field:\n${offenders.join("\n")}`);
+assert.deepEqual(offenders, [], `a log call prints a name or a person:\n${offenders.join("\n")}`);
 
-// The guard itself catches the shapes it exists for.
-const caught = (s: string) => [...s.matchAll(NAME_FIELD)].some((n) => !ALLOWED.has(`${n[1]}.${n[2]}`));
-assert.ok(caught("console.log(`for ${user.name}`)"));
-assert.ok(caught("console.log(`for ${holder.org.name}'s account`)"));
-assert.ok(caught("console.log(`for ${u?.displayName}`)"));
-assert.ok(!caught("console.warn(`failed: ${err.name}`)"));
+// The guard itself catches the shapes it exists for, and nothing else.
+const caught = (s: string, file = "") => nameHits(s, file).length > 0;
+// name fields
+assert.ok(caught("`for ${user.name}`"));
+assert.ok(caught("`for ${holder.org.name}'s account`"));
+assert.ok(caught("`for ${u?.displayName}`"));
+assert.ok(caught("`org ${o.name}`"), "o.name outside Shopify");
+assert.ok(caught("`org ${o.name}`", "routes/business.ts"));
+assert.ok(!caught("`shopify: order ${o.name} at ${c.shop}`", "routes/shopify.ts"));
+assert.ok(!caught("`failed: ${err.name}`"));
+// bare (destructured) names
+assert.ok(caught("`for ${name}`"));
+assert.ok(caught("`hello ${firstName} ${lastName}`"));
+assert.ok(caught("\"payee\", legalName"));
+assert.ok(caught("{ name }"));
+assert.ok(!caught("\"name missing\""), "a word in a message");
+assert.ok(!caught("{ name: \"x\" }"), "an object key");
+// whole person/company objects
+assert.ok(caught("user"));
+assert.ok(caught("\"member\", member"));
+assert.ok(caught("JSON.stringify(org)"));
+assert.ok(caught("`req ${req.user}`"));
+assert.ok(caught("{ holder }"));
+assert.ok(caught("\"x\", users"));
+// non-PII stays clean
+assert.ok(!caught("`user ${user.id} order ${order.id} (€${amount}) tx ${sha}`"));
+assert.ok(!caught("`org ${org?.id} member ${member.userId}`"));
+assert.ok(!caught("{ user: user.id, transferId }"));
+assert.ok(!caught("\"user not found\", err"));
+assert.ok(!caught("`${userId} ${orgId} ${usersCount}`"));
+assert.ok(!caught("`for ${bookHolderLabel(holder)}`"));
+assert.ok(caught("`for ${bookHolderLabel(holder)} ${holder}`"));
+assert.ok(caught("`order ${r.source.orderName}`", "routes/business.ts"), "orderName outside Shopify");
 
 // 3. the issue-order line names its holder through the label.
 const sandbox = readFileSync(path.join(SRC, "adapters/monerium-sandbox.ts"), "utf8");
 assert.match(sandbox, /recorded issue order \$\{order\.id\} \(€\$\{amount\}\) for \$\{bookHolderLabel\(holder\)\}/);
 
-console.log(`log-names: ${calls} console calls in ${files.length} files print no name field`);
+console.log(`log-names: ${calls} console calls in ${files.length} files print no name or person`);
