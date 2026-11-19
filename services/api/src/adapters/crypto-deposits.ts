@@ -472,7 +472,7 @@ export async function settleConvertedDeposit(
     ...(otherInflowWei > 0n ? { otherInflowWei: otherInflowWei.toString() } : {}),
   };
   console.log(
-    `crypto-in: converted ${usd.fromUnits(amountInUnits)} USDC to EUR ${filledEur} for ${user.name} ` +
+    `crypto-in: converted ${usd.fromUnits(amountInUnits)} USDC to EUR ${filledEur} for user ${user.id} ` +
       `via ${quote.provider} at ${venueRate.toFixed(4)}` + (leftover > 0n ? ` (${usd.fromUnits(leftover)} USDC left held)` : ""),
   );
 

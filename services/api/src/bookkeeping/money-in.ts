@@ -23,6 +23,11 @@ export type MoneyInHolder =
 
 export type MoneyInResolution = MoneyInHolder | { kind: "none" } | { kind: "unbookable"; reason: string };
 
+/** A holder as a log names it: ids only, never a person's or a company's name. */
+export function bookHolderLabel(holder: MoneyInHolder): string {
+  return holder.kind === "user" ? `user:${holder.user.id}` : `account:${holder.account.id}`;
+}
+
 export function moneyInHolder(address: string): MoneyInResolution {
   if (!address) return { kind: "none" };
   const user = store.findUserByAddress(address);

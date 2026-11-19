@@ -27,7 +27,7 @@ import { keccak256, toHex } from "viem";
 import { moneriumAmountString, moneriumRedeemMessage, normalizeIban } from "../sepa.js";
 import { attributeMoneriumOrder, attributeMoneriumOrderToInvoice } from "../routes/payment-requests.js";
 import { noteMoneriumIssue, writeStatementLines } from "../bookkeeping/writer.js";
-import { moneyInHolder, type MoneyInHolder } from "../bookkeeping/money-in.js";
+import { bookHolderLabel, moneyInHolder, type MoneyInHolder } from "../bookkeeping/money-in.js";
 import { moneriumOrderProcessed } from "../domain/monerium-order.js";
 import { describeCause } from "../http/log-cause.js";
 import { can } from "../domain/segments.js";
@@ -501,8 +501,7 @@ async function mirrorOrder(order: MoneriumOrder): Promise<MirrorOutcome> {
     }
     store.markOrderProcessed(order.id);
     noteMoneriumIssue(order, holder);
-    const who = holder.kind === "user" ? holder.user.name : `${holder.org.name}'s account ${holder.account.id}`;
-    console.log(`monerium: recorded issue order ${order.id} (€${amount}) for ${who}`);
+    console.log(`monerium: recorded issue order ${order.id} (€${amount}) for ${bookHolderLabel(holder)}`);
     return "recorded";
   } finally {
     recording.delete(order.id);
