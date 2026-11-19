@@ -7,7 +7,9 @@
  *      person-shaped name, as a field (`.name`, `.displayName`, `.legalName`,
  *      `.payeeName`, …) or bare (`${name}`, `firstName` after a destructure),
  *      or a whole person or company object (`user`, `JSON.stringify(org)`).
- *      Other names (`fileName`, `chainName`) are not a person's and pass.
+ *      Every `*name`, `*_name` and plural `*names` counts as a person's
+ *      unless the word before it is on a short non-person list (`fileName`,
+ *      `chainName`, `hostname`): an unknown prefix fails closed.
  *      Error class names anywhere, and Shopify order names (an order number
  *      like #1001) in routes/shopify.ts only, are the names a log may print.
  *      It reads source text, so it does not see a name or a person reached
@@ -69,19 +71,26 @@ function codeOf(s: string): string {
 // Three rules, each over the code of one console call:
 //   a name field:  `user.name`, `holder.org.legalName`, `u?.displayName`;
 //   a bare name:   `name`, `firstName`, `legalName` (a destructured name);
-//   (both only when person-shaped: `name` itself, or a prefix that names a
-//   person, a company or an order, so `fileName` and `chainName` pass);
+//   (both also plural, `names`/`firstNames`, and snake case, `first_name`;
+//   both skipped only when the last word before "name" is non-person, so
+//   `fileName` and `chainName` pass and `payorName` or `signupName` does not);
 //   a whole person or company object as a value: `user`, `req.user`,
 //   `JSON.stringify(org)`, `{ member }` (but `user.id` is fine).
-const NAME_FIELD = /([\w$\])]+)\??\.(\w*[nN]ame)\b/g;
-const BARE_NAME = /(?<![\w$.])(\w*[nN]ame)\b(?!\s*:(?!:))/g;
+const NAME_FIELD = /([\w$\])]+)\??\.(\w*[nN]ames?)\b/g;
+const BARE_NAME = /(?<![\w$.])(\w*[nN]ames?)\b(?!\s*:(?!:))/g;
 const PERSON = "user|users|member|members|holder|org|orgs|organization|customer|sender|recipient|payee|beneficiary|owner|guardian|profile|person|contact|company";
-// What comes before "name" in a person-shaped name. `order` is here so an
-// order name is caught outside routes/shopify.ts, bare as well as a field.
-// The payment-side roles are prefixes only, not whole-object values, so a
-// bare `tenant` or `director` is not read as a person.
-const PERSON_PREFIX = new RegExp(`(^|${PERSON}|first|last|full|legal|display|given|family|middle|nick|sur|account|merchant|business|trade|party|payer|receiver|signer|client|employee|partner|supplier|vendor|contractor|buyer|seller|debtor|creditor|landlord|tenant|representative|director|order)$`, "i");
-const personShaped = (id: string) => PERSON_PREFIX.test(id.slice(0, -4));
+// The words before "name" that never name a person, a company or an order.
+// Matched against the whole last word of the prefix (`belegFileName` ->
+// `file`, `first_name` -> `first`), so `profileName` is not `file` and
+// `trailName` is not `rail`. Anything not here is a person's name.
+// ens/dns: an ENS domain; authenticator: a passkey's device model;
+// gateway: Shopify's payment_gateway_names; region/country/display-names
+// are Intl lookups; rail, bank, provider, app, wallet, status are labels.
+const NON_PERSON = new Set(["file", "chain", "host", "path", "dir", "function", "country", "region", "provider", "rail", "bank", "app", "wallet", "status", "ens", "dns", "authenticator", "gateway"]);
+const personShaped = (id: string) => {
+  const words = id.replace(/_?names?$/i, "").split(/_|(?=[A-Z])/).filter(Boolean);
+  return !NON_PERSON.has((words.pop() ?? "").toLowerCase());
+};
 const PERSON_VALUE = new RegExp(`(?<![\\w$])(${PERSON})\\b(?!\\s*(\\?\\.|\\.|\\[|:(?!:)))`, "g");
 // Names that are not a person's or a company's, by receiver or identifier.
 const ALLOWED = new Set(["err.name", "e.name", "error.name"]);
@@ -178,6 +187,19 @@ for (const id of ["firstName", "lastName", "legalName", "displayName", "userName
 }
 assert.ok(caught("`partner ${p.partnerName}`"), "p.partnerName");
 assert.ok(caught("`holder ${p.holderName}`"), "p.holderName");
+// every other name fails closed: the identifiers in this codebase that hold a
+// person's or company's name, and plurals, snake case and unknown prefixes
+for (const id of ["payorName", "counterpartName", "signupName", "inviteName", "rawName", "operatorName", "moneriumVerifiedName", "moneriumName", "impersonatedName", "first_name", "last_name", "names", "firstNames", "memberNames", "placeholderName", "rpcClientName"]) {
+  assert.ok(caught(`\`for \${${id}}\``), `bare ${id}`);
+  assert.ok(caught(`\`for \${x.${id}}\``), `field ${id}`);
+}
+assert.ok(caught("`for ${user.names}`"), "user.names");
+// the non-person words pass, bare and as a field, and only as a whole word
+for (const id of ["fileName", "filename", "belegFileName", "fileNames", "chainName", "sourceChainName", "hostname", "pathname", "dirname", "__dirname", "functionName", "countryName", "regionNames", "providerName", "railName", "bankName", "appName", "walletName", "statusName", "ensName", "authenticatorName", "payment_gateway_names"]) {
+  assert.ok(!caught(`\`for \${${id}}\``), `bare ${id}`);
+  assert.ok(!caught(`\`for \${x.${id}}\``), `field ${id}`);
+}
+for (const id of ["profileName", "trailName", "happName", "bankerName"]) assert.ok(caught(`\`for \${${id}}\``), `${id} is not a non-person word`);
 
 // 3. the issue-order line names its holder through the label.
 const sandbox = readFileSync(path.join(SRC, "adapters/monerium-sandbox.ts"), "utf8");
