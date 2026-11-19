@@ -18,16 +18,20 @@ export const payableContacts = (contacts) => contacts.filter((c) => (c.bankAccou
 /** An account here that receives bank transfers. */
 export const hasIban = (accounts) => accounts.some((a) => a.status === "active" && a.identifier?.iban);
 
-/** What the balance card says for a company whose euro account is not live:
- *  the account's own gate, which the server words from what it lacks (no
- *  Safe yet, or a Safe waiting for its IBAN). A company's account is its own
- *  Safe, not a login's, so the card has no figure for it. Null for any other
- *  organisation, a company with no euro account, or one that is live. */
-export function companyAccountNote(org, accounts) {
-  if (org?.entity !== "company" || !Array.isArray(accounts)) return null;
+/** What the balance card says for a company. A company's account is its own
+ *  Safe, not a login's, so the card has no figure for it: a live euro account
+ *  shows its IBAN; one not live, the account's own gate, which the server
+ *  words from what it lacks (no Safe yet, or a Safe waiting for its IBAN).
+ *  `accounts` is null when they could not be read, and a failed read says
+ *  so, never that no account is connected. Null for any other organisation
+ *  or a company with no euro account. */
+export function companyBalance(org, accounts) {
+  if (org?.entity !== "company") return null;
+  if (!Array.isArray(accounts)) return { note: "The company’s account could not be read just now. Reload to try again." };
   const a = accounts.find((x) => x.currency === "EUR");
-  if (!a || a.status === "active") return null;
-  return a.gate?.reason || "The company’s account is not live yet.";
+  if (!a) return null;
+  if (a.status === "active") return { iban: a.identifier?.iban || null };
+  return { note: a.gate?.reason || "The company’s account is not live yet." };
 }
 
 /** Runs drafted here and not yet sent: with review off, a saved payment waits as DRAFT. */

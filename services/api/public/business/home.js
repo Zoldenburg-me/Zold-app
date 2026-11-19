@@ -21,7 +21,7 @@ import { META, RENDER, linkBtn, moneriumLink } from "./views.js";
 import { submittedInvoices, waitingForMe } from "./nav.js";
 import { draftTag, draftTitle, draftTotal, invAmount, loadMembers, memberName } from "./screens.js";
 import { APP_LINKS, isOwnCompanyOrg, loadAccess } from "./access-model.js";
-import { companyAccountNote, countedLines, hasIban, noIbanStep, pendingRuns, securityRows, setupOpen, setupSteps } from "./home-model.js";
+import { companyBalance, countedLines, hasIban, noIbanStep, pendingRuns, securityRows, setupOpen, setupSteps } from "./home-model.js";
 import { runLink } from "./payment.js";
 import { runIdForLine } from "./payment-model.js";
 
@@ -116,28 +116,28 @@ function roundActions() {
  *  this organisation may show it (ownSafe); `read` is false when the accounts
  *  could not be read, and then nothing is said about the Safe. Under the
  *  figure: that account's IBAN, or the state that keeps it from having one.
- *  A company's account is its own Safe: no figure, and the card says what it
- *  is waiting for (companyAccountNote). */
+ *  A company's account is its own Safe: no figure; its IBAN once live, else
+ *  what it is waiting for, or that the read failed (companyBalance). */
 function balanceCard(accounts, read) {
   const mine = accounts.find((a) => a.status === "active" && a.backingUserId && me && a.backingUserId === me.id);
   const safe = read ? ownSafe(accounts) : null;
   const fig = (mine || safe) && typeof me.balanceEur === "number";
   // A company's account has no backer, so no person to name.
   const other = !mine && org.entity !== "company" && accounts.find((a) => a.backingUserId);
-  const companyNote = read ? companyAccountNote(org, accounts) : null;
+  const company = companyBalance(org, read ? accounts : null);
   const label = mine ? `${mine.label || mine.currency} balance` : safe?.company ? "Company Zold account" : "Your Zold account";
   const head = fig
     ? `<span class="zb-h-bal__label">${esc(label)}</span><span class="zb-h-bal__fig">${bigEur(me.balanceEur)}</span>`
     : mine || safe
       ? `<span class="zb-h-bal__label">${esc(label)}</span><p class="zb-hint">The balance could not be read just now. Reload to try again.</p>`
-      : companyNote
-        ? `<span class="zb-h-bal__label">Company account</span><p class="zb-hint">${esc(companyNote)}</p>`
+      : company
+        ? `<span class="zb-h-bal__label">Company account</span>${company.note ? `<p class="zb-hint">${esc(company.note)}</p>` : ""}`
         : `<span class="zb-h-bal__label">Balance</span><p class="zb-hint">${other ? `Only ${esc(other.backingMemberName || "the member who backs it")} sees this account’s balance.` : "No account is connected yet."}</p>`;
-  const iban = mine?.identifier?.iban;
+  const iban = mine?.identifier?.iban || company?.iban;
   const ibanRow = iban
     ? `<div class="zb-safe-addr"><span class="z-mono" translate="no">${esc(Z.groupIban(iban))}</span>
       <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="copy-text" data-text="${esc(String(iban).replace(/\s+/g, ""))}" data-said="IBAN copied">${Z.icon("content_copy")}<span>Copy<span class="z-sr"> IBAN</span></span></button></div>`
-    : mine || safe ? `<p class="zb-hint">${mine?.profile?.status === "needs_check" ? "No IBAN yet. It needs its Monerium profile checked." : "No IBAN yet."}</p>` : "";
+    : mine || safe || company?.iban === null ? `<p class="zb-hint">${mine?.profile?.status === "needs_check" ? "No IBAN yet. It needs its Monerium profile checked." : "No IBAN yet."}</p>` : "";
   return `<section class="z-card zb-side-card zb-h-bal" aria-labelledby="home-bal"><h2 id="home-bal" class="z-sr">Balance</h2>
     <div class="zb-h-bal__row"><div class="zb-h-bal__head">${head}${ibanRow}${safe ? safeAddressHtml(safe) : ""}</div>${roundActions()}</div></section>`;
 }
