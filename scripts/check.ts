@@ -25,6 +25,7 @@ const scripts = [
   "redeem-window:test",
   "country:policy:test",
   "env:number:test",
+  "log-pii:test",
   "recovery:test",
   "recovery:remove:test",
   "recovery:candide:test",
