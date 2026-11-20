@@ -400,7 +400,7 @@ async function oauthCallback(userId: string, token: string) {
   return { status: r.status, location: r.headers.get("location") };
 }
 
-for (const [n, refusal] of [[31, "rejected"], [32, "manual_review"]] as const) {
+for (const [n, refusal] of [[31, "rejected"], [32, "manual_review"], [34, "wallet-only"]] as const) {
   await check(`${refusal}: the OAuth callback stores the connection but promises no IBAN`, async () => {
     const u = await addRefused(n, refusal);
     // A field from an earlier IBAN must not ride along; the address verdict does.
@@ -412,7 +412,7 @@ for (const [n, refusal] of [[31, "rejected"], [32, "manual_review"]] as const) {
     const after = store.findUser(u.id)!;
     assert.ok(after.monerium?.accessTokenEnc, "the token is stored as before");
     assert.equal(after.monerium?.profileId, PROFILE);
-    assert.equal(after.kycStatus, refusal);
+    assert.equal(after.kycStatus, before.kycStatus, "the callback records no kyc verdict");
     assert.notEqual(after.funding?.status, "provisioning", "no IBAN is being provisioned");
     assert.notEqual(after.funding?.status, "iban_pending");
     assert.notEqual(after.funding?.status, "active");

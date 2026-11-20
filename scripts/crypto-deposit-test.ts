@@ -683,7 +683,8 @@ try {
     await pollCryptoDepositsOnce(async (h) => (h === ota.op ? { success: false, txHash: otaTx } : null));
     const otaD = ota.row();
     check("a reverted userOp is left unconfirmed for review", otaD.holding === "unconfirmed" && /reverted/.test(otaD.reason ?? "") && !otaD.creditedEur && otaD.txs.some((t) => t.step === "safe.swap(usdc->eure).reverted" && t.hash === otaTx), `${otaD.holding} ${otaD.reason ?? ""}`);
-    check("and is not offered for conversion again", /may still land/.test(depositConversionBlocker(store.findUser(ota.user.id)!, otaD) ?? ""));
+    const otaBlock = depositConversionBlocker(store.findUser(ota.user.id)!, otaD) ?? "";
+    check("and is not offered for conversion again, saying it reverted", /reverted/.test(otaBlock) && !/may still land/.test(otaBlock), otaBlock);
     check("other EURe in its user's Safe is booked as money in", eureOf(ota.user.id).length === 1 && eureOf(ota.user.id)[0].creditedEur === 12);
 
     // The bundler lags: the scanner books the swap's output as money in while
@@ -759,6 +760,25 @@ try {
       (publicClient as any).readContract = realRead;
     }
     await lateChecks("settling throws", { ...lex, tx: lexTx, bookedFirst: lexBooked }, /could not be recorded/);
+
+    // Settling credited the row, then a later write threw: the credit stands.
+    // Refusing it would leave EUR that arrived booked nowhere.
+    const cleo = await parkUncertain("Credited Cleo");
+    const cleoTx = await mintEure(cleo.user.address, 87.88);
+    opOfTx.set(cleoTx.toLowerCase(), cleo.op);
+    const realUpdate = store.updateCryptoDeposit;
+    (store as any).updateCryptoDeposit = (id: string, patch: any) => {
+      if (id === cleo.id && "conversionIntent" in patch && Object.keys(patch).length === 1) throw new Error("disk full");
+      return realUpdate.call(store, id, patch);
+    };
+    try {
+      await pollCryptoDepositsOnce(async (h) => (h === cleo.op ? { success: true, txHash: cleoTx } : null));
+    } finally {
+      (store as any).updateCryptoDeposit = realUpdate;
+    }
+    const cleoD = cleo.row();
+    check("a throw after settling credited the row leaves it converted, not refused",
+      cleoD.holding === "converted" && cleoD.creditedEur === 87.88, `${cleoD.holding} ${cleoD.creditedEur} ${cleoD.reason ?? ""}`);
     (publicClient as any).getTransactionReceipt = realReceipt;
   }
 

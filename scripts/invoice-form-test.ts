@@ -11,10 +11,10 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { checkCompliance, type InvoiceDraft } from "../services/api/src/domain/invoicing.js";
-import { validateLines } from "../services/api/src/domain/invoices.js";
+import { AMOUNT_RE, validateLines } from "../services/api/src/domain/invoices.js";
 
 const PUB = path.join(import.meta.dirname, "../services/api/public");
-const { lineNetCents, formTotalCents, formatCents } = await import(pathToFileURL(path.join(PUB, "invoice-totals.js")).href);
+const { lineNetCents, formTotalCents, formatCents, AMOUNT_RE: FORM_AMOUNT_RE } = await import(pathToFileURL(path.join(PUB, "invoice-totals.js")).href);
 
 let passed = 0;
 const check = (name: string, fn: () => void) => {
@@ -116,8 +116,16 @@ check("a value the server refuses shows no number, line or total", () => {
     assert.equal(formatCents(formTotalCents([{ quantity: "1", unitPrice: "2" }, { quantity, unitPrice }])), "—");
   }
 });
-check("an empty line counts as zero", () => {
-  assert.equal(formTotalCents([{ quantity: "1", unitPrice: "" }, { quantity: "", unitPrice: "2" }]), 0);
+check("an empty field shows no number, as submit refuses it", () => {
+  for (const [quantity, unitPrice] of [["1", ""], ["", "2"], [" ", "2"]]) {
+    assert.throws(() => submitted([{ quantity, unitPrice }]), `${JSON.stringify(quantity)} x ${JSON.stringify(unitPrice)} is refused`);
+    assert.equal(lineNetCents(quantity, unitPrice), null);
+    assert.equal(formatCents(formTotalCents([{ quantity: "1", unitPrice: "2" }, { quantity, unitPrice }])), "—");
+  }
+});
+check("the form tests amounts with the server's AMOUNT_RE", () => {
+  assert.equal(FORM_AMOUNT_RE.source, AMOUNT_RE.source);
+  assert.equal(FORM_AMOUNT_RE.flags, AMOUNT_RE.flags);
 });
 check("the form draws its lines and total from invoice-totals.js", () => {
   const html = readFileSync(path.join(PUB, "invoice.html"), "utf8");

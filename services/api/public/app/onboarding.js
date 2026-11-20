@@ -1747,7 +1747,7 @@ OB.monerium = {
   kind: "after",
   get title() { return ibanUnderReview(user) ? "Under review" : "Get your IBAN"; },
   html: () => {
-    // Connected and under review: nothing to sign in to again, no IBAN to
+    // Under review: nothing to sign in to (again), no IBAN to
     // promise. Any old link or button that still lands here sees this.
     if (ibanUnderReview(user)) {
       return `${obAfterProgress("monerium", "Your IBAN")}
