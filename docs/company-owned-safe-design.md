@@ -55,7 +55,7 @@ Owner-approved 2026-11-18 (PR #35). Code references checked against main d982325
   - anyone can see who signed and who hasn't.
 - The existing payment drafts (`routes/business/drafts.ts`) become the UI for this. Today they are different objects from a signature:
   - Review is a policy flag on the org, evaluated per draft (`domain/payment-review.ts:14-18`, applied at `drafts.ts:220,362,608`), not a signature.
-  - One draft is N transfers, one per line (`drafts.ts:520-533`). So owners either sign N ops, or one batched op whose digest covers every line. This note proposes one batched op per draft (one Safe `multiSend`): one signature per owner per draft. Consequence: a draft becomes all-or-nothing. One reverting line reverts the whole draft, where today each transfer stands or falls alone and a failure partway leaves the draft `FAILED` (`drafts.ts:520-533`, `scripts/draft-batch-failure-test.ts:1-8`). The owner decides whether a draft pays all its lines or none (§6, Q9).
+  - One draft is N transfers, one per line (`drafts.ts:520-533`). So owners either sign N ops, or one batched op whose digest covers every line. Each draft is one batched op (one Safe `multiSend`): one signature per owner per draft (owner, Q9). Consequence: a draft is all-or-nothing. One reverting line reverts the whole draft, where today each transfer stands or falls alone and a failure partway leaves the draft `FAILED` (`drafts.ts:520-533`, `scripts/draft-batch-failure-test.ts:1-8`).
   - Execution re-reads the backing profile and can refuse a draft that was already reviewed (`drafts.ts:500-513`), or hold it as `INVALID_DATA` when its facts drifted (`:528-529`). A signature already collected can't be withdrawn, so when an execution-time check fails after signing, the queued op is invalidated and its signatures discarded, the same shape as `INVALID_DATA`. The draft must be signed again.
 - On an org Safe the owners' signatures are the approval. There is no off-chain review step before signing on an org Safe (§6, Q8), so `paymentReviewRequired` (`domain/payment-review.ts:14-18`) must return false for an org Safe whatever the org's `paymentReview` setting or plan. Today it returns an owner's choice when one is set, and otherwise true for a business org on the business plan or its trial.
 - The invariant "No debit without a user signature" still holds, at n-of-m. The API still disposes of nothing.
@@ -121,9 +121,9 @@ This is M2-sized. Row 13 (§3.1) is part of it.
 
 8. **Review step on an org Safe**: does the off-chain review flag stay as a step before owners sign, or is the on-chain threshold the only four-eyes control? **Answer: the on-chain threshold only; no off-chain review step on an org Safe.** (§2.4, §3.5.)
 
-9. **Drafts**: one batched op per draft (all lines or none), or one op per line (each line stands or falls alone, as today)? §2.4 proposes one batched op. (Open.)
+9. **Drafts**: one batched op per draft (all lines or none), or one op per line (each line stands or falls alone, as today)? **Answer: one batched op per draft; a draft pays all its lines or none.** (§2.4.)
 
-Q1–Q8 answered (2026-11-18). Q9 is open.
+All nine questions answered (2026-11-18).
 
 ## 7. Gaps found against the code (Florentine's code map, board #118)
 
@@ -140,7 +140,7 @@ Q1–Q8 answered (2026-11-18). Q9 is open.
 9. **`backingMemberName` is an API field**, projected by `accountView` (`routes/orgs.ts:122-133`) and shown as the "Backing user" column in admin (`admin/monerium.js:63`). Both mean nothing on a company org, which has no backer.
 10. **The 403 refusals are user-visible copy.** The UI renders server refusals verbatim (`business/core.js:78-100`, `business/shell.js:112-126`), so the wording at `drafts.ts:485-490` and `crypto-sends.ts:401` must change with the model.
 11. **Member → signer mapping.** `Member.signerAddress` (`domain/types.ts:246-251`) names the owner address Zold last added for a member; `domain/org-signers.ts` joins members to the chain's owners (#193). It is a label, never a grant: the chain decides who signs.
-12. **Org-scoped read route.** `GET /api/orgs/:orgId/safe` (`routes/business/org-safe.ts`, #193) returns the org Safe's owners, threshold and each owner member's signer status, read from chain. Showing who signs needs no new membership key, because only `owner` signs. The permission table still changes, because Q1 splits `transfers.execute`: today `PAYER` and `ADMIN` hold it (`domain/roles.ts:63-80`) and the client maps `send` to it (`business/core.js:205-217`), so payers and admins get a Send button. After the split, prepare and queue stays with payer and admin and signing is owner only, so the server table, `ROLE_CAN` and the button copy (`business/payment.js:72-73`, `business/send.js`) change with it.
+12. **Org-scoped read route.** `GET /api/orgs/:orgId/safe` (`routes/business/org-safe.ts`, #193) returns the org Safe's owners, threshold and each owner member's signer status, read from chain. Showing who signs needs no new membership key, because only `owner` signs. Q1's split is built (#45): `transfers.execute` is gone, replaced by `transfers.queue` and `transfers.sign` (`domain/roles.ts`). `COMPANY_ROLE_PERMISSIONS` (`roles.ts:109`) keeps `transfers.sign` for `owner` only, so on a company org payers and admins prepare and queue but do not sign. The client mirrors this in `business/role-table.js`: `roleTableFor(entity)` returns `COMPANY_ROLE_CAN` for a company, and `core.js:207` reads it (`roleCan(role, what)`), so the Send button (`business/payment.js:72-73`, `business/screens.js:96-100`) shows only for an owner. `scripts/role-table-test.ts` checks both tables against the server's.
 13. **The send form offers nothing for an org-Safe row.** `fundableAccounts` filters on `a.backingUserId` (`business/home-model.js:15`), pinned by `business-home-test.ts:26-33`.
 
 ### 7.2 Tests to write
