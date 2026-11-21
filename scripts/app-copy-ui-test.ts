@@ -181,4 +181,40 @@ await t("under review, connected or not: no entry point offers the IBAN sign-in"
   assert.match(flat("OB.monerium.title + ' ' + OB.monerium.html()"), /Get your IBAN.*Continue with Monerium/, "a pending account keeps the sign-in");
 });
 
+// Not connected and under review, Home's checklist says it once (the IBAN
+// row), and Settings → Monerium keeps the sign-in without promising an IBAN.
+await t("not connected and under review: Home says it once, and Settings → Monerium promises no IBAN", () => {
+  const flat = (code: string) => String(run(code)).replace(/\s+/g, " ");
+  run(`user = ${JSON.stringify(unconnected("manual_review"))}; caps = { ...caps, sandbox: true, moneriumOAuth: true, moneriumApiKeys: true }; capsLoaded = true;`);
+  const home = flat("PH.home.html()");
+  assert.equal(home.split("Monerium is still reviewing this account").length - 1, 1, home);
+  const els: Record<string, any> = {};
+  const realGet = ctx.document.getElementById;
+  ctx.document.getElementById = (id: string) => (els[id] ??= new Proxy({} as any, {
+    get: (o, k) => (k in o ? o[k] : stub), set: (o, k, v) => { o[k] = v; return true; },
+  }));
+  try { run("renderMoneriumScreen()"); } finally { ctx.document.getElementById = realGet; }
+  const lede = String(els["m-mon-lede"].textContent);
+  assert.doesNotMatch(lede, /issues your IBAN/, lede);
+  assert.match(lede, /Monerium is still reviewing this account/, lede);
+  assert.match(String(els["m-mon-body"].innerHTML), /Continue with Monerium/, "the sign-in stays");
+  run(`user = ${JSON.stringify(unconnected("pending"))};`);
+  try { ctx.document.getElementById = (id: string) => els[id]; run("renderMoneriumScreen()"); } finally { ctx.document.getElementById = realGet; }
+  assert.match(String(els["m-mon-lede"].textContent), /Monerium issues your IBAN/, "a pending account keeps the pitch");
+});
+
+// A conversion that reverted moved nothing: the screens say so, not "sent and
+// not confirmed yet". One whose op may still land keeps that line.
+await t("a reverted conversion is not described as sent and unconfirmed", () => {
+  const row = (over: any) => ({ id: "dr", token: "USDC", holding: "unconfirmed", amountUsdc: 5, amountUnits: "5000000", detectedAt: "2026-11-19T00:00:00Z", txs: [], ...over });
+  for (const [reverted, re] of [[true, /didn’t go through, so nothing was converted/], [false, /isn’t confirmed yet/]] as const) {
+    run(`phCache.deposits = [${JSON.stringify(row(reverted ? { conversionReverted: true } : {}))}];`);
+    const screen = String(run(`PH.convert.html("dr")`));
+    assert.match(screen, re, `convert screen, reverted=${reverted}`);
+    const story = String(run(`phInStory(${JSON.stringify(row(reverted ? { conversionReverted: true } : {}))})`));
+    assert.match(story, reverted ? /did not go through, so nothing was converted/ : /not confirmed yet/, `activity, reverted=${reverted}`);
+    if (reverted) assert.doesNotMatch(screen + story, /isn’t confirmed yet|not confirmed yet/);
+  }
+});
+
 console.log(`\nAPP COPY UI TEST PASSED — ${pass}/${pass}`);

@@ -217,7 +217,9 @@ function phInStory(t) {
     case "converted": return typeof t.creditedEur === "number" ? `Converted to ${phEur(t.creditedEur)}, now in your account as euros.` : "Converted to euros.";
     case "awaiting_approval": return "Waiting for you to approve the conversion to euros.";
     case "refused": return "The conversion to euros did not go through. The dollars are still in your account.";
-    case "unconfirmed": return "A conversion to euros was sent and is not confirmed yet. We check it before offering it again.";
+    case "unconfirmed": return t.conversionReverted
+      ? "A conversion to euros did not go through, so nothing was converted. We check it before offering it again."
+      : "A conversion to euros was sent and is not confirmed yet. We check it before offering it again.";
     default: return "Held as digital dollars. You can convert them to euros any time.";
   }
 }

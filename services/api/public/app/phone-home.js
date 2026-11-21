@@ -50,7 +50,7 @@ function phChecklist(u) {
       : []),
     // A wallet account has no bank step: the checklist ends at the account.
     ...(bankOffered(u) ? [
-    { title: "Verify your identity", sub: approved || connected ? "Connected." : ibanUnderReview(u) ? IBAN_UNDER_REVIEW : "ID check, a few minutes.",
+    { title: "Verify your identity", sub: approved || connected ? "Connected." : ibanUnderReview(u) ? "Under review at Monerium." : "ID check, a few minutes.",
       done: approved || connected, action: ibanUnderReview(u) ? null : { id: "ph-ck-verify", label: "Start" } },
     { title: "IBAN active",
       sub: u.iban && approved ? "Ready to receive bank transfers."

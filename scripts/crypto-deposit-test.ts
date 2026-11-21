@@ -779,6 +779,30 @@ try {
     const cleoD = cleo.row();
     check("a throw after settling credited the row leaves it converted, not refused",
       cleoD.holding === "converted" && cleoD.creditedEur === 87.88, `${cleoD.holding} ${cleoD.creditedEur} ${cleoD.reason ?? ""}`);
+
+    // A partial fill is recorded (held, with the fill on the row), then the
+    // intent-clear write throws once. The fill is the outcome on record, so
+    // the intent goes: the rest stays convertible, not blocked for good.
+    const pia = await parkUncertain("Partial Pia");
+    store.updateCryptoDeposit(pia.id, { conversionIntent: { ...pia.row().conversionIntent!, amountUnits: (BigInt(pia.row().amountUnits) / 2n).toString() } });
+    const piaTx = await mintEure(pia.user.address, 87.88);
+    opOfTx.set(piaTx.toLowerCase(), pia.op);
+    let piaThrown = false;
+    (store as any).updateCryptoDeposit = (id: string, patch: any) => {
+      if (id === pia.id && !piaThrown && "conversionIntent" in patch && Object.keys(patch).length === 1) { piaThrown = true; throw new Error("disk full"); }
+      return realUpdate.call(store, id, patch);
+    };
+    try {
+      await pollCryptoDepositsOnce(async (h) => (h === pia.op ? { success: true, txHash: piaTx } : null));
+    } finally {
+      (store as any).updateCryptoDeposit = realUpdate;
+    }
+    const piaD = pia.row();
+    const piaBlock = depositConversionBlocker(store.findUser(pia.user.id)!, piaD) ?? "";
+    check("a throw after a partial fill was recorded keeps the fill and clears the intent",
+      piaThrown && piaD.holding === "held" && piaD.partials?.length === 1 && piaD.conversionIntent === undefined,
+      `${piaThrown} ${piaD.holding} ${piaD.partials?.length} ${JSON.stringify(piaD.conversionIntent)}`);
+    check("and the rest is not blocked as an unrecorded outcome", !/outcome was not recorded/.test(piaBlock), piaBlock);
     (publicClient as any).getTransactionReceipt = realReceipt;
   }
 

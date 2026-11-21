@@ -105,7 +105,9 @@ Each of these was a bug once.
   never booked as money in; the balance delta is a check (less: review).
   A venue that refuses to settle a swap that landed throws
   `SwapSettlementError` carrying its txs, recorded before the refusal
-  propagates: the swap hash is always on the transfer.
+  propagates: once the venue has its receipt, the swap hash is on the
+  transfer. A timeout in the venue's own receipt wait still loses it; the
+  forward path is then held in review by `liquidity.swap.pending`.
 - **Compensation is asymmetric on purpose**: only a definite refusal refunds (Monerium: 401 or 403); a
   timeout, a duplicate-transfer revert, or any failure after Bridge holds the
   deposit is MANUAL_REVIEW. `store.updateTransfer` refuses to move a
