@@ -279,7 +279,7 @@ await t("a refusal that lands while the person is on a Waiting screen redraws th
   const drawn: Record<string, any> = { "#ph-wait": el(), "#ph-wal-err": shown };
   ctx.document.querySelector = (s: string) => drawn[s] ?? null;
   run(`phRender = () => { __renders++; }`);
-  ctx.__refuse(Object.assign(new Error("alice.eth now points to a different address — nothing was sent; check it and start again"), { status: 409, body: { error: "x", code: "ADDRESS_CHANGED" } }));
+  ctx.__refuse(Object.assign(new Error("alice.eth now points to a different address — nothing was sent; check it and start again"), { status: 409, fromZold: true, body: { error: "x", code: "ADDRESS_CHANGED" } }));
   await done;
   ctx.document.querySelector = () => null;
   assert.equal(run(`__renders`), 1, "the Waiting screen is drawn again");
