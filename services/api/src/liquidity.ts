@@ -14,7 +14,7 @@
  * re-exported here for existing importers.
  */
 import { FX, LIQUIDITY, railFeeEur } from "./config.js";
-import { eur, usd } from "./chain.js";
+import { eur } from "./chain.js";
 import type { Transfer } from "./store.js";
 import { store } from "./store.js";
 import { FxSwapperLiquidityProvider } from "./liquidity/fx-swapper.js";
@@ -223,10 +223,6 @@ export function serializeExecution(e: LiquidityExecution): NonNullable<Transfer[
     executedAt: new Date().toISOString(),
     txHash: e.txs.at(-1)?.hash,
   };
-}
-
-export function liquidityAmountOutUnits(q: LiquidityQuote): number {
-  return q.tokenOut === "USDC" ? usd.fromUnits(q.expectedOut) : eur.fromWei(q.expectedOut);
 }
 
 function hydrateQuote(q: NonNullable<Transfer["liquidity"]>): LiquidityQuote {

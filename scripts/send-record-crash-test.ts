@@ -56,6 +56,9 @@ interface Scenario {
   /** The venue's pre-swap balance read is one unit high, so its delta falls
    *  short of the swap's logged output and the venue refuses to settle. */
   venueShortDelta?: boolean;
+  /** The venue's quote expected 1 USDC more than the swap delivered: a fill
+   *  between minOut and expectedOut. */
+  venueQuoteAbove?: boolean;
   /** The redeem message was stamped this long before the send started. */
   redeemIssuedAgoSec?: number;
   /** The fee debit takes this long: the clock moves on once its step is written. */
@@ -156,6 +159,15 @@ const SCENARIOS: Record<string, Scenario> = {
       state: "MANUAL_REVIEW", refunded: false, sends: [], error: /balance shows only/,
       hashed: ["liquidity.fx-swapper.eure-usdc"],
     },
+  },
+  // Not a crash: the fill lands under the quote's expectedOut (above minOut).
+  // usdcOut is what the swap delivered, so a reverse swap takes back no more.
+  "cash swap fills under the quote's expected output": {
+    kind: "cash",
+    noCrash: true,
+    venueQuoteAbove: true,
+    crashOn: () => false,
+    expect: { state: "MANUAL_REVIEW", refunded: false, sends: [], usdcOut: 44.3781 },
   },
   "refund landed, its record write fails": {
     kind: "refund",
@@ -479,6 +491,14 @@ async function child(which: string, name: string) {
     FxSwapperLiquidityProvider.prototype.execute = function (...args) {
       skew = true;
       return realExecute.apply(this, args);
+    };
+  }
+  if (scenario.venueQuoteAbove) {
+    const { FxSwapperLiquidityProvider } = await import("../services/api/src/liquidity/fx-swapper.js");
+    const realExecute = FxSwapperLiquidityProvider.prototype.execute;
+    FxSwapperLiquidityProvider.prototype.execute = async function (...args) {
+      const done = await realExecute.apply(this, args);
+      return { ...done, quote: { ...done.quote, expectedOut: done.quote.expectedOut + 1_000_000n } };
     };
   }
   fs.renameSync = ((from: any, to: any) => {

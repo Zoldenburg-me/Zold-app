@@ -62,6 +62,8 @@ function renderMoneriumScreen() {
     ? "Connected by signing in at Monerium."
     : keys || !caps.moneriumOAuth
       ? `Connect the API keys of your own Monerium account. This deployment talks to Monerium ${env} (${caps.moneriumHost}), so the keys must come from an app created at ${portal} — keys from the other environment are refused as a wrong secret.`
+      // Under review, the sign-in still connects the account, but no IBAN follows yet.
+      : ibanUnderReview(u) ? `${IBAN_UNDER_REVIEW} You can still connect your Monerium account here.`
       : "Monerium issues your IBAN. Sign in or sign up there, then come back here.";
   const row = (k, v) => `<div class="m-row"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`;
   const when = (iso) => { const d = new Date(iso || ""); return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString(); };

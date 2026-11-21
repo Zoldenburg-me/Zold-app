@@ -30,7 +30,6 @@ import { paymentMemo, redeemMessageStale } from "./sepa.js";
 import { createBridgeTransfer, BridgeTransferError, type BridgeTransferPlan } from "./bridge/bridgexyz.js";
 import {
   executeTransferLiquidity,
-  liquidityAmountOutUnits,
   liquidityProvider,
   prepareTransferLiquidity,
   serializeExecution,
@@ -1035,7 +1034,9 @@ export async function executeTransfer(
         executeTransferLiquidity({ ...transfer, liquidity: liquidityPlan }),
       );
       expectedOut = liquidity.amountOut;
-      usdcOut = liquidityAmountOutUnits(liquidity.quote);
+      // What the swap delivered, as the batch records it: compensation
+      // reverse-swaps this from the shared wallet, so never the quote's figure.
+      usdcOut = usd.fromUnits(liquidity.amountOut);
       store.updateTransfer(transfer.id, {
         state: "SWAPPED",
         txs,

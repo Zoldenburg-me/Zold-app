@@ -162,14 +162,6 @@ try {
     }
   });
 
-  await check("the scripts /app and /business load write no inline event handler into the page", () => {
-    const files = ["ui.js", "device.js", "device-ready.js", "cookie-notice.js", "narwhal/narwhal.js",
-      ...["app", "business"].flatMap((d) => readdirSync(path.join(PUB, d)).filter((f) => f.endsWith(".js")).map((f) => `${d}/${f}`))];
-    for (const f of files) {
-      assert.doesNotMatch(readFileSync(path.join(PUB, f), "utf8"), /<[a-z][^<>]*\son[a-z]+=["'`$]/i, f);
-    }
-  });
-
   await check("/pay, a payment request and /r refuse inline script, and their HTML has none", async () => {
     for (const p of ["/pay/someone", "/pay/someone/HSC94-E52WR-26M44", "/r/some-slug", "/pay.html", "/pay-request.html", "/receipt.html"]) {
       const r = await fetch(`${base}${p}`);
@@ -207,11 +199,21 @@ try {
     }
   });
 
-  await check("the scripts the public pages load write no inline event handler into the page", () => {
-    const files = readdirSync(PUB).filter((f) => f.endsWith(".js"));
-    for (const f of ["invoice.js", "send.js", "document.js", "faucet.js"]) assert.ok(files.includes(f), f);
+  // Every script under public/ outside vendor: /app also imports /guardian/*.js
+  // at runtime. Any ` onX="`, ` onX=${`, ` onX = "` or `/onX=` + quote counts, wherever it
+  // sits in a template (a `>` inside `${…}` before it does not hide it), and
+  // so does setAttribute("onX", …). `.onX =` property assignment and a
+  // declared variable (`const one = `) are allowed.
+  await check("no script the pages load writes an inline event handler into the page", () => {
+    const files = readdirSync(PUB, { recursive: true, encoding: "utf8" })
+      .filter((f) => f.endsWith(".js") && !f.startsWith(`vendor${path.sep}`));
+    for (const f of ["ui.js", "invoice.js", "send.js", "app/core.js", "business/home.js", "guardian/providers.js"]) {
+      assert.ok(files.includes(f.split("/").join(path.sep)), f);
+    }
     for (const f of files) {
-      assert.doesNotMatch(readFileSync(path.join(PUB, f), "utf8"), /<[a-z][^<>]*\son[a-z]+=["'`$]/i, f);
+      const js = readFileSync(path.join(PUB, f), "utf8");
+      assert.doesNotMatch(js, /(?<!\b(?:const|let|var))[\s/]on[a-z]+\s*=\s*["'`$]/i, f);
+      assert.doesNotMatch(js, /setAttribute\(\s*["'`]on/i, f);
     }
   });
 
