@@ -100,8 +100,8 @@ Order in `server.ts`:
    `x-content-type-options: nosniff`, a same-origin CSP with
    `frame-ancestors 'none'`, and HSTS in production (`http/policy.ts`). The
    site's CSP still allows inline script for the public token pages; /app and
-   /business allow only their import map's hash; /admin, /guardian and
-   /recovery allow no inline script.
+   /business allow only their import map's hash; /pay, /r, /admin, /guardian
+   and /recovery allow no inline script.
 3. `originPolicy`: an allowlisted `Origin` gets CORS headers. A foreign
    `Origin` on any non-GET request gets 403. A request with no Origin passes,
    which covers webhooks and curl.

@@ -9,6 +9,8 @@
  *    script), never cached, and kept out of robots; its HTML has no inline
  *    script; /app and /business allow no inline script but their import
  *    map, by hash, and their HTML and scripts carry no inline handler;
+ *    /pay/:handle, /pay/:handle/:code and /r/:slug allow no inline script
+ *    and their HTML has none;
  *  - the login helpers: Google and Apple authorize URLs return an ID token in
  *    the fragment, with the nonce bound to the browser key and a one-time
  *    state that expires; a return with the wrong state, no stored state, an
@@ -168,8 +170,25 @@ try {
     }
   });
 
+  await check("/pay, a payment request and /r refuse inline script, and their HTML has none", async () => {
+    for (const p of ["/pay/someone", "/pay/someone/HSC94-E52WR-26M44", "/r/some-slug", "/pay.html", "/pay-request.html", "/receipt.html"]) {
+      const r = await fetch(`${base}${p}`);
+      assert.equal(r.status, 200, p);
+      const csp = r.headers.get("content-security-policy") ?? "";
+      assert.match(csp, /(?:^|; )script-src 'self'(;|$)/, p);
+      const html = (await r.text()).replace(/<!--[\s\S]*?-->/g, "");
+      for (const [, attrs] of html.matchAll(/<script\b([^>]*)>/g)) {
+        assert.match(attrs, /\bsrc="\/[a-z-]+\.js"/, `${p}: inline <script${attrs}>`);
+      }
+      assert.doesNotMatch(html, /\son[a-z]+\s*=/i, `${p}: inline event handler`);
+    }
+    for (const f of ["pay.js", "pay-request.js", "receipt.js"]) {
+      assert.doesNotMatch(readFileSync(path.join(PUB, f), "utf8"), /<[a-z][^<>]*\son[a-z]+=["'`$]/i, f);
+    }
+  });
+
   await check("the other pages keep the site's CSP until their inline bootstraps move", async () => {
-    for (const p of ["/", "/pay/someone", "/faucet"]) {
+    for (const p of ["/", "/faucet"]) {
       const r = await fetch(`${base}${p}`);
       assert.equal(r.headers.get("content-security-policy"), CONTENT_SECURITY_POLICY, p);
     }
