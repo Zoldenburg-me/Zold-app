@@ -186,6 +186,24 @@ await check("the convert route parks an uncertain submit as unconfirmed and refu
     "an included-but-reverted swap moved nothing and is refused before settlement");
 });
 
+await check("an unconfirmed row says it reverted only when no later attempt is still unconfirmed", async () => {
+  const { buildActivity } = await import("../services/api/src/transfers/activity.js");
+  const u = mkUser();
+  const reverted = mkDeposit(u.id, { holding: "unconfirmed",
+    txs: [{ step: "safe.swap(usdc->eure).reverted", hash: "0x5" }, { step: "userOperation", hash: "0x6" }] });
+  assert.match(depositConversionBlocker(u, reverted)!, /reverted/, "the sweep's reverted row");
+  const row = (d: any) => buildActivity({ transfers: [], deposits: [d], issues: [] }).find((r) => r.id === d.id) as any;
+  assert.equal(row(reverted).conversionReverted, true, "the activity row says it reverted");
+  // An earlier submit reverted (refused, retryable); the retry is uncertain
+  // and keeps that old step. The new op may still land.
+  const retried = mkDeposit(u.id, { holding: "unconfirmed",
+    txs: [{ step: "safe.swap(usdc->eure).reverted", hash: "0x7" }, { step: "safe.swap(usdc->eure).unconfirmed", hash: "0x8" }] });
+  const block = depositConversionBlocker(u, retried)!;
+  assert.match(block, /may still land/, block);
+  assert.doesNotMatch(block, /reverted/, block);
+  assert.equal(row(retried).conversionReverted, undefined, "an op that may still land is not called reverted");
+});
+
 await check("a deposit with an unrecorded conversion intent is not offered again, whatever its holding", () => {
   const u = mkUser();
   const quote = { provider: "dex", rate: "1137900", minOut: "1" };
@@ -209,6 +227,9 @@ await check("the convert route writes the intent before submitting and clears it
   const executed = route.slice(route.indexOf("const executed ="), route.indexOf("settleConvertedDeposit("));
   assert.doesNotMatch(executed, /conversionIntent/, "the post-swap unconfirmed write keeps it");
   assert.match(route, /settleConvertedDeposit\([\s\S]{0,600}conversionIntent: undefined/, "settling clears it");
+  const caught = route.slice(route.indexOf("executed but was not recorded"), route.indexOf("const balances ="));
+  assert.match(caught, /holding !== "unconfirmed"\) clearSettledIntent\(deposit\.id\)/,
+    "a throw after settling recorded the outcome clears the intent, so a partial fill's rest is not blocked");
 });
 
 await check("a deposit already in the settlement currency has nothing to convert", () => {
