@@ -687,7 +687,7 @@ try {
     const { readFileSync } = await import("node:fs");
     const src = readFileSync(path.join(ROOT, "services/api/src/orchestrator.ts"), "utf8");
     const intentAt = src.indexOf('recordOutboundIntent(transfer.id, txs, "liquidity.swap.pending")');
-    const swapAt = src.indexOf("await executeTransferLiquidity(");
+    const swapAt = src.indexOf("executeTransferLiquidity({ ...transfer, liquidity: liquidityPlan })");
     check("the swap intent is recorded before the orchestrator runs the swap", intentAt > 0 && intentAt < swapAt, `${intentAt} vs ${swapAt}`);
   }
 

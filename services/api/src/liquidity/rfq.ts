@@ -25,6 +25,7 @@ import {
   assertMinOutBound,
   assertVenueTarget,
   settleFromReceipt,
+  settleLanded,
   defaultTokens,
   type VenueTokens,
   } from "./contract.js";
@@ -176,22 +177,21 @@ export class RfqLiquidityProvider implements LiquidityProvider {
     // Measured, not copied from the quote: a fill at the maker's minimum is
     // still a fill, and the transfer must settle against what arrived — the
     // settlement's own Transfer logs, with the balance delta as the check.
-    const delivered = await settleFromReceipt("RFQ", swapHash, tokenOut, to, before);
-    if (delivered < quote.minOut) {
-      throw new Error(`RFQ settlement delivered ${delivered} below the quoted floor ${quote.minOut} — refusing to settle`);
-    }
-    return {
-      quote,
-      amountOut: delivered,
-      txs: [
-        { step: `${quote.tokenIn.toLowerCase()}.approve(rfq-settlement)`, hash: approveHash },
-        {
-          step:
-            quote.side === "EURE_TO_USDC" ? "liquidity.rfq.eure-usdc" : "liquidity.rfq.usdc-eure",
-          hash: swapHash,
-        },
-      ],
-    };
+    const txs = [
+      { step: `${quote.tokenIn.toLowerCase()}.approve(rfq-settlement)`, hash: approveHash },
+      {
+        step: quote.side === "EURE_TO_USDC" ? "liquidity.rfq.eure-usdc" : "liquidity.rfq.usdc-eure",
+        hash: swapHash,
+      },
+    ];
+    const delivered = await settleLanded(txs, async () => {
+      const d = await settleFromReceipt("RFQ", swapHash, tokenOut, to, before);
+      if (d < quote.minOut) {
+        throw new Error(`RFQ settlement delivered ${d} below the quoted floor ${quote.minOut} — refusing to settle`);
+      }
+      return d;
+    });
+    return { quote, amountOut: delivered, txs };
   }
 
   /**

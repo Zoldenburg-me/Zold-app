@@ -25,6 +25,7 @@ import {
   SafeSwapPlan,
   applySurplus,
   settleFromReceipt,
+  settleLanded,
   } from "./contract.js";
 
 export class DexLiquidityProvider implements LiquidityProvider {
@@ -112,23 +113,28 @@ export class DexLiquidityProvider implements LiquidityProvider {
       ],
     });
 
+    const txs = [
+      { step: `${quote.tokenIn.toLowerCase()}.approve(dex-router)`, hash: approveHash },
+      { step: `liquidity.dex.${quote.tokenIn.toLowerCase()}-${quote.tokenOut.toLowerCase()}`, hash: swapHash },
+    ];
     // `to` is shared: a balance delta would also count another operation's
-    // money arriving while the swap ran. The delta is the check.
-    const delivered = await settleFromReceipt("dex", swapHash, tokenOut, to, before);
-    if (delivered < quote.minOut) {
-      throw new Error(
-        `dex swap delivered ${delivered} below the quoted floor ${quote.minOut} — refusing to settle`,
-      );
-    }
+    // money arriving while the swap ran. The delta is the check, read past
+    // replica lag (balanceAfterWrite): a stale pre-swap balance here would
+    // report a landed swap as unswapped, and compensation would refund EURe
+    // this side no longer holds.
+    const delivered = await settleLanded(txs, async () => {
+      const d = await settleFromReceipt("dex", swapHash, tokenOut, to, before);
+      if (d < quote.minOut) {
+        throw new Error(`dex swap delivered ${d} below the quoted floor ${quote.minOut} — refusing to settle`);
+      }
+      return d;
+    });
     const { amountOut, surplus } = applySurplus(quote, delivered);
     return {
       quote,
       amountOut,
       ...(surplus ? { surplus } : {}),
-      txs: [
-        { step: `${quote.tokenIn.toLowerCase()}.approve(dex-router)`, hash: approveHash },
-        { step: `liquidity.dex.${quote.tokenIn.toLowerCase()}-${quote.tokenOut.toLowerCase()}`, hash: swapHash },
-      ],
+      txs,
     };
   }
 

@@ -22,6 +22,7 @@ import {
   publicClient,
   } from "../chain.js";
 import type { Transfer } from "../store.js";
+import { redactedMessage } from "../http/log-cause.js";
 /**
  * A venue's calldata is executed with the orchestrator's key or, in a batch,
  * the user's passkey. Whatever the API answered is therefore a transaction we
@@ -402,4 +403,31 @@ export async function settleFromReceipt(
     );
   }
   return output.wei;
+}
+
+/**
+ * A venue's refusal after its swap landed. The swap moved money whether or
+ * not it settles, so the txs it sent ride on the error and the caller records
+ * them before the refusal propagates: a reverse swap's step must be on record
+ * or the scanner books its EURe as a new deposit, and a forward swap's hash is
+ * what an operator reconciles against.
+ */
+export class SwapSettlementError extends Error {
+  constructor(
+    message: string,
+    readonly txs: Transfer["txs"],
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = "SwapSettlementError";
+  }
+}
+
+/** Settle a landed swap; any refusal carries the swap's `txs`. */
+export async function settleLanded<T>(txs: Transfer["txs"], settle: () => Promise<T>): Promise<T> {
+  try {
+    return await settle();
+  } catch (err) {
+    throw new SwapSettlementError(redactedMessage(err), txs, { cause: err });
+  }
 }

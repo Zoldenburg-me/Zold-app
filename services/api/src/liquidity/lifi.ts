@@ -28,6 +28,7 @@ import {
   assertMinOutBound,
   assertVenueTarget,
   settleFromReceipt,
+  settleLanded,
   defaultTokens,
   type VenueTokens,
   } from "./contract.js";
@@ -168,19 +169,24 @@ export class LifiLiquidityProvider implements LiquidityProvider {
     // Measured. LI.FI's slippage bound is enforced inside its own contract,
     // but what the rest of the transfer settles against is what the route's
     // own Transfer logs delivered, with the balance delta as the check.
-    const delivered = await settleFromReceipt("lifi", swapHash, quote.lifi.toToken, to, before);
-    if (delivered < quote.minOut) {
-      throw new Error(`lifi swap delivered ${delivered} below the quoted floor ${quote.minOut} — refusing to settle`);
-    }
+    const txs = [
+      { step: `${quote.tokenIn.toLowerCase()}.approve(lifi)`, hash: approveHash },
+      { step: `liquidity.lifi.${quote.tokenIn.toLowerCase()}-${quote.tokenOut.toLowerCase()}`, hash: swapHash },
+    ];
+    const toToken = quote.lifi.toToken;
+    const delivered = await settleLanded(txs, async () => {
+      const d = await settleFromReceipt("lifi", swapHash, toToken, to, before);
+      if (d < quote.minOut) {
+        throw new Error(`lifi swap delivered ${d} below the quoted floor ${quote.minOut} — refusing to settle`);
+      }
+      return d;
+    });
     const { amountOut, surplus } = applySurplus(quote, delivered);
     return {
       quote,
       amountOut,
       ...(surplus ? { surplus } : {}),
-      txs: [
-        { step: `${quote.tokenIn.toLowerCase()}.approve(lifi)`, hash: approveHash },
-        { step: `liquidity.lifi.${quote.tokenIn.toLowerCase()}-${quote.tokenOut.toLowerCase()}`, hash: swapHash },
-      ],
+      txs,
     };
   }
 

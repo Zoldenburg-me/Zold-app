@@ -15,6 +15,7 @@ import {
   LiquiditySide,
   MAX_SLIPPAGE_BPS,
   settleFromReceipt,
+  settleLanded,
   waitForAllowanceVisibility,
 } from "./contract.js";
 
@@ -85,15 +86,12 @@ export class FxSwapperLiquidityProvider implements LiquidityProvider {
     });
     // The swapper pays at its posted rate, but what it paid is read from its
     // own Transfer logs, as on every venue.
-    const amountOut = await settleFromReceipt("fx-swapper", swapHash, tokenOut, to, before);
-    return {
-      quote,
-      amountOut,
-      txs: [
-        { step: approveStep, hash: approveHash },
-        { step: swapStep, hash: swapHash },
-      ],
-    };
+    const txs = [
+      { step: approveStep, hash: approveHash },
+      { step: swapStep, hash: swapHash },
+    ];
+    const amountOut = await settleLanded(txs, () => settleFromReceipt("fx-swapper", swapHash, tokenOut, to, before));
+    return { quote, amountOut, txs };
   }
 
   /** The mock's own posted rate — the price it will really swap at. */
