@@ -26,6 +26,7 @@ import { auditProfileCheck, checkBackingProfile } from "../../adapters/monerium-
 import {
   CSV_MAX_BYTES,
   activity,
+  assertOneLinePerInvoice,
   assertTransition,
   importCsv,
   isCancellable,
@@ -110,7 +111,9 @@ export function createDraftRoutes(
     const ctx = ctxOf(req, res);
     if (!ctx) return;
     if (!requirePermission(ctx, res, "drafts.create")) return;
-    const open = store.draftsOf(ctx.org.id).filter((d) => !["EXECUTED", "FAILED", "REJECTED", "CANCELLED"].includes(d.state)).length;
+    // Counted by the state reads show: a run whose transfers all finished is
+    // finished, though its row still says EXECUTING (withExecutionState writes nothing).
+    const open = store.draftsOf(ctx.org.id).map(withExecutionState).filter((d) => !["EXECUTED", "FAILED", "REJECTED", "CANCELLED"].includes(d.state)).length;
     if (open >= CEILINGS.openDraftsPerOrg) {
       return res.status(409).json(ceilingRefusal("payment runs not yet executed", CEILINGS.openDraftsPerOrg));
     }
@@ -141,6 +144,7 @@ export function createDraftRoutes(
         ...validateLine(l, typeof l?.contactId === "string" ? contacts.get(l.contactId) : undefined),
       }));
       if (!lines.length) return res.status(400).json({ error: "A draft needs at least one line." });
+      assertOneLinePerInvoice(lines);
 
       const now = new Date().toISOString();
       const draft = store.addDraft({
@@ -189,6 +193,7 @@ export function createDraftRoutes(
         id: typeof l?.id === "string" ? l.id : `dl_${randomUUID()}`,
         ...validateLine(l, typeof l?.contactId === "string" ? contacts.get(l.contactId) : undefined),
       }));
+      assertOneLinePerInvoice(lines);
       const updated = store.updateDraft(draft.id, {
         lines,
         // Re-pointing the lines is exactly how INVALID_DATA is resolved.

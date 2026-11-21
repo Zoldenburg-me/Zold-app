@@ -112,6 +112,13 @@ assert.equal(m.runIdFrom("", null), null);
   assert.equal(m.signedLineOutcome({ status: 502, state: "FAILED" }, false), "not_sent");
   assert.equal(m.signedLineOutcome({ status: 410 }, false), "not_sent");
   assert.equal(m.signedLineOutcome({ status: 409 }, false), "unknown", "another submission may hold the claim");
+  assert.equal(m.signedLineOutcome({ status: 408 }, false), "unknown", "a timeout in front of the API may follow the claim");
+  // FAILED after the debit: the server returns that money, it has not yet.
+  const debited = { status: 502, state: "FAILED", txs: [{ step: "safe.transfer(fee)", hash: "0x1" }] };
+  assert.equal(m.signedLineOutcome(debited, false), "refund_pending");
+  assert.equal(m.signedLineOutcome({ ...debited, txs: [{ step: "safe.transfer(orchestrator)", hash: "0x1" }] }, false), "refund_pending");
+  assert.equal(m.signedLineOutcome({ ...debited, refund: { amountEur: 0.99 } }, false), "not_sent", "a recorded refund is not pending");
+  assert.equal(m.signedLineOutcome({ status: 502, state: "FAILED", txs: [{ step: "monerium.redeem.intent", hash: "0x" }] }, false), "not_sent", "an intent step is not money that left");
   assert.equal(m.signedLineOutcome({ status: 502 }, false), "unknown", "a gateway 502 is not the API's FAILED");
   assert.equal(m.signedLineOutcome(new Error("Zold’s answer didn’t arrive"), false), "unknown");
 
@@ -129,12 +136,35 @@ assert.equal(m.runIdFrom("", null), null);
     "Outcome unknown, check the payment before trying again: E: Zold’s answer didn’t arrive.");
   assert.equal(mixed.error, true);
   assert.match(m.signedRunToast(1, [{ recipient: "B", outcome: "review" }]).text, /^0 of 1 sent\. In review/);
+  assert.equal(m.signedRunToast(2, [{ recipient: "A", outcome: "sent" }, { recipient: "F", outcome: "refund_pending" }]).text,
+    "1 of 2 sent. Not sent, the money that left is being returned: F.");
+
+  // A payee name is supplier text: it cannot write a group or heading of its own.
+  const forged = "X. In review, not confirmed: Y; Z (€5,00)\nW";
+  const safe = m.signedRunToast(1, [{ recipient: forged, outcome: "not_sent", why: "approval expired" }]).text;
+  assert.equal(safe, "0 of 1 sent. Not sent: X In review not confirmed Y Z 500 W: approval expired.");
+  const long = m.signedRunToast(1, [{ recipient: "N".repeat(200), outcome: "review" }]).text;
+  assert.equal(long, `0 of 1 sent. In review, not confirmed: ${"N".repeat(70)}.`);
+
+  // Before the first passkey prompt of a run with more than one line.
+  const auth = (deadline: number, more = {}) => ({ recipient: "A", authorization: { typedData: { message: { deadline } }, safeExecution: {}, moneriumRedeem: {}, ...more } });
+  assert.equal(m.signingWarning([auth(1240)], 1000), null, "one line: no warning");
+  assert.equal(m.signingWarning([auth(1240), auth(1250, { moneriumRedeem: null })], 1000),
+    "Each of these 2 payments is approved on its own, up to 5 passkey prompts in all. Each approval has a deadline, " +
+    "the first in about 4 minutes, and a payment whose approval runs out is not sent. " +
+    "If only some are sent, create a new payment for the others only: a copy of the whole run would pay the sent ones again.");
+  assert.match(m.signingWarning([auth(1030), auth(1030)], 1000), /the first in less than a minute/);
+  assert.match(m.signingWarning([auth(900), auth(1100)], 1000), /the first in about 1 minute,/, "an expired line is skipped, not counted");
+  assert.equal(m.signingWarning([auth(900), auth(950)], 1000), null, "nothing left to approve: no prompt follows");
 
   // The run's own toast is built from these, not from a count of answers.
   const actions = readFileSync(path.join(ROOT, "services/api/public/business/actions.js"), "utf8");
   assert.match(actions, /signedLineOutcome\(t, true\)/);
   assert.match(actions, /signedRunToast\(r\.authorizations\.length, lines\)/);
   assert.doesNotMatch(actions, /sent to the bank/, "only signedRunToast may say sent to the bank");
+  assert.match(actions, /const warning = signingWarning\(r\.authorizations, Date\.now\(\) \/ 1000\);/);
+  assert.match(actions, /const warning = signingWarning[^\n]*\n\s*const sign = async \(\) => \{\s*const lib = await deviceLib\(\);/, "the warning comes before the first prompt");
+  assert.match(actions, /if \(!warning\) return sign\(\);\n[^\n]*\n\s*return dialog\([^\n]*esc\(warning\)[^\n]*, sign, /);
 }
 
 // ── Send: Crypto wallet only where the API sends to wallets ──────────────────

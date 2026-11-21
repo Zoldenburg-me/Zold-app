@@ -13,7 +13,7 @@ import { forgetDraft, invoiceBody, invoiceDraft, readInvoiceEditor, setInvoiceDr
 import { ap, bk, contactPayments, ct, draftTag, draftTitle, draftTotal, invoiceDrawer, iv, mayReview, memberName } from "./screens.js";
 import { loadOrg, render } from "./shell.js";
 import { field, payerRuleDialog, payerRuleSection, runSummary } from "./receipts.js";
-import { signedLineOutcome, signedRunToast } from "./payment-model.js";
+import { signedLineOutcome, signedRunToast, signingWarning } from "./payment-model.js";
 
 /** A file the API serves behind the bearer header, which a navigation
  *  cannot carry: fetch it, then hand the bytes to the browser as a download. */
@@ -1156,46 +1156,54 @@ export const ACTIONS = {
     if (r.cryptoSends?.length) return signCryptoRun(r.cryptoSends);
     if (!r.authorizations?.length) return toast(r.note || "Nothing to approve.");
 
-    const lib = await deviceLib();
-    // The passkey that wraps this browser's device key, from the session:
-    // nothing writes it to storage.
-    const session = await api("/api/session");
-    const credentialId = session.passkey?.credentialId;
-    if (!credentialId) throw new Error("This account has no passkey here, so nothing can be approved.");
-    let approved = 0;
-    const lines = [];
-    for (const a of r.authorizations) {
-      // No passkey prompt for a line the server would refuse.
-      if (Date.now() / 1000 > Number(a.authorization.typedData.message.deadline)) {
-        lines.push({ recipient: a.recipient, outcome: "not_sent", why: "approval expired" });
-        continue;
+    // Before the first prompt: every line's deadline is already running, and
+    // a run sent again would pay its sent lines twice.
+    const warning = signingWarning(r.authorizations, Date.now() / 1000);
+    const sign = async () => {
+      const lib = await deviceLib();
+      // The passkey that wraps this browser's device key, from the session:
+      // nothing writes it to storage.
+      const session = await api("/api/session");
+      const credentialId = session.passkey?.credentialId;
+      if (!credentialId) throw new Error("This account has no passkey here, so nothing can be approved.");
+      let approved = 0;
+      const lines = [];
+      for (const a of r.authorizations) {
+        // No passkey prompt for a line the server would refuse.
+        if (Date.now() / 1000 > Number(a.authorization.typedData.message.deadline)) {
+          lines.push({ recipient: a.recipient, outcome: "not_sent", why: "approval expired" });
+          continue;
+        }
+        let submitted = false;
+        try {
+          const signature = await lib.signTypedData(a.authorization.typedData, credentialId, a.authorization.authorizer);
+          // The debit itself is a Safe operation the passkey signs, then the
+          // Monerium redeem order on a SEPA line, in that order, as the server
+          // verifies them (authenticator counters rise with each ceremony).
+          const executionAssertion = await lib.passkeyAssertion(a.authorization.safeExecution);
+          const moneriumRedeemAssertion = await lib.passkeyAssertion(a.authorization.moneriumRedeem);
+          submitted = true;
+          const t = await api(a.authorization.submitTo, {
+            method: "POST",
+            body: {
+              signature,
+              ...(executionAssertion ? { executionAssertion } : {}),
+              ...(moneriumRedeemAssertion ? { moneriumRedeemAssertion } : {}),
+            },
+          });
+          lines.push({ recipient: a.recipient, outcome: signedLineOutcome(t, true) });
+          toast(`Approved ${++approved} of ${r.authorizations.length}…`);
+        } catch (e) {
+          // Reported per line rather than aborting silently: the ones already
+          // signed are real payments and the user must know which.
+          lines.push({ recipient: a.recipient, outcome: submitted ? signedLineOutcome(e, false) : "not_sent", why: plain(e.message) });
+        }
       }
-      let submitted = false;
-      try {
-        const signature = await lib.signTypedData(a.authorization.typedData, credentialId, a.authorization.authorizer);
-        // The debit itself is a Safe operation the passkey signs, then the
-        // Monerium redeem order on a SEPA line, in that order, as the server
-        // verifies them (authenticator counters rise with each ceremony).
-        const executionAssertion = await lib.passkeyAssertion(a.authorization.safeExecution);
-        const moneriumRedeemAssertion = await lib.passkeyAssertion(a.authorization.moneriumRedeem);
-        submitted = true;
-        const t = await api(a.authorization.submitTo, {
-          method: "POST",
-          body: {
-            signature,
-            ...(executionAssertion ? { executionAssertion } : {}),
-            ...(moneriumRedeemAssertion ? { moneriumRedeemAssertion } : {}),
-          },
-        });
-        lines.push({ recipient: a.recipient, outcome: signedLineOutcome(t, true) });
-        toast(`Approved ${++approved} of ${r.authorizations.length}…`);
-      } catch (e) {
-        // Reported per line rather than aborting silently: the ones already
-        // signed are real payments and the user must know which.
-        lines.push({ recipient: a.recipient, outcome: submitted ? signedLineOutcome(e, false) : "not_sent", why: plain(e.message) });
-      }
-    }
-    const done = signedRunToast(r.authorizations.length, lines);
-    toast(done.text, done.error);
+      const done = signedRunToast(r.authorizations.length, lines);
+      toast(done.text, done.error);
+    };
+    if (!warning) return sign();
+    // Signing runs from the dialog's own button, inside the click that allows a passkey prompt.
+    return dialog("Approve each payment", `<p class="desc">${esc(warning)}</p>`, sign, { okLabel: "Start approving" });
   },
 };
