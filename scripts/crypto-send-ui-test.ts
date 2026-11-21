@@ -205,6 +205,7 @@ await t("while /authorize waits, going back and sending again makes no second se
   assert.doesNotMatch(html, /id="ph-wal-send"/);
   assert.match(html, /Waiting for your last payment/);
   assert.doesNotMatch(html, /We can’t confirm|ph-check-activity/, "a reload now would drop the answer");
+  assert.match(html, /If nothing changes after a few minutes, reload the app and check Activity before you pay again\./);
   await run(`phWalletSubmit`)(el(), el());
   assert.equal(run(`__calls.filter(([p]) => p.endsWith("/crypto-sends")).length`), 1, "no second create");
 });
@@ -263,6 +264,40 @@ await t("a refusal from Zold after /authorize was sent still lets the person fix
   assert.match(err.textContent, /different address/);
   assert.equal(run(`Z.isDisabled`)(btn), false, "the spinner is off and Send is live");
   assert.match(flat(run(`PH["send/wallet-check"].html()`)), /id="ph-wal-send"/);
+});
+
+await t("a refusal that lands while the person is on a Waiting screen redraws that screen with the reason", async () => {
+  run(`phUnconfirmed = false; phWallet = { to: "alice.eth", token: "USDC", amount: "25.5", name: "alice.eth", address: "${ADDR}" }; __renders = 0;
+    api = (p) => p.endsWith("/authorize") ? new Promise((_, no) => { globalThis.__refuse = no; }) : Promise.resolve({ id: "s10", safeExecution: { credentialId: "c", challenge: "ch" } });`);
+  const done = run(`phWalletSubmit`)(el(), el());
+  await new Promise((r) => setTimeout(r, 10));
+  // Back, then Send again: the check screen now draws "Waiting for your last payment".
+  assert.match(flat(run(`PH["send/wallet-check"].html()`)), /id="ph-wait"/);
+  const shown = el();
+  const drawn: Record<string, any> = { "#ph-wait": el(), "#ph-wal-err": shown };
+  ctx.document.querySelector = (s: string) => drawn[s] ?? null;
+  run(`phRender = () => { __renders++; }`);
+  ctx.__refuse(Object.assign(new Error("alice.eth now points to a different address — nothing was sent; check it and start again"), { status: 409, body: { error: "x", code: "ADDRESS_CHANGED" } }));
+  await done;
+  ctx.document.querySelector = () => null;
+  assert.equal(run(`__renders`), 1, "the Waiting screen is drawn again");
+  assert.match(shown.textContent, /different address/);
+  assert.equal(shown.hidden, false);
+  assert.match(flat(run(`PH["send/wallet-check"].html()`)), /id="ph-wal-send"/);
+});
+
+await t("an unknown answer that lands while the person is on a Waiting screen does not redraw it as open", async () => {
+  run(`phUnconfirmed = false; phWallet = { to: "alice.eth", token: "USDC", amount: "25.5", name: "alice.eth", address: "${ADDR}" }; __renders = 0;
+    api = (p) => p.endsWith("/authorize") ? new Promise((_, no) => { globalThis.__refuse = no; }) : Promise.resolve({ id: "s11", safeExecution: { credentialId: "c", challenge: "ch" } });`);
+  const done = run(`phWalletSubmit`)(el(), el());
+  await new Promise((r) => setTimeout(r, 10));
+  ctx.document.querySelector = (s: string) => (s === "#ph-wait" ? el() : null);
+  run(`phRender = () => { __renders++; }`);
+  ctx.__refuse(Object.assign(new Error("offline"), { status: 503, offline: true, body: { error: "offline" } }));
+  await done;
+  ctx.document.querySelector = () => null;
+  assert.equal(run(`__renders`), 0);
+  assert.match(flat(run(`PH["send/wallet-check"].html()`)), /We can’t confirm this payment/);
 });
 
 await t("a name is looked up and the resolved address goes to the check screen", async () => {

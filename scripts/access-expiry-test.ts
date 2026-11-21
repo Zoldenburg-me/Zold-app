@@ -370,6 +370,7 @@ await check("/app send: while /authorize waits, review offers no approval and no
   const html = run(`PH["send/review"].html()`) as string;
   assert.doesNotMatch(html, /ph-approve/);
   assert.match(html, /Waiting for your last payment/);
+  assert.match(html, /If nothing changes after a few minutes, reload the app and check Activity before you pay again\./);
   const before = calls.length;
   await run(`phSubmit(__el, __el)`);
   assert.equal(calls.length, before, "no new transfer is created");
