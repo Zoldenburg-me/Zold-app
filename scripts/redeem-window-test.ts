@@ -39,6 +39,7 @@ const { createTransferRouter } = await import("../services/api/src/routes/transf
 const { buildTransferFromQuote } = await import("../services/api/src/transfers/build.js");
 const { executeSepaTransfer, safeFundedEurToday } = await import("../services/api/src/orchestrator.js");
 const { MoneriumClient } = await import("../services/api/src/adapters/monerium-client.js");
+const { REDEEM_WINDOW_SEC } = await import("../services/api/src/sepa.js");
 const chain = await import("../services/api/src/chain.js");
 const { syncInvoicePayment, withExecutionState } = await import("../services/api/src/routes/business/state.js");
 
@@ -112,12 +113,17 @@ store.addQuote({
   receiveKes: 0, receiveEur: 40, midRate: 1, marginBps: 0, effectiveRate: 1,
   expiresAt: new Date(Date.now() + 60_000).toISOString(), createdAt: stamp,
 } as any);
-const built = await buildTransferFromQuote(store.findQuote("q-built")!, { recipientName: "Recipient", recipientIban: IBAN });
+// A slow read between the stamp and the deadline (the daily-cap check): Date.now
+// runs 30 s ahead of the clock `new Date()` stamps createdAt with.
+const realNow = Date.now;
+Date.now = () => realNow() + 30_000;
+const built = await buildTransferFromQuote(store.findQuote("q-built")!, { recipientName: "Recipient", recipientIban: IBAN })
+  .finally(() => { Date.now = realNow; });
 assert.ok(built.ok, JSON.stringify(built));
-const window = built.transfer.auth!.deadline - Date.parse(built.transfer.moneriumRedeem!.issuedAt) / 1000;
-assert.ok(window > 0 && window < 5 * 60, `the built deadline is ${window} s after the signed stamp`);
+const window = built.transfer.auth!.deadline - Math.floor(Date.parse(built.transfer.moneriumRedeem!.issuedAt) / 1000);
+assert.equal(window, REDEEM_WINDOW_SEC, "the route deadline counts from the signed stamp, as the executor does");
 store.updateTransfer(built.transfer.id, { state: "FAILED" });
-console.log("  ok  a built SEPA transfer must be approved inside Monerium's 5 minutes");
+console.log("  ok  a built SEPA transfer must be approved inside Monerium's 5 minutes, counted from its stamp");
 
 const app = express();
 app.use(express.json());

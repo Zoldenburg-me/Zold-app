@@ -174,7 +174,8 @@ async function prepareTransferFromQuote(
     // binds the payout target into the signature (see destinationCommitment):
     // the device signs *who* is paid, not only how much.
     const amountWei = eur.toWei(transfer.sendEur);
-    const deadline = Math.floor(Date.now() / 1000) + (transfer.rail === "sepa" ? REDEEM_WINDOW_SEC : AUTH_WINDOW_SEC);
+    // Counted from createdAt, the redeem message's stamp, as the executor counts it.
+    const deadline = Math.floor(Date.parse(createdAt) / 1000) + (transfer.rail === "sepa" ? REDEEM_WINDOW_SEC : AUTH_WINDOW_SEC);
     const destination = destinationCommitment(transfer.rail, {
       phone: transfer.recipientPhone,
       iban: transfer.recipientIban,
