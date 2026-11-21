@@ -12,6 +12,11 @@
 import { partnerTimeout } from "../http.js";
 import { moneriumFetch } from "./monerium-limit.js";
 
+/** The shape an order id must have before it may go into a request path. */
+export function isMoneriumOrderId(orderId: string): boolean {
+  return /^[A-Za-z0-9._~-]{1,128}$/.test(orderId);
+}
+
 /** A non-2xx response from Monerium, carrying the status so callers can tell
  *  "this order does not exist" from "Monerium is briefly unreachable". */
 export class MoneriumApiError extends Error {
@@ -191,9 +196,8 @@ export class MoneriumClient {
     // This id reaches us from a webhook body and lands in a request path on an
     // authenticated connection, so its shape is checked rather than trusted:
     // `../`, `?` and `#` would retarget the call somewhere else in Monerium's
-    // API. Rejected as a 4xx so the caller treats it as a settled "no such
-    // order" rather than a transient failure to retry.
-    if (!/^[A-Za-z0-9._~-]{1,128}$/.test(orderId)) {
+    // API. mirrorOrderById settles a malformed id before it gets here.
+    if (!isMoneriumOrderId(orderId)) {
       throw new MoneriumApiError(`malformed Monerium order id: ${orderId.slice(0, 40)}`, 400);
     }
     return this.request<MoneriumOrder>("GET", `/orders/${encodeURIComponent(orderId)}`);
