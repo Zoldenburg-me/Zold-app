@@ -128,7 +128,7 @@ check("the form tests amounts with the server's AMOUNT_RE", () => {
   assert.equal(FORM_AMOUNT_RE.flags, AMOUNT_RE.flags);
 });
 check("the form draws its lines and total from invoice-totals.js", () => {
-  const html = readFileSync(path.join(PUB, "invoice.html"), "utf8");
+  const html = readFileSync(path.join(PUB, "invoice.js"), "utf8");
   assert.match(html, /import \{ lineNetCents, formTotalCents, formatCents \} from "\/invoice-totals\.js";/);
   assert.doesNotMatch(html, /Number\(l(?:ines\[i\])?\.quantity \|\| 0\) \* Number/);
 });

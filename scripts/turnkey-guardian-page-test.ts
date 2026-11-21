@@ -9,8 +9,8 @@
  *    script), never cached, and kept out of robots; its HTML has no inline
  *    script; /app and /business allow no inline script but their import
  *    map, by hash, and their HTML and scripts carry no inline handler;
- *    /pay/:handle, /pay/:handle/:code and /r/:slug allow no inline script
- *    and their HTML has none;
+ *    every other page, and the site policy itself, allows no inline script,
+ *    and no page's HTML or script carries an inline script or handler;
  *  - the login helpers: Google and Apple authorize URLs return an ID token in
  *    the fragment, with the nonce bound to the browser key and a one-time
  *    state that expires; a return with the wrong state, no stored state, an
@@ -182,15 +182,36 @@ try {
       }
       assert.doesNotMatch(html, /\son[a-z]+\s*=/i, `${p}: inline event handler`);
     }
-    for (const f of ["pay.js", "pay-request.js", "receipt.js"]) {
-      assert.doesNotMatch(readFileSync(path.join(PUB, f), "utf8"), /<[a-z][^<>]*\son[a-z]+=["'`$]/i, f);
+  });
+
+  await check("the site policy allows no inline script", () => {
+    assert.match(CONTENT_SECURITY_POLICY, /(?:^|; )script-src 'self'(;|$)/);
+  });
+
+  await check("every other page refuses inline script, and its HTML has none", async () => {
+    const files = readdirSync(PUB, { recursive: true, encoding: "utf8" })
+      .filter((f) => f.endsWith(".html") && !f.startsWith(`vendor${path.sep}`) && f !== "index.html" && f !== "business.html");
+    const routes = ["/", "/imprint", "/legal", "/privacy", "/partner-terms", "/compare/qonto",
+      "/faucet", "/invoice/some-token", "/invoice/own", "/send/some-token", "/v/SOME-CODE"];
+    assert.ok(files.includes("invoice.html") && files.includes("faucet.html"), files.join(","));
+    for (const p of [...routes, ...files.map((f) => `/${f.split(path.sep).join("/")}`)]) {
+      const r = await fetch(`${base}${p}`);
+      assert.equal(r.status, 200, p);
+      const csp = r.headers.get("content-security-policy") ?? "";
+      assert.match(csp, /(?:^|; )script-src 'self'(;|$)/, p);
+      const html = (await r.text()).replace(/<!--[\s\S]*?-->/g, "");
+      for (const [, attrs] of html.matchAll(/<script\b([^>]*)>/g)) {
+        assert.match(attrs, /\bsrc="\/[a-z/-]+\.js"/, `${p}: inline <script${attrs}>`);
+      }
+      assert.doesNotMatch(html, /\son[a-z]+\s*=/i, `${p}: inline event handler`);
     }
   });
 
-  await check("the other pages keep the site's CSP until their inline bootstraps move", async () => {
-    for (const p of ["/", "/faucet"]) {
-      const r = await fetch(`${base}${p}`);
-      assert.equal(r.headers.get("content-security-policy"), CONTENT_SECURITY_POLICY, p);
+  await check("the scripts the public pages load write no inline event handler into the page", () => {
+    const files = readdirSync(PUB).filter((f) => f.endsWith(".js"));
+    for (const f of ["invoice.js", "send.js", "document.js", "faucet.js"]) assert.ok(files.includes(f), f);
+    for (const f of files) {
+      assert.doesNotMatch(readFileSync(path.join(PUB, f), "utf8"), /<[a-z][^<>]*\son[a-z]+=["'`$]/i, f);
     }
   });
 

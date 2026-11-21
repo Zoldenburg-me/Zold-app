@@ -99,9 +99,9 @@ Order in `server.ts`:
 2. `securityHeadersFor` sets `referrer-policy: no-referrer`,
    `x-content-type-options: nosniff`, a same-origin CSP with
    `frame-ancestors 'none'`, and HSTS in production (`http/policy.ts`). The
-   site's CSP still allows inline script for the public token pages; /app and
-   /business allow only their import map's hash; /pay, /r, /admin, /guardian
-   and /recovery allow no inline script.
+   site's CSP allows no inline script (`script-src 'self'`) and no page has an
+   inline handler; /app and /business add only their import map's hash, and
+   /guardian and /recovery may also reach Turnkey's API.
 3. `originPolicy`: an allowlisted `Origin` gets CORS headers. A foreign
    `Origin` on any non-GET request gets 403. A request with no Origin passes,
    which covers webhooks and curl.

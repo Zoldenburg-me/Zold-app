@@ -54,8 +54,7 @@ await t("verification codes use the Crockford alphabet and normalise look-alikes
 });
 
 await t("a statement's printed address is typed per visit, marked self-declared, and never leaves the page", () => {
-  const page = readFileSync(path.join(ROOT, "services/api/public/document.html"), "utf8");
-  const script = page.slice(page.indexOf("<script>"));
+  const script = readFileSync(path.join(ROOT, "services/api/public/document.js"), "utf8");
   assert.doesNotMatch(script, /localStorage|sessionStorage|indexedDB|document\.cookie|sendBeacon|XMLHttpRequest/);
   assert.equal(script.match(/fetch\(/g)?.length, 1, "the only request is the GET of the public document");
   assert.match(script, /fetch\(`\/api\/v\/\$\{encodeURIComponent\(code\)\}`, \{ headers/);

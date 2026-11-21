@@ -27,7 +27,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { OPERATOR, PUBLIC_URL } from "../config.js";
-import { APP_CONTENT_SECURITY_POLICY, PUBLIC_PAGE_CONTENT_SECURITY_POLICY, guardianPageCsp } from "../http/policy.js";
+import { APP_CONTENT_SECURITY_POLICY, guardianPageCsp } from "../http/policy.js";
 import { TURNKEY } from "../config/turnkey.js";
 import { displayCode, isRequestCode, normaliseCode } from "../payment-requests.js";
 
@@ -41,10 +41,6 @@ const COMPARISONS = ["qonto", "revolut-business", "holyheld"];
 /** The pages search engines are invited to: the landing, the comparisons and
  *  the legal pages. Everything else is an app screen or a credential-bearing link. */
 const INDEXABLE = ["/", ...COMPARISONS.map((c) => `/compare/${c}`), "/imprint", "/legal", "/partner-terms", "/privacy"];
-
-/** The payment and receipt pages, which run no inline script; reached by
- *  their own name they keep their policy. */
-const PUBLIC_PAGES = ["pay.html", "pay-request.html", "receipt.html"];
 
 /** RFC 9116 allows at most a year ahead. */
 export const SECURITY_TXT_EXPIRES = "2027-10-26T00:00:00.000Z";
@@ -65,12 +61,10 @@ function absTags(canonicalPath?: string): string {
   return tags.join("\n");
 }
 
-/** Read once, fill the marker, serve from memory. A page that runs no inline
- *  script says so with `csp`, and is served with that policy instead. */
-function page(file: string, canonicalPath?: string, csp?: string): express.RequestHandler {
+/** Read once, fill the marker, serve from memory. */
+function page(file: string, canonicalPath?: string): express.RequestHandler {
   let html: string | undefined;
   return (_req, res) => {
-    if (csp) res.setHeader("content-security-policy", csp);
     html ??= fs
       .readFileSync(path.join(pub, file), "utf8")
       .replace("<!--zold:abs-->", absTags(canonicalPath))
@@ -190,11 +184,9 @@ export function createPageRouter() {
   /** A payment page, and a payment request against it. */
   // The testnet faucet page; it draws "no faucet" itself where there is none.
   router.get("/faucet", page("faucet.html"));
-  /** Google or Apple login as a recovery guardian: its own ES-module page and
-   *  a stricter CSP, never cached (a login comes back to it). */
   /** Choosing a guardian (Zoldenburg, or your own Google/Apple login) and
-   *  getting your account back on a new phone: ES-module pages with a
-   *  stricter CSP, never cached (a login comes back to each). */
+   *  getting your account back on a new phone: ES-module pages whose CSP alone
+   *  reaches Turnkey's API, never cached (a login comes back to each). */
   const ownPage = (file: string): express.RequestHandler => (_req, res) => {
     res.setHeader("content-security-policy", guardianPageCsp(TURNKEY.enabled ? new URL(TURNKEY.baseUrl).origin : undefined));
     res.setHeader("cache-control", "no-store");
@@ -204,10 +196,10 @@ export function createPageRouter() {
   router.get(["/guardian", "/guardian/"], ownPage("guardian.html"));
   router.get("/recovery.html", (_req, res) => res.redirect(301, "/recovery"));
   router.get(["/recovery", "/recovery/"], ownPage("recovery.html"));
-  router.get("/pay/:handle", page("pay.html", undefined, PUBLIC_PAGE_CONTENT_SECURITY_POLICY));
-  router.get("/pay/:handle/:code", tidyRequestCode, page("pay-request.html", undefined, PUBLIC_PAGE_CONTENT_SECURITY_POLICY));
+  router.get("/pay/:handle", page("pay.html"));
+  router.get("/pay/:handle/:code", tidyRequestCode, page("pay-request.html"));
   /** A shared receipt. */
-  router.get("/r/:slug", page("receipt.html", undefined, PUBLIC_PAGE_CONTENT_SECURITY_POLICY));
+  router.get("/r/:slug", page("receipt.html"));
 
   // The app's own code revalidates on every load (a 304 when unchanged). The
   // pages that load it are never cached, so a longer browser cache, such as
@@ -218,9 +210,6 @@ export function createPageRouter() {
     setHeaders(res, file) {
       if (file === path.join(pub, "index.html") || file === path.join(pub, "business.html")) {
         res.setHeader("content-security-policy", APP_CONTENT_SECURITY_POLICY);
-      }
-      if (PUBLIC_PAGES.some((f) => file === path.join(pub, f))) {
-        res.setHeader("content-security-policy", PUBLIC_PAGE_CONTENT_SECURITY_POLICY);
       }
       if (/\.(?:m?js|css|html|webmanifest)$/.test(file) && !file.includes(`${path.sep}vendor${path.sep}`)) {
         res.setHeader("cache-control", "no-cache");
