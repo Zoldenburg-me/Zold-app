@@ -51,6 +51,10 @@ const orders = new Map<string, any>();
 /** Order ids the stub answers with 503 — Monerium briefly unreachable, as
  *  distinct from a 404 that says the order genuinely does not exist. */
 const unavailable = new Set<string>();
+/** Order ids the stub answers with this 4xx instead of the order: a refusal
+ *  of the lookup (bad request, our credentials, a rate limit), not a "no such
+ *  order". */
+const orderFault = new Map<string, number>();
 /** While set, /tokens answers this instead of its usual 404 ("no EURe on this
  *  chain"): an outage or a body that is not a token list. */
 let tokensOutage: { code: number; body: unknown } | null = null;
@@ -91,6 +95,8 @@ const stub = createServer((req, res) => {
   if (one) {
     const wanted = decodeURIComponent(one[1]);
     if (unavailable.has(wanted)) return send(503, { error: "service unavailable" });
+    const fault = orderFault.get(wanted);
+    if (fault) return send(fault, { error: `refused ${fault}` });
     const o = orders.get(wanted);
     return o ? send(200, o) : send(404, { error: "no such order" });
   }
@@ -502,6 +508,16 @@ try {
     const r = await post("/api/webhooks/monerium", body, signedHeaders("evt-404", body));
     assert.equal(r.status, 200);
     assert.equal(r.data.outcome, "ignored");
+    const again = await post("/api/webhooks/monerium", body, signedHeaders("evt-404", body));
+    assert.equal(again.status, 200);
+    assert.equal(again.data.duplicate, true, "the 404 consumed the delivery id");
+  });
+
+  await t("a malformed order id is settled without asking Monerium", async () => {
+    const body = { data: { id: "../profiles" } };
+    const r = await post("/api/webhooks/monerium", body, signedHeaders("evt-malformed", body));
+    assert.equal(r.status, 200);
+    assert.equal(r.data.outcome, "ignored");
   });
 
   await t("a stale signed delivery is refused even with a valid signature", async () => {
@@ -547,6 +563,39 @@ try {
     assert.equal(retry.data.outcome, "duplicate");
     assert.equal(await balance(), 102, "€5 must be credited once, not twice");
   });
+
+  for (const code of [400, 401, 403, 429]) {
+    await t(`a ${code} on the order lookup does not consume the delivery id`, async () => {
+      // Last, because it credits and the tests above pin absolute balances.
+      // Only a 404 says the order does not exist. Any other 4xx refuses the
+      // lookup itself, so the delivery is unresolved and its retry must land.
+      const id = `real-${code}`;
+      const delivery = `evt-real-${code}`;
+      orders.set(id, {
+        id, kind: "issue", state: "processed", meta: { state: "processed" },
+        address: user.address, amount: "2", currency: "eur", chain: "sepolia",
+      });
+      orderFault.set(id, code);
+      const before = await balance();
+      const body = { data: { id } };
+      const first = await post("/api/webhooks/monerium", body, signedHeaders(delivery, body));
+      assert.equal(first.status, 503, `a ${code} lookup is not a settled answer`);
+      assert.equal(first.data.outcome, "unavailable");
+      assert.equal(await balance(), before, "nothing is credited while the order is unread");
+
+      orderFault.delete(id);
+      const retry = await post("/api/webhooks/monerium", body, signedHeaders(delivery, body));
+      assert.equal(retry.status, 200);
+      assert.equal(retry.data.handled, true, "the same delivery id must be accepted on retry");
+      assert.equal(retry.data.outcome, "recorded");
+      assert.equal(await balance(), before + 2, "€2 credited once, on the retry");
+
+      const again = await post("/api/webhooks/monerium", body, signedHeaders(delivery, body));
+      assert.equal(again.status, 200);
+      assert.equal(again.data.duplicate, true, "the settled delivery id is now spent");
+      assert.equal(await balance(), before + 2, "a third delivery credits nothing");
+    });
+  }
 
   console.log(`\nWEBHOOK TEST PASSED — ${pass}/${pass}: body is untrusted, secret gate enforced`);
 } finally {

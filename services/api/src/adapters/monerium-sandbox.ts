@@ -18,7 +18,7 @@
  */
 import { MONERIUM, moneriumSandboxEnabled } from "../config.js";
 import { store, type User } from "../store.js";
-import { MoneriumApiError, MoneriumClient, type MoneriumOrder } from "./monerium-client.js";
+import { isMoneriumOrderId, MoneriumApiError, MoneriumClient, type MoneriumOrder } from "./monerium-client.js";
 import { hasOwnMoneriumCredentials, moneriumAppClient, moneriumClientFor, usersWithOwnCredentials } from "./monerium-connection.js";
 import { auditEntry } from "../audit.js";
 import { HARNESS } from "../config.js";
@@ -551,20 +551,23 @@ async function mintLocalTestEure(to: `0x${string}`, amountEur: number, ref: stri
 export async function mirrorOrderById(orderId: string): Promise<MirrorOutcome> {
   if (store.isOrderProcessed(orderId)) return "duplicate";
   if (recording.has(orderId)) return "unavailable";
+  if (!isMoneriumOrderId(orderId)) return "ignored";
   let order: MoneriumOrder;
   try {
     order = await getClient().getOrder(orderId);
   } catch (err: any) {
-    // A 404 is Monerium telling us this order does not exist — a settled
-    // answer. Anything else (5xx, a timeout, DNS) means we simply could not
-    // ask, and the caller must be free to try again rather than treat the
-    // delivery as spent.
+    // Only a 404 is Monerium saying this order does not exist — a settled
+    // answer that spends the delivery. Any other refusal (400, 401/403 on our
+    // credentials, a 429), a 5xx, a timeout or DNS means the lookup itself
+    // failed, and the caller must be free to try the same delivery again.
+    // The status alone is logged: a refusal's body is Monerium's, not ours.
     const status = err instanceof MoneriumApiError ? err.status : 0;
-    if (status >= 400 && status < 500) {
-      console.warn(`monerium: refusing unknown order ${orderId}: ${describeCause(err)}`);
+    const reason = status ? `HTTP ${status}` : describeCause(err);
+    if (status === 404) {
+      console.warn(`monerium: refusing unknown order ${orderId}: ${reason}`);
       return "ignored";
     }
-    console.warn(`monerium: could not read order ${orderId}, will retry: ${describeCause(err)}`);
+    console.warn(`monerium: could not read order ${orderId}, will retry: ${reason}`);
     return "unavailable";
   }
   if (order.id !== orderId) return "ignored";
