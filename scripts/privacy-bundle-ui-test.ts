@@ -126,7 +126,8 @@ async function render(privacyBundle: unknown, live: boolean, catalog: unknown = 
 const hidden = (id: string) => el(id).classList.contains("hidden");
 const catalogReads = () => calls.filter((c) => c.method === "GET" && c.url === "/api/privacy-bundles").length;
 /** Press a button wired with addEventListener and wait for what it started. */
-const click = (id: string) => Promise.all((el(id).listeners.click ?? []).map((fn: () => unknown) => fn()));
+/** A click as a browser delivers it: a disabled button gets none. */
+const click = (id: string) => Promise.all((el(id).disabled ? [] : el(id).listeners.click ?? []).map((fn: () => unknown) => fn()));
 
 let failed = 0;
 async function check(name: string, fn: () => void | Promise<void>) {
@@ -208,9 +209,12 @@ await check("offer on, no subscription, the catalog fails: an error and Try agai
   assert.equal(el("privacy-status").innerHTML, "");
   assert.deepEqual(calls.filter((c) => c.method !== "GET"), [], "nothing subscribed or canceled");
 
-  // Try again reads the catalog once more and draws the plans in the error's place.
+  // Try again reads the catalog once more and draws the plans in the error's
+  // place; a double click is still one read.
   reply("GET", "/api/privacy-bundles", CATALOG);
-  await click("btn-privacy-retry");
+  const first = click("btn-privacy-retry");
+  assert.equal(el("btn-privacy-retry").disabled, true, "Try again is disabled while its read is in flight");
+  await Promise.all([first, click("btn-privacy-retry")]);
   assert.equal(catalogReads(), 2, "one more read, no retry loop");
   const after = el("privacy-plans").innerHTML;
   assert.match(after, /data-plan="travel-shield"[^>]*>Add</);

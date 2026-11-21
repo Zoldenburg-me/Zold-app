@@ -468,8 +468,15 @@ async function renderPrivacyBundle() {
       <button class="${isActive ? "ghost" : ""}" data-plan="${esc(p.id)}" ${disabled ? "disabled" : ""}>${label}</button>
     </div>`;
   }).join("");
-  // A failed read left privacyCatalog empty, so this reads it again.
-  if (catalogErr) $("btn-privacy-retry").addEventListener("click", () => renderPrivacyBundle());
+  // A failed read left privacyCatalog empty, so this reads it again, once: the
+  // button is disabled until the render that replaces it.
+  if (catalogErr) {
+    const retry = $("btn-privacy-retry");
+    retry.addEventListener("click", () => {
+      retry.disabled = true;
+      return renderPrivacyBundle();
+    });
+  }
   document.querySelectorAll("[data-plan]").forEach((b) => {
     b.onclick = () => subscribePrivacyBundle(b.dataset.plan);
   });
