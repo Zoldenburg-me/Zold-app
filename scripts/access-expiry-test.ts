@@ -250,7 +250,10 @@ await check("/app: a gated /authorize reaches the send error screen, with its me
 
 // Drives phSubmit to /authorize, which answers `authorize`; the read that follows answers `read`.
 const CREATED_T = { id: "t2", state: "CREATED", createdAt: "2026-11-05T00:00:00Z", recipientName: "Ana", sendEur: 5, auth: { deadline: 1 } };
-const json = (status: number, body: object) => response(status, JSON.stringify(body), "application/json");
+// Zold's API marks every answer it writes (http/policy.ts); a proxy's own answer has no mark.
+const zoldHeaders = { get: (k: string) => ({ "content-type": "application/json", "x-zold-answer": "1" } as Record<string, string>)[k.toLowerCase()] ?? null };
+const json = (status: number, body: object) => response(status, JSON.stringify(body), "application/json", { headers: zoldHeaders });
+const proxyJson = (status: number, body: object) => response(status, JSON.stringify(body), "application/json");
 const lostBody = () => response(200, "", "application/json", { json: async () => { throw new TypeError("body stream failed"); } });
 async function driveSend(authorize: () => any, read: () => any, execution = `async () => null`) {
   freshTab();
@@ -317,6 +320,8 @@ await check("/app send: a lost /authorize answer read back as unsigned CREATED p
     lostBody,
     () => response(502, "<html>Bad gateway</html>", "text/html"),
     () => response(429, "", null), // a 4xx is a refusal only with Zold's error string
+    () => proxyJson(409, { error: "conflict" }), // and only when Zold wrote it
+    () => proxyJson(400, { error: "Bad Request" }),
     () => json(500, { error: "Something went wrong on our side. Check whether it went through before trying again." }),
     () => response(503, JSON.stringify({ error: "offline" }), "application/json", { headers: { get: (k: string) => (k === "x-zold-offline" ? "1" : "application/json") } }),
   ]) {
@@ -442,6 +447,28 @@ await check("/app send: refused, returned and reviewed payments keep their words
   assert.match(errorScreen(), /REFUNDED/);
   await driveSend(refused, () => json(200, { ...CREATED_T, state: "MANUAL_REVIEW" }));
   assert.match(errorScreen(), /We’re checking this payment/);
+});
+
+await check("/app send: a lost /authorize answer read back as FAILED says why it failed, not that the answer was lost", async () => {
+  await driveSend(lostBody, () => json(200, { ...CREATED_T, state: "FAILED", error: "The bank refused the payment." }));
+  let html = errorScreen();
+  assert.match(html, /Nothing was sent/);
+  assert.match(html, /The bank refused the payment\./);
+  assert.doesNotMatch(html, /didn’t arrive|Check before you try it again/);
+  await driveSend(lostBody, () => json(200, { ...CREATED_T, state: "FAILED" }));
+  html = errorScreen();
+  assert.match(html, /stopped before any money left your account/);
+  assert.doesNotMatch(html, /didn’t arrive/);
+});
+
+await check("/app api: only an answer Zold marked is Zold's", async () => {
+  freshTab();
+  for (const [answerWith, zold] of [[() => json(409, { error: "x" }), true], [() => proxyJson(409, { error: "x" }), false]] as const) {
+    answer = answerWith;
+    const e: any = await run(`api("/api/orgs", { name: "x" })`).catch((x: any) => x);
+    assert.equal(e.status, 409);
+    assert.equal(e.fromZold, zold);
+  }
 });
 
 await check("/app api: a 2xx whose body is lost throws; a write says to check first, a read to try again", async () => {

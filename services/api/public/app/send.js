@@ -451,12 +451,13 @@ $("btn-send").onclick = async () => {
     addHistory(t);
   } catch (e) {
     // /authorize answers 400, 401 and 403 only before it claims the transfer.
-    const refused = authorizeSent && [400, 401, 403].includes(e?.status);
+    // Only Zold's marked answer counts: a proxy's 4xx proves nothing.
+    const refused = authorizeSent && e?.fromZold && [400, 401, 403].includes(e?.status);
     const why = e?.name === "NotAllowedError" ? "The passkey prompt was cancelled. Nothing was sent."
       : refused ? `${e.message} Nothing was sent.` : e.message;
     // Creating the transfer consumed the quote. Nothing signed reached Zold,
-    // or it refused or answered 410 (expired) before any claim: price it again.
-    if (created && (!authorizeSent || refused || e?.status === 410)) await repriceSend(why);
+    // or Zold refused or answered 410 (expired) before any claim: price it again.
+    if (created && (!authorizeSent || refused || (e?.status === 410 && e.fromZold))) await repriceSend(why);
     // Any other answer, or none, may follow a debit: no new price, no retry.
     else if (authorizeSent) showErr("send-err", new Error(`${why} It may have gone out: check Transactions before you send again.`));
     else showErr("send-err", new Error(why));
