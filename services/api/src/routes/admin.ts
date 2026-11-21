@@ -259,6 +259,12 @@ export function createAdminRouter() {
       // evidence (transfers/attach-redeem-order.ts).
       if (state === "PAID" && evidence && !matchesPayoutEvidence(transfer, evidence) && mayAttachRedeemOrder(transfer)) {
         const attached = await attachRedeemOrder(transfer.id, evidence);
+        if (!attached.ok && attached.code === "NOT_CONNECTED") {
+          return res.status(409).json({
+            error: "Zold cannot read this account's Monerium orders: it has no Monerium connection, or Monerium refused it. Nothing was changed; the order can be attached once the user connects Monerium again.",
+            code: "MONERIUM_NOT_CONNECTED",
+          });
+        }
         if (!attached.ok && attached.code === "UNAVAILABLE") {
           return res.status(503).json({ error: "Monerium could not be read for that order, so nothing was changed. Try again." });
         }

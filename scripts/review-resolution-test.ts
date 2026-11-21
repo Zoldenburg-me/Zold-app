@@ -111,6 +111,12 @@ sepaRow("t_attach_bad");
 sepaRow("t_attach_flaky");
 row("t_owns_order", "PAYOUT_SUBMITTED");
 store.updateTransfer("t_owns_order", { sepa: { mode: "sandbox", orderId: "ord-taken", state: "processed" } });
+// The other two ways a transfer owns an order: an operator's PAID evidence,
+// and a placed step without a recorded order.
+row("t_owns_evidence", "MANUAL_REVIEW");
+store.updateTransfer("t_owns_evidence", { reviewResolution: { state: "PAID", note: "n", by: "op", at: now, evidence: "ord-taken-evidence" } } as any);
+row("t_owns_placed", "MANUAL_REVIEW");
+store.updateTransfer("t_owns_placed", { txs: [...store.findTransfer("t_owns_placed")!.txs, { step: "monerium.redeem.placed", hash: "ord-taken-placed" }] });
 /** The redeem order Monerium holds for `transferId`, processed. */
 function redeemOrder(id: string, transferId: string, patch: Record<string, unknown> = {}) {
   return {
@@ -133,10 +139,15 @@ const ORDERS: Record<string, unknown> = {
   "ord-currency": redeemOrder("ord-currency", "t_attach_bad", { currency: "usd" }),
   "ord-id": redeemOrder("ord-other-id", "t_attach_bad"),
   "ord-taken": redeemOrder("ord-taken", "t_attach_bad"),
+  // Each matches t_attach_bad in full, so only the ownership check refuses it.
+  "ord-taken-evidence": redeemOrder("ord-taken-evidence", "t_attach_bad"),
+  "ord-taken-placed": redeemOrder("ord-taken-placed", "t_attach_bad"),
+  "ord-auth": redeemOrder("ord-auth", "t_attach_bad"),
+  "ord-forbidden": redeemOrder("ord-forbidden", "t_attach_bad"),
   "ord-flaky": redeemOrder("ord-flaky", "t_attach_flaky"),
 };
 /** Order reads still to fail, by id, with the status to answer. */
-const FAULTS: Record<string, number[]> = { "ord-flaky": [503, 429] };
+const FAULTS: Record<string, number[]> = { "ord-flaky": [503, 429], "ord-auth": [401], "ord-forbidden": [403] };
 const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: any, init?: any) => {
   const url = new URL(String(input?.url ?? input));
@@ -324,6 +335,8 @@ try {
       ["ord-pending", /not processed/], ["ord-placed", /not processed/], ["ord-memo", /memo/], ["ord-amount", /amount/],
       ["ord-iban", /IBAN/], ["ord-safe", /Safe address/], ["ord-chain", /chain/], ["ord-issue", /kind/],
       ["ord-currency", /currency/], ["ord-id", /order id/], ["ord-unknown", /no such order/], ["ord-taken", /another transfer/],
+      ["ord-taken-evidence", /another transfer/], ["ord-taken-placed", /another transfer/],
+      ["ord-forbidden", /refused this account's read/],
       ["../orders", /not a Monerium order id/],
     ] as const) {
       const r = await post("t_attach_bad", { state: "PAID", note: NOTE, evidence: id });
@@ -335,6 +348,31 @@ try {
       assert.ok(!t.sepa, `${id}: an order was attached`);
     }
     assert.equal(store.findTransfer("t_owns_order")!.sepa!.orderId, "ord-taken", "the owner keeps its order");
+  });
+
+  await check("no working Monerium connection is not answered Try again: 409 MONERIUM_NOT_CONNECTED, nothing changed", async () => {
+    const u = store.findUser("u_review")! as any;
+    const own = u.monerium;
+    const cases: Array<[string, string, () => void]> = [
+      // A connection that holds no credential: moneriumClientFor refuses before any request.
+      ["no credential", "ord-unknown", () => (u.monerium = { method: "oauth" })],
+      // Monerium refuses the account's token.
+      ["a 401", "ord-auth", () => (u.monerium = own)],
+    ];
+    try {
+      for (const [label, id, arrange] of cases) {
+        arrange();
+        const r = await post("t_attach_bad", { state: "PAID", note: NOTE, evidence: id });
+        assert.equal(r.status, 409, `${label}: ${r.status} ${JSON.stringify(r.body)}`);
+        assert.equal(r.body.code, "MONERIUM_NOT_CONNECTED", label);
+        assert.doesNotMatch(String(r.body.error), /try again/i, label);
+        const t = store.findTransfer("t_attach_bad")! as any;
+        assert.equal(t.state, "MANUAL_REVIEW", label);
+        assert.ok(!t.reviewResolution && !t.sepa, `${label}: the transfer changed`);
+      }
+    } finally {
+      u.monerium = own;
+    }
   });
 
   await check("a failed order read is retryable and changes nothing; the retry attaches it", async () => {
@@ -361,9 +399,9 @@ try {
     const entry = store.auditFor("u_review").find((e: any) => e.kind === "operator.transfer_review_resolved" && e.data.transferId === "t_attach");
     assert.ok(entry, "no audit entry");
     // Attached to one transfer, the order is no evidence for another.
-    store.updateTransfer("t_attach_bad", { moneriumRedeem: { ...store.findTransfer("t_attach_bad")!.moneriumRedeem!, memo: paymentMemo("t_attach", "Invoice 42") } });
     const again = await post("t_attach_bad", { state: "PAID", note: NOTE, evidence: "ord-attach" });
     assert.equal(again.status, 409, JSON.stringify(again.body));
+    assert.match(String(again.body.error), /another transfer/);
     assert.equal(store.findTransfer("t_attach_bad")!.state, "MANUAL_REVIEW");
   });
 
