@@ -56,8 +56,19 @@ interface Scenario {
   /** The venue's pre-swap balance read is one unit high, so its delta falls
    *  short of the swap's logged output and the venue refuses to settle. */
   venueShortDelta?: boolean;
-  /** Steps that must be on record with a transaction hash. */
-  expect: { state: string; refunded: boolean; sends: string[]; usdcOut?: number; error?: RegExp; hashed?: string[] };
+  /** The redeem message was stamped this long before the send started. */
+  redeemIssuedAgoSec?: number;
+  /** The fee debit takes this long: the clock moves on once its step is written. */
+  feeDebitSec?: number;
+  /** Monerium refuses the access-token request, before any order is sent. */
+  moneriumTokenStatus?: number;
+  /** Steps that must be on record with a transaction hash. `refundEur` is the
+   *  exact refund, `orderCalls` the redeem orders that reached Monerium in both
+   *  processes, `absent` steps that must not be on record. */
+  expect: {
+    state: string; refunded: boolean; sends: string[]; usdcOut?: number; error?: RegExp; hashed?: string[];
+    refundEur?: number; orderCalls?: number; absent?: string[];
+  };
 }
 
 const SCENARIOS: Record<string, Scenario> = {
@@ -177,14 +188,62 @@ const SCENARIOS: Record<string, Scenario> = {
     kind: "sepa",
     redeemStatus: status,
     crashOn: () => false,
-    expect: { state: "REFUNDED", refunded: true, sends: [] },
+    expect: { state: "REFUNDED", refunded: true, sends: [], refundEur: 0.99, orderCalls: 1 },
   } satisfies Scenario])),
   ...Object.fromEntries([400, 404, 408, 409, 422, 429].map((status) => [`sepa redeem answered ${status}`, {
     kind: "sepa",
     redeemStatus: status,
     crashOn: () => false,
-    expect: { state: "MANUAL_REVIEW", refunded: false, sends: [] },
+    // Sent, and the answer does not prove it was refused: review, with the fee held.
+    expect: { state: "MANUAL_REVIEW", refunded: false, sends: [], orderCalls: 1, error: /outcome unknown/ },
   } satisfies Scenario])),
+  // The signed redeem went stale while the fee debit ran: no order may go out,
+  // and the fee comes back once. A fresh one with a short debit still pays.
+  "sepa redeem goes stale during the fee debit": {
+    kind: "sepa",
+    noCrash: true,
+    redeemIssuedAgoSec: 230,
+    feeDebitSec: 20,
+    crashOn: () => false,
+    expect: {
+      state: "REFUNDED", refunded: true, sends: [], refundEur: 0.99, orderCalls: 0,
+      absent: ["monerium.redeem.pending", "monerium.redeem.placed"], error: /expired before it could go to Monerium, so no payment was sent/,
+    },
+  },
+  "sepa redeem goes stale during the fee debit, FAILED write fails": {
+    kind: "sepa",
+    redeemIssuedAgoSec: 230,
+    feeDebitSec: 20,
+    crashOn: (r) => r.state === "FAILED",
+    expect: { state: "REFUNDED", refunded: true, sends: [], refundEur: 0.99, orderCalls: 0 },
+  },
+  "sepa redeem still fresh after the fee debit": {
+    kind: "sepa",
+    noCrash: true,
+    redeemIssuedAgoSec: 200,
+    feeDebitSec: 10,
+    crashOn: () => false,
+    expect: { state: "PAYOUT_SUBMITTED", refunded: false, sends: ["monerium.redeem"], orderCalls: 1 },
+  },
+  // Monerium refuses the token before POST /orders: no order was sent.
+  "sepa Monerium access refused before the order": {
+    kind: "sepa",
+    noCrash: true,
+    moneriumTokenStatus: 401,
+    crashOn: () => false,
+    expect: {
+      state: "REFUNDED", refunded: true, sends: [], refundEur: 0.99, orderCalls: 0,
+      absent: ["monerium.redeem.placed"], error: /refused Zold's access .* so no payment was sent/,
+    },
+  },
+  // The refusal is in memory only when the process dies: the restart cannot
+  // tell it from a sent order, so review, and never a refund.
+  "sepa Monerium access refused, FAILED write fails": {
+    kind: "sepa",
+    moneriumTokenStatus: 401,
+    crashOn: (r) => r.state === "FAILED",
+    expect: { state: "MANUAL_REVIEW", refunded: false, sends: [], orderCalls: 0 },
+  },
   // Nothing went out, so the restart pays once and finishes.
   "anchor payment intent write fails, nothing sent": {
     kind: "anchor",
@@ -200,12 +259,18 @@ else await parent();
 /** Partners, faked at the edge. Anything else that is not the local chain is refused: this suite is offline. */
 async function stubPartners(logSend: (what: string) => void) {
   const { MoneriumApiError, MoneriumClient } = await import("../services/api/src/adapters/monerium-client.js");
-  const redeemStatus = SCENARIOS[process.argv[3]]?.redeemStatus;
-  (MoneriumClient.prototype as any).placeOrder = async () => {
-    if (redeemStatus) throw new MoneriumApiError("stubbed answer", redeemStatus);
-    logSend("monerium.redeem");
-    return { id: "order-1", state: "placed" };
-  };
+  const { redeemStatus, moneriumTokenStatus } = SCENARIOS[process.argv[3]] ?? {};
+  const logOrderCall = () => appendFileSync(`${process.env.SEND_LOG}.orders`, "order\n");
+  // With a token refusal the real client runs, so an order would have to come
+  // through fetch below; the token request fails first.
+  if (!moneriumTokenStatus) {
+    (MoneriumClient.prototype as any).placeOrder = async () => {
+      logOrderCall();
+      if (redeemStatus) throw new MoneriumApiError("stubbed answer", redeemStatus);
+      logSend("monerium.redeem");
+      return { id: "order-1", state: "placed" };
+    };
+  }
 
   // A real anchor takes a while to notice a payment, so the first status read
   // of a process still asks for it.
@@ -224,6 +289,11 @@ async function stubPartners(logSend: (what: string) => void) {
     const url = new URL(String(input?.url ?? input));
     if (url.hostname === "127.0.0.1" || url.hostname === "localhost") return realFetch(input, init);
     const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+    if (url.hostname === "api.monerium.app" && moneriumTokenStatus) {
+      if (url.pathname === "/auth/token") return new Response("{}", { status: moneriumTokenStatus });
+      if (url.pathname === "/orders") logOrderCall();
+      return new Response("{}", { status: 500 });
+    }
     if (url.hostname === "bridge.test") {
       return json({ id: "bridge-1", state: "awaiting_funds", source_deposit_instructions: { to_address: DEPOSIT } });
     }
@@ -296,6 +366,7 @@ async function child(which: string, name: string) {
   const device = privateKeyToAccount(key);
   const address = `0x${randomBytes(20).toString("hex")}` as `0x${string}`;
   const now = new Date().toISOString();
+  const issuedAt = new Date(Date.now() - (scenario.redeemIssuedAgoSec ?? 0) * 1000).toISOString();
   const user: any = {
     id: `9${randomBytes(3).readUIntBE(0, 3)}`,
     name: "Crash Test",
@@ -328,7 +399,7 @@ async function child(which: string, name: string) {
   const destination = chain.destinationCommitment(rail, { phone: "+254700000000", iban: IBAN, name: "Recipient" });
   const { paymentMemo, moneriumRedeemMessage, moneriumAmountString } = await import("../services/api/src/sepa.js");
   const memo = paymentMemo(id, undefined);
-  const redeem = moneriumRedeemMessage(payout, IBAN, now);
+  const redeem = moneriumRedeemMessage(payout, IBAN, issuedAt);
   const base: any = {
     id, userId: user.id, quoteId, rail, recipientName: "Recipient", recipientPhone: "+254700000000",
     state: "CREATED", sendEur: SEND_EUR, receiveKes: 1000, fundingSource: "safe", txs: [],
@@ -338,7 +409,7 @@ async function child(which: string, name: string) {
   if (rail === "sepa") {
     Object.assign(base, {
       recipientIban: IBAN, receiveEur: payout,
-      moneriumRedeem: { amount: moneriumAmountString(payout), iban: IBAN, issuedAt: now, message: redeem.message, memo, signature: "0x1234" },
+      moneriumRedeem: { amount: moneriumAmountString(payout), iban: IBAN, issuedAt, message: redeem.message, memo, signature: "0x1234" },
     });
   }
   // What the user-signed debit would have delivered, plus other users' money a
@@ -377,6 +448,9 @@ async function child(which: string, name: string) {
   const realRename = fs.renameSync;
   let seen = 0;
   let delivered = false;
+  const realNow = Date.now;
+  let clockAhead = 0;
+  Date.now = () => realNow() + clockAhead;
   let batchTx: Promise<`0x${string}`> | undefined;
   // The fake batch's receipt is the delivery mint's, inside the fake userOp's
   // own execution, as an EntryPoint bundle would carry it.
@@ -418,6 +492,7 @@ async function child(which: string, name: string) {
         return hash;
       });
     }
+    if (scenario.feeDebitSec && !clockAhead && hasStep(r, orch.DEBIT_STEP.safeFee)) clockAhead = scenario.feeDebitSec * 1000;
     const crash = scenario.crashOn(r, seen);
     if (scenario.seen?.(r)) seen++;
     if (crash) throw Object.assign(new Error("disk refused"), { code: "EIO" });
@@ -445,7 +520,8 @@ async function child(which: string, name: string) {
   const refundedEur = eur.fromWei((await balance(addrs().eure, address)) - safeBefore);
   const end = store.findTransfer(id);
   const hashed = (end?.txs ?? []).filter((x) => /^0x[0-9a-f]{64}$/i.test(x.hash)).map((x) => x.step);
-  console.log(`NOCRASH the armed write never happened; the transfer ended ${end?.state}, refunded €${refundedEur}, usdcOut ${end?.usdcOut}, hashed [${hashed}]: ${end?.error}`);
+  const steps = (end?.txs ?? []).map((x) => x.step);
+  console.log(`NOCRASH the armed write never happened; the transfer ended ${end?.state}, refunded €${refundedEur}, usdcOut ${end?.usdcOut}, hashed [${hashed}], steps [${steps}]: ${end?.error}`);
   process.exit(0);
 }
 
@@ -497,10 +573,15 @@ async function parent() {
       const dbPath = path.join(dir, `${randomUUID()}.json`);
       const sendLog = path.join(dir, `${randomUUID()}.log`);
       appendFileSync(sendLog, "");
+      appendFileSync(`${sendLog}.orders`, "");
+      const orderCalls = () => readFileSync(`${sendLog}.orders`, "utf8").split("\n").filter(Boolean).length;
+      const exact = (refundEur: number) =>
+        (scenario.expect.refundEur === undefined || refundEur === scenario.expect.refundEur) &&
+        (scenario.expect.orderCalls === undefined || orderCalls() === scenario.expect.orderCalls);
       const send = run(["send", name], dbPath, sendLog);
       if (scenario.redeemStatus || scenario.noCrash) {
-        const [, state, refundedEur, usdcOut, hashed, error] =
-          send.stdout.match(/^NOCRASH .*ended (\w+), refunded €([\d.]+), usdcOut (\S+), hashed \[(.*?)\]: (.*)$/m) ?? [];
+        const [, state, refundedEur, usdcOut, hashed, steps, error] =
+          send.stdout.match(/^NOCRASH .*ended (\w+), refunded €([\d.]+), usdcOut (\S+), hashed \[(.*?)\], steps \[(.*?)\]: (.*)$/m) ?? [];
         const sends = readFileSync(sendLog, "utf8").split("\n").filter(Boolean);
         const ok =
           state === scenario.expect.state &&
@@ -508,9 +589,11 @@ async function parent() {
           JSON.stringify(sends) === JSON.stringify(scenario.expect.sends) &&
           (scenario.expect.usdcOut === undefined || Number(usdcOut) === scenario.expect.usdcOut) &&
           (!scenario.expect.error || scenario.expect.error.test(error ?? "")) &&
-          (scenario.expect.hashed ?? []).every((step) => (hashed ?? "").split(",").includes(step));
+          (scenario.expect.hashed ?? []).every((step) => (hashed ?? "").split(",").includes(step)) &&
+          (scenario.expect.absent ?? []).every((step) => !(steps ?? "").split(",").includes(step)) &&
+          exact(Number(refundedEur));
         if (!ok) failures.push(name);
-        console.log(`  ${ok ? "ok  " : "FAIL"} ${name} -> ${state}, refunded €${refundedEur}, usdcOut ${usdcOut}\n${ok ? "" : send.stdout + send.stderr}`.trimEnd());
+        console.log(`  ${ok ? "ok  " : "FAIL"} ${name} -> ${state}, refunded €${refundedEur}, usdcOut ${usdcOut}, orders ${orderCalls()}\n${ok ? "" : send.stdout + send.stderr}`.trimEnd());
         continue;
       }
       if (send.status !== 1 || !/FATAL store write failed \(EIO\)/.test(send.stderr)) {
@@ -531,11 +614,12 @@ async function parent() {
         got.state === scenario.expect.state &&
         got.refundedEur > 0 === scenario.expect.refunded &&
         JSON.stringify(sends) === JSON.stringify(scenario.expect.sends) &&
+        exact(got.refundedEur) &&
         // Only a transfer that started CREATED has a claim to refuse.
         (!["sepa", "cash", "batch"].includes(scenario.kind) || got.reclaimed === false);
       if (!ok) failures.push(name);
       console.log(
-        `  ${ok ? "ok  " : "FAIL"} ${name} -> ${got.state}, refunded €${got.refundedEur}, partner sends [${sends}], re-claim ${got.reclaimed}` +
+        `  ${ok ? "ok  " : "FAIL"} ${name} -> ${got.state}, refunded €${got.refundedEur}, partner sends [${sends}], orders ${orderCalls()}, re-claim ${got.reclaimed}` +
           (ok ? "" : `\n       wanted ${JSON.stringify(scenario.expect)}; error: ${got.error}`),
       );
     }
