@@ -48,6 +48,10 @@ interface Scenario {
   seen?: (r: Row) => boolean;
   /** Monerium answers the redeem with this status, and nothing crashes. */
   redeemStatus?: number;
+  /** Monerium answers the redeem with this 2xx body (default a placed order-1). */
+  redeemBody?: unknown;
+  /** After a no-crash send, restart too: re-claim, sweep twice, poll the redeem orders once. */
+  restartAfter?: boolean;
   /** Nothing crashes: the executor's own end state is the result. */
   noCrash?: boolean;
   /** USDC the batch delivers to the recipient, and another deposit's USDC
@@ -67,10 +71,12 @@ interface Scenario {
   moneriumTokenStatus?: number;
   /** Steps that must be on record with a transaction hash. `refundEur` is the
    *  exact refund, `orderCalls` the redeem orders that reached Monerium in both
-   *  processes, `absent` steps that must not be on record. */
+   *  processes, `absent` steps that must not be on record. `orderId` and
+   *  `placed` are the recorded order id and placed-step count, `orderGets` the
+   *  order reads in the restart. */
   expect: {
     state: string; refunded: boolean; sends: string[]; usdcOut?: number; error?: RegExp; hashed?: string[];
-    refundEur?: number; orderCalls?: number; absent?: string[];
+    refundEur?: number; orderCalls?: number; absent?: string[]; orderId?: string; placed?: number; orderGets?: number;
   };
 }
 
@@ -256,6 +262,36 @@ const SCENARIOS: Record<string, Scenario> = {
     crashOn: (r) => r.state === "FAILED",
     expect: { state: "MANUAL_REVIEW", refunded: false, sends: [], orderCalls: 0 },
   },
+  // Monerium's 202 (pending multisig confirmation) carries no order id, so
+  // nothing can follow the order: review, never PAYOUT_SUBMITTED or a refund.
+  // A 200 without an id breaks Monerium's contract; the same guard holds it.
+  ...Object.fromEntries(([
+    ["sepa redeem answered 202 with no order id", { code: 202, status: "Accepted" }],
+    ["sepa redeem answered 200 with no order id", { state: "placed" }],
+    ["sepa redeem answered 200 with a blank order id", { id: " ", state: "placed" }],
+  ] as const).map(([name, body]) => [name, {
+    kind: "sepa",
+    noCrash: true,
+    restartAfter: true,
+    redeemBody: body,
+    crashOn: () => false,
+    expect: {
+      state: "MANUAL_REVIEW", refunded: false, sends: ["monerium.redeem"], orderCalls: 1, orderGets: 0, placed: 0,
+      orderId: "undefined", absent: ["monerium.redeem.placed", "monerium.redeem.refused"],
+      error: /Monerium accepted the redeem but returned no order id/,
+    },
+  } satisfies Scenario])),
+  "sepa redeem answered 200 with an order id": {
+    kind: "sepa",
+    noCrash: true,
+    restartAfter: true,
+    redeemBody: { id: "order-1", state: "placed" },
+    crashOn: () => false,
+    expect: {
+      state: "PAYOUT_SUBMITTED", refunded: false, sends: ["monerium.redeem"], orderCalls: 1, orderGets: 1, placed: 1,
+      orderId: '"order-1"',
+    },
+  },
   // Nothing went out, so the restart pays once and finishes.
   "anchor payment intent write fails, nothing sent": {
     kind: "anchor",
@@ -271,7 +307,7 @@ else await parent();
 /** Partners, faked at the edge. Anything else that is not the local chain is refused: this suite is offline. */
 async function stubPartners(logSend: (what: string) => void) {
   const { MoneriumApiError, MoneriumClient } = await import("../services/api/src/adapters/monerium-client.js");
-  const { redeemStatus, moneriumTokenStatus } = SCENARIOS[process.argv[3]] ?? {};
+  const { redeemStatus, redeemBody, moneriumTokenStatus } = SCENARIOS[process.argv[3]] ?? {};
   const logOrderCall = () => appendFileSync(`${process.env.SEND_LOG}.orders`, "order\n");
   // With a token refusal the real client runs, so an order would have to come
   // through fetch below; the token request fails first.
@@ -280,7 +316,11 @@ async function stubPartners(logSend: (what: string) => void) {
       logOrderCall();
       if (redeemStatus) throw new MoneriumApiError("stubbed answer", redeemStatus);
       logSend("monerium.redeem");
-      return { id: "order-1", state: "placed" };
+      return redeemBody ?? { id: "order-1", state: "placed" };
+    };
+    (MoneriumClient.prototype as any).getOrder = async (id: string) => {
+      appendFileSync(`${process.env.SEND_LOG}.gets`, "get\n");
+      return { id, state: "placed" };
     };
   }
 
@@ -364,6 +404,10 @@ async function child(which: string, name: string) {
     for (let i = 0; i < 2; i++) {
       await orch.sweepStrandedTransfers();
       await orch.sweepAnchorPayouts();
+    }
+    if (scenario.restartAfter) {
+      const { pollRedeemOrdersOnce } = await import("../services/api/src/adapters/monerium-sandbox.js");
+      await pollRedeemOrdersOnce();
     }
     const after = store.findTransfer(t.id)!;
     const refundedWei = (await balance(addrs().eure, user.address as `0x${string}`)) - safeBefore;
@@ -541,7 +585,7 @@ async function child(which: string, name: string) {
   const end = store.findTransfer(id);
   const hashed = (end?.txs ?? []).filter((x) => /^0x[0-9a-f]{64}$/i.test(x.hash)).map((x) => x.step);
   const steps = (end?.txs ?? []).map((x) => x.step);
-  console.log(`NOCRASH the armed write never happened; the transfer ended ${end?.state}, refunded €${refundedEur}, usdcOut ${end?.usdcOut}, hashed [${hashed}], steps [${steps}]: ${end?.error}`);
+  console.log(`NOCRASH the armed write never happened; the transfer ended ${end?.state}, refunded €${refundedEur}, usdcOut ${end?.usdcOut}, hashed [${hashed}], steps [${steps}], orderId ${JSON.stringify(end?.sepa?.orderId)}: ${end?.error}`);
   process.exit(0);
 }
 
@@ -594,26 +638,49 @@ async function parent() {
       const sendLog = path.join(dir, `${randomUUID()}.log`);
       appendFileSync(sendLog, "");
       appendFileSync(`${sendLog}.orders`, "");
-      const orderCalls = () => readFileSync(`${sendLog}.orders`, "utf8").split("\n").filter(Boolean).length;
+      appendFileSync(`${sendLog}.gets`, "");
+      const lines = (file: string) => readFileSync(file, "utf8").split("\n").filter(Boolean).length;
+      const orderCalls = () => lines(`${sendLog}.orders`);
       const exact = (refundEur: number) =>
         (scenario.expect.refundEur === undefined || refundEur === scenario.expect.refundEur) &&
         (scenario.expect.orderCalls === undefined || orderCalls() === scenario.expect.orderCalls);
       const send = run(["send", name], dbPath, sendLog);
       if (scenario.redeemStatus || scenario.noCrash) {
-        const [, state, refundedEur, usdcOut, hashed, steps, error] =
-          send.stdout.match(/^NOCRASH .*ended (\w+), refunded €([\d.]+), usdcOut (\S+), hashed \[(.*?)\], steps \[(.*?)\]: (.*)$/m) ?? [];
+        const [, state, refundedEur, usdcOut, hashed, steps, orderId, error] =
+          send.stdout.match(/^NOCRASH .*ended (\w+), refunded €([\d.]+), usdcOut (\S+), hashed \[(.*?)\], steps \[(.*?)\], orderId (.*?): (.*)$/m) ?? [];
+        const stepList = (steps ?? "").split(",");
         const sends = readFileSync(sendLog, "utf8").split("\n").filter(Boolean);
-        const ok =
+        let ok =
           state === scenario.expect.state &&
           Number(refundedEur) > 0 === scenario.expect.refunded &&
           JSON.stringify(sends) === JSON.stringify(scenario.expect.sends) &&
           (scenario.expect.usdcOut === undefined || Number(usdcOut) === scenario.expect.usdcOut) &&
           (!scenario.expect.error || scenario.expect.error.test(error ?? "")) &&
           (scenario.expect.hashed ?? []).every((step) => (hashed ?? "").split(",").includes(step)) &&
-          (scenario.expect.absent ?? []).every((step) => !(steps ?? "").split(",").includes(step)) &&
+          (scenario.expect.absent ?? []).every((step) => !stepList.includes(step)) &&
+          (scenario.expect.orderId === undefined || orderId === scenario.expect.orderId) &&
+          (scenario.expect.placed === undefined || stepList.filter((s) => s === "monerium.redeem.placed").length === scenario.expect.placed) &&
           exact(Number(refundedEur));
+        let restarted = "";
+        if (scenario.restartAfter) {
+          // The restart must leave the row where the send put it: no second
+          // order, no refund, no re-claim, and no order read without an id.
+          const restart = run(["restart", name], dbPath, sendLog);
+          const line = restart.stdout.split("\n").find((l) => l.startsWith("RESULT "));
+          const got = line ? JSON.parse(line.slice("RESULT ".length)) : undefined;
+          ok &&= Boolean(got) &&
+            got.state === scenario.expect.state &&
+            got.refundedEur === 0 &&
+            got.reclaimed === false &&
+            lines(sendLog) === scenario.expect.sends.length &&
+            exact(Number(refundedEur)) &&
+            lines(`${sendLog}.gets`) === scenario.expect.orderGets;
+          restarted = got
+            ? `; restart -> ${got.state}, refunded €${got.refundedEur}, re-claim ${got.reclaimed}, orders ${orderCalls()}, order reads ${lines(`${sendLog}.gets`)}`
+            : `; the restart gave no result (exit ${restart.status})\n${restart.stdout}\n${restart.stderr}`;
+        }
         if (!ok) failures.push(name);
-        console.log(`  ${ok ? "ok  " : "FAIL"} ${name} -> ${state}, refunded €${refundedEur}, usdcOut ${usdcOut}, orders ${orderCalls()}\n${ok ? "" : send.stdout + send.stderr}`.trimEnd());
+        console.log(`  ${ok ? "ok  " : "FAIL"} ${name} -> ${state}, refunded €${refundedEur}, usdcOut ${usdcOut}, orders ${orderCalls()}${restarted}\n${ok ? "" : send.stdout + send.stderr}`.trimEnd());
         continue;
       }
       if (send.status !== 1 || !/FATAL store write failed \(EIO\)/.test(send.stderr)) {
