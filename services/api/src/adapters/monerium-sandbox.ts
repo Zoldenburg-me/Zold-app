@@ -250,6 +250,23 @@ export function ibanActivationRefusal(user: User): { error: string; code: string
   return undefined;
 }
 
+/**
+ * The funding of an account Zold may not bank (`ibanActivationRefusal` says
+ * IBAN_NOT_OFFERED): no IBAN is coming, and the refusal says why. One shape
+ * for the OAuth callback, the API-key connect and the poller. Named fields
+ * only: the mode, and the address verdict, which stays true of the address.
+ * Nothing tied to an IBAN carries over.
+ */
+export function refusedFunding(user: User, moneriumProfileId: string | undefined, detail: string): NonNullable<User["funding"]> {
+  return {
+    mode: user.funding?.mode ?? "sandbox",
+    status: "kyc_pending",
+    moneriumProfileId,
+    detail,
+    ...(user.funding?.addressUnlinkable ? { addressUnlinkable: true } : {}),
+  };
+}
+
 /** Mark the newest unconfirmed move of `iban` on this user as confirmed. */
 export function confirmedMoves(user: User, iban: string): User["moneriumIbanMoves"] {
   const moves = user.moneriumIbanMoves;
@@ -297,7 +314,7 @@ export async function refreshPendingIban(user: User): Promise<User> {
   if (user.funding?.status !== "iban_pending") return user;
   const refused = ibanActivationRefusal(user);
   if (refused?.code === "IBAN_NOT_OFFERED") {
-    return store.updateUser(user.id, { funding: { ...user.funding, status: "provisioning", detail: refused.error } });
+    return store.updateUser(user.id, { funding: refusedFunding(user, user.funding.moneriumProfileId, refused.error) });
   }
   try {
     const list = ibanList(await moneriumClientFor(user).ibans());

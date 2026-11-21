@@ -312,6 +312,28 @@ const REFUSAL_DETAIL = {
   "wallet-only": /bank account is not part of your account/,
 } as const;
 
+/** A field an earlier IBAN left on funding, and the address verdict, which stays true of the address. */
+const STALE_FUNDING = { addressUnlinkable: true, ibanIssuedAt: "2026-01-01" };
+/** The funding each path left on a refused account, by refusal then path. */
+const refusedFundingBy = new Map<string, Map<string, unknown>>();
+
+/**
+ * The OAuth callback's state for a refused account, whichever path wrote it:
+ * kyc_pending with the refusal as detail, from named fields only.
+ */
+function assertRefusedFunding(after: any, refusal: keyof typeof REFUSAL_DETAIL, path: string) {
+  assert.match(after.funding?.detail ?? "", REFUSAL_DETAIL[refusal], `${path}: the refusal is the detail`);
+  assert.deepEqual(after.funding, {
+    mode: "sandbox",
+    status: "kyc_pending",
+    moneriumProfileId: PROFILE,
+    detail: ibanActivationRefusal(after)?.error,
+    addressUnlinkable: true,
+  }, `${path}: kyc_pending, named fields only`);
+  if (!refusedFundingBy.has(refusal)) refusedFundingBy.set(refusal, new Map());
+  refusedFundingBy.get(refusal)!.set(path, after.funding);
+}
+
 async function addRefused(n: number, refusal: "rejected" | "manual_review" | "wallet-only") {
   const u = addUser(n);
   const key = await makeSoftwarePasskey(`gate-${n}`, ORIGIN);
@@ -330,17 +352,21 @@ async function addRefused(n: number, refusal: "rejected" | "manual_review" | "wa
 }
 
 await check("the poller does not attach an IBAN to a pending activation the account may no longer have, and it stops waiting", async () => {
-  for (const [n, refused] of [[19, { kycStatus: "rejected" }], [20, { kycStatus: "manual_review" }], [21, { segment: { value: "WALLET_ONLY", reasonCode: "test", decidedAt: now, decidedBy: "system" } }]] as const) {
+  for (const [n, refusal, refused] of [
+    [19, "rejected", { kycStatus: "rejected" }],
+    [20, "manual_review", { kycStatus: "manual_review" }],
+    [21, "wallet-only", { segment: { value: "WALLET_ONLY", reasonCode: "test", decidedAt: now, decidedBy: "system" } }],
+  ] as const) {
     const u = addUser(n);
-    store.updateUser(u.id, { iban: "", ...refused, funding: { mode: "sandbox", status: "iban_pending", moneriumProfileId: PROFILE } } as any);
+    store.updateUser(u.id, { iban: "", ...refused, funding: { mode: "sandbox", status: "iban_pending", moneriumProfileId: PROFILE, ...STALE_FUNDING } } as any);
     ibansOf.set(u.token, [listed(u.iban, u.address)]);
     const after = await refreshPendingIban(store.findUser(u.id)!);
     assert.equal(after.iban, "", `${u.id}: no IBAN attached`);
-    assert.equal(after.funding?.status, "provisioning", `${u.id}: no longer shown as an IBAN being issued`);
-    assert.match(after.funding?.detail ?? "", /bank account|still reviewing this account, so there is no IBAN yet/, u.id);
+    assertRefusedFunding(after, refusal, "poller");
     const reads = fake.reads;
-    await refreshPendingIban(after);
+    const again = await refreshPendingIban(after);
     assert.equal(fake.reads, reads, `${u.id}: not re-read on the next tick`);
+    assert.deepEqual(again.funding, after.funding, `${u.id}: and not rewritten`);
   }
 });
 
@@ -367,15 +393,15 @@ for (const [n, refusal] of [[16, "rejected"], [17, "manual_review"], [18, "walle
   if (refusal === "wallet-only") continue;
   await check(`${refusal}: connecting API keys neither keeps nor attributes an IBAN`, async () => {
     const u = await addRefused(n + 10, refusal);
+    store.updateUser(u.id, { funding: { ...store.findUser(u.id)!.funding!, ...STALE_FUNDING } } as any);
     const r = await post(`/api/users/${u.id}/monerium/api-keys`, {
       clientId: KEYS.clientId, clientSecret: KEYS.clientSecret, stepUp: await u.stepUp("monerium.connect"),
     });
     assert.equal(r.status, 201, JSON.stringify(r.data));
     const after = store.findUser(u.id)!;
     assert.equal(after.iban, undefined, "the IBAN Monerium lists on this Safe is not kept");
-    assert.notEqual(after.funding?.status, "active");
     assert.equal(after.kycStatus, refusal);
-    assert.match(after.funding?.detail ?? "", REFUSAL_DETAIL[refusal]);
+    assertRefusedFunding(after, refusal, "api-keys");
     assert.ok(!publicUser(after).iban, "and no bank details are shown");
   });
 }
@@ -404,7 +430,7 @@ for (const [n, refusal] of [[31, "rejected"], [32, "manual_review"], [34, "walle
   await check(`${refusal}: the OAuth callback stores the connection but promises no IBAN`, async () => {
     const u = await addRefused(n, refusal);
     // A field from an earlier IBAN must not ride along; the address verdict does.
-    store.updateUser(u.id, { funding: { ...store.findUser(u.id)!.funding!, addressUnlinkable: true, ibanIssuedAt: "2026-01-01" } } as any);
+    store.updateUser(u.id, { funding: { ...store.findUser(u.id)!.funding!, ...STALE_FUNDING } } as any);
     const before = store.findUser(u.id)!;
     const r = await oauthCallback(u.id, u.token);
     assert.equal(r.status, 302);
@@ -413,16 +439,22 @@ for (const [n, refusal] of [[31, "rejected"], [32, "manual_review"], [34, "walle
     assert.ok(after.monerium?.accessTokenEnc, "the token is stored as before");
     assert.equal(after.monerium?.profileId, PROFILE);
     assert.equal(after.kycStatus, before.kycStatus, "the callback records no kyc verdict");
-    assert.notEqual(after.funding?.status, "provisioning", "no IBAN is being provisioned");
-    assert.notEqual(after.funding?.status, "iban_pending");
-    assert.notEqual(after.funding?.status, "active");
-    assert.match(after.funding?.detail ?? "", REFUSAL_DETAIL[refusal]);
-    assert.deepEqual(Object.keys(after.funding ?? {}).sort(), ["addressUnlinkable", "detail", "mode", "moneriumProfileId", "status"]);
+    assertRefusedFunding(after, refusal, "oauth");
     assert.deepEqual(after.kyc, before.kyc, "no \"activate IBAN with passkey\" verdict is recorded");
     assert.equal(after.iban, undefined, "a refused account keeps no IBAN");
     assert.ok(!publicUser(after).iban);
   });
 }
+
+await check("a refused account ends with the same funding state whichever path met it", async () => {
+  const paths = { rejected: ["poller", "api-keys", "oauth"], manual_review: ["poller", "api-keys", "oauth"], "wallet-only": ["poller", "oauth"] };
+  for (const [refusal, want] of Object.entries(paths)) {
+    const by = refusedFundingBy.get(refusal);
+    assert.deepEqual([...(by?.keys() ?? [])].sort(), [...want].sort(), `${refusal}: every path ran`);
+    const [first, ...rest] = [...by!.values()];
+    for (const f of rest) assert.deepEqual(f, first, refusal);
+  }
+});
 
 await check("pending: the OAuth callback still sets the account up for IBAN activation", async () => {
   const u = addUser(33);

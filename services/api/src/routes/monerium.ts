@@ -51,6 +51,7 @@ import {
   ibanActivationRefusal,
   mayApproveOnIban,
   paysInto,
+  refusedFunding,
   releaseIbanFromOtherUsers,
 } from "../adapters/monerium-sandbox.js";
 import {
@@ -489,17 +490,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         moneriumRefusal: undefined,
         ...(dropIban ? { iban: undefined } : {}),
         ...(notOffered
-          ? {
-              // Named fields only: the mode, and the address verdict, which
-              // stays true of the address. Nothing tied to an IBAN carries over.
-              funding: {
-                mode: user.funding?.mode ?? ("sandbox" as const),
-                status: "kyc_pending" as const,
-                moneriumProfileId: profileId,
-                detail: refused.error,
-                ...(user.funding?.addressUnlinkable ? { addressUnlinkable: true } : {}),
-              },
-            }
+          ? { funding: refusedFunding(user, profileId, refused.error) }
           : {
               kyc: {
                 provider: "monerium" as const,
@@ -1167,21 +1158,21 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
                 },
               }),
         ...(ownIban ? { iban: ownIban, moneriumIbanElsewhere: undefined } : dropIban ? { iban: undefined } : {}),
-        funding: {
-          ...(user.funding ?? {}),
-          mode: "sandbox" as const,
-          status: ownIban || keepsIban ? ("active" as const) : ("provisioning" as const),
-          moneriumProfileId: profileId,
-          detail: notOffered
-            ? refused.error
-            : ownIban
-              ? `IBAN attributed to this account by your Monerium (${moneriumEnvironment()}) account`
-              : keepsIban
-                ? "own Monerium keys connected; the existing IBAN is kept and Monerium calls for this account now use your keys"
-                : dropIban
-                  ? "the IBAN this account had is not on the Monerium profile now connected; approve IBAN issuance with your passkey"
-                  : "own Monerium account connected — approve IBAN issuance with your passkey",
-        },
+        funding: notOffered
+          ? refusedFunding(user, profileId, refused.error)
+          : {
+              ...(user.funding ?? {}),
+              mode: "sandbox" as const,
+              status: ownIban || keepsIban ? ("active" as const) : ("provisioning" as const),
+              moneriumProfileId: profileId,
+              detail: ownIban
+                ? `IBAN attributed to this account by your Monerium (${moneriumEnvironment()}) account`
+                : keepsIban
+                  ? "own Monerium keys connected; the existing IBAN is kept and Monerium calls for this account now use your keys"
+                  : dropIban
+                    ? "the IBAN this account had is not on the Monerium profile now connected; approve IBAN issuance with your passkey"
+                    : "own Monerium account connected — approve IBAN issuance with your passkey",
+            },
         monerium: {
           connectedAt: now,
           method: "api_keys",
