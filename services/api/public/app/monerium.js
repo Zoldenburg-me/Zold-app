@@ -442,15 +442,19 @@ async function renderPrivacyBundle() {
   }
   // Only the offer needs the catalog: a subscriber's status and Cancel read the
   // record, so where the offer is off it is not fetched, and a failed fetch only
-  // loses the plans.
-  if (live) try { await loadPrivacyCatalog(); } catch { if (!active) return; }
+  // swaps the plans for an error and Try again.
+  let catalogErr = null;
+  if (live) try { await loadPrivacyCatalog(); } catch (e) { catalogErr = e; }
   card.classList.toggle("hidden", !kycApproved(user) && !active);
   const activePlan = active ? bundlePlan(user.privacyBundle.planId) : null;
   const chip = $("privacy-chip");
   chip.textContent = active ? user.privacyBundle.status.replace("_", " ").toUpperCase() : "OPTIONAL";
   chip.className = active && user.privacyBundle.status === "active" ? "chip ok" : active ? "chip pend" : "chip review";
   // Where the offer is off, a subscriber sees their status and cancel, no plans.
-  $("privacy-plans").innerHTML = (live ? privacyCatalog?.plans || [] : []).map((p) => {
+  $("privacy-plans").innerHTML = catalogErr
+    ? `<div class="error" role="alert">The plans could not be loaded: ${esc(catalogErr.message)}</div>
+      <button class="ghost" id="btn-privacy-retry">Try again</button>`
+    : (live ? privacyCatalog?.plans || [] : []).map((p) => {
     const isActive = activePlan?.id === p.id;
     const disabled = !p.marginProtected || isActive;
     const label = isActive ? "Selected" : p.marginProtected ? "Add" : "Paused";
@@ -462,6 +466,8 @@ async function renderPrivacyBundle() {
       <button class="${isActive ? "ghost" : ""}" data-plan="${esc(p.id)}" ${disabled ? "disabled" : ""}>${label}</button>
     </div>`;
   }).join("");
+  // A failed read left privacyCatalog empty, so this reads it again.
+  if (catalogErr) $("btn-privacy-retry").addEventListener("click", () => renderPrivacyBundle());
   document.querySelectorAll("[data-plan]").forEach((b) => {
     b.onclick = () => subscribePrivacyBundle(b.dataset.plan);
   });
