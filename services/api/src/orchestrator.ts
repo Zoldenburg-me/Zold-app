@@ -25,8 +25,8 @@ import { verifyTypedData } from "viem";
 import { AnchorPaymentUncertainError } from "./stellar/anchor.js";
 import { store, type Transfer, type TransferState, type User } from "./store.js";
 import { redeemToIban } from "./adapters/monerium-sandbox.js";
-import { MoneriumApiError } from "./adapters/monerium-client.js";
-import { paymentMemo } from "./sepa.js";
+import { MoneriumAccessError, MoneriumApiError } from "./adapters/monerium-client.js";
+import { paymentMemo, redeemMessageStale } from "./sepa.js";
 import { createBridgeTransfer, BridgeTransferError, type BridgeTransferPlan } from "./bridge/bridgexyz.js";
 import {
   executeTransferLiquidity,
@@ -1168,9 +1168,10 @@ export async function executeTransfer(
  *   CREATED -> DEBITED -> PAYOUT_SUBMITTED -> PAID
  * The payout amount remains in the user's Safe for Monerium to redeem; only
  * the fee leg is moved before placing the order — and only once the account
- * has a Monerium connection to place it on. An order Monerium refuses (401 or
- * 403) refunds the fee, any other failure goes to review, and nothing is ever
- * marked paid without a real order.
+ * has a Monerium connection to place it on. A redeem that went stale during the
+ * fee debit, access Monerium refused before the order was sent, or an order it
+ * refuses (401 or 403) refunds the fee; any other failure goes to review, and
+ * nothing is ever marked paid without a real order.
  */
 export async function executeSepaTransfer(
   transfer: Transfer,
@@ -1200,6 +1201,11 @@ export async function executeSepaTransfer(
     }
 
     await debitSafeFundedSepaFee(transfer, user, auth, payoutEur, txs, execution);
+    // A slow fee debit can outlast the signed redeem's window. No order has
+    // been sent yet, so this throws to the outer catch, which returns the fee.
+    if (transfer.moneriumRedeem && redeemMessageStale(transfer.moneriumRedeem.issuedAt)) {
+      throw new Error("The approval for this bank payment expired before it could go to Monerium, so no payment was sent. Send it again.");
+    }
 
     {
       try {
@@ -1229,8 +1235,11 @@ export async function executeSepaTransfer(
         // documents no other refusal and no answer for a duplicate, so a 400, 409
         // or 422 could mean an order exists. Those, a timeout, 5xx or reset may
         // have placed one, and the transfer would read as failed while it pays,
-        // so hold for review.
-        const refused = err instanceof MoneriumApiError && (err.status === 401 || err.status === 403);
+        // so hold for review. A MoneriumAccessError is thrown while getting the
+        // access token, before POST /orders is sent, so no order exists either.
+        const refused =
+          err instanceof MoneriumAccessError ||
+          (err instanceof MoneriumApiError && (err.status === 401 || err.status === 403));
         if (!refused) {
           return store.updateTransfer(transfer.id, {
             state: "MANUAL_REVIEW",
@@ -1241,7 +1250,9 @@ export async function executeSepaTransfer(
         txs.push({ step: "monerium.redeem.refused", hash: "0x" });
         return failAndCompensate(
           transfer.id,
-          new Error(`redeem order failed: ${redactedMessage(err).slice(0, 200)}`),
+          err instanceof MoneriumAccessError
+            ? new Error("Monerium refused Zold's access to your Monerium account, so no payment was sent. Connect Monerium again, then send it again.")
+            : new Error(`redeem order failed: ${redactedMessage(err).slice(0, 200)}`),
           txs,
         );
       }
