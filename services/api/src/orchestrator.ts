@@ -1220,6 +1220,12 @@ export async function executeSepaTransfer(
             ? { ...transfer.moneriumRedeem, signature: transfer.moneriumRedeem.signature }
             : undefined,
         );
+        // A 202 (pending multisig confirmation) carries no order id. Without
+        // one nothing can follow the order, so it is not PAYOUT_SUBMITTED: the
+        // catch below holds it for review, with no refund and no retry.
+        if (typeof order.id !== "string" || !order.id.trim()) {
+          throw new Error("Monerium accepted the redeem but returned no order id");
+        }
         txs.push({ step: "monerium.redeem.placed", hash: order.id });
         return store.updateTransfer(transfer.id, {
           state: "PAYOUT_SUBMITTED",
