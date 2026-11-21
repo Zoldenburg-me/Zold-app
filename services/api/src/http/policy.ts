@@ -69,9 +69,9 @@ export const adminHostPolicy: express.RequestHandler = (req, res, next) => {
  * The CSP keeps every script, style, font, fetch and worker on our own
  * origin: the app holds a session and a device key in localStorage, so the
  * thing to deny an injected script is somewhere to send them. It still allows
- * 'unsafe-inline' for scripts because the public token pages (/pay, /r,
- * /invoice, /send, /v, /faucet) bootstrap from an inline block; /app and
- * /business no longer do and get APP_CONTENT_SECURITY_POLICY.
+ * 'unsafe-inline' for scripts because the public token pages (/invoice,
+ * /send, /v, /faucet) bootstrap from an inline block; /app and /business get
+ * APP_CONTENT_SECURITY_POLICY, /pay and /r PUBLIC_PAGE_CONTENT_SECURITY_POLICY.
  * frame-ancestors 'none' because nothing embeds us (the Shopify app is not
  * embedded) and a framed pay or passkey page is a clickjacking surface.
  */
@@ -105,6 +105,11 @@ export const IMPORT_MAP_SHA256 = "sha256-+5Oy6AHENgQqMIceBeJtYIO+9+G1BYWRmAXrpuZ
 /** /app and /business: the site's policy with inline script refused but the
  *  import map. Every other script, and every handler, is in a file. */
 export const APP_CONTENT_SECURITY_POLICY = CONTENT_SECURITY_POLICY.replace("script-src 'self' 'unsafe-inline'", `script-src 'self' '${IMPORT_MAP_SHA256}'`);
+
+/** /pay/:handle, /pay/:handle/:code and /r/:slug: the site's policy with
+ *  inline script refused. Each page loads its one script from a file and
+ *  reads its handle, code or slug from the path, never from the HTML. */
+export const PUBLIC_PAGE_CONTENT_SECURITY_POLICY = CONTENT_SECURITY_POLICY.replace("script-src 'self' 'unsafe-inline'", "script-src 'self'");
 
 /**
  * /guardian and /recovery: the app's policy without inline script. They drive
