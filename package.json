@@ -143,6 +143,7 @@
     "business:payment:test": "tsx scripts/business-payment-test.ts",
     "phone:home-cards:test": "tsx scripts/phone-home-cards-ui-test.ts",
     "desktop:handle:test": "tsx scripts/desktop-handle-ui-test.ts",
+    "desktop:send:test": "tsx scripts/desktop-send-ui-test.ts",
     "security:test": "tsx scripts/security-hardening-test.ts",
     "persist-failure:test": "tsx scripts/persist-failure-test.ts",
     "send-record-crash:test": "tsx scripts/send-record-crash-test.ts",
