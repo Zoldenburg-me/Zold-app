@@ -96,9 +96,12 @@ Order in `server.ts`:
 
 1. `express.json({limit: 64kb, verify})` keeps `req.rawBody` for the Monerium
    and Shopify HMAC checks (`server.ts:59-64`).
-2. `securityHeaders` sets `referrer-policy: no-referrer` and
-   `x-content-type-options: nosniff` (`http/policy.ts:36-40`). It sets **no
-   CSP, HSTS or frame-ancestors**. TLS and HSTS come from the Cloudflare edge.
+2. `securityHeadersFor` sets `referrer-policy: no-referrer`,
+   `x-content-type-options: nosniff`, a same-origin CSP with
+   `frame-ancestors 'none'`, and HSTS in production (`http/policy.ts`). The
+   site's CSP still allows inline script for the public token pages; /app and
+   /business allow only their import map's hash; /admin, /guardian and
+   /recovery allow no inline script.
 3. `originPolicy`: an allowlisted `Origin` gets CORS headers. A foreign
    `Origin` on any non-GET request gets 403. A request with no Origin passes,
    which covers webhooks and curl.

@@ -7,7 +7,8 @@
  *    makes no network call;
  *  - /guardian is served with a stricter CSP than the app (no inline
  *    script), never cached, and kept out of robots; its HTML has no inline
- *    script; /app's CSP is unchanged;
+ *    script; /app and /business allow no inline script but their import
+ *    map, by hash, and their HTML and scripts carry no inline handler;
  *  - the login helpers: Google and Apple authorize URLs return an ID token in
  *    the fragment, with the nonce bound to the browser key and a one-time
  *    state that expires; a return with the wrong state, no stored state, an
@@ -28,7 +29,7 @@
 import "./_test-env.js";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import express from "express";
@@ -141,9 +142,37 @@ try {
     assert.equal(old.headers.get("location"), "/recovery");
   });
 
-  await check("/app keeps the app's CSP", async () => {
-    const r = await fetch(`${base}/app`);
-    assert.equal(r.headers.get("content-security-policy"), CONTENT_SECURITY_POLICY);
+  await check("/app and /business refuse inline script: the only inline block is the import map, allowed by its hash", async () => {
+    for (const p of ["/app", "/app/", "/index.html", "/business", "/business/", "/business.html"]) {
+      const r = await fetch(`${base}${p}`);
+      assert.equal(r.status, 200, p);
+      const csp = r.headers.get("content-security-policy") ?? "";
+      const scriptSrc = /(?:^|; )script-src ([^;]*)/.exec(csp)?.[1] ?? "";
+      assert.doesNotMatch(scriptSrc, /unsafe-inline/, p);
+      const html = (await r.text()).replace(/<!--[\s\S]*?-->/g, "");
+      for (const [, attrs, body] of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)) {
+        if (/\bsrc=/.test(attrs)) continue;
+        assert.match(attrs, /type="importmap"/, `${p}: inline <script${attrs}>`);
+        const hash = `'sha256-${createHash("sha256").update(body).digest("base64")}'`;
+        assert.ok(scriptSrc.split(" ").includes(hash), `${p}: ${hash} not in script-src ${scriptSrc}`);
+      }
+      assert.doesNotMatch(html, /\son[a-z]+\s*=/i, `${p}: inline event handler`);
+    }
+  });
+
+  await check("the scripts /app and /business load write no inline event handler into the page", () => {
+    const files = ["ui.js", "device.js", "device-ready.js", "cookie-notice.js", "narwhal/narwhal.js",
+      ...["app", "business"].flatMap((d) => readdirSync(path.join(PUB, d)).filter((f) => f.endsWith(".js")).map((f) => `${d}/${f}`))];
+    for (const f of files) {
+      assert.doesNotMatch(readFileSync(path.join(PUB, f), "utf8"), /<[a-z][^<>]*\son[a-z]+=["'`$]/i, f);
+    }
+  });
+
+  await check("the other pages keep the site's CSP until their inline bootstraps move", async () => {
+    for (const p of ["/", "/pay/someone", "/faucet"]) {
+      const r = await fetch(`${base}${p}`);
+      assert.equal(r.headers.get("content-security-policy"), CONTENT_SECURITY_POLICY, p);
+    }
   });
 
   await check("robots.txt keeps crawlers off /guardian", async () => {

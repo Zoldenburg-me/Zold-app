@@ -27,7 +27,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { OPERATOR, PUBLIC_URL } from "../config.js";
-import { guardianPageCsp } from "../http/policy.js";
+import { APP_CONTENT_SECURITY_POLICY, guardianPageCsp } from "../http/policy.js";
 import { TURNKEY } from "../config/turnkey.js";
 import { displayCode, isRequestCode, normaliseCode } from "../payment-requests.js";
 
@@ -154,7 +154,14 @@ export function createPageRouter() {
   });
 
   router.get("/favicon.ico", (_req, res) => res.redirect(301, "/icons/icon-192.png"));
-  router.get(["/app", "/app/"], (_req, res) => res.sendFile(path.join(pub, "index.html")));
+  /** The app and the org dashboard run no inline script but their import
+   *  map; the same file reached by its own name (or a ../ path the static
+   *  handler resolves to it) gets the same policy, below. */
+  const appPage = (file: string): express.RequestHandler => (_req, res) => {
+    res.setHeader("content-security-policy", APP_CONTENT_SECURITY_POLICY);
+    res.sendFile(path.join(pub, file));
+  };
+  router.get(["/app", "/app/"], appPage("index.html"));
   /** The operator dashboard; each section has its own path (the page reads
    *  it), and its scripts are under /admin/*.js. With ADMIN_ORIGIN set it is
    *  served there only: an operator passkey works on that origin alone. */
@@ -168,9 +175,7 @@ export function createPageRouter() {
     },
   );
   /** The org dashboard — business and personal accounts. */
-  router.get(["/business", "/business/"], (_req, res) =>
-    res.sendFile(path.join(pub, "business.html")),
-  );
+  router.get(["/business", "/business/"], appPage("business.html"));
   /** The supplier's invoice view, reached with a one-time link and no account. */
   router.get("/invoice/:token", (_req, res) => res.sendFile(path.join(pub, "invoice.html")));
   router.get("/send/:token", (_req, res) => res.sendFile(path.join(pub, "send.html")));
@@ -205,6 +210,9 @@ export function createPageRouter() {
   // fonts and images keep the default.
   router.use(express.static(pub, {
     setHeaders(res, file) {
+      if (file === path.join(pub, "index.html") || file === path.join(pub, "business.html")) {
+        res.setHeader("content-security-policy", APP_CONTENT_SECURITY_POLICY);
+      }
       if (/\.(?:m?js|css|html|webmanifest)$/.test(file) && !file.includes(`${path.sep}vendor${path.sep}`)) {
         res.setHeader("cache-control", "no-cache");
       }

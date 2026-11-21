@@ -105,9 +105,7 @@
 </script>
 <!-- Classic script: runs during parsing, so the resolver exists before the
      deferred module below calls it. -->
-<script>
-  window.__deviceLib = new Promise((resolve) => { window.__deviceLibReady = resolve; });
-</script>
+<script src="/device-ready.js"></script>
 <script type="module" src="/device.js"></script>
 
 <!-- The dashboard, split into ES modules. main.js is the only one that

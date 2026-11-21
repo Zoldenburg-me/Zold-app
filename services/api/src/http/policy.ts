@@ -69,8 +69,9 @@ export const adminHostPolicy: express.RequestHandler = (req, res, next) => {
  * The CSP keeps every script, style, font, fetch and worker on our own
  * origin: the app holds a session and a device key in localStorage, so the
  * thing to deny an injected script is somewhere to send them. It still allows
- * 'unsafe-inline' for scripts because every page bootstraps from an inline
- * block today; moving those to files (or nonces) is what lets that go.
+ * 'unsafe-inline' for scripts because the public token pages (/pay, /r,
+ * /invoice, /send, /v, /faucet) bootstrap from an inline block; /app and
+ * /business no longer do and get APP_CONTENT_SECURITY_POLICY.
  * frame-ancestors 'none' because nothing embeds us (the Shopify app is not
  * embedded) and a framed pay or passkey page is a clickjacking surface.
  */
@@ -94,11 +95,22 @@ export const CONTENT_SECURITY_POLICY = [
 export const ADMIN_CONTENT_SECURITY_POLICY = CONTENT_SECURITY_POLICY.replace("script-src 'self' 'unsafe-inline'", "script-src 'self'");
 
 /**
+ * The import map index.html and business.html carry inline (a browser will
+ * not load one from a file). Its hash is the only inline script /app and
+ * /business allow; editing the map means recomputing this, and
+ * turnkey-guardian-page-test says the value.
+ */
+export const IMPORT_MAP_SHA256 = "sha256-+5Oy6AHENgQqMIceBeJtYIO+9+G1BYWRmAXrpuZEt24=";
+
+/** /app and /business: the site's policy with inline script refused but the
+ *  import map. Every other script, and every handler, is in a file. */
+export const APP_CONTENT_SECURITY_POLICY = CONTENT_SECURITY_POLICY.replace("script-src 'self' 'unsafe-inline'", `script-src 'self' '${IMPORT_MAP_SHA256}'`);
+
+/**
  * /guardian and /recovery: the app's policy without inline script. They drive
  * a passkey approval, a Google/Apple login and a Turnkey signature, so only
  * their own module files may run there, and they alone may reach Turnkey's
- * API (the origin, when the switch is on). /app keeps 'unsafe-inline' for its
- * classic scripts and connect-src 'self'.
+ * API (the origin, when the switch is on); /app keeps connect-src 'self'.
  */
 export function guardianPageCsp(turnkeyOrigin?: string): string {
   return CONTENT_SECURITY_POLICY
