@@ -57,7 +57,9 @@ function renderTxs(root) {
 /* Close a MANUAL_REVIEW transfer with what the operator decided. This moves
    no money: it records an outcome the operator already brought about on chain
    or at the partner, so it asks for the state, a note and a confirmation.
-   PAID also asks for the payout identifier the transfer recorded; REFUNDED
+   PAID also asks for the payout identifier the transfer recorded (or, for a
+   SEPA order the transfer lost, its Monerium order id, which the API reads
+   back from Monerium and checks against the transfer); REFUNDED
    for the euros returned and the refund tx hash or partner reference. */
 const RESOLVE_STATES = ['REFUNDED', 'PAID', 'FAILED'];
 async function resolveReview(root, id) {

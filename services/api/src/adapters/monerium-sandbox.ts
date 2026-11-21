@@ -438,8 +438,14 @@ export async function redeemToIban(
   });
 }
 
+/** An order as Monerium reports it, read on the client that can see this
+ *  user's orders (the one a redeem was placed on). */
+export function readOrder(orderId: string, user?: User): Promise<MoneriumOrder> {
+  return (user ? moneriumClientFor(user) : getClient()).getOrder(orderId);
+}
+
 export async function getOrderState(orderId: string, user?: User): Promise<string> {
-  const order = await (user ? moneriumClientFor(user) : getClient()).getOrder(orderId);
+  const order = await readOrder(orderId, user);
   return order.meta?.state ?? order.state ?? "unknown";
 }
 
