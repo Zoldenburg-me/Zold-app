@@ -132,6 +132,9 @@ export function securityHeadersFor(production: boolean): express.RequestHandler 
     res.setHeader("cross-origin-opener-policy", "same-origin");
     res.setHeader("permissions-policy", "camera=(), microphone=(), geolocation=(), payment=()");
     if (production) res.setHeader("strict-transport-security", STRICT_TRANSPORT_SECURITY);
+    // Zold wrote this answer. A proxy's own 4xx can look like Zold's refusal
+    // ({ error }), and only a refusal may offer a retry: the app checks this.
+    res.setHeader("x-zold-answer", "1");
     next();
   };
 }

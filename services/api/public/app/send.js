@@ -446,8 +446,8 @@ $("btn-send").onclick = async () => {
   } catch (e) {
     const why = e?.name === "NotAllowedError" ? "The passkey prompt was cancelled. Nothing was sent." : e.message;
     // Creating the transfer consumed the quote. Nothing signed reached Zold,
-    // or it answered 410 (expired before any claim): price it again.
-    if (created && (!authorizeSent || e?.status === 410)) await repriceSend(why);
+    // or Zold answered 410 (expired before any claim): price it again.
+    if (created && (!authorizeSent || (e?.status === 410 && e.fromZold))) await repriceSend(why);
     // Any other answer, or none, may follow a debit: no new price, no retry.
     else if (authorizeSent) showErr("send-err", new Error(`${why} It may have gone out: check Transactions before you send again.`));
     else showErr("send-err", new Error(why));

@@ -5,7 +5,7 @@
  *    "Send another transfer"; it points to Transactions and support.
  *    REFUNDED and FAILED still do.
  *  - A cancelled passkey after the transfer was created, or a definite 410
- *    from /authorize, leaves the quote consumed: the next send must be priced
+ *    from /authorize (Zold's own: a proxy's 410 proves nothing), leaves the quote consumed: the next send must be priced
  *    again, not refused as "quote already consumed".
  *  - Any other /authorize failure may have gone out: no new price, no retry.
  *
@@ -172,7 +172,7 @@ await t("a passkey cancelled after the transfer was created prices the send agai
 });
 
 await t("a definite 410 from /authorize prices the send again", async () => {
-  setUp({ authorize: () => { throw Object.assign(new Error("This approval expired, so this payment was not sent."), { status: 410 }); } });
+  setUp({ authorize: () => { throw Object.assign(new Error("This approval expired, so this payment was not sent."), { status: 410, fromZold: true }); } });
   await el("btn-send").onclick();
   assert.deepEqual(calls(), ["/api/transfers q1", "/api/transfers/t-q1/authorize", "/api/quotes"]);
   assert.equal(run("quote.id"), "q2");
@@ -182,7 +182,8 @@ await t("a definite 410 from /authorize prices the send again", async () => {
 
 for (const [what, err] of [
   ["a 502", () => Object.assign(new Error("Payout failed"), { status: 502 })],
-  ["a 409", () => Object.assign(new Error("transfer is PAYOUT_SUBMITTED, expected CREATED"), { status: 409 })],
+  ["a 409", () => Object.assign(new Error("transfer is PAYOUT_SUBMITTED, expected CREATED"), { status: 409, fromZold: true })],
+  ["a 410 Zold did not write (a proxy's)", () => Object.assign(new Error("Gone"), { status: 410, fromZold: false })],
   ["a lost answer", () => Object.assign(new Error("you appear to be offline. Zold could not be reached"), { offline: true })],
 ] as const) {
   await t(`${what} from /authorize may have gone out: no new price, check Transactions`, async () => {

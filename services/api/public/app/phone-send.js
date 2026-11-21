@@ -285,8 +285,8 @@ async function phWalletSubmit(btn, errEl) {
     // new send, signed afresh, that nothing on the server stops. A 409 with no
     // code is "already submitted": it went out. A send Zold marked FAILED (a
     // 502 naming its state) is settled too: the bundler refused or it reverted.
-    const refused = (e?.body?.state === "FAILED" && typeof e.body.error === "string")
-      || (e?.status < 500 && typeof e.body?.error === "string" && !(e.status === 409 && !e.body.code));
+    const refused = e?.fromZold === true && ((e.body?.state === "FAILED" && typeof e.body.error === "string")
+      || (e.status < 500 && typeof e.body?.error === "string" && !(e.status === 409 && !e.body.code)));
     if (authorizeSent) phUnconfirmed = !refused;
     if (authorizeSent && w.sendLink) phSendLinkUnsent(w.sendLink, refused);
     if (authorizeSent && !refused) {
@@ -560,7 +560,7 @@ async function phSubmit(btn, errEl) {
     phSend.error = e?.name === "NotAllowedError" ? Z.byDevice("You cancelled Face ID or fingerprint.", "You cancelled the passkey prompt.") : e.message;
     // Until Zold has refused it, /authorize may still be arriving: an unsigned
     // read then proves nothing, and a retry is a second payment nothing would stop.
-    const refused = e?.status < 500 && typeof e.body?.error === "string";
+    const refused = e?.fromZold === true && e.status < 500 && typeof e.body?.error === "string";
     if (authorizeSent && phSend.sendLink) phSendLinkUnsent(phSend.sendLink, refused);
     // Kept here too: Activity's next load drops an unsigned CREATED from hist.
     try {
@@ -650,7 +650,8 @@ PH["send/error"] = {
       ? "We can’t tell yet whether it reached the bank, so nothing is refunded automatically. Write to support@zoldhq.com and we’ll look into it."
       : refunded ? `It was refused, and ${phEur(t.refund?.amountEur ?? t.sendEur)} is back in your account.`
         : returning ? "The money that left your account is being returned. It shows as refunded once it is back."
-          : phSend.error || t.error || "The payment was stopped before any money left your account.";
+          // A FAILED read is the answer: its reason, not why the last one was lost.
+          : (t.state === "FAILED" ? t.error : phSend.error || t.error) || "The payment was stopped before any money left your account.";
     const word = review ? "IN REVIEW" : refunded ? "REFUNDED" : t.state === "FAILED" ? "FAILED" : null;
     const sub = unknown || review ? "outcome not known yet" : refunded ? "refunded" : returning ? "being returned" : "not debited";
     return `${Z.topbar({ srTitle: title, back: { href: "#home", label: "Back to Home" } })}${phMain(`

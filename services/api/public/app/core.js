@@ -162,6 +162,8 @@ async function api(path, body, method, extraHeaders) {
   if (!res.ok) {
     const err = new Error(data.error || gatewayMessage(res) || res.statusText || `request failed (HTTP ${res.status})`);
     err.status = res.status;
+    // Only Zold's own answer is a refusal: a proxy's 4xx proves nothing.
+    err.fromZold = res.headers.get("x-zold-answer") === "1";
     err.ref = data.ref;
     // The service worker's own 503: the network, not our server, failed.
     err.offline = res.headers.get("x-zold-offline") === "1";

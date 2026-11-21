@@ -221,9 +221,11 @@ await t("once the waiting /authorize answers, Send is offered again", async () =
 });
 
 for (const [name, fail] of [
-  ["a Zold 5xx with a JSON body", `Object.assign(new Error("Something went wrong on our side."), { status: 500, body: { error: "Something went wrong on our side." } })`],
+  ["a Zold 5xx with a JSON body", `Object.assign(new Error("Something went wrong on our side."), { status: 500, fromZold: true, body: { error: "Something went wrong on our side." } })`],
   ["the service worker's offline 503", `Object.assign(new Error("offline"), { status: 503, offline: true, body: { error: "offline" } })`],
-  ["a 409 \"already submitted\" (it went out)", `Object.assign(new Error("this send was already submitted"), { status: 409, body: { error: "this send was already submitted" } })`],
+  ["a 409 \"already submitted\" (it went out)", `Object.assign(new Error("this send was already submitted"), { status: 409, fromZold: true, body: { error: "this send was already submitted" } })`],
+  ["a proxy's JSON 4xx with an error string", `Object.assign(new Error("Bad Request"), { status: 400, fromZold: false, body: { error: "Bad Request" } })`],
+  ["a proxy's JSON 502 naming state FAILED", `Object.assign(new Error("payout failed"), { status: 502, fromZold: false, body: { state: "FAILED", error: "payout failed" } })`],
 ] as const) {
   await t(`after /authorize, ${name} is unknown: no Send`, async () => {
     run(`phUnconfirmed = false; phWallet = { to: "alice.eth", token: "USDC", amount: "25.5", name: "alice.eth", address: "${ADDR}" };
@@ -235,7 +237,7 @@ for (const [name, fail] of [
 
 await t("after /authorize, a 502 naming state FAILED is a failure: its reason, and Send again", async () => {
   run(`phUnconfirmed = false; phWallet = { to: "alice.eth", token: "USDC", amount: "25.5", name: "alice.eth", address: "${ADDR}" };
-    api = async (p) => { if (p.endsWith("/authorize")) { const e = new Error("the bundler refused the operation, so nothing was sent: AA24 signature error"); e.status = 502; e.body = { id: "s9", state: "FAILED", error: e.message }; throw e; } return { id: "s9", safeExecution: { credentialId: "c", challenge: "ch" } }; }`);
+    api = async (p) => { if (p.endsWith("/authorize")) { const e = new Error("the bundler refused the operation, so nothing was sent: AA24 signature error"); e.status = 502; e.fromZold = true; e.body = { id: "s9", state: "FAILED", error: e.message }; throw e; } return { id: "s9", safeExecution: { credentialId: "c", challenge: "ch" } }; }`);
   const btn = el(); const err = el();
   await run(`phWalletSubmit`)(btn, err);
   assert.match(err.textContent, /nothing was sent: AA24/);
@@ -256,7 +258,7 @@ await t("a cancelled passkey prompt sends nothing and keeps Send", async () => {
 
 await t("a refusal from Zold after /authorize was sent still lets the person fix it and send", async () => {
   run(`phUnconfirmed = false; phWallet = { to: "alice.eth", token: "USDC", amount: "25.5", name: "alice.eth", address: "${ADDR}" }; __calls = [];
-    api = async (p, b) => { __calls.push([p, b]); if (p.endsWith("/authorize")) { const e = new Error("alice.eth now points to a different address — nothing was sent; check it and start again"); e.status = 409; e.body = { error: e.message, code: "ADDRESS_CHANGED" }; throw e; } return { id: "s4", safeExecution: { credentialId: "c", challenge: "ch" } }; }`);
+    api = async (p, b) => { __calls.push([p, b]); if (p.endsWith("/authorize")) { const e = new Error("alice.eth now points to a different address — nothing was sent; check it and start again"); e.status = 409; e.fromZold = true; e.body = { error: e.message, code: "ADDRESS_CHANGED" }; throw e; } return { id: "s4", safeExecution: { credentialId: "c", challenge: "ch" } }; }`);
   const btn = el(); const err = el();
   btn.setAttribute("aria-busy", "true"); btn.removeAttribute("aria-busy");
   await run(`phWalletSubmit`)(btn, err);

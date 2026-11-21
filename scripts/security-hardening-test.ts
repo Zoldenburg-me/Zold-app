@@ -137,6 +137,14 @@ await check("every response says no-referrer and nosniff", async () => {
   assert.equal(r.headers.get("referrer-policy"), "no-referrer");
   assert.equal(r.headers.get("x-content-type-options"), "nosniff");
 });
+await check("every answer Zold writes is marked as Zold's, a refusal and a rate-limit 429 included", async () => {
+  const notFound = await fetch(`${base}/api/invoice-links/nothing`);
+  assert.ok(notFound.status >= 400 && notFound.status < 500, String(notFound.status));
+  assert.equal(notFound.headers.get("x-zold-answer"), "1");
+  const limited = await fetch(`${base}/api/webauthn/challenge`, { method: "POST" });
+  assert.equal(limited.status, 429);
+  assert.equal(limited.headers.get("x-zold-answer"), "1");
+});
 await check("every response carries a same-origin CSP and refuses to be framed", async () => {
   const r = await fetch(`${base}/api/invoice-links/nothing`);
   const csp = r.headers.get("content-security-policy") ?? "";
