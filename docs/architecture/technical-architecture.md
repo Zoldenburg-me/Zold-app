@@ -423,7 +423,14 @@ state read back from Monerium (`sepa.state`) is `processed` (a placed order is
 not enough; the redeem poller keeps reading the order of a transfer in
 review), the destination tx Bridge reported (`bridge.xyz.destination_tx` step;
 the plan field `pickup.bridgeDestinationTxHash` is not accepted), or
-`pickup.anchorPaymentHash` (`transfers/review-evidence.ts`). REFUNDED needs
+`pickup.anchorPaymentHash` (`transfers/review-evidence.ts`). A SEPA transfer
+in review that signed a redeem but recorded no order id (the answer to
+`POST /orders` was lost) may cite the order Monerium holds: the route reads it
+on the account's own client and attaches it to `sepa` only if it is a processed
+EUR redeem of the signed amount, from this Safe on `MONERIUM.chain`, to the
+signed IBAN, with this transfer's payment memo, and on no other transfer
+(else 409; a failed read is 503 and changes nothing)
+(`transfers/attach-redeem-order.ts`). REFUNDED needs
 `amountEur` (0 up to `safeMovedEur`, else 400) and `evidence` (the refund tx
 hash or partner reference); it writes `transfer.refund` (`recoveredFrom:
 "operator-resolved"`, deductions = what was not returned), so the app and the

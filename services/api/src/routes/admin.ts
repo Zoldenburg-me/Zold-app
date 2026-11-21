@@ -32,6 +32,8 @@ import { onboardingOf, recoveryEnrolment } from "../admin/onboarding.js";
 import { issues, overview } from "../admin/overview.js";
 import { liveMonerium, moneriumOverview, storedMonerium } from "../admin/monerium.js";
 import { maskIdentifier } from "../admin/mask.js";
+import { attachRedeemOrder, mayAttachRedeemOrder } from "../transfers/attach-redeem-order.js";
+import { matchesPayoutEvidence } from "../transfers/review-evidence.js";
 
 function adminUserSummary(userId: string) {
   const u = store.findUser(userId);
@@ -251,6 +253,18 @@ export function createAdminRouter() {
           return res.status(400).json({ error: "REFUNDED needs evidence: the refund tx hash or the partner's reference" });
         }
         refund = { amountEur: Math.round(amountEur * 100) / 100, movedEur };
+      }
+      // A redeem order Monerium holds but the transfer never recorded is
+      // re-read from Monerium and attached first; the cited id alone is no
+      // evidence (transfers/attach-redeem-order.ts).
+      if (state === "PAID" && evidence && !matchesPayoutEvidence(transfer, evidence) && mayAttachRedeemOrder(transfer)) {
+        const attached = await attachRedeemOrder(transfer.id, evidence);
+        if (!attached.ok && attached.code === "UNAVAILABLE") {
+          return res.status(503).json({ error: "Monerium could not be read for that order, so nothing was changed. Try again." });
+        }
+        if (!attached.ok) {
+          return res.status(409).json({ error: `that is not this transfer's processed Monerium redeem order: ${attached.reason}` });
+        }
       }
       const result = store.resolveTransferReview(String(req.params.id), {
         state: state as ReviewResolutionState,

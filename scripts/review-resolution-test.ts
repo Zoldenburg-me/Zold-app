@@ -19,6 +19,12 @@ import path from "node:path";
 import express from "express";
 
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-review-")), "db.json");
+// App credentials, so an unrecorded redeem order can be re-read from the
+// Monerium stub below (globalThis.fetch).
+process.env.MONERIUM_BASE_URL = "https://api.monerium.app";
+process.env.MONERIUM_CLIENT_ID = "review-test-client";
+process.env.MONERIUM_CLIENT_SECRET = "review-test-secret";
+process.env.MONERIUM_CHAIN = "base";
 /** Stands for the operator in `post`: the change goes through the kit. */
 const OPERATOR = "operator";
 
@@ -31,6 +37,7 @@ const { operatorKit } = await import("./_operator.js");
 const { createTransferRouter } = await import("../services/api/src/routes/transfers.js");
 const { strandedAction, compensateTransfer, DEBIT_STEP } = await import("../services/api/src/orchestrator.js");
 const { projectStatementLines } = await import("../services/api/src/bookkeeping/statement.js");
+const { moneriumAmountString, paymentMemo } = await import("../services/api/src/sepa.js");
 
 initStore();
 const now = new Date().toISOString();
@@ -86,6 +93,63 @@ row("t_bridge_done", "MANUAL_REVIEW");
 store.updateTransfer("t_bridge_done", {
   txs: [...store.findTransfer("t_bridge_done")!.txs, { step: "bridge.xyz.destination_tx", hash: DEST_TX }],
 });
+
+// Transfers whose redeem order is at Monerium but not on the transfer: the
+// order placement's answer was lost, so the transfer went to review.
+const SAFE = `0x${"22".repeat(20)}`;
+const IBAN = "DE89370400440532013000";
+function sepaRow(id: string) {
+  row(id, "MANUAL_REVIEW");
+  store.updateTransfer(id, {
+    recipientIban: IBAN, reference: "Invoice 42",
+    moneriumRedeem: { amount: moneriumAmountString(9), iban: IBAN, issuedAt: now, message: "m", memo: paymentMemo(id, "Invoice 42"), signature: "0x01" },
+    txs: [...store.findTransfer(id)!.txs, { step: "monerium.redeem.pending", hash: "0x" }],
+  } as any);
+}
+sepaRow("t_attach");
+sepaRow("t_attach_bad");
+sepaRow("t_attach_flaky");
+row("t_owns_order", "PAYOUT_SUBMITTED");
+store.updateTransfer("t_owns_order", { sepa: { mode: "sandbox", orderId: "ord-taken", state: "processed" } });
+/** The redeem order Monerium holds for `transferId`, processed. */
+function redeemOrder(id: string, transferId: string, patch: Record<string, unknown> = {}) {
+  return {
+    id, kind: "redeem", amount: "9", currency: "eur", address: SAFE, chain: "base", state: "processed",
+    meta: { state: "processed" }, memo: paymentMemo(transferId, "Invoice 42"),
+    counterpart: { identifier: { standard: "iban", iban: "DE89 3704 0044 0532 0130 00" }, details: { name: "Payee" } },
+    ...patch,
+  };
+}
+const ORDERS: Record<string, unknown> = {
+  "ord-attach": redeemOrder("ord-attach", "t_attach"),
+  "ord-pending": redeemOrder("ord-pending", "t_attach_bad", { state: "pending", meta: { state: "pending" } }),
+  "ord-placed": redeemOrder("ord-placed", "t_attach_bad", { state: "placed", meta: { state: "placed" } }),
+  "ord-memo": redeemOrder("ord-memo", "t_attach_bad", { memo: paymentMemo("t_other", "Invoice 42") }),
+  "ord-amount": redeemOrder("ord-amount", "t_attach_bad", { amount: "9.01" }),
+  "ord-iban": redeemOrder("ord-iban", "t_attach_bad", { counterpart: { identifier: { standard: "iban", iban: "DE02120300000000202051" } } }),
+  "ord-safe": redeemOrder("ord-safe", "t_attach_bad", { address: `0x${"33".repeat(20)}` }),
+  "ord-chain": redeemOrder("ord-chain", "t_attach_bad", { chain: "gnosis" }),
+  "ord-issue": redeemOrder("ord-issue", "t_attach_bad", { kind: "issue" }),
+  "ord-currency": redeemOrder("ord-currency", "t_attach_bad", { currency: "usd" }),
+  "ord-id": redeemOrder("ord-other-id", "t_attach_bad"),
+  "ord-taken": redeemOrder("ord-taken", "t_attach_bad"),
+  "ord-flaky": redeemOrder("ord-flaky", "t_attach_flaky"),
+};
+/** Order reads still to fail, by id, with the status to answer. */
+const FAULTS: Record<string, number[]> = { "ord-flaky": [503, 429] };
+const realFetch = globalThis.fetch;
+globalThis.fetch = (async (input: any, init?: any) => {
+  const url = new URL(String(input?.url ?? input));
+  if (url.hostname !== "api.monerium.app") return realFetch(input, init);
+  const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+  if (url.pathname === "/auth/token") return json({ access_token: "review-token", expires_in: 3600 });
+  const m = /^\/orders\/([^/]+)$/.exec(url.pathname);
+  if (!m || (init?.method ?? "GET") !== "GET") return json({}, 500);
+  const id = decodeURIComponent(m[1]);
+  const fault = FAULTS[id]?.shift();
+  if (fault) return json({ errors: "unavailable" }, fault);
+  return ORDERS[id] ? json(ORDERS[id]) : json({ errors: "not found" }, 404);
+}) as typeof fetch;
 
 const app = express();
 app.use(express.json());
@@ -255,6 +319,54 @@ try {
     assert.equal(t.reviewResolution.evidence, "ord-abc-123");
   });
 
+  await check("PAID re-reads an unrecorded redeem order and refuses one that does not match this transfer", async () => {
+    for (const [id, why] of [
+      ["ord-pending", /not processed/], ["ord-placed", /not processed/], ["ord-memo", /memo/], ["ord-amount", /amount/],
+      ["ord-iban", /IBAN/], ["ord-safe", /Safe address/], ["ord-chain", /chain/], ["ord-issue", /kind/],
+      ["ord-currency", /currency/], ["ord-id", /order id/], ["ord-unknown", /no such order/], ["ord-taken", /another transfer/],
+      ["../orders", /not a Monerium order id/],
+    ] as const) {
+      const r = await post("t_attach_bad", { state: "PAID", note: NOTE, evidence: id });
+      assert.equal(r.status, 409, `${id}: ${r.status} ${JSON.stringify(r.body)}`);
+      assert.match(String(r.body.error), why, id);
+      const t = store.findTransfer("t_attach_bad")! as any;
+      assert.equal(t.state, "MANUAL_REVIEW", id);
+      assert.ok(!t.reviewResolution, `${id}: resolved`);
+      assert.ok(!t.sepa, `${id}: an order was attached`);
+    }
+    assert.equal(store.findTransfer("t_owns_order")!.sepa!.orderId, "ord-taken", "the owner keeps its order");
+  });
+
+  await check("a failed order read is retryable and changes nothing; the retry attaches it", async () => {
+    for (const status of [503, 429]) {
+      const r = await post("t_attach_flaky", { state: "PAID", note: NOTE, evidence: "ord-flaky" });
+      assert.equal(r.status, 503, `after ${status}: ${JSON.stringify(r.body)}`);
+      const t = store.findTransfer("t_attach_flaky")! as any;
+      assert.equal(t.state, "MANUAL_REVIEW");
+      assert.ok(!t.reviewResolution && !t.sepa, "a failed read changed the transfer");
+    }
+    const r = await post("t_attach_flaky", { state: "PAID", note: NOTE, evidence: "ord-flaky" });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(store.findTransfer("t_attach_flaky")!.state, "PAID");
+  });
+
+  await check("PAID attaches the processed redeem order Monerium holds for this transfer, then resolves", async () => {
+    const r = await post("t_attach", { state: "PAID", note: NOTE, evidence: " ord-attach " });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    const t = store.findTransfer("t_attach")! as any;
+    assert.equal(t.state, "PAID");
+    assert.equal(t.sepa.orderId, "ord-attach");
+    assert.equal(t.sepa.state, "processed");
+    assert.equal(t.reviewResolution.evidence, "ord-attach");
+    const entry = store.auditFor("u_review").find((e: any) => e.kind === "operator.transfer_review_resolved" && e.data.transferId === "t_attach");
+    assert.ok(entry, "no audit entry");
+    // Attached to one transfer, the order is no evidence for another.
+    store.updateTransfer("t_attach_bad", { moneriumRedeem: { ...store.findTransfer("t_attach_bad")!.moneriumRedeem!, memo: paymentMemo("t_attach", "Invoice 42") } });
+    const again = await post("t_attach_bad", { state: "PAID", note: NOTE, evidence: "ord-attach" });
+    assert.equal(again.status, 409, JSON.stringify(again.body));
+    assert.equal(store.findTransfer("t_attach_bad")!.state, "MANUAL_REVIEW");
+  });
+
   await check("a REFUNDED evidence hash already on record is refused", async () => {
     const own = store.findTransfer("t_ref_1")!.txs[0].hash;
     for (const [label, hash] of [
@@ -323,6 +435,7 @@ try {
     assert.equal(store.findTransfer("t_review2")!.state, "FAILED");
   });
 } finally {
+  globalThis.fetch = realFetch;
   server.close();
 }
 
