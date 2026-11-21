@@ -398,11 +398,11 @@ await check("serves the dashboard and nothing of the user app", async () => {
   });
   const onAdmin = (p: string) => run(adminHostPolicy, { path: p, headers: { host: "admin.test" } });
   for (const p of ["/admin", "/admin/users", "/admin/core.js", "/admin.css", "/api/admin/users", "/tokens.css", "/vendor/fonts/text.css"]) assert.equal(await onAdmin(p), 0, p);
-  const { ADMIN_CONTENT_SECURITY_POLICY } = await import("../services/api/src/http/policy.js");
-  assert.match(ADMIN_CONTENT_SECURITY_POLICY, /script-src 'self';/, "the admin host allows no inline script");
+  const { CONTENT_SECURITY_POLICY } = await import("../services/api/src/http/policy.js");
+  assert.match(CONTENT_SECURITY_POLICY, /script-src 'self';/, "the admin host allows no inline script");
   const headers: Record<string, string> = {};
   await new Promise<void>((resolve) => adminHostPolicy({ path: "/admin", get: () => "admin.test" } as any, { setHeader: (k: string, v: string) => { headers[k] = v; } } as any, () => resolve()));
-  assert.equal(headers["content-security-policy"], ADMIN_CONTENT_SECURITY_POLICY);
+  assert.equal(headers["content-security-policy"], CONTENT_SECURITY_POLICY);
   for (const p of ["/app", "/business", "/pay/x/y", "/app/main.js", "/api/users/u1", "/",
     // The passkey and Turnkey pages: their scripts must never run on the operator's origin.
     "/guardian", "/guardian/main.js", "/guardian/enrolment.js", "/recovery", "/recovery/main.js", "/vendor/turnkey.js", "/api/recovery/turnkey/login", "/admin/..%2fbusiness.html", "/admin/../index.html",

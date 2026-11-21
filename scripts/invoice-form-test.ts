@@ -120,7 +120,7 @@ check("an empty line counts as zero", () => {
   assert.equal(formTotalCents([{ quantity: "1", unitPrice: "" }, { quantity: "", unitPrice: "2" }]), 0);
 });
 check("the form draws its lines and total from invoice-totals.js", () => {
-  const html = readFileSync(path.join(PUB, "invoice.html"), "utf8");
+  const html = readFileSync(path.join(PUB, "invoice.js"), "utf8");
   assert.match(html, /import \{ lineNetCents, formTotalCents, formatCents \} from "\/invoice-totals\.js";/);
   assert.doesNotMatch(html, /Number\(l(?:ines\[i\])?\.quantity \|\| 0\) \* Number/);
 });
