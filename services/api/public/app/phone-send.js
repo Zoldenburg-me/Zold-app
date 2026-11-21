@@ -21,10 +21,11 @@ let phSend = { payee: null, amount: "", reference: "", quote: null, transferId: 
 let phUnconfirmed = false;
 
 function phUnconfirmedHtml() {
-  // No Check Activity while waiting: the reload would drop the answer.
+  // No Check Activity button while waiting: a reload drops the answer. The
+  // requests have no timeout, so the copy says when a reload is the way on.
   if (phUnconfirmed === "pending") return `${phTop("Payment result", "home")}${phMain(`
       <span class="z-tile z-tile--a z-tile--lg" aria-hidden="true">${Z.icon("hourglass_top")}</span>
-      <div class="z-intro"><h2 class="z-title">Waiting for your last payment</h2><p class="z-sub">Zold hasn’t answered yet, so it may go out. You can send again once it has; a payment that went out is listed in Activity.</p></div>
+      <div class="z-intro" id="ph-wait"><h2 class="z-title">Waiting for your last payment</h2><p class="z-sub">Zold hasn’t answered yet, so it may go out. You can send again once it has; a payment that went out is listed in Activity. If nothing changes after a few minutes, reload the app and check Activity before you pay again.</p></div>
     `)}${phFoot(Z.button({ variant: "primary", full: true, label: "Back to Home", href: "#home" }))}`;
   return `${phTop("Payment result", "home")}${phMain(`
       <span class="z-tile z-tile--a z-tile--lg" aria-hidden="true">${Z.icon("hourglass_top")}</span>
@@ -293,6 +294,13 @@ async function phWalletSubmit(btn, errEl) {
       btn.setAttribute("aria-disabled", "true");
       phGo("send/wallet-check", null, { replace: true });
       return;
+    }
+    // Refused while the person waits on another screen: that one still says
+    // "Waiting…" and has no poll, so draw it again, open, with the reason.
+    if (authorizeSent && document.querySelector("#ph-wait")) {
+      phRender();
+      errEl = document.querySelector("#ph-wal-err") || document.querySelector("#ph-rev-err");
+      if (!errEl) return;
     }
     errEl.textContent = e?.name === "NotAllowedError"
       ? Z.byDevice("Face ID or fingerprint was cancelled. Nothing was sent.", "The passkey prompt was cancelled. Nothing was sent.")
