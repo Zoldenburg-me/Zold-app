@@ -98,15 +98,15 @@ export function withoutConversionOutputs(deposits: CryptoDeposit[], transfers: T
 }
 
 /**
- * An unconfirmed row whose conversion was included but reverted: nothing was
- * converted, and it waits for review. Not when a later attempt is still
- * unconfirmed: a retry after an earlier revert keeps that old step, and its
- * own op may still land.
+ * An unconfirmed row whose last conversion attempt was included but reverted:
+ * that attempt converted nothing, and the row waits for review. Decided by the
+ * last swap step, so an earlier revert is never blamed for a retry that is
+ * still unconfirmed or that executed.
  */
 export function conversionReverted(d: Pick<CryptoDeposit, "holding" | "txs">): boolean {
-  return d.holding === "unconfirmed"
-    && d.txs.some((t) => t.step === "safe.swap(usdc->eure).reverted")
-    && !d.txs.some((t) => t.step === "safe.swap(usdc->eure).unconfirmed");
+  if (d.holding !== "unconfirmed") return false;
+  const last = d.txs.filter((t) => t.step.startsWith("safe.swap(usdc->eure)")).at(-1);
+  return last?.step === "safe.swap(usdc->eure).reverted";
 }
 
 const fundingRow = (d: CryptoDeposit): ActivityRow => ({

@@ -186,7 +186,7 @@ await check("the convert route parks an uncertain submit as unconfirmed and refu
     "an included-but-reverted swap moved nothing and is refused before settlement");
 });
 
-await check("an unconfirmed row says it reverted only when no later attempt is still unconfirmed", async () => {
+await check("an unconfirmed row says it reverted only when its last swap step reverted", async () => {
   const { buildActivity } = await import("../services/api/src/transfers/activity.js");
   const u = mkUser();
   const reverted = mkDeposit(u.id, { holding: "unconfirmed",
@@ -202,6 +202,16 @@ await check("an unconfirmed row says it reverted only when no later attempt is s
   assert.match(block, /may still land/, block);
   assert.doesNotMatch(block, /reverted/, block);
   assert.equal(row(retried).conversionReverted, undefined, "an op that may still land is not called reverted");
+  // The retry executed, then settlement threw: its swap is the last step.
+  const executed = mkDeposit(u.id, { holding: "unconfirmed",
+    txs: [{ step: "safe.swap(usdc->eure).reverted", hash: "0x9" }, { step: "safe.swap(usdc->eure)", hash: "0xa" }, { step: "userOperation", hash: "0xb" }] });
+  assert.doesNotMatch(depositConversionBlocker(u, executed)!, /reverted/, "a retry that executed is not called reverted");
+  assert.equal(row(executed).conversionReverted, undefined, "the activity row does not say nothing was converted");
+  // A partial fill, then a retry that reverted: the last attempt reverted.
+  const partialThenRevert = mkDeposit(u.id, { holding: "unconfirmed",
+    txs: [{ step: "safe.swap(usdc->eure)", hash: "0xc" }, { step: "safe.swap(usdc->eure).reverted", hash: "0xd" }] });
+  assert.match(depositConversionBlocker(u, partialThenRevert)!, /reverted/, "the last attempt reverted");
+  assert.equal(row(partialThenRevert).conversionReverted, true);
 });
 
 await check("a deposit with an unrecorded conversion intent is not offered again, whatever its holding", () => {
@@ -228,8 +238,10 @@ await check("the convert route writes the intent before submitting and clears it
   assert.doesNotMatch(executed, /conversionIntent/, "the post-swap unconfirmed write keeps it");
   assert.match(route, /settleConvertedDeposit\([\s\S]{0,600}conversionIntent: undefined/, "settling clears it");
   const caught = route.slice(route.indexOf("executed but was not recorded"), route.indexOf("const balances ="));
-  assert.match(caught, /holding !== "unconfirmed"\) clearSettledIntent\(deposit\.id\)/,
+  assert.match(caught, /holding !== "unconfirmed"\) \{\s*clearSettledIntent\(deposit\.id\);\s*settled = recorded;\s*\} else/,
     "a throw after settling recorded the outcome clears the intent, so a partial fill's rest is not blocked");
+  const settledBranch = caught.slice(caught.indexOf("clearSettledIntent("), caught.indexOf("} else"));
+  assert.doesNotMatch(settledBranch, /SAFE_OP_UNCONFIRMED/, "a settled row is answered as settled, not as unconfirmed");
 });
 
 await check("a deposit already in the settlement currency has nothing to convert", () => {

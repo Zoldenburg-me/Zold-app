@@ -430,12 +430,18 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
           const reason = redactedMessage(err);
           console.error(`convert: swap ${submitted.txHash ?? submitted.userOpHash} executed but was not recorded:`, describeCause(err));
           // Settled before the throw: the outcome is on record and keeps its
-          // own reason; only the intent is left to clear.
-          if (store.cryptoDeposits.find((x) => x.id === deposit.id)?.holding !== "unconfirmed") clearSettledIntent(deposit.id);
-          else store.updateCryptoDeposit(deposit.id, {
-            reason: `the swap went through, but what arrived could not be recorded (${reason}) — it is being checked and will not be offered again`,
-          });
-          return res.status(502).json({ error: reason, code: "SAFE_OP_UNCONFIRMED", userOpHash: submitted.userOpHash });
+          // own reason; only the intent is left to clear, and the answer is
+          // the settled row.
+          const recorded = store.cryptoDeposits.find((x) => x.id === deposit.id);
+          if (recorded && recorded.holding !== "unconfirmed") {
+            clearSettledIntent(deposit.id);
+            settled = recorded;
+          } else {
+            store.updateCryptoDeposit(deposit.id, {
+              reason: `the swap went through, but what arrived could not be recorded (${reason}) — it is being checked and will not be offered again`,
+            });
+            return res.status(502).json({ error: reason, code: "SAFE_OP_UNCONFIRMED", userOpHash: submitted.userOpHash });
+          }
         }
         const balances = await accountBalances(user.address).catch(() => ({}));
         res.json({ deposit: settled, ...balances });

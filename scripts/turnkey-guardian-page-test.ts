@@ -200,9 +200,10 @@ try {
   });
 
   // Every script under public/ outside vendor: /app also imports /guardian/*.js
-  // at runtime. Any ` onX="`, ` onX=${` or ` onX=` + quote counts, wherever it
+  // at runtime. Any ` onX="`, ` onX=${`, ` onX = "` or `/onX=` + quote counts, wherever it
   // sits in a template (a `>` inside `${…}` before it does not hide it), and
-  // so does setAttribute("onX", …). `.onX =` property assignment is allowed.
+  // so does setAttribute("onX", …). `.onX =` property assignment and a
+  // declared variable (`const one = `) are allowed.
   await check("no script the pages load writes an inline event handler into the page", () => {
     const files = readdirSync(PUB, { recursive: true, encoding: "utf8" })
       .filter((f) => f.endsWith(".js") && !f.startsWith(`vendor${path.sep}`));
@@ -211,7 +212,7 @@ try {
     }
     for (const f of files) {
       const js = readFileSync(path.join(PUB, f), "utf8");
-      assert.doesNotMatch(js, /\son[a-z]+=["'`$]/i, f);
+      assert.doesNotMatch(js, /(?<!\b(?:const|let|var))[\s/]on[a-z]+\s*=\s*["'`$]/i, f);
       assert.doesNotMatch(js, /setAttribute\(\s*["'`]on/i, f);
     }
   });
