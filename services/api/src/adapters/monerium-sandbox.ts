@@ -261,7 +261,7 @@ export function refusedFunding(user: User, moneriumProfileId: string | undefined
   return {
     mode: user.funding?.mode ?? "sandbox",
     status: "kyc_pending",
-    moneriumProfileId,
+    ...(moneriumProfileId ? { moneriumProfileId } : {}),
     detail,
     ...(user.funding?.addressUnlinkable ? { addressUnlinkable: true } : {}),
   };

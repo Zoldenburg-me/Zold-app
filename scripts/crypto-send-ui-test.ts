@@ -291,6 +291,8 @@ await t("an unknown answer that lands while the person is on a Waiting screen do
     api = (p) => p.endsWith("/authorize") ? new Promise((_, no) => { globalThis.__refuse = no; }) : Promise.resolve({ id: "s11", safeExecution: { credentialId: "c", challenge: "ch" } });`);
   const done = run(`phWalletSubmit`)(el(), el());
   await new Promise((r) => setTimeout(r, 10));
+  // The screen carries the hook a refusal redraws on, so only the answer's kind holds it back.
+  assert.match(flat(run(`PH["send/wallet-check"].html()`)), /id="ph-wait"/);
   ctx.document.querySelector = (s: string) => (s === "#ph-wait" ? el() : null);
   run(`phRender = () => { __renders++; }`);
   ctx.__refuse(Object.assign(new Error("offline"), { status: 503, offline: true, body: { error: "offline" } }));

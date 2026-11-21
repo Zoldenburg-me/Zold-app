@@ -456,6 +456,24 @@ await check("a refused account ends with the same funding state whichever path m
   }
 });
 
+await check("a refused API-key connect keeps the account's own funding mode", async () => {
+  const u = await addRefused(35, "rejected");
+  store.updateUser(u.id, { funding: { ...store.findUser(u.id)!.funding!, mode: "mock" } } as any);
+  const r = await post(`/api/users/${u.id}/monerium/api-keys`, {
+    clientId: KEYS.clientId, clientSecret: KEYS.clientSecret, stepUp: await u.stepUp("monerium.connect"),
+  });
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  assert.equal(store.findUser(u.id)!.funding?.mode, "mock");
+});
+
+await check("the poller writes no profile-id key for a refused row that never had one", async () => {
+  const u = addUser(36);
+  store.updateUser(u.id, { iban: "", kycStatus: "rejected", funding: { mode: "sandbox", status: "iban_pending" } } as any);
+  const after = await refreshPendingIban(store.findUser(u.id)!);
+  assert.equal(after.funding?.status, "kyc_pending");
+  assert.ok(!("moneriumProfileId" in after.funding!), JSON.stringify(after.funding));
+});
+
 await check("pending: the OAuth callback still sets the account up for IBAN activation", async () => {
   const u = addUser(33);
   store.updateUser(u.id, { kycStatus: "pending", iban: "", monerium: undefined, funding: { mode: "sandbox", status: "kyc_pending" } } as any);
