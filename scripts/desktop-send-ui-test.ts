@@ -4,9 +4,13 @@
  *  - MANUAL_REVIEW may have a payment in flight, so it never offers
  *    "Send another transfer"; it points to Transactions and support.
  *    REFUNDED and FAILED still do.
- *  - A cancelled passkey after the transfer was created, or a definite 410
- *    from /authorize (Zold's own: a proxy's 410 proves nothing), leaves the quote consumed: the next send must be priced
- *    again, not refused as "quote already consumed".
+ *  - A cancelled passkey after the transfer was created, or a definite 410,
+ *    400, 401 or 403 from /authorize (each refused before the claim, and
+ *    Zold's own: a proxy's 4xx proves nothing), leaves the quote consumed:
+ *    the next send must be priced again, not refused as "quote already
+ *    consumed".
+ *  - A SEPA payment polled into MANUAL_REVIEW or REFUNDED shows the same
+ *    result panel as one that came back that way.
  *  - Any other /authorize failure may have gone out: no new price, no retry.
  *
  * Runs the real classic scripts in load order with a stub DOM. What this
@@ -106,6 +110,23 @@ await t("MANUAL_REVIEW offers Transactions and support, never Send another trans
   assert.equal(hidden("btn-check-activity"), true);
 });
 
+await t("the page has the Check Transactions button send.js binds", () => {
+  assert.match(readFileSync(path.join(PUB, "index.html"), "utf8"), /<button[^>]*id="btn-check-activity"/);
+});
+
+for (const state of ["MANUAL_REVIEW", "REFUNDED"]) {
+  await t(`a SEPA payment polled into ${state} leaves "Awaiting SEPA settlement" for the result panel`, () => {
+    run(`renderSepaResult({ state: "PAYOUT_SUBMITTED", rail: "sepa", sendEur: 10, sepa: { orderId: "o1" } })`);
+    assert.equal(hidden("sepa-box"), false);
+    el("refund-box").classList.add("hidden");
+    run(`renderSepaResult({ state: "${state}", rail: "sepa", sendEur: 10, error: "SEPA: order unconfirmed", sepa: { orderId: "o1" } })`);
+    assert.equal(hidden("sepa-box"), true);
+    assert.equal(hidden("refund-box"), false);
+    assert.equal(hidden("btn-again"), state === "MANUAL_REVIEW");
+    if (state === "MANUAL_REVIEW") assert.match(el("refund-note").innerHTML, /support@zoldhq\.com/);
+  });
+}
+
 await t("Check Transactions opens Transactions and starts a new send from the destination", () => {
   run(`revealRefund({ state: "MANUAL_REVIEW", sendEur: 10, error: "x" }); __views = []; switchView = (v) => __views.push(v); loadTransfers = () => {};`);
   el("step-quote").classList.add("hidden");
@@ -178,12 +199,37 @@ await t("a definite 410 from /authorize prices the send again", async () => {
   assert.equal(run("quote.id"), "q2");
   assert.match(el("send-err").textContent, /expired/);
   assert.match(el("send-err").textContent, /new price/);
+  assert.deepEqual(run("JSON.stringify(__calls[2].body)"), JSON.stringify({ userId: "u1", rail: "sepa", sendEur: 25 }), "same rail and amount");
 });
+
+await t("the server answers 400, 401 and 403 on /authorize only before the claim", () => {
+  const src = readFileSync(path.join(ROOT, "services/api/src/routes/transfers.ts"), "utf8");
+  const afterClaim = src.slice(src.indexOf("store.claimAuthorization(transfer.id)"), src.indexOf("return router;"));
+  assert.ok(afterClaim.length > 0);
+  assert.doesNotMatch(afterClaim, /status\(40[013]\)/);
+});
+
+for (const [status, msg] of [
+  [400, "signature required"],
+  [401, "That passkey approval did not check out (bad). Start again."],
+  [403, "passkey credential does not match this account"],
+] as const) {
+  await t(`a ${status} from /authorize was refused before the claim: nothing sent, priced again`, async () => {
+    setUp({ authorize: () => { throw Object.assign(new Error(msg), { status, fromZold: true }); } });
+    await el("btn-send").onclick();
+    assert.deepEqual(calls(), ["/api/transfers q1", "/api/transfers/t-q1/authorize", "/api/quotes"]);
+    assert.equal(run("quote.id"), "q2");
+    assert.doesNotMatch(el("send-err").textContent, /may have gone out/);
+    assert.match(el("send-err").textContent, /Nothing was sent/);
+    assert.match(el("send-err").textContent, /new price/);
+  });
+}
 
 for (const [what, err] of [
   ["a 502", () => Object.assign(new Error("Payout failed"), { status: 502 })],
   ["a 409", () => Object.assign(new Error("transfer is PAYOUT_SUBMITTED, expected CREATED"), { status: 409, fromZold: true })],
   ["a 410 Zold did not write (a proxy's)", () => Object.assign(new Error("Gone"), { status: 410, fromZold: false })],
+  ["a 403 Zold did not write (a proxy's)", () => Object.assign(new Error("Forbidden"), { status: 403, fromZold: false })],
   ["a lost answer", () => Object.assign(new Error("you appear to be offline. Zold could not be reached"), { offline: true })],
 ] as const) {
   await t(`${what} from /authorize may have gone out: no new price, check Transactions`, async () => {
