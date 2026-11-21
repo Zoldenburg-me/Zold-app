@@ -810,9 +810,16 @@ try {
     let venue: {
       deliverEur: number; coInflowEur?: number; outflowEur?: number; deliverTo?: `0x${string}`; noSwapStep?: boolean;
       swapHash?: `0x${string}`; coHash?: `0x${string}`;
+      /** Settle inside execute, as the real venues do: from the swap's receipt,
+       *  refusing on a short delta with the swap's txs on the error. */
+      settleInVenue?: boolean;
     };
+    const { settleFromReceipt, settleLanded } = await import("../services/api/src/liquidity/contract.js");
     const realExecute = FxSwapperLiquidityProvider.prototype.execute;
     FxSwapperLiquidityProvider.prototype.execute = async function (quote, to) {
+      const before = (await publicClient.readContract({
+        address: addrs().eure, abi: abis.MockToken, functionName: "balanceOf", args: [to!],
+      })) as bigint;
       const sameBlock = venue.coInflowEur || venue.outflowEur;
       if (sameBlock) await rpc("evm_setAutomine", [false]);
       venue.swapHash = await eureTransfer(maker, venue.deliverTo ?? to!, venue.deliverEur);
@@ -824,11 +831,12 @@ try {
       }
       await publicClient.waitForTransactionReceipt({ hash: venue.swapHash });
       if (venue.coHash) await publicClient.waitForTransactionReceipt({ hash: venue.coHash });
-      return {
-        quote,
-        amountOut: eur.toWei(venue.deliverEur),
-        txs: venue.noSwapStep ? [] : [{ step: "liquidity.fx-swapper.usdc-eure", hash: venue.swapHash }],
-      };
+      const txs = venue.noSwapStep ? [] : [{ step: "liquidity.fx-swapper.usdc-eure", hash: venue.swapHash }];
+      const swapHash = venue.swapHash;
+      const amountOut = venue.settleInVenue
+        ? await settleLanded(txs, () => settleFromReceipt("fx-swapper", swapHash, addrs().eure, to!, before))
+        : eur.toWei(venue.deliverEur);
+      return { quote, amountOut, txs };
     };
 
     /** A cash transfer the user's Safe funded: debited, swapped to USDC, then failed. */
@@ -913,6 +921,23 @@ try {
       check("a balance delta under the logged output is left for review", short.state === "MANUAL_REVIEW" && !short.refund && /balance shows only/.test(short.error ?? ""), `${short.state} ${short.error ?? ""}`);
       await pollCryptoDepositsOnce();
       check("and its output is still the refund's, not money in", !eureIn(ola).some((x) => x.txHash === venue.swapHash), JSON.stringify(eureIn(ola).map((x) => x.amountEur)));
+
+      // The same short delta, but refused inside the venue's execute, before it
+      // returns its txs (the venues settle from their own receipt). The swap
+      // still landed: its step must be on record, or the scanner books the
+      // refund's EURe as a new deposit.
+      const vic = addUser("Venue-refused Vic", { withSafe: true });
+      await sendEure(vic.address, 20);
+      await rpc("hardhat_impersonateAccount", [vic.address]);
+      await rpc("hardhat_setBalance", [vic.address, "0xDE0B6B3A7640000"]);
+      await pollCryptoDepositsOnce();
+      venue = { deliverEur: 30, outflowEur: 1, settleInVenue: true };
+      const refused = await orch.compensateTransfer(failedTransfer(vic));
+      check("a venue's own settlement refusal leaves the refund for review", refused.state === "MANUAL_REVIEW" && !refused.refund && /balance shows only/.test(refused.error ?? ""), `${refused.state} ${refused.error ?? ""}`);
+      check("with the reverse swap's step and hash on record", refused.txs.some((x) => x.step === "liquidity.fx-swapper.usdc-eure" && x.hash === venue.swapHash), JSON.stringify(refused.txs));
+      check("and on disk", store.findTransfer(refused.id)!.txs.some((x) => x.hash === venue.swapHash));
+      await pollCryptoDepositsOnce();
+      check("the scanner does not book the refused refund's EURe as a deposit", !eureIn(vic).some((x) => x.txHash === venue.swapHash), JSON.stringify(eureIn(vic).map((x) => [x.txHash, x.amountEur])));
     } finally {
       FxSwapperLiquidityProvider.prototype.execute = realExecute;
     }

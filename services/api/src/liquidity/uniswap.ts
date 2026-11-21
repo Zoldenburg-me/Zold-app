@@ -24,7 +24,8 @@ import {
   SafeSwapContext,
   SafeSwapPlan,
   applySurplus,
-  balanceAfterWrite,
+  settleFromReceipt,
+  settleLanded,
   } from "./contract.js";
 
 export class DexLiquidityProvider implements LiquidityProvider {
@@ -82,8 +83,8 @@ export class DexLiquidityProvider implements LiquidityProvider {
 
     // Measured, not assumed. amountOutMinimum makes the router revert on a bad
     // fill, but the amount actually received is what the rest of the transfer
-    // is settled against, so it is read from the chain rather than copied from
-    // the quote we hoped for.
+    // is settled against, so it is read from the swap's own Transfer logs
+    // rather than copied from the quote we hoped for.
     const balanceOf = (owner: `0x${string}`) =>
       publicClient.readContract({ address: tokenOut, abi: erc20Abi, functionName: "balanceOf", args: [owner] }) as Promise<bigint>;
     const before = await balanceOf(to);
@@ -112,24 +113,28 @@ export class DexLiquidityProvider implements LiquidityProvider {
       ],
     });
 
-    // Read past replica lag: a stale pre-swap balance here would report a
-    // landed swap as unswapped, and compensation would refund EURe this side
-    // no longer holds.
-    const delivered = (await balanceAfterWrite(tokenOut, to, before)) - before;
-    if (delivered < quote.minOut) {
-      throw new Error(
-        `dex swap delivered ${delivered} below the quoted floor ${quote.minOut} — refusing to settle`,
-      );
-    }
+    const txs = [
+      { step: `${quote.tokenIn.toLowerCase()}.approve(dex-router)`, hash: approveHash },
+      { step: `liquidity.dex.${quote.tokenIn.toLowerCase()}-${quote.tokenOut.toLowerCase()}`, hash: swapHash },
+    ];
+    // `to` is shared: a balance delta would also count another operation's
+    // money arriving while the swap ran. The delta is the check, read past
+    // replica lag (balanceAfterWrite): a stale pre-swap balance here would
+    // report a landed swap as unswapped, and compensation would refund EURe
+    // this side no longer holds.
+    const delivered = await settleLanded(txs, async () => {
+      const d = await settleFromReceipt("dex", swapHash, tokenOut, to, before);
+      if (d < quote.minOut) {
+        throw new Error(`dex swap delivered ${d} below the quoted floor ${quote.minOut} — refusing to settle`);
+      }
+      return d;
+    });
     const { amountOut, surplus } = applySurplus(quote, delivered);
     return {
       quote,
       amountOut,
       ...(surplus ? { surplus } : {}),
-      txs: [
-        { step: `${quote.tokenIn.toLowerCase()}.approve(dex-router)`, hash: approveHash },
-        { step: `liquidity.dex.${quote.tokenIn.toLowerCase()}-${quote.tokenOut.toLowerCase()}`, hash: swapHash },
-      ],
+      txs,
     };
   }
 

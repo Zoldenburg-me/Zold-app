@@ -36,6 +36,9 @@ import {
   serializeExecution,
   balanceAfterWrite,
   deliveredFromReceipt,
+  settleFromReceipt,
+  SwapSettlementError,
+  type LiquidityExecution,
 } from "./liquidity.js";
 import {
   abis,
@@ -239,16 +242,17 @@ async function debitInputFunds(
    *  own write: on a later write, a restart between the two would refund a
    *  debit whose money the swap already delivered elsewhere. */
   atomicStep?: string,
-): Promise<void> {
+): Promise<SafeExecutionResult> {
   await assertDeviceAuthorization(transfer, user, auth);
   if (transfer.txs.some((x) => x.step === DEBIT_STEP.safe)) {
     throw new Error("duplicate transfer: this transfer already moved EURe out of the Safe");
   }
 
-  const moveHash = await submitSafeExecution(user, execution);
-  txs.push({ step: DEBIT_STEP.safe, hash: moveHash });
-  if (atomicStep) txs.push({ step: atomicStep, hash: moveHash });
+  const op = await submitSafeExecution(user, execution);
+  txs.push({ step: DEBIT_STEP.safe, hash: op.userOpHash });
+  if (atomicStep) txs.push({ step: atomicStep, hash: op.userOpHash });
   store.updateTransfer(transfer.id, { state: "DEBITED", txs });
+  return op;
 }
 
 /**
@@ -275,8 +279,8 @@ async function debitSafeFundedSepaFee(
   }
   const feeEur = Math.max(0, transfer.sendEur - payoutEur);
   if (feeEur > 0) {
-    const feeHash = await submitSafeExecution(user, execution);
-    txs.push({ step: DEBIT_STEP.safeFee, hash: feeHash });
+    const fee = await submitSafeExecution(user, execution);
+    txs.push({ step: DEBIT_STEP.safeFee, hash: fee.userOpHash });
   }
   store.updateTransfer(transfer.id, { state: "DEBITED", txs });
 }
@@ -308,12 +312,23 @@ function passkeySafeExecutionReady(user: User): boolean {
  * user's passkey signed at send time. This process cannot produce that
  * signature — it can only relay it. No execution means no debit; there is no server-side fallback path.
  */
-async function submitSafeExecution(user: User, execution: SafeExecution | undefined): Promise<string> {
+/** The userOp hash is what the transfer records; the bundle's transaction
+ *  hash is where its receipt, and so its Transfer logs, are read. */
+type SafeExecutionResult = { userOpHash: string; txHash?: string };
+
+/** The harness's fake operation (a hardhat node has no bundler). Hash-shaped,
+ *  so a test's stub chain can answer its receipt. */
+export const HARNESS_SAFE_EXECUTION = {
+  userOpHash: `0x${"0".repeat(63)}2`,
+  txHash: `0x${"0".repeat(63)}3`,
+} as const;
+
+async function submitSafeExecution(user: User, execution: SafeExecution | undefined): Promise<SafeExecutionResult> {
   if (!passkeySafeExecutionReady(user)) {
     throw new Error(safeDebitBlocker(user) ?? "Safe debit is not configured for this account");
   }
   if (HARNESS.enabled) {
-    return "0xmock-safe-execution-hash";
+    return { ...HARNESS_SAFE_EXECUTION };
   }
   if (!execution) {
     throw new Error(
@@ -329,7 +344,7 @@ async function submitSafeExecution(user: User, execution: SafeExecution | undefi
   if (op.success === false) {
     throw new Error(`the Safe operation ${op.userOpHash} was included but reverted — the debit never left the Safe`);
   }
-  return op.userOpHash ?? "0x";
+  return { userOpHash: op.userOpHash ?? "0x", txHash: op.txHash };
 }
 
 function bridgeDestination(): { toAddress: string; blockchainMemo?: string } {
@@ -458,9 +473,10 @@ const OUTBOUND_INTENT_STEPS = {
     "bridge.xyz.deposit.not-sent",
     "bridge.xyz.deposit.reverted",
   ],
-  // The orchestrator-run EURe -> USDC swap. A venue records its step only once
-  // delivery is measured, so a swap that landed and then threw (a receipt
-  // timeout, a stale balance read) leaves this unsettled.
+  // The orchestrator-run EURe -> USDC swap. A swap that landed and then threw
+  // before its venue returned (a receipt timeout) leaves this unsettled. One
+  // the venue refused to settle records its step, with no usdcOut, so
+  // compensation has nothing to reverse and goes to review.
   "liquidity.swap.pending": [
     "liquidity.fx-swapper.eure-usdc",
     "liquidity.rfq.eure-usdc",
@@ -486,6 +502,28 @@ function intentUnsettled(txs: Transfer["txs"], intent: OutboundIntent): boolean 
 
 function unsettledOutbound(txs: Transfer["txs"]): string | undefined {
   return (Object.keys(OUTBOUND_INTENT_STEPS) as OutboundIntent[]).find((intent) => intentUnsettled(txs, intent));
+}
+
+/** Run a venue swap and put its txs on the transfer. A venue that refuses to
+ *  settle a swap that landed (SwapSettlementError) still sent it: its steps go
+ *  on record before the refusal propagates, so a reverse swap's EURe is not
+ *  booked as money in and the swap hash is there to reconcile. */
+async function recordVenueSwap(
+  id: string,
+  txs: Transfer["txs"],
+  run: () => Promise<LiquidityExecution>,
+): Promise<LiquidityExecution> {
+  try {
+    const done = await run();
+    txs.push(...done.txs);
+    return done;
+  } catch (err) {
+    if (err instanceof SwapSettlementError) {
+      txs.push(...err.txs);
+      store.updateTransfer(id, { txs });
+    }
+    throw err;
+  }
 }
 
 /** Record an outbound intent on the transfer before the call goes out. */
@@ -693,8 +731,7 @@ async function compensateTransferOnce(id: string): Promise<Transfer> {
           })) as bigint;
         const before = await eureBalance();
         recordOutboundIntent(id, txs, "safe.refundTransfer.pending");
-        const back = await provider.execute(rq, user.address as `0x${string}`);
-        txs.push(...back.txs);
+        const back = await recordVenueSwap(id, txs, () => provider.execute(rq, user.address as `0x${string}`));
         // On record before measuring: until the step names its output logs,
         // the scanner leaves every EURe log in the swap's transaction alone.
         store.updateTransfer(id, { txs });
@@ -915,7 +952,8 @@ export async function executeTransfer(
       // 1+2 fused: the user-signed batch takes the fee, approves the venue and
       // swaps atomically, delivering straight to the batch recipient. The
       // orchestrator never holds the input: it refuses on staleness before
-      // anything moves, then measures what arrived.
+      // anything moves, then measures what arrived from the batch's own
+      // Transfer logs to the recipient.
       // The expiry check is needed because the batch never calls the venue's
       // execute() (which refuses expired quotes), and the authorization window
       // (15 min) outlives the quote TTL (10 min).
@@ -937,7 +975,7 @@ export async function executeTransfer(
       // only after a successful balance read would let a stale RPC replica
       // strand a swapped transfer looking unswapped — and compensation would
       // then "refund" EURe this side no longer holds.
-      await debitInputFunds(
+      const op = await debitInputFunds(
         transfer,
         user,
         auth,
@@ -945,12 +983,15 @@ export async function executeTransfer(
         execution,
         `liquidity.${transfer.liquidity?.provider ?? "safe"}.eure-usdc`,
       );
-      const opHash = txs.at(-1)?.hash ?? "0x";
-      const delivered = (await balanceAfterWrite(a.usdc, recipient, before)) - before;
+      const opHash = op.userOpHash;
+      // The recipient (Bridge's deposit address) is not ours alone: another
+      // deposit reaching it while the batch ran is not this transfer's output.
+      // The balance delta is the check; no receipt refuses, as post-swap.
+      const delivered = await settleFromReceipt("Safe swap batch", op.txHash, a.usdc, recipient, before, op.userOpHash);
       const minOut = BigInt(transfer.liquidity?.minOut ?? "0");
       if (delivered < minOut) {
-        // The venue enforces the floor, so this means a stale recipient read or
-        // output delivered elsewhere. Don't settle a payout against money we
+        // The venue enforces the floor, so this means output delivered
+        // elsewhere. Don't settle a payout against money we
         // cannot see. The swap step recorded above makes compensation treat
         // this as post-swap.
         throw new Error(
@@ -990,8 +1031,9 @@ export async function executeTransfer(
       const liquidityPlan = await prepareTransferLiquidity(transfer);
       store.updateTransfer(transfer.id, { liquidity: liquidityPlan });
       recordOutboundIntent(transfer.id, txs, "liquidity.swap.pending");
-      const liquidity = await executeTransferLiquidity({ ...transfer, liquidity: liquidityPlan });
-      txs.push(...liquidity.txs);
+      const liquidity = await recordVenueSwap(transfer.id, txs, () =>
+        executeTransferLiquidity({ ...transfer, liquidity: liquidityPlan }),
+      );
       expectedOut = liquidity.amountOut;
       usdcOut = liquidityAmountOutUnits(liquidity.quote);
       store.updateTransfer(transfer.id, {
