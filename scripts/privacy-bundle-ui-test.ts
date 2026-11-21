@@ -29,7 +29,9 @@ const stub: any = new Proxy(function () {}, {
 /** An element whose class list and markup the test can read back. */
 const element = () => {
   const classes = new Set<string>();
+  const listeners: Record<string, Array<() => unknown>> = {};
   return {
+    listeners,
     innerHTML: "", textContent: "", className: "", onclick: null, dataset: {}, style: {}, scrollTop: 0,
     classList: {
       add: (c: string) => void classes.add(c),
@@ -39,11 +41,31 @@ const element = () => {
     },
     querySelector: () => element(),
     querySelectorAll: () => [],
-    setAttribute() {}, appendChild() {}, addEventListener() {}, focus() {},
+    setAttribute() {}, appendChild() {}, focus() {},
+    addEventListener: (type: string, fn: () => unknown) => void (listeners[type] ??= []).push(fn),
   };
 };
 const els = new Map<string, any>();
 const fetched: string[] = [];
+/** Every request the scripts made, and the answers queued per "METHOD url". A
+ *  request with nothing queued fails like a dead network. */
+const calls: Array<{ method: string; url: string; body: unknown }> = [];
+const replies = new Map<string, unknown[]>();
+const reply = (method: string, url: string, body: unknown) =>
+  void (replies.get(`${method} ${url}`) ?? (replies.set(`${method} ${url}`, []), replies.get(`${method} ${url}`)!)).push(body);
+function stubFetch(url: string, init: { method?: string; body?: string } = {}) {
+  const method = init.method || "GET";
+  fetched.push(String(url));
+  calls.push({ method, url: String(url), body: init.body === undefined ? undefined : JSON.parse(init.body) });
+  const queued = replies.get(`${method} ${url}`);
+  if (!queued?.length) return Promise.reject(new Error("no network in this test"));
+  const body = queued.shift();
+  return Promise.resolve({
+    ok: true, status: 200, type: "basic",
+    headers: { get: (h: string) => (h.toLowerCase() === "content-type" ? "application/json" : null) },
+    json: async () => body,
+  });
+}
 const el = (id: string) => els.get(id) ?? (els.set(id, element()), els.get(id));
 const storage = () => {
   const m = new Map<string, string>();
@@ -59,7 +81,7 @@ const ctx: any = {
   history: { state: null, replaceState() {}, pushState() {}, back() {} },
   localStorage: storage(),
   sessionStorage: storage(),
-  fetch: (url: string) => (fetched.push(String(url)), Promise.reject(new Error("no network in this test"))),
+  fetch: stubFetch,
   scrollTo() {},
   document: {
     hidden: false,
@@ -96,14 +118,19 @@ const PENDING = {
 async function render(privacyBundle: unknown, live: boolean, catalog: unknown = null, kycStatus = "approved") {
   els.clear();
   fetched.length = 0;
+  calls.length = 0;
   run(`user = ${JSON.stringify({ id: "u1", name: "Erika Muster", kycStatus, privacyBundle })};
     caps = { ...caps, privacyBundle: ${live} }; capsLoaded = true; privacyCatalog = ${JSON.stringify(catalog)};`);
   await run("renderPrivacyBundle()");
 }
 const hidden = (id: string) => el(id).classList.contains("hidden");
+const catalogReads = () => calls.filter((c) => c.method === "GET" && c.url === "/api/privacy-bundles").length;
+/** Press a button wired with addEventListener and wait for what it started. */
+const click = (id: string) => Promise.all((el(id).listeners.click ?? []).map((fn: () => unknown) => fn()));
 
 let failed = 0;
 async function check(name: string, fn: () => void | Promise<void>) {
+  replies.clear();
   try { await fn(); console.log(`  ok  ${name}`); }
   catch (err) { failed++; console.error(`  FAIL ${name}\n       ${(err as Error).message}`); }
 }
@@ -166,6 +193,55 @@ await check("no Zold Plus, Zold card, card number or FX-margin perk in the app, 
   const fake = /Zold Plus|Zold card|metal|No FX margin|no-FX|•••• \d{4}|m-plus-screen|#plus/i;
   for (const screen of ["settings", "soon"]) assert.doesNotMatch(run(`PH[${JSON.stringify(screen)}].html()`), fake, screen);
   for (const f of ["index.html", "landing.html"]) assert.doesNotMatch(readFileSync(path.join(PUB, f), "utf8").replace(/<!--[\s\S]*?-->/g, ""), fake, f);
+});
+
+await check("offer on, no subscription, the catalog fails: an error and Try again, no plans", async () => {
+  await render(undefined, true);
+  assert.equal(catalogReads(), 1);
+  assert.ok(!hidden("privacy-card"), "the card is drawn");
+  const plans = el("privacy-plans").innerHTML;
+  assert.match(plans, /role="alert"/);
+  assert.match(plans, /no network in this test|could not be reached/);
+  assert.match(plans, /id="btn-privacy-retry"[^>]*>Try again</);
+  assert.doesNotMatch(plans, /data-plan|onclick=/);
+  assert.ok(hidden("privacy-status"));
+  assert.equal(el("privacy-status").innerHTML, "");
+  assert.deepEqual(calls.filter((c) => c.method !== "GET"), [], "nothing subscribed or canceled");
+
+  // Try again reads the catalog once more and draws the plans in the error's place.
+  reply("GET", "/api/privacy-bundles", CATALOG);
+  await click("btn-privacy-retry");
+  assert.equal(catalogReads(), 2, "one more read, no retry loop");
+  const after = el("privacy-plans").innerHTML;
+  assert.match(after, /data-plan="travel-shield"[^>]*>Add</);
+  assert.doesNotMatch(after, /role="alert"|btn-privacy-retry/);
+  assert.ok(hidden("privacy-status"));
+  assert.equal(run("user.privacyBundle"), undefined);
+});
+
+await check("offer on, a subscriber whose catalog fails keeps status and Cancel next to the error, and after Try again", async () => {
+  await render(PENDING, true);
+  assert.match(el("privacy-plans").innerHTML, /role="alert"[\s\S]*btn-privacy-retry/);
+  assert.ok(!hidden("privacy-status"));
+  assert.match(el("privacy-status").innerHTML, /id="btn-privacy-cancel"/);
+  assert.equal(el("privacy-chip").textContent, "PENDING FULFILLMENT");
+  assert.deepEqual(JSON.parse(run("JSON.stringify(user.privacyBundle)")), PENDING, "the record is untouched");
+
+  reply("GET", "/api/privacy-bundles", CATALOG);
+  await click("btn-privacy-retry");
+  assert.match(el("privacy-plans").innerHTML, /data-plan="travel-shield"[^>]*>Selected</);
+  assert.ok(!hidden("privacy-status"));
+  assert.match(el("privacy-status").innerHTML, /id="btn-privacy-cancel"/);
+  assert.equal(el("privacy-chip").textContent, "PENDING FULFILLMENT");
+});
+
+await check("offer on, the catalog down: Cancel still cancels", async () => {
+  await render(PENDING, true);
+  const canceled = { id: "u1", name: "Erika Muster", kycStatus: "approved", privacyBundle: { ...PENDING, status: "canceled" } };
+  reply("POST", "/api/users/u1/privacy-bundle/cancel", canceled);
+  await el("btn-privacy-cancel").onclick();
+  assert.deepEqual(calls.filter((c) => c.method === "POST"), [{ method: "POST", url: "/api/users/u1/privacy-bundle/cancel", body: {} }]);
+  assert.equal(run("user.privacyBundle.status"), "canceled");
 });
 
 await check("Settings shows a subscriber's bundle as awaiting setup, not active, while the offer is off", async () => {
