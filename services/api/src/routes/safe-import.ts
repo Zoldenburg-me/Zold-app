@@ -20,7 +20,7 @@
  * deployed, or holds anything, both routes refuse.
  */
 import express from "express";
-import { decodeFunctionResult, encodeFunctionData, getAddress, parseAbi } from "viem";
+import { decodeFunctionResult, encodeFunctionData, erc20Abi, getAddress } from "viem";
 import { HARNESS, SECURITY } from "../config.js";
 import { addrs } from "../chain.js";
 import { store, type User } from "../store.js";
@@ -68,7 +68,6 @@ const ZERO = "0x0000000000000000000000000000000000000000";
 const VERIFIER_RECEIPT_TIMEOUT_MS = 60_000;
 const VERIFIER_CODE_POLLS = 10;
 const VERIFIER_CODE_POLL_MS = 2_000;
-const ERC20 = parseAbi(["function balanceOf(address) view returns (uint256)"]);
 
 class Refusal extends Error {
   constructor(readonly status: number, message: string, readonly code: string) {
@@ -89,8 +88,8 @@ export function createSafeImportRouter(deps: SafeImportDeps) {
   const holdsFunds = async (r: ChainReader, address: Hex): Promise<boolean> => {
     if ((await r.getBalance(address)) > 0n) return true;
     for (const token of tokens()) {
-      const raw = await r.call(token, encodeFunctionData({ abi: ERC20, functionName: "balanceOf", args: [address] }));
-      if ((decodeFunctionResult({ abi: ERC20, functionName: "balanceOf", data: raw }) as bigint) > 0n) return true;
+      const raw = await r.call(token, encodeFunctionData({ abi: erc20Abi, functionName: "balanceOf", args: [address] }));
+      if ((decodeFunctionResult({ abi: erc20Abi, functionName: "balanceOf", data: raw }) as bigint) > 0n) return true;
     }
     return false;
   };

@@ -28,18 +28,12 @@
  * Drip limits live in memory and reset when the server restarts — a deploy,
  * on a testnet. The grant row is in the store and survives.
  */
-import { formatUnits, parseUnits } from "viem";
+import { erc20Abi, formatUnits, parseUnits } from "viem";
 import { usdToken } from "./usd-token.js";
 import { describeCause } from "./http/log-cause.js";
 import { CHAIN_ID, IS_PRODUCTION, IS_REAL_MONEY_CHAIN, TESTNET_FAUCET } from "./config.js";
 import { addrs, eur, faucetWallet, publicClient } from "./chain.js";
 import { store } from "./store.js";
-
-const ERC20 = [
-  { type: "function", name: "transfer", stateMutability: "nonpayable", inputs: [{ name: "to", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ type: "bool" }] },
-  { type: "function", name: "balanceOf", stateMutability: "view", inputs: [{ name: "owner", type: "address" }], outputs: [{ type: "uint256" }] },
-  { type: "function", name: "decimals", stateMutability: "view", inputs: [], outputs: [{ type: "uint8" }] },
-] as const;
 
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 const UNAVAILABLE = "the test faucet could not send — try again later";
@@ -74,9 +68,9 @@ type Sent = { kind: "dry"; have: bigint } | { kind: "sent"; txHash: `0x${string}
 async function sendToken(token: `0x${string}`, to: `0x${string}`, units: bigint, label: string): Promise<Sent> {
   const wallet = faucetWallet!;
   const out = await queued(async (): Promise<Sent> => {
-    const have = await publicClient.readContract({ address: token, abi: ERC20, functionName: "balanceOf", args: [wallet.account.address] });
+    const have = await publicClient.readContract({ address: token, abi: erc20Abi, functionName: "balanceOf", args: [wallet.account.address] });
     if (have < units) return { kind: "dry", have };
-    const { request } = await publicClient.simulateContract({ account: wallet.account, address: token, abi: ERC20, functionName: "transfer", args: [to, units] });
+    const { request } = await publicClient.simulateContract({ account: wallet.account, address: token, abi: erc20Abi, functionName: "transfer", args: [to, units] });
     return { kind: "sent", txHash: await wallet.writeContract(request), reverted: false };
   });
   if (out.kind !== "sent") return out;
@@ -201,7 +195,7 @@ export async function drip(address: string, symbol: string, ip: string): Promise
   let sent: Sent;
   let decimals = 0;
   try {
-    decimals = decimalsOf.get(token.address) ?? Number(await publicClient.readContract({ address: token.address, abi: ERC20, functionName: "decimals" }));
+    decimals = decimalsOf.get(token.address) ?? Number(await publicClient.readContract({ address: token.address, abi: erc20Abi, functionName: "decimals" }));
     decimalsOf.set(token.address, decimals);
     sent = await sendToken(token.address, to as `0x${string}`, parseUnits(String(token.amount), decimals), `${token.symbol} drip to ${to}`);
   } catch (err: any) {

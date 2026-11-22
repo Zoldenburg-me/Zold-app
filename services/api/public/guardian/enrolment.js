@@ -8,7 +8,8 @@
  * No DOM; scripts/turnkey-guardian-page-test.ts runs it.
  */
 
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+import { esc } from "./device-words.js";
+
 const day = (iso) => new Date(iso).toLocaleDateString();
 
 /**

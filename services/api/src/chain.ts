@@ -362,25 +362,6 @@ export function authorizerBindingTypedData(args: {
   };
 }
 
-/**
- * The EUR->USD rate the swapper will actually execute at.
- *
- * The quote's EUR leg is read from here rather than from a constant so that
- * what we promise and what we can deliver cannot drift apart. `rate` is USDC
- * (6dp) per 1e18 EURe, so 1_080_000 means 1 EURe -> 1.08 USDC. `raw` is what
- * the quote binding locks into the quote and re-checks at execution.
- */
-export async function swapperRate(): Promise<{ rate: number; raw: bigint }> {
-  const raw = (await publicClient.readContract({
-    address: swapperAddress(),
-    abi: abis.FxSwapper,
-    functionName: "rate",
-    args: [],
-  })) as bigint;
-  if (raw <= 0n) throw new Error("swapper rate is zero — cannot quote");
-  return { rate: Number(raw) / 1e6, raw };
-}
-
 export async function safeEurBalance(user: `0x${string}`): Promise<number> {
   const bal = (await publicClient.readContract({
     address: addrs().eure,

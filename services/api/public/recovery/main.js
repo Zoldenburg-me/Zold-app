@@ -16,7 +16,7 @@ import { IndexedDbStamper, WebauthnStamper, encryptOtpCodeToBundle } from "../ve
 import { emailCodeToToken, emailLoginSignature, passkeyWhoami, sendEmailCode } from "../guardian/logins.js";
 import { startLogin } from "../guardian/oauth.js";
 import { providerButtons } from "../guardian/providers.js";
-import { byDevice, passkeyName } from "../guardian/device-words.js";
+import { byDevice, esc, passkeyName } from "../guardian/device-words.js";
 import { approveWith, finishApprove } from "./approve.js";
 import { bankStepChanged, bankStepHtml, checkAnswerText, issuedFor, keepIssued } from "./bank-step.js";
 import { UNREACHABLE, readAnswer, readHealth } from "../foreign-answer.js";
@@ -24,7 +24,6 @@ import {
   EMAIL_KEY, SECRET_KEY, TICKET_KEY, currentAuth, endedText, finalizeAfter, requestPath, saveFor, savedFor, screenFor, startRecovery,
 } from "./flow.js";
 
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const b64urlToBytes = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(s.length / 4) * 4, "=")), (c) => c.charCodeAt(0));
 const bytesToB64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 

@@ -29,7 +29,7 @@ import {
   type UserOperationV9,
   type WebauthnPublicKey,
 } from "abstractionkit";
-import { decodeFunctionResult, encodeFunctionData, hashTypedData, keccak256, stringToHex } from "viem";
+import { decodeFunctionResult, encodeFunctionData, erc20Abi, hashTypedData, keccak256, stringToHex } from "viem";
 
 /**
  * The only shortcuts are the HARNESS ones (config.ts): fake challenges and a
@@ -382,37 +382,11 @@ export function transferExecutionTransactions(
   return [erc20TransferMetaTransaction(token, to, amount)];
 }
 
-const ERC20_TRANSFER_ABI = [
-  {
-    type: "function",
-    name: "transfer",
-    inputs: [
-      { name: "to", type: "address" },
-      { name: "amount", type: "uint256" },
-    ],
-    outputs: [{ name: "", type: "bool" }],
-    stateMutability: "nonpayable",
-  },
-] as const;
-
-const ERC20_APPROVE_ABI = [
-  {
-    type: "function",
-    name: "approve",
-    inputs: [
-      { name: "spender", type: "address" },
-      { name: "amount", type: "uint256" },
-    ],
-    outputs: [{ name: "", type: "bool" }],
-    stateMutability: "nonpayable",
-  },
-] as const;
-
 function erc20TransferMetaTransaction(token: `0x${string}`, to: `0x${string}`, amount: bigint): MetaTransaction {
   return {
     to: token,
     value: 0n,
-    data: encodeFunctionData({ abi: ERC20_TRANSFER_ABI, functionName: "transfer", args: [to, amount] }),
+    data: encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [to, amount] }),
   };
 }
 
@@ -449,7 +423,7 @@ export function transferSwapBatchTransactions(args: {
     to: args.token,
     value: 0n,
     data: encodeFunctionData({
-      abi: ERC20_APPROVE_ABI,
+      abi: erc20Abi,
       functionName: "approve",
       args: [args.approval.spender, args.approval.amount],
     }),
