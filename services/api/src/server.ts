@@ -86,6 +86,11 @@ import { knownError } from "./http/known-errors.js";
 import { createOperatorGate } from "./operators/gate.js";
 import { createOperatorAuthRouter } from "./routes/operator-auth.js";
 const app = express();
+// Origin policy + per-IP rate limiting live in http/policy.ts — the
+// outermost thing every request passes through, readable in one place.
+// Security headers come before the body parser, so its own 400 and 413
+// carry them and x-zold-answer too.
+app.use(securityHeaders);
 // Keep the raw body around for webhook signature checks — HMAC has to run
 // over the exact bytes sent, not a re-serialised object.
 app.use(express.json({
@@ -94,10 +99,6 @@ app.use(express.json({
     (req as any).rawBody = buf;
   },
 }));
-
-// Origin policy + per-IP rate limiting live in http/policy.ts — the
-// outermost thing every request passes through, readable in one place.
-app.use(securityHeaders);
 app.use(originPolicy);
 app.use(adminHostPolicy);
 

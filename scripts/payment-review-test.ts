@@ -319,6 +319,20 @@ await check("with review off, an edit that lands while a run is being prepared s
   }
 });
 
+await check("a stored run with two lines on one invoice is refused at execution, before anything is created", async () => {
+  // Create and edit refuse this (assertOneLinePerInvoice); a row stored
+  // before that check can still hold it, and would execute last-wins.
+  const d = await draftIn("org_a");
+  const [first] = store.findDraft(d)!.lines;
+  store.updateDraft(d, { lines: [{ ...first, invoiceId: "inv_legacy" }, { ...first, id: `${first.id}_2`, invoiceId: "inv_legacy" }] });
+  const r = await call("POST", `/api/orgs/org_a/drafts/${d}/execute`, "u_owner");
+  assert.equal(r.status, 422, JSON.stringify(r.data));
+  assert.match(String(r.data.error), /Nothing was created/);
+  assert.deepEqual(r.data.problems.map((p: any) => p.lineId), [`${first.id}_2`]);
+  assert.match(r.data.problems[0].reason, /same invoice/);
+  assert.equal(stateOf(d), "DRAFT");
+});
+
 console.log("\nEdit and cancel a draft");
 
 addOrg("org_c", "business");
@@ -432,6 +446,13 @@ await check("a run whose transfers all finished counts as finished against the c
   seedDraft("dft_ceil_live", "EXECUTING", ["t_ceil_live"]);
   const full = await call("POST", "/api/orgs/org_ceil/drafts", "u_payer", { source: { kind: "account", accountId: "acc_org_ceil" }, lines: [line("org_ceil")] });
   assert.equal(full.status, 409, JSON.stringify(full.data));
+
+  // One stuck line makes the run read FAILED, as list and detail show it, and
+  // frees its slot though its other line is still live.
+  seedTransfer("t_ceil_stuck", "MANUAL_REVIEW");
+  store.updateDraft("dft_ceil_live", { transferIds: ["t_ceil_stuck", "t_ceil_live"] });
+  const freed = await call("POST", "/api/orgs/org_ceil/drafts", "u_payer", { source: { kind: "account", accountId: "acc_org_ceil" }, lines: [line("org_ceil")] });
+  assert.equal(freed.status, 201, JSON.stringify(freed.data));
 });
 
 await check("two lines may not pay the same invoice, on create or edit", async () => {
