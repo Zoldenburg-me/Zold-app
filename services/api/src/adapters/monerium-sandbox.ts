@@ -29,7 +29,6 @@ import { attributeMoneriumOrder, attributeMoneriumOrderToInvoice } from "../rout
 import { noteMoneriumIssue, writeStatementLines } from "../bookkeeping/writer.js";
 import { bookHolderLabel, moneyInHolder, type MoneyInHolder } from "../bookkeeping/money-in.js";
 import { moneriumOrderProcessed } from "../domain/monerium-order.js";
-import { describeCause } from "../http/log-cause.js";
 import { can } from "../domain/segments.js";
 
 /**
@@ -175,7 +174,7 @@ export async function verifyIbanBinding(user: User): Promise<User> {
   try {
     ibans = ibanList(await moneriumClientFor(user).ibans());
   } catch (err: any) {
-    console.warn(`monerium: could not re-read the IBAN of ${user.id}: ${describeCause(err)}`);
+    console.warn(`monerium: could not re-read the IBAN of ${user.id}: ${moneriumFailureReason(err)}`);
     return user;
   }
   // The read is an await: take the row as it is now.
@@ -511,7 +510,7 @@ async function mirrorOrder(order: MoneriumOrder): Promise<MirrorOutcome> {
       eure = await moneriumEureOrUnavailable(MONERIUM.baseUrl, CHAIN_ID);
     } catch (err: any) {
       if (!(err instanceof MoneriumTokensUnavailable)) throw err;
-      console.warn(`monerium: could not read Monerium's tokens for order ${order.id}, will retry: ${describeCause(err)}`);
+      console.warn(`monerium: could not read Monerium's tokens for order ${order.id}, will retry: ${moneriumFailureReason(err)}`);
       return "unavailable";
     }
     if (!eure) {
@@ -668,7 +667,7 @@ export async function pollDepositsOnce(): Promise<number> {
       try {
         list = orderList(await moneriumClientFor(u).orders(profile));
       } catch (err: any) {
-        console.warn(`monerium: could not read orders for ${u.id} on their own credentials: ${describeCause(err)}`);
+        console.warn(`monerium: could not read orders for ${u.id} on their own credentials: ${moneriumFailureReason(err)}`);
         continue;
       }
       for (const order of list) {
@@ -742,7 +741,7 @@ export function startDepositPoller() {
         else if (u.funding?.status === "active" && u.iban) await verifyIbanBinding(u);
       }
     } catch (err: any) {
-      console.error(`monerium poll failed: ${describeCause(err)}`);
+      console.error(`monerium poll failed: ${moneriumFailureReason(err)}`);
     } finally {
       busy = false;
     }

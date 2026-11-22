@@ -39,6 +39,8 @@ process.env.MONERIUM_IBAN_CHECK_MS = "300000";
 /** The IBANs each bearer token sees at GET /ibans. */
 const ibansOf = new Map<string, any[]>();
 const fake = { down: false, reads: 0, calls: 0 };
+/** Text Monerium puts in a failed answer's body: no log line may carry it. */
+const DOWN_BODY = "upstream-detail-7f3a";
 /** The user's own API keys (client credentials) and the token they mint. */
 const KEYS = { clientId: "own-keys-client", clientSecret: "own-keys-secret-0001", token: "tok-own-keys" };
 /** OAuth authorization codes and the bearer token each one exchanges for. */
@@ -48,7 +50,7 @@ const monerium = createServer((req, res) => {
   fake.calls++;
   const url = new URL(req.url ?? "/", "http://fake");
   const send = (code: number, b: any) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(b)); };
-  if (fake.down) return send(503, { code: 503, status: "Service Unavailable" });
+  if (fake.down) return send(503, { code: 503, status: "Service Unavailable", details: DOWN_BODY });
   if (url.pathname === "/auth/token") {
     let raw = "";
     req.on("data", (c) => (raw += c));
@@ -83,7 +85,7 @@ const { MONERIUM, SECURITY } = await import("../services/api/src/config.js");
 const { createMoneriumRouter } = await import("../services/api/src/routes/monerium.js");
 const { issueChallenge, stepUpBinding, verifyRegistration } = await import("../services/api/src/webauthn.js");
 const { makeSoftwarePasskey } = await import("./_software-passkey.js");
-const { verifyIbanBinding, applyIbanBinding, refreshPendingIban, ibanActivationRefusal } = await import("../services/api/src/adapters/monerium-sandbox.js");
+const { verifyIbanBinding, applyIbanBinding, refreshPendingIban, ibanActivationRefusal, pollDepositsOnce } = await import("../services/api/src/adapters/monerium-sandbox.js");
 const { accountBankOf } = await import("../services/api/src/routes/business/shared.js");
 
 let passed = 0;
@@ -183,6 +185,28 @@ await check("Monerium not answering changes nothing", async () => {
     assert.equal(after.moneriumIbanElsewhere, undefined);
   } finally {
     fake.down = false;
+  }
+});
+
+await check("a failed read on the user's own credentials logs Monerium's status, not its answer", async () => {
+  const u = addUser(40);
+  ibansOf.set(u.token, [listed(u.iban, u.address)]);
+  const warned: string[] = [];
+  const realWarn = console.warn;
+  console.warn = (m: string) => warned.push(String(m));
+  fake.down = true;
+  try {
+    await verifyIbanBinding(store.findUser(u.id)!); // the IBAN re-read
+    await pollDepositsOnce(); // the order list
+  } finally {
+    fake.down = false;
+    console.warn = realWarn;
+  }
+  for (const what of ["could not re-read the IBAN", "could not read orders"]) {
+    const line = warned.find((w) => w.includes(what) && w.includes(u.id));
+    assert.ok(line, `a "${what}" line names the user (${warned.join(" | ")})`);
+    assert.match(line!, /HTTP 503/);
+    assert.ok(!line!.includes("upstream-detail") && !line!.includes("Service Unavailable"), `no Monerium body in the log: ${line}`);
   }
 });
 
