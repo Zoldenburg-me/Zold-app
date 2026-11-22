@@ -265,6 +265,11 @@ export function createAdminRouter() {
             code: "MONERIUM_NOT_CONNECTED",
           });
         }
+        if (!attached.ok && attached.code === "READ_REFUSED") {
+          return res.status(409).json({
+            error: "Monerium refused this account's read of that order: the connection may lack access to orders, or the order is another account's. Nothing was changed; check the connection or the order id.",
+          });
+        }
         if (!attached.ok && attached.code === "UNAVAILABLE") {
           return res.status(503).json({ error: "Monerium could not be read for that order, so nothing was changed. Try again." });
         }

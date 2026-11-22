@@ -59,9 +59,16 @@ const orderFault = new Map<string, number>();
  *  chain"): an outage or a body that is not a token list. */
 let tokensOutage: { code: number; body: unknown } | null = null;
 let tokensRequests = 0;
-/** Every request the stub received. A path like `/orders/../profiles` is
- *  normalised before it is sent, so only the total shows it never went. */
-let stubRequests = 0;
+/** Every request path the stub received, in order. */
+const stubUrls: string[] = [];
+/** The requests since `from` that could be a lookup of order `id`: a read of
+ *  that id, or the path a raw `/orders/<id>` normalises to. Background
+ *  traffic (token, list, other order reads, `/profiles?kind=`) never
+ *  matches, so a poller tick still in flight cannot fail a check. */
+const lookupsOf = (id: string, from: number) => {
+  const normalised = new URL(`/orders/${id}`, "http://stub").pathname;
+  return stubUrls.slice(from).filter((u) => u === normalised || decodeURIComponent(u) === `/orders/${id}`);
+};
 /** Order ids the poller's list shows. Empty except where a test arms it. */
 const listed = new Set<string>();
 let listServed = false;
@@ -89,7 +96,7 @@ const stub = createServer((req, res) => {
     res.end(JSON.stringify(body));
   };
   const url = req.url ?? "";
-  stubRequests++;
+  stubUrls.push(url);
   if (url.startsWith("/auth/token")) return send(200, { access_token: "stub", expires_in: 3600 });
   if (url.startsWith("/auth/context")) return send(200, { userId: "stub-user" });
   if (url.startsWith("/profiles")) return send(200, { profiles: [{ id: "stub-profile" }] });
@@ -523,11 +530,11 @@ try {
     // Without the shape check before the lookup, getOrder's own refusal (a
     // local 400) would answer 503 and leave the id unspent.
     const body = { data: { id: "../profiles" } };
-    const asked = stubRequests;
+    const asked = stubUrls.length;
     const r = await post("/api/webhooks/monerium", body, signedHeaders("evt-malformed", body));
     assert.equal(r.status, 200);
     assert.equal(r.data.outcome, "ignored");
-    assert.equal(stubRequests, asked, "no request reached Monerium");
+    assert.deepEqual(lookupsOf("../profiles", asked), [], "no request for that id reached Monerium");
     const again = await post("/api/webhooks/monerium", body, signedHeaders("evt-malformed", body));
     assert.equal(again.data.duplicate, true, "the malformed id consumed the delivery id");
   });

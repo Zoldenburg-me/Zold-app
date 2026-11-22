@@ -336,7 +336,6 @@ try {
       ["ord-iban", /IBAN/], ["ord-safe", /Safe address/], ["ord-chain", /chain/], ["ord-issue", /kind/],
       ["ord-currency", /currency/], ["ord-id", /order id/], ["ord-unknown", /no such order/], ["ord-taken", /another transfer/],
       ["ord-taken-evidence", /another transfer/], ["ord-taken-placed", /another transfer/],
-      ["ord-forbidden", /refused this account's read/],
       ["../orders", /not a Monerium order id/],
     ] as const) {
       const r = await post("t_attach_bad", { state: "PAID", note: NOTE, evidence: id });
@@ -348,6 +347,19 @@ try {
       assert.ok(!t.sepa, `${id}: an order was attached`);
     }
     assert.equal(store.findTransfer("t_owns_order")!.sepa!.orderId, "ord-taken", "the owner keeps its order");
+  });
+
+  await check("a 403 on the order read says Monerium refused the read, not that the order is wrong; nothing changed", async () => {
+    // A 403 can mean the account's token lacks the scope to read orders, so
+    // it is not evidence that the cited order is someone else's.
+    const r = await post("t_attach_bad", { state: "PAID", note: NOTE, evidence: "ord-forbidden" });
+    assert.equal(r.status, 409, JSON.stringify(r.body));
+    assert.match(String(r.body.error), /Monerium refused this account's read of that order/);
+    assert.match(String(r.body.error), /check the connection or the order id/);
+    assert.doesNotMatch(String(r.body.error), /not this transfer's/);
+    const t = store.findTransfer("t_attach_bad")! as any;
+    assert.equal(t.state, "MANUAL_REVIEW");
+    assert.ok(!t.reviewResolution && !t.sepa, "nothing was resolved or attached");
   });
 
   await check("no working Monerium connection is not answered Try again: 409 MONERIUM_NOT_CONNECTED, nothing changed", async () => {

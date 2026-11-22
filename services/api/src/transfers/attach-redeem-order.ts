@@ -26,6 +26,9 @@ export type AttachOutcome =
    *  refused); nothing changed, and a retry fails the same way until the user
    *  connects again. */
   | { ok: false; code: "NOT_CONNECTED" }
+  /** Monerium answered 403 to the order read: the account's token may lack
+   *  the scope, or the order is not this account's. Nothing changed. */
+  | { ok: false; code: "READ_REFUSED" }
   /** Monerium could not be read; nothing changed, the operator may retry. */
   | { ok: false; code: "UNAVAILABLE" };
 
@@ -86,8 +89,8 @@ export async function attachRedeemOrder(transferId: string, orderId: string): Pr
     // Only a transient (5xx, 429, a timeout) is worth retrying.
     const status = err instanceof MoneriumApiError ? err.status : 0;
     if (status === 404) return { ok: false, code: "NOT_THIS_ORDER", reason: "Monerium has no such order" };
-    if (status === 403) return { ok: false, code: "NOT_THIS_ORDER", reason: "Monerium refused this account's read of that order" };
     console.warn(`monerium: could not read order ${orderId} for transfer ${transferId}: ${moneriumFailureReason(err)}`);
+    if (status === 403) return { ok: false, code: "READ_REFUSED" };
     if (err instanceof MoneriumAccessError || status === 401) return { ok: false, code: "NOT_CONNECTED" };
     return { ok: false, code: "UNAVAILABLE" };
   }
