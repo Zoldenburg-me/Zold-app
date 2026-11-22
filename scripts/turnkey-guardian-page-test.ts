@@ -234,6 +234,14 @@ await check("both pages strip a returned token before they await anything", () =
   }
 });
 
+await check("recovery makes a discoverable account passkey: sign-in asks with no allowCredentials", () => {
+  const src = readFileSync(path.join(PUB, "recovery/main.js"), "utf8");
+  const make = src.slice(src.indexOf("const makePasskey"), src.indexOf("const start ="));
+  assert.ok(make.includes("navigator.credentials.create("), "makePasskey is where recovery creates the account passkey");
+  assert.match(make, /authenticatorSelection: \{ residentKey: "required", requireResidentKey: true, userVerification: "required" \}/);
+  assert.doesNotMatch(src, /residentKey: "preferred"/);
+});
+
 await check("guardian.html and recovery.html have no inline script and say noindex", () => {
   for (const f of ["guardian.html", "recovery.html"]) {
     const html = readFileSync(path.join(PUB, f), "utf8");
@@ -912,6 +920,7 @@ await check("a recovery passkey comes back in Turnkey's attestation shape", asyn
   const credentials = { create: async (o: any) => {
     assert.equal(o.publicKey.rp.id, "zoldhq.com");
     assert.deepEqual(o.publicKey.pubKeyCredParams, [{ type: "public-key", alg: -7 }]);
+    assert.deepEqual(o.publicKey.authenticatorSelection, { residentKey: "required", userVerification: "required" });
     return { rawId: new Uint8Array([1, 2]).buffer, response: { clientDataJSON: new Uint8Array([3]).buffer, attestationObject: new Uint8Array([4]).buffer, getTransports: () => ["internal", "hybrid", "smoke-signal"] } };
   } };
   const r = await logins.createGuardianPasskey({ credentials, rpId: "zoldhq.com", random: bytes });

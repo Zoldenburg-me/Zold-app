@@ -349,6 +349,16 @@ try {
     assert.equal(await balance(), 40);
   });
 
+  await t("the body parser's own 400 and 413 carry the security headers and x-zold-answer", async () => {
+    const send = (body: string) => fetch(`${API}/api/webhooks/monerium`, { method: "POST", headers: { "content-type": "application/json" }, body });
+    for (const [r, status] of [[await send('{"data":'), 400], [await send(JSON.stringify({ pad: "x".repeat(70_000) })), 413]] as const) {
+      assert.equal(r.status, status);
+      assert.equal(r.headers.get("x-zold-answer"), "1", `${status} lacks x-zold-answer`);
+      assert.equal(r.headers.get("x-content-type-options"), "nosniff", `${status} lacks nosniff`);
+      assert.ok(r.headers.get("content-security-policy"), `${status} lacks a CSP`);
+    }
+  });
+
   console.log("      restarting API with a webhook secret…");
   await restartApi(SIGNED_ENV);
 

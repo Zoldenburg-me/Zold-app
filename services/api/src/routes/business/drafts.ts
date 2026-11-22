@@ -111,8 +111,11 @@ export function createDraftRoutes(
     const ctx = ctxOf(req, res);
     if (!ctx) return;
     if (!requirePermission(ctx, res, "drafts.create")) return;
-    // Counted by the state reads show: a run whose transfers all finished is
-    // finished, though its row still says EXECUTING (withExecutionState writes nothing).
+    // Counted by the state reads show (withExecutionState, which writes
+    // nothing), though the row still says EXECUTING: a run is EXECUTED once
+    // every line is PAID, and FAILED once any line is FAILED, REFUNDED,
+    // MANUAL_REVIEW or past its signing deadline, even while its other lines
+    // are still live. This is a resource cap, not a money guard.
     const open = store.draftsOf(ctx.org.id).map(withExecutionState).filter((d) => !["EXECUTED", "FAILED", "REJECTED", "CANCELLED"].includes(d.state)).length;
     if (open >= CEILINGS.openDraftsPerOrg) {
       return res.status(409).json(ceilingRefusal("payment runs not yet executed", CEILINGS.openDraftsPerOrg));
@@ -583,10 +586,21 @@ export function createDraftRoutes(
     const plannedAt = checked.updatedAt;
     const plans: { lineId: string; iban: string; name: string; sendEur: number; invoiceId?: string }[] = [];
     const problems: { lineId: string; reason: string }[] = [];
+    // Create and edit refuse a second line on one invoice
+    // (assertOneLinePerInvoice); a row stored before that check is refused
+    // here, or its lines would overwrite each other's invoice payment.
+    const invoiced = new Set<string>();
 
     for (const line of checked.lines) {
       const d = line.destination;
       if (d.kind === "wallet") continue; // a wallet run returned above
+      if (line.invoiceId) {
+        if (invoiced.has(line.invoiceId)) {
+          problems.push({ lineId: line.id, reason: "This line pays the same invoice as an earlier line. Pay an invoice in one line." });
+          continue;
+        }
+        invoiced.add(line.invoiceId);
+      }
       const contact = line.contactId ? store.findContact(line.contactId) : undefined;
       const bank = contact?.bankAccounts.find((b) => b.id === d.bankAccountId);
       if (!bank) {

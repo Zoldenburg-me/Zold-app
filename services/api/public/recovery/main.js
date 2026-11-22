@@ -186,7 +186,8 @@ async function boot() {
         // The start names no account, so the handle is random; sign-in finds the account by credential id.
         user: { id: crypto.getRandomValues(new Uint8Array(16)), name: s.email, displayName: s.email },
         pubKeyCredParams: [{ type: "public-key", alg: -7 }],
-        authenticatorSelection: { residentKey: "preferred", userVerification: "required" },
+        // Discoverable: it becomes the account passkey, and sign-in asks with no allowCredentials.
+        authenticatorSelection: { residentKey: "required", requireResidentKey: true, userVerification: "required" },
         extensions: { prf: {} },
       },
     });
