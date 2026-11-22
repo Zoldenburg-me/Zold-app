@@ -77,6 +77,8 @@ interface Scenario {
   expect: {
     state: string; refunded: boolean; sends: string[]; usdcOut?: number; error?: RegExp; hashed?: string[];
     refundEur?: number; orderCalls?: number; absent?: string[]; orderId?: string; placed?: number; orderGets?: number;
+    /** The Stellar hash the restart's row records, on the pickup and on anchor.payment.sent. */
+    payoutHash?: string;
   };
 }
 
@@ -300,7 +302,7 @@ const SCENARIOS: Record<string, Scenario> = {
   "anchor payment intent write fails, nothing sent": {
     kind: "anchor",
     crashOn: (r) => hasStep(r, "anchor.payment.pending"),
-    expect: { state: "PAID", refunded: false, sends: ["stellar.payment"] },
+    expect: { state: "PAID", refunded: false, sends: ["stellar.payment"], payoutHash: "ab".repeat(32) },
   },
 };
 
@@ -416,7 +418,11 @@ async function child(which: string, name: string) {
     const after = store.findTransfer(t.id)!;
     const refundedWei = (await balance(addrs().eure, user.address as `0x${string}`)) - safeBefore;
     console.log(
-      `RESULT ${JSON.stringify({ state: after.state, refundedEur: eur.fromWei(refundedWei), reclaimed, error: after.error })}`,
+      `RESULT ${JSON.stringify({
+        state: after.state, refundedEur: eur.fromWei(refundedWei), reclaimed, error: after.error,
+        pickupHash: after.pickup?.anchorPaymentHash,
+        sentHashes: after.txs.filter((x) => x.step === "anchor.payment.sent").map((x) => x.hash),
+      })}`,
     );
     process.exit(0);
   }
@@ -706,6 +712,9 @@ async function parent() {
         got.refundedEur > 0 === scenario.expect.refunded &&
         JSON.stringify(sends) === JSON.stringify(scenario.expect.sends) &&
         exact(got.refundedEur) &&
+        (scenario.expect.payoutHash === undefined ||
+          (got.pickupHash === scenario.expect.payoutHash &&
+            JSON.stringify(got.sentHashes) === JSON.stringify([scenario.expect.payoutHash]))) &&
         // Only a transfer that started CREATED has a claim to refuse.
         (!["sepa", "cash", "batch"].includes(scenario.kind) || got.reclaimed === false);
       if (!ok) failures.push(name);

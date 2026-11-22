@@ -13,6 +13,7 @@ import "./_test-env.js";
 import assert from "node:assert/strict";
 import {
   AnchorPaymentUncertainError,
+  isTransientAnchorError,
   resolvePaymentAmount,
 } from "../services/api/src/stellar/anchor.js";
 
@@ -76,6 +77,36 @@ t("AnchorPaymentUncertainError is distinguishable and keeps its cause", () => {
   assert.equal(err.cause, cause);
   // The orchestrator branches on exactly this check.
   assert.equal(new Error("ordinary failure") instanceof AnchorPaymentUncertainError, false);
+});
+
+console.log("transient anchor errors — only a transport failure or a 5xx status waits:");
+
+t("transport failures and a 5xx status are transient", () => {
+  const timeout = new Error("The operation was aborted due to timeout");
+  timeout.name = "TimeoutError";
+  for (const err of [
+    new TypeError("fetch failed"),
+    new Error("connect ECONNREFUSED 127.0.0.1:443"),
+    new Error("request timed out"),
+    new Error("socket hang up"),
+    timeout,
+    new Error("SEP-24 status failed (500): oops"),
+    new Error("SEP-24 status failed (503): upstream"),
+    new Error("SEP-10 token failed (504): gateway"),
+    new Error("stellar.toml fetch failed for anchor.test (502)"),
+    Object.assign(new Error("Request failed"), { response: { status: 503 } }),
+  ]) assert.equal(isTransientAnchorError(err), true, String(err));
+});
+
+t("a three-digit number in the anchor's text is not a 5xx", () => {
+  for (const err of [
+    new Error("anchor rejected amount 500"),
+    new Error("SEP-24 status failed (400): reference 501 is unknown"),
+    new Error("SEP-24 status failed (404): not found"),
+    new Error("SEP-10 token failed (401): amount 503 over limit"),
+    new Error("anchor withdrawal anchor-tx is refunded"),
+    Object.assign(new Error("Request failed"), { response: { status: 400 } }),
+  ]) assert.equal(isTransientAnchorError(err), false, String(err));
 });
 
 console.log(`\nANCHOR SAFETY TEST PASSED — ${pass}/${pass}`);

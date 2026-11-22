@@ -16,7 +16,7 @@ process.env.MONERIUM_CLIENT_SECRET = "";
 rmSync(process.env.TRANSF_DB_PATH!, { force: true });
 
 const { initStore, store } = await import("../services/api/src/store.js");
-const { sweepAnchorPayouts } = await import("../services/api/src/orchestrator.js");
+const { anchorPaymentMayHaveLeft, sweepAnchorPayouts } = await import("../services/api/src/orchestrator.js");
 const { anchorMemoForPickup, senderMemo } = await import("../services/api/src/adapters/moneygram.js");
 
 initStore();
@@ -70,4 +70,52 @@ assert.equal(
   "anchor pickups stored without a memo must recover the same per-user SEP-10 memo on refresh",
 );
 
-console.log("ANCHOR SWEEP TEST PASSED — funded payout reaches PAID without client polling and keeps the user memo");
+// A payment broadcast before a restart whose hash never reached the disk. The
+// signed payment stays valid on Stellar for 5 minutes, so an operator who
+// checks the treasury at once can see nothing and pay again.
+const strandedTxs = [{ step: "bridge.xyz.deposit.transfer", hash: "0x33" }, { step: "anchor.payment.pending", hash: "0x" }];
+for (const state of ["PAYOUT_FUNDING_PENDING", "PAYOUT_READY"] as const) {
+  store.addTransfer({
+    id: `t-stranded-${state}`,
+    userId: "u-anchor-sweep",
+    quoteId: "q-anchor-sweep",
+    rail: "cash",
+    recipientName: "Recipient",
+    recipientPhone: "+254700000000",
+    state,
+    sendEur: 10,
+    receiveKes: 1295,
+    fundingSource: "safe",
+    txs: strandedTxs.map((x) => ({ ...x })),
+    pickup: {
+      referenceCode: "R1",
+      provider: "anchor:test",
+      status: "PENDING",
+      anchorTransactionId: "anchor-tx",
+      anchorAmount: 10,
+      anchorAsset: "USDC",
+      anchorStatus: "pending_user_transfer_start",
+    },
+    createdAt: now,
+    updatedAt: now,
+  });
+}
+assert.equal(await sweepAnchorPayouts(), 2);
+for (const state of ["PAYOUT_FUNDING_PENDING", "PAYOUT_READY"]) {
+  const stranded = store.findTransfer(`t-stranded-${state}`)!;
+  assert.equal(stranded.state, "MANUAL_REVIEW", state);
+  assert.match(stranded.error ?? "", /wait 5 minutes/i, state);
+}
+
+// A failed refresh may have paid whenever a payment intent has no settling
+// step, whatever the error: an ordinary throw after the broadcast must not
+// read as "nothing went out" and refund the sender.
+const row = (txs: { step: string; hash: string }[], anchorPaymentHash?: string) =>
+  ({ txs, pickup: { referenceCode: "R1", provider: "anchor:test", status: "PENDING", anchorPaymentHash } }) as any;
+const ordinary = new Error("hash write failed");
+assert.equal(anchorPaymentMayHaveLeft(ordinary, row(strandedTxs)), true, "unsettled intent");
+assert.equal(anchorPaymentMayHaveLeft(ordinary, row([...strandedTxs, { step: "anchor.payment.sent", hash: "ab" }], "ab")), true, "hash on record");
+assert.equal(anchorPaymentMayHaveLeft(ordinary, row([{ step: "bridge.xyz.deposit.transfer", hash: "0x33" }])), false, "nothing sent");
+assert.equal(anchorPaymentMayHaveLeft(ordinary, undefined), false, "no row");
+
+console.log("ANCHOR SWEEP TEST PASSED — funded payout reaches PAID without client polling and keeps the user memo; a lost payment goes to review with a 5-minute wait");
