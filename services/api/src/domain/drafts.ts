@@ -121,6 +121,21 @@ export function validateLine(raw: unknown, contact?: Contact): Omit<DraftLine, "
 }
 
 /**
+ * One line per invoice: execution books one payment on an invoice
+ * (domain/invoices.ts refuses a second one under way), so a second line on
+ * it would overwrite the first one's transfer, and its failure would release
+ * an invoice its sibling paid.
+ */
+export function assertOneLinePerInvoice(lines: { invoiceId?: string }[]): void {
+  const seen = new Set<string>();
+  for (const [i, l] of lines.entries()) {
+    if (!l.invoiceId) continue;
+    if (seen.has(l.invoiceId)) throw new DraftError(`Line ${i + 1} pays the same invoice as an earlier line. Pay an invoice in one line.`);
+    seen.add(l.invoiceId);
+  }
+}
+
+/**
  * Re-check every line against the address book as it stands now.
  *
  * Returns the ids of lines whose saved contact no longer matches what was

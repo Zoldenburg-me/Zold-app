@@ -59,6 +59,7 @@ const { issueChallenge, stepUpBinding, verifyRegistration } = await import("../s
 const { paymentReviewRequired } = await import("../services/api/src/domain/payment-review.js");
 const { assertTransition, isCancellable, isEditable } = await import("../services/api/src/domain/drafts.js");
 const { HARNESS, SECURITY } = await import("../services/api/src/config.js");
+const { CEILINGS } = await import("../services/api/src/domain/ceilings.js");
 
 let passed = 0;
 const check = async (name: string, fn: () => void | Promise<void>) => {
@@ -150,6 +151,8 @@ const richBalance = async () => { duringBalanceRead?.(); return { safeBalanceEur
 app.use("/api/orgs", createInvoicingRoutes({ ctxOf: (req: any, res: any) => resolveOrg(req, res, requireSession) }));
 app.use("/api/orgs", createDraftRoutes({ ctxOf: (req: any, res: any) => resolveOrg(req, res, requireSession) }, noTransfers, richBalance));
 const server = app.listen(0, "127.0.0.1");
+// Seeding a full ceiling of drafts blocks for longer than the default keep-alive.
+server.keepAliveTimeout = 60_000;
 await new Promise<void>((r) => server.once("listening", () => r()));
 const API = `http://127.0.0.1:${(server.address() as any).port}`;
 const call = async (method: string, p: string, asUser: string, body?: unknown) => {
@@ -401,6 +404,52 @@ await check("cancelled drafts do not count against the open-drafts ceiling", asy
   await call("POST", `/api/orgs/org_c/drafts/${d}/cancel`, "u_payer");
   const after = store.draftsOf("org_c").filter((x) => !["EXECUTED", "FAILED", "REJECTED", "CANCELLED"].includes(x.state)).length;
   assert.equal(after, before);
+});
+
+await check("a run whose transfers all finished counts as finished against the ceiling, though its row still says EXECUTING", async () => {
+  addOrg("org_ceil", "business");
+  const at = new Date().toISOString();
+  const seedTransfer = (id: string, state: string, row: object = {}) => store.addTransfer({
+    id, userId: "u_owner", quoteId: `q-${id}`, rail: "sepa", recipientName: "Supplier GmbH", recipientIban: "DE02120300000000202051",
+    sendEur: 10, state, txs: [], createdAt: at, updatedAt: at, ...row,
+  } as any);
+  const seedDraft = (id: string, state: string, transferIds?: string[]) => store.addDraft({
+    id, orgId: "org_ceil", source: { kind: "account", accountId: "acc_org_ceil" }, state, lines: [],
+    createdByMemberId: "m_org_ceil_u_payer", activity: [], createdAt: at, updatedAt: at, ...(transferIds ? { transferIds } : {}),
+  } as any);
+  for (let i = 0; i < CEILINGS.openDraftsPerOrg - 2; i++) seedDraft(`dft_ceil_${i}`, "DRAFT");
+  seedTransfer("t_ceil_paid", "PAID");
+  seedDraft("dft_ceil_paid", "EXECUTING", ["t_ceil_paid"]);
+  seedTransfer("t_ceil_failed", "FAILED");
+  seedDraft("dft_ceil_failed", "EXECUTING", ["t_ceil_failed"]);
+  assert.equal(store.draftsOf("org_ceil").filter((d) => d.state === "EXECUTING").length, 2, "both rows still read EXECUTING");
+
+  const r = await call("POST", "/api/orgs/org_ceil/drafts", "u_payer", { source: { kind: "account", accountId: "acc_org_ceil" }, lines: [line("org_ceil")] });
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+
+  // One payment still on its way does hold a slot: the ceiling is reached again.
+  seedTransfer("t_ceil_live", "CREATED", { auth: { deadline: Math.floor(Date.now() / 1000) + 240 } });
+  seedDraft("dft_ceil_live", "EXECUTING", ["t_ceil_live"]);
+  const full = await call("POST", "/api/orgs/org_ceil/drafts", "u_payer", { source: { kind: "account", accountId: "acc_org_ceil" }, lines: [line("org_ceil")] });
+  assert.equal(full.status, 409, JSON.stringify(full.data));
+});
+
+await check("two lines may not pay the same invoice, on create or edit", async () => {
+  const body = (lines: object[]) => ({ source: { kind: "account", accountId: "acc_org_c" }, lines });
+  const count = () => store.draftsOf("org_c").length;
+  const before = count();
+  const dup = await call("POST", "/api/orgs/org_c/drafts", "u_payer", body([{ ...line("org_c"), invoiceId: "inv_dup" }, { ...line("org_c"), invoiceId: "inv_dup" }]));
+  assert.equal(dup.status, 400, JSON.stringify(dup.data));
+  assert.match(String(dup.data.error), /same invoice/);
+  assert.equal(count(), before, "no draft is created");
+
+  const ok = await call("POST", "/api/orgs/org_c/drafts", "u_payer", body([{ ...line("org_c"), invoiceId: "inv_a" }, { ...line("org_c"), invoiceId: "inv_b" }, line("org_c"), line("org_c")]));
+  assert.equal(ok.status, 201, JSON.stringify(ok.data));
+  const d = ok.data.draft.id as string;
+  const lines = store.findDraft(d)!.lines;
+  const edit = await call("PATCH", `/api/orgs/org_c/drafts/${d}`, "u_payer", { lines: [lines[0], { ...lines[1], invoiceId: "inv_a" }] });
+  assert.equal(edit.status, 400, JSON.stringify(edit.data));
+  assert.deepEqual(store.findDraft(d)!.lines.map((l) => l.invoiceId), ["inv_a", "inv_b", undefined, undefined], "the draft is unchanged");
 });
 
 console.log("\nThe payout IBAN on invoices takes an owner or admin and a passkey");
