@@ -126,6 +126,13 @@ export function signedRunToast(total, lines) {
   };
 }
 
+/** A progress line while a run is signed: inside the open dialog, where a
+ *  toast would render under its backdrop (core.js dialog()), else a toast. */
+export function showProgress(msg, dlg, statusEl, toast) {
+  if (dlg?.open && statusEl) statusEl.textContent = msg;
+  else toast(msg);
+}
+
 /**
  * What a signer is told before the first passkey prompt of a run with more
  * than one line, or null for one line (or none left to approve). Every line was prepared when the run

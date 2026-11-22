@@ -13,7 +13,7 @@ import { forgetDraft, invoiceBody, invoiceDraft, readInvoiceEditor, setInvoiceDr
 import { ap, bk, contactPayments, ct, draftTag, draftTitle, draftTotal, invoiceDrawer, iv, mayReview, memberName } from "./screens.js";
 import { loadOrg, render } from "./shell.js";
 import { field, payerRuleDialog, payerRuleSection, runSummary } from "./receipts.js";
-import { signedLineOutcome, signedRunToast, signingWarning } from "./payment-model.js";
+import { showProgress, signedLineOutcome, signedRunToast, signingWarning } from "./payment-model.js";
 
 /** A file the API serves behind the bearer header, which a navigation
  *  cannot carry: fetch it, then hand the bytes to the browser as a download. */
@@ -1192,7 +1192,7 @@ export const ACTIONS = {
             },
           });
           lines.push({ recipient: a.recipient, outcome: signedLineOutcome(t, true) });
-          toast(`Approved ${++approved} of ${r.authorizations.length}…`);
+          showProgress(`Approved ${++approved} of ${r.authorizations.length}…`, $("#dlg"), $("#dlg-progress"), toast);
         } catch (e) {
           // Reported per line rather than aborting silently: the ones already
           // signed are real payments and the user must know which.
@@ -1204,6 +1204,6 @@ export const ACTIONS = {
     };
     if (!warning) return sign();
     // Signing runs from the dialog's own button, inside the click that allows a passkey prompt.
-    return dialog("Approve each payment", `<p class="desc">${esc(warning)}</p>`, sign, { okLabel: "Start approving" });
+    return dialog("Approve each payment", `<p class="desc">${esc(warning)}</p><p class="desc" id="dlg-progress" role="status"></p>`, sign, { okLabel: "Start approving" });
   },
 };

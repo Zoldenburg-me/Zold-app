@@ -165,6 +165,19 @@ assert.equal(m.runIdFrom("", null), null);
   assert.match(actions, /const warning = signingWarning\(r\.authorizations, Date\.now\(\) \/ 1000\);/);
   assert.match(actions, /const warning = signingWarning[^\n]*\n\s*const sign = async \(\) => \{\s*const lib = await deviceLib\(\);/, "the warning comes before the first prompt");
   assert.match(actions, /if \(!warning\) return sign\(\);\n[^\n]*\n\s*return dialog\([^\n]*esc\(warning\)[^\n]*, sign, /);
+
+  // "Approved n of N" while signing: a toast renders under an open dialog's
+  // backdrop, so with the warning dialog open it is written inside it.
+  const toasts: string[] = [];
+  const status = { textContent: "" };
+  m.showProgress("Approved 1 of 3…", { open: true }, status, (t: string) => toasts.push(t));
+  assert.equal(status.textContent, "Approved 1 of 3…");
+  assert.equal(toasts.length, 0, "no toast under the open dialog");
+  m.showProgress("Approved 2 of 3…", { open: false }, status, (t: string) => toasts.push(t));
+  m.showProgress("Approved 3 of 3…", null, null, (t: string) => toasts.push(t));
+  assert.deepEqual(toasts, ["Approved 2 of 3…", "Approved 3 of 3…"], "no dialog open: a toast");
+  assert.match(actions, /showProgress\(`Approved \$\{\+\+approved\} of \$\{r\.authorizations\.length\}…`, \$\("#dlg"\), \$\("#dlg-progress"\), toast\)/);
+  assert.match(actions, /esc\(warning\)\}<\/p><p class="desc" id="dlg-progress" role="status"><\/p>`/, "the warning dialog has a place for progress");
 }
 
 // ── Send: Crypto wallet only where the API sends to wallets ──────────────────
