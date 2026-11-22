@@ -306,6 +306,56 @@ try {
   coarse = false;
 }
 
+// The account passkey is discoverable: sign-in on a new device asks with no
+// allowCredentials, so a passkey the authenticator does not store would never
+// be found there. A cancelled sign-in names this device, not "this phone", on a computer.
+{
+  const realApi = run("api"), realShowErr = run("obShowErr");
+  try {
+    run(`api = async (p) => p === "/api/webauthn/challenge" ? { challenge: "AA" } : {}`);
+    run(`user = { id: "u1", name: "A", email: "a@example.com" }`);
+    prompts.length = 0;
+    const reg = run(`registerPasskey(user)`);
+    await waitFor(() => prompts.length === 1, "the create prompt");
+    assert.equal(prompts[0].kind, "create");
+    const pk = prompts[0].options.publicKey;
+    assert.deepEqual(JSON.parse(JSON.stringify(pk.authenticatorSelection)), { residentKey: "required", requireResidentKey: true, userVerification: "required" });
+    assert.deepEqual(JSON.parse(JSON.stringify(pk.pubKeyCredParams)), [{ type: "public-key", alg: -7 }]);
+    const buf = new Uint8Array([1]).buffer;
+    prompts[0].resolve({ id: "c1", response: { attestationObject: buf, clientDataJSON: buf }, getClientExtensionResults: () => ({ prf: { enabled: true } }) });
+    await reg;
+
+    ctx.__shown = [];
+    run(`obShowErr = (e, id) => __shown.push([e.message, id])`);
+    const notAllowed = () => Object.assign(new Error("The operation either timed out or was not allowed."), { name: "NotAllowedError" });
+    for (const phone of [false, true]) {
+      coarse = phone;
+      prompts.length = 0;
+      ctx.__shown.length = 0;
+      const signIn = run(`obSignIn(null)`);
+      await waitFor(() => prompts.length === 1, "the sign-in prompt");
+      assert.equal(prompts[0].kind, "get");
+      assert.equal(prompts[0].options.publicKey.allowCredentials, undefined, "sign-in finds the account by a discoverable passkey");
+      assert.equal(prompts[0].options.publicKey.userVerification, "required");
+      prompts[0].reject(notAllowed());
+      await signIn;
+      const [msg, id] = ctx.__shown[0];
+      assert.equal(id, "auth-err");
+      assert.match(msg, /Create an account, or recover one you lost\./);
+      if (phone) assert.match(msg, /this phone/);
+      else {
+        assert.doesNotMatch(msg, /phone/i, "a computer is not told about a phone");
+        assert.match(msg, /passkey prompt/);
+        assert.match(msg, /this device/);
+      }
+    }
+  } finally {
+    coarse = false;
+    ctx.__api = realApi; ctx.__showErr = realShowErr;
+    run(`api = __api; obShowErr = __showErr; user = null`);
+  }
+}
+
 // Every prompt in the app goes through passkeyPrompt: a direct call would open
 // a prompt nothing can close.
 {

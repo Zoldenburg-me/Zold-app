@@ -1678,7 +1678,9 @@ async function obSignIn(btn) {
     else enterDashboard(user.name);
   } catch (e) {
     obShowErr(e?.name === "NotAllowedError"
-      ? new Error("Sign-in was cancelled, or this phone has no Zold sign-in saved. Create an account, or recover one you lost.")
+      ? new Error(Z.byDevice(
+        "Sign-in was cancelled, or this phone has no Zold sign-in saved. Create an account, or recover one you lost.",
+        "Sign-in was cancelled, or the passkey prompt found no Zold sign-in on this device or your security key. Create an account, or recover one you lost."))
       : e, "auth-err");
   } finally { Z.setLoading(btn, false); }
 }
@@ -2293,7 +2295,9 @@ async function registerPasskey(u) {
     // ES256 (P-256) only. This passkey becomes the Safe's owner, which
     // verifies P-256 signatures; any other algorithm would fail at deployment.
     pubKeyCredParams: [{ type: "public-key", alg: -7 }],
-    authenticatorSelection: { residentKey: "preferred", userVerification: "required" },
+    // Discoverable: sign-in on a new device (obSignIn) asks with no
+    // allowCredentials, so a passkey the authenticator does not store is never found.
+    authenticatorSelection: { residentKey: "required", requireResidentKey: true, userVerification: "required" },
     // Ask for the PRF extension so this passkey can encrypt the
     // device spending key. Authenticators without it still register fine.
     extensions: { prf: {} },
