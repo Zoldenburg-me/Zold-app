@@ -264,11 +264,15 @@ const SCENARIOS: Record<string, Scenario> = {
   },
   // Monerium's 202 (pending multisig confirmation) carries no order id, so
   // nothing can follow the order: review, never PAYOUT_SUBMITTED or a refund.
-  // A 200 without an id breaks Monerium's contract; the same guard holds it.
+  // A 200 without an id breaks Monerium's contract; the same guard holds it,
+  // and an id getOrder would refuse to read (isMoneriumOrderId) is no id: the
+  // poller could never resolve it.
   ...Object.fromEntries(([
     ["sepa redeem answered 202 with no order id", { code: 202, status: "Accepted" }],
     ["sepa redeem answered 200 with no order id", { state: "placed" }],
     ["sepa redeem answered 200 with a blank order id", { id: " ", state: "placed" }],
+    ["sepa redeem answered 200 with a malformed order id", { id: "order 1", state: "placed" }],
+    ["sepa redeem answered 200 with a padded order id", { id: " order-1 ", state: "placed" }],
   ] as const).map(([name, body]) => [name, {
     kind: "sepa",
     noCrash: true,
@@ -278,7 +282,7 @@ const SCENARIOS: Record<string, Scenario> = {
     expect: {
       state: "MANUAL_REVIEW", refunded: false, sends: ["monerium.redeem"], orderCalls: 1, orderGets: 0, placed: 0,
       orderId: "undefined", absent: ["monerium.redeem.placed", "monerium.redeem.refused"],
-      error: /Monerium accepted the redeem but returned no order id/,
+      error: /Monerium accepted the redeem but returned no usable order id/,
     },
   } satisfies Scenario])),
   "sepa redeem answered 200 with an order id": {

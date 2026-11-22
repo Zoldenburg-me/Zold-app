@@ -59,6 +59,9 @@ const orderFault = new Map<string, number>();
  *  chain"): an outage or a body that is not a token list. */
 let tokensOutage: { code: number; body: unknown } | null = null;
 let tokensRequests = 0;
+/** Every request the stub received. A path like `/orders/../profiles` is
+ *  normalised before it is sent, so only the total shows it never went. */
+let stubRequests = 0;
 /** Order ids the poller's list shows. Empty except where a test arms it. */
 const listed = new Set<string>();
 let listServed = false;
@@ -86,6 +89,7 @@ const stub = createServer((req, res) => {
     res.end(JSON.stringify(body));
   };
   const url = req.url ?? "";
+  stubRequests++;
   if (url.startsWith("/auth/token")) return send(200, { access_token: "stub", expires_in: 3600 });
   if (url.startsWith("/auth/context")) return send(200, { userId: "stub-user" });
   if (url.startsWith("/profiles")) return send(200, { profiles: [{ id: "stub-profile" }] });
@@ -503,7 +507,9 @@ try {
 
   await t("a definitively unknown order still consumes its delivery id", async () => {
     // A 404 from Monerium is a settled answer, not an outage — retrying it
-    // forever would be pointless, so 200 tells the sender to stop.
+    // forever would be pointless, so 200 tells the sender to stop. This pins
+    // the one status that still spends the id (main behaved the same); the
+    // 4xx loop at the end is what fails without the 404-only rule.
     const body = { data: { id: "nope-404" } };
     const r = await post("/api/webhooks/monerium", body, signedHeaders("evt-404", body));
     assert.equal(r.status, 200);
@@ -514,10 +520,16 @@ try {
   });
 
   await t("a malformed order id is settled without asking Monerium", async () => {
+    // Without the shape check before the lookup, getOrder's own refusal (a
+    // local 400) would answer 503 and leave the id unspent.
     const body = { data: { id: "../profiles" } };
+    const asked = stubRequests;
     const r = await post("/api/webhooks/monerium", body, signedHeaders("evt-malformed", body));
     assert.equal(r.status, 200);
     assert.equal(r.data.outcome, "ignored");
+    assert.equal(stubRequests, asked, "no request reached Monerium");
+    const again = await post("/api/webhooks/monerium", body, signedHeaders("evt-malformed", body));
+    assert.equal(again.data.duplicate, true, "the malformed id consumed the delivery id");
   });
 
   await t("a stale signed delivery is refused even with a valid signature", async () => {

@@ -18,7 +18,7 @@
  */
 import { MONERIUM, moneriumSandboxEnabled } from "../config.js";
 import { store, type User } from "../store.js";
-import { isMoneriumOrderId, MoneriumApiError, MoneriumClient, type MoneriumOrder } from "./monerium-client.js";
+import { isMoneriumOrderId, MoneriumApiError, MoneriumClient, moneriumFailureReason, type MoneriumOrder } from "./monerium-client.js";
 import { hasOwnMoneriumCredentials, moneriumAppClient, moneriumClientFor, usersWithOwnCredentials } from "./monerium-connection.js";
 import { auditEntry } from "../audit.js";
 import { HARNESS } from "../config.js";
@@ -566,9 +566,10 @@ export async function mirrorOrderById(orderId: string): Promise<MirrorOutcome> {
     // answer that spends the delivery. Any other refusal (400, 401/403 on our
     // credentials, a 429), a 5xx, a timeout or DNS means the lookup itself
     // failed, and the caller must be free to try the same delivery again.
-    // The status alone is logged: a refusal's body is Monerium's, not ours.
+    // The status alone is logged, for the order read and the token request
+    // alike: a refusal's body is Monerium's, not ours.
     const status = err instanceof MoneriumApiError ? err.status : 0;
-    const reason = status ? `HTTP ${status}` : describeCause(err);
+    const reason = moneriumFailureReason(err);
     if (status === 404) {
       console.warn(`monerium: refusing unknown order ${orderId}: ${reason}`);
       return "ignored";

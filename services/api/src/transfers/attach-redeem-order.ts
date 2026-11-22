@@ -13,16 +13,19 @@
  */
 import { MONERIUM } from "../config.js";
 import { store, type Transfer, type User } from "../store.js";
-import { isMoneriumOrderId, MoneriumApiError, type MoneriumOrder } from "../adapters/monerium-client.js";
+import { isMoneriumOrderId, MoneriumAccessError, MoneriumApiError, moneriumFailureReason, type MoneriumOrder } from "../adapters/monerium-client.js";
 import { readOrder } from "../adapters/monerium-sandbox.js";
 import { moneriumOrderProcessed } from "../domain/monerium-order.js";
-import { describeCause } from "../http/log-cause.js";
 import { normalizeIban, paymentMemo } from "../sepa.js";
 
 export type AttachOutcome =
   | { ok: true }
   /** Not this transfer's processed redeem order, or no such order. */
   | { ok: false; code: "NOT_THIS_ORDER"; reason: string }
+  /** The account has no working Monerium connection (none, or its token was
+   *  refused); nothing changed, and a retry fails the same way until the user
+   *  connects again. */
+  | { ok: false; code: "NOT_CONNECTED" }
   /** Monerium could not be read; nothing changed, the operator may retry. */
   | { ok: false; code: "UNAVAILABLE" };
 
@@ -80,9 +83,12 @@ export async function attachRedeemOrder(transferId: string, orderId: string): Pr
     order = await readOrder(orderId, user);
   } catch (err) {
     // The status alone is logged: a refusal's body is Monerium's, not ours.
+    // Only a transient (5xx, 429, a timeout) is worth retrying.
     const status = err instanceof MoneriumApiError ? err.status : 0;
     if (status === 404) return { ok: false, code: "NOT_THIS_ORDER", reason: "Monerium has no such order" };
-    console.warn(`monerium: could not read order ${orderId} for transfer ${transferId}: ${status ? `HTTP ${status}` : describeCause(err)}`);
+    if (status === 403) return { ok: false, code: "NOT_THIS_ORDER", reason: "Monerium refused this account's read of that order" };
+    console.warn(`monerium: could not read order ${orderId} for transfer ${transferId}: ${moneriumFailureReason(err)}`);
+    if (err instanceof MoneriumAccessError || status === 401) return { ok: false, code: "NOT_CONNECTED" };
     return { ok: false, code: "UNAVAILABLE" };
   }
   // Re-checked after the read: the transfer or the order may have moved

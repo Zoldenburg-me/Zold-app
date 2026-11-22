@@ -11,6 +11,7 @@
 
 import { partnerTimeout } from "../http.js";
 import { moneriumFetch } from "./monerium-limit.js";
+import { describeCause } from "../http/log-cause.js";
 
 /** The shape an order id must have before it may go into a request path. */
 export function isMoneriumOrderId(orderId: string): boolean {
@@ -40,11 +41,24 @@ export class MoneriumAccessError extends Error {
 }
 
 /** Monerium's own refusal of a token request is an access error; its 5xx
- *  (or a proxy's) is a transient and stays a plain Error. */
+ *  (or a proxy's) is a transient and stays a plain Error. Both carry the
+ *  status as `partnerStatus`, so a log line can name it without the body. */
 const tokenError = (what: string, status: number, body: string) =>
   status >= 400 && status < 500
     ? new MoneriumAccessError(`${what} (${status}): ${body}`, status)
-    : new Error(`${what} (${status}): ${body}`);
+    : Object.assign(new Error(`${what} (${status}): ${body}`), { partnerStatus: status });
+
+/**
+ * What a log line may say about a failed Monerium call: the HTTP status, and
+ * for a token request a fixed label, never Monerium's body. A failure with no
+ * status (a timeout, DNS, a missing secret) is ours and described in full.
+ */
+export function moneriumFailureReason(err: unknown): string {
+  if (err instanceof MoneriumApiError) return `HTTP ${err.status}`;
+  const status = (err as { partnerStatus?: unknown } | null)?.partnerStatus;
+  if (typeof status === "number") return `token request failed, HTTP ${status}`;
+  return describeCause(err);
+}
 
 export interface MoneriumConfig {
   baseUrl: string; // https://api.monerium.dev (sandbox) | .app (production)

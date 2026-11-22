@@ -7,7 +7,10 @@
  *   3. a sole trader's Safe: under the user, on the business's books;
  *   4. an address naming more than one holder books nothing, and the
  *      reconciler reports it;
- *   5. a second delivery of a recorded order is `duplicate`.
+ *   5. a second delivery of a recorded order is `duplicate`;
+ *   6. a token request Monerium refuses (4xx) or cannot answer (5xx) leaves
+ *      the delivery unresolved, and its log line names the status, never the
+ *      token endpoint's body.
  *
  * The stub Monerium answers the app's client-credentials login, the order
  * reads and /tokens (EURe on the test chain, so nothing is minted). No chain:
@@ -32,12 +35,17 @@ process.env.MONERIUM_CLIENT_SECRET = "app-secret-0001";
 process.env.MONERIUM_CHAIN = "base";
 
 const orders = new Map<string, any>();
+/** While set, /auth/token answers this status with an OAuth error body. */
+let tokenFault = 0;
+const TOKEN_BODY = { error: "invalid_client", error_description: "client app-client unknown" };
 const monerium = createServer((req, res) => {
   const url = new URL(req.url ?? "/", "http://fake");
   const send = (code: number, b: any) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(b)); };
   if (url.pathname === "/auth/token") {
     req.resume();
-    req.on("end", () => send(200, { access_token: "tok-app", token_type: "Bearer", expires_in: 3600 }));
+    req.on("end", () => tokenFault
+      ? send(tokenFault, TOKEN_BODY)
+      : send(200, { access_token: "tok-app", token_type: "Bearer", expires_in: 3600 }));
     return;
   }
   if (url.pathname === "/tokens") {
@@ -114,6 +122,33 @@ org("org_twin_1", "business", "company");
 org("org_twin_2", "business", "company");
 account("acc_twin_1", "org_twin_1", addr("e"));
 account("acc_twin_2", "org_twin_2", addr("e"));
+
+console.log("\nA failed token request");
+
+// First, while the app client holds no cached token: the lookup must ask
+// /auth/token.
+await check("a refused or failed token request leaves the delivery unresolved and logs the status, not the body", async () => {
+  const id = issue(addr("a"));
+  const warned: string[] = [];
+  const realWarn = console.warn;
+  console.warn = (m: string) => warned.push(String(m));
+  try {
+    for (const code of [401, 502]) {
+      tokenFault = code;
+      warned.length = 0;
+      assert.equal(await mirrorOrderById(id), "unavailable", `a ${code} on the token request is retried`);
+      const line = warned.find((w) => w.includes(id));
+      assert.ok(line, `a warn line names the order (${warned.join(" | ")})`);
+      assert.match(line!, new RegExp(`HTTP ${code}`));
+      assert.ok(!/invalid_client|app-client/.test(line!), `no token endpoint body in the log: ${line}`);
+    }
+  } finally {
+    tokenFault = 0;
+    console.warn = realWarn;
+  }
+  assert.equal(store.isOrderProcessed(id), false);
+  orders.delete(id);
+});
 
 console.log("\nBooked to the holder");
 
