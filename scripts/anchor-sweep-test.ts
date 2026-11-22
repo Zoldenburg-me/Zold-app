@@ -16,7 +16,11 @@ process.env.MONERIUM_CLIENT_SECRET = "";
 rmSync(process.env.TRANSF_DB_PATH!, { force: true });
 
 const { initStore, store } = await import("../services/api/src/store.js");
-const { anchorPaymentMayHaveLeft, sweepAnchorPayouts } = await import("../services/api/src/orchestrator.js");
+const { anchorPaymentMayHaveLeft, refreshPayout, sweepAnchorPayouts } = await import("../services/api/src/orchestrator.js");
+const { userTransfer } = await import("../services/api/src/transfers/user-transfer.js");
+const { STELLAR } = await import("../services/api/src/config/cash-rail.js");
+const { AnchorPaymentUncertainError } = await import("../services/api/src/stellar/anchor.js");
+const { Keypair } = await import("@stellar/stellar-sdk");
 const { anchorMemoForPickup, senderMemo } = await import("../services/api/src/adapters/moneygram.js");
 
 initStore();
@@ -107,6 +111,61 @@ for (const state of ["PAYOUT_FUNDING_PENDING", "PAYOUT_READY"]) {
   assert.match(stranded.error ?? "", /wait 5 minutes/i, state);
 }
 
+// A refresh that fails after the payment may have gone out (an uncertain
+// submit) goes to review with the same operator step, never a refund.
+store.addTransfer({
+  id: "t-uncertain",
+  userId: "u-anchor-sweep",
+  quoteId: "q-anchor-sweep",
+  rail: "cash",
+  recipientName: "Recipient",
+  recipientPhone: "+254700000000",
+  state: "PAYOUT_FUNDING_PENDING",
+  sendEur: 10,
+  receiveKes: 1295,
+  fundingSource: "safe",
+  txs: [{ step: "bridge.xyz.deposit.transfer", hash: "0x33" }],
+  pickup: {
+    referenceCode: "R1",
+    provider: "anchor:test",
+    status: "PENDING",
+    anchorTransactionId: "anchor-tx",
+    anchorAmount: 10,
+    anchorAsset: "USDC",
+    anchorStatus: "pending_user_transfer_start",
+  },
+  createdAt: now,
+  updatedAt: now,
+});
+const realFetch = globalThis.fetch;
+const anchorConfig = { anchorDomain: STELLAR.anchorDomain, treasurySecret: STELLAR.treasurySecret };
+Object.assign(STELLAR, { anchorDomain: "anchor.invalid", treasurySecret: Keypair.random().secret() });
+globalThis.fetch = (async () => {
+  throw new AnchorPaymentUncertainError("submit timed out");
+}) as typeof fetch;
+try {
+  const uncertain = await refreshPayout(store.findTransfer("t-uncertain")!);
+  assert.equal(uncertain.state, "MANUAL_REVIEW");
+  assert.match(uncertain.error ?? "", /no automatic refund; wait 5 minutes, then check the treasury account/);
+  assert.equal(uncertain.refund, undefined);
+} finally {
+  globalThis.fetch = realFetch;
+  Object.assign(STELLAR, anchorConfig);
+}
+
+// The operator step is for the operator. The sender's copy of these rows
+// (desktop Under review card, phone detail) must not read as "pay again in 5
+// minutes"; the admin view reads the stored error and keeps the full text.
+for (const id of ["t-stranded-PAYOUT_FUNDING_PENDING", "t-stranded-PAYOUT_READY", "t-uncertain"]) {
+  const stored = store.findTransfer(id)!;
+  assert.match(stored.error ?? "", /treasury account before paying again/, id);
+  const seen = userTransfer(stored).error ?? "";
+  assert.doesNotMatch(seen, /5 minutes|treasury|again or|paying again|refunding|hash|Stellar/i, id);
+  assert.match(seen, /under review/i, id);
+  assert.match(seen, /don.t send it again/i, id);
+  assert.doesNotMatch(seen, /:/, `${id}: the desktop card cuts the reason at the first colon`);
+}
+
 // A failed refresh may have paid whenever a payment intent has no settling
 // step, whatever the error: an ordinary throw after the broadcast must not
 // read as "nothing went out" and refund the sender.
@@ -118,4 +177,4 @@ assert.equal(anchorPaymentMayHaveLeft(ordinary, row([...strandedTxs, { step: "an
 assert.equal(anchorPaymentMayHaveLeft(ordinary, row([{ step: "bridge.xyz.deposit.transfer", hash: "0x33" }])), false, "nothing sent");
 assert.equal(anchorPaymentMayHaveLeft(ordinary, undefined), false, "no row");
 
-console.log("ANCHOR SWEEP TEST PASSED — funded payout reaches PAID without client polling and keeps the user memo; a lost payment goes to review with a 5-minute wait");
+console.log("ANCHOR SWEEP TEST PASSED — funded payout reaches PAID without client polling and keeps the user memo; a lost or uncertain payment goes to review with a 5-minute wait the sender never sees");

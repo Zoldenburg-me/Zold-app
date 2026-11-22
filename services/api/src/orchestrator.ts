@@ -19,6 +19,7 @@
 import { BRIDGE, FX, railFeeEur } from "./config.js";
 import { DEBIT_STEP, safeMovedEur } from "./transfers/safe-moved.js";
 import { isReverseSwapStep } from "./transfers/conversion-outputs.js";
+import { OPERATOR_TREASURY_CHECK } from "./transfers/user-transfer.js";
 import { usdIsStaging } from "./usd-token.js";
 import { MONERIUM_NOT_CONNECTED, moneriumLiveFor } from "./adapters/monerium-connection.js";
 import { verifyTypedData } from "viem";
@@ -1287,8 +1288,9 @@ export async function settlePickup(transfer: Transfer): Promise<Transfer> {
 const refreshPayoutLocks = new Map<string, Promise<Transfer>>();
 
 /** A signed Stellar payment stays valid for 5 minutes (stellar/anchor.ts
- *  setTimeout(300)): one checked for sooner can still land after. */
-const STELLAR_REVIEW_STEP = "wait 5 minutes, then check the treasury account before paying again or refunding";
+ *  setTimeout(300)): one checked for sooner can still land after. Operator
+ *  text: `userTransfer` shows the sender a safe line instead. */
+const STELLAR_REVIEW_STEP = `wait 5 minutes, then ${OPERATOR_TREASURY_CHECK}`;
 
 /** Whether a failed anchor refresh may already have paid the anchor: an
  *  uncertain submit, a hash on record, or a payment intent nothing settled.
