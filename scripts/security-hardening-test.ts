@@ -369,6 +369,25 @@ console.log("a passkey replaced by recovery while an approval is being verified"
       server.close();
     }
   });
+
+  await check("sign-out revokes the session on the server: the old token is refused, other sessions live", async () => {
+    reset();
+    const { issueSession } = await import("../services/api/src/http/sessions.js");
+    const app = express().use(express.json()).use("/api", createAuthRouter({ requireUserSession: () => undefined }));
+    const server = app.listen(0);
+    try {
+      const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/session`;
+      const signedOut = issueSession(uid);
+      const other = issueSession(uid);
+      const auth = (t: string) => ({ authorization: `Bearer ${t}` });
+      assert.equal((await fetch(url, { method: "DELETE", headers: auth(signedOut) })).status, 204);
+      assert.equal((await fetch(url, { headers: auth(signedOut) })).status, 401);
+      assert.equal((await fetch(url, { method: "DELETE", headers: auth(signedOut) })).status, 401);
+      assert.equal((await fetch(url, { method: "DELETE", headers: auth(other) })).status, 204);
+    } finally {
+      server.close();
+    }
+  });
   subtle.verify = realVerify;
 
   await check("every passkey signCount write goes through store.recordPasskeyUse", async () => {

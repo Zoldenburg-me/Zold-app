@@ -181,7 +181,8 @@ export function createBookkeepingExportRoutes(deps: OrgRoutes): express.Router {
     for (const e of lines) {
       const code = e.statement!.documentCode;
       const doc = code ? store.findDocumentByCode(code) : undefined;
-      if (!doc || doc.snapshot.kind !== "beleg") {
+      // A revoked Beleg would read as valid in the ZIP: it counts as missing, and prepare issues a new one.
+      if (!doc || doc.snapshot.kind !== "beleg" || doc.revokedAt) {
         missing.push(e.id);
         continue;
       }

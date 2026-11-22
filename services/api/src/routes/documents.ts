@@ -510,7 +510,8 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
   );
 
   /** The Beleg as bytes: the same frozen snapshot, rendered server-side. The
-   *  verdict is not baked in; the page at /v/<code> is where it is checked. */
+   *  verdict is not baked in; the page at /v/<code> is where it is checked.
+   *  A revoked Beleg has no bytes: a PDF carries no verdict, so it would read as valid. */
   router.get(
     "/v/:code/beleg.pdf",
     wrap(async (req, res) => {
@@ -518,6 +519,7 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
       if (!isDocumentCode(req.params.code)) return res.status(404).json({ error: "no such document" });
       const doc = store.findDocumentByCode(normaliseCode(req.params.code));
       if (!doc || doc.snapshot.kind !== "beleg") return res.status(404).json({ error: "no such document" });
+      if (doc.revokedAt) return res.status(410).json({ error: "the holder revoked this document", revoked: true });
       res
         .status(200)
         .type("application/pdf")

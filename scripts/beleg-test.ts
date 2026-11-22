@@ -191,4 +191,28 @@ await check("the holder name says whether Monerium verified it, and a company na
   assert.match(text(holderFor(u, undefined)), /Not verified: name as the holder entered it/);
 });
 
+console.log("\nPublic PDF");
+
+await check("the public PDF is served while live and refused once revoked; the verify page still answers", async () => {
+  const express = (await import("express")).default;
+  const { createDocumentsRouter } = await import("../services/api/src/routes/documents.js");
+  const server = express().use("/api", createDocumentsRouter({ requireUserSession: () => undefined } as any)).listen(0);
+  try {
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/v`;
+    const doc = store.documentsForOrg("org_1")[0];
+    const live = await fetch(`${base}/${doc.code}/beleg.pdf`);
+    assert.equal(live.status, 200);
+    assert.equal(live.headers.get("content-type"), "application/pdf");
+    store.updateDocument(doc.id, { revokedAt: new Date().toISOString() });
+    const revoked = await fetch(`${base}/${doc.code}/beleg.pdf`);
+    assert.equal(revoked.status, 410);
+    assert.equal(((await revoked.json()) as any).revoked, true);
+    const page = (await (await fetch(`${base}/${doc.code}`)).json()) as any;
+    assert.ok(page.revokedAt);
+    assert.equal(page.verification.checks.find((c: any) => c.name === "Not revoked")?.ok, false);
+  } finally {
+    server.close();
+  }
+});
+
 console.log(`\nbeleg: ${passed} checks passed${process.exitCode ? " (with failures)" : ""}`);

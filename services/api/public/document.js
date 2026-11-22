@@ -154,7 +154,7 @@ function render(doc) {
     return head(doc, "Booking receipt (Beleg)", TITLES[l.event] || "Statement line") + holder(s.holder) + movement + booking + crypto + conversion +
       (s.unexecutedNote ? `<div class="note">${esc(s.unexecutedNote)}</div>` : "") +
       (ids ? `<details class="ids"><summary>Record IDs</summary><div class="meta" style="min-width:0">${ids}</div></details>` : "") +
-      `<div class="prose sub" style="margin-top:14px"><a href="/api/v/${esc(code)}/beleg.pdf">Download as PDF</a></div>` +
+      (doc.revokedAt ? "" : `<div class="prose sub" style="margin-top:14px"><a href="/api/v/${esc(code)}/beleg.pdf">Download as PDF</a></div>`) +
       signatures(doc) + legal(doc, ["Statement lines are projected from the account's own records. Every verification re-reads those records and, for money received on chain, the receipt transaction itself."]);
   }
   if (s.kind === "ownership") {
