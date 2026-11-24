@@ -19,10 +19,13 @@
  */
 import "./_test-env.js";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import express from "express";
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-beleg-reissue-")), "db.json");
 process.env.TRANSF_CHAIN_ID = "31337";
@@ -145,9 +148,9 @@ await check("the Lexware CSV does not name its code and says the Beleg must be r
 await check("belege.zip leaves the PDF out and its note names the line and the reason", async () => {
   const entries = await zip();
   assert.ok(!entries.some((e) => e.name.includes(OLD)), entries.map((e) => e.name).join("|"));
-  const note = entries.find((e) => e.name === `MISSING-${MONTH}.txt`);
-  assert.ok(note, "a note says what is missing");
-  const text = note!.data.toString("utf8");
+  assert.ok(entries.some((e) => e.name === `MISSING-${MONTH}.txt`), "a note says what is missing");
+  // Stored, not deflated: the note's text is in the archive's bytes as is.
+  const text = (await call("GET", `/orgs/org_co/bookkeeping/export/${MONTH}/belege.zip`)).bytes.toString("utf8");
   assert.ok(text.includes(IN));
   assert.match(text, /no longer matches/);
   assert.match(text, /no longer marked/);
@@ -224,6 +227,20 @@ await check("a Beleg issued before a mark keeps verifying, so replace refuses it
   assert.equal(byOwner.status, 201);
   assert.ok(store.findDocumentByCode(issued.body.code)!.revokedAt);
   assert.equal((await line()).documentCode, byOwner.body.code);
+});
+
+console.log("\nThe screens");
+
+await check("the books statement and the export draw Replace where the receipt stopped verifying; /app offers it under the payment", () => {
+  const read = (f: string) => readFileSync(path.join(ROOT, "services/api/public", f), "utf8");
+  const views = read("business/views.js");
+  assert.match(views, /export const staleBeleg = [\s\S]*?data-act="line-beleg-replace"/);
+  assert.match(views, /l\.belegStale \? staleBeleg\(l, mayBook\)/, "the export table");
+  assert.match(read("business/screens.js"), /l\.belegStale \? staleBeleg\(l, mayMark, who\)/, "the books statement");
+  assert.match(read("business/actions.js"), /"line-beleg-replace"[\s\S]*?\/beleg\/replace`, \{ method: "POST" \}/);
+  const app = read("app/phone-activity.js");
+  assert.match(app, /line\.belegStale \?[\s\S]*?Replace booking receipt/);
+  assert.match(app, /\/beleg\/replace`, \{\}\)/);
 });
 
 server.close();

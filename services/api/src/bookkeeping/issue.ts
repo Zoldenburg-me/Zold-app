@@ -1,15 +1,15 @@
 /**
  * Issuing a Beleg for a statement line: gather the records the line links
  * to, freeze the snapshot, sign it, store it under a verification code and
- * write the code back onto the line. One per line, ever: a second call
- * returns the existing document.
+ * write the code back onto the line. One live Beleg per line: a second call
+ * returns the existing document, and only replace revokes it for a new one.
  */
 import { randomUUID } from "node:crypto";
 import type { LedgerEntry } from "../domain/types.js";
 import { holderBlock, newDocumentCode, normaliseCode, signSnapshot, type HolderBlock, type StoredDocument } from "../documents.js";
 import { store } from "../store.js";
 import { personKey } from "../users/verified-name.js";
-import { buildBeleg, type BelegContext, type BelegSnapshot } from "./beleg.js";
+import { belegStillAgrees, buildBeleg, type BelegContext, type BelegSnapshot } from "./beleg.js";
 
 /** The IBAN's owner is the Monerium profile, not the person holding the
  *  device key: a company account's Beleg names the company. The profile
@@ -52,13 +52,66 @@ export function belegContextFor(entry: LedgerEntry): BelegContext & { userId: st
   };
 }
 
+/** The records check of the verify page, /v/<code>: does the store still say
+ *  what this Beleg says? The exports use the same check, so a Beleg that
+ *  fails it there is not handed out here. */
+export function belegRecordsAgree(s: BelegSnapshot, line?: LedgerEntry): { ok: boolean; detail: string } {
+  return belegStillAgrees(s, {
+    entry: line?.id === s.line.lineId ? line : store.ledger.find((e) => e.id === s.line.lineId),
+    deposit: s.line.links.depositId ? store.cryptoDeposits.find((d) => d.id === s.line.links.depositId) : undefined,
+    transfer: s.line.links.transferId ? store.findTransfer(s.line.links.transferId) : undefined,
+    issueOrder: s.line.links.orderId ? store.moneriumIssueOrders.find((o) => o.orderId === s.line.links.orderId) : undefined,
+    sweep: s.sweep ? store.conversionSweeps.find((x) => `sweep:${x.id}` === s.line.key) : undefined,
+  });
+}
+
+type BelegDoc = StoredDocument & { snapshot: BelegSnapshot };
+
+/** The line's Beleg as the books may hand it out. `live`: issued, a Beleg,
+ *  not revoked, and its records still agree. `stale`: not revoked, but it no
+ *  longer agrees, so it is replaced, never shipped. A revoked one is neither:
+ *  the line has no Beleg until one is issued. */
+export function belegOfLine(e: LedgerEntry): { live: BelegDoc } | { stale: BelegDoc; detail: string } | undefined {
+  const code = e.statement?.documentCode;
+  const doc = code ? store.findDocumentByCode(code) : undefined;
+  if (!doc || doc.snapshot.kind !== "beleg" || doc.revokedAt) return undefined;
+  const d = { ...doc, snapshot: doc.snapshot };
+  const agree = belegRecordsAgree(d.snapshot, e);
+  return agree.ok ? { live: d } : { stale: d, detail: agree.detail };
+}
+
+/** Replace refused: the line's Beleg still verifies, and revoking a true
+ *  document someone may already hold would only make it fail. */
+export class BelegStillVerifies extends Error {}
+
 /** One issue per line at a time: two sends at once must not both find no
  *  Beleg, sign two, and leave the line pointing at the second. */
-const issuing = new Map<string, Promise<{ doc: StoredDocument; issued: boolean }>>();
+const issuing = new Map<string, Promise<unknown>>();
 
 export function issueBelegForLine(entry: LedgerEntry): Promise<{ doc: StoredDocument; issued: boolean }> {
+  return queued(entry, () => issueOnce(entry));
+}
+
+/** Revoke the line's Beleg that no longer verifies and issue one from the
+ *  books as they are now. The revoked one keeps its frozen snapshot and fails
+ *  verification at its code. One that still verifies is refused
+ *  (BelegStillVerifies); with no live Beleg this just issues. */
+export function replaceBelegForLine(entry: LedgerEntry): Promise<{ doc: StoredDocument; issued: boolean; revoked?: StoredDocument }> {
+  return queued(entry, async () => {
+    const now = store.ledgerOf(entry.orgId).find((e) => e.id === entry.id) ?? entry;
+    const current = belegOfLine(now);
+    if (current && "live" in current) throw new BelegStillVerifies("this Beleg still matches the books");
+    // Before the revoke: a line that cannot have a Beleg keeps the one it has.
+    belegContextFor(now);
+    if (current) store.updateDocument(current.stale.id, { revokedAt: new Date().toISOString() });
+    const r = await issueOnce(now);
+    return current ? { ...r, revoked: current.stale } : r;
+  });
+}
+
+function queued<T extends { doc: StoredDocument; issued: boolean }>(entry: LedgerEntry, fn: () => Promise<T>): Promise<T> {
   const before = issuing.get(entry.id) ?? Promise.resolve();
-  const run = before.catch(() => undefined).then(() => issueOnce(entry));
+  const run = before.catch(() => undefined).then(fn);
   issuing.set(entry.id, run);
   void run.finally(() => { if (issuing.get(entry.id) === run) issuing.delete(entry.id); }).catch(() => undefined);
   return run;

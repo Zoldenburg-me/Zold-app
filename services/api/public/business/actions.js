@@ -1003,6 +1003,11 @@ export const ACTIONS = {
     const r = await api(`/api/orgs/${org.id}/bookkeeping/lines/${el.dataset.line}/beleg`, { method: "POST" });
     toast(`Receipt ${r.code} ${r.issued ? "created" : "already existed"}.`);
   },
+  /** The old receipt is revoked, not deleted: its page then says so. */
+  async "line-beleg-replace"(el) {
+    const r = await api(`/api/orgs/${org.id}/bookkeeping/lines/${el.dataset.line}/beleg/replace`, { method: "POST" });
+    toast(`Receipt ${r.code} created${r.revoked ? "; the old one is revoked" : ""}. Download the month's export again for your accountant.`);
+  },
   /** One step from Connections or the export page: pick the month, send.
    *  The server issues any missing Beleg first; the result says what landed. */
   async "gmi-push"() {

@@ -21,7 +21,7 @@ import { GetMyInvoicesClient, GmiApiError, gmiUserAgent, type GmiBankAccount, ty
 import { belegFileName, belegPdf, belegTitle, type BelegSnapshot } from "../../bookkeeping/beleg.js";
 import { isMonth, linesInMonth } from "../../bookkeeping/statement.js";
 import { statementLinesOf } from "../../bookkeeping/writer.js";
-import { issueBelegForLine } from "../../bookkeeping/issue.js";
+import { belegRecordsAgree, issueBelegForLine } from "../../bookkeeping/issue.js";
 import { auditEntry } from "../../audit.js";
 import type { Organisation } from "../../domain/types.js";
 import { redactedMessage } from "../../http/log-cause.js";
@@ -266,6 +266,12 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
         }
         if (doc.snapshot.kind !== "beleg" || doc.revokedAt) {
           results.push({ lineId: line.id, outcome: "no-beleg" });
+          continue;
+        }
+        // The export's rule: a Beleg that stopped verifying is replaced, not sent.
+        const agree = belegRecordsAgree(doc.snapshot);
+        if (!agree.ok) {
+          results.push({ lineId: line.id, outcome: "no-beleg", error: `the receipt no longer matches the books (${agree.detail}); replace it in Books` });
           continue;
         }
         let pushed: (typeof results)[number];

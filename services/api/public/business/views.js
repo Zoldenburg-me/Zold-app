@@ -21,6 +21,12 @@ export const secondary = (label, attrs, icon) => `<button type="button" class="z
 export const linkBtn = (label, view, icon, variant = "secondary") => `<a class="z-btn z-btn--${variant}" href="?view=${esc(view)}" data-view-link="${esc(view)}">${icon ? Z.icon(icon) : ""}<span>${esc(label)}</span></a>`;
 export const table = (head, rows) => `<div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr>${head.map(([h, cls]) => `<th scope="col"${cls ? ` class="${cls}"` : ""}>${h ? esc(h) : `<span class="z-sr">Actions</span>`}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
 /** A transaction hash, shortened, with the whole hash on hover; "none" without one. */
+/** A line whose receipt stopped verifying: never drawn as its receipt. The old
+ *  one still opens, so its page can say why; Replace revokes it and issues a
+ *  new one from the books as they are now. */
+export const staleBeleg = (l, may, who = "") => `${Z.tag("Does not verify", "amber")}<span class="zb-sub2">${esc(l.belegStale.detail)}. <a href="${esc(l.belegStale.url)}" target="_blank" rel="noopener">Old receipt<span class="z-sr"> ${esc(l.belegStale.code)} (opens in a new tab)</span></a></span>${may
+  ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="line-beleg-replace" data-line="${esc(l.id)}">Replace<span class="z-sr"> the booking receipt${who ? ` for ${esc(who)}` : ""}</span></button>`
+  : '<span class="zb-sub2">Someone who keeps the books can replace it.</span>'}`;
 export const shortTx = (h) => (h ? `<span class="mono" title="${esc(h)}">${esc(h.slice(0, 10))}…${esc(h.slice(-6))}</span>` : "none");
 const card = (title, desc, inner, right = "") => `<section class="card"><div class="h"><div><h2>${esc(title)}</h2>${desc ? `<p class="desc">${desc}</p>` : ""}</div>${right}</div>${inner}</section>`;
 const statusTag = (s) => Z.tag(s === "active" ? "Active" : s === "gated" ? "Not open" : "Waiting");
@@ -327,7 +333,7 @@ RENDER.export = async () => {
         <td class="zb-top">${esc(l.counterparty?.name || "")}<span class="zb-sub2 z-mono">${esc(l.counterparty?.iban ? maskIban(l.counterparty.iban) : l.counterparty?.address ? `${l.counterparty.address.slice(0, 10)}…` : "")}</span></td>
         <td class="zb-top">${esc(l.reference)}${l.ownTransfer ? `<span class="zb-sub2">Between my own accounts</span>` : ""}${l.links?.invoiceNumber ? `<span class="zb-sub2">Invoice ${esc(l.links.invoiceNumber)}</span>` : ""}</td>
         <td class="zb-top z-tbl__num">${Z.amount({ value: Math.abs(l.amountCents) / 100, direction: l.amountCents >= 0 ? "in" : "out" })}</td>
-        <td class="zb-top">${l.documentCode ? `<a class="zb-beleg" href="${esc(l.documentUrl)}" target="_blank" rel="noopener">${Z.icon("attach_file")}${esc(l.documentCode)}<span class="z-sr"> (opens in a new tab)</span></a>` : mayBook ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="line-beleg" data-line="${esc(l.id)}">Create<span class="z-sr"> a booking receipt</span></button>` : '<span class="z-dim">None yet</span>'}</td></tr>`).join("")}</tbody></table></div>`
+        <td class="zb-top">${l.documentCode ? `<a class="zb-beleg" href="${esc(l.documentUrl)}" target="_blank" rel="noopener">${Z.icon("attach_file")}${esc(l.documentCode)}<span class="z-sr"> (opens in a new tab)</span></a>` : l.belegStale ? staleBeleg(l, mayBook) : mayBook ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="line-beleg" data-line="${esc(l.id)}">Create<span class="z-sr"> a booking receipt</span></button>` : '<span class="z-dim">None yet</span>'}</td></tr>`).join("")}</tbody></table></div>`
       : `<div class="z-card"><p class="empty">No statement lines in ${esc(exportMonth)}. Lines appear once money moves on an account backed by a member’s own account.</p></div>`}`;
 };
 

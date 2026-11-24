@@ -48,7 +48,8 @@ import {
   statementTotals,
   verifyZoldAttestation,
 } from "../documents.js";
-import { belegPdf, belegStillAgrees, belegFileName } from "../bookkeeping/beleg.js";
+import { belegPdf, belegFileName } from "../bookkeeping/beleg.js";
+import { belegRecordsAgree } from "../bookkeeping/issue.js";
 import { CEILINGS, ceilingRefusal } from "../domain/ceilings.js";
 import { redactedMessage } from "../http/log-cause.js";
 
@@ -223,14 +224,7 @@ async function verifyDocument(doc: StoredDocument): Promise<{ ok: boolean; check
   }
   if (doc.snapshot.kind === "beleg") {
     const s = doc.snapshot;
-    const entry = store.ledger.find((e) => e.id === s.line.lineId);
-    const agree = belegStillAgrees(s, {
-      entry,
-      deposit: s.line.links.depositId ? store.cryptoDeposits.find((d) => d.id === s.line.links.depositId) : undefined,
-      transfer: s.line.links.transferId ? store.findTransfer(s.line.links.transferId) : undefined,
-      issueOrder: s.line.links.orderId ? store.moneriumIssueOrders.find((o) => o.orderId === s.line.links.orderId) : undefined,
-      sweep: s.sweep ? store.conversionSweeps.find((x) => `sweep:${x.id}` === s.line.key) : undefined,
-    });
+    const agree = belegRecordsAgree(s);
     checks.push({ name: "Records still match", ok: agree.ok, detail: agree.detail });
     if (s.receipt?.txHash && !HARNESS.enabled) {
       try {
@@ -511,7 +505,8 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
 
   /** The Beleg as bytes: the same frozen snapshot, rendered server-side. The
    *  verdict is not baked in; the page at /v/<code> is where it is checked.
-   *  A revoked Beleg has no bytes: a PDF carries no verdict, so it would read as valid. */
+   *  A revoked Beleg, or one whose records no longer agree, has no bytes: a
+   *  PDF carries no verdict, so it would read as valid. */
   router.get(
     "/v/:code/beleg.pdf",
     wrap(async (req, res) => {
@@ -520,6 +515,7 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
       const doc = store.findDocumentByCode(normaliseCode(req.params.code));
       if (!doc || doc.snapshot.kind !== "beleg") return res.status(404).json({ error: "no such document" });
       if (doc.revokedAt) return res.status(410).json({ error: "the holder revoked this document", revoked: true });
+      if (!belegRecordsAgree(doc.snapshot).ok) return res.status(409).json({ error: "this document no longer matches the books; open its page to see why", verifies: false });
       res
         .status(200)
         .type("application/pdf")
