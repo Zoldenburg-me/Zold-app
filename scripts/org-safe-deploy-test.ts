@@ -149,7 +149,7 @@ await check("a company signup's first org gets a gated EUR account with no addre
   assert.equal(forAdmin.data.orgSafeDeploy.allowed, false);
   assert.equal(forAdmin.data.orgSafeDeploy.code, "NOT_A_SIGNER");
   assert.equal(forAdmin.data.orgSafeDeploy.reason, "Only an owner can set up the company’s Safe.");
-  assert.match(list.data.accounts[0].gate.needs, /not yet live/);
+  assert.match(list.data.accounts[0].gate.needs, /then the company’s IBAN on it \(Settings → Monerium\)/);
 });
 
 await check("only an owner whose passkey can sign deploys: admin, payer, passkey-less owner and non-member are refused", async () => {
@@ -235,9 +235,9 @@ await check("an unconfirmed submit keeps the plan planned; the retry finds the S
   assert.equal(chain.prepares, before, "a deployed Safe is not prepared again");
   const list = await call("GET", `/api/orgs/${orgId}/accounts`, "anna");
   assert.equal(list.data.orgSafeDeploy.allowed, false);
-  assert.match(list.data.accounts[0].gate.reason, /IBAN onto it is not yet live/, "no IBAN step is promised");
+  assert.match(list.data.accounts[0].gate.reason, /IBAN is not issued onto it yet/, "the IBAN is not shown as there");
   assert.doesNotMatch(list.data.accounts[0].gate.needs, /connect/i);
-  assert.match(accountIsSpendable(a, store.findOrganisation(orgId)!).reason!, /not yet live/);
+  assert.match(accountIsSpendable(a, store.findOrganisation(orgId)!).reason!, /not issued onto its Safe yet/);
 });
 
 await check("the happy path: sign, submit, plan active, address set, still gated", async () => {

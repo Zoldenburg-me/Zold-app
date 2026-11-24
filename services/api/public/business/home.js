@@ -257,8 +257,8 @@ function attention({ waiting, invoices, lines, accounts }) {
 /** Why there is no IBAN yet, and the one step that moves it on. Only the
  *  login whose own account backs this organisation connects Monerium for it. */
 function noIbanHtml(accounts) {
-  // A company's account is its own Safe; its keys connect in Settings, and no step issues its IBAN yet.
-  if (org.entity === "company") return `<p class="zb-hint">No IBAN yet. Connect the company’s own Monerium keys in Settings. Issuing the company’s IBAN onto its Safe is not live yet.</p>${linkBtn("Settings", "settings")}`;
+  // A company's account is its own Safe; its keys and its IBAN are in Settings → Monerium.
+  if (org.entity === "company") return `<p class="zb-hint">No IBAN yet. Connect the company’s own Monerium keys, then issue the company’s IBAN onto its Safe, in Settings → Monerium.</p>${linkBtn("Settings", "settings")}`;
   const step = noIbanStep(org.type === "personal" || isOwnCompanyOrg(me, org, accounts), me);
   const whose = org.type === "personal" ? "you" : esc(org.name);
   if (step === "not-own") return `<p class="zb-hint">No IBAN yet. Monerium issues one once it has verified ${whose}, and only the company’s own login can connect it.</p>${linkBtn("Accounts", "accounts")}`;
@@ -297,10 +297,19 @@ const STEP = {
   monerium: () => ({ title: "Connect Monerium", sub: "Monerium verifies the company before it issues an IBAN.", action: { label: "Connect", href: "/app?from=business#monerium-settings" } }),
   iban: (s) => ({ title: "Activate the euro IBAN", sub: s.monerium ? "Receives and sends bank transfers." : "Follows the Monerium check.",
     ...(!s.monerium ? {} : me?.iban ? { view: "accounts" } : { action: { label: "Activate", href: "/app?from=business#monerium-settings" } }) }),
-  // A company's own Monerium keys (Settings → Monerium), then its IBAN, which is not live.
+  // A company's own Monerium keys, then its IBAN onto its Safe: both in Settings → Monerium.
   companyMonerium: (_, d) => ({ title: "Connect the company’s Monerium keys", sub: d === null ? "Couldn’t check just now." : "API keys from the company’s own Monerium account. Monerium verifies the company.", view: "settings", sec: "monerium" }),
-  companyIban: () => ({ title: "Issue the company’s IBAN", sub: "Onto the company’s own Safe. This step is coming next and is not live yet.", tag: "Not live yet" }),
+  companyIban: (by, d, s) => ({ title: "Issue the company’s IBAN", sub: d === null ? "Couldn’t check just now." : IBAN_SUB[s?.state] || "Onto the company’s own Safe, signed with an owner’s passkey.",
+    ...(by.companyMonerium && s?.state !== "safe_needed" ? { view: "settings", sec: "monerium" } : {}) }),
   backup: (_, d) => ({ title: "Add a backup key", sub: d === null ? "Couldn’t check just now." : "A second key you keep, in case this sign-in is lost.", action: d === null ? null : { label: "Add", href: APP_LINKS.signers } }),
+};
+
+/** The IBAN step's line per state (org-monerium-model.js ibanState). */
+const IBAN_SUB = {
+  safe_needed: "Set up the company’s Safe first.",
+  link_pending: "Monerium is checking the signed declaration.",
+  iban_requested: "Requested. Monerium usually issues it within minutes.",
+  moved: "Monerium lists the company’s IBAN elsewhere now; see Settings → Monerium.",
 };
 
 /** A step's "Open": the view, and the Settings section in the URL too, so the
@@ -315,7 +324,7 @@ function checklistCard(steps) {
   const done = steps.filter((s) => s.done).length;
   const by = Object.fromEntries(steps.map((s) => [s.id, s.done]));
   const rows = steps.map((s) => {
-    const t = STEP[s.id](by, s.done);
+    const t = STEP[s.id](by, s.done, s);
     const right = s.done ? Z.tag("Done") : s.done === null ? Z.tag("Couldn’t check") : t.tag ? Z.tag(t.tag) : t.action ? appLink(t.action, t.title) : t.view ? openLink(t.view, t.sec) : Z.tag("Waiting");
     return `<li>${mark(s.done)}<span class="z-row__main zb-h-checks__main"><span class="z-row__title">${esc(t.title)}</span>${s.done ? "" : `<span class="z-row__sub">${esc(t.sub)}</span>`}</span>${right}</li>`;
   });

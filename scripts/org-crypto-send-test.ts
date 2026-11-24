@@ -19,7 +19,9 @@
  *   - the personal route refuses a company Safe, and the company send is not
  *     signed at /crypto-sends/:id/authorize;
  *   - an executed send is booked on the company account's statement, never on
- *     the queuing member's own books.
+ *     the queuing member's own books;
+ *   - a bank run from a company account with its IBAN issued is refused by
+ *     name (COMPANY_BANK_PAYOUT_NOT_BUILT) before any transfer is built.
  *
  * The sole-trader and personal paths are covered unchanged by
  * business-crypto-send:test and crypto-send:test.
@@ -375,6 +377,28 @@ try {
     assert.equal(x.data.code, "ORG_SAFE_NOT_DEPLOYED");
     assert.equal(store.cryptoSends.length, before);
     assert.equal(store.safeOpsOf("org_2").length, ops);
+  });
+
+  await check("a company bank run is refused by name, even with the company's IBAN issued: nothing is built", async () => {
+    store.addContact({ id: "c_b", orgId: "org_1", name: "Bob GmbH", wallets: [], bankAccounts: [{ id: "cb_1", currency: "EUR", country: "DE", holderName: "Bob GmbH", iban: "DE89370400440532013000" }], createdAt: now, updatedAt: now } as any);
+    store.updateAccount("acc_1", { identifier: { iban: "DE02100100109307118603" } });
+    try {
+      const d = await call("POST", "/orgs/org_1/drafts", "u_payer", { source: { kind: "account", accountId: "acc_1" }, lines: [{ contactId: "c_b", destination: { kind: "bank", bankAccountId: "cb_1", displayName: "Bob GmbH" }, asset: "EUR", amount: "5" }] });
+      assert.equal(d.status, 201, JSON.stringify(d.data));
+      const id = d.data.draft.id as string;
+      assert.equal((await call("POST", `/orgs/org_1/drafts/${id}/submit`, "u_payer")).status, 200);
+      assert.equal((await call("POST", `/orgs/org_1/drafts/${id}/review`, "u_admin", { approve: true })).status, 200);
+      const ops = store.safeOpsOf("org_1").length;
+      const transfers = store.transfers.length;
+      // noSepa throws if a transfer were built: the refusal comes first.
+      const x = await call("POST", `/orgs/org_1/drafts/${id}/execute`, "u_payer");
+      assert.equal(x.status, 409, JSON.stringify(x.data));
+      assert.equal(x.data.code, "COMPANY_BANK_PAYOUT_NOT_BUILT");
+      assert.equal(store.safeOpsOf("org_1").length, ops, "nothing queued");
+      assert.equal(store.transfers.length, transfers, "no transfer");
+    } finally {
+      store.updateAccount("acc_1", { identifier: {} });
+    }
   });
 
   await check("the personal route refuses a company Safe", async () => {

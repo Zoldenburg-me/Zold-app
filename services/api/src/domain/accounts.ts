@@ -340,7 +340,7 @@ export function accountIsSpendable(account: Account, org?: Pick<Organisation, "t
     const why = company && !account.address
       ? "The company’s Safe is not set up yet, so nothing can be sent from it"
       : company
-        ? "Issuing the company’s IBAN onto its Safe is not yet live, so nothing can be sent from it"
+        ? "The company’s IBAN is not issued onto its Safe yet (Settings → Monerium), so nothing can be sent from it"
       : account.currency === "EUR" && !account.backingUserId
         ? "No IBAN is connected to this account yet, so nothing can be sent from it"
         : account.gate?.reason.replace(/\.$/, "");

@@ -203,8 +203,11 @@ export interface Organisation {
    * company's Monerium developer section), proven against Monerium before
    * they are stored. The secret is encrypted at rest (stored-secrets.ts) and
    * never returned, in any form. `profile` is the corporate profile the keys
-   * opened, as Monerium reported it at the last check. Nothing here issues an
-   * IBAN or moves money (routes/business/org-monerium.ts).
+   * opened, as Monerium reported it at the last check. `safe` is the company
+   * Safe's link to that profile and its IBAN request, as far as Zold has
+   * taken them (routes/business/org-monerium-iban.ts); the IBAN itself is on
+   * the EUR account once Monerium attributes it to the Safe. Nothing here
+   * moves money.
    */
   monerium?: {
     clientId: string;
@@ -217,6 +220,18 @@ export interface Organisation {
     /** Set when, at a later check, the keys no longer opened `profile`. */
     profileMissingAt?: string;
     connectedByMemberId: string;
+    safe?: {
+      address: `0x${string}`;
+      /** The owner member whose passkey signed the ownership declaration. */
+      signedByMemberId: string;
+      /** When Monerium took the signed declaration (it may link later). */
+      linkSubmittedAt: string;
+      /** When Monerium showed the Safe linked under `profile`. */
+      linkedAt?: string;
+      ibanRequestedAt?: string;
+      /** When Monerium listed the issued IBAN on another address or chain. */
+      movedAwayAt?: string;
+    };
   };
   /**
    * Whether a payment run needs a second person's approval before it is sent.

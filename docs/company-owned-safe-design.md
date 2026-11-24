@@ -98,7 +98,7 @@ Zold is redeployed from zero (owner, 2026-11-18). No business account is backed 
 2. Pending-op multi-signature queue (§2.4) with tests, behind a flag. Built: #187, behind `ORG_SAFE_QUEUE_ENABLED`.
 3. Org Safe with **one owner** at threshold 1: the owner who opens the account (owner, 2026-11-18). The plan is stored on the org (#190) and the org-scoped read route and member → signer mapping exist (#193, §7.1(11)–(12)). Deploying it at account opening is built (#192). Still to build: paying from it through the queue (step 2) from day one, never through the personal path and its `assertPasskeyAloneCanSign` check (`wallet/candide.ts:637`).
    - **Deferred: more than one owner**: §2.3's add/remove flow, applying Q1's default threshold and Q6's drop rule as answered. Because payments already go through the queue, adding an owner later is the invite-and-passkey flow plus an add-owner op the current owners sign there (`addOwnerTransaction`, `wallet/safe-signers.ts:158`). Payments, the API and the threshold logic do not change.
-4. Monerium link and IBAN for the org Safe (§3.3), issued at account opening.
+4. Monerium link and IBAN for the org Safe (§3.3), issued at account opening. Built for a Safe at threshold 1, on the company's own Monerium keys (`routes/business/org-monerium-iban.ts`); several owners' signatures on the declaration are not collected yet (§7.1(4)). Paying a bank account from the company's IBAN (a Monerium redeem signed by the Safe through the queue) is not built.
 5. Org-scoped Zoldenburg recovery enrolment from the company's IBAN (§6, Q7).
 6. Company orgs never take the personal-backer path; AGENTS.md and docs changes.
 This is M2-sized. Row 13 (§3.1) is part of it.

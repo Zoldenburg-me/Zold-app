@@ -84,7 +84,13 @@ export type AuditKind =
   /** A member issued a link code for a shop, or revoked a merchant link. */
   | "merchant_link.code_issued"
   | "merchant_link.revoked"
-  | "org_safe.replanned";
+  | "org_safe.replanned"
+  /** A company Safe's signed declaration went to Monerium, and Monerium
+   *  attributed the company's IBAN to that Safe. */
+  | "org_iban.link_submitted"
+  | "org_iban.issued"
+  /** Monerium listed the company's issued IBAN on another address or chain. */
+  | "org_iban.moved_away";
 
 export interface AuditEntry {
   id: string;
