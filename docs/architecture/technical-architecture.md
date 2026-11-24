@@ -1578,11 +1578,11 @@ Settings (`config/checkout-service.ts`; a bad webhook URL or secret refuses star
 | `GET /:orgId/bookkeeping/export/:month/lexware.csv` (C(export.ledger)) | Lexware Office bank-import CSV. A line whose Beleg no longer verifies names no code and says `Beleg stimmt nicht mehr`. |
 | `GET /:orgId/bookkeeping/export/:month/belege.zip` (C(export.ledger)) | ZIP of the month's Belege. A Beleg that no longer verifies is left out; `MISSING-<month>.txt` lists its line and why. |
 | `POST /:orgId/bookkeeping/lines/:lineId/beleg` (C(export.ledger), reports.run) | Issue one line's Beleg. |
-| `POST /:orgId/bookkeeping/lines/:lineId/beleg/replace` (C(export.ledger), reports.run) | Revoke the line's Beleg that no longer verifies and issue a new one (owner, admin, accountant); 409 if it still verifies. Audited as `document.reissued`, by document id. |
+| `POST /:orgId/bookkeeping/lines/:lineId/beleg/replace` (C(export.ledger), reports.run) | Revoke the line's Beleg that no longer verifies and issue a new one (owner, admin, accountant); the new one is signed and checked first, and revoke plus issue are one write. 409 if the old one still verifies, or if a new one would fail too (a payout Monerium rejected); nothing is revoked then. Audited as `document.reissued`, by document id. |
 | `GET /:orgId/integrations` (org.read) | Connector state; never a key. |
 | `POST/DELETE /:orgId/integrations/getmyinvoices` (C(integrations.accounting), org.update) | Verify and store, or remove, the org's GetMyInvoices key. |
 | `GET /:orgId/integrations/getmyinvoices/bank-accounts` (C(integrations.accounting)) | Their bank accounts, read only. |
-| `POST /:orgId/integrations/getmyinvoices/push` (C(integrations.accounting), reports.run) | Push a month's Belege; idempotent on the document number. Per line: `uploaded`, `exists`, `unknown` (no answer, not found after), `no-beleg` or `failed` (refused). |
+| `POST /:orgId/integrations/getmyinvoices/push` (C(integrations.accounting), reports.run) | Push a month's Belege; idempotent on the document number. Per line: `uploaded`, `exists`, `unknown` (no answer, not found after), `no-beleg` or `failed` (refused). A Beleg records what GetMyInvoices holds of it (`sentTo`, server-side); the bank-line lookup sends only codes it holds, and after a replace `bankLine.revokedStillAttached` counts revoked Belege still attached there (Zold detaches none). |
 
 **Shopify**
 
