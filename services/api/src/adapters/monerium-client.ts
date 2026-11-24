@@ -48,6 +48,17 @@ const tokenError = (what: string, status: number, body: string) =>
     ? new MoneriumAccessError(`${what} (${status}): ${body}`, status)
     : Object.assign(new Error(`${what} (${status}): ${body}`), { partnerStatus: status });
 
+/** Monerium's body, parsed. A body that is not JSON (a proxy's HTML page)
+ *  throws a fixed message: Node's own parse error quotes the body's start. */
+export function moneriumJson<T>(text: string, what: string, status: number): T {
+  if (!text) return {} as T;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error(`${what} answered with a body that is not JSON (HTTP ${status})`);
+  }
+}
+
 /**
  * What a log line may say about a failed Monerium call: the HTTP status, and
  * for a token request a fixed label, never Monerium's body. A failure with no
@@ -109,7 +120,7 @@ export class MoneriumClient {
     if (!res.ok) {
       throw tokenError("Monerium auth failed", res.status, await res.text());
     }
-    const data = (await res.json()) as { access_token: string; expires_in: number };
+    const data = moneriumJson<{ access_token: string; expires_in: number }>(await res.text(), "Monerium auth", res.status);
     this.token = { value: data.access_token, expiresAt: Date.now() + data.expires_in * 1000 };
     return this.token.value;
   }
@@ -133,7 +144,7 @@ export class MoneriumClient {
         res.status,
       );
     }
-    return (text ? JSON.parse(text) : {}) as T;
+    return moneriumJson<T>(text, `Monerium ${method} ${path}`, res.status);
   }
 
   /** App-level (client-credentials) bearer token, for callers that talk to
@@ -277,7 +288,7 @@ export async function exchangeAuthorizationCode(cfg: MoneriumConfig, params: {
   if (!res.ok) {
     throw tokenError("Monerium OAuth code exchange failed", res.status, await res.text());
   }
-  return (await res.json()) as MoneriumTokenResponse;
+  return moneriumJson<MoneriumTokenResponse>(await res.text(), "Monerium OAuth token", res.status);
 }
 
 export async function refreshAuthorizationToken(
@@ -298,7 +309,7 @@ export async function refreshAuthorizationToken(
   if (!res.ok) {
     throw tokenError("Monerium OAuth refresh failed", res.status, await res.text());
   }
-  return (await res.json()) as MoneriumTokenResponse;
+  return moneriumJson<MoneriumTokenResponse>(await res.text(), "Monerium OAuth token", res.status);
 }
 
 
@@ -326,7 +337,7 @@ export async function moneriumBearerRequest<T>(
       res.status,
     );
   }
-  return (text ? JSON.parse(text) : {}) as T;
+  return moneriumJson<T>(text, `Monerium ${method} ${path}`, res.status);
 }
 
 export const LINK_MESSAGE = "I hereby declare that I am the address owner.";

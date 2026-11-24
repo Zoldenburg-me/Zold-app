@@ -176,7 +176,17 @@ assert.equal(m.runIdFrom("", null), null);
   m.showProgress("Approved 2 of 3…", { open: false }, status, (t: string) => toasts.push(t));
   m.showProgress("Approved 3 of 3…", null, null, (t: string) => toasts.push(t));
   assert.deepEqual(toasts, ["Approved 2 of 3…", "Approved 3 of 3…"], "no dialog open: a toast");
-  assert.match(actions, /showProgress\(`Approved \$\{\+\+approved\} of \$\{r\.authorizations\.length\}…`, \$\("#dlg"\), \$\("#dlg-progress"\), toast\)/);
+  // A line skipped as expired is not an approval: a 3-line run with one
+  // expired ends at "Approved 2 of 3, 1 expired, not sent.", not "Approved 2 of 3…".
+  assert.equal(m.approvalProgress(1, 0, 3), "Approved 1 of 3…");
+  assert.equal(m.approvalProgress(1, 1, 3), "Approved 1 of 3, 1 expired, not sent…");
+  assert.equal(m.approvalProgress(2, 1, 3), "Approved 2 of 3, 1 expired, not sent.");
+  assert.equal(m.approvalProgress(3, 0, 3), "Approved 3 of 3.");
+  assert.equal(m.approvalProgress(0, 2, 2), "Approved 0 of 2, 2 expired, not sent.");
+  assert.match(actions, /const progress = \(\) => showProgress\(approvalProgress\(approved, expired, r\.authorizations\.length\), \$\("#dlg"\), \$\("#dlg-progress"\), toast\);/);
+  assert.match(actions, /why: "approval expired" \}\);\n\s*expired\+\+;\n\s*progress\(\);\n\s*continue;/, "an expired line is counted apart");
+  assert.match(actions, /signedLineOutcome\(t, true\) \}\);\n\s*approved\+\+;\n\s*progress\(\);/, "only a submitted line counts as approved");
+  assert.doesNotMatch(actions, /Approved \$\{/, "the progress text is approvalProgress's alone");
   assert.match(actions, /esc\(warning\)\}<\/p><p class="desc" id="dlg-progress" role="status"><\/p>`/, "the warning dialog has a place for progress");
 }
 

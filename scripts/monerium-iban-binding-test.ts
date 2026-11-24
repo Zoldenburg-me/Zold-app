@@ -38,7 +38,7 @@ process.env.MONERIUM_IBAN_CHECK_MS = "300000";
 
 /** The IBANs each bearer token sees at GET /ibans. */
 const ibansOf = new Map<string, any[]>();
-const fake = { down: false, reads: 0, calls: 0 };
+const fake = { down: false, html: false, reads: 0, calls: 0 };
 /** Text Monerium puts in a failed answer's body: no log line may carry it. */
 const DOWN_BODY = "upstream-detail-7f3a";
 /** The user's own API keys (client credentials) and the token they mint. */
@@ -51,6 +51,8 @@ const monerium = createServer((req, res) => {
   const url = new URL(req.url ?? "/", "http://fake");
   const send = (code: number, b: any) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(b)); };
   if (fake.down) return send(503, { code: 503, status: "Service Unavailable", details: DOWN_BODY });
+  // A proxy's page with a 200: Node's JSON parse error quotes its start.
+  if (fake.html && url.pathname !== "/auth/token") { res.writeHead(200, { "content-type": "text/html" }); return res.end(`<html>${DOWN_BODY}</html>`); }
   if (url.pathname === "/auth/token") {
     let raw = "";
     req.on("data", (c) => (raw += c));
@@ -207,6 +209,46 @@ await check("a failed read on the user's own credentials logs Monerium's status,
     assert.ok(line, `a "${what}" line names the user (${warned.join(" | ")})`);
     assert.match(line!, /HTTP 503/);
     assert.ok(!line!.includes("upstream-detail") && !line!.includes("Service Unavailable"), `no Monerium body in the log: ${line}`);
+  }
+});
+
+await check("a 200 whose body is not JSON logs a fixed line, not the start of the body", async () => {
+  const u = addUser(41);
+  ibansOf.set(u.token, [listed(u.iban, u.address)]);
+  const warned: string[] = [];
+  const realWarn = console.warn;
+  console.warn = (m: string) => warned.push(String(m));
+  fake.html = true;
+  try {
+    const after = await verifyIbanBinding(store.findUser(u.id)!);
+    assert.equal(after.iban, u.iban, "an unreadable answer changes nothing");
+    await pollDepositsOnce();
+  } finally {
+    fake.html = false;
+    console.warn = realWarn;
+  }
+  for (const what of ["could not re-read the IBAN", "could not read orders"]) {
+    const line = warned.find((w) => w.includes(what) && w.includes(u.id));
+    assert.ok(line, `a "${what}" line names the user (${warned.join(" | ")})`);
+    assert.match(line!, /a body that is not JSON \(HTTP 200\)/);
+    assert.ok(!line!.includes("<html") && !line!.includes("upstream-detail"), `no Monerium body in the log: ${line}`);
+  }
+});
+
+await check("a Monerium body that is not JSON is refused with fixed text, not the body's start", async () => {
+  const { moneriumJson } = await import("../services/api/src/adapters/monerium-client.js");
+  const { moneriumEureOrUnavailable, MoneriumTokensUnavailable } = await import("../services/api/src/adapters/monerium-tokens.js");
+  const page = "<html>secret-body-9c1</html>";
+  assert.deepEqual(moneriumJson("", "Monerium GET /x", 200), {});
+  assert.deepEqual(moneriumJson('{"a":1}', "Monerium GET /x", 200), { a: 1 });
+  assert.throws(() => moneriumJson(page, "Monerium GET /x", 200), (e: Error) => e.message === "Monerium GET /x answered with a body that is not JSON (HTTP 200)");
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(page, { status: 200, headers: { "content-type": "text/html" } })) as typeof fetch;
+  try {
+    await assert.rejects(moneriumEureOrUnavailable("https://api.monerium.dev", 84532), (e: Error) =>
+      e instanceof MoneriumTokensUnavailable && /unreadable body \(HTTP 200\)$/.test(e.message) && !e.message.includes("<html") && !e.message.includes("secret"));
+  } finally {
+    globalThis.fetch = realFetch;
   }
 });
 

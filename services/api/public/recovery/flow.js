@@ -16,6 +16,20 @@ export const TICKET_KEY = "zold-recovery-otp-ticket";
 /** The email of the recovery in progress in this tab, to resume after a reload or a login redirect. */
 export const EMAIL_KEY = "zold-recovery-email";
 
+/** The user handle of the recovery passkey made in this browser. Kept until
+ *  the recovery is done: an authenticator replaces its own passkey for the
+ *  same handle, so a retry does not leave one more on a security key's few slots. */
+export const HANDLE_KEY = "zold-recovery-passkey-handle";
+
+/** This recovery's passkey user handle (base64url, 16 random bytes): the saved one, or a new one saved. */
+export function recoveryHandle(storage, email, random = () => crypto.getRandomValues(new Uint8Array(16))) {
+  const saved = savedFor(storage, HANDLE_KEY, email);
+  if (saved) return saved;
+  const made = btoa(String.fromCharCode(...random())).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  saveFor(storage, HANDLE_KEY, email, made);
+  return made;
+}
+
 export function savedFor(storage, key, email) {
   try { return JSON.parse(storage.getItem(key) || "{}")[email.toLowerCase()] || ""; } catch { return ""; }
 }
