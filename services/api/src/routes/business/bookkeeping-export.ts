@@ -17,7 +17,7 @@ import { store } from "../../store.js";
 import { requireCapability, requirePermission, type OrgContext } from "../org-context.js";
 import { isMonth, linesInMonth, ownTransferAllowed } from "../../bookkeeping/statement.js";
 import { statementLinesOf, swapsHaveExecuted, writeAccountStatementLines, writeStatementLinesFor } from "../../bookkeeping/writer.js";
-import { belegOfLine, BelegStillVerifies, issueBelegForLine, replaceBelegForLine } from "../../bookkeeping/issue.js";
+import { belegOfLine, BelegStillVerifies, BelegWouldNotVerify, issueBelegForLine, replaceBelegForLine } from "../../bookkeeping/issue.js";
 import { belegFileName, belegPdf, UNEXECUTED_NOTE } from "../../bookkeeping/beleg.js";
 import { lexwareCsvBytes, lexwareRow } from "../../bookkeeping/lexware.js";
 import { zipStored } from "../../bookkeeping/zip.js";
@@ -257,6 +257,7 @@ export function createBookkeepingExportRoutes(deps: OrgRoutes): express.Router {
         out = await replaceBelegForLine(line);
       } catch (err) {
         if (err instanceof BelegStillVerifies) return res.status(409).json({ error: "this receipt still matches the books, so there is nothing to replace" });
+        if (err instanceof BelegWouldNotVerify) return res.status(409).json({ error: `a new receipt would not match the books either (${err.message}), so this one is left as it is` });
         throw err;
       }
       // Document ids, never codes: a verification code is a credential.

@@ -314,7 +314,9 @@ RENDER.export = async () => {
   const integrations = cap("integrations.accounting").allowed
     ? (await api(`/api/orgs/${org.id}/integrations`).catch(() => null))?.integrations : null;
   const withBeleg = d.lines.filter((l) => l.documentCode).length;
-  const dis = withBeleg ? "" : ` disabled title="Create receipts for ${esc(exportMonth)} first"`;
+  const stale = d.lines.filter((l) => l.belegStale).length;
+  // A stale receipt still opens the files: they say it was left out and why.
+  const dis = withBeleg || stale ? "" : ` disabled title="Create receipts for ${esc(exportMonth)} first"`;
   const mayBook = roleCan(org.role, "categorise");
   return `${d.swapsHaveExecuted ? "" : `<div class="banner warn">${Z.icon("science")}<span>${esc(plain(d.note || ""))}</span></div>`}
     <div class="zb-bar"><div class="zb-inline"><label for="x-month" style="margin:0">Month</label>
@@ -326,7 +328,7 @@ RENDER.export = async () => {
         <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="export-zip"${dis}>Receipts as ZIP</button>
         ${mayBook && integrations?.getmyinvoices?.connected ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="gmi-push"${dis}>Send to GetMyInvoices</button>` : ""}
       </div></div>
-    <p class="zb-hint" style="margin-bottom:12px">${d.lines.length} line${d.lines.length === 1 ? "" : "s"}, ${withBeleg} with a receipt.${withBeleg || !d.lines.length ? "" : " The CSV and the ZIP open once a line has its receipt: press Create receipts."}${mayBook && integrations && !integrations.getmyinvoices?.connected ? ` <a href="?view=integrations" data-view-link="integrations">Connect GetMyInvoices</a> to send the receipts there.` : ""}</p>
+    <p class="zb-hint" style="margin-bottom:12px">${d.lines.length} line${d.lines.length === 1 ? "" : "s"}, ${withBeleg} with a receipt.${stale ? ` ${stale} with a receipt that no longer matches the books: replace it below.` : ""}${withBeleg || stale || !d.lines.length ? "" : " The CSV and the ZIP open once a line has its receipt: press Create receipts."}${mayBook && integrations && !integrations.getmyinvoices?.connected ? ` <a href="?view=integrations" data-view-link="integrations">Connect GetMyInvoices</a> to send the receipts there.` : ""}</p>
     ${d.lines.length ? `<div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Value date</th><th scope="col">Event</th><th scope="col">Who</th><th scope="col">Reference</th><th scope="col" class="z-tbl__num">Euros</th><th scope="col">Receipt</th></tr></thead><tbody>${d.lines.map((l) => `<tr>
         <td class="zb-top z-dim">${esc(day(ymd(l.valueDate)))}${l.bookingDate !== l.valueDate ? `<span class="zb-sub2">booked ${esc(day(ymd(l.bookingDate)))}</span>` : ""}</td>
         <td class="zb-top">${esc(EVENT_LABEL[l.event] || l.event)}${l.unexecuted ? ` ${Z.tag("Unproven", "amber")}` : ""}</td>

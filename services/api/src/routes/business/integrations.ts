@@ -21,7 +21,7 @@ import { GetMyInvoicesClient, GmiApiError, gmiUserAgent, type GmiBankAccount, ty
 import { belegFileName, belegPdf, belegTitle, type BelegSnapshot } from "../../bookkeeping/beleg.js";
 import { isMonth, linesInMonth } from "../../bookkeeping/statement.js";
 import { statementLinesOf } from "../../bookkeeping/writer.js";
-import { belegRecordsAgree, issueBelegForLine } from "../../bookkeeping/issue.js";
+import { belegCodesOfLine, belegRecordsAgree, issueBelegForLine } from "../../bookkeeping/issue.js";
 import { auditEntry } from "../../audit.js";
 import type { Organisation } from "../../domain/types.js";
 import { redactedMessage } from "../../http/log-cause.js";
@@ -253,7 +253,7 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
       if (bankAccountUid !== undefined && bankAccountUid !== gmi.bankAccountUid) {
         store.updateOrganisation(ctx.org.id, { integrations: { ...ctx.org.integrations, getmyinvoices: { ...gmi, bankAccountUid } } });
       }
-      const results: { lineId: string; code?: string; outcome: "uploaded" | "exists" | "unknown" | "no-beleg" | "failed"; documentUid?: number; verifiedAfterTimeout?: true; tagsMayBeMissing?: true; error?: string; bankLine?: GmiBankLineResult | { outcome: "failed"; error: string } }[] = [];
+      const results: { lineId: string; code?: string; outcome: "uploaded" | "exists" | "unknown" | "no-beleg" | "failed"; stale?: true; documentUid?: number; verifiedAfterTimeout?: true; tagsMayBeMissing?: true; error?: string; bankLine?: GmiBankLineResult | { outcome: "failed"; error: string } }[] = [];
       for (const line of lines) {
         // One step for the person sending: a line without its Beleg gets it
         // now (issuing is once per line), then it goes up.
@@ -271,7 +271,7 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
         // The export's rule: a Beleg that stopped verifying is replaced, not sent.
         const agree = belegRecordsAgree(doc.snapshot);
         if (!agree.ok) {
-          results.push({ lineId: line.id, outcome: "no-beleg", error: `the receipt no longer matches the books (${agree.detail}); replace it in Books` });
+          results.push({ lineId: line.id, outcome: "no-beleg", stale: true, error: `the receipt no longer matches the books (${agree.detail}); replace it in Books` });
           continue;
         }
         let pushed: (typeof results)[number];
@@ -283,7 +283,9 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
         }
         if (bankAccountUid !== undefined) {
           try {
-            pushed.bankLine = await client.pushBankLine(bankAccountUid, bankLineFor(doc.snapshot, doc.code), doc.code, pushed.documentUid);
+            // Current code first; an earlier one finds a line sent before a replace.
+            const markers = [doc.code, ...belegCodesOfLine(ctx.org.id, line.id).filter((c) => c !== doc.code)];
+            pushed.bankLine = await client.pushBankLine(bankAccountUid, bankLineFor(doc.snapshot, doc.code), markers, pushed.documentUid);
           } catch (err: any) {
             pushed.bankLine = { outcome: "failed", error: redactedMessage(err).slice(0, 200) };
           }

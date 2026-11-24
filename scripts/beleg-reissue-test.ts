@@ -12,8 +12,13 @@
  * revoked one keeps its frozen snapshot and fails verification at its code.
  * Marking the line again makes the old Beleg true again, with no replace.
  *
- * What this cannot show: the screens in a browser, or the GetMyInvoices push
- * (it takes the same rule, belegOfLine). Offline.
+ * A replacement never carries the old code; two replaces at once leave one
+ * live Beleg; replace refuses, revoking nothing, when the new Beleg would
+ * fail too (a payout Monerium rejected); a deposit converted in parts has a
+ * Beleg per fill that verifies before and after the rest is converted.
+ *
+ * What this cannot show: the screens in a browser. The GetMyInvoices push,
+ * replace and re-send are in getmyinvoices-test. Offline.
  *
  * Run: npm run beleg-reissue:test
  */
@@ -238,6 +243,19 @@ await check("a replacement never carries the old code: its public page does not 
   assert.equal((store.findDocumentByCode(NEW)!.snapshot as any).line.documentCode, undefined);
 });
 
+await check("two replaces at once: one replaces, the other finds the new Beleg live and is refused; one live Beleg on the line", async () => {
+  assert.equal((await own(true)).status, 200);
+  store.updateDocument(store.findDocumentByCode((await line()).documentCode)!.id, { revokedAt: NOW });
+  assert.equal((await replace("u_boss")).status, 201, "a marked Beleg");
+  assert.equal((await own(false)).status, 200);
+  assert.ok((await line()).belegStale);
+  const both = await Promise.all([replace("u_boss"), replace("u_accountant")]);
+  assert.deepEqual(both.map((r) => r.status).sort(), [201, 409]);
+  const live = store.documentsForOrg("org_co").filter((d) => !d.revokedAt && (d.snapshot as any).line?.lineId === IN);
+  assert.equal(live.length, 1);
+  assert.equal((await line()).documentCode, live[0].code);
+});
+
 console.log("\nWhere replacing cannot help");
 
 const H = (n: number) => `0x${n.toString(16).padStart(64, "0")}`;
@@ -298,6 +316,9 @@ await check("the books statement and the export draw Replace where the receipt s
   const app = read("app/phone-activity.js");
   assert.match(app, /line\.belegStale \?[\s\S]*?Replace booking receipt/);
   assert.match(app, /\/beleg\/replace`, \{\}\)/);
+  assert.match(views, /const dis = withBeleg \|\| stale \?/, "a month whose receipts are all stale still downloads: the files say why");
+  assert.match(read("business/actions.js"), /x\.stale\)\.length, "receipts that no longer match the books/, "the GetMyInvoices result says why and what to do");
+  assert.match(read("document.js"), /doc\.revokedAt \|\| doc\.verification\?\.checks\?\.some\(\(c\) => c\.name === "Records still match" && !c\.ok\)/, "no PDF link the server refuses");
 });
 
 server.close();

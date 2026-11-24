@@ -397,9 +397,9 @@ await check("a Beleg replaced after its line went up: the re-send finds the line
 await check("a line the lookup misses is found by GetMyInvoices' own duplicate refusal (code 127), not added twice", async () => {
   const c = new GetMyInvoicesClient({ apiKey: GOOD_KEY, userAgent: gmiUserAgent() });
   const tx = { bookingDate: "2026-09-20", valueDate: "2026-09-20", description: "Ref · Beleg MISSME", amount: 7, currencyCode: "EUR" };
-  const first = await c.pushBankLine(77, tx, "MISSME");
+  const first = await c.pushBankLine(77, tx, ["MISSME"]);
   // A marker the lookup cannot see: only their refusal can find it.
-  const second = await c.pushBankLine(77, tx, "NOT-IN-DESCRIPTION");
+  const second = await c.pushBankLine(77, tx, ["NOT-IN-DESCRIPTION"]);
   assert.equal(first.outcome, "added");
   assert.equal(second.outcome, "exists");
   assert.equal(second.transactionUid, first.transactionUid);

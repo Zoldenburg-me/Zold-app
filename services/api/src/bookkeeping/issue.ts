@@ -84,6 +84,11 @@ export function belegOfLine(e: LedgerEntry): { live: BelegDoc } | { stale: Beleg
  *  document someone may already hold would only make it fail. */
 export class BelegStillVerifies extends Error {}
 
+/** Replace refused: a Beleg issued from the books as they are now would fail
+ *  the same check (a payout Monerium rejected, say), so the old one stays as
+ *  it is and nothing is issued. */
+export class BelegWouldNotVerify extends Error {}
+
 /** One issue per line at a time: two sends at once must not both find no
  *  Beleg, sign two, and leave the line pointing at the second. */
 const issuing = new Map<string, Promise<unknown>>();
@@ -93,20 +98,32 @@ export function issueBelegForLine(entry: LedgerEntry): Promise<{ doc: StoredDocu
 }
 
 /** Revoke the line's Beleg that no longer verifies and issue one from the
- *  books as they are now. The revoked one keeps its frozen snapshot and fails
+ *  books as they are now. The new one is signed and checked first: only if
+ *  it verifies is the old one revoked, in the same step the line takes the
+ *  new code. The revoked one keeps its frozen snapshot and fails
  *  verification at its code. One that still verifies is refused
- *  (BelegStillVerifies); with no live Beleg this just issues. */
+ *  (BelegStillVerifies), as is a replacement that would fail too
+ *  (BelegWouldNotVerify); with no live Beleg this just issues. */
 export function replaceBelegForLine(entry: LedgerEntry): Promise<{ doc: StoredDocument; issued: boolean; revoked?: StoredDocument }> {
   return queued(entry, async () => {
     const now = store.ledgerOf(entry.orgId).find((e) => e.id === entry.id) ?? entry;
     const current = belegOfLine(now);
-    if (current && "live" in current) throw new BelegStillVerifies("this Beleg still matches the books");
-    // Before the revoke: a line that cannot have a Beleg keeps the one it has.
-    belegContextFor(now);
-    if (current) store.updateDocument(current.stale.id, { revokedAt: new Date().toISOString() });
-    const r = await issueOnce(now);
-    return current ? { ...r, revoked: current.stale } : r;
+    if (!current) return issueOnce(now);
+    if ("live" in current) throw new BelegStillVerifies("this Beleg still matches the books");
+    const doc = await draft(now);
+    const agree = belegRecordsAgree(doc.snapshot as BelegSnapshot, now);
+    if (!agree.ok) throw new BelegWouldNotVerify(agree.detail);
+    store.updateDocument(current.stale.id, { revokedAt: new Date().toISOString() });
+    commit(now, doc);
+    return { doc, issued: true, revoked: current.stale };
   });
+}
+
+/** Every code a line's Belege have had, revoked ones included: what was
+ *  sent to a partner under an earlier code is found again by it. Server-side
+ *  only; a code is a credential. */
+export function belegCodesOfLine(orgId: string, lineId: string): string[] {
+  return store.documentsForOrg(orgId).filter((d) => d.snapshot.kind === "beleg" && d.snapshot.line.lineId === lineId).map((d) => d.code);
 }
 
 function queued<T extends { doc: StoredDocument; issued: boolean }>(entry: LedgerEntry, fn: () => Promise<T>): Promise<T> {
@@ -126,10 +143,17 @@ async function issueOnce(given: LedgerEntry): Promise<{ doc: StoredDocument; iss
     const existing = store.findDocumentByCode(s.documentCode);
     if (existing && !existing.revokedAt) return { doc: existing, issued: false };
   }
+  const doc = await draft(entry);
+  commit(entry, doc);
+  return { doc, issued: true };
+}
+
+/** The Beleg for the line as the books are now, signed, not yet stored. */
+async function draft(entry: LedgerEntry): Promise<StoredDocument> {
   const ctx = belegContextFor(entry);
   const snapshot: BelegSnapshot = buildBeleg(entry, ctx);
   const code = newDocumentCode();
-  const doc: StoredDocument = {
+  return {
     id: randomUUID(),
     code: normaliseCode(code),
     kind: "beleg",
@@ -139,7 +163,11 @@ async function issueOnce(given: LedgerEntry): Promise<{ doc: StoredDocument; iss
     snapshot,
     attestations: { zold: await signSnapshot(snapshot, code) },
   };
+}
+
+function commit(entry: LedgerEntry, doc: StoredDocument): void {
+  // Re-read after the signing await: the writer may have updated the row.
+  const s = (store.ledgerOf(entry.orgId).find((e) => e.id === entry.id) ?? entry).statement!;
   store.addDocument(doc);
   store.updateLedgerEntry(entry.id, { statement: { ...s, documentCode: doc.code } });
-  return { doc, issued: true };
 }

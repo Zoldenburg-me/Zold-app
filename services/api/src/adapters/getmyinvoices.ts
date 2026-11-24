@@ -281,12 +281,21 @@ export class GetMyInvoicesClient {
   /**
    * The bank line for one Beleg, once, with the Beleg assigned to it.
    *
-   * `marker` (the Beleg code) is in the description, and is what makes a
-   * re-send find the line instead of adding it twice. An add that got no
-   * answer may have landed, so it is looked up again rather than retried.
+   * A marker (a Beleg code) is in the description, and is what makes a
+   * re-send find the line instead of adding it twice. `markers` are every
+   * code the line's Belege have had, so a line sent before its Beleg was
+   * replaced is found by the old one. An add that got no answer may have
+   * landed, so it is looked up again rather than retried.
    */
-  async pushBankLine(bankAccountUid: number, tx: GmiBankTransaction, marker: string, documentUid?: number): Promise<GmiBankLineResult> {
-    let transactionUid: number | undefined = (await this.findBankTransactions(bankAccountUid, marker, tx.bookingDate))[0]?.transactionUid;
+  async pushBankLine(bankAccountUid: number, tx: GmiBankTransaction, markers: string[], documentUid?: number): Promise<GmiBankLineResult> {
+    const find = async (): Promise<number | undefined> => {
+      for (const m of markers) {
+        const uid = (await this.findBankTransactions(bankAccountUid, m, tx.bookingDate))[0]?.transactionUid;
+        if (uid) return uid;
+      }
+      return undefined;
+    };
+    let transactionUid: number | undefined = await find();
     let outcome: GmiBankLineResult["outcome"] = transactionUid ? "exists" : "added";
     if (!transactionUid) {
       try {
@@ -301,7 +310,7 @@ export class GetMyInvoicesClient {
         } else if (!(err instanceof GmiApiError) || (err.status !== 0 && err.status < 500)) throw err;
         for (const wait of transactionUid ? [] : this.relookupDelaysMs) {
           await new Promise((r) => setTimeout(r, wait));
-          transactionUid = (await this.findBankTransactions(bankAccountUid, marker, tx.bookingDate).catch(() => []))[0]?.transactionUid;
+          transactionUid = await find().catch(() => undefined);
           if (transactionUid) break;
         }
         if (!transactionUid) return { outcome: "unknown", error: redactedMessage(err) };
