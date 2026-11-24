@@ -46,16 +46,16 @@ check("dates are DD.MM.YYYY and amounts carry a decimal comma and a sign", () =>
 });
 
 check("a credit puts the counterparty as Auftraggeber and the holder as Empfänger; a debit the reverse", () => {
-  const credit = lexwareRow(entry(), "Zoldenburg UG");
+  const credit = lexwareRow(entry(), "Zoldenburg UG", undefined);
   assert.equal(credit.orderer, "Kunde AG DE89370400440532013000");
   assert.equal(credit.recipient, "Zoldenburg UG");
-  const debit = lexwareRow(entry({ amountCents: -5000, event: "sepa_out" }), "Zoldenburg UG");
+  const debit = lexwareRow(entry({ amountCents: -5000, event: "sepa_out" }), "Zoldenburg UG", undefined);
   assert.equal(debit.orderer, "Zoldenburg UG");
   assert.equal(debit.recipient, "Kunde AG DE89370400440532013000");
 });
 
 check("one line: separator, CRLF, Beleg code, invoice number, tx hash and the rule-2 note in Zusatzinfo", () => {
-  const csv = lexwareCsv([lexwareRow(entry(), "Zoldenburg UG")]);
+  const csv = lexwareCsv([lexwareRow(entry(), "Zoldenburg UG", "ABCDEFGHJKMNPQR")]);
   const lines = csv.split("\r\n");
   assert.equal(lines.length, 3, "header, row, trailing newline");
   const cells = lines[1].split(";");
@@ -79,12 +79,12 @@ check("a memo that starts like a formula is neutralised; semicolons and quotes a
   assert.equal(lexwareCell("\t=1+1"), "'=1+1");
   assert.equal(lexwareCell("\u0001=1+1"), "'\u0001=1+1", "a control character the trim keeps does not hide a formula");
   assert.equal(lexwareCell("\u00a0+1"), "'+1");
-  const csv = lexwareCsv([lexwareRow(entry({ reference: "=HYPERLINK(\"x\")" }), "Z")]);
+  const csv = lexwareCsv([lexwareRow(entry({ reference: "=HYPERLINK(\"x\")" }), "Z", undefined)]);
   assert.match(csv.split("\r\n")[1], /;"'=HYPERLINK\(""x""\)";/);
 });
 
 check("the bytes are ISO-8859-1 like the template, with characters outside it replaced", () => {
-  const bytes = lexwareCsvBytes([lexwareRow(entry({ counterparty: { name: "Müller & Söhne — 東京" } }), "Z")]);
+  const bytes = lexwareCsvBytes([lexwareRow(entry({ counterparty: { name: "Müller & Söhne — 東京" } }), "Z", undefined)]);
   const text = bytes.toString("latin1");
   assert.ok(text.includes("Müller & Söhne"), "umlauts survive");
   assert.ok(text.includes("Zahlungsempfänger"), "the header's ä survives");

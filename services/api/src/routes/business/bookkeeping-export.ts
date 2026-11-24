@@ -25,9 +25,19 @@ export interface OrgRoutes {
   ctxOf: (req: express.Request, res: express.Response) => OrgContext | undefined;
 }
 
+/** The line's Beleg if it may be handed out: issued, a Beleg, not revoked.
+ *  The statement, the CSV and the ZIP all use this one rule, so a revoked
+ *  Beleg reads as missing everywhere until prepare issues a new one. */
+function liveBeleg(e: LedgerEntry) {
+  const code = e.statement!.documentCode;
+  const doc = code ? store.findDocumentByCode(code) : undefined;
+  return doc && doc.snapshot.kind === "beleg" && !doc.revokedAt ? { ...doc, snapshot: doc.snapshot } : undefined;
+}
+
 /** The line as the dashboard and the accountant see it. */
 export function publicStatementLine(e: LedgerEntry) {
   const s = e.statement!;
+  const beleg = liveBeleg(e);
   return {
     id: e.id,
     event: s.event,
@@ -45,7 +55,7 @@ export function publicStatementLine(e: LedgerEntry) {
     ...(ownTransferAllowed(e) ? { ownTransferAllowed: true } : {}),
     note: e.note,
     links: s.links,
-    ...(s.documentCode ? { documentCode: s.documentCode, documentUrl: documentUrl(s.documentCode) } : {}),
+    ...(beleg ? { documentCode: beleg.code, documentUrl: documentUrl(beleg.code) } : {}),
     ...(s.unexecuted ? { unexecuted: true } : {}),
   };
 }
@@ -157,8 +167,9 @@ export function createBookkeepingExportRoutes(deps: OrgRoutes): express.Router {
     const lines = linesInMonth(statementLinesOf(ctx.org.id), month);
     const holder = holderNameFor(ctx.org.id);
     const rows = lines.map((e) => {
-      const row = lexwareRow(e, holder);
-      if (!e.statement!.documentCode) row.extra = ["Beleg fehlt (Export noch nicht vorbereitet)", row.extra].filter(Boolean).join(" | ");
+      const code = liveBeleg(e)?.code;
+      const row = lexwareRow(e, holder, code);
+      if (!code) row.extra = ["Beleg fehlt (Export noch nicht vorbereitet)", row.extra].filter(Boolean).join(" | ");
       return row;
     });
     // Set after attachment(): express re-derives the charset from the
@@ -179,10 +190,8 @@ export function createBookkeepingExportRoutes(deps: OrgRoutes): express.Router {
     const entries = [];
     const missing: string[] = [];
     for (const e of lines) {
-      const code = e.statement!.documentCode;
-      const doc = code ? store.findDocumentByCode(code) : undefined;
-      // A revoked Beleg would read as valid in the ZIP: it counts as missing, and prepare issues a new one.
-      if (!doc || doc.snapshot.kind !== "beleg" || doc.revokedAt) {
+      const doc = liveBeleg(e);
+      if (!doc) {
         missing.push(e.id);
         continue;
       }
