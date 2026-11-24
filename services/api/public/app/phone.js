@@ -142,7 +142,11 @@ function phOpen(route, { focus = false } = {}) {
     window.scrollTo(0, 0);
     // The share composer needs its payment; the others open by name.
     document.title = `${{ plus: "Privacy Bundle", bundle: "Privacy Bundle", card: "Card", documents: "Documents", signers: "Who approves payments", "monerium-settings": "Monerium", "recovery-settings": "Recovery", "page-settings": "Your page", "share-compose": "Share receipt" }[route.name] || "Zold"} · Zold`;
-    if (route.name === "share-compose") return route.arg ? openShare(route.arg) : phGo("activity", null, { replace: true });
+    if (route.name === "share-compose") {
+      // Back or a pasted hash can still land on the old #share/ name.
+      if (/^#share\//.test(location.hash)) history.replaceState(history.state, "", `${location.pathname}${location.search}${phHref(route.name, route.arg)}`);
+      return route.arg ? openShare(route.arg) : phGo("activity", null, { replace: true });
+    }
     mobileNavLegacy(PH_LEGACY[route.name]);
     return;
   }

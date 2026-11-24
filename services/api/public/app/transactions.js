@@ -24,10 +24,10 @@ const SHARE_TOGGLES = [
 ];
 
 const SHARE_DEFAULTS = { sender: "last", recipient: "full", account: "short", fx: "both", showRate: true, showRef: true, route: false };
-let mShare = { transferId: null, fields: { ...SHARE_DEFAULTS }, link: null, expiresAt: null, busy: false };
+let mShare = { transferId: null, fields: { ...SHARE_DEFAULTS }, link: null, expiresAt: null, expired: false, busy: false };
 
 function openShare(id) {
-  mShare = { transferId: id, fields: { ...SHARE_DEFAULTS }, link: null, expiresAt: null, busy: false };
+  mShare = { transferId: id, fields: { ...SHARE_DEFAULTS }, link: null, expiresAt: null, expired: false, busy: false };
   mobileNav("share");
 }
 
@@ -41,8 +41,13 @@ async function renderShareScreen() {
     mShare.fields = { ...SHARE_DEFAULTS, ...s.fields };
     mShare.link = s.url;
     mShare.expiresAt = s.expiresAt;
-  } catch {
-    /* No live share yet — the defaults stand and the CTA will create one. */
+  } catch (e) {
+    /* No live share yet: the CTA will create one. An expired one sends back
+       its choices (never its URL), so the new link starts from them. */
+    if (e?.body?.expired) {
+      mShare.fields = { ...SHARE_DEFAULTS, ...e.body.fields };
+      mShare.expired = true;
+    }
   }
   paintShare();
 }
@@ -63,6 +68,13 @@ function paintShare() {
 }
 
 function paintShareControls() {
+  // A link that runs out while the screen is open is not offered any more:
+  // the recipient would get "expired".
+  if (mShare.link && !(Date.parse(mShare.expiresAt) > Date.now())) {
+    mShare.link = null;
+    mShare.expiresAt = null;
+    mShare.expired = true;
+  }
   const f = mShare.fields;
   // One radio group per choice (arrow keys move within it), then the extras
   // as switches: each control says what it is to a screen reader.
@@ -86,11 +98,15 @@ function paintShareControls() {
   $("m-share-out").classList.toggle("hidden", !mShare.link);
   $("m-share-url").textContent = mShare.link || "";
   $("m-share-copy").textContent = shareCopyLabel();
-  $("m-share-native").classList.toggle("hidden", typeof navigator.share !== "function");
+  // Share appears only with a link, so its tap opens the sheet at once: a
+  // request first would spend the tap's activation and the sheet would refuse.
+  $("m-share-native").classList.toggle("hidden", !mShare.link || typeof navigator.share !== "function");
   const foot = $("m-share-foot");
   if (mShare.link) {
     const days = Math.max(0, Math.ceil((Date.parse(mShare.expiresAt) - Date.now()) / 86400000));
     foot.textContent = `Live · expires in ${days} day${days === 1 ? "" : "s"}`;
+  } else if (mShare.expired) {
+    foot.textContent = "The last link expired and stays off. Create a new one; it stays live for 30 days.";
   } else {
     foot.textContent = "Nothing is public until you create the link. It stays live for 30 days.";
   }
@@ -164,6 +180,7 @@ async function saveShare({ silent } = {}) {
     const s = await api(`/api/transfers/${mShare.transferId}/share`, mShare.fields);
     mShare.link = s.url;
     mShare.expiresAt = s.expiresAt;
+    mShare.expired = false;
     clearErr("m-share-err");
     paintShare();
     return s;
@@ -175,14 +192,19 @@ async function saveShare({ silent } = {}) {
   }
 }
 
-const shareCopyLabel = () => (mShare.link ? "Copy link" : "Create and copy link");
+const shareCopyLabel = () => (mShare.link ? "Copy link" : "Create link");
 
+/* With no link, the button only creates one: the clipboard, like the share
+   sheet, wants the tap's activation, which the request would have spent.
+   Copy and Share then work from their own taps. */
 $("m-share-copy").onclick = async () => {
   const btn = $("m-share-copy");
-  const s = mShare.link ? { url: mShare.link } : await saveShare();
-  if (!s) return;
+  if (!mShare.link) {
+    if (await saveShare()) announce("Link created");
+    return;
+  }
   try {
-    await navigator.clipboard.writeText(s.url);
+    await navigator.clipboard.writeText(mShare.link);
   } catch {
     // A denied clipboard must not read as a failure to create the link — the
     // link exists either way, and "Send this link" shows it.
@@ -194,16 +216,16 @@ $("m-share-copy").onclick = async () => {
   setTimeout(() => { btn.textContent = shareCopyLabel(); }, 1800);
 };
 
-/* The phone's share sheet, where the browser has one. Closing the sheet is
-   not an error; a sheet that fails falls back to the clipboard. */
+/* The phone's share sheet, where the browser has one, called straight from
+   the tap. Closing the sheet is not an error. A sheet that fails points at
+   Copy: copying here, without a fresh tap, would fail the same way. */
 $("m-share-native").onclick = async () => {
-  const s = mShare.link ? { url: mShare.link } : await saveShare();
-  if (!s) return;
+  if (!mShare.link) return;
   try {
-    await navigator.share({ title: "Zold receipt", url: s.url });
+    await navigator.share({ title: "Zold receipt", url: mShare.link });
   } catch (e) {
     if (e?.name === "AbortError") return;
-    $("m-share-copy").onclick();
+    showErr("m-share-err", new Error("the share sheet did not open. Tap Copy link and paste it where you want it"));
   }
 };
 

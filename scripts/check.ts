@@ -50,6 +50,7 @@ const scripts = [
   "activity:test",
   "sepa:test",
   "receipt:test",
+  "receipt:route:test",
   "convert:test",
   "convert:race:test",
   "convert:crash:test",

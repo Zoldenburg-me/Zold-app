@@ -12,7 +12,7 @@
  * /r/ page (share-receipt tests cover the API). Offline.
  */
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
@@ -97,20 +97,71 @@ await t("an old #share/<id> link still opens the composer, and the address bar s
   ctx.location.hash = "";
 });
 
-await t("the app's own Share buttons point at #share-compose/", () => {
+await t("a company login opens the composer from Business: #share-compose/ is in its allowed set", () => {
+  run(`user = { id: "c1", name: "Acme GmbH", accountType: "company" }; __opened = []; __left = 0;
+    phCompanyLeave = () => { __left++; };`);
+  ctx.location.hash = "#share-compose/t9";
+  replaced.length = 0;
+  run("phStart()");
+  assert.deepEqual([...run("__opened")], ["t9"], "the company's composer opened for that payment");
+  assert.equal(run("__left"), 0, "the company login was not sent back to /business");
+  assert.equal(replaced[0], "/app#share-compose/t9");
+  // Business → Statements links here; the link must be the route the app opens.
+  const views = readFileSync(path.join(PUB, "business/views.js"), "utf8");
+  const href = views.match(/href="\/app(#share-compose\/)\$\{encodeURIComponent\(t\.id\)\}"/);
+  assert.ok(href, "Business → Statements links /app#share-compose/<id>");
+  assert.equal(run(`phParse("#share-compose/t9").name`), "share-compose");
+  ctx.location.hash = "";
+  run(`user = { id: "u1", name: "Erika Muster", accountType: "personal" };`);
+});
+
+await t("an old #share/<id> reached while the app is open (Back, a pasted hash) also loses #share/", () => {
+  run(`__opened = [];`);
+  ctx.location.hash = "#share/t2";
+  replaced.length = 0;
+  run(`phOpen(phParse(location.hash))`);
+  assert.deepEqual([...run("__opened")], ["t2"]);
+  assert.deepEqual(replaced, ["/app#share-compose/t2"]);
+  ctx.location.hash = "";
+});
+
+await t("no file in public/ links the old #share/ name", () => {
   assert.equal(run(`phHref("share-compose", "t1")`), "#share-compose/t1");
-  for (const f of ["app/phone-activity.js", "app/phone-send.js", "business/views.js"]) {
-    const src = readFileSync(path.join(PUB, f), "utf8");
-    assert.doesNotMatch(src, /phHref\("share",|#share\//, `${f} still links the old #share/ name`);
+  const walk = (d: string): string[] => readdirSync(d, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? walk(path.join(d, e.name)) : /\.(js|html)$/.test(e.name) ? [path.join(d, e.name)] : []);
+  const files = walk(PUB);
+  assert.ok(files.length > 20, "the walk found the app's files");
+  for (const f of files) {
+    const src = readFileSync(f, "utf8");
+    // A link is a string or an href; phone.js still names the old route in
+    // a comment and the regex that rewrites it.
+    assert.doesNotMatch(src, /phHref\("share",|["'`]#share\/|href="[^"]*#share\//, `${path.relative(PUB, f)} still links the old #share/ name`);
   }
 });
 
-await t("no link yet: nothing to send is shown, and the button says it creates one", () => {
+await t("no link yet: nothing to send is shown, the button only creates one, and there is no Share yet", () => {
+  ctx.navigator.share = async () => {};
   run(`mShare = { transferId: "t1", fields: { ...SHARE_DEFAULTS }, link: null, expiresAt: null, busy: false }; paintShare();`);
   assert.ok(hidden("m-share-out"));
-  assert.equal(el("m-share-copy").textContent, "Create and copy link");
-  assert.ok(hidden("m-share-native"), "no share sheet in this browser, no Share button");
+  assert.equal(el("m-share-copy").textContent, "Create link");
+  assert.ok(hidden("m-share-native"), "Share waits for a link, so its tap can open the sheet at once");
   assert.match(el("m-share-foot").textContent, /Nothing is public until you create the link/);
+  delete ctx.navigator.share;
+});
+
+await t("Create link creates it and shows it, and copies nothing (the tap's activation is spent on the request)", async () => {
+  const copied: string[] = [];
+  ctx.navigator.clipboard = { writeText: async (s: string) => void copied.push(s) };
+  ctx.navigator.share = async () => {};
+  run(`announce = () => {}; __posts = []; api = async (p, body) => { __posts.push(p); return { url: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)} }; };`);
+  await el("m-share-copy").onclick();
+  assert.deepEqual([...run("__posts")], ["/api/transfers/t1/share"]);
+  assert.deepEqual(copied, []);
+  assert.ok(!hidden("m-share-out"));
+  assert.equal(el("m-share-url").textContent, URL_R);
+  assert.equal(el("m-share-copy").textContent, "Copy link");
+  assert.ok(!hidden("m-share-native"), "Share appears once there is a link");
+  delete ctx.navigator.share;
 });
 
 await t("a live link is drawn as 'Send this link', with Copy, and Share where the browser has a share sheet", () => {
@@ -129,25 +180,24 @@ await t("a live link is drawn as 'Send this link', with Copy, and Share where th
 await t("Copy copies the /r/ link", async () => {
   const copied: string[] = [];
   ctx.navigator.clipboard = { writeText: async (s: string) => void copied.push(s) };
-  run(`announce = () => {};`);
   await el("m-share-copy").onclick();
   assert.deepEqual(copied, [URL_R]);
   assert.equal(el("m-share-copy").textContent, "Link copied");
 });
 
-await t("Share with no link yet creates it first, then hands the /r/ link to the share sheet", async () => {
+await t("Share opens the sheet in the same tick as the tap, with the /r/ link and no request first", () => {
   const shared: any[] = [];
   ctx.navigator.share = async (d: any) => void shared.push(d);
-  run(`mShare = { transferId: "t1", fields: { ...SHARE_DEFAULTS }, link: null, expiresAt: null, busy: false };
-    __posts = []; api = async (p, body) => { __posts.push(p); return { url: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)} }; };`);
-  await el("m-share-native").onclick();
-  assert.deepEqual([...run("__posts")], ["/api/transfers/t1/share"]);
-  assert.equal(shared.length, 1);
+  run(`__posts = [];`);
+  void el("m-share-native").onclick();
+  // Nothing awaited: transient activation from the tap is still there.
+  assert.equal(shared.length, 1, "navigator.share was called synchronously from the click");
   assert.equal(shared[0].url, URL_R);
-  assert.equal(el("m-share-url").textContent, URL_R);
+  assert.deepEqual([...run("__posts")], []);
+  delete ctx.navigator.share;
 });
 
-await t("closing the share sheet is not an error; a sheet that fails falls back to the clipboard", async () => {
+await t("closing the share sheet is not an error; a sheet that fails says to use Copy, and copies nothing itself", async () => {
   const copied: string[] = [];
   ctx.navigator.clipboard = { writeText: async (s: string) => void copied.push(s) };
   el("m-share-err").classList.add("hidden");
@@ -155,10 +205,49 @@ await t("closing the share sheet is not an error; a sheet that fails falls back 
   await el("m-share-native").onclick();
   assert.deepEqual(copied, []);
   assert.ok(hidden("m-share-err"));
-  ctx.navigator.share = async () => { throw new Error("NotAllowedError"); };
+  ctx.navigator.share = async () => { const e = new Error("no activation"); e.name = "NotAllowedError"; throw e; };
   await el("m-share-native").onclick();
-  await new Promise((r) => setTimeout(r, 0));
-  assert.deepEqual(copied, [URL_R]);
+  assert.ok(!hidden("m-share-err"), "the failure is shown");
+  assert.match(el("m-share-err").textContent, /Copy link/);
+  assert.deepEqual(copied, [], "no clipboard write without a fresh tap");
+  delete ctx.navigator.share;
+});
+
+await t("an expired link is never shown, copied or shared: the composer keeps the choices and offers a new link", async () => {
+  const shared: any[] = [];
+  const copied: string[] = [];
+  ctx.navigator.share = async (d: any) => void shared.push(d);
+  ctx.navigator.clipboard = { writeText: async (s: string) => void copied.push(s) };
+  // The API answers an expired share with 404 { expired, fields }.
+  run(`mShare = { transferId: "t1", fields: { ...SHARE_DEFAULTS }, link: null, expiresAt: null, busy: false };
+    api = async (p, body, method) => { if (method === "GET") throw Object.assign(new Error("the link for this payment has expired"), { status: 404, body: { expired: true, fields: { sender: "full", route: true } } });
+      __posts.push(p); return { url: "https://zold.test/r/fresh-slug-xyz", expiresAt: ${JSON.stringify(EXPIRES)} }; }; __posts = [];`);
+  await run("renderShareScreen()");
+  assert.equal(run("mShare.link"), null);
+  assert.equal(run("mShare.fields.sender"), "full", "the sender's last choices are kept");
+  assert.equal(run("mShare.fields.route"), true);
+  assert.ok(hidden("m-share-out"));
+  assert.ok(hidden("m-share-native"));
+  assert.ok(hidden("m-share-revoke"));
+  assert.equal(el("m-share-copy").textContent, "Create link");
+  assert.match(el("m-share-foot").textContent, /expired/i);
+  await el("m-share-copy").onclick();
+  assert.deepEqual([...run("__posts")], ["/api/transfers/t1/share"]);
+  assert.equal(el("m-share-url").textContent, "https://zold.test/r/fresh-slug-xyz");
+  assert.deepEqual(copied, []);
+  assert.deepEqual(shared, []);
+  delete ctx.navigator.share;
+});
+
+await t("a link that expires while the composer is open stops being offered", () => {
+  ctx.navigator.share = async () => {};
+  const past = new Date(Date.now() - 1000).toISOString();
+  run(`mShare = { ...mShare, link: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(past)} }; paintShare();`);
+  assert.ok(hidden("m-share-out"));
+  assert.ok(hidden("m-share-native"));
+  assert.equal(el("m-share-url").textContent, "");
+  assert.equal(el("m-share-copy").textContent, "Create link");
+  assert.match(el("m-share-foot").textContent, /expired/i);
   delete ctx.navigator.share;
 });
 

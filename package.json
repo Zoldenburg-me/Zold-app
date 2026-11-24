@@ -180,6 +180,7 @@
     "onboarding:test": "tsx scripts/onboarding-segments-test.ts",
     "gnosispay:test": "tsx scripts/gnosis-pay-test.ts",
     "receipt:test": "tsx scripts/receipt-share-test.ts",
+    "receipt:route:test": "tsx scripts/receipt-share-route-test.ts",
     "tx:audit:test": "tsx scripts/transaction-audit-test.ts",
     "statement:test": "tsx scripts/statement-lines-test.ts",
     "own-transfer:test": "tsx scripts/own-transfer-test.ts",
