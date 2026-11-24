@@ -288,6 +288,8 @@ export function createOrgMoneriumIbanRoutes(deps: { ctxOf: (req: express.Request
       detail: undefined,
       moneriumProfile: { id: m.profile.id, kind: "corporate", ...(m.profile.name ? { name: m.profile.name } : {}), checkedAt: at },
     });
+    const after = store.findOrganisation(orgId)!.monerium!;
+    if (after.safe?.movedAwayAt) store.updateOrganisation(orgId, { monerium: { ...after, safe: { ...after.safe, movedAwayAt: undefined } } });
     store.audit(auditEntry("org_iban.issued", { orgId, accountId: account.id, safeAddress: link.address, profileId: m.profile.id }, userId));
   }
 
@@ -307,10 +309,11 @@ export function createOrgMoneriumIbanRoutes(deps: { ctxOf: (req: express.Request
     } catch (err) {
       throw moneriumFailure("reading the company’s IBANs", err);
     }
-    stillKeys(orgId, m);
+    const cur = stillKeys(orgId, m);
     const iban = normalizeIban(account.identifier.iban!);
     const entry = list.find((i) => normalizeIban(i.iban) === iban);
     if (!entry || typeof entry.address !== "string" || paysIntoSafe(entry, account.address!)) return;
+    if (cur.safe) store.updateOrganisation(orgId, { monerium: { ...cur, safe: { ...cur.safe, movedAwayAt: new Date().toISOString() } } });
     store.updateAccount(account.id, {
       status: "gated",
       identifier: { ...account.identifier, iban: undefined },
@@ -409,7 +412,7 @@ export function createOrgMoneriumIbanRoutes(deps: { ctxOf: (req: express.Request
     const ctx = gate(req, res, "accounts.open");
     if (!ctx) return;
     const state = companyIbanState(ctx.org, companyEurAccount(store.accountsOf(ctx.org.id)));
-    if (state !== "link_pending" && state !== "iban_requested" && state !== "issued") return res.json(view(ctx.org.id));
+    if (state !== "link_pending" && state !== "iban_requested" && state !== "issued" && state !== "moved") return res.json(view(ctx.org.id));
     if (!ctx.org.monerium || (state !== "issued" && orgMoneriumStatus(ctx.org.monerium) !== "connected")) {
       return res.status(409).json({ code: "MONERIUM_NOT_CONNECTED", error: "The company’s Monerium keys need attention first: open Settings → Monerium." });
     }

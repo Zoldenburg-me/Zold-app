@@ -406,7 +406,8 @@ try {
     mon.ibans = [{ iban: IBAN, profile: PROFILE, address: OWN_SAFE, chain: MONERIUM.chain, state: "approved" }];
     const moved = await call("POST", "/org_co/monerium/iban/check", "u_adam");
     assert.equal(moved.status, 200, moved.text);
-    assert.notEqual(moved.data.monerium.companyIban.state, "issued");
+    assert.equal(moved.data.monerium.companyIban.state, "moved", "said as moved, not as waiting for issuance");
+    assert.match(model.ibanNotice(moved.data.monerium), /elsewhere/);
     gatedStill();
     // And it is not re-adopted for the Safe while it pays elsewhere.
     const again = await call("POST", "/org_co/monerium/iban/check", "u_adam");
@@ -500,7 +501,8 @@ try {
     assert.match(model.ibanPanel({ companyIban: { state: "issued", iban: IBAN } }, true).text, /not built yet/, "says payouts are not built");
     assert.equal(model.ibanPanel(null, true).action, undefined);
     assert.equal(model.ibanNotice({ companyIban: { state: "issued" } }), "The company’s IBAN is issued onto its Safe.");
-    assert.equal(model.ibanPanel({ companyIban: { state: "issued", iban: IBAN } }, false).action, "check", "an issued IBAN can be checked again");
+    assert.equal(model.ibanPanel({ status: "connected", companyIban: { state: "issued", iban: IBAN } }, false).action, "check", "an issued IBAN can be checked again");
+    assert.equal(model.ibanPanel({ status: "not_connected", companyIban: { state: "issued", iban: IBAN } }, false).action, undefined, "not without the keys");
   });
 } finally {
   server.close();

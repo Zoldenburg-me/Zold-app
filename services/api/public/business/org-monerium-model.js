@@ -71,7 +71,9 @@ export const ibanState = (m) => (m ? m.companyIban?.state || "keys_needed" : nul
 export function ibanPanel(m, maySign) {
   const st = ibanState(m);
   if (st === null) return { text: "The IBAN status couldn’t be read. Open Settings again to retry." };
-  if (st === "issued") return { text: "Bank transfers to this IBAN arrive on the company’s Safe as euros (EURe). Paying a bank account from it is not built yet.", iban: m.companyIban.iban, action: "check" };
+  // Checking an issued IBAN reads Monerium on the company's keys: offered only while they are connected.
+  if (st === "issued") return { text: "Bank transfers to this IBAN arrive on the company’s Safe as euros (EURe). Paying a bank account from it is not built yet.", iban: m.companyIban.iban, ...(m.status !== "not_connected" ? { action: "check" } : {}) };
+  if (st === "moved") return { text: "Monerium now lists the company’s IBAN on another address or network, so Zold no longer offers it for the Safe. Write to support@zoldhq.com.", action: "check" };
   if (st === "keys_needed") return { text: "Next: once Monerium has approved the company profile, an owner issues the company’s IBAN onto its own Safe." };
   if (st === "safe_needed") return { text: "Next: set up the company’s Safe (Home), then issue its IBAN here." };
   if (st === "link_pending") return { text: "Monerium is checking the Safe’s signed declaration. Check again in a minute.", action: "check" };
@@ -85,6 +87,7 @@ export function ibanPanel(m, maySign) {
 export function ibanNotice(m) {
   const st = ibanState(m);
   if (st === "issued") return "The company’s IBAN is issued onto its Safe.";
+  if (st === "moved") return "Monerium lists the company’s IBAN elsewhere now. It is no longer offered for the Safe.";
   if (st === "link_pending") return "Signed. Monerium is checking the declaration; check again in a minute.";
   if (st === "iban_requested") return "IBAN requested. Monerium usually issues it within minutes.";
   return "Nothing new from Monerium yet.";

@@ -72,12 +72,19 @@ function companyIbanPart(keys, deposits) {
   const btn = p.action === "issue"
     ? `<div class="zb-actions"><button type="button" class="z-btn z-btn--primary z-btn--sm" data-act="org-iban-issue">Issue the company’s IBAN</button></div>`
     : p.action === "check" ? `<div class="zb-actions"><button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="org-iban-check">Check again</button></div>` : "";
-  const list = !p.iban ? "" : deposits === null
-    ? `<p class="zb-hint">Deposits couldn’t be read from Monerium just now.</p>`
-    : deposits.length
-      ? `<p class="zb-hint">Latest deposits, as Monerium lists them:</p>${rows(deposits.map((d) => [`${d.from || "Bank transfer"} · ${String(d.at).slice(0, 10)}`, `€${d.amountEur.toFixed(2)} (${d.state})`]))}`
-      : `<p class="zb-hint">No deposits yet.</p>`;
-  return (p.iban ? rows([["Company IBAN", Z.groupIban(p.iban), true]]) : "") + `<p class="zb-hint">${esc(p.text)}</p>` + btn + list;
+  return (p.iban ? rows([["Company IBAN", Z.groupIban(p.iban), true]]) : "") + `<p class="zb-hint">${esc(p.text)}</p>` + btn + (p.iban ? depositsHtml(deposits) : "");
+}
+
+/** The latest deposits: undefined while loading, null when unread, [] none. */
+function depositsHtml(deposits) {
+  const body = deposits === undefined
+    ? `<p class="zb-hint">Loading deposits…</p>`
+    : deposits === null
+      ? `<p class="zb-hint">Deposits couldn’t be read from Monerium just now.</p>`
+      : deposits.length
+        ? `<p class="zb-hint">Latest deposits, as Monerium lists them:</p>${rows(deposits.map((d) => [`${d.from || "Bank transfer"} · ${String(d.at).slice(0, 10)}`, `€${d.amountEur.toFixed(2)} (${d.state})`]))}`
+        : `<p class="zb-hint">No deposits yet.</p>`;
+  return `<div id="om-deposits">${body}</div>`;
 }
 
 /** A company's own Monerium keys (routes/business/org-monerium.ts). `keys`
@@ -121,11 +128,12 @@ RENDER.settings = async () => {
   const company = companyKeysHere(org, roleCan(org.role, "accounts"));
   const [acc, , ks] = await Promise.allSettled([api(`/api/orgs/${org.id}/accounts`), ensureMe(),
     company ? api(`/api/orgs/${org.id}/monerium`) : Promise.resolve(null)]);
-  // The company's deposits, read live from Monerium once its IBAN is issued:
-  // read whatever section opens first, since switching sections reuses them.
-  // Null is "couldn't read", [] is "none".
+  // The company's deposits, read live from Monerium once its IBAN is issued.
+  // Not awaited: the screen draws first and the list fills in, whichever
+  // section is open (switching sections reuses it).
   const issued = ks.status === "fulfilled" && ks.value?.monerium?.companyIban?.state === "issued";
-  const deposits = !issued ? [] : await api(`/api/orgs/${org.id}/monerium/deposits`).then((r) => r.deposits, () => null);
+  let deposits = issued ? undefined : [];
+  const depositsLoad = issued ? api(`/api/orgs/${org.id}/monerium/deposits`).then((r) => r.deposits, () => null) : null;
   const accounts = acc.status === "fulfilled" ? acc.value.accounts : null;
   const keys = ks.status === "fulfilled" ? ks.value?.monerium ?? null : null;
   // A company's account is its own Safe: its Monerium is its own keys, never a login's connection.
@@ -134,6 +142,11 @@ RENDER.settings = async () => {
     html: `<div class="zb-set" id="set-root">${menu(accounts)}<div id="set-body">${SECTIONS[ss.sec]()}</div></div>`,
     bind(box) {
       const root = box.querySelector("#set-root");
+      depositsLoad?.then((d) => {
+        deposits = d;
+        const el = root.querySelector("#om-deposits");
+        if (el) el.outerHTML = depositsHtml(d);
+      });
       root.addEventListener("click", (ev) => {
         const b = ev.target.closest("[data-ss]");
         if (!b) return;

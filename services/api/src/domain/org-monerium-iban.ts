@@ -17,7 +17,9 @@ export type CompanyIbanState =
   | "ready"
   | "link_pending"
   | "iban_requested"
-  | "issued";
+  | "issued"
+  /** Issued once, then Monerium listed it on another address or chain. */
+  | "moved";
 
 /** The company's one EUR account, if it has one. */
 export const companyEurAccount = (accounts: Account[]): Account | undefined => accounts.find((a) => a.currency === "EUR");
@@ -40,5 +42,6 @@ export function companyIbanState(org: Pick<Organisation, "type" | "entity" | "sa
   }
   const link = m.safe && m.safe.address.toLowerCase() === plan.address.toLowerCase() ? m.safe : undefined;
   if (!link) return "ready";
+  if (link.movedAwayAt) return "moved";
   return link.linkedAt ? "iban_requested" : "link_pending";
 }

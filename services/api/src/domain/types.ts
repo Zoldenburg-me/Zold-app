@@ -229,6 +229,8 @@ export interface Organisation {
       /** When Monerium showed the Safe linked under `profile`. */
       linkedAt?: string;
       ibanRequestedAt?: string;
+      /** When Monerium listed the issued IBAN on another address or chain. */
+      movedAwayAt?: string;
     };
   };
   /**
