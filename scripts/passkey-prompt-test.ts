@@ -12,7 +12,7 @@
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import vm from "node:vm";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -353,6 +353,59 @@ try {
     coarse = false;
     ctx.__api = realApi; ctx.__showErr = realShowErr;
     run(`api = __api; obShowErr = __showErr; user = null`);
+  }
+}
+
+// A failed create says why, where the WebAuthn error's name tells us: a
+// security key that is full or cannot store a discoverable passkey is refused
+// as NotAllowedError (Chromium, Safari) or NotSupportedError/ConstraintError.
+// The recovery page's passkeyRefusal says the same words.
+{
+  const realApi = run("api");
+  const words = await import(pathToFileURL(path.join(PUB, "guardian/device-words.js")).href);
+  const realMatch = (globalThis as any).matchMedia;
+  (globalThis as any).matchMedia = () => ({ matches: coarse });
+  try {
+    run(`api = async (p) => p === "/api/webauthn/challenge" ? { challenge: "AA" } : {}`);
+    run(`user = { id: "u1", name: "A", email: "a@example.com" }`);
+    const failedCreate = async (name: string) => {
+      prompts.length = 0;
+      const reg = run(`registerPasskey(user)`).then(() => null, (x: any) => x);
+      await waitFor(() => prompts.length === 1, "the create prompt");
+      prompts[0].reject(Object.assign(new Error("The operation either timed out or was not allowed."), { name }));
+      ctx.__e = await reg;
+      assert.equal(ctx.__e.passkeyCreate, true, "registerPasskey marks its create()'s refusal");
+      return run("obMessage(__e)");
+    };
+    coarse = false;
+    const desk = await failedCreate("NotAllowedError");
+    assert.match(desk, /cancelled or timed out, or your security key couldn’t save the passkey/);
+    assert.match(desk, /use this computer’s own passkey or another security key/);
+    assert.equal(desk, words.passkeyRefusal(ctx.__e, true), "the recovery page says the same");
+    for (const name of ["NotSupportedError", "ConstraintError"]) {
+      const m = await failedCreate(name);
+      assert.match(m, /This security key can’t save a passkey for Zold: it may be full/, name);
+      assert.equal(m, words.passkeyRefusal(ctx.__e, true), `${name}: the recovery page says the same`);
+    }
+    const sec = await failedCreate("SecurityError");
+    assert.match(sec, /won’t use a passkey on this page’s address/);
+    coarse = true;
+    const phone = await failedCreate("NotAllowedError");
+    assert.doesNotMatch(phone, /security key/, "a phone is not told about a security key");
+    assert.equal(phone, words.passkeyRefusal(ctx.__e, true));
+    coarse = false;
+    // A sign-in prompt (no create) is not about saving a passkey.
+    ctx.__e = Object.assign(new Error("x"), { name: "NotAllowedError" });
+    assert.equal(run("obMessage(__e)"), "The passkey prompt was cancelled, or it timed out. Try again when you’re ready.");
+    assert.equal(run("obMessage(__e)"), words.passkeyRefusal(ctx.__e, false));
+    ctx.__e = Object.assign(new Error("Some other refusal"), { name: "NotSupportedError" });
+    assert.equal(run("obMessage(__e)"), "Some other refusal", "outside a create, NotSupportedError keeps its own message");
+    assert.equal(words.passkeyRefusal(ctx.__e, false), null);
+  } finally {
+    coarse = false;
+    (globalThis as any).matchMedia = realMatch;
+    ctx.__api = realApi;
+    run(`api = __api; user = null`);
   }
 }
 
