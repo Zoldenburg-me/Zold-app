@@ -14,6 +14,7 @@ import { ap, bk, contactPayments, ct, draftTag, draftTitle, draftTotal, invoiceD
 import { loadOrg, render } from "./shell.js";
 import { field, payerRuleDialog, payerRuleSection, runSummary } from "./receipts.js";
 import { showProgress, signedLineOutcome, signedRunToast, signingWarning } from "./payment-model.js";
+import { ibanNotice, keyNotice } from "./org-monerium-model.js";
 
 /** A file the API serves behind the bearer header, which a navigation
  *  cannot carry: fetch it, then hand the bytes to the browser as a download. */
@@ -323,6 +324,40 @@ function gmiDrawer(el) {
   };
 }
 
+/* A company's own Monerium keys (routes/business/org-monerium.ts). Replacing
+   stored keys needs a fresh passkey approval. */
+function orgMoneriumDrawer(el) {
+  const replacing = el?.dataset?.replace === "1";
+  const scrim = drawer("om-drawer", "Company Monerium keys", `
+    <ol class="zb-steps"><li>Sign in to the company’s own Monerium account (not a personal one).</li><li>Open Developers and create an app with client credentials.</li><li>Paste its client id and client secret here.</li></ol>
+    <div><label for="om-id">Client id</label><input id="om-id" name="om-id" autocomplete="off" spellcheck="false" placeholder="Paste the client id…" /></div>
+    <div><label for="om-secret">Client secret</label><input id="om-secret" name="om-secret" type="password" autocomplete="off" spellcheck="false" placeholder="Paste the client secret…" /></div>
+    <div class="zb-note">${Z.icon("lock")}<span>Zold checks the keys with Monerium, stores the secret encrypted and never shows it again. Use keys from the same Monerium environment as this site.</span></div>
+    <p class="zb-err" id="om-err" role="alert"></p>
+    <div class="zb-actions"><button type="button" class="z-btn z-btn--secondary" id="om-cancel">Cancel</button><button type="button" class="z-btn z-btn--primary" id="om-go">Check and connect</button></div>`, el);
+  scrim.querySelector("#om-cancel").onclick = () => Z.closeOverlay("om-drawer");
+  scrim.querySelector("#om-go").onclick = async () => {
+    const btn = scrim.querySelector("#om-go");
+    const err = scrim.querySelector("#om-err");
+    const clientId = scrim.querySelector("#om-id").value.trim();
+    const clientSecret = scrim.querySelector("#om-secret").value.trim();
+    if (!clientId || !clientSecret) { err.textContent = "Paste both the client id and the client secret."; return; }
+    if (Z.isDisabled(btn)) return;
+    Z.setLoading(btn, true);
+    err.textContent = "";
+    try {
+      const stepUp = replacing ? await passkeyStepUp("org.monerium.keys") : undefined;
+      const r = await api(`/api/orgs/${org.id}/monerium`, { method: "POST", body: { clientId, clientSecret, ...(stepUp ? { stepUp } : {}) } });
+      Z.closeOverlay("om-drawer");
+      toast(keyNotice(r.monerium, "save"), r.monerium.status === "invalid");
+      render();
+    } catch (e) {
+      err.textContent = plain(e.message);
+      Z.setLoading(btn, false);
+    }
+  };
+}
+
 /* A document opens in a new tab; the list below the buttons then shows it. */
 function openDocument(d) {
   const url = docHref(d?.url);
@@ -399,6 +434,38 @@ export const ACTIONS = {
     return "keep";
   },
   "gmi-drawer": (el) => { gmiDrawer(el); return "keep"; },
+  "org-monerium-drawer": (el) => { orgMoneriumDrawer(el); return "keep"; },
+  async "org-monerium-check"() {
+    // A refused check can still change what is stored (a profile gone): draw the screen again, then say why.
+    const r = await api(`/api/orgs/${org.id}/monerium/check`, { method: "POST" }).catch((e) => { render(); throw e; });
+    toast(keyNotice(r.monerium, "check"), r.monerium.status === "invalid");
+  },
+  "org-monerium-remove": () => dialog("Remove the Monerium keys?", `<p class="desc">Zold forgets the keys. Nothing changes at Monerium, and an IBAN already issued stays the company’s; delete the app there too if it is no longer used. Your ${Z.passkeyName()} approves this.</p>`,
+    async () => {
+      const stepUp = await passkeyStepUp("org.monerium.keys");
+      await api(`/api/orgs/${org.id}/monerium`, { method: "DELETE", body: stepUp ? { stepUp } : {} });
+      toast("Keys removed.");
+    }, { okLabel: "Remove keys" }),
+  /* The company's IBAN onto its own Safe: this owner's passkey signs
+     Monerium's declaration as the Safe (routes/business/org-monerium-iban.ts). */
+  "org-iban-issue": () => dialog(`Issue ${org.name}’s IBAN?`, `<ul class="zb-next" style="margin-top:6px">
+      <li>${Z.icon("fingerprint")}<span>Your ${Z.passkeyName()} signs Monerium’s declaration that ${esc(org.name)} owns its Safe.</span></li>
+      <li>${Z.icon("account_balance")}<span>Monerium then issues the company’s IBAN onto the Safe. Bank transfers to it arrive there as euros.</span></li>
+    </ul>`, async () => {
+      const start = await api(`/api/orgs/${org.id}/monerium/link/start`, { method: "POST" });
+      let signed;
+      try {
+        signed = await (await deviceLib()).passkeyAssertion(start);
+      } catch (e) {
+        throw new Error(e.name === "NotAllowedError" ? Z.byDevice("Face ID was cancelled.", "The passkey prompt was cancelled.") : e.message);
+      }
+      const r = await api(start.submitTo, { method: "POST", body: { requestId: start.requestId, ...signed } });
+      setTimeout(() => toast(ibanNotice(r.monerium)), 0);
+    }, { okLabel: "Sign and issue" }),
+  async "org-iban-check"() {
+    const r = await api(`/api/orgs/${org.id}/monerium/iban/check`, { method: "POST" }).catch((e) => { render(); throw e; });
+    toast(ibanNotice(r.monerium));
+  },
 
   async "shopify-connect"() {
     const shop = shopAddress("#sh-shop");

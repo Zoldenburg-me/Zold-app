@@ -176,6 +176,43 @@ await check("third-party IBANs are masked on the Monerium views, as on the trans
   }
 });
 
+await check("a Stellar payout hash shows once in the route list, a legacy one still shows", async () => {
+  const H = "ab".repeat(32);
+  const H2 = "cd".repeat(32);
+  const pickup = { referenceCode: "R1", provider: "anchor:test", status: "PENDING", anchorTransactionId: "anchor-tx" };
+  store.addTransfer({
+    id: "t_anchor_sent", userId: "u_live", quoteId: "q", rail: "cash", state: "PAYOUT_READY", sendEur: 10, receiveKes: 1000,
+    recipientName: "Payee", recipientPhone: "+254700000000", createdAt: now, updatedAt: now,
+    txs: [{ step: "anchor.payment.pending", hash: "0x" }, { step: "anchor.payment.sent", hash: H }],
+    pickup: { ...pickup, anchorPaymentHash: H },
+  } as any);
+  // Before anchor.payment.sent existed, the pickup was the only record of the hash.
+  store.addTransfer({
+    id: "t_anchor_legacy", userId: "u_live", quoteId: "q", rail: "cash", state: "PAYOUT_READY", sendEur: 10, receiveKes: 1000,
+    recipientName: "Payee", recipientPhone: "+254700000000", createdAt: now, updatedAt: now,
+    txs: [{ step: "bridge.xyz.deposit.transfer", hash: "0x33" }],
+    pickup: { ...pickup, anchorPaymentHash: H2 },
+  } as any);
+  const { transactions } = JSON.parse((await get("/api/admin/transactions")).text);
+  const route = (id: string) => transactions.find((t: any) => t.id === id).route;
+  assert.equal(route("t_anchor_sent").filter((r: any) => r.hash === H).length, 1, JSON.stringify(route("t_anchor_sent")));
+  assert.equal(route("t_anchor_legacy").filter((r: any) => r.hash === H2 && r.step === "moneygram.anchor.payment").length, 1);
+});
+
+await check("a pickup hash that differs from the recorded send is still shown", async () => {
+  const H = "ef".repeat(32);
+  const H3 = "12".repeat(32);
+  store.addTransfer({
+    id: "t_anchor_differs", userId: "u_live", quoteId: "q", rail: "cash", state: "MANUAL_REVIEW", sendEur: 10, receiveKes: 1000,
+    recipientName: "Payee", recipientPhone: "+254700000000", createdAt: now, updatedAt: now,
+    txs: [{ step: "anchor.payment.sent", hash: H }],
+    pickup: { referenceCode: "R1", provider: "anchor:test", status: "PENDING", anchorTransactionId: "anchor-tx", anchorPaymentHash: H3 },
+  } as any);
+  const { transactions } = JSON.parse((await get("/api/admin/transactions")).text);
+  const route = transactions.find((t: any) => t.id === "t_anchor_differs").route;
+  assert.ok(route.some((r: any) => r.hash === H) && route.some((r: any) => r.hash === H3), JSON.stringify(route));
+});
+
 server.close();
 globalThis.fetch = realFetch;
 if (failed) { console.error(`\n${failed} failed`); process.exit(1); }

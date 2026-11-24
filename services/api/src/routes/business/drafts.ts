@@ -526,6 +526,14 @@ export function createDraftRoutes(
     }
     const spendable = accountIsSpendable(account, ctx.org);
     if (!spendable.ok) return res.status(409).json({ error: spendable.reason });
+    // A company's IBAN is on its own Safe, which only its owners sign; a bank
+    // payout from it (a Monerium redeem signed by the Safe) is not built.
+    if (orgEntity(ctx.org) === "company") {
+      return res.status(409).json({
+        code: "COMPANY_BANK_PAYOUT_NOT_BUILT",
+        error: "Paying a bank account from the company’s IBAN is not built yet. Nothing was sent. A payment to a crypto wallet is queued for the owners to sign.",
+      });
+    }
     if (!account.backingUserId) {
       return res.status(409).json({
         error:

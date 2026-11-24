@@ -23,7 +23,7 @@ import {
 } from "@stellar/stellar-sdk";
 import { IS_PRODUCTION, ROOT, STELLAR, STELLAR_TESTNET_PASSPHRASE } from "../config.js";
 import { partnerTimeout } from "../http.js";
-import { redactedMessage } from "../http/log-cause.js";
+import { errorText, redactedMessage } from "../http/log-cause.js";
 
 // ---------------------------------------------------------------------------
 // Treasury account (auto-provisioned on testnet via friendbot)
@@ -686,6 +686,24 @@ export function resolvePaymentAmount(requested: number, amountIn?: string): numb
   }
   // Anchor asking for less (fees taken on their side) is theirs to decide.
   return echoed;
+}
+
+/**
+ * Whether an anchor call failed in transport or with a 5xx, so the next
+ * refresh should simply ask again. A 5xx counts only as an HTTP status: our
+ * errors carry it as "failed (503)", a Horizon error as response.status. Any
+ * other three digits in the text (an amount, a reference) are the anchor's
+ * words, not a status.
+ */
+export function isTransientAnchorError(err: unknown): boolean {
+  if (err instanceof TypeError) return true;
+  const status = (err as { response?: { status?: unknown } } | null)?.response?.status;
+  if (typeof status === "number" && status >= 500 && status <= 599) return true;
+  const text = errorText(err);
+  return (
+    /fetch failed|ECONN|ETIMEDOUT|timed? ?out|aborted|socket hang up/i.test(text) ||
+    /\bfailed \(5\d\d\)/.test(text)
+  );
 }
 
 /**
