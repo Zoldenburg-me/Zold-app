@@ -13,7 +13,12 @@
  *     opens only there, and never appears in a response or on disk in the
  *     clear, not even as ciphertext in a response; re-encryption sees it;
  *   - check again: pending → connected; refused keys → invalid, row kept;
- *     a different profile is not adopted;
+ *     the stored profile is looked up by id; keys that no longer open it are
+ *     invalid until it is back, and a different one is not adopted;
+ *   - races: keys removed while a check waits on Monerium are not written
+ *     back; a member demoted or removed while a save waits stores nothing;
+ *   - errors: only a refused token grant is "keys refused"; Monerium's own
+ *     response body never reaches the browser;
  *   - remove: the keys are gone and GET says not_connected;
  *   - Home's company set-up: the keys step, and an IBAN step that is never
  *     offered as done.
@@ -39,6 +44,7 @@ const { initStore, store } = await import("../services/api/src/store.js");
 const { resolveOrg } = await import("../services/api/src/routes/org-context.js");
 const { createOrgMoneriumRoutes, orgMoneriumStatus } = await import("../services/api/src/routes/business/org-monerium.js");
 const { MoneriumApiError } = await import("../services/api/src/adapters/monerium-client.js");
+const { MoneriumKeysRefusedError } = await import("../services/api/src/adapters/monerium-connection.js");
 const { SECRETS, STORED_SECRETS } = await import("../services/api/src/stored-secrets.js");
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const model: any = await import(pathToFileURL(path.join(ROOT, "services/api/public/business/org-monerium-model.js")).href);
@@ -71,12 +77,35 @@ member("m_pers", "org_pers", "u_olga", "owner");
 const CLIENT_ID = "test-client-id-0000-1111";
 const SECRET = "test-secret-" + Math.random().toString(36).slice(2) + "-placeholder";
 const CORP = { id: "prof-corp-1", kind: "corporate", name: "Acme GmbH", state: "pending" };
-const stub = { mode: "ok" as "ok" | "refuse" | "down", profiles: [CORP] as any[], calls: [] as { clientId: string; secretOk: boolean }[] };
+const PROVIDER_BODY = "provider-body-marker-must-not-reach-the-browser";
+const stub = {
+  mode: "ok" as "ok" | "refuse" | "down" | "readfail",
+  profiles: [CORP] as any[],
+  calls: [] as { clientId: string; secretOk: boolean }[],
+  /** While set, Monerium "answers" only once it resolves: a request in flight. */
+  hold: undefined as Promise<void> | undefined,
+  /** Called as Monerium is asked, so a test acts while the request waits. */
+  entered: undefined as (() => void) | undefined,
+};
 const verify = async (clientId: string, clientSecret: string) => {
   stub.calls.push({ clientId, secretOk: clientSecret === SECRET });
-  if (stub.mode === "refuse") throw new MoneriumApiError("Monerium (sandbox) rejected these credentials", 400);
-  if (stub.mode === "down") throw new Error("connect ECONNREFUSED");
-  return { context: {}, profiles: stub.profiles.map((p) => ({ ...p })), ibans: [], addresses: [] };
+  const mode = stub.mode;
+  stub.entered?.();
+  if (stub.hold) await stub.hold;
+  if (mode === "refuse") throw new MoneriumKeysRefusedError("Monerium (sandbox) rejected these credentials");
+  if (mode === "down") throw new Error("connect ECONNREFUSED");
+  // A read after the token grant failing with a 400 is not "the keys are refused".
+  if (mode === "readfail") throw new MoneriumApiError(`Monerium GET /profiles failed (400): ${PROVIDER_BODY}`, 400);
+  return { profiles: stub.profiles.map((p) => ({ ...p })) };
+};
+/** Starts a request and holds Monerium's answer: `asked` resolves once
+ *  Monerium is asked, `release` lets it answer and returns the response. */
+const inFlight = <T,>(start: () => Promise<T>) => {
+  let release!: () => void;
+  stub.hold = new Promise<void>((r) => { release = r; });
+  const asked = new Promise<void>((r) => { stub.entered = r; });
+  const pending = start();
+  return { asked, release: () => { stub.hold = undefined; stub.entered = undefined; release(); return pending; } };
 };
 
 const app = express();
@@ -142,7 +171,12 @@ await check("keys Monerium refuses, or an outage, store nothing", async () => {
   stub.mode = "down";
   const down = await call("POST", "/org_co/monerium", "u_adam", keys);
   assert.equal(down.status, 503);
-  neverLeaks(no.text + down.text);
+  stub.mode = "readfail";
+  const read = await call("POST", "/org_co/monerium", "u_adam", keys);
+  assert.equal(read.status, 503, "a failed read after the grant is not a refusal of the keys");
+  assert.equal(read.data.code, "MONERIUM_UNREACHABLE");
+  assert.ok(!read.text.includes(PROVIDER_BODY), "Monerium's own response body never reaches the browser");
+  neverLeaks(no.text + down.text + read.text);
   assert.equal(store.findOrganisation("org_co")!.monerium, undefined);
   stub.mode = "ok";
 });
@@ -188,13 +222,33 @@ await check("check again: an approved profile is connected; the secret used is t
   neverLeaks(r.text);
 });
 
-await check("check again: a different company profile is not adopted", async () => {
+await check("check again: the stored profile is found by its id, even when another ranks first", async () => {
+  CORP.state = "pending";
+  stub.profiles = [{ id: "prof-corp-2", kind: "corporate", name: "Other GmbH", state: "approved" }, CORP];
+  const r = await call("POST", "/org_co/monerium/check", "u_olga");
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.data.monerium.status, "pending", "still the stored, pending profile");
+  assert.equal(store.findOrganisation("org_co")!.monerium!.profile.id, "prof-corp-1");
+  CORP.state = "approved";
+  stub.profiles = [CORP];
+});
+
+await check("check again: keys that no longer open the stored profile are invalid until it is back; another is not adopted", async () => {
   stub.profiles = [{ id: "prof-corp-2", kind: "corporate", name: "Other GmbH", state: "approved" }];
   const r = await call("POST", "/org_co/monerium/check", "u_olga");
   assert.equal(r.status, 409);
   assert.equal(r.data.code, "MONERIUM_PROFILE_CHANGED");
-  assert.equal(store.findOrganisation("org_co")!.monerium!.profile.id, "prof-corp-1");
+  assert.equal(r.data.monerium.status, "invalid");
+  const m = store.findOrganisation("org_co")!.monerium!;
+  assert.equal(m.profile.id, "prof-corp-1", "kept for reference");
+  assert.ok(m.profileMissingAt);
+  assert.equal((await call("GET", "/org_co/monerium", "u_olga")).data.monerium.status, "invalid", "and stays invalid on the next read");
+  assert.deepEqual(model.companySteps({ status: "invalid" }).map((s: any) => s.done), [false, false], "Home does not count it as done");
+  assert.match(model.keyHint(r.data.monerium), /no longer open the company profile/);
   stub.profiles = [CORP];
+  const back = await call("POST", "/org_co/monerium/check", "u_olga");
+  assert.equal(back.data.monerium.status, "connected", "visible again clears it");
+  assert.equal(store.findOrganisation("org_co")!.monerium!.profileMissingAt, undefined);
 });
 
 await check("check again: keys Monerium now refuses are invalid, and the row stays to be replaced", async () => {
@@ -207,6 +261,37 @@ await check("check again: keys Monerium now refuses are invalid, and the row sta
   const again = await call("POST", "/org_co/monerium/check", "u_olga");
   assert.equal(again.data.monerium.status, "connected", "accepted again clears it");
   assert.equal(store.findOrganisation("org_co")!.monerium!.rejectedAt, undefined);
+});
+
+await check("check again: keys removed or replaced while Monerium answers are not written back", async () => {
+  for (const mode of ["ok", "refuse"] as const) {
+    stub.mode = mode;
+    const before = store.findOrganisation("org_co")!.monerium!;
+    const check = inFlight(() => call("POST", "/org_co/monerium/check", "u_olga"));
+    await check.asked;
+    assert.equal((await call("DELETE", "/org_co/monerium", "u_olga")).status, 200, "removed meanwhile");
+    const r = await check.release();
+    assert.equal(r.status, 409, `${mode}: ${r.text}`);
+    assert.equal(r.data.code, "MONERIUM_KEYS_CHANGED");
+    assert.equal(store.findOrganisation("org_co")!.monerium, undefined, `${mode}: the removal stands`);
+    store.updateOrganisation("org_co", { monerium: before });
+  }
+  stub.mode = "ok";
+});
+
+await check("a member demoted or removed while Monerium answers stores nothing", async () => {
+  const saved = store.findOrganisation("org_co")!.monerium;
+  store.updateOrganisation("org_co", { monerium: undefined });
+  for (const change of [{ role: "viewer" }, { status: "removed" }] as const) {
+    const post = inFlight(() => call("POST", "/org_co/monerium", "u_adam", keys));
+    await post.asked;
+    store.updateMember("m_adam", change as any);
+    const r = await post.release();
+    assert.ok([403, 404].includes(r.status), `${JSON.stringify(change)}: ${r.status} ${r.text}`);
+    assert.equal(store.findOrganisation("org_co")!.monerium, undefined, "nothing stored");
+    store.updateMember("m_adam", { role: "admin", status: "active" } as any);
+  }
+  store.updateOrganisation("org_co", { monerium: saved });
 });
 
 await check("a payer cannot remove them; an owner can", async () => {

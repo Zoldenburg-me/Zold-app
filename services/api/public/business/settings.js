@@ -11,6 +11,13 @@ import { companyKeysHere, keyHint, keyRows } from "./org-monerium-model.js";
 import { shown } from "./nav.js";
 
 const ss = { sec: "org" };
+// A link that opens Settings at one section (Home's set-up card): it picks the
+// section before the view link renders Settings. Capture phase, so it runs
+// ahead of the shell's view-link handler.
+document.addEventListener("click", (ev) => {
+  const a = ev.target.closest?.("a[data-settings-sec]");
+  if (a && ["org", "monerium"].includes(a.dataset.settingsSec)) ss.sec = a.dataset.settingsSec;
+}, true);
 META.settings = () => ({ title: "Settings", sub: `${org.name}.`, actions: "" });
 
 function menu(accounts) {

@@ -214,6 +214,8 @@ export interface Organisation {
     checkedAt: string;
     /** Set when Monerium refused the stored keys at a later check. */
     rejectedAt?: string;
+    /** Set when, at a later check, the keys no longer opened `profile`. */
+    profileMissingAt?: string;
     connectedByMemberId: string;
   };
   /**

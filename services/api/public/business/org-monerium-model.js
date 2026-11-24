@@ -36,8 +36,19 @@ export function keyHint(m) {
   if (!m) return "The Monerium keys couldn’t be read. Open Settings again to retry.";
   if (m.status === "not_connected") return m.available ? "" : `Not available here: ${m.needs || "the server can’t store keys"}.`;
   if (m.status === "pending") return `Monerium hasn’t approved the company profile yet (it is ${m.profile?.state || "in review"}). Check again once they have.`;
-  if (m.status === "invalid") return m.rejectedAt ? "Monerium no longer accepts these keys. Connect new keys from the company’s Monerium account." : `Monerium has ${m.profile?.state || "closed"} the company profile.`;
+  if (m.status === "invalid") {
+    if (m.rejectedAt) return "Monerium no longer accepts these keys. Connect new keys from the company’s Monerium account.";
+    if (m.profileMissingAt) return "These keys no longer open the company profile they were connected with. Connect the company’s current keys.";
+    return `Monerium has ${m.profile?.state || "closed"} the company profile. Connect keys from an approved company profile.`;
+  }
   return "";
+}
+
+/** The toast after saving or checking the keys: what the status now is. */
+export function keyNotice(m, verb) {
+  if (m?.status === "connected") return verb === "check" ? "Checked: connected." : "Monerium keys connected.";
+  const hint = keyHint(m);
+  return verb === "check" ? `Checked. ${hint}` : `Monerium keys saved. ${hint}`;
 }
 
 /** Home's company set-up: the keys step, then the IBAN step that is not

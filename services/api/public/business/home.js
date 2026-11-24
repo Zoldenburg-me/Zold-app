@@ -298,7 +298,7 @@ const STEP = {
   iban: (s) => ({ title: "Activate the euro IBAN", sub: s.monerium ? "Receives and sends bank transfers." : "Follows the Monerium check.",
     ...(!s.monerium ? {} : me?.iban ? { view: "accounts" } : { action: { label: "Activate", href: "/app?from=business#monerium-settings" } }) }),
   // A company's own Monerium keys (Settings → Monerium), then its IBAN, which is not live.
-  companyMonerium: (_, d) => ({ title: "Connect the company’s Monerium keys", sub: d === null ? "Couldn’t check just now." : "API keys from the company’s own Monerium account. Monerium verifies the company.", view: "settings" }),
+  companyMonerium: (_, d) => ({ title: "Connect the company’s Monerium keys", sub: d === null ? "Couldn’t check just now." : "API keys from the company’s own Monerium account. Monerium verifies the company.", view: "settings", sec: "monerium" }),
   companyIban: () => ({ title: "Issue the company’s IBAN", sub: "Onto the company’s own Safe. This step is coming next and is not live yet.", tag: "Not live yet" }),
   backup: (_, d) => ({ title: "Add a backup key", sub: d === null ? "Couldn’t check just now." : "A second key you keep, in case this sign-in is lost.", action: d === null ? null : { label: "Add", href: APP_LINKS.signers } }),
 };
@@ -310,7 +310,7 @@ function checklistCard(steps) {
   const by = Object.fromEntries(steps.map((s) => [s.id, s.done]));
   const rows = steps.map((s) => {
     const t = STEP[s.id](by, s.done);
-    const right = s.done ? Z.tag("Done") : s.done === null ? Z.tag("Couldn’t check") : t.tag ? Z.tag(t.tag) : t.action ? appLink(t.action, t.title) : t.view ? linkBtn("Open", t.view).replace('class="z-btn ', 'class="z-btn z-btn--sm ') : Z.tag("Waiting");
+    const right = s.done ? Z.tag("Done") : s.done === null ? Z.tag("Couldn’t check") : t.tag ? Z.tag(t.tag) : t.action ? appLink(t.action, t.title) : t.view ? linkBtn("Open", t.view).replace('class="z-btn ', 'class="z-btn z-btn--sm ').replace(" data-view-link=", t.sec ? ` data-settings-sec="${esc(t.sec)}" data-view-link=` : " data-view-link=") : Z.tag("Waiting");
     return `<li>${mark(s.done)}<span class="z-row__main zb-h-checks__main"><span class="z-row__title">${esc(t.title)}</span>${s.done ? "" : `<span class="z-row__sub">${esc(t.sub)}</span>`}</span>${right}</li>`;
   });
   return `<section class="z-card zb-side-card" aria-labelledby="home-ck"><div class="zb-side-card__head"><h2 id="home-ck">Set up</h2><span class="z-fig">${done} of ${steps.length} done</span></div>

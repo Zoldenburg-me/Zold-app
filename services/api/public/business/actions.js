@@ -14,6 +14,7 @@ import { ap, bk, contactPayments, ct, draftTag, draftTitle, draftTotal, invoiceD
 import { loadOrg, render } from "./shell.js";
 import { field, payerRuleDialog, payerRuleSection, runSummary } from "./receipts.js";
 import { showProgress, signedLineOutcome, signedRunToast, signingWarning } from "./payment-model.js";
+import { keyNotice } from "./org-monerium-model.js";
 
 /** A file the API serves behind the bearer header, which a navigation
  *  cannot carry: fetch it, then hand the bytes to the browser as a download. */
@@ -345,7 +346,7 @@ function orgMoneriumDrawer(el) {
     try {
       const r = await api(`/api/orgs/${org.id}/monerium`, { method: "POST", body: { clientId, clientSecret } });
       Z.closeOverlay("om-drawer");
-      toast(r.monerium.status === "connected" ? "Monerium keys connected." : "Monerium keys saved. Monerium hasn’t approved the company profile yet.");
+      toast(keyNotice(r.monerium, "save"), r.monerium.status === "invalid");
       render();
     } catch (e) {
       err.textContent = plain(e.message);
@@ -432,8 +433,9 @@ export const ACTIONS = {
   "gmi-drawer": (el) => { gmiDrawer(el); return "keep"; },
   "org-monerium-drawer": (el) => { orgMoneriumDrawer(el); return "keep"; },
   async "org-monerium-check"() {
-    const r = await api(`/api/orgs/${org.id}/monerium/check`, { method: "POST" });
-    toast(r.monerium.status === "connected" ? "Checked: connected." : r.monerium.status === "invalid" ? "Monerium no longer accepts these keys." : "Checked: Monerium hasn’t approved the company profile yet.", r.monerium.status === "invalid");
+    // A refused check can still change what is stored (a profile gone): draw the screen again, then say why.
+    const r = await api(`/api/orgs/${org.id}/monerium/check`, { method: "POST" }).catch((e) => { render(); throw e; });
+    toast(keyNotice(r.monerium, "check"), r.monerium.status === "invalid");
   },
   "org-monerium-remove": () => dialog("Remove the Monerium keys?", `<p class="desc">Zold forgets the keys. Nothing changes at Monerium; delete the app there too if it is no longer used.</p>`,
     async () => { await api(`/api/orgs/${org.id}/monerium`, { method: "DELETE" }); toast("Keys removed."); }, { okLabel: "Remove keys" }),
