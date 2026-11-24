@@ -288,6 +288,28 @@ await check("the export prepares Belege for the month; the CSV and the ZIP follo
   const entries = listZip(Buffer.from(await zip.arrayBuffer()));
   assert.equal(entries.length, 3);
   assert.ok(entries.every((e) => e.name.endsWith(".pdf") && e.crcOk));
+  // A revoked Beleg is not shipped as a valid PDF: the ZIP lists its line as missing.
+  const revoked = store.documentsForOrg("org_1")[0];
+  store.updateDocument(revoked.id, { revokedAt: new Date().toISOString() });
+  const zip2 = await fetch(`${API}/api/orgs/org_1/bookkeeping/export/2026-09/belege.zip`, { headers: { "x-user": "u_owner" } });
+  const names = listZip(Buffer.from(await zip2.arrayBuffer())).map((e) => e.name);
+  assert.equal(names.filter((n) => n.endsWith(".pdf")).length, 2);
+  assert.ok(names.includes("MISSING-2026-09.txt"), names.join("|"));
+  assert.ok(!names.some((n) => n.includes(revoked.code)), "the revoked Beleg's PDF is not in the ZIP");
+  // The CSV and the statement agree with the ZIP: the revoked code is not named, the line says its Beleg is missing.
+  const csv2 = (await call("GET", "/api/orgs/org_1/bookkeeping/export/2026-09/lexware.csv")).bytes.toString("latin1");
+  assert.ok(!csv2.includes(revoked.code), "the revoked Beleg's code is not in the CSV");
+  assert.equal(csv2.split("Beleg fehlt").length - 1, 1, csv2);
+  const st2 = await call("GET", "/api/orgs/org_1/bookkeeping/statement?month=2026-09");
+  assert.equal(st2.body.lines.filter((l: any) => l.documentCode).length, 2);
+  assert.ok(!JSON.stringify(st2.body).includes(revoked.code), "the statement does not offer the revoked Beleg");
+  // Prepare issues the line a new Beleg, and the ZIP ships it.
+  const prep2 = await call("POST", "/api/orgs/org_1/bookkeeping/export/2026-09/prepare");
+  assert.equal(prep2.body.belegeIssued, 1, JSON.stringify(prep2.body));
+  const zip3 = await fetch(`${API}/api/orgs/org_1/bookkeeping/export/2026-09/belege.zip`, { headers: { "x-user": "u_owner" } });
+  const names3 = listZip(Buffer.from(await zip3.arrayBuffer())).map((e) => e.name);
+  assert.equal(names3.filter((n) => n.endsWith(".pdf")).length, 3, names3.join("|"));
+  assert.ok(!names3.includes("MISSING-2026-09.txt"), names3.join("|"));
   assert.equal((await call("GET", "/api/orgs/org_1/bookkeeping/export/2026-13/lexware.csv")).status, 400);
   assert.equal((await call("GET", "/api/orgs/org_1/bookkeeping/statement", undefined, "u_viewer")).status, 200, "a viewer may read");
   assert.equal((await call("POST", "/api/orgs/org_1/bookkeeping/export/2026-09/prepare", undefined, "u_viewer")).status, 403, "but not prepare");
