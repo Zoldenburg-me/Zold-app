@@ -199,6 +199,24 @@ export interface Organisation {
     };
   };
   /**
+   * Company orgs only: the company's own Monerium API keys (an app in the
+   * company's Monerium developer section), proven against Monerium before
+   * they are stored. The secret is encrypted at rest (stored-secrets.ts) and
+   * never returned, in any form. `profile` is the corporate profile the keys
+   * opened, as Monerium reported it at the last check. Nothing here issues an
+   * IBAN or moves money (routes/business/org-monerium.ts).
+   */
+  monerium?: {
+    clientId: string;
+    clientSecretEnc: string;
+    profile: { id: string; name?: string; state: string };
+    connectedAt: string;
+    checkedAt: string;
+    /** Set when Monerium refused the stored keys at a later check. */
+    rejectedAt?: string;
+    connectedByMemberId: string;
+  };
+  /**
    * Whether a payment run needs a second person's approval before it is sent.
    * Absent, domain/payment-review.ts decides. Once set it is the org's own
    * policy, and only an owner changes it.

@@ -23,6 +23,7 @@ import { draftTag, draftTitle, draftTotal, invAmount, loadMembers, memberName } 
 import { APP_LINKS, isOwnCompanyOrg, loadAccess } from "./access-model.js";
 import { companyBalance, countedLines, hasIban, noIbanStep, pendingRuns, securityRows, setupOpen, setupSteps } from "./home-model.js";
 import { runLink } from "./payment.js";
+import { companyKeysHere, companySteps } from "./org-monerium-model.js";
 import { runIdForLine } from "./payment-model.js";
 
 const DAY = 86400000;
@@ -256,8 +257,8 @@ function attention({ waiting, invoices, lines, accounts }) {
 /** Why there is no IBAN yet, and the one step that moves it on. Only the
  *  login whose own account backs this organisation connects Monerium for it. */
 function noIbanHtml(accounts) {
-  // A company's account is its own Safe; no step issues its IBAN yet.
-  if (org.entity === "company") return `<p class="zb-hint">No IBAN yet. Issuing the company’s IBAN onto its Safe is not yet live.</p>${linkBtn("Accounts", "accounts")}`;
+  // A company's account is its own Safe; its keys connect in Settings, and no step issues its IBAN yet.
+  if (org.entity === "company") return `<p class="zb-hint">No IBAN yet. Connect the company’s own Monerium keys in Settings. Issuing the company’s IBAN onto its Safe is not live yet.</p>${linkBtn("Settings", "settings")}`;
   const step = noIbanStep(org.type === "personal" || isOwnCompanyOrg(me, org, accounts), me);
   const whose = org.type === "personal" ? "you" : esc(org.name);
   if (step === "not-own") return `<p class="zb-hint">No IBAN yet. Monerium issues one once it has verified ${whose}, and only the company’s own login can connect it.</p>${linkBtn("Accounts", "accounts")}`;
@@ -296,6 +297,9 @@ const STEP = {
   monerium: () => ({ title: "Connect Monerium", sub: "Monerium verifies the company before it issues an IBAN.", action: { label: "Connect", href: "/app?from=business#monerium-settings" } }),
   iban: (s) => ({ title: "Activate the euro IBAN", sub: s.monerium ? "Receives and sends bank transfers." : "Follows the Monerium check.",
     ...(!s.monerium ? {} : me?.iban ? { view: "accounts" } : { action: { label: "Activate", href: "/app?from=business#monerium-settings" } }) }),
+  // A company's own Monerium keys (Settings → Monerium), then its IBAN, which is not live.
+  companyMonerium: (_, d) => ({ title: "Connect the company’s Monerium keys", sub: d === null ? "Couldn’t check just now." : "API keys from the company’s own Monerium account. Monerium verifies the company.", view: "settings" }),
+  companyIban: () => ({ title: "Issue the company’s IBAN", sub: "Onto the company’s own Safe. This step is coming next and is not live yet.", tag: "Not live yet" }),
   backup: (_, d) => ({ title: "Add a backup key", sub: d === null ? "Couldn’t check just now." : "A second key you keep, in case this sign-in is lost.", action: d === null ? null : { label: "Add", href: APP_LINKS.signers } }),
 };
 
@@ -306,7 +310,7 @@ function checklistCard(steps) {
   const by = Object.fromEntries(steps.map((s) => [s.id, s.done]));
   const rows = steps.map((s) => {
     const t = STEP[s.id](by, s.done);
-    const right = s.done ? Z.tag("Done") : s.done === null ? Z.tag("Couldn’t check") : t.action ? appLink(t.action, t.title) : t.view ? linkBtn("Open", t.view).replace('class="z-btn ', 'class="z-btn z-btn--sm ') : Z.tag("Waiting");
+    const right = s.done ? Z.tag("Done") : s.done === null ? Z.tag("Couldn’t check") : t.tag ? Z.tag(t.tag) : t.action ? appLink(t.action, t.title) : t.view ? linkBtn("Open", t.view).replace('class="z-btn ', 'class="z-btn z-btn--sm ') : Z.tag("Waiting");
     return `<li>${mark(s.done)}<span class="z-row__main zb-h-checks__main"><span class="z-row__title">${esc(t.title)}</span>${s.done ? "" : `<span class="z-row__sub">${esc(t.sub)}</span>`}</span>${right}</li>`;
   });
   return `<section class="z-card zb-side-card" aria-labelledby="home-ck"><div class="zb-side-card__head"><h2 id="home-ck">Set up</h2><span class="z-fig">${done} of ${steps.length} done</span></div>
@@ -327,7 +331,8 @@ META.overview = () => ({ title: greeting(), sub: "", actions: "" });
 RENDER.overview = async () => {
   const books = cap("ledger.transactions").allowed;
   // The greeting and the balance need the session, read again for a balance that moved.
-  const [acc, dr, inv, , st, , ax] = await Promise.allSettled([
+  const companyKeys = companyKeysHere(org, roleCan(org.role, "accounts"));
+  const [acc, dr, inv, , st, , ax, ks] = await Promise.allSettled([
     api(`/api/orgs/${org.id}/accounts`),
     cap("transfers.drafts").allowed ? api(`/api/orgs/${org.id}/drafts`) : Promise.resolve({ drafts: [] }),
     cap("invoices").allowed ? api(`/api/orgs/${org.id}/invoices`) : Promise.resolve(null),
@@ -336,6 +341,8 @@ RENDER.overview = async () => {
     refreshMe(),
     // Null for any member but the company login (access-model.js).
     Promise.race([ensureMe().then((u) => loadAccess(u, api)), new Promise((ok) => { setTimeout(ok, ACCESS_WAIT_MS, null); })]),
+    // A company's own Monerium keys, for owners and admins (org-monerium-model.js).
+    companyKeys ? api(`/api/orgs/${org.id}/monerium`) : Promise.resolve(null),
   ]);
   const accounts = acc.status === "fulfilled" ? acc.value.accounts : [];
   const runs = dr.status === "fulfilled" ? dr.value.drafts : [];
@@ -350,7 +357,8 @@ RENDER.overview = async () => {
   // Security and set-up are about the login's own account: only in its own company.
   const access = ax.status === "fulfilled" && acc.status === "fulfilled" && isOwnCompanyOrg(me, org, accounts) ? ax.value : null;
   const secRows = securityRows(access, APP_LINKS, Z.passkeyName());
-  const setup = [access ? checklistCard(setupSteps(me, accounts, access)) : "", secRows ? securityCard(secRows) : ""].filter(Boolean);
+  const keys = companyKeys ? (ks.status === "fulfilled" ? ks.value?.monerium ?? null : null) : undefined;
+  const setup = [access ? checklistCard(setupSteps(me, accounts, access)) : "", keys !== undefined ? checklistCard(companySteps(keys)) : "", secRows ? securityCard(secRows) : ""].filter(Boolean);
   const pendingTab = cap("transfers.drafts").allowed && dr.status === "fulfilled" ? runs : null;
 
   const cards = [];

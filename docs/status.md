@@ -123,6 +123,12 @@ Say this plainly rather than letting the surface imply otherwise:
   the refusal and the activation screen both say to sign out first.
   Logins connected before this rule are not re-read: one connected to a
   profile of the other kind keeps it until it reconnects.
+- **A company org's own Monerium API keys have never been checked against
+  Monerium.** Settings → Monerium stores a company's keys only after the
+  client-credentials grant succeeds and the keys open a corporate profile,
+  but that has run only against a stub in `org-monerium:test`, never with
+  sandbox or production keys. The keys issue no IBAN and move no money:
+  linking the company Safe and issuing its IBAN are not built.
   The check gates sending only: invoices and pay links still receive into
   an account whose profile has not been checked.
 - **The VIES lookup of a customer's VAT ID** (`adapters/vies.ts`) has run
