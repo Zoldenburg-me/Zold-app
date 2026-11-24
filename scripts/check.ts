@@ -166,6 +166,7 @@ const scripts = [
   "lexware:csv:test",
   "exact-output:test",
   "gmi:test",
+  "beleg-reissue:test",
 ];
 // The company-owned Safe's suites (M2), named once here and in package.json:
 // org-owner-changes (step 4), org-draft-queue (6), org-crypto-send (7),
