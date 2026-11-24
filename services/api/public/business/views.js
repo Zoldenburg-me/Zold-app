@@ -428,7 +428,7 @@ RENDER.documents = async () => {
         <td class="mono">${esc(day(t.updatedAt || t.createdAt))}</td>
         <td>${esc(t.recipientName || "—")}</td>
         <td class="num">${esc(eur(t.sendEur))}</td>
-        <td class="num"><span class="zb-actions" style="justify-content:flex-end">${secondary("Receipt", `data-act="doc-receipt" data-id="${esc(t.id)}"`)}<a class="z-btn z-btn--secondary z-btn--sm" href="/app#share/${encodeURIComponent(t.id)}" target="_blank" rel="noopener">Share</a></span></td></tr>`))
+        <td class="num"><span class="zb-actions" style="justify-content:flex-end">${secondary("Receipt", `data-act="doc-receipt" data-id="${esc(t.id)}"`)}<a class="z-btn z-btn--secondary z-btn--sm" href="/app#share-compose/${encodeURIComponent(t.id)}" target="_blank" rel="noopener">Share</a></span></td></tr>`))
     : `<div class="z-card"><p class="empty">No bank transfer from this account has been paid yet.</p></div>`;
   return `${create}
     <h2 class="zb-h2" style="margin:28px 0 12px">Issued</h2>${issued}

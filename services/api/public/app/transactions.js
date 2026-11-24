@@ -81,12 +81,18 @@ function paintShareControls() {
 
   paintSharePreview();
   $("m-share-revoke").classList.toggle("hidden", !mShare.link);
+  // The link to send is drawn as the screen's result, with its own copy and
+  // share buttons, so the address bar is not mistaken for it.
+  $("m-share-out").classList.toggle("hidden", !mShare.link);
+  $("m-share-url").textContent = mShare.link || "";
+  $("m-share-copy").textContent = shareCopyLabel();
+  $("m-share-native").classList.toggle("hidden", typeof navigator.share !== "function");
   const foot = $("m-share-foot");
   if (mShare.link) {
     const days = Math.max(0, Math.ceil((Date.parse(mShare.expiresAt) - Date.now()) / 86400000));
-    foot.textContent = `${mShare.link.replace(/^https?:\/\//, "")} · expires in ${days} day${days === 1 ? "" : "s"}`;
+    foot.textContent = `Live · expires in ${days} day${days === 1 ? "" : "s"}`;
   } else {
-    foot.textContent = "A link is created when you copy it, and stays live for 30 days.";
+    foot.textContent = "Nothing is public until you create the link. It stays live for 30 days.";
   }
 
   $("m-share-groups").querySelectorAll("input[data-sgroup]").forEach((r) => {
@@ -169,6 +175,8 @@ async function saveShare({ silent } = {}) {
   }
 }
 
+const shareCopyLabel = () => (mShare.link ? "Copy link" : "Create and copy link");
+
 $("m-share-copy").onclick = async () => {
   const btn = $("m-share-copy");
   const s = mShare.link ? { url: mShare.link } : await saveShare();
@@ -177,13 +185,26 @@ $("m-share-copy").onclick = async () => {
     await navigator.clipboard.writeText(s.url);
   } catch {
     // A denied clipboard must not read as a failure to create the link — the
-    // link exists either way, and the footer under the button shows it.
-    showErr("m-share-err", new Error("could not reach the clipboard — the link is shown below"));
+    // link exists either way, and "Send this link" shows it.
+    showErr("m-share-err", new Error("could not reach the clipboard — copy the link shown above"));
     return;
   }
   btn.textContent = "Link copied";
   announce("Link copied");
-  setTimeout(() => { btn.textContent = "Copy share link"; }, 1800);
+  setTimeout(() => { btn.textContent = shareCopyLabel(); }, 1800);
+};
+
+/* The phone's share sheet, where the browser has one. Closing the sheet is
+   not an error; a sheet that fails falls back to the clipboard. */
+$("m-share-native").onclick = async () => {
+  const s = mShare.link ? { url: mShare.link } : await saveShare();
+  if (!s) return;
+  try {
+    await navigator.share({ title: "Zold receipt", url: s.url });
+  } catch (e) {
+    if (e?.name === "AbortError") return;
+    $("m-share-copy").onclick();
+  }
 };
 
 $("m-share-revoke").onclick = async () => {

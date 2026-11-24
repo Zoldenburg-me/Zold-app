@@ -162,7 +162,7 @@ function phTxParts(id) {
     <p class="z-err" id="ph-tx-err" role="alert" hidden></p>
   `, foot: t.state === "CREATED" ? "" : `<div class="z-pair">
       ${receipt ? Z.button({ icon: "receipt_long", label: "Receipt", id: "ph-tx-receipt" }) : ""}
-      ${Z.button({ variant: receipt ? "secondary" : "primary", icon: "ios_share", label: "Share", href: phHref("share", t.id), className: receipt ? "" : "z-btn--full" })}
+      ${Z.button({ variant: receipt ? "secondary" : "primary", icon: "ios_share", label: "Share", href: phHref("share-compose", t.id), className: receipt ? "" : "z-btn--full" })}
     </div>` };
 }
 
@@ -295,5 +295,5 @@ PH.in = {
 };
 
 /* The older share composer, reached from one payment. */
-PH_LEGACY.share = "share";
+PH_LEGACY["share-compose"] = "share";
 

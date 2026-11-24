@@ -78,6 +78,7 @@ const scripts = [
   "app-copy:ui:test",
   "monerium-screen:ui:test",
   "paylink-form:ui:test",
+  "share-link:ui:test",
   "unread-balance:ui:test",
   "signout:test",
   "money-in:ui:test",
