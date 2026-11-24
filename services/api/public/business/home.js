@@ -309,6 +309,7 @@ const IBAN_SUB = {
   safe_needed: "Set up the company’s Safe first.",
   link_pending: "Monerium is checking the signed declaration.",
   iban_requested: "Requested. Monerium usually issues it within minutes.",
+  moved: "Monerium lists the company’s IBAN elsewhere now; see Settings → Monerium.",
 };
 
 /** A step's "Open": the view, and the Settings section in the URL too, so the
