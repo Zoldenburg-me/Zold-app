@@ -240,6 +240,8 @@ function isAuthRoute(req: express.Request): boolean {
     path.startsWith("/admin") ||
     path.startsWith("/invoice-links/") ||
     (path.endsWith("/monerium/api-keys") && req.method === "POST") ||
+    // A company's own Monerium keys, checked against Monerium on every POST.
+    (/^\/orgs\/[^/]+\/monerium$/.test(path) && req.method === "POST") ||
     (path === "/users" && req.method === "POST") ||
     // A 6-digit code is a guessable credential; sending one spends mail.
     /^\/users\/[^/]+\/email\/(code|verify)$/.test(path) ||
@@ -265,6 +267,7 @@ function partnerBucket(req: express.Request): "p" | "d" | undefined {
   if (
     (path === "/quotes" && req.method === "POST") ||
     /^\/users\/[^/]+\/monerium(\/|$)/.test(path) ||
+    /^\/orgs\/[^/]+\/monerium(\/|$)/.test(path) ||
     path.startsWith("/gnosis-pay/") ||
     /^\/orgs\/[^/]+\/integrations(\/|$)/.test(path) ||
     /^\/orgs\/[^/]+\/invoicing\/vat-check$/.test(path) ||

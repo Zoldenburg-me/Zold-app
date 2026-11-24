@@ -3,7 +3,7 @@
  *
  * One router per subject, mounted on the same path: drafts, incoming invoices,
  * issued invoices, bookkeeping, integrations, payment links, the org
- * Safe's signature queue and its owners. They share the derived-state helpers in
+ * Safe's signature queue and its owners, and a company's Monerium keys and the IBAN on its Safe. They share the derived-state helpers in
  * ./business/state.ts and the request helpers in ./business/shared.ts, so the cross-cutting rules (four eyes, INVALID_DATA,
  * gating as a read-time filter) each live in one place.
  *
@@ -28,6 +28,8 @@ import { createOrgPaymentPageRoutes } from "./business/org-payment-page.js";
 import { createSafeOpRoutes } from "./business/safe-ops.js";
 import { createOrgSafeRoutes } from "./business/org-safe.js";
 import { createOrgRecoveryRoutes } from "./business/org-recovery.js";
+import { createOrgMoneriumRoutes } from "./business/org-monerium.js";
+import { createOrgMoneriumIbanRoutes } from "./business/org-monerium-iban.js";
 import type { TransferFactory } from "./business/shared.js";
 
 export type { TransferFactory } from "./business/shared.js";
@@ -54,6 +56,8 @@ export function createBusinessRouter(
   r.use(createSafeOpRoutes(deps));
   r.use(createOrgSafeRoutes(deps));
   r.use(createOrgRecoveryRoutes(deps));
+  r.use(createOrgMoneriumRoutes(deps));
+  r.use(createOrgMoneriumIbanRoutes(deps));
 
   return r;
 }

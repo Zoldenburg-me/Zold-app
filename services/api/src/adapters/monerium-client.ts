@@ -195,6 +195,13 @@ export class MoneriumClient {
     return this.request<any>("GET", "/addresses");
   }
 
+  /** One linked address: `profile` is the profile it is linked under. The
+   *  address becomes a path segment, so its shape is checked first. */
+  address(address: string) {
+    if (!/^0x[0-9a-fA-F]{40}$/.test(address)) throw new MoneriumApiError("malformed address", 400);
+    return this.request<any>("GET", `/addresses/${address}`);
+  }
+
   requestIban(address: string, chain: string) {
     return this.request<any>("POST", "/ibans", { address, chain });
   }

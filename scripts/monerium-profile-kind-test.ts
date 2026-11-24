@@ -741,6 +741,19 @@ await check("an owner changes the entity until an EUR account is funded; then it
   assert.equal(safeLocked.data.code, "ENTITY_LOCKED");
 });
 
+await check("a company with its own Monerium keys stored cannot become a sole trader until they are removed", async () => {
+  addOrg("org_keys", "business", "u_entity", "Keys GmbH");
+  assert.equal((await call("PATCH", "/api/orgs/org_keys", "u_entity", { entity: "company" })).status, 200);
+  store.updateOrganisation("org_keys", { monerium: { clientId: "test-client-id-0000", clientSecretEnc: "sealed-placeholder", profile: { id: "p1", state: "pending" }, connectedAt: now, checkedAt: now, connectedByMemberId: "m" } });
+  const refused = await call("PATCH", "/api/orgs/org_keys", "u_entity", { entity: "sole_trader" });
+  assert.equal(refused.status, 409, JSON.stringify(refused.data));
+  assert.equal(refused.data.code, "MONERIUM_KEYS_CONNECTED");
+  assert.equal(store.findOrganisation("org_keys")!.entity, "company");
+  assert.equal((await call("PATCH", "/api/orgs/org_keys", "u_entity", { entity: "company", taxId: "DE1" })).status, 200, "the same entity still saves the rest");
+  store.updateOrganisation("org_keys", { monerium: undefined });
+  assert.equal((await call("PATCH", "/api/orgs/org_keys", "u_entity", { entity: "sole_trader" })).status, 200, "once removed it changes");
+});
+
 await check("a personal space keeps its person's name: renaming it in /business is refused, other fields save", async () => {
   const org = store.organisationsForUser("u_fresh").find(({ org: o }) => o.type === "personal")!.org;
   const renamed = await call("PATCH", `/api/orgs/${org.id}`, "u_fresh", { name: "Something Else" });

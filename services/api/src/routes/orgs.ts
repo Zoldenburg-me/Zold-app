@@ -88,15 +88,15 @@ function noIbanGate(type: OrgType): NonNullable<Account["gate"]> {
  *  POST .../safe/deployment). */
 const ORG_SAFE_GATE: NonNullable<Account["gate"]> = {
   reason: "The company’s Safe is not set up yet, so nothing can be paid into or sent from this account.",
-  needs: "an owner to set up the company’s Safe with their passkey. Issuing the company’s IBAN onto it is not yet live.",
+  needs: "an owner to set up the company’s Safe with their passkey, then the company’s IBAN on it (Settings → Monerium).",
 };
-/** A company's EUR account once its Safe exists. No route issues a company's
- *  IBAN onto its Safe yet, so nothing here says one can be connected. Only
- *  bank transfers wait for it: a crypto send is queued on the Safe for its
- *  owners (wallet/org-debit.ts orgDebitSource). */
+/** A company's EUR account once its Safe exists, until Monerium attributes
+ *  the company's IBAN to it (routes/business/org-monerium-iban.ts opens the
+ *  account then). Only bank transfers wait for it: a crypto send is queued on
+ *  the Safe for its owners (wallet/org-debit.ts orgDebitSource). */
 const ORG_IBAN_GATE: NonNullable<Account["gate"]> = {
-  reason: "The company’s Safe is set up, but issuing the company’s IBAN onto it is not yet live, so no bank transfer can go into or out of this account. A payment to a crypto wallet is queued for the owners to sign.",
-  needs: "the company’s IBAN on its Safe, which is not yet live.",
+  reason: "The company’s Safe is set up, but the company’s IBAN is not issued onto it yet, so no bank transfer can go into or out of this account. A payment to a crypto wallet is queued for the owners to sign.",
+  needs: "the company’s Monerium keys and an owner’s passkey to issue the company’s IBAN onto its Safe (Settings → Monerium).",
 };
 
 const OWNER_ONLY_FUNDING = "Only an owner can connect their account or wallet to this organisation.";
@@ -358,6 +358,16 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
         return res.status(409).json({
           code: "ENTITY_LOCKED",
           error: "The euro account is already set up, so whether the business is a company or a sole trader can no longer change.",
+          field: "entity",
+        });
+      }
+      // A company's own Monerium keys belong to the company: they are removed
+      // in Settings → Monerium first, not stranded on a sole trader, where
+      // that section no longer reaches them (routes/business/org-monerium.ts).
+      if (ctx.org.monerium) {
+        return res.status(409).json({
+          code: "MONERIUM_KEYS_CONNECTED",
+          error: "The company's Monerium keys are still connected. Remove them in Settings → Monerium first, then change whether the business is a company or a sole trader.",
           field: "entity",
         });
       }

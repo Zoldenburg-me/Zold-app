@@ -951,6 +951,21 @@ export async function signMessageAsPasskeySafe(
   return SafeAccount.buildSignaturesFromSingerSignaturePairs(pairs, { isInit: false }) as `0x${string}`;
 }
 
+/**
+ * A company org Safe's EIP-1271 signature over a message, from ONE of its
+ * passkey owners' assertion over safeMessageHash(safeAddress, message). It is
+ * a valid signature only while the Safe's threshold is 1 and `owner` is an
+ * owner on chain: the caller reads both first (routes/business/org-monerium-iban.ts).
+ * Collecting several owners' message signatures is not built.
+ */
+export function orgSafeMessageSignature(owner: WebauthnPublicKey, assertion: BrowserPasskeyAssertion): `0x${string}` {
+  const passkeySignature = SafeAccount.createWebAuthnSignature(webauthnSignatureFromAssertion(assertion));
+  const pairs: SignerSignaturePair[] = [
+    { signer: passkeyAccountAddress(owner) as any, signature: passkeySignature, isContractSignature: true },
+  ];
+  return SafeAccount.buildSignaturesFromSingerSignaturePairs(pairs, { isInit: false }) as `0x${string}`;
+}
+
 export async function isDeployed(address: string): Promise<boolean> {
   if (allowSimulation()) return true;
   return hasCode(address);

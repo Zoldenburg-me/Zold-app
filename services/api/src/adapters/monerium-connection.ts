@@ -133,21 +133,7 @@ export interface VerifiedApiKeys {
  * "wrong secret".
  */
 export async function verifyApiKeys(clientId: string, clientSecret: string): Promise<VerifiedApiKeys> {
-  const client = new MoneriumClient({ baseUrl: MONERIUM.baseUrl, clientId, clientSecret });
-  try {
-    await client.bearerToken();
-  } catch (err: any) {
-    const msg = errorText(err);
-    const m = msg.match(/Monerium auth failed \((\d{3})\)/);
-    const status = m ? Number(m[1]) : 0;
-    if (status === 400 || status === 401 || status === 403) {
-      throw new MoneriumApiError(
-        `Monerium (${moneriumEnvironment()}) rejected these credentials — check the client id and secret, and that they come from the ${moneriumEnvironment()} environment`,
-        400,
-      );
-    }
-    throw err;
-  }
+  const client = await provenClient(clientId, clientSecret);
   const [context, profileRes, ibanRes, addressRes] = await Promise.all([
     client.authContext(),
     client.profiles(),
@@ -156,10 +142,60 @@ export async function verifyApiKeys(clientId: string, clientSecret: string): Pro
   ]);
   return {
     context,
-    profiles: Array.isArray(profileRes) ? profileRes : (profileRes?.profiles ?? []),
-    ibans: Array.isArray(ibanRes) ? ibanRes : (ibanRes?.ibans ?? []),
-    addresses: Array.isArray(addressRes) ? addressRes : (addressRes?.addresses ?? []),
+    profiles: listOf(profileRes, "profiles"),
+    ibans: listOf(ibanRes, "ibans"),
+    addresses: listOf(addressRes, "addresses"),
   };
+}
+
+/** A company's own keys (routes/business/org-monerium.ts) need only the
+ *  token grant and the profile list: nothing there reads IBANs, addresses or
+ *  the auth context, so their absence or an outage of those reads never
+ *  blocks storing the keys. */
+export async function verifyCompanyKeys(clientId: string, clientSecret: string): Promise<{ profiles: any[] }> {
+  const client = await provenClient(clientId, clientSecret);
+  return { profiles: profileListOf(await client.profiles()) };
+}
+
+/** The profile list, strictly: an answer without one is a failed read (a
+ *  503 the caller may retry), never "Monerium lists no profiles", which a
+ *  re-check would record as the company profile gone. */
+export function profileListOf(res: unknown): any[] {
+  if (Array.isArray(res)) return res;
+  const list = (res as { profiles?: unknown } | null)?.profiles;
+  if (Array.isArray(list)) return list;
+  throw new Error("Monerium answered the profile list without a profiles array");
+}
+
+const listOf = (res: any, key: string): any[] => (Array.isArray(res) ? res : (res?.[key] ?? []));
+
+/** Monerium refused the token grant itself: the keys are wrong, revoked or
+ *  from the other environment. Only this means "the keys are refused"; a
+ *  failed read after the grant is the transient (or bug) it is. */
+export class MoneriumKeysRefusedError extends MoneriumApiError {
+  constructor(message: string) {
+    super(message, 400);
+    this.name = "MoneriumKeysRefusedError";
+  }
+}
+
+/** A client whose token grant Monerium accepted; its refusal is a 400. */
+async function provenClient(clientId: string, clientSecret: string): Promise<MoneriumClient> {
+  const client = new MoneriumClient({ baseUrl: MONERIUM.baseUrl, clientId, clientSecret });
+  try {
+    await client.bearerToken();
+  } catch (err: any) {
+    const msg = errorText(err);
+    const m = msg.match(/Monerium auth failed \((\d{3})\)/);
+    const status = m ? Number(m[1]) : 0;
+    if (status === 400 || status === 401 || status === 403) {
+      throw new MoneriumKeysRefusedError(
+        `Monerium (${moneriumEnvironment()}) rejected these credentials — check the client id and secret, and that they come from the ${moneriumEnvironment()} environment`,
+      );
+    }
+    throw err;
+  }
+  return client;
 }
 
 /* Per-user clients, keyed on the ciphertext so a rotated secret is a new
