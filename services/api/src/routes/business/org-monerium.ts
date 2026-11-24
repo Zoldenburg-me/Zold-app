@@ -208,8 +208,10 @@ export function createOrgMoneriumRoutes(deps: OrgRoutes, verify: Verify = verify
       if (err instanceof MoneriumApiError) return res.status(err.status).json({ error: err.message });
       throw err;
     }
+    // The keys as they are before any wait (ctx.org is the live row).
+    const before = ctx.org.monerium ? { ...ctx.org.monerium } : undefined;
     // Replacing keys that are stored: the passkey approves it, before Monerium is asked.
-    if (ctx.org.monerium && !(await stepUp(ctx.userId, req.body, res))) return;
+    if (before && !(await stepUp(ctx.userId, req.body, res))) return;
     let verified;
     try {
       verified = await verify(input.clientId, input.clientSecret);
@@ -224,7 +226,12 @@ export function createOrgMoneriumRoutes(deps: OrgRoutes, verify: Verify = verify
     const profile = issuedTo ? storedProfile(verified.profiles, issuedTo) : corporateProfile(verified.profiles);
     if (!profile) return res.status(409).json(issuedTo ? ISSUED_PROFILE_MISSING : NO_COMPANY_PROFILE);
     // A member removed or demoted, or the org no longer a company, while Monerium answered: nothing is stored.
-    if (!gate(req, res)) return;
+    const cur = gate(req, res);
+    if (!cur) return;
+    // Keys connected or replaced by someone else meanwhile are not written
+    // over: a first connection was approved by nobody's passkey, and a
+    // replacement only for the keys that were there.
+    if (before ? !sameKeys(cur.org.monerium, before) : !!cur.org.monerium) return res.status(409).json(KEYS_CHANGED);
     let clientSecretEnc: string;
     try {
       clientSecretEnc = SECRETS.orgMoneriumApiSecret.seal(ctx.org.id, input.clientSecret);
@@ -289,11 +296,13 @@ export function createOrgMoneriumRoutes(deps: OrgRoutes, verify: Verify = verify
     const ctx = gate(req, res);
     if (!ctx) return;
     if (!ctx.org.monerium) return res.status(409).json({ error: "no Monerium keys are connected", code: "MONERIUM_NOT_CONNECTED" });
+    const approved = { ...ctx.org.monerium };
     if (!(await stepUp(ctx.userId, req.body, res))) return;
-    // Decided on the org and membership as they are after the approval.
+    // Decided on the org and membership as they are after the approval: only
+    // the keys the passkey approved removing are removed.
     const cur = gate(req, res);
     if (!cur) return;
-    if (!sameKeys(cur.org.monerium, ctx.org.monerium)) return res.status(409).json(KEYS_CHANGED);
+    if (!sameKeys(cur.org.monerium, approved)) return res.status(409).json(KEYS_CHANGED);
     const org = store.updateOrganisation(ctx.org.id, { monerium: undefined });
     store.audit(auditEntry("partner.credentials_removed", { partner: "monerium", orgId: org.id }, ctx.userId));
     res.json({ monerium: publicOrgMonerium(org) });

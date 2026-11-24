@@ -137,7 +137,11 @@ Say this plainly rather than letting the surface imply otherwise:
   (`org-monerium-iban:test`): no org Safe EIP-1271 signature has been checked
   by Monerium, and no company IBAN exists. A Safe at threshold 2 or more is
   refused (collecting several owners' message signatures is not built).
-  Deposits are listed live from Monerium and booked nowhere. **Paying a bank
+  It needs the `profile` and `chain` fields on GET /ibans items, which are
+  unverified against the real server (without `profile` it waits, failing
+  closed). An issued IBAN is re-read only when someone presses **Check
+  again**: there is no poller. Deposits are listed live from Monerium and
+  booked nowhere. **Paying a bank
   account from the company's IBAN is not built**: a company bank run is
   refused with `COMPANY_BANK_PAYOUT_NOT_BUILT`.
   The check gates sending only: invoices and pay links still receive into

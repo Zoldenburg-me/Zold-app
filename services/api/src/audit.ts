@@ -88,7 +88,9 @@ export type AuditKind =
   /** A company Safe's signed declaration went to Monerium, and Monerium
    *  attributed the company's IBAN to that Safe. */
   | "org_iban.link_submitted"
-  | "org_iban.issued";
+  | "org_iban.issued"
+  /** Monerium listed the company's issued IBAN on another address or chain. */
+  | "org_iban.moved_away";
 
 export interface AuditEntry {
   id: string;

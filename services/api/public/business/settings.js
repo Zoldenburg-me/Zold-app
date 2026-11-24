@@ -121,9 +121,11 @@ RENDER.settings = async () => {
   const company = companyKeysHere(org, roleCan(org.role, "accounts"));
   const [acc, , ks] = await Promise.allSettled([api(`/api/orgs/${org.id}/accounts`), ensureMe(),
     company ? api(`/api/orgs/${org.id}/monerium`) : Promise.resolve(null)]);
-  // The company's deposits, read live from Monerium once its IBAN is issued.
+  // The company's deposits, read live from Monerium once its IBAN is issued:
+  // read whatever section opens first, since switching sections reuses them.
+  // Null is "couldn't read", [] is "none".
   const issued = ks.status === "fulfilled" && ks.value?.monerium?.companyIban?.state === "issued";
-  const deposits = !issued || ss.sec !== "monerium" ? [] : await api(`/api/orgs/${org.id}/monerium/deposits`).then((r) => r.deposits, () => null);
+  const deposits = !issued ? [] : await api(`/api/orgs/${org.id}/monerium/deposits`).then((r) => r.deposits, () => null);
   const accounts = acc.status === "fulfilled" ? acc.value.accounts : null;
   const keys = ks.status === "fulfilled" ? ks.value?.monerium ?? null : null;
   // A company's account is its own Safe: its Monerium is its own keys, never a login's connection.

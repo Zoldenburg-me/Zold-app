@@ -355,6 +355,20 @@ await check("replacing or removing stored keys needs a fresh passkey approval; t
   store.updateOrganisation("org_co", { monerium: before });
 });
 
+await check("keys someone else connects while a first connection is checked are not written over", async () => {
+  const before = store.findOrganisation("org_co")!.monerium;
+  store.updateOrganisation("org_co", { monerium: undefined });
+  const post = inFlight(() => call("POST", "/org_co/monerium", "u_adam", keys));
+  await post.asked;
+  const theirs = { clientId: "test-client-id-4444-5555", clientSecretEnc: SECRETS.orgMoneriumApiSecret.seal("org_co", SECRET + "-theirs"), profile: { id: "prof-corp-1", state: "approved" }, connectedAt: now, checkedAt: now, connectedByMemberId: "m_olga" };
+  store.updateOrganisation("org_co", { monerium: theirs as any });
+  const r = await post.release();
+  assert.equal(r.status, 409, r.text);
+  assert.equal(r.data.code, "MONERIUM_KEYS_CHANGED");
+  assert.deepEqual(store.findOrganisation("org_co")!.monerium, theirs, "the other connection stands, unapproved overwrite refused");
+  store.updateOrganisation("org_co", { monerium: before });
+});
+
 await check("a payer cannot remove them; an owner can", async () => {
   assert.equal((await call("DELETE", "/org_co/monerium", "u_pia", OK)).status, 403);
   const r = await call("DELETE", "/org_co/monerium", "u_olga", OK);

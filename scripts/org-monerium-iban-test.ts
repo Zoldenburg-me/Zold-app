@@ -20,9 +20,14 @@
  *     issued yet, are waiting states a check moves on; a Safe linked under
  *     another profile, or a profile whose one IBAN pays another address (the
  *     founder's own Safe), is refused and opens nothing;
- *   - deposits: only issue orders into the company Safe, newest first,
- *     without the payer's IBAN; Monerium's own response body never reaches
- *     the browser;
+ *   - an IBAN record for the Safe's address on another chain is never
+ *     adopted; an issued IBAN Monerium now lists elsewhere closes the
+ *     account, an outage or an unlisted IBAN changes nothing;
+ *   - keys removed or replaced while Monerium answers are never written back;
+ *   - an issued company account reads as verified, so its payment page opens;
+ *   - deposits: only EUR issue orders into the company Safe on our chain,
+ *     newest first, without the payer's IBAN; Monerium's own response body
+ *     never reaches the browser;
  *   - Home and Settings say what the state is (org-monerium-model.js).
  *
  * Offline: Monerium, the chain read and the Safe signature are stubs
@@ -53,6 +58,8 @@ const { passkeyOwnerAddressOfJwk } = await import("../services/api/src/wallet/sa
 const { safeMessageHash } = await import("../services/api/src/wallet/candide.js");
 const { passkeySafeChallenge } = await import("../services/api/src/wallet/passkey-safe-plan.js");
 const { companyIbanState } = await import("../services/api/src/domain/org-monerium-iban.js");
+const { orgPageAccount } = await import("../services/api/src/routes/business/org-payment-page.js");
+const { MONERIUM } = await import("../services/api/src/config.js");
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const model: any = await import(pathToFileURL(path.join(ROOT, "services/api/public/business/org-monerium-model.js")).href);
 initStore();
@@ -124,13 +131,20 @@ const freshMon = () => ({
   issueOnRequest: true,
   orders: [] as any[],
   linkFails: "" as "" | "refuse" | "down",
+  /** Runs while Monerium "answers" a call: a change made meanwhile. */
+  during: undefined as undefined | { call: string; act: () => void },
+  ibansFail: false,
 });
+const meanwhile = (name: string) => {
+  if (mon.during?.call === name) { const act = mon.during.act; mon.during = undefined; act(); }
+};
 const mon = freshMon();
 const client = {
   async linkAddress(p: any) {
     if (mon.linkFails === "refuse") throw new MoneriumApiError(`Monerium POST /addresses failed (400): ${PROVIDER_BODY}`, 400);
     if (mon.linkFails === "down") throw new Error("connect ECONNREFUSED");
     mon.links.push(p);
+    meanwhile("link");
     return {};
   },
   async linkedProfile(address: string) {
@@ -140,12 +154,16 @@ const client = {
   },
   async requestIban(address: string) {
     mon.ibanRequests.push(address);
+    meanwhile("requestIban");
     if (mon.ibanAnswer === "304") throw new MoneriumApiError("Monerium POST /ibans failed (304): ", 304);
     if (mon.ibanAnswer === "refuse") throw new MoneriumApiError(`Monerium POST /ibans failed (422): ${PROVIDER_BODY}`, 422);
-    if (mon.issueOnRequest) mon.ibans.push({ iban: IBAN, profile: PROFILE, address, chain: "base", state: "approved" });
+    if (mon.issueOnRequest) mon.ibans.push({ iban: IBAN, profile: PROFILE, address, chain: MONERIUM.chain, state: "approved" });
     return {};
   },
-  async ibans() { return { ibans: mon.ibans.map((i) => ({ ...i })) }; },
+  async ibans() {
+    if (mon.ibansFail) throw new Error("connect ECONNREFUSED");
+    return { ibans: mon.ibans.map((i) => ({ ...i })) };
+  },
   async orders() { return { orders: mon.orders }; },
 };
 const io = {
@@ -359,6 +377,76 @@ try {
     gatedStill();
   });
 
+  await check("an IBAN record for the Safe's address on another chain is never adopted", async () => {
+    reset();
+    mon.issueOnRequest = false;
+    mon.ibans = [{ iban: OTHER_IBAN, profile: PROFILE, address: SAFE, chain: "gnosis", state: "approved" }];
+    const r = await issue();
+    assert.equal(r.status, 409, r.text);
+    assert.equal(r.data.code, "PROFILE_IBAN_ELSEWHERE");
+    gatedStill();
+  });
+
+  await check("an issued IBAN read again: moved elsewhere closes the account; an outage or an unlisted IBAN changes nothing", async () => {
+    reset();
+    assert.equal((await issue()).data.monerium.companyIban.state, "issued");
+    mon.ibansFail = true;
+    const warn = console.warn;
+    console.warn = () => {};
+    let down;
+    try { down = await call("POST", "/org_co/monerium/iban/check", "u_adam"); } finally { console.warn = warn; }
+    mon.ibansFail = false;
+    assert.equal(down.status, 503);
+    assert.equal(account().status, "active", "an outage changes nothing");
+    mon.ibans = [];
+    assert.equal((await call("POST", "/org_co/monerium/iban/check", "u_adam")).data.monerium.companyIban.state, "issued", "an IBAN Monerium does not list is not taken off");
+    mon.ibans = [{ iban: IBAN, profile: PROFILE, address: SAFE, chain: MONERIUM.chain, state: "approved" }];
+    assert.equal((await call("POST", "/org_co/monerium/iban/check", "u_adam")).data.monerium.companyIban.state, "issued");
+    // Moved to another address at Monerium: no longer offered for this Safe.
+    mon.ibans = [{ iban: IBAN, profile: PROFILE, address: OWN_SAFE, chain: MONERIUM.chain, state: "approved" }];
+    const moved = await call("POST", "/org_co/monerium/iban/check", "u_adam");
+    assert.equal(moved.status, 200, moved.text);
+    assert.notEqual(moved.data.monerium.companyIban.state, "issued");
+    gatedStill();
+    // And it is not re-adopted for the Safe while it pays elsewhere.
+    const again = await call("POST", "/org_co/monerium/iban/check", "u_adam");
+    assert.equal(again.data.code, "PROFILE_IBAN_ELSEWHERE");
+    gatedStill();
+    // Moved to the same address on another chain: also closed.
+    reset();
+    await issue();
+    mon.ibans = [{ iban: IBAN, profile: PROFILE, address: SAFE, chain: "gnosis", state: "approved" }];
+    await call("POST", "/org_co/monerium/iban/check", "u_adam");
+    gatedStill();
+  });
+
+  await check("keys removed or replaced while Monerium answers are never written back", async () => {
+    for (const at of ["link", "requestIban"] as const) {
+      for (const change of ["remove", "replace"] as const) {
+        reset();
+        const replacement = { ...connected(), clientId: "test-client-id-2222-3333" };
+        mon.during = { call: at, act: () => store.updateOrganisation("org_co", { monerium: change === "remove" ? undefined : replacement as any }) };
+        const r = await issue();
+        assert.equal(r.status, 409, `${at}/${change}: ${r.text}`);
+        assert.equal(r.data.code, "MONERIUM_KEYS_CHANGED");
+        const now = store.findOrganisation("org_co")!.monerium;
+        if (change === "remove") assert.equal(now, undefined, `${at}: the removal stands`);
+        else assert.deepEqual(now, replacement, `${at}: the replacement is not written over`);
+        gatedStill();
+      }
+    }
+  });
+
+  await check("an issued company account reads as verified: its payment page can show it", async () => {
+    reset();
+    assert.equal("code" in orgPageAccount(store.findOrganisation("org_co")!), true, "no page before the IBAN");
+    await issue();
+    const page = orgPageAccount(store.findOrganisation("org_co")!) as any;
+    assert.equal(page.code, undefined, JSON.stringify(page));
+    assert.equal(page.account.identifier.iban, IBAN);
+    assert.equal(page.holder, "Acme GmbH");
+  });
+
   await check("Monerium refusing or down: a fixed answer, never Monerium's body", async () => {
     reset();
     mon.linkFails = "refuse";
@@ -388,10 +476,12 @@ try {
     assert.deepEqual((await call("GET", "/org_co/monerium/deposits", "u_adam")).data.deposits, [], "none before the IBAN is issued");
     await issue();
     mon.orders = [
-      { id: "o1", kind: "issue", amount: "12.50", address: SAFE, state: "processed", meta: { placedAt: "2026-11-01T10:00:00Z" }, counterpart: { identifier: { iban: OTHER_IBAN }, details: { companyName: "Kunde AG" } }, memo: "INV-7" },
+      { id: "o1", kind: "issue", amount: "12.50", chain: MONERIUM.chain, currency: "eur", address: SAFE, state: "processed", meta: { placedAt: "2026-11-01T10:00:00Z" }, counterpart: { identifier: { iban: OTHER_IBAN }, details: { companyName: "Kunde AG" } }, memo: "INV-7" },
       { id: "o2", kind: "redeem", amount: "5", address: SAFE, state: "processed", meta: { placedAt: "2026-11-02T10:00:00Z" } },
       { id: "o3", kind: "issue", amount: "99", address: OWN_SAFE, state: "processed", meta: { placedAt: "2026-11-03T10:00:00Z" } },
-      { id: "o4", kind: "issue", amount: "3", address: SAFE.toUpperCase().replace("0X", "0x"), state: "pending", meta: { placedAt: "2026-11-04T10:00:00Z" }, counterpart: { details: { firstName: "Eva", lastName: "Lang" } } },
+      { id: "o5", kind: "issue", amount: "100", chain: "gnosis", currency: "eur", address: SAFE, state: "processed", meta: { placedAt: "2026-11-05T10:00:00Z" } },
+      { id: "o6", kind: "issue", amount: "7", chain: MONERIUM.chain, currency: "usd", address: SAFE, state: "processed", meta: { placedAt: "2026-11-06T10:00:00Z" } },
+      { id: "o4", kind: "issue", amount: "3", chain: MONERIUM.chain, address: SAFE.toUpperCase().replace("0X", "0x"), state: "pending", meta: { placedAt: "2026-11-04T10:00:00Z" }, counterpart: { details: { firstName: "Eva", lastName: "Lang" } } },
     ];
     assert.equal((await call("GET", "/org_co/monerium/deposits", "u_pia")).status, 403);
     const r = await call("GET", "/org_co/monerium/deposits", "u_adam");
@@ -409,7 +499,8 @@ try {
     assert.equal(model.ibanPanel({ companyIban: { state: "issued", iban: IBAN } }, false).iban, IBAN);
     assert.match(model.ibanPanel({ companyIban: { state: "issued", iban: IBAN } }, true).text, /not built yet/, "says payouts are not built");
     assert.equal(model.ibanPanel(null, true).action, undefined);
-    assert.equal(model.ibanNotice({ companyIban: { state: "issued" } }), "The company’s IBAN is issued.");
+    assert.equal(model.ibanNotice({ companyIban: { state: "issued" } }), "The company’s IBAN is issued onto its Safe.");
+    assert.equal(model.ibanPanel({ companyIban: { state: "issued", iban: IBAN } }, false).action, "check", "an issued IBAN can be checked again");
   });
 } finally {
   server.close();

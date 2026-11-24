@@ -102,6 +102,16 @@ class Refusal extends Error {
 
 const low = (a: string) => a.toLowerCase();
 
+/** Does Monerium's IBAN record pay into this Safe on OUR chain? Monerium
+ *  links one address on several chains; a record without a chain is taken on
+ *  the address (as paysInto in adapters/monerium-sandbox.ts). */
+const paysIntoSafe = (i: { address?: unknown; chain?: unknown }, address: string) =>
+  typeof i.address === "string" && low(i.address) === low(address) && (!i.chain || i.chain === MONERIUM.chain);
+
+/** The same stored keys: a write after a wait only lands on the keys it read. */
+const sameKeys = (a: Organisation["monerium"], b: NonNullable<Organisation["monerium"]>) =>
+  !!a && a.clientId === b.clientId && a.clientSecretEnc === b.clientSecretEnc;
+
 /** Monerium's 304 for a profile that already has its one IBAN (fetch drops a
  *  304's body, so the status is the signal). */
 const profileHasIban = (err: unknown) => err instanceof MoneriumApiError && (err.status === 304 || /already has an iban/i.test(err.message));
@@ -202,10 +212,22 @@ export function createOrgMoneriumIbanRoutes(deps: { ctxOf: (req: express.Request
   };
 
   /**
+   * The keys as they are now, if they are still the ones `m` was read with:
+   * every write after a wait on Monerium goes through this, so keys an owner
+   * removed or replaced meanwhile are never written back.
+   */
+  const stillKeys = (orgId: string, m: NonNullable<Organisation["monerium"]>) => {
+    const cur = store.findOrganisation(orgId)?.monerium;
+    if (!sameKeys(cur, m)) throw new Refusal(409, "MONERIUM_KEYS_CHANGED", "The company’s Monerium keys were replaced or removed meanwhile. Open Settings → Monerium again.");
+    return cur!;
+  };
+
+  /**
    * Take the company Safe as far as Monerium has got: linked under the
    * company profile → IBAN requested → IBAN attributed → account open. Every
    * read is fresh. Refuses, and changes nothing, when the Safe is linked
-   * under another profile or the profile's one IBAN pays another address.
+   * under another profile or the profile's one IBAN pays another address or
+   * chain.
    */
   async function advance(orgId: string, userId: string): Promise<void> {
     const org = store.findOrganisation(orgId)!;
@@ -223,7 +245,8 @@ export function createOrgMoneriumIbanRoutes(deps: { ctxOf: (req: express.Request
       if (under !== m.profile.id) {
         throw new Refusal(409, "ADDRESS_NOT_ON_PROFILE", "Monerium has the company’s Safe linked under another profile, so no IBAN was requested. Monerium support has to move it; write to support@zoldhq.com.");
       }
-      store.updateOrganisation(orgId, { monerium: { ...m, safe: { ...link, linkedAt: new Date().toISOString() } } });
+      const cur = stillKeys(orgId, m);
+      store.updateOrganisation(orgId, { monerium: { ...cur, safe: { ...cur.safe!, linkedAt: new Date().toISOString() } } });
     }
     let hasOne = false;
     if (!link.ibanRequestedAt) {
@@ -233,7 +256,7 @@ export function createOrgMoneriumIbanRoutes(deps: { ctxOf: (req: express.Request
         if (profileHasIban(err)) hasOne = true;
         else if (!alreadyDone(err)) throw moneriumFailure("the IBAN request", err);
       }
-      const cur = store.findOrganisation(orgId)!.monerium!;
+      const cur = stillKeys(orgId, m);
       store.updateOrganisation(orgId, { monerium: { ...cur, safe: { ...cur.safe!, ibanRequestedAt: new Date().toISOString() } } });
     }
     let list;
@@ -243,27 +266,57 @@ export function createOrgMoneriumIbanRoutes(deps: { ctxOf: (req: express.Request
       throw moneriumFailure("reading the company’s IBANs", err);
     }
     const onProfile = list.filter((i) => i.profile === m.profile.id && normalizeIban(i.iban));
-    const ours = onProfile.find((i) => i.state === "approved" && typeof i.address === "string" && low(i.address) === low(link.address));
+    const ours = onProfile.find((i) => i.state === "approved" && paysIntoSafe(i, link.address));
     if (!ours) {
-      // The profile's one IBAN pays another address: never this Safe's.
-      if (hasOne || onProfile.some((i) => typeof i.address === "string" && low(i.address) !== low(link.address))) {
-        throw new Refusal(409, "PROFILE_IBAN_ELSEWHERE", "The company’s Monerium profile already has its one IBAN, paying into another address. Moving it onto the company’s Safe is not built; write to support@zoldhq.com.");
+      // The profile's one IBAN pays another address, or this address on
+      // another chain: never this Safe's.
+      if (hasOne || onProfile.some((i) => typeof i.address === "string" && !paysIntoSafe(i, link.address))) {
+        throw new Refusal(409, "PROFILE_IBAN_ELSEWHERE", "The company’s Monerium profile already has its one IBAN, paying into another address or network. Moving it onto the company’s Safe is not built; write to support@zoldhq.com.");
       }
       return; // iban_requested: Monerium has not issued it yet.
     }
     // Written only against the account and keys as they are now.
-    const now = store.findOrganisation(orgId)!;
+    stillKeys(orgId, m);
     const account = companyEurAccount(store.accountsOf(orgId));
-    if (!account || !account.address || low(account.address) !== low(link.address) || now.monerium?.profile.id !== m.profile.id) return;
+    if (!account || !account.address || low(account.address) !== low(link.address)) return;
     const at = new Date().toISOString();
     store.updateAccount(account.id, {
       status: "active",
       provider: "monerium",
       identifier: { ...account.identifier, iban: normalizeIban(ours.iban) },
       gate: undefined,
+      detail: undefined,
       moneriumProfile: { id: m.profile.id, kind: "corporate", ...(m.profile.name ? { name: m.profile.name } : {}), checkedAt: at },
     });
     store.audit(auditEntry("org_iban.issued", { orgId, accountId: account.id, safeAddress: link.address, profileId: m.profile.id }, userId));
+  }
+
+  /**
+   * An issued IBAN, read again: Monerium can move it to another address or
+   * chain. Only a positive answer that it now pays elsewhere closes the
+   * account (gated, the IBAN no longer offered); an outage or an IBAN Monerium
+   * does not list changes nothing. A new destination is never adopted.
+   */
+  async function recheckIssued(orgId: string, userId: string): Promise<void> {
+    const org = store.findOrganisation(orgId)!;
+    const m = org.monerium!;
+    const account = companyEurAccount(store.accountsOf(orgId))!;
+    let list;
+    try {
+      list = moneriumIbanList(await io.monerium(org).ibans());
+    } catch (err) {
+      throw moneriumFailure("reading the company’s IBANs", err);
+    }
+    stillKeys(orgId, m);
+    const iban = normalizeIban(account.identifier.iban!);
+    const entry = list.find((i) => normalizeIban(i.iban) === iban);
+    if (!entry || typeof entry.address !== "string" || paysIntoSafe(entry, account.address!)) return;
+    store.updateAccount(account.id, {
+      status: "gated",
+      identifier: { ...account.identifier, iban: undefined },
+      detail: "Monerium now lists the company's IBAN on another address or network, so it is no longer offered for this Safe.",
+    });
+    store.audit(auditEntry("org_iban.moved_away", { orgId, accountId: account.id, safeAddress: account.address }, userId));
   }
 
   const view = (orgId: string) => ({ monerium: publicOrgMonerium(store.findOrganisation(orgId)!) });
@@ -335,7 +388,13 @@ export function createOrgMoneriumIbanRoutes(deps: { ctxOf: (req: express.Request
       if (!alreadyDone(err)) return answer(res, moneriumFailure("linking the company’s Safe", err));
     }
     const at = new Date().toISOString();
-    store.updateOrganisation(org.id, { monerium: { ...m, safe: { address: s.plan.address as Hex, signedByMemberId: ctx.member.id, linkSubmittedAt: at } } });
+    let cur;
+    try {
+      cur = stillKeys(org.id, m);
+    } catch (err) {
+      return answer(res, err);
+    }
+    store.updateOrganisation(org.id, { monerium: { ...cur, safe: { address: s.plan.address as Hex, signedByMemberId: ctx.member.id, linkSubmittedAt: at } } });
     store.audit(auditEntry("org_iban.link_submitted", { orgId: org.id, safeAddress: s.plan.address, profileId: m.profile.id }, ctx.userId));
     try {
       await advance(org.id, ctx.userId);
@@ -350,12 +409,12 @@ export function createOrgMoneriumIbanRoutes(deps: { ctxOf: (req: express.Request
     const ctx = gate(req, res, "accounts.open");
     if (!ctx) return;
     const state = companyIbanState(ctx.org, companyEurAccount(store.accountsOf(ctx.org.id)));
-    if (state !== "link_pending" && state !== "iban_requested") return res.json(view(ctx.org.id));
-    if (orgMoneriumStatus(ctx.org.monerium) !== "connected") {
+    if (state !== "link_pending" && state !== "iban_requested" && state !== "issued") return res.json(view(ctx.org.id));
+    if (!ctx.org.monerium || (state !== "issued" && orgMoneriumStatus(ctx.org.monerium) !== "connected")) {
       return res.status(409).json({ code: "MONERIUM_NOT_CONNECTED", error: "The company’s Monerium keys need attention first: open Settings → Monerium." });
     }
     try {
-      await advance(ctx.org.id, ctx.userId);
+      await (state === "issued" ? recheckIssued : advance)(ctx.org.id, ctx.userId);
     } catch (err) {
       if (err instanceof Refusal) return res.status(err.status).json({ code: err.code, error: err.message, ...view(ctx.org.id) });
       throw err;
@@ -377,7 +436,8 @@ export function createOrgMoneriumIbanRoutes(deps: { ctxOf: (req: express.Request
     const list: any[] = Array.isArray(raw) ? raw : Array.isArray(raw?.orders) ? raw.orders : [];
     const safe = low(account!.address!);
     const deposits = list
-      .filter((o) => o?.kind === "issue" && typeof o.address === "string" && low(o.address) === safe)
+      // Only EURe issued on OUR chain is a euro deposit to this account (as mirrorOrder).
+      .filter((o) => o?.kind === "issue" && typeof o.address === "string" && low(o.address) === safe && o.chain === MONERIUM.chain && String(o.currency ?? "eur").toLowerCase() === "eur")
       .map((o) => {
         const d = o.counterpart?.details ?? {};
         const from = d.name || d.companyName || [d.firstName, d.lastName].filter(Boolean).join(" ") || undefined;
