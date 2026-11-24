@@ -81,7 +81,7 @@ const SECRET = "test-secret-" + Math.random().toString(36).slice(2) + "-placehol
 const CORP = { id: "prof-corp-1", kind: "corporate", name: "Acme GmbH", state: "pending" };
 const PROVIDER_BODY = "provider-body-marker-must-not-reach-the-browser";
 const stub = {
-  mode: "ok" as "ok" | "refuse" | "down" | "readfail",
+  mode: "ok" as "ok" | "refuse" | "down" | "readfail" | "nolist",
   profiles: [CORP] as any[],
   calls: [] as { clientId: string; secretOk: boolean }[],
   /** While set, Monerium "answers" only once it resolves: a request in flight. */
@@ -98,6 +98,8 @@ const verify = async (clientId: string, clientSecret: string) => {
   if (mode === "down") throw new Error("connect ECONNREFUSED");
   // A read after the token grant failing with a 400 is not "the keys are refused".
   if (mode === "readfail") throw new MoneriumApiError(`Monerium GET /profiles failed (400): ${PROVIDER_BODY}`, 400);
+  // Monerium answers the profile read without a list: the real parser decides.
+  if (mode === "nolist") return { profiles: profileListOf({ items: stub.profiles }) };
   return { profiles: stub.profiles.map((p) => ({ ...p })) };
 };
 /** Starts a request and holds Monerium's answer: `asked` resolves once
@@ -311,6 +313,17 @@ await check("a member demoted or removed while Monerium answers stores nothing",
     store.updateMember("m_adam", { role: "admin", status: "active" } as any);
   }
   store.updateOrganisation("org_co", { monerium: saved });
+});
+
+await check("a re-check whose answer has no profile list is a 503 and changes nothing", async () => {
+  const before = structuredClone(store.findOrganisation("org_co")!.monerium);
+  assert.ok(before, "keys are stored for this check");
+  stub.mode = "nolist";
+  const r = await call("POST", "/org_co/monerium/check", "u_olga");
+  stub.mode = "ok";
+  assert.equal(r.status, 503, r.text);
+  assert.equal(r.data.code, "MONERIUM_UNREACHABLE");
+  assert.deepEqual(store.findOrganisation("org_co")!.monerium, before, "the saved connection is untouched: not missing, not invalid");
 });
 
 await check("a payer cannot remove them; an owner can", async () => {
