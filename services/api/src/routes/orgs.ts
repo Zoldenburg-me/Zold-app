@@ -361,6 +361,16 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
           field: "entity",
         });
       }
+      // A company's own Monerium keys belong to the company: they are removed
+      // in Settings → Monerium first, not stranded on a sole trader, where
+      // that section no longer reaches them (routes/business/org-monerium.ts).
+      if (ctx.org.monerium) {
+        return res.status(409).json({
+          code: "MONERIUM_KEYS_CONNECTED",
+          error: "The company's Monerium keys are still connected. Remove them in Settings → Monerium first, then change whether the business is a company or a sole trader.",
+          field: "entity",
+        });
+      }
       patch.entity = b.entity;
     }
     if (typeof b.legalName === "string" && !sameName(b.legalName, ctx.org.legalName ?? "")) {

@@ -7,7 +7,8 @@
  * job re-encrypts it with cannot drift apart. A new stored credential gets a
  * site and a registry entry here, with its own purpose.
  *
- * Users' Monerium credentials are bound to the user row. The API secret a
+ * Users' Monerium credentials are bound to the user row; a company org's
+ * Monerium API secret to the organisation row, under a purpose of its own. The API secret a
  * user pastes has a purpose of its own; its v1 values, like the tokens',
  * were written under `monerium`.
  */
@@ -41,6 +42,7 @@ export const SECRETS = {
   moneriumAccessToken: site("monerium", "users", "monerium.accessToken"),
   moneriumRefreshToken: site("monerium", "users", "monerium.refreshToken"),
   moneriumApiSecret: site("monerium-api-secret", "users", "monerium.apiKeys.clientSecret", "monerium"),
+  orgMoneriumApiSecret: site("monerium-org-api-secret", "organisations", "monerium.clientSecret"),
 } as const;
 
 export interface StoredSecret {
@@ -103,6 +105,15 @@ export const STORED_SECRETS: StoredSecret[] = [
       const g = org?.integrations?.getmyinvoices;
       if (!org || !g) throw new Error(`organisation ${id} has no GetMyInvoices connection`);
       store.updateOrganisation(id, { integrations: { ...org.integrations, getmyinvoices: { ...g, apiKeyEnc: stored } } });
+    },
+  },
+  {
+    site: SECRETS.orgMoneriumApiSecret,
+    rows: () => store.organisations.flatMap((o) => (o.monerium?.clientSecretEnc ? [{ rowId: o.id, stored: o.monerium.clientSecretEnc }] : [])),
+    write: (id, stored) => {
+      const m = store.findOrganisation(id)?.monerium;
+      if (!m) throw new Error(`organisation ${id} has no Monerium API keys`);
+      store.updateOrganisation(id, { monerium: { ...m, clientSecretEnc: stored } });
     },
   },
 ];

@@ -3,13 +3,21 @@
  * chosen section on the right. Organisation and Monerium open in place; the
  * other entries are their own screens.
  */
-import { Z, api, cap, ensureMe, esc, issuerFieldNames, issuerIds, me, org, plain } from "./core.js";
+import { Z, api, cap, ensureMe, esc, issuerFieldNames, issuerIds, me, org, plain, roleCan } from "./core.js";
 import { META, RENDER, moneriumLink } from "./views.js";
 import { isOwnCompanyOrg } from "./access-model.js";
-import { mayChangeEntity } from "./settings-model.js";
+import { mayChangeEntity, settingsSecFrom } from "./settings-model.js";
+import { companyKeysHere, keyHint, keyRows } from "./org-monerium-model.js";
 import { shown } from "./nav.js";
 
 const ss = { sec: "org" };
+// A link that opens Settings at one section (Home's set-up card): it picks the
+// section before the view link renders Settings. Capture phase, so it runs
+// ahead of the shell's view-link handler.
+document.addEventListener("click", (ev) => {
+  const a = ev.target.closest?.("a[data-settings-sec]");
+  if (a && ["org", "monerium"].includes(a.dataset.settingsSec)) ss.sec = a.dataset.settingsSec;
+}, true);
 META.settings = () => ({ title: "Settings", sub: `${org.name}.`, actions: "" });
 
 function menu(accounts) {
@@ -57,6 +65,23 @@ function orgSection() {
       <p class="zb-hint">It can’t change once the euro account is set up.</p>` : ""), edit);
 }
 
+/** A company's own Monerium keys (routes/business/org-monerium.ts). `keys`
+ *  is GET .../monerium, null when it could not be read. */
+function companyMoneriumSection(keys) {
+  if (!roleCan(org.role, "accounts")) {
+    return section("Monerium", "The company connects its own Monerium account with API keys. An owner or admin does this.", "");
+  }
+  const connected = keys && keys.status !== "not_connected";
+  const hint = keyHint(keys);
+  const actions = !keys ? "" : connected
+    ? `<div class="zb-actions"><button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="org-monerium-check">Check again</button><button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="org-monerium-drawer">Replace keys</button><button type="button" class="z-btn z-btn--secondary z-btn--sm zb-danger" data-act="org-monerium-remove">Remove keys</button></div>`
+    : keys.available ? `<div class="zb-actions"><button type="button" class="z-btn z-btn--primary z-btn--sm" data-act="org-monerium-drawer">Add Monerium keys</button></div>` : "";
+  return section("Monerium", "The company’s own Monerium account, connected with API keys from its Monerium developer section. Monerium issues the IBANs and the euros; Zold is the software you use them with.",
+    rows(keyRows(keys)) + (hint ? `<p class="zb-hint">${esc(plain(hint))}</p>` : "")
+    + `<p class="zb-hint">Next: issuing the company’s IBAN onto its own Safe. That step is not live yet, so no IBAN is issued and no money moves with these keys today.</p>`
+    + actions);
+}
+
 function moneriumSection(accounts) {
   if (!accounts) return section("Monerium", "", `<p class="empty">Accounts couldn’t load. Open Settings again to retry.</p>`);
   const euro = accounts.filter((a) => a.currency === "EUR");
@@ -75,11 +100,17 @@ function moneriumSection(accounts) {
 }
 
 RENDER.settings = async () => {
+  // A link that names its section in the URL (opened in a new tab, or reloaded).
+  ss.sec = settingsSecFrom(location.search) || ss.sec;
   // The menu offers Access only to the company login in its own company, so
   // it waits for who that is and reads whose account backs this one.
-  const [acc] = await Promise.allSettled([api(`/api/orgs/${org.id}/accounts`), ensureMe()]);
+  const company = companyKeysHere(org, roleCan(org.role, "accounts"));
+  const [acc, , ks] = await Promise.allSettled([api(`/api/orgs/${org.id}/accounts`), ensureMe(),
+    company ? api(`/api/orgs/${org.id}/monerium`) : Promise.resolve(null)]);
   const accounts = acc.status === "fulfilled" ? acc.value.accounts : null;
-  const SECTIONS = { org: orgSection, monerium: () => moneriumSection(accounts) };
+  const keys = ks.status === "fulfilled" ? ks.value?.monerium ?? null : null;
+  // A company's account is its own Safe: its Monerium is its own keys, never a login's connection.
+  const SECTIONS = { org: orgSection, monerium: () => (org.entity === "company" ? companyMoneriumSection(keys) : moneriumSection(accounts)) };
   return {
     html: `<div class="zb-set" id="set-root">${menu(accounts)}<div id="set-body">${SECTIONS[ss.sec]()}</div></div>`,
     bind(box) {
