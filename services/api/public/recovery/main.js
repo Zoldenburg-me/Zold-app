@@ -16,16 +16,33 @@ import { IndexedDbStamper, WebauthnStamper, encryptOtpCodeToBundle } from "../ve
 import { emailCodeToToken, emailLoginSignature, passkeyWhoami, sendEmailCode } from "../guardian/logins.js";
 import { startLogin } from "../guardian/oauth.js";
 import { providerButtons } from "../guardian/providers.js";
-import { byDevice, esc, passkeyName } from "../guardian/device-words.js";
+import { byDevice, esc, passkeyName, passkeyRefusal } from "../guardian/device-words.js";
 import { approveWith, finishApprove } from "./approve.js";
 import { bankStepChanged, bankStepHtml, checkAnswerText, issuedFor, keepIssued } from "./bank-step.js";
 import { UNREACHABLE, readAnswer, readHealth } from "../foreign-answer.js";
 import {
-  EMAIL_KEY, SECRET_KEY, TICKET_KEY, currentAuth, endedText, finalizeAfter, requestPath, saveFor, savedFor, screenFor, startRecovery,
+  EMAIL_KEY, HANDLE_KEY, SECRET_KEY, SUBMIT_KEY, TICKET_KEY, currentAuth, endedText, finalizeAfter, passkeySubmitted, requestPath, saveFor, savedFor, screenFor, startRecovery, submitPasskey,
 } from "./flow.js";
 
 const b64urlToBytes = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(s.length / 4) * 4, "=")), (c) => c.charCodeAt(0));
 const bytesToB64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+/** The options of the recovery passkey: the new owner, P-256 only, to own a Safe. */
+export function passkeyCreateOptions({ challenge, email, handle, rpId }) {
+  return {
+    publicKey: {
+      challenge: b64urlToBytes(challenge),
+      rp: { name: "Zold", id: rpId },
+      // The start names no account, so the handle is this recovery's own
+      // (recoveryHandle); sign-in finds the account by credential id.
+      user: { id: b64urlToBytes(handle), name: email, displayName: email },
+      pubKeyCredParams: [{ type: "public-key", alg: -7 }],
+      // Discoverable: it becomes the account passkey, and sign-in asks with no allowCredentials.
+      authenticatorSelection: { residentKey: "required", requireResidentKey: true, userVerification: "required" },
+      extensions: { prf: {} },
+    },
+  };
+}
 
 /** The page's API client over `fetchFn`. An answer Zold did not write throws,
  *  so it never stands in for the request (a {} reads as "this recovery ended"). */
@@ -87,6 +104,8 @@ async function boot() {
     if (screen === "done") {
       saveFor(localStorage, SECRET_KEY, s.email, "");
       saveFor(localStorage, TICKET_KEY, s.email, "");
+      saveFor(localStorage, HANDLE_KEY, s.email, "");
+      saveFor(localStorage, SUBMIT_KEY, s.email, "");
       try { sessionStorage.removeItem(EMAIL_KEY); } catch { /* nothing to clear */ }
     }
     el.innerHTML = SCREENS[screen]();
@@ -95,7 +114,7 @@ async function boot() {
     if (["wait", "zoldenburg", "approve"].includes(screen)) follow();
   };
   const fail = (e) => {
-    s.error = e?.name === "NotAllowedError" ? byDevice("Face ID or fingerprint was cancelled. Try again when you’re ready.", "The passkey prompt was cancelled. Try again when you’re ready.") : e?.message || String(e);
+    s.error = passkeyRefusal(e, e?.passkeyCreate) || e?.message || String(e);
     const box = el.querySelector("#r-err");
     if (box) { box.textContent = s.error; box.hidden = false; }
   };
@@ -175,27 +194,23 @@ async function boot() {
     show();
   };
 
-  /** The new owner: a passkey made on THIS phone. P-256 only, to own a Safe. */
-  const makePasskey = async () => {
-    const r = s.request;
-    const cred = await navigator.credentials.create({
-      publicKey: {
-        challenge: b64urlToBytes(r.registerChallenge),
-        rp: { name: "Zold", id: location.hostname },
-        // The start names no account, so the handle is random; sign-in finds the account by credential id.
-        user: { id: crypto.getRandomValues(new Uint8Array(16)), name: s.email, displayName: s.email },
-        pubKeyCredParams: [{ type: "public-key", alg: -7 }],
-        // Discoverable: it becomes the account passkey, and sign-in asks with no allowCredentials.
-        authenticatorSelection: { residentKey: "required", requireResidentKey: true, userVerification: "required" },
-        extensions: { prf: {} },
-      },
-    });
-    return api(r.submitTo, {
-      credentialId: cred.id,
-      attestation: bytesToB64url(cred.response.attestationObject),
-      clientDataJSON: bytesToB64url(cred.response.clientDataJSON),
-    }, auth());
-  };
+  /** The new owner: a passkey made on THIS phone. */
+  const makePasskey = () => submitPasskey(localStorage, s.email, s.request, {
+    create: async (handle) => {
+      const options = passkeyCreateOptions({ challenge: s.request.registerChallenge, email: s.email, handle, rpId: location.hostname });
+      const cred = await navigator.credentials.create(options).catch((e) => {
+        if (e && typeof e === "object") e.passkeyCreate = true;
+        throw e;
+      });
+      return {
+        credentialId: cred.id,
+        attestation: bytesToB64url(cred.response.attestationObject),
+        clientDataJSON: bytesToB64url(cred.response.clientDataJSON),
+      };
+    },
+    read: (r) => api(requestPath(s.mode, r.id), undefined, auth()),
+    submit: (r, body) => api(r.submitTo, body, auth()),
+  });
 
   const start = async (btn) => {
     const input = el.querySelector("#r-email");
@@ -210,7 +225,8 @@ async function boot() {
       if (request.recoverySecret) saveFor(localStorage, SECRET_KEY, email, request.recoverySecret);
       s.mode = mode;
       s.request = request;
-      if (request.status === "PASSKEY_PENDING") request = await makePasskey();
+      // A resumed request past PASSKEY_PENDING owns its passkey: forget the handle.
+      request = request.status === "PASSKEY_PENDING" ? await makePasskey() : passkeySubmitted(localStorage, email, request);
       after(mode, request);
     } catch (e) {
       fail(e?.code === "RECOVERY_IN_PROGRESS"
