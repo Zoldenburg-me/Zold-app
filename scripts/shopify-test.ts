@@ -354,7 +354,8 @@ await check("the sweep stops retrying a failing resolve after RESOLVE_MAX_ATTEMP
   assert.equal(after.source.resolvedAt, undefined);
   assert.ok(after.source.resolveError, "the last error stays on the row");
   assert.equal(calls.filter((c) => c.op === "paymentSessionResolve" && c.vars.id === s.gid).length, RESOLVE_MAX_ATTEMPTS);
-  assert.equal(logged.filter((l) => l.includes("gave up") && l.includes(req.code.slice(0, 5))).length, 1, logged.join("\n"));
+  assert.equal(logged.filter((l) => l.includes("gave up") && l.includes(req.id)).length, 1, logged.join("\n"));
+  assert.ok(!logged.some((l) => l.includes(req.code.slice(0, 5))), "no log line carries the payment code");
 });
 await check("a buyer who cancels is sent back to the store; the unauthenticated GET does not close the request", async () => {
   const s = session();

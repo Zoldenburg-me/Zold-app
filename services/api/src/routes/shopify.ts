@@ -288,7 +288,7 @@ async function resolveOnce(r: PaymentRequest): Promise<void> {
       store.updatePaymentRequest(r.id, {
         source: { ...r.source, resolvedAt: new Date().toISOString(), resolveAttempts: attempts, resolveError: undefined },
       });
-      console.log(`shopify: marked order ${r.source.orderName ?? r.source.orderGid} paid at ${connection.shop} (${displayCode(r.code)})`);
+      console.log(`shopify: marked order ${r.source.orderName ?? r.source.orderGid} paid at ${connection.shop} (${r.id})`);
       const facts = {
         code: displayCode(r.code),
         amountEur: r.amountEur,
@@ -304,13 +304,13 @@ async function resolveOnce(r: PaymentRequest): Promise<void> {
     store.updatePaymentRequest(r.id, {
       source: { ...r.source, resolvedAt: new Date().toISOString(), resolveAttempts: attempts, resolveError: undefined, ...(externalHttpUrl(result.redirectUrl) ? { returnUrl: externalHttpUrl(result.redirectUrl)! } : {}) },
     });
-    console.log(`shopify: resolved session for ${displayCode(r.code)} at ${connection.shop}`);
+    console.log(`shopify: resolved session for ${r.id} at ${connection.shop}`);
   } catch (err: any) {
     const resolveError = redactedMessage(err).slice(0, 300);
     store.updatePaymentRequest(r.id, { source: { ...r.source, resolveAttempts: attempts, resolveError } });
     // The sweep stops here; the row keeps the error for the dashboard, and this line is the alert.
     if (attempts === RESOLVE_MAX_ATTEMPTS) {
-      console.error(`shopify: gave up telling ${connection.shop} that ${displayCode(r.code)} is paid after ${attempts} attempts: ${resolveError}`);
+      console.error(`shopify: gave up telling ${connection.shop} that ${r.id} is paid after ${attempts} attempts: ${resolveError}`);
     }
     throw err;
   }
@@ -456,9 +456,9 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       }
       pendingInstalls.delete(String(q.state));
       res.append("set-cookie", `${INSTALL_COOKIE}=; Path=/api/shopify/callback; Max-Age=0; HttpOnly; SameSite=Lax`);
-      const refuse = (r: InstallRefusal) => {
-        console.error(`shopify: install callback for ${shop} refused (${r.code}): org ${pending.orgId}, installer ${pending.installerId}`);
-        return back({ error: r.error, code: r.code });
+      const refuse = (refusal: InstallRefusal) => {
+        console.error(`shopify: install callback for ${shop} refused (${refusal.code}): org ${pending.orgId}, installer ${pending.installerId}`);
+        return back({ error: refusal.error, code: refusal.code });
       };
       // The install route's checks held when the install started, up to 15
       // minutes ago. Ask again before fetching a token, and once more after
