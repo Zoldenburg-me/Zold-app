@@ -113,17 +113,19 @@ export function replaceBelegForLine(entry: LedgerEntry): Promise<{ doc: StoredDo
     const doc = await draft(now);
     const agree = belegRecordsAgree(doc.snapshot as BelegSnapshot, now);
     if (!agree.ok) throw new BelegWouldNotVerify(agree.detail);
-    store.updateDocument(current.stale.id, { revokedAt: new Date().toISOString() });
-    commit(now, doc);
+    store.batched(() => {
+      store.updateDocument(current.stale.id, { revokedAt: new Date().toISOString() });
+      commit(now, doc);
+    });
     return { doc, issued: true, revoked: current.stale };
   });
 }
 
-/** Every code a line's Belege have had, revoked ones included: what was
- *  sent to a partner under an earlier code is found again by it. Server-side
- *  only; a code is a credential. */
-export function belegCodesOfLine(orgId: string, lineId: string): string[] {
-  return store.documentsForOrg(orgId).filter((d) => d.snapshot.kind === "beleg" && d.snapshot.line.lineId === lineId).map((d) => d.code);
+/** Every Beleg a line has had, revoked ones included: what was sent to a
+ *  partner under an earlier code is found again by it. Server-side only; a
+ *  code is a credential. */
+export function belegeOfLine(orgId: string, lineId: string): StoredDocument[] {
+  return store.documentsForOrg(orgId).filter((d) => d.snapshot.kind === "beleg" && d.snapshot.line.lineId === lineId);
 }
 
 function queued<T extends { doc: StoredDocument; issued: boolean }>(entry: LedgerEntry, fn: () => Promise<T>): Promise<T> {

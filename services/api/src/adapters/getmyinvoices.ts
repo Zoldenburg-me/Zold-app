@@ -129,6 +129,9 @@ export interface GmiBankLineResult {
   transactionUid?: number;
   /** The Beleg is attached to the line in GetMyInvoices. */
   assigned?: boolean;
+  /** Revoked Belege of the line still attached to it there. Zold does not
+   *  detach them (no call for it is used), so the user removes them. */
+  revokedStillAttached?: number;
   error?: string;
 }
 
@@ -285,9 +288,11 @@ export class GetMyInvoicesClient {
    * re-send find the line instead of adding it twice. `markers` are every
    * code the line's Belege have had, so a line sent before its Beleg was
    * replaced is found by the old one. An add that got no answer may have
-   * landed, so it is looked up again rather than retried.
+   * landed, so it is looked up again rather than retried. `superseded` are
+   * the documentUids of the line's revoked Belege: any still attached is
+   * counted, and one that cannot be checked counts as attached.
    */
-  async pushBankLine(bankAccountUid: number, tx: GmiBankTransaction, markers: string[], documentUid?: number): Promise<GmiBankLineResult> {
+  async pushBankLine(bankAccountUid: number, tx: GmiBankTransaction, markers: string[], documentUid?: number, superseded: number[] = []): Promise<GmiBankLineResult> {
     const find = async (): Promise<number | undefined> => {
       for (const m of markers) {
         const uid = (await this.findBankTransactions(bankAccountUid, m, tx.bookingDate))[0]?.transactionUid;
@@ -316,10 +321,12 @@ export class GetMyInvoicesClient {
         if (!transactionUid) return { outcome: "unknown", error: redactedMessage(err) };
       }
     }
-    if (!documentUid) return { outcome, transactionUid, assigned: false };
-    const already = await this.assignedDocumentUids(bankAccountUid, transactionUid).catch(() => [] as number[]);
-    if (!already.includes(documentUid)) await this.assignDocument(bankAccountUid, transactionUid, documentUid);
-    return { outcome, transactionUid, assigned: true };
+    const already = await this.assignedDocumentUids(bankAccountUid, transactionUid).catch(() => undefined);
+    const stale = superseded.filter((uid) => !already || already.includes(uid)).length;
+    const flag = stale ? { revokedStillAttached: stale } : {};
+    if (!documentUid) return { outcome, transactionUid, assigned: false, ...flag };
+    if (!already?.includes(documentUid)) await this.assignDocument(bankAccountUid, transactionUid, documentUid);
+    return { outcome, transactionUid, assigned: true, ...flag };
   }
 }
 

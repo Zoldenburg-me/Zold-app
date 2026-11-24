@@ -1043,7 +1043,8 @@ export const ACTIONS = {
           [n("failed") + bl("failed"), "failed: send again; whatever did arrive is skipped"],
           [n("unknown") + bl("unknown"), "got no answer and can’t be found there yet: send again in a few minutes"],
           [r.results.filter((x) => x.outcome === "no-beleg" && !x.stale).length, "lines that could not get a receipt, so not sent"],
-          [r.results.filter((x) => x.stale).length, "receipts that no longer match the books, so not sent: replace them in Books and send again"],
+          [r.results.filter((x) => x.stale).length, "receipts that no longer match the books, so not sent: replace them in Books and send again (a payout Monerium rejected can’t be replaced; Books says why)"],
+          [r.results.reduce((k, x) => k + (x.bankLine?.revokedStillAttached ?? 0), 0), "replaced receipts still attached to their bank line in GetMyInvoices: remove the old one there; Zold does not detach it"],
           [late, "receipts that arrived slowly and may be missing their tags"],
         ].filter(([k]) => k > 0);
         const body = r.results.length
