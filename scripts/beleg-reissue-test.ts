@@ -318,6 +318,8 @@ await check("the books statement and the export draw Replace where the receipt s
   assert.match(app, /\/beleg\/replace`, \{\}\)/);
   assert.match(views, /const dis = withBeleg \|\| stale \?/, "a month whose receipts are all stale still downloads: the files say why");
   assert.match(read("business/actions.js"), /x\.stale\)\.length, "receipts that no longer match the books/, "the GetMyInvoices result says why and what to do");
+  assert.match(read("business/actions.js"), /no longer match the books[^"]*a payout Monerium rejected can’t be replaced/, "and that Books refuses to replace a rejected payout's receipt");
+  assert.match(read("business/actions.js"), /bankLine\?\.revokedStillAttached[\s\S]{0,200}still attached[^"]*remove/, "a revoked receipt still attached in GetMyInvoices is said, with what to do");
   assert.match(read("document.js"), /doc\.revokedAt \|\| doc\.verification\?\.checks\?\.some\(\(c\) => c\.name === "Records still match" && !c\.ok\)/, "no PDF link the server refuses");
 });
 

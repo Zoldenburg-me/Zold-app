@@ -353,6 +353,15 @@ await check("push uploads each Beleg once; a second push uploads nothing", async
   assert.ok(audit, "the push is audited");
 });
 
+await check("a receipt revoked before it was ever sent: its code never goes to GetMyInvoices", async () => {
+  // The export test revoked one Beleg and issued its line another before any push.
+  const neverSent = store.documentsForOrg("org_1").filter((d) => d.revokedAt).map((d) => d.code);
+  assert.ok(neverSent.length >= 1);
+  for (const code of neverSent) {
+    assert.ok(!seen.requests.some((r) => r.path.includes(code) || JSON.stringify(r.body ?? "").includes(code)), `the revoked code ${code} went to GetMyInvoices`);
+  }
+});
+
 await check("push adds each line to the manual bank account once, with its Beleg assigned; a re-send adds nothing", async () => {
   const lines = bank.lines.length;
   const r = await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09" });
@@ -392,6 +401,12 @@ await check("a Beleg replaced after its line went up: the re-send finds the line
   assert.equal(x.code, rep.body.code);
   assert.equal(x.bankLine.outcome, "exists");
   assert.ok(bank.assigned.some((a) => a.transactionUid === x.bankLine.transactionUid && a.documentUid === x.documentUid), "the new Beleg is attached to the line already there");
+  // Their API has no call Zold uses to detach a document, so the old one is
+  // still attached there, and the answer says so rather than "replaced".
+  const oldUid = seen.uploaded.get(before.code)!;
+  assert.ok(bank.assigned.some((a) => a.transactionUid === x.bankLine.transactionUid && a.documentUid === oldUid), "the revoked one is still attached in GetMyInvoices");
+  assert.equal(x.bankLine.revokedStillAttached, 1, JSON.stringify(x.bankLine));
+  assert.ok(!r.body.results.filter((y: any) => y.lineId !== IN).some((y: any) => y.bankLine?.revokedStillAttached), "only the replaced line is flagged");
 });
 
 await check("a line the lookup misses is found by GetMyInvoices' own duplicate refusal (code 127), not added twice", async () => {
