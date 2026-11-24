@@ -319,6 +319,27 @@ await check("no line for a member who may not categorise, or for another person'
   assert.equal((await call("GET", "/users/u_me/books-line/t_co")).body.line, null);
 });
 
+await check("a crypto send finds its line once SENT, on the wallet payment's own sheet", async () => {
+  addUser("u_cs", safe("cc"));
+  store.addOrganisation({ id: "org_cs", type: "personal", name: "Cs", reporting, createdAt: NOW, updatedAt: NOW } as any);
+  member("org_cs", "u_cs", "owner");
+  store.addAccount({ id: "acc_cs", orgId: "org_cs", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: safe("cc"), backingUserId: "u_cs", createdAt: NOW } as any);
+  // shortcut: pushed straight into the store; the send path itself is crypto-send's test.
+  const send = { id: "cs_1", userId: "u_cs", to: safe("dd"), token: "EURE", amount: "25", capEur: 25, state: "SUBMITTED", createdAt: NOW, updatedAt: NOW } as any;
+  store.cryptoSends.push(send);
+  writeStatementLinesFor(store.findUser("u_cs")!);
+  const look = () => call("GET", "/users/u_cs/books-line/cs_1", undefined, "u_cs");
+  assert.equal((await look()).body.line, null, "a send not yet confirmed has no line");
+  send.state = "SENT";
+  send.txHash = `0x${"e".repeat(64)}`;
+  writeStatementLinesFor(store.findUser("u_cs")!);
+  const CS = lineId("org_cs", "cryptosend:cs_1");
+  assert.deepEqual((await look()).body, { line: { orgId: "org_cs", lineId: CS, ownTransfer: false } });
+  assert.equal((await own("org_cs", CS, true, "u_cs")).status, 200);
+  assert.equal((await look()).body.line.ownTransfer, true);
+  assert.equal((await own("org_cs", CS, false, "u_cs")).status, 200);
+});
+
 console.log("\nBelege");
 
 await check("an issued Beleg is never touched: it still verifies, is not revoked, and keeps the booking it froze", async () => {
@@ -429,6 +450,10 @@ await check("Revenue and Expenses are summed from counted lines; cash keeps ever
     assert.match(read(f), /Between my own accounts/, f);
     assert.match(read(f), /[Nn]ot income or an expense/, f);
   }
+  // The wallet payment's sheet reuses phOwnBind, drawn only for a confirmed send.
+  const wallet = read("app/phone-send.js").match(/PH\["send\/wallet-done"\] = \{[\s\S]*?\n\};/)![0];
+  assert.match(wallet, /sent \? `<div id="ph-own" class="z-stack"><\/div>` : ""/);
+  assert.match(wallet, /bind\(root, id\) \{ phOwnBind\(root, id\); \}/);
 });
 
 server.close();

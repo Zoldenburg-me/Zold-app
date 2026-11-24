@@ -15,11 +15,12 @@ import { isOwnTransfer } from "../domain/ledger.js";
 import { booksFor } from "../bookkeeping/writer.js";
 import { lineId, ownTransferAllowed } from "../bookkeeping/statement.js";
 
-/** The keys a payment on these sheets can have a mark-able line under. A crypto
- *  send's own screen has no action yet, and a conversion in parts has one line
- *  per part: both are marked on the statement in /business. */
+/** The keys a payment on these sheets can have a mark-able line under. A
+ *  conversion in parts has one line per part: it is marked on the statement in
+ *  /business. */
 const keysOf = (id: string) => [
   `transfer:${id}:payout`,
+  `cryptosend:${id}`,
   `monerium:issue:${id}`,
   `deposit:${id}:eure`,
   `deposit:${id}:held`,
