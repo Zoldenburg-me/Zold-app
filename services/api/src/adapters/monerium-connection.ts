@@ -154,7 +154,17 @@ export async function verifyApiKeys(clientId: string, clientSecret: string): Pro
  *  blocks storing the keys. */
 export async function verifyCompanyKeys(clientId: string, clientSecret: string): Promise<{ profiles: any[] }> {
   const client = await provenClient(clientId, clientSecret);
-  return { profiles: listOf(await client.profiles(), "profiles") };
+  return { profiles: profileListOf(await client.profiles()) };
+}
+
+/** The profile list, strictly: an answer without one is a failed read (a
+ *  503 the caller may retry), never "Monerium lists no profiles", which a
+ *  re-check would record as the company profile gone. */
+export function profileListOf(res: unknown): any[] {
+  if (Array.isArray(res)) return res;
+  const list = (res as { profiles?: unknown } | null)?.profiles;
+  if (Array.isArray(list)) return list;
+  throw new Error("Monerium answered the profile list without a profiles array");
 }
 
 const listOf = (res: any, key: string): any[] => (Array.isArray(res) ? res : (res?.[key] ?? []));

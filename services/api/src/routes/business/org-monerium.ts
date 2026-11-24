@@ -98,7 +98,10 @@ function refusal(err: unknown): { status: number; body: { error: string; code: s
   if (err instanceof MoneriumKeysRefusedError) {
     return { status: 400, body: { code: "MONERIUM_KEYS_REFUSED", error: `Monerium (${environment}) refused these keys. Check the client id and secret, and that they come from the company's Monerium ${environment} account.` } };
   }
-  console.warn(`org-monerium: checking keys with Monerium failed: ${redactedMessage(err)}`);
+  // A Monerium HTTP error carries the provider's response body in its message:
+  // log only the status. Anything else (network, a malformed answer) is ours.
+  const why = err instanceof MoneriumApiError ? `Monerium answered ${err.status}` : redactedMessage(err);
+  console.warn(`org-monerium: checking keys with Monerium failed: ${why}`);
   return { status: 503, body: { code: "MONERIUM_UNREACHABLE", error: "Monerium could not be reached to check the keys. Try again in a minute." } };
 }
 

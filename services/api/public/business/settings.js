@@ -6,7 +6,7 @@
 import { Z, api, cap, ensureMe, esc, issuerFieldNames, issuerIds, me, org, plain, roleCan } from "./core.js";
 import { META, RENDER, moneriumLink } from "./views.js";
 import { isOwnCompanyOrg } from "./access-model.js";
-import { mayChangeEntity } from "./settings-model.js";
+import { mayChangeEntity, settingsSecFrom } from "./settings-model.js";
 import { companyKeysHere, keyHint, keyRows } from "./org-monerium-model.js";
 import { shown } from "./nav.js";
 
@@ -100,6 +100,8 @@ function moneriumSection(accounts) {
 }
 
 RENDER.settings = async () => {
+  // A link that names its section in the URL (opened in a new tab, or reloaded).
+  ss.sec = settingsSecFrom(location.search) || ss.sec;
   // The menu offers Access only to the company login in its own company, so
   // it waits for who that is and reads whose account backs this one.
   const company = companyKeysHere(org, roleCan(org.role, "accounts"));

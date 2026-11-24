@@ -15,10 +15,11 @@
  *   - check again: pending → connected; refused keys → invalid, row kept;
  *     the stored profile is looked up by id; keys that no longer open it are
  *     invalid until it is back, and a different one is not adopted;
- *   - races: keys removed while a check waits on Monerium are not written
- *     back; a member demoted or removed while a save waits stores nothing;
+ *   - races: keys removed or replaced while a check waits on Monerium are
+ *     not written over; a member demoted or removed while a save waits stores nothing;
  *   - errors: only a refused token grant is "keys refused"; Monerium's own
- *     response body never reaches the browser;
+ *     response body never reaches the browser or the server log; an answer
+ *     without a profile list is a failed read, not "no profiles";
  *   - remove: the keys are gone and GET says not_connected;
  *   - Home's company set-up: the keys step, and an IBAN step that is never
  *     offered as done.
@@ -44,10 +45,11 @@ const { initStore, store } = await import("../services/api/src/store.js");
 const { resolveOrg } = await import("../services/api/src/routes/org-context.js");
 const { createOrgMoneriumRoutes, orgMoneriumStatus } = await import("../services/api/src/routes/business/org-monerium.js");
 const { MoneriumApiError } = await import("../services/api/src/adapters/monerium-client.js");
-const { MoneriumKeysRefusedError } = await import("../services/api/src/adapters/monerium-connection.js");
+const { MoneriumKeysRefusedError, profileListOf } = await import("../services/api/src/adapters/monerium-connection.js");
 const { SECRETS, STORED_SECRETS } = await import("../services/api/src/stored-secrets.js");
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const model: any = await import(pathToFileURL(path.join(ROOT, "services/api/public/business/org-monerium-model.js")).href);
+const settingsModel: any = await import(pathToFileURL(path.join(ROOT, "services/api/public/business/settings-model.js")).href);
 initStore();
 
 let passed = 0;
@@ -172,7 +174,13 @@ await check("keys Monerium refuses, or an outage, store nothing", async () => {
   const down = await call("POST", "/org_co/monerium", "u_adam", keys);
   assert.equal(down.status, 503);
   stub.mode = "readfail";
-  const read = await call("POST", "/org_co/monerium", "u_adam", keys);
+  const logged: string[] = [];
+  const warn = console.warn;
+  console.warn = (...a: unknown[]) => { logged.push(a.map(String).join(" ")); };
+  let read;
+  try { read = await call("POST", "/org_co/monerium", "u_adam", keys); } finally { console.warn = warn; }
+  assert.ok(logged.some((l) => l.includes("Monerium answered 400")), `the status is logged: ${logged.join(" | ")}`);
+  assert.ok(!logged.join("\n").includes(PROVIDER_BODY), "Monerium's response body is not logged either");
   assert.equal(read.status, 503, "a failed read after the grant is not a refusal of the keys");
   assert.equal(read.data.code, "MONERIUM_UNREACHABLE");
   assert.ok(!read.text.includes(PROVIDER_BODY), "Monerium's own response body never reaches the browser");
@@ -275,6 +283,17 @@ await check("check again: keys removed or replaced while Monerium answers are no
     assert.equal(r.data.code, "MONERIUM_KEYS_CHANGED");
     assert.equal(store.findOrganisation("org_co")!.monerium, undefined, `${mode}: the removal stands`);
     store.updateOrganisation("org_co", { monerium: before });
+
+    // Replaced meanwhile by other keys: the replacement stands, untouched.
+    const replacement = { ...before, clientId: "test-client-id-2222-3333", clientSecretEnc: SECRETS.orgMoneriumApiSecret.seal("org_co", SECRET + "-other"), checkedAt: "2000-01-01T00:00:00.000Z" };
+    const again = inFlight(() => call("POST", "/org_co/monerium/check", "u_olga"));
+    await again.asked;
+    store.updateOrganisation("org_co", { monerium: replacement });
+    const r2 = await again.release();
+    assert.equal(r2.status, 409, `${mode} replaced: ${r2.text}`);
+    assert.equal(r2.data.code, "MONERIUM_KEYS_CHANGED");
+    assert.deepEqual(store.findOrganisation("org_co")!.monerium, replacement, `${mode}: the replacement is not written over`);
+    store.updateOrganisation("org_co", { monerium: before });
   }
   stub.mode = "ok";
 });
@@ -313,6 +332,26 @@ await check("Home's company set-up: the keys step, and an IBAN step never done",
   assert.deepEqual(model.companySteps(null).map((s: any) => s.done), [null, false], "unread is couldn't check, not not-done");
   assert.equal(model.companySteps({ status: "connected" })[1].notLive, true);
   assert.equal(model.keyHint({ status: "pending", profile: { state: "review" } }).includes("review"), true);
+});
+
+await check("a Monerium answer without a profile list is a failed read, not \"no profiles\"", () => {
+  assert.deepEqual(profileListOf([CORP]), [CORP]);
+  assert.deepEqual(profileListOf({ profiles: [] }), [], "an explicit empty list is no profiles");
+  for (const bad of [{}, null, undefined, { profiles: null }, { items: [CORP] }, "x"]) {
+    assert.throws(() => profileListOf(bad), /without a profiles array/, JSON.stringify(bad));
+    assert.ok(!((() => { try { profileListOf(bad); } catch (e) { return e; } })() instanceof MoneriumKeysRefusedError), "never read as refused keys");
+  }
+});
+
+await check("the set-up link names its Settings section in the URL, so a new tab lands there", () => {
+  assert.equal(settingsModel.settingsSecFrom("?view=settings&sec=monerium"), "monerium");
+  assert.equal(settingsModel.settingsSecFrom("?view=settings&sec=org"), "org");
+  assert.equal(settingsModel.settingsSecFrom("?view=settings"), null);
+  assert.equal(settingsModel.settingsSecFrom("?view=settings&sec=members"), null, "unknown sections are ignored");
+  const home = readFileSync(path.join(ROOT, "services/api/public/business/home.js"), "utf8");
+  assert.match(home, /href="\?view=\$\{esc\(view\)\}&amp;sec=\$\{esc\(sec\)\}"/, "Home's Open link carries sec in its href");
+  const settings = readFileSync(path.join(ROOT, "services/api/public/business/settings.js"), "utf8");
+  assert.match(settings, /settingsSecFrom\(location\.search\)/, "Settings reads it on render");
 });
 
 server.close();
