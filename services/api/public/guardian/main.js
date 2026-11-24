@@ -19,7 +19,7 @@ import { createGuardianPasskey, emailCodeToToken, sendEmailCode } from "./logins
 import { OAUTH_STATE_KEY, readReturn, startLogin } from "./oauth.js";
 import { providerButtons } from "./providers.js";
 import { afterCheck, checkEnrolment, enrolmentHtml, issueEnrolmentCode } from "./enrolment.js";
-import { byDevice } from "./device-words.js";
+import { byDevice, esc } from "./device-words.js";
 import { UNREACHABLE, WRITE_UNANSWERED, readAnswer, readHealth } from "../foreign-answer.js";
 
 
@@ -156,7 +156,6 @@ export async function zoldenburgOp(add, btn, { api, userId, passkeyGet, announce
 
 const b64urlToBytes = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(s.length / 4) * 4, "=")), (c) => c.charCodeAt(0));
 const bytesToB64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
 /** The account's passkey approves the prepared Safe op. */
 /** A step-up for one action (routes/auth.ts): a challenge bound to it, approved with the account's passkey. */

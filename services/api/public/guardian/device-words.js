@@ -8,3 +8,6 @@
 const onPhone = () => !!globalThis.matchMedia?.("(pointer: coarse)").matches;
 export const byDevice = (phone, computer) => (onPhone() ? phone : computer);
 export const passkeyName = () => byDevice("Face ID or fingerprint", "passkey");
+
+/* HTML-escape, for the same two pages (they do not load app/core.js). */
+export const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
