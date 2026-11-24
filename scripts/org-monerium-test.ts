@@ -116,7 +116,16 @@ const app = express();
 app.use(express.json());
 const who = (req: any) => req.header("x-user");
 const requireSession = (req: any, res: any) => (who(req) ? { userId: who(req) } : (res.status(401).json({ error: "no session" }), undefined));
-app.use("/api/orgs", createOrgMoneriumRoutes({ ctxOf: (req, res) => resolveOrg(req, res, requireSession as any) }, verify));
+/** The passkey approval, stubbed: `stepUp: "approved"` in the body passes. */
+const stepUps: string[] = [];
+const stepUp = async (userId: string, body: any, res: any) => {
+  stepUps.push(userId);
+  if (body?.stepUp === "approved") return true;
+  res.status(401).json({ error: "a fresh passkey approval is required for this change", code: "STEP_UP_REQUIRED" });
+  return false;
+};
+const OK = { stepUp: "approved" };
+app.use("/api/orgs", createOrgMoneriumRoutes({ ctxOf: (req, res) => resolveOrg(req, res, requireSession as any) }, verify, stepUp));
 const server = app.listen(0, "127.0.0.1");
 await new Promise<void>((r) => server.once("listening", () => r()));
 const API = `http://127.0.0.1:${(server.address() as any).port}/api/orgs`;
@@ -279,7 +288,7 @@ await check("check again: keys removed or replaced while Monerium answers are no
     const before = store.findOrganisation("org_co")!.monerium!;
     const check = inFlight(() => call("POST", "/org_co/monerium/check", "u_olga"));
     await check.asked;
-    assert.equal((await call("DELETE", "/org_co/monerium", "u_olga")).status, 200, "removed meanwhile");
+    assert.equal((await call("DELETE", "/org_co/monerium", "u_olga", OK)).status, 200, "removed meanwhile");
     const r = await check.release();
     assert.equal(r.status, 409, `${mode}: ${r.text}`);
     assert.equal(r.data.code, "MONERIUM_KEYS_CHANGED");
@@ -326,24 +335,46 @@ await check("a re-check whose answer has no profile list is a 503 and changes no
   assert.deepEqual(store.findOrganisation("org_co")!.monerium, before, "the saved connection is untouched: not missing, not invalid");
 });
 
+await check("replacing or removing stored keys needs a fresh passkey approval; the first connection does not", async () => {
+  const before = structuredClone(store.findOrganisation("org_co")!.monerium);
+  assert.ok(before, "keys are stored for this check");
+  stub.calls = [];
+  const replace = await call("POST", "/org_co/monerium", "u_adam", keys);
+  assert.equal(replace.status, 401, replace.text);
+  assert.equal(replace.data.code, "STEP_UP_REQUIRED");
+  assert.deepEqual(stub.calls, [], "Monerium is not asked before the approval");
+  const remove = await call("DELETE", "/org_co/monerium", "u_olga");
+  assert.equal(remove.status, 401);
+  assert.deepEqual(store.findOrganisation("org_co")!.monerium, before, "nothing changed");
+  const replaced = await call("POST", "/org_co/monerium", "u_adam", { ...keys, ...OK });
+  assert.equal(replaced.status, 201, replaced.text);
+  stepUps.length = 0;
+  store.updateOrganisation("org_co", { monerium: undefined });
+  assert.equal((await call("POST", "/org_co/monerium", "u_adam", keys)).status, 201, "a first connection replaces nothing");
+  assert.deepEqual(stepUps, [], "and asks for no approval");
+  store.updateOrganisation("org_co", { monerium: before });
+});
+
 await check("a payer cannot remove them; an owner can", async () => {
-  assert.equal((await call("DELETE", "/org_co/monerium", "u_pia")).status, 403);
-  const r = await call("DELETE", "/org_co/monerium", "u_olga");
+  assert.equal((await call("DELETE", "/org_co/monerium", "u_pia", OK)).status, 403);
+  const r = await call("DELETE", "/org_co/monerium", "u_olga", OK);
   assert.equal(r.status, 200);
   assert.equal(r.data.monerium.status, "not_connected");
   assert.equal(store.findOrganisation("org_co")!.monerium, undefined);
-  assert.equal((await call("DELETE", "/org_co/monerium", "u_olga")).status, 409);
+  assert.equal((await call("DELETE", "/org_co/monerium", "u_olga", OK)).status, 409);
 });
 
-await check("Home's company set-up: the keys step, and an IBAN step never done", () => {
+await check("Home's company set-up: the keys step, then the IBAN step, done only once issued", () => {
   assert.equal(model.companyKeysHere({ type: "business", entity: "company" }, true), true);
   assert.equal(model.companyKeysHere({ type: "business", entity: "company" }, false), false, "not for a payer");
   assert.equal(model.companyKeysHere({ type: "business", entity: "sole_trader" }, true), false);
   assert.equal(model.companyKeysHere({ type: "personal" }, true), false);
   assert.deepEqual(model.companySteps({ status: "connected" }).map((s: any) => s.done), [true, false]);
   assert.deepEqual(model.companySteps({ status: "pending" }).map((s: any) => s.done), [false, false]);
-  assert.deepEqual(model.companySteps(null).map((s: any) => s.done), [null, false], "unread is couldn't check, not not-done");
-  assert.equal(model.companySteps({ status: "connected" })[1].notLive, true);
+  assert.deepEqual(model.companySteps(null).map((s: any) => s.done), [null, null], "unread is couldn't check, not not-done");
+  assert.equal(model.companySteps({ status: "connected", companyIban: { state: "ready" } })[1].state, "ready");
+  assert.deepEqual(model.companySteps({ status: "connected", companyIban: { state: "iban_requested" } }).map((s: any) => s.done), [true, false], "requested is not issued");
+  assert.deepEqual(model.companySteps({ status: "not_connected", companyIban: { state: "issued", iban: "DE00" } }).map((s: any) => s.done), [true, true], "issued stays done with the keys removed");
   assert.equal(model.keyHint({ status: "pending", profile: { state: "review" } }).includes("review"), true);
 });
 

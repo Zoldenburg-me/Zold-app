@@ -127,8 +127,19 @@ Say this plainly rather than letting the surface imply otherwise:
   Monerium.** Settings → Monerium stores a company's keys only after the
   client-credentials grant succeeds and the keys open a corporate profile,
   but that has run only against a stub in `org-monerium:test`, never with
-  sandbox or production keys. The keys issue no IBAN and move no money:
-  linking the company Safe and issuing its IBAN are not built.
+  sandbox or production keys. Replacing or removing them needs a passkey
+  approval (`org.monerium.keys`).
+- **A company's IBAN on its own Safe has never been issued.** Settings →
+  Monerium lets an owner sign Monerium's ownership declaration as the company
+  Safe (one passkey, threshold 1 only), links it under the company profile on
+  the company's keys, requests the IBAN and opens the account once Monerium
+  attributes it to the Safe. All of it has run only against stubs
+  (`org-monerium-iban:test`): no org Safe EIP-1271 signature has been checked
+  by Monerium, and no company IBAN exists. A Safe at threshold 2 or more is
+  refused (collecting several owners' message signatures is not built).
+  Deposits are listed live from Monerium and booked nowhere. **Paying a bank
+  account from the company's IBAN is not built**: a company bank run is
+  refused with `COMPANY_BANK_PAYOUT_NOT_BUILT`.
   The check gates sending only: invoices and pay links still receive into
   an account whose profile has not been checked.
 - **The VIES lookup of a customer's VAT ID** (`adapters/vies.ts`) has run

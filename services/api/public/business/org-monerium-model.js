@@ -1,8 +1,9 @@
 /**
  * A company org's own Monerium keys, without the DOM: what Settings and
  * Home's set-up card say about GET /api/orgs/:id/monerium. The keys connect
- * the company's Monerium account; issuing the IBAN onto the company's Safe
- * is not built yet, so that step is never offered as an action.
+ * the company's Monerium account; an owner's passkey then signs Monerium's
+ * declaration for the company Safe, and Monerium issues the IBAN onto it
+ * (routes/business/org-monerium-iban.ts, `companyIban`).
  *
  * No imports, so scripts/org-monerium-test.ts loads it in node.
  */
@@ -51,11 +52,40 @@ export function keyNotice(m, verb) {
   return verb === "check" ? `Checked. ${hint}` : `Monerium keys saved. ${hint}`;
 }
 
-/** Home's company set-up: the keys step, then the IBAN step that is not
- *  live. `m` null is an unread status: "couldn't check", never "not done". */
+/** Home's company set-up: the keys step, then the IBAN step. `m` null is an
+ *  unread status: "couldn't check", never "not done". The IBAN is done only
+ *  once Monerium attributed it to the Safe. */
 export function companySteps(m) {
+  const iban = ibanState(m);
   return [
-    { id: "companyMonerium", done: m ? m.status === "connected" : null },
-    { id: "companyIban", done: false, notLive: true },
+    { id: "companyMonerium", done: m ? m.status === "connected" || iban === "issued" : null },
+    { id: "companyIban", done: m ? iban === "issued" : null, state: iban },
   ];
+}
+
+/** The IBAN step's state (domain/org-monerium-iban.ts), or null unread. */
+export const ibanState = (m) => (m ? m.companyIban?.state || "keys_needed" : null);
+
+/** What the IBAN part of Settings → Monerium says, and which button it offers:
+ *  `issue` for an owner who can sign, `check` while Monerium works on it. */
+export function ibanPanel(m, maySign) {
+  const st = ibanState(m);
+  if (st === null) return { text: "The IBAN status couldn’t be read. Open Settings again to retry." };
+  if (st === "issued") return { text: "Bank transfers to this IBAN arrive on the company’s Safe as euros (EURe). Paying a bank account from it is not built yet.", iban: m.companyIban.iban };
+  if (st === "keys_needed") return { text: "Next: once Monerium has approved the company profile, an owner issues the company’s IBAN onto its own Safe." };
+  if (st === "safe_needed") return { text: "Next: set up the company’s Safe (Home), then issue its IBAN here." };
+  if (st === "link_pending") return { text: "Monerium is checking the Safe’s signed declaration. Check again in a minute.", action: "check" };
+  if (st === "iban_requested") return { text: "The IBAN is requested. Monerium usually issues it within minutes. Check again shortly.", action: "check" };
+  return maySign
+    ? { text: "Your passkey signs Monerium’s declaration that the company owns its Safe. Monerium then issues the company’s IBAN onto the Safe.", action: "issue" }
+    : { text: "An owner of the company signs Monerium’s declaration with their passkey to issue the IBAN." };
+}
+
+/** The toast after issuing or checking: where the IBAN has got. */
+export function ibanNotice(m) {
+  const st = ibanState(m);
+  if (st === "issued") return "The company’s IBAN is issued.";
+  if (st === "link_pending") return "Signed. Monerium is checking the declaration; check again in a minute.";
+  if (st === "iban_requested") return "IBAN requested. Monerium usually issues it within minutes.";
+  return "Nothing new from Monerium yet.";
 }
