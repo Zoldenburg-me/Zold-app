@@ -80,8 +80,9 @@ async function readTokens(baseUrl: string): Promise<MoneriumToken[]> {
   let raw: unknown;
   try {
     raw = await res.json();
-  } catch (err: any) {
-    throw new MoneriumTokensUnavailable(`${where}: unreadable body: ${redactedMessage(err)}`);
+  } catch {
+    // Fixed text: a parse error's message quotes the body's start.
+    throw new MoneriumTokensUnavailable(`${where}: unreadable body (HTTP ${res.status})`);
   }
   if (!Array.isArray(raw)) throw new MoneriumTokensUnavailable(`${where}: body is not a token list`);
   return raw

@@ -13,7 +13,7 @@ import { forgetDraft, invoiceBody, invoiceDraft, readInvoiceEditor, setInvoiceDr
 import { ap, bk, contactPayments, ct, draftTag, draftTitle, draftTotal, invoiceDrawer, iv, mayReview, memberName } from "./screens.js";
 import { loadOrg, render } from "./shell.js";
 import { field, payerRuleDialog, payerRuleSection, runSummary } from "./receipts.js";
-import { showProgress, signedLineOutcome, signedRunToast, signingWarning } from "./payment-model.js";
+import { approvalProgress, showProgress, signedLineOutcome, signedRunToast, signingWarning } from "./payment-model.js";
 import { ibanNotice, keyNotice } from "./org-monerium-model.js";
 
 /** A file the API serves behind the bearer header, which a navigation
@@ -1240,11 +1240,16 @@ export const ACTIONS = {
       const credentialId = session.passkey?.credentialId;
       if (!credentialId) throw new Error("This account has no passkey here, so nothing can be approved.");
       let approved = 0;
+      let expired = 0;
+      let failed = 0;
+      const progress = () => showProgress(approvalProgress(approved, expired, r.authorizations.length, failed), $("#dlg"), $("#dlg-progress"), toast);
       const lines = [];
       for (const a of r.authorizations) {
         // No passkey prompt for a line the server would refuse.
         if (Date.now() / 1000 > Number(a.authorization.typedData.message.deadline)) {
           lines.push({ recipient: a.recipient, outcome: "not_sent", why: "approval expired" });
+          expired++;
+          progress();
           continue;
         }
         let submitted = false;
@@ -1265,11 +1270,14 @@ export const ACTIONS = {
             },
           });
           lines.push({ recipient: a.recipient, outcome: signedLineOutcome(t, true) });
-          showProgress(`Approved ${++approved} of ${r.authorizations.length}…`, $("#dlg"), $("#dlg-progress"), toast);
+          approved++;
+          progress();
         } catch (e) {
           // Reported per line rather than aborting silently: the ones already
           // signed are real payments and the user must know which.
           lines.push({ recipient: a.recipient, outcome: submitted ? signedLineOutcome(e, false) : "not_sent", why: plain(e.message) });
+          failed++;
+          progress();
         }
       }
       const done = signedRunToast(r.authorizations.length, lines);

@@ -176,7 +176,21 @@ assert.equal(m.runIdFrom("", null), null);
   m.showProgress("Approved 2 of 3…", { open: false }, status, (t: string) => toasts.push(t));
   m.showProgress("Approved 3 of 3…", null, null, (t: string) => toasts.push(t));
   assert.deepEqual(toasts, ["Approved 2 of 3…", "Approved 3 of 3…"], "no dialog open: a toast");
-  assert.match(actions, /showProgress\(`Approved \$\{\+\+approved\} of \$\{r\.authorizations\.length\}…`, \$\("#dlg"\), \$\("#dlg-progress"\), toast\)/);
+  m.showProgress(null, null, null, (t: string) => toasts.push(t));
+  assert.equal(toasts.length, 2, "a null line (the run is done) shows nothing");
+  // A line skipped as expired is not an approval: it is counted apart.
+  assert.equal(m.approvalProgress(1, 0, 3), "Approved 1 of 3…");
+  assert.equal(m.approvalProgress(1, 1, 3), "Approved 1 of 3, 1 expired, not sent…");
+  assert.equal(m.approvalProgress(1, 0, 3, 1), "Approved 1 of 3…");
+  // The last line has no count: the run's toast replaces it in the same frame.
+  for (const [a, e, t, f] of [[2, 1, 3, 0], [3, 0, 3, 0], [0, 2, 2, 0], [2, 0, 3, 1]]) assert.equal(m.approvalProgress(a, e, t, f), null, `${a}/${e}/${f} of ${t}`);
+  assert.equal(m.signedRunToast(2, [{ recipient: "A", outcome: "sent" }, { recipient: "B", outcome: "not_sent", why: "approval expired" }]).text,
+    "1 of 2 sent. Not sent: B: approval expired.", "the toast says what the final count would have");
+  assert.match(actions, /const progress = \(\) => showProgress\(approvalProgress\(approved, expired, r\.authorizations\.length, failed\), \$\("#dlg"\), \$\("#dlg-progress"\), toast\);/);
+  assert.match(actions, /why: plain\(e\.message\) \}\);\n\s*failed\+\+;\n\s*progress\(\);/, "a failed line ends its step too");
+  assert.match(actions, /why: "approval expired" \}\);\n\s*expired\+\+;\n\s*progress\(\);\n\s*continue;/, "an expired line is counted apart");
+  assert.match(actions, /signedLineOutcome\(t, true\) \}\);\n\s*approved\+\+;\n\s*progress\(\);/, "only a submitted line counts as approved");
+  assert.doesNotMatch(actions, /Approved \$\{/, "the progress text is approvalProgress's alone");
   assert.match(actions, /esc\(warning\)\}<\/p><p class="desc" id="dlg-progress" role="status"><\/p>`/, "the warning dialog has a place for progress");
 }
 

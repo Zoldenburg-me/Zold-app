@@ -355,6 +355,7 @@ try {
     const r = await post("t_attach_bad", { state: "PAID", note: NOTE, evidence: "ord-forbidden" });
     assert.equal(r.status, 409, JSON.stringify(r.body));
     assert.match(String(r.body.error), /Monerium refused this account's read of that order/);
+    assert.equal(r.body.code, "MONERIUM_READ_REFUSED", "a tool tells it from the 409 for an order that is not this transfer's by code");
     assert.match(String(r.body.error), /check the connection or the order id/);
     assert.doesNotMatch(String(r.body.error), /not this transfer's/);
     const t = store.findTransfer("t_attach_bad")! as any;
