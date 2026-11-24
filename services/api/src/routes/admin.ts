@@ -57,13 +57,17 @@ function lastHash(txs: { step: string; hash: string }[] = []) {
 
 function adminTransfer(transfer: Transfer) {
   const quote = store.findQuote(transfer.quoteId);
+  // A modern row records the Stellar hash as anchor.payment.sent too; only a
+  // hash no such step carries (a legacy row, or one that differs) adds an entry.
+  const payoutHash = transfer.pickup?.anchorPaymentHash;
+  const payoutRecorded = transfer.txs.some((tx) => tx.step === "anchor.payment.sent" && tx.hash === payoutHash);
   const route = [
     ...transfer.txs.map((tx) => ({ kind: "chain" as const, ...tx })),
     ...(transfer.liquidity?.txHash
       ? [{ kind: "liquidity" as const, step: `liquidity.${transfer.liquidity.provider}`, hash: transfer.liquidity.txHash }]
       : []),
-    ...(transfer.pickup?.anchorPaymentHash
-      ? [{ kind: "payout" as const, step: "moneygram.anchor.payment", hash: transfer.pickup.anchorPaymentHash }]
+    ...(payoutHash && !payoutRecorded
+      ? [{ kind: "payout" as const, step: "moneygram.anchor.payment", hash: payoutHash }]
       : []),
   ];
   return {

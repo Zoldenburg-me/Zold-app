@@ -19,10 +19,11 @@
 import { BRIDGE, FX, railFeeEur } from "./config.js";
 import { DEBIT_STEP, safeMovedEur } from "./transfers/safe-moved.js";
 import { isReverseSwapStep } from "./transfers/conversion-outputs.js";
+import { OPERATOR_TREASURY_CHECK } from "./transfers/user-transfer.js";
 import { usdIsStaging } from "./usd-token.js";
 import { MONERIUM_NOT_CONNECTED, moneriumLiveFor } from "./adapters/monerium-connection.js";
 import { verifyTypedData } from "viem";
-import { AnchorPaymentUncertainError } from "./stellar/anchor.js";
+import { AnchorPaymentUncertainError, isTransientAnchorError } from "./stellar/anchor.js";
 import { store, type Transfer, type TransferState, type User } from "./store.js";
 import { redeemToIban } from "./adapters/monerium-sandbox.js";
 import { isMoneriumOrderId, MoneriumAccessError, MoneriumApiError } from "./adapters/monerium-client.js";
@@ -62,7 +63,7 @@ import {
 } from "./wallet/candide.js";
 import { createCashPickupViaAnchor, fundAndRefreshAnchorPickup } from "./adapters/moneygram.js";
 import { anchorModeEnabled, HARNESS } from "./config.js";
-import { describeCause, redactedMessage, errorText } from "./http/log-cause.js";
+import { describeCause, redactedMessage } from "./http/log-cause.js";
 
 /**
  * The user's device signature over this payment's exact terms. The
@@ -1286,6 +1287,22 @@ export async function settlePickup(transfer: Transfer): Promise<Transfer> {
 
 const refreshPayoutLocks = new Map<string, Promise<Transfer>>();
 
+/** A signed Stellar payment stays valid for 5 minutes (stellar/anchor.ts
+ *  setTimeout(300)): one checked for sooner can still land after. Operator
+ *  text: `userTransfer` shows the sender a safe line instead. */
+const STELLAR_REVIEW_STEP = `wait 5 minutes, then ${OPERATOR_TREASURY_CHECK}`;
+
+/** Whether a failed anchor refresh may already have paid the anchor: an
+ *  uncertain submit, a hash on record, or a payment intent nothing settled.
+ *  Any of them means no automatic refund. */
+export function anchorPaymentMayHaveLeft(err: unknown, latest: Transfer | undefined): boolean {
+  return (
+    err instanceof AnchorPaymentUncertainError ||
+    !!latest?.pickup?.anchorPaymentHash ||
+    intentUnsettled(latest?.txs ?? [], "anchor.payment.pending")
+  );
+}
+
 /** Refresh an anchor-backed cash payout. If the anchor has supplied payment
  * instructions, fund it on-ledger and mark PAID only after anchor completion. */
 export async function refreshPayout(
@@ -1315,7 +1332,7 @@ async function refreshPayoutUnlocked(
       state: "MANUAL_REVIEW",
       error:
         "a Stellar payment to the anchor may have gone out before a restart and its hash was never recorded; " +
-        "check the treasury account before paying again or refunding",
+        STELLAR_REVIEW_STEP,
     });
   }
   if (transfer.state === "PAYOUT_FUNDED" && transfer.pickup?.status === "PAID") {
@@ -1331,8 +1348,8 @@ async function refreshPayoutUnlocked(
       // Persist the payment hash the moment it exists. Without this, a crash
       // during the poll loop below loses the record and the next call pays
       // the anchor a second time.
-      (funded) => {
-        transfer.txs.push({ step: "anchor.payment.sent", hash: funded.anchorPaymentHash ?? "0x" });
+      (funded, hash) => {
+        transfer.txs.push({ step: "anchor.payment.sent", hash });
         store.updateTransfer(transfer.id, {
           pickup: { ...transfer.pickup, ...funded },
           txs: transfer.txs,
@@ -1351,13 +1368,10 @@ async function refreshPayoutUnlocked(
     // A failure that may have moved money must never auto-refund the sender:
     // that would pay twice. Same reasoning as a completed Bridge destination leg.
     const latest = store.findTransfer(transfer.id);
-    const maybePaid =
-      err instanceof AnchorPaymentUncertainError || !!latest?.pickup?.anchorPaymentHash;
+    const maybePaid = anchorPaymentMayHaveLeft(err, latest);
     // A transport failure says nothing about the payout; the next refresh
     // asks again. Only the anchor's own verdict may fail the transfer.
-    const transient =
-      err instanceof TypeError ||
-      /fetch failed|ECONN|ETIMEDOUT|timed? ?out|aborted|socket hang up|\b5\d\d\b/i.test(errorText(err));
+    const transient = isTransientAnchorError(err);
     if (transient && !maybePaid) {
       console.error(`refreshPayout: transient anchor error for ${transfer.id}, state unchanged: ${describeCause(err)}`);
       return transfer;
@@ -1367,7 +1381,7 @@ async function refreshPayoutUnlocked(
         state: "MANUAL_REVIEW",
         error:
           `anchor settlement unresolved: ${redactedMessage(err).slice(0, 200)}; ` +
-          `a Stellar payment may already have been sent, so no automatic refund`,
+          `a Stellar payment may already have been sent, so no automatic refund; ${STELLAR_REVIEW_STEP}`,
       });
     }
     return failAndCompensate(
