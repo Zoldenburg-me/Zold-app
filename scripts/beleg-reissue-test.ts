@@ -229,6 +229,63 @@ await check("a Beleg issued before a mark keeps verifying, so replace refuses it
   assert.equal((await line()).documentCode, byOwner.body.code);
 });
 
+await check("a replacement never carries the old code: its public page does not return it", async () => {
+  const NEW: string = (await line()).documentCode;
+  const revoked = store.documentsForOrg("org_co").filter((d) => d.revokedAt && (d.snapshot as any).line?.lineId === IN).map((d) => d.code);
+  assert.ok(revoked.length >= 2, "this line has replaced Belege behind it");
+  const page = (await call("GET", `/v/${NEW}`, undefined, null)).text;
+  for (const old of revoked) assert.ok(!page.includes(old), "a revoked Beleg's code is a credential to its figures");
+  assert.equal((store.findDocumentByCode(NEW)!.snapshot as any).line.documentCode, undefined);
+});
+
+console.log("\nWhere replacing cannot help");
+
+const H = (n: number) => `0x${n.toString(16).padStart(64, "0")}`;
+const lineOf = async (id: string, month = MONTH) => (await call("GET", `/orgs/org_co/bookkeeping/statement?month=${month}`)).body.lines.find((l: any) => l.id === id);
+
+await check("a payout Monerium rejected after its Beleg: replace refuses with the reason, revokes nothing and issues nothing", async () => {
+  store.addTransfer({ id: "t_out", userId: "u_boss", rail: "sepa", state: "PAYOUT_SUBMITTED", sendEur: 80, receiveEur: 80, recipientName: "Supplier GmbH", recipientIban: "DE89370400440532013000", reference: "RE-9", txs: [], createdAt: "2026-10-05T10:00:00.000Z", updatedAt: "2026-10-05T10:00:00.000Z" } as any);
+  writeStatementLinesFor(store.findUser("u_boss")!);
+  const OUT = lineId("org_co", "transfer:t_out:payout");
+  const issued = await call("POST", `/orgs/org_co/bookkeeping/lines/${OUT}/beleg`, {});
+  assert.equal(issued.status, 201, JSON.stringify(issued.body));
+  store.updateTransfer("t_out", { state: "FAILED" } as any);
+  assert.match((await recordsCheck(issued.body.code)).detail, /transfer is now FAILED/);
+  const r = await call("POST", `/orgs/org_co/bookkeeping/lines/${OUT}/beleg/replace`, {});
+  assert.equal(r.status, 409, JSON.stringify(r.body));
+  assert.match(r.body.error, /would not match the books either/);
+  assert.match(r.body.error, /transfer is now FAILED/);
+  assert.equal(store.findDocumentByCode(issued.body.code)!.revokedAt, undefined, "the old one is not revoked");
+  assert.equal(store.documentsForOrg("org_co").filter((d) => (d.snapshot as any).line?.lineId === OUT).length, 1, "no second one issued");
+  assert.equal((await lineOf(OUT)).belegStale.code, issued.body.code);
+});
+
+await check("a deposit converted in parts: each fill's Beleg verifies and is handed out, before and after the rest is converted", async () => {
+  const at = "2026-10-12T10:00:00.000Z";
+  const p1 = { creditedEur: 40, receiptPortionEur: 40.4, provider: "dex", rate: 1.1, conversion: { txHash: H(30), at: "2026-10-12T10:01:00.000Z", amountInUnits: "44000000" } };
+  store.addCryptoDeposit({ id: "d_part", userId: "u_boss", chainId: 31337, token: "USDC", txHash: H(5), logIndex: 0, amountUnits: "110000000", amountUsdc: 110,
+    receipt: { amountEur: 101, rate: 1.089, rateProvider: "ecb", rateAsOf: "2026-10-12", ratedAt: at, blockTimestamp: "2026-10-12T09:58:00.000Z" },
+    holding: "held", settledAt: at, settlementAsset: "EURE", partials: [p1], txs: [{ step: "safe.swap(usdc->eure)", hash: H(30) }], detectedAt: at, updatedAt: at } as any);
+  writeStatementLinesFor(store.findUser("u_boss")!);
+  const P1 = lineId("org_co", "deposit:d_part:disposal:p1");
+  const first = await call("POST", `/orgs/org_co/bookkeeping/lines/${P1}/beleg`, {});
+  assert.equal(first.status, 201, JSON.stringify(first.body));
+  assert.equal((await recordsCheck(first.body.code)).ok, true, "the first fill, the rest still held");
+  assert.equal((await lineOf(P1)).documentCode, first.body.code);
+  store.updateCryptoDeposit("d_part", { holding: "converted", settledAt: at, settlementAsset: "EURE", creditedEur: 100, provider: "dex", rate: 1.1, midRate: 1.09, realisedGainEur: -1,
+    conversion: { txHash: H(31), at: "2026-10-12T11:00:00.000Z", amountInUnits: "66000000" }, txs: [{ step: "safe.swap(usdc->eure)", hash: H(30) }, { step: "safe.swap(usdc->eure)", hash: H(31) }] } as any);
+  writeStatementLinesFor(store.findUser("u_boss")!);
+  const FINAL = lineId("org_co", "deposit:d_part:disposal");
+  const last = await call("POST", `/orgs/org_co/bookkeeping/lines/${FINAL}/beleg`, {});
+  assert.equal(last.status, 201, JSON.stringify(last.body));
+  assert.equal((store.findDocumentByCode(last.body.code)!.snapshot as any).conversion.creditedEur, 60, "the last fill alone");
+  for (const [id, code] of [[P1, first.body.code], [FINAL, last.body.code]]) {
+    assert.equal((await recordsCheck(code)).ok, true, `${id} verifies once the rest is converted`);
+    assert.equal((await lineOf(id)).documentCode, code);
+    assert.ok((await csv()).includes(code));
+  }
+});
+
 console.log("\nThe screens");
 
 await check("the books statement and the export draw Replace where the receipt stopped verifying; /app offers it under the payment", () => {

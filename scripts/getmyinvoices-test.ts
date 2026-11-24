@@ -90,6 +90,7 @@ process.env.GETMYINVOICES_BASE_URL = FAKE;
 const { GetMyInvoicesClient, GmiApiError, gmiUserAgent } = await import("../services/api/src/adapters/getmyinvoices.js");
 const { initStore, store } = await import("../services/api/src/store.js");
 const { writeStatementLines } = await import("../services/api/src/bookkeeping/writer.js");
+const { lineId } = await import("../services/api/src/bookkeeping/statement.js");
 const { belegUpload, createIntegrationRoutes } = await import("../services/api/src/routes/business/integrations.js");
 const { createBookkeepingExportRoutes } = await import("../services/api/src/routes/business/bookkeeping-export.js");
 const { resolveOrg } = await import("../services/api/src/routes/org-context.js");
@@ -374,6 +375,23 @@ await check("push adds each line to the manual bank account once, with its Beleg
   assert.equal((await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09", bankAccountUid: 999 })).status, 400, "a bank account that is not theirs is refused");
   assert.equal((await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09", bankAccountUid: 88 })).status, 400, "a connected bank's own account is refused: lines go to a manual one");
   assert.equal(bank.lines.filter((t) => t.bankAccountUid === 88).length, 0);
+});
+
+await check("a Beleg replaced after its line went up: the re-send finds the line by the old code and adds nothing", async () => {
+  const IN = lineId("org_1", "monerium:issue:ord-1");
+  const before = store.findDocumentByCode(store.ledgerOf("org_1").find((e) => e.id === IN)!.statement!.documentCode!)!;
+  assert.ok(bank.lines.some((t) => String(t.description).includes(before.code)), "the line is in GetMyInvoices under the old code");
+  store.updateDocument(before.id, { revokedAt: new Date().toISOString() });
+  const rep = await call("POST", `/api/orgs/org_1/bookkeeping/lines/${IN}/beleg/replace`, {});
+  assert.equal(rep.status, 201, JSON.stringify(rep.body));
+  const total = bank.lines.length;
+  const r = await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09" });
+  assert.equal(r.status, 200);
+  assert.equal(bank.lines.length, total, "no second bank transaction for the same payment");
+  const x = r.body.results.find((y: any) => y.lineId === IN);
+  assert.equal(x.code, rep.body.code);
+  assert.equal(x.bankLine.outcome, "exists");
+  assert.ok(bank.assigned.some((a) => a.transactionUid === x.bankLine.transactionUid && a.documentUid === x.documentUid), "the new Beleg is attached to the line already there");
 });
 
 await check("a line the lookup misses is found by GetMyInvoices' own duplicate refusal (code 127), not added twice", async () => {
