@@ -199,9 +199,11 @@ Say this plainly rather than letting the surface imply otherwise:
   recovery passkey made.** Adding such a guardian and recovering with one run
   only against stubs (`turnkey:test`, `turnkey-page:test`,
   `turnkey-recovery:test`); no sub-org, login, guardian add, Turnkey
-  signature or relayed recovery exists. `TURNKEY_GUARDIANS` is off, so
-  neither these options on /guardian and signup nor the recovery fallback
-  on /recovery shows. The /recovery page itself (all guardians) has never
+  signature or relayed recovery exists. `TURNKEY_GUARDIANS` is on at
+  zoldhq.com and app.zoldhq.com (`/api/health`, read 2026-11-24) with email
+  and passkey logins only: neither has a Google or Apple client id, so
+  /guardian, signup and the /recovery fallback offer an email code or a
+  passkey and no Google or Apple button. The /recovery page itself (all guardians) has never
   driven a real recovery. No DPA with Turnkey is signed.
 - **One Candide forward has run, on the same chain.** On 2026-10-11 the
   owner paid 1 USDC on Base to their app.zoldhq.com payment page's forwarding

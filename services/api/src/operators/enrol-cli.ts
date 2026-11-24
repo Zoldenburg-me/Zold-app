@@ -1,7 +1,11 @@
 /**
  * Start an operator's passkey enrolment, on the host that runs the API.
  *
- *   npm run operator:enrol -- --name "Ada Example" --email ada@example.com
+ *   npm run operator:enrol
+ *
+ * It asks for the operator's full name and email on stdin, or reads them from
+ * OPERATOR_ENROL_NAME and OPERATOR_ENROL_EMAIL, so neither lands in shell
+ * history. `--name`/`--email` on the command line are refused.
  *
  * Writes a single-use enrolment next to the store (only its hash of the
  * token) and prints the link that redeems it: open it within 15 minutes in a
@@ -15,18 +19,31 @@
  * the file lands in the store the API reads. It lives under services/api/src
  * because the production branch keeps nothing else.
  */
+import { createInterface } from "node:readline";
 import { OPERATOR } from "../config.js";
 import { ENROLMENT_FILE, startEnrolment } from "./enrolment.js";
 
-const args = process.argv.slice(2);
-const flag = (name: string) => {
-  const i = args.indexOf(`--${name}`);
-  return i >= 0 ? args[i + 1] : undefined;
+if (process.argv.slice(2).some((a) => /^--(name|email)\b/.test(a))) {
+  console.error("operator:enrol no longer takes --name/--email (they stay in shell history); run it bare and answer the prompts, or set OPERATOR_ENROL_NAME and OPERATOR_ENROL_EMAIL");
+  process.exit(2);
+}
+
+let lines: AsyncIterator<string> | undefined;
+let rl: ReturnType<typeof createInterface> | undefined;
+const ask = async (envName: string, question: string) => {
+  const fromEnv = process.env[envName]?.trim();
+  if (fromEnv) return fromEnv;
+  rl ??= createInterface({ input: process.stdin });
+  lines ??= rl[Symbol.asyncIterator]();
+  process.stderr.write(question);
+  const r = await lines.next();
+  return r.done ? undefined : r.value.trim() || undefined;
 };
-const name = flag("name");
-const email = flag("email");
+const name = await ask("OPERATOR_ENROL_NAME", "Operator's full name: ");
+const email = await ask("OPERATOR_ENROL_EMAIL", "Operator's email (their Cloudflare Access login): ");
+rl?.close();
 if (!name || !email) {
-  console.error('usage: npm run operator:enrol -- --name "<full name>" --email <address>');
+  console.error("usage: npm run operator:enrol, then answer the prompts (or set OPERATOR_ENROL_NAME and OPERATOR_ENROL_EMAIL)");
   process.exit(2);
 }
 
