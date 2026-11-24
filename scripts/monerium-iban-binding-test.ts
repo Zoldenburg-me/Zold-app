@@ -252,6 +252,24 @@ await check("a Monerium body that is not JSON is refused with fixed text, not th
   }
 });
 
+await check("a token answer with no access_token is refused before any call carries it", async () => {
+  const { MoneriumClient, exchangeAuthorizationCode, refreshAuthorizationToken } = await import("../services/api/src/adapters/monerium-client.js");
+  const cfg = { baseUrl: "https://api.monerium.dev", clientId: "id", clientSecret: "sec" };
+  const realFetch = globalThis.fetch;
+  for (const body of ["", "{}", '{"access_token":7}']) {
+    globalThis.fetch = (async () => new Response(body, { status: 200 })) as typeof fetch;
+    try {
+      // A plain Error, not a MoneriumAccessError or MoneriumApiError: no refund branch sees a status.
+      const plain = (what: string) => (e: Error) => e.constructor === Error && e.message === `${what} answered with no access token (HTTP 200)`;
+      await assert.rejects(new MoneriumClient(cfg).bearerToken(), plain("Monerium auth"), body);
+      await assert.rejects(exchangeAuthorizationCode(cfg, { code: "c", codeVerifier: "v", redirectUri: "https://x/cb" }), plain("Monerium OAuth token"), body);
+      await assert.rejects(refreshAuthorizationToken(cfg, "r"), plain("Monerium OAuth token"), body);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  }
+});
+
 await check("an IBAN missing from Monerium's list, or listed twice, is no verdict and changes nothing", async () => {
   const u = addUser(5);
   const missing = applyIbanBinding(store.findUser(u.id)!, [listed("DE00000000000000000099", OTHER)]);

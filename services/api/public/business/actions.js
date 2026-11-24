@@ -1235,7 +1235,8 @@ export const ACTIONS = {
       if (!credentialId) throw new Error("This account has no passkey here, so nothing can be approved.");
       let approved = 0;
       let expired = 0;
-      const progress = () => showProgress(approvalProgress(approved, expired, r.authorizations.length), $("#dlg"), $("#dlg-progress"), toast);
+      let failed = 0;
+      const progress = () => showProgress(approvalProgress(approved, expired, r.authorizations.length, failed), $("#dlg"), $("#dlg-progress"), toast);
       const lines = [];
       for (const a of r.authorizations) {
         // No passkey prompt for a line the server would refuse.
@@ -1269,6 +1270,8 @@ export const ACTIONS = {
           // Reported per line rather than aborting silently: the ones already
           // signed are real payments and the user must know which.
           lines.push({ recipient: a.recipient, outcome: submitted ? signedLineOutcome(e, false) : "not_sent", why: plain(e.message) });
+          failed++;
+          progress();
         }
       }
       const done = signedRunToast(r.authorizations.length, lines);

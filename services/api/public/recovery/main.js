@@ -21,7 +21,7 @@ import { approveWith, finishApprove } from "./approve.js";
 import { bankStepChanged, bankStepHtml, checkAnswerText, issuedFor, keepIssued } from "./bank-step.js";
 import { UNREACHABLE, readAnswer, readHealth } from "../foreign-answer.js";
 import {
-  EMAIL_KEY, HANDLE_KEY, SECRET_KEY, TICKET_KEY, currentAuth, endedText, finalizeAfter, recoveryHandle, requestPath, saveFor, savedFor, screenFor, startRecovery,
+  EMAIL_KEY, HANDLE_KEY, SECRET_KEY, TICKET_KEY, currentAuth, endedText, finalizeAfter, passkeySubmitted, recoveryHandle, requestPath, saveFor, savedFor, screenFor, startRecovery,
 } from "./flow.js";
 
 const b64urlToBytes = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(s.length / 4) * 4, "=")), (c) => c.charCodeAt(0));
@@ -201,11 +201,11 @@ async function boot() {
       if (e && typeof e === "object") e.passkeyCreate = true;
       throw e;
     });
-    return api(r.submitTo, {
+    return passkeySubmitted(localStorage, s.email, await api(r.submitTo, {
       credentialId: cred.id,
       attestation: bytesToB64url(cred.response.attestationObject),
       clientDataJSON: bytesToB64url(cred.response.clientDataJSON),
-    }, auth());
+    }, auth()));
   };
 
   const start = async (btn) => {

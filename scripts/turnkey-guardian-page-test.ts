@@ -815,6 +815,27 @@ await check("a retried recovery reuses its passkey handle, so a security key rep
   assert.match(src, /saveFor\(localStorage, SECRET_KEY, s\.email, ""\);\n\s*saveFor\(localStorage, TICKET_KEY, s\.email, ""\);\n\s*saveFor\(localStorage, HANDLE_KEY, s\.email, ""\);/);
 });
 
+await check("a handle is not reused once a request has a registered passkey (the sweep may finalise it unseen)", () => {
+  const st = memoryStorage();
+  let n = 0;
+  const random = () => new Uint8Array(16).fill(++n);
+  const first = flow.recoveryHandle(st, "a@b.c", random);
+  // A refused submit leaves the request waiting for its passkey: the retry keeps the handle.
+  assert.deepEqual(flow.passkeySubmitted(st, "a@b.c", { status: "PASSKEY_PENDING" }), { status: "PASSKEY_PENDING" });
+  assert.equal(flow.recoveryHandle(st, "a@b.c", random), first);
+  // Accepted: that passkey is the request's owner now, so a later recovery must not replace it.
+  for (const status of ["OTP_PENDING", "GRACE_PERIOD", "KYC_PENDING", "REVIEW_PENDING"]) {
+    flow.recoveryHandle(st, "a@b.c", random);
+    flow.passkeySubmitted(st, "a@b.c", { status });
+    assert.equal(flow.savedFor(st, flow.HANDLE_KEY, "a@b.c"), "", status);
+  }
+  assert.notEqual(flow.recoveryHandle(st, "a@b.c", random), first);
+  // makePasskey runs the submit's answer through it.
+  const src = readFileSync(path.join(PUB, "recovery/main.js"), "utf8");
+  const make = src.slice(src.indexOf("const makePasskey"), src.indexOf("const start ="));
+  assert.match(make, /return passkeySubmitted\(localStorage, s\.email, await api\(r\.submitTo, \{/);
+});
+
 await check("a refused recovery passkey says why: a security key that can't save it is named", async () => {
   const words = await import(pathToFileURL(path.join(PUB, "guardian/device-words.js")).href);
   const named = (name: string) => Object.assign(new Error("raw"), { name });

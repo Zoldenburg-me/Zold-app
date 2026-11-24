@@ -17,8 +17,9 @@ export const TICKET_KEY = "zold-recovery-otp-ticket";
 export const EMAIL_KEY = "zold-recovery-email";
 
 /** The user handle of the recovery passkey made in this browser. Kept until
- *  the recovery is done: an authenticator replaces its own passkey for the
- *  same handle, so a retry does not leave one more on a security key's few slots. */
+ *  the API accepts that passkey: an authenticator replaces its own passkey for
+ *  the same handle, so a retry does not leave one more on a security key's few
+ *  slots. Once accepted it is the account's owner, and a later recovery must not replace it. */
 export const HANDLE_KEY = "zold-recovery-passkey-handle";
 
 /** This recovery's passkey user handle (base64url, 16 random bytes): the saved one, or a new one saved. */
@@ -28,6 +29,13 @@ export function recoveryHandle(storage, email, random = () => crypto.getRandomVa
   const made = btoa(String.fromCharCode(...random())).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   saveFor(storage, HANDLE_KEY, email, made);
   return made;
+}
+
+/** The submit's answer: a request past PASSKEY_PENDING owns that passkey, so forget its handle
+ *  (the server sweep can finalise the recovery without this page seeing "done"). */
+export function passkeySubmitted(storage, email, request) {
+  if (request?.status !== "PASSKEY_PENDING") saveFor(storage, HANDLE_KEY, email, "");
+  return request;
 }
 
 export function savedFor(storage, key, email) {

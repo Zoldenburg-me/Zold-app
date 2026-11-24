@@ -59,6 +59,16 @@ export function moneriumJson<T>(text: string, what: string, status: number): T {
   }
 }
 
+/** A token endpoint's 200, parsed. One with no access token (an empty body)
+ *  is a plain Error, so no request goes out as `Bearer undefined`. */
+function moneriumToken<T extends { access_token: string }>(text: string, what: string, status: number): T {
+  const data = moneriumJson<T>(text, what, status);
+  if (typeof data?.access_token !== "string" || !data.access_token) {
+    throw new Error(`${what} answered with no access token (HTTP ${status})`);
+  }
+  return data;
+}
+
 /**
  * What a log line may say about a failed Monerium call: the HTTP status, and
  * for a token request a fixed label, never Monerium's body. A failure with no
@@ -120,7 +130,7 @@ export class MoneriumClient {
     if (!res.ok) {
       throw tokenError("Monerium auth failed", res.status, await res.text());
     }
-    const data = moneriumJson<{ access_token: string; expires_in: number }>(await res.text(), "Monerium auth", res.status);
+    const data = moneriumToken<{ access_token: string; expires_in: number }>(await res.text(), "Monerium auth", res.status);
     this.token = { value: data.access_token, expiresAt: Date.now() + data.expires_in * 1000 };
     return this.token.value;
   }
@@ -295,7 +305,7 @@ export async function exchangeAuthorizationCode(cfg: MoneriumConfig, params: {
   if (!res.ok) {
     throw tokenError("Monerium OAuth code exchange failed", res.status, await res.text());
   }
-  return moneriumJson<MoneriumTokenResponse>(await res.text(), "Monerium OAuth token", res.status);
+  return moneriumToken<MoneriumTokenResponse>(await res.text(), "Monerium OAuth token", res.status);
 }
 
 export async function refreshAuthorizationToken(
@@ -316,7 +326,7 @@ export async function refreshAuthorizationToken(
   if (!res.ok) {
     throw tokenError("Monerium OAuth refresh failed", res.status, await res.text());
   }
-  return moneriumJson<MoneriumTokenResponse>(await res.text(), "Monerium OAuth token", res.status);
+  return moneriumToken<MoneriumTokenResponse>(await res.text(), "Monerium OAuth token", res.status);
 }
 
 
