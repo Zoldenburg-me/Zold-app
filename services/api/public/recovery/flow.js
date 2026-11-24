@@ -16,6 +16,62 @@ export const TICKET_KEY = "zold-recovery-otp-ticket";
 /** The email of the recovery in progress in this tab, to resume after a reload or a login redirect. */
 export const EMAIL_KEY = "zold-recovery-email";
 
+/** The user handle of the recovery passkey made in this browser. Kept until
+ *  the API accepts that passkey: an authenticator replaces its own passkey for
+ *  the same handle, so a retry does not leave one more on a security key's few
+ *  slots. Once accepted it is the account's owner, and a later recovery must not replace it. */
+export const HANDLE_KEY = "zold-recovery-passkey-handle";
+
+/** This recovery's passkey user handle (base64url, 16 random bytes): the saved one, or a new one saved. */
+export function recoveryHandle(storage, email, random = () => crypto.getRandomValues(new Uint8Array(16))) {
+  const saved = savedFor(storage, HANDLE_KEY, email);
+  if (saved) return saved;
+  const made = btoa(String.fromCharCode(...random())).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  saveFor(storage, HANDLE_KEY, email, made);
+  return made;
+}
+
+/** The id of the request whose passkey submit has no definite answer yet. The
+ *  server may have accepted that passkey with the answer lost on the way back;
+ *  a new ceremony with the same handle would then make a security key replace
+ *  the accepted passkey with one the server refuses. */
+export const SUBMIT_KEY = "zold-recovery-passkey-submit";
+
+/** The submit's answer: a request past PASSKEY_PENDING owns that passkey, so forget its handle
+ *  (the server sweep can finalise the recovery without this page seeing "done"). */
+export function passkeySubmitted(storage, email, request) {
+  if (request?.status !== "PASSKEY_PENDING") {
+    saveFor(storage, HANDLE_KEY, email, "");
+    saveFor(storage, SUBMIT_KEY, email, "");
+  }
+  return request;
+}
+
+/** Make the recovery passkey and submit it. After a submit with no definite
+ *  answer the same request is read back first: past PASSKEY_PENDING, that
+ *  passkey was accepted and the recovery goes on with no new ceremony; a read
+ *  that fails throws, still unresolved. Only a refusal that leaves the request
+ *  waiting (a 4xx but 409, which says it moved on) lets the handle be reused at once.
+ *  `create(handle)` runs the ceremony, `read(request)` and `submit(request, body)` call the API. */
+export async function submitPasskey(storage, email, request, { create, read, submit }) {
+  if (savedFor(storage, SUBMIT_KEY, email) === request.id) {
+    const now = await read(request);
+    if (now?.status !== "PASSKEY_PENDING") return passkeySubmitted(storage, email, now);
+    saveFor(storage, SUBMIT_KEY, email, "");
+  }
+  const body = await create(recoveryHandle(storage, email));
+  saveFor(storage, SUBMIT_KEY, email, request.id);
+  let answer;
+  try {
+    answer = await submit(request, body);
+  } catch (e) {
+    if (e?.status >= 400 && e.status < 500 && e.status !== 409) saveFor(storage, SUBMIT_KEY, email, "");
+    throw e;
+  }
+  saveFor(storage, SUBMIT_KEY, email, "");
+  return passkeySubmitted(storage, email, answer);
+}
+
 export function savedFor(storage, key, email) {
   try { return JSON.parse(storage.getItem(key) || "{}")[email.toLowerCase()] || ""; } catch { return ""; }
 }
