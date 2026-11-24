@@ -21,7 +21,7 @@ import { approveWith, finishApprove } from "./approve.js";
 import { bankStepChanged, bankStepHtml, checkAnswerText, issuedFor, keepIssued } from "./bank-step.js";
 import { UNREACHABLE, readAnswer, readHealth } from "../foreign-answer.js";
 import {
-  EMAIL_KEY, HANDLE_KEY, SECRET_KEY, TICKET_KEY, currentAuth, endedText, finalizeAfter, passkeySubmitted, recoveryHandle, requestPath, saveFor, savedFor, screenFor, startRecovery,
+  EMAIL_KEY, HANDLE_KEY, SECRET_KEY, SUBMIT_KEY, TICKET_KEY, currentAuth, endedText, finalizeAfter, passkeySubmitted, requestPath, saveFor, savedFor, screenFor, startRecovery, submitPasskey,
 } from "./flow.js";
 
 const b64urlToBytes = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(s.length / 4) * 4, "=")), (c) => c.charCodeAt(0));
@@ -105,6 +105,7 @@ async function boot() {
       saveFor(localStorage, SECRET_KEY, s.email, "");
       saveFor(localStorage, TICKET_KEY, s.email, "");
       saveFor(localStorage, HANDLE_KEY, s.email, "");
+      saveFor(localStorage, SUBMIT_KEY, s.email, "");
       try { sessionStorage.removeItem(EMAIL_KEY); } catch { /* nothing to clear */ }
     }
     el.innerHTML = SCREENS[screen]();
@@ -194,19 +195,22 @@ async function boot() {
   };
 
   /** The new owner: a passkey made on THIS phone. */
-  const makePasskey = async () => {
-    const r = s.request;
-    const options = passkeyCreateOptions({ challenge: r.registerChallenge, email: s.email, handle: recoveryHandle(localStorage, s.email), rpId: location.hostname });
-    const cred = await navigator.credentials.create(options).catch((e) => {
-      if (e && typeof e === "object") e.passkeyCreate = true;
-      throw e;
-    });
-    return passkeySubmitted(localStorage, s.email, await api(r.submitTo, {
-      credentialId: cred.id,
-      attestation: bytesToB64url(cred.response.attestationObject),
-      clientDataJSON: bytesToB64url(cred.response.clientDataJSON),
-    }, auth()));
-  };
+  const makePasskey = () => submitPasskey(localStorage, s.email, s.request, {
+    create: async (handle) => {
+      const options = passkeyCreateOptions({ challenge: s.request.registerChallenge, email: s.email, handle, rpId: location.hostname });
+      const cred = await navigator.credentials.create(options).catch((e) => {
+        if (e && typeof e === "object") e.passkeyCreate = true;
+        throw e;
+      });
+      return {
+        credentialId: cred.id,
+        attestation: bytesToB64url(cred.response.attestationObject),
+        clientDataJSON: bytesToB64url(cred.response.clientDataJSON),
+      };
+    },
+    read: (r) => api(requestPath(s.mode, r.id), undefined, auth()),
+    submit: (r, body) => api(r.submitTo, body, auth()),
+  });
 
   const start = async (btn) => {
     const input = el.querySelector("#r-email");
@@ -221,7 +225,8 @@ async function boot() {
       if (request.recoverySecret) saveFor(localStorage, SECRET_KEY, email, request.recoverySecret);
       s.mode = mode;
       s.request = request;
-      if (request.status === "PASSKEY_PENDING") request = await makePasskey();
+      // A resumed request past PASSKEY_PENDING owns its passkey: forget the handle.
+      request = request.status === "PASSKEY_PENDING" ? await makePasskey() : passkeySubmitted(localStorage, email, request);
       after(mode, request);
     } catch (e) {
       fail(e?.code === "RECOVERY_IN_PROGRESS"

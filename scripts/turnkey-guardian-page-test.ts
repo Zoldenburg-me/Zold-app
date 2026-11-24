@@ -795,7 +795,7 @@ await check("recovery makes a discoverable account passkey: sign-in asks with no
   // makePasskey hands these options to create() as they are.
   const src = readFileSync(path.join(PUB, "recovery/main.js"), "utf8");
   const make = src.slice(src.indexOf("const makePasskey"), src.indexOf("const start ="));
-  assert.match(make, /const options = passkeyCreateOptions\(\{ challenge: r\.registerChallenge, email: s\.email, handle: recoveryHandle\(localStorage, s\.email\), rpId: location\.hostname \}\);\n\s*const cred = await navigator\.credentials\.create\(options\)/);
+  assert.match(make, /create: async \(handle\) => \{\n\s*const options = passkeyCreateOptions\(\{ challenge: s\.request\.registerChallenge, email: s\.email, handle, rpId: location\.hostname \}\);\n\s*const cred = await navigator\.credentials\.create\(options\)/);
   assert.equal(make.match(/navigator\.credentials\.create\(/g)?.length, 1);
 });
 
@@ -812,7 +812,7 @@ await check("a retried recovery reuses its passkey handle, so a security key rep
   assert.notEqual(flow.recoveryHandle(st, "a@b.c", random), first, "once done, the next recovery starts a new one");
   // Done clears it, beside the secret.
   const src = readFileSync(path.join(PUB, "recovery/main.js"), "utf8");
-  assert.match(src, /saveFor\(localStorage, SECRET_KEY, s\.email, ""\);\n\s*saveFor\(localStorage, TICKET_KEY, s\.email, ""\);\n\s*saveFor\(localStorage, HANDLE_KEY, s\.email, ""\);/);
+  assert.match(src, /saveFor\(localStorage, SECRET_KEY, s\.email, ""\);\n\s*saveFor\(localStorage, TICKET_KEY, s\.email, ""\);\n\s*saveFor\(localStorage, HANDLE_KEY, s\.email, ""\);\n\s*saveFor\(localStorage, SUBMIT_KEY, s\.email, ""\);/);
 });
 
 await check("a handle is not reused once a request has a registered passkey (the sweep may finalise it unseen)", () => {
@@ -830,10 +830,97 @@ await check("a handle is not reused once a request has a registered passkey (the
     assert.equal(flow.savedFor(st, flow.HANDLE_KEY, "a@b.c"), "", status);
   }
   assert.notEqual(flow.recoveryHandle(st, "a@b.c", random), first);
-  // makePasskey runs the submit's answer through it.
+  // submitPasskey runs the submit's answer through it, and a resumed request too.
+  const src = readFileSync(path.join(PUB, "recovery/flow.js"), "utf8");
+  assert.match(src, /saveFor\(storage, SUBMIT_KEY, email, ""\);\n\s*return passkeySubmitted\(storage, email, answer\);/);
+  assert.match(readFileSync(path.join(PUB, "recovery/main.js"), "utf8"), /request = request\.status === "PASSKEY_PENDING" \? await makePasskey\(\) : passkeySubmitted\(localStorage, email, request\);/);
+});
+
+await check("a passkey submit whose answer was lost is re-read before any retry: no second passkey over the accepted one", async () => {
+  // A fake server: the submit is accepted, then its answer is lost on the way back.
+  const server = (opts: { lose?: boolean; refuse?: number } = {}) => {
+    const s = { status: "PASSKEY_PENDING", creates: [] as string[], reads: 0, submits: 0, readFails: false, ...opts };
+    const io = {
+      create: async (handle: string) => { s.creates.push(handle); return { credentialId: `cred-${s.creates.length}`, attestation: "a", clientDataJSON: "c" }; },
+      read: async () => {
+        s.reads++;
+        if (s.readFails) throw new TypeError("Failed to fetch");
+        return { id: "rq1", status: s.status };
+      },
+      submit: async () => {
+        s.submits++;
+        if (s.status !== "PASSKEY_PENDING") throw Object.assign(new Error("recovery is REVIEW_PENDING"), { status: 409 });
+        if (s.refuse) { const status = s.refuse; s.refuse = 0; throw Object.assign(new Error("refused"), { status }); }
+        s.status = "REVIEW_PENDING";
+        if (s.lose) { s.lose = false; throw new TypeError("Failed to fetch"); }
+        return { id: "rq1", status: s.status };
+      },
+    };
+    return { s, io };
+  };
+  const request = { id: "rq1", status: "PASSKEY_PENDING", submitTo: "/x", registerChallenge: "AQID" };
+
+  // Accepted, answer lost, then retried: the retry re-reads and resumes without a ceremony.
+  let st = memoryStorage();
+  let { s, io } = server({ lose: true });
+  await assert.rejects(flow.submitPasskey(st, "a@b.c", request, io), TypeError);
+  assert.equal(flow.savedFor(st, flow.SUBMIT_KEY, "A@b.c"), "rq1", "the uncertain submit is remembered per request");
+  const resumed = await flow.submitPasskey(st, "a@b.c", request, io);
+  assert.equal(resumed.status, "REVIEW_PENDING");
+  assert.equal(s.creates.length, 1, "no second credential made over the accepted one");
+  assert.equal(s.submits, 1);
+  assert.equal(flow.savedFor(st, flow.HANDLE_KEY, "a@b.c"), "", "the accepted passkey's handle is forgotten");
+  assert.equal(flow.savedFor(st, flow.SUBMIT_KEY, "a@b.c"), "");
+
+  // The same after a reload: the marker is in storage, not in the page.
+  st = memoryStorage();
+  ({ s, io } = server({ lose: true }));
+  await assert.rejects(flow.submitPasskey(st, "a@b.c", request, io));
+  const reloaded = memoryStorage();
+  for (const k of [flow.HANDLE_KEY, flow.SUBMIT_KEY]) reloaded.setItem(k, st.getItem(k)!);
+  assert.equal((await flow.submitPasskey(reloaded, "a@b.c", request, io)).status, "REVIEW_PENDING");
+  assert.equal(s.creates.length, 1);
+
+  // The re-read fails too: still unresolved, so no ceremony either.
+  st = memoryStorage();
+  ({ s, io } = server({ lose: true }));
+  await assert.rejects(flow.submitPasskey(st, "a@b.c", request, io));
+  s.readFails = true;
+  await assert.rejects(flow.submitPasskey(st, "a@b.c", request, io), TypeError);
+  assert.equal(s.creates.length, 1);
+  assert.equal(flow.savedFor(st, flow.SUBMIT_KEY, "a@b.c"), "rq1");
+
+  // Lost before the server saw it (still PASSKEY_PENDING on re-read): one more ceremony, same handle.
+  st = memoryStorage();
+  ({ s, io } = server());
+  io.submit = async () => { s.submits++; throw new TypeError("Failed to fetch"); };
+  await assert.rejects(flow.submitPasskey(st, "a@b.c", request, io));
+  await assert.rejects(flow.submitPasskey(st, "a@b.c", request, io));
+  assert.equal(s.reads, 1, "the uncertain submit is re-read before the next ceremony");
+  assert.equal(flow.savedFor(st, flow.SUBMIT_KEY, "a@b.c"), "rq1", "and the second is uncertain too");
+  assert.equal(s.creates.length, 2);
+  assert.equal(s.creates[0], s.creates[1], "the authenticator replaces its own refused passkey");
+
+  // A definite refusal (400, request still waiting): the retry reuses the handle without a re-read.
+  st = memoryStorage();
+  ({ s, io } = server({ refuse: 400 }));
+  await assert.rejects(flow.submitPasskey(st, "a@b.c", request, io), /refused/);
+  assert.equal(flow.savedFor(st, flow.SUBMIT_KEY, "a@b.c"), "");
+  assert.equal((await flow.submitPasskey(st, "a@b.c", request, io)).status, "REVIEW_PENDING");
+  assert.equal(s.reads, 0);
+  assert.equal(s.creates[0], s.creates[1]);
+
+  // A 409 (the request moved on) is not a refusal of this passkey: unresolved, re-read first.
+  st = memoryStorage();
+  ({ s, io } = server({ refuse: 409 }));
+  await assert.rejects(flow.submitPasskey(st, "a@b.c", request, io));
+  assert.equal(flow.savedFor(st, flow.SUBMIT_KEY, "a@b.c"), "rq1");
+
+  // The page submits through it, reading the same request back.
   const src = readFileSync(path.join(PUB, "recovery/main.js"), "utf8");
   const make = src.slice(src.indexOf("const makePasskey"), src.indexOf("const start ="));
-  assert.match(make, /return passkeySubmitted\(localStorage, s\.email, await api\(r\.submitTo, \{/);
+  assert.match(make, /submitPasskey\(localStorage, s\.email, s\.request, \{/);
+  assert.match(make, /read: \(r\) => api\(requestPath\(s\.mode, r\.id\), undefined, auth\(\)\)/);
 });
 
 await check("a refused recovery passkey says why: a security key that can't save it is named", async () => {

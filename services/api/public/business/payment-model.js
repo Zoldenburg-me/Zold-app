@@ -127,19 +127,22 @@ export function signedRunToast(total, lines) {
 }
 
 /**
- * "Approved n of N" while a run is signed. A line skipped as expired is not
+ * "Approved n of N…" while a run is signed. A line skipped as expired is not
  * an approval: it is counted apart. A line that failed is not named here
- * (signedRunToast says what became of it) but still ends the run: the last
- * line ends with a full stop, not "…".
+ * (signedRunToast says what became of it) but still counts toward the end.
+ * Once every line is done it is null: the run's toast, drawn in the same
+ * frame, says how it ended, so a final count would never be seen.
  */
 export function approvalProgress(approved, expired, total, failed = 0) {
-  const done = approved + expired + failed;
-  return `Approved ${approved} of ${total}${expired ? `, ${expired} expired, not sent` : ""}${done < total ? "…" : "."}`;
+  if (approved + expired + failed >= total) return null;
+  return `Approved ${approved} of ${total}${expired ? `, ${expired} expired, not sent` : ""}…`;
 }
 
 /** A progress line while a run is signed: inside the open dialog, where a
- *  toast would render under its backdrop (core.js dialog()), else a toast. */
+ *  toast would render under its backdrop (core.js dialog()), else a toast.
+ *  Nothing for a null line (the run is done). */
 export function showProgress(msg, dlg, statusEl, toast) {
+  if (msg == null) return;
   if (dlg?.open && statusEl) statusEl.textContent = msg;
   else toast(msg);
 }
