@@ -265,7 +265,7 @@ function needsPasskeySafeSetup(u = user) {
   return !!(u?.passkeySafe && u.passkeySafe.status !== "active" && segmentHas(u, "safe"));
 }
 
-/* Bringing in a company's existing Safe (onboarding's b-safe-choice). Offered
+/* Bringing in a company's existing Safe (onboarding's b-import-* screens). Possible
    only where the server takes it and this login could still switch: a passkey
    and a Safe of its own that was never activated. The server also refuses a
    planned Safe that is deployed or holds money; only `prepare` can say so. */

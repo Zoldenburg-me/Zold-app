@@ -91,23 +91,17 @@ async function check(name: string, fn: () => unknown) {
   console.log(`  ok  ${name}`);
 }
 
-await check("an eligible company account with a passkey is offered the choice, never b-passkey", () => {
+await check("a company account with a passkey and no import under way goes to b-passkey: no choice screen", () => {
   setCaps({ safeImport: true });
   setUser(company());
-  assert.equal(run("obNextAfterAccount()"), "b-safe-choice");
-  assert.equal(run('obGuard("b-passkey")'), "b-safe-choice");
-  assert.equal(run('obGuard("b-safe-choice")'), "b-safe-choice");
-});
-await check("no choice without the capability, for a personal account, or once the Safe is active", () => {
-  setCaps({ safeImport: false });
-  setUser(company());
   assert.equal(run("obNextAfterAccount()"), "b-passkey");
-  assert.equal(run('obGuard("b-safe-choice")'), "b-passkey", "the screen itself is refused too");
+  assert.equal(run('obGuard("b-passkey")'), "b-passkey");
+  assert.equal(run("typeof OB['b-safe-choice']"), "undefined");
+  setCaps({ safeImport: false });
+  assert.equal(run("obNextAfterAccount()"), "b-passkey");
   setCaps({ safeImport: true });
   setUser(company({ accountType: "individual" }));
   assert.equal(run("obNextAfterAccount()"), "p-passkey");
-  setUser(company({ passkeySafe: { address: PLAN, status: "active" } }));
-  assert.notEqual(run('obGuard("b-safe-choice")'), "b-safe-choice");
 });
 await check("an import started on this device resumes at confirm, for that user only", () => {
   setCaps({ safeImport: true });
@@ -116,18 +110,17 @@ await check("an import started on this device resumes at confirm, for that user 
   assert.equal(run("obNextAfterAccount()"), "b-import-confirm");
   assert.equal(run('obGuard("b-passkey")'), "b-import-confirm");
   setUser(company({ id: "someone-else" }));
-  assert.equal(run("obNextAfterAccount()"), "b-safe-choice", "another login on this browser ignores the flag");
+  assert.equal(run("obNextAfterAccount()"), "b-passkey", "another login on this browser ignores the flag");
   ctx.localStorage.setItem("zold-safe-import", "{not json");
   assert.equal(run("safeImportFlag()"), null, "a broken flag reads as none");
 });
-await check("b-passkey's button stops after the passkey for an eligible company: no deployment", async () => {
+await check("b-passkey's button stops after the passkey while an import is under way: no deployment", async () => {
   setCaps({ safeImport: true });
   setUser(company());
-  run("obGo('b-passkey')");
-  assert.equal(screen(), "b-safe-choice");
+  run(`setSafeImportFlag("${SAFE}")`);
   run("obScreen = 'b-passkey'");
   await run("obCreateAccount(document.createElement('button'))");
-  assert.equal(screen(), "b-safe-choice");
+  assert.equal(screen(), "b-import-confirm");
   assert.ok(!deployed(), JSON.stringify(calls));
 });
 await check("with an import in progress nothing deploys, even where the capability is off", async () => {
@@ -278,7 +271,7 @@ await check("confirm: a refused approval is dropped, and the next click checks a
   await handlers.confirm.onclick({ currentTarget: btn });
   assert.deepEqual(calls.map((c) => c.path), ["/api/users/u-co/safe/import/prepare"]);
 });
-await check("Use a new account instead clears the flag and returns to the choice", () => {
+await check("Use a new account instead clears the flag and returns to b-passkey", () => {
   setCaps({ safeImport: true });
   setUser(company());
   run(`setSafeImportFlag("${SAFE}")`);
@@ -286,7 +279,7 @@ await check("Use a new account instead clears the flag and returns to the choice
   run("obBindNewAccountLink")({ querySelector: (sel: string) => (sel === "#btn-import-new" ? link : null) });
   link.onclick();
   assert.equal(run("safeImportFlag()"), null);
-  assert.equal(screen(), "b-safe-choice");
+  assert.equal(screen(), "b-passkey");
   assert.ok(!deployed());
 });
 await check("once the Safe is live signup is over: recovery, email and Monerium are Home's checklist", () => {
@@ -374,29 +367,6 @@ await check("signup: skipping after a login then using the passkey adds no guard
   assert.equal(run("obSocial"), null);
   assert.equal(screen(), "b-passkey");
   setUser(company());
-  await run("obAddSocialGuardian()");
-  assert.deepEqual(calls.map((c) => c.path), []);
-});
-await check("import: choosing the existing Safe discards the recovery login without a guardian POST", async () => {
-  setCaps({ safeImport: true, turnkeyGuardians: true, turnkeyLogins: { google: "client-id" } });
-  setUser(company());
-  run('obSocial = { provider: "google", idToken: "tok", publicKey: "pk" }');
-  assert.match(run("OB['b-safe-choice'].html()"), /Your Google login can’t be added to an existing Safe\./);
-  const handlers: Record<string, any> = {};
-  const form = { addEventListener: (event: string, handler: any) => { handlers[event] = handler; } };
-  const btn = { disabled: false, getAttribute: () => null };
-  const root = {
-    querySelector: (sel: string) => {
-      if (sel === "#ob-form") return form;
-      if (sel === "#btn-next") return btn;
-      if (sel === 'input[name="safe-choice"]:checked') return { value: "import" };
-      return null;
-    },
-  };
-  run("OB['b-safe-choice'].bind")(root);
-  handlers.submit({ preventDefault() {} });
-  assert.equal(screen(), "b-import-address");
-  assert.equal(run("obSocial"), null);
   await run("obAddSocialGuardian()");
   assert.deepEqual(calls.map((c) => c.path), []);
 });

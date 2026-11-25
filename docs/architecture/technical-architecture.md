@@ -324,10 +324,11 @@ Safe (`importedAt`) as for a recovered one (`recoveredAt`).
   (`safe-import:test` compares them). The browser only downloads it.
 - `capabilities().safeImport` is false under the harness, where both routes
   answer `NO_CHAIN`.
-- Onboarding (`public/app/onboarding.js`): for a company account with
-  `caps.safeImport`, `obCreateAccount` stops after the passkey at
-  `b-safe-choice` instead of deploying. "Open a new account" deploys as
-  before; "Use our company's existing Safe" runs `b-import-address` (prepare)
+- Onboarding (`public/app/onboarding.js`): `obCreateAccount` deploys the
+  account's own Safe straight after the passkey; signup offers no choice of
+  Safe, so no screen leads into the import. An import under way on this
+  device (the flag below) resumes at `b-import-confirm` instead of deploying.
+  The import screens: `b-import-address` (prepare)
   → `b-import-sign` (download, or to/value/data) → `b-import-confirm`
   (check: `prepare` again until it names an approval; then the screen shows
   the other owner and "Approve with Face ID" spends the challenge on confirm;

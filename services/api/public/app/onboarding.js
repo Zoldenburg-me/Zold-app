@@ -151,11 +151,11 @@ function obGuard(name) {
   return name;
 }
 
-/* An account with no live Safe yet. A company that may still bring in its own
-   Safe never goes back to b-passkey, whose button deploys a new one: it gets
-   the choice, or the import it started on this device. */
+/* An account with no live Safe yet. A company with an import under way on
+   this device never goes back to b-passkey, whose button deploys a new Safe
+   and ends the import: it gets the import's last step. */
 function obSetupScreen(u) {
-  if (u.passkey && safeImportOffered(u)) return safeImportFlag(u) ? "b-import-confirm" : "b-safe-choice";
+  if (u.passkey && safeImportOffered(u) && safeImportFlag(u)) return "b-import-confirm";
   return u.accountType === "company" ? "b-passkey" : "p-passkey";
 }
 
@@ -1172,7 +1172,7 @@ function obImportErr(e) { obShowErr(new Error(obImportSentence(e))); }
 const obNewAccountLink = () => `<button type="button" class="z-link-btn" id="btn-import-new">Use a new account instead</button>`;
 function obBindNewAccountLink(root) {
   const b = root.querySelector("#btn-import-new");
-  if (b) b.onclick = () => { clearSafeImportFlag(); obImport = null; obGo("b-safe-choice"); };
+  if (b) b.onclick = () => { clearSafeImportFlag(); obImport = null; obGo("b-passkey"); };
 }
 
 /* The Safe as the chain shows it, from the last `prepare`. */
@@ -1206,50 +1206,12 @@ function obDownloadFile(file) {
 const obChoiceHtml = (name, v, title, text, checked) =>
   `<label class="z-choice"><input type="radio" name="${name}" value="${v}"${checked ? " checked" : ""}><span class="z-choice__main"><span class="z-choice__title">${title}</span><span class="z-choice__text">${text}</span></span></label>`;
 
-OB["b-safe-choice"] = {
-  kind: "import",
-  title: "Business: choose the account",
-  html: () => `${obBackHead(null)}
-    <main id="main" class="z-screen__main z-screen__main--tight">
-      ${obIntro("Where should the money sit?", `Your ${Z.byDevice("Face ID", "passkey")} sign-in is saved. Choose the account ${esc(obCompany())} uses in Zold.`)}
-      <form class="z-form z-form--tight" id="ob-form" novalidate>
-        <fieldset class="z-form z-form--tight" style="border:0;margin:0;padding:0;min-width:0">
-          <legend class="z-sr">Which account</legend>
-          ${obChoiceHtml("safe-choice", "new", "Open a new account", `Zold sets up a new account for the company. One more approval with your ${Z.passkeyName()}.`, true)}
-          ${obChoiceHtml("safe-choice", "import", "Use our company’s existing Safe", `You already have a Safe, owned by a wallet such as a Ledger. Its owner adds this phone as an owner. No money moves.${obSocial ? ` Your ${obSocialName()} can’t be added to an existing Safe.` : ""}`, false)}
-        </fieldset>
-      </form>
-      ${obSetupSteps()}
-      ${obAlert()}
-    </main>
-    <div class="z-screen__foot">${obSubmit("Continue")}</div>`,
-  bind: (root) => {
-    obBindForm(root, async () => {
-      const btn = root.querySelector("#btn-next");
-      if (Z.isDisabled(btn)) return;
-      if (root.querySelector('input[name="safe-choice"]:checked')?.value === "import") {
-        obDiscardSocial();
-        return obGo("b-import-address");
-      }
-      obClearErr();
-      clearSafeImportFlag();
-      obImport = null;
-      Z.setLoading(btn, true);
-      try { await obOpenOwnSafe(btn); } catch (e) { obSetupFailed(e); } finally {
-        Z.setLoading(btn, false);
-        const label = btn.querySelector("span:last-child");
-        if (label) label.textContent = "Continue";
-      }
-    });
-  },
-};
-
 OB["b-import-address"] = {
   kind: "import",
   title: "Business: your Safe’s address",
   html: () => {
     const p = obImport?.prepared;
-    return `${obBackHead("b-safe-choice")}
+    return `${obBackHead("b-passkey")}
     <main id="main" class="z-screen__main z-screen__main--tight">
       ${obIntro(p ? "Is this your Safe?" : "Your company’s Safe", p
         ? "This is what the network shows for that address."
@@ -1581,9 +1543,8 @@ async function obCreateAccount(btn) {
       // The prompt has its own deadline; this bounds the requests around it.
       await withinPasskeyStep(registerPasskey(user), 30000, "Zold could not be reached. Try again.");
     }
-    // A company may bring in the Safe it already has: stop before deploying
-    // one. The choice screen deploys only if they pick a new account.
-    if (safeImportOffered(user)) {
+    // An import under way on this device: deploying would end it.
+    if (obSetupScreen(user) === "b-import-confirm") {
       obSetup = null;
       obClearDraft();
       return obGo(obSetupScreen(user), { replace: true });
