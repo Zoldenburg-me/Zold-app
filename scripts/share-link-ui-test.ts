@@ -77,6 +77,8 @@ for (const f of [
   "app/phone-send.js", "app/phone-add.js", "app/phone-getpaid.js", "app/phone-more.js", "app/settings.js", "app/desktop.js",
 ]) load(f);
 const run = (code: string) => vm.runInContext(code, ctx);
+// Tests that need to count opens stub openShare; this puts the real one back.
+run("__realOpenShare = openShare; __realMobileNav = mobileNav;");
 
 const URL_R = "https://zold.test/r/abcDEF123";
 const EXPIRES = new Date(Date.now() + 30 * 86400000).toISOString();
@@ -334,13 +336,20 @@ const URL_B = "https://zold.test/r/receiptB999";
 /* Receipt A's live link has a gated autosave in flight; the sender goes Back
    and opens receipt B, whose live link withholds the recipient. */
 const openAThenB = async (answerA: string) => {
+  // The real openShare and navigation, not a test's stub: B must get a fresh
+  // composer object and the share screen, as a tap on its receipt does.
+  run(`openShare = __realOpenShare; __navs = []; mobileNav = (v) => { __navs.push(v); };`);
   run(`__bodies = []; __gateA = new Promise((r) => { __releaseA = r; });
     api = async (p, body, method) => {
       if (method === "GET") return { url: ${JSON.stringify(URL_B)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: { recipient: "hidden" } };
       __bodies.push({ p, body }); await __gateA; ${answerA} };
     mShare = { transferId: "tA", fields: { ...SHARE_DEFAULTS, recipient: "full" }, link: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, expired: false, busy: false, loaded: true };`);
   const saving = run(`setShare("route", true)`);
+  const a = run("mShare");
   run(`openShare("tB")`);
+  assert.notEqual(run("mShare"), a, "B gets a fresh composer");
+  assert.equal(run("mShare.loaded"), false, "B's controls wait for B's saved choices");
+  assert.deepEqual([...run("__navs")], ["share"], "the share screen is opened");
   await run("renderShareScreen()");
   assert.equal(run("mShare.link"), URL_B);
   run("__releaseA()");
@@ -413,6 +422,40 @@ await t("a second change made while the first save is in flight is kept on scree
   assert.equal(run("mShare.busy"), false);
   assert.equal(run("mShare.fields.showRate"), false);
   assert.equal(run("mShare.fields.route"), true);
+});
+
+await t("a failed edit shows what the live link still carries, says so, and drops the queued change", async () => {
+  run(`mobileNav = __realMobileNav; __bodies = []; __gates = [];
+    api = async (p, body) => { __bodies.push({ ...body }); if (__bodies.length === 1) await new Promise((r) => __gates.push(r)); throw Object.assign(new Error("server unavailable"), { status: 503 }); };
+    mShare = { transferId: "t1", fields: { ...SHARE_DEFAULTS, recipient: "full" }, published: { ...SHARE_DEFAULTS, recipient: "full" }, link: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, expired: false, busy: false, loaded: true };
+    hist.length = 0; hist.push({ id: "t1", rail: "sepa", recipientName: "Max Mustermann" });`);
+  el("m-share-err").classList.add("hidden");
+  const first = run(`setShare("route", true)`);
+  // Queued while the first save is in flight: hide the recipient.
+  await run(`setShare("recipient", "hidden")`);
+  assert.match(el("m-share-preview").innerHTML, /Recipient<\/span><span class="v">withheld/, "the tap is drawn at once");
+  run("__gates[0]()");
+  await first;
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(run("__bodies.length"), 1, "the queued change is not sent after a failure");
+  assert.equal(run("mShare.again"), false);
+  assert.equal(run("mShare.fields.recipient"), "full", "the screen shows what the live link still carries");
+  assert.equal(run("mShare.fields.route"), false);
+  assert.match(el("m-share-preview").innerHTML, /Recipient<\/span><span class="v">Max Mustermann/, "the preview names the recipient the link still shows");
+  assert.ok(!hidden("m-share-err"), "the failure is shown, not swallowed");
+  assert.match(el("m-share-err").textContent, /not saved/i);
+  assert.match(el("m-share-err").textContent, /server unavailable/);
+  assert.equal(run("mShare.link"), URL_R, "the link itself is still live");
+  run("hist.length = 0;");
+});
+
+await t("after a save lands, a later failed edit reverts to that save, not to the load", async () => {
+  run(`__n = 0; api = async (p, body) => { if (__n++ === 0) return { url: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: body }; throw Object.assign(new Error("offline"), { status: 0 }); };
+    mShare = { transferId: "t1", fields: { ...SHARE_DEFAULTS }, published: { ...SHARE_DEFAULTS }, link: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, expired: false, busy: false, loaded: true };`);
+  await run(`setShare("recipient", "hidden")`);
+  await run(`setShare("route", true)`);
+  assert.equal(run("mShare.fields.recipient"), "hidden", "the saved narrowing stays");
+  assert.equal(run("mShare.fields.route"), false, "the failed change is undone");
 });
 
 console.log(`\nSHARE LINK UI TEST PASSED — ${pass}/${pass}`);

@@ -28,11 +28,12 @@ const SHARE_TOGGLES = [
 const SHARE_DEFAULTS = { sender: "last", recipient: "full", account: "short", fx: "both", showRate: true, showRef: true, route: false };
 /* One object per opened composer: a request answers only the object it was
    started for, so a reply that lands after another receipt opened is dropped
-   rather than written into that receipt's screen. */
-let mShare = { transferId: null, fields: { ...SHARE_DEFAULTS }, link: null, expiresAt: null, expired: false, busy: false, again: false, loaded: false };
+   rather than written into that receipt's screen. `published` is what the
+   live link carries, as the server last said; a failed edit goes back to it. */
+let mShare = { transferId: null, fields: { ...SHARE_DEFAULTS }, published: null, link: null, expiresAt: null, expired: false, busy: false, again: false, loaded: false };
 
 function openShare(id) {
-  mShare = { transferId: id, fields: { ...SHARE_DEFAULTS }, link: null, expiresAt: null, expired: false, busy: false, again: false, loaded: false };
+  mShare = { transferId: id, fields: { ...SHARE_DEFAULTS }, published: null, link: null, expiresAt: null, expired: false, busy: false, again: false, loaded: false };
   mobileNav("share");
 }
 
@@ -49,6 +50,7 @@ async function renderShareScreen() {
     const s = await api(`/api/transfers/${id}/share`, undefined, "GET");
     if (mShare !== m) return;
     mShare.fields = { ...SHARE_DEFAULTS, ...s.fields };
+    mShare.published = { ...mShare.fields };
     mShare.link = s.url;
     mShare.expiresAt = s.expiresAt;
     mShare.loaded = true;
@@ -216,7 +218,8 @@ async function saveShare({ silent, edit } = {}) {
     if (mShare !== m) return null;
     // The screen shows what the server saved, not what it was sent, unless a
     // newer change is queued: that save's answer replaces this one.
-    if (!m.again) m.fields = { ...SHARE_DEFAULTS, ...s.fields };
+    m.published = { ...SHARE_DEFAULTS, ...s.fields };
+    if (!m.again) m.fields = { ...m.published };
     m.link = s.url;
     m.expiresAt = s.expiresAt;
     m.expired = false;
@@ -229,6 +232,14 @@ async function saveShare({ silent, edit } = {}) {
       m.expiresAt = null;
       m.expired = true;
       paintShare();
+    } else if (edit) {
+      /* The live link still carries what it carried before, so the screen
+         must not show a narrowing that never landed: back to what is
+         published, the queued change dropped with it, and said out loud. */
+      m.fields = { ...m.published };
+      m.again = false;
+      paintShare();
+      showErr("m-share-err", new Error(`that change was not saved, so the live link still shows what is selected here (${e.message})`));
     }
     if (!silent) showErr("m-share-err", e);
   } finally {
