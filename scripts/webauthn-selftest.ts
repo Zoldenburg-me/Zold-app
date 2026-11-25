@@ -225,6 +225,10 @@ console.log("4. unknown challenge rejected");
   const { tmpdir } = await import("node:os");
   const path = await import("node:path");
   process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-webauthn-")), "db.json");
+  // Case 18 relies on verification being off; set here, not inherited.
+  process.env.EMAIL_VERIFICATION = "0";
+  const { EMAIL_VERIFICATION } = await import("../services/api/src/config.js");
+  assert.equal(EMAIL_VERIFICATION.enabled, false, "EMAIL_VERIFICATION was read before this suite set it");
   const express = (await import("express")).default;
   const { initStore, store } = await import("../services/api/src/store.js");
   const { requireUserSession } = await import("../services/api/src/http/sessions.js");
@@ -303,8 +307,11 @@ console.log("4. unknown challenge rejected");
   r = await register(a, keyA.register(chOk));
   assert.equal(r.status, 201, JSON.stringify(r.body));
   const keyA2 = await passkey("a2");
-  r = await register(a, keyA2.register(chOk));
-  assert.notEqual(r.status, 201, "the challenge of a completed registration registered again");
+  // With a valid step-up, so the replay reaches the challenge check: without
+  // one, the missing step-up refuses it first and the challenge goes untested.
+  r = await register(a, { ...keyA2.register(chOk), stepUp: await keyA.assert(await challenge("step_up", a.token, { action: "passkey.replace" })) });
+  assert.equal(r.status, 400, `the challenge of a completed registration registered again: ${JSON.stringify(r.body)}`);
+  assert.match(r.body.error, /unknown or expired challenge/, "refused for a reason other than the spent challenge");
   assert.equal(store.findUser(a.id)!.passkey!.credentialId, keyA.credentialId);
   console.log("15. the challenge of a completed registration cannot be replayed");
 

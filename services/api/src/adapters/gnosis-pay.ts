@@ -106,7 +106,7 @@ function unreachable(err: any): GnosisPayError {
 const MAX_NONCE_BYTES = 1024;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 
-/** The body, read up to `max` bytes under the request's own timeout. */
+/** The body as text, read up to `max` bytes under the request's own timeout. */
 async function readCapped(res: Response, max: number): Promise<string> {
   if (!res.body) return "";
   const reader = res.body.getReader();
@@ -126,7 +126,8 @@ async function readCapped(res: Response, max: number): Promise<string> {
   } catch (err) {
     throw err instanceof GnosisPayError ? err : unreachable(err);
   }
-  return Buffer.concat(chunks).toString("utf8");
+  // Response.text() drops a leading byte order mark; so does this.
+  return Buffer.concat(chunks).toString("utf8").replace(/^\uFEFF/, "");
 }
 
 /**

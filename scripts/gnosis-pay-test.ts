@@ -52,7 +52,7 @@ const nonceOfCookie = new Map<string, string>();
 const profileOfToken = new Map<string, Record<string, unknown>>();
 let challengeCalls = 0;
 /** The next answer on a path starting with `path` is broken this way. */
-let fault: { path: string; kind: "empty" | "malformed" | "oversized" | "hang" | "echo" } | undefined;
+let fault: { path: string; kind: "empty" | "malformed" | "oversized" | "hang" | "echo" | "unavailable" } | undefined;
 const WALLET_A = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const WALLET_B = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 /** Signs in, but its profile lists WALLET_B as the sign-in wallet. */
@@ -79,6 +79,7 @@ const stub: Server = createServer((req, res) => {
     if (kind === "malformed") return send(200, "{not json", "text/plain");
     if (kind === "oversized") return send(200, "x".repeat(2 * 1024 * 1024), "text/plain");
     if (kind === "echo") return send(400, { message: `rejected ${req.headers.authorization}` });
+    if (kind === "unavailable") return send(503, { message: "try again later" });
     // Headers, a first byte, then nothing: only our timeout ends this.
     res.writeHead(200, { "content-type": "application/json" });
     return res.write("[");
@@ -467,9 +468,19 @@ await check("an internal failure answers 500 with a reference, never the raw err
   const upstream = async (path: string, kind: NonNullable<typeof fault>["kind"], run: () => Promise<{ status: number; body: any }>) => {
     fault = { path, kind };
     const t0 = Date.now();
-    const r = await run();
-    fault = undefined;
-    return { ...r, ms: Date.now() - t0 };
+    // A hard stop of our own: if the API ever stops aborting a stalled body,
+    // this check fails instead of hanging the whole run.
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${path} ${kind}: no answer within 5000ms`)), 5_000);
+    });
+    try {
+      const r = await Promise.race([run(), deadline]);
+      return { ...r, ms: Date.now() - t0 };
+    } finally {
+      clearTimeout(timer);
+      fault = undefined;
+    }
   };
 
   await check("router: an empty, oversized or stalled nonce answer starts nothing", async () => {
@@ -492,6 +503,18 @@ await check("an internal failure answers 500 with a reference, never the raw err
       assert.equal(r.body.token, undefined);
       assert.equal(connectedOf("u_a"), undefined, kind);
     }
+  });
+
+  await check("router: a sign-in whose profile read fails is refused whole, and a retry connects", async () => {
+    disconnect("u_a");
+    const v = await start("u_a", WALLET_A);
+    const r = await upstream("/api/v1/user", "unavailable", () => verify("u_a", v));
+    assert.equal(r.status, 502, JSON.stringify(r.body));
+    assert.equal(r.body.token, undefined, "a token was handed back for a sign-in that connected nothing");
+    assert.equal(connectedOf("u_a"), undefined);
+    const again = await verify("u_a", await start("u_a", WALLET_A));
+    assert.equal(again.status, 200, JSON.stringify(again.body));
+    assert.equal(connectedOf("u_a")?.userId, "gp-A");
   });
 
   await check("router: an oversized or stalled profile answer is a 502/504, never a 500", async () => {

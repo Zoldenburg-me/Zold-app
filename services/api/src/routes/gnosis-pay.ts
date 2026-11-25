@@ -300,8 +300,9 @@ export function createGnosisPayRouter(requireSession: SessionResolver): express.
 }
 
 /** Verify the signature, then read the profile once so the stored status is
- *  never ahead of what Gnosis Pay actually says. A profile that has no id or
- *  does not list the wallet that signed is refused, and nothing connected. */
+ *  never ahead of what Gnosis Pay actually says. A profile that cannot be
+ *  read, has no id or does not list the wallet that signed is refused, and
+ *  nothing connected. */
 async function verifyAndProfile(
   message: string,
   signature: string,
@@ -310,16 +311,12 @@ async function verifyAndProfile(
   signedBy: string,
 ): Promise<{ token: string }> {
   const { token } = await verifySiwe(message, signature, cookie);
-  let profile: Awaited<ReturnType<typeof getUser>>;
-  try {
-    profile = await getUser(token);
-  } catch {
-    // A profile read that fails right after a successful sign-in is worth not
-    // failing the sign-in over: the token is valid, nothing is connected, and
-    // /account will report the real reason on the next call.
-    return { token };
+  // No profile, no sign-in: a token handed back without a connection would
+  // show cards that a reload forgets, and /account never connects a bare token.
+  const profile = await getUser(token).catch(() => undefined);
+  if (!profile || typeof profile !== "object") {
+    throw new GnosisPayError("Gnosis Pay accepted the signature but its profile could not be read, so nothing was connected. Sign in again.", 502);
   }
-  if (!profile || typeof profile !== "object") return { token };
   if (!profile.id || !ADDRESS.test(signedBy) || !signedInWith(profile, signedBy)) {
     throw new GnosisPayError("This Gnosis Pay account does not list the wallet that signed in, so it was not connected.", 409);
   }
