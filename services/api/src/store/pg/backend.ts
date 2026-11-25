@@ -118,10 +118,10 @@ async function locked<T>(q: Sql, table: Table, id: string): Promise<T | undefine
   return r.rows[0]?.doc;
 }
 async function insert(q: Sql, table: Table, row: { id: string }): Promise<void> {
-  await q.query(`INSERT INTO ${table} (id, doc) VALUES ($1, $2::jsonb)`, [row.id, JSON.stringify(row)]);
+  await q.query(`INSERT INTO ${table} (id, doc) VALUES ($1, $2::json)`, [row.id, JSON.stringify(row)]);
 }
 async function save(q: Sql, table: Table, row: { id: string }): Promise<void> {
-  await q.query(`UPDATE ${table} SET doc = $2::jsonb WHERE id = $1`, [row.id, JSON.stringify(row)]);
+  await q.query(`UPDATE ${table} SET doc = $2::json WHERE id = $1`, [row.id, JSON.stringify(row)]);
 }
 /** Delete the ids `dead` picks among the rows `where` selects, `dead` being
  *  the same JavaScript the JSON backend filters with. */
@@ -519,6 +519,10 @@ export function createPgStore(database: Database): StoreBackend {
       const { result, audit } = await tx(async (t) => {
         const row = await locked<Transfer>(t, TABLE.transfers, id);
         const refundTx = reviewRefundTx(r);
+        // Two reviews of different transfers citing one refund tx lock
+        // different rows; this lock makes the second wait for the first's
+        // commit, so its hashOnRecord sees the hash booked.
+        if (row && refundTx) await t.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`refund-evidence:${refundTx.toLowerCase()}`]);
         const out = applyReviewResolution(row, r, row && refundTx ? await hashOnRecord(t, refundTx, row.userId) : undefined);
         if (out.audit) {
           await save(t, TABLE.transfers, row!);
@@ -742,7 +746,7 @@ export function createPgStore(database: Database): StoreBackend {
         const params = [d.txHash.toLowerCase(), d.logIndex];
         const existing = await first<CryptoDeposit>(t, TABLE.cryptoDeposits, key, params);
         if (existing) return existing;
-        const ins = await t.query("INSERT INTO crypto_deposits (id, doc) VALUES ($1, $2::jsonb) ON CONFLICT DO NOTHING RETURNING id", [d.id, JSON.stringify(d)]);
+        const ins = await t.query("INSERT INTO crypto_deposits (id, doc) VALUES ($1, $2::json) ON CONFLICT DO NOTHING RETURNING id", [d.id, JSON.stringify(d)]);
         if (ins.rows.length) return d;
         const winner = await first<CryptoDeposit>(t, TABLE.cryptoDeposits, key, params);
         if (!winner) throw new Error(`crypto deposit ${d.id} collides with another row`);
@@ -896,7 +900,7 @@ export function createPgStore(database: Database): StoreBackend {
 
     async recordMoneriumIssue(r: MoneriumIssueRecord) {
       const ins = await q.query<{ doc: MoneriumIssueRecord }>(
-        "INSERT INTO monerium_issue_orders (order_id, doc) VALUES ($1, $2::jsonb) ON CONFLICT (order_id) DO NOTHING RETURNING doc",
+        "INSERT INTO monerium_issue_orders (order_id, doc) VALUES ($1, $2::json) ON CONFLICT (order_id) DO NOTHING RETURNING doc",
         [r.orderId, JSON.stringify(r)],
       );
       if (ins.rows.length) return r;

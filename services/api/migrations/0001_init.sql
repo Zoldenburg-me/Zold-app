@@ -1,6 +1,9 @@
 -- The store's collections, one table each (docs/postgres-store-design.md §1).
 --
--- `doc` is the row exactly as the JSON backend holds it. Every key column is
+-- `doc` is the row exactly as the JSON backend holds it, as `json`, not
+-- `jsonb`: jsonb reorders object keys, and the store's callers compare rows
+-- with JSON.stringify (bookkeeping/statement.ts mergeStatementLines), so a
+-- reordered row would read as changed. Every key column is
 -- GENERATED from `doc`, so it cannot disagree with it. `seq` is the row's
 -- position in the JSON array (insertion order): a store method that returns
 -- "the first match" reads ORDER BY seq. Ids stay the text ids the code mints.
@@ -16,7 +19,7 @@
 
 CREATE TABLE users (
   id text PRIMARY KEY,
-  doc jsonb NOT NULL,
+  doc json NOT NULL,
   seq bigint GENERATED ALWAYS AS IDENTITY,
   address_lc text GENERATED ALWAYS AS (lower(doc->>'address')) STORED,
   safe_address_lc text GENERATED ALWAYS AS (lower(doc->'passkeySafe'->>'address')) STORED,
@@ -44,7 +47,7 @@ CREATE INDEX payment_handles_owner ON payment_handles (owner_kind, owner_id);
 
 CREATE TABLE quotes (
   id text PRIMARY KEY,
-  doc jsonb NOT NULL,
+  doc json NOT NULL,
   seq bigint GENERATED ALWAYS AS IDENTITY,
   user_id text GENERATED ALWAYS AS (doc->>'userId') STORED,
   status text GENERATED ALWAYS AS (doc->>'status') STORED,
@@ -55,7 +58,7 @@ CREATE INDEX quotes_status_expires ON quotes (status, expires_at);
 
 CREATE TABLE transfers (
   id text PRIMARY KEY,
-  doc jsonb NOT NULL,
+  doc json NOT NULL,
   seq bigint GENERATED ALWAYS AS IDENTITY,
   user_id text GENERATED ALWAYS AS (doc->>'userId') STORED,
   quote_id text GENERATED ALWAYS AS (doc->>'quoteId') STORED,
@@ -69,7 +72,7 @@ CREATE INDEX transfers_created_at ON transfers (created_at);
 
 CREATE TABLE sessions (
   id text PRIMARY KEY,
-  doc jsonb NOT NULL,
+  doc json NOT NULL,
   seq bigint GENERATED ALWAYS AS IDENTITY,
   user_id text GENERATED ALWAYS AS (doc->>'userId') STORED,
   token_hash text GENERATED ALWAYS AS (doc->>'tokenHash') STORED,
@@ -81,7 +84,7 @@ CREATE INDEX sessions_expires_at ON sessions (expires_at);
 
 CREATE TABLE operators (
   id text PRIMARY KEY,
-  doc jsonb NOT NULL,
+  doc json NOT NULL,
   seq bigint GENERATED ALWAYS AS IDENTITY,
   email text GENERATED ALWAYS AS (doc->>'email') STORED
 );
@@ -98,7 +101,7 @@ CREATE INDEX operator_credentials_operator_id ON operator_credentials (operator_
 
 CREATE TABLE operator_sessions (
   id text PRIMARY KEY,
-  doc jsonb NOT NULL,
+  doc json NOT NULL,
   seq bigint GENERATED ALWAYS AS IDENTITY,
   operator_id text GENERATED ALWAYS AS (doc->>'operatorId') STORED,
   token_hash text GENERATED ALWAYS AS (doc->>'tokenHash') STORED
@@ -108,7 +111,7 @@ CREATE INDEX operator_sessions_operator_id ON operator_sessions (operator_id);
 
 CREATE TABLE service_credentials (
   id text PRIMARY KEY,
-  doc jsonb NOT NULL,
+  doc json NOT NULL,
   seq bigint GENERATED ALWAYS AS IDENTITY,
   service text GENERATED ALWAYS AS (doc->>'service') STORED
 );
@@ -116,7 +119,7 @@ CREATE INDEX service_credentials_service ON service_credentials (service);
 
 CREATE TABLE receipt_shares (
   id text PRIMARY KEY,
-  doc jsonb NOT NULL,
+  doc json NOT NULL,
   seq bigint GENERATED ALWAYS AS IDENTITY,
   slug text GENERATED ALWAYS AS (doc->>'slug') STORED,
   transfer_id text GENERATED ALWAYS AS (doc->>'transferId') STORED,
@@ -128,7 +131,7 @@ CREATE INDEX receipt_shares_transfer_id ON receipt_shares (transfer_id);
 
 CREATE TABLE documents (
   id text PRIMARY KEY,
-  doc jsonb NOT NULL,
+  doc json NOT NULL,
   seq bigint GENERATED ALWAYS AS IDENTITY,
   code text GENERATED ALWAYS AS (doc->>'code') STORED,
   user_id text GENERATED ALWAYS AS (doc->>'userId') STORED,
@@ -140,7 +143,7 @@ CREATE INDEX documents_org_id ON documents (org_id);
 
 CREATE TABLE payment_requests (
   id text PRIMARY KEY,
-  doc jsonb NOT NULL,
+  doc json NOT NULL,
   seq bigint GENERATED ALWAYS AS IDENTITY,
   code text GENERATED ALWAYS AS (doc->>'code') STORED,
   user_id text GENERATED ALWAYS AS (doc->>'userId') STORED,
@@ -156,7 +159,7 @@ CREATE INDEX payment_requests_state ON payment_requests (state);
 
 CREATE TABLE shopify_connections (
   id text PRIMARY KEY,
-  doc jsonb NOT NULL,
+  doc json NOT NULL,
   seq bigint GENERATED ALWAYS AS IDENTITY,
   shop text GENERATED ALWAYS AS (doc->>'shop') STORED,
   org_id text GENERATED ALWAYS AS (doc->>'orgId') STORED
@@ -166,7 +169,7 @@ CREATE INDEX shopify_connections_org_id ON shopify_connections (org_id);
 
 CREATE TABLE shopify_deliveries (
   id text PRIMARY KEY,
-  doc jsonb NOT NULL,
+  doc json NOT NULL,
   seq bigint GENERATED ALWAYS AS IDENTITY,
   at text GENERATED ALWAYS AS (doc->>'at') STORED
 );
@@ -174,7 +177,7 @@ CREATE INDEX shopify_deliveries_at ON shopify_deliveries (at);
 
 CREATE TABLE merchant_links (
   id text PRIMARY KEY,
-  doc jsonb NOT NULL,
+  doc json NOT NULL,
   seq bigint GENERATED ALWAYS AS IDENTITY,
   shop text GENERATED ALWAYS AS (doc->>'shop') STORED,
   org_id text GENERATED ALWAYS AS (doc->>'orgId') STORED,
@@ -197,7 +200,7 @@ CREATE TABLE processed_monerium_webhooks (
 
 CREATE TABLE monerium_issue_orders (
   order_id text PRIMARY KEY,
-  doc jsonb NOT NULL,
+  doc json NOT NULL,
   seq bigint GENERATED ALWAYS AS IDENTITY,
   user_id text GENERATED ALWAYS AS (doc->>'userId') STORED,
   account_id text GENERATED ALWAYS AS (doc->>'accountId') STORED
@@ -207,7 +210,7 @@ CREATE INDEX monerium_issue_orders_account_id ON monerium_issue_orders (account_
 
 CREATE TABLE conversion_sweeps (
   id text PRIMARY KEY,
-  doc jsonb NOT NULL,
+  doc json NOT NULL,
   seq bigint GENERATED ALWAYS AS IDENTITY,
   user_id text GENERATED ALWAYS AS (doc->>'userId') STORED
 );
@@ -215,7 +218,7 @@ CREATE INDEX conversion_sweeps_user_id ON conversion_sweeps (user_id);
 
 CREATE TABLE crypto_deposits (
   id text PRIMARY KEY,
-  doc jsonb NOT NULL,
+  doc json NOT NULL,
   seq bigint GENERATED ALWAYS AS IDENTITY,
   user_id text GENERATED ALWAYS AS (doc->>'userId') STORED,
   chain_id text GENERATED ALWAYS AS (doc->>'chainId') STORED,
@@ -234,7 +237,7 @@ CREATE INDEX crypto_deposits_payment_request_id ON crypto_deposits (payment_requ
 
 CREATE TABLE crypto_sends (
   id text PRIMARY KEY,
-  doc jsonb NOT NULL,
+  doc json NOT NULL,
   seq bigint GENERATED ALWAYS AS IDENTITY,
   user_id text GENERATED ALWAYS AS (doc->>'userId') STORED,
   state text GENERATED ALWAYS AS (doc->>'state') STORED,
@@ -246,7 +249,7 @@ CREATE INDEX crypto_sends_org_id ON crypto_sends (org_id);
 
 CREATE TABLE audit (
   id text PRIMARY KEY,
-  doc jsonb NOT NULL,
+  doc json NOT NULL,
   seq bigint GENERATED ALWAYS AS IDENTITY,
   user_id text GENERATED ALWAYS AS (doc->>'userId') STORED,
   at text GENERATED ALWAYS AS (doc->>'at') STORED
@@ -256,7 +259,7 @@ CREATE INDEX audit_at ON audit (at);
 
 CREATE TABLE recovery_requests (
   id text PRIMARY KEY,
-  doc jsonb NOT NULL,
+  doc json NOT NULL,
   seq bigint GENERATED ALWAYS AS IDENTITY,
   user_id text GENERATED ALWAYS AS (doc->>'userId') STORED,
   mode text GENERATED ALWAYS AS (doc->>'mode') STORED,
@@ -267,7 +270,7 @@ CREATE INDEX recovery_requests_status ON recovery_requests (status);
 
 CREATE TABLE safe_ops (
   id text PRIMARY KEY,
-  doc jsonb NOT NULL,
+  doc json NOT NULL,
   seq bigint GENERATED ALWAYS AS IDENTITY,
   org_id text GENERATED ALWAYS AS (doc->>'orgId') STORED,
   state text GENERATED ALWAYS AS (doc->>'state') STORED
@@ -282,7 +285,7 @@ CREATE TABLE crypto_deposit_cursor (
 
 CREATE TABLE organisations (
   id text PRIMARY KEY,
-  doc jsonb NOT NULL,
+  doc json NOT NULL,
   seq bigint GENERATED ALWAYS AS IDENTITY,
   page_handle text GENERATED ALWAYS AS (doc->'paymentPage'->>'handle') STORED
 );
@@ -290,7 +293,7 @@ CREATE UNIQUE INDEX organisations_page_handle ON organisations (lower(page_handl
 
 CREATE TABLE members (
   id text PRIMARY KEY,
-  doc jsonb NOT NULL,
+  doc json NOT NULL,
   seq bigint GENERATED ALWAYS AS IDENTITY,
   org_id text GENERATED ALWAYS AS (doc->>'orgId') STORED,
   user_id text GENERATED ALWAYS AS (doc->>'userId') STORED,
@@ -304,7 +307,7 @@ CREATE INDEX members_user_id ON members (user_id);
 
 CREATE TABLE accounts (
   id text PRIMARY KEY,
-  doc jsonb NOT NULL,
+  doc json NOT NULL,
   seq bigint GENERATED ALWAYS AS IDENTITY,
   org_id text GENERATED ALWAYS AS (doc->>'orgId') STORED,
   address_lc text GENERATED ALWAYS AS (lower(doc->>'address')) STORED,
@@ -316,7 +319,7 @@ CREATE INDEX accounts_backing_user_id ON accounts (backing_user_id);
 
 CREATE TABLE imported_wallets (
   id text PRIMARY KEY,
-  doc jsonb NOT NULL,
+  doc json NOT NULL,
   seq bigint GENERATED ALWAYS AS IDENTITY,
   org_id text GENERATED ALWAYS AS (doc->>'orgId') STORED
 );
@@ -324,7 +327,7 @@ CREATE INDEX imported_wallets_org_id ON imported_wallets (org_id);
 
 CREATE TABLE contacts (
   id text PRIMARY KEY,
-  doc jsonb NOT NULL,
+  doc json NOT NULL,
   seq bigint GENERATED ALWAYS AS IDENTITY,
   org_id text GENERATED ALWAYS AS (doc->>'orgId') STORED
 );
@@ -332,7 +335,7 @@ CREATE INDEX contacts_org_id ON contacts (org_id);
 
 CREATE TABLE drafts (
   id text PRIMARY KEY,
-  doc jsonb NOT NULL,
+  doc json NOT NULL,
   seq bigint GENERATED ALWAYS AS IDENTITY,
   org_id text GENERATED ALWAYS AS (doc->>'orgId') STORED,
   state text GENERATED ALWAYS AS (doc->>'state') STORED
@@ -342,7 +345,7 @@ CREATE INDEX drafts_state ON drafts (state);
 
 CREATE TABLE invoices (
   id text PRIMARY KEY,
-  doc jsonb NOT NULL,
+  doc json NOT NULL,
   seq bigint GENERATED ALWAYS AS IDENTITY,
   org_id text GENERATED ALWAYS AS (doc->>'orgId') STORED,
   state text GENERATED ALWAYS AS (doc->>'state') STORED,
@@ -356,7 +359,7 @@ CREATE INDEX invoices_org_number ON invoices (org_id, number);
 
 CREATE TABLE chart_accounts (
   id text PRIMARY KEY,
-  doc jsonb NOT NULL,
+  doc json NOT NULL,
   seq bigint GENERATED ALWAYS AS IDENTITY,
   org_id text GENERATED ALWAYS AS (doc->>'orgId') STORED,
   code text GENERATED ALWAYS AS (doc->>'code') STORED
@@ -365,7 +368,7 @@ CREATE UNIQUE INDEX chart_accounts_org_code ON chart_accounts (org_id, code);
 
 CREATE TABLE account_rules (
   id text PRIMARY KEY,
-  doc jsonb NOT NULL,
+  doc json NOT NULL,
   seq bigint GENERATED ALWAYS AS IDENTITY,
   org_id text GENERATED ALWAYS AS (doc->>'orgId') STORED
 );
@@ -373,7 +376,7 @@ CREATE INDEX account_rules_org_id ON account_rules (org_id);
 
 CREATE TABLE ledger (
   id text PRIMARY KEY,
-  doc jsonb NOT NULL,
+  doc json NOT NULL,
   seq bigint GENERATED ALWAYS AS IDENTITY,
   org_id text GENERATED ALWAYS AS (doc->>'orgId') STORED,
   tx_hash_lc text GENERATED ALWAYS AS (lower(doc->>'txHash')) STORED,

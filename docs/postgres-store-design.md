@@ -57,14 +57,18 @@ Every table is:
 ```sql
 CREATE TABLE <name> (
   id   text PRIMARY KEY,
-  doc  jsonb NOT NULL,
+  doc  json NOT NULL,
   -- typed key columns, each GENERATED ALWAYS AS (…) STORED from doc
   ...
 );
 ```
 
 The row shape in `store/types.ts` and `domain/types.ts` stays the source of
-truth. `doc` holds the whole row as the JSON backend has it. Every column we
+truth. `doc` holds the whole row as the JSON backend has it, as `json`,
+not `jsonb`: `jsonb` reorders object keys, and callers compare rows with
+`JSON.stringify` (`mergeStatementLines`, `bookkeeping/statement.ts:583`,
+`:588`), so a row read back from `jsonb` would look changed. `json` keeps the
+text as written; the `->`/`->>` operators work on it. Every column we
 look up, join or constrain on is a **stored generated column** over `doc`
 (Postgres 12+), for example
 `state text GENERATED ALWAYS AS (doc->>'state') STORED` or
@@ -266,8 +270,8 @@ Five rules cover most of it:
    for `passkeySafe` / `monerium`, `patchOrgSub(id, key, fn)` for
    `invoicing` / `integrations`, `appendDraftActivity(id, entry)`,
    `recordPaymentRequestPayment` and `settleInvoice` (table below). `fn`
-   receives the locked current value and returns the new one; in SQL that is
-   `jsonb_set` or `||` on the locked row. S2 adds a grep gate to
+   receives the locked current value and returns the new one, in JavaScript
+   on the locked row (a `jsonb_set` would reorder the keys, §1.1). S2 adds a grep gate to
    `scripts/check.ts` that refuses, outside `store.ts` and `store/`, a patch
    built from these spreads and pushes: `...user.passkeySafe` (9 today),
    `...user.monerium` (4), `...t.sepa`, `...ctx.org.invoicing` (1),
@@ -335,7 +339,7 @@ in parallel on Postgres 17 in `check:pg`.
 | Invoice `/pay` twice | `assertPayable(syncInvoicePayment(invoice))` then the draft insert (`routes/business/invoices.ts:178`→`:257`→`:268`), synchronous today | One store method, `startInvoicePayment(invoiceId, draft)`: conditional `SUBMITTED`→`PAYING` and the draft insert in one transaction | Two parallel `/pay` on one invoice: one draft, one 409 | S2 |
 | Supplier pay-to submit | State check then `payTo` write (`routes/business/invoice-links.ts:179`→`:212`/`:254`), synchronous after the `load` await at `:177` | Rule 3: `WHERE state='LINK_CREATED'` on the write | Two submits with different `payTo`: the first stands, the second answers 409 | S2 |
 | Payment-request expiry sweep | Filters `OPEN` once (`routes/payment-requests.ts:743`), awaits `hook(r)` (`:768`) inside the loop, writes `EXPIRED` without re-checking (`:746`). Open today | Rule 3: `EXPIRED` only `WHERE state='OPEN'` | A payment recorded while the sweep is mid-loop: the request stays `PAID` | S2 |
-| Shopify cancel | `payments.length === 0` on the row read, then cancel (`routes/shopify.ts:685`→`:686`), synchronous today | One store method: cancel `WHERE state='OPEN' AND expires_at > now() AND jsonb_array_length(doc->'payments') = 0` on the locked row, the same test as `effectiveState(existing) === 'OPEN'` (`payment-requests.ts:573-576`) today, so a request already past its expiry stays expired | A payment recorded in parallel with a Shopify cancel: one of them; never a cancelled request with a payment. A cancel for a request past `expiresAt`: it stays `EXPIRED` | S2 |
+| Shopify cancel | `payments.length === 0` on the row read, then cancel (`routes/shopify.ts:685`→`:686`), synchronous today | One store method: cancel `WHERE state='OPEN' AND expires_at > now() AND json_array_length(doc->'payments') = 0` on the locked row, the same test as `effectiveState(existing) === 'OPEN'` (`payment-requests.ts:573-576`) today, so a request already past its expiry stays expired | A payment recorded in parallel with a Shopify cancel: one of them; never a cancelled request with a payment. A cancel for a request past `expiresAt`: it stays `EXPIRED` | S2 |
 | One deposit matched twice | A deposit is attributed to a request (`attributeDepositToRequest`, `payment-requests.ts:593`→`:620`) or linked to an invoice (`routes/crypto-deposits.ts:141`→`:175`), synchronous today | The deposit row gets a `settledTo` field (generated column `settled_to`), set by the one store method that records the deposit's money on a target (a request payment or an invoice settlement) `WHERE settled_to IS NULL`, in the same transaction as that payment or settlement; no row back means the money is already recorded elsewhere, and the caller refuses. The invoice link itself (`invoiceId`) stays changeable, or droppable, until then, as today (`routes/crypto-deposits.ts:137-150` refuses a move only once a settlement carries `deposit:<id>`); the move is refused `WHERE settled_to IS NOT NULL` | One deposit attributed by the scanner and settled on an invoice in parallel: one target. An unsettled link moved to another invoice: allowed |
 | Deposit conversion and partials | Guarded by deleting the pending entry and `convertingDeposits` (`routes/crypto-deposits.ts:288`, `:295`), both in memory, before the submit (`:299`→`:358`); `settleConvertedDeposit` reads `deposit.partials` after awaits (`adapters/crypto-deposits.ts:414-480`) | Rule 5: a `CONVERTING` reserve on the deposit row before the submit; partials appended with rule 2 | Two conversions of one deposit: one submits. Two partials settling in parallel: both kept | S3 |
 | Last owner | Count of owners then the role change or deactivation (`routes/orgs.ts:606`→`:616`), synchronous today | Rule 4: the method locks the `organisations` row, counts active owners inside the lock, then writes | Two owners each demoting the other in parallel: one succeeds, one answers 409; one owner remains | S2 |

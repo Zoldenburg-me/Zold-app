@@ -368,6 +368,12 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
   await s.addCryptoDeposit({ ...deposit, id: "dep_refund", txHash: hash("66"), logIndex: 0 });
   assert.ok((await s.resolveTransferReview("t_rev2", review(hash("66")))).ok, "the refund's own arrival is not another record");
 
+  // Rows come back with their keys in the order written: callers compare
+  // rows with JSON.stringify (bookkeeping/statement.ts).
+  await s.addLedgerEntries([{ statement: { valueDate: "d", key: "k-order", counterparty: { name: "n", iban: "i" } }, id: "l_order", orgId: "org_b", zz: 1, a: 2 } as any]);
+  const back = (await s.ledgerOf("org_b")).find((e) => e.id === "l_order")!;
+  assert.equal(JSON.stringify(back), JSON.stringify({ statement: { valueDate: "d", key: "k-order", counterparty: { name: "n", iban: "i" } }, id: "l_order", orgId: "org_b", zz: 1, a: 2 }));
+
   // ── list() returns each collection as it was written ─────────────────────
   assert.deepEqual((await s.list("users")).map((u) => u.id), ["u_a", "u_b"]);
   assert.deepEqual((await s.list("quotes")).map((x) => x.id), ["q_kept", "q_1"]);

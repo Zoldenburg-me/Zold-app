@@ -13,7 +13,7 @@
  * ./store/db.ts; both are re-exported here.
  */
 import { randomUUID } from "node:crypto";
-import { batched, db, persist, pruneSessions, seedChartOfAccounts } from "./store/db.js";
+import { batched, db, persist, pruneSessions, seedChartOfAccounts, type Db } from "./store/db.js";
 import { auditEntry } from "./audit.js";
 import type {
   Account,
@@ -116,6 +116,10 @@ function hashOnRecord(hash: string, userId: string): string | undefined {
 export const store = {
   /** Several writes, one file write (store/db.ts). */
   batched,
+  /** One whole collection, as stored (the `list` of store/backend.ts). */
+  list<K extends keyof Db>(name: K): Db[K] {
+    return db[name];
+  },
   get users() {
     return db.users;
   },

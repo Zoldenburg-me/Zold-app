@@ -11,7 +11,7 @@
  * `batched` has no counterpart until `store.tx` replaces it in S2. The two
  * listener registrations stay synchronous.
  */
-import { db, type Db } from "./db.js";
+import type { Db } from "./db.js";
 import type { store as jsonStore } from "../store.js";
 
 type Store = typeof jsonStore;
@@ -24,7 +24,7 @@ type AsyncMethod<F> = F extends (...args: infer A) => infer R ? (...args: A) => 
 export type Collection = keyof Db;
 
 export type StoreBackend = {
-  [K in Exclude<MethodName, Listener | "batched">]: AsyncMethod<Store[K]>;
+  [K in Exclude<MethodName, Listener | "batched" | "list">]: AsyncMethod<Store[K]>;
 } & Pick<Store, Listener> & {
   list<K extends Collection>(name: K): Promise<Db[K]>;
   close(): Promise<void>;
@@ -34,7 +34,7 @@ export type StoreBackend = {
  *  the live ones, as from `store`; S2 makes them copies. */
 export function jsonBackend(s: Store): StoreBackend {
   const out: Record<string, unknown> = {
-    list: async (name: Collection) => db[name],
+    list: async (name: Collection) => s.list(name),
     close: async () => {},
     onTransferStateChange: s.onTransferStateChange,
     onPaymentRequestStateChange: s.onPaymentRequestStateChange,
