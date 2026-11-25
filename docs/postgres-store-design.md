@@ -177,7 +177,14 @@ each such window opens unless the check moves into the write.
 the Postgres backend takes `pg_try_advisory_lock(hashtext('api:'||<deployment>))`
 on a dedicated connection before it serves anything, and the process refuses
 to start if the lock is held. The lock lives as long as that connection, so
-a crashed process releases it. These in-memory guards on money and identity
+a crashed process releases it. So does a database restart or a dropped
+connection while the process lives on, and the pool would reconnect without
+it; so the process watches that connection (its `error` and `end` events
+and a `SELECT 1` every 5 s) and on losing it **exits non-zero at once**,
+before another request or sweep tick runs. systemd starts it again, and the
+new process takes the lock or refuses to start. Tests: two processes on one
+database, the second exits before it listens; `pg_terminate_backend` on the
+lock's connection, the API exits. These in-memory guards on money and identity
 paths rely on it, and stay in memory in #166:
 
 - `executing` / `compensating` (`orchestrator.ts:556`, `:561`), which the
@@ -204,9 +211,7 @@ Moving any of them to a lease column (`UPDATE … SET lease_until=… WHERE
 lease_until IS NULL OR lease_until < now() RETURNING`) is the work a second
 process would need first; it is not in #166. The restore drill and a
 returning old host must not start an API for a deployment for the same
-reason (§7, §7.1). A start-up test runs two API processes against one
-database: the second exits non-zero before it listens.
-
+reason (§7, §7.1). 
 **Sweeps are single-flight.** The sweeps in `server.ts:334-396` are bare
 `setInterval`s, and a tick can outlast its interval today: the Zoldenburg
 sweep runs every 60 s (`config/security.ts:51`) and waits up to 90 s for a
@@ -293,7 +298,7 @@ The table below is built in S3 (money paths on Postgres, `check:pg`).
 | Shopify delivery dedupe | `shopifyDelivery`, record, mark on finish (`routes/shopify.ts:668-678`) | `INSERT … ON CONFLICT (id) DO NOTHING RETURNING`; a conflict reads the row and checks its shop. Order create is backed by `UNIQUE(kind, shop, external_id)` on payment requests | One delivery id twice in parallel: one request created. Same order id from two shops: two requests |
 | Crypto deposits | Idempotent on (txHash, logIndex) (`store.ts:985-1009`) | `UNIQUE(chain_id, lower(tx_hash), log_index)`, `ON CONFLICT DO NOTHING` then read. The scanner covers one chain per deployment (`CHAIN_ID`, `adapters/crypto-deposits.ts:34`), but each deposit records its `chainId` (`store/types.ts:540`) and the cursor is per chain, so the key carries it: a second chain cannot collide with the first | Two overlapping scans of one window: one row |
 | Passkey sign count | `recordPasskeyUse` only while the credential is still the account's (`store.ts:202-206`), 11 callers (`http/passkey-assertion.ts:44`, `routes/auth.ts:122`, …). The counter check (`webauthn.ts:323`) compares against the count the caller read before its await, and the method writes whatever came back | Rule 1 on the user row, and the compare moves into the method: the write happens only if `stored = 0 AND new = 0` or `new > stored` on the locked row; otherwise the method returns false and the caller answers 401, as for a replaced credential (S3) | A recovery replacing the passkey while an assertion records its count: the count is refused, the new passkey stays. Two assertions with counts 5 and 6 recorded in the order 6, 5: the stored count is 6 and the second is refused |
-| Sessions | `findSessionByTokenHash`, `touchSession` (`store.ts:819-841`); login mints its session synchronously after `recordPasskeyUse` so that a recovery landing later revokes it too (`routes/auth.ts:440-448`); recovery revokes the others (`recovery/recovered-passkey.ts:155`, `revokeOtherSessions` `http/sessions.ts:32-36`) | On an async store the credential check and the session insert are separate awaits, and a recovery can swap the passkey and revoke between them, leaving the old device a 24 h bearer. So `users.session_epoch` (an integer in `doc`, generated column): every passkey replace or recovery bumps it in the same transaction as the swap and the revoke; `addSession` copies the epoch it read with the credential check and inserts only `WHERE` the user's epoch still equals it; `requireSession` (`http/sessions.ts:44-61`) refuses a session whose epoch is below the user's. The touch is a conditional `UPDATE … WHERE last_used_at < now() - 60s`. Pruning is a periodic `DELETE`, not part of `addSession` (S4) | Login paused after its credential check while a recovery swaps the passkey: the login gets 401, or its session is refused on first use; never a live session on the old passkey |
+| Sessions | `findSessionByTokenHash`, `touchSession` (`store.ts:819-841`); login mints its session synchronously after `recordPasskeyUse` so that a recovery landing later revokes it too (`routes/auth.ts:440-448`); recovery revokes the others (`recovery/recovered-passkey.ts:155`, `revokeOtherSessions` `http/sessions.ts:32-36`) | On an async store the credential check and the session insert are separate awaits, and a recovery can swap the passkey and revoke between them, leaving the old device a 24 h bearer. So `users.session_epoch` (an integer in `doc`, generated column): every passkey replace or recovery bumps it in the same transaction as the swap and the revoke, and moves the one session the method keeps (`revokeOtherSessions(userId, keepId)`, e.g. the session that approved a passkey replacement, `routes/auth.ts:249-259`) to the new epoch, so that session stays signed in; `addSession` copies the epoch it read with the credential check and inserts only `WHERE` the user's epoch still equals it; `requireSession` (`http/sessions.ts:44-61`) refuses a session whose epoch is below the user's. The touch is a conditional `UPDATE … WHERE last_used_at < now() - 60s`. Pruning is a periodic `DELETE`, not part of `addSession` (S4) | Login paused after its credential check while a recovery swaps the passkey: the login gets 401, or its session is refused on first use; never a live session on the old passkey. A passkey replacement approved from a session: that session still works, every other one is refused |
 | Imported-wallet proof | `batched` re-reads before writing (`routes/orgs.ts:1244-1294`) | `store.tx` with the wallet row locked | Two proofs at once: one wins, the other 409 |
 
 
@@ -310,8 +315,8 @@ in parallel on Postgres 17 in `check:pg`.
 | Invoice `/pay` twice | `assertPayable(syncInvoicePayment(invoice))` then the draft insert (`routes/business/invoices.ts:178`→`:257`→`:268`), synchronous today | One store method, `startInvoicePayment(invoiceId, draft)`: conditional `SUBMITTED`→`PAYING` and the draft insert in one transaction | Two parallel `/pay` on one invoice: one draft, one 409 | S2 |
 | Supplier pay-to submit | State check then `payTo` write (`routes/business/invoice-links.ts:179`→`:212`/`:254`), synchronous after the `load` await at `:177` | Rule 3: `WHERE state='LINK_CREATED'` on the write | Two submits with different `payTo`: the first stands, the second answers 409 | S2 |
 | Payment-request expiry sweep | Filters `OPEN` once (`routes/payment-requests.ts:743`), awaits `hook(r)` (`:768`) inside the loop, writes `EXPIRED` without re-checking (`:746`). Open today | Rule 3: `EXPIRED` only `WHERE state='OPEN'` | A payment recorded while the sweep is mid-loop: the request stays `PAID` | S2 |
-| Shopify cancel | `payments.length === 0` on the row read, then cancel (`routes/shopify.ts:685`→`:686`), synchronous today | One store method: cancel `WHERE state='OPEN' AND jsonb_array_length(doc->'payments') = 0` on the locked row | A payment recorded in parallel with a Shopify cancel: one of them; never a cancelled request with a payment | S2 |
-| One deposit matched twice | A deposit is attributed to a request (`attributeDepositToRequest`, `payment-requests.ts:593`→`:620`) or linked to an invoice (`routes/crypto-deposits.ts:141`→`:175`), synchronous today | `attachDeposit(id, target)`: `WHERE payment_request_id IS NULL AND invoice_id IS NULL` on the deposit row, in the same transaction as the payment or settlement it records | One deposit attributed by the scanner and an invoice link in parallel: one target | S3 |
+| Shopify cancel | `payments.length === 0` on the row read, then cancel (`routes/shopify.ts:685`→`:686`), synchronous today | One store method: cancel `WHERE state='OPEN' AND expires_at > now() AND jsonb_array_length(doc->'payments') = 0` on the locked row, the same test as `effectiveState(existing) === 'OPEN'` (`payment-requests.ts:573-576`) today, so a request already past its expiry stays expired | A payment recorded in parallel with a Shopify cancel: one of them; never a cancelled request with a payment. A cancel for a request past `expiresAt`: it stays `EXPIRED` | S2 |
+| One deposit matched twice | A deposit is attributed to a request (`attributeDepositToRequest`, `payment-requests.ts:593`→`:620`) or linked to an invoice (`routes/crypto-deposits.ts:141`→`:175`), synchronous today | The deposit row gets a `settledTo` field (generated column `settled_to`), set by the one store method that records the deposit's money on a target (a request payment or an invoice settlement) `WHERE settled_to IS NULL`, in the same transaction as that payment or settlement; no row back means the money is already recorded elsewhere, and the caller refuses. The invoice link itself (`invoiceId`) stays changeable, or droppable, until then, as today (`routes/crypto-deposits.ts:137-150` refuses a move only once a settlement carries `deposit:<id>`); the move is refused `WHERE settled_to IS NOT NULL` | One deposit attributed by the scanner and settled on an invoice in parallel: one target. An unsettled link moved to another invoice: allowed |
 | Deposit conversion and partials | Guarded by deleting the pending entry and `convertingDeposits` (`routes/crypto-deposits.ts:288`, `:295`), both in memory, before the submit (`:299`→`:358`); `settleConvertedDeposit` reads `deposit.partials` after awaits (`adapters/crypto-deposits.ts:414-480`) | Rule 5: a `CONVERTING` reserve on the deposit row before the submit; partials appended with rule 2 | Two conversions of one deposit: one submits. Two partials settling in parallel: both kept | S3 |
 | Last owner | Count of owners then the role change or deactivation (`routes/orgs.ts:606`→`:616`), synchronous today | Rule 4: the method locks the `organisations` row, counts active owners inside the lock, then writes | Two owners each demoting the other in parallel: one succeeds, one answers 409; one owner remains | S2 |
 | Four eyes | `canReviewDraft` compares reviewer and drafter (`routes/business/drafts.ts:282-309`), synchronous today | The review write is conditional on the draft's `updated_at` and drafter read with the check (`WHERE doc->>'updatedAt' = $read AND doc->>'createdByMemberId' = $drafterMember`, and the review state from rule 3), so an edit that makes the reviewer the drafter lands first or refuses the review | A line edit by the reviewer racing their own approval: the approval is refused | S2 |
@@ -627,8 +632,9 @@ stopped and read-only, until the owner closes it (§6 step 8).
   `pg_createcluster 17 mainnet -u pg-mainnet` and
   `pg_createcluster 17 testnet -u pg-testnet`, each run by its own OS user,
   each with its own data directory, its own socket directory
-  (`/run/postgresql-mainnet`, `/run/postgresql-testnet`) and port number (the
-  port only names the socket file; nothing listens on TCP), its own systemd
+  (`/run/postgresql-mainnet`, `/run/postgresql-testnet`) and port number
+  (mainnet 5432, testnet 5433; the port only names the socket file,
+  `.s.PGSQL.<port>`, and nothing listens on TCP), its own systemd
   unit, its own pgBackRest stanza and config file, its own bucket per region,
   and its own repository passphrase. The API of a deployment runs as a third
   OS user (`zold-mainnet`, `zold-testnet`) and can reach only its own
@@ -643,8 +649,8 @@ stopped and read-only, until the owner closes it (§6 step 8).
   CONNECT` to the two roles of that database. A testnet process cannot open
   mainnet's socket (directory permissions), would not be mapped if it could
   (`pg_ident`), and has no `CONNECT` grant on the database. `DATABASE_URL` is
-  `postgresql://<role>@/<db>?host=/run/postgresql-<deployment>` with no
-  password, so the environment file holds no database credential.
+  `postgresql://<role>@/<db>?host=/run/postgresql-<deployment>&port=<port>`
+  with no password (the port is needed: it names the socket file), so the environment file holds no database credential.
 - **The code still takes only `DATABASE_URL`** (and `DATABASE_CA` when it is
   given). It fails closed: on a real-money chain a TCP host other than
   loopback is refused unless the URL asks for `sslmode=verify-full` and a CA
@@ -720,7 +726,8 @@ stopped and read-only, until the owner closes it (§6 step 8).
   which stops pgBackRest itself. Instead each deployment gets a third bucket,
   `zold-dumps-<deployment>`, in the second region, with a **time-bound
   retention rule of 14 days**. A systemd timer writes a daily `pg_dump`
-  piped to `age` (to the owner's age key) into it, each as a new object. The
+  piped to `age` (to the owner's age key) into it, each as a new object: `pg_dumpall --globals-only` (the roles and their attributes; there are no
+  passwords, §7) and `pg_dump -Fc` of the database, in one encrypted tar. The
   host's credential for it has create and read only (no overwrite, no
   delete); a lifecycle rule deletes objects after 30 days. A compromised
   host can then wipe the PITR repositories but not the last 14 days of
@@ -744,7 +751,8 @@ stopped and read-only, until the owner closes it (§6 step 8).
   against an export taken at T. It does not start the API: a restored
   mainnet API would run the sweeps against real partners, a second API
   process (§2). The drill restores from `repo1` and `repo2` in alternate
-  months. It times the database part, from "instance requested" to "verify
+  months, and every third month from the latest dump instead (§7.1, both
+  repositories lost), so the logical path is tried too. It times the database part, from "instance requested" to "verify
   passed". The service part of the recovery target (API, tunnel, smoke) is
   timed on testnet: once before the cut-over and then quarterly, testnet is
   rebuilt for real onto a new instance (its old API stopped first), the
@@ -811,6 +819,17 @@ Rebuild, mainnet first, then testnet the same way:
 7. Smoke as in §6 step 7. The old instance, if it comes back, stays stopped:
    two hosts must never write to the same repositories, and two API
    processes must never run for one deployment (§2).
+
+**Both repositories lost** (or both unreadable): steps 1-2, then fetch the
+latest dump from the dump bucket and decrypt it with the owner's age key,
+which is never on the host (the owner runs `age -d` or hands the key in for
+the restore only). Create the cluster's database from `initdb` defaults,
+load the globals (roles), `pg_restore` the database as the owner role, check
+the roles and grants as in step 3 and that `schema_migrations` is at the
+latest version. Then create a new pgBackRest stanza in each reachable
+region and take a full backup before step 5. Everything after the dump's
+time is lost; the reconciler reports the drift and the owner is told the
+loss window.
 
 Transfers in flight when the host died are handled by the existing sweeps
 after the restart: an intent without a known outcome goes to review (§2,
