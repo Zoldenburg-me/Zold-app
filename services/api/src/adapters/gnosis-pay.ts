@@ -86,15 +86,47 @@ async function gpFetch(
   if (rest.body) headers["content-type"] = "application/json";
 
   // The signal stays armed while the caller reads the body, so a response
-  // that sends headers and then stalls is bounded too.
+  // that sends headers and then stalls is bounded too (readCapped).
   try {
     return await fetch(`${baseUrl()}${path}`, { ...rest, headers, signal: AbortSignal.timeout(GNOSIS_PAY.timeoutMs) });
   } catch (err: any) {
-    if (err?.name === "AbortError" || err?.name === "TimeoutError") {
-      throw new GnosisPayError(`Gnosis Pay did not answer within ${GNOSIS_PAY.timeoutMs}ms`, 504);
-    }
-    throw new GnosisPayError(`Gnosis Pay unreachable: ${redactedMessage(err)}`, 502);
+    throw unreachable(err);
   }
+}
+
+function unreachable(err: any): GnosisPayError {
+  if (err?.name === "AbortError" || err?.name === "TimeoutError") {
+    return new GnosisPayError(`Gnosis Pay did not answer within ${GNOSIS_PAY.timeoutMs}ms`, 504);
+  }
+  return new GnosisPayError(`Gnosis Pay unreachable: ${redactedMessage(err)}`, 502);
+}
+
+/** A nonce is a few dozen bytes; the largest answer read (a transaction
+ *  list) is well under a megabyte. Past these it is not their answer. */
+const MAX_NONCE_BYTES = 1024;
+const MAX_RESPONSE_BYTES = 1024 * 1024;
+
+/** The body, read up to `max` bytes under the request's own timeout. */
+async function readCapped(res: Response, max: number): Promise<string> {
+  if (!res.body) return "";
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > max) {
+        await reader.cancel().catch(() => {});
+        throw new GnosisPayError(`Gnosis Pay answered with a body larger than ${max} bytes`, 502);
+      }
+      chunks.push(value);
+    }
+  } catch (err) {
+    throw err instanceof GnosisPayError ? err : unreachable(err);
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 /**
@@ -103,7 +135,7 @@ async function gpFetch(
  * them with "request failed" is how a user gets stuck with nothing to act on.
  */
 async function readJson<T>(res: Response, what: string): Promise<T> {
-  const text = await res.text();
+  const text = await readCapped(res, MAX_RESPONSE_BYTES);
   let body: any;
   try {
     body = text ? JSON.parse(text) : undefined;
@@ -125,7 +157,7 @@ async function readJson<T>(res: Response, what: string): Promise<T> {
  */
 export async function getNonce(): Promise<GnosisPayNonce> {
   const res = await gpFetch("/api/v1/auth/nonce", { method: "GET" });
-  const nonce = (await res.text()).trim();
+  const nonce = (await readCapped(res, MAX_NONCE_BYTES)).trim();
   if (!res.ok) throw new GnosisPayError(`Gnosis Pay nonce failed: ${nonce.slice(0, 200)}`, res.status);
   if (!nonce) throw new GnosisPayError("Gnosis Pay returned an empty nonce", 502);
   // `set-cookie` may carry several cookies; the challenge only needs the pair,
