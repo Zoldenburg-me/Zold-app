@@ -158,6 +158,15 @@ test("the Terms are accepted on the sign-in step, where the account is made", ()
   await run("obSendResidence(document.createElement('button'))");
   assert.deepEqual(JSON.parse(JSON.stringify(ctx.__posts)), [{ url: "/api/users/u1/residence", body: { country: "AT", usAnswers: { usPerson: true, companyUsNexus: false } } }]);
   assert.equal(run("user.segment.value"), "EU_FULL");
+  // Opened from Profile's personal-space row: saving opens Profile again.
+  ctx.__hist = [];
+  run(`user = __u; obDraft.residenceFor = "u1"; enterResidence("more"); history.replaceState = (_s, _t, url) => __hist.push(url)`);
+  await run("obSendResidence(document.createElement('button'))");
+  assert.equal(ctx.__hist.at(-1), "/app#more");
+  run("history.replaceState = () => {}; obResidenceThen = null");
+  // /business's Answer links are what carry the way back.
+  assert.ok(readFileSync(path.join(PUB, "business.html"), "utf8").includes('href="/app?from=business#residence"'));
+  assert.ok(readFileSync(path.join(PUB, "business/shell.js"), "utf8").includes('"/app?from=business&setup=invoices#residence"'));
   // Opened from /business: saving goes back to the set-up that sent them.
   ctx.__to = [];
   run(`user = __u; obDraft.residenceFor = "u1"; location.search = "?from=business&setup=invoices"; location.assign = (u) => __to.push(u)`);

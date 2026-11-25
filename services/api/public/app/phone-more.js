@@ -256,7 +256,7 @@ PH.more = {
     if (nm) nm.onclick = () => phNameSheet(nm);
     const biz = root.querySelector("#ph-biz-create");
     // The server makes no space for an account that has not said where it lives.
-    if (biz) biz.onclick = () => (residenceAsked(user) ? enterResidence() : phPersonalSheet(biz));
+    if (biz) biz.onclick = () => (residenceAsked(user) ? enterResidence("more") : phPersonalSheet(biz));
     const body = root.querySelector("#ph-pay-body");
     phBindPayBody(body);
     root.querySelectorAll('input[name="ph-pay-via"]').forEach((r) => {

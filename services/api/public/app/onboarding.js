@@ -67,8 +67,11 @@ function enterKycReview(_name) {
   obGo(obNextAfterAccount() || (activate ? "activate" : "monerium"), { replace: true });
 }
 
-/* Home's "Where you live" row. */
-function enterResidence() {
+/* Home's "Where you live" row. `then`: the app screen that sent them here,
+   opened again once the answers are saved. */
+let obResidenceThen = null;
+function enterResidence(then = null) {
+  obResidenceThen = then;
   // Another account's answers left in this tab are not this one's.
   if (obDraft.residenceFor !== user.id) obSaveDraft({ country: "", usPerson: null, companyUsNexus: null, residenceFor: user.id });
   obShow();
@@ -618,6 +621,7 @@ async function obSendResidence(btn) {
     // Opened from /business (its "First: where you live"): back to the set-up that sent them.
     const qs = new URLSearchParams(location.search);
     if (qs.get("from") === "business") return location.assign(qs.get("setup") === "invoices" ? "/business?setup=invoices" : "/business");
+    if (obResidenceThen) history.replaceState(null, "", `${location.pathname}${location.search}#${obResidenceThen}`);
     obFinish();
   } catch (e) {
     obShowErr(e);
