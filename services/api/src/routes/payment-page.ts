@@ -71,10 +71,15 @@ const RENEW_BEFORE_MS = 24 * 3600 * 1000;
  *  public GET lands here, so without it a Candide outage is retried per hit. */
 export const RENEW_RETRY_MS = 5 * 60 * 1000;
 const renewing = new Map<string, Promise<boolean>>();
-/** Per user: until when not to retry, and whether the last renewal closed the
- *  page (moved the address, or Candide said not active), whatever the old
- *  activation says. */
-const renewFailed = new Map<string, { until: number; closed: boolean }>();
+/** Per user: until when not to retry, whether the last renewal closed the
+ *  page (moved the address, or Candide said not active) whatever the old
+ *  activation says, and which activation it judged. Saving the page writes a
+ *  new activation, which no earlier backoff speaks for. */
+const renewFailed = new Map<string, { until: number; closed: boolean; activatedAt: string }>();
+/** The activation a renewal started from is still the one stored. A save that
+ *  landed meanwhile wrote a new one, and an answer about the old one must not
+ *  overwrite it. */
+const sameActivation = (a: { activatedAt: string } | undefined, b: { activatedAt: string }) => a?.activatedAt === b.activatedAt;
 
 /**
  * May this page's deposit address be shown to a payer right now? A Candide
@@ -93,6 +98,10 @@ const renewFailed = new Map<string, { until: number; closed: boolean }>();
  * answer, not an outage: the activation is stored as not active, so the page
  * stays closed until a renewal of that address comes back active.
  *
+ * An answer is about the activation the renewal started from. If the page
+ * was saved meanwhile (a new activation), the answer writes nothing, and the
+ * backoff it set does not apply to the saved page.
+ *
  * Any other failed renewal still answers yes while the old activation runs, is
  * active and its list came from the routes; once it has lapsed the answer is no, and the
  * caller shows no address. Failures back off for RENEW_RETRY_MS.
@@ -106,7 +115,7 @@ export async function livePaymentPage(user: User): Promise<boolean> {
   const expires = f.expiresAt ? Date.parse(f.expiresAt) : Number.POSITIVE_INFINITY;
   if (listed && expires - Date.now() > RENEW_BEFORE_MS) return true;
   const failed = renewFailed.get(user.id);
-  if (failed && failed.until > Date.now()) return !failed.closed && listed && expires > Date.now();
+  if (failed && failed.until > Date.now() && failed.activatedAt === f.activatedAt) return !failed.closed && listed && expires > Date.now();
   let run = renewing.get(user.id);
   if (!run) {
     run = (async () => {
@@ -114,12 +123,12 @@ export async function livePaymentPage(user: User): Promise<boolean> {
         const next = await activatePaymentForwarder({ userId: user.id, handle: page.handle, recipient: f.recipient, token: addrs().usdc });
         if (next.address.toLowerCase() !== page.depositAddress.toLowerCase()) {
           console.error(`payment page: renewal for ${user.id} gave ${next.address}, page shows ${page.depositAddress}`);
-          renewFailed.set(user.id, { until: Date.now() + RENEW_RETRY_MS, closed: true });
+          renewFailed.set(user.id, { until: Date.now() + RENEW_RETRY_MS, closed: true, activatedAt: f.activatedAt });
           return false;
         }
         renewFailed.delete(user.id);
         const fresh = store.findUser(user.id);
-        if (fresh?.paymentPage?.handle !== page.handle) return false;
+        if (fresh?.paymentPage?.handle !== page.handle || !sameActivation(fresh.paymentPage.forwarder, f)) return false;
         const now = new Date().toISOString();
         store.updateUser(user.id, {
           paymentPage: { ...fresh.paymentPage, forwarder: next.forwarder, supportedTokens: next.accepts, routesReadAt: now, updatedAt: now },
@@ -128,17 +137,17 @@ export async function livePaymentPage(user: User): Promise<boolean> {
       } catch (err: any) {
         console.error(`payment page: renewing forwarder for ${user.id} failed: ${describeCause(err)}`);
         if (err instanceof ForwarderInactiveError) {
-          renewFailed.set(user.id, { until: Date.now() + RENEW_RETRY_MS, closed: true });
+          renewFailed.set(user.id, { until: Date.now() + RENEW_RETRY_MS, closed: true, activatedAt: f.activatedAt });
           const fresh = store.findUser(user.id);
           const shown = fresh?.paymentPage;
-          if (shown?.handle === page.handle && shown.forwarder && shown.depositAddress.toLowerCase() === err.address.toLowerCase()) {
+          if (shown?.handle === page.handle && shown.forwarder && sameActivation(shown.forwarder, f) && shown.depositAddress.toLowerCase() === err.address.toLowerCase()) {
             store.updateUser(user.id, {
               paymentPage: { ...shown, forwarder: { ...shown.forwarder, active: false }, updatedAt: new Date().toISOString() },
             });
           }
           return false;
         }
-        renewFailed.set(user.id, { until: Date.now() + RENEW_RETRY_MS, closed: false });
+        renewFailed.set(user.id, { until: Date.now() + RENEW_RETRY_MS, closed: false, activatedAt: f.activatedAt });
         return listed && expires > Date.now();
       } finally {
         renewing.delete(user.id);
