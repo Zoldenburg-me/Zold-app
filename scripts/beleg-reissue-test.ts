@@ -127,6 +127,20 @@ await check("the statement, the CSV and the ZIP carry it, and replace refuses it
   assert.equal(store.findDocumentByCode(OLD)!.revokedAt, undefined);
 });
 
+await check("the statement, the CSV and the ZIP index the documents once, not one scan per line", async () => {
+  const real = store.findDocumentByCode;
+  let scans = 0;
+  (store as any).findDocumentByCode = (code: string) => { scans++; return real.call(store, code); };
+  try {
+    assert.equal((await line()).documentCode, OLD);
+    assert.ok((await csv()).includes(OLD));
+    assert.ok((await zip()).some((e) => e.name.includes(OLD)));
+  } finally {
+    (store as any).findDocumentByCode = real;
+  }
+  assert.equal(scans, 0, `${scans} per-line document scans`);
+});
+
 console.log("\nOnce the mark comes off");
 
 await check("the verify page says the records no longer match", async () => {

@@ -17,7 +17,7 @@ import { store } from "../../store.js";
 import { requireCapability, requirePermission, type OrgContext } from "../org-context.js";
 import { invoicePayments, isMonth, linesInMonth, ownTransferAllowed, type InvoicePayments } from "../../bookkeeping/statement.js";
 import { statementLinesOf, swapsHaveExecuted, writeAccountStatementLines, writeStatementLinesFor } from "../../bookkeeping/writer.js";
-import { belegOfLine, BelegStillVerifies, BelegWouldNotVerify, issueBelegForLine, replaceBelegForLine } from "../../bookkeeping/issue.js";
+import { belegOfLine, documentsByCode, type DocumentsByCode, BelegStillVerifies, BelegWouldNotVerify, issueBelegForLine, replaceBelegForLine } from "../../bookkeeping/issue.js";
 import { belegFileName, belegPdf, UNEXECUTED_NOTE } from "../../bookkeeping/beleg.js";
 import { lexwareCsvBytes, lexwareRow } from "../../bookkeeping/lexware.js";
 import { zipStored } from "../../bookkeeping/zip.js";
@@ -31,19 +31,18 @@ export interface OrgRoutes {
   ctxOf: (req: express.Request, res: express.Response) => OrgContext | undefined;
 }
 
-/** The line's Beleg if it may be handed out. The statement, the CSV and the
- *  ZIP all use this one rule, so a revoked Beleg reads as missing everywhere
+/** The line as the dashboard and the accountant see it. A listing builds
+ *  `paid` and `docs` once. The statement, the CSV and the ZIP all take the
+ *  Beleg from belegOfLine, so a revoked Beleg reads as missing everywhere
  *  until prepare issues a new one, and one that stopped verifying until it is
  *  replaced. */
-function liveBeleg(e: LedgerEntry) {
-  const b = belegOfLine(e);
-  return b && "live" in b ? b.live : undefined;
-}
-
-/** The line as the dashboard and the accountant see it. A listing builds `paid` once. */
-export function publicStatementLine(e: LedgerEntry, paid: InvoicePayments = invoicePayments(store.invoices)) {
+export function publicStatementLine(
+  e: LedgerEntry,
+  paid: InvoicePayments = invoicePayments(store.invoices),
+  docs?: DocumentsByCode,
+) {
   const s = e.statement!;
-  const b = belegOfLine(e);
+  const b = belegOfLine(e, docs);
   const beleg = b && "live" in b ? b.live : undefined;
   return {
     id: e.id,
@@ -96,7 +95,8 @@ export function createBookkeepingExportRoutes(deps: OrgRoutes): express.Router {
     if (month && !isMonth(month)) return res.status(400).json({ error: "month must be YYYY-MM" });
     const all = statementLinesOf(ctx.org.id);
     const paid = invoicePayments(store.invoices);
-    const lines = (month ? linesInMonth(all, month) : all).map((e) => publicStatementLine(e, paid));
+    const docs = documentsByCode();
+    const lines = (month ? linesInMonth(all, month) : all).map((e) => publicStatementLine(e, paid, docs));
     const months = [...new Set(all.map((e) => e.statement!.valueDate.slice(0, 7)))].sort().reverse();
     res.json({
       month,
@@ -176,8 +176,9 @@ export function createBookkeepingExportRoutes(deps: OrgRoutes): express.Router {
     if (!month) return;
     const lines = linesInMonth(statementLinesOf(ctx.org.id), month);
     const holder = holderNameFor(ctx.org.id);
+    const docs = documentsByCode();
     const rows = lines.map((e) => {
-      const b = belegOfLine(e);
+      const b = belegOfLine(e, docs);
       const code = b && "live" in b ? b.live.code : undefined;
       const row = lexwareRow(e, holder, code);
       const why = b && "stale" in b ? "Beleg stimmt nicht mehr (in Zold ersetzen)" : "Beleg fehlt (Export noch nicht vorbereitet)";
@@ -202,8 +203,9 @@ export function createBookkeepingExportRoutes(deps: OrgRoutes): express.Router {
     const entries = [];
     const missing: string[] = [];
     const stale: string[] = [];
+    const docs = documentsByCode();
     for (const e of lines) {
-      const b = belegOfLine(e);
+      const b = belegOfLine(e, docs);
       if (!b) {
         missing.push(e.id);
         continue;
