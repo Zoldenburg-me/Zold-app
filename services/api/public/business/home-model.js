@@ -86,6 +86,22 @@ export function setupSteps(me, accounts, access) {
   ];
 }
 
+/** The command a typed line means: the first one it is the start of, case
+ *  aside. Null for anything that is not a slash line, which is a search. */
+export function commandFor(text, cmds) {
+  const q = String(text || "").trim().toLowerCase();
+  if (q.length < 2 || !q.startsWith("/")) return null;
+  return cmds.find((c) => c.cmd.startsWith(q)) ?? null;
+}
+
+/** What a submitted line does: run a command, say there is no such command, search, or nothing. */
+export function submitFor(text, cmds) {
+  const q = String(text || "").trim(), cmd = commandFor(q, cmds);
+  if (cmd) return { cmd };
+  if (q.startsWith("/")) return { unknown: true };
+  return q ? { search: q } : null;
+}
+
 /** The set-up card stays while any step is not known to be done. */
 export const setupOpen = (steps) => steps.some((s) => s.done !== true);
 

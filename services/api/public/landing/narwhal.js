@@ -49,7 +49,7 @@
   }, { rootMargin: "-40% 0px -59% 0px" });
   stops.forEach(function (s) { band.observe(s); });
 
-  /* The light hero draws its own narwhal; this line-drawn one would be a white ghost on it, so it waits below.
+  /* This line-drawn narwhal would be a white ghost on the light hero, so it waits below.
      Away while the hero reaches into the top fifth of the viewport, whatever the hero's height; away until the first check. */
   var hero = document.getElementById("top");
   if (hero) {
@@ -101,7 +101,7 @@
     return { x: spot.x, y: spot.y, beside: roomRight };
   }
 
-  /* Never settle on a link or button (the hero's Open an account): step to
+  /* Never settle on a link or button (the hero's actions): step to
      its right, or below it when there is no room on the right. The box
      includes the caption above the narwhal. */
   function clearOfControls(stop, x, y, w, h) {
