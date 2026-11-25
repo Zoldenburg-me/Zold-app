@@ -330,4 +330,89 @@ await t("Copy and Share check expiry at the tap, even if the screen has not redr
   delete ctx.navigator.share;
 });
 
+const URL_B = "https://zold.test/r/receiptB999";
+/* Receipt A's live link has a gated autosave in flight; the sender goes Back
+   and opens receipt B, whose live link withholds the recipient. */
+const openAThenB = async (answerA: string) => {
+  run(`__bodies = []; __gateA = new Promise((r) => { __releaseA = r; });
+    api = async (p, body, method) => {
+      if (method === "GET") return { url: ${JSON.stringify(URL_B)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: { recipient: "hidden" } };
+      __bodies.push({ p, body }); await __gateA; ${answerA} };
+    mShare = { transferId: "tA", fields: { ...SHARE_DEFAULTS, recipient: "full" }, link: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, expired: false, busy: false, loaded: true };`);
+  const saving = run(`setShare("route", true)`);
+  run(`openShare("tB")`);
+  await run("renderShareScreen()");
+  assert.equal(run("mShare.link"), URL_B);
+  run("__releaseA()");
+  await saving;
+};
+
+await t("a save for receipt A that lands after receipt B opened leaves B's link and choices alone", async () => {
+  await openAThenB(`return { url: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: body };`);
+  assert.equal(run("mShare.transferId"), "tB");
+  assert.equal(run("mShare.link"), URL_B, "B still offers its own link");
+  assert.equal(el("m-share-url").textContent, URL_B, "and Send this link shows it");
+  assert.equal(run("mShare.fields.recipient"), "hidden", "B's choices are not A's");
+  assert.equal(run("mShare.fields.route"), false);
+  // The next change on B goes to B, with B's choices.
+  run(`__releaseA = () => {}; __gateA = Promise.resolve();`);
+  await run(`setShare("showRate", false)`);
+  const last = run("__bodies[__bodies.length - 1]");
+  assert.equal(last.p, "/api/transfers/tB/share");
+  assert.equal(last.body.recipient, "hidden", "B's live link is not widened");
+});
+
+await t("an expired answer for receipt A does not drop receipt B's live link", async () => {
+  await openAThenB(`throw Object.assign(new Error("this link has expired"), { status: 409, body: { expired: true, fields: body } });`);
+  assert.equal(run("mShare.link"), URL_B);
+  assert.equal(run("mShare.expired"), false);
+  assert.ok(!hidden("m-share-out"));
+});
+
+await t("a load error is cleared once a later load succeeds", async () => {
+  run(`openShare("t1"); api = async () => { throw Object.assign(new Error("offline"), { status: 0 }); };`);
+  el("m-share-err").classList.add("hidden");
+  await run("renderShareScreen()");
+  assert.ok(!hidden("m-share-err"));
+  run(`openShare("t1"); api = async () => ({ url: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: {} });`);
+  await run("renderShareScreen()");
+  assert.ok(hidden("m-share-err"), "the old warning is gone above working controls");
+});
+
+await t("every radio and switch renders disabled until the saved choices load, and enabled after", async () => {
+  run(`openShare("t1"); __gate = new Promise((r) => { __releaseGet = r; });
+    api = async () => { await __gate; return { url: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: {} }; };`);
+  const pending = run("renderShareScreen()");
+  const radios = () => el("m-share-groups").innerHTML.match(/<input type="radio"[^>]*>/g) || [];
+  const switches = () => el("m-share-toggles").innerHTML.match(/<button [^>]*role="switch"[^>]*>/g) || [];
+  assert.equal(radios().length, run("SHARE_GROUPS.reduce((n, g) => n + g.options.length, 0)"));
+  assert.equal(switches().length, run("SHARE_TOGGLES.length"));
+  for (const c of [...radios(), ...switches()]) assert.match(c, / disabled[ >/]/, `${c} is disabled before load`);
+  run("__releaseGet()");
+  await pending;
+  for (const c of [...radios(), ...switches()]) assert.doesNotMatch(c, / disabled[ >/]/, `${c} is enabled after load`);
+});
+
+await t("a second change made while the first save is in flight is kept on screen and saved after it", async () => {
+  run(`__bodies = []; __gates = []; api = async (p, body) => { __bodies.push({ ...body }); await new Promise((r) => __gates.push(r));
+      return { url: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: body }; };
+    mShare = { transferId: "t1", fields: { ...SHARE_DEFAULTS }, link: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, expired: false, busy: false, loaded: true };`);
+  const first = run(`setShare("route", true)`);
+  await run(`setShare("showRate", false)`);
+  assert.equal(run("__bodies.length"), 1, "one save at a time");
+  run("__gates[0]()");
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(run("mShare.fields.showRate"), false, "the second tap does not revert when the first save lands");
+  assert.equal(run("__bodies.length"), 2, "the second change is saved next");
+  assert.equal(run("__bodies[1].showRate"), false);
+  assert.equal(run("__bodies[1].route"), true);
+  assert.equal(run("__bodies[1].edit"), true);
+  run("__gates[1]()");
+  await first;
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(run("mShare.busy"), false);
+  assert.equal(run("mShare.fields.showRate"), false);
+  assert.equal(run("mShare.fields.route"), true);
+});
+
 console.log(`\nSHARE LINK UI TEST PASSED — ${pass}/${pass}`);

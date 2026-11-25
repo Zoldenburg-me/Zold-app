@@ -26,29 +26,34 @@ const SHARE_TOGGLES = [
 ];
 
 const SHARE_DEFAULTS = { sender: "last", recipient: "full", account: "short", fx: "both", showRate: true, showRef: true, route: false };
-let mShare = { transferId: null, fields: { ...SHARE_DEFAULTS }, link: null, expiresAt: null, expired: false, busy: false, loaded: false };
+/* One object per opened composer: a request answers only the object it was
+   started for, so a reply that lands after another receipt opened is dropped
+   rather than written into that receipt's screen. */
+let mShare = { transferId: null, fields: { ...SHARE_DEFAULTS }, link: null, expiresAt: null, expired: false, busy: false, again: false, loaded: false };
 
 function openShare(id) {
-  mShare = { transferId: id, fields: { ...SHARE_DEFAULTS }, link: null, expiresAt: null, expired: false, busy: false, loaded: false };
+  mShare = { transferId: id, fields: { ...SHARE_DEFAULTS }, link: null, expiresAt: null, expired: false, busy: false, again: false, loaded: false };
   mobileNav("share");
 }
 
 async function renderShareScreen() {
-  mShare.loaded = false;
+  const m = mShare;
+  m.loaded = false;
+  clearErr("m-share-err");
   paintShare();
-  const id = mShare.transferId;
+  const id = m.transferId;
   if (!id) return;
   try {
     // An existing live share is the truth about what is already public; the
     // screen must open showing that, not the defaults.
     const s = await api(`/api/transfers/${id}/share`, undefined, "GET");
-    if (mShare.transferId !== id) return;
+    if (mShare !== m) return;
     mShare.fields = { ...SHARE_DEFAULTS, ...s.fields };
     mShare.link = s.url;
     mShare.expiresAt = s.expiresAt;
     mShare.loaded = true;
   } catch (e) {
-    if (mShare.transferId !== id) return;
+    if (mShare !== m) return;
     /* No share yet (Zold's own 404): the CTA will create one. An expired one
        sends back its choices (never its URL), so the new link starts from
        them. Anything else leaves the screen locked: we do not know what the
@@ -194,34 +199,46 @@ async function setShare(key, value) {
   // receipt the sender never asked to share.
   // It goes as an edit: if the link ran out on the way, the server refuses
   // rather than publishing a new one the sender did not ask for.
-  if (mShare.link) await saveShare({ silent: true, edit: true });
+  if (!mShare.link) return;
+  // A change made while a save is in flight is saved when that one lands, so
+  // the tap is neither lost nor visibly undone by the earlier answer.
+  if (mShare.busy) { mShare.again = true; return; }
+  await saveShare({ silent: true, edit: true });
 }
 
 async function saveShare({ silent, edit } = {}) {
-  if (mShare.busy || !mShare.loaded) return null;
-  mShare.busy = true;
+  const m = mShare;
+  if (m.busy || !m.loaded) return null;
+  m.busy = true;
+  let s = null;
   try {
-    const s = await api(`/api/transfers/${mShare.transferId}/share`, edit ? { ...mShare.fields, edit: true } : mShare.fields);
-    // The screen shows what the server saved, not what it was sent.
-    mShare.fields = { ...SHARE_DEFAULTS, ...s.fields };
-    mShare.link = s.url;
-    mShare.expiresAt = s.expiresAt;
-    mShare.expired = false;
+    s = await api(`/api/transfers/${m.transferId}/share`, edit ? { ...m.fields, edit: true } : m.fields);
+    if (mShare !== m) return null;
+    // The screen shows what the server saved, not what it was sent, unless a
+    // newer change is queued: that save's answer replaces this one.
+    if (!m.again) m.fields = { ...SHARE_DEFAULTS, ...s.fields };
+    m.link = s.url;
+    m.expiresAt = s.expiresAt;
+    m.expired = false;
     clearErr("m-share-err");
     paintShare();
-    return s;
   } catch (e) {
+    if (mShare !== m) return null;
     if (e?.body?.expired) {
-      mShare.link = null;
-      mShare.expiresAt = null;
-      mShare.expired = true;
+      m.link = null;
+      m.expiresAt = null;
+      m.expired = true;
       paintShare();
     }
     if (!silent) showErr("m-share-err", e);
-    return null;
   } finally {
-    mShare.busy = false;
+    m.busy = false;
   }
+  if (m.again && mShare === m) {
+    m.again = false;
+    if (m.link) await saveShare({ silent: true, edit: true });
+  }
+  return s;
 }
 
 const shareCopyLabel = () => (mShare.link ? "Copy link" : "Create link");
