@@ -28,7 +28,7 @@ import { store, type Transfer, type TransferState, type User } from "./store.js"
 import { redeemToIban } from "./adapters/monerium-sandbox.js";
 import { isMoneriumOrderId, MoneriumAccessError, MoneriumApiError } from "./adapters/monerium-client.js";
 import { paymentMemo, redeemMessageStale } from "./sepa.js";
-import { createBridgeTransfer, BridgeTransferError, type BridgeTransferPlan } from "./bridge/bridgexyz.js";
+import { bridgeRequestHash, createBridgeTransfer, BridgeTransferError, type BridgeTransferPlan } from "./bridge/bridgexyz.js";
 import {
   executeTransferLiquidity,
   liquidityProvider,
@@ -357,6 +357,46 @@ function bridgeDestination(): { toAddress: string; blockchainMemo?: string } {
     toAddress: BRIDGE.destinationAddress,
     ...(BRIDGE.destinationMemo ? { blockchainMemo: BRIDGE.destinationMemo } : {}),
   };
+}
+
+/**
+ * Before the debit: the Bridge order this send will replay is the one on
+ * record. /api/transfers created a batched send's Bridge transfer under the
+ * transfer's Idempotency-Key and recorded its hash; the batch's recipient is
+ * that order's deposit address. A send that would replay a different body
+ * (another amount, recipient or source, or a plain debit after a batched
+ * create), or whose signed batch pays another address, stops here with
+ * nothing debited.
+ */
+function assertBridgeOrderBound(transfer: Transfer, user: User, execution: SafeExecution | undefined) {
+  const batch = execution?.batch;
+  if (batch && batch.recipient.toLowerCase() !== transfer.safeSwap?.recipient?.toLowerCase()) {
+    throw new Error(
+      `the signed batch pays ${batch.recipient}, not the recorded Bridge deposit address ${transfer.safeSwap?.recipient} — nothing was debited`,
+    );
+  }
+  if (!transfer.bridgeRequest) return;
+  const amount = transfer.safeSwap?.bridgeAmountUsdc;
+  const destination = bridgeDestination();
+  if (
+    batch?.mode !== "live" ||
+    amount === undefined ||
+    bridgeRequestHash(
+      transfer.id,
+      amount,
+      {
+        paymentRail: BRIDGE.destinationRail,
+        currency: BRIDGE.destinationCurrency,
+        toAddress: destination.toAddress,
+        blockchainMemo: destination.blockchainMemo,
+      },
+      { sourceAddress: user.address },
+    ) !== transfer.bridgeRequest
+  ) {
+    throw new Error(
+      "this send would ask Bridge for a different order than the one already sent under this transfer's key — nothing was debited; create the transfer again",
+    );
+  }
 }
 
 /** Both halves of the cash rail must be live: Bridge moves the USDC to
@@ -946,6 +986,7 @@ export async function executeTransfer(
         "the cash rail is closed on this deployment (BRIDGE_LIVE and the payout anchor must both be configured) — nothing was debited",
       );
     }
+    assertBridgeOrderBound(transfer, user, execution);
     let expectedOut: bigint;
     let usdcOut: number;
     if (execution?.batch) {
@@ -1069,7 +1110,7 @@ export async function executeTransfer(
           toAddress: destination.toAddress,
           blockchainMemo: destination.blockchainMemo,
         },
-        { sourceAddress: batchLive ? user.address : orchestratorAddress },
+        { sourceAddress: batchLive ? user.address : orchestratorAddress, expectRequest: transfer.bridgeRequest },
       );
       recordBridgePlan(txs, bridgePlan);
     } catch (err) {

@@ -9,8 +9,8 @@ import {
   paymentAuthorizationTypedData,
   transferIdHash,
 } from "../chain.js";
-import { createBridgeTransfer } from "../bridge/bridgexyz.js";
-import { prepareSafeSwapForTransfer } from "../liquidity.js";
+import { bridgeRequestHash, createBridgeTransfer } from "../bridge/bridgexyz.js";
+import { prepareSafeSwapForTransfer, venueServesSafe } from "../liquidity.js";
 import { moneriumRedeemMessage, paymentMemo, REDEEM_WINDOW_SEC } from "../sepa.js";
 import { safeDebitBlocker, safeFundedEurToday } from "../orchestrator.js";
 import { store, type Quote, type Transfer } from "../store.js";
@@ -226,7 +226,17 @@ async function prepareTransferFromQuote(
         // holds the input. Falls back to the plain user-signed debit when the
         // configured venue cannot serve a Safe executor (FxSwapper, CoW) or
         // the venue is down; the fallback still never moves without the user.
-        if (transfer.rail === "cash") {
+        const venueIncapable: NonNullable<Transfer["custody"]> = {
+          mode: "orchestrator",
+          reason:
+            `the configured liquidity venue (${LIQUIDITY.PROVIDER}) cannot be executed by the ` +
+            "user's Safe, so the input is debited to the orchestrator and swapped from there",
+          feeToOrchestrator: true,
+        };
+        // A venue that cannot serve a Safe executor at all gets no Bridge
+        // order here: the batch it would fund can never be built.
+        if (transfer.rail === "cash" && !venueServesSafe()) custody = venueIncapable;
+        else if (transfer.rail === "cash") {
           try {
             // A cash transfer exists only while the rail is open (BRIDGE_LIVE
             // and an anchor — /api/quotes refuses otherwise), so the output
@@ -245,17 +255,22 @@ async function prepareTransferFromQuote(
             const bridgeAmountUsdc = Math.floor(convertEur * rate * 100) / 100;
             let recipient: `0x${string}`;
             {
-              const bridgePlan = await createBridgeTransfer(
-                transfer.id,
-                bridgeAmountUsdc,
-                {
-                  paymentRail: BRIDGE.destinationRail,
-                  currency: BRIDGE.destinationCurrency,
-                  toAddress: BRIDGE.destinationAddress,
-                  blockchainMemo: BRIDGE.destinationMemo || undefined,
-                },
-                { sourceAddress: user.address },
-              );
+              const bridgeDest = {
+                paymentRail: BRIDGE.destinationRail,
+                currency: BRIDGE.destinationCurrency,
+                toAddress: BRIDGE.destinationAddress,
+                blockchainMemo: BRIDGE.destinationMemo || undefined,
+              };
+              // On the row before the create goes out: once it may have
+              // reached Bridge, this key belongs to this order, and execute
+              // refuses to send any other under it (or to fall back to a
+              // plain debit, whose replay would be a different order).
+              transfer.bridgeRequest = bridgeRequestHash(transfer.id, bridgeAmountUsdc, bridgeDest, {
+                sourceAddress: user.address,
+              });
+              const bridgePlan = await createBridgeTransfer(transfer.id, bridgeAmountUsdc, bridgeDest, {
+                sourceAddress: user.address,
+              });
               const deposit = bridgePlan.sourceDepositInstructions?.to_address;
               if (!deposit || !/^0x[a-fA-F0-9]{40}$/.test(deposit)) {
                 throw new Error("Bridge returned no Base deposit address for the swap to deliver into");
@@ -295,15 +310,7 @@ async function prepareTransferFromQuote(
                 bridgeAmountUsdc,
               };
             }
-            if (!swap) {
-              custody = {
-                mode: "orchestrator",
-                reason:
-                  `the configured liquidity venue (${LIQUIDITY.PROVIDER}) cannot be executed by the ` +
-                  "user's Safe, so the input is debited to the orchestrator and swapped from there",
-                feeToOrchestrator: true,
-              };
-            }
+            if (!swap) custody = venueIncapable;
           } catch (err: any) {
             custody = {
               mode: "orchestrator",
