@@ -424,9 +424,9 @@ await t("a second change made while the first save is in flight is kept on scree
   assert.equal(run("mShare.fields.route"), true);
 });
 
-await t("a failed edit shows what the live link still carries, says so, and drops the queued change", async () => {
+await t("an edit Zold refuses shows what the live link still carries, says so, and drops the queued change", async () => {
   run(`mobileNav = __realMobileNav; __bodies = []; __gates = [];
-    api = async (p, body) => { __bodies.push({ ...body }); if (__bodies.length === 1) await new Promise((r) => __gates.push(r)); throw Object.assign(new Error("server unavailable"), { status: 503 }); };
+    api = async (p, body) => { __bodies.push({ ...body }); if (__bodies.length === 1) await new Promise((r) => __gates.push(r)); throw Object.assign(new Error("that choice is not allowed"), { status: 422, fromZold: true }); };
     mShare = { transferId: "t1", fields: { ...SHARE_DEFAULTS, recipient: "full" }, published: { ...SHARE_DEFAULTS, recipient: "full" }, link: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, expired: false, busy: false, loaded: true };
     hist.length = 0; hist.push({ id: "t1", rail: "sepa", recipientName: "Max Mustermann" });`);
   el("m-share-err").classList.add("hidden");
@@ -444,18 +444,76 @@ await t("a failed edit shows what the live link still carries, says so, and drop
   assert.match(el("m-share-preview").innerHTML, /Recipient<\/span><span class="v">Max Mustermann/, "the preview names the recipient the link still shows");
   assert.ok(!hidden("m-share-err"), "the failure is shown, not swallowed");
   assert.match(el("m-share-err").textContent, /not saved/i);
-  assert.match(el("m-share-err").textContent, /server unavailable/);
+  assert.match(el("m-share-err").textContent, /that choice is not allowed/);
   assert.equal(run("mShare.link"), URL_R, "the link itself is still live");
   run("hist.length = 0;");
 });
 
-await t("after a save lands, a later failed edit reverts to that save, not to the load", async () => {
-  run(`__n = 0; api = async (p, body) => { if (__n++ === 0) return { url: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: body }; throw Object.assign(new Error("offline"), { status: 0 }); };
+await t("after a save lands, a later refused edit reverts to that save, not to the load", async () => {
+  run(`__n = 0; api = async (p, body) => { if (__n++ === 0) return { url: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: body }; throw Object.assign(new Error("bad field"), { status: 400, fromZold: true }); };
     mShare = { transferId: "t1", fields: { ...SHARE_DEFAULTS }, published: { ...SHARE_DEFAULTS }, link: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, expired: false, busy: false, loaded: true };`);
   await run(`setShare("recipient", "hidden")`);
   await run(`setShare("route", true)`);
   assert.equal(run("mShare.fields.recipient"), "hidden", "the saved narrowing stays");
   assert.equal(run("mShare.fields.route"), false, "the failed change is undone");
+});
+
+/* The edit route writes before it replies, so an answer that never arrived
+   (or a gateway's 5xx) says nothing about the live link. The screen must ask
+   the server, not guess either way. */
+const lostReply = (getAnswer: string) => run(`__bodies = []; __gets = 0; __saved = { ...SHARE_DEFAULTS, recipient: "full" };
+    api = async (p, body, method) => {
+      if (method === "GET") { __gets++; ${getAnswer} }
+      __bodies.push({ ...body }); __saved = { ...SHARE_DEFAULTS, ...body }; delete __saved.edit;
+      throw Object.assign(new Error("Zold’s answer didn’t arrive. Check before you try it again."), { offline: true }); };
+    mShare = { transferId: "t1", fields: { ...SHARE_DEFAULTS, recipient: "hidden" }, published: { ...SHARE_DEFAULTS, recipient: "hidden" }, link: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, expired: false, busy: false, loaded: true };
+    hist.length = 0; hist.push({ id: "t1", rail: "sepa", recipientName: "Max Mustermann" });`);
+
+await t("an edit whose reply is lost re-reads the link and shows what the server saved", async () => {
+  lostReply(`return { url: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: __saved };`);
+  el("m-share-err").classList.add("hidden");
+  await run(`setShare("recipient", "full")`);
+  assert.equal(run("__bodies.length"), 1);
+  assert.equal(run("__gets"), 1, "the share is read back from the server");
+  assert.equal(run("mShare.fields.recipient"), "full", "the screen shows the saved change, not the old value");
+  assert.equal(run("mShare.published.recipient"), "full");
+  assert.match(el("m-share-preview").innerHTML, /Recipient<\/span><span class="v">Max Mustermann/, "the preview names the recipient the link now shows");
+  assert.equal(run("mShare.loaded"), true, "confirmed, so the controls work again");
+  assert.equal(run("mShare.link"), URL_R);
+  assert.doesNotMatch(el("m-share-err").textContent, /not saved/i, "nothing claims the change was not saved");
+  assert.ok(!hidden("m-share-err"), "the sender is told the screen was re-read");
+  // The next edit carries the server's fields, so it cannot undo the saved one.
+  run(`api = async (p, body) => { __bodies.push({ ...body }); return { url: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: body }; };`);
+  await run(`setShare("route", true)`);
+  assert.equal(run("__bodies[1].recipient"), "full");
+  run("hist.length = 0;");
+});
+
+await t("a 502 from a gateway (not Zold) is uncertain too: the link is re-read, not reverted", async () => {
+  run(`__bodies = []; __gets = 0;
+    api = async (p, body, method) => {
+      if (method === "GET") { __gets++; return { url: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: { ...SHARE_DEFAULTS, route: true } }; }
+      __bodies.push({ ...body }); throw Object.assign(new Error("bad gateway"), { status: 502, fromZold: false }); };
+    mShare = { transferId: "t1", fields: { ...SHARE_DEFAULTS }, published: { ...SHARE_DEFAULTS }, link: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, expired: false, busy: false, loaded: true };`);
+  await run(`setShare("route", true)`);
+  assert.equal(run("__gets"), 1);
+  assert.equal(run("mShare.fields.route"), true);
+});
+
+await t("an edit whose reply is lost and whose re-read fails keeps the composer locked and says so", async () => {
+  lostReply(`throw Object.assign(new Error("you appear to be offline. Zold could not be reached"), { offline: true });`);
+  el("m-share-err").classList.add("hidden");
+  await run(`setShare("recipient", "full")`);
+  assert.equal(run("__gets"), 1);
+  assert.equal(run("mShare.loaded"), false, "no edits until what the link shows is confirmed");
+  assert.match(el("m-share-err").textContent, /could not confirm what the link shows/i);
+  assert.doesNotMatch(el("m-share-err").textContent, /not saved/i);
+  for (const c of el("m-share-groups").innerHTML.match(/<input type="radio"[^>]*>/g) || []) assert.match(c, / disabled[ >/]/);
+  assert.equal(el("m-share-copy").disabled, true, "Copy waits too");
+  // A tap while locked sends nothing.
+  await run(`setShare("route", true)`);
+  assert.equal(run("__bodies.length"), 1);
+  run("hist.length = 0;");
 });
 
 console.log(`\nSHARE LINK UI TEST PASSED — ${pass}/${pass}`);

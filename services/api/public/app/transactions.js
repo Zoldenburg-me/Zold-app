@@ -29,7 +29,8 @@ const SHARE_DEFAULTS = { sender: "last", recipient: "full", account: "short", fx
 /* One object per opened composer: a request answers only the object it was
    started for, so a reply that lands after another receipt opened is dropped
    rather than written into that receipt's screen. `published` is what the
-   live link carries, as the server last said; a failed edit goes back to it. */
+   live link carries, as the server last said; an edit Zold refuses goes back
+   to it, and one whose outcome is unknown re-reads it. */
 let mShare = { transferId: null, fields: { ...SHARE_DEFAULTS }, published: null, link: null, expiresAt: null, expired: false, busy: false, again: false, loaded: false };
 
 function openShare(id) {
@@ -42,35 +43,46 @@ async function renderShareScreen() {
   m.loaded = false;
   clearErr("m-share-err");
   paintShare();
-  const id = m.transferId;
-  if (!id) return;
+  if (!m.transferId) return;
   try {
-    // An existing live share is the truth about what is already public; the
-    // screen must open showing that, not the defaults.
-    const s = await api(`/api/transfers/${id}/share`, undefined, "GET");
-    if (mShare !== m) return;
-    mShare.fields = { ...SHARE_DEFAULTS, ...s.fields };
-    mShare.published = { ...mShare.fields };
-    mShare.link = s.url;
-    mShare.expiresAt = s.expiresAt;
-    mShare.loaded = true;
+    await loadShare(m);
   } catch (e) {
     if (mShare !== m) return;
-    /* No share yet (Zold's own 404): the CTA will create one. An expired one
-       sends back its choices (never its URL), so the new link starts from
-       them. Anything else leaves the screen locked: we do not know what the
-       sender chose. */
-    if (e?.status === 404 && e.fromZold) {
-      if (e.body?.expired) {
-        mShare.fields = { ...SHARE_DEFAULTS, ...e.body.fields };
-        mShare.expired = true;
-      }
-      mShare.loaded = true;
-    } else {
-      showErr("m-share-err", e);
+    // Anything but Zold's own 404 leaves the screen locked: we do not know
+    // what the sender chose.
+    showErr("m-share-err", e);
+  }
+  if (mShare !== m) return;
+  paintShare();
+}
+
+/* Read what the live link carries and adopt it as both the screen and
+   `published`. An existing live share is the truth about what is already
+   public; the screen must show that, not the defaults. No share yet (Zold's
+   own 404) is an answer too: the CTA will create one. An expired one sends
+   back its choices (never its URL), so the new link starts from them. Any
+   other failure throws and leaves `loaded` false. */
+async function loadShare(m) {
+  try {
+    const s = await api(`/api/transfers/${m.transferId}/share`, undefined, "GET");
+    if (mShare !== m) return;
+    m.fields = { ...SHARE_DEFAULTS, ...s.fields };
+    m.published = { ...m.fields };
+    m.link = s.url;
+    m.expiresAt = s.expiresAt;
+    m.expired = false;
+  } catch (e) {
+    if (mShare !== m) return;
+    if (!(e?.status === 404 && e.fromZold)) throw e;
+    m.link = null;
+    m.expiresAt = null;
+    m.published = null;
+    if (e.body?.expired) {
+      m.fields = { ...SHARE_DEFAULTS, ...e.body.fields };
+      m.expired = true;
     }
   }
-  paintShare();
+  m.loaded = true;
 }
 
 /* paintShare redraws the controls; put focus back on the one in use, so arrow
@@ -128,7 +140,7 @@ function paintShareControls() {
   $("m-share-copy").disabled = !mShare.loaded;
   // Share appears only with a link, so its tap opens the sheet at once: a
   // request first would spend the tap's activation and the sheet would refuse.
-  $("m-share-native").classList.toggle("hidden", !mShare.link || typeof navigator.share !== "function");
+  $("m-share-native").classList.toggle("hidden", !mShare.link || !mShare.loaded || typeof navigator.share !== "function");
   const foot = $("m-share-foot");
   if (mShare.link) {
     const days = Math.max(0, Math.ceil((Date.parse(mShare.expiresAt) - Date.now()) / 86400000));
@@ -232,14 +244,30 @@ async function saveShare({ silent, edit } = {}) {
       m.expiresAt = null;
       m.expired = true;
       paintShare();
-    } else if (edit) {
-      /* The live link still carries what it carried before, so the screen
-         must not show a narrowing that never landed: back to what is
-         published, the queued change dropped with it, and said out loud. */
+    } else if (edit && e?.fromZold && e.status < 500) {
+      /* Zold refused the edit, so the live link still carries what it
+         carried before: back to what is published, the queued change dropped
+         with it, and said out loud. */
       m.fields = { ...m.published };
       m.again = false;
       paintShare();
-      showErr("m-share-err", new Error(`that change was not saved, so the live link still shows what is selected here (${e.message})`));
+      showErr("m-share-err", new Error(`that change was not saved (${e.message}). The live link still shows what is selected here`));
+    } else if (edit) {
+      /* The route writes before it replies, so a lost answer, a gateway's
+         5xx or a drop mid-request may have saved the change. Neither the old
+         nor the new choice is known to be live: lock the screen and ask. */
+      m.again = false;
+      m.loaded = false;
+      paintShare();
+      try {
+        await loadShare(m);
+        if (mShare !== m) return null;
+        paintShare();
+        showErr("m-share-err", new Error("Zold's answer to that change didn't arrive, so the screen now shows what the live link carries"));
+      } catch {
+        if (mShare !== m) return null;
+        showErr("m-share-err", new Error("could not confirm what the link shows. Reopen this receipt before you change it or send it"));
+      }
     }
     if (!silent) showErr("m-share-err", e);
   } finally {
@@ -283,7 +311,7 @@ $("m-share-copy").onclick = async () => {
    Copy: copying here, without a fresh tap, would fail the same way. */
 $("m-share-native").onclick = async () => {
   if (dropExpiredShare()) return paintShare();
-  if (!mShare.link) return;
+  if (!mShare.link || !mShare.loaded) return;
   try {
     await navigator.share({ title: "Zold receipt", url: mShare.link });
   } catch (e) {
