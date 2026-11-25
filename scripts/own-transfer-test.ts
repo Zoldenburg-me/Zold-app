@@ -319,6 +319,61 @@ await check("no line for a member who may not categorise, or for another person'
   assert.equal((await call("GET", "/users/u_me/books-line/t_co")).body.line, null);
 });
 
+await check("a crypto send finds its line once SENT, on the wallet payment's own sheet", async () => {
+  addUser("u_cs", safe("cc"));
+  store.addOrganisation({ id: "org_cs", type: "personal", name: "Cs", reporting, createdAt: NOW, updatedAt: NOW } as any);
+  member("org_cs", "u_cs", "owner");
+  store.addAccount({ id: "acc_cs", orgId: "org_cs", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: safe("cc"), backingUserId: "u_cs", createdAt: NOW } as any);
+  // shortcut: pushed straight into the store; the send path itself is crypto-send's test.
+  const send = { id: "cs_1", userId: "u_cs", to: safe("dd"), token: "EURE", amount: "25", capEur: 25, state: "SUBMITTED", createdAt: NOW, updatedAt: NOW } as any;
+  store.cryptoSends.push(send);
+  writeStatementLinesFor(store.findUser("u_cs")!);
+  const look = () => call("GET", "/users/u_cs/books-line/cs_1", undefined, "u_cs");
+  assert.equal((await look()).body.line, null, "a send not yet confirmed has no line");
+  send.state = "SENT";
+  send.txHash = `0x${"e".repeat(64)}`;
+  writeStatementLinesFor(store.findUser("u_cs")!);
+  const CS = lineId("org_cs", "cryptosend:cs_1");
+  assert.deepEqual((await look()).body, { line: { orgId: "org_cs", lineId: CS, ownTransfer: false } });
+  assert.equal((await own("org_cs", CS, true, "u_cs")).status, 200);
+  assert.equal((await look()).body.line.ownTransfer, true);
+  assert.equal((await own("org_cs", CS, false, "u_cs")).status, 200);
+});
+
+await check("a send confirmed before the bookkeeping sweep ran still finds its line: the lookup writes it", async () => {
+  store.cryptoSends.push({ id: "cs_new", userId: "u_cs", to: safe("dd"), token: "EURE", amount: "5", capEur: 5, state: "SENT", txHash: `0x${"9".repeat(64)}`, createdAt: NOW, updatedAt: NOW } as any);
+  assert.equal(store.ledgerOf("org_cs").some((e: any) => e.id === lineId("org_cs", "cryptosend:cs_new")), false, "no sweep has run");
+  const r = await call("GET", "/users/u_cs/books-line/cs_new", undefined, "u_cs");
+  assert.deepEqual(r.body, { line: { orgId: "org_cs", lineId: lineId("org_cs", "cryptosend:cs_new"), ownTransfer: false } });
+});
+
+await check("a company send has no line on the sender's own sheet", async () => {
+  store.cryptoSends.push({ id: "cs_co", userId: "u_cs", orgId: "org_co", safeOpId: "op_1", to: safe("dd"), token: "EURE", amount: "7", capEur: 7, state: "SENT", createdAt: NOW, updatedAt: NOW } as any);
+  assert.equal((await call("GET", "/users/u_cs/books-line/cs_co", undefined, "u_cs")).body.line, null);
+});
+
+await check("a wallet send that pays a send link is an invoice payment: no mark, and an earlier mark is cleared", async () => {
+  const sent = (id: string) => store.cryptoSends.push({ id, userId: "u_cs", to: safe("dd"), token: "EURE", amount: "25", capEur: 25, state: "SENT", txHash: `0x${id.length.toString(16).repeat(64).slice(0, 64)}`, createdAt: NOW, updatedAt: NOW } as any);
+  const pays = (invId: string, sendId: string) =>
+    store.addInvoice({ id: invId, orgId: "org_cs", linkTokenHash: invId, state: "PAYING", total: "25.00", payment: { cryptoSendId: sendId }, createdAt: NOW, updatedAt: NOW } as any);
+  sent("cs_inv");
+  sent("cs_was");
+  writeStatementLinesFor(store.findUser("u_cs")!);
+  const INV = lineId("org_cs", "cryptosend:cs_inv");
+  const WAS = lineId("org_cs", "cryptosend:cs_was");
+  assert.equal((await own("org_cs", WAS, true, "u_cs")).status, 200);
+  // The link is recorded after the line was written; no sweep has run since.
+  pays("inv_a", "cs_inv");
+  assert.equal((await own("org_cs", INV, true, "u_cs")).status, 409, "the mark endpoint asks the invoice, not only the line");
+  assert.equal((await call("GET", "/users/u_cs/books-line/cs_inv", undefined, "u_cs")).body.line, null);
+  pays("inv_b", "cs_was");
+  writeStatementLinesFor(store.findUser("u_cs")!);
+  const was = store.ledgerOf("org_cs").find((e: any) => e.id === WAS)!;
+  assert.equal(was.statement!.links.invoiceId, "inv_b", "the line carries the invoice it pays");
+  assert.equal(was.tags.includes("internal"), false, "the mark made before the link is dropped");
+  assert.equal(store.ledgerOf("org_cs").find((e: any) => e.id === INV)!.statement!.links.invoiceId, "inv_a");
+});
+
 console.log("\nBelege");
 
 await check("an issued Beleg is never touched: it still verifies, is not revoked, and keeps the booking it froze", async () => {
@@ -429,6 +484,10 @@ await check("Revenue and Expenses are summed from counted lines; cash keeps ever
     assert.match(read(f), /Between my own accounts/, f);
     assert.match(read(f), /[Nn]ot income or an expense/, f);
   }
+  // The wallet payment's sheet reuses phOwnBind, drawn only for a confirmed send.
+  const wallet = read("app/phone-send.js").match(/PH\["send\/wallet-done"\] = \{[\s\S]*?\n\};/)![0];
+  assert.match(wallet, /sent \? `<div id="ph-own" class="z-stack"><\/div>` : ""/);
+  assert.match(wallet, /bind\(root, id\) \{ phOwnBind\(root, id\); \}/);
 });
 
 server.close();
