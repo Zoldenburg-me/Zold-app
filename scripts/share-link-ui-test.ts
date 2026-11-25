@@ -558,4 +558,63 @@ await t("turning an unconfirmed link off leaves a known state: no link, and Crea
   run("hist.length = 0;");
 });
 
+/* Receipt A's Turn this link off is in flight when the sender opens receipt
+   B, whose live link withholds the recipient. A's reply must not unlock B
+   before B's saved choices load, or Create link would send the defaults and
+   the route would widen B's live link with them. */
+await t("turning receipt A's link off leaves receipt B locked until B's own choices load", async () => {
+  run(`openShare = __realOpenShare; mobileNav = () => {}; __posts = [];
+    __delA = new Promise((r) => { __releaseDel = r; }); __getB = new Promise((r) => { __releaseGetB = r; });
+    api = async (p, body, method) => {
+      if (method === "DELETE") { await __delA; return {}; }
+      if (method === "GET") { await __getB; return { url: ${JSON.stringify(URL_B)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: { recipient: "hidden" } }; }
+      __posts.push({ p, body }); return { url: ${JSON.stringify(URL_B)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: body }; };
+    mShare = { transferId: "tA", fields: { ...SHARE_DEFAULTS }, published: { ...SHARE_DEFAULTS }, link: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, expired: false, busy: false, again: false, loaded: true };`);
+  const revoking = el("m-share-revoke").onclick();
+  run(`openShare("tB")`);
+  const loadingB = run("renderShareScreen()");
+  run("__releaseDel()");
+  await revoking;
+  assert.equal(run("mShare.transferId"), "tB");
+  assert.equal(run("mShare.loaded"), false, "A's reply does not unlock B");
+  assert.equal(el("m-share-copy").disabled, true);
+  run("announce = () => {};");
+  await el("m-share-copy").onclick();
+  assert.equal(run("__posts.length"), 0, "Create link sends nothing for B yet");
+  run("__releaseGetB()");
+  await loadingB;
+  assert.equal(run("mShare.loaded"), true);
+  assert.equal(run("mShare.link"), URL_B, "B keeps its live link");
+  assert.equal(run("mShare.fields.recipient"), "hidden", "with B's choices");
+});
+
+/* A settings change on a live link is still saving when the sender turns the
+   link off. Whichever order the server ran them in, the link ends up off, so
+   the save's late reply must not draw it again. */
+await t("a save that lands after Turn this link off does not bring the link back", async () => {
+  run(`__saveGate = new Promise((r) => { __releaseSave = r; });
+    api = async (p, body, method) => {
+      if (method === "DELETE") return {};
+      await __saveGate; return { url: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: body }; };
+    mShare = { transferId: "t1", fields: { ...SHARE_DEFAULTS }, published: { ...SHARE_DEFAULTS }, link: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, expired: false, busy: false, again: false, loaded: true };`);
+  const saving = run(`setShare("route", true)`);
+  await el("m-share-revoke").onclick();
+  assert.equal(run("mShare.link"), null);
+  run("__releaseSave()");
+  await saving;
+  assert.equal(run("mShare.link"), null, "the revoked link stays off");
+  assert.ok(hidden("m-share-out"));
+  assert.equal(el("m-share-copy").textContent, "Create link");
+  assert.equal(run("mShare.busy"), false, "and Create link is not blocked");
+});
+
+await t("the footer does not call an unconfirmed link live", async () => {
+  lostReply(`throw Object.assign(new Error("you appear to be offline. Zold could not be reached"), { offline: true });`);
+  await run(`setShare("recipient", "full")`);
+  assert.equal(run("mShare.loaded"), false);
+  assert.doesNotMatch(el("m-share-foot").textContent, /^Live/);
+  assert.match(el("m-share-foot").textContent, /not confirmed/i);
+  run("hist.length = 0;");
+});
+
 console.log(`\nSHARE LINK UI TEST PASSED — ${pass}/${pass}`);

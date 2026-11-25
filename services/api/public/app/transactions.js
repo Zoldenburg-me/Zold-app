@@ -30,11 +30,13 @@ const SHARE_DEFAULTS = { sender: "last", recipient: "full", account: "short", fx
    started for, so a reply that lands after another receipt opened is dropped
    rather than written into that receipt's screen. `published` is what the
    live link carries, as the server last said; an edit Zold refuses goes back
-   to it, and one whose outcome is unknown re-reads it. */
-let mShare = { transferId: null, fields: { ...SHARE_DEFAULTS }, published: null, link: null, expiresAt: null, expired: false, busy: false, again: false, loaded: false };
+   to it, and one whose outcome is unknown re-reads it. `revokes` counts the
+   times this link was turned off: a save that started before one answers a
+   link that no longer exists, and is dropped. */
+let mShare = { transferId: null, fields: { ...SHARE_DEFAULTS }, published: null, link: null, expiresAt: null, expired: false, busy: false, again: false, loaded: false, revokes: 0 };
 
 function openShare(id) {
-  mShare = { transferId: id, fields: { ...SHARE_DEFAULTS }, published: null, link: null, expiresAt: null, expired: false, busy: false, again: false, loaded: false };
+  mShare = { transferId: id, fields: { ...SHARE_DEFAULTS }, published: null, link: null, expiresAt: null, expired: false, busy: false, again: false, loaded: false, revokes: 0 };
   mobileNav("share");
 }
 
@@ -145,7 +147,9 @@ function paintShareControls() {
   // request first would spend the tap's activation and the sheet would refuse.
   $("m-share-native").classList.toggle("hidden", !mShare.link || !mShare.loaded || typeof navigator.share !== "function");
   const foot = $("m-share-foot");
-  if (mShare.link) {
+  if (mShare.link && !mShare.loaded) {
+    foot.textContent = "The link is on, but what it shows is not confirmed";
+  } else if (mShare.link) {
     const days = Math.max(0, Math.ceil((Date.parse(mShare.expiresAt) - Date.now()) / 86400000));
     foot.textContent = `Live · expires in ${days} day${days === 1 ? "" : "s"}`;
   } else if (mShare.expired) {
@@ -227,10 +231,11 @@ async function saveShare({ silent, edit } = {}) {
   const m = mShare;
   if (m.busy || !m.loaded) return null;
   m.busy = true;
+  const revokes = m.revokes;
   let s = null;
   try {
     s = await api(`/api/transfers/${m.transferId}/share`, edit ? { ...m.fields, edit: true } : m.fields);
-    if (mShare !== m) return null;
+    if (mShare !== m || m.revokes !== revokes) return null;
     // The screen shows what the server saved, not what it was sent, unless a
     // newer change is queued: that save's answer replaces this one.
     m.published = { ...SHARE_DEFAULTS, ...s.fields };
@@ -241,7 +246,7 @@ async function saveShare({ silent, edit } = {}) {
     clearErr("m-share-err");
     paintShare();
   } catch (e) {
-    if (mShare !== m) return null;
+    if (mShare !== m || m.revokes !== revokes) return null;
     if (e?.body?.expired) {
       m.link = null;
       m.expiresAt = null;
@@ -323,18 +328,27 @@ $("m-share-native").onclick = async () => {
   }
 };
 
+/* The reply answers the receipt it was sent for: one that lands after
+   another receipt opened must not unlock that receipt before its own saved
+   choices load. */
 $("m-share-revoke").onclick = async () => {
+  const m = mShare;
   try {
-    await api(`/api/transfers/${mShare.transferId}/share`, undefined, "DELETE");
+    await api(`/api/transfers/${m.transferId}/share`, undefined, "DELETE");
+    if (mShare !== m) return;
     // No link is a known state, even after a confirmation that failed: the
-    // composer is unlocked and Create link starts a new one.
-    mShare.link = null;
-    mShare.expiresAt = null;
-    mShare.published = null;
-    mShare.loaded = true;
+    // composer is unlocked and Create link starts a new one. A save still in
+    // flight answers the link just turned off, so its reply is dropped.
+    m.revokes = (m.revokes || 0) + 1;
+    m.again = false;
+    m.link = null;
+    m.expiresAt = null;
+    m.published = null;
+    m.loaded = true;
     clearErr("m-share-err");
     paintShare();
   } catch (e) {
+    if (mShare !== m) return;
     showErr("m-share-err", e);
   }
 };
