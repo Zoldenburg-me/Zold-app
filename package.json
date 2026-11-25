@@ -28,6 +28,7 @@
     "convert:race:test": "tsx scripts/convert-race-test.ts",
     "convert:crash:test": "tsx scripts/convert-crash-test.ts",
     "safe-op-uncertain:test": "tsx scripts/safe-op-uncertain-test.ts",
+    "candide:matrix:test": "tsx scripts/candide-matrix-test.ts",
     "verifier-sweep:test": "tsx scripts/verifier-sweep-test.ts",
     "pay:test": "tsx scripts/pay-page-test.ts",
     "ens:test": "tsx scripts/ens-test.ts",

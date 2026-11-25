@@ -85,17 +85,19 @@ const renewFailed = new Map<string, { until: number; addressMoved: boolean }>();
  * `routesReadAt`: the hard-coded EURe + USDC of older pages) is renewed on
  * first read, because Candide forwards only what its routes list and an EURe
  * deposit to the forwarder is stranded. Until that renewal succeeds the page
- * is closed.
+ * is closed. So is a page whose stored activation Candide did not report
+ * active: that address forwards nothing.
  *
- * A failed renewal still answers yes while the old activation runs and its
- * list came from the routes; once it has lapsed the answer is no, and the
+ * A failed renewal still answers yes while the old activation runs, is
+ * active and its list came from the routes; once it has lapsed the answer is no, and the
  * caller shows no address. Failures back off for RENEW_RETRY_MS.
  */
 export async function livePaymentPage(user: User): Promise<boolean> {
   const page = user.paymentPage;
   const f = page?.forwarder;
   if (!page || !f || f.provider !== "candide") return true;
-  const listed = !!page.routesReadAt;
+  // The stored activation may be served: listed from the routes, and active.
+  const listed = !!page.routesReadAt && f.active === true;
   const expires = f.expiresAt ? Date.parse(f.expiresAt) : Number.POSITIVE_INFINITY;
   if (listed && expires - Date.now() > RENEW_BEFORE_MS) return true;
   const failed = renewFailed.get(user.id);

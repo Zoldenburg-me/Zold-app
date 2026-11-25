@@ -195,6 +195,11 @@ export async function activatePaymentForwarder(params: {
   if (activatedAddress.toLowerCase() !== address.toLowerCase()) {
     throw new Error(`Candide activated ${activatedAddress}, but computed ${address}`);
   }
+  // An address Candide does not report active is not forwarded: a deposit to
+  // it stays in the forwarder, so it is never shown as the page's.
+  if (activation.active !== true) {
+    throw new Error(`Candide reports forwarding address ${address} as not active`);
+  }
 
   return {
     address,
@@ -206,7 +211,7 @@ export async function activatePaymentForwarder(params: {
       sourceChainIds,
       custodialWithdrawer,
       salt,
-      active: !!activation.active,
+      active: true,
       ...(activation.expiresAt ? { expiresAt: new Date(activation.expiresAt * 1000).toISOString() } : {}),
       activatedAt: now,
     },
