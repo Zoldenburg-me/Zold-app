@@ -337,8 +337,11 @@ PH["send/wallet-done"] = {
         { key: "Address", value: phGroupAddress(s.to), mono: true },
         ...(s.txHash ? [{ key: "Transaction", value: s.txHash, mono: true }] : []),
       ])}
+      ${sent ? `<div id="ph-own" class="z-stack"></div>` : ""}
     `)}${phFoot(Z.button({ variant: "primary", full: true, label: "Done", href: "#home" }))}`;
   },
+  // Only a SENT send has a statement line (bookkeeping/statement.ts).
+  bind(root, id) { phOwnBind(root, id); },
 };
 
 /** The payee for the amount step: from history by IBAN, or the one typed. */
