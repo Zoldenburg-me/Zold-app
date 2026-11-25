@@ -50,6 +50,8 @@ process.env.ORG_SAFE_QUEUE_ENABLED = "1";
 process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS = GUARDIAN;
 
 const { initStore, store } = await import("../services/api/src/store.js");
+// The live rows, for arranging state no store method writes (store/db.ts).
+const dbm = await import("../services/api/src/store/db.js");
 const { resolveOrg } = await import("../services/api/src/routes/org-context.js");
 const { createSafeOpRoutes, opSignRefusal } = await import("../services/api/src/routes/business/safe-ops.js");
 const { createOrgRecoveryRoutes } = await import("../services/api/src/routes/business/org-recovery.js");
@@ -390,16 +392,16 @@ try {
     op = (await store.findSafeOp(id))!;
     assert.ok(op.userOperation.toLowerCase().includes(strip(GUARDIAN)));
     // No store method rewrites an op's guardian: the stored row is set by hand.
-    (await import("../services/api/src/store/db.js")).db.safeOps.find((o) => o.id === id)!.guardianAddress = FOREIGN;
+    dbm.db.safeOps.find((o) => o.id === id)!.guardianAddress = FOREIGN;
     await refused(id);
 
     // An op queued before the field existed: the substring check decides.
     id = await queue(false);
-    delete (await store.findSafeOp(id))!.guardianAddress;
+    delete dbm.db.safeOps.find((x) => x.id === id)!.guardianAddress;
     assert.equal((await sign("anna", id, "org_2")).status, 201, "a legacy op that names the guardian may be signed");
     await end(id);
     id = await queue(true);
-    delete (await store.findSafeOp(id))!.guardianAddress;
+    delete dbm.db.safeOps.find((x) => x.id === id)!.guardianAddress;
     await refused(id);
     modules[SAFE2.toLowerCase()] = fresh();
   });

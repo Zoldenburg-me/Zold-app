@@ -208,7 +208,7 @@ const linksModule = new URL("../services/api/src/merchant-links.ts", import.meta
  *  closing ("fetch failed" on slow CI runners). */
 const availabilityWith = (origin: string) => new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve, reject) => {
   const child = spawn(tsx, ["-e",
-    `import(${JSON.stringify(linksModule)}).then((m) => console.log(JSON.stringify(m.merchantLinksAvailable()))).catch((e) => { console.error(e.message); process.exit(1); })`], {
+    `import(${JSON.stringify(linksModule)}).then((m) => m.merchantLinksAvailable()).then((v) => console.log(JSON.stringify(v))).catch((e) => { console.error(e.message); process.exit(1); })`], {
     env: { ...process.env, CHECKOUT_SERVICE_ORIGIN: origin },
   });
   let stdout = "";

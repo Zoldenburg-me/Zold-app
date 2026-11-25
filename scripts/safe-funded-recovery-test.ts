@@ -90,6 +90,8 @@ try {
 
   // Imported after the deploy so config/chain read the right addresses.
   const { initStore, store } = await import("../services/api/src/store.js");
+  // The live rows, for arranging state no store method writes (store/db.ts).
+  const dbm = await import("../services/api/src/store/db.js");
   const { abis, addrs, eur, orchestratorAddress, orchestratorWallet, publicClient, writeAndWait, deployerWallet } =
     await import("../services/api/src/chain.js");
   const { compensateTransfer, sweepStrandedTransfers, dailyCapUsage, DEBIT_STEP, strandedAction } = await import(
@@ -385,10 +387,10 @@ try {
     const user = await seedUser("Stranded Outbound", 0);
     const sepa = await seedSafeFundedTransfer(user, 15, ["monerium.redeem.pending"]);
     await store.updateTransfer(sepa.id, { state: "DEBITED", error: undefined });
-    (await store.findTransfer(sepa.id))!.updatedAt = stale;
+    dbm.db.transfers.find((x) => x.id === sepa.id)!.updatedAt = stale;
     const cash = await seedSafeFundedTransfer(user, 15, ["bridge.xyz.deposit.pending"]);
     await store.updateTransfer(cash.id, { state: "SWAPPED", error: undefined });
-    (await store.findTransfer(cash.id))!.updatedAt = stale;
+    dbm.db.transfers.find((x) => x.id === cash.id)!.updatedAt = stale;
     const before = await eureBalance(user.address);
     await sweepStrandedTransfers();
     const after = await eureBalance(user.address);

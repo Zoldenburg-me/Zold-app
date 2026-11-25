@@ -62,6 +62,10 @@ await new Promise<void>((r) => fake.listen(0, "127.0.0.1", r));
 process.env.MONERIUM_BASE_URL = `http://127.0.0.1:${(fake.address() as any).port}`;
 
 const { initStore, store } = await import("../services/api/src/store.js");
+
+// The live rows, for arranging state no store method writes (store/db.ts).
+
+const dbm = await import("../services/api/src/store/db.js");
 const { createDraftRoutes } = await import("../services/api/src/routes/business/drafts.js");
 const { createCryptoSendsRouter, createCryptoSendPreparer } = await import("../services/api/src/routes/crypto-sends.js");
 const { resolveOrg } = await import("../services/api/src/routes/org-context.js");
@@ -168,13 +172,13 @@ try {
 
   await t("a contact edit between review and execution holds the run; nothing is created", async () => {
     const id = await approvedRun();
-    const before = (await store.list("cryptoSends")).length;
+    const before = dbm.db.cryptoSends.length;
     await setWallet(MALLORY);
     const x = await call("POST", `/orgs/org_1/drafts/${id}/execute`, "u_owner");
     await setWallet(ALICE);
     assert.equal(x.status, 409, JSON.stringify(x.data));
     assert.equal(x.data.draft.state, "INVALID_DATA");
-    assert.equal((await store.list("cryptoSends")).length, before);
+    assert.equal(dbm.db.cryptoSends.length, before);
   });
 
   await t("a contact edit between execution and the signature sends nothing and fails the run", async () => {
@@ -335,7 +339,7 @@ try {
   await t("an expired approval reads FAILED, cannot be submitted, and the run says so", async () => {
     const id = await approvedRun();
     const [cs] = (await call("POST", `/orgs/org_1/drafts/${id}/execute`, "u_owner")).data.cryptoSends;
-    (await store.findCryptoSend(cs.cryptoSendId))!.deadline = Math.floor(Date.now() / 1000) - 1;
+    dbm.db.cryptoSends.find((x) => x.id === cs.cryptoSendId)!.deadline = Math.floor(Date.now() / 1000) - 1;
     assert.equal((await call("GET", `/orgs/org_1/drafts/${id}`, "u_owner")).data.draft.state, "FAILED");
     assert.equal((await call("POST", `/crypto-sends/${cs.cryptoSendId}/authorize`, "u_owner", { executionAssertion: await passkey.assert(cs.safeExecution.challenge) })).status, 410);
     const x = await call("POST", `/orgs/org_1/drafts/${id}/execute`, "u_owner");

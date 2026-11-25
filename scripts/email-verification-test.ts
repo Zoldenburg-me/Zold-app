@@ -287,7 +287,7 @@ await t("off: the app is told so and both routes answer 404", () => {
     const s = express().use(express.json()).use("/api", createEmailVerificationRouter({ requireUserSession: () => true })).listen(0);
     const u = "http://127.0.0.1:" + s.address().port + "/api/users/anna/email/";
     const a = await fetch(u + "code", { method: "POST" }), b = await fetch(u + "verify", { method: "POST" });
-    console.log(JSON.stringify([capabilities().emailVerification, a.status, b.status])); s.close();`);
+    console.log(JSON.stringify([(await capabilities()).emailVerification, a.status, b.status])); s.close();`);
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout.trim().split("\n").pop(), JSON.stringify([false, 404, 404]));
 });

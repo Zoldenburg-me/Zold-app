@@ -28,6 +28,10 @@ process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-own
 process.env.TRANSF_CHAIN_ID = "31337";
 
 const { initStore, store } = await import("../services/api/src/store.js");
+
+// The live rows, for arranging state no store method writes (store/db.ts).
+
+const dbm = await import("../services/api/src/store/db.js");
 const { createOrgRouter } = await import("../services/api/src/routes/orgs.js");
 const { createBusinessRouter } = await import("../services/api/src/routes/business.js");
 const { createBooksLineRouter } = await import("../services/api/src/routes/books-line.js");
@@ -326,7 +330,7 @@ await check("a crypto send finds its line once SENT, on the wallet payment's own
   await store.addAccount({ id: "acc_cs", orgId: "org_cs", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: safe("cc"), backingUserId: "u_cs", createdAt: NOW } as any);
   // shortcut: pushed straight into the store; the send path itself is crypto-send's test.
   const send = { id: "cs_1", userId: "u_cs", to: safe("dd"), token: "EURE", amount: "25", capEur: 25, state: "SUBMITTED", createdAt: NOW, updatedAt: NOW } as any;
-  (await store.list("cryptoSends")).push(send);
+  dbm.db.cryptoSends.push(send);
   await writeStatementLinesFor((await store.findUser("u_cs"))!);
   const look = () => call("GET", "/users/u_cs/books-line/cs_1", undefined, "u_cs");
   assert.equal((await look()).body.line, null, "a send not yet confirmed has no line");
@@ -341,19 +345,19 @@ await check("a crypto send finds its line once SENT, on the wallet payment's own
 });
 
 await check("a send confirmed before the bookkeeping sweep ran still finds its line: the lookup writes it", async () => {
-  (await store.list("cryptoSends")).push({ id: "cs_new", userId: "u_cs", to: safe("dd"), token: "EURE", amount: "5", capEur: 5, state: "SENT", txHash: `0x${"9".repeat(64)}`, createdAt: NOW, updatedAt: NOW } as any);
+  dbm.db.cryptoSends.push({ id: "cs_new", userId: "u_cs", to: safe("dd"), token: "EURE", amount: "5", capEur: 5, state: "SENT", txHash: `0x${"9".repeat(64)}`, createdAt: NOW, updatedAt: NOW } as any);
   assert.equal((await store.ledgerOf("org_cs")).some((e: any) => e.id === lineId("org_cs", "cryptosend:cs_new")), false, "no sweep has run");
   const r = await call("GET", "/users/u_cs/books-line/cs_new", undefined, "u_cs");
   assert.deepEqual(r.body, { line: { orgId: "org_cs", lineId: lineId("org_cs", "cryptosend:cs_new"), ownTransfer: false } });
 });
 
 await check("a company send has no line on the sender's own sheet", async () => {
-  (await store.list("cryptoSends")).push({ id: "cs_co", userId: "u_cs", orgId: "org_co", safeOpId: "op_1", to: safe("dd"), token: "EURE", amount: "7", capEur: 7, state: "SENT", createdAt: NOW, updatedAt: NOW } as any);
+  dbm.db.cryptoSends.push({ id: "cs_co", userId: "u_cs", orgId: "org_co", safeOpId: "op_1", to: safe("dd"), token: "EURE", amount: "7", capEur: 7, state: "SENT", createdAt: NOW, updatedAt: NOW } as any);
   assert.equal((await call("GET", "/users/u_cs/books-line/cs_co", undefined, "u_cs")).body.line, null);
 });
 
 await check("a wallet send that pays a send link is an invoice payment: no mark, and an earlier mark is cleared", async () => {
-  const sent = async (id: string) => (await store.list("cryptoSends")).push({ id, userId: "u_cs", to: safe("dd"), token: "EURE", amount: "25", capEur: 25, state: "SENT", txHash: `0x${id.length.toString(16).repeat(64).slice(0, 64)}`, createdAt: NOW, updatedAt: NOW } as any);
+  const sent = async (id: string) => dbm.db.cryptoSends.push({ id, userId: "u_cs", to: safe("dd"), token: "EURE", amount: "25", capEur: 25, state: "SENT", txHash: `0x${id.length.toString(16).repeat(64).slice(0, 64)}`, createdAt: NOW, updatedAt: NOW } as any);
   const pays = async (invId: string, sendId: string) =>
     await store.addInvoice({ id: invId, orgId: "org_cs", linkTokenHash: invId, state: "PAYING", total: "25.00", payment: { cryptoSendId: sendId }, createdAt: NOW, updatedAt: NOW } as any);
   await sent("cs_inv");
@@ -375,7 +379,7 @@ await check("a wallet send that pays a send link is an invoice payment: no mark,
 });
 
 await check("a personal send that pays another org's send link loses an earlier mark too, without that org's invoice on the line", async () => {
-  (await store.list("cryptoSends")).push({ id: "cs_xorg", userId: "u_cs", to: safe("de"), token: "EURE", amount: "30", capEur: 30, state: "SENT", txHash: `0x${"7".repeat(64)}`, createdAt: NOW, updatedAt: NOW } as any);
+  dbm.db.cryptoSends.push({ id: "cs_xorg", userId: "u_cs", to: safe("de"), token: "EURE", amount: "30", capEur: 30, state: "SENT", txHash: `0x${"7".repeat(64)}`, createdAt: NOW, updatedAt: NOW } as any);
   await writeStatementLinesFor((await store.findUser("u_cs"))!);
   const LINE = lineId("org_cs", "cryptosend:cs_xorg");
   assert.equal((await own("org_cs", LINE, true, "u_cs")).status, 200, "marked before the link was tied");

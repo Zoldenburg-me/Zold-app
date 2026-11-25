@@ -31,6 +31,10 @@ process.env.TRANSF_CHAIN_ID = "31337";
 process.env.MONERIUM_TOKEN_ENCRYPTION_KEY = "test-encryption-key-for-org-accounts-32";
 
 const { initStore, store } = await import("../services/api/src/store.js");
+
+// The live rows, for arranging state no store method writes (store/db.ts).
+
+const dbm = await import("../services/api/src/store/db.js");
 const { createOrgRouter } = await import("../services/api/src/routes/orgs.js");
 const { createBusinessRouter } = await import("../services/api/src/routes/business.js");
 const { createPaymentRequestRouter } = await import("../services/api/src/routes/payment-requests.js");
@@ -309,7 +313,7 @@ await check("an admin's link then pays into the account's Safe under the company
   assert.equal((await call("POST", "/api/orgs/org_co/payment-requests", { amountEur: 50, methods: [1] }, "u_admin")).status, 400, "a malformed method is a bad request, not a refusal");
   assert.equal((await call("POST", "/api/orgs/org_co/payment-requests", { amountEur: 50, methods: ["crypto", 1] }, "u_admin")).status, 400, "malformed beats refused");
   // Out again: the checks below count the company's links from here.
-  (await store.list("paymentRequests")).splice(i, 1);
+  dbm.db.paymentRequests.splice(i, 1);
 });
 await check("a company link is cancelled by anyone who may make one, not a viewer, and not once paid", async () => {
   const made = await call("POST", "/api/orgs/org_co/payment-requests", { amountEur: 9 });
@@ -323,7 +327,7 @@ await check("a company link is cancelled by anyone who may make one, not a viewe
   const done = await call("POST", `/api/orgs/org_co/payment-requests/${id}/cancel`, undefined, "u_admin");
   assert.equal(done.status, 200, JSON.stringify(done.body));
   assert.equal((await store.findPaymentRequest(id))!.state, "CANCELLED", "an admin cancels the holder's company link");
-  (await store.list("paymentRequests")).splice((await store.list("paymentRequests")).findIndex((p) => p.id === id), 1);
+  dbm.db.paymentRequests.splice((await store.list("paymentRequests")).findIndex((p) => p.id === id), 1);
 });
 await check("open links count against whoever made them: an admin at the limit cannot use up the holder's", async () => {
   const { CEILINGS } = await import("../services/api/src/domain/ceilings.js");
@@ -333,24 +337,24 @@ await check("open links count against whoever made them: an admin at the limit c
     currency: "EUR", methods: ["bank"], state: "OPEN", cryptoQuotes: [], payments: [], source: { kind: "app" },
     expiresAt: far, createdAt: now, updatedAt: now,
   }));
-  (await store.list("paymentRequests")).push(...(fill as any));
+  dbm.db.paymentRequests.push(...(fill as any));
   try {
     const admin = await call("POST", "/api/orgs/org_co/payment-requests", { amountEur: 5, methods: ["bank"] }, "u_admin");
     assert.equal(admin.status, 409, JSON.stringify(admin.body));
     const holder = await call("POST", "/api/orgs/org_co/payment-requests", { amountEur: 5, methods: ["bank"] });
     assert.equal(holder.status, 201, `the holder's own quota is untouched: ${JSON.stringify(holder.body)}`);
-    (await store.list("paymentRequests")).splice((await store.list("paymentRequests")).findIndex((p) => p.id === holder.body.id), 1);
+    dbm.db.paymentRequests.splice((await store.list("paymentRequests")).findIndex((p) => p.id === holder.body.id), 1);
   } finally {
-    for (const f of fill) (await store.list("paymentRequests")).splice((await store.list("paymentRequests")).findIndex((p) => p.id === f.id), 1);
+    for (const f of fill) dbm.db.paymentRequests.splice((await store.list("paymentRequests")).findIndex((p) => p.id === f.id), 1);
   }
 });
 await check("a backer who has left the company is not paid by links others make", async () => {
   const m = (await store.membersOf("org_co")).find((x) => x.userId === "u_co")!;
   const was = m.status;
-  (m as any).status = "deactivated";
+  await store.updateMember(m.id, { status: "deactivated" } as any);
   try {
     assert.equal(await linkPayee((await store.findOrganisation("org_co"))!, (await store.findUser("u_admin"))!), undefined);
-  } finally { (m as any).status = was; }
+  } finally { await store.updateMember(m.id, { status: was }); }
   assert.equal((await linkPayee((await store.findOrganisation("org_co"))!, (await store.findUser("u_admin"))!))?.id, "u_co");
 });
 await check("the company page alone is enough: no NO_PAGE once it exists", async () => {
@@ -369,10 +373,10 @@ await check("a wallet-backed company account gets no bank link on behalf, even w
     assert.ok((await store.findUser("u_co"))!.iban, "the holder has a personal IBAN");
     assert.deepEqual(await linkMethods(orgCo, (await store.findUser("u_co"))!, (await store.findUser("u_admin"))!), []);
     assert.ok((await linkMethods(orgCo, (await store.findUser("u_co"))!, (await store.findUser("u_co"))!)).includes("bank"), "the holder's own link still takes their IBAN");
-    const before = (await store.list("paymentRequests")).length;
+    const before = dbm.db.paymentRequests.length;
     const r = await call("POST", "/api/orgs/org_co/payment-requests", { amountEur: 50, methods: ["bank"] }, "u_admin");
     assert.equal(r.status, 409, JSON.stringify(r.body));
-    assert.equal((await store.list("paymentRequests")).length, before, "no link published");
+    assert.equal(dbm.db.paymentRequests.length, before, "no link published");
   } finally { await store.updateAccount("acc_co", { identifier: acc.identifier } as any); }
   await store.updateAccount("acc_co", { identifier: { iban: "DE00000000000000000000" } } as any);
   try {
@@ -389,7 +393,7 @@ await check("a link on behalf with no active IBAN behind the company says so", a
   } finally { await store.updateUser("u_co", { iban: IBAN } as any); }
 });
 await check("cancelling an invoice's link needs the invoices capability, as making it does", async () => {
-  (await store.list("paymentRequests")).push({
+  dbm.db.paymentRequests.push({
     id: "pr_inv_p", code: "INVP", userId: "u_co", orgId: "org_p", invoiceId: "inv_x", currency: "EUR", methods: ["bank"], state: "OPEN",
     cryptoQuotes: [], payments: [], source: { kind: "app" }, expiresAt: new Date(Date.now() + 86_400_000).toISOString(), createdAt: now, updatedAt: now,
   } as any);
@@ -403,7 +407,7 @@ await check("cancelling an invoice's link needs the invoices capability, as maki
     assert.equal((await store.findPaymentRequest("pr_inv_p"))!.state, "OPEN");
   } finally {
     delete (CAPABILITIES.invoices as any).unavailable;
-    (await store.list("paymentRequests")).splice((await store.list("paymentRequests")).findIndex((p) => p.id === "pr_inv_p"), 1);
+    dbm.db.paymentRequests.splice((await store.list("paymentRequests")).findIndex((p) => p.id === "pr_inv_p"), 1);
   }
 });
 await check("the same code resolves under the payee's own handle, never under another page", async () => {

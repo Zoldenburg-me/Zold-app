@@ -422,7 +422,7 @@ await t("the operator cannot sign for an account that is not armed", () => {
   }
   const gate = between("const refusalFor = ", "const adminRequest = ");
   assert.ok(gate.indexOf("zoldenburgArmed(user)") > 0 && gate.indexOf('code: "NOT_ARMED"') > 0, "an unarmed account is refused first");
-  assert.match(r, /safeCoverLink:\s*\n\s*!refusalFor\(r\)/, "no Safe Cover link before arming");
+  assert.match(r, /safeCoverLink:\s*\n\s*!\(await refusalFor\(r\)\)/, "no Safe Cover link before arming");
   const sync = between('"/admin/recoveries/:id/sync"', '"/admin/recoveries/:id/finalize"');
   assert.ok(sync.indexOf("refusalFor(r)") > 0 && sync.indexOf("refusalFor(r)") < sync.indexOf("syncZoldenburgFromChain"), "sync records no review for an unarmed account");
   assert.equal(r.match(/zoldenburgEnrolment: undefined/g)?.length, 3, "adding or removing the guardian drops the enrolled account");

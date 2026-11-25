@@ -213,8 +213,9 @@ export function createOrgMoneriumIbanRoutes(deps: { ctxOf: (req: express.Request
 
   /**
    * The keys as they are now, if they are still the ones `m` was read with:
-   * every write after a wait on Monerium goes through this, so keys an owner
-   * removed or replaced meanwhile are never written back.
+   * every write after a wait on Monerium goes through this, in one store.tx
+   * with the write, so keys an owner removed or replaced meanwhile are never
+   * written back.
    */
   const stillKeys = async (orgId: string, m: NonNullable<Organisation["monerium"]>) => {
     const cur = (await store.findOrganisation(orgId))?.monerium;
@@ -245,8 +246,10 @@ export function createOrgMoneriumIbanRoutes(deps: { ctxOf: (req: express.Request
       if (under !== m.profile.id) {
         throw new Refusal(409, "ADDRESS_NOT_ON_PROFILE", "Monerium has the company’s Safe linked under another profile, so no IBAN was requested. Monerium support has to move it; write to support@zoldhq.com.");
       }
-      const cur = await stillKeys(orgId, m);
-      await store.updateOrganisation(orgId, { monerium: { ...cur, safe: { ...cur.safe!, linkedAt: new Date().toISOString() } } });
+      await store.tx(async () => {
+        const cur = await stillKeys(orgId, m);
+        await store.updateOrganisation(orgId, { monerium: { ...cur, safe: { ...cur.safe!, linkedAt: new Date().toISOString() } } });
+      });
     }
     let hasOne = false;
     if (!link.ibanRequestedAt) {
@@ -256,8 +259,10 @@ export function createOrgMoneriumIbanRoutes(deps: { ctxOf: (req: express.Request
         if (profileHasIban(err)) hasOne = true;
         else if (!alreadyDone(err)) throw moneriumFailure("the IBAN request", err);
       }
-      const cur = await stillKeys(orgId, m);
-      await store.updateOrganisation(orgId, { monerium: { ...cur, safe: { ...cur.safe!, ibanRequestedAt: new Date().toISOString() } } });
+      await store.tx(async () => {
+        const cur = await stillKeys(orgId, m);
+        await store.updateOrganisation(orgId, { monerium: { ...cur, safe: { ...cur.safe!, ibanRequestedAt: new Date().toISOString() } } });
+      });
     }
     let list;
     try {
@@ -276,21 +281,23 @@ export function createOrgMoneriumIbanRoutes(deps: { ctxOf: (req: express.Request
       return; // iban_requested: Monerium has not issued it yet.
     }
     // Written only against the account and keys as they are now.
-    await stillKeys(orgId, m);
-    const account = companyEurAccount(await store.accountsOf(orgId));
-    if (!account || !account.address || low(account.address) !== low(link.address)) return;
-    const at = new Date().toISOString();
-    await store.updateAccount(account.id, {
-      status: "active",
-      provider: "monerium",
-      identifier: { ...account.identifier, iban: normalizeIban(ours.iban) },
-      gate: undefined,
-      detail: undefined,
-      moneriumProfile: { id: m.profile.id, kind: "corporate", ...(m.profile.name ? { name: m.profile.name } : {}), checkedAt: at },
+    await store.tx(async () => {
+      await stillKeys(orgId, m);
+      const account = companyEurAccount(await store.accountsOf(orgId));
+      if (!account || !account.address || low(account.address) !== low(link.address)) return;
+      const at = new Date().toISOString();
+      await store.updateAccount(account.id, {
+        status: "active",
+        provider: "monerium",
+        identifier: { ...account.identifier, iban: normalizeIban(ours.iban) },
+        gate: undefined,
+        detail: undefined,
+        moneriumProfile: { id: m.profile.id, kind: "corporate", ...(m.profile.name ? { name: m.profile.name } : {}), checkedAt: at },
+      });
+      const after = (await store.findOrganisation(orgId))!.monerium!;
+      if (after.safe?.movedAwayAt) await store.updateOrganisation(orgId, { monerium: { ...after, safe: { ...after.safe, movedAwayAt: undefined } } });
+      await store.audit(auditEntry("org_iban.issued", { orgId, accountId: account.id, safeAddress: link.address, profileId: m.profile.id }, userId));
     });
-    const after = (await store.findOrganisation(orgId))!.monerium!;
-    if (after.safe?.movedAwayAt) await store.updateOrganisation(orgId, { monerium: { ...after, safe: { ...after.safe, movedAwayAt: undefined } } });
-    await store.audit(auditEntry("org_iban.issued", { orgId, accountId: account.id, safeAddress: link.address, profileId: m.profile.id }, userId));
   }
 
   /**
@@ -309,17 +316,19 @@ export function createOrgMoneriumIbanRoutes(deps: { ctxOf: (req: express.Request
     } catch (err) {
       throw moneriumFailure("reading the company’s IBANs", err);
     }
-    const cur = await stillKeys(orgId, m);
-    const iban = normalizeIban(account.identifier.iban!);
-    const entry = list.find((i) => normalizeIban(i.iban) === iban);
-    if (!entry || typeof entry.address !== "string" || paysIntoSafe(entry, account.address!)) return;
-    if (cur.safe) await store.updateOrganisation(orgId, { monerium: { ...cur, safe: { ...cur.safe, movedAwayAt: new Date().toISOString() } } });
-    await store.updateAccount(account.id, {
-      status: "gated",
-      identifier: { ...account.identifier, iban: undefined },
-      detail: "Monerium now lists the company's IBAN on another address or network, so it is no longer offered for this Safe.",
+    await store.tx(async () => {
+      const cur = await stillKeys(orgId, m);
+      const iban = normalizeIban(account.identifier.iban!);
+      const entry = list.find((i) => normalizeIban(i.iban) === iban);
+      if (!entry || typeof entry.address !== "string" || paysIntoSafe(entry, account.address!)) return;
+      if (cur.safe) await store.updateOrganisation(orgId, { monerium: { ...cur, safe: { ...cur.safe, movedAwayAt: new Date().toISOString() } } });
+      await store.updateAccount(account.id, {
+        status: "gated",
+        identifier: { ...account.identifier, iban: undefined },
+        detail: "Monerium now lists the company's IBAN on another address or network, so it is no longer offered for this Safe.",
+      });
+      await store.audit(auditEntry("org_iban.moved_away", { orgId, accountId: account.id, safeAddress: account.address }, userId));
     });
-    await store.audit(auditEntry("org_iban.moved_away", { orgId, accountId: account.id, safeAddress: account.address }, userId));
   }
 
   const view = async (orgId: string) => ({ monerium: await publicOrgMonerium((await store.findOrganisation(orgId))!) });
@@ -391,13 +400,14 @@ export function createOrgMoneriumIbanRoutes(deps: { ctxOf: (req: express.Request
       if (!alreadyDone(err)) return answer(res, moneriumFailure("linking the company’s Safe", err));
     }
     const at = new Date().toISOString();
-    let cur;
     try {
-      cur = await stillKeys(org.id, m);
+      await store.tx(async () => {
+        const cur = await stillKeys(org.id, m);
+        await store.updateOrganisation(org.id, { monerium: { ...cur, safe: { address: s.plan.address as Hex, signedByMemberId: ctx.member.id, linkSubmittedAt: at } } });
+      });
     } catch (err) {
       return answer(res, err);
     }
-    await store.updateOrganisation(org.id, { monerium: { ...cur, safe: { address: s.plan.address as Hex, signedByMemberId: ctx.member.id, linkSubmittedAt: at } } });
     await store.audit(auditEntry("org_iban.link_submitted", { orgId: org.id, safeAddress: s.plan.address, profileId: m.profile.id }, ctx.userId));
     try {
       await advance(org.id, ctx.userId);

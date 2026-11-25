@@ -21,6 +21,10 @@ process.env.TRANSF_RPC_URL ??= "http://127.0.0.1:18545";
 process.env.LOCAL_HARNESS = "";
 
 const { initStore, store } = await import("../services/api/src/store.js");
+
+// The live rows, for arranging state no store method writes (store/db.ts).
+
+const dbm = await import("../services/api/src/store/db.js");
 const { resolveOrg } = await import("../services/api/src/routes/org-context.js");
 const { createInvoiceLinkRouter, notifyRequester } = await import("../services/api/src/routes/business/invoice-links.js");
 const { createInvoiceRoutes } = await import("../services/api/src/routes/business/invoices.js");
@@ -94,7 +98,7 @@ const transfer = async (over: Record<string, unknown> = {}) => {
 };
 const cryptoSend = async (over: Record<string, unknown> = {}) => {
   const id = `cs_${++seq}`;
-  (await store.list("cryptoSends")).push({ id, userId: "u_tony", to: WALLET, token: "EURE", amount: "11.45", capEur: 11.45, state: "SUBMITTED", deadline: Math.floor(Date.now() / 1000) + 600, createdAt: new Date().toISOString(), updatedAt: now, ...over } as any);
+  dbm.db.cryptoSends.push({ id, userId: "u_tony", to: WALLET, token: "EURE", amount: "11.45", capEur: 11.45, state: "SUBMITTED", deadline: Math.floor(Date.now() / 1000) + 600, createdAt: new Date().toISOString(), updatedAt: now, ...over } as any);
   return id;
 };
 
@@ -342,7 +346,7 @@ await check("a wallet send past its deadline cannot be claimed, so it never goes
   await fill(l.token, { payTo: { kind: "wallet", chainId: CHAIN_ID, address: WALLET } });
   const id = await cryptoSend({ state: "CREATED" });
   assert.equal((await call("POST", `/api/orgs/org_p/invoices/${l.id}/paying`, "u_tony", { cryptoSendId: id })).status, 200);
-  ((await store.findCryptoSend(id)) as any).deadline = Math.floor(Date.now() / 1000) - 1;
+  (dbm.db.cryptoSends.find((x) => x.id === id) as any).deadline = Math.floor(Date.now() / 1000) - 1;
   assert.equal((await listed(l.id)).state, "SUBMITTED", "the link is to pay again");
   assert.equal(await store.claimCryptoSend(id), false, "authorize can no longer claim it");
   assert.equal((await store.findCryptoSend(id))?.state, "CREATED");

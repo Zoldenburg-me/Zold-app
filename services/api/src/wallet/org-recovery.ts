@@ -212,29 +212,32 @@ export async function queueOrgGuardianSetup(args: {
     throw err;
   }
   // The org and member as they are now, and no setup op queued meanwhile:
-  // everything from here to the write is synchronous.
-  const orgNow = await store.findOrganisation(org.id);
-  const memberNow = await store.findMember(member.id);
-  if (!orgNow || !memberNow || memberNow.status !== "active" || memberNow.role !== "owner") {
-    throw new OrgRecoveryRefusal(409, "CANNOT_QUEUE", "This organisation or your membership changed; nothing was created.");
-  }
-  const raced = await openSetupOp(org.id, safe.plan.address, now);
-  if (raced) return { op: raced, created: false };
-  try {
-    const op = await queueSafeOp({
-      org: orgNow,
-      member: memberNow,
-      safeAddress: safe.plan.address,
-      kind: GUARDIAN_OP_KIND,
-      summary: `${state.moduleEnabled ? "" : "Enable the recovery module and "}${state.moduleEnabled ? "Add" : "add"} Zoldenburg UG (${guardian}) as the Safe’s recovery guardian`,
-      prepared,
-      guardianAddress: guardian,
-    });
-    return { op, created: true };
-  } catch (err) {
-    if (err instanceof SafeOpRefusal) throw new OrgRecoveryRefusal(err.status, err.code, err.message);
-    throw err;
-  }
+  // checked and written in one transaction, which holds the organisation.
+  return store.tx(async () => {
+    await store.lockOrganisation(org.id);
+    const orgNow = await store.findOrganisation(org.id);
+    const memberNow = await store.findMember(member.id);
+    if (!orgNow || !memberNow || memberNow.status !== "active" || memberNow.role !== "owner") {
+      throw new OrgRecoveryRefusal(409, "CANNOT_QUEUE", "This organisation or your membership changed; nothing was created.");
+    }
+    const raced = await openSetupOp(org.id, safe.plan.address, now);
+    if (raced) return { op: raced, created: false };
+    try {
+      const op = await queueSafeOp({
+        org: orgNow,
+        member: memberNow,
+        safeAddress: safe.plan.address,
+        kind: GUARDIAN_OP_KIND,
+        summary: `${state.moduleEnabled ? "" : "Enable the recovery module and "}${state.moduleEnabled ? "Add" : "add"} Zoldenburg UG (${guardian}) as the Safe’s recovery guardian`,
+        prepared,
+        guardianAddress: guardian,
+      });
+      return { op, created: true };
+    } catch (err) {
+      if (err instanceof SafeOpRefusal) throw new OrgRecoveryRefusal(err.status, err.code, err.message);
+      throw err;
+    }
+  });
 }
 
 type SignRefusal = { status: number; code: string; error: string; invalidate?: string };

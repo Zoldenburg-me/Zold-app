@@ -474,34 +474,38 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       } catch (err: any) {
         return back({ error: `Shopify refused the install: ${redactedMessage(err).slice(0, 160)}` });
       }
-      // The row id is part of the AAD, so it is fixed before sealing. Nothing
-      // awaits between here and the write below.
-      const existing = await store.findShopifyConnectionByShop(shop);
-      const connectionId = existing?.id ?? randomUUID();
-      let enc: string;
-      try {
-        enc = SECRETS.shopifyAccessToken.seal(connectionId, token.accessToken);
-      } catch (err) {
-        if (err instanceof EncryptionUnavailableError) return back({ error: err.message, code: "NOT_SET_UP" });
-        throw err;
-      }
-      const refusedLate = await installRefusal(pending);
-      if (refusedLate) return refuse(refusedLate);
-      const now = new Date().toISOString();
-      const connection = existing
-        ? (await store.updateShopifyConnection(existing.id, { accessTokenEnc: enc, scope: token.scope, mode: SHOPIFY.mode, payeeUserId: pending.payeeUserId, installedByUserId: pending.installerId, installedAt: now, configuredAt: undefined, configureError: undefined }))
-        : (await store.addShopifyConnection({
-            id: connectionId,
-            orgId: pending.orgId,
-            shop,
-            payeeUserId: pending.payeeUserId,
-            accessTokenEnc: enc,
-            scope: token.scope,
-            mode: SHOPIFY.mode,
-            installedByUserId: pending.installerId,
-            installedAt: now,
-            updatedAt: now,
-          }));
+      // The row id is part of the AAD, so it is fixed before sealing. The
+      // shop is read, checked again and written in one transaction.
+      const written = await store.tx(async () => {
+        const existing = await store.findShopifyConnectionByShop(shop);
+        const connectionId = existing?.id ?? randomUUID();
+        let enc: string;
+        try {
+          enc = SECRETS.shopifyAccessToken.seal(connectionId, token.accessToken);
+        } catch (err) {
+          if (err instanceof EncryptionUnavailableError) return { answered: back({ error: err.message, code: "NOT_SET_UP" }) };
+          throw err;
+        }
+        const refusedLate = await installRefusal(pending);
+        if (refusedLate) return { answered: refuse(refusedLate) };
+        const now = new Date().toISOString();
+        return { existing, connection: existing
+          ? (await store.updateShopifyConnection(existing.id, { accessTokenEnc: enc, scope: token.scope, mode: SHOPIFY.mode, payeeUserId: pending.payeeUserId, installedByUserId: pending.installerId, installedAt: now, configuredAt: undefined, configureError: undefined }))
+          : (await store.addShopifyConnection({
+              id: connectionId,
+              orgId: pending.orgId,
+              shop,
+              payeeUserId: pending.payeeUserId,
+              accessTokenEnc: enc,
+              scope: token.scope,
+              mode: SHOPIFY.mode,
+              installedByUserId: pending.installerId,
+              installedAt: now,
+              updatedAt: now,
+            })) };
+      });
+      if ("answered" in written) return written.answered;
+      const { existing, connection } = written;
       const payee = await store.findUser(pending.payeeUserId);
       try {
         if (SHOPIFY.mode === "payments-app") {

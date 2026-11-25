@@ -40,6 +40,10 @@ process.env.ENS_RESOLVER_ADDRESS = "0x00000000000000000000000000000000000e45e5";
 process.env.ENS_GATEWAY_KEY = (await import("viem")).keccak256((await import("viem")).toHex("zold crypto-send-test gateway key"));
 
 const { store, initStore } = await import("../services/api/src/store.js");
+
+// The live rows, for arranging state no store method writes (store/db.ts).
+
+const dbm = await import("../services/api/src/store/db.js");
 const { addrs } = await import("../services/api/src/chain.js");
 const { FX } = await import("../services/api/src/config.js");
 const { safeFundedEurToday } = await import("../services/api/src/orchestrator.js");
@@ -292,7 +296,7 @@ try {
   await t("an expired unsigned send stops counting and cannot be approved", async () => {
     const c = await create({ to: ALICE, confirmedAddress: ALICE, amount: "1" });
     const before = await safeFundedEurToday("u-cs");
-    (await store.findCryptoSend(c.data.id))!.deadline = Math.floor(Date.now() / 1000) - 1;
+    dbm.db.cryptoSends.find((x) => x.id === c.data.id)!.deadline = Math.floor(Date.now() / 1000) - 1;
     assert.equal(before - (await safeFundedEurToday("u-cs")), 1);
     const r = await post(`/crypto-sends/${c.data.id}/authorize`, { executionAssertion: await passkey.assert(c.data.safeExecution.challenge) });
     assert.equal(r.status, 410);
@@ -435,7 +439,7 @@ try {
     assert.equal((await store.findCryptoSend(lands))!.state, "SUBMITTED", "no receipt yet");
     await settleUnconfirmedCryptoSends(async () => { throw new Error("bundler down"); });
     assert.equal((await store.findCryptoSend(lands))!.state, "SUBMITTED", "a failed read changes nothing");
-    const hashOf = async (id: string) => (await store.findCryptoSend(id))!.userOpHash;
+    const hashOf = async (id: string) => dbm.db.cryptoSends.find((x) => x.id === id)!.userOpHash;
     await settleUnconfirmedCryptoSends(async (h) => ({ success: h === (await hashOf(lands)), txHash: "0xabc" }));
     assert.equal((await store.findCryptoSend(lands))!.state, "SENT");
     assert.equal((await store.findCryptoSend(lands))!.txHash, "0xabc");

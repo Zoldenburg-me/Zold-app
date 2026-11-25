@@ -871,7 +871,7 @@ await t("writes after a chain read spread the stored state, not a copy from befo
   const r = src("routes/recovery-zoldenburg.ts");
   const chain = r.slice(r.indexOf("export async function syncZoldenburgFromChain"), r.indexOf("export async function sweepZoldenburgRecoveries"));
   assert.ok(!/zoldenburg: \{ \.\.\.z,/.test(chain), "no `...z` spread: a 1 € pass recorded during the read would be put back");
-  assert.equal(chain.match(/\.\.\.zoldenburgNow\(request\.id\)/g)?.length, 3);
+  assert.equal(chain.match(/\.\.\.\(await zoldenburgNow\(request\.id\)\)/g)?.length, 3);
 });
 
 await t("the owner's cancel, the operator's reject and the person's routes wait for a relay in flight", () => {
@@ -891,7 +891,7 @@ await t("the operator routes refuse before they hand out or relay anything", () 
   const between = (a: string, b: string) => r.slice(r.indexOf(a), r.indexOf(b));
   for (const [route, next] of [['"/admin/recoveries/:id/sign-request"', '"/admin/recoveries/:id/execute"'], ['"/admin/recoveries/:id/execute"', '"/admin/recoveries/:id/sync"']]) {
     const body = between(route, next);
-    assert.ok(body.includes("const refusal = refusalFor(r);\n      if (refusal) return res.status(409).json(refusal);"), route);
+    assert.ok(body.includes("const refusal = await refusalFor(r);\n      if (refusal) return res.status(409).json(refusal);"), route);
     assert.ok(body.indexOf("refusalFor(r)") < body.indexOf("typedDataFor(r)"), route);
   }
   const sync = between('"/admin/recoveries/:id/sync"', '"/admin/recoveries/:id/finalize"');
@@ -903,7 +903,7 @@ await t("the chain paths the harness skips close the account's other requests", 
   const r = src("routes/recovery-zoldenburg.ts");
   const sync = r.slice(r.indexOf("export async function syncZoldenburgFromChain"), r.indexOf("function bindAndFinish"));
   assert.ok(sync.indexOf("closeOtherRequests(request, now)") > 0 && sync.indexOf("closeOtherRequests(request, now)") < sync.indexOf('status: "GRACE_PERIOD"'), "seen on chain");
-  assert.ok(sync.includes("return bindAndFinish("), "finished elsewhere goes through bindAndFinish");
+  assert.ok(sync.includes("return await bindAndFinish("), "finished elsewhere goes through bindAndFinish");
   const finish = r.slice(r.indexOf("function bindAndFinish"), r.indexOf("export async function finalizeZoldenburgRecovery"));
   assert.ok(finish.includes("closeOtherRequests(request, now)"), "bindAndFinish closes the others");
 });

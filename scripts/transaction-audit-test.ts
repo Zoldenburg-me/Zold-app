@@ -43,6 +43,8 @@ process.env.TRANSF_RATES_TIMEOUT_MS = "400";
 const { FX, PAYMENT_REQUESTS, railFeeEur } = await import("../services/api/src/config.js");
 const { matchDepositToRequests, quoteCrypto } = await import("../services/api/src/payment-requests.js");
 const { store } = await import("../services/api/src/store.js");
+// The live rows, for arranging state no store method writes (store/db.ts).
+const dbm = await import("../services/api/src/store/db.js");
 const { safeFundedEurToday } = await import("../services/api/src/orchestrator.js");
 const { destinationCommitment } = await import("../services/api/src/chain.js");
 const { externalHttpUrl } = await import("../services/api/src/routes/shopify.js");
@@ -297,13 +299,13 @@ await check("an equidistant tie goes to the OLDER request", () => {
 });
 
 await check("a transfer landing exactly ON the cap is allowed", async () => {
-  (await store.list("transfers")).length = 0;
+  dbm.db.transfers.length = 0;
   const res = await addUnderCap(transfer("t-on-cap", FX.DAILY_CAP_EUR));
   assert.equal(res.ok, true, "the cap is exclusive where it should be inclusive");
 });
 
 await check("one cent over the cap is refused", async () => {
-  (await store.list("transfers")).length = 0;
+  dbm.db.transfers.length = 0;
   const res = await addUnderCap(transfer("t-over-cap", FX.DAILY_CAP_EUR + 0.01));
   assert.equal(res.ok, false);
   assert.equal(await store.findTransfer("t-over-cap"), undefined, "a refused transfer was still written");
@@ -312,7 +314,7 @@ await check("one cent over the cap is refused", async () => {
 console.log("─── (d) partner and network failure ───");
 
 await check("two transfers prepared in parallel cannot both reserve the whole cap", async () => {
-  (await store.list("transfers")).length = 0;
+  dbm.db.transfers.length = 0;
   const half = FX.DAILY_CAP_EUR * 0.6; // two of these exceed the cap
   // Each "request" does its slow work (a balance read, a venue call) and only
   // then writes its row — which is exactly the window the audit found open.
@@ -342,7 +344,7 @@ await check("transfer creation RESERVES the cap rather than only checking it", (
   assert.ok(hold < src.indexOf("store.consumeQuote(quote.id)"), "the quote is consumed before the cap is held");
   assert.ok(hold < src.indexOf("await createBridgeTransfer("), "Bridge is called before the cap is held");
   assert.match(src, /store\.addTransferUnderHold\(/, "the row is not written under the hold");
-  assert.match(src, /finally \{\s*if \(hold\.id\) store\.releaseCapHold\(hold\.id\)/, "a refused or failed preparation keeps its hold");
+  assert.match(src, /finally \{\s*if \(hold\.id\) await store\.releaseCapHold\(hold\.id\)/, "a refused or failed preparation keeps its hold");
   assert.doesNotMatch(
     src,
     /\bstore\.addTransfer\(/,
@@ -351,7 +353,7 @@ await check("transfer creation RESERVES the cap rather than only checking it", (
 });
 
 await check("a released hold frees the cap; a committed one cannot be released twice", async () => {
-  (await store.list("transfers")).length = 0;
+  dbm.db.transfers.length = 0;
   const a = await store.holdDailyCap("cap-user", FX.DAILY_CAP_EUR, FX.DAILY_CAP_EUR, usedByCapUser);
   assert.equal(a.ok, true);
   const blocked = await store.holdDailyCap("cap-user", 1, FX.DAILY_CAP_EUR, usedByCapUser);
@@ -368,7 +370,7 @@ await check("a released hold frees the cap; a committed one cannot be released t
 });
 
 await check("an abandoned unsigned transfer frees the cap; a still-signable one holds it", async () => {
-  (await store.list("transfers")).length = 0;
+  dbm.db.transfers.length = 0;
   const now = new Date();
   const nowSec = now.getTime() / 1000;
   const used = async () => await safeFundedEurToday("cap-user", now);
@@ -396,7 +398,7 @@ await check("an abandoned unsigned transfer frees the cap; a still-signable one 
     await store.addTransfer(row("t-no-auth", 30));
     assert.equal(await used(), 65);
   } finally {
-    (await store.list("transfers")).length = 0;
+    dbm.db.transfers.length = 0;
   }
 });
 
@@ -416,10 +418,10 @@ await check("a deposit recorded twice by overlapping scans is stored once", asyn
     detectedAt: iso(0),
     updatedAt: iso(0),
   };
-  const before = (await store.list("cryptoDeposits")).length;
+  const before = dbm.db.cryptoDeposits.length;
   const first = await store.addCryptoDeposit({ id: "dep-first", ...base });
   const second = await store.addCryptoDeposit({ id: "dep-second", ...base });
-  assert.equal((await store.list("cryptoDeposits")).length, before + 1, "one on-chain transfer was recorded as two deposits");
+  assert.equal(dbm.db.cryptoDeposits.length, before + 1, "one on-chain transfer was recorded as two deposits");
   assert.equal(second.id, first.id, "the second write did not return the row that already existed");
 });
 

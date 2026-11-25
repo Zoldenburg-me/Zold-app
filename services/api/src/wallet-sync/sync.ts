@@ -188,10 +188,14 @@ async function readWindow(reader: ChainReader, wallet: ImportedWallet, fromBlock
 }
 
 export async function syncWallet(
-  wallet: ImportedWallet,
+  given: ImportedWallet,
   reader: ChainReader,
   opts: SyncOptions = {},
 ): Promise<{ added: number; skipped: number }> {
+  // From the row as stored, not the copy the caller listed: its cursor may
+  // have moved since, and a wallet removed meanwhile is not synced.
+  const wallet = await store.findImportedWallet(given.id);
+  if (!wallet) return { added: 0, skipped: 0 };
   const now = opts.now ?? (() => new Date().toISOString());
   const value = opts.value ?? valueTransfer;
   const loadLists = opts.lists ?? (() => loadTokenLists());

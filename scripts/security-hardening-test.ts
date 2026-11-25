@@ -767,7 +767,7 @@ await check("capabilities.privacyBundle is true only when the bundle is switched
     for (const f of FLAGS) delete env[f];
     for (const f of on) env[f] = "1";
     const r = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e",
-      `const { capabilities } = await import(${JSON.stringify(caps)}); process.stdout.write(String(capabilities().privacyBundle));`],
+      `const { capabilities } = await import(${JSON.stringify(caps)}); process.stdout.write(String((await capabilities()).privacyBundle));`],
       { env, encoding: "utf8" });
     assert.equal(r.status, 0, r.stderr);
     return r.stdout;
@@ -791,7 +791,7 @@ await check("capabilities.moneriumOAuth is false without a data encryption key: 
     delete env.DATA_ENCRYPTION_KEYS;
     if (key) env.DATA_ENCRYPTION_KEYS = key;
     const r = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e",
-      `const { capabilities } = await import(${JSON.stringify(caps)}); process.stdout.write(String(capabilities().moneriumOAuth));`],
+      `const { capabilities } = await import(${JSON.stringify(caps)}); process.stdout.write(String((await capabilities()).moneriumOAuth));`],
       { env, encoding: "utf8" });
     assert.equal(r.status, 0, r.stderr);
     return r.stdout;

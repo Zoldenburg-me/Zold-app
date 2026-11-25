@@ -286,7 +286,8 @@ export function createUserRouter(deps: UserDeps) {
         softUsSignals: decision.review?.softUsSignals ?? [],
         outcome: "account_created",
       }, user.id));
-      res.status(201).json(await withSession(user));
+      // The row as stored: the segment, consents and patch above went onto it.
+      res.status(201).json(await withSession((await store.findUser(user.id))!));
     }),
   );
 

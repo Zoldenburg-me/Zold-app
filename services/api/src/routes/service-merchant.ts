@@ -228,19 +228,22 @@ export function createServiceMerchantRouter() {
         await audit(kind, caller, "", "refused:LINK_NOT_CONFIRMED", { orgId: pending.orgId, shop });
         return res.status(409).json({ error: "this link code was never previewed: show the store's admin the organisation and payee, then exchange a fresh code", code: "LINK_NOT_CONFIRMED" });
       }
-      // No await between these checks and the write.
-      if ((await refusePending(res, caller, kind, pending))) return;
-      const payee = (await store.findUser(pending.payeeUserId))!;
-      let established: Awaited<ReturnType<typeof establishLink>>;
-      try {
-        established = await establishLink(pending);
-      } catch (err) {
-        if (err instanceof EncryptionUnavailableError) {
-          await audit("service.merchant_link_exchange", caller, "", "unavailable:encryption", { orgId: pending.orgId, shop });
-          return res.status(503).json({ error: err.message, code: "MERCHANT_LINKS_UNAVAILABLE" });
+      // These checks and the write are one transaction.
+      const established = await store.tx(async () => {
+        if ((await refusePending(res, caller, kind, pending))) return undefined;
+        try {
+          return await establishLink(pending);
+        } catch (err) {
+          if (err instanceof EncryptionUnavailableError) {
+            await audit("service.merchant_link_exchange", caller, "", "unavailable:encryption", { orgId: pending.orgId, shop });
+            res.status(503).json({ error: err.message, code: "MERCHANT_LINKS_UNAVAILABLE" });
+            return undefined;
+          }
+          throw err;
         }
-        throw err;
-      }
+      });
+      if (!established) return;
+      const payee = (await store.findUser(pending.payeeUserId))!;
       const { link, previousPayeeUserId } = established;
       await audit("service.merchant_link_exchange", caller, link.id, "linked", {
         orgId: link.orgId, shop, payeeUserId: link.payeeUserId, ...(previousPayeeUserId ? { previousPayeeUserId } : {}),

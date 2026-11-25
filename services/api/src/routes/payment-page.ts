@@ -191,30 +191,31 @@ export function createPaymentPageRouter(deps: PaymentPageDeps) {
       }
       // The partner round trip above yields the event loop, so another claim
       // of the same handle can land while this one waits. Handle uniqueness
-      // is a check-then-write invariant: re-assert it in the same synchronous
-      // window as the write (the claimAuthorization / holdDailyCap pattern).
-      const takenNow = await store.findUserByHandle(handle);
-      if ((takenNow && takenNow.id !== user.id) || (await store.findOrgByHandle(handle))) {
-        return res.status(409).json({ error: `"${handle}" is already taken` });
-      }
-      const updated = await store.updateUser(user.id, {
-        handle: undefined,
-        payDisplayName: undefined,
-        autoConvert: undefined,
-        paymentPage: {
-          handle,
-          displayName,
-          depositAddress: forwarder.address,
-          recipientAddress: user.address,
-          forwarder: forwarder.forwarder,
-          supportedTokens: forwarder.accepts,
-          routesReadAt: now,
-          settlementAsset,
-          autoConvert: existing?.autoConvert ?? false,
-          createdAt: existing?.createdAt ?? now,
-          updatedAt: now,
-        },
+      // is a check-then-write invariant: re-assert it in one transaction with
+      // the write (Postgres also refuses it through payment_handles).
+      const updated = await store.tx(async () => {
+        const takenNow = await store.findUserByHandle(handle);
+        if ((takenNow && takenNow.id !== user.id) || (await store.findOrgByHandle(handle))) return undefined;
+        return await store.updateUser(user.id, {
+          handle: undefined,
+          payDisplayName: undefined,
+          autoConvert: undefined,
+          paymentPage: {
+            handle,
+            displayName,
+            depositAddress: forwarder.address,
+            recipientAddress: user.address,
+            forwarder: forwarder.forwarder,
+            supportedTokens: forwarder.accepts,
+            routesReadAt: now,
+            settlementAsset,
+            autoConvert: existing?.autoConvert ?? false,
+            createdAt: existing?.createdAt ?? now,
+            updatedAt: now,
+          },
+        });
       });
+      if (!updated) return res.status(409).json({ error: `"${handle}" is already taken` });
       // The name follows the handle: the caller replaces its own (absent when none is shown).
       const pub = await publicUser(updated);
       res.json({

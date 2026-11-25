@@ -267,22 +267,25 @@ async function refreshOnce(user: User): Promise<string> {
   );
   // Re-read after the await: the user may have disconnected, or connected
   // again by another method, while Monerium answered. Only the connection
-  // whose refresh token was spent takes the new tokens.
-  const now = (await store.findUser(user.id))?.monerium;
-  if (!now || now.method !== current.method || now.refreshTokenEnc !== current.refreshTokenEnc) {
-    throw new MoneriumAccessError("the Monerium connection changed while its token was refreshed; nothing was written");
-  }
-  const next = await store.updateUser(user.id, {
-    monerium: {
-      ...now,
-      accessTokenEnc: SECRETS.moneriumAccessToken.seal(user.id, refreshed.access_token),
-      refreshTokenEnc: refreshed.refresh_token
-        ? SECRETS.moneriumRefreshToken.seal(user.id, refreshed.refresh_token)
-        : now.refreshTokenEnc,
-      expiresAt: refreshed.expires_in
-        ? new Date(Date.now() + refreshed.expires_in * 1000).toISOString()
-        : now.expiresAt,
-    },
+  // whose refresh token was spent takes the new tokens: read, compared and
+  // written in one transaction.
+  const next = await store.tx(async () => {
+    const now = (await store.findUser(user.id))?.monerium;
+    if (!now || now.method !== current.method || now.refreshTokenEnc !== current.refreshTokenEnc) {
+      throw new MoneriumAccessError("the Monerium connection changed while its token was refreshed; nothing was written");
+    }
+    return await store.updateUser(user.id, {
+      monerium: {
+        ...now,
+        accessTokenEnc: SECRETS.moneriumAccessToken.seal(user.id, refreshed.access_token),
+        refreshTokenEnc: refreshed.refresh_token
+          ? SECRETS.moneriumRefreshToken.seal(user.id, refreshed.refresh_token)
+          : now.refreshTokenEnc,
+        expiresAt: refreshed.expires_in
+          ? new Date(Date.now() + refreshed.expires_in * 1000).toISOString()
+          : now.expiresAt,
+      },
+    });
   });
   return SECRETS.moneriumAccessToken.open(user.id, next.monerium!.accessTokenEnc!);
 }

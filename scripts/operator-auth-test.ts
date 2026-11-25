@@ -63,6 +63,8 @@ const secondJwt = await accessJwt({ email: "second@example.com" });
 
 const express = (await import("express")).default;
 const { initStore, store } = await import("../services/api/src/store.js");
+// The live rows, for arranging state no store method writes (store/db.ts).
+const dbm = await import("../services/api/src/store/db.js");
 const { createOperatorGate } = await import("../services/api/src/operators/gate.js");
 const { createOperatorAuthRouter } = await import("../services/api/src/routes/operator-auth.js");
 const { createAdminRouter } = await import("../services/api/src/routes/admin.js");
@@ -472,7 +474,7 @@ await check("a session ends when idle for thirty minutes, after eight hours, or 
   ] as const) {
     const token = await signIn();
     assert.equal((await req("GET", "/api/admin/users", undefined, { authorization: `Bearer ${token}` })).status, 200, why);
-    change(await store.findOperatorSessionByTokenHash(tokenHash(token)));
+    change(dbm.db.operatorSessions.find((x) => x.tokenHash === tokenHash(token)));
     assert.equal((await req("GET", "/api/admin/users", undefined, { authorization: `Bearer ${token}` })).status, 401, why);
   }
 });

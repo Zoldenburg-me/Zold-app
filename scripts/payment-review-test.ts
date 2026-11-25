@@ -146,8 +146,8 @@ const requireSession = async (req: any, res: any) => {
 app.use("/api/orgs", createOrgRouter(requireSession));
 const noTransfers = (async () => { throw new Error("no transfer is built in this suite"); }) as any;
 /** Runs inside the balance read, the last await before the claim. */
-let duringBalanceRead: (() => void) | undefined;
-const richBalance = async () => { duringBalanceRead?.(); return { safeBalanceEur: 1_000_000 }; };
+let duringBalanceRead: (() => Promise<void>) | undefined;
+const richBalance = async () => { await duringBalanceRead?.(); return { safeBalanceEur: 1_000_000 }; };
 app.use("/api/orgs", createInvoicingRoutes({ ctxOf: async (req: any, res: any) => await resolveOrg(req, res, requireSession) }));
 app.use("/api/orgs", createDraftRoutes({ ctxOf: async (req: any, res: any) => await resolveOrg(req, res, requireSession) }, noTransfers, richBalance));
 const server = app.listen(0, "127.0.0.1");

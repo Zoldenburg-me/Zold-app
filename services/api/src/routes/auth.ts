@@ -238,21 +238,26 @@ export function createAuthRouter(deps: AuthDeps) {
       // ONE CLAIMABLE ACCOUNT PER EMAIL, re-asserted here. Signup checks it,
       // but two passkey-less rows on one email both pass that check; the first
       // passkey is what makes a row claimable, so it is where the invariant
-      // has to hold. Nothing is awaited between this check and the write.
-      if (!user.passkey?.publicKey && user.email &&
-          emailHeldBy((await store.usersByEmail(user.email)).filter((u) => u.id !== user.id), EMAIL_VERIFICATION.enabled)) {
+      // has to hold. The check and the write are one transaction.
+      const updated = await store.tx(async () => {
+        if (!user.passkey?.publicKey && user.email &&
+            emailHeldBy((await store.usersByEmail(user.email)).filter((u) => u.id !== user.id), EMAIL_VERIFICATION.enabled)) {
+          return undefined;
+        }
+        const plannedSafe = passkeySafePlan(user, reg.key);
+        return await store.updateUser(user.id, {
+          passkey: {
+            ...passkey,
+          },
+          ...(plannedSafe ? { passkeySafe: plannedSafe } : {}),
+        });
+      });
+      if (!updated) {
         return res.status(409).json({
           error: "an account already uses this email — sign in with your passkey, or recover the account if you lost the device",
           code: "EMAIL_IN_USE",
         });
       }
-      const plannedSafe = passkeySafePlan(user, reg.key);
-      const updated = await store.updateUser(user.id, {
-        passkey: {
-          ...passkey,
-        },
-        ...(plannedSafe ? { passkeySafe: plannedSafe } : {}),
-      });
       // A bearer copied before the swap would otherwise keep working under the
       // new passkey until it expires.
       if (replacing) await revokeOtherSessions(user.id, session.id);
