@@ -152,5 +152,27 @@ const router = (venues: [string, bigint | null][]) =>
   }
 }
 
+{
+  // Best has safeSwapPlan whatever it routes over, so asking the provider
+  // alone said yes for best over FxSwapper and CoW, and the cash send ordered
+  // a Bridge transfer no batch could ever fund.
+  const { venueServesSafe, venueSettles } = liquidity as any;
+  class SafeVenue extends StubVenue { async safeSwapPlan() { throw new Error("unused"); } }
+  class QuoteOnlyVenue extends StubVenue { readonly quoteOnly = true; }
+  const best = (venues: [string, any][]) => new BestExecutionProvider(venues.map(([id, provider]) => ({ id, provider })));
+  const fx = new StubVenue(1n, "fx-swapper");
+  const cow = new QuoteOnlyVenue(1n, "cow");
+  const dex = new SafeVenue(1n, "dex");
+  assert.equal(venueServesSafe(best([["fx-swapper", fx], ["cow", cow]])), false);
+  assert.equal(venueServesSafe(best([["fx-swapper", fx], ["dex", dex]])), true);
+  assert.equal(venueServesSafe(fx), false);
+  assert.equal(venueServesSafe(dex), true);
+  ok("best serves a Safe only when one of its venues can build the Safe swap");
+  assert.equal(venueSettles(cow), false);
+  assert.equal(venueSettles(best([["dex", dex], ["cow", cow]])), false, "cow could win the price and then refuse to settle");
+  assert.equal(venueSettles(best([["dex", dex], ["fx-swapper", fx]])), true);
+  assert.equal(venueSettles(fx), true);
+  ok("a quote-only venue (CoW), alone or behind best, does not settle");
+}
 console.log(`\nBEST EXECUTION TEST PASSED — ${n}/${n}: the better price wins, losers are recorded, surplus is measured and attributed`);
 console.log("NOT covered here: a real multi-venue race. LI.FI has no testnet, so that can only be observed on a mainnet.");
