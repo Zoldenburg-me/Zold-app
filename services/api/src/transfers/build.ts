@@ -9,7 +9,7 @@ import {
   paymentAuthorizationTypedData,
   transferIdHash,
 } from "../chain.js";
-import { createBridgeTransfer } from "../bridge/bridgexyz.js";
+import { bridgeRequestHash, createBridgeTransfer } from "../bridge/bridgexyz.js";
 import { prepareSafeSwapForTransfer } from "../liquidity.js";
 import { moneriumRedeemMessage, paymentMemo, REDEEM_WINDOW_SEC } from "../sepa.js";
 import { safeDebitBlocker, safeFundedEurToday } from "../orchestrator.js";
@@ -245,17 +245,22 @@ async function prepareTransferFromQuote(
             const bridgeAmountUsdc = Math.floor(convertEur * rate * 100) / 100;
             let recipient: `0x${string}`;
             {
-              const bridgePlan = await createBridgeTransfer(
-                transfer.id,
-                bridgeAmountUsdc,
-                {
-                  paymentRail: BRIDGE.destinationRail,
-                  currency: BRIDGE.destinationCurrency,
-                  toAddress: BRIDGE.destinationAddress,
-                  blockchainMemo: BRIDGE.destinationMemo || undefined,
-                },
-                { sourceAddress: user.address },
-              );
+              const bridgeDest = {
+                paymentRail: BRIDGE.destinationRail,
+                currency: BRIDGE.destinationCurrency,
+                toAddress: BRIDGE.destinationAddress,
+                blockchainMemo: BRIDGE.destinationMemo || undefined,
+              };
+              // On the row before the create goes out: once it may have
+              // reached Bridge, this key belongs to this order, and execute
+              // refuses to send any other under it (or to fall back to a
+              // plain debit, whose replay would be a different order).
+              transfer.bridgeRequest = bridgeRequestHash(transfer.id, bridgeAmountUsdc, bridgeDest, {
+                sourceAddress: user.address,
+              });
+              const bridgePlan = await createBridgeTransfer(transfer.id, bridgeAmountUsdc, bridgeDest, {
+                sourceAddress: user.address,
+              });
               const deposit = bridgePlan.sourceDepositInstructions?.to_address;
               if (!deposit || !/^0x[a-fA-F0-9]{40}$/.test(deposit)) {
                 throw new Error("Bridge returned no Base deposit address for the swap to deliver into");

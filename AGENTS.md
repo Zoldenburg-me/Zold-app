@@ -79,8 +79,8 @@ THREE RULES OVERRIDE CONVENIENCE:
   `public/business/*.js` are **ES modules**; `core.js` owns shared state.
 - **server.ts owns authentication**: every router is a factory taking
   `requireUserSession`.
-- Four suites grep source text (custody, passkey-safe-plan, gnosis-pay,
-  passkey-safe's mount check). Moving code means moving their greps.
+- Suites grep source text (custody, passkey-safe-plan, gnosis-pay,
+  bridge-harness, passkey-safe mount). Moving code means moving their greps.
 
 ## Invariants
 

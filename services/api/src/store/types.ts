@@ -857,6 +857,10 @@ export interface Transfer {
    * settlement custodian — which is why compensation must not assume it can
    * reverse-swap them.
    */
+  /** bridgeRequestHash of the Bridge order /api/transfers sent under this
+   *  transfer's Idempotency-Key, recorded before it went out. Execute sends
+   *  only that order again; anything else is refused before the debit. */
+  bridgeRequest?: string;
   safeSwap?: {
     recipient: `0x${string}`;
     mode: "dry-run" | "live";
