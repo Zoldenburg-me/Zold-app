@@ -22,14 +22,18 @@ export const EMAIL_KEY = "zold-recovery-email";
  *  slots. Once accepted it is the account's owner, and a later recovery must not replace it. */
 export const HANDLE_KEY = "zold-recovery-passkey-handle";
 
+const b64url = (bytes) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
 /** This recovery's passkey user handle (base64url, 16 random bytes): the saved one, or a new one saved. */
 export function recoveryHandle(storage, email, random = () => crypto.getRandomValues(new Uint8Array(16))) {
   const saved = savedFor(storage, HANDLE_KEY, email);
   if (saved) return saved;
-  const made = btoa(String.fromCharCode(...random())).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const made = b64url(random());
   saveFor(storage, HANDLE_KEY, email, made);
   return made;
 }
+
+export const STILL_CHECKING = "Your passkey is still being checked. Wait a moment, then try again.";
 
 /** The id of the request whose passkey submit has no definite answer yet. The
  *  server may have accepted that passkey with the answer lost on the way back;
@@ -54,18 +58,37 @@ export function passkeySubmitted(storage, email, request) {
  *  waiting (a 4xx but 409, which says it moved on) lets the handle be reused at once.
  *  `create(handle)` runs the ceremony, `read(request)` and `submit(request, body)` call the API. */
 export async function submitPasskey(storage, email, request, { create, read, submit }) {
-  if (savedFor(storage, SUBMIT_KEY, email) === request.id) {
+  const uncertain = savedFor(storage, SUBMIT_KEY, email);
+  // Another request's submit never had an answer: that passkey may own the
+  // account now, so this request makes its own handle.
+  if (uncertain && uncertain !== request.id) passkeySubmitted(storage, email, {});
+  if (uncertain === request.id) {
     const now = await read(request);
     if (now?.status !== "PASSKEY_PENDING") return passkeySubmitted(storage, email, now);
+    // The first submit is still waiting on the guardian: a new ceremony now
+    // would replace the passkey it is about to record.
+    if (now.passkeySubmitting) throw new Error(STILL_CHECKING);
     saveFor(storage, SUBMIT_KEY, email, "");
   }
   const body = await create(recoveryHandle(storage, email));
+  // Candide's OTP ticket: made and kept here before the submit, so an answer
+  // lost on the way back does not lose it (the server returns it only then).
+  const keptTicket = savedFor(storage, TICKET_KEY, email);
+  if (request.mode === "candide") {
+    body.otpTicket = b64url(crypto.getRandomValues(new Uint8Array(32)));
+    saveFor(storage, TICKET_KEY, email, body.otpTicket);
+  }
   saveFor(storage, SUBMIT_KEY, email, request.id);
   let answer;
   try {
     answer = await submit(request, body);
   } catch (e) {
-    if (e?.status >= 400 && e.status < 500 && e.status !== 409) saveFor(storage, SUBMIT_KEY, email, "");
+    if (e?.status >= 400 && e.status < 500) {
+      if (e.status !== 409) saveFor(storage, SUBMIT_KEY, email, "");
+      // Refused before it was stored (a stale tab's 409 among them): the ticket
+      // another submit was accepted with stays the one the codes are checked against.
+      if (body.otpTicket) saveFor(storage, TICKET_KEY, email, keptTicket);
+    }
     throw e;
   }
   saveFor(storage, SUBMIT_KEY, email, "");

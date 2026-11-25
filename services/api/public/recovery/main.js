@@ -186,7 +186,8 @@ async function boot() {
 
   const after = (mode, request) => {
     s.mode = mode;
-    s.request = request;
+    // A request past PASSKEY_PENDING owns its passkey: forget the handle.
+    s.request = passkeySubmitted(localStorage, s.email, request);
     if (request.recoverySecret) saveFor(localStorage, SECRET_KEY, s.email, request.recoverySecret);
     if (request.otpTicket) saveFor(localStorage, TICKET_KEY, s.email, request.otpTicket);
     s.notice = "";
@@ -225,8 +226,7 @@ async function boot() {
       if (request.recoverySecret) saveFor(localStorage, SECRET_KEY, email, request.recoverySecret);
       s.mode = mode;
       s.request = request;
-      // A resumed request past PASSKEY_PENDING owns its passkey: forget the handle.
-      request = request.status === "PASSKEY_PENDING" ? await makePasskey() : passkeySubmitted(localStorage, email, request);
+      if (request.status === "PASSKEY_PENDING") request = await makePasskey();
       after(mode, request);
     } catch (e) {
       fail(e?.code === "RECOVERY_IN_PROGRESS"
@@ -463,7 +463,8 @@ async function boot() {
       if (request.recoverySecret) saveFor(localStorage, SECRET_KEY, s.email, request.recoverySecret);
       if (request.otpTicket) saveFor(localStorage, TICKET_KEY, s.email, request.otpTicket);
       s.mode = mode;
-      s.request = request;
+      // A submit whose answer was lost resumes here past PASSKEY_PENDING: that passkey is the owner now.
+      s.request = passkeySubmitted(localStorage, s.email, request);
       if (returnedHash && mode === "turnkey" && request.status === "REVIEW_PENDING") {
         const result = await finishApprove({
           hash: returnedHash, storage: sessionStorage, stamper: new IndexedDbStamper(), api,

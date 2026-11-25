@@ -833,7 +833,59 @@ await check("a handle is not reused once a request has a registered passkey (the
   // submitPasskey runs the submit's answer through it, and a resumed request too.
   const src = readFileSync(path.join(PUB, "recovery/flow.js"), "utf8");
   assert.match(src, /saveFor\(storage, SUBMIT_KEY, email, ""\);\n\s*return passkeySubmitted\(storage, email, answer\);/);
-  assert.match(readFileSync(path.join(PUB, "recovery/main.js"), "utf8"), /request = request\.status === "PASSKEY_PENDING" \? await makePasskey\(\) : passkeySubmitted\(localStorage, email, request\);/);
+  // The page runs every request it is handed through it: an answer (after), and a
+  // request resumed after a reload (boot), which a lost submit answer leaves at OTP_PENDING.
+  const main = readFileSync(path.join(PUB, "recovery/main.js"), "utf8");
+  const after = main.slice(main.indexOf("const after = (mode, request) => {"), main.indexOf("const makePasskey"));
+  assert.match(after, /s\.request = passkeySubmitted\(localStorage, s\.email, request\);/);
+  const boot = main.slice(main.indexOf("Back in this tab mid-recovery"));
+  assert.match(boot, /s\.request = passkeySubmitted\(localStorage, s\.email, request\);/);
+  assert.match(main, /if \(request\.status === "PASSKEY_PENDING"\) request = await makePasskey\(\);\n\s*after\(mode, request\);/);
+});
+
+await check("a resumed OTP_PENDING request forgets the accepted passkey's handle; a new request does not reuse an uncertain one", async () => {
+  const st = memoryStorage();
+  let n = 0;
+  const random = () => new Uint8Array(16).fill(++n);
+  // The submit's answer was lost; the reload resumes the request at OTP_PENDING.
+  const first = flow.recoveryHandle(st, "a@b.c", random);
+  flow.saveFor(st, flow.SUBMIT_KEY, "a@b.c", "rc1");
+  flow.passkeySubmitted(st, "a@b.c", { id: "rc1", status: "OTP_PENDING" });
+  assert.equal(flow.savedFor(st, flow.HANDLE_KEY, "a@b.c"), "");
+  assert.equal(flow.savedFor(st, flow.SUBMIT_KEY, "a@b.c"), "");
+  // The tab never came back, and a later recovery starts a new request: the
+  // old submit may have been accepted, so its handle is not reused.
+  const old = flow.recoveryHandle(st, "a@b.c", random);
+  flow.saveFor(st, flow.SUBMIT_KEY, "a@b.c", "rq-old");
+  const handles: string[] = [];
+  const io = {
+    create: async (h: string) => { handles.push(h); return { credentialId: "c", attestation: "a", clientDataJSON: "c" }; },
+    read: async () => { throw new Error("not this request's submit"); },
+    submit: async () => ({ id: "rq-new", status: "REVIEW_PENDING" }),
+  };
+  await flow.submitPasskey(st, "a@b.c", { id: "rq-new", status: "PASSKEY_PENDING" }, io);
+  assert.notEqual(handles[0], old);
+  assert.notEqual(handles[0], first);
+});
+
+await check("a stale tab's refused passkey submit leaves the accepted OTP ticket in place", async () => {
+  const st = memoryStorage();
+  // Tab A's submit was accepted with ticket t1 and is on the code step.
+  flow.saveFor(st, flow.TICKET_KEY, "a@b.c", "t1");
+  // Tab B still shows the passkey screen; the server says the request moved on.
+  const io = {
+    create: async () => ({ credentialId: "c", attestation: "a", clientDataJSON: "c" }),
+    read: async () => ({ id: "rc1", status: "OTP_PENDING" }),
+    submit: async () => { throw Object.assign(new Error("recovery is OTP_PENDING"), { status: 409 }); },
+  };
+  const request = { id: "rc1", mode: "candide", status: "PASSKEY_PENDING", submitTo: "/x" };
+  await assert.rejects(flow.submitPasskey(st, "a@b.c", request, io), /OTP_PENDING/);
+  assert.equal(flow.savedFor(st, flow.TICKET_KEY, "a@b.c"), "t1", "the refused submit's ticket was never stored");
+  // A lost answer (no status) keeps the new ticket: the server may hold it.
+  io.submit = async () => { throw new TypeError("Failed to fetch"); };
+  flow.saveFor(st, flow.SUBMIT_KEY, "a@b.c", "");
+  await assert.rejects(flow.submitPasskey(st, "a@b.c", request, io), TypeError);
+  assert.notEqual(flow.savedFor(st, flow.TICKET_KEY, "a@b.c"), "t1");
 });
 
 await check("a passkey submit whose answer was lost is re-read before any retry: no second passkey over the accepted one", async () => {
@@ -921,6 +973,37 @@ await check("a passkey submit whose answer was lost is re-read before any retry:
   const make = src.slice(src.indexOf("const makePasskey"), src.indexOf("const start ="));
   assert.match(make, /submitPasskey\(localStorage, s\.email, s\.request, \{/);
   assert.match(make, /read: \(r\) => api\(requestPath\(s\.mode, r\.id\), undefined, auth\(\)\)/);
+});
+
+await check("a Candide passkey submit still waiting on the guardian is not retried; its OTP ticket is kept before it is sent", async () => {
+  const st = memoryStorage();
+  const sent: any[] = [];
+  let creates = 0;
+  const state = { status: "PASSKEY_PENDING", passkeySubmitting: true };
+  const io = {
+    create: async () => { creates++; return { credentialId: `cred-${creates}`, attestation: "a", clientDataJSON: "c" }; },
+    read: async () => ({ id: "rc1", mode: "candide", ...state }),
+    // The guardian is slow: the answer never comes back to this page.
+    submit: async (_r: unknown, body: any) => { sent.push(body); throw new TypeError("Failed to fetch"); },
+  };
+  const request = { id: "rc1", mode: "candide", status: "PASSKEY_PENDING", submitTo: "/x", registerChallenge: "AQID" };
+  await assert.rejects(flow.submitPasskey(st, "a@b.c", request, io), TypeError);
+  assert.match(sent[0].otpTicket, /^[A-Za-z0-9_-]{43}$/, "32 random bytes, made in this browser");
+  assert.equal(flow.savedFor(st, flow.TICKET_KEY, "a@b.c"), sent[0].otpTicket, "kept before the answer, which may be lost");
+  // Retry while the server still has the first submit in flight: no second ceremony.
+  await assert.rejects(flow.submitPasskey(st, "a@b.c", request, io), new RegExp(flow.STILL_CHECKING.slice(0, 20)));
+  assert.equal(creates, 1, "no passkey made over the one being recorded");
+  assert.equal(flow.savedFor(st, flow.SUBMIT_KEY, "a@b.c"), "rc1", "still unresolved");
+  // The first one landed: the page goes on to the codes with the ticket it kept.
+  Object.assign(state, { status: "OTP_PENDING", passkeySubmitting: undefined });
+  assert.equal((await flow.submitPasskey(st, "a@b.c", request, io)).status, "OTP_PENDING");
+  assert.equal(creates, 1);
+  assert.equal(flow.savedFor(st, flow.TICKET_KEY, "a@b.c"), sent[0].otpTicket);
+  // Other guardians have no ticket.
+  const tk = memoryStorage();
+  await assert.rejects(flow.submitPasskey(tk, "a@b.c", { ...request, mode: "turnkey" }, io));
+  assert.equal(sent[1].otpTicket, undefined);
+  assert.equal(flow.savedFor(tk, flow.TICKET_KEY, "a@b.c"), "");
 });
 
 await check("a refused recovery passkey says why: a security key that can't save it is named", async () => {

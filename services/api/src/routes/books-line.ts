@@ -15,7 +15,7 @@ import { roleCan } from "../domain/roles.js";
 import { isOwnTransfer } from "../domain/ledger.js";
 import { booksFor, writeStatementLinesFor } from "../bookkeeping/writer.js";
 import { describeCause } from "../http/log-cause.js";
-import { lineId, ownTransferAllowed } from "../bookkeeping/statement.js";
+import { invoicePayments, lineId, ownTransferAllowed } from "../bookkeeping/statement.js";
 import { belegOfLine } from "../bookkeeping/issue.js";
 
 /** The keys a payment on these sheets can have a mark-able line under. A
@@ -42,11 +42,13 @@ export function createBooksLineRouter({ requireUserSession }: { requireUserSessi
       return res.json({ line: null });
     }
     // The sweep writes lines once a minute, and a send reads SENT before then:
-    // write this person's lines first, so a payment just confirmed has its own.
+    // write this person's lines first, so a payment just confirmed has its own
+    // (as one file write, like the sweep).
     const user = store.findUser(userId);
-    try { if (user) writeStatementLinesFor(user); } catch (e) { console.error(`books-line ${userId}: ${describeCause(e)}`); }
+    try { if (user) store.batched(() => writeStatementLinesFor(user)); } catch (e) { console.error(`books-line ${userId}: ${describeCause(e)}`); }
     const ids = new Set(keysOf(String(req.params.paymentId)).map((k) => lineId(org.id, k)));
-    const entry = store.ledgerOf(org.id).find((e) => ids.has(e.id) && (ownTransferAllowed(e, store.invoices) || isOwnTransfer(e)));
+    const paid = invoicePayments(store.invoices);
+    const entry = store.ledgerOf(org.id).find((e) => ids.has(e.id) && (ownTransferAllowed(e, paid) || isOwnTransfer(e)));
     // A Beleg that stopped verifying (say after Undo): the sheet offers to replace it.
     const b = entry && belegOfLine(entry);
     const stale = b && "stale" in b && roleCan(member.role, "reports.run") && can(org, "export.ledger").allowed;
