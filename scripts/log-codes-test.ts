@@ -72,24 +72,50 @@ const walk = (dir: string) => {
 walk(SRC);
 assert.ok(files.length > 50, "the guard walked the API source");
 
+/** The end of a call whose "(" is just before `start`: the index of its ")".
+ *  Parentheses in string text ("closed (x)") do not count. */
+function callEnd(s: string, start: number): number {
+  const stack: string[] = []; // as in codeOf
+  let depth = 1;
+  for (let i = start; i < s.length; i++) {
+    const ch = s[i];
+    const q = stack[stack.length - 1];
+    if (q === '"' || q === "'" || q === "`") {
+      if (ch === "\\") i++;
+      else if (ch === q) stack.pop();
+      else if (q === "`" && ch === "$" && s[i + 1] === "{") { stack.push("}"); i++; }
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") stack.push(ch);
+    else if (ch === "{") stack.push("{");
+    else if (ch === "}" && (q === "}" || q === "{")) stack.pop();
+    else if (ch === "(") depth++;
+    else if (ch === ")" && --depth === 0) return i;
+  }
+  return s.length;
+}
+
+/** Every console call in a source file: `line: hit` for each code it prints. */
+function scan(src: string): { calls: number; hits: string[] } {
+  const hits: string[] = [];
+  let calls = 0;
+  const call = /console\.(log|warn|error|info|debug)\s*\(/g;
+  for (let m; (m = call.exec(src)); ) {
+    calls++;
+    for (const hit of codeHits(src.slice(call.lastIndex, callEnd(src, call.lastIndex)))) {
+      hits.push(`${src.slice(0, m.index).split("\n").length}: ${hit}`);
+    }
+  }
+  return { calls, hits };
+}
+
 const offenders: string[] = [];
 let calls = 0;
 for (const file of files) {
-  const src = readFileSync(file, "utf8");
   const rel = path.relative(SRC, file).split(path.sep).join("/");
-  const call = /console\.(log|warn|error|info|debug)\s*\(/g;
-  for (let m; (m = call.exec(src)); ) {
-    let i = call.lastIndex;
-    for (let depth = 1; i < src.length && depth; i++) {
-      if (src[i] === "(") depth++;
-      else if (src[i] === ")") depth--;
-    }
-    calls++;
-    for (const hit of codeHits(src.slice(call.lastIndex, i - 1))) {
-      const line = src.slice(0, m.index).split("\n").length;
-      offenders.push(`${rel}:${line}: ${hit}`);
-    }
-  }
+  const found = scan(readFileSync(file, "utf8"));
+  calls += found.calls;
+  for (const hit of found.hits) offenders.push(`${rel}:${hit}`);
 }
 assert.ok(calls > 100, `the guard found the console calls (${calls})`);
 assert.deepEqual(offenders, [], `a log call prints a payment code:\n${offenders.join("\n")}`);
@@ -114,5 +140,11 @@ assert.ok(!caught("`refused (${refusal.code})`"));
 assert.ok(!caught("\"code missing\""), "a word in a message");
 assert.ok(!caught("{ code: \"INSTALL_OTHER_BROWSER\" }"), "an object key");
 assert.ok(!caught("`${statusCode} ${responseCode} had ${b.codesIssued}`"));
+
+// Through the scan: a ")" in a message does not end the call before the code.
+assert.deepEqual(scan('console.log("refund :) sent", displayCode(r.code));').hits, ["1: displayCode(", "1: r.code"]);
+assert.deepEqual(scan("console.error(`closed ) for ${r.id}`,\n  r.code);").hits, ["1: r.code"], "a template, over lines");
+assert.deepEqual(scan("console.warn('it\\'s done (ok)', r.id); f(r.code);").hits, [], "the call ends at its own )");
+assert.deepEqual(scan("console.log(`a ${f(\")\")} b`, payCode);").hits, ["1: payCode"], "a ) in a string inside ${}");
 
 console.log(`log-codes: ${calls} console calls in ${files.length} files print no payment code`);

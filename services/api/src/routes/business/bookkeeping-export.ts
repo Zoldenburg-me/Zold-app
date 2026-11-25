@@ -15,7 +15,7 @@
 import express from "express";
 import { store } from "../../store.js";
 import { requireCapability, requirePermission, type OrgContext } from "../org-context.js";
-import { isMonth, linesInMonth, ownTransferAllowed } from "../../bookkeeping/statement.js";
+import { invoicePayments, isMonth, linesInMonth, ownTransferAllowed, type InvoicePayments } from "../../bookkeeping/statement.js";
 import { statementLinesOf, swapsHaveExecuted, writeAccountStatementLines, writeStatementLinesFor } from "../../bookkeeping/writer.js";
 import { belegOfLine, BelegStillVerifies, BelegWouldNotVerify, issueBelegForLine, replaceBelegForLine } from "../../bookkeeping/issue.js";
 import { belegFileName, belegPdf, UNEXECUTED_NOTE } from "../../bookkeeping/beleg.js";
@@ -40,8 +40,8 @@ function liveBeleg(e: LedgerEntry) {
   return b && "live" in b ? b.live : undefined;
 }
 
-/** The line as the dashboard and the accountant see it. */
-export function publicStatementLine(e: LedgerEntry) {
+/** The line as the dashboard and the accountant see it. A listing builds `paid` once. */
+export function publicStatementLine(e: LedgerEntry, paid: InvoicePayments = invoicePayments(store.invoices)) {
   const s = e.statement!;
   const b = belegOfLine(e);
   const beleg = b && "live" in b ? b.live : undefined;
@@ -59,7 +59,7 @@ export function publicStatementLine(e: LedgerEntry) {
     ...(bookedCode(e) ? { accountCodeAuto: e.accountCodeAuto !== false } : {}),
     tags: e.tags,
     ...(isOwnTransfer(e) ? { ownTransfer: true } : {}),
-    ...(ownTransferAllowed(e, store.invoices) ? { ownTransferAllowed: true } : {}),
+    ...(ownTransferAllowed(e, paid) ? { ownTransferAllowed: true } : {}),
     note: e.note,
     links: s.links,
     ...(beleg ? { documentCode: beleg.code, documentUrl: documentUrl(beleg.code) } : {}),
@@ -95,7 +95,8 @@ export function createBookkeepingExportRoutes(deps: OrgRoutes): express.Router {
     const month = req.query.month ? String(req.query.month) : undefined;
     if (month && !isMonth(month)) return res.status(400).json({ error: "month must be YYYY-MM" });
     const all = statementLinesOf(ctx.org.id);
-    const lines = (month ? linesInMonth(all, month) : all).map(publicStatementLine);
+    const paid = invoicePayments(store.invoices);
+    const lines = (month ? linesInMonth(all, month) : all).map((e) => publicStatementLine(e, paid));
     const months = [...new Set(all.map((e) => e.statement!.valueDate.slice(0, 7)))].sort().reverse();
     res.json({
       month,

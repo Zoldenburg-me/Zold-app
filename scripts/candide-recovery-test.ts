@@ -150,6 +150,8 @@ let recoveryCounter = 0;
 /** How the stub reports a wrong recovery code: an error body (the SDK throws),
  *  or `{ success: false }` after a short delay, so parallel guesses overlap. */
 let wrongCodeAs: "error" | "delayed-failure" = "error";
+/** While set, the stub holds its answer to a signature request until this resolves. */
+let holdSignatureRequest: Promise<void> | null = null;
 
 const stub = createServer((req, res) => {
   const send = (code: number, body: any) => {
@@ -159,7 +161,7 @@ const stub = createServer((req, res) => {
   const url = new URL(req.url ?? "/", STUB);
   let raw = "";
   req.on("data", (c) => (raw += c));
-  req.on("end", () => {
+  req.on("end", async () => {
     const body = raw ? JSON.parse(raw) : {};
     const p = url.pathname;
     if (p === "/v1/config/getNetworkConfig") {
@@ -196,6 +198,7 @@ const stub = createServer((req, res) => {
       return send(200, { success: true });
     }
     if (p === "/v1/auth/signature/request") {
+      if (holdSignatureRequest) await holdSignatureRequest;
       seen.signatureRequests.push(body);
       const requestId = `sigreq-${seen.signatureRequests.length}`;
       const auths = registered.map((r, i) => ({ challengeId: `${requestId}-otp-${i + 1}`, channel: r.channel, target: r.target, verified: false }));
@@ -601,8 +604,44 @@ try {
     recovery = { ...recovery, ...resumed.data };
   });
 
+  let pendingFirst: Awaited<ReturnType<typeof rc>> | undefined;
+  await t("a second passkey submit while the first waits on the guardian is refused, and a read-back says it is pending", async () => {
+    let release = () => {};
+    holdSignatureRequest = new Promise<void>((r) => { release = r; });
+    // The browser's own ticket, kept before it submits, so a lost answer does not lose it.
+    const browserTicket = randomBytes(32).toString("base64url");
+    const first = rc(recovery.submitTo, { ...newPasskey.register(recovery.registerChallenge), otpTicket: browserTicket });
+    try {
+      let read: any;
+      for (const s = Date.now(); Date.now() - s < 5000; await new Promise((r) => setTimeout(r, 25))) {
+        read = await rc(`/api/recovery/candide/${recovery.id}`);
+        if (read.data.passkeySubmitting) break;
+      }
+      assert.equal(read.status, 200, JSON.stringify(read.data));
+      assert.equal(read.data.status, "PASSKEY_PENDING");
+      assert.equal(read.data.passkeySubmitting, true, "the read-back tells the browser not to make another passkey");
+      const retry = await makePasskey("retry-while-pending");
+      const second = await rc(recovery.submitTo, retry.register(recovery.registerChallenge));
+      assert.equal(second.status, 409, JSON.stringify(second.data));
+      assert.equal(second.data.code, "PASSKEY_SUBMIT_IN_PROGRESS");
+    } finally {
+      holdSignatureRequest = null;
+      release();
+    }
+    const r = await first;
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    assert.equal(r.data.otpTicket, browserTicket, "the ticket is the one the browser kept");
+    assert.equal(seen.signatureRequests.length, 1, "one guardian request, for the first passkey");
+    const after = await rc(`/api/recovery/candide/${recovery.id}`);
+    assert.equal(after.data.status, "OTP_PENDING");
+    assert.equal(after.data.passkeySubmitting, undefined);
+    assert.equal(after.data.otpTicket, undefined, "the ticket is never on a read");
+    // The first submit's answer stands in for the one checked below.
+    pendingFirst = r;
+  });
+
   await t("registering the new passkey asks Candide for OTPs on every channel with the new owner set", async () => {
-    const r = await rc(recovery.submitTo, newPasskey.register(recovery.registerChallenge));
+    const r = pendingFirst!;
     assert.equal(r.status, 200, JSON.stringify(r.data));
     assert.equal(r.data.status, "OTP_PENDING");
     assert.equal(r.data.candide.auths.length, 2);

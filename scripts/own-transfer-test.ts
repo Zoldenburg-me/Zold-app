@@ -374,6 +374,21 @@ await check("a wallet send that pays a send link is an invoice payment: no mark,
   assert.equal(store.ledgerOf("org_cs").find((e: any) => e.id === INV)!.statement!.links.invoiceId, "inv_a");
 });
 
+await check("a personal send that pays another org's send link loses an earlier mark too, without that org's invoice on the line", async () => {
+  store.cryptoSends.push({ id: "cs_xorg", userId: "u_cs", to: safe("de"), token: "EURE", amount: "30", capEur: 30, state: "SENT", txHash: `0x${"7".repeat(64)}`, createdAt: NOW, updatedAt: NOW } as any);
+  writeStatementLinesFor(store.findUser("u_cs")!);
+  const LINE = lineId("org_cs", "cryptosend:cs_xorg");
+  assert.equal((await own("org_cs", LINE, true, "u_cs")).status, 200, "marked before the link was tied");
+  // u_cs pays another person's send link (send links exist only in personal orgs) from their own Safe.
+  store.addOrganisation({ id: "org_xorg", type: "personal", name: "Other", reporting, createdAt: NOW, updatedAt: NOW } as any);
+  store.addInvoice({ id: "inv_xorg", orgId: "org_xorg", linkTokenHash: "inv_xorg", state: "PAYING", total: "30.00", payment: { cryptoSendId: "cs_xorg" }, createdAt: NOW, updatedAt: NOW } as any);
+  writeStatementLinesFor(store.findUser("u_cs")!);
+  const line = store.ledgerOf("org_cs").find((e: any) => e.id === LINE)!;
+  assert.equal(line.tags.includes("internal"), false, "the writer drops the mark, as the PUT would refuse it");
+  assert.equal(line.statement!.links.invoiceId, undefined, "another org's invoice is not named in these books");
+  assert.equal((await own("org_cs", LINE, true, "u_cs")).status, 409);
+});
+
 console.log("\nBelege");
 
 await check("an issued Beleg is never touched: it still verifies, is not revoked, and keeps the booking it froze", async () => {

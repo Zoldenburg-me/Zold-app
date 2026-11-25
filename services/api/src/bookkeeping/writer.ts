@@ -31,7 +31,7 @@ import {
 } from "../store.js";
 import { safeBooksStart } from "../domain/safe-books.js";
 import type { MoneriumOrderLike } from "../documents.js";
-import { mergeStatementLines, projectStatementLines, type StatementInputs } from "./statement.js";
+import { invoicePayments, mergeStatementLines, projectStatementLines, type InvoicePayments, type StatementInputs } from "./statement.js";
 import { describeCause } from "../http/log-cause.js";
 import { withoutConversionOutputs } from "../transfers/activity.js";
 import type { MoneyInHolder } from "./money-in.js";
@@ -87,6 +87,8 @@ interface Rows {
   sweepsOf(userId: string): ConversionSweep[];
   paymentRequestsOf(userId: string): PaymentRequest[];
   invoicesOf(orgId: string): Invoice[];
+  /** What every org's invoices pay: a mark on a line one of them pays is dropped. */
+  invoicePayments(): InvoicePayments;
   rulesOf(orgId: string): AccountRule[];
   ledgerOf(orgId: string): LedgerEntry[];
   swapsHaveExecuted(): boolean;
@@ -105,6 +107,7 @@ const storeRows: Rows = {
   sweepsOf: (id) => store.conversionSweeps.filter((s) => s.userId === id),
   paymentRequestsOf: (id) => store.paymentRequestsForUser(id),
   invoicesOf: (orgId) => store.invoicesOf(orgId),
+  invoicePayments: () => invoicePayments(store.invoices),
   rulesOf: (orgId) => store.rulesOf(orgId),
   ledgerOf: (orgId) => store.ledgerOf(orgId),
   swapsHaveExecuted,
@@ -143,6 +146,7 @@ function groupedRows(): Rows {
   const sweeps = groupBy(store.conversionSweeps, (s) => s.userId);
   const paymentRequests = groupBy(store.paymentRequests, (r) => r.userId);
   const invoices = groupBy(store.invoices, (i) => i.orgId);
+  const paid = invoicePayments(store.invoices);
   const rules = groupBy(store.accountRules, (r) => r.orgId);
   const ledger = groupBy(store.ledger, (e) => e.orgId);
   const swaps = swapsHaveExecuted();
@@ -156,6 +160,7 @@ function groupedRows(): Rows {
     sweepsOf: (id) => sweeps.get(id) ?? [],
     paymentRequestsOf: (id) => paymentRequests.get(id) ?? [],
     invoicesOf: (orgId) => invoices.get(orgId) ?? [],
+    invoicePayments: () => paid,
     rulesOf: (orgId) => rules.get(orgId) ?? [],
     ledgerOf: (orgId) => ledger.get(orgId) ?? [],
     swapsHaveExecuted: () => swaps,
@@ -235,7 +240,7 @@ function writeProjected(inp: StatementInputs, since: string | undefined, rows: R
   // Nothing from before the Safe's books start: an imported Safe's earlier life is not the account's.
   const projected = projectStatementLines(inp).filter((e) => !since || e.at >= since);
   const existing = rows.ledgerOf(inp.orgId);
-  const { toAdd, toUpdate } = mergeStatementLines(existing, projected);
+  const { toAdd, toUpdate } = mergeStatementLines(existing, projected, rows.invoicePayments());
   if (toAdd.length) {
     const { entries } = applyRules(rows.rulesOf(inp.orgId), toAdd);
     store.addLedgerEntries(entries);

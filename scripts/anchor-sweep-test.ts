@@ -166,6 +166,21 @@ for (const id of ["t-stranded-PAYOUT_FUNDING_PENDING", "t-stranded-PAYOUT_READY"
   assert.doesNotMatch(seen, /:/, `${id}: the desktop card cuts the reason at the first colon`);
 }
 
+// Once an operator resolves the review, the row is not under review any more:
+// the sender reads the state it resolved into, not the review note.
+const refunded = store.resolveTransferReview("t-uncertain", {
+  state: "REFUNDED", note: "Treasury checked: nothing left, sender refunded by hand.", by: "op-test",
+  evidence: "partner ref R-1", refund: { amountEur: 0, movedEur: 0 },
+});
+assert.ok(refunded.ok, JSON.stringify(refunded));
+assert.match(store.findTransfer("t-uncertain")!.reviewResolution?.previousError ?? "", /treasury account/, "the operator keeps the old error");
+assert.equal(userTransfer(store.findTransfer("t-uncertain")!).error, undefined, "REFUNDED: no under-review note");
+const failed = store.resolveTransferReview("t-stranded-PAYOUT_READY", { state: "FAILED", note: "Anchor confirms nothing was paid out.", by: "op-test" });
+assert.ok(failed.ok, JSON.stringify(failed));
+assert.equal(userTransfer(store.findTransfer("t-stranded-PAYOUT_READY")!).error, undefined, "FAILED: no under-review note");
+const paid = { ...store.findTransfer("t-stranded-PAYOUT_FUNDING_PENDING")!, state: "PAID" as const, reviewResolution: { state: "PAID" as const, note: "paid on Stellar", by: "op-test", at: now } };
+assert.equal(userTransfer(paid).error, undefined, "PAID: no under-review note");
+
 // A failed refresh may have paid whenever a payment intent has no settling
 // step, whatever the error: an ordinary throw after the broadcast must not
 // read as "nothing went out" and refund the sender.
