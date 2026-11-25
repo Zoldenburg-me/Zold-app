@@ -56,6 +56,7 @@ const scripts = [
   "convert:crash:test",
   "persist-failure:test",
   "send-record-crash:test",
+  "bridge:harness:test",
   "safe-op-uncertain:test",
   "verifier-sweep:test",
   "device-key:test",
