@@ -39,7 +39,8 @@ export function belegContextFor(entry: LedgerEntry): BelegContext & { userId: st
   const sweep = s.event === "sweep" ? store.conversionSweeps.find((x) => `sweep:${x.id}` === s.key) : undefined;
   const paymentRequest = s.links.paymentRequestId ? store.findPaymentRequest(s.links.paymentRequestId) : undefined;
   const invoice = s.links.invoiceId ? store.findInvoice(s.links.invoiceId) : undefined;
-  const invoicePayerName = invoice?.issued?.recipient?.name ?? invoice?.supplier?.orgName;
+  // Whoever the invoice is with: its recipient if we issued it, its supplier if we pay it.
+  const invoiceCounterpartyName = invoice?.issued?.recipient?.name ?? invoice?.supplier?.orgName;
   return {
     userId: user.id,
     holder: holderFor(user, account?.moneriumProfile),
@@ -48,7 +49,7 @@ export function belegContextFor(entry: LedgerEntry): BelegContext & { userId: st
     ...(issueOrder ? { issueOrder } : {}),
     ...(sweep ? { sweep } : {}),
     ...(paymentRequest ? { paymentRequest } : {}),
-    ...(invoicePayerName ? { invoicePayerName } : {}),
+    ...(invoiceCounterpartyName ? { invoiceCounterpartyName } : {}),
   };
 }
 
