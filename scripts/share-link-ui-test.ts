@@ -141,7 +141,7 @@ await t("no file in public/ links the old #share/ name", () => {
 
 await t("no link yet: nothing to send is shown, the button only creates one, and there is no Share yet", () => {
   ctx.navigator.share = async () => {};
-  run(`mShare = { transferId: "t1", fields: { ...SHARE_DEFAULTS }, link: null, expiresAt: null, busy: false }; paintShare();`);
+  run(`mShare = { transferId: "t1", fields: { ...SHARE_DEFAULTS }, link: null, expiresAt: null, busy: false, loaded: true }; paintShare();`);
   assert.ok(hidden("m-share-out"));
   assert.equal(el("m-share-copy").textContent, "Create link");
   assert.ok(hidden("m-share-native"), "Share waits for a link, so its tap can open the sheet at once");
@@ -220,7 +220,7 @@ await t("an expired link is never shown, copied or shared: the composer keeps th
   ctx.navigator.clipboard = { writeText: async (s: string) => void copied.push(s) };
   // The API answers an expired share with 404 { expired, fields }.
   run(`mShare = { transferId: "t1", fields: { ...SHARE_DEFAULTS }, link: null, expiresAt: null, busy: false };
-    api = async (p, body, method) => { if (method === "GET") throw Object.assign(new Error("the link for this payment has expired"), { status: 404, body: { expired: true, fields: { sender: "full", route: true } } });
+    api = async (p, body, method) => { if (method === "GET") throw Object.assign(new Error("the link for this payment has expired"), { status: 404, fromZold: true, body: { expired: true, fields: { sender: "full", route: true } } });
       __posts.push(p); return { url: "https://zold.test/r/fresh-slug-xyz", expiresAt: ${JSON.stringify(EXPIRES)} }; }; __posts = [];`);
   await run("renderShareScreen()");
   assert.equal(run("mShare.link"), null);
@@ -246,6 +246,85 @@ await t("a link that expires while the composer is open stops being offered", ()
   assert.ok(hidden("m-share-out"));
   assert.ok(hidden("m-share-native"));
   assert.equal(el("m-share-url").textContent, "");
+  assert.equal(el("m-share-copy").textContent, "Create link");
+  assert.match(el("m-share-foot").textContent, /expired/i);
+  delete ctx.navigator.share;
+});
+
+await t("Create link and the controls are refused until the saved choices load; the link then carries exactly what is shown", async () => {
+  // The expired link withheld the recipient; the screen paints defaults
+  // (recipient: full) first and only learns that from the GET.
+  run(`openShare = (id) => { mShare = { transferId: id, fields: { ...SHARE_DEFAULTS }, link: null, expiresAt: null, expired: false, busy: false, loaded: false }; };
+    openShare("t1"); __posts = []; __bodies = []; __gate = new Promise((r) => { __releaseGet = r; });
+    api = async (p, body, method) => {
+      if (method === "GET") { await __gate; throw Object.assign(new Error("expired"), { status: 404, fromZold: true, body: { expired: true, fields: { recipient: "hidden" } } }); }
+      __posts.push(p); __bodies.push(body); return { url: "https://zold.test/r/fresh", expiresAt: ${JSON.stringify(EXPIRES)}, fields: body }; };`);
+  const pending = run("renderShareScreen()");
+  assert.equal(el("m-share-copy").disabled, true, "Create link is disabled while the saved choices load");
+  await el("m-share-copy").onclick();
+  await run(`setShare("sender", "full")`);
+  assert.deepEqual([...run("__posts")], [], "nothing is published with the defaults");
+  assert.equal(run("mShare.fields.sender"), "last", "a control change before load is refused");
+  run("__releaseGet()");
+  await pending;
+  assert.equal(el("m-share-copy").disabled, false);
+  assert.equal(run("mShare.fields.recipient"), "hidden");
+  await el("m-share-copy").onclick();
+  assert.equal(run("__bodies[0].recipient"), "hidden", "the link carries the choices the preview shows");
+  assert.deepEqual({ ...run("__bodies[0]") }, { ...run("mShare.fields") });
+});
+
+await t("the same holds for a live link: Create link before the GET cannot widen it", async () => {
+  run(`openShare("t1"); __posts = []; __gate = new Promise((r) => { __releaseGet = r; });
+    api = async (p, body, method) => {
+      if (method === "GET") { await __gate; return { url: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: { recipient: "hidden" } }; }
+      __posts.push(p); return { url: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: body }; };`);
+  const pending = run("renderShareScreen()");
+  assert.equal(el("m-share-copy").disabled, true);
+  await el("m-share-copy").onclick();
+  assert.deepEqual([...run("__posts")], []);
+  run("__releaseGet()");
+  await pending;
+  assert.equal(run("mShare.link"), URL_R);
+  assert.equal(run("mShare.fields.recipient"), "hidden");
+});
+
+await t("a failed load keeps Create link disabled and says so", async () => {
+  run(`openShare("t1"); __posts = []; api = async (p, body, method) => { if (method === "GET") throw Object.assign(new Error("offline"), { status: 0 }); __posts.push(p); return {}; };`);
+  el("m-share-err").classList.add("hidden");
+  await run("renderShareScreen()");
+  assert.equal(el("m-share-copy").disabled, true);
+  assert.ok(!hidden("m-share-err"));
+  await el("m-share-copy").onclick();
+  assert.deepEqual([...run("__posts")], []);
+});
+
+await t("a settings change on a live link is an edit: it never asks for a new link, and an edit refused as expired leaves none", async () => {
+  run(`mShare = { transferId: "t1", fields: { ...SHARE_DEFAULTS }, link: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, expired: false, busy: false, loaded: true };
+    __bodies = []; api = async (p, body) => { __bodies.push(body); throw Object.assign(new Error("this link has expired"), { status: 409, body: { expired: true, fields: body } }); };`);
+  await run(`setShare("route", true)`);
+  assert.equal(run("__bodies[0].edit"), true, "the autosave says it is an edit");
+  assert.equal(run("mShare.link"), null, "the dead link is dropped");
+  assert.equal(run("mShare.expired"), true);
+  assert.equal(el("m-share-copy").textContent, "Create link");
+  assert.ok(hidden("m-share-out"));
+});
+
+await t("Copy and Share check expiry at the tap, even if the screen has not redrawn", async () => {
+  const shared: any[] = [];
+  const copied: string[] = [];
+  ctx.navigator.share = async (d: any) => void shared.push(d);
+  ctx.navigator.clipboard = { writeText: async (s: string) => void copied.push(s) };
+  const past = new Date(Date.now() - 1000).toISOString();
+  run(`__posts = []; api = async (p) => { __posts.push(p); return {}; };
+    mShare = { transferId: "t1", fields: { ...SHARE_DEFAULTS }, link: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(past)}, expired: false, busy: false, loaded: true };`);
+  await el("m-share-native").onclick();
+  assert.deepEqual(shared, [], "the dead link is not shared");
+  run(`mShare = { ...mShare, link: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(past)}, expired: false };`);
+  await el("m-share-copy").onclick();
+  assert.deepEqual(copied, [], "the dead link is not copied");
+  assert.deepEqual([...run("__posts")], [], "and no new link is made by that tap");
+  assert.equal(run("mShare.link"), null);
   assert.equal(el("m-share-copy").textContent, "Create link");
   assert.match(el("m-share-foot").textContent, /expired/i);
   delete ctx.navigator.share;

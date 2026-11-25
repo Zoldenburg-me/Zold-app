@@ -62,7 +62,8 @@ const isLive = (share: ReceiptShare): boolean =>
  * selection narrows what is public and links already sent keep working.
  *
  * An edit does not extend the expiry: a share is a 30-day window opened once.
- * Once it has passed, a post opens a new window under a fresh slug.
+ * Once it has passed, a post opens a new window under a fresh slug, unless
+ * it says it is an edit, which is refused.
  */
 /** Kill the link. The slug stays recorded so a later visitor is told it was
  *  revoked rather than getting the same 404 as a typo. */
@@ -95,6 +96,11 @@ export function createReceiptShareRouter(deps: ReceiptShareDeps) {
       const fields = parseShareFields(req.body, existing?.fields ?? DEFAULT_SHARE_FIELDS);
       if (existing && isLive(existing)) {
         return res.json(shareResponse(req, store.updateReceiptShare(existing.id, { fields })));
+      }
+      // A settings change is an edit (`edit: true`). Sent as the link ran out
+      // or was revoked, it must not publish a new one: only Create link does.
+      if (req.body?.edit === true) {
+        return res.status(409).json({ error: "this link has expired or was revoked — create a new one", expired: true, fields });
       }
       const now = new Date();
       const share: ReceiptShare = {

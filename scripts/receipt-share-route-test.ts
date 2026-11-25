@@ -101,6 +101,25 @@ await check("the composer now reads the fresh link, and editing it keeps that sl
   assert.equal(store.findReceiptShareBySlug("oldxx-oldxx-oldxx")?.fields.sender, "full", "the expired share is not edited");
 });
 
+await check("a settings edit never creates a link: after expiry or revoke it is refused and nothing new is public", async () => {
+  const live = store.findReceiptShareBySlug(fresh)!;
+  store.updateReceiptShare(live.id, { expiresAt: new Date(Date.now() - 1000).toISOString() } as any);
+  const before = store.findReceiptShareByTransfer("t1")?.slug;
+  const r = await call("POST", "/transfers/t1/share", { ...DEFAULT_SHARE_FIELDS, route: false, edit: true });
+  assert.equal(r.status, 409);
+  assert.equal(r.body.expired, true);
+  assert.equal(r.body.url, undefined);
+  assert.equal(store.findReceiptShareByTransfer("t1")?.slug, before, "no new share was minted");
+  assert.equal(store.findReceiptShareBySlug(fresh)?.fields.sender, "hidden", "the expired share is not edited");
+  // Create link (no edit flag) still opens a new window.
+  const c = await call("POST", "/transfers/t1/share", { ...DEFAULT_SHARE_FIELDS });
+  assert.equal(c.status, 201);
+  await call("DELETE", "/transfers/t1/share");
+  const rv = await call("POST", "/transfers/t1/share", { ...DEFAULT_SHARE_FIELDS, edit: true });
+  assert.equal(rv.status, 409, "an edit after revoke does not resurrect it either");
+  assert.equal(store.findReceiptShareBySlug(c.body.slug)?.revokedAt !== undefined, true);
+});
+
 server.close();
 if (process.exitCode) process.exit();
 console.log(`\nRECEIPT SHARE ROUTE TEST PASSED — ${passed}/${passed}`);

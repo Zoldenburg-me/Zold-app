@@ -6,7 +6,9 @@
    The composer picks what a public receipt exposes. The server builds the
    payload and never sends a withheld value, so these controls set what the
    server publishes. A change to a live link is saved immediately, so closing
-   the screen after narrowing a selection narrows the real link. */
+   the screen after narrowing a selection narrows the real link. Until the
+   saved choices have loaded, nothing on the screen can be changed or
+   published: the defaults painted first are not what the sender chose. */
 const SHARE_GROUPS = [
   { key: "sender", label: "Your name", options: [["full", "Full"], ["first", "First"], ["last", "Last"], ["hidden", "None"]] },
   { key: "recipient", label: "Recipient name", options: [["full", "Full"], ["first", "First"], ["last", "Last"], ["hidden", "None"]] },
@@ -24,29 +26,41 @@ const SHARE_TOGGLES = [
 ];
 
 const SHARE_DEFAULTS = { sender: "last", recipient: "full", account: "short", fx: "both", showRate: true, showRef: true, route: false };
-let mShare = { transferId: null, fields: { ...SHARE_DEFAULTS }, link: null, expiresAt: null, expired: false, busy: false };
+let mShare = { transferId: null, fields: { ...SHARE_DEFAULTS }, link: null, expiresAt: null, expired: false, busy: false, loaded: false };
 
 function openShare(id) {
-  mShare = { transferId: id, fields: { ...SHARE_DEFAULTS }, link: null, expiresAt: null, expired: false, busy: false };
+  mShare = { transferId: id, fields: { ...SHARE_DEFAULTS }, link: null, expiresAt: null, expired: false, busy: false, loaded: false };
   mobileNav("share");
 }
 
 async function renderShareScreen() {
+  mShare.loaded = false;
   paintShare();
-  if (!mShare.transferId) return;
+  const id = mShare.transferId;
+  if (!id) return;
   try {
     // An existing live share is the truth about what is already public; the
     // screen must open showing that, not the defaults.
-    const s = await api(`/api/transfers/${mShare.transferId}/share`, undefined, "GET");
+    const s = await api(`/api/transfers/${id}/share`, undefined, "GET");
+    if (mShare.transferId !== id) return;
     mShare.fields = { ...SHARE_DEFAULTS, ...s.fields };
     mShare.link = s.url;
     mShare.expiresAt = s.expiresAt;
+    mShare.loaded = true;
   } catch (e) {
-    /* No live share yet: the CTA will create one. An expired one sends back
-       its choices (never its URL), so the new link starts from them. */
-    if (e?.body?.expired) {
-      mShare.fields = { ...SHARE_DEFAULTS, ...e.body.fields };
-      mShare.expired = true;
+    if (mShare.transferId !== id) return;
+    /* No share yet (Zold's own 404): the CTA will create one. An expired one
+       sends back its choices (never its URL), so the new link starts from
+       them. Anything else leaves the screen locked: we do not know what the
+       sender chose. */
+    if (e?.status === 404 && e.fromZold) {
+      if (e.body?.expired) {
+        mShare.fields = { ...SHARE_DEFAULTS, ...e.body.fields };
+        mShare.expired = true;
+      }
+      mShare.loaded = true;
+    } else {
+      showErr("m-share-err", e);
     }
   }
   paintShare();
@@ -67,26 +81,32 @@ function paintShare() {
   if (refocus) document.querySelector(refocus)?.focus();
 }
 
+/* A link that runs out while the screen is open is not offered any more: the
+   recipient would get "expired". Checked on every paint and again at the
+   Copy or Share tap, since the screen may sit open without redrawing. */
+function dropExpiredShare() {
+  if (!mShare.link || Date.parse(mShare.expiresAt) > Date.now()) return false;
+  mShare.link = null;
+  mShare.expiresAt = null;
+  mShare.expired = true;
+  return true;
+}
+
 function paintShareControls() {
-  // A link that runs out while the screen is open is not offered any more:
-  // the recipient would get "expired".
-  if (mShare.link && !(Date.parse(mShare.expiresAt) > Date.now())) {
-    mShare.link = null;
-    mShare.expiresAt = null;
-    mShare.expired = true;
-  }
+  dropExpiredShare();
   const f = mShare.fields;
+  const off = mShare.loaded ? "" : " disabled";
   // One radio group per choice (arrow keys move within it), then the extras
   // as switches: each control says what it is to a screen reader.
   $("m-share-groups").innerHTML = SHARE_GROUPS.map((g) => `
     <fieldset class="m-shfield"><legend>${esc(g.label)}</legend>
       <div class="z-seg">${g.options.map(([id, label]) =>
-        `<label><input type="radio" name="m-sg-${g.key}" value="${id}" data-sgroup="${g.key}"${f[g.key] === id ? " checked" : ""} />${esc(label)}</label>`
+        `<label><input type="radio" name="m-sg-${g.key}" value="${id}" data-sgroup="${g.key}"${f[g.key] === id ? " checked" : ""}${off} />${esc(label)}</label>`
       ).join("")}</div>
     </fieldset>`).join("");
 
   $("m-share-toggles").innerHTML = `<h3 class="m-shhead">Also show</h3><ul class="z-list z-card">${SHARE_TOGGLES.map((t) => `
-    <li><button type="button" class="z-row z-row--btn m-shswitch" role="switch" data-stoggle="${t.key}" aria-checked="${!!f[t.key]}">
+    <li><button type="button" class="z-row z-row--btn m-shswitch" role="switch" data-stoggle="${t.key}" aria-checked="${!!f[t.key]}"${off}>
       <span class="z-row__main"><span class="z-row__title">${esc(t.label)}</span><span class="z-row__sub">${esc(t.sub)}</span></span>
       <span class="m-track" aria-hidden="true"><span class="knob"></span></span>
     </button></li>`).join("")}</ul>`;
@@ -98,6 +118,7 @@ function paintShareControls() {
   $("m-share-out").classList.toggle("hidden", !mShare.link);
   $("m-share-url").textContent = mShare.link || "";
   $("m-share-copy").textContent = shareCopyLabel();
+  $("m-share-copy").disabled = !mShare.loaded;
   // Share appears only with a link, so its tap opens the sheet at once: a
   // request first would spend the tap's activation and the sheet would refuse.
   $("m-share-native").classList.toggle("hidden", !mShare.link || typeof navigator.share !== "function");
@@ -165,19 +186,24 @@ function paintSharePreview() {
 }
 
 async function setShare(key, value) {
+  if (!mShare.loaded) return;
   mShare.fields = { ...mShare.fields, [key]: value };
   paintShare();
   // Only a link that already exists needs pushing: narrowing an unpublished
   // selection has nothing to narrow yet, and creating one here would publish a
   // receipt the sender never asked to share.
-  if (mShare.link) await saveShare({ silent: true });
+  // It goes as an edit: if the link ran out on the way, the server refuses
+  // rather than publishing a new one the sender did not ask for.
+  if (mShare.link) await saveShare({ silent: true, edit: true });
 }
 
-async function saveShare({ silent } = {}) {
-  if (mShare.busy) return null;
+async function saveShare({ silent, edit } = {}) {
+  if (mShare.busy || !mShare.loaded) return null;
   mShare.busy = true;
   try {
-    const s = await api(`/api/transfers/${mShare.transferId}/share`, mShare.fields);
+    const s = await api(`/api/transfers/${mShare.transferId}/share`, edit ? { ...mShare.fields, edit: true } : mShare.fields);
+    // The screen shows what the server saved, not what it was sent.
+    mShare.fields = { ...SHARE_DEFAULTS, ...s.fields };
     mShare.link = s.url;
     mShare.expiresAt = s.expiresAt;
     mShare.expired = false;
@@ -185,6 +211,12 @@ async function saveShare({ silent } = {}) {
     paintShare();
     return s;
   } catch (e) {
+    if (e?.body?.expired) {
+      mShare.link = null;
+      mShare.expiresAt = null;
+      mShare.expired = true;
+      paintShare();
+    }
     if (!silent) showErr("m-share-err", e);
     return null;
   } finally {
@@ -199,6 +231,8 @@ const shareCopyLabel = () => (mShare.link ? "Copy link" : "Create link");
    Copy and Share then work from their own taps. */
 $("m-share-copy").onclick = async () => {
   const btn = $("m-share-copy");
+  if (!mShare.loaded) return;
+  if (dropExpiredShare()) return paintShare();
   if (!mShare.link) {
     if (await saveShare()) announce("Link created");
     return;
@@ -220,6 +254,7 @@ $("m-share-copy").onclick = async () => {
    the tap. Closing the sheet is not an error. A sheet that fails points at
    Copy: copying here, without a fresh tap, would fail the same way. */
 $("m-share-native").onclick = async () => {
+  if (dropExpiredShare()) return paintShare();
   if (!mShare.link) return;
   try {
     await navigator.share({ title: "Zold receipt", url: mShare.link });
