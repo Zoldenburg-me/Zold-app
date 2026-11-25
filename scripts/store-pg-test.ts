@@ -17,7 +17,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import pg from "pg";
-import { storeSuite } from "./_store-suite.js";
+import { conditionalWriteSuite, storeSuite } from "./_store-suite.js";
 import { mapSeq } from "../services/api/src/seq.js";
 
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-store-pg-")), "db.json");
@@ -50,11 +50,12 @@ try {
   const a = open();
   const b = open();
   const [ra, rb] = await Promise.all([migrate(a), migrate(b)]);
-  assert.deepEqual([...ra, ...rb], [1], "0001 applied once, by one runner");
-  console.log(`ok - two parallel migration runners apply 0001 once (server_version_num ${version})`);
+  assert.deepEqual([...ra, ...rb], [1, 2], "each file applied once, by one runner");
+  console.log(`ok - two parallel migration runners apply each file once (server_version_num ${version})`);
 
   const s = createPgStore(a);
   await storeSuite(s);
+  await conditionalWriteSuite(s);
   console.log("ok - store suite on the Postgres backend (Postgres 17)");
 
   // Parallel calls on one row, each on its own connection from the pool.

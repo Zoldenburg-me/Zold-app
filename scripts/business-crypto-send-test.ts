@@ -198,9 +198,9 @@ try {
     const x = await call("POST", `/orgs/org_1/drafts/${id}/execute`, "u_owner");
     const [cs] = x.data.cryptoSends;
     const m = (await store.membersOf("org_1")).find((r) => r.userId === "u_owner")!;
-    m.status = "deactivated" as any;
+    await store.updateMember(m.id, { status: "deactivated" as any });
     const s = await call("POST", `/crypto-sends/${cs.cryptoSendId}/authorize`, "u_owner", { executionAssertion: await passkey.assert(cs.safeExecution.challenge) });
-    m.status = "active" as any;
+    await store.updateMember(m.id, { status: "active" as any });
     assert.equal(s.status, 409, JSON.stringify(s.data));
     assert.equal(s.data.code, "NOT_SENDER");
     assert.equal((await store.findCryptoSend(cs.cryptoSendId))!.state, "FAILED");
@@ -209,7 +209,7 @@ try {
   await t("transfers.sign: a payer who backs a sole trader's account still sends; on a company org only an owner signs", async () => {
     const org = (await store.findOrganisation("org_1"))!;
     const m = (await store.membersOf("org_1")).find((r) => r.userId === "u_owner")!;
-    m.role = "payer";
+    await store.updateMember(m.id, { role: "payer" });
     try {
       const id = await approvedRun();
       const x = await call("POST", `/orgs/org_1/drafts/${id}/execute`, "u_owner");
@@ -217,18 +217,18 @@ try {
       const [cs] = x.data.cryptoSends;
       // A company account is never backed by a member (design note §4); the
       // sign check refuses it anyway, after the queue gate let the payer in.
-      org.entity = "company";
+      await store.updateOrganisation(org.id, { entity: "company" } as any);
       const s = await call("POST", `/crypto-sends/${cs.cryptoSendId}/authorize`, "u_owner", { executionAssertion: await passkey.assert(cs.safeExecution.challenge) });
       assert.equal(s.status, 409, JSON.stringify(s.data));
       assert.equal(s.data.code, "NOT_SENDER");
-      delete org.entity;
+      await store.updateOrganisation(org.id, { entity: undefined } as any);
       const id2 = await approvedRun();
       const [cs2] = (await call("POST", `/orgs/org_1/drafts/${id2}/execute`, "u_owner")).data.cryptoSends;
       const ok2 = await call("POST", `/crypto-sends/${cs2.cryptoSendId}/authorize`, "u_owner", { executionAssertion: await passkey.assert(cs2.safeExecution.challenge) });
       assert.equal(ok2.status, 200, JSON.stringify(ok2.data));
     } finally {
-      m.role = "owner";
-      delete org.entity;
+      await store.updateMember(m.id, { role: "owner" });
+      await store.updateOrganisation(org.id, { entity: undefined } as any);
     }
   });
 
@@ -255,7 +255,7 @@ try {
 
   await t("review off: the same refusal at execute, and a one-line run sends from DRAFT", async () => {
     const org = (await store.findOrganisation("org_1"))!;
-    org.paymentReview = { required: false } as any;
+    await store.updateOrganisation(org.id, { paymentReview: { required: false } } as any);
     try {
       const bad = await call("POST", "/orgs/org_1/drafts", "u_owner", { source: { kind: "account", accountId: "acc_1" }, lines: [walletLine(), walletLine()] });
       assert.equal((await call("POST", `/orgs/org_1/drafts/${bad.data.draft.id}/execute`, "u_owner")).status, 422);
@@ -263,7 +263,7 @@ try {
       const x = await call("POST", `/orgs/org_1/drafts/${d.data.draft.id}/execute`, "u_owner");
       assert.equal(x.status, 201, JSON.stringify(x.data));
     } finally {
-      delete (org as any).paymentReview;
+      await store.updateOrganisation(org.id, { paymentReview: (org as any).paymentReview } as any);
     }
   });
 

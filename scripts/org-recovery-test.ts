@@ -389,7 +389,8 @@ try {
     id = await queue(false);
     op = (await store.findSafeOp(id))!;
     assert.ok(op.userOperation.toLowerCase().includes(strip(GUARDIAN)));
-    op.guardianAddress = FOREIGN;
+    // No store method rewrites an op's guardian: the stored row is set by hand.
+    (await import("../services/api/src/store/db.js")).db.safeOps.find((o) => o.id === id)!.guardianAddress = FOREIGN;
     await refused(id);
 
     // An op queued before the field existed: the substring check decides.

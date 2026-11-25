@@ -221,8 +221,7 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
       }
     }
 
-    const org = await store.updateOrganisation(ctx.org.id, {
-      invoicing: { ...((await store.findOrganisation(ctx.org.id))?.invoicing ?? {}), ...next },
+    const org = await store.patchOrgSub(ctx.org.id, "invoicing", (cur) => ({ ...(cur ?? {}), ...next }), {
       ...(clearsSignupTaxId(identity.patch) ? { taxId: undefined } : {}),
     });
     if (ibanChange) {

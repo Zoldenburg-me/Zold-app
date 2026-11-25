@@ -725,23 +725,34 @@ try {
   {
     // The poller re-sees every order every pass: one already on the row writes nothing.
     const writes: string[] = [];
-    const { updatePaymentRequest, updateInvoice } = store;
+    const { updatePaymentRequest, updateInvoice, recordPaymentRequestPayment, settleInvoice } = store;
     store.updatePaymentRequest = (...a: Parameters<typeof updatePaymentRequest>) => (writes.push(`request ${a[0]}`), updatePaymentRequest(...a));
     store.updateInvoice = (...a: Parameters<typeof updateInvoice>) => (writes.push(`invoice ${a[0]}`), updateInvoice(...a));
+    // These decide on the stored row whether to write: counted when they do.
+    store.recordPaymentRequestPayment = async (...a: Parameters<typeof recordPaymentRequestPayment>) => {
+      const r = await recordPaymentRequestPayment(...a);
+      if (r.written) writes.push(`request ${a[0]}`);
+      return r;
+    };
+    store.settleInvoice = async (...a: Parameters<typeof settleInvoice>) => {
+      const r = await settleInvoice(...a);
+      if (r) writes.push(`invoice ${a[0]}`);
+      return r;
+    };
     try {
       const again = await routes.attributeMoneriumOrder({ id: "ord-9", kind: "issue", amount: "40", address: owner, memo: `${live.body.code} invoice`, meta: { state: "processed", processedAt: nowIso }, counterpart: { details: { name: "Payer Ltd" } } });
       await routes.sweepPaymentRequests();
       check("a poll and a sweep over an already-recorded paid order write nothing", again?.id === live.body.id && writes.length === 0, writes.join(", "));
       // A crash between the request write and the invoice write: the next poll heals the invoice, once.
       const healed = await mkInvoice({}, issuedSnapshot(4000, { number: "RE-2026-0999" }));
-      updatePaymentRequest(live.body.id, { invoiceId: healed });
+      await updatePaymentRequest(live.body.id, { invoiceId: healed });
       const ord9 = { id: "ord-9", kind: "issue", amount: "40", address: owner, memo: `${live.body.code} invoice`, meta: { state: "processed", processedAt: nowIso }, counterpart: { details: { name: "Payer Ltd" } } };
       await routes.attributeMoneriumOrder(ord9);
       await routes.attributeMoneriumOrder(ord9);
       check("an invoice settlement a crash left unwritten is written by the next poll, and only once",
         writes.join(",") === `invoice ${healed}` && ((await store.findInvoice(healed))!.settlements?.[0] as any)?.orderId === "ord-9", writes.join(", "));
     } finally {
-      Object.assign(store, { updatePaymentRequest, updateInvoice });
+      Object.assign(store, { updatePaymentRequest, updateInvoice, recordPaymentRequestPayment, settleInvoice });
     }
   }
   void bankCode; void liveCode;
@@ -755,6 +766,15 @@ try {
   const list = await call("GET", `/api/users/${miriam.id}/payment-requests`, undefined, miriam.id);
   // 9, not 14: the five refused invoice links left no row behind.
   check("the owner's list carries every link, newest first, with what the payee can offer — and nothing a refusal created", list.body.requests.length === 9 && list.body.methods.length === 2 && Date.parse(list.body.requests[0].createdAt) >= Date.parse(list.body.requests[1].createdAt), `${list.body.requests.length}`);
+  {
+    // §2: the sweep reads the open requests, then awaits; a payment recorded
+    // in between keeps the request PAID. The store runs calls in the order
+    // made, so the payment lands between the sweep's read and its write.
+    const late = await call("POST", `/api/users/${miriam.id}/payment-requests`, { amountEur: 6, methods: ["bank"], expiresAt: new Date(Date.now() + 90_000).toISOString() }, miriam.id);
+    await store.updatePaymentRequest(late.body.id, { expiresAt: new Date(Date.now() - 1000).toISOString() });
+    const [swept3] = await Promise.all([routes.sweepPaymentRequests(), store.updatePaymentRequest(late.body.id, { state: "PAID", paidAt: nowIso })]);
+    check("a payment recorded while the expiry sweep runs keeps the request PAID", swept3.expired === 0 && (await store.findPaymentRequest(late.body.id))!.state === "PAID", JSON.stringify(swept3));
+  }
 
   {
     // A page whose deposit address is a Candide forwarder, claimed before the

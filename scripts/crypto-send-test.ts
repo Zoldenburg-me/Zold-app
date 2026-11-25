@@ -214,17 +214,17 @@ try {
   });
 
   await t("a forwarder that cannot forward now takes nothing: expired, never read, or no route here", async () => {
-    const page = (await store.findUser("u-kim"))!.paymentPage!;
-    const was = JSON.parse(JSON.stringify(page));
+    const was = (await store.findUser("u-kim"))!.paymentPage!;
+    const setPage = (page: any) => store.updateUser("u-kim", { paymentPage: page });
     const usdc = () => create({ to: "kim.eth", confirmedAddress: FWD, token: "USDC", amount: "1" });
-    page.forwarder!.expiresAt = new Date(Date.now() - 1000).toISOString();
+    await setPage({ ...was, forwarder: { ...was.forwarder!, expiresAt: new Date(Date.now() - 1000).toISOString() } });
     const expired = await usdc();
-    Object.assign(page, JSON.parse(JSON.stringify(was)));
-    delete (page as any).routesReadAt;
+    const { routesReadAt: _unread, ...neverRead } = was as any;
+    await setPage(neverRead);
     const unread = await usdc();
-    Object.assign(page, JSON.parse(JSON.stringify(was)), { supportedTokens: [{ chainId: 42161, symbol: "USDC", address: addrs().usdc, decimals: 6 }] });
+    await setPage({ ...was, supportedTokens: [{ chainId: 42161, symbol: "USDC", address: addrs().usdc, decimals: 6 }] });
     const elsewhere = await usdc();
-    Object.assign(page, JSON.parse(JSON.stringify(was)));
+    await setPage(was);
     for (const [why, r] of [["expired", expired], ["never read from its routes", unread], ["routes only on another chain", elsewhere]] as const) {
       assert.equal(r.data.code, "PAGE_TOKEN_REFUSED", `${why}: ${JSON.stringify(r.data)}`);
       assert.match(r.data.error, /can't take payments from here right now/);
@@ -445,12 +445,11 @@ try {
 
   await t("KYC is not the gate: a pending account sends, a segment without a balance does not", async () => {
     const u = (await store.findUser("u-cs"))!;
-    u.kycStatus = "pending";
+    await store.updateUser(u.id, { kycStatus: "pending" });
     assert.equal((await create({ to: ALICE, confirmedAddress: ALICE })).status, 201);
-    u.kycStatus = "approved";
-    u.segment = { value: "BLOCKED_US" } as any;
+    await store.updateUser(u.id, { kycStatus: "approved", segment: { value: "BLOCKED_US" } as any });
     assert.equal((await create({ to: ALICE, confirmedAddress: ALICE })).status, 403);
-    delete u.segment;
+    await store.updateUser(u.id, { segment: u.segment });
   });
 } catch (err: any) {
   failed = true;

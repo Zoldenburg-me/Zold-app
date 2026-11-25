@@ -159,20 +159,18 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
         if (err instanceof EncryptionUnavailableError) return res.status(503).json({ error: err.message });
         throw err;
       }
-      const org = await store.updateOrganisation(ctx.org.id, {
-        integrations: {
-          ...(ctx.org.integrations ?? {}),
-          getmyinvoices: {
-            apiKeyEnc,
-            accountName: account.organization || account.name || undefined,
-            accountEmail: account.email,
-            ...(account.accountId ? { accountId: String(account.accountId) } : {}),
-            connectedAt: new Date().toISOString(),
-            connectedByMemberId: ctx.member.id,
-            ...(companyId !== undefined ? { companyId } : {}),
-          },
+      const org = await store.patchOrgSub(ctx.org.id, "integrations", (cur) => ({
+        ...(cur ?? {}),
+        getmyinvoices: {
+          apiKeyEnc,
+          accountName: account.organization || account.name || undefined,
+          accountEmail: account.email,
+          ...(account.accountId ? { accountId: String(account.accountId) } : {}),
+          connectedAt: new Date().toISOString(),
+          connectedByMemberId: ctx.member.id,
+          ...(companyId !== undefined ? { companyId } : {}),
         },
-      });
+      }));
       await store.audit(auditEntry("partner.credentials_connected", { partner: "getmyinvoices", orgId: org.id, account: account.organization ?? account.name }, ctx.userId));
       res.status(201).json({ integrations: publicIntegrations(org), account: { name: account.name, organization: account.organization, email: account.email, hasBankingAccess: account.hasBankingAccess } });
     } catch (err) {

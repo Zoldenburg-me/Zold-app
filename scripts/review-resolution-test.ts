@@ -366,15 +366,15 @@ try {
   await check("no working Monerium connection is not answered Try again: 409 MONERIUM_NOT_CONNECTED, nothing changed", async () => {
     const u = (await store.findUser("u_review"))! as any;
     const own = u.monerium;
-    const cases: Array<[string, string, () => void]> = [
+    const cases: Array<[string, string, () => Promise<unknown>]> = [
       // A connection that holds no credential: moneriumClientFor refuses before any request.
-      ["no credential", "ord-unknown", () => (u.monerium = { method: "oauth" })],
+      ["no credential", "ord-unknown", () => store.updateUser(u.id, { monerium: { method: "oauth" } as any })],
       // Monerium refuses the account's token.
-      ["a 401", "ord-auth", () => (u.monerium = own)],
+      ["a 401", "ord-auth", () => store.updateUser(u.id, { monerium: own })],
     ];
     try {
       for (const [label, id, arrange] of cases) {
-        arrange();
+        await arrange();
         const r = await post("t_attach_bad", { state: "PAID", note: NOTE, evidence: id });
         assert.equal(r.status, 409, `${label}: ${r.status} ${JSON.stringify(r.body)}`);
         assert.equal(r.body.code, "MONERIUM_NOT_CONNECTED", label);
@@ -384,7 +384,7 @@ try {
         assert.ok(!t.reviewResolution && !t.sepa, `${label}: the transfer changed`);
       }
     } finally {
-      u.monerium = own;
+      await store.updateUser(u.id, { monerium: own });
     }
   });
 

@@ -125,9 +125,10 @@ export async function ensureQuote(r: PaymentRequest, amountEur: number | undefin
     return { request: r };
   }
   // The amounts taken and the new one are read and written in one
-  // transaction: two quotes picked from the same reading could share an
-  // amount, and a deposit is attributed by amount alone.
+  // transaction that holds the payee: two quotes picked from the same reading
+  // could share an amount, and a deposit is attributed by amount alone.
   return await store.tx(async () => {
+    await store.lockUser(r.userId);
     const now = (await store.findPaymentRequest(r.id)) ?? r;
     const again = currentQuote(now, amountEur);
     if (again) return { request: now, quote: again };

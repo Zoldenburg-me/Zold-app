@@ -265,8 +265,8 @@ export async function writeStatementLines(): Promise<{ added: number; updated: n
     let added = 0;
     let updated = 0;
     // One file write per sweep: a write per user re-serialised the whole store
-    // once for every user with a new line. The sweep is synchronous, and
-    // batched() writes on the way out even if a user's projection throws.
+    // once for every user with a new line. The sweep reads only the store,
+    // and store.tx writes on the way out even if a user's projection throws.
     await store.tx(async () => {
       const rows = await groupedRows();
       for (const u of (await store.list("users"))) {

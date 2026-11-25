@@ -339,6 +339,7 @@ export function createPgStore(database: Database): StoreBackend {
       await tx((t) => insertUser(t, u));
     },
     updateUser: (id, patch) => tx((t) => updateUserIn(t, id, patch)),
+    lockUser: (id) => tx((t) => locked<User>(t, TABLE.users, id)),
     patchUserSub: (id, key, fn, patch = {}) =>
       tx(async (t) => {
         const u = await locked<User>(t, TABLE.users, id);

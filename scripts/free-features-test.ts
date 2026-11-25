@@ -114,6 +114,43 @@ await check("payment review starts off and an owner turns it on: a control, not 
   assert.equal(on.data.organisation.paymentReview.required, true);
 });
 
+// §2 rule 4 on the JSON backend: these were synchronous from check to write;
+// with an async store they are one store method each.
+await check("two owners each demoting the other in parallel: one succeeds, one owner remains", async () => {
+  await store.addOrganisation({ id: "org_two", type: "business", name: "Two", reporting, verifications: {}, createdAt: now, updatedAt: now } as any);
+  for (const userId of ["u_owner", "u_admin"]) {
+    await store.addMember({ id: `m_two_${userId}`, orgId: "org_two", userId, email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now });
+  }
+  const [a, b] = await Promise.all([
+    call("PATCH", "/api/orgs/org_two/members/m_two_u_admin", "u_owner", { role: "viewer" }),
+    call("PATCH", "/api/orgs/org_two/members/m_two_u_owner", "u_admin", { role: "viewer" }),
+  ]);
+  // The second is refused: 409 when it found the other still an owner, 403
+  // when it found itself already demoted.
+  const statuses = [a.status, b.status].sort();
+  assert.equal(statuses[0], 200, JSON.stringify([a.data, b.data]));
+  assert.ok([403, 409].includes(statuses[1]), JSON.stringify([a.data, b.data]));
+  const owners = (await store.membersOf("org_two")).filter((m) => m.role === "owner" && m.status === "active");
+  assert.equal(owners.length, 1);
+});
+
+await check("one invitation accepted twice in parallel: spent once", async () => {
+  const { createHash } = await import("node:crypto");
+  const email = "invitee@example.com";
+  await store.addUser({
+    id: "u_invitee", name: "Invitee", country: "DE", kycStatus: "approved", email, createdAt: now,
+    passkeySafe: { address: `0x${"cd".repeat(20)}`, status: "active", candideRecovery: { channels: [{ channel: "email", target: email, verifiedAt: now }] } },
+  } as any);
+  const token = "invite-token-race";
+  await store.addMember({
+    id: "m_invited", orgId: "org_b", email, role: "viewer", status: "invited", invitedAt: now,
+    invite: { tokenHash: createHash("sha256").update(token).digest("hex"), expiresAt: new Date(Date.now() + 86_400_000).toISOString() },
+  } as any);
+  const answers = await Promise.all([1, 2].map(() => call("POST", "/api/orgs/invites/accept", "u_invitee", { token })));
+  assert.deepEqual(answers.map((r) => r.status).sort(), [200, 404], JSON.stringify(answers.map((r) => r.data)));
+  assert.equal((await store.membersOf("org_b")).filter((m) => m.userId === "u_invitee").length, 1);
+});
+
 server.close();
 if (failed) { console.error(`\nFREE FEATURES TEST FAILED — ${failed} check(s)`); process.exit(1); }
 console.log(`\nFREE FEATURES TEST PASSED — ${passed}/${passed}: every built feature is free, and session and role checks still refuse`);

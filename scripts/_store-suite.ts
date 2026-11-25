@@ -387,3 +387,133 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
   assert.equal((await s.list("chartAccounts")).length, DEFAULT_CHART.length + 1);
   assert.deepEqual((await s.list("contacts")), []);
 }
+
+/**
+ * The store methods §2 of docs/postgres-store-design.md moved callers'
+ * check-then-writes into (rules 2-4): each checks on the row as stored, in
+ * the same write. Run after storeSuite, on its rows.
+ */
+export async function conditionalWriteSuite(s: StoreBackend): Promise<void> {
+  const now = iso(0);
+
+  // Rule 2: a sub-object changes from its stored value; a stale copy written
+  // whole would lose what another writer put there.
+  await s.updateUser("u_b", { passkeySafe: { address: `0x${"bc".repeat(20)}`, status: "active", socialGuardians: [] } } as any);
+  const stale = (await s.findUser("u_b"))!;
+  await s.patchUserSub("u_b", "passkeySafe", (ps) => ({ ...ps!, recoveryChoice: { choice: "declined", at: now } }));
+  const both = await s.patchUserSub("u_b", "passkeySafe", (ps) => ({ ...ps!, recoveredAt: now }), { name: "Bo 2" });
+  assert.equal((both.passkeySafe as any).recoveryChoice?.choice, "declined", "the first writer's field survives the second");
+  assert.equal(both.passkeySafe?.recoveredAt, now);
+  assert.equal(both.name, "Bo 2", "the patch goes in the same write");
+  assert.equal(stale.passkeySafe?.recoveredAt, undefined, "a row handed out earlier is a copy");
+  await assert.rejects(async () => await s.patchUserSub("nobody", "monerium", (m) => m), /unknown user nobody/);
+
+  await s.patchOrgSub("org_b", "invoicing", (cur) => ({ ...cur, vatId: "DE123456789" }));
+  const org = await s.patchOrgSub("org_b", "invoicing", (cur) => ({ ...cur, taxNumber: "12/345/67890" }), { name: "B 2" } as any);
+  assert.deepEqual([org.invoicing?.vatId, org.invoicing?.taxNumber, org.name], ["DE123456789", "12/345/67890", "B 2"]);
+  await assert.rejects(async () => await s.patchOrgSub("org_b", "integrations", (c) => c, { safe: {} } as any), /setOrgSafePlan only/);
+
+  // A transfer's steps only grow: two writers from stale copies both land,
+  // and a step one of them enriched keeps what it was given.
+  await s.addTransfer({ id: "t_steps", userId: "u_a", quoteId: "q_steps", rail: "sepa", state: "DEBITED", sendEur: 1, txs: [{ step: "safe.debit", hash: hash("01") }], createdAt: now, updatedAt: now } as any);
+  const copyA = (await s.findTransfer("t_steps"))!;
+  const copyB = (await s.findTransfer("t_steps"))!;
+  copyA.txs.push({ step: "executor.intent", hash: "0x" });
+  await s.updateTransfer("t_steps", { txs: copyA.txs });
+  copyB.txs.push({ step: "compensator.refund", hash: hash("02") });
+  await s.updateTransfer("t_steps", { txs: copyB.txs });
+  await s.appendTransferStep("t_steps", { step: "appended", hash: hash("03") }, { error: "e" });
+  const enriched = (await s.findTransfer("t_steps"))!.txs.map((x) => (x.step === "safe.debit" ? { ...x, outputLogIndexes: [4] } : x));
+  const steps = await s.updateTransfer("t_steps", { txs: enriched });
+  assert.deepEqual(steps.txs.map((x) => x.step), ["safe.debit", "executor.intent", "compensator.refund", "appended"], "both stale writers' steps, in commit order");
+  assert.deepEqual((steps.txs[0] as any).outputLogIndexes, [4], "an enriched step keeps its new field");
+  assert.equal(steps.error, "e");
+  await s.updateTransfer("t_steps", { txs: [{ step: "safe.debit", hash: hash("01") }] });
+  assert.deepEqual(((await s.findTransfer("t_steps"))!.txs[0] as any).outputLogIndexes, [4], "a stale copy without the field removes nothing");
+  const sepa = await s.patchTransferSub("t_steps", "sepa", (cur) => ({ ...(cur ?? {}), state: "processed" } as any), { state: "PAID" } as any);
+  assert.deepEqual([sepa.sepa?.state, sepa.state], ["processed", "PAID"]);
+  assert.equal((await s.patchTransferSub("t_steps", "sepa", (cur) => cur, { state: "FAILED" } as any)).state, "PAID", "the final-state guard still holds");
+
+  // Drafts: activity is appended, never written whole; a conditional write
+  // checks state, the row read and the drafter (four eyes).
+  const d = await s.addDraft({ id: "dr_s2", orgId: "org_b", source: { kind: "account", accountId: "acc_eur" }, state: "PENDING_REVIEW", lines: [], createdByMemberId: "mem_a", activity: [{ at: now, by: "mem_a", action: "created" }], createdAt: now, updatedAt: "2000-01-01T00:00:00.000Z" } as any);
+  await assert.rejects(async () => await s.updateDraft("dr_s2", { activity: [] } as any), /appendDraftActivity/);
+  assert.equal(await s.updateDraftFrom("dr_s2", { state: "REVIEWED" }, { from: ["DRAFT"] }), null, "not from a state it is not in");
+  assert.equal(await s.updateDraftFrom("dr_s2", { state: "REVIEWED" }, { from: ["PENDING_REVIEW"], drafter: "mem_b" }), null, "someone else became the drafter");
+  assert.equal(await s.updateDraftFrom("dr_s2", { state: "REVIEWED" }, { from: ["PENDING_REVIEW"], expectedUpdatedAt: "1999-01-01T00:00:00.000Z" }), null, "written since it was read");
+  const reviewed = await s.updateDraftFrom("dr_s2", { state: "REVIEWED" }, { from: ["PENDING_REVIEW"], expectedUpdatedAt: d.updatedAt, drafter: "mem_a", activity: { at: now, by: "mem_b", action: "reviewed" } as any });
+  assert.deepEqual(reviewed?.activity.map((a: any) => a.action), ["created", "reviewed"]);
+  assert.ok(await s.claimDraftExecution("dr_s2"));
+  assert.equal(await s.updateDraftFrom("dr_s2", { state: "CANCELLED" }, { from: ["DRAFT", "PENDING_REVIEW", "REVIEWED", "INVALID_DATA"] }), null, "a cancel never lands on EXECUTING");
+  const appended = await s.appendDraftActivity("dr_s2", { at: now, by: "system", action: "executing" } as any, { failureReason: "x" } as any);
+  assert.deepEqual([appended.state, appended.activity.length, (appended as any).failureReason], ["EXECUTING", 3, "x"]);
+
+  // Rule 3: a state write names the states it may leave.
+  await s.addPaymentRequest({ id: "pr_s2", code: "JKLM9012", userId: "u_a", state: "OPEN", payments: [], cryptoQuotes: [], source: { kind: "shopify", externalId: "2002", shop: "a.myshopify.com" }, expiresAt: iso(DAY), createdAt: now, updatedAt: now } as any);
+  const recorded = await s.recordPaymentRequestPayment("pr_s2", (r) => ({ payments: [...r.payments, { id: "p1", ref: "x", amountEur: 1 } as any], state: "PAID" }));
+  assert.deepEqual([recorded.from, recorded.written, recorded.request.state], ["OPEN", true, "PAID"]);
+  assert.equal((await s.recordPaymentRequestPayment("pr_s2", () => null)).written, false, "nothing to write writes nothing");
+  assert.equal(await s.updatePaymentRequestFrom("pr_s2", ["OPEN"], { state: "EXPIRED" }), null, "the expiry sweep leaves a request paid meanwhile PAID");
+  assert.equal(await s.cancelUnpaidPaymentRequest("pr_s2"), null, "a paid request is never cancelled");
+  await s.addPaymentRequest({ id: "pr_s2b", code: "NOPQ3456", userId: "u_a", state: "OPEN", payments: [], cryptoQuotes: [], source: { kind: "app" }, expiresAt: iso(-1000), createdAt: now, updatedAt: now } as any);
+  assert.equal(await s.cancelUnpaidPaymentRequest("pr_s2b"), null, "past its expiry it stays expired (a Shopify cancel)");
+  assert.equal((await s.cancelUnpaidPaymentRequest("pr_s2b", new Date(), true))?.state, "CANCELLED", "the payee's own cancel takes a stored OPEN one");
+  assert.equal((await s.updatePaymentRequestFrom("pr_s2b", ["CANCELLED"], { description: "d" } as any))?.state, "CANCELLED");
+
+  const csHold = (await s.holdDailyCap("u_a", 1, 100, () => 0)) as { holdId: string };
+  await s.addCryptoSendUnderHold({ id: "cs_s2", userId: "u_a", to: `0x${"11".repeat(20)}`, token: "EURE", amount: "1", capEur: 1, state: "CREATED", deadline: Date.now() / 1000 + 600, createdAt: now, updatedAt: now } as any, csHold.holdId);
+  assert.equal(await s.claimCryptoSend("cs_s2"), true);
+  assert.equal(await s.updateCryptoSendFrom("cs_s2", ["CREATED"], { state: "FAILED", error: "screening" }), null, "FAILED never over a claimed send");
+  assert.equal((await s.findCryptoSend("cs_s2"))?.state, "SUBMITTED");
+  assert.equal((await s.updateCryptoSendFrom("cs_s2", ["SUBMITTED"], { state: "SENT", txHash: hash("98") }))?.state, "SENT");
+
+  // Invoices: pay-to, one settlement per ref, /pay once.
+  await s.addInvoice({ id: "inv_s2", orgId: "org_b", direction: "outgoing", linkTokenHash: "lth-s2", state: "SUBMITTED", lines: [], currency: "EUR", total: "2.00", createdByMemberId: "mem_a", createdAt: now, updatedAt: now } as any);
+  const settle = (ref: string, amountEur: number) => (i: any) => ({ settlements: [...(i.settlements ?? []).filter((x: any) => x.ref !== ref), { method: "bank", ref, amountEur, at: now }] });
+  assert.ok(await s.settleInvoice("inv_s2", "monerium:o1", settle("monerium:o1", 1)));
+  assert.equal(await s.settleInvoice("inv_s2", "monerium:o1", settle("monerium:o1", 1)), null, "the poller and a webhook settle one order once");
+  assert.equal((await s.settleInvoice("inv_s2", "monerium:o1", settle("monerium:o1", 1.5), true))?.settlements?.length, 1, "a replace rewrites under its ref");
+  assert.equal((await s.findInvoice("inv_s2"))?.settlements?.[0].amountEur, 1.5);
+  const payDraft = (id: string) => ({ id, orgId: "org_b", source: { kind: "account", accountId: "acc_eur" }, state: "DRAFT", lines: [], createdByMemberId: "mem_a", activity: [], createdAt: now, updatedAt: now }) as any;
+  const paying = await s.startInvoicePayment("inv_s2", ["SUBMITTED"], payDraft("dr_pay1"));
+  assert.deepEqual([paying?.invoice.state, paying?.invoice.payment?.draftId], ["PAYING", "dr_pay1"]);
+  assert.equal(await s.startInvoicePayment("inv_s2", ["SUBMITTED"], payDraft("dr_pay2")), null, "a second /pay finds it PAYING");
+  assert.equal(await s.findDraft("dr_pay2"), undefined, "and adds no draft");
+  assert.equal(await s.updateInvoiceFrom("inv_s2", ["LINK_CREATED"], { state: "SUBMITTED" } as any), null);
+
+  assert.equal((await s.lockOrganisation("org_b"))?.id, "org_b");
+  assert.equal((await s.lockUser("u_a"))?.id, "u_a");
+
+  // A deposit is settled once.
+  await s.addCryptoDeposit({ id: "dep_s2", userId: "u_a", chainId: 84532, token: "USDC", txHash: hash("5a"), logIndex: 1, amountUnits: "1", holding: "awaiting_approval", txs: [], createdAt: now, updatedAt: now } as any);
+  const first = await s.settleCryptoDeposit("dep_s2", (row) => ({ holding: row.holding === "awaiting_approval" ? "held" : row.holding }) as any);
+  assert.deepEqual([first?.holding, !!first?.settledAt], ["held", true]);
+  assert.equal(await s.settleCryptoDeposit("dep_s2", () => ({ holding: "converted" }) as any), null, "settledAt is set once");
+  assert.equal((await s.list("cryptoDeposits")).find((x) => x.id === "dep_s2")?.holding, "held");
+
+  // Rule 4: the last owner, and an invitation spent once.
+  await s.addMember({ id: "mem_o1", orgId: "org_b", userId: "u_o1", email: "a@x", role: "owner", status: "active", createdAt: now } as any);
+  await s.addMember({ id: "mem_o2", orgId: "org_b", userId: "u_o2", email: "b@x", role: "owner", status: "active", createdAt: now } as any);
+  const lastOwnerLeft = (members: any[], id: string, next: any) =>
+    members.filter((m) => m.role === "owner" && m.status === "active" && m.id !== id).length > 0 || next.role === "owner";
+  assert.ok(await s.updateMemberChecked("mem_o1", { role: "admin" } as any, (ms) => lastOwnerLeft(ms, "mem_o1", { role: "admin" })));
+  assert.equal(await s.updateMemberChecked("mem_o2", { role: "admin" } as any, (ms) => lastOwnerLeft(ms, "mem_o2", { role: "admin" })), null, "the org keeps its last owner");
+  assert.equal((await s.findMember("mem_o2"))?.role, "owner");
+  await s.addMember({ id: "mem_inv", orgId: "org_b", email: "c@x", role: "viewer", status: "invited", invite: { tokenHash: "th-1", expiresAt: iso(DAY) }, createdAt: now } as any);
+  assert.equal(await s.acceptInvite("mem_inv", "th-other", "u_c"), null, "not with another token");
+  assert.equal(await s.acceptInvite("mem_inv", "th-1", "u_o1"), null, "not for someone already on the org");
+  const accepted = await s.acceptInvite("mem_inv", "th-1", "u_c");
+  assert.deepEqual([accepted?.status, accepted?.userId, accepted?.invite], ["active", "u_c", undefined]);
+  assert.equal(await s.acceptInvite("mem_inv", "th-1", "u_d"), null, "spent once");
+
+  // Candide: each wrong code counted on the stored row, cancelled past the limit.
+  await s.addRecoveryRequest({ id: "rr_otp", userId: "u_a", mode: "candide", status: "OTP_PENDING", candide: { otpAttempts: 0 }, requestedAt: now } as any);
+  assert.deepEqual([(await s.countRecoveryOtpAttempt("rr_otp", 2))?.attempts, (await s.countRecoveryOtpAttempt("rr_otp", 2))?.attempts], [1, 2]);
+  const over = await s.countRecoveryOtpAttempt("rr_otp", 2);
+  assert.deepEqual([over?.over, over?.request.status], [true, "CANCELED"]);
+  assert.equal(await s.countRecoveryOtpAttempt("rr_otp", 2), null, "nothing counted once it left OTP_PENDING");
+
+  // Rule 4 over an organisation: a write only while a check on it holds.
+  assert.equal(await s.updateOrganisationIf("org_b", () => false, () => ({ name: "never" })), null);
+  assert.equal((await s.updateOrganisationIf("org_b", (o) => o.name === "B 2", (o) => ({ name: `${o.name}!` })))?.name, "B 2!");
+}

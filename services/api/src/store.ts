@@ -140,17 +140,6 @@ function hashOnRecord(hash: string, userId: string): string | undefined {
  * store/backend.ts calls it: everything else calls `store`, which runs these
  * methods one at a time behind the store's mutex and hands out copies.
  */
-/**
- * One issued number per organisation (§14 UStG), as UNIQUE(org_id, number)
- * refuses it on Postgres (migrations/0002).
- */
-function refuseIssuedNumberTaken(orgId: string, id: string, number: string | undefined) {
-  if (number === undefined) return;
-  if (db.invoices.some((x) => x.orgId === orgId && x.id !== id && x.issued?.number === number)) {
-    throw new Error(`invoice number ${number} is already issued in organisation ${orgId}`);
-  }
-}
-
 /** Every state a draft can be in: an activity append is refused by none. */
 const DRAFT_STATES: DraftPayment["state"][] = ["DRAFT", "PENDING_REVIEW", "REVIEWED", "REJECTED", "INVALID_DATA", "EXECUTING", "EXECUTED", "FAILED", "CANCELLED"];
 
@@ -169,6 +158,14 @@ export const jsonCore = {
   addUser(u: User) {
     db.users.push(u);
     persist();
+  },
+  /**
+   * The user, held until the transaction this runs in ends (Postgres:
+   * `FOR UPDATE`; JSON: the mutex already holds everything). For a rule over
+   * other rows of the user (§2 rule 4).
+   */
+  lockUser(id: string) {
+    return db.users.find((u) => u.id === id);
   },
   /** Change `passkeySafe` or `monerium` from the stored value (§2 rule 2), with `patch`. */
   patchUserSub<K extends "passkeySafe" | "monerium">(id: string, key: K, fn: (current: User[K]) => User[K], patch: Partial<User> = {}) {
@@ -1216,7 +1213,6 @@ export const jsonCore = {
   },
 
   addInvoice(i: Invoice) {
-    refuseIssuedNumberTaken(i.orgId, i.id, i.issued?.number);
     db.invoices.push(i);
     persist();
     return i;
@@ -1233,7 +1229,6 @@ export const jsonCore = {
   updateInvoice(id: string, patch: Partial<Invoice>) {
     const i = db.invoices.find((x) => x.id === id);
     if (!i) throw new Error(`unknown invoice ${id}`);
-    if (patch.issued) refuseIssuedNumberTaken(i.orgId, i.id, patch.issued.number);
     Object.assign(i, patch, { updatedAt: new Date().toISOString() });
     persist();
     return i;

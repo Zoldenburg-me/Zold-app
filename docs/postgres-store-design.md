@@ -275,9 +275,12 @@ Five rules cover most of it:
    `scripts/check.ts` that refuses, outside `store.ts` and `store/`, a patch
    built from these spreads and pushes: `...user.passkeySafe` (9 today),
    `...user.monerium` (4), `...t.sepa`, `...ctx.org.invoicing` (1),
-   `...ctx.org.integrations` (1), `...draft.activity` (4),
-   `transfer.txs.push` / `txs.push` followed by an `updateTransfer`, writes of
-   `r.payments` and `invoice.settlements`. Test (S3, Postgres 17): an
+   `...ctx.org.integrations` (1), `...draft.activity` (4), writes of
+   `r.payments` and `invoice.settlements` (`scripts/store-gates-test.ts`).
+   A transfer's `txs` needs no gate: `updateTransfer` merges any `txs` patch
+   into the stored log (`mergeTransferSteps`, `store/rules.ts`), keeping
+   every stored step and appending the caller's new ones, so a stale array
+   cannot erase a step on either backend. Test (S3, Postgres 17): an
    executor append and a compensator append on one transfer in parallel;
    both steps survive, in commit order.
 3. **Every state write names the states it may leave.** The store method

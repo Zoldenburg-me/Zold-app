@@ -406,7 +406,7 @@ await check("a throw while making the Pay button still answers 201 for the issue
 
 await check("an unpaid invoice whose link expired says so instead of losing the Pay button silently", async () => {
   const link = (await store.list("paymentRequests")).find((p) => p.invoiceId === unlinkedInvoiceId)!;
-  link.expiresAt = new Date(Date.now() - 1000).toISOString();
+  await store.updatePaymentRequest(link.id, { expiresAt: new Date(Date.now() - 1000).toISOString() });
   const view = await call("GET", `/api/invoice-links/${unlinkedToken}`);
   assert.equal(view.status, 200);
   assert.equal(view.data.invoice.payPath, undefined);
@@ -823,6 +823,29 @@ await check("an account that can still get an IBAN does not connect as a wallet:
   assert.equal(r.status, 409, JSON.stringify(r.data));
   assert.match(r.data.error, /not funded yet/);
   assert.equal((await store.findAccount("acc_org_inbiz2"))!.backingUserId, undefined);
+});
+
+console.log("\nOne number, once, when two issues race (§2 invoice numbers)");
+
+await check("two automatic issues in parallel get two different, consecutive numbers", async () => {
+  await addOrg("org_race", "GA");
+  const [a, b] = await Promise.all([1, 2].map(() => call("POST", "/api/orgs/org_race/invoicing/issue", "u_owner", invoiceFor("GA"))));
+  assert.deepEqual([a.status, b.status], [201, 201], JSON.stringify([a.data, b.data]));
+  assert.deepEqual([a.data.invoice.issued.number, b.data.invoice.issued.number].sort(), ["INV-" + new Date().getFullYear() + "-0001", "INV-" + new Date().getFullYear() + "-0002"]);
+  assert.equal((await store.findOrganisation("org_race"))!.invoicing?.numberSeries?.next, 3, "the series moved past both");
+});
+
+await check("a typed number racing an automatic one that picks it: one of them is refused", async () => {
+  const next = `INV-${new Date().getFullYear()}-0003`;
+  const [auto, typed] = await Promise.all([
+    call("POST", "/api/orgs/org_race/invoicing/issue", "u_owner", invoiceFor("GA")),
+    call("POST", "/api/orgs/org_race/invoicing/issue", "u_owner", { ...invoiceFor("GA"), number: next }),
+  ]);
+  assert.equal(auto.status, 201, JSON.stringify(auto.data));
+  assert.notEqual(typed.status === 201 && typed.data.invoice.issued.number, auto.data.invoice.issued.number, "never the same number twice");
+  const numbers = (await store.invoicesOf("org_race")).flatMap((i) => (i.issued?.number ? [i.issued.number] : []));
+  assert.equal(new Set(numbers).size, numbers.length, `no number issued twice: ${numbers}`);
+  if (typed.status !== 201) assert.equal(typed.status, 409, JSON.stringify(typed.data));
 });
 
 server.close();

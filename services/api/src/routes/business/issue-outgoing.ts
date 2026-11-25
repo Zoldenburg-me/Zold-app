@@ -25,7 +25,7 @@ import {
 } from "../../domain/invoicing.js";
 import { vatIdShape } from "../../domain/vat-ids.js";
 import { checkVatId } from "../../adapters/vies.js";
-import { assertTransition, newLinkToken, ownerInvoiceView, settlementUpdate } from "../../domain/invoices.js";
+import { assertTransition, newLinkToken, ownerInvoiceView, settlementRef, settlementUpdate } from "../../domain/invoices.js";
 import type { Invoice } from "../../domain/types.js";
 import type { OrgContext } from "../org-context.js";
 import {
@@ -241,6 +241,7 @@ async function issueDraft(draft: Invoice, document: Partial<Invoice>, linkTokenH
     const submitted = await store.updateInvoice(draft.id, { ...document, state: "SUBMITTED", linkTokenHash });
     const settlements = submitted.settlements ?? [];
     const last = settlements[settlements.length - 1];
-    return last ? (await store.updateInvoice(draft.id, settlementUpdate(submitted, last))) : submitted;
+    if (!last) return submitted;
+    return (await store.settleInvoice(draft.id, settlementRef(last), (row) => settlementUpdate(row, last), true))!;
   });
 }

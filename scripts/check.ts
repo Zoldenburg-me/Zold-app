@@ -55,6 +55,7 @@ const scripts = [
   "convert:crash:test",
   "persist-failure:test",
   "store-backend:test",
+  "store-gates:test",
   "send-record-crash:test",
   "safe-op-uncertain:test",
   "verifier-sweep:test",

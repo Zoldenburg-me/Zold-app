@@ -17,7 +17,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PGlite } from "@electric-sql/pglite";
-import { storeSuite } from "./_store-suite.js";
+import { conditionalWriteSuite, storeSuite } from "./_store-suite.js";
 
 const tmp = mkdtempSync(path.join(tmpdir(), "zold-store-backend-"));
 process.env.TRANSF_DB_PATH = path.join(tmp, "db.json");
@@ -32,14 +32,72 @@ const pglite = async () => pgliteDatabase((await PGlite.create()) as never);
 // ── The suite, on both backends ────────────────────────────────────────────
 await initStore();
 await storeSuite(store);
+await conditionalWriteSuite(store);
 console.log("ok - store suite on the JSON backend");
+
+// ── The JSON backend's mutex, transactions and copies (§3) ─────────────────
+{
+  const { readFileSync } = await import("node:fs");
+  const onDisk = () => JSON.parse(readFileSync(process.env.TRANSF_DB_PATH!, "utf8"));
+  const now = new Date().toISOString();
+  await store.addOrganisation({ id: "org_mx", type: "business", name: "Before", createdAt: now, updatedAt: now } as any, false);
+  assert.equal(onDisk().organisations.find((o: any) => o.id === "org_mx")?.name, "Before", "a write outside a transaction is on disk when it resolves");
+
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  let readDone = false;
+  const tx = store.tx(async (t) => {
+    await t.updateOrganisation("org_mx", { name: "Half" });
+    await gate;
+    await t.updateOrganisation("org_mx", { name: "After" });
+  });
+  await new Promise((r) => setTimeout(r, 0));
+  const read = store.findOrganisation("org_mx").then((o) => ((readDone = true), o));
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(readDone, false, "a read waits while a transaction holds the mutex");
+  assert.equal(onDisk().organisations.find((o: any) => o.id === "org_mx")?.name, "Before", "a transaction writes the file once, at its end");
+  release();
+  await tx;
+  assert.equal((await read)?.name, "After", "and then reads the committed state, never the half-made one");
+  assert.equal(onDisk().organisations.find((o: any) => o.id === "org_mx")?.name, "After");
+
+  // Store calls made from inside the callback, through `store` too, join it.
+  assert.equal(await store.tx(async () => (await store.findOrganisation("org_mx"))?.name), "After", "a nested call does not wait for its own transaction");
+
+  // A callback that throws keeps the writes it made: no rollback on JSON.
+  await assert.rejects(store.tx(async (t) => {
+    await t.updateOrganisation("org_mx", { name: "Thrown" });
+    throw new Error("boom");
+  }), /boom/);
+  assert.equal(onDisk().organisations.find((o: any) => o.id === "org_mx")?.name, "Thrown", "persisted: the JSON backend has no rollback");
+
+  // Rows are copies, both ways.
+  const a = (await store.findOrganisation("org_mx"))!;
+  a.name = "mutated";
+  assert.equal((await store.findOrganisation("org_mx"))?.name, "Thrown", "changing a row read changes nothing stored");
+  const patch = { name: "Patched" };
+  const written = await store.updateOrganisation("org_mx", patch);
+  patch.name = "later";
+  written.name = "later";
+  assert.equal((await store.findOrganisation("org_mx"))?.name, "Patched", "nor does changing the patch or the row returned");
+  assert.notEqual(await store.list("organisations"), await store.list("organisations"), "a list is a copy too");
+
+  // Calls run one at a time, in the order they were made.
+  const order: number[] = [];
+  await Promise.all([1, 2, 3].map((n) => store.updateOrganisation("org_mx", { name: `N${n}` }).then(() => order.push(n))));
+  assert.deepEqual(order, [1, 2, 3]);
+  assert.equal((await store.findOrganisation("org_mx"))?.name, "N3");
+  console.log("ok - JSON backend: every call behind one mutex, store.tx holds it, rows are copies, a write is on disk when it resolves");
+}
 
 {
   const db = await pglite();
   const version = (await db.query<{ v: string }>("SELECT current_setting('server_version_num') AS v")).rows[0].v;
   assert.equal(version.slice(0, 2), "17", `PGlite runs Postgres 17, the production major (got ${version})`);
-  assert.deepEqual(await migrate(db), [1]);
-  await storeSuite(createPgStore(db));
+  assert.deepEqual(await migrate(db), [1, 2]);
+  const pg = createPgStore(db);
+  await storeSuite(pg);
+  await conditionalWriteSuite(pg);
   await db.close();
   console.log(`ok - store suite on the Postgres backend (PGlite, server_version_num ${version})`);
 }
@@ -48,15 +106,15 @@ console.log("ok - store suite on the JSON backend");
 {
   const db = await pglite();
   const files = readMigrations();
-  assert.deepEqual(await migrate(db, files), [1]);
+  assert.deepEqual(await migrate(db, files), [1, 2]);
   assert.deepEqual(await migrate(db, files), [], "an applied file is not run again");
   await assert.rejects(() => migrate(db, [{ ...files[0], sha256: "0".repeat(64) }]), /changed after it was applied/);
   await assert.rejects(() => migrate(db, []), /applied but its file is gone/);
   // A failing file leaves nothing behind, not even its first statement.
-  const bad = { version: 2, name: "0002_bad.sql", sql: "CREATE TABLE half_done (id text); SELECT 1/0;", sha256: "b".repeat(64) };
+  const bad = { version: 3, name: "0003_bad.sql", sql: "CREATE TABLE half_done (id text); SELECT 1/0;", sha256: "b".repeat(64) };
   await assert.rejects(() => migrate(db, [...files, bad]), /division by zero/);
   assert.equal((await db.query("SELECT 1 FROM pg_tables WHERE tablename = 'half_done'")).rows.length, 0, "the failed file rolled back");
-  assert.deepEqual((await db.query<{ version: number }>("SELECT version FROM schema_migrations")).rows.map((r) => r.version), [1]);
+  assert.deepEqual((await db.query<{ version: number }>("SELECT version FROM schema_migrations")).rows.map((r) => r.version), [1, 2]);
   await db.close();
 
   const dir = mkdtempSync(path.join(tmp, "migrations-"));
@@ -101,8 +159,18 @@ console.log("ok - store suite on the JSON backend");
     /duplicate key/,
     "one live share per transfer",
   );
+  // One issued number per organisation, whatever the code does (0002).
+  const issued = (id: string, orgId: string, number?: string) =>
+    ({ id, orgId, direction: "outgoing", linkTokenHash: `lth-${id}`, state: number ? "SUBMITTED" : "DRAFT", lines: [], currency: "EUR", total: "1.00", ...(number ? { issued: { number } } : {}), createdByMemberId: "m", createdAt: now, updatedAt: now }) as any;
+  await s.addInvoice(issued("inv_n1", "org_x", "RE-1"));
+  await s.addInvoice(issued("inv_n1b", "org_y", "RE-1"));
+  await assert.rejects(async () => await s.addInvoice(issued("inv_n2", "org_x", "RE-1")), /duplicate key/, "one number per organisation");
+  await s.addInvoice(issued("inv_d1", "org_x"));
+  await s.addInvoice(issued("inv_d2", "org_x"));
+  await assert.rejects(async () => await s.updateInvoice("inv_d1", { issued: { number: "RE-1" } } as any), /duplicate key/);
+  assert.equal((await s.updateInvoice("inv_d1", { issued: { number: "RE-2" } } as any)).issued?.number, "RE-2");
   await db.close();
-  console.log("ok - Postgres keys: one payment-handle namespace, unique credentials, one live share per transfer");
+  console.log("ok - Postgres keys: one payment-handle namespace, unique credentials, one live share per transfer, one issued invoice number per org");
 }
 
 // ── The PGlite features the design note relies on (§4) ─────────────────────

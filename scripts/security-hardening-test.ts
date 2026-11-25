@@ -235,7 +235,7 @@ await check("the email check answers a hostile 60,000-character address at once"
   assert.equal(emailLooksValid("a@b" + ".c".repeat(30_000) + "@"), false);
   assert.ok(Date.now() - t < 50, `took ${Date.now() - t} ms`);
 });
-await check("writes inside batched() reach the file once, at its end", async () => {
+await check("writes inside store.tx reach the file once, at its end", async () => {
   const { readFileSync } = await import("node:fs");
   const onDisk = () => readFileSync(process.env.TRANSF_DB_PATH!, "utf8");
   await store.tx(async () => {

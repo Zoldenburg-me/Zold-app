@@ -277,9 +277,10 @@ export function createIncomeInvoiceRoutes(deps: OrgRoutes): express.Router {
         const now = new Date().toISOString();
         const month: unknown = req.body?.month;
         assertCollectableMonth(month, ctx.org.reporting.timeZone, now);
-        // Read and write with nothing awaited between: two runs cannot both
-        // claim a row.
+        // Read and write in one transaction that holds the organisation:
+        // two runs cannot both claim a row (§2 rule 4).
         const { plan, written } = await store.tx(async () => {
+          await store.lockOrganisation(ctx.org.id);
           const plan = await planFor(ctx, month, now);
           return { plan, written: await writeDrafts(plan.drafts) };
         });

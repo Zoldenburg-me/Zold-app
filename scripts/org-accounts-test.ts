@@ -317,10 +317,9 @@ await check("a company link is cancelled by anyone who may make one, not a viewe
   const id = made.body.id;
   assert.equal((await call("POST", `/api/orgs/org_co/payment-requests/${id}/cancel`, undefined, "u_view")).status, 403);
   assert.equal((await call("POST", `/api/orgs/org_new/payment-requests/${id}/cancel`)).status, 404, "another organisation's route does not reach it");
-  const paid = (await store.findPaymentRequest(id))!;
-  paid.payments.push({ at: now } as any);
+  await store.updatePaymentRequest(id, { payments: [{ at: now } as any] });
   assert.equal((await call("POST", `/api/orgs/org_co/payment-requests/${id}/cancel`, undefined, "u_admin")).status, 409);
-  paid.payments.length = 0;
+  await store.updatePaymentRequest(id, { payments: [] });
   const done = await call("POST", `/api/orgs/org_co/payment-requests/${id}/cancel`, undefined, "u_admin");
   assert.equal(done.status, 200, JSON.stringify(done.body));
   assert.equal((await store.findPaymentRequest(id))!.state, "CANCELLED", "an admin cancels the holder's company link");
