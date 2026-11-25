@@ -28,6 +28,7 @@ const { openPool } = await import("../services/api/src/store/pg/sql.js");
 
 const adminUrl = process.env.TEST_DATABASE_URL || "postgresql:///postgres?host=/tmp";
 const admin = new pg.Pool({ connectionString: adminUrl, max: 1 });
+admin.on("error", () => {}); // an idle admin client cut by the server: the pool drops it
 const name = `zold_test_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
 const urlFor = (db: string) => {
   // Swap the database name only; the socket, role and parameters stay.
@@ -50,7 +51,8 @@ try {
   const a = open();
   const b = open();
   const [ra, rb] = await Promise.all([migrate(a), migrate(b)]);
-  assert.deepEqual([...ra, ...rb], [1, 2], "each file applied once, by one runner");
+  // Each runner takes the lock per file, so the two may share the files out.
+  assert.deepEqual([...ra, ...rb].sort((x, y) => x - y), [1, 2], "each file applied once, by one runner");
   console.log(`ok - two parallel migration runners apply each file once (server_version_num ${version})`);
 
   const s = createPgStore(a);
@@ -79,6 +81,18 @@ try {
   // Every transaction is READ COMMITTED, whatever the database default says.
   await admin.query(`ALTER DATABASE ${name} SET default_transaction_isolation = 'repeatable read'`);
   const rr = open();
+  // The baseline: a plain BEGIN on a new session really is REPEATABLE READ here.
+  {
+    const c = new pg.Client({ connectionString: urlFor(name) });
+    await c.connect();
+    try {
+      await c.query("BEGIN");
+      assert.equal((await c.query<{ transaction_isolation: string }>("SHOW transaction_isolation")).rows[0].transaction_isolation, "repeatable read", "the pinned default applies to a plain BEGIN");
+      await c.query("ROLLBACK");
+    } finally {
+      await c.end();
+    }
+  }
   assert.equal((await rr.tx((q) => q.query<{ transaction_isolation: string }>("SHOW transaction_isolation"))).rows[0].transaction_isolation, "read committed");
   const srr = createPgStore(rr);
 
@@ -110,8 +124,35 @@ try {
     await c1.end().catch(() => {});
   }
   console.log("ok - an advisory lock is held against other connections and released with its own");
+
+  // An idle pooled connection killed by the server (a restart, an OOM-killed
+  // backend): the pool logs it without the URL, the process lives on, and the
+  // next query opens a new connection.
+  const idle = open();
+  const pid = (await idle.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+  const logged: string[] = [];
+  const error = console.error;
+  console.error = (...args: unknown[]) => void logged.push(args.join(" "));
+  try {
+    assert.equal((await admin.query<{ ok: boolean }>("SELECT pg_terminate_backend($1) AS ok", [pid])).rows[0].ok, true);
+    for (let i = 0; i < 100 && !logged.length; i++) await new Promise((r) => setTimeout(r, 50));
+  } finally {
+    console.error = error;
+  }
+  assert.equal(logged.length, 1, "the pool reports the lost idle connection once");
+  assert.match(logged[0], /idle Postgres connection lost \(57P01\)/);
+  assert.ok(!logged[0].includes(name) && !logged[0].includes("postgresql:"), "the log line carries no URL");
+  const next = (await idle.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+  assert.notEqual(next, pid, "the next query runs on a new connection");
+  console.log("ok - an idle pooled connection terminated by the server is logged and replaced; the process survives");
 } finally {
   for (const db of opened) await db.close().catch(() => {});
+  // pool.end() resolves before every socket has closed; a backend still
+  // attached when DROP … WITH (FORCE) terminates it errors on its client.
+  // Wait for the sessions to go, so the drop finds none.
+  const left = async () =>
+    (await admin.query<{ n: number }>("SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = $1", [name])).rows[0].n;
+  for (let i = 0; i < 100 && (await left()) > 0; i++) await new Promise((r) => setTimeout(r, 50));
   await admin.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
   await admin.end();
 }

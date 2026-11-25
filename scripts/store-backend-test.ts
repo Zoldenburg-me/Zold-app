@@ -115,6 +115,22 @@ console.log("ok - store suite on the JSON backend");
   await assert.rejects(() => migrate(db, [...files, bad]), /division by zero/);
   assert.equal((await db.query("SELECT 1 FROM pg_tables WHERE tablename = 'half_done'")).rows.length, 0, "the failed file rolled back");
   assert.deepEqual((await db.query<{ version: number }>("SELECT version FROM schema_migrations")).rows.map((r) => r.version), [1, 2]);
+  // A file that ends our transaction early is refused before anything runs.
+  for (const sql of ["CREATE TABLE a (id text);\nCOMMIT;\nCREATE TABLE b (id text);", "begin;\nSELECT 1;", "SELECT 1; ROLLBACK", "START TRANSACTION; SELECT 1;"]) {
+    const early = { version: 3, name: "0003_early.sql", sql, sha256: "c".repeat(64) };
+    await assert.rejects(() => migrate(db, [...files, early]), /0003_early.sql contains (COMMIT|BEGIN|ROLLBACK|START TRANSACTION)/);
+  }
+  assert.equal((await db.query("SELECT 1 FROM pg_tables WHERE tablename = 'a'")).rows.length, 0, "nothing of a refused file ran");
+  // BEGIN in a comment, a string or a function body is not transaction control,
+  // and the file runs with its lock and statement timeouts set.
+  const timed = {
+    version: 3,
+    name: "0003_timed.sql",
+    sql: `-- begin;\nSELECT 'commit;';\nDO $$ BEGIN\n  IF current_setting('lock_timeout') <> '5s' OR current_setting('statement_timeout') <> '2min' THEN RAISE EXCEPTION 'timeouts not set'; END IF;\nEND $$;`,
+    sha256: "d".repeat(64),
+  };
+  assert.deepEqual(await migrate(db, [...files, timed]), [3]);
+  assert.equal((await db.query<{ t: string }>("SELECT current_setting('lock_timeout') AS t")).rows[0].t, "0", "SET LOCAL: the timeouts end with the file's transaction");
   await db.close();
 
   const dir = mkdtempSync(path.join(tmp, "migrations-"));
@@ -122,7 +138,7 @@ console.log("ok - store suite on the JSON backend");
   assert.throws(() => readMigrations(dir), /out of sequence/);
   writeFileSync(path.join(dir, "0001_First.sql"), "SELECT 1;");
   assert.throws(() => readMigrations(dir), /not named NNNN_name.sql/);
-  console.log("ok - migrations: once each, a changed or missing file refused, a failed file rolled back");
+  console.log("ok - migrations: once each, a changed or missing file refused, a failed file rolled back, BEGIN/COMMIT/ROLLBACK refused, lock and statement timeouts set");
 }
 
 // ── Keys only Postgres enforces ────────────────────────────────────────────

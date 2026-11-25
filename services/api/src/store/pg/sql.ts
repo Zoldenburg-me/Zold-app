@@ -36,6 +36,13 @@ export function pgliteDatabase(db: PgliteLike): Database {
 }
 
 export function poolDatabase(pool: pg.Pool): Database {
+  // An idle client's error (a restart, pg_terminate_backend, a socket reset)
+  // is re-emitted by the pool; with no listener node throws and the process
+  // dies. The pool has already discarded that client and the next query opens
+  // a new one, so it is logged, never the URL: it can carry a password.
+  pool.on("error", (err: Error & { code?: string }) => {
+    console.error(`store: idle Postgres connection lost${err.code ? ` (${err.code})` : ""}; the pool drops it`);
+  });
   return {
     query: async (text, params) => pool.query(text, params as unknown[]) as never,
     exec: (text) => pool.query(text),
