@@ -153,6 +153,11 @@ assert.deepEqual(
   assert.equal(m.commandFor("pay an invoice", cmds), null, "no slash: a search");
   assert.equal(m.commandFor("/", cmds), null, "a lone slash picks nothing");
   assert.equal(m.commandFor("/refund", cmds), null);
+  assert.deepEqual(m.submitFor(" /pay ", cmds), { cmd: cmds[0] }, "a command runs");
+  assert.deepEqual(m.submitFor("/refund", cmds), { unknown: true }, "an unknown command is never searched for");
+  assert.deepEqual(m.submitFor("/", cmds), { unknown: true });
+  assert.deepEqual(m.submitFor("  lindner ", cmds), { search: "lindner" }, "anything else is a search, trimmed");
+  assert.equal(m.submitFor("   ", cmds), null, "nothing typed does nothing");
   assert.equal(m.commandFor("/pay", []), null, "a command this person may not use is not offered, so not matched");
 }
 

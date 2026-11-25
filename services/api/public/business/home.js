@@ -22,7 +22,7 @@ import { META, RENDER, linkBtn, moneriumLink } from "./views.js";
 import { submittedInvoices, waitingForMe } from "./nav.js";
 import { draftTag, draftTitle, draftTotal, invAmount, loadMembers, memberName } from "./screens.js";
 import { APP_LINKS, isOwnCompanyOrg, loadAccess } from "./access-model.js";
-import { commandFor, companyBalance, countedLines, hasIban, noIbanStep, pendingRuns, securityRows, setupOpen, setupSteps } from "./home-model.js";
+import { companyBalance, countedLines, hasIban, noIbanStep, pendingRuns, securityRows, setupOpen, setupSteps, submitFor } from "./home-model.js";
 import { runLink } from "./payment.js";
 import { openSearch } from "./search.js";
 import { companyKeysHere, companySteps } from "./org-monerium-model.js";
@@ -121,9 +121,9 @@ function commandBox(cmds) {
     : `<button type="button" class="zb-h-cmd__chip" data-act="${c.act}" data-cmd="${i}">${esc(c.cmd)}</button>`);
   return `<section class="zb-h-cmd" aria-label="Search and commands">
     <p class="zb-h-cmd__line" id="hm-line" aria-hidden="true"></p>
+    <label class="zb-h-cmd__label" for="hm-q">Search, or type a command</label>
     <form class="zb-h-cmd__box" id="hm-ask" role="search">
-      <label class="z-sr" for="hm-q">Search, or type a command</label>
-      <input id="hm-q" class="zb-h-cmd__input" type="search" name="q" autocomplete="off" spellcheck="false" placeholder="Search, or type / for a command…">
+      <input id="hm-q" class="zb-h-cmd__input" type="search" name="q" autocomplete="off" spellcheck="false" placeholder="A name, or / for a command…">
       <button type="submit" class="zb-h-cmd__go" aria-label="Go">${Z.icon("arrow_upward")}</button>
     </form>
     <p class="zb-h-cmd__hint" id="hm-hint" role="status"></p>
@@ -466,11 +466,10 @@ RENDER.overview = async () => {
       const q = box.querySelector("#hm-q");
       box.querySelector("#hm-ask").addEventListener("submit", (ev) => {
         ev.preventDefault();
-        const text = q.value.trim(), c = commandFor(text, cmds), hint = box.querySelector("#hm-hint");
-        hint.textContent = "";
-        if (c) box.querySelector(`[data-cmd="${cmds.indexOf(c)}"]`).click();
-        else if (text.startsWith("/")) hint.textContent = "No such command. Pick one below, or search without the slash.";
-        else if (text) { q.value = ""; openSearch(text, q); }
+        const todo = submitFor(q.value, cmds), hint = box.querySelector("#hm-hint");
+        hint.textContent = todo?.unknown ? "No such command. Pick one below, or search without the slash." : "";
+        if (todo?.cmd) box.querySelector(`[data-cmd="${cmds.indexOf(todo.cmd)}"]`).click();
+        else if (todo?.search) { q.value = ""; openSearch(todo.search, q); }
       });
       // On #hm-root, which each render replaces: #view itself outlives renders.
       box.querySelector("#hm-root").addEventListener("click", (ev) => {

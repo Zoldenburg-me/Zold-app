@@ -94,6 +94,14 @@ export function commandFor(text, cmds) {
   return cmds.find((c) => c.cmd.startsWith(q)) ?? null;
 }
 
+/** What a submitted line does: run a command, say there is no such command, search, or nothing. */
+export function submitFor(text, cmds) {
+  const q = String(text || "").trim(), cmd = commandFor(q, cmds);
+  if (cmd) return { cmd };
+  if (q.startsWith("/")) return { unknown: true };
+  return q ? { search: q } : null;
+}
+
 /** The set-up card stays while any step is not known to be done. */
 export const setupOpen = (steps) => steps.some((s) => s.done !== true);
 
