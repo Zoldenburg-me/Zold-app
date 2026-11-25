@@ -110,7 +110,15 @@
         <div id="m-share-groups"></div>
         <div id="m-share-toggles"></div>
         <div class="m-shprev" id="m-share-preview"></div>
-        <button class="m-cta" id="m-share-copy" style="margin-top:16px">Copy share link</button>
+        <!-- The output: the /r/ link the recipient opens. This screen's own
+             address (#share-compose/…) opens only for the sender. -->
+        <div class="m-shout hidden" id="m-share-out">
+          <h3 class="m-shhead">Send this link</h3>
+          <p class="m-shnote">This is the receipt the other person opens. The address of this screen works only for you.</p>
+          <div class="m-shurl" id="m-share-url"></div>
+        </div>
+        <button class="m-cta" id="m-share-copy" style="margin-top:16px">Create link</button>
+        <button class="m-cta quiet hidden" id="m-share-native" style="margin-top:8px;background:transparent;border:1px solid var(--m-line-strong);color:var(--m-text)">Share link</button>
         <button class="m-cta quiet hidden" id="m-share-revoke" style="min-height:44px;font-size:13px;background:transparent;border:1px solid var(--m-line-strong);color:var(--m-pink)">Turn this link off</button>
         <div class="m-shlink" id="m-share-foot"></div>
         <div class="m-note warn hidden" id="m-share-err"></div>
