@@ -149,7 +149,8 @@ await check("the link shows the note but never the limit, a hash or an org id", 
   assert.equal(r.status, 200);
   assert.deepEqual(r.data.invoice.sendLink, { note: "Dinner" });
   assert.equal(r.data.invoice.payor.name, "Tony Payer");
-  const text = JSON.stringify(r.data);
+  // Timestamps left out: "…:13.375Z" would match the limit by chance.
+  const text = JSON.stringify(r.data, (_k, v) => (typeof v === "string" && /^\d{4}-\d\d-\d\dT/.test(v) ? undefined : v));
   assert.ok(!text.includes("13.37") && !text.includes("maxTotal"), text);
   assert.ok(!text.includes("linkTokenHash") && !text.includes("org_p") && !text.includes("m_tony"), text);
   assert.deepEqual(r.data.payoutChains.map((c: any) => c.chainId), [CHAIN_ID]);

@@ -133,9 +133,12 @@ function paintShareControls() {
   paintSharePreview();
   $("m-share-revoke").classList.toggle("hidden", !mShare.link);
   // The link to send is drawn as the screen's result, with its own copy and
-  // share buttons, so the address bar is not mistaken for it.
-  $("m-share-out").classList.toggle("hidden", !mShare.link);
-  $("m-share-url").textContent = mShare.link || "";
+  // share buttons, so the address bar is not mistaken for it. Until what the
+  // link carries is confirmed it is not drawn at all: the preview beside it
+  // may not be what the recipient would see.
+  const sendable = mShare.loaded && mShare.link;
+  $("m-share-out").classList.toggle("hidden", !sendable);
+  $("m-share-url").textContent = sendable || "";
   $("m-share-copy").textContent = shareCopyLabel();
   $("m-share-copy").disabled = !mShare.loaded;
   // Share appears only with a link, so its tap opens the sheet at once: a
@@ -323,8 +326,12 @@ $("m-share-native").onclick = async () => {
 $("m-share-revoke").onclick = async () => {
   try {
     await api(`/api/transfers/${mShare.transferId}/share`, undefined, "DELETE");
+    // No link is a known state, even after a confirmation that failed: the
+    // composer is unlocked and Create link starts a new one.
     mShare.link = null;
     mShare.expiresAt = null;
+    mShare.published = null;
+    mShare.loaded = true;
     clearErr("m-share-err");
     paintShare();
   } catch (e) {

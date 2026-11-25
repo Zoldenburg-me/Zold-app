@@ -516,4 +516,46 @@ await t("an edit whose reply is lost and whose re-read fails keeps the composer 
   run("hist.length = 0;");
 });
 
+await t("an unconfirmed link is not offered to send: no URL, no Copy, no Share, until a read-back confirms it", async () => {
+  ctx.navigator.share = async () => {};
+  lostReply(`throw Object.assign(new Error("you appear to be offline. Zold could not be reached"), { offline: true });`);
+  await run(`setShare("recipient", "full")`);
+  assert.equal(run("mShare.loaded"), false);
+  assert.ok(hidden("m-share-out"), "'Send this link' is hidden while the preview may not match the link");
+  assert.equal(el("m-share-url").textContent, "", "no URL text to select and copy");
+  assert.equal(el("m-share-copy").disabled, true);
+  assert.ok(hidden("m-share-native"));
+  assert.match(el("m-share-err").textContent, /could not confirm what the link shows/i);
+  // Reopening reads the share back; once it answers, the link is offered again.
+  run(`api = async (p, body, method) => ({ url: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: __saved });`);
+  await run("renderShareScreen()");
+  assert.equal(run("mShare.loaded"), true);
+  assert.ok(!hidden("m-share-out"));
+  assert.equal(el("m-share-url").textContent, URL_R);
+  assert.equal(el("m-share-copy").disabled, false);
+  assert.ok(!hidden("m-share-native"));
+  delete ctx.navigator.share;
+  run("hist.length = 0;");
+});
+
+await t("turning an unconfirmed link off leaves a known state: no link, and Create link works without reopening", async () => {
+  lostReply(`throw Object.assign(new Error("you appear to be offline. Zold could not be reached"), { offline: true });`);
+  await run(`setShare("recipient", "full")`);
+  assert.equal(run("mShare.loaded"), false);
+  run(`__posts = []; api = async (p, body, method) => { if (method === "DELETE") return {}; __posts.push(p); return { url: "https://zold.test/r/fresh-slug-xyz", expiresAt: ${JSON.stringify(EXPIRES)}, fields: body }; };`);
+  await el("m-share-revoke").onclick();
+  assert.equal(run("mShare.link"), null);
+  assert.equal(run("mShare.loaded"), true, "no link is a known state");
+  assert.equal(run("mShare.published"), null);
+  assert.ok(hidden("m-share-err"));
+  assert.equal(el("m-share-copy").textContent, "Create link");
+  assert.equal(el("m-share-copy").disabled, false);
+  for (const c of el("m-share-groups").innerHTML.match(/<input type="radio"[^>]*>/g) || []) assert.doesNotMatch(c, / disabled[ >/]/);
+  run("announce = () => {};");
+  await el("m-share-copy").onclick();
+  assert.deepEqual([...run("__posts")], ["/api/transfers/t1/share"]);
+  assert.equal(el("m-share-url").textContent, "https://zold.test/r/fresh-slug-xyz");
+  run("hist.length = 0;");
+});
+
 console.log(`\nSHARE LINK UI TEST PASSED — ${pass}/${pass}`);
