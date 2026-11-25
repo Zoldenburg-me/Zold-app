@@ -643,7 +643,8 @@ export const store = {
    */
   findReceiptShareByTransfer(transferId: string) {
     const shares = db.receiptShares.filter((s) => s.transferId === transferId);
-    return shares.find((s) => !s.revokedAt) ?? shares.at(-1);
+    // A live share first; an expired one stays recorded beside its successor.
+    return shares.find((s) => !s.revokedAt && Date.parse(s.expiresAt) >= Date.now()) ?? shares.at(-1);
   },
   findReceiptShareBySlug(slug: string) {
     return db.receiptShares.find((s) => s.slug === slug);
