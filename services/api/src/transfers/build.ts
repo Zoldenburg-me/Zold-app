@@ -10,7 +10,7 @@ import {
   transferIdHash,
 } from "../chain.js";
 import { bridgeRequestHash, createBridgeTransfer } from "../bridge/bridgexyz.js";
-import { prepareSafeSwapForTransfer, venueServesSafe } from "../liquidity.js";
+import { prepareSafeSwapForTransfer, venueServesSafe, venueSettles } from "../liquidity.js";
 import { moneriumRedeemMessage, paymentMemo, REDEEM_WINDOW_SEC } from "../sepa.js";
 import { safeDebitBlocker, safeFundedEurToday } from "../orchestrator.js";
 import { store, type Quote, type Transfer } from "../store.js";
@@ -94,6 +94,15 @@ async function prepareTransferFromQuote(
   const { recipientName, recipientPhone, recipientIban, reference } = recipient;
     const user = store.findUser(quote.userId)!;
     if (!requireKycApproved(user, res)) return out;
+    // A cash send swaps after the debit. On a venue that prices but cannot
+    // settle (CoW) that swap always refuses and the debited euros strand in
+    // review, so refuse here: no quote spent, no debit prepared.
+    if (quote.rail === "cash" && !venueSettles()) {
+      return res.status(409).json({
+        error: `the configured liquidity venue (${LIQUIDITY.PROVIDER}) prices but cannot settle a swap — refusing the cash transfer before any debit`,
+        code: "VENUE_CANNOT_SETTLE",
+      });
+    }
     const balances = await accountBalances(user.address);
     const fundingSource: Transfer["fundingSource"] = "safe";
     if (balances.safeBalanceEur < quote.sendEur) {
@@ -224,7 +233,7 @@ async function prepareTransferFromQuote(
         // Cash rail: try the full fee+approve+swap batch first (Change 2,
         // windows 1-3) — one signature, atomic, and the orchestrator never
         // holds the input. Falls back to the plain user-signed debit when the
-        // configured venue cannot serve a Safe executor (FxSwapper, CoW) or
+        // configured venue cannot serve a Safe executor (FxSwapper) or
         // the venue is down; the fallback still never moves without the user.
         const venueIncapable: NonNullable<Transfer["custody"]> = {
           mode: "orchestrator",

@@ -106,16 +106,26 @@ export async function prepareTransferLiquidity(transfer: Transfer): Promise<NonN
   };
 }
 
-/** Whether the configured venue can build a Safe-executed swap at all. */
-export const venueServesSafe = (): boolean => Boolean(liquidityProvider().safeSwapPlan);
+/** Whether the configured venue can build a Safe-executed swap at all. Best
+ *  has safeSwapPlan whatever its venues are, so it answers for them. */
+export function venueServesSafe(provider: LiquidityProvider = liquidityProvider()): boolean {
+  if (!provider.safeSwapPlan) return false;
+  return provider instanceof BestExecutionProvider ? provider.servesSafe() : true;
+}
+
+/** Whether the configured venue can settle the swaps it prices. */
+export function venueSettles(provider: LiquidityProvider = liquidityProvider()): boolean {
+  if (provider.quoteOnly) return false;
+  return provider instanceof BestExecutionProvider ? provider.settles() : true;
+}
 
 /**
  * The Safe-executed swap for one transfer, prepared at CREATION time — its
  * calldata rides inside the UserOperation the user signs, so unlike the
  * orchestrator path there is no execute-time quote: the price serialized here
  * is the price the user's signature covers. Returns null when the configured
- * venue cannot serve a Safe executor (FxSwapper's permissioned inventory,
- * CoW) — the transfer then falls back to the plain user-signed debit.
+ * venue cannot serve a Safe executor (FxSwapper's permissioned inventory)
+ * — the transfer then falls back to the plain user-signed debit.
  */
 export async function prepareSafeSwapForTransfer(
   transfer: Transfer,

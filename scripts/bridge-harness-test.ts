@@ -30,7 +30,7 @@
 import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -589,6 +589,55 @@ try {
     ok("a duplicate execute after Bridge holds the deposit: one debit, one create, no refund");
   }
 
+  {
+    // CoW prices but cannot settle a swap for anyone, so a cash send on it
+    // (alone, or as one of best's venues: it may win the price) would debit
+    // and then strand in review. /api/transfers refuses it before the debit:
+    // no quote spent, no row, no prepared operation, no Bridge order.
+    const { LIQUIDITY } = await import("../services/api/src/config.js");
+    const { buildTransferFromQuote } = await import("../services/api/src/transfers/build.js");
+    const { pendingTransferExecutions } = await import("../services/api/src/http/pending.js");
+    const configured = { provider: LIQUIDITY.PROVIDER, venues: [...LIQUIDITY.VENUES] };
+    const recipient = { recipientName: "Recipient", recipientPhone: "+254700000000" };
+    const freshQuote = async () => {
+      const { id, user } = await seed("batch");
+      // seed() wrote the transfer its quote became; this copy is still open.
+      const quote = { ...store.findQuote(store.findTransfer(id)!.quoteId)!, id: randomUUID(), status: "OPEN" } as any;
+      store.addQuote(quote);
+      return { user, quote };
+    };
+    try {
+      for (const [provider, venues] of [["cow", configured.venues], ["best", ["dex", "cow"]]] as const) {
+        (LIQUIDITY as any).PROVIDER = provider;
+        (LIQUIDITY as any).VENUES = venues;
+        const { user, quote } = await freshQuote();
+        const rowsBefore = store.transfers.filter((x) => x.userId === user.id).length;
+        const pendingBefore = pendingTransferExecutions.size;
+        bridgeCalls.length = 0;
+        const r: any = await buildTransferFromQuote(quote, recipient);
+        const label = `${provider} over ${venues.join(",")}`;
+        assert.equal(r.ok, false, `${label}: a cash transfer was built`);
+        assert.equal(r.status, 409, `${label}: ${JSON.stringify(r.body)}`);
+        assert.equal(r.body.code, "VENUE_CANNOT_SETTLE", label);
+        assert.equal(store.findQuote(quote.id)!.status, "OPEN", `${label}: the quote was spent`);
+        assert.equal(store.transfers.filter((x) => x.userId === user.id).length, rowsBefore, `${label}: a row was written`);
+        assert.equal(pendingTransferExecutions.size, pendingBefore, `${label}: a debit was prepared`);
+        assert.equal(bridgeCalls.length, 0, `${label}: Bridge was called`);
+        ok(`a cash send on ${label} is refused before the debit: no quote spent, no row, no Bridge order`);
+      }
+      // Control: a venue that settles gets past this check (it stops later, at
+      // the empty Safe's balance, before anything is debited).
+      (LIQUIDITY as any).PROVIDER = "fx-swapper";
+      const { quote } = await freshQuote();
+      const r: any = await buildTransferFromQuote(quote, recipient);
+      assert.notEqual(r.body?.code, "VENUE_CANNOT_SETTLE", "fx-swapper settles; it must not be refused as a quote-only venue");
+      ok("a venue that settles is not refused as quote-only");
+    } finally {
+      (LIQUIDITY as any).PROVIDER = configured.provider;
+      (LIQUIDITY as any).VENUES = configured.venues;
+    }
+  }
+
   // ── Part 3: rows each failure point leaves, handed to compensation ────────
   console.log("3/3 compensation and the stranded sweep on the rows each failure leaves");
   async function row(label: string, state: string, txs: { step: string; hash: string }[], extra: Record<string, any>, expect: { state: string; refund: boolean }) {
@@ -659,7 +708,11 @@ try {
   rmSync(DB_DIR, { recursive: true, force: true });
 }
 if (inheritedDb) {
-  assert.deepEqual(existsSync(inheritedDb) ? readFileSync(inheritedDb) : undefined, inheritedDbBefore, `the run touched ${inheritedDb}`);
+  // Compared as digests: a failing compare of the bytes themselves would
+  // print the operator's database into the test output.
+  const digest = (b?: Buffer) => (b ? createHash("sha256").update(b).digest("hex") : "absent");
+  const after = existsSync(inheritedDb) ? readFileSync(inheritedDb) : undefined;
+  assert.ok(digest(after) === digest(inheritedDbBefore), `the run touched ${inheritedDb}`);
   console.log(`   ok  TRANSF_DB_PATH on entry (${inheritedDb}) is untouched`);
 }
 process.exit(0);

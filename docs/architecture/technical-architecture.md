@@ -576,9 +576,9 @@ router receives injected and never rebuilds.
 | **lifi** | `GET li.quest/v1/quote` | approve `approvalAddress` (what LI.FI names), send tx, measure | yes | `LIFI_CONTRACTS` allowlist (Diamond), `value == 0` |
 | **dex** (Uniswap v3) | deepest pool across fee tiers, QuoterV2 | `exactInputSingle` via SwapRouter02, measure | yes | router is config, pool pinned on quote |
 | **rfq** (Bebop PMM) | `/pmm/<chain>/v3/quote` | maker tx | yes | `BEBOP_CONTRACTS` (empty means execution refused) |
-| **cow** | `/api/v1/quote` | **throws, not wired** | no | quote only |
+| **cow** | `/api/v1/quote` | **throws, not wired** | no | quote only; a cash transfer on it (alone or behind best) is refused before the debit |
 | **fx-swapper** | on-chain `FxSwapper` | `swapExactIn` | no | hardhat only |
-| **best** | all venues in parallel, highest `expectedOut` wins, every venue's result recorded | dispatch to the winner | if any is | per venue |
+| **best** | all venues in parallel, highest `expectedOut` wins, every venue's result recorded | dispatch to the winner | if any of its venues is | per venue |
 
 `liquidity/contract.ts` shares the venue guards. `assertVenueTarget` covers
 the allowlist, the named spender and zero value. `applySurplus` decides who
