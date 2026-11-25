@@ -21,7 +21,7 @@ import {
   isOwnTransfer,
 } from "../../domain/ledger.js";
 import { IncomeInvoiceError } from "../../domain/income-invoices.js";
-import { ownTransferAllowed } from "../../bookkeeping/statement.js";
+import { invoicePayments, ownTransferAllowed } from "../../bookkeeping/statement.js";
 import { publicStatementLine } from "./bookkeeping-export.js";
 import { proofStateOf } from "../../domain/wallet-ownership.js";
 import { revaluable, revalueEntry } from "../../wallet-sync/revalue.js";
@@ -233,7 +233,7 @@ export function createBookkeepingRoutes(deps: OrgRoutes): express.Router {
     if (!entry) return res.status(404).json({ error: "no such statement line" });
     const own = req.body?.own;
     if (typeof own !== "boolean") return res.status(400).json({ error: "own must be true or false" });
-    if (own && !ownTransferAllowed(entry, store.invoices)) {
+    if (own && !ownTransferAllowed(entry, invoicePayments(store.invoices))) {
       return res.status(409).json({ error: "This line is a fee, a reversal or an invoice payment, so it can't be a transfer between your own accounts." });
     }
     const others = entry.tags.filter((t) => t !== "internal");

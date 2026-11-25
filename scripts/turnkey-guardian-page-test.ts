@@ -923,6 +923,37 @@ await check("a passkey submit whose answer was lost is re-read before any retry:
   assert.match(make, /read: \(r\) => api\(requestPath\(s\.mode, r\.id\), undefined, auth\(\)\)/);
 });
 
+await check("a Candide passkey submit still waiting on the guardian is not retried; its OTP ticket is kept before it is sent", async () => {
+  const st = memoryStorage();
+  const sent: any[] = [];
+  let creates = 0;
+  const state = { status: "PASSKEY_PENDING", passkeySubmitting: true };
+  const io = {
+    create: async () => { creates++; return { credentialId: `cred-${creates}`, attestation: "a", clientDataJSON: "c" }; },
+    read: async () => ({ id: "rc1", mode: "candide", ...state }),
+    // The guardian is slow: the answer never comes back to this page.
+    submit: async (_r: unknown, body: any) => { sent.push(body); throw new TypeError("Failed to fetch"); },
+  };
+  const request = { id: "rc1", mode: "candide", status: "PASSKEY_PENDING", submitTo: "/x", registerChallenge: "AQID" };
+  await assert.rejects(flow.submitPasskey(st, "a@b.c", request, io), TypeError);
+  assert.match(sent[0].otpTicket, /^[A-Za-z0-9_-]{43}$/, "32 random bytes, made in this browser");
+  assert.equal(flow.savedFor(st, flow.TICKET_KEY, "a@b.c"), sent[0].otpTicket, "kept before the answer, which may be lost");
+  // Retry while the server still has the first submit in flight: no second ceremony.
+  await assert.rejects(flow.submitPasskey(st, "a@b.c", request, io), new RegExp(flow.STILL_CHECKING.slice(0, 20)));
+  assert.equal(creates, 1, "no passkey made over the one being recorded");
+  assert.equal(flow.savedFor(st, flow.SUBMIT_KEY, "a@b.c"), "rc1", "still unresolved");
+  // The first one landed: the page goes on to the codes with the ticket it kept.
+  Object.assign(state, { status: "OTP_PENDING", passkeySubmitting: undefined });
+  assert.equal((await flow.submitPasskey(st, "a@b.c", request, io)).status, "OTP_PENDING");
+  assert.equal(creates, 1);
+  assert.equal(flow.savedFor(st, flow.TICKET_KEY, "a@b.c"), sent[0].otpTicket);
+  // Other guardians have no ticket.
+  const tk = memoryStorage();
+  await assert.rejects(flow.submitPasskey(tk, "a@b.c", { ...request, mode: "turnkey" }, io));
+  assert.equal(sent[1].otpTicket, undefined);
+  assert.equal(flow.savedFor(tk, flow.TICKET_KEY, "a@b.c"), "");
+});
+
 await check("a refused recovery passkey says why: a security key that can't save it is named", async () => {
   const words = await import(pathToFileURL(path.join(PUB, "guardian/device-words.js")).href);
   const named = (name: string) => Object.assign(new Error("raw"), { name });

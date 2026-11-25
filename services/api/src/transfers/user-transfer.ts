@@ -16,7 +16,10 @@ export const SENDER_PAYOUT_REVIEW = "This payout is under review. Don't send it 
 export type UserTransfer = Omit<Transfer, "reviewResolution">;
 
 export function userTransfer(t: Transfer): UserTransfer {
-  const { reviewResolution: _operatorOnly, ...visible } = t;
-  if (visible.error?.includes(OPERATOR_TREASURY_CHECK)) visible.error = SENDER_PAYOUT_REVIEW;
+  const { reviewResolution, ...visible } = t;
+  // A resolved review is over: the error it was raised with stays in
+  // reviewResolution.previousError for the operator, and the owner reads the state.
+  if (reviewResolution) delete visible.error;
+  else if (visible.error?.includes(OPERATOR_TREASURY_CHECK)) visible.error = SENDER_PAYOUT_REVIEW;
   return visible;
 }

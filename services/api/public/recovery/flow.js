@@ -22,14 +22,18 @@ export const EMAIL_KEY = "zold-recovery-email";
  *  slots. Once accepted it is the account's owner, and a later recovery must not replace it. */
 export const HANDLE_KEY = "zold-recovery-passkey-handle";
 
+const b64url = (bytes) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
 /** This recovery's passkey user handle (base64url, 16 random bytes): the saved one, or a new one saved. */
 export function recoveryHandle(storage, email, random = () => crypto.getRandomValues(new Uint8Array(16))) {
   const saved = savedFor(storage, HANDLE_KEY, email);
   if (saved) return saved;
-  const made = btoa(String.fromCharCode(...random())).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const made = b64url(random());
   saveFor(storage, HANDLE_KEY, email, made);
   return made;
 }
+
+export const STILL_CHECKING = "Your passkey is still being checked. Wait a moment, then try again.";
 
 /** The id of the request whose passkey submit has no definite answer yet. The
  *  server may have accepted that passkey with the answer lost on the way back;
@@ -57,9 +61,18 @@ export async function submitPasskey(storage, email, request, { create, read, sub
   if (savedFor(storage, SUBMIT_KEY, email) === request.id) {
     const now = await read(request);
     if (now?.status !== "PASSKEY_PENDING") return passkeySubmitted(storage, email, now);
+    // The first submit is still waiting on the guardian: a new ceremony now
+    // would replace the passkey it is about to record.
+    if (now.passkeySubmitting) throw new Error(STILL_CHECKING);
     saveFor(storage, SUBMIT_KEY, email, "");
   }
   const body = await create(recoveryHandle(storage, email));
+  // Candide's OTP ticket: made and kept here before the submit, so an answer
+  // lost on the way back does not lose it (the server returns it only then).
+  if (request.mode === "candide") {
+    body.otpTicket = b64url(crypto.getRandomValues(new Uint8Array(32)));
+    saveFor(storage, TICKET_KEY, email, body.otpTicket);
+  }
   saveFor(storage, SUBMIT_KEY, email, request.id);
   let answer;
   try {
