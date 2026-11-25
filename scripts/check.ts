@@ -70,6 +70,7 @@ const scripts = [
   "org-signers:test",
   "org-monerium:test",
   "org-monerium-iban:test",
+  "org-monerium-payouts:test",
   "role-table:test",
   "safe-import:test",
   "safe-import:ui:test",

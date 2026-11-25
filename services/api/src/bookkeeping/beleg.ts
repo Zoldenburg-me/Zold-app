@@ -31,7 +31,10 @@ export interface BelegSnapshot {
   /** The statement line as booked. */
   line: StatementFacts & { lineId: string; accountCode?: string; ownTransfer?: boolean };
   /** The invoice, when the line settles one. */
-  invoice?: { number: string; payer?: string; invoiceId?: string; source: "zold" | "external" };
+  /** `counterparty`: the other party to the invoice (the payer of one we
+   *  issued, the payee of one we pay). Snapshots are frozen, and older ones
+   *  carry the same name as `payer`. */
+  invoice?: { number: string; counterparty?: string; payer?: string; invoiceId?: string; source: "zold" | "external" };
   /** SEPA facts, on a bank line. */
   bank?: {
     orderId?: string;
@@ -91,7 +94,7 @@ export interface BelegContext {
   issueOrder?: MoneriumIssueRecord;
   sweep?: ConversionSweep;
   paymentRequest?: PaymentRequest;
-  invoicePayerName?: string;
+  invoiceCounterpartyName?: string;
 }
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -150,7 +153,9 @@ export function buildBeleg(entry: LedgerEntry, ctx: BelegContext): BelegSnapshot
   if (s.links.invoiceNumber) {
     snap.invoice = {
       number: s.links.invoiceNumber,
-      ...(ctx.invoicePayerName ?? req?.source.orderName ? { payer: ctx.invoicePayerName ?? `Order ${req!.source.orderName}` } : {}),
+      ...(ctx.invoiceCounterpartyName ?? req?.source.orderName
+        ? { counterparty: ctx.invoiceCounterpartyName ?? `Order ${req!.source.orderName}` }
+        : {}),
       ...(s.links.invoiceId ? { invoiceId: s.links.invoiceId } : {}),
       source: s.links.invoiceId ? "zold" : "external",
     };
@@ -366,7 +371,8 @@ export function belegLines(snap: BelegSnapshot, code: string, issuedAt: string):
   ], { size: 8.5, muted: true, rule: "thin" });
 
   heading("Booked against");
-  if (snap.invoice) kv("Invoice", `${snap.invoice.number}${snap.invoice.payer ? ` · ${snap.invoice.payer}` : ""}${snap.invoice.source === "external" ? " (issued outside Zold)" : ""}`);
+  const invoiceParty = snap.invoice?.counterparty ?? snap.invoice?.payer;
+  if (snap.invoice) kv("Invoice", `${snap.invoice.number}${invoiceParty ? ` · ${invoiceParty}` : ""}${snap.invoice.source === "external" ? " (issued outside Zold)" : ""}`);
   kv("Account code", line.accountCode);
   if (line.ownTransfer) kv("Booked as", "Between the holder's own accounts, not income or an expense");
   if (memo && !memoInRow) kv("Memo", memo);

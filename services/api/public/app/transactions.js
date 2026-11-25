@@ -31,8 +31,13 @@ const SHARE_DEFAULTS = { sender: "last", recipient: "full", account: "short", fx
    rather than written into that receipt's screen. `published` is what the
    live link carries, as the server last said; an edit Zold refuses goes back
    to it, and one whose outcome is unknown re-reads it. `revokes` counts the
-   times this link was turned off: a save that started before one answers a
-   link that no longer exists, and is dropped. */
+   times this link was turned off: a save or a read that started before one
+   answers a link that no longer exists, and is dropped. A save in flight with
+   no link on screen (Create link, or an edit that outlived Turn this link
+   off) locks the choices and Create link until it answers: the create's
+   answer would undo a change tapped meanwhile, and an old edit reaching the
+   server after a new create would write its older choices onto the new
+   link. */
 let mShare = { transferId: null, fields: { ...SHARE_DEFAULTS }, published: null, link: null, expiresAt: null, expired: false, busy: false, again: false, loaded: false, revokes: 0 };
 
 function openShare(id) {
@@ -65,16 +70,17 @@ async function renderShareScreen() {
    back its choices (never its URL), so the new link starts from them. Any
    other failure throws and leaves `loaded` false. */
 async function loadShare(m) {
+  const revokes = m.revokes;
   try {
     const s = await api(`/api/transfers/${m.transferId}/share`, undefined, "GET");
-    if (mShare !== m) return;
+    if (mShare !== m || m.revokes !== revokes) return;
     m.fields = { ...SHARE_DEFAULTS, ...s.fields };
     m.published = { ...m.fields };
     m.link = s.url;
     m.expiresAt = s.expiresAt;
     m.expired = false;
   } catch (e) {
-    if (mShare !== m) return;
+    if (mShare !== m || m.revokes !== revokes) return;
     if (!(e?.status === 404 && e.fromZold)) throw e;
     m.link = null;
     m.expiresAt = null;
@@ -116,7 +122,7 @@ function dropExpiredShare() {
 function paintShareControls() {
   dropExpiredShare();
   const f = mShare.fields;
-  const off = mShare.loaded ? "" : " disabled";
+  const off = shareLocked() ? " disabled" : "";
   // One radio group per choice (arrow keys move within it), then the extras
   // as switches: each control says what it is to a screen reader.
   $("m-share-groups").innerHTML = SHARE_GROUPS.map((g) => `
@@ -142,7 +148,7 @@ function paintShareControls() {
   $("m-share-out").classList.toggle("hidden", !sendable);
   $("m-share-url").textContent = sendable || "";
   $("m-share-copy").textContent = shareCopyLabel();
-  $("m-share-copy").disabled = !mShare.loaded;
+  $("m-share-copy").disabled = shareLocked();
   // Share appears only with a link, so its tap opens the sheet at once: a
   // request first would spend the tap's activation and the sheet would refuse.
   $("m-share-native").classList.toggle("hidden", !mShare.link || !mShare.loaded || typeof navigator.share !== "function");
@@ -211,8 +217,13 @@ function paintSharePreview() {
   }).join("");
 }
 
+/* What the link shows is unconfirmed, or a save with no link on screen is in flight. */
+function shareLocked() {
+  return !mShare.loaded || (mShare.busy && !mShare.link);
+}
+
 async function setShare(key, value) {
-  if (!mShare.loaded) return;
+  if (shareLocked()) return;
   mShare.fields = { ...mShare.fields, [key]: value };
   paintShare();
   // Only a link that already exists needs pushing: narrowing an unpublished
@@ -232,6 +243,7 @@ async function saveShare({ silent, edit } = {}) {
   if (m.busy || !m.loaded) return null;
   m.busy = true;
   const revokes = m.revokes;
+  if (!m.link) paintShare();
   let s = null;
   try {
     s = await api(`/api/transfers/${m.transferId}/share`, edit ? { ...m.fields, edit: true } : m.fields);
@@ -269,17 +281,19 @@ async function saveShare({ silent, edit } = {}) {
       paintShare();
       try {
         await loadShare(m);
-        if (mShare !== m) return null;
+        if (mShare !== m || m.revokes !== revokes) return null;
         paintShare();
         showErr("m-share-err", new Error("Zold's answer to that change didn't arrive, so the screen now shows what the live link carries"));
       } catch {
-        if (mShare !== m) return null;
+        if (mShare !== m || m.revokes !== revokes) return null;
         showErr("m-share-err", new Error("could not confirm what the link shows. Reopen this receipt before you change it or send it"));
       }
     }
     if (!silent) showErr("m-share-err", e);
   } finally {
     m.busy = false;
+    // Unlocks what a save with no link on screen locked.
+    if (mShare === m && !m.link) paintShare();
   }
   if (m.again && mShare === m) {
     m.again = false;
@@ -295,7 +309,7 @@ const shareCopyLabel = () => (mShare.link ? "Copy link" : "Create link");
    Copy and Share then work from their own taps. */
 $("m-share-copy").onclick = async () => {
   const btn = $("m-share-copy");
-  if (!mShare.loaded) return;
+  if (shareLocked()) return;
   if (dropExpiredShare()) return paintShare();
   if (!mShare.link) {
     if (await saveShare()) announce("Link created");

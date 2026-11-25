@@ -13,10 +13,12 @@
  */
 import "./_test-env.js";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-beleg-")), "db.json");
 process.env.TRANSF_CHAIN_ID = "31337";
 
@@ -103,6 +105,19 @@ await check("a USDC-paid invoice's disposal Beleg carries every fact the account
   assert.equal(belegTitle(snap), "Held USDC converted to EURe (disposal)");
   assert.deepEqual(snap.gas, { costWei: "1200", paidBy: "safe-token" });
   assert.equal(snap.unexecutedNote, UNEXECUTED_NOTE, "rule 2: labelled until a swap has moved real money");
+});
+
+await check("an invoice-linked Beleg names the invoice's counterparty as that, and an older snapshot's `payer` still renders", () => {
+  const holder = { name: "Zoldenburg UG", addressLines: [], safeAddress: SAFE, chainId: 31337, accountSince: now };
+  // An outgoing payment of a supplier's invoice: the name is the payee's, so it is not a payer.
+  const snap = buildBeleg(line, { holder, deposit, invoiceCounterpartyName: "Lieferant GmbH" });
+  assert.deepEqual(snap.invoice, { number: "RE-2026-0042", counterparty: "Lieferant GmbH", source: "external" });
+  assert.match(belegLines(snap, "ABCDE-FGHJK-MNPQR", now).map((l) => l.text).join("\n"), /RE-2026-0042 · Lieferant GmbH/);
+  // Snapshots are frozen: one issued before the field was named for what it holds keeps `payer`.
+  const old = { ...snap, invoice: { number: "RE-2026-0042", payer: "Kunde AG", source: "external" as const } };
+  assert.match(belegLines(old, "ABCDE-FGHJK-MNPQR", now).map((l) => l.text).join("\n"), /RE-2026-0042 · Kunde AG/);
+  const page = readFileSync(path.join(ROOT, "services/api/public/document.js"), "utf8");
+  assert.match(page, /s\.invoice\.counterparty \?\? s\.invoice\.payer/, "the public page reads both");
 });
 
 await check("the text rendering states the ECB rate is a daily fixing, and the PDF is a real PDF holding the facts", () => {

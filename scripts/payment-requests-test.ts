@@ -39,13 +39,21 @@ process.env.DEPLOY_EURUSD_RATE ??= String(Math.round(MID * 1e6));
 // forwarder. Configured before config.js reads the environment; it answers
 // with the app's USDC once the chain half has deployed it.
 const FORWARDER = `0x${"33".repeat(20)}` as `0x${string}`;
-const candide = { up: true, usdc: "", calls: 0, active: true as unknown, address: "" };
+const candide = {
+  up: true, usdc: "", calls: 0, active: true as unknown, address: "",
+  /** While set, an activation's answer waits for it; `held` counts the ones waiting. */
+  hold: undefined as Promise<void> | undefined, held: 0,
+};
 const candideStub = createServer((req, res) => {
   let raw = "";
   req.on("data", (c) => (raw += c));
-  req.on("end", () => {
+  req.on("end", async () => {
     candide.calls++;
     const { id, method } = JSON.parse(raw);
+    if (candide.hold && method === "account_activateForwardingAddress") {
+      candide.held++;
+      await candide.hold;
+    }
     res.setHeader("content-type", "application/json");
     if (!candide.up) return res.end(JSON.stringify({ jsonrpc: "2.0", id, error: { message: "stub: down" } }));
     const result =
@@ -848,6 +856,48 @@ try {
       pastBackoff();
       check("only a same-address active renewal reopens it", (await livePaymentPage(store.findUser(ravi.id)!)) === true && store.findUser(ravi.id)!.paymentPage!.forwarder!.active === true);
 
+      // Inside the renewal window, Candide unreachable: the old activation is
+      // active, listed and still running, so the page stays open on it.
+      renewDue();
+      candide.up = false;
+      pastBackoff();
+      check("an active page inside the renewal window stays open while Candide is down", (await livePaymentPage(store.findUser(ravi.id)!)) === true);
+      check("and through the backoff that follows", (await livePaymentPage(store.findUser(ravi.id)!)) === true);
+      candide.up = true;
+
+      // What POST /handle writes for the same handle: a fresh activation.
+      const saveActive = () => {
+        const p = store.findUser(ravi.id)!.paymentPage!;
+        const at = new Date(realNow2() + t + 1).toISOString();
+        store.updateUser(ravi.id, { paymentPage: { ...p, forwarder: { ...p.forwarder!, active: true, activatedAt: at, expiresAt: later }, routesReadAt: at, updatedAt: at } });
+        return at;
+      };
+      // A renewal asked before the page was saved, answered "not active" after.
+      renewDue();
+      candide.active = false;
+      let release!: () => void;
+      candide.hold = new Promise<void>((r) => (release = r));
+      candide.held = 0;
+      pastBackoff();
+      const late = livePaymentPage(store.findUser(ravi.id)!);
+      for (let i = 0; i < 200 && candide.held === 0; i++) await new Promise((r) => setTimeout(r, 10));
+      check("(the renewal is waiting on Candide's answer)", candide.held === 1);
+      const savedAt = saveActive();
+      candide.hold = undefined;
+      release();
+      await late;
+      const afterLate = store.findUser(ravi.id)!.paymentPage!.forwarder!;
+      check("a late not-active answer to an earlier renewal does not overwrite the activation just saved", afterLate.active === true && afterLate.activatedAt === savedAt, JSON.stringify(afterLate));
+      check("nor close the saved page through its backoff", (await livePaymentPage(store.findUser(ravi.id)!)) === true);
+
+      // A renewal that closed the page, then the page is saved: no waiting out the backoff.
+      renewDue();
+      pastBackoff();
+      check("(a not-active renewal closes the page again)", (await livePaymentPage(store.findUser(ravi.id)!)) === false);
+      candide.active = true;
+      saveActive();
+      check("saving the page clears that backoff: it opens at once", (await livePaymentPage(store.findUser(ravi.id)!)) === true);
+
       // A renewal that comes back with another address: the page keeps its address and stays closed.
       store.updateUser(ravi.id, { paymentPage: { ...store.findUser(ravi.id)!.paymentPage!, forwarder: { ...store.findUser(ravi.id)!.paymentPage!.forwarder!, expiresAt: new Date(realNow2() + t + 60_000).toISOString() } } });
       candide.address = "0x4444444444444444444444444444444444444444";
@@ -858,6 +908,7 @@ try {
       Date.now = realNow2;
       candide.active = true;
       candide.address = "";
+      candide.hold = undefined;
     }
   }
 

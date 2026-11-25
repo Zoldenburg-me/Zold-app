@@ -39,7 +39,8 @@ export function belegContextFor(entry: LedgerEntry): BelegContext & { userId: st
   const sweep = s.event === "sweep" ? store.conversionSweeps.find((x) => `sweep:${x.id}` === s.key) : undefined;
   const paymentRequest = s.links.paymentRequestId ? store.findPaymentRequest(s.links.paymentRequestId) : undefined;
   const invoice = s.links.invoiceId ? store.findInvoice(s.links.invoiceId) : undefined;
-  const invoicePayerName = invoice?.issued?.recipient?.name ?? invoice?.supplier?.orgName;
+  // Whoever the invoice is with: its recipient if we issued it, its supplier if we pay it.
+  const invoiceCounterpartyName = invoice?.issued?.recipient?.name ?? invoice?.supplier?.orgName;
   return {
     userId: user.id,
     holder: holderFor(user, account?.moneriumProfile),
@@ -48,7 +49,7 @@ export function belegContextFor(entry: LedgerEntry): BelegContext & { userId: st
     ...(issueOrder ? { issueOrder } : {}),
     ...(sweep ? { sweep } : {}),
     ...(paymentRequest ? { paymentRequest } : {}),
-    ...(invoicePayerName ? { invoicePayerName } : {}),
+    ...(invoiceCounterpartyName ? { invoiceCounterpartyName } : {}),
   };
 }
 
@@ -67,13 +68,26 @@ export function belegRecordsAgree(s: BelegSnapshot, line?: LedgerEntry): { ok: b
 
 type BelegDoc = StoredDocument & { snapshot: BelegSnapshot };
 
+export type DocumentsByCode = ReadonlyMap<string, StoredDocument>;
+/** Every document by code, for a listing to build once: belegOfLine on each
+ *  line would otherwise scan every document. The first with a code wins, as
+ *  in findDocumentByCode. */
+export function documentsByCode(): DocumentsByCode {
+  const byCode = new Map<string, StoredDocument>();
+  for (const d of store.documents) if (!byCode.has(d.code)) byCode.set(d.code, d);
+  return byCode;
+}
+
 /** The line's Beleg as the books may hand it out. `live`: issued, a Beleg,
  *  not revoked, and its records still agree. `stale`: not revoked, but it no
  *  longer agrees, so it is replaced, never shipped. A revoked one is neither:
  *  the line has no Beleg until one is issued. */
-export function belegOfLine(e: LedgerEntry): { live: BelegDoc } | { stale: BelegDoc; detail: string } | undefined {
+export function belegOfLine(
+  e: LedgerEntry,
+  docs?: DocumentsByCode,
+): { live: BelegDoc } | { stale: BelegDoc; detail: string } | undefined {
   const code = e.statement?.documentCode;
-  const doc = code ? store.findDocumentByCode(code) : undefined;
+  const doc = code ? (docs ? docs.get(code) : store.findDocumentByCode(code)) : undefined;
   if (!doc || doc.snapshot.kind !== "beleg" || doc.revokedAt) return undefined;
   const d = { ...doc, snapshot: doc.snapshot };
   const agree = belegRecordsAgree(d.snapshot, e);
