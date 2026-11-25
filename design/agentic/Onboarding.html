@@ -20,7 +20,7 @@ body{margin:0;min-height:100dvh;background:var(--z-bg);color:var(--z-text);font-
 .signet{width:30px;height:30px;border-radius:999px;border:1px solid var(--z-pink);color:var(--z-pink);display:inline-flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;flex:none}
 .top b{font-weight:600}
 .top .step{margin-left:auto;font-family:var(--z-mono);font-size:12px;color:var(--z-dim)}
-.back{height:44px;padding:0 12px;border-radius:8px;border:1px solid var(--z-line);background:transparent;color:var(--z-dim);font:inherit;font-size:13.5px;cursor:pointer}
+.back{height:var(--z-touch);padding:0 var(--z-space-3);border-radius:var(--z-radius-control);border:1px solid var(--z-line);background:transparent;color:var(--z-dim);font:inherit;font-size:13.5px;cursor:pointer}
 .back:hover{color:var(--z-text);border-color:var(--z-line-hover)}
 .back[hidden]{display:none}
 .meter{position:sticky;top:64px;z-index:3;height:2px;background:var(--z-line)}
@@ -81,8 +81,8 @@ main{max-width:600px;margin:0 auto;padding:36px 18px 160px;display:flex;flex-dir
 .ask{margin-left:42px;margin-top:10px;display:flex;flex-wrap:wrap;gap:8px}
 .ask span{height:32px;padding:0 12px;display:inline-flex;align-items:center;border-radius:999px;border:1px solid var(--z-line);font-family:var(--z-mono);font-size:12px;color:var(--z-dim)}
 .legal{margin:0 4px;text-align:center;font-size:12.5px;color:var(--z-dim)}
-.legal a{display:inline-block;padding:15px 4px}
-.concept{margin:0;padding:8px 18px;text-align:center;font-size:12.5px;color:var(--z-amber);border-bottom:1px solid var(--z-line)}
+.legal a{display:inline-block;padding:var(--z-space-4) var(--z-space-1)}
+.concept{margin:0;padding:var(--z-space-2) var(--z-space-4);text-align:center;font-size:12.5px;color:var(--z-amber);border-bottom:1px solid var(--z-line)}
 .z-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
