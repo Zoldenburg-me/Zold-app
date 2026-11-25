@@ -240,12 +240,18 @@ export function createOrgMoneriumRoutes(deps: OrgRoutes, verify: Verify = verify
       throw err;
     }
     const now = new Date().toISOString();
-    // The Safe's link belongs to the profile: kept for the same one, dropped for another.
-    const prior = (await store.findOrganisation(ctx.org.id))?.monerium;
-    const safe = prior?.safe && prior.profile.id === profile.id ? { safe: prior.safe } : {};
-    const org = await store.updateOrganisation(ctx.org.id, {
-      monerium: { clientId: input.clientId, clientSecretEnc, profile, connectedAt: now, checkedAt: now, connectedByMemberId: ctx.member.id, ...safe },
-    });
+    // Compared again on the stored row as it is written. The Safe's link
+    // belongs to the profile: kept for the same one, dropped for another.
+    const org = await store.updateOrganisationIf(
+      ctx.org.id,
+      (o) => (before ? sameKeys(o.monerium, before) : !o.monerium),
+      (o) => {
+        const prior = o.monerium;
+        const safe = prior?.safe && prior.profile.id === profile.id ? { safe: prior.safe } : {};
+        return { monerium: { clientId: input.clientId, clientSecretEnc, profile, connectedAt: now, checkedAt: now, connectedByMemberId: ctx.member.id, ...safe } };
+      },
+    );
+    if (!org) return res.status(409).json(KEYS_CHANGED);
     await store.audit(auditEntry("partner.credentials_connected", { partner: "monerium", orgId: org.id, profileState: profile.state }, ctx.userId));
     res.status(201).json({ monerium: await publicOrgMonerium(org) });
   }));
@@ -268,11 +274,20 @@ export function createOrgMoneriumRoutes(deps: OrgRoutes, verify: Verify = verify
     if (!cur) return;
     if (!sameKeys(cur.org.monerium, m)) return res.status(409).json(KEYS_CHANGED);
     const at = new Date().toISOString();
-    const { rejectedAt: _r, profileMissingAt: _p, ...rest } = cur.org.monerium!;
+    // Each write below is compared again on the stored row.
+    const write = async (extra: Partial<NonNullable<Organisation["monerium"]>>) => {
+      const org = await store.updateOrganisationIf(ctx.org.id, (o) => sameKeys(o.monerium, m), (o) => {
+        const { rejectedAt: _r, profileMissingAt: _p, ...rest } = o.monerium!;
+        return { monerium: { ...rest, checkedAt: at, ...extra } };
+      });
+      if (!org) res.status(409).json(KEYS_CHANGED);
+      return org;
+    };
     if (!verified) {
       // Monerium refused keys it accepted before: say so, keep the row so an
       // admin sees what was connected and replaces it.
-      const org = await store.updateOrganisation(ctx.org.id, { monerium: { ...rest, checkedAt: at, rejectedAt: at } });
+      const org = await write({ rejectedAt: at });
+      if (!org) return;
       await store.audit(auditEntry("partner.call_refused", { partner: "monerium", status: 400, orgId: ctx.org.id }, ctx.userId));
       return res.json({ monerium: await publicOrgMonerium(org) });
     }
@@ -281,14 +296,16 @@ export function createOrgMoneriumRoutes(deps: OrgRoutes, verify: Verify = verify
     // are replaced; a different one is never silently adopted.
     const profile = storedProfile(verified.profiles, m.profile.id);
     if (!profile) {
-      const org = await store.updateOrganisation(ctx.org.id, { monerium: { ...rest, checkedAt: at, profileMissingAt: at } });
+      const org = await write({ profileMissingAt: at });
+      if (!org) return;
       return res.status(409).json({
         code: "MONERIUM_PROFILE_CHANGED",
         error: "These keys no longer open the company profile they were connected with. Remove the keys and connect the company's current keys.",
         monerium: await publicOrgMonerium(org),
       });
     }
-    const org = await store.updateOrganisation(ctx.org.id, { monerium: { ...rest, profile, checkedAt: at } });
+    const org = await write({ profile });
+    if (!org) return;
     res.json({ monerium: await publicOrgMonerium(org) });
   }));
 

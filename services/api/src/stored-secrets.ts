@@ -103,11 +103,10 @@ export const STORED_SECRETS: StoredSecret[] = [
       return g?.apiKeyEnc ? [{ rowId: o.id, stored: g.apiKeyEnc }] : [];
     }),
     write: async (id, stored) => {
-      return store.tx(async () => {
-        const org = await store.findOrganisation(id);
-        const g = org?.integrations?.getmyinvoices;
-        if (!org || !g) throw new Error(`organisation ${id} has no GetMyInvoices connection`);
-        await store.updateOrganisation(id, { integrations: { ...org.integrations, getmyinvoices: { ...g, apiKeyEnc: stored } } });
+      await store.patchOrgSub(id, "integrations", (cur) => {
+        const g = cur?.getmyinvoices;
+        if (!g) throw new Error(`organisation ${id} has no GetMyInvoices connection`);
+        return { ...cur, getmyinvoices: { ...g, apiKeyEnc: stored } };
       });
     },
   },

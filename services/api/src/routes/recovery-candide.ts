@@ -558,18 +558,21 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       const state = await readRecoveryState(plan, existing ? [existing.guardianAddress] : []);
       const onChain = state.guardians.some((g) => g.toLowerCase() === guardianAddress.toLowerCase());
       const channel = { registrationId, channel: pending.channel, target: pending.target, verifiedAt: new Date().toISOString() };
-      const updated = await store.updateUser(user.id, {
-        passkeySafe: {
-          ...user.passkeySafe!,
+      // From the stored recovery, not `existing`: a channel added or removed
+      // while the chain was read stays.
+      const updated = await store.patchUserSub(user.id, "passkeySafe", (ps) => {
+        const now = ps!.candideRecovery;
+        return {
+          ...ps!,
           candideRecovery: {
             moduleAddress: pending.moduleAddress,
             guardianAddress,
-            channels: [...(existing?.channels ?? []), channel],
-            guardianStatus: onChain ? "active" : existing?.guardianStatus ?? "pending_setup",
-            ...(existing?.guardianOpHash ? { guardianOpHash: existing.guardianOpHash } : {}),
-            ...(onChain && !existing?.activatedAt ? { activatedAt: new Date().toISOString() } : existing?.activatedAt ? { activatedAt: existing.activatedAt } : {}),
+            channels: [...(now?.channels ?? []), channel],
+            guardianStatus: onChain ? "active" : now?.guardianStatus ?? "pending_setup",
+            ...(now?.guardianOpHash ? { guardianOpHash: now.guardianOpHash } : {}),
+            ...(onChain && !now?.activatedAt ? { activatedAt: new Date().toISOString() } : now?.activatedAt ? { activatedAt: now.activatedAt } : {}),
           },
-        },
+        };
       });
       res.status(201).json({
         ...(await deps.publicUser(updated)),
@@ -589,8 +592,9 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       if (!c) return res.status(409).json({ error: "register an email or phone for recovery first" });
       const state = await readRecoveryState(plan);
       if (state.guardians.some((g) => g.toLowerCase() === c.guardianAddress.toLowerCase())) {
-        const updated = await store.updateUser(user.id, {
-          passkeySafe: { ...user.passkeySafe!, candideRecovery: { ...c, guardianStatus: "active", activatedAt: c.activatedAt ?? new Date().toISOString() } },
+        const updated = await store.patchUserSub(user.id, "passkeySafe", (ps) => {
+          const now = ps!.candideRecovery ?? c;
+          return { ...ps!, candideRecovery: { ...now, guardianStatus: "active", activatedAt: now.activatedAt ?? new Date().toISOString() } };
         });
         return res.json({ ...(await deps.publicUser(updated)), recovery: publicCandideRecovery(updated), status: "active" });
       }
@@ -657,12 +661,10 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
           opHash,
         });
       }
-      const updated = await store.updateUser(user.id, {
-        passkeySafe: {
-          ...user.passkeySafe!,
-          candideRecovery: { ...c, guardianStatus: "active", guardianOpHash: opHash ?? undefined, activatedAt: new Date().toISOString() },
-        },
-      });
+      const updated = await store.patchUserSub(user.id, "passkeySafe", (ps) => ({
+        ...ps!,
+        candideRecovery: { ...(ps!.candideRecovery ?? c), guardianStatus: "active", guardianOpHash: opHash ?? undefined, activatedAt: new Date().toISOString() },
+      }));
       res.status(201).json({ ...(await deps.publicUser(updated)), recovery: publicCandideRecovery(updated), opHash });
     }),
   );
@@ -713,12 +715,9 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       const signature = await signMessageAsPasskeySafe(plan, plan.address, pending.statement, toAssertion(req.body));
       await deleteRegistration(pending.registrationId, pending.statement, signature);
       pendingChannelRemovals.delete(req.params.requestId);
-      const c = user.passkeySafe!.candideRecovery!;
-      const updated = await store.updateUser(user.id, {
-        passkeySafe: {
-          ...user.passkeySafe!,
-          candideRecovery: { ...c, channels: c.channels.filter((x) => x.registrationId !== pending.registrationId) },
-        },
+      const updated = await store.patchUserSub(user.id, "passkeySafe", (ps) => {
+        const c = ps!.candideRecovery!;
+        return { ...ps!, candideRecovery: { ...c, channels: c.channels.filter((x) => x.registrationId !== pending.registrationId) } };
       });
       res.json({ ...(await deps.publicUser(updated)), recovery: publicCandideRecovery(updated) });
     }),
@@ -892,69 +891,75 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       if (passkeySubmits.has(request.id)) {
         return res.status(409).json({ ...publicRequest(request), error: "a passkey for this recovery is still being checked", code: "PASSKEY_SUBMIT_IN_PROGRESS" });
       }
-      const { credentialId, attestation, clientDataJSON, otpTicket: offeredTicket } = req.body ?? {};
-      if (offeredTicket !== undefined && (typeof offeredTicket !== "string" || !OTP_TICKET_RE.test(offeredTicket))) {
-        return res.status(400).json({ error: "otpTicket must be 32 or more random bytes, base64url" });
-      }
-      if (!credentialId || typeof credentialId !== "string" || !attestation || !clientDataJSON) {
-        return res.status(400).json({ error: "credentialId, attestation and clientDataJSON required" });
-      }
-      if ((await store.findUserByCredential(credentialId))) {
-        return res.status(409).json({ error: "that passkey already belongs to an account" });
-      }
-      let reg;
-      try {
-        reg = verifyRegistration(attestation, clientDataJSON, SECURITY.rpId, SECURITY.origins, `recovery:${request.id}`);
-      } catch (err: any) {
-        return res.status(400).json({ error: redactedMessage(err) });
-      }
-      if (reg.credentialId !== credentialId) return res.status(400).json({ error: "credentialId does not match attestation" });
-      if (reg.key.alg !== "ES256") return res.status(400).json({ error: "the new passkey must be a P-256 (ES256) credential to own a Safe" });
-      const owner = webauthnOwnerFromJwk(reg.key.jwk);
-      if (!owner) return res.status(400).json({ error: "could not read the new passkey's public key" });
-      const plan = user.passkeySafe;
-      // The new passkey becomes the ONLY owner.
-      const newOwners: `0x${string}`[] = [passkeyAccountAddress(owner)];
-      const newThreshold = 1;
-
-      // No await since the check above, so no second submit got past it.
+      // Held from this check until the OTP_PENDING write, across the guardian
+      // request: a second submit is refused and never sends a second one.
       passkeySubmits.add(request.id);
-      let sig;
       try {
-        sig = await requestSignatureChallenge(plan.address, newOwners, newThreshold);
+        const { credentialId, attestation, clientDataJSON, otpTicket: offeredTicket } = req.body ?? {};
+        if (offeredTicket !== undefined && (typeof offeredTicket !== "string" || !OTP_TICKET_RE.test(offeredTicket))) {
+          return res.status(400).json({ error: "otpTicket must be 32 or more random bytes, base64url" });
+        }
+        if (!credentialId || typeof credentialId !== "string" || !attestation || !clientDataJSON) {
+          return res.status(400).json({ error: "credentialId, attestation and clientDataJSON required" });
+        }
+        if ((await store.findUserByCredential(credentialId))) {
+          return res.status(409).json({ error: "that passkey already belongs to an account" });
+        }
+        let reg;
+        try {
+          reg = verifyRegistration(attestation, clientDataJSON, SECURITY.rpId, SECURITY.origins, `recovery:${request.id}`);
+        } catch (err: any) {
+          return res.status(400).json({ error: redactedMessage(err) });
+        }
+        if (reg.credentialId !== credentialId) return res.status(400).json({ error: "credentialId does not match attestation" });
+        if (reg.key.alg !== "ES256") return res.status(400).json({ error: "the new passkey must be a P-256 (ES256) credential to own a Safe" });
+        const owner = webauthnOwnerFromJwk(reg.key.jwk);
+        if (!owner) return res.status(400).json({ error: "could not read the new passkey's public key" });
+        const plan = user.passkeySafe;
+        // The new passkey becomes the ONLY owner.
+        const newOwners: `0x${string}`[] = [passkeyAccountAddress(owner)];
+        const newThreshold = 1;
+
+        const sig = await requestSignatureChallenge(plan.address, newOwners, newThreshold);
+        // Canceled or expired during the wait: record nothing. Read and written
+        // in one transaction, so the status checked is the one written over.
+        const otpTicket = typeof offeredTicket === "string" ? offeredTicket : randomBytes(32).toString("base64url");
+        const written = await store.tx(async () => {
+          const current = await store.findRecoveryRequest(request.id);
+          if (current?.status !== "PASSKEY_PENDING") return { current };
+          return { updated: await store.updateRecoveryRequest(request.id, {
+            status: "OTP_PENDING",
+            candide: {
+              ...(current.candide ?? {}),
+              newPasskey: {
+                credentialId,
+                publicKey: reg.key,
+                signCount: reg.signCount,
+                rpId: SECURITY.rpId,
+                attestation,
+                createdAt: new Date().toISOString(),
+              },
+              newOwners,
+              newThreshold,
+              otpTicketHash: hashSecret(otpTicket),
+              serviceRequestId: sig.requestId,
+              requiredVerifications: sig.requiredVerifications,
+              auths: sig.auths.map((a) => ({ challengeId: a.challengeId, channel: a.channel, target: a.target, verified: false })),
+            },
+          }) };
+        });
+        if (!written.updated) {
+          const current = written.current;
+          return res.status(409).json({ ...(current ? publicRequest(current) : {}), error: `recovery is ${current?.status ?? "gone"}` });
+        }
+        const updated = written.updated;
+        // Returned once (or the browser's own, kept before it submitted): the
+        // codes the owner receives confirm the credential registered HERE, so
+        // only this browser may submit them.
+        res.json({ ...publicRequest(updated), otpTicket, submitTo: `/api/recovery/candide/${request.id}/otp` });
       } finally {
         passkeySubmits.delete(request.id);
       }
-      // Canceled or expired during the wait: record nothing.
-      const current = await store.findRecoveryRequest(request.id);
-      if (current?.status !== "PASSKEY_PENDING") {
-        return res.status(409).json({ ...(current ? publicRequest(current) : {}), error: `recovery is ${current?.status ?? "gone"}` });
-      }
-      const otpTicket = typeof offeredTicket === "string" ? offeredTicket : randomBytes(32).toString("base64url");
-      const updated = await store.updateRecoveryRequest(request.id, {
-        status: "OTP_PENDING",
-        candide: {
-          ...(current.candide ?? {}),
-          newPasskey: {
-            credentialId,
-            publicKey: reg.key,
-            signCount: reg.signCount,
-            rpId: SECURITY.rpId,
-            attestation,
-            createdAt: new Date().toISOString(),
-          },
-          newOwners,
-          newThreshold,
-          otpTicketHash: hashSecret(otpTicket),
-          serviceRequestId: sig.requestId,
-          requiredVerifications: sig.requiredVerifications,
-          auths: sig.auths.map((a) => ({ challengeId: a.challengeId, channel: a.channel, target: a.target, verified: false })),
-        },
-      });
-      // Returned once (or the browser's own, kept before it submitted): the
-      // codes the owner receives confirm the credential registered HERE, so
-      // only this browser may submit them.
-      res.json({ ...publicRequest(updated), otpTicket, submitTo: `/api/recovery/candide/${request.id}/otp` });
     }),
   );
 
@@ -980,23 +985,22 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       // Bounded like enrolment: past the limit the request is canceled, so a
       // guesser must start over (and the owner sees a canceled attempt), while
       // Candide's own throttle stays the outer bound. Every guess is counted
-      // before the await, as enrolment does: parallel guesses each see the one
-      // before, and a wrong code the SDK throws on still counts.
-      const attempts = (c.otpAttempts ?? 0) + 1;
-      if (attempts > OTP_MAX_ATTEMPTS) {
-        await store.updateRecoveryRequest(request.id, { status: "CANCELED", canceledAt: new Date().toISOString(), cancelReason: "too many wrong codes" });
-        return res.status(429).json({ error: "too many wrong codes — this recovery is canceled; start again" });
-      }
-      await store.updateRecoveryRequest(request.id, { candide: { ...c, otpAttempts: attempts } });
+      // on the stored row before the await, as enrolment does: parallel
+      // guesses each see the one before, and a wrong code the SDK throws on
+      // still counts.
+      const counted = await store.countRecoveryOtpAttempt(request.id, OTP_MAX_ATTEMPTS);
+      if (!counted) return res.status(409).json({ error: "this recovery is no longer waiting for codes" });
+      if (counted.over) return res.status(429).json({ error: "too many wrong codes — this recovery is canceled; start again" });
 
       const result = await submitSignatureChallenge(c.serviceRequestId, challengeId, req.body?.otp);
       if (!result.success) {
         return res.status(400).json({ error: "the code was not accepted" });
       }
       const auths = c.auths.map((a) => (a.challengeId === challengeId ? { ...a, verified: true } : a));
-      // request.candide is the stored row, so its count includes guesses made
-      // during the await; `c` is the snapshot from before it.
-      let patch: Partial<RecoveryRequest> = { candide: { ...c, ...request.candide, auths } };
+      // Read again: the stored count includes guesses made during the await;
+      // `c` is the copy from before it.
+      const stored = (await store.findRecoveryRequest(request.id))?.candide;
+      let patch: Partial<RecoveryRequest> = { candide: { ...c, ...stored, auths } };
 
       if (result.guardianSignature && result.guardianAddress) {
         // Every channel is verified: Candide has signed. Execute now — the
@@ -1022,7 +1026,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
           factors: { ...request.factors, otp: "passed" },
           candide: {
             ...c,
-            ...request.candide,
+            ...stored,
             auths,
             otpTicketHash: undefined,
             guardianAddress: result.guardianAddress,

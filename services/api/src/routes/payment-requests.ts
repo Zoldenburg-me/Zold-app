@@ -124,9 +124,17 @@ export async function ensureQuote(r: PaymentRequest, amountEur: number | undefin
   } catch {
     return { request: r };
   }
-  const quote = quoteCrypto(amountEur, mid, [...await openQuotedAmounts(r.userId, r.id), ...r.cryptoQuotes.map((q) => q.amountUsdc)]);
-  const updated = await store.updatePaymentRequest(r.id, { cryptoQuotes: withQuote(r, quote) });
-  return { request: updated, quote };
+  // The amounts taken and the new one are read and written in one
+  // transaction: two quotes picked from the same reading could share an
+  // amount, and a deposit is attributed by amount alone.
+  return await store.tx(async () => {
+    const now = (await store.findPaymentRequest(r.id)) ?? r;
+    const again = currentQuote(now, amountEur);
+    if (again) return { request: now, quote: again };
+    const quote = quoteCrypto(amountEur, mid, [...(await openQuotedAmounts(now.userId, now.id)), ...now.cryptoQuotes.map((q) => q.amountUsdc)]);
+    const updated = await store.updatePaymentRequest(now.id, { cryptoQuotes: withQuote(now, quote) });
+    return { request: updated, quote };
+  });
 }
 
 /**
@@ -399,8 +407,10 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
       if (r.payments.length) {
         return res.status(409).json({ error: "a payment has already been recorded against this request — it cannot be cancelled" });
       }
-      const now = new Date().toISOString();
-      res.json(ownerPaymentRequest(await store.updatePaymentRequest(r.id, { state: "CANCELLED", cancelledAt: now }), baseUrlFor(req)));
+      // Checked again on the stored row: a payment recorded since the read keeps it.
+      const cancelled = await store.cancelUnpaidPaymentRequest(r.id, new Date(), true);
+      if (!cancelled) return res.status(409).json({ error: "a payment has already been recorded against this request — it cannot be cancelled" });
+      res.json(ownerPaymentRequest(cancelled, baseUrlFor(req)));
     }),
   );
 
@@ -557,33 +567,35 @@ export function onPaymentRequestPaid(hook: PaidHook) {
 }
 
 async function record(r: PaymentRequest, payment: Parameters<typeof applyPayment>[1]): Promise<PaymentRequest> {
-  return store.tx(async () => {
-    // `r` is usually the live store row, which updatePaymentRequest mutates in
-    // place — so remember whether it was already PAID before writing.
-    const wasPaid = r.state === "PAID";
-    const { request, added, merged } = applyPayment(r, payment);
-    if (!added) {
+  // applyPayment runs on the request as stored, not on `r`, which was read
+  // before the caller's awaits.
+  let added = false;
+  const { request: saved, from } = await store.recordPaymentRequestPayment(r.id, (row) => {
+    const applied = applyPayment(row, payment);
+    added = applied.added;
+    if (!applied.added) {
       // A twin was enriched in place and needs writing; a payment already on the
       // row writes nothing, or every poll rewrites the db.
-      return merged ? (await store.updatePaymentRequest(r.id, { payments: r.payments })) : r;
+      return applied.merged ? { payments: row.payments } : null;
     }
-    const saved = await store.updatePaymentRequest(r.id, {
-      payments: request.payments,
-      ...(request.state !== r.state ? { state: request.state, paidAt: request.paidAt } : {}),
-    });
-    console.log(
-      `pay-request: ${saved.id} received €${payment.amountEur} by ${payment.method} (${payment.kind})` +
-        (saved.state === "PAID" ? " — PAID" : ""),
-    );
-    if (saved.state === "PAID" && !wasPaid) {
-      for (const hook of paidHooks) {
-        Promise.resolve()
-          .then(() => hook(saved))
-          .catch((e) => console.error(`pay-request: paid hook failed for ${saved.id}: ${describeCause(e)}`));
-      }
-    }
-    return saved;
+    return {
+      payments: applied.request.payments,
+      ...(applied.request.state !== row.state ? { state: applied.request.state, paidAt: applied.request.paidAt } : {}),
+    };
   });
+  if (!added) return saved;
+  console.log(
+    `pay-request: ${saved.id} received €${payment.amountEur} by ${payment.method} (${payment.kind})` +
+      (saved.state === "PAID" ? " — PAID" : ""),
+  );
+  if (saved.state === "PAID" && from !== "PAID") {
+    for (const hook of paidHooks) {
+      Promise.resolve()
+        .then(() => hook(saved))
+        .catch((e) => console.error(`pay-request: paid hook failed for ${saved.id}: ${describeCause(e)}`));
+    }
+  }
+  return saved;
 }
 
 /**
@@ -641,10 +653,10 @@ function heldAs(deposit: CryptoDeposit): { settledEur?: number; settledAsset: "U
 export async function noteDepositSettled(deposit: CryptoDeposit): Promise<void> {
   return store.tx(async () => {
     if (!deposit.paymentRequestId || !deposit.settledAt) return;
-    const r = await store.findPaymentRequest(deposit.paymentRequestId);
-    if (!r) return;
-    const payments = r.payments.map((p) => (p.depositId === deposit.id ? { ...p, ...heldAs(deposit) } : p));
-    await store.updatePaymentRequest(r.id, { payments });
+    if (!(await store.findPaymentRequest(deposit.paymentRequestId))) return;
+    await store.recordPaymentRequestPayment(deposit.paymentRequestId, (row) => ({
+      payments: row.payments.map((p) => (p.depositId === deposit.id ? { ...p, ...heldAs(deposit) } : p)),
+    }));
   });
 }
 
@@ -661,13 +673,11 @@ async function recordBankSettlement(
   order: MoneriumOrderLike,
   matchedOn: "payment-link" | "invoice-number",
 ): Promise<void> {
-  return store.tx(async () => {
-    const invoice = (await store.list("invoices")).find((i) => i.id === invoiceId);
-    if (!invoice) return;
-    // Already booked: the poll re-sees it every pass and must not rewrite the db.
-    if (invoice.settlements?.some((x) => settlementRef(x) === `monerium:${order.id}`)) return;
-    await store.updateInvoice(invoice.id, settlementUpdate(invoice, buildBankSettlement(order, matchedOn)));
-  });
+  if (!(await store.findInvoice(invoiceId))) return;
+  const s = buildBankSettlement(order, matchedOn);
+  // Already booked: the poll re-sees it every pass and must not rewrite the
+  // db. Checked on the stored row, in the same write.
+  await store.settleInvoice(invoiceId, settlementRef(s), (row) => settlementUpdate(row, s));
 }
 
 /**
@@ -755,8 +765,8 @@ export async function sweepPaymentRequests(now = new Date()): Promise<{ expired:
   const open = (await store.list("paymentRequests")).filter((r) => r.state === "OPEN");
   for (const r of open) {
     if (Date.parse(r.expiresAt) <= now.getTime()) {
-      await store.updatePaymentRequest(r.id, { state: "EXPIRED" });
-      expired++;
+      // Only from OPEN: a payment recorded while this loop awaited keeps it PAID.
+      if (await store.updatePaymentRequestFrom(r.id, ["OPEN"], { state: "EXPIRED" })) expired++;
       continue;
     }
     if (!r.methods.includes("bank")) continue;

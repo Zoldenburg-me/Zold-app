@@ -19,6 +19,7 @@ import { auditEntry } from "./audit.js";
 import type {
   Account,
   AccountRule,
+  DraftActivity,
   ChartAccount,
   Contact,
   DraftPayment,
@@ -33,11 +34,17 @@ import {
   applyOrgSafePlan,
   applyReplacedOrgSafePlan,
   applyReviewResolution,
+  acceptInviteOnRow,
   applyUserPatch,
+  cancelUnpaidOnRow,
   checkReviewResolution,
+  draftPatchOnRow,
+  refuseActivityPatch,
+  settlementOnRow,
+  transferPatchOnRow,
+  type DraftCondition,
   followIban,
-  guardTransferPatch,
-  hashOnRecordIn,
+    hashOnRecordIn,
   passkeyUsePatch,
   reviewRefundTx,
   sessionDead,
@@ -133,6 +140,20 @@ function hashOnRecord(hash: string, userId: string): string | undefined {
  * store/backend.ts calls it: everything else calls `store`, which runs these
  * methods one at a time behind the store's mutex and hands out copies.
  */
+/**
+ * One issued number per organisation (§14 UStG), as UNIQUE(org_id, number)
+ * refuses it on Postgres (migrations/0002).
+ */
+function refuseIssuedNumberTaken(orgId: string, id: string, number: string | undefined) {
+  if (number === undefined) return;
+  if (db.invoices.some((x) => x.orgId === orgId && x.id !== id && x.issued?.number === number)) {
+    throw new Error(`invoice number ${number} is already issued in organisation ${orgId}`);
+  }
+}
+
+/** Every state a draft can be in: an activity append is refused by none. */
+const DRAFT_STATES: DraftPayment["state"][] = ["DRAFT", "PENDING_REVIEW", "REVIEWED", "REJECTED", "INVALID_DATA", "EXECUTING", "EXECUTED", "FAILED", "CANCELLED"];
+
 export const jsonCore = {
   /** A transaction's writes land as one file write, at endTx. */
   beginTx: beginWrites,
@@ -148,6 +169,12 @@ export const jsonCore = {
   addUser(u: User) {
     db.users.push(u);
     persist();
+  },
+  /** Change `passkeySafe` or `monerium` from the stored value (§2 rule 2), with `patch`. */
+  patchUserSub<K extends "passkeySafe" | "monerium">(id: string, key: K, fn: (current: User[K]) => User[K], patch: Partial<User> = {}) {
+    const u = db.users.find((x) => x.id === id);
+    if (!u) throw new Error(`unknown user ${id}`);
+    return jsonCore.updateUser(id, { ...patch, [key]: fn(structuredClone(u[key])) } as Partial<User>);
   },
   updateUser(id: string, patch: Partial<User>) {
     const u = db.users.find((x) => x.id === id);
@@ -254,6 +281,20 @@ export const jsonCore = {
     Object.assign(r, patch);
     persist();
     return r;
+  },
+  /**
+   * Count one OTP guess on the stored row, while it is OTP_PENDING. Past
+   * `max` the request is canceled instead. Null when it is not OTP_PENDING.
+   */
+  countRecoveryOtpAttempt(id: string, max: number) {
+    const r = db.recoveryRequests.find((x) => x.id === id);
+    if (!r || r.status !== "OTP_PENDING" || !r.candide) return null;
+    const attempts = (r.candide.otpAttempts ?? 0) + 1;
+    if (attempts > max) {
+      Object.assign(r, { status: "CANCELED", canceledAt: new Date().toISOString(), cancelReason: "too many wrong codes" });
+    } else r.candide = { ...r.candide, otpAttempts: attempts };
+    persist();
+    return { request: r, attempts, over: attempts > max };
   },
   findRecoveryRequest(id: string) {
     return db.recoveryRequests.find((r) => r.id === id);
@@ -486,12 +527,27 @@ export const jsonCore = {
   updateTransfer(id: string, patch: Partial<Transfer>) {
     const t = db.transfers.find((x) => x.id === id);
     if (!t) throw new Error(`unknown transfer ${id}`);
-    patch = guardTransferPatch(t, patch);
+    patch = transferPatchOnRow(t, patch);
     const from = t.state;
     Object.assign(t, patch, { updatedAt: new Date().toISOString() });
     persist();
     announceStateChange(t, from);
     return t;
+  },
+  /** Append one step to a transfer's log on the stored row, with `patch`. */
+  appendTransferStep(id: string, step: Transfer["txs"][number], patch: Partial<Transfer> = {}) {
+    const t = db.transfers.find((x) => x.id === id);
+    if (!t) throw new Error(`unknown transfer ${id}`);
+    return jsonCore.updateTransfer(id, { ...patch, txs: [...t.txs, step] });
+  },
+  /**
+   * Change one sub-object of a transfer (`sepa`, `refund`, …) from its
+   * stored value: `fn` gets the value on the row and returns the new one.
+   */
+  patchTransferSub<K extends keyof Transfer>(id: string, key: K, fn: (current: Transfer[K]) => Transfer[K], patch: Partial<Transfer> = {}) {
+    const t = db.transfers.find((x) => x.id === id);
+    if (!t) throw new Error(`unknown transfer ${id}`);
+    return jsonCore.updateTransfer(id, { ...patch, [key]: fn(structuredClone(t[key])) });
   },
   /** Subscribe to transfer state changes (checkout-webhook.ts). */
   onTransferStateChange(listener: TransferStateListener) {
@@ -565,6 +621,32 @@ export const jsonCore = {
     persist();
     announcePaymentRequestState(r, from);
     return r;
+  },
+  /** Write a request only from the states it may leave; null when it moved on. */
+  updatePaymentRequestFrom(id: string, from: readonly PaymentRequest["state"][], patch: Partial<PaymentRequest>) {
+    const r = db.paymentRequests.find((x) => x.id === id);
+    if (!r) throw new Error(`unknown payment request ${id}`);
+    if (!from.includes(r.state)) return null;
+    return jsonCore.updatePaymentRequest(id, patch);
+  },
+  /** Cancel an open request nothing has paid (rules.ts cancelUnpaidOnRow); null otherwise. */
+  cancelUnpaidPaymentRequest(id: string, now = new Date(), evenIfExpired = false) {
+    const r = db.paymentRequests.find((x) => x.id === id);
+    if (!r) throw new Error(`unknown payment request ${id}`);
+    const patch = cancelUnpaidOnRow(r, now, evenIfExpired);
+    return patch ? jsonCore.updatePaymentRequest(id, patch) : null;
+  },
+  /**
+   * Record a payment on the stored request: `apply` runs on the row as
+   * stored (payment-requests.ts applyPayment) and returns the patch, or null
+   * when there is nothing to write. Returns the row and its state before.
+   */
+  recordPaymentRequestPayment(id: string, apply: (r: PaymentRequest) => Partial<PaymentRequest> | null) {
+    const r = db.paymentRequests.find((x) => x.id === id);
+    if (!r) throw new Error(`unknown payment request ${id}`);
+    const from = r.state;
+    const patch = apply(structuredClone(r));
+    return { request: patch ? jsonCore.updatePaymentRequest(id, patch) : r, from, written: !!patch };
   },
   /** Subscribe to payment request state changes (checkout-webhook.ts). */
   onPaymentRequestStateChange(listener: PaymentRequestStateListener) {
@@ -828,6 +910,13 @@ export const jsonCore = {
     persist();
     return true;
   },
+  /** Write a send only from the states it may leave (§2 rule 3); null when it moved on. */
+  updateCryptoSendFrom(id: string, from: readonly CryptoSend["state"][], patch: Partial<Pick<CryptoSend, "state" | "userOpHash" | "txHash" | "error">>) {
+    const s = db.cryptoSends.find((x) => x.id === id);
+    if (!s) throw new Error(`unknown crypto send ${id}`);
+    if (!from.includes(s.state)) return null;
+    return jsonCore.updateCryptoSend(id, patch);
+  },
   updateCryptoSend(id: string, patch: Partial<Pick<CryptoSend, "state" | "userOpHash" | "txHash" | "error">>) {
     const s = db.cryptoSends.find((x) => x.id === id);
     if (!s) throw new Error(`unknown crypto send ${id}`);
@@ -869,6 +958,13 @@ export const jsonCore = {
     persist();
     return d;
   },
+  /** Settle a deposit once: `decide` runs on the stored row; null when it was settled already. */
+  settleCryptoDeposit(id: string, decide: (d: CryptoDeposit) => Partial<CryptoDeposit>) {
+    const d = db.cryptoDeposits.find((x) => x.id === id);
+    if (!d) throw new Error(`unknown crypto deposit ${id}`);
+    if (d.settledAt) return null;
+    return jsonCore.updateCryptoDeposit(id, { ...decide(structuredClone(d)), settledAt: new Date().toISOString() });
+  },
   cryptoDepositCursor(chainId: number | string): bigint | undefined {
     const v = db.cryptoDepositCursor[String(chainId)];
     return v === undefined ? undefined : BigInt(v);
@@ -894,6 +990,30 @@ export const jsonCore = {
   },
   findOrganisation(id: string) {
     return db.organisations.find((o) => o.id === id);
+  },
+  /**
+   * Write an organisation only while `ok` holds for it as stored; `patch`
+   * is computed from that row. Null when `ok` fails.
+   */
+  updateOrganisationIf(id: string, ok: (o: Organisation) => boolean, patch: (o: Organisation) => Partial<Organisation>) {
+    const o = db.organisations.find((x) => x.id === id);
+    if (!o) throw new Error(`unknown organisation ${id}`);
+    if (!ok(structuredClone(o))) return null;
+    return jsonCore.updateOrganisation(id, patch(structuredClone(o)));
+  },
+  /**
+   * The organisation, held until the transaction this runs in ends (Postgres:
+   * `FOR UPDATE`; JSON: the mutex already holds everything). For a rule over
+   * other rows of the org (§2 rule 4).
+   */
+  lockOrganisation(id: string) {
+    return db.organisations.find((o) => o.id === id);
+  },
+  /** Change `invoicing` or `integrations` from the stored value (§2 rule 2), with `patch`. */
+  patchOrgSub<K extends "invoicing" | "integrations">(id: string, key: K, fn: (current: Organisation[K]) => Organisation[K], patch: Partial<Organisation> = {}) {
+    const o = db.organisations.find((x) => x.id === id);
+    if (!o) throw new Error(`unknown organisation ${id}`);
+    return jsonCore.updateOrganisation(id, { ...patch, [key]: fn(structuredClone(o[key])) } as Partial<Organisation>);
   },
   updateOrganisation(id: string, patch: Partial<Organisation>) {
     if ("safe" in patch) throw new Error("an org Safe plan is written through setOrgSafePlan only");
@@ -962,6 +1082,24 @@ export const jsonCore = {
     return m;
   },
 
+  /**
+   * Change a member only if `allowed` still holds for the organisation's
+   * members as stored (an org never loses its last owner, §2 rule 4).
+   * Null when it does not.
+   */
+  updateMemberChecked(id: string, patch: Partial<Member>, allowed: (members: Member[], member: Member) => boolean) {
+    const m = db.members.find((x) => x.id === id);
+    if (!m) throw new Error(`unknown member ${id}`);
+    if (!allowed(structuredClone(db.members.filter((x) => x.orgId === m.orgId)), structuredClone(m))) return null;
+    return jsonCore.updateMember(id, patch);
+  },
+  /** Spend an invitation, once, for one user. Null when it is spent, replaced or the user is already on the org. */
+  acceptInvite(id: string, tokenHash: string, userId: string, at = new Date().toISOString()) {
+    const m = db.members.find((x) => x.id === id);
+    if (!m) return null;
+    const patch = acceptInviteOnRow(m, tokenHash, userId, db.members.filter((x) => x.orgId === m.orgId), at);
+    return patch ? jsonCore.updateMember(id, patch) : null;
+  },
   addAccount(a: Account) {
     db.accounts.push(a);
     persist();
@@ -1022,9 +1160,30 @@ export const jsonCore = {
     return db.drafts.filter((d) => d.orgId === orgId);
   },
   updateDraft(id: string, patch: Partial<DraftPayment>) {
+    refuseActivityPatch(patch);
     const d = db.drafts.find((x) => x.id === id);
     if (!d) throw new Error(`unknown draft ${id}`);
     Object.assign(d, patch, { updatedAt: new Date().toISOString() });
+    persist();
+    return d;
+  },
+  /** Append to a draft's activity on the stored row, with `patch`. */
+  appendDraftActivity(id: string, entry: DraftActivity, patch: Partial<DraftPayment> = {}) {
+    return jsonCore.updateDraftFrom(id, patch, { from: DRAFT_STATES, activity: entry })!;
+  },
+  /**
+   * Write a draft only from the states it may leave (§2 rule 3), and only if
+   * it is still the row the caller read (`expectedUpdatedAt`) or still has
+   * the drafter four eyes was checked against. Null when it moved on; the
+   * caller refuses.
+   */
+  updateDraftFrom(id: string, patch: Partial<DraftPayment>, c: DraftCondition): DraftPayment | null {
+    refuseActivityPatch(patch);
+    const d = db.drafts.find((x) => x.id === id);
+    if (!d) throw new Error(`unknown draft ${id}`);
+    const next = draftPatchOnRow(d, patch, c);
+    if (!next) return null;
+    Object.assign(d, next, { updatedAt: new Date().toISOString() });
     persist();
     return d;
   },
@@ -1057,6 +1216,7 @@ export const jsonCore = {
   },
 
   addInvoice(i: Invoice) {
+    refuseIssuedNumberTaken(i.orgId, i.id, i.issued?.number);
     db.invoices.push(i);
     persist();
     return i;
@@ -1073,11 +1233,45 @@ export const jsonCore = {
   updateInvoice(id: string, patch: Partial<Invoice>) {
     const i = db.invoices.find((x) => x.id === id);
     if (!i) throw new Error(`unknown invoice ${id}`);
+    if (patch.issued) refuseIssuedNumberTaken(i.orgId, i.id, patch.issued.number);
     Object.assign(i, patch, { updatedAt: new Date().toISOString() });
     persist();
     return i;
   },
 
+  /** Write an invoice only from the states it may leave; null when it moved on. */
+  updateInvoiceFrom(id: string, from: readonly Invoice["state"][], patch: Partial<Invoice>) {
+    const i = db.invoices.find((x) => x.id === id);
+    if (!i) throw new Error(`unknown invoice ${id}`);
+    if (!from.includes(i.state)) return null;
+    return jsonCore.updateInvoice(id, patch);
+  },
+  /**
+   * Put a settlement on an invoice once per ref: `update` runs on the stored
+   * row (domain/invoices.ts settlementUpdate). Null when the ref is there,
+   * unless `replace` (rules.ts settlementOnRow).
+   */
+  settleInvoice(id: string, ref: string, update: (i: Invoice) => Partial<Invoice>, replace = false) {
+    const i = db.invoices.find((x) => x.id === id);
+    if (!i) throw new Error(`unknown invoice ${id}`);
+    const patch = settlementOnRow(structuredClone(i), ref, update, replace);
+    return patch ? jsonCore.updateInvoice(id, patch) : null;
+  },
+  /**
+   * Start paying an invoice: from `from` to PAYING, with the draft that pays
+   * it, as one write. Null (and no draft) when the invoice moved on.
+   */
+  startInvoicePayment(invoiceId: string, from: readonly Invoice["state"][], draft: DraftPayment) {
+    const i = db.invoices.find((x) => x.id === invoiceId);
+    if (!i) throw new Error(`unknown invoice ${invoiceId}`);
+    if (!from.includes(i.state)) return null;
+    db.drafts.push(draft);
+    i.state = "PAYING";
+    i.payment = { ...i.payment, draftId: draft.id };
+    i.updatedAt = new Date().toISOString();
+    persist();
+    return { invoice: i, draft };
+  },
   addImportedWallet(w: ImportedWallet) {
     db.importedWallets.push(w);
     persist();

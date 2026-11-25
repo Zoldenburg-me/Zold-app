@@ -228,9 +228,9 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
       if (!client) return res.status(409).json({ error: "connect a GetMyInvoices API key first" });
       const month = String(req.body?.month ?? "");
       if (!isMonth(month)) return res.status(400).json({ error: "month must be YYYY-MM" });
-      const lines = linesInMonth(await statementLinesOf(ctx.org.id), month);
       pushing.add(ctx.org.id);
       held = ctx.org.id;
+      const lines = linesInMonth(await statementLinesOf(ctx.org.id), month);
       // Where the bank lines go: the account asked for, else the one picked
       // last time, else the only manual account there is. None of those: the
       // Belege still go up, and the answer says a bank account is needed.
@@ -253,7 +253,7 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
       const bankAccountUid = bankAccountsError ? undefined
         : asked ?? (manual.some((b) => b.bankAccountUid === gmi.bankAccountUid) ? gmi.bankAccountUid : manual.length === 1 ? manual[0].bankAccountUid : undefined);
       if (bankAccountUid !== undefined && bankAccountUid !== gmi.bankAccountUid) {
-        await store.updateOrganisation(ctx.org.id, { integrations: { ...ctx.org.integrations, getmyinvoices: { ...gmi, bankAccountUid } } });
+        await store.patchOrgSub(ctx.org.id, "integrations", (cur) => ({ ...cur, getmyinvoices: { ...cur!.getmyinvoices!, bankAccountUid } }));
       }
       const results: { lineId: string; code?: string; outcome: "uploaded" | "exists" | "unknown" | "no-beleg" | "failed"; stale?: true; documentUid?: number; verifiedAfterTimeout?: true; tagsMayBeMissing?: true; error?: string; bankLine?: GmiBankLineResult | { outcome: "failed"; error: string } }[] = [];
       for (const line of lines) {

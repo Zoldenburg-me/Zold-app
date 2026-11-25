@@ -68,11 +68,8 @@ export async function readMoneriumProfile(user: User, profileId: string): Promis
   if (!one || one.id !== profileId || typeof one.kind !== "string" || typeof one.state !== "string") {
     throw unreachable();
   }
-  const fresh = await store.findUser(user.id);
-  if (fresh?.monerium) {
-    await store.updateUser(user.id, {
-      monerium: { ...fresh.monerium, profileSeen: { id: profileId, kind: one.kind, state: one.state, at: new Date().toISOString() } },
-    });
+  if ((await store.findUser(user.id))?.monerium) {
+    await store.patchUserSub(user.id, "monerium", (m) => (m ? { ...m, profileSeen: { id: profileId, kind: one.kind, state: one.state, at: new Date().toISOString() } } : m));
   }
   let name: string | undefined = typeof one.name === "string" ? one.name : undefined;
   if (!name) {

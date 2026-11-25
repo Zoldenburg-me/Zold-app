@@ -137,23 +137,27 @@ export async function sweepMissingVerifiers(given?: User[], io: VerifierChain = 
 export async function bindRecoveredPasskey(user: User, np: NewPasskey, now: Date): Promise<User> {
   return store.tx(async () => {
     const owner = webauthnOwnerFromJwk(np.publicKey.jwk)!;
-    const updated = await store.updateUser(user.id, {
-      passkey: {
-        credentialId: np.credentialId,
-        publicKey: np.publicKey,
-        signCount: np.signCount,
-        rpId: np.rpId,
-        attestation: np.attestation,
-        createdAt: np.createdAt,
-      },
-      passkeySafe: {
-        ...user.passkeySafe!,
+    const updated = await store.patchUserSub(
+      user.id,
+      "passkeySafe",
+      (ps) => ({
+        ...ps!,
         passkeyPublicKey: webauthnOwnerToStore(owner),
         recoveredAt: now.toISOString(),
         threshold: 1 as const,
+      }),
+      {
+        passkey: {
+          credentialId: np.credentialId,
+          publicKey: np.publicKey,
+          signCount: np.signCount,
+          rpId: np.rpId,
+          attestation: np.attestation,
+          createdAt: np.createdAt,
+        },
+        authorizerAddress: undefined,
       },
-      authorizerAddress: undefined,
-    });
+    );
     await revokeOtherSessions(user.id);
     return updated;
   });

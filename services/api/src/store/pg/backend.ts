@@ -35,10 +35,15 @@ import {
   applyOrgSafePlan,
   applyReplacedOrgSafePlan,
   applyReviewResolution,
+  acceptInviteOnRow,
   applyUserPatch,
+  cancelUnpaidOnRow,
   checkReviewResolution,
+  draftPatchOnRow,
+  refuseActivityPatch,
+  settlementOnRow,
+  transferPatchOnRow,
   followIban,
-  guardTransferPatch,
   hashOnRecordIn,
   passkeyUsePatch,
   reviewRefundTx,
@@ -275,6 +280,35 @@ export function createPgStore(database: Database): StoreBackend {
       Object.assign(row, patch, stamp ? { updatedAt: new Date().toISOString() } : {}),
     ))!;
   }
+  /** updateTransfer with a patch computed from the locked row. */
+  async function patchTransfer(id: string, make: (row: Transfer) => Partial<Transfer>): Promise<Transfer> {
+    let from: Transfer["state"] = "CREATED";
+    const t = (await change<Transfer>(TABLE.transfers, id, `unknown transfer ${id}`, (row) => {
+      const p = transferPatchOnRow(row, make(structuredClone(row)));
+      from = row.state;
+      return Object.assign(row, p, { updatedAt: new Date().toISOString() });
+    }))!;
+    announceStateChange(t, from);
+    return t;
+  }
+  /** updatePaymentRequest with a patch computed from the locked row, or none. */
+  async function patchPaymentRequest(id: string, make: (row: PaymentRequest) => Partial<PaymentRequest> | null) {
+    let from: PaymentRequest["state"] = "OPEN";
+    let written = false;
+    const r = (await tx(async (t) => {
+      const row = await locked<PaymentRequest>(t, TABLE.paymentRequests, id);
+      if (!row) throw new Error(`unknown payment request ${id}`);
+      from = row.state;
+      const p = make(structuredClone(row));
+      if (!p) return row;
+      written = true;
+      Object.assign(row, p, { updatedAt: new Date().toISOString() });
+      await save(t, TABLE.paymentRequests, row);
+      return row;
+    }))!;
+    if (written) announcePaymentRequestState(r, from);
+    return { request: r, from, written };
+  }
   async function removeRow(table: Table, id: string): Promise<boolean> {
     const r = await q.query(`DELETE FROM ${table} WHERE id = $1 RETURNING id`, [id]);
     return r.rows.length > 0;
@@ -305,6 +339,12 @@ export function createPgStore(database: Database): StoreBackend {
       await tx((t) => insertUser(t, u));
     },
     updateUser: (id, patch) => tx((t) => updateUserIn(t, id, patch)),
+    patchUserSub: (id, key, fn, patch = {}) =>
+      tx(async (t) => {
+        const u = await locked<User>(t, TABLE.users, id);
+        if (!u) throw new Error(`unknown user ${id}`);
+        return updateUserIn(t, id, { ...patch, [key]: fn(structuredClone(u[key])) } as Partial<User>);
+      }),
     recordPasskeyUse: (id, credentialId, signCount) =>
       tx(async (t) => {
         const patch = passkeyUsePatch(await locked<User>(t, TABLE.users, id), credentialId, signCount);
@@ -372,6 +412,18 @@ export function createPgStore(database: Database): StoreBackend {
       await insert(q, TABLE.recoveryRequests, r);
     },
     updateRecoveryRequest: (id, patch) => patchRow<RecoveryRequest>(TABLE.recoveryRequests, id, "recovery request", patch, false),
+    async countRecoveryOtpAttempt(id, max) {
+      let out: { attempts: number; over: boolean } | undefined;
+      const r = await change<RecoveryRequest>(TABLE.recoveryRequests, id, null, (row) => {
+        if (row.status !== "OTP_PENDING" || !row.candide) return null;
+        const attempts = (row.candide.otpAttempts ?? 0) + 1;
+        if (attempts > max) Object.assign(row, { status: "CANCELED", canceledAt: new Date().toISOString(), cancelReason: "too many wrong codes" });
+        else row.candide = { ...row.candide, otpAttempts: attempts };
+        out = { attempts, over: attempts > max };
+        return row;
+      });
+      return r && out ? { request: r, ...out } : null;
+    },
     findRecoveryRequest: (id) => first<RecoveryRequest>(q, TABLE.recoveryRequests, "id = $1", [id]),
     recoveryRequestsForUser: (userId) => rows<RecoveryRequest>(q, TABLE.recoveryRequests, "user_id = $1", [userId]),
 
@@ -509,13 +561,15 @@ export function createPgStore(database: Database): StoreBackend {
     async updateTransfer(id, patch) {
       let from: Transfer["state"] = "CREATED";
       const t = (await change<Transfer>(TABLE.transfers, id, `unknown transfer ${id}`, (row) => {
-        const p = guardTransferPatch(row, patch);
+        const p = transferPatchOnRow(row, patch);
         from = row.state;
         return Object.assign(row, p, { updatedAt: new Date().toISOString() });
       }))!;
       announceStateChange(t, from);
       return t;
     },
+    appendTransferStep: (id, step, patch = {}) => patchTransfer(id, (row) => ({ ...patch, txs: [...row.txs, step] })),
+    patchTransferSub: (id, key, fn, patch = {}) => patchTransfer(id, (row) => ({ ...patch, [key]: fn(row[key]) })),
     onTransferStateChange(listener) {
       transferStateListeners.push(listener);
     },
@@ -564,6 +618,15 @@ export function createPgStore(database: Database): StoreBackend {
       announcePaymentRequestState(r, from);
       return r;
     },
+    updatePaymentRequestFrom: async (id, from, patch) => {
+      const r = await patchPaymentRequest(id, (row) => (from.includes(row.state) ? patch : null));
+      return r.written ? r.request : null;
+    },
+    cancelUnpaidPaymentRequest: async (id, now = new Date(), evenIfExpired = false) => {
+      const r = await patchPaymentRequest(id, (row) => cancelUnpaidOnRow(row, now, evenIfExpired));
+      return r.written ? r.request : null;
+    },
+    recordPaymentRequestPayment: (id, apply) => patchPaymentRequest(id, apply),
     onPaymentRequestStateChange(listener) {
       paymentRequestStateListeners.push(listener);
     },
@@ -740,6 +803,10 @@ export function createPgStore(database: Database): StoreBackend {
         return true;
       })) ?? false,
     updateCryptoSend: (id, patch) => patchRow<CryptoSend>(TABLE.cryptoSends, id, "crypto send", patch, true),
+    updateCryptoSendFrom: (id, from, patch) =>
+      change<CryptoSend>(TABLE.cryptoSends, id, `unknown crypto send ${id}`, (row) =>
+        from.includes(row.state) ? Object.assign(row, patch, { updatedAt: new Date().toISOString() }) : null,
+      ),
 
     findCryptoDeposit: (txHash, logIndex) =>
       first<CryptoDeposit>(q, TABLE.cryptoDeposits, "tx_hash_lc = $1 AND log_index = $2", [txHash.toLowerCase(), logIndex]),
@@ -758,6 +825,12 @@ export function createPgStore(database: Database): StoreBackend {
         return winner;
       }),
     updateCryptoDeposit: (id, patch) => patchRow<CryptoDeposit>(TABLE.cryptoDeposits, id, "crypto deposit", patch, true),
+    settleCryptoDeposit: (id, decide) =>
+      change<CryptoDeposit>(TABLE.cryptoDeposits, id, `unknown crypto deposit ${id}`, (row) => {
+        if (row.settledAt) return null;
+        const now = new Date().toISOString();
+        return Object.assign(row, decide(structuredClone(row)), { settledAt: now, updatedAt: now });
+      }),
     async cryptoDepositCursor(chainId) {
       const r = await q.query<{ b: string }>("SELECT block::text AS b FROM crypto_deposit_cursor WHERE chain_key = $1", [String(chainId)]);
       return r.rows[0] === undefined ? undefined : BigInt(r.rows[0].b);
@@ -777,6 +850,29 @@ export function createPgStore(database: Database): StoreBackend {
         return org;
       }),
     findOrganisation: (id) => first<Organisation>(q, TABLE.organisations, "id = $1", [id]),
+    lockOrganisation: (id) => tx((t) => locked<Organisation>(t, TABLE.organisations, id)),
+    patchOrgSub: (id, key, fn, patch = {}) =>
+      tx(async (t) => {
+        if ("safe" in patch) throw new Error("an org Safe plan is written through setOrgSafePlan only");
+        const o = await locked<Organisation>(t, TABLE.organisations, id);
+        if (!o) throw new Error(`unknown organisation ${id}`);
+        const handleBefore = pageHandle(o);
+        Object.assign(o, patch, { [key]: fn(structuredClone(o[key])) }, { updatedAt: new Date().toISOString() });
+        await saveOrg(t, o, handleBefore);
+        return o;
+      }),
+    updateOrganisationIf: (id, ok, make) =>
+      tx(async (t) => {
+        const o = await locked<Organisation>(t, TABLE.organisations, id);
+        if (!o) throw new Error(`unknown organisation ${id}`);
+        if (!ok(structuredClone(o))) return null;
+        const patch = make(structuredClone(o));
+        if ("safe" in patch) throw new Error("an org Safe plan is written through setOrgSafePlan only");
+        const handleBefore = pageHandle(o);
+        Object.assign(o, patch, { updatedAt: new Date().toISOString() });
+        await saveOrg(t, o, handleBefore);
+        return o;
+      }),
     async updateOrganisation(id, patch) {
       if ("safe" in patch) throw new Error("an org Safe plan is written through setOrgSafePlan only");
       return tx(async (t) => {
@@ -820,6 +916,33 @@ export function createPgStore(database: Database): StoreBackend {
     findMemberByInviteHash: (tokenHash) => first<Member>(q, TABLE.members, "invite_token_hash = $1", [tokenHash]),
     membersOf: (orgId) => rows<Member>(q, TABLE.members, "org_id = $1", [orgId]),
     updateMember: (id, patch) => patchRow<Member>(TABLE.members, id, "member", patch, false),
+    // The organisation row is locked first, so two changes to one org's
+    // members are taken one after the other (§2 rule 4).
+    updateMemberChecked: (id, patch, allowed) =>
+      tx(async (t) => {
+        const m0 = await first<Member>(t, TABLE.members, "id = $1", [id]);
+        if (!m0) throw new Error(`unknown member ${id}`);
+        await locked<Organisation>(t, TABLE.organisations, m0.orgId);
+        const all = await rows<Member>(t, TABLE.members, "org_id = $1", [m0.orgId], "FOR UPDATE");
+        const m = all.find((x) => x.id === id)!;
+        if (!allowed(structuredClone(all), structuredClone(m))) return null;
+        Object.assign(m, patch);
+        await save(t, TABLE.members, m);
+        return m;
+      }),
+    acceptInvite: (id, tokenHash, userId, at = new Date().toISOString()) =>
+      tx(async (t) => {
+        const m0 = await first<Member>(t, TABLE.members, "id = $1", [id]);
+        if (!m0) return null;
+        await locked<Organisation>(t, TABLE.organisations, m0.orgId);
+        const all = await rows<Member>(t, TABLE.members, "org_id = $1", [m0.orgId], "FOR UPDATE");
+        const m = all.find((x) => x.id === id)!;
+        const patch = acceptInviteOnRow(m, tokenHash, userId, all, at);
+        if (!patch) return null;
+        Object.assign(m, patch);
+        await save(t, TABLE.members, m);
+        return m;
+      }),
 
     async addAccount(a: Account) {
       await insert(q, TABLE.accounts, a);
@@ -845,7 +968,21 @@ export function createPgStore(database: Database): StoreBackend {
     },
     findDraft: (id) => first<DraftPayment>(q, TABLE.drafts, "id = $1", [id]),
     draftsOf: (orgId) => rows<DraftPayment>(q, TABLE.drafts, "org_id = $1", [orgId]),
-    updateDraft: (id, patch) => patchRow<DraftPayment>(TABLE.drafts, id, "draft", patch, true),
+    updateDraft: (id, patch) => {
+      refuseActivityPatch(patch);
+      return patchRow<DraftPayment>(TABLE.drafts, id, "draft", patch, true);
+    },
+    updateDraftFrom: (id, patch, c) => {
+      refuseActivityPatch(patch);
+      return change<DraftPayment>(TABLE.drafts, id, `unknown draft ${id}`, (row) => {
+        const next = draftPatchOnRow(row, patch, c);
+        return next ? Object.assign(row, next, { updatedAt: new Date().toISOString() }) : null;
+      });
+    },
+    appendDraftActivity: async (id, entry, patch = {}) =>
+      (await change<DraftPayment>(TABLE.drafts, id, `unknown draft ${id}`, (row) =>
+        Object.assign(row, patch, { activity: [...row.activity, entry], updatedAt: new Date().toISOString() }),
+      ))!,
     claimDraftExecution: (id, from = ["REVIEWED"], expectedUpdatedAt) =>
       change<DraftPayment>(TABLE.drafts, id, null, (d) => {
         if (!from.includes(d.state)) return null;
@@ -863,6 +1000,25 @@ export function createPgStore(database: Database): StoreBackend {
     findInvoiceByLinkHash: (hash) => first<Invoice>(q, TABLE.invoices, "link_token_hash = $1", [hash]),
     invoicesOf: (orgId) => rows<Invoice>(q, TABLE.invoices, "org_id = $1", [orgId]),
     updateInvoice: (id, patch) => patchRow<Invoice>(TABLE.invoices, id, "invoice", patch, true),
+    updateInvoiceFrom: (id, from, patch) =>
+      change<Invoice>(TABLE.invoices, id, `unknown invoice ${id}`, (row) =>
+        from.includes(row.state) ? Object.assign(row, patch, { updatedAt: new Date().toISOString() }) : null,
+      ),
+    settleInvoice: (id, ref, update, replace = false) =>
+      change<Invoice>(TABLE.invoices, id, `unknown invoice ${id}`, (row) => {
+        const patch = settlementOnRow(structuredClone(row), ref, update, replace);
+        return patch ? Object.assign(row, patch, { updatedAt: new Date().toISOString() }) : null;
+      }),
+    startInvoicePayment: (invoiceId, from, draft) =>
+      tx(async (t) => {
+        const i = await locked<Invoice>(t, TABLE.invoices, invoiceId);
+        if (!i) throw new Error(`unknown invoice ${invoiceId}`);
+        if (!from.includes(i.state)) return null;
+        await insert(t, TABLE.drafts, draft);
+        Object.assign(i, { state: "PAYING", payment: { ...i.payment, draftId: draft.id }, updatedAt: new Date().toISOString() });
+        await save(t, TABLE.invoices, i);
+        return { invoice: i, draft };
+      }),
 
     async addImportedWallet(w: ImportedWallet) {
       await insert(q, TABLE.importedWallets, w);

@@ -320,13 +320,13 @@ export async function fundAndRefreshAnchorPickup(
   pollMs = 2_000,
   timeoutMs = 60_000,
   /** Called the moment a payment hash exists, before any polling. The caller
-   *  must persist it synchronously: a crash during the poll loop would
+   *  must have persisted it when this resolves: a crash during the poll loop would
    *  otherwise lose the record and the next run would pay a second time. */
-  onPaymentSubmitted?: (pickup: CashPickup, hash: string) => void,
+  onPaymentSubmitted?: (pickup: CashPickup, hash: string) => void | Promise<void>,
   /** Called just before the payment is broadcast. The caller must persist an
-   *  intent synchronously, so a crash before the hash is recorded cannot read
+   *  intent, on disk when this resolves, so a crash before the hash is recorded cannot read
    *  as "never paid". */
-  beforeBroadcast?: () => void,
+  beforeBroadcast?: () => void | Promise<void>,
 ): Promise<CashPickup | undefined> {
   const pickup = await refreshAnchorPickup(transferId, existing);
   if (!pickup?.anchorTransactionId || !pickup.anchorAmount || !pickup.anchorAsset) return pickup;
@@ -355,7 +355,7 @@ export async function fundAndRefreshAnchorPickup(
         beforeBroadcast,
       );
       pickup.anchorPaymentHash = sent.hash;
-      onPaymentSubmitted?.(pickup, sent.hash);
+      await onPaymentSubmitted?.(pickup, sent.hash);
     } catch (err: any) {
       if (errorText(err).includes("has not provided a withdrawal account yet")) {
         return pickup;

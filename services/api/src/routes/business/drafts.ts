@@ -59,6 +59,9 @@ import { orgEntity } from "../../domain/org-entity.js";
 import { publicSafeOp } from "./safe-ops.js";
 import { mapSeq } from "../../seq.js";
 
+/** A conditional draft write found the draft moved on since it was read. */
+const DRAFT_CHANGED = { error: "This draft changed while this request was being handled. Nothing was written; look at it again." };
+
 export type CryptoSendPreparer = ReturnType<typeof createCryptoSendPreparer>;
 export type CompanyCryptoSendPreparer = ReturnType<typeof createCompanyCryptoSendPreparer>;
 
@@ -201,7 +204,9 @@ export function createDraftRoutes(
           ...validateLine(l, typeof l?.contactId === "string" ? contacts.get(l.contactId) : undefined),
         }));
         assertOneLinePerInvoice(lines);
-        const updated = await store.updateDraft(draft.id, {
+        // Written only over the row this edit read: an execute claim, a cancel
+        // or another edit landing meanwhile refuses it.
+        const updated = await store.updateDraftFrom(draft.id, {
           lines,
           // Re-pointing the lines is exactly how INVALID_DATA is resolved.
           state: "DRAFT",
@@ -215,11 +220,12 @@ export function createDraftRoutes(
           reviewedByMemberId: undefined,
           reviewedAt: undefined,
           rejectedReason: undefined,
-          activity: [
-            ...draft.activity,
-            activity(ctx.member.id, "edited", ["PENDING_REVIEW", "REVIEWED"].includes(draft.state) ? `was ${draft.state}; review starts again` : undefined),
-          ],
+        }, {
+          from: [draft.state],
+          expectedUpdatedAt: draft.updatedAt,
+          activity: activity(ctx.member.id, "edited", ["PENDING_REVIEW", "REVIEWED"].includes(draft.state) ? `was ${draft.state}; review starts again` : undefined),
         });
+        if (!updated) return res.status(409).json(DRAFT_CHANGED);
         res.json({ draft: updated, totals: totalsByAsset(updated) });
       } catch (err) {
         if (badRequest(res, err)) return;
@@ -256,12 +262,13 @@ export function createDraftRoutes(
       }
       try {
         assertTransition(checked.state, "PENDING_REVIEW");
-        res.json({
-          draft: await store.updateDraft(draft.id, {
-            state: "PENDING_REVIEW",
-            activity: [...checked.activity, activity(ctx.member.id, "submitted_for_review")],
-          }),
+        const submitted = await store.updateDraftFrom(draft.id, { state: "PENDING_REVIEW" }, {
+          from: [checked.state],
+          expectedUpdatedAt: checked.updatedAt,
+          activity: activity(ctx.member.id, "submitted_for_review"),
         });
+        if (!submitted) return res.status(409).json(DRAFT_CHANGED);
+        res.json({ draft: submitted });
       } catch (err) {
         if (badRequest(res, err)) return;
         throw err;
@@ -295,15 +302,16 @@ export function createDraftRoutes(
       try {
         if (!approve) {
           assertTransition(draft.state, "REJECTED");
-          return res.json({
-            draft: await store.updateDraft(draft.id, {
-              state: "REJECTED",
-              rejectedReason: String(req.body?.reason ?? "").trim() || undefined,
-              reviewedByMemberId: ctx.member.id,
-              reviewedAt: new Date().toISOString(),
-              activity: [...draft.activity, activity(ctx.member.id, "rejected", req.body?.reason)],
-            }),
-          });
+          // Four eyes on the row as written: an edit that made this reviewer
+          // the drafter, or any write since the check, refuses the review.
+          const rejected = await store.updateDraftFrom(draft.id, {
+            state: "REJECTED",
+            rejectedReason: String(req.body?.reason ?? "").trim() || undefined,
+            reviewedByMemberId: ctx.member.id,
+            reviewedAt: new Date().toISOString(),
+          }, { from: [draft.state], expectedUpdatedAt: draft.updatedAt, drafter: draft.createdByMemberId, activity: activity(ctx.member.id, "rejected", req.body?.reason) });
+          if (!rejected) return res.status(409).json(DRAFT_CHANGED);
+          return res.json({ draft: rejected });
         }
         const checked = await reconcileDrift(draft);
         if (checked.state === "INVALID_DATA") {
@@ -313,14 +321,13 @@ export function createDraftRoutes(
           });
         }
         assertTransition(checked.state, "REVIEWED");
-        res.json({
-          draft: await store.updateDraft(draft.id, {
-            state: "REVIEWED",
-            reviewedByMemberId: ctx.member.id,
-            reviewedAt: new Date().toISOString(),
-            activity: [...checked.activity, activity(ctx.member.id, "reviewed")],
-          }),
-        });
+        const reviewed = await store.updateDraftFrom(draft.id, {
+          state: "REVIEWED",
+          reviewedByMemberId: ctx.member.id,
+          reviewedAt: new Date().toISOString(),
+        }, { from: [checked.state], expectedUpdatedAt: checked.updatedAt, drafter: draft.createdByMemberId, activity: activity(ctx.member.id, "reviewed") });
+        if (!reviewed) return res.status(409).json(DRAFT_CHANGED);
+        res.json({ draft: reviewed });
       } catch (err) {
         if (badRequest(res, err)) return;
         throw err;
@@ -354,10 +361,13 @@ export function createDraftRoutes(
         });
       }
       const reason = String(req.body?.reason ?? "").trim().slice(0, 300) || undefined;
-      const cancelled = await store.updateDraft(draft.id, {
-        state: "CANCELLED",
-        activity: [...draft.activity, activity(ctx.member.id, "cancelled", reason)],
+      // Never over a claim to execute that landed after the check above.
+      const cancelled = await store.updateDraftFrom(draft.id, { state: "CANCELLED" }, {
+        from: [draft.state],
+        expectedUpdatedAt: draft.updatedAt,
+        activity: activity(ctx.member.id, "cancelled", reason),
       });
+      if (!cancelled) return res.status(409).json(DRAFT_CHANGED);
       await releaseInvoicesOf(draft.id);
       res.json({ draft: cancelled });
     });
@@ -407,7 +417,7 @@ export function createDraftRoutes(
       return store.tx(async () => {
         if (op) await store.endPendingSafeOp(op.id, { state: "INVALIDATED", reason: why });
         else {
-          await store.updateCryptoSend(send.id, { state: "FAILED", error: why });
+          await store.updateCryptoSendFrom(send.id, ["CREATED"], { state: "FAILED", error: why });
           pendingCryptoSends.delete(send.id);
         }
       });
@@ -427,12 +437,9 @@ export function createDraftRoutes(
     if (found && found.orgId === ctx.org.id && found.state === "PAYING" && found.payment?.draftId === claimed.id) {
       await store.updateInvoice(found.id, { payment: { ...found.payment, cryptoSendId: send.id } });
     }
-    const updated = await store.updateDraft(claimed.id, {
-      cryptoSendIds: [send.id],
-      activity: [...claimed.activity, activity(ctx.member.id, "executing", op
-        ? "1 crypto send queued, waiting for the owners to sign."
-        : "1 crypto send created, awaiting a passkey signature.")],
-    });
+    const updated = await store.appendDraftActivity(claimed.id, activity(ctx.member.id, "executing", op
+      ? "1 crypto send queued, waiting for the owners to sign."
+      : "1 crypto send created, awaiting a passkey signature."), { cryptoSendIds: [send.id] });
     if (op) {
       return res.status(201).json({
         draft: updated,
@@ -769,18 +776,14 @@ export function createDraftRoutes(
         // Invoices this draft was paying go back to SUBMITTED so they can be
         // paid again by a fresh draft; the failed one is not their payment.
         await releaseInvoicesOf(claimed.id);
-        await store.updateDraft(claimed.id, {
+        await store.appendDraftActivity(claimed.id, activity(
+          ctx.member.id,
+          "execution_failed",
+          `${authorizations.length} transfer(s) were created and left unsigned; they expire without moving anything.`,
+        ), {
           state: "FAILED",
           transferIds: authorizations.map((a) => a.transferId),
           failureReason: `Line ${plan.lineId} could not be prepared: ${built.body?.error ?? "unknown"}`,
-          activity: [
-            ...claimed.activity,
-            activity(
-              ctx.member.id,
-              "execution_failed",
-              `${authorizations.length} transfer(s) were created and left unsigned; they expire without moving anything.`,
-            ),
-          ],
         });
         return res.status(built.status).json({
           error: `Line ${plan.lineId} could not be prepared, so the batch was stopped.`,
@@ -804,17 +807,11 @@ export function createDraftRoutes(
       });
     }
 
-    const updated = await store.updateDraft(claimed.id, {
-      transferIds: authorizations.map((a) => a.transferId),
-      activity: [
-        ...claimed.activity,
-        activity(
-          ctx.member.id,
-          "executing",
-          `${authorizations.length} transfer(s) created, awaiting a device signature for each.`,
-        ),
-      ],
-    });
+    const updated = await store.appendDraftActivity(claimed.id, activity(
+      ctx.member.id,
+      "executing",
+      `${authorizations.length} transfer(s) created, awaiting a device signature for each.`,
+    ), { transferIds: authorizations.map((a) => a.transferId) });
 
     res.status(201).json({
       draft: updated,

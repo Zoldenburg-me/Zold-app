@@ -238,7 +238,7 @@ await check("the convert route writes the intent before submitting and clears it
   assert.doesNotMatch(executed, /conversionIntent/, "the post-swap unconfirmed write keeps it");
   assert.match(route, /settleConvertedDeposit\([\s\S]{0,600}conversionIntent: undefined/, "settling clears it");
   const caught = route.slice(route.indexOf("executed but was not recorded"), route.indexOf("const balances ="));
-  assert.match(caught, /holding !== "unconfirmed"\) \{\s*clearSettledIntent\(deposit\.id\);\s*settled = recorded;\s*\} else/,
+  assert.match(caught, /holding !== "unconfirmed"\) \{\s*(await )?clearSettledIntent\(deposit\.id\);\s*settled = recorded;\s*\} else/,
     "a throw after settling recorded the outcome clears the intent, so a partial fill's rest is not blocked");
   const settledBranch = caught.slice(caught.indexOf("clearSettledIntent("), caught.indexOf("} else"));
   assert.doesNotMatch(settledBranch, /SAFE_OP_UNCONFIRMED/, "a settled row is answered as settled, not as unconfirmed");

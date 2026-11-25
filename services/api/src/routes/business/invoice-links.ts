@@ -209,7 +209,8 @@ export function createInvoiceLinkRouter(): express.Router {
           throw err;
         }
         assertInvoiceTransition(invoice.state, "SUBMITTED");
-        const updated = await store.updateInvoice(invoice.id, {
+        // Only over a link still waiting: the first submit stands.
+        const updated = await store.updateInvoiceFrom(invoice.id, ["LINK_CREATED"], {
           state: "SUBMITTED",
           // The number is the SEPA reference the payer's transfer carries.
           supplier: { orgName: name, email: "", invoiceNumber: `LINK-${invoice.id.slice(4, 12).toUpperCase()}` },
@@ -218,6 +219,7 @@ export function createInvoiceLinkRouter(): express.Router {
           payTo,
           submittedAt: new Date().toISOString(),
         });
+        if (!updated) return res.status(409).json({ error: "This link was already filled in." });
         res.json({ invoice: await linkInvoiceView(updated) });
         void notifyRequester(updated);
       } catch (err) {
@@ -251,7 +253,8 @@ export function createInvoiceLinkRouter(): express.Router {
         return res.status(400).json({ error: `A wallet must be on ${payoutChains().map((c) => c.name).join(" or ")}.` });
       }
       assertInvoiceTransition(invoice.state, "SUBMITTED");
-      const updated = await store.updateInvoice(invoice.id, {
+      // Only over a link still waiting: the first submit stands.
+      const updated = await store.updateInvoiceFrom(invoice.id, ["LINK_CREATED"], {
         state: "SUBMITTED",
         supplier: {
           orgName: String(supplier.orgName).trim(),
@@ -266,6 +269,7 @@ export function createInvoiceLinkRouter(): express.Router {
         dueDate: typeof dueDate === "string" && dueDate ? dueDate : invoice.dueDate,
         submittedAt: new Date().toISOString(),
       });
+      if (!updated) return res.status(409).json({ error: "This invoice was already submitted. Submitted invoices are timestamped and locked." });
       res.json({ invoice: await linkInvoiceView(updated) });
       void notifyRequester(updated);
     } catch (err) {

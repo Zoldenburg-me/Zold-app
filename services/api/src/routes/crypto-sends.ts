@@ -569,7 +569,7 @@ export function createCryptoSendsRouter({ requireUserSession, ...deps }: CryptoS
           return res.status(502).json({ error: `${send.name} could not be checked again just now — nothing was sent; try again`, code: now.code });
         }
         if (!now.ok || now.address !== send.to) {
-          await store.updateCryptoSend(send.id, { state: "FAILED", error: "the name's address changed before the send" });
+          await store.updateCryptoSendFrom(send.id, ["CREATED"], { state: "FAILED", error: "the name's address changed before the send" });
           pendingCryptoSends.delete(send.id);
           return res.status(409).json({
             error: now.ok
@@ -582,7 +582,7 @@ export function createCryptoSendsRouter({ requireUserSession, ...deps }: CryptoS
       // A list can change in the ten minutes the passkey prompt may wait.
       try {
         if (await screen(send.to as `0x${string}`)) {
-          await store.updateCryptoSend(send.id, { state: "FAILED", error: "the address is on a sanctions list" });
+          await store.updateCryptoSendFrom(send.id, ["CREATED"], { state: "FAILED", error: "the address is on a sanctions list" });
           pendingCryptoSends.delete(send.id);
           return res.status(403).json({ error: SANCTIONED_ERROR, code: "SANCTIONED" });
         }
@@ -590,36 +590,40 @@ export function createCryptoSendsRouter({ requireUserSession, ...deps }: CryptoS
         console.error(`crypto send ${send.id}: screening failed: ${describeCause(err)}`);
         return res.status(503).json({ error: SCREENING_DOWN_ERROR, code: "SCREENING_UNAVAILABLE" });
       }
-      // A payment run's payee is a saved contact and its signer the member
-      // whose Safe backs the account. Checked with nothing awaited before the
-      // claim, so an address-book edit cannot land in between.
-      if (send.draftId) {
-        const draft = await store.findDraft(send.draftId);
-        const account = draft?.source.kind === "account" ? (await store.findAccount(draft.source.accountId)) : undefined;
-        const member = draft && (await store.membersOf(draft.orgId)).find((m) => m.userId === send.userId && m.status === "active");
-        // Read, not reconciled: the run is EXECUTING and stays so; this send failing fails it.
-        // The send must still be this run's, and pay what its line says now:
-        // a run reopened since could name another address.
-        const line = draft?.lines.length === 1 ? draft.lines[0] : undefined;
-        const bound = !!draft && draft.state === "EXECUTING" && !!draft.cryptoSendIds?.includes(send.id) && !!line
-          && line.destination.address?.toLowerCase() === send.to.toLowerCase()
-          && line.asset.toUpperCase() === send.token && Number(line.amount) === Number(send.amount);
-        const drifted = !bound || findDriftedLines(draft!, await contactsById(draft!.orgId)).length > 0;
-        // What /execute checked, again: the org may lose the feature, the account may be frozen.
-        const org = draft && (await store.findOrganisation(draft.orgId));
-        const mayStill = !!org && can(org, "transfers.drafts").allowed && !!account && accountIsSpendable(account).ok;
-        if (drifted || !mayStill || account?.backingUserId !== send.userId || !member || !roleCan(member.role, "transfers.sign", orgEntity(org!))) {
-          await store.updateCryptoSend(send.id, { state: "FAILED", error: drifted ? "the payee changed before the send" : "the sender may no longer send from this account" });
-          pendingCryptoSends.delete(send.id);
-          return res.status(409).json(drifted
-            ? { error: "the payee’s details changed since this payment was approved — nothing was sent", code: "INVALID_DATA" }
-            : { error: "you can no longer send from this account — nothing was sent", code: "NOT_SENDER" });
+      const claim = await store.tx(async () => {
+        // A payment run's payee is a saved contact and its signer the member
+        // whose Safe backs the account. Checked in one transaction with the
+        // claim, so an address-book edit cannot land in between.
+        if (send.draftId) {
+          const draft = await store.findDraft(send.draftId);
+          const account = draft?.source.kind === "account" ? (await store.findAccount(draft.source.accountId)) : undefined;
+          const member = draft && (await store.membersOf(draft.orgId)).find((m) => m.userId === send.userId && m.status === "active");
+          // Read, not reconciled: the run is EXECUTING and stays so; this send failing fails it.
+          // The send must still be this run's, and pay what its line says now:
+          // a run reopened since could name another address.
+          const line = draft?.lines.length === 1 ? draft.lines[0] : undefined;
+          const bound = !!draft && draft.state === "EXECUTING" && !!draft.cryptoSendIds?.includes(send.id) && !!line
+            && line.destination.address?.toLowerCase() === send.to.toLowerCase()
+            && line.asset.toUpperCase() === send.token && Number(line.amount) === Number(send.amount);
+          const drifted = !bound || findDriftedLines(draft!, await contactsById(draft!.orgId)).length > 0;
+          // What /execute checked, again: the org may lose the feature, the account may be frozen.
+          const org = draft && (await store.findOrganisation(draft.orgId));
+          const mayStill = !!org && can(org, "transfers.drafts").allowed && !!account && accountIsSpendable(account).ok;
+          if (drifted || !mayStill || account?.backingUserId !== send.userId || !member || !roleCan(member.role, "transfers.sign", orgEntity(org!))) {
+            await store.updateCryptoSendFrom(send.id, ["CREATED"], { state: "FAILED", error: drifted ? "the payee changed before the send" : "the sender may no longer send from this account" });
+            pendingCryptoSends.delete(send.id);
+            return res.status(409).json(drifted
+              ? { error: "the payee’s details changed since this payment was approved — nothing was sent", code: "INVALID_DATA" }
+              : { error: "you can no longer send from this account — nothing was sent", code: "NOT_SENDER" });
+          }
         }
-      }
-      if (!(await store.claimCryptoSend(send.id))) {
-        if ((await store.findCryptoSend(send.id))?.state === "CREATED" && Date.now() / 1000 > send.deadline) return res.status(410).json({ error: "the approval window closed — start the send again" });
-        return res.status(409).json({ error: "this send was already submitted" });
-      }
+        if (!(await store.claimCryptoSend(send.id))) {
+          if ((await store.findCryptoSend(send.id))?.state === "CREATED" && Date.now() / 1000 > send.deadline) return res.status(410).json({ error: "the approval window closed — start the send again" });
+          return res.status(409).json({ error: "this send was already submitted" });
+        }
+        return "claimed" as const;
+      });
+      if (claim !== "claimed") return;
       pendingCryptoSends.delete(send.id);
       try {
         const op = await submitPasskeySafeOperationWithReceipt(pending.plan, pending.userOperation, {

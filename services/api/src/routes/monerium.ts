@@ -535,9 +535,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         return res.status(409).json({ error: "no Monerium account is connected to this account — connect one by OAuth or with your own API keys" });
       }
       const snapshot = await readMoneriumAccountSnapshot(user);
-      let updated = await store.updateUser(user.id, {
-        monerium: { ...user.monerium!, ...snapshot },
-      });
+      let updated = await store.patchUserSub(user.id, "monerium", (m) => ({ ...m!, ...snapshot }));
       // The list was just read: check the stored IBAN still pays in here.
       updated = await applyIbanBinding(updated, snapshot.ibans);
       res.json((await publicUser(updated)).monerium);
@@ -813,7 +811,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         }, `Your Monerium profile already has an IBAN ${where} — move ${one ? "it" : "one"} to this account, or keep ${one ? "it" : "them"} where ${one ? "it is" : "they are"}`);
       }
 
-      const updated = await store.updateUser(user.id, {
+      const updated = await store.patchUserSub(user.id, "monerium", (m) => ({ ...m!, profileId, ...snapshot }), {
         // What Monerium attributes to THIS address, or nothing. Falling back to
         // a previously stored value would preserve a mis-attribution.
         iban,
@@ -840,7 +838,6 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
           moneriumProfileId: profileId,
           detail: iban ? undefined : "Monerium IBAN requested; waiting for activation",
         },
-        monerium: { ...user.monerium!, profileId, ...snapshot },
       });
       const balances = await shownBalances(updated.address);
       res.json({ ...(await publicUser(updated)), ...balances });
@@ -1008,7 +1005,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       if (confirmed) {
         const iban = ibanKey(landed[0].iban);
         await releaseIbanFromOtherUsers(iban, user.id);
-        updated = await store.updateUser(user.id, {
+        updated = await store.patchUserSub(user.id, "monerium", (m) => ({ ...m!, profileId: ibanProfile, ...after }), {
           iban,
           moneriumIbanElsewhere: undefined,
           moneriumIbanMoves: moves,
@@ -1031,11 +1028,10 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
             moneriumProfileId: ibanProfile,
             detail: undefined,
           },
-          monerium: { ...user.monerium!, profileId: ibanProfile, ...after },
         });
         updated = await store.updateUser(user.id, { moneriumIbanMoves: confirmedMoves(updated, iban) });
       } else {
-        updated = await store.updateUser(user.id, {
+        updated = await store.patchUserSub(user.id, "monerium", (m) => (after ? { ...m!, profileId: ibanProfile, ...after } : m), {
           iban: "",
           moneriumIbanMoves: moves,
           funding: {
@@ -1045,7 +1041,6 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
             moneriumProfileId: ibanProfile,
             detail: `Monerium accepted moving ${maskIban(requested)} to this account but does not show it here yet — checked again on every visit`,
           },
-          ...(after ? { monerium: { ...user.monerium!, profileId: ibanProfile, ...after } } : {}),
         });
       }
       await store.audit(auditEntry(

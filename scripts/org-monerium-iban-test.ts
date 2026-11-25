@@ -132,11 +132,11 @@ const freshMon = () => ({
   orders: [] as any[],
   linkFails: "" as "" | "refuse" | "down",
   /** Runs while Monerium "answers" a call: a change made meanwhile. */
-  during: undefined as undefined | { call: string; act: () => void },
+  during: undefined as undefined | { call: string; act: () => Promise<void> },
   ibansFail: false,
 });
-const meanwhile = (name: string) => {
-  if (mon.during?.call === name) { const act = mon.during.act; mon.during = undefined; act(); }
+const meanwhile = async (name: string) => {
+  if (mon.during?.call === name) { const act = mon.during.act; mon.during = undefined; await act(); }
 };
 const mon = freshMon();
 const client = {
@@ -144,7 +144,7 @@ const client = {
     if (mon.linkFails === "refuse") throw new MoneriumApiError(`Monerium POST /addresses failed (400): ${PROVIDER_BODY}`, 400);
     if (mon.linkFails === "down") throw new Error("connect ECONNREFUSED");
     mon.links.push(p);
-    meanwhile("link");
+    await meanwhile("link");
     return {};
   },
   async linkedProfile(address: string) {
@@ -154,7 +154,7 @@ const client = {
   },
   async requestIban(address: string) {
     mon.ibanRequests.push(address);
-    meanwhile("requestIban");
+    await meanwhile("requestIban");
     if (mon.ibanAnswer === "304") throw new MoneriumApiError("Monerium POST /ibans failed (304): ", 304);
     if (mon.ibanAnswer === "refuse") throw new MoneriumApiError(`Monerium POST /ibans failed (422): ${PROVIDER_BODY}`, 422);
     if (mon.issueOnRequest) mon.ibans.push({ iban: IBAN, profile: PROFILE, address, chain: MONERIUM.chain, state: "approved" });
@@ -426,7 +426,7 @@ try {
       for (const change of ["remove", "replace"] as const) {
         await reset();
         const replacement = { ...connected(), clientId: "test-client-id-2222-3333" };
-        mon.during = { call: at, act: async () => await store.updateOrganisation("org_co", { monerium: change === "remove" ? undefined : replacement as any }) };
+        mon.during = { call: at, act: async () => void await store.updateOrganisation("org_co", { monerium: change === "remove" ? undefined : replacement as any }) };
         const r = await issue();
         assert.equal(r.status, 409, `${at}/${change}: ${r.text}`);
         assert.equal(r.data.code, "MONERIUM_KEYS_CHANGED");

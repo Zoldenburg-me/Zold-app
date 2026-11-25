@@ -499,14 +499,18 @@ async function mirrorOrder(order: MoneriumOrder): Promise<MirrorOutcome> {
   // only an EURe issue on OUR chain is a euro deposit to this account.
   if (order.chain !== MONERIUM.chain) return "ignored";
   if (String(order.currency ?? "eur").toLowerCase() !== "eur") return "ignored";
-  if ((await store.isOrderProcessed(order.id))) return "duplicate";
+  if (await store.isOrderProcessed(order.id)) return "duplicate";
+  // Claimed before the next await: two deliveries of one order must not both
+  // get past here.
   if (recording.has(order.id)) return "unavailable";
-  const holder = await bookableHolder(order);
-  if (!holder) return "ignored";
-  const amount = Number(order.amount);
-  if (!(amount > 0)) return "ignored";
   recording.add(order.id);
   try {
+    // A recording that finished while this one waited above has marked it.
+    if (await store.isOrderProcessed(order.id)) return "duplicate";
+    const holder = await bookableHolder(order);
+    if (!holder) return "ignored";
+    const amount = Number(order.amount);
+    if (!(amount > 0)) return "ignored";
     // Monerium minted the EURe into the user's Safe on the app chain; there is
     // nothing to move and nothing to mint — the Safe balance IS the account.
     const { moneriumEureOrUnavailable, MoneriumTokensUnavailable } = await import("./monerium-tokens.js");
@@ -712,19 +716,18 @@ export async function pollRedeemOrdersOnce(): Promise<void> {
       // The order was placed on this user's client, so it is read on it too.
       const state = await getOrderState(t.sepa!.orderId!, await store.findUser(t.userId));
       if (t.state === "MANUAL_REVIEW") {
-        if (state !== t.sepa!.state) await store.updateTransfer(t.id, { sepa: { ...t.sepa!, state } });
+        if (state !== t.sepa!.state) await store.patchTransferSub(t.id, "sepa", (sepa) => ({ ...sepa!, state }));
       } else if (moneriumOrderProcessed(state)) {
-        await store.updateTransfer(t.id, { state: "PAID", sepa: { ...t.sepa!, state } });
+        await store.patchTransferSub(t.id, "sepa", (sepa) => ({ ...sepa!, state }), { state: "PAID" });
         console.log(`monerium: redeem order ${t.sepa!.orderId} processed (transfer ${t.id})`);
         await writeStatementLines();
       } else if (state === "rejected" || state === "failed") {
-        await store.updateTransfer(t.id, {
+        await store.patchTransferSub(t.id, "sepa", (sepa) => ({ ...sepa!, state }), {
           state: "FAILED",
           error: `Monerium redeem order ${state}`,
-          sepa: { ...t.sepa!, state },
         });
       } else if (state !== t.sepa!.state) {
-        await store.updateTransfer(t.id, { sepa: { ...t.sepa!, state } });
+        await store.patchTransferSub(t.id, "sepa", (sepa) => ({ ...sepa!, state }));
       }
     } catch {
       // transient — retry next tick

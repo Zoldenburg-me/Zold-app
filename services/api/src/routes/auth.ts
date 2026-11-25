@@ -474,10 +474,8 @@ async function markSignupGuardian(user: User): Promise<User> {
     return user;
   }
   const activeAt = new Date().toISOString();
-  return await store.updateUser(user.id, {
-    passkeySafe: {
-      ...user.passkeySafe,
-      socialGuardians: user.passkeySafe.socialGuardians!.map((g) => (g === guardian ? { ...g, status: "active" as const, activeAt } : g)),
-    },
-  });
+  return await store.patchUserSub(user.id, "passkeySafe", (ps) => ({
+    ...ps!,
+    socialGuardians: ps!.socialGuardians!.map((g) => (g.address === guardian.address ? { ...g, status: "active" as const, activeAt } : g)),
+  }));
 }

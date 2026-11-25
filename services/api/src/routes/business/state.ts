@@ -158,17 +158,17 @@ export const reconcileDrift = async (draft: DraftPayment): Promise<DraftPayment>
     if (!["DRAFT", "PENDING_REVIEW", "REVIEWED", "INVALID_DATA"].includes(draft.state)) return draft;
     const drifted = findDriftedLines(draft, await contactsById(draft.orgId));
     if (!drifted.length) return draft;
-    return await store.updateDraft(draft.id, {
-      state: "INVALID_DATA",
-      invalidLineIds: drifted,
-      activity: [
-        ...draft.activity,
-        activity(
-          "system",
-          "invalid_data",
-          `${drifted.length} line(s) point at a recipient that has changed since the draft was saved.`,
-        ),
-      ],
+    // Never over a claim to execute: only from the states checked above, and
+    // only over the row the drift was found on.
+    const parked = await store.updateDraftFrom(draft.id, { state: "INVALID_DATA", invalidLineIds: drifted }, {
+      from: ["DRAFT", "PENDING_REVIEW", "REVIEWED", "INVALID_DATA"],
+      expectedUpdatedAt: draft.updatedAt,
+      activity: activity(
+        "system",
+        "invalid_data",
+        `${drifted.length} line(s) point at a recipient that has changed since the draft was saved.`,
+      ),
     });
+    return parked ?? (await store.findDraft(draft.id)) ?? draft;
   });
 };

@@ -264,7 +264,8 @@ const resolving = new Map<string, Promise<void>>();
 export async function resolveShopifyRequest(r: PaymentRequest): Promise<void> {
   const inFlight = resolving.get(r.id);
   if (inFlight) return inFlight;
-  const run = resolveOnce((await store.findPaymentRequest(r.id)) ?? r).finally(() => resolving.delete(r.id));
+  // Set before anything is awaited, so a second caller finds it.
+  const run = (async () => resolveOnce((await store.findPaymentRequest(r.id)) ?? r))().finally(() => resolving.delete(r.id));
   resolving.set(r.id, run);
   return run;
 }
@@ -683,9 +684,8 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       if (!orderGid) return res.status(400).json({ error: "the order has no id" });
       const existing = await store.findPaymentRequestBySource("shopify", orderGid, c.shop);
       if (topic === "orders/cancelled") {
-        if (existing && effectiveState(existing) === "OPEN" && existing.payments.length === 0) {
-          await store.updatePaymentRequest(existing.id, { state: "CANCELLED", cancelledAt: new Date().toISOString() });
-        }
+        // Open, unexpired and unpaid on the stored row (rules.ts cancelUnpaidOnRow).
+        if (existing) await store.cancelUnpaidPaymentRequest(existing.id);
         return res.status(200).json({ ok: true, cancelled: Boolean(existing) });
       }
       if (topic !== "orders/create") return res.status(200).json({ ok: true, ignored: topic });

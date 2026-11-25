@@ -433,8 +433,8 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
           }
         }
       }
-      if (Object.keys(identity.patch).length) {
-        patch.invoicing = { ...ctx.org.invoicing, ...identity.patch };
+      const invoicing = Object.keys(identity.patch).length ? identity.patch : undefined;
+      if (invoicing) {
         // The signup tax id stands in until these are saved, and the form shows
         // it in their place: saving them, even empty, replaces it. A cleared
         // field must not print the old number again.
@@ -459,7 +459,10 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
         patch.reporting = next;
       }
 
-      res.json({ organisation: await publicOrg(await store.updateOrganisation(ctx.org.id, patch), ctx.member) });
+      const saved = invoicing
+        ? await store.patchOrgSub(ctx.org.id, "invoicing", (cur) => ({ ...cur, ...invoicing }), patch)
+        : await store.updateOrganisation(ctx.org.id, patch);
+      res.json({ organisation: await publicOrg(saved, ctx.member) });
     });
   });
 
@@ -608,19 +611,20 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
         next.status = status;
       }
 
+      const patch: Record<string, unknown> = { ...next };
+      if (next.status === "deactivated") patch.deactivatedAt = new Date().toISOString();
+      if (next.status === "active") patch.deactivatedAt = undefined;
       // An org must never lose its last owner — by role change or deactivation,
-      // which are the same hole reached two ways.
-      if (wouldOrphanOrg(await store.membersOf(ctx.org.id), member.id, next)) {
+      // which are the same hole reached two ways. Counted on the stored
+      // members, in the same write.
+      const updated = await store.updateMemberChecked(member.id, patch, (members) => !wouldOrphanOrg(members, member.id, next));
+      if (!updated) {
         return res.status(409).json({
           error:
             "That would leave the organisation with no active owner. Make someone else an owner first.",
         });
       }
-
-      const patch: Record<string, unknown> = { ...next };
-      if (next.status === "deactivated") patch.deactivatedAt = new Date().toISOString();
-      if (next.status === "active") patch.deactivatedAt = undefined;
-      res.json({ member: publicMember(await store.updateMember(member.id, patch)) });
+      res.json({ member: publicMember(updated) });
     });
   });
 
@@ -662,12 +666,10 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       if (existing && existing.status !== "deactivated") {
         return res.status(409).json({ error: "You are already on this organisation." });
       }
-      const accepted = await store.updateMember(member.id, {
-        userId: session.userId,
-        status: "active",
-        acceptedAt: new Date().toISOString(),
-        invite: undefined, // spend the token
-      });
+      // Spends the token on the stored row: a second accept of the same
+      // invitation, or one the org replaced meanwhile, finds nothing to spend.
+      const accepted = await store.acceptInvite(member.id, member.invite!.tokenHash, session.userId);
+      if (!accepted) return res.status(409).json({ error: "That invitation was already used." });
       const org = (await store.findOrganisation(member.orgId))!;
       res.json({ organisation: await publicOrg(org, accepted), member: publicMember(accepted) });
     });

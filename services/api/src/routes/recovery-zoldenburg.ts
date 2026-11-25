@@ -412,15 +412,17 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       assertNoOtherGuardian(user, state.guardians);
       const now = new Date().toISOString();
       if (!HARNESS.enabled && state.guardians.some((g) => g.toLowerCase() === guardian.toLowerCase())) {
-        const updated = await store.updateUser(user.id, {
-          passkeySafe: {
-            ...user.passkeySafe!,
-            recovery: { moduleAddress, guardianAddress: guardian, threshold: 1, status: "active", enabledAt: user.passkeySafe?.recovery?.enabledAt ?? now },
+        const updated = await store.patchUserSub(
+          user.id,
+          "passkeySafe",
+          (ps) => ({
+            ...ps!,
+            recovery: { moduleAddress, guardianAddress: guardian, threshold: 1, status: "active", enabledAt: ps?.recovery?.enabledAt ?? now },
             recoveryChoice: { choice: "zoldenburg", at: now },
-          },
+          }),
           // Added again: a new 1 € arms it, not one from an earlier time.
-          zoldenburgEnrolment: undefined,
-        });
+          { zoldenburgEnrolment: undefined },
+        );
         return res.json(await screenState(updated));
       }
       const txs = zoldenburgGuardianSetupTransactions(plan.address, moduleAddress, guardian, state.moduleEnabled);
@@ -506,33 +508,39 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       const moduleAddress = moduleFor(user);
       const now = new Date().toISOString();
       if (pending.kind === "add") {
-        const updated = await store.updateUser(user.id, {
-          passkeySafe: {
-            ...user.passkeySafe!,
+        const updated = await store.patchUserSub(
+          user.id,
+          "passkeySafe",
+          (ps) => ({
+            ...ps!,
             recovery: { moduleAddress, guardianAddress: guardian, threshold: 1, status: "active", enabledAt: now, opHash: op.userOpHash ?? undefined },
             recoveryChoice: { choice: "zoldenburg", at: now },
-          },
+          }),
           // Added again: a new 1 € arms it, not one from an earlier time.
-          zoldenburgEnrolment: undefined,
-        });
+          { zoldenburgEnrolment: undefined },
+        );
         // Confirm on the chain, not on the op's say-so.
         if (!HARNESS.enabled) {
           const state = await readRecoveryState(updated.passkeySafe as PasskeySafeDeploymentPlan);
           if (!state.guardians.some((g) => g.toLowerCase() === guardian.toLowerCase())) {
-            await store.updateUser(user.id, { passkeySafe: { ...updated.passkeySafe!, recovery: { ...updated.passkeySafe!.recovery!, status: "planned" } } });
+            await store.patchUserSub(user.id, "passkeySafe", (ps) => ({ ...ps!, recovery: { ...ps!.recovery!, status: "planned" } }));
             return res.status(502).json({ error: "the operation was submitted but the module does not list Zoldenburg yet — check again shortly" });
           }
         }
         console.log(`RECOVERY: ${user.id} added Zoldenburg as guardian (${op.userOpHash})`);
         return res.json({ ...(await screenState(updated)), txHash: op.txHash, userOpHash: op.userOpHash });
       }
-      const { recovery: _gone, ...rest } = user.passkeySafe!;
       // The enrolled bank account goes with the guardian (recovery-guardians-plan,
       // Data and GDPR): adding Zoldenburg again means sending 1 € again.
-      const updated = await store.updateUser(user.id, {
-        passkeySafe: { ...rest, recoveryChoice: { choice: "declined", at: now } } as User["passkeySafe"],
-        zoldenburgEnrolment: undefined,
-      });
+      const updated = await store.patchUserSub(
+        user.id,
+        "passkeySafe",
+        (ps) => {
+          const { recovery: _gone, ...rest } = ps!;
+          return { ...rest, recoveryChoice: { choice: "declined", at: now } } as User["passkeySafe"];
+        },
+        { zoldenburgEnrolment: undefined },
+      );
       console.log(`RECOVERY: ${user.id} removed Zoldenburg as guardian (${op.userOpHash})`);
       res.json({ ...(await screenState(updated)), txHash: op.txHash, userOpHash: op.userOpHash });
     }),
@@ -555,9 +563,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       if (!user.passkeySafe) {
         return res.status(409).json({ error: "set up your passkey and smart account before choosing recovery", code: "NO_SAFE" });
       }
-      const updated = await store.updateUser(user.id, {
-        passkeySafe: { ...user.passkeySafe, recoveryChoice: { choice: "declined", at: new Date().toISOString() } },
-      });
+      const updated = await store.patchUserSub(user.id, "passkeySafe", (ps) => ({ ...ps!, recoveryChoice: { choice: "declined", at: new Date().toISOString() } }));
       res.json(await screenState(updated));
     }),
   );

@@ -40,7 +40,7 @@ import { safeDebitBlocker } from "../orchestrator.js";
 import { walletBlocker } from "../domain/wallet-tier.js";
 import { midRates, referenceRate } from "../rates.js";
 import { attributeDepositToRequest, noteDepositSettled } from "../routes/payment-requests.js";
-import { buildCryptoSettlement, settlementUpdate } from "../domain/invoices.js";
+import { buildCryptoSettlement, settlementRef, settlementUpdate } from "../domain/invoices.js";
 import { writeStatementLines } from "../bookkeeping/writer.js";
 import { readLogWindow } from "../log-range.js";
 import { conversionOutputs } from "../transfers/conversion-outputs.js";
@@ -281,15 +281,16 @@ export async function settleOnArrival(deposit: CryptoDeposit): Promise<CryptoDep
     if (deposit.settledAt) return deposit;
     const user = await store.findUser(deposit.userId);
     if (!user) throw new Error(`unknown user for crypto deposit ${deposit.id}`);
-    const settled = await store.updateCryptoDeposit(deposit.id, {
+    // `settledAt` is set once, on the stored row: a second settle finds it set.
+    const settled = await store.settleCryptoDeposit(deposit.id, (row) => ({
       // A migrated row may already know its holding (held, refused); only a
       // fresh one is decided here.
-      ...(deposit.holding === "awaiting_approval" || deposit.holding === undefined
-        ? holdingOnArrival(user, deposit)
+      ...(row.holding === "awaiting_approval" || row.holding === undefined
+        ? holdingOnArrival(user, row)
         : {}),
-      ...(deposit.token === "USDC" && deposit.holding !== "converted" ? { creditedUsdc: deposit.amountUsdc ?? 0 } : {}),
-      settledAt: new Date().toISOString(),
-    });
+      ...(row.token === "USDC" && row.holding !== "converted" ? { creditedUsdc: row.amountUsdc ?? 0 } : {}),
+    }));
+    if (!settled) return (await store.list("cryptoDeposits")).find((d) => d.id === deposit.id) ?? deposit;
     if (settled.invoiceId) await recordInvoiceSettlement(settled);
     await noteDepositSettled(settled);
     return settled;
@@ -628,12 +629,11 @@ export async function settleUnconfirmedConversions(outcome = userOperationOutcom
  * Appends: an invoice can be settled by more than one payment.
  */
 export async function recordInvoiceSettlement(deposit: CryptoDeposit): Promise<void> {
-  return store.tx(async () => {
-    if (!deposit.invoiceId) return;
-    const invoice = (await store.list("invoices")).find((i) => i.id === deposit.invoiceId);
-    if (!invoice) return;
-    await store.updateInvoice(invoice.id, settlementUpdate(invoice, buildCryptoSettlement(deposit)));
-  });
+  if (!deposit.invoiceId || !(await store.findInvoice(deposit.invoiceId))) return;
+  const s = buildCryptoSettlement(deposit);
+  // Computed from the stored row; a converted deposit rewrites its own
+  // settlement under the same ref (withSettlement), never adds a second.
+  await store.settleInvoice(deposit.invoiceId, settlementRef(s), (row) => settlementUpdate(row, s), true);
 }
 
 

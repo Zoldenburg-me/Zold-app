@@ -25,10 +25,14 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Db } from "./db.js";
 import type { jsonCore } from "../store.js";
+import type { Organisation } from "../domain/types.js";
+import type { Transfer, User } from "./types.js";
 
 type Core = typeof jsonCore;
 type Listener = "onTransferStateChange" | "onPaymentRequestStateChange";
-type Special = Listener | "list" | "holdDailyCap" | "beginTx" | "endTx" | "drainAnnouncements";
+type Special = Listener | Generic | "list" | "holdDailyCap" | "beginTx" | "endTx" | "drainAnnouncements";
+/** Generic methods: a mapped type would lose their type parameter. */
+type Generic = "patchUserSub" | "patchOrgSub" | "patchTransferSub";
 type MethodName = {
   [K in keyof Core]: Core[K] extends (...args: never[]) => unknown ? K : never;
 }[keyof Core];
@@ -47,6 +51,11 @@ export type StoreMethods = {
    * inside the same transaction as the hold, so it may read the store.
    */
   holdDailyCap(capKey: string, eur: number, capEur: number, used: () => number | Promise<number>): Promise<HoldResult>;
+  /** Change one sub-object from its stored value (§2 rule 2): `fn` gets the
+   *  value on the row and returns the new one; `patch` goes in the same write. */
+  patchUserSub<K extends "passkeySafe" | "monerium">(id: string, key: K, fn: (current: User[K]) => User[K], patch?: Partial<User>): Promise<User>;
+  patchOrgSub<K extends "invoicing" | "integrations">(id: string, key: K, fn: (current: Organisation[K]) => Organisation[K], patch?: Partial<Organisation>): Promise<Organisation>;
+  patchTransferSub<K extends keyof Transfer>(id: string, key: K, fn: (current: Transfer[K]) => Transfer[K], patch?: Partial<Transfer>): Promise<Transfer>;
 };
 
 export type StoreBackend = StoreMethods & {

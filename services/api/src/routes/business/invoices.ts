@@ -255,7 +255,9 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
         if (badRequest(res, err)) return;
         throw err;
       }
-      const draft = await store.addDraft({
+      // SUBMITTED to PAYING and the draft, as one write: a second /pay finds
+      // the invoice PAYING and gets no second draft.
+      const started = await store.startInvoicePayment(invoice.id, ["SUBMITTED"], {
         id: `dft_${randomUUID()}`,
         orgId: ctx.org.id,
         source: { kind: "account", accountId: account.id },
@@ -266,10 +268,8 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
         createdAt: now,
         updatedAt: now,
       });
-      const updated = await store.updateInvoice(invoice.id, {
-        state: "PAYING",
-        payment: { ...invoice.payment, draftId: draft.id },
-      });
+      if (!started) return res.status(409).json({ error: "A payment for this invoice is already under way." });
+      const { invoice: updated, draft } = started;
       res.status(201).json({
         invoice: ownerInvoiceView(updated),
         draft,

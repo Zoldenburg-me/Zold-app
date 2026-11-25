@@ -71,46 +71,49 @@ export function createEmailVerificationRouter(deps: EmailVerificationDeps) {
         const wait = Math.ceil(EMAIL_VERIFICATION.resendAfterMs / 1000);
         return res.status(429).json({ error: `Wait ${wait} seconds before asking for another code.`, code: "EMAIL_CODE_WAIT", retryAfterSeconds: wait });
       }
-      const now = Date.now();
-      const sentLastHour = (u: User) => (u.emailCode?.sentAt ?? []).filter((t) => now - Date.parse(t) < 3600_000);
-      const recent = sentLastHour(user);
-      // The wait and the hourly cap are per address: every account that signed
-      // up with it counts, so more accounts mean neither more mail nor more guesses.
-      const toAddress = (await store.usersByEmail(user.email)).flatMap(sentLastHour);
-      const last = toAddress.length ? Math.max(...toAddress.map((t) => Date.parse(t))) : 0;
-      if (now - last < EMAIL_VERIFICATION.resendAfterMs) {
-        const wait = Math.ceil((EMAIL_VERIFICATION.resendAfterMs - (now - last)) / 1000);
-        return res.status(429).json({ error: `Wait ${wait} seconds before asking for another code.`, code: "EMAIL_CODE_WAIT", retryAfterSeconds: wait });
-      }
-      if (toAddress.length >= EMAIL_VERIFICATION.maxSendsPerHour) {
-        return res.status(429).json({ error: "Too many codes in the last hour. Try again later.", code: "EMAIL_CODE_LIMIT" });
-      }
-
-      const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
+      // Held from the check to the write of the new code: the reads below and
+      // the write await, and a second request must not send a second code.
       sending.add(to);
       try {
-        await sendVerificationCode(user.email, code);
-      } catch (err: any) {
-        // The server's reply, which nodemailer appends to err.message, often
-        // quotes the address: log only the error and SMTP codes.
-        console.error(`email verification: sending to ${user.id} failed: ${err?.code ?? "error"}${err?.responseCode ? ` (SMTP ${err.responseCode})` : ""}`);
-        // Nothing is stored: the previous code, if any, still stands.
-        return res.status(502).json({ error: "The email could not be sent just now. Try again in a minute.", code: "MAIL_UNAVAILABLE" });
+        const now = Date.now();
+        const sentLastHour = (u: User) => (u.emailCode?.sentAt ?? []).filter((t) => now - Date.parse(t) < 3600_000);
+        const recent = sentLastHour(user);
+        // The wait and the hourly cap are per address: every account that signed
+        // up with it counts, so more accounts mean neither more mail nor more guesses.
+        const toAddress = (await store.usersByEmail(user.email)).flatMap(sentLastHour);
+        const last = toAddress.length ? Math.max(...toAddress.map((t) => Date.parse(t))) : 0;
+        if (now - last < EMAIL_VERIFICATION.resendAfterMs) {
+          const wait = Math.ceil((EMAIL_VERIFICATION.resendAfterMs - (now - last)) / 1000);
+          return res.status(429).json({ error: `Wait ${wait} seconds before asking for another code.`, code: "EMAIL_CODE_WAIT", retryAfterSeconds: wait });
+        }
+        if (toAddress.length >= EMAIL_VERIFICATION.maxSendsPerHour) {
+          return res.status(429).json({ error: "Too many codes in the last hour. Try again later.", code: "EMAIL_CODE_LIMIT" });
+        }
+
+        const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
+        try {
+          await sendVerificationCode(user.email, code);
+        } catch (err: any) {
+          // The server's reply, which nodemailer appends to err.message, often
+          // quotes the address: log only the error and SMTP codes.
+          console.error(`email verification: sending to ${user.id} failed: ${err?.code ?? "error"}${err?.responseCode ? ` (SMTP ${err.responseCode})` : ""}`);
+          // Nothing is stored: the previous code, if any, still stands.
+          return res.status(502).json({ error: "The email could not be sent just now. Try again in a minute.", code: "MAIL_UNAVAILABLE" });
+        }
+        const sentAt = new Date(now).toISOString();
+        await store.updateUser(user.id, {
+          emailCode: {
+            hash: codeHash(user.id, code),
+            email: user.email,
+            expiresAt: new Date(now + EMAIL_VERIFICATION.codeTtlMs).toISOString(),
+            attempts: 0,
+            sentAt: [...recent, sentAt],
+          },
+        });
+        res.json({ sentTo: user.email, expiresAt: new Date(now + EMAIL_VERIFICATION.codeTtlMs).toISOString() });
       } finally {
-        // The write below runs in this same turn, so no request sees the gap.
         sending.delete(to);
       }
-      const sentAt = new Date(now).toISOString();
-      await store.updateUser(user.id, {
-        emailCode: {
-          hash: codeHash(user.id, code),
-          email: user.email,
-          expiresAt: new Date(now + EMAIL_VERIFICATION.codeTtlMs).toISOString(),
-          attempts: 0,
-          sentAt: [...recent, sentAt],
-        },
-      });
-      res.json({ sentTo: user.email, expiresAt: new Date(now + EMAIL_VERIFICATION.codeTtlMs).toISOString() });
     }),
   );
 
