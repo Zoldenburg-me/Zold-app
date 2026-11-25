@@ -23,8 +23,8 @@
  * The IBAN opens the account only when Monerium attributes it to this Safe
  * under the company profile (address-matched, as for a person). A profile
  * whose one IBAN pays another address is refused: moving it is not built.
- * Paying out from the company's IBAN is not built either (drafts.ts refuses a
- * company bank run by name).
+ * Paying out from the company's IBAN is ./org-monerium-payouts.ts (one redeem
+ * signed by an owner); a company bank run stays refused by name in drafts.ts.
  */
 import express from "express";
 import { randomUUID } from "node:crypto";
@@ -37,7 +37,7 @@ import { assertReadableSafeState } from "../../domain/safe-op-queue.js";
 import { companyEurAccount, companyIbanState } from "../../domain/org-monerium-iban.js";
 import { moneriumIbanList } from "../../domain/monerium-profile.js";
 import type { Organisation } from "../../domain/types.js";
-import { LINK_MESSAGE, MoneriumApiError, MoneriumClient } from "../../adapters/monerium-client.js";
+import { LINK_MESSAGE, MoneriumApiError, MoneriumClient, type MoneriumOrder, type MoneriumRedeemOrder } from "../../adapters/monerium-client.js";
 import { redactedMessage } from "../../http/log-cause.js";
 import { SECRETS } from "../../stored-secrets.js";
 import { store } from "../../store.js";
@@ -60,6 +60,9 @@ export interface CompanyMonerium {
   requestIban(address: string, chain: string): Promise<unknown>;
   ibans(): Promise<unknown>;
   orders(profileId: string): Promise<unknown>;
+  /** A redeem from the company's Safe: the SEPA payout (org-monerium-payouts.ts). */
+  placeOrder(body: MoneriumRedeemOrder): Promise<MoneriumOrder>;
+  getOrder(orderId: string): Promise<MoneriumOrder>;
 }
 
 export interface OrgMoneriumIbanIo {
@@ -70,7 +73,7 @@ export interface OrgMoneriumIbanIo {
 }
 
 /** A client on the company's own keys, opened for this call only. */
-function companyClient(org: Organisation): CompanyMonerium {
+export function companyMoneriumClient(org: Organisation): CompanyMonerium {
   const m = org.monerium;
   if (!m) throw new Error("no Monerium keys are connected");
   const client = new MoneriumClient({ baseUrl: MONERIUM.baseUrl, clientId: m.clientId, clientSecret: SECRETS.orgMoneriumApiSecret.open(org.id, m.clientSecretEnc) });
@@ -89,10 +92,12 @@ function companyClient(org: Organisation): CompanyMonerium {
     requestIban: (address, chain) => client.requestIban(address, chain),
     ibans: () => client.ibans(),
     orders: (profileId) => client.orders(profileId),
+    placeOrder: (body) => client.placeOrder(body),
+    getOrder: (orderId) => client.getOrder(orderId),
   };
 }
 
-export const liveIbanIo: OrgMoneriumIbanIo = { monerium: companyClient, safe: liveOrgSafeReader, sign: orgSafeMessageSignature };
+export const liveIbanIo: OrgMoneriumIbanIo = { monerium: companyMoneriumClient, safe: liveOrgSafeReader, sign: orgSafeMessageSignature };
 
 class Refusal extends Error {
   constructor(readonly status: number, readonly code: string, message: string) {

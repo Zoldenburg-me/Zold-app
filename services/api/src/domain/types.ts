@@ -336,6 +336,36 @@ export interface AccountIdentifier {
   bankCode?: string;
 }
 
+/** A bank payout from a company's own IBAN: one Monerium redeem order, signed
+ *  by an owner's passkey (routes/business/org-monerium-payouts.ts). `pending`
+ *  means Monerium holds the order; only `sent` means it processed it. */
+export type CompanyPayoutState = "pending" | "sent" | "failed" | "unknown";
+
+export interface CompanyBankPayout {
+  id: string;
+  amountEur: number;
+  recipientName: string;
+  recipientIban: string;
+  reference?: string;
+  /** The remittance line sent to Monerium. */
+  memo: string;
+  /** The exact redeem message the owner's passkey signed. */
+  message: string;
+  issuedAt: string;
+  safeAddress: `0x${string}`;
+  profileId: string;
+  /** The owner member whose passkey signed it. */
+  signedByMemberId: string;
+  state: CompanyPayoutState;
+  orderId?: string;
+  /** Monerium's own order state, as last read. */
+  providerState?: string;
+  /** A fixed explanation for `failed` or `unknown`; never Monerium's body. */
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Account {
   id: string;
   orgId: string;
@@ -410,6 +440,9 @@ export interface Account {
     profileId: string;
     movedAwayAt?: string;
   };
+  /** Bank payouts sent from this account's IBAN, newest first (the last 50
+   *  are kept). Empty on every other account. */
+  moneriumPayouts?: CompanyBankPayout[];
   createdAt: string;
   updatedAt: string;
 }

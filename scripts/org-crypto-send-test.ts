@@ -21,7 +21,8 @@
  *   - an executed send is booked on the company account's statement, never on
  *     the queuing member's own books;
  *   - a bank run from a company account with its IBAN issued is refused by
- *     name (COMPANY_BANK_PAYOUT_NOT_BUILT) before any transfer is built.
+ *     name (COMPANY_BANK_RUN_NOT_BUILT) before any transfer is built, and
+ *     the message points to Settings → Monerium.
  *
  * The sole-trader and personal paths are covered unchanged by
  * business-crypto-send:test and crypto-send:test.
@@ -393,7 +394,7 @@ try {
       // noSepa throws if a transfer were built: the refusal comes first.
       const x = await call("POST", `/orgs/org_1/drafts/${id}/execute`, "u_payer");
       assert.equal(x.status, 409, JSON.stringify(x.data));
-      assert.equal(x.data.code, "COMPANY_BANK_PAYOUT_NOT_BUILT");
+      assert.equal(x.data.code, "COMPANY_BANK_RUN_NOT_BUILT");
       assert.equal(store.safeOpsOf("org_1").length, ops, "nothing queued");
       assert.equal(store.transfers.length, transfers, "no transfer");
     } finally {
