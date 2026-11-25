@@ -127,8 +127,11 @@ function accountView(org: Organisation, a: Account) {
   const backer = a.backingUserId
     ? store.membersOf(org.id).find((m) => m.userId === a.backingUserId && m.status === "active")
     : undefined;
+  // Bank payouts carry recipients' IBANs and references: they are read only
+  // through GET .../monerium/payouts, under its own permission.
+  const { moneriumPayouts: _payouts, ...rest } = a;
   return {
-    ...a, gate: gateOf(org, a), profile: accountProfileStanding(org, a),
+    ...rest, gate: gateOf(org, a), profile: accountProfileStanding(org, a),
     // As Members shows them: the name, else the email.
     ...(backer?.name || backer?.email ? { backingMemberName: backer.name || backer.email } : {}),
   };

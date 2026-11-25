@@ -104,6 +104,23 @@ export interface MoneriumOrder {
   [k: string]: any;
 }
 
+/** The body of a redeem order: burn EURe from `address` and pay `counterpart`
+ *  over SEPA. `message` is the exact text the Safe signed. */
+export interface MoneriumRedeemOrder {
+  address: string;
+  chain: string;
+  kind: "redeem";
+  amount: string;
+  currency: string;
+  counterpart: {
+    identifier: { standard: "iban"; iban: string };
+    details: { firstName: string; lastName: string; country: string };
+  };
+  message: string;
+  signature: string;
+  memo?: string;
+}
+
 export class MoneriumClient {
   private token: { value: string; expiresAt: number } | null = null;
 
@@ -250,20 +267,7 @@ export class MoneriumClient {
    * via SEPA to the counterpart IBAN. `message` must be the exact payment
    * message the wallet signed: "Send EUR <amount> to <iban> at <rfc3339>".
    */
-  placeOrder(body: {
-    address: string;
-    chain: string;
-    kind: "redeem";
-    amount: string;
-    currency: string;
-    counterpart: {
-      identifier: { standard: "iban"; iban: string };
-      details: { firstName: string; lastName: string; country: string };
-    };
-    message: string;
-    signature: string;
-    memo?: string;
-  }) {
+  placeOrder(body: MoneriumRedeemOrder) {
     return this.request<MoneriumOrder>("POST", "/orders", body);
   }
 }
