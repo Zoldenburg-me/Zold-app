@@ -10,6 +10,7 @@
  * record. Settlement and conversion apply their own gates later.
  */
 import express from "express";
+import { requireCapability } from "../http/guards.js";
 import { usdToken } from "../usd-token.js";
 import { wrap } from "./util.js";
 import { CHAIN_ID } from "../config.js";
@@ -164,6 +165,8 @@ export function createPaymentPageRouter(deps: PaymentPageDeps) {
       const user = store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
       if (!requireUserSession(req, res, user.id)) return;
+      // A page takes crypto into the Safe: not for an account whose segment has no on-chain balance.
+      if (!requireCapability(user, "onchain_balance", res)) return;
       let handle: string;
       let displayName: string | undefined;
       let settlementAsset: "EURE" | "USDC";
