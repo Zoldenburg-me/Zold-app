@@ -106,6 +106,9 @@ export async function prepareTransferLiquidity(transfer: Transfer): Promise<NonN
   };
 }
 
+/** Whether the configured venue can build a Safe-executed swap at all. */
+export const venueServesSafe = (): boolean => Boolean(liquidityProvider().safeSwapPlan);
+
 /**
  * The Safe-executed swap for one transfer, prepared at CREATION time — its
  * calldata rides inside the UserOperation the user signs, so unlike the

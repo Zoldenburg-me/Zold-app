@@ -26,12 +26,13 @@
  *
  *   npm run bridge:harness:test
  */
-// Must be first: pins chain, keys and a throwaway database.
+// Must be first: pins chain and keys.
 import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ENTRYPOINT_V9 } from "abstractionkit";
@@ -60,6 +61,15 @@ Object.assign(process.env, {
   // Short, so the timeout cases finish quickly. Read once, at import.
   PARTNER_HTTP_TIMEOUT_MS: "300",
 });
+
+// The database lives in a directory this run created, whatever
+// TRANSF_DB_PATH was on entry: the cleanup removes only that directory, so an
+// exported path to a working database is never touched. Set before the deploy
+// child and before any store import.
+const inheritedDb = process.env.TRANSF_DB_PATH;
+const inheritedDbBefore = inheritedDb && existsSync(inheritedDb) ? readFileSync(inheritedDb) : undefined;
+const DB_DIR = mkdtempSync(path.join(os.tmpdir(), "zold-bridge-harness-"));
+process.env.TRANSF_DB_PATH = path.join(DB_DIR, "db.json");
 
 let passed = 0;
 const ok = (label: string) => {
@@ -146,7 +156,6 @@ try {
     env: process.env,
   });
   assert.equal(deploy.status, 0, `deploy failed\n${deploy.stderr}`);
-  rmSync(process.env.TRANSF_DB_PATH!, { force: true });
 
   const bridge = await import("../services/api/src/bridge/bridgexyz.js");
   const { BRIDGE } = await import("../services/api/src/config.js");
@@ -264,6 +273,9 @@ try {
   // the caller records it, and it must not be used.
   const mismatches: [string, (c: BridgeCall) => any, RegExp][] = [
     ["amount", (c) => echo(c, { amount: "99.00" }), /amount/],
+    ["customer", (c) => echo(c, { on_behalf_of: "cust_other" }), /customer/],
+    ["(missing) customer", (c) => echo(c, { on_behalf_of: undefined }), /customer/],
+    ["customer, by case", (c) => echo(c, { on_behalf_of: "CUST_TEST" }), /customer/],
     ["source chain", (c) => echo(c, { source: { ...c.body.source, payment_rail: "ethereum" } }), /source/],
     ["source asset", (c) => echo(c, { source: { ...c.body.source, currency: "usdt" } }), /source/],
     ["source address", (c) => echo(c, { source: { ...c.body.source, from_address: `0x${"cd".repeat(20)}` } }), /source/],
@@ -423,7 +435,8 @@ try {
     refunded: boolean;
     /** Creates that reached the stub Bridge. */
     bridgeCalls: number;
-    /** USDC the orchestrator sent to Bridge's deposit address; "some" is any amount above 0. */
+    /** USDC that reached Bridge's deposit address (the orchestrator's deposit, or the batch's
+     *  delivery); "some" is any amount above 0. Nothing ever reaches OTHER_DEPOSIT. */
     deposited: number | "some";
     error?: RegExp;
     steps?: string[];
@@ -443,6 +456,7 @@ try {
     batchDelivery = kind === "batch" ? { to: over.recipient ?? DEPOSIT, usdc: over.deliver ?? 10 } : undefined;
     const safeBefore = await balance(addrs().eure, user.address);
     const depositBefore = await balance(addrs().usdc, DEPOSIT);
+    const otherBefore = await balance(addrs().usdc, OTHER_DEPOSIT);
     const execution: any = kind === "batch" ? { batch: { recipient: over.recipient ?? DEPOSIT, mode: "live" } } : {};
     await orch.executeTransfer(store.findTransfer(id)!, user, auth, execution);
     // Two sweeps, as a restart would run them: neither may refund or resend.
@@ -452,11 +466,13 @@ try {
     const end = store.findTransfer(id)!;
     const refunded = (await balance(addrs().eure, user.address)) - safeBefore;
     const steps = end.txs.map((x) => x.step);
-    const deposited = kind === "plain" ? usd.fromUnits((await balance(addrs().usdc, DEPOSIT)) - depositBefore) : 0;
+    const deposited = usd.fromUnits((await balance(addrs().usdc, DEPOSIT)) - depositBefore);
+    const other = usd.fromUnits((await balance(addrs().usdc, OTHER_DEPOSIT)) - otherBefore);
     const detail = `${label}: ended ${end.state}, refunded ${refunded}, Bridge calls ${bridgeCalls.length}, deposited ${deposited}, steps [${steps}], error ${end.error}`;
     assert.equal(end.state, expect.state, detail);
     assert.equal(refunded > 0n, expect.refunded, detail);
     assert.equal(bridgeCalls.length, expect.bridgeCalls, detail);
+    assert.equal(other, 0, `${detail}: ${other} USDC reached another deposit address`);
     if (expect.deposited === "some") assert.ok(deposited > 0, detail);
     else assert.equal(deposited, expect.deposited, detail);
     if (expect.error) assert.match(end.error ?? "", expect.error, detail);
@@ -471,29 +487,32 @@ try {
   // Batched send: the user-signed batch delivers straight to Bridge's deposit
   // address, so after the debit the money is at Bridge whatever Bridge says.
   await scenario("batch: the replay matches, the anchor is down → review, no refund", "batch", (c) => json(echo(c)), {
-    state: "MANUAL_REVIEW", refunded: false, bridgeCalls: 1, deposited: 0, error: atBridge,
+    state: "MANUAL_REVIEW", refunded: false, bridgeCalls: 1, deposited: 10, error: atBridge,
     steps: ["bridge.xyz.live.transfer", "bridge.xyz.deposit.funded"],
   });
   await scenario("batch: the replay times out → review, no refund, no second create", "batch", (_c, s) => hangingRequest(s), {
-    state: "MANUAL_REVIEW", refunded: false, bridgeCalls: 1, deposited: 0, error: atBridge,
+    state: "MANUAL_REVIEW", refunded: false, bridgeCalls: 1, deposited: 10, error: atBridge,
     steps: ["bridge.xyz.live.transfer"], absent: ["bridge.xyz.deposit.funded"],
   });
   await scenario("batch: the replay answers 500 → review", "batch", () => json({ message: "boom" }, 500), {
-    state: "MANUAL_REVIEW", refunded: false, bridgeCalls: 1, deposited: 0, error: atBridge,
+    state: "MANUAL_REVIEW", refunded: false, bridgeCalls: 1, deposited: 10, error: atBridge,
   });
   await scenario("batch: the replay answers an empty 200 → review", "batch", () => new Response("", { status: 200 }), {
-    state: "MANUAL_REVIEW", refunded: false, bridgeCalls: 1, deposited: 0, error: atBridge,
+    state: "MANUAL_REVIEW", refunded: false, bridgeCalls: 1, deposited: 10, error: atBridge,
   });
   await scenario("batch: the replay names another deposit address → review", "batch",
     (c) => json(echo(c, { source_deposit_instructions: { ...echo(c).source_deposit_instructions, to_address: OTHER_DEPOSIT } })), {
-      state: "MANUAL_REVIEW", refunded: false, bridgeCalls: 1, deposited: 0, error: atBridge, absent: ["bridge.xyz.deposit.funded"],
+      state: "MANUAL_REVIEW", refunded: false, bridgeCalls: 1, deposited: 10, error: atBridge, absent: ["bridge.xyz.deposit.funded"],
     });
   await scenario("batch: the replay answers another order's amount → review", "batch", (c) => json(echo(c, { amount: "99.00" })), {
-    state: "MANUAL_REVIEW", refunded: false, bridgeCalls: 1, deposited: 0, error: atBridge, absent: ["bridge.xyz.deposit.funded"],
+    state: "MANUAL_REVIEW", refunded: false, bridgeCalls: 1, deposited: 10, error: atBridge, absent: ["bridge.xyz.deposit.funded"],
+  });
+  await scenario("batch: the replay answers another customer's order → review", "batch", (c) => json(echo(c, { on_behalf_of: "cust_other" })), {
+    state: "MANUAL_REVIEW", refunded: false, bridgeCalls: 1, deposited: 10, error: atBridge, absent: ["bridge.xyz.deposit.funded"],
   });
   await scenario("batch: paid, with broken deposit instructions → review, destination hash on record", "batch",
     (c) => json(echo(c, { state: "payment_processed", receipt: { destination_tx_hash: "stellar-tx-2" }, source_deposit_instructions: {} })), {
-      state: "MANUAL_REVIEW", refunded: false, bridgeCalls: 1, deposited: 0, steps: ["bridge.xyz.destination_tx"],
+      state: "MANUAL_REVIEW", refunded: false, bridgeCalls: 1, deposited: 10, steps: ["bridge.xyz.destination_tx"],
     });
   // The local conflict, before the debit: nothing moves, nothing is sent.
   await scenario("batch: the recorded order's amount differs from the one execute would send → refused before the debit", "batch",
@@ -509,7 +528,7 @@ try {
       state: "FAILED", refunded: false, bridgeCalls: 0, deposited: 0, error: /recipient|nothing was debited/, absent: [orch.DEBIT_STEP.safe],
     }, { recipient: OTHER_DEPOSIT });
   await scenario("batch: delivered 8 of the 10 Bridge was created for → review", "batch", (c) => json(echo(c)), {
-    state: "MANUAL_REVIEW", refunded: false, bridgeCalls: 0, deposited: 0, error: /below the 10000000/,
+    state: "MANUAL_REVIEW", refunded: false, bridgeCalls: 0, deposited: 8, error: /below the 10000000/,
   }, { deliver: 8 });
 
   // Plain send: the orchestrator holds the USDC until its own deposit write.
@@ -529,6 +548,9 @@ try {
     state: "REFUNDED", refunded: true, bridgeCalls: 1, deposited: 0, absent: ["bridge.xyz.deposit.pending"],
   });
   await scenario("plain: the create answers another order (amount) → no deposit, refunded", "plain", (c) => json(echo(c, { amount: "1.00" })), {
+    state: "REFUNDED", refunded: true, bridgeCalls: 1, deposited: 0, absent: ["bridge.xyz.deposit.pending"],
+  });
+  await scenario("plain: the create answers another customer's order → no deposit, refunded", "plain", (c) => json(echo(c, { on_behalf_of: "cust_other" })), {
     state: "REFUNDED", refunded: true, bridgeCalls: 1, deposited: 0, absent: ["bridge.xyz.deposit.pending"],
   });
   await scenario("plain: the create answers another deposit chain → no deposit, refunded", "plain",
@@ -626,11 +648,18 @@ try {
     assert.ok(recorded > 0 && sent > recorded, "build.ts records bridgeRequest before its Bridge create goes out");
     assert.ok(src.indexOf("store.addTransferUnderHold(transfer") > sent, "the row is written after the create, carrying the hash");
     ok("/api/transfers records the order's hash on the transfer before its create goes out");
+    const venueCheck = src.indexOf('transfer.rail === "cash" && !venueServesSafe()');
+    assert.ok(venueCheck > 0 && venueCheck < recorded, "build.ts asks whether the venue serves a Safe before it orders from Bridge");
+    ok("/api/transfers orders from Bridge only when the venue can build the Safe batch");
   }
 
   console.log(`\nbridge harness: ${passed} checks passed`);
 } finally {
   chainNode.child.kill();
-  rmSync(process.env.TRANSF_DB_PATH!, { force: true });
+  rmSync(DB_DIR, { recursive: true, force: true });
+}
+if (inheritedDb) {
+  assert.deepEqual(existsSync(inheritedDb) ? readFileSync(inheritedDb) : undefined, inheritedDbBefore, `the run touched ${inheritedDb}`);
+  console.log(`   ok  TRANSF_DB_PATH on entry (${inheritedDb}) is untouched`);
 }
 process.exit(0);

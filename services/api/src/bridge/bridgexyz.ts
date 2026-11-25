@@ -158,6 +158,10 @@ export function bridgeRequestHash(
 
 /** Why Bridge's answer is not the order that was sent, or undefined if it is. */
 function answerMismatch(data: any, body: ReturnType<typeof requestBody>): string | undefined {
+  // Bridge's Transfer object always names its customer. Missing is refused
+  // with different: another customer's order would hand us their deposit
+  // address as the swap target. Neither id goes into the message.
+  if (data.on_behalf_of !== body.on_behalf_of) return "a different or missing customer (on_behalf_of)";
   if (amountUnits(data.amount) !== amountUnits(body.amount)) return `amount ${JSON.stringify(data.amount)}, sent ${body.amount}`;
   const src = data.source;
   if (

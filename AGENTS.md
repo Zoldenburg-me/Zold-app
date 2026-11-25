@@ -88,9 +88,9 @@ Each of these was a bug once.
 
 **Money**
 - **No debit without a user signature.** `POST /api/transfers` prepares the
-  userOp that *is* the debit; the passkey signs its hash at send time and the
-  chain enforces token, amount and destination. There is no standing
-  allowance — the API can dispose of nothing, ever.
+  userOp that *is* the debit; the passkey signs its hash at send time; the
+  chain enforces token, amount and destination. No standing allowance: the
+  API can dispose of nothing.
 - **Quote binds execution.** `assertQuoteRateBinding` refuses and auto-refunds
   if the on-chain rate drifts past `FX.QUOTE_BINDING_BPS`. Persisted quotes
   execute on the venue that priced them.
@@ -103,62 +103,57 @@ Each of these was a bug once.
   the Safe batch, a crypto-in conversion and a reverse-swap refund settle
   from their own Transfer logs (`deliveredFromReceipt`); conversion EURe is
   never booked as money in; the balance delta is a check (less: review).
-  A venue that refuses to settle a swap that landed throws
-  `SwapSettlementError` carrying its txs, recorded before the refusal
-  propagates: once the venue has its receipt, the swap hash is on the
-  transfer. A timeout in the venue's own receipt wait still loses it; the
-  forward path is then held in review by `liquidity.swap.pending`.
+  A venue refusing to settle a landed swap throws `SwapSettlementError` with
+  its txs, recorded before the refusal propagates. A timeout in the venue's
+  own receipt wait loses them; `liquidity.swap.pending` holds that in review.
 - **Compensation is asymmetric on purpose**: only a definite refusal refunds (Monerium: 401 or 403); a
   timeout, a duplicate-transfer revert, or any failure after Bridge holds the
   deposit is MANUAL_REVIEW. `store.updateTransfer` refuses to move a
   REFUNDED/PAID transfer backwards.
-- **Margin is measured, surplus is attributed.** `marginBps` is computed between
-  the live mid and what we deliver; positive slippage goes to the user by
-  default and is recorded either way.
+- **Margin is measured, surplus is attributed.** `marginBps` is the live mid
+  against what we deliver; positive slippage goes to the user by default,
+  recorded either way.
 - **The reconciler reports drift and never repairs it.**
 
 **Identity and authority**
 - **The passkey is the Safe's only owner.** The plan type is `threshold: 1`
-  only. Never add a co-owner that Zold holds: the user could then not move
-  their own funds, or add a key, without us.
+  only. Never add a co-owner Zold holds: the user could then not move funds
+  or add a key without us.
 - **The user may add their own second owner; Zold never collects its
   signature**, so at threshold > 1 every op is refused and no route lowers the
   threshold. **Zoldenburg is a recovery guardian only by the user's choice**,
   signs only from a hardware wallet, and **the API never holds the guardian
   key**. Full rules: `docs/recovery-and-signers.md`.
 - **Gas is a choice, not an assumption.** `SAFE_GAS_PAYMENT` = `sponsored`
-  (default) | `native` (Safe pays ETH) | `token` (Safe pays USDC). Verified by
-  preflight: the public paymaster REFUSES Base mainnet and sponsors Base
-  Sepolia; `native` and `token` work on mainnet.
+  (default) | `native` (Safe pays ETH) | `token` (Safe pays USDC). Preflight
+  verified: the public paymaster REFUSES Base mainnet, sponsors Base Sepolia;
+  `native` and `token` work on mainnet.
 - **Three checks, not one**: session (who), member+role (may they here),
   capability (built, right org type). Collapsing any two opens a hole.
 - **Four eyes**: the reviewer may not be the drafter, whatever their role — and
   editing someone's draft lines makes you the drafter.
 - **Gating is a read-time filter, NEVER a write-time delete.** Nothing in
-  `store.ts` deletes an org, account, invoice or ledger row; no such method
-  exists. Every feature is free: no plan, no trial.
+  `store.ts` deletes an org, account, invoice or ledger row. Every feature is
+  free: no plan, no trial.
 - **INVALID_DATA**: a draft line's payee fingerprint is recomputed at review AND
-  at execution. The gap between approval and execution is where an address-book
-  edit lands.
-- **An org can never lose its last owner** — by role change or by deactivation.
+  at execution: an address-book edit lands between the two.
+- **An org can never lose its last owner** (role change or deactivation).
 - **The device key's protection is per-authenticator.** `device.js` reports
-  it; the Security screen shows what it reports.
+  it; the Security screen shows that.
 
 **Data and exposure**
 - **Collect per call, store nothing.** `SenderDetails` (name, birth date, ID
-  number) is held for one call. Do not store an identity profile for a rail
-  that has never run.
+  number) lives for one call; no identity profile for a rail that never ran.
 - **Public projections are allowlists**, and redaction is server-side — a
   withheld field is never in the JSON, not merely undrawn.
 - **Slugs, verification codes and payment codes are credentials**: auth rate
   bucket, never cached by the service worker, and a code under the wrong handle
   is a 404.
 - **A merchant-side id is never a global key.** Shopify order and session ids
-  are per-store sequences; every lookup by one carries the shop
-  (`findPaymentRequestBySource(kind, id, shop)`), or one store's signed
-  webhook cancels or dedupes against another's request.
+  are per-store; every lookup carries the shop (`findPaymentRequestBySource(kind,
+  id, shop)`), or one store's webhook cancels or dedupes another's request.
 - **Documents are frozen snapshots, re-verified on every visit.** A revoked one
-  fails verification rather than vanishing.
+  fails verification, never vanishes.
 
 **Secrets and storage**
 - **Agents never read `.env*`, `.private/` (bar `pentest/`) or

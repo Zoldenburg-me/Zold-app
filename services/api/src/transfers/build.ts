@@ -10,7 +10,7 @@ import {
   transferIdHash,
 } from "../chain.js";
 import { bridgeRequestHash, createBridgeTransfer } from "../bridge/bridgexyz.js";
-import { prepareSafeSwapForTransfer } from "../liquidity.js";
+import { prepareSafeSwapForTransfer, venueServesSafe } from "../liquidity.js";
 import { moneriumRedeemMessage, paymentMemo, REDEEM_WINDOW_SEC } from "../sepa.js";
 import { safeDebitBlocker, safeFundedEurToday } from "../orchestrator.js";
 import { store, type Quote, type Transfer } from "../store.js";
@@ -226,7 +226,17 @@ async function prepareTransferFromQuote(
         // holds the input. Falls back to the plain user-signed debit when the
         // configured venue cannot serve a Safe executor (FxSwapper, CoW) or
         // the venue is down; the fallback still never moves without the user.
-        if (transfer.rail === "cash") {
+        const venueIncapable: NonNullable<Transfer["custody"]> = {
+          mode: "orchestrator",
+          reason:
+            `the configured liquidity venue (${LIQUIDITY.PROVIDER}) cannot be executed by the ` +
+            "user's Safe, so the input is debited to the orchestrator and swapped from there",
+          feeToOrchestrator: true,
+        };
+        // A venue that cannot serve a Safe executor at all gets no Bridge
+        // order here: the batch it would fund can never be built.
+        if (transfer.rail === "cash" && !venueServesSafe()) custody = venueIncapable;
+        else if (transfer.rail === "cash") {
           try {
             // A cash transfer exists only while the rail is open (BRIDGE_LIVE
             // and an anchor — /api/quotes refuses otherwise), so the output
@@ -300,15 +310,7 @@ async function prepareTransferFromQuote(
                 bridgeAmountUsdc,
               };
             }
-            if (!swap) {
-              custody = {
-                mode: "orchestrator",
-                reason:
-                  `the configured liquidity venue (${LIQUIDITY.PROVIDER}) cannot be executed by the ` +
-                  "user's Safe, so the input is debited to the orchestrator and swapped from there",
-                feeToOrchestrator: true,
-              };
-            }
+            if (!swap) custody = venueIncapable;
           } catch (err: any) {
             custody = {
               mode: "orchestrator",
