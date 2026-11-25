@@ -30,10 +30,12 @@ document.addEventListener("click", async (ev) => {
   busy.add(el);
   const canDisable = "disabled" in el;
   if (canDisable) el.disabled = true;
+  const was = view;
   try {
     const keep = await fn(el);
     // An action that opened a dialog or drawer draws again when it closes.
-    if (keep !== "keep" && !$("#dlg").open && !document.querySelector("body > .z-scrim.is-open")) render();
+    // One that changed the screen puts focus on its title, as a link to that screen does.
+    if (keep !== "keep" && !$("#dlg").open && !document.querySelector("body > .z-scrim.is-open")) render({ focus: view !== was });
   } catch (e) { toast(e.message, true); }
   finally {
     busy.delete(el);

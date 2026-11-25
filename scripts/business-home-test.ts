@@ -143,4 +143,17 @@ assert.deepEqual(
   ["DRAFT", "PENDING_REVIEW", "REVIEWED", "EXECUTING"],
 );
 
+// ── Command box: a slash line is its command, anything else a search ─────────
+
+{
+  const cmds = [{ cmd: "/pay an invoice", view: "send" }, { cmd: "/send an invoice", act: "issue-invoice" }, { cmd: "/what is due", view: "invoices" }];
+  assert.equal(m.commandFor("/pay", cmds), cmds[0]);
+  assert.equal(m.commandFor("  /SEND an invoice ", cmds), cmds[1], "case and outer spaces aside");
+  assert.equal(m.commandFor("/what is due today", cmds), null, "more than the command is not the command");
+  assert.equal(m.commandFor("pay an invoice", cmds), null, "no slash: a search");
+  assert.equal(m.commandFor("/", cmds), null, "a lone slash picks nothing");
+  assert.equal(m.commandFor("/refund", cmds), null);
+  assert.equal(m.commandFor("/pay", []), null, "a command this person may not use is not offered, so not matched");
+}
+
 console.log("business home: ok");

@@ -1,5 +1,6 @@
 /**
- * Home of the business console, top to bottom: the balance with the IBAN and
+ * Home of the business console, top to bottom: the command box (search and
+ * slash commands), the balance with the IBAN and
  * four round actions, what needs you, the accounts, invoices and payments at a
  * glance, the latest statement lines, then money in and out and who paid and
  * who got paid.
@@ -21,8 +22,9 @@ import { META, RENDER, linkBtn, moneriumLink } from "./views.js";
 import { submittedInvoices, waitingForMe } from "./nav.js";
 import { draftTag, draftTitle, draftTotal, invAmount, loadMembers, memberName } from "./screens.js";
 import { APP_LINKS, isOwnCompanyOrg, loadAccess } from "./access-model.js";
-import { companyBalance, countedLines, hasIban, noIbanStep, pendingRuns, securityRows, setupOpen, setupSteps } from "./home-model.js";
+import { commandFor, companyBalance, countedLines, hasIban, noIbanStep, pendingRuns, securityRows, setupOpen, setupSteps } from "./home-model.js";
 import { runLink } from "./payment.js";
+import { openSearch } from "./search.js";
 import { companyKeysHere, companySteps } from "./org-monerium-model.js";
 import { runIdForLine } from "./payment-model.js";
 
@@ -97,6 +99,56 @@ const bigEur = (v) => {
   const t = eur(v), m = t.match(/^(.*)([.,]\d{2})$/);
   return m ? `${esc(m[1])}<span class="zb-h-cents">${esc(m[2])}</span>` : esc(t);
 };
+
+/** What the command box offers. No model reads the box: a slash line opens
+ *  the screen it names, under the same capability and role checks as that
+ *  screen, and anything else is searched (search.js). */
+function commands() {
+  const drafts = cap("transfers.drafts").allowed;
+  const inv = cap("invoices").allowed;
+  return [
+    drafts && roleCan(org.role, "propose") && { cmd: "/make a payment", view: "send" },
+    inv && roleCan(org.role, "invoices") && { cmd: "/send an invoice", act: "issue-invoice" },
+    inv && { cmd: "/see invoices", view: "invoices" },
+    drafts && { cmd: "/see payments", view: "payments" },
+    cap("ledger.transactions").allowed && { cmd: "/where the money went", view: "books-overview" },
+  ].filter(Boolean);
+}
+
+function commandBox(cmds) {
+  const chip = (c, i) => (c.view
+    ? `<a class="zb-h-cmd__chip" href="?view=${c.view}" data-view-link="${c.view}" data-cmd="${i}">${esc(c.cmd)}</a>`
+    : `<button type="button" class="zb-h-cmd__chip" data-act="${c.act}" data-cmd="${i}">${esc(c.cmd)}</button>`);
+  return `<section class="zb-h-cmd" aria-label="Search and commands">
+    <p class="zb-h-cmd__line" id="hm-line" aria-hidden="true"></p>
+    <form class="zb-h-cmd__box" id="hm-ask" role="search">
+      <label class="z-sr" for="hm-q">Search, or type a command</label>
+      <input id="hm-q" class="zb-h-cmd__input" type="search" name="q" autocomplete="off" spellcheck="false" placeholder="Search, or type / for a command…">
+      <button type="submit" class="zb-h-cmd__go" aria-label="Go">${Z.icon("arrow_upward")}</button>
+    </form>
+    <p class="zb-h-cmd__hint" id="hm-hint" role="status"></p>
+    ${cmds.length ? `<nav class="zb-h-cmd__chips" aria-label="Commands">${cmds.map(chip).join("")}</nav>` : ""}
+  </section>`;
+}
+
+/** The line above the box names one command at a time, its last word in pink.
+ *  Decoration: it stands still under reduced motion, once the box has focus,
+ *  and stops for good when Home is redrawn. */
+function rotateLine(box, cmds) {
+  const line = box.querySelector("#hm-line");
+  const words = cmds.length ? cmds.map((c) => c.cmd.slice(1)) : ["search your account"];
+  let i = 0;
+  const say = () => {
+    const w = words[i++ % words.length].split(" ");
+    line.innerHTML = `${esc(w.slice(0, -1).join(" "))} <span>${esc(w.at(-1))}</span>`;
+  };
+  say();
+  if (words.length < 2 || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const t = setInterval(() => {
+    if (!line.isConnected) clearInterval(t);
+    else if (!box.querySelector("#hm-ask").contains(document.activeElement)) say();
+  }, 3800);
+}
 
 /** A round action: an icon in a circle with its label under it. */
 const roundLink = (label, v, icon) => `<a class="zb-h-act" href="?view=${v}" data-view-link="${v}"><span class="zb-h-act__ic">${Z.icon(icon)}</span><span class="zb-h-act__label">${esc(label)}</span></a>`;
@@ -398,7 +450,8 @@ RENDER.overview = async () => {
     cards.push(statCard("home-pay", "Payments", "payments", [["Waiting for review", by("PENDING_REVIEW").length, total(by("PENDING_REVIEW"))], ["Approved, not sent", by("REVIEWED").length, total(by("REVIEWED"))], sent]));
   }
 
-  const html = `<div id="hm-root" class="zb-h-root">${balanceCard(accounts, acc.status === "fulfilled")}
+  const cmds = commands();
+  const html = `<div id="hm-root" class="zb-h-root">${commandBox(cmds)}${balanceCard(accounts, acc.status === "fulfilled")}
     ${attention({ waiting: waitingForMe(runs), invoices, lines: counted, accounts })}
     ${setup.length ? `<div class="zb-grid2">${setup.join("")}</div>` : ""}
     <div class="zb-grid2">${accountsCard(accounts, acc.status === "fulfilled")}${cards.join("")}</div>
@@ -409,6 +462,16 @@ RENDER.overview = async () => {
   return {
     html,
     bind(box) {
+      rotateLine(box, cmds);
+      const q = box.querySelector("#hm-q");
+      box.querySelector("#hm-ask").addEventListener("submit", (ev) => {
+        ev.preventDefault();
+        const text = q.value.trim(), c = commandFor(text, cmds), hint = box.querySelector("#hm-hint");
+        hint.textContent = "";
+        if (c) box.querySelector(`[data-cmd="${cmds.indexOf(c)}"]`).click();
+        else if (text.startsWith("/")) hint.textContent = "No such command. Pick one below, or search without the slash.";
+        else if (text) { q.value = ""; openSearch(text, q); }
+      });
       // On #hm-root, which each render replaces: #view itself outlives renders.
       box.querySelector("#hm-root").addEventListener("click", (ev) => {
         const b = ev.target.closest("[data-hp],[data-ht],[data-hm]");
