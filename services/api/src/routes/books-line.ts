@@ -6,6 +6,7 @@
  * `line` is null where the sheet draws no action: no line, no books, no
  * permission, a payment outside keysOf, or a line that cannot be an own
  * transfer (an invoice payment among them). A line already marked always comes back, so the mark can be undone.
+ * `belegStale` says its Beleg no longer verifies and this person may replace it.
  */
 import express from "express";
 import { store } from "../store.js";
@@ -15,6 +16,7 @@ import { isOwnTransfer } from "../domain/ledger.js";
 import { booksFor, writeStatementLinesFor } from "../bookkeeping/writer.js";
 import { describeCause } from "../http/log-cause.js";
 import { invoicePayments, lineId, ownTransferAllowed } from "../bookkeeping/statement.js";
+import { belegOfLine } from "../bookkeeping/issue.js";
 
 /** The keys a payment on these sheets can have a mark-able line under. A
  *  conversion in parts has one line per part: it is marked on the statement in
@@ -47,7 +49,10 @@ export function createBooksLineRouter({ requireUserSession }: { requireUserSessi
     const ids = new Set(keysOf(String(req.params.paymentId)).map((k) => lineId(org.id, k)));
     const paid = invoicePayments(store.invoices);
     const entry = store.ledgerOf(org.id).find((e) => ids.has(e.id) && (ownTransferAllowed(e, paid) || isOwnTransfer(e)));
-    res.json({ line: entry ? { orgId: org.id, lineId: entry.id, ownTransfer: isOwnTransfer(entry) } : null });
+    // A Beleg that stopped verifying (say after Undo): the sheet offers to replace it.
+    const b = entry && belegOfLine(entry);
+    const stale = b && "stale" in b && roleCan(member.role, "reports.run") && can(org, "export.ledger").allowed;
+    res.json({ line: entry ? { orgId: org.id, lineId: entry.id, ownTransfer: isOwnTransfer(entry), ...(stale ? { belegStale: true } : {}) } : null });
   });
   return r;
 }

@@ -824,7 +824,12 @@ prepared for export (or on demand per line): a frozen snapshot under a
 `/v/<CODE>` with a PDF at `/api/v/<CODE>/beleg.pdf`, and re-verified on every
 visit — signature, digest, revocation, and whether the records it was built
 from still say the same (a corrected deposit fails the document rather than
-vanishing; the receipt transaction is re-read from the chain). For a
+vanishing; the receipt transaction is re-read from the chain). A Beleg whose
+records no longer agree is not handed out: the statement shows it as "Does
+not verify" with a Replace button for whoever may manage the books (owner,
+admin, accountant), the CSV and the ZIP leave it out and say so, and its PDF
+link refuses. Replace revokes it, so it fails at its code, and issues a new
+one from the books as they are now. For a
 USDC-paid invoice it shows the invoice number and payer, USDC received with
 the receipt tx and block time, the ECB rate with its fixing day, the
 conversion's chain tx, time, venue, rate, amount in and EURe credited, the

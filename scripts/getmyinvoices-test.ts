@@ -31,7 +31,7 @@ let nextUid = 1000;
 const bank = { lines: [] as any[], assigned: [] as { transactionUid: number; documentUid: number }[] };
 /** normal | slow (records, answers after 1.5 s) | slow-drop (answers after
  *  1.5 s, records nothing) | reject (422). readDelayMs slows GET /account. */
-const fakeMode = { upload: "normal" as "normal" | "slow" | "slow-drop" | "reject", readDelayMs: 0, banksDown: false };
+const fakeMode = { upload: "normal" as "normal" | "slow" | "slow-drop" | "reject", readDelayMs: 0, banksDown: false, assignDown: false, addLost: false };
 const SLOW_MS = 1500;
 
 const fake = createServer((req, res) => {
@@ -67,18 +67,21 @@ const fake = createServer((req, res) => {
       const same = bank.lines.find((t) => t.bankAccountUid === Number(txPath[1]) && t.description === body.description && t.bookingDate === body.bookingDate && t.amount === body.amount);
       if (same) return send(422, { errors: [{ code: 127, detail: "Transaction Record Already Exist.", transactionUid: same.transactionUid }] });
       const transactionUid = nextUid++;
-      bank.lines.push({ transactionUid, bankAccountUid: Number(txPath[1]), ...body });
+      bank.lines.push({ transactionUid, bankAccountUid: Number(txPath[1]), ...body, ...(fakeMode.addLost ? { hidden: true } : {}) });
+      // addLost: the line lands, the answer is a 503 and lookups miss it.
+      if (fakeMode.addLost) return send(503, { success: false, detail: "gateway timeout" });
       return send(200, { success: true, meta_data: { transactionUid } });
     }
     if (txPath && req.method === "GET") {
       const text = url.searchParams.get("textFilter") ?? "";
       const day = url.searchParams.get("startDateFilter");
-      const records = bank.lines.filter((t) => t.bankAccountUid === Number(txPath[1]) && String(t.description).includes(text) && (!day || t.bookingDate === day));
+      const records = bank.lines.filter((t) => t.bankAccountUid === Number(txPath[1]) && String(t.description).includes(text) && (!day || t.bookingDate === day) && !(t.hidden && fakeMode.addLost));
       // Live answers key the records by transactionUid, not as an array.
       return send(200, { totalCount: records.length, records: Object.fromEntries(records.map((t) => [String(t.transactionUid), t])) });
     }
     const assignPath = /^\/bankAccounts\/\d+\/transactions\/(\d+)\/assign$/.exec(url.pathname);
     if (assignPath && req.method === "GET") return send(200, { records: bank.assigned.filter((a) => a.transactionUid === Number(assignPath[1])).map((a) => ({ documentUid: a.documentUid })) });
+    if (assignPath && req.method === "POST" && fakeMode.assignDown) return send(503, { success: false, detail: "down" });
     if (assignPath && req.method === "POST") { bank.assigned.push({ transactionUid: Number(assignPath[1]), documentUid: body.documentUid }); return send(200, { success: true, meta_data: { assignmentUid: nextUid++ } }); }
     send(404, { success: false, detail: "unhandled " + url.pathname });
   });
@@ -90,6 +93,7 @@ process.env.GETMYINVOICES_BASE_URL = FAKE;
 const { GetMyInvoicesClient, GmiApiError, gmiUserAgent } = await import("../services/api/src/adapters/getmyinvoices.js");
 const { initStore, store } = await import("../services/api/src/store.js");
 const { writeStatementLines } = await import("../services/api/src/bookkeeping/writer.js");
+const { lineId } = await import("../services/api/src/bookkeeping/statement.js");
 const { belegUpload, createIntegrationRoutes } = await import("../services/api/src/routes/business/integrations.js");
 const { createBookkeepingExportRoutes } = await import("../services/api/src/routes/business/bookkeeping-export.js");
 const { resolveOrg } = await import("../services/api/src/routes/org-context.js");
@@ -352,6 +356,15 @@ await check("push uploads each Beleg once; a second push uploads nothing", async
   assert.ok(audit, "the push is audited");
 });
 
+await check("a receipt revoked before it was ever sent: its code never goes to GetMyInvoices", async () => {
+  // The export test revoked one Beleg and issued its line another before any push.
+  const neverSent = store.documentsForOrg("org_1").filter((d) => d.revokedAt).map((d) => d.code);
+  assert.ok(neverSent.length >= 1);
+  for (const code of neverSent) {
+    assert.ok(!seen.requests.some((r) => r.path.includes(code) || JSON.stringify(r.body ?? "").includes(code)), `the revoked code ${code} went to GetMyInvoices`);
+  }
+});
+
 await check("push adds each line to the manual bank account once, with its Beleg assigned; a re-send adds nothing", async () => {
   const lines = bank.lines.length;
   const r = await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09" });
@@ -376,12 +389,81 @@ await check("push adds each line to the manual bank account once, with its Beleg
   assert.equal(bank.lines.filter((t) => t.bankAccountUid === 88).length, 0);
 });
 
+await check("a Beleg replaced after its line went up: the re-send finds the line by the old code and adds nothing", async () => {
+  const IN = lineId("org_1", "monerium:issue:ord-1");
+  const before = store.findDocumentByCode(store.ledgerOf("org_1").find((e) => e.id === IN)!.statement!.documentCode!)!;
+  assert.ok(bank.lines.some((t) => String(t.description).includes(before.code)), "the line is in GetMyInvoices under the old code");
+  store.updateDocument(before.id, { revokedAt: new Date().toISOString() });
+  const rep = await call("POST", `/api/orgs/org_1/bookkeeping/lines/${IN}/beleg/replace`, {});
+  assert.equal(rep.status, 201, JSON.stringify(rep.body));
+  const total = bank.lines.length;
+  const r = await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09" });
+  assert.equal(r.status, 200);
+  assert.equal(bank.lines.length, total, "no second bank transaction for the same payment");
+  const x = r.body.results.find((y: any) => y.lineId === IN);
+  assert.equal(x.code, rep.body.code);
+  assert.equal(x.bankLine.outcome, "exists");
+  assert.ok(bank.assigned.some((a) => a.transactionUid === x.bankLine.transactionUid && a.documentUid === x.documentUid), "the new Beleg is attached to the line already there");
+  // Their API has no call Zold uses to detach a document, so the old one is
+  // still attached there, and the answer says so rather than "replaced".
+  const oldUid = seen.uploaded.get(before.code)!;
+  assert.ok(bank.assigned.some((a) => a.transactionUid === x.bankLine.transactionUid && a.documentUid === oldUid), "the revoked one is still attached in GetMyInvoices");
+  assert.equal(x.bankLine.revokedStillAttached, 1, JSON.stringify(x.bankLine));
+  assert.ok(!r.body.results.filter((y: any) => y.lineId !== IN).some((y: any) => y.bankLine?.revokedStillAttached), "only the replaced line is flagged");
+});
+
+// A line whose bank line went up but whose send did not end in a saved
+// transactionUid: it is held from the moment the add goes out, so a replace
+// then finds it by the old code.
+for (const [name, mode] of [["the Beleg could not be attached (5xx)", "assignDown"], ["the add got no answer and the re-lookups missed it", "addLost"]] as const) {
+  await check(`${name}, then a replace: the re-send finds the line by the old code and adds nothing`, async () => {
+    const IN = lineId("org_1", "monerium:issue:ord-1");
+    const listed = await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09" });
+    const X = listed.body.results.find((y: any) => y.lineId !== IN && y.bankLine?.transactionUid);
+    assert.ok(X, JSON.stringify(listed.body.results));
+    // Back to a line never banked: its Beleg is in GetMyInvoices, its line is not.
+    const doc = store.findDocumentByCode(X.code)!;
+    bank.lines = bank.lines.filter((t) => t.transactionUid !== X.bankLine.transactionUid);
+    bank.assigned = bank.assigned.filter((a) => a.transactionUid !== X.bankLine.transactionUid);
+    store.updateDocument(doc.id, { sentTo: { getmyinvoices: { documentUid: doc.sentTo!.getmyinvoices!.documentUid } } });
+    fakeMode[mode] = true;
+    let first: any;
+    try {
+      first = (await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09" })).body.results.find((y: any) => y.lineId === X.lineId);
+    } finally { fakeMode[mode] = false; }
+    assert.ok(["failed", "unknown"].includes(first.bankLine.outcome), JSON.stringify(first));
+    const landed = bank.lines.filter((t) => String(t.description).includes(X.code));
+    assert.equal(landed.length, 1, "the line landed once");
+    store.updateDocument(doc.id, { revokedAt: new Date().toISOString() });
+    const rep = await call("POST", `/api/orgs/org_1/bookkeeping/lines/${X.lineId}/beleg/replace`, {});
+    assert.equal(rep.status, 201, JSON.stringify(rep.body));
+    const total = bank.lines.length;
+    const r = await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09" });
+    const y = r.body.results.find((z: any) => z.lineId === X.lineId);
+    assert.equal(bank.lines.length, total, `no second bank line: ${JSON.stringify(y)}`);
+    assert.equal(y.bankLine.outcome, "exists");
+    assert.equal(y.bankLine.transactionUid, landed[0].transactionUid);
+  });
+}
+
+await check("a re-send with nothing new writes nothing to the store", async () => {
+  await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09" });
+  const real = store.updateDocument;
+  let writes = 0;
+  store.updateDocument = ((...a: Parameters<typeof real>) => { writes++; return real(...a); }) as typeof real;
+  try {
+    const r = await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09" });
+    assert.ok(r.body.results.every((x: any) => x.outcome === "exists" && x.bankLine?.outcome === "exists"), JSON.stringify(r.body.results));
+  } finally { store.updateDocument = real; }
+  assert.equal(writes, 0);
+});
+
 await check("a line the lookup misses is found by GetMyInvoices' own duplicate refusal (code 127), not added twice", async () => {
   const c = new GetMyInvoicesClient({ apiKey: GOOD_KEY, userAgent: gmiUserAgent() });
   const tx = { bookingDate: "2026-09-20", valueDate: "2026-09-20", description: "Ref · Beleg MISSME", amount: 7, currencyCode: "EUR" };
-  const first = await c.pushBankLine(77, tx, "MISSME");
+  const first = await c.pushBankLine(77, tx, ["MISSME"]);
   // A marker the lookup cannot see: only their refusal can find it.
-  const second = await c.pushBankLine(77, tx, "NOT-IN-DESCRIPTION");
+  const second = await c.pushBankLine(77, tx, ["NOT-IN-DESCRIPTION"]);
   assert.equal(first.outcome, "added");
   assert.equal(second.outcome, "exists");
   assert.equal(second.transactionUid, first.transactionUid);

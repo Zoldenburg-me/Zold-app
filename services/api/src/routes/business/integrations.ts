@@ -21,7 +21,7 @@ import { GetMyInvoicesClient, GmiApiError, gmiUserAgent, type GmiBankAccount, ty
 import { belegFileName, belegPdf, belegTitle, type BelegSnapshot } from "../../bookkeeping/beleg.js";
 import { isMonth, linesInMonth } from "../../bookkeeping/statement.js";
 import { statementLinesOf } from "../../bookkeeping/writer.js";
-import { issueBelegForLine } from "../../bookkeeping/issue.js";
+import { belegeOfLine, belegRecordsAgree, issueBelegForLine } from "../../bookkeeping/issue.js";
 import { auditEntry } from "../../audit.js";
 import type { Organisation } from "../../domain/types.js";
 import { redactedMessage } from "../../http/log-cause.js";
@@ -253,7 +253,7 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
       if (bankAccountUid !== undefined && bankAccountUid !== gmi.bankAccountUid) {
         store.updateOrganisation(ctx.org.id, { integrations: { ...ctx.org.integrations, getmyinvoices: { ...gmi, bankAccountUid } } });
       }
-      const results: { lineId: string; code?: string; outcome: "uploaded" | "exists" | "unknown" | "no-beleg" | "failed"; documentUid?: number; verifiedAfterTimeout?: true; tagsMayBeMissing?: true; error?: string; bankLine?: GmiBankLineResult | { outcome: "failed"; error: string } }[] = [];
+      const results: { lineId: string; code?: string; outcome: "uploaded" | "exists" | "unknown" | "no-beleg" | "failed"; stale?: true; documentUid?: number; verifiedAfterTimeout?: true; tagsMayBeMissing?: true; error?: string; bankLine?: GmiBankLineResult | { outcome: "failed"; error: string } }[] = [];
       for (const line of lines) {
         // One step for the person sending: a line without its Beleg gets it
         // now (issuing is once per line), then it goes up.
@@ -268,6 +268,12 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
           results.push({ lineId: line.id, outcome: "no-beleg" });
           continue;
         }
+        // The export's rule: a Beleg that stopped verifying is replaced, not sent.
+        const agree = belegRecordsAgree(doc.snapshot);
+        if (!agree.ok) {
+          results.push({ lineId: line.id, outcome: "no-beleg", stale: true, error: `the receipt no longer matches the books (${agree.detail}); replace it in Books` });
+          continue;
+        }
         let pushed: (typeof results)[number];
         try {
           const r = await client.pushDocument(belegUpload(doc.snapshot, doc.code, doc.createdAt, ctx.org.integrations?.getmyinvoices?.companyId));
@@ -275,9 +281,24 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
         } catch (err: any) {
           pushed = { lineId: line.id, code: doc.code, outcome: "failed", error: redactedMessage(err).slice(0, 200) };
         }
+        // Written only when it changes: each write persists the whole store.
+        const hold = (patch: NonNullable<NonNullable<typeof doc.sentTo>["getmyinvoices"]>) => {
+          const was = store.findDocumentByCode(doc.code)?.sentTo?.getmyinvoices ?? {};
+          if (Object.entries(patch).some(([k, v]) => (was as Record<string, unknown>)[k] !== v)) store.updateDocument(doc.id, { sentTo: { getmyinvoices: { ...was, ...patch } } });
+        };
+        if (pushed.documentUid) hold({ documentUid: pushed.documentUid });
         if (bankAccountUid !== undefined) {
           try {
-            pushed.bankLine = await client.pushBankLine(bankAccountUid, bankLineFor(doc.snapshot, doc.code), doc.code, pushed.documentUid);
+            // Current code first; an earlier one finds a line sent before a
+            // replace. Only codes GetMyInvoices already holds go up: a revoked
+            // code still opens its snapshot at /v.
+            const earlier = belegeOfLine(ctx.org.id, line.id).filter((d) => d.id !== doc.id && d.sentTo?.getmyinvoices);
+            const markers = [doc.code, ...earlier.filter((d) => d.sentTo!.getmyinvoices!.transactionUid || d.sentTo!.getmyinvoices!.bankLine).map((d) => d.code)];
+            const superseded = earlier.map((d) => d.sentTo!.getmyinvoices!.documentUid).filter((n): n is number => !!n);
+            // Recorded before the add goes out: one that fails or gets no
+            // answer may still have landed, and a replace must find it.
+            pushed.bankLine = await client.pushBankLine(bankAccountUid, bankLineFor(doc.snapshot, doc.code), markers, pushed.documentUid, superseded,
+              (transactionUid) => hold(transactionUid ? { transactionUid } : { bankLine: true }));
           } catch (err: any) {
             pushed.bankLine = { outcome: "failed", error: redactedMessage(err).slice(0, 200) };
           }
