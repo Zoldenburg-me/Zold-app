@@ -379,8 +379,9 @@ await check("a personal send that pays another org's send link loses an earlier 
   writeStatementLinesFor(store.findUser("u_cs")!);
   const LINE = lineId("org_cs", "cryptosend:cs_xorg");
   assert.equal((await own("org_cs", LINE, true, "u_cs")).status, 200, "marked before the link was tied");
-  // u_cs pays org_co's link from their own Safe: their line is in their personal books.
-  store.addInvoice({ id: "inv_xorg", orgId: "org_co", linkTokenHash: "inv_xorg", state: "PAYING", total: "30.00", payment: { cryptoSendId: "cs_xorg" }, createdAt: NOW, updatedAt: NOW } as any);
+  // u_cs pays another person's send link (send links exist only in personal orgs) from their own Safe.
+  store.addOrganisation({ id: "org_xorg", type: "personal", name: "Other", reporting, createdAt: NOW, updatedAt: NOW } as any);
+  store.addInvoice({ id: "inv_xorg", orgId: "org_xorg", linkTokenHash: "inv_xorg", state: "PAYING", total: "30.00", payment: { cryptoSendId: "cs_xorg" }, createdAt: NOW, updatedAt: NOW } as any);
   writeStatementLinesFor(store.findUser("u_cs")!);
   const line = store.ledgerOf("org_cs").find((e: any) => e.id === LINE)!;
   assert.equal(line.tags.includes("internal"), false, "the writer drops the mark, as the PUT would refuse it");

@@ -58,7 +58,11 @@ export function passkeySubmitted(storage, email, request) {
  *  waiting (a 4xx but 409, which says it moved on) lets the handle be reused at once.
  *  `create(handle)` runs the ceremony, `read(request)` and `submit(request, body)` call the API. */
 export async function submitPasskey(storage, email, request, { create, read, submit }) {
-  if (savedFor(storage, SUBMIT_KEY, email) === request.id) {
+  const uncertain = savedFor(storage, SUBMIT_KEY, email);
+  // Another request's submit never had an answer: that passkey may own the
+  // account now, so this request makes its own handle.
+  if (uncertain && uncertain !== request.id) passkeySubmitted(storage, email, {});
+  if (uncertain === request.id) {
     const now = await read(request);
     if (now?.status !== "PASSKEY_PENDING") return passkeySubmitted(storage, email, now);
     // The first submit is still waiting on the guardian: a new ceremony now
@@ -69,6 +73,7 @@ export async function submitPasskey(storage, email, request, { create, read, sub
   const body = await create(recoveryHandle(storage, email));
   // Candide's OTP ticket: made and kept here before the submit, so an answer
   // lost on the way back does not lose it (the server returns it only then).
+  const keptTicket = savedFor(storage, TICKET_KEY, email);
   if (request.mode === "candide") {
     body.otpTicket = b64url(crypto.getRandomValues(new Uint8Array(32)));
     saveFor(storage, TICKET_KEY, email, body.otpTicket);
@@ -78,7 +83,12 @@ export async function submitPasskey(storage, email, request, { create, read, sub
   try {
     answer = await submit(request, body);
   } catch (e) {
-    if (e?.status >= 400 && e.status < 500 && e.status !== 409) saveFor(storage, SUBMIT_KEY, email, "");
+    if (e?.status >= 400 && e.status < 500) {
+      if (e.status !== 409) saveFor(storage, SUBMIT_KEY, email, "");
+      // Refused before it was stored (a stale tab's 409 among them): the ticket
+      // another submit was accepted with stays the one the codes are checked against.
+      if (body.otpTicket) saveFor(storage, TICKET_KEY, email, keptTicket);
+    }
     throw e;
   }
   saveFor(storage, SUBMIT_KEY, email, "");
