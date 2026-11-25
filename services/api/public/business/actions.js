@@ -1003,6 +1003,11 @@ export const ACTIONS = {
     const r = await api(`/api/orgs/${org.id}/bookkeeping/lines/${el.dataset.line}/beleg`, { method: "POST" });
     toast(`Receipt ${r.code} ${r.issued ? "created" : "already existed"}.`);
   },
+  /** The old receipt is revoked, not deleted: its page then says so. */
+  async "line-beleg-replace"(el) {
+    const r = await api(`/api/orgs/${org.id}/bookkeeping/lines/${el.dataset.line}/beleg/replace`, { method: "POST" });
+    toast(`Receipt ${r.code} created${r.revoked ? "; the old one is revoked" : ""}. Download the month's export again for your accountant.`);
+  },
   /** One step from Connections or the export page: pick the month, send.
    *  The server issues any missing Beleg first; the result says what landed. */
   async "gmi-push"() {
@@ -1037,7 +1042,9 @@ export const ACTIONS = {
           [n("uploaded"), "receipts sent now"], [n("exists"), "receipts already there, skipped"],
           [n("failed") + bl("failed"), "failed: send again; whatever did arrive is skipped"],
           [n("unknown") + bl("unknown"), "got no answer and can’t be found there yet: send again in a few minutes"],
-          [n("no-beleg"), "lines that could not get a receipt, so not sent"],
+          [r.results.filter((x) => x.outcome === "no-beleg" && !x.stale).length, "lines that could not get a receipt, so not sent"],
+          [r.results.filter((x) => x.stale).length, "receipts that no longer match the books, so not sent: replace them in Books and send again (a payout Monerium rejected can’t be replaced; Books says why)"],
+          [r.results.reduce((k, x) => k + (x.bankLine?.revokedStillAttached ?? 0), 0), "replaced receipts still attached to their bank line in GetMyInvoices: remove the old one there; Zold does not detach it"],
           [late, "receipts that arrived slowly and may be missing their tags"],
         ].filter(([k]) => k > 0);
         const body = r.results.length

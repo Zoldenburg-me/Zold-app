@@ -14,7 +14,7 @@
 import {
   $, Z, api, cap, day, esc, eur, gateHtml, maskIban, me, org, plain, reviewOn, roleCan, ROLE_WORD, toast, view, when, ymd, usdSymbol,
 } from "./core.js";
-import { META, RENDER, invoiceActions, linkBtn, primary, secondary, settlementRows, shortTx, table } from "./views.js";
+import { META, RENDER, invoiceActions, linkBtn, primary, secondary, settlementRows, shortTx, staleBeleg, table } from "./views.js";
 import { runLink } from "./payment.js";
 
 const note = (text, icon = "info", tone = "") => `<div class="zb-note${tone ? ` zb-note--${tone}` : ""}">${Z.icon(icon)}<span>${text}</span></div>`;
@@ -418,6 +418,7 @@ RENDER.books = async () => {
       : `<button type="button" class="zb-memo" data-act="bk-memo" data-id="${esc(l.id)}">${Z.icon("edit_note")}Add memo<span class="z-sr"> for ${esc(who)}</span></button>`;
     const beleg = l.documentCode
       ? `<a class="zb-beleg" href="${esc(l.documentUrl)}" target="_blank" rel="noopener">${Z.icon("attach_file")}Receipt<span class="z-sr"> ${esc(l.documentCode)} (opens in a new tab)</span></a>`
+      : l.belegStale ? staleBeleg(l, mayMark, who)
       : mayMark ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="line-beleg" data-line="${esc(l.id)}">Create<span class="z-sr"> a booking receipt for ${esc(who)}</span></button>` : '<span class="z-dim">None yet</span>';
     return `<tr><td class="z-dim">${esc(day(ymd(l.valueDate)))}</td>
       <td><span class="z-tbl__who">${Z.avatar({ name: who })}<span>${esc(who)}${l.reference && l.reference !== l.note ? `<span class="zb-sub2">${esc(l.reference)}</span>` : ""}</span></span></td>
