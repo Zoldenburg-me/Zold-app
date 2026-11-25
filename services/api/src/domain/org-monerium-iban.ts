@@ -5,6 +5,9 @@
  * ownership declaration and Monerium links the Safe under that profile, Zold
  * requests the IBAN, and Monerium attributes one to the Safe. Only that last
  * step opens the account (`active`); nothing before it is shown as an IBAN.
+ * A move Monerium reported is kept on the EUR account, not the key record, so
+ * removing and reconnecting keys cannot offer a fresh issue for an IBAN that
+ * still pays elsewhere.
  */
 import type { Account, Organisation } from "./types.js";
 import { orgEntity } from "./org-entity.js";
@@ -40,6 +43,11 @@ export function companyIbanState(org: Pick<Organisation, "type" | "entity" | "sa
   if (!plan || !isOrgSafePlan(plan) || plan.status !== "active" || !account?.address || account.address.toLowerCase() !== plan.address.toLowerCase()) {
     return "safe_needed";
   }
+  // Kept on the account, so removing and reconnecting the keys cannot turn a
+  // moved IBAN back into a first-time issue. Only for this Safe and profile:
+  // different keys open a different company.
+  const moved = account.moneriumIban;
+  if (moved?.movedAwayAt && moved.profileId === m.profile.id && moved.safeAddress.toLowerCase() === plan.address.toLowerCase()) return "moved";
   const link = m.safe && m.safe.address.toLowerCase() === plan.address.toLowerCase() ? m.safe : undefined;
   if (!link) return "ready";
   if (link.movedAwayAt) return "moved";
