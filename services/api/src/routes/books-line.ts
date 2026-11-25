@@ -3,9 +3,9 @@
  * org the person's Safe books under is the server's to decide (booksFor), and
  * a line's id is derived from that org.
  *
- * `line` is null where the sheet draws no action: no line yet, no books, no
+ * `line` is null where the sheet draws no action: no line, no books, no
  * permission, a payment outside keysOf, or a line that cannot be an own
- * transfer. A line already marked always comes back, so the mark can be undone.
+ * transfer (an invoice payment among them). A line already marked always comes back, so the mark can be undone.
  * `belegStale` says its Beleg no longer verifies and this person may replace it.
  */
 import express from "express";
@@ -13,15 +13,17 @@ import { store } from "../store.js";
 import { can } from "../domain/plans.js";
 import { roleCan } from "../domain/roles.js";
 import { isOwnTransfer } from "../domain/ledger.js";
-import { booksFor } from "../bookkeeping/writer.js";
+import { booksFor, writeStatementLinesFor } from "../bookkeeping/writer.js";
+import { describeCause } from "../http/log-cause.js";
 import { lineId, ownTransferAllowed } from "../bookkeeping/statement.js";
 import { belegOfLine } from "../bookkeeping/issue.js";
 
-/** The keys a payment on these sheets can have a mark-able line under. A crypto
- *  send's own screen has no action yet, and a conversion in parts has one line
- *  per part: both are marked on the statement in /business. */
+/** The keys a payment on these sheets can have a mark-able line under. A
+ *  conversion in parts has one line per part: it is marked on the statement in
+ *  /business. */
 const keysOf = (id: string) => [
   `transfer:${id}:payout`,
+  `cryptosend:${id}`,
   `monerium:issue:${id}`,
   `deposit:${id}:eure`,
   `deposit:${id}:held`,
@@ -39,8 +41,12 @@ export function createBooksLineRouter({ requireUserSession }: { requireUserSessi
     if (!org || member?.status !== "active" || !roleCan(member.role, "ledger.categorise") || !can(org, "ledger.transactions").allowed) {
       return res.json({ line: null });
     }
+    // The sweep writes lines once a minute, and a send reads SENT before then:
+    // write this person's lines first, so a payment just confirmed has its own.
+    const user = store.findUser(userId);
+    try { if (user) writeStatementLinesFor(user); } catch (e) { console.error(`books-line ${userId}: ${describeCause(e)}`); }
     const ids = new Set(keysOf(String(req.params.paymentId)).map((k) => lineId(org.id, k)));
-    const entry = store.ledgerOf(org.id).find((e) => ids.has(e.id) && (ownTransferAllowed(e) || isOwnTransfer(e)));
+    const entry = store.ledgerOf(org.id).find((e) => ids.has(e.id) && (ownTransferAllowed(e, store.invoices) || isOwnTransfer(e)));
     // A Beleg that stopped verifying (say after Undo): the sheet offers to replace it.
     const b = entry && belegOfLine(entry);
     const stale = b && "stale" in b && roleCan(member.role, "reports.run") && can(org, "export.ledger").allowed;

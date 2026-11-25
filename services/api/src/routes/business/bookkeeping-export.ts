@@ -59,7 +59,7 @@ export function publicStatementLine(e: LedgerEntry) {
     ...(bookedCode(e) ? { accountCodeAuto: e.accountCodeAuto !== false } : {}),
     tags: e.tags,
     ...(isOwnTransfer(e) ? { ownTransfer: true } : {}),
-    ...(ownTransferAllowed(e) ? { ownTransferAllowed: true } : {}),
+    ...(ownTransferAllowed(e, store.invoices) ? { ownTransferAllowed: true } : {}),
     note: e.note,
     links: s.links,
     ...(beleg ? { documentCode: beleg.code, documentUrl: documentUrl(beleg.code) } : {}),
