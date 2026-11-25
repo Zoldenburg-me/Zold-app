@@ -5,7 +5,8 @@
  * verifyAssertion — including negative cases (bad challenge, tampered
  * signature, cloned-counter). Run: npm run webauthn:selftest
  */
-import "./_test-env.js";
+// The router cases import chain.js (no node is started or called).
+import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { createHash, webcrypto } from "node:crypto";
 import {
@@ -213,4 +214,183 @@ console.log("4. unknown challenge rejected");
   console.log("10. login requires the user-verification flag");
 }
 
-console.log("\nWEBAUTHN SELF-TEST PASSED — 11/11");
+// ---------------------------------------------------------------------------
+// The same rules through the routes a person actually calls: signup
+// (routes/users.ts), the challenge and passkey routes (routes/auth.ts), a
+// software passkey, a throwaway store. One process: the challenge Map is
+// per process, so what a second instance or a restart would do is not
+// tested here (an open deployment decision, docs: PR body of board #232).
+{
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const path = await import("node:path");
+  process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-webauthn-")), "db.json");
+  // Case 18 relies on verification being off; set here, not inherited.
+  process.env.EMAIL_VERIFICATION = "0";
+  const { EMAIL_VERIFICATION } = await import("../services/api/src/config.js");
+  assert.equal(EMAIL_VERIFICATION.enabled, false, "EMAIL_VERIFICATION was read before this suite set it");
+  const express = (await import("express")).default;
+  const { initStore, store } = await import("../services/api/src/store.js");
+  const { requireUserSession } = await import("../services/api/src/http/sessions.js");
+  const { createUserRouter } = await import("../services/api/src/routes/users.js");
+  const { createAuthRouter } = await import("../services/api/src/routes/auth.js");
+  const { makeSoftwarePasskey } = await import("./_software-passkey.js");
+  initStore();
+  const app = express().use(express.json());
+  app.use("/api", createUserRouter({ requireUserSession }));
+  app.use("/api", createAuthRouter({ requireUserSession }));
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise((r) => server.once("listening", r));
+  const base = `http://127.0.0.1:${(server.address() as any).port}/api`;
+  const call = async (p: string, body: unknown, token?: string) => {
+    const r = await fetch(base + p, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify(body),
+    });
+    return { status: r.status, body: (await r.json()) as any };
+  };
+  const signup = async (email: string) => {
+    const r = await call("/users", { name: "Test Person", email, country: "DE" });
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    return { id: r.body.id as string, token: r.body.sessionToken as string };
+  };
+  const challenge = async (purpose: string, token?: string, extra: object = {}) => {
+    const r = await call("/webauthn/challenge", { purpose, ...extra }, token);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    return r.body.challenge as string;
+  };
+  const register = (who: { id: string; token: string }, body: object) => call(`/users/${who.id}/passkey`, body, who.token);
+  const passkey = (label: string) => makeSoftwarePasskey(label, ORIGIN);
+  let r: Awaited<ReturnType<typeof call>>;
+
+  const a = await signup("a@example.test");
+  const b = await signup("b@example.test");
+  const keyA = await passkey("a");
+  const keyB = await passkey("b");
+
+  // 11. a register challenge is bound to the account that asked for it
+  const chA = await challenge("register", a.token);
+  r = await register(b, keyB.register(chA));
+  assert.equal(r.status, 400, "B registered with a challenge minted for A");
+  assert.equal(store.findUser(b.id)!.passkey, undefined);
+  r = await register(a, keyA.register(chA));
+  assert.equal(r.status, 400, "a challenge tried once on another account is spent, not handed back");
+  console.log("11. a register challenge is not usable by another account, and a misused one is burned");
+
+  // 12. a login challenge is not a register challenge
+  r = await register(a, keyA.register(await challenge("login")));
+  assert.equal(r.status, 400);
+  console.log("12. a login challenge cannot register a passkey");
+
+  // 13. an expired register challenge is refused
+  {
+    const ch = await challenge("register", a.token);
+    const realNow = Date.now;
+    Date.now = () => realNow() + 5 * 60_000 + 1_000;
+    try { r = await register(a, keyA.register(ch)); } finally { Date.now = realNow; }
+    assert.equal(r.status, 400, JSON.stringify(r.body));
+    assert.equal(store.findUser(a.id)!.passkey, undefined);
+    console.log("13. a register challenge past its five minutes is refused");
+  }
+
+  // 14. foreign origin or RP id at registration is refused
+  r = await register(a, keyA.register(await challenge("register", a.token), { origin: "https://evil.example" }));
+  assert.equal(r.status, 400);
+  r = await register(a, keyA.register(await challenge("register", a.token), { rpId: "evil.example" }));
+  assert.equal(r.status, 400);
+  assert.equal(store.findUser(a.id)!.passkey, undefined);
+  console.log("14. registration from another origin or for another RP id is refused");
+
+  // 15. success spends the challenge
+  const chOk = await challenge("register", a.token);
+  r = await register(a, keyA.register(chOk));
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  const keyA2 = await passkey("a2");
+  // With a valid step-up, so the replay reaches the challenge check: without
+  // one, the missing step-up refuses it first and the challenge goes untested.
+  r = await register(a, { ...keyA2.register(chOk), stepUp: await keyA.assert(await challenge("step_up", a.token, { action: "passkey.replace" })) });
+  assert.equal(r.status, 400, `the challenge of a completed registration registered again: ${JSON.stringify(r.body)}`);
+  assert.match(r.body.error, /unknown or expired challenge/, "refused for a reason other than the spent challenge");
+  assert.equal(store.findUser(a.id)!.passkey!.credentialId, keyA.credentialId);
+  console.log("15. the challenge of a completed registration cannot be replayed");
+
+  r = await register(b, keyB.register(await challenge("register", b.token)));
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+
+  // 16. replacing a passkey needs a step-up from THIS account's current
+  // passkey, bound to passkey.replace on THIS account
+  {
+    const stepUp = async (token: string, key: typeof keyA, action = "passkey.replace") =>
+      key.assert(await challenge("step_up", token, { action }));
+    const replace = async (stepUpBody: unknown) =>
+      register(a, { ...keyA2.register(await challenge("register", a.token)), stepUp: stepUpBody });
+    r = await replace(undefined);
+    assert.equal(r.status, 401, "no step-up");
+    r = await replace(await stepUp(b.token, keyB));
+    assert.equal(r.status, 403, "B's passkey approved A's replacement");
+    r = await replace({ ...(await stepUp(b.token, keyA)), credentialId: keyA.credentialId });
+    assert.equal(r.status, 401, "A's passkey over a challenge bound to B's account");
+    r = await replace(await stepUp(a.token, keyA, "monerium.connect"));
+    assert.equal(r.status, 401, "a step-up for another action approved the replacement");
+    r = await replace(await keyA.assert(await challenge("login")));
+    assert.equal(r.status, 401, "a login challenge stood in for a step-up");
+    r = await replace(await keyA.assert(await challenge("step_up", a.token, { action: "passkey.replace" }), { origin: "https://evil.example" }));
+    assert.equal(r.status, 401, "a step-up from another origin");
+    assert.equal(store.findUser(a.id)!.passkey!.credentialId, keyA.credentialId, "nothing replaced so far");
+    const other = (await call("/passkey/login", await keyA.assert(await challenge("login")))).body.sessionToken as string;
+    r = await replace(await stepUp(a.token, keyA));
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    assert.equal(store.findUser(a.id)!.passkey!.credentialId, keyA2.credentialId);
+    const stale = await fetch(`${base}/session`, { headers: { authorization: `Bearer ${other}` } });
+    assert.equal(stale.status, 401, "a session minted before the swap outlived it");
+    console.log("16. passkey replacement: only this account's current passkey, for this action, revokes other sessions");
+  }
+
+  // 17. login is bound to the credential's account, its RP, and an unspent
+  // login challenge from an allowed origin
+  {
+    r = await call("/passkey/login", await keyA.assert(await challenge("login")));
+    assert.equal(r.status, 404, "the replaced passkey still signs in");
+    r = await call("/passkey/login", { ...(await keyB.assert(await challenge("login"))), credentialId: keyA2.credentialId });
+    assert.equal(r.status, 401, "B's signature over A's credential id");
+    const assertion = await keyB.assert(await challenge("login"));
+    r = await call("/passkey/login", assertion);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.id, b.id, "a login signed by B's passkey answered as another account");
+    r = await call("/passkey/login", assertion);
+    assert.equal(r.status, 401, "a spent login challenge signed in again");
+    r = await call("/passkey/login", await keyB.assert(await challenge("step_up", b.token, { action: "passkey.replace" })));
+    assert.equal(r.status, 401, "a step-up challenge used to sign in");
+    r = await call("/passkey/login", await keyB.assert(await challenge("login"), { origin: "https://evil.example" }));
+    assert.equal(r.status, 401, "a login from another origin");
+    r = await call("/passkey/login", await keyB.assert(await challenge("login"), { rpId: "evil.example" }));
+    assert.equal(r.status, 401, "a login for another RP id");
+    const ch = await challenge("login");
+    const realNow = Date.now;
+    Date.now = () => realNow() + 5 * 60_000 + 1_000;
+    try { r = await call("/passkey/login", await keyB.assert(ch)); } finally { Date.now = realNow; }
+    assert.equal(r.status, 401, "an expired login challenge");
+    console.log("17. login: right account, RP id, origin, purpose; once; within the TTL");
+  }
+
+  // 18. two signups on one email, finished at the same moment: one claimable
+  // account (EMAIL_VERIFICATION off, so a passkey holds the address)
+  {
+    const c1 = await signup("twin@example.test");
+    const c2 = await signup("Twin@Example.test ");
+    const [k1, k2] = await Promise.all([passkey("t1"), passkey("t2")]);
+    const [ch1, ch2] = await Promise.all([challenge("register", c1.token), challenge("register", c2.token)]);
+    const rs = await Promise.all([register(c1, k1.register(ch1)), register(c2, k2.register(ch2))]);
+    assert.deepEqual(rs.map((x) => x.status).sort(), [201, 409], JSON.stringify(rs.map((x) => x.body)));
+    assert.equal(rs.find((x) => x.status === 409)!.body.code, "EMAIL_IN_USE");
+    assert.equal(store.usersByEmail("twin@example.test").filter((u) => u.passkey?.publicKey).length, 1);
+    r = await call("/users", { name: "Third", email: "TWIN@example.test", country: "DE" });
+    assert.equal(r.status, 409, "a third signup on the held address");
+    console.log("18. parallel passkey completions on one email give one claimable account");
+  }
+
+  server.close();
+}
+
+console.log("\nWEBAUTHN SELF-TEST PASSED — 19/19");

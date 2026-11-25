@@ -14,6 +14,15 @@
  * chain; balances stay strings; a 401 from Gnosis Pay does not become a 401
  * from us (which would log the user out of Zold); no JWT is persisted.
  *
+ * The router matrix (second half): a Zold session never ends up connected to
+ * a Gnosis Pay profile it did not start and sign for. Start and verify are
+ * bound (same account, same message, same cookie, once, within the TTL);
+ * the profile must list the wallet that signed; /account never re-records
+ * another profile over the connected one; upstream bodies are capped and a
+ * stalled one is a 504; the JWT reaches no store, log or other response.
+ * One process: the pending sign-ins are this process's, so a second
+ * instance or a restart is not modelled (an open deployment decision).
+ *
  * Stub Gnosis Pay, no chain, no network.
  *
  * Run: npm run gnosispay:test
@@ -21,6 +30,7 @@
 import "./_test-env.js";
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
+import { randomBytes } from "node:crypto";
 
 const NONCE = "91300995f3381b0b858e3c775e5a8e7d27bfb005d6ff3a88e8d0b842fd804d7a";
 const COOKIE_VALUE = "siwe=stub-session-cookie";
@@ -34,12 +44,77 @@ let unauthorizedNext = false;
 /** The profile read answers 200 with a body the route cannot use. */
 let nullProfileNext = false;
 
+// ---- router-matrix stub state -------------------------------------------
+/** A fresh nonce and cookie per call, as the real endpoint does. */
+let freshNonces = false;
+const nonceOfCookie = new Map<string, string>();
+/** Tokens the stub issued, and whose profile each one reads. */
+const profileOfToken = new Map<string, Record<string, unknown>>();
+let challengeCalls = 0;
+/** The next answer on a path starting with `path` is broken this way. */
+let fault: { path: string; kind: "empty" | "malformed" | "oversized" | "hang" | "echo" | "unavailable" } | undefined;
+const WALLET_A = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const WALLET_B = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+/** Signs in, but its profile lists WALLET_B as the sign-in wallet. */
+const WALLET_M = "0xcccccccccccccccccccccccccccccccccccccccc";
+/** Signs in, but its profile carries no id. */
+const WALLET_N = "0xdddddddddddddddddddddddddddddddddddddddd";
+const profileOfWallet: Record<string, Record<string, unknown>> = {
+  [WALLET_A]: { id: "gp-A", kycStatus: "approved", status: "active", signInWallets: [{ address: WALLET_A }], safeWallets: [{ address: GP_SAFE, chainId: 100 }] },
+  [WALLET_B]: { id: "gp-B", kycStatus: "approved", status: "active", signInWallets: [{ address: WALLET_B }] },
+  [WALLET_M]: { id: "gp-M", signInWallets: [{ address: WALLET_B }] },
+  [WALLET_N]: { signInWallets: [{ address: WALLET_N }] },
+};
+
 const stub: Server = createServer((req, res) => {
   const url = req.url ?? "";
   const send = (code: number, body: unknown, type = "application/json") => {
     res.writeHead(code, { "content-type": type });
     res.end(type === "application/json" ? JSON.stringify(body) : String(body));
   };
+  if (fault && url.startsWith(fault.path)) {
+    const { kind } = fault;
+    fault = undefined;
+    if (kind === "empty") return send(200, "", "text/plain");
+    if (kind === "malformed") return send(200, "{not json", "text/plain");
+    if (kind === "oversized") return send(200, "x".repeat(2 * 1024 * 1024), "text/plain");
+    if (kind === "echo") return send(400, { message: `rejected ${req.headers.authorization}` });
+    if (kind === "unavailable") return send(503, { message: "try again later" });
+    // Headers, a first byte, then nothing: only our timeout ends this.
+    res.writeHead(200, { "content-type": "application/json" });
+    return res.write("[");
+  }
+  if (url.startsWith("/api/v1/auth/nonce") && freshNonces) {
+    nonceCalls++;
+    const nonce = randomBytes(16).toString("hex");
+    const cookie = `siwe=c${randomBytes(8).toString("hex")}`;
+    nonceOfCookie.set(cookie, nonce);
+    res.writeHead(200, { "content-type": "text/plain", "set-cookie": `${cookie}; Path=/; HttpOnly` });
+    return res.end(nonce);
+  }
+  if (url.startsWith("/api/v1/auth/challenge") && freshNonces) {
+    challengeCalls++;
+    let body = "";
+    req.on("data", (c) => (body += c));
+    return req.on("end", () => {
+      const { message = "", signature = "" } = JSON.parse(body || "{}");
+      const nonce = nonceOfCookie.get(String(req.headers.cookie ?? ""));
+      // Deliberately NOT single-use: what stops a replay must be ours.
+      if (!nonce || !String(message).includes(`Nonce: ${nonce}`)) return send(401, { message: "invalid nonce" });
+      const signer = String(message).split("\n")[1]?.toLowerCase();
+      if (signature !== `signed:${signer}` || !profileOfWallet[signer]) return send(401, { message: "invalid signature" });
+      const token = `jwt.${signer.slice(2, 6)}.${randomBytes(12).toString("hex")}`;
+      profileOfToken.set(token, profileOfWallet[signer]);
+      return send(200, { token });
+    });
+  }
+  const issued = profileOfToken.get(String(req.headers.authorization ?? "").replace(/^Bearer /, ""));
+  if (issued) {
+    if (url.startsWith("/api/v1/user")) return send(200, issued);
+    if (url.startsWith("/api/v1/cards")) return send(200, []);
+    if (url.startsWith("/api/v1/account-balances")) return send(200, { total: "0", spendable: "0", pending: "0" });
+    if (url.startsWith("/api/v1/transactions")) return send(200, []);
+  }
   if (url.startsWith("/api/v1/auth/nonce")) {
     nonceCalls++;
     // text/plain + set-cookie, exactly as the real endpoint answers.
@@ -84,6 +159,8 @@ const stub: Server = createServer((req, res) => {
 await new Promise<void>((r) => stub.listen(0, "127.0.0.1", () => r()));
 const port = (stub.address() as any).port;
 process.env.GNOSIS_PAY_BASE_URL = `http://127.0.0.1:${port}`;
+// Short, so the stalled-body cases finish quickly.
+process.env.GNOSIS_PAY_TIMEOUT_MS = "600";
 
 const gp = await import("../services/api/src/adapters/gnosis-pay.js");
 const { GNOSIS_PAY } = await import("../services/api/src/config.js");
@@ -225,7 +302,258 @@ await check("an internal failure answers 500 with a reference, never the raw err
   }
 });
 
+
+// ===========================================================================
+// Router matrix: sessions A and B, the stub issuing a fresh nonce per start.
+{
+  const express = (await import("express")).default;
+  const { store } = await import("../services/api/src/store.js");
+  const { SECURITY } = await import("../services/api/src/config.js");
+  const { DB_PATH } = await import("../services/api/src/store/db.js");
+  const { createGnosisPayRouter } = await import("../services/api/src/routes/gnosis-pay.js");
+  const { readFileSync } = await import("node:fs");
+  for (const id of ["u_a", "u_b"]) {
+    store.addUser({ id, name: id, country: "DE", kycStatus: "approved", createdAt: new Date().toISOString() } as any);
+  }
+  freshNonces = true;
+  const app = express().use(express.json({ limit: SECURITY.jsonBodyLimit }));
+  app.use("/api/gnosis-pay", createGnosisPayRouter((req, res) => {
+    const userId = req.header("x-user");
+    if (!userId) { res.status(401).json({ error: "no session" }); return undefined; }
+    return { userId } as any;
+  }));
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise<void>((r) => server.once("listening", () => r()));
+  const base = `http://127.0.0.1:${(server.address() as any).port}/api/gnosis-pay`;
+
+  // Everything the API says, in logs and in answers, for the token checks.
+  const logged: string[] = [];
+  const answers: Array<{ path: string; text: string }> = [];
+  const tokens: string[] = [];
+  const realLog = console.log, realError = console.error, realWarn = console.warn;
+  console.error = (...a: unknown[]) => { logged.push(a.map(String).join(" ")); };
+  console.warn = (...a: unknown[]) => { logged.push(a.map(String).join(" ")); };
+  // The harness's own numbered lines quote answers, and are not the API's logs.
+  console.log = (...a: unknown[]) => { const line = a.map(String).join(" "); if (!/^\d+\. /.test(line)) logged.push(line); realLog(...a); };
+
+  const call = async (method: string, path: string, as: string | undefined, opts: { json?: unknown; raw?: string; token?: string } = {}) => {
+    const headers: Record<string, string> = {};
+    if (as) headers["x-user"] = as;
+    if (opts.token) headers["x-gnosis-pay-token"] = opts.token;
+    if (opts.json !== undefined || opts.raw !== undefined) headers["content-type"] = "application/json";
+    const r = await fetch(base + path, {
+      method, headers,
+      ...(opts.raw !== undefined ? { body: opts.raw } : opts.json !== undefined ? { body: JSON.stringify(opts.json) } : {}),
+    });
+    const text = await r.text();
+    let body: any = {};
+    try { body = JSON.parse(text); } catch { /* the parser's own HTML error page */ }
+    answers.push({ path, text });
+    if (typeof body.token === "string") tokens.push(body.token);
+    return { status: r.status, body };
+  };
+  const start = async (as: string, address: string) => {
+    const r = await call("POST", "/siwe/start", as, { json: { address } });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    return { message: r.body.message as string, cookie: r.body.cookie as string, signature: `signed:${address.toLowerCase()}` };
+  };
+  const verify = (as: string, v: { message: string; cookie: string; signature: string }) =>
+    call("POST", "/siwe/verify", as, { json: v });
+  const connectedOf = (id: string) => store.findUser(id)?.gnosisPay;
+  const disconnect = (id: string) => store.updateUser(id, { gnosisPay: undefined });
+
+  await check("router: a start and verify on one session connects the signer's profile", async () => {
+    const r = await verify("u_a", await start("u_a", WALLET_A));
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(connectedOf("u_a")?.userId, "gp-A");
+    assert.equal(connectedOf("u_a")?.connectedAddress.toLowerCase(), WALLET_A);
+    disconnect("u_a");
+  });
+
+  await check("router: a sign-in started by session A cannot be finished by session B", async () => {
+    const v = await start("u_a", WALLET_A);
+    const before = challengeCalls;
+    const r = await verify("u_b", v);
+    assert.notEqual(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.token, undefined, "B was handed A's Gnosis Pay token");
+    assert.equal(connectedOf("u_b"), undefined, "B connected to A's Gnosis Pay profile");
+    assert.equal(challengeCalls, before, "refused before Gnosis Pay is asked");
+    const again = await verify("u_a", v);
+    assert.notEqual(again.status, 200, "a start tried on another account is spent, not handed back");
+    assert.equal(connectedOf("u_a"), undefined);
+  });
+
+  await check("router: verify with another start's cookie is refused", async () => {
+    const v1 = await start("u_a", WALLET_A);
+    const v2 = await start("u_a", WALLET_A);
+    const r = await verify("u_a", { ...v1, cookie: v2.cookie });
+    assert.notEqual(r.status, 200, JSON.stringify(r.body));
+    assert.equal(connectedOf("u_a"), undefined);
+  });
+
+  await check("router: session A cannot finish with a message for signer B on A's nonce", async () => {
+    const v = await start("u_a", WALLET_A);
+    const lines = v.message.split("\n");
+    lines[1] = WALLET_B;
+    const r = await verify("u_a", { message: lines.join("\n"), cookie: v.cookie, signature: `signed:${WALLET_B}` });
+    assert.notEqual(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.token, undefined);
+    assert.equal(connectedOf("u_a"), undefined, "A connected to B's profile");
+  });
+
+  await check("router: a profile that does not list the signing wallet is not connected", async () => {
+    const r = await verify("u_a", await start("u_a", WALLET_M));
+    assert.notEqual(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.token, undefined);
+    assert.equal(connectedOf("u_a"), undefined, "A connected to a profile that is not the signer's");
+    const r2 = await verify("u_a", await start("u_a", WALLET_N));
+    assert.notEqual(r2.status, 200, JSON.stringify(r2.body));
+    assert.equal(connectedOf("u_a"), undefined, "A connected to a profile with no id");
+  });
+
+  await check("router: a completed sign-in cannot be replayed", async () => {
+    const v = await start("u_a", WALLET_A);
+    assert.equal((await verify("u_a", v)).status, 200);
+    disconnect("u_a");
+    const before = challengeCalls;
+    const r = await verify("u_a", v);
+    assert.notEqual(r.status, 200, "the same message, signature and cookie signed in twice");
+    assert.equal(connectedOf("u_a"), undefined);
+    assert.equal(challengeCalls, before);
+  });
+
+  await check("router: a sign-in past its time is refused", async () => {
+    const v = await start("u_a", WALLET_A);
+    const realNow = Date.now;
+    Date.now = () => realNow() + 10 * 60_000;
+    let r;
+    try { r = await verify("u_a", v); } finally { Date.now = realNow; }
+    assert.notEqual(r.status, 200, JSON.stringify(r.body));
+    assert.equal(connectedOf("u_a"), undefined);
+  });
+
+  await check("router: /account with another profile's token never overwrites the connection", async () => {
+    assert.equal((await verify("u_a", await start("u_a", WALLET_A))).status, 200);
+    const mine = structuredClone(connectedOf("u_a"));
+    const theirs = await verify("u_b", await start("u_b", WALLET_B));
+    assert.equal(theirs.status, 200);
+    const r = await call("GET", "/account", "u_a", { token: theirs.body.token });
+    assert.equal(r.status, 409, JSON.stringify(r.body));
+    assert.equal(r.body.reauth, true);
+    assert.equal(r.body.user, undefined, "B's profile was served as A's card account");
+    assert.deepEqual(connectedOf("u_a"), mine, "A's stored connection was rewritten from B's profile");
+  });
+
+  await check("router: /account with no connection records none", async () => {
+    const tokenB = tokens[tokens.length - 1];
+    disconnect("u_a");
+    const r = await call("GET", "/account", "u_a", { token: tokenB });
+    assert.notEqual(r.status, 500);
+    assert.equal(connectedOf("u_a"), undefined, "a bare token connected a profile without a sign-in");
+  });
+
+  await check("router: empty, malformed, wrong-typed and oversized request bodies connect nothing and call nobody", async () => {
+    const before = challengeCalls;
+    assert.equal((await call("POST", "/siwe/verify", "u_a")).status, 400);
+    assert.equal((await call("POST", "/siwe/verify", "u_a", { raw: "{not json" })).status, 400);
+    const r = await call("POST", "/siwe/verify", "u_a", { json: { message: { a: 1 }, signature: ["x"], cookie: 7 } });
+    assert.ok(r.status >= 400 && r.status < 500, `${r.status}`);
+    const big = "x".repeat(1024 * 1024); // past the parser's limit (64kb by default)
+    assert.equal((await call("POST", "/siwe/verify", "u_a", { json: { message: big, signature: "s", cookie: "c" } })).status, 413);
+    assert.equal((await call("POST", "/siwe/start", "u_a", { raw: "" })).status, 400);
+    assert.equal(challengeCalls, before);
+    assert.equal(connectedOf("u_a"), undefined);
+  });
+
+  const upstream = async (path: string, kind: NonNullable<typeof fault>["kind"], run: () => Promise<{ status: number; body: any }>) => {
+    fault = { path, kind };
+    const t0 = Date.now();
+    // A hard stop of our own: if the API ever stops aborting a stalled body,
+    // this check fails instead of hanging the whole run.
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${path} ${kind}: no answer within 5000ms`)), 5_000);
+    });
+    try {
+      const r = await Promise.race([run(), deadline]);
+      return { ...r, ms: Date.now() - t0 };
+    } finally {
+      clearTimeout(timer);
+      fault = undefined;
+    }
+  };
+
+  await check("router: an empty, oversized or stalled nonce answer starts nothing", async () => {
+    for (const kind of ["empty", "oversized"] as const) {
+      const r = await upstream("/api/v1/auth/nonce", kind, () => call("POST", "/siwe/start", "u_a", { json: { address: WALLET_A } }));
+      assert.equal(r.status, 502, `${kind}: ${JSON.stringify(r.body).slice(0, 200)}`);
+      assert.equal(r.body.message, undefined, `${kind}: a sign-in was started on a ${kind} nonce`);
+    }
+    const r = await upstream("/api/v1/auth/nonce", "hang", () => call("POST", "/siwe/start", "u_a", { json: { address: WALLET_A } }));
+    assert.equal(r.status, 504, JSON.stringify(r.body));
+    assert.ok(r.ms < 5_000, `bounded by the timeout, took ${r.ms}ms`);
+  });
+
+  await check("router: an empty, malformed, oversized or stalled sign-in answer connects nothing", async () => {
+    disconnect("u_a");
+    for (const kind of ["empty", "malformed", "oversized", "hang"] as const) {
+      const v = await start("u_a", WALLET_A);
+      const r = await upstream("/api/v1/auth/challenge", kind, () => verify("u_a", v));
+      assert.equal(r.status, kind === "hang" ? 504 : 502, `${kind}: ${JSON.stringify(r.body)}`);
+      assert.equal(r.body.token, undefined);
+      assert.equal(connectedOf("u_a"), undefined, kind);
+    }
+  });
+
+  await check("router: a sign-in whose profile read fails is refused whole, and a retry connects", async () => {
+    disconnect("u_a");
+    const v = await start("u_a", WALLET_A);
+    const r = await upstream("/api/v1/user", "unavailable", () => verify("u_a", v));
+    assert.equal(r.status, 502, JSON.stringify(r.body));
+    assert.equal(r.body.token, undefined, "a token was handed back for a sign-in that connected nothing");
+    assert.equal(connectedOf("u_a"), undefined);
+    const again = await verify("u_a", await start("u_a", WALLET_A));
+    assert.equal(again.status, 200, JSON.stringify(again.body));
+    assert.equal(connectedOf("u_a")?.userId, "gp-A");
+  });
+
+  await check("router: an oversized or stalled profile answer is a 502/504, never a 500", async () => {
+    assert.equal((await verify("u_a", await start("u_a", WALLET_A))).status, 200);
+    const token = tokens[tokens.length - 1];
+    const big = await upstream("/api/v1/user", "oversized", () => call("GET", "/account", "u_a", { token }));
+    assert.equal(big.status, 502, JSON.stringify(big.body));
+    const hang = await upstream("/api/v1/user", "hang", () => call("GET", "/account", "u_a", { token }));
+    assert.equal(hang.status, 504, JSON.stringify(hang.body));
+  });
+
+  await check("router: a Gnosis Pay error quoting the token does not carry it back", async () => {
+    const token = tokens[tokens.length - 1];
+    const r = await upstream("/api/v1/transactions", "echo", () => call("GET", "/transactions", "u_a", { token }));
+    assert.equal(r.status, 400);
+    assert.ok(!JSON.stringify(r.body).includes(token), JSON.stringify(r.body));
+  });
+
+  await check("router: no Gnosis Pay token in the store, the logs or any answer but its own sign-in", async () => {
+    assert.ok(tokens.length >= 3, "the matrix issued tokens");
+    const stored = JSON.stringify(store.findUser("u_a")) + JSON.stringify(store.findUser("u_b")) + readFileSync(DB_PATH, "utf8");
+    const log = logged.join("\n");
+    for (const token of tokens) {
+      assert.ok(!stored.includes(token), "a token is in the store");
+      assert.ok(!log.includes(token), "a token is in the logs");
+      const where = answers.filter((a) => a.text.includes(token));
+      assert.ok(where.every((a) => a.path === "/siwe/verify"), `a token in answers to ${where.map((a) => a.path)}`);
+      assert.ok(where.length <= 1, "a token was answered twice");
+    }
+  });
+
+  console.log = realLog; console.error = realError; console.warn = realWarn;
+  freshNonces = false;
+  server.closeAllConnections();
+  server.close();
+}
+
 assert.ok(nonceCalls >= 3, "expected the nonce endpoint to be exercised");
+stub.closeAllConnections();
 stub.close();
 
 console.log("");
