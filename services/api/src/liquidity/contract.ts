@@ -160,6 +160,9 @@ export interface SafeSwapPlan {
 }
 
 export interface LiquidityProvider {
+  /** Prices but cannot settle a swap for anyone (CoW): execute() always
+   *  refuses, so a transfer on it would debit and then strand in review. */
+  readonly quoteOnly?: boolean;
   quote(side: LiquiditySide, amountIn: bigint, quoteId: string, expiresAt: string): Promise<LiquidityQuote>;
   execute(quote: LiquidityQuote, to?: `0x${string}`): Promise<LiquidityExecution>;
   /**

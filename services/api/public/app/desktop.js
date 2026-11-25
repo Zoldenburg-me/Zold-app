@@ -147,6 +147,11 @@ function phGreeting(name) {
 function phDeskBalance(u) {
   const live = u.iban && kycApproved(u);
   const known = phCache.bicFor === u.iban && phCache.bic !== undefined;
+  // Undecided: the checklist beside this card asks where they live; nothing to press here.
+  if (residenceAsked(u)) {
+    return `<section class="z-card z-dhome__bal">${phBalance(knownBalance(u), "Balance")}
+      <div class="z-dhome__ids z-dhome__ids--none"><p class="z-sub">Your account details appear here once you’ve said where you live.</p></div></section>`;
+  }
   const details = live
     ? `<div class="z-dhome__ids">
         <div><span class="z-dhome__k">IBAN</span><span class="z-mono" translate="no">${esc(Z.groupIban(u.iban))}</span></div>

@@ -190,6 +190,11 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     const session = requireSession(req, res);
     if (!session) return;
 
+    // An organisation opens accounts, pages and partner keys of its own, none
+    // of which ask the member's segment: so not before that is decided.
+    if (store.findUser(session.userId)?.segment?.value === "UNDECIDED") {
+      return res.status(403).json({ code: "RESIDENCE_NEEDED", error: "Say where you live first. It is the first step on your Home." });
+    }
     const { name, type, country, legalName, taxId, email, timeZone, entity } = req.body ?? {};
     const orgType: OrgType = type === "business" ? "business" : "personal";
     // Company or sole trader decides who will own the org's money, so a

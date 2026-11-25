@@ -256,7 +256,8 @@ export const store = {
   ) {
     const u = db.users.find((x) => x.id === id);
     if (!u) throw new Error(`unknown user ${id}`);
-    if (u.segment && by !== "admin") {
+    // An account that has not said where it lives is decided once, later.
+    if (u.segment && u.segment.value !== "UNDECIDED" && by !== "admin") {
       throw new Error(
         `user ${id} already has segment ${u.segment.value}; only an admin action may change it`,
       );
