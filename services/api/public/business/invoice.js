@@ -158,7 +158,7 @@ RENDER["invoice-new"] = async () => {
   const f = (id, label, value, extra = "") => `<div><label for="${id}">${label}</label><input id="${id}" name="${id}" autocomplete="off" value="${esc(value ?? "")}" ${extra} /></div>`;
 
   const html = `<div class="zb-editor">
-    <form class="zb-editor__form" id="inv-form" novalidate onsubmit="return false">
+    <form class="zb-editor__form" id="inv-form" novalidate data-z-nosubmit>
       ${missing.length ? `<div class="zb-note zb-note--a" style="margin-bottom:6px">${Z.icon("badge")}<span>Your business profile is missing ${esc(missing.join(" and "))}. Add it once and it goes on every invoice. <a href="?view=organisation" data-view-link="organisation">Business profile</a></span></div>` : ""}
       <div class="zb-row zb-row--2">
         <div><label for="inv-r-name">Customer</label><input id="inv-r-name" name="customer" autocomplete="off" value="${esc(r.name || "")}" placeholder="Customer or company name…" list="inv-contacts" /></div>

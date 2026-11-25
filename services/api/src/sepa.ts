@@ -86,6 +86,17 @@ export function reportedBic(user: { iban?: string; ibanBic?: { iban: string; bic
   return b && user.iban && normalizeIban(b.iban) === normalizeIban(user.iban) ? b.bic : undefined;
 }
 
+/** Monerium's docs refuse a redeem message stamped over 5 minutes ago, and it is
+ *  stamped at creation. A minute is left for the fee debit that runs first. */
+export const REDEEM_WINDOW_SEC = 4 * 60;
+
+/** Past REDEEM_WINDOW_SEC since the redeem message was stamped: it must not be
+ *  sent to Monerium. An unreadable stamp counts as stale. */
+export function redeemMessageStale(issuedAt: string, nowMs = Date.now()): boolean {
+  const stamped = Date.parse(issuedAt);
+  return !Number.isFinite(stamped) || nowMs > stamped + REDEEM_WINDOW_SEC * 1000;
+}
+
 export function moneriumRedeemMessage(amountEur: number, iban: string, issuedAt: string): {
   amount: string;
   iban: string;

@@ -26,6 +26,7 @@ import { auditProfileCheck, checkBackingProfile } from "../../adapters/monerium-
 import {
   CSV_MAX_BYTES,
   activity,
+  assertOneLinePerInvoice,
   assertTransition,
   importCsv,
   isCancellable,
@@ -110,7 +111,12 @@ export function createDraftRoutes(
     const ctx = ctxOf(req, res);
     if (!ctx) return;
     if (!requirePermission(ctx, res, "drafts.create")) return;
-    const open = store.draftsOf(ctx.org.id).filter((d) => !["EXECUTED", "FAILED", "REJECTED", "CANCELLED"].includes(d.state)).length;
+    // Counted by the state reads show (withExecutionState, which writes
+    // nothing), though the row still says EXECUTING: a run is EXECUTED once
+    // every line is PAID, and FAILED once any line is FAILED, REFUNDED,
+    // MANUAL_REVIEW or past its signing deadline, even while its other lines
+    // are still live. This is a resource cap, not a money guard.
+    const open = store.draftsOf(ctx.org.id).map(withExecutionState).filter((d) => !["EXECUTED", "FAILED", "REJECTED", "CANCELLED"].includes(d.state)).length;
     if (open >= CEILINGS.openDraftsPerOrg) {
       return res.status(409).json(ceilingRefusal("payment runs not yet executed", CEILINGS.openDraftsPerOrg));
     }
@@ -141,6 +147,7 @@ export function createDraftRoutes(
         ...validateLine(l, typeof l?.contactId === "string" ? contacts.get(l.contactId) : undefined),
       }));
       if (!lines.length) return res.status(400).json({ error: "A draft needs at least one line." });
+      assertOneLinePerInvoice(lines);
 
       const now = new Date().toISOString();
       const draft = store.addDraft({
@@ -189,6 +196,7 @@ export function createDraftRoutes(
         id: typeof l?.id === "string" ? l.id : `dl_${randomUUID()}`,
         ...validateLine(l, typeof l?.contactId === "string" ? contacts.get(l.contactId) : undefined),
       }));
+      assertOneLinePerInvoice(lines);
       const updated = store.updateDraft(draft.id, {
         lines,
         // Re-pointing the lines is exactly how INVALID_DATA is resolved.
@@ -518,6 +526,14 @@ export function createDraftRoutes(
     }
     const spendable = accountIsSpendable(account, ctx.org);
     if (!spendable.ok) return res.status(409).json({ error: spendable.reason });
+    // A company's IBAN is on its own Safe, which only its owners sign; a bank
+    // payout from it (a Monerium redeem signed by the Safe) is not built.
+    if (orgEntity(ctx.org) === "company") {
+      return res.status(409).json({
+        code: "COMPANY_BANK_PAYOUT_NOT_BUILT",
+        error: "Paying a bank account from the company’s IBAN is not built yet. Nothing was sent. A payment to a crypto wallet is queued for the owners to sign.",
+      });
+    }
     if (!account.backingUserId) {
       return res.status(409).json({
         error:
@@ -578,10 +594,21 @@ export function createDraftRoutes(
     const plannedAt = checked.updatedAt;
     const plans: { lineId: string; iban: string; name: string; sendEur: number; invoiceId?: string }[] = [];
     const problems: { lineId: string; reason: string }[] = [];
+    // Create and edit refuse a second line on one invoice
+    // (assertOneLinePerInvoice); a row stored before that check is refused
+    // here, or its lines would overwrite each other's invoice payment.
+    const invoiced = new Set<string>();
 
     for (const line of checked.lines) {
       const d = line.destination;
       if (d.kind === "wallet") continue; // a wallet run returned above
+      if (line.invoiceId) {
+        if (invoiced.has(line.invoiceId)) {
+          problems.push({ lineId: line.id, reason: "This line pays the same invoice as an earlier line. Pay an invoice in one line." });
+          continue;
+        }
+        invoiced.add(line.invoiceId);
+      }
       const contact = line.contactId ? store.findContact(line.contactId) : undefined;
       const bank = contact?.bankAccounts.find((b) => b.id === d.bankAccountId);
       if (!bank) {

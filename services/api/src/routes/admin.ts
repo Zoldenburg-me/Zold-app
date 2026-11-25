@@ -32,6 +32,8 @@ import { onboardingOf, recoveryEnrolment } from "../admin/onboarding.js";
 import { issues, overview } from "../admin/overview.js";
 import { liveMonerium, moneriumOverview, storedMonerium } from "../admin/monerium.js";
 import { maskIdentifier } from "../admin/mask.js";
+import { attachRedeemOrder, mayAttachRedeemOrder } from "../transfers/attach-redeem-order.js";
+import { matchesPayoutEvidence } from "../transfers/review-evidence.js";
 
 function adminUserSummary(userId: string) {
   const u = store.findUser(userId);
@@ -55,13 +57,17 @@ function lastHash(txs: { step: string; hash: string }[] = []) {
 
 function adminTransfer(transfer: Transfer) {
   const quote = store.findQuote(transfer.quoteId);
+  // A modern row records the Stellar hash as anchor.payment.sent too; only a
+  // hash no such step carries (a legacy row, or one that differs) adds an entry.
+  const payoutHash = transfer.pickup?.anchorPaymentHash;
+  const payoutRecorded = transfer.txs.some((tx) => tx.step === "anchor.payment.sent" && tx.hash === payoutHash);
   const route = [
     ...transfer.txs.map((tx) => ({ kind: "chain" as const, ...tx })),
     ...(transfer.liquidity?.txHash
       ? [{ kind: "liquidity" as const, step: `liquidity.${transfer.liquidity.provider}`, hash: transfer.liquidity.txHash }]
       : []),
-    ...(transfer.pickup?.anchorPaymentHash
-      ? [{ kind: "payout" as const, step: "moneygram.anchor.payment", hash: transfer.pickup.anchorPaymentHash }]
+    ...(payoutHash && !payoutRecorded
+      ? [{ kind: "payout" as const, step: "moneygram.anchor.payment", hash: payoutHash }]
       : []),
   ];
   return {
@@ -251,6 +257,30 @@ export function createAdminRouter() {
           return res.status(400).json({ error: "REFUNDED needs evidence: the refund tx hash or the partner's reference" });
         }
         refund = { amountEur: Math.round(amountEur * 100) / 100, movedEur };
+      }
+      // A redeem order Monerium holds but the transfer never recorded is
+      // re-read from Monerium and attached first; the cited id alone is no
+      // evidence (transfers/attach-redeem-order.ts).
+      if (state === "PAID" && evidence && !matchesPayoutEvidence(transfer, evidence) && mayAttachRedeemOrder(transfer)) {
+        const attached = await attachRedeemOrder(transfer.id, evidence);
+        if (!attached.ok && attached.code === "NOT_CONNECTED") {
+          return res.status(409).json({
+            error: "Zold cannot read this account's Monerium orders: it has no Monerium connection, or Monerium refused it. Nothing was changed; the order can be attached once the user connects Monerium again.",
+            code: "MONERIUM_NOT_CONNECTED",
+          });
+        }
+        if (!attached.ok && attached.code === "READ_REFUSED") {
+          return res.status(409).json({
+            error: "Monerium refused this account's read of that order: the connection may lack access to orders, or the order is another account's. Nothing was changed; check the connection or the order id.",
+            code: "MONERIUM_READ_REFUSED",
+          });
+        }
+        if (!attached.ok && attached.code === "UNAVAILABLE") {
+          return res.status(503).json({ error: "Monerium could not be read for that order, so nothing was changed. Try again." });
+        }
+        if (!attached.ok) {
+          return res.status(409).json({ error: `that is not this transfer's processed Monerium redeem order: ${attached.reason}` });
+        }
       }
       const result = store.resolveTransferReview(String(req.params.id), {
         state: state as ReviewResolutionState,

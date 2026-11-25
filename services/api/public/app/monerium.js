@@ -28,12 +28,12 @@ function ibanActivationOffered(u = user) {
   return !!u && bankOffered(u) && (kycApproved(u) || u.kycStatus === "pending");
 }
 
-/* Connected, and Monerium is still reviewing it: there is no IBAN to get or
-   switch on yet, and nothing to redo. Every "Verify your identity" says this
-   instead of opening the IBAN sign-in. */
+/* Monerium is still reviewing it, connected or not: there is no IBAN to get
+   or switch on yet, and nothing to redo (the API refuses one either way).
+   Every "Verify your identity" says this instead of opening the IBAN sign-in. */
 const IBAN_UNDER_REVIEW = "Monerium is still reviewing this account. No IBAN yet.";
 function ibanUnderReview(u = user) {
-  return !!u && hasConnectedMonerium(u) && bankOffered(u) && !ibanActivationOffered(u);
+  return !!u && bankOffered(u) && !ibanActivationOffered(u);
 }
 
 function ibanMovedAway(u = user) {
@@ -62,6 +62,8 @@ function renderMoneriumScreen() {
     ? "Connected by signing in at Monerium."
     : keys || !caps.moneriumOAuth
       ? `Connect the API keys of your own Monerium account. This deployment talks to Monerium ${env} (${caps.moneriumHost}), so the keys must come from an app created at ${portal} — keys from the other environment are refused as a wrong secret.`
+      // Under review, the sign-in still connects the account, but no IBAN follows yet.
+      : ibanUnderReview(u) ? `${IBAN_UNDER_REVIEW} You can still connect your Monerium account here.`
       : "Monerium issues your IBAN. Sign in or sign up there, then come back here.";
   const row = (k, v) => `<div class="m-row"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`;
   const when = (iso) => { const d = new Date(iso || ""); return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString(); };
@@ -442,15 +444,19 @@ async function renderPrivacyBundle() {
   }
   // Only the offer needs the catalog: a subscriber's status and Cancel read the
   // record, so where the offer is off it is not fetched, and a failed fetch only
-  // loses the plans.
-  if (live) try { await loadPrivacyCatalog(); } catch { if (!active) return; }
+  // swaps the plans for an error and Try again.
+  let catalogErr = null;
+  if (live) try { await loadPrivacyCatalog(); } catch (e) { catalogErr = e; }
   card.classList.toggle("hidden", !kycApproved(user) && !active);
   const activePlan = active ? bundlePlan(user.privacyBundle.planId) : null;
   const chip = $("privacy-chip");
   chip.textContent = active ? user.privacyBundle.status.replace("_", " ").toUpperCase() : "OPTIONAL";
   chip.className = active && user.privacyBundle.status === "active" ? "chip ok" : active ? "chip pend" : "chip review";
   // Where the offer is off, a subscriber sees their status and cancel, no plans.
-  $("privacy-plans").innerHTML = (live ? privacyCatalog?.plans || [] : []).map((p) => {
+  $("privacy-plans").innerHTML = catalogErr
+    ? `<div class="error" role="alert">The plans could not be loaded: ${esc(catalogErr.message)}</div>
+      <button class="ghost" id="btn-privacy-retry">Try again</button>`
+    : (live ? privacyCatalog?.plans || [] : []).map((p) => {
     const isActive = activePlan?.id === p.id;
     const disabled = !p.marginProtected || isActive;
     const label = isActive ? "Selected" : p.marginProtected ? "Add" : "Paused";
@@ -462,6 +468,15 @@ async function renderPrivacyBundle() {
       <button class="${isActive ? "ghost" : ""}" data-plan="${esc(p.id)}" ${disabled ? "disabled" : ""}>${label}</button>
     </div>`;
   }).join("");
+  // A failed read left privacyCatalog empty, so this reads it again, once: the
+  // button is disabled until the render that replaces it.
+  if (catalogErr) {
+    const retry = $("btn-privacy-retry");
+    retry.addEventListener("click", () => {
+      retry.disabled = true;
+      return renderPrivacyBundle();
+    });
+  }
   document.querySelectorAll("[data-plan]").forEach((b) => {
     b.onclick = () => subscribePrivacyBundle(b.dataset.plan);
   });

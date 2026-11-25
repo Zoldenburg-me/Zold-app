@@ -6,13 +6,18 @@
  * Prepare first (issues the missing Belege, a write), then download (reads).
  * The CSV carries every line of the month; a line whose Beleg is missing
  * says so in the Zusatzinfo column rather than being dropped.
+ *
+ * Which Beleg may be handed out is one rule, belegOfLine: issued, not
+ * revoked, and its records still agree, the same check as the verify page.
+ * One that no longer agrees is not shipped until someone who may manage the
+ * books replaces it (POST .../beleg/replace).
  */
 import express from "express";
 import { store } from "../../store.js";
 import { requireCapability, requirePermission, type OrgContext } from "../org-context.js";
-import { isMonth, linesInMonth, ownTransferAllowed } from "../../bookkeeping/statement.js";
+import { invoicePayments, isMonth, linesInMonth, ownTransferAllowed, type InvoicePayments } from "../../bookkeeping/statement.js";
 import { statementLinesOf, swapsHaveExecuted, writeAccountStatementLines, writeStatementLinesFor } from "../../bookkeeping/writer.js";
-import { issueBelegForLine } from "../../bookkeeping/issue.js";
+import { belegOfLine, BelegStillVerifies, BelegWouldNotVerify, issueBelegForLine, replaceBelegForLine } from "../../bookkeeping/issue.js";
 import { belegFileName, belegPdf, UNEXECUTED_NOTE } from "../../bookkeeping/beleg.js";
 import { lexwareCsvBytes, lexwareRow } from "../../bookkeeping/lexware.js";
 import { zipStored } from "../../bookkeeping/zip.js";
@@ -20,14 +25,26 @@ import { documentUrl } from "../../documents.js";
 import type { LedgerEntry } from "../../domain/types.js";
 import { bookedCode, isOwnTransfer } from "../../domain/ledger.js";
 import { redactedMessage } from "../../http/log-cause.js";
+import { auditEntry } from "../../audit.js";
 
 export interface OrgRoutes {
   ctxOf: (req: express.Request, res: express.Response) => OrgContext | undefined;
 }
 
-/** The line as the dashboard and the accountant see it. */
-export function publicStatementLine(e: LedgerEntry) {
+/** The line's Beleg if it may be handed out. The statement, the CSV and the
+ *  ZIP all use this one rule, so a revoked Beleg reads as missing everywhere
+ *  until prepare issues a new one, and one that stopped verifying until it is
+ *  replaced. */
+function liveBeleg(e: LedgerEntry) {
+  const b = belegOfLine(e);
+  return b && "live" in b ? b.live : undefined;
+}
+
+/** The line as the dashboard and the accountant see it. A listing builds `paid` once. */
+export function publicStatementLine(e: LedgerEntry, paid: InvoicePayments = invoicePayments(store.invoices)) {
   const s = e.statement!;
+  const b = belegOfLine(e);
+  const beleg = b && "live" in b ? b.live : undefined;
   return {
     id: e.id,
     event: s.event,
@@ -42,10 +59,12 @@ export function publicStatementLine(e: LedgerEntry) {
     ...(bookedCode(e) ? { accountCodeAuto: e.accountCodeAuto !== false } : {}),
     tags: e.tags,
     ...(isOwnTransfer(e) ? { ownTransfer: true } : {}),
-    ...(ownTransferAllowed(e) ? { ownTransferAllowed: true } : {}),
+    ...(ownTransferAllowed(e, paid) ? { ownTransferAllowed: true } : {}),
     note: e.note,
     links: s.links,
-    ...(s.documentCode ? { documentCode: s.documentCode, documentUrl: documentUrl(s.documentCode) } : {}),
+    ...(beleg ? { documentCode: beleg.code, documentUrl: documentUrl(beleg.code) } : {}),
+    // Offered only to be replaced: its page still says why it fails.
+    ...(b && "stale" in b ? { belegStale: { code: b.stale.code, url: documentUrl(b.stale.code), detail: b.detail } } : {}),
     ...(s.unexecuted ? { unexecuted: true } : {}),
   };
 }
@@ -76,7 +95,8 @@ export function createBookkeepingExportRoutes(deps: OrgRoutes): express.Router {
     const month = req.query.month ? String(req.query.month) : undefined;
     if (month && !isMonth(month)) return res.status(400).json({ error: "month must be YYYY-MM" });
     const all = statementLinesOf(ctx.org.id);
-    const lines = (month ? linesInMonth(all, month) : all).map(publicStatementLine);
+    const paid = invoicePayments(store.invoices);
+    const lines = (month ? linesInMonth(all, month) : all).map((e) => publicStatementLine(e, paid));
     const months = [...new Set(all.map((e) => e.statement!.valueDate.slice(0, 7)))].sort().reverse();
     res.json({
       month,
@@ -157,8 +177,11 @@ export function createBookkeepingExportRoutes(deps: OrgRoutes): express.Router {
     const lines = linesInMonth(statementLinesOf(ctx.org.id), month);
     const holder = holderNameFor(ctx.org.id);
     const rows = lines.map((e) => {
-      const row = lexwareRow(e, holder);
-      if (!e.statement!.documentCode) row.extra = ["Beleg fehlt (Export noch nicht vorbereitet)", row.extra].filter(Boolean).join(" | ");
+      const b = belegOfLine(e);
+      const code = b && "live" in b ? b.live.code : undefined;
+      const row = lexwareRow(e, holder, code);
+      const why = b && "stale" in b ? "Beleg stimmt nicht mehr (in Zold ersetzen)" : "Beleg fehlt (Export noch nicht vorbereitet)";
+      if (!code) row.extra = [why, row.extra].filter(Boolean).join(" | ");
       return row;
     });
     // Set after attachment(): express re-derives the charset from the
@@ -178,20 +201,26 @@ export function createBookkeepingExportRoutes(deps: OrgRoutes): express.Router {
     const lines = linesInMonth(statementLinesOf(ctx.org.id), month);
     const entries = [];
     const missing: string[] = [];
+    const stale: string[] = [];
     for (const e of lines) {
-      const code = e.statement!.documentCode;
-      const doc = code ? store.findDocumentByCode(code) : undefined;
-      if (!doc || doc.snapshot.kind !== "beleg") {
+      const b = belegOfLine(e);
+      if (!b) {
         missing.push(e.id);
         continue;
       }
+      if ("stale" in b) {
+        stale.push(`${e.id}: ${b.detail}`);
+        continue;
+      }
+      const doc = b.live;
       entries.push({ name: belegFileName(doc.snapshot, doc.code), data: belegPdf(doc.snapshot, doc.code, doc.createdAt), modifiedAt: new Date(doc.createdAt) });
     }
-    if (missing.length) {
-      entries.push({
-        name: `MISSING-${month}.txt`,
-        data: Buffer.from(`${missing.length} line(s) have no Beleg yet. Run prepare for ${month} first.\n${missing.join("\n")}\n`, "utf8"),
-      });
+    if (missing.length || stale.length) {
+      const text = [
+        ...(missing.length ? [`${missing.length} line(s) have no Beleg yet. Run prepare for ${month} first.`, ...missing] : []),
+        ...(stale.length ? [`${stale.length} line(s) have a Beleg that no longer matches the books, so it is left out. Replace it in Zold's Books, then download again.`, ...stale] : []),
+      ];
+      entries.push({ name: `MISSING-${month}.txt`, data: Buffer.from(`${text.join("\n")}\n`, "utf8") });
     }
     res.status(200).type("application/zip").attachment(`zold-${month}-belege.zip`).send(zipStored(entries));
   });
@@ -207,6 +236,36 @@ export function createBookkeepingExportRoutes(deps: OrgRoutes): express.Router {
       if (!line) return res.status(404).json({ error: "no such statement line" });
       const { doc, issued } = await issueBelegForLine(line);
       res.status(issued ? 201 : 200).json({ code: doc.code, url: documentUrl(doc.code), issued });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /** Revoke the line's Beleg that stopped verifying and issue a new one.
+   *  Whoever may issue a Beleg may replace one: the owner, an admin, the
+   *  accountant. One that still verifies is refused, so nothing true is
+   *  revoked. */
+  r.post("/:orgId/bookkeeping/lines/:lineId/beleg/replace", async (req, res, next) => {
+    try {
+      const ctx = ctxOf(req, res);
+      if (!ctx) return;
+      if (!requireCapability(ctx, res, "export.ledger")) return;
+      if (!requirePermission(ctx, res, "reports.run")) return;
+      const line = store.ledgerOf(ctx.org.id).find((e) => e.id === String(req.params.lineId) && e.statement);
+      if (!line) return res.status(404).json({ error: "no such statement line" });
+      let out;
+      try {
+        out = await replaceBelegForLine(line);
+      } catch (err) {
+        if (err instanceof BelegStillVerifies) return res.status(409).json({ error: "this receipt still matches the books, so there is nothing to replace" });
+        if (err instanceof BelegWouldNotVerify) return res.status(409).json({ error: `a new receipt would not match the books either (${err.message}), so this one is left as it is` });
+        throw err;
+      }
+      // Document ids, never codes: a verification code is a credential.
+      store.audit(auditEntry("document.reissued", {
+        orgId: ctx.org.id, memberId: ctx.member.id, lineId: line.id, documentId: out.doc.id, ...(out.revoked ? { revokedDocumentId: out.revoked.id } : {}),
+      }, ctx.userId));
+      res.status(201).json({ code: out.doc.code, url: documentUrl(out.doc.code), issued: out.issued, revoked: !!out.revoked });
     } catch (err) {
       next(err);
     }

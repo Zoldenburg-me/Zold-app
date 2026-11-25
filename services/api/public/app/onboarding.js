@@ -258,16 +258,34 @@ function obMessage(e) {
       ? "A Face ID prompt is still open. Finish or close it, then try again."
       : "A passkey prompt is still open, maybe in another window, a tab or your password manager. Close it, reload this page, then try again.";
   }
-  if (e?.name === "NotAllowedError") {
-    return phone
-      ? "Face ID or fingerprint was cancelled, or it timed out. Try again when you’re ready."
-      : "The passkey prompt was cancelled, or it timed out. Try again when you’re ready.";
-  }
+  const refused = obPasskeyRefusal(e, e?.passkeyCreate);
+  if (refused) return refused;
   if (e?.name === "InvalidStateError") {
     return `This ${phone ? "phone" : "device"} already has a Zold sign-in for this account. Sign in instead.`;
   }
   const m = String(e?.message || e || "Something went wrong.");
   return m.charAt(0).toUpperCase() + m.slice(1);
+}
+
+/* Why a passkey prompt failed, from the WebAuthn error's name, or null.
+   `creating` marks registerPasskey's create(): a security key that is full,
+   or cannot store a discoverable passkey, refuses it as NotAllowedError, like
+   a cancel. The recovery page says the same (guardian/device-words.js,
+   passkeyRefusal); passkey-prompt-test holds the two equal. */
+function obPasskeyRefusal(e, creating) {
+  if (e?.name === "NotAllowedError") {
+    return creating
+      ? Z.byDevice("Face ID or fingerprint was cancelled, or it timed out. Try again when you’re ready.",
+        "The passkey prompt was cancelled or timed out, or your security key couldn’t save the passkey. Try again, or use this computer’s own passkey or another security key.")
+      : Z.byDevice("Face ID or fingerprint was cancelled, or it timed out. Try again when you’re ready.",
+        "The passkey prompt was cancelled, or it timed out. Try again when you’re ready.");
+  }
+  if (creating && (e?.name === "NotSupportedError" || e?.name === "ConstraintError")) {
+    return Z.byDevice("This phone can’t save a passkey for Zold. Check that Face ID or a fingerprint is set up, then try again.",
+      "This security key can’t save a passkey for Zold: it may be full, or not store passkeys. Use this computer’s own passkey or another security key.");
+  }
+  if (e?.name === "SecurityError") return "This browser won’t use a passkey on this page’s address. Open Zold from its usual address and try again.";
+  return null;
 }
 
 /* ==========================================================================
@@ -1678,7 +1696,9 @@ async function obSignIn(btn) {
     else enterDashboard(user.name);
   } catch (e) {
     obShowErr(e?.name === "NotAllowedError"
-      ? new Error("Sign-in was cancelled, or this phone has no Zold sign-in saved. Create an account, or recover one you lost.")
+      ? new Error(Z.byDevice(
+        "Sign-in was cancelled, or this phone has no Zold sign-in saved. Create an account, or recover one you lost.",
+        "Sign-in was cancelled, or the passkey prompt found no Zold sign-in on this device or your security key. Create an account, or recover one you lost."))
       : e, "auth-err");
   } finally { Z.setLoading(btn, false); }
 }
@@ -1747,7 +1767,7 @@ OB.monerium = {
   kind: "after",
   get title() { return ibanUnderReview(user) ? "Under review" : "Get your IBAN"; },
   html: () => {
-    // Connected and under review: nothing to sign in to again, no IBAN to
+    // Under review: nothing to sign in to (again), no IBAN to
     // promise. Any old link or button that still lands here sees this.
     if (ibanUnderReview(user)) {
       return `${obAfterProgress("monerium", "Your IBAN")}
@@ -2293,10 +2313,16 @@ async function registerPasskey(u) {
     // ES256 (P-256) only. This passkey becomes the Safe's owner, which
     // verifies P-256 signatures; any other algorithm would fail at deployment.
     pubKeyCredParams: [{ type: "public-key", alg: -7 }],
-    authenticatorSelection: { residentKey: "preferred", userVerification: "required" },
+    // Discoverable: sign-in on a new device (obSignIn) asks with no
+    // allowCredentials, so a passkey the authenticator does not store is never found.
+    authenticatorSelection: { residentKey: "required", requireResidentKey: true, userVerification: "required" },
     // Ask for the PRF extension so this passkey can encrypt the
     // device spending key. Authenticators without it still register fine.
     extensions: { prf: {} },
+  }).catch((e) => {
+    // obMessage names a security key that could not save it.
+    if (e && typeof e === "object") e.passkeyCreate = true;
+    throw e;
   });
   const updated = await api(`/api/users/${u.id}/passkey`, {
     credentialId: cred.id,

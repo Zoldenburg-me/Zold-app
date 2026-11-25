@@ -475,7 +475,8 @@ function cryptoOutLines(inp: StatementInputs): LineDraft[] {
     // SENT only: lines are never deleted, and a SUBMITTED send may still fail.
     // A company send (safeOpId) is the account's; its userId only says who queued it.
     .filter((c) => (c.safeOpId ? !inp.userId && c.orgId === inp.orgId : !!inp.userId && c.userId === inp.userId) && c.state === "SENT")
-    .map((c) => ({
+    .map((c) => ({ c, paid: inp.invoices.find((i) => i.payment?.cryptoSendId === c.id) }))
+    .map(({ c, paid }) => ({
       event: "crypto_out" as const,
       key: `cryptosend:${c.id}`,
       bookingAt: c.createdAt,
@@ -483,7 +484,12 @@ function cryptoOutLines(inp: StatementInputs): LineDraft[] {
       amountCents: -cents(c.capEur),
       counterparty: { ...(c.name ? { name: c.name } : {}), address: c.to },
       reference: c.name ?? `To ${c.to.slice(0, 10)}`,
-      links: { txHashes: c.txHash ? [c.txHash] : [], ...(c.userOpHash ? { userOpHash: c.userOpHash } : {}) },
+      links: {
+        txHashes: c.txHash ? [c.txHash] : [],
+        ...(c.userOpHash ? { userOpHash: c.userOpHash } : {}),
+        // A send link it paid: the expense is that invoice's (payment.cryptoSendId).
+        ...(paid ? { invoiceId: paid.id, invoiceNumber: invoiceNumber(paid) } : {}),
+      },
       txType: "payout",
       // A business payment run sent from this Safe is tagged so it can be told apart.
       tags: [c.token === "EURE" ? "eure" : "usdc", "crypto_out", ...(c.draftId ? ["business_run"] : [])],
@@ -553,6 +559,7 @@ const settlesInvoice = (s: StatementFacts) => Boolean(s.links.invoiceId || s.lin
 export function mergeStatementLines(
   existing: LedgerEntry[],
   projected: LedgerEntry[],
+  paid: InvoicePayments = NO_INVOICE_PAYMENTS,
 ): { toAdd: LedgerEntry[]; toUpdate: { id: string; patch: Partial<LedgerEntry> }[] } {
   const byKey = new Map(existing.filter((e) => e.statement).map((e) => [e.statement!.key, e]));
   const toAdd: LedgerEntry[] = [];
@@ -567,8 +574,10 @@ export function mergeStatementLines(
     const nextFacts: StatementFacts = { ...p.statement!, ...(cur.statement?.documentCode ? { documentCode: cur.statement.documentCode } : {}) };
     const facts = { ...cur.statement, ...nextFacts };
     // A line that settles an invoice is income or an expense by that invoice,
-    // so a mark made before the match does not stand (ownTransferAllowed).
-    const dropMark = settlesInvoice(p.statement!) && cur.tags.includes("internal");
+    // so a mark made before the match does not stand (ownTransferAllowed). An
+    // invoice in another org's books (a send link paid from a personal Safe)
+    // is not named on the line, but it ends the mark all the same.
+    const dropMark = (settlesInvoice(p.statement!) || paysAnInvoice(p.statement!, paid)) && cur.tags.includes("internal");
     const changed =
       dropMark ||
       JSON.stringify(facts) !== JSON.stringify(cur.statement) ||
@@ -598,12 +607,37 @@ export function mergeStatementLines(
 
 const OWN_TRANSFER_EVENTS = new Set<StatementEvent>(["sepa_in", "eure_in", "crypto_held", "crypto_converted", "crypto_out"]);
 
+/** The payments invoices name, in every org. Built once per listing or
+ *  sweep: ownTransferAllowed asks it for every line. */
+export interface InvoicePayments {
+  transferIds: ReadonlySet<string>;
+  cryptoSendIds: ReadonlySet<string>;
+}
+const NO_INVOICE_PAYMENTS: InvoicePayments = { transferIds: new Set(), cryptoSendIds: new Set() };
+
+export function invoicePayments(invoices: readonly Invoice[]): InvoicePayments {
+  const transferIds = new Set<string>();
+  const cryptoSendIds = new Set<string>();
+  for (const i of invoices) {
+    if (i.payment?.transferId) transferIds.add(i.payment.transferId);
+    if (i.payment?.cryptoSendId) cryptoSendIds.add(i.payment.cryptoSendId);
+  }
+  return { transferIds, cryptoSendIds };
+}
+
+/** An invoice that names this line's payment. Asked of the invoices
+ *  themselves, so a line written before the link was recorded is caught too. */
+function paysAnInvoice(s: StatementFacts, paid: InvoicePayments): boolean {
+  const send = /^cryptosend:(.+)$/.exec(s.key)?.[1];
+  return (!!s.links.transferId && paid.transferIds.has(s.links.transferId)) || (!!send && paid.cryptoSendIds.has(send));
+}
+
 /** May a person call this line a move between their own accounts? Only one
  *  payment in or out: a fee, a reversal, a sweep or a disposal is none, and a
  *  line settling an invoice is income or an expense by that invoice. */
-export function ownTransferAllowed(e: LedgerEntry): boolean {
+export function ownTransferAllowed(e: LedgerEntry, paid: InvoicePayments): boolean {
   const s = e.statement;
-  if (!s || settlesInvoice(s)) return false;
+  if (!s || settlesInvoice(s) || paysAnInvoice(s, paid)) return false;
   return OWN_TRANSFER_EVENTS.has(s.event) || s.key.endsWith(":payout");
 }
 

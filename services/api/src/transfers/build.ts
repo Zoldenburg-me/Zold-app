@@ -11,7 +11,7 @@ import {
 } from "../chain.js";
 import { createBridgeTransfer } from "../bridge/bridgexyz.js";
 import { prepareSafeSwapForTransfer } from "../liquidity.js";
-import { moneriumRedeemMessage, paymentMemo } from "../sepa.js";
+import { moneriumRedeemMessage, paymentMemo, REDEEM_WINDOW_SEC } from "../sepa.js";
 import { safeDebitBlocker, safeFundedEurToday } from "../orchestrator.js";
 import { store, type Quote, type Transfer } from "../store.js";
 import { assertDailyCap, requireKycApproved } from "../http/guards.js";
@@ -26,9 +26,6 @@ import { describeCause, redactedMessage } from "../http/log-cause.js";
 
 /** How long a device signature stays submittable. */
 export const AUTH_WINDOW_SEC = 15 * 60;
-/** Monerium's docs refuse a redeem message stamped over 5 minutes ago, and it is
- *  stamped at creation. A minute is left for the fee debit that runs first. */
-const REDEEM_WINDOW_SEC = 4 * 60;
 
 /**
  * Build a transfer from an open quote, and the authorization the device must
@@ -177,7 +174,8 @@ async function prepareTransferFromQuote(
     // binds the payout target into the signature (see destinationCommitment):
     // the device signs *who* is paid, not only how much.
     const amountWei = eur.toWei(transfer.sendEur);
-    const deadline = Math.floor(Date.now() / 1000) + (transfer.rail === "sepa" ? REDEEM_WINDOW_SEC : AUTH_WINDOW_SEC);
+    // Counted from createdAt, the redeem message's stamp, as the executor counts it.
+    const deadline = Math.floor(Date.parse(createdAt) / 1000) + (transfer.rail === "sepa" ? REDEEM_WINDOW_SEC : AUTH_WINDOW_SEC);
     const destination = destinationCommitment(transfer.rail, {
       phone: transfer.recipientPhone,
       iban: transfer.recipientIban,

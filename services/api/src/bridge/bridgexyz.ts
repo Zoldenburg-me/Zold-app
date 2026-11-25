@@ -150,26 +150,3 @@ export async function createBridgeTransfer(
   plan.raw = data;
   return plan;
 }
-
-export async function getBridgeTransfer(bridgeTransferId: string): Promise<{
-  id: string;
-  state?: string;
-  destinationTxHash?: string;
-  sourceDepositInstructions?: BridgeDepositInstructions;
-  raw: unknown;
-}> {
-  if (!BRIDGE.apiKey) throw new Error("BRIDGE_API_KEY is required to read Bridge transfers");
-  const res = await fetch(apiPath(`/v0/transfers/${encodeURIComponent(bridgeTransferId)}`), {
-    signal: partnerTimeout(),
-    headers: { "Api-Key": BRIDGE.apiKey },
-  });
-  const data = await res.json().catch(async () => ({ error: await res.text().catch(() => "") }));
-  if (!res.ok) throw new Error(`Bridge transfer read failed (${res.status}): ${JSON.stringify(data)}`);
-  return {
-    id: data.id ?? bridgeTransferId,
-    state: transferState(data),
-    destinationTxHash: destinationHash(data),
-    sourceDepositInstructions: data.source_deposit_instructions,
-    raw: data,
-  };
-}

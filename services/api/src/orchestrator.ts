@@ -19,23 +19,26 @@
 import { BRIDGE, FX, railFeeEur } from "./config.js";
 import { DEBIT_STEP, safeMovedEur } from "./transfers/safe-moved.js";
 import { isReverseSwapStep } from "./transfers/conversion-outputs.js";
+import { OPERATOR_TREASURY_CHECK } from "./transfers/user-transfer.js";
 import { usdIsStaging } from "./usd-token.js";
 import { MONERIUM_NOT_CONNECTED, moneriumLiveFor } from "./adapters/monerium-connection.js";
 import { verifyTypedData } from "viem";
-import { AnchorPaymentUncertainError } from "./stellar/anchor.js";
+import { AnchorPaymentUncertainError, isTransientAnchorError } from "./stellar/anchor.js";
 import { store, type Transfer, type TransferState, type User } from "./store.js";
 import { redeemToIban } from "./adapters/monerium-sandbox.js";
-import { MoneriumApiError } from "./adapters/monerium-client.js";
-import { paymentMemo } from "./sepa.js";
+import { isMoneriumOrderId, MoneriumAccessError, MoneriumApiError } from "./adapters/monerium-client.js";
+import { paymentMemo, redeemMessageStale } from "./sepa.js";
 import { createBridgeTransfer, BridgeTransferError, type BridgeTransferPlan } from "./bridge/bridgexyz.js";
 import {
   executeTransferLiquidity,
-  liquidityAmountOutUnits,
   liquidityProvider,
   prepareTransferLiquidity,
   serializeExecution,
   balanceAfterWrite,
   deliveredFromReceipt,
+  settleFromReceipt,
+  SwapSettlementError,
+  type LiquidityExecution,
 } from "./liquidity.js";
 import {
   abis,
@@ -60,7 +63,7 @@ import {
 } from "./wallet/candide.js";
 import { createCashPickupViaAnchor, fundAndRefreshAnchorPickup } from "./adapters/moneygram.js";
 import { anchorModeEnabled, HARNESS } from "./config.js";
-import { describeCause, redactedMessage, errorText } from "./http/log-cause.js";
+import { describeCause, redactedMessage } from "./http/log-cause.js";
 
 /**
  * The user's device signature over this payment's exact terms. The
@@ -239,16 +242,17 @@ async function debitInputFunds(
    *  own write: on a later write, a restart between the two would refund a
    *  debit whose money the swap already delivered elsewhere. */
   atomicStep?: string,
-): Promise<void> {
+): Promise<SafeExecutionResult> {
   await assertDeviceAuthorization(transfer, user, auth);
   if (transfer.txs.some((x) => x.step === DEBIT_STEP.safe)) {
     throw new Error("duplicate transfer: this transfer already moved EURe out of the Safe");
   }
 
-  const moveHash = await submitSafeExecution(user, execution);
-  txs.push({ step: DEBIT_STEP.safe, hash: moveHash });
-  if (atomicStep) txs.push({ step: atomicStep, hash: moveHash });
+  const op = await submitSafeExecution(user, execution);
+  txs.push({ step: DEBIT_STEP.safe, hash: op.userOpHash });
+  if (atomicStep) txs.push({ step: atomicStep, hash: op.userOpHash });
   store.updateTransfer(transfer.id, { state: "DEBITED", txs });
+  return op;
 }
 
 /**
@@ -275,8 +279,8 @@ async function debitSafeFundedSepaFee(
   }
   const feeEur = Math.max(0, transfer.sendEur - payoutEur);
   if (feeEur > 0) {
-    const feeHash = await submitSafeExecution(user, execution);
-    txs.push({ step: DEBIT_STEP.safeFee, hash: feeHash });
+    const fee = await submitSafeExecution(user, execution);
+    txs.push({ step: DEBIT_STEP.safeFee, hash: fee.userOpHash });
   }
   store.updateTransfer(transfer.id, { state: "DEBITED", txs });
 }
@@ -308,12 +312,23 @@ function passkeySafeExecutionReady(user: User): boolean {
  * user's passkey signed at send time. This process cannot produce that
  * signature — it can only relay it. No execution means no debit; there is no server-side fallback path.
  */
-async function submitSafeExecution(user: User, execution: SafeExecution | undefined): Promise<string> {
+/** The userOp hash is what the transfer records; the bundle's transaction
+ *  hash is where its receipt, and so its Transfer logs, are read. */
+type SafeExecutionResult = { userOpHash: string; txHash?: string };
+
+/** The harness's fake operation (a hardhat node has no bundler). Hash-shaped,
+ *  so a test's stub chain can answer its receipt. */
+export const HARNESS_SAFE_EXECUTION = {
+  userOpHash: `0x${"0".repeat(63)}2`,
+  txHash: `0x${"0".repeat(63)}3`,
+} as const;
+
+async function submitSafeExecution(user: User, execution: SafeExecution | undefined): Promise<SafeExecutionResult> {
   if (!passkeySafeExecutionReady(user)) {
     throw new Error(safeDebitBlocker(user) ?? "Safe debit is not configured for this account");
   }
   if (HARNESS.enabled) {
-    return "0xmock-safe-execution-hash";
+    return { ...HARNESS_SAFE_EXECUTION };
   }
   if (!execution) {
     throw new Error(
@@ -329,7 +344,7 @@ async function submitSafeExecution(user: User, execution: SafeExecution | undefi
   if (op.success === false) {
     throw new Error(`the Safe operation ${op.userOpHash} was included but reverted — the debit never left the Safe`);
   }
-  return op.userOpHash ?? "0x";
+  return { userOpHash: op.userOpHash ?? "0x", txHash: op.txHash };
 }
 
 function bridgeDestination(): { toAddress: string; blockchainMemo?: string } {
@@ -458,9 +473,10 @@ const OUTBOUND_INTENT_STEPS = {
     "bridge.xyz.deposit.not-sent",
     "bridge.xyz.deposit.reverted",
   ],
-  // The orchestrator-run EURe -> USDC swap. A venue records its step only once
-  // delivery is measured, so a swap that landed and then threw (a receipt
-  // timeout, a stale balance read) leaves this unsettled.
+  // The orchestrator-run EURe -> USDC swap. A swap that landed and then threw
+  // before its venue returned (a receipt timeout) leaves this unsettled. One
+  // the venue refused to settle records its step, with no usdcOut, so
+  // compensation has nothing to reverse and goes to review.
   "liquidity.swap.pending": [
     "liquidity.fx-swapper.eure-usdc",
     "liquidity.rfq.eure-usdc",
@@ -486,6 +502,28 @@ function intentUnsettled(txs: Transfer["txs"], intent: OutboundIntent): boolean 
 
 function unsettledOutbound(txs: Transfer["txs"]): string | undefined {
   return (Object.keys(OUTBOUND_INTENT_STEPS) as OutboundIntent[]).find((intent) => intentUnsettled(txs, intent));
+}
+
+/** Run a venue swap and put its txs on the transfer. A venue that refuses to
+ *  settle a swap that landed (SwapSettlementError) still sent it: its steps go
+ *  on record before the refusal propagates, so a reverse swap's EURe is not
+ *  booked as money in and the swap hash is there to reconcile. */
+async function recordVenueSwap(
+  id: string,
+  txs: Transfer["txs"],
+  run: () => Promise<LiquidityExecution>,
+): Promise<LiquidityExecution> {
+  try {
+    const done = await run();
+    txs.push(...done.txs);
+    return done;
+  } catch (err) {
+    if (err instanceof SwapSettlementError) {
+      txs.push(...err.txs);
+      store.updateTransfer(id, { txs });
+    }
+    throw err;
+  }
 }
 
 /** Record an outbound intent on the transfer before the call goes out. */
@@ -693,8 +731,7 @@ async function compensateTransferOnce(id: string): Promise<Transfer> {
           })) as bigint;
         const before = await eureBalance();
         recordOutboundIntent(id, txs, "safe.refundTransfer.pending");
-        const back = await provider.execute(rq, user.address as `0x${string}`);
-        txs.push(...back.txs);
+        const back = await recordVenueSwap(id, txs, () => provider.execute(rq, user.address as `0x${string}`));
         // On record before measuring: until the step names its output logs,
         // the scanner leaves every EURe log in the swap's transaction alone.
         store.updateTransfer(id, { txs });
@@ -784,7 +821,9 @@ async function compensateTransferOnce(id: string): Promise<Transfer> {
   });
 }
 
-async function compensationRate(t: Transfer): Promise<bigint> {
+/** The EURe→USDC rate a post-swap refund is sized at: the executed rate,
+ *  else the quote's locked rate, else a fresh venue read (never the cache). */
+export async function compensationRate(t: Transfer): Promise<bigint> {
   if (t.liquidity?.rate) {
     const rate = BigInt(t.liquidity.rate);
     if (rate > 0n) return rate;
@@ -913,7 +952,8 @@ export async function executeTransfer(
       // 1+2 fused: the user-signed batch takes the fee, approves the venue and
       // swaps atomically, delivering straight to the batch recipient. The
       // orchestrator never holds the input: it refuses on staleness before
-      // anything moves, then measures what arrived.
+      // anything moves, then measures what arrived from the batch's own
+      // Transfer logs to the recipient.
       // The expiry check is needed because the batch never calls the venue's
       // execute() (which refuses expired quotes), and the authorization window
       // (15 min) outlives the quote TTL (10 min).
@@ -935,7 +975,7 @@ export async function executeTransfer(
       // only after a successful balance read would let a stale RPC replica
       // strand a swapped transfer looking unswapped — and compensation would
       // then "refund" EURe this side no longer holds.
-      await debitInputFunds(
+      const op = await debitInputFunds(
         transfer,
         user,
         auth,
@@ -943,12 +983,15 @@ export async function executeTransfer(
         execution,
         `liquidity.${transfer.liquidity?.provider ?? "safe"}.eure-usdc`,
       );
-      const opHash = txs.at(-1)?.hash ?? "0x";
-      const delivered = (await balanceAfterWrite(a.usdc, recipient, before)) - before;
+      const opHash = op.userOpHash;
+      // The recipient (Bridge's deposit address) is not ours alone: another
+      // deposit reaching it while the batch ran is not this transfer's output.
+      // The balance delta is the check; no receipt refuses, as post-swap.
+      const delivered = await settleFromReceipt("Safe swap batch", op.txHash, a.usdc, recipient, before, op.userOpHash);
       const minOut = BigInt(transfer.liquidity?.minOut ?? "0");
       if (delivered < minOut) {
-        // The venue enforces the floor, so this means a stale recipient read or
-        // output delivered elsewhere. Don't settle a payout against money we
+        // The venue enforces the floor, so this means output delivered
+        // elsewhere. Don't settle a payout against money we
         // cannot see. The swap step recorded above makes compensation treat
         // this as post-swap.
         throw new Error(
@@ -988,10 +1031,13 @@ export async function executeTransfer(
       const liquidityPlan = await prepareTransferLiquidity(transfer);
       store.updateTransfer(transfer.id, { liquidity: liquidityPlan });
       recordOutboundIntent(transfer.id, txs, "liquidity.swap.pending");
-      const liquidity = await executeTransferLiquidity({ ...transfer, liquidity: liquidityPlan });
-      txs.push(...liquidity.txs);
+      const liquidity = await recordVenueSwap(transfer.id, txs, () =>
+        executeTransferLiquidity({ ...transfer, liquidity: liquidityPlan }),
+      );
       expectedOut = liquidity.amountOut;
-      usdcOut = liquidityAmountOutUnits(liquidity.quote);
+      // What the swap delivered, as the batch records it: compensation
+      // reverse-swaps this from the shared wallet, so never the quote's figure.
+      usdcOut = usd.fromUnits(liquidity.amountOut);
       store.updateTransfer(transfer.id, {
         state: "SWAPPED",
         txs,
@@ -1124,9 +1170,10 @@ export async function executeTransfer(
  *   CREATED -> DEBITED -> PAYOUT_SUBMITTED -> PAID
  * The payout amount remains in the user's Safe for Monerium to redeem; only
  * the fee leg is moved before placing the order — and only once the account
- * has a Monerium connection to place it on. An order Monerium refuses (401 or
- * 403) refunds the fee, any other failure goes to review, and nothing is ever
- * marked paid without a real order.
+ * has a Monerium connection to place it on. A redeem that went stale during the
+ * fee debit, access Monerium refused before the order was sent, or an order it
+ * refuses (401 or 403) refunds the fee; any other failure goes to review, and
+ * nothing is ever marked paid without a real order.
  */
 export async function executeSepaTransfer(
   transfer: Transfer,
@@ -1156,6 +1203,11 @@ export async function executeSepaTransfer(
     }
 
     await debitSafeFundedSepaFee(transfer, user, auth, payoutEur, txs, execution);
+    // A slow fee debit can outlast the signed redeem's window. No order has
+    // been sent yet, so this throws to the outer catch, which returns the fee.
+    if (transfer.moneriumRedeem && redeemMessageStale(transfer.moneriumRedeem.issuedAt)) {
+      throw new Error("The approval for this bank payment expired before it could go to Monerium, so no payment was sent. Send it again.");
+    }
 
     {
       try {
@@ -1169,6 +1221,13 @@ export async function executeSepaTransfer(
             ? { ...transfer.moneriumRedeem, signature: transfer.moneriumRedeem.signature }
             : undefined,
         );
+        // A 202 (pending multisig confirmation) carries no order id. Without
+        // one nothing can follow the order, and an id getOrder refuses to read
+        // is none, so it is not PAYOUT_SUBMITTED: the catch below holds it for
+        // review, with no refund and no retry.
+        if (typeof order?.id !== "string" || !isMoneriumOrderId(order.id)) {
+          throw new Error("Monerium accepted the redeem but returned no usable order id");
+        }
         txs.push({ step: "monerium.redeem.placed", hash: order.id });
         return store.updateTransfer(transfer.id, {
           state: "PAYOUT_SUBMITTED",
@@ -1185,8 +1244,11 @@ export async function executeSepaTransfer(
         // documents no other refusal and no answer for a duplicate, so a 400, 409
         // or 422 could mean an order exists. Those, a timeout, 5xx or reset may
         // have placed one, and the transfer would read as failed while it pays,
-        // so hold for review.
-        const refused = err instanceof MoneriumApiError && (err.status === 401 || err.status === 403);
+        // so hold for review. A MoneriumAccessError is thrown while getting the
+        // access token, before POST /orders is sent, so no order exists either.
+        const refused =
+          err instanceof MoneriumAccessError ||
+          (err instanceof MoneriumApiError && (err.status === 401 || err.status === 403));
         if (!refused) {
           return store.updateTransfer(transfer.id, {
             state: "MANUAL_REVIEW",
@@ -1197,7 +1259,9 @@ export async function executeSepaTransfer(
         txs.push({ step: "monerium.redeem.refused", hash: "0x" });
         return failAndCompensate(
           transfer.id,
-          new Error(`redeem order failed: ${redactedMessage(err).slice(0, 200)}`),
+          err instanceof MoneriumAccessError
+            ? new Error("Monerium refused Zold's access to your Monerium account, so no payment was sent. Connect Monerium again, then send it again.")
+            : new Error(`redeem order failed: ${redactedMessage(err).slice(0, 200)}`),
           txs,
         );
       }
@@ -1222,6 +1286,22 @@ export async function settlePickup(transfer: Transfer): Promise<Transfer> {
 }
 
 const refreshPayoutLocks = new Map<string, Promise<Transfer>>();
+
+/** A signed Stellar payment stays valid for 5 minutes (stellar/anchor.ts
+ *  setTimeout(300)): one checked for sooner can still land after. Operator
+ *  text: `userTransfer` shows the sender a safe line instead. */
+const STELLAR_REVIEW_STEP = `wait 5 minutes, then ${OPERATOR_TREASURY_CHECK}`;
+
+/** Whether a failed anchor refresh may already have paid the anchor: an
+ *  uncertain submit, a hash on record, or a payment intent nothing settled.
+ *  Any of them means no automatic refund. */
+export function anchorPaymentMayHaveLeft(err: unknown, latest: Transfer | undefined): boolean {
+  return (
+    err instanceof AnchorPaymentUncertainError ||
+    !!latest?.pickup?.anchorPaymentHash ||
+    intentUnsettled(latest?.txs ?? [], "anchor.payment.pending")
+  );
+}
 
 /** Refresh an anchor-backed cash payout. If the anchor has supplied payment
  * instructions, fund it on-ledger and mark PAID only after anchor completion. */
@@ -1252,7 +1332,7 @@ async function refreshPayoutUnlocked(
       state: "MANUAL_REVIEW",
       error:
         "a Stellar payment to the anchor may have gone out before a restart and its hash was never recorded; " +
-        "check the treasury account before paying again or refunding",
+        STELLAR_REVIEW_STEP,
     });
   }
   if (transfer.state === "PAYOUT_FUNDED" && transfer.pickup?.status === "PAID") {
@@ -1268,8 +1348,8 @@ async function refreshPayoutUnlocked(
       // Persist the payment hash the moment it exists. Without this, a crash
       // during the poll loop below loses the record and the next call pays
       // the anchor a second time.
-      (funded) => {
-        transfer.txs.push({ step: "anchor.payment.sent", hash: funded.anchorPaymentHash ?? "0x" });
+      (funded, hash) => {
+        transfer.txs.push({ step: "anchor.payment.sent", hash });
         store.updateTransfer(transfer.id, {
           pickup: { ...transfer.pickup, ...funded },
           txs: transfer.txs,
@@ -1288,13 +1368,10 @@ async function refreshPayoutUnlocked(
     // A failure that may have moved money must never auto-refund the sender:
     // that would pay twice. Same reasoning as a completed Bridge destination leg.
     const latest = store.findTransfer(transfer.id);
-    const maybePaid =
-      err instanceof AnchorPaymentUncertainError || !!latest?.pickup?.anchorPaymentHash;
+    const maybePaid = anchorPaymentMayHaveLeft(err, latest);
     // A transport failure says nothing about the payout; the next refresh
     // asks again. Only the anchor's own verdict may fail the transfer.
-    const transient =
-      err instanceof TypeError ||
-      /fetch failed|ECONN|ETIMEDOUT|timed? ?out|aborted|socket hang up|\b5\d\d\b/i.test(errorText(err));
+    const transient = isTransientAnchorError(err);
     if (transient && !maybePaid) {
       console.error(`refreshPayout: transient anchor error for ${transfer.id}, state unchanged: ${describeCause(err)}`);
       return transfer;
@@ -1304,7 +1381,7 @@ async function refreshPayoutUnlocked(
         state: "MANUAL_REVIEW",
         error:
           `anchor settlement unresolved: ${redactedMessage(err).slice(0, 200)}; ` +
-          `a Stellar payment may already have been sent, so no automatic refund`,
+          `a Stellar payment may already have been sent, so no automatic refund; ${STELLAR_REVIEW_STEP}`,
       });
     }
     return failAndCompensate(

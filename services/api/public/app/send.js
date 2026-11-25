@@ -275,6 +275,7 @@ function playTimeline(t, { onDone } = {}) {
 const isTerminalFailure = (t) => ["REFUNDED", "FAILED", "MANUAL_REVIEW"].includes(t.state);
 
 function revealRefund(t) {
+  const review = t.state === "MANUAL_REVIEW";
   $("refund-box").classList.remove("hidden");
   const reason = (t.error || "").replace(/^.*?:\s*/, "").split(" (set ")[0] || "the payout could not be completed";
   if (t.state === "REFUNDED") {
@@ -285,18 +286,20 @@ function revealRefund(t) {
       `€${esc(amt)} is back in your account.<br><span style="color:var(--muted)">Why: ${esc(reason)}</span>` +
       (t.refund && t.refund.deductions && t.refund.deductions !== "none"
         ? `<br><span style="color:var(--muted)">Deductions: ${esc(t.refund.deductions)}</span>` : "");
-  } else if (t.state === "MANUAL_REVIEW") {
+  } else if (review) {
     $("refund-title").textContent = "Under review";
     $("refund-title").style.color = "var(--amber)";
     $("refund-note").innerHTML =
-      `This transfer needs manual review before it settles — a payment may already be in flight, so it was not auto-refunded.` +
+      `We can’t tell yet whether it reached the bank, so nothing is refunded automatically. Write to support@zoldhq.com and we’ll look into it.` +
       `<br><span style="color:var(--muted)">${esc(reason)}</span>`;
   } else {
     $("refund-title").textContent = "Payout failed";
     $("refund-title").style.color = "var(--red)";
     $("refund-note").innerHTML = `<span style="color:var(--muted)">${esc(reason)}</span>`;
   }
-  $("btn-again").classList.remove("hidden");
+  // A payment in review may already be in flight: no second one from here.
+  $("btn-again").classList.toggle("hidden", review);
+  $("btn-check-activity").classList.toggle("hidden", !review);
   $("refund-box").scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
 
@@ -327,6 +330,12 @@ function revealPickup(t) {
 
 function renderSepaResult(t) {
   const s = t.sepa || {};
+  // Polled into review or a refund: the result panel, as if it came back so.
+  if (t.state === "MANUAL_REVIEW" || t.state === "REFUNDED") {
+    $("sepa-box").classList.add("hidden");
+    revealRefund(t);
+    return;
+  }
   $("sepa-box").classList.remove("hidden");
   if (t.state === "PAID") {
     $("sepa-status").textContent = "SEPA payout processed";
@@ -380,6 +389,8 @@ $("btn-send").onclick = async () => {
   const label = btn.textContent;
   btn.disabled = true;
   btn.textContent = "Sending…";
+  let created = null;
+  let authorizeSent = false;
   try {
     if (!kycApproved(user)) throw new Error("identity review must be approved before sending");
     // Late binding for accounts that skipped registration at onboarding.
@@ -387,7 +398,7 @@ $("btn-send").onclick = async () => {
     await registerDeviceKey(user);
 
     // 1. Propose: the server fixes the terms and returns them unexecuted.
-    const created = await api("/api/transfers", { quoteId: quote.id, ...recipient });
+    created = await api("/api/transfers", { quoteId: quote.id, ...recipient });
 
     // 2. Authorize: unlock the device key with the passkey and sign the exact
     //    terms. With a PRF-capable authenticator the ceremony IS the gate —
@@ -414,6 +425,7 @@ $("btn-send").onclick = async () => {
 
     // 3. Submit: the server can only relay the movement the passkey just
     //    signed — the debit is a Safe operation, not a server action.
+    authorizeSent = true;
     const t = await api(`/api/transfers/${created.id}/authorize`, {
       signature,
       ...(execution ? { executionAssertion: execution } : {}),
@@ -437,9 +449,35 @@ $("btn-send").onclick = async () => {
     } });
     refresh();
     addHistory(t);
-  } catch (e) { showErr("send-err", e); }
+  } catch (e) {
+    // /authorize answers 400, 401 and 403 only before it claims the transfer.
+    // Only Zold's marked answer counts: a proxy's 4xx proves nothing.
+    const refused = authorizeSent && e?.fromZold && [400, 401, 403].includes(e?.status);
+    const why = e?.name === "NotAllowedError" ? "The passkey prompt was cancelled. Nothing was sent."
+      : refused ? `${e.message} Nothing was sent.` : e.message;
+    // Creating the transfer consumed the quote. Nothing signed reached Zold,
+    // or Zold refused or answered 410 (expired) before any claim: price it again.
+    if (created && (!authorizeSent || refused || (e?.status === 410 && e.fromZold))) await repriceSend(why);
+    // Any other answer, or none, may follow a debit: no new price, no retry.
+    else if (authorizeSent) showErr("send-err", new Error(`${why} It may have gone out: check Transactions before you send again.`));
+    else showErr("send-err", new Error(why));
+  }
   finally { btn.disabled = false; btn.textContent = label; }
 };
+
+/** A new quote for the same rail and amount, shown on the details with the
+ *  recipient kept; without one, back to the destination. */
+async function repriceSend(why) {
+  const used = quote;
+  quote = null;
+  try {
+    selectOption(await api("/api/quotes", { userId: user.id, rail: used.rail, sendEur: used.sendEur }));
+    showErr("send-err", new Error(`${why} Here is a new price: check it before you send again.`));
+  } catch (qe) {
+    showSendStep("dest");
+    showErr("dest-err", new Error(`${why} No new price: ${qe.message}`));
+  }
+}
 
 async function refreshCashPayout() {
   try {
@@ -459,15 +497,24 @@ async function refreshCashPayout() {
 $("btn-refresh-payout").onclick = refreshCashPayout;
 
 
-$("btn-again").onclick = () => {
+function resetSend() {
   $("step-progress").classList.add("hidden");
   $("paid-box").classList.add("hidden");
   $("btn-again").classList.add("hidden");
+  $("btn-check-activity").classList.add("hidden");
   $("pickup-box").classList.add("hidden");
   $("sepa-box").classList.add("hidden");
   $("refund-box").classList.add("hidden");
   $("step-quote").classList.remove("hidden");
   showSendStep("dest");
+}
+
+$("btn-again").onclick = resetSend;
+/* Review: the payment may be in flight, so it is looked up, not resent. */
+$("btn-check-activity").onclick = () => {
+  resetSend();
+  switchView("transactions");
+  loadTransfers();
 };
 
 /* ---------- history ---------- */

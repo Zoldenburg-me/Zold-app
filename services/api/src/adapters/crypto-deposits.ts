@@ -44,6 +44,7 @@ import { buildCryptoSettlement, settlementUpdate } from "../domain/invoices.js";
 import { writeStatementLines } from "../bookkeeping/writer.js";
 import { readLogWindow } from "../log-range.js";
 import { conversionOutputs } from "../transfers/conversion-outputs.js";
+import { conversionReverted } from "../transfers/activity.js";
 import { userOperationOutcome } from "../wallet/candide.js";
 
 
@@ -187,6 +188,9 @@ export function depositConversionBlocker(user: User, deposit: CryptoDeposit): st
   if (deposit.token !== "USDC") return `only ${usdToken().symbol} deposits can be converted`;
   if (deposit.holding === "converted") return "this deposit has already been converted to EURe";
   if (deposit.holding === "unconfirmed") {
+    if (conversionReverted(deposit)) {
+      return "a conversion of this deposit was included on chain but reverted, so nothing was converted — it is being checked before it can be converted again";
+    }
     return "a conversion of this deposit was sent and may still land — it has to be checked on chain before it can be converted again";
   }
   // Written before the swap was submitted and never cleared: the process
@@ -492,6 +496,19 @@ export async function settleConvertedDeposit(
 }
 
 /**
+ * Clear the conversion intent of a row settling already moved off
+ * `unconfirmed`, after a later write threw. A second failure leaves it set:
+ * the row is then blocked (fail closed), as before.
+ */
+export function clearSettledIntent(id: string): void {
+  try {
+    store.updateCryptoDeposit(id, { conversionIntent: undefined });
+  } catch (err) {
+    console.error(`crypto-in: deposit ${id}: conversion intent not cleared: ${describeCause(err)}`);
+  }
+}
+
+/**
  * Resolve conversions whose submit was uncertain. The route parks such a row
  * with the userOpHash, which no EURe log carries, so the scanner could not
  * tell the swap's output from money in. Once the bundler has a receipt, the
@@ -500,7 +517,8 @@ export async function settleConvertedDeposit(
  * have done. No receipt, or no answer: the row stays as it is. Included but
  * reverted: nothing converted, and the row stays unconfirmed for review.
  * Landed but not settled (no intent, or a failed read while settling): the
- * row is refused for review, never credited. The step always carries the
+ * row is refused for review, never credited; a row settling already credited
+ * keeps its credit. The step always carries the
  * swap's output log indexes, empty when the scanner booked them first.
  * Runs before a scan, so the step is on the row before its logs are read.
  */
@@ -581,6 +599,14 @@ export async function settleUnconfirmedConversions(outcome = userOperationOutcom
       store.updateCryptoDeposit(d.id, { conversionIntent: undefined });
     } catch (err) {
       console.error(`crypto-in: deposit ${d.id}: swap ${op.txHash} executed but was not recorded: ${describeCause(err)}`);
+      // Settling may have credited the row before the throw; that credit stands.
+      // Its outcome is on record (settling writes holding, fill and txs in one
+      // write), so the intent goes too, or the rest of a partial fill would be
+      // blocked as an unrecorded outcome.
+      if (store.cryptoDeposits.find((x) => x.id === d.id)?.holding !== "unconfirmed") {
+        clearSettledIntent(d.id);
+        continue;
+      }
       store.updateCryptoDeposit(d.id, {
         holding: "refused",
         reason: "the swap went through, but what arrived could not be recorded — nothing has been credited; it is being checked and will not be offered again",

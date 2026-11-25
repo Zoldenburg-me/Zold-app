@@ -1,6 +1,7 @@
 /**
- * Zold UI v2 components: small render functions that return markup, plus the
- * two behaviours markup cannot carry (sheet/dialog focus handling, copy).
+ * Zold UI v2 components: small render functions that return markup, plus
+ * the behaviours markup cannot carry (sheet/dialog focus handling, copy, a
+ * form that must not submit).
  * The contract is design/ui-v2/SYSTEM.md; the classes live in ui.css.
  *
  * A classic script, loaded before app/core.js and before the business ES
@@ -414,6 +415,13 @@
     const first = items[0], last = items[items.length - 1];
     if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
     else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
+
+  /* A form marked data-z-nosubmit never navigates: Enter in a search box or a
+     field submits it, and its own handlers do the work. The CSP refuses an
+     inline onsubmit, so this is where that lives. */
+  document.addEventListener("submit", (e) => {
+    if (e.target.closest("[data-z-nosubmit]")) e.preventDefault();
   });
 
   /* An /api answer Zold did not write. Whatever stands in front of the API

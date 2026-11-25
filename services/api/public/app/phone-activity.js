@@ -60,7 +60,7 @@ PH.activity = {
   html(arg) {
     const filter = PH_FILTERS.some(([k]) => k === arg) ? arg : "all";
     return `${phTop("Activity")}${phMain(`
-      <form class="z-search" role="search" onsubmit="return false">
+      <form class="z-search" role="search" data-z-nosubmit>
         <label class="z-sr" for="ph-q">Search payments</label>${Z.icon("search")}
         <input class="z-search__input" id="ph-q" type="search" name="q" autocomplete="off" spellcheck="false" placeholder="Search payments…" value="${esc(phQuery)}">
       </form>
@@ -83,15 +83,34 @@ PH.activity = {
 };
 
 /* "Between my own accounts", under a payment. Only where the API says the mark
-   is possible (routes/books-line.ts), so nothing shows until it answers. */
+   is possible (routes/books-line.ts), so nothing shows until it answers. A
+   booking receipt that stopped verifying (after Undo, say) is offered for
+   replacing here too. */
 function phOwnBind(root, id) {
   const slot = root.querySelector("#ph-own");
   if (!slot || !user?.id) return;
   slot.dataset.payment = id;
+  const lookup = () => api(`/api/users/${encodeURIComponent(user.id)}/books-line/${encodeURIComponent(id)}`);
   const draw = (line) => {
-    slot.innerHTML = line.ownTransfer
+    slot.innerHTML = (line.ownTransfer
       ? `${Z.note({ text: "Between my own accounts: not income or an expense in your books." })}${Z.button({ variant: "secondary", label: "Undo", id: "ph-own-btn" })}`
-      : `${Z.button({ variant: "secondary", label: "Between my own accounts", id: "ph-own-btn" })}<p class="z-hint">Mark it if this money moved to or from another account of yours. It is then not income or an expense in your books.</p>`;
+      : `${Z.button({ variant: "secondary", label: "Between my own accounts", id: "ph-own-btn" })}<p class="z-hint">Mark it if this money moved to or from another account of yours. It is then not income or an expense in your books.</p>`)
+      + (line.belegStale ? `${Z.note({ tone: "a", text: "This payment's booking receipt no longer matches your books, so it is left out of the export. Replace it to issue one that does; the old one is revoked." })}${Z.button({ variant: "secondary", label: "Replace booking receipt", id: "ph-beleg-btn" })}` : "");
+    const rb = slot.querySelector("#ph-beleg-btn");
+    if (rb) rb.onclick = async () => {
+      if (Z.isDisabled(rb)) return;
+      Z.setLoading(rb, true);
+      const err = slot.querySelector(".z-err") || slot.appendChild(Object.assign(document.createElement("p"), { className: "z-err", role: "alert" }));
+      err.textContent = "";
+      try {
+        await api(`/api/orgs/${encodeURIComponent(line.orgId)}/bookkeeping/lines/${encodeURIComponent(line.lineId)}/beleg/replace`, {});
+        Z.announce("Booking receipt replaced.");
+        if (slot.isConnected) draw({ ...line, belegStale: false });
+      } catch (e) {
+        err.textContent = e.message;
+        Z.setLoading(rb, false);
+      }
+    };
     const b = slot.querySelector("#ph-own-btn");
     b.onclick = async () => {
       if (Z.isDisabled(b)) return;
@@ -108,14 +127,16 @@ function phOwnBind(root, id) {
           if (root.querySelector("#ph-own")?.dataset.payment === id) phOwnBind(root, id);
           return;
         }
-        draw({ ...line, ownTransfer: own });
+        // Read again: the mark can make the receipt stop verifying, or verify again.
+        const next = await lookup().then((r) => r.line).catch(() => null);
+        if (slot.isConnected) draw(next || { ...line, ownTransfer: own });
       } catch (e) {
         err.textContent = e.message;
         Z.setLoading(b, false);
       }
     };
   };
-  api(`/api/users/${encodeURIComponent(user.id)}/books-line/${encodeURIComponent(id)}`)
+  lookup()
     .then((r) => { if (r.line && slot.isConnected) draw(r.line); })
     .catch(() => { /* the payment still reads without the action */ });
 }
@@ -162,7 +183,7 @@ function phTxParts(id) {
     <p class="z-err" id="ph-tx-err" role="alert" hidden></p>
   `, foot: t.state === "CREATED" ? "" : `<div class="z-pair">
       ${receipt ? Z.button({ icon: "receipt_long", label: "Receipt", id: "ph-tx-receipt" }) : ""}
-      ${Z.button({ variant: receipt ? "secondary" : "primary", icon: "ios_share", label: "Share", href: phHref("share", t.id), className: receipt ? "" : "z-btn--full" })}
+      ${Z.button({ variant: receipt ? "secondary" : "primary", icon: "ios_share", label: "Share", href: phHref("share-compose", t.id), className: receipt ? "" : "z-btn--full" })}
     </div>` };
 }
 
@@ -217,7 +238,9 @@ function phInStory(t) {
     case "converted": return typeof t.creditedEur === "number" ? `Converted to ${phEur(t.creditedEur)}, now in your account as euros.` : "Converted to euros.";
     case "awaiting_approval": return "Waiting for you to approve the conversion to euros.";
     case "refused": return "The conversion to euros did not go through. The dollars are still in your account.";
-    case "unconfirmed": return "A conversion to euros was sent and is not confirmed yet. We check it before offering it again.";
+    case "unconfirmed": return t.conversionReverted
+      ? "A conversion to euros did not go through, so nothing was converted. We check it before offering it again."
+      : "A conversion to euros was sent and is not confirmed yet. We check it before offering it again.";
     default: return "Held as digital dollars. You can convert them to euros any time.";
   }
 }
@@ -293,5 +316,5 @@ PH.in = {
 };
 
 /* The older share composer, reached from one payment. */
-PH_LEGACY.share = "share";
+PH_LEGACY["share-compose"] = "share";
 

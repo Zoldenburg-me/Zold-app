@@ -9,11 +9,12 @@
  * rare and user-initiated; the volume is reads, so the limit holds where the
  * load is.
  *
- * Monerium publishes no number; its docs say a limit answers 429 with a
- * Retry-After. 40 requests a second ran clean on the sandbox (200 calls in
- * 5 s, all 200, no rate-limit headers, 2026-10-04), so that is the default
- * (MONERIUM_MAX_RPS). It was a 5-second burst on the sandbox: a per-minute
- * window, or production, may still answer 429 below it.
+ * Monerium's API reference (docs.monerium.com/api and its OpenAPI spec)
+ * documents no limit, no 429 and no Retry-After. 40 requests a second ran
+ * clean on the sandbox (200 calls in 5 s, all 200, no rate-limit headers,
+ * 2026-10-04), so that is the default (MONERIUM_MAX_RPS). It was a 5-second
+ * burst on the sandbox: a per-minute window, or production, may still answer
+ * 429 below it.
  *
  * A call past the limit waits for the next slot; none is refused. The wait
  * counts against the caller's own timeout signal, so a backlog fails the way

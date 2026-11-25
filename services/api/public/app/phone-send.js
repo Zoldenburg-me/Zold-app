@@ -21,10 +21,11 @@ let phSend = { payee: null, amount: "", reference: "", quote: null, transferId: 
 let phUnconfirmed = false;
 
 function phUnconfirmedHtml() {
-  // No Check Activity while waiting: the reload would drop the answer.
+  // No Check Activity button while waiting: a reload drops the answer. The
+  // requests have no timeout, so the copy says when a reload is the way on.
   if (phUnconfirmed === "pending") return `${phTop("Payment result", "home")}${phMain(`
       <span class="z-tile z-tile--a z-tile--lg" aria-hidden="true">${Z.icon("hourglass_top")}</span>
-      <div class="z-intro"><h2 class="z-title">Waiting for your last payment</h2><p class="z-sub">Zold hasn’t answered yet, so it may go out. You can send again once it has; a payment that went out is listed in Activity.</p></div>
+      <div class="z-intro" id="ph-wait"><h2 class="z-title">Waiting for your last payment</h2><p class="z-sub">Zold hasn’t answered yet, so it may go out. You can send again once it has; a payment that went out is listed in Activity. If nothing changes after a few minutes, reload the app and check Activity before you pay again.</p></div>
     `)}${phFoot(Z.button({ variant: "primary", full: true, label: "Back to Home", href: "#home" }))}`;
   return `${phTop("Payment result", "home")}${phMain(`
       <span class="z-tile z-tile--a z-tile--lg" aria-hidden="true">${Z.icon("hourglass_top")}</span>
@@ -82,7 +83,7 @@ PH.send = {
     const q = phQuery;
     return `${phTop("Send")}${phMain(`
       ${blocked ? `${Z.note({ tone: "a", text: blocked.text })}${blocked.action ? Z.button({ variant: "primary", full: true, label: blocked.action.label, id: blocked.action.id }) : ""}${HAS("onchain_balance") ? Z.listGroup({ label: "New payment", rows: [...(caps.cryptoSend ? [phWalletRow()] : []), phSendLinkRow()] }) : ""}${phSendLinksList()}` : `
-      <form class="z-search" role="search" onsubmit="return false">
+      <form class="z-search" role="search" data-z-nosubmit>
         <label class="z-sr" for="ph-sq">Search people you’ve paid</label>${Z.icon("search")}
         <input class="z-search__input" id="ph-sq" type="search" name="q" autocomplete="off" spellcheck="false" placeholder="Name or IBAN…" value="">
       </form>
@@ -285,14 +286,21 @@ async function phWalletSubmit(btn, errEl) {
     // new send, signed afresh, that nothing on the server stops. A 409 with no
     // code is "already submitted": it went out. A send Zold marked FAILED (a
     // 502 naming its state) is settled too: the bundler refused or it reverted.
-    const refused = (e?.body?.state === "FAILED" && typeof e.body.error === "string")
-      || (e?.status < 500 && typeof e.body?.error === "string" && !(e.status === 409 && !e.body.code));
+    const refused = e?.fromZold === true && ((e.body?.state === "FAILED" && typeof e.body.error === "string")
+      || (e.status < 500 && typeof e.body?.error === "string" && !(e.status === 409 && !e.body.code)));
     if (authorizeSent) phUnconfirmed = !refused;
     if (authorizeSent && w.sendLink) phSendLinkUnsent(w.sendLink, refused);
     if (authorizeSent && !refused) {
       btn.setAttribute("aria-disabled", "true");
       phGo("send/wallet-check", null, { replace: true });
       return;
+    }
+    // Refused while the person waits on another screen: that one still says
+    // "Waiting…" and has no poll, so draw it again, open, with the reason.
+    if (authorizeSent && document.querySelector("#ph-wait")) {
+      phRender();
+      errEl = document.querySelector("#ph-wal-err") || document.querySelector("#ph-rev-err");
+      if (!errEl) return;
     }
     errEl.textContent = e?.name === "NotAllowedError"
       ? Z.byDevice("Face ID or fingerprint was cancelled. Nothing was sent.", "The passkey prompt was cancelled. Nothing was sent.")
@@ -329,8 +337,11 @@ PH["send/wallet-done"] = {
         { key: "Address", value: phGroupAddress(s.to), mono: true },
         ...(s.txHash ? [{ key: "Transaction", value: s.txHash, mono: true }] : []),
       ])}
+      ${sent ? `<div id="ph-own" class="z-stack"></div>` : ""}
     `)}${phFoot(Z.button({ variant: "primary", full: true, label: "Done", href: "#home" }))}`;
   },
+  // Only a SENT send has a statement line (bookkeeping/statement.ts).
+  bind(root, id) { phOwnBind(root, id); },
 };
 
 /** The payee for the amount step: from history by IBAN, or the one typed. */
@@ -560,7 +571,7 @@ async function phSubmit(btn, errEl) {
     phSend.error = e?.name === "NotAllowedError" ? Z.byDevice("You cancelled Face ID or fingerprint.", "You cancelled the passkey prompt.") : e.message;
     // Until Zold has refused it, /authorize may still be arriving: an unsigned
     // read then proves nothing, and a retry is a second payment nothing would stop.
-    const refused = e?.status < 500 && typeof e.body?.error === "string";
+    const refused = e?.fromZold === true && e.status < 500 && typeof e.body?.error === "string";
     if (authorizeSent && phSend.sendLink) phSendLinkUnsent(phSend.sendLink, refused);
     // Kept here too: Activity's next load drops an unsigned CREATED from hist.
     try {
@@ -615,7 +626,7 @@ PH["send/progress"] = {
         { key: "Payment ID", value: t.id, mono: true },
         ...(t.sepa?.orderId ? [{ key: "Monerium order", value: t.sepa.orderId, mono: true }, { key: "Order state", value: t.sepa.state || "" }] : []),
       ])}</details>
-    `)}${phFoot(`<div class="z-pair">${t.state !== "CREATED" ? Z.button({ icon: "ios_share", label: "Share receipt", href: phHref("share", t.id) }) : ""}${Z.button({ variant: "primary", label: "Done", href: "#home", className: t.state === "CREATED" ? "z-btn--full" : "" })}</div>`)}`;
+    `)}${phFoot(`<div class="z-pair">${t.state !== "CREATED" ? Z.button({ icon: "ios_share", label: "Share receipt", href: phHref("share-compose", t.id) }) : ""}${Z.button({ variant: "primary", label: "Done", href: "#home", className: t.state === "CREATED" ? "z-btn--full" : "" })}</div>`)}`;
   },
   bind(root, id) {
     if (!hist.some((x) => x.id === id) && id) {
@@ -650,7 +661,8 @@ PH["send/error"] = {
       ? "We can’t tell yet whether it reached the bank, so nothing is refunded automatically. Write to support@zoldhq.com and we’ll look into it."
       : refunded ? `It was refused, and ${phEur(t.refund?.amountEur ?? t.sendEur)} is back in your account.`
         : returning ? "The money that left your account is being returned. It shows as refunded once it is back."
-          : phSend.error || t.error || "The payment was stopped before any money left your account.";
+          // A FAILED read is the answer: its reason, not why the last one was lost.
+          : (t.state === "FAILED" ? t.error : phSend.error || t.error) || "The payment was stopped before any money left your account.";
     const word = review ? "IN REVIEW" : refunded ? "REFUNDED" : t.state === "FAILED" ? "FAILED" : null;
     const sub = unknown || review ? "outcome not known yet" : refunded ? "refunded" : returning ? "being returned" : "not debited";
     return `${Z.topbar({ srTitle: title, back: { href: "#home", label: "Back to Home" } })}${phMain(`

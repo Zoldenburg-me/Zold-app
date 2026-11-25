@@ -112,7 +112,8 @@ export function tokenMatches(token: string, hash: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-const AMOUNT_RE = /^\d+(\.\d{1,8})?$/;
+/** public/invoice-totals.js tests the form's fields with the same pattern. */
+export const AMOUNT_RE = /^\d+(\.\d{1,8})?$/;
 
 /** The highest limit a send link may carry. The daily cap still applies when
  *  it is paid; this only keeps a typo from printing a five-figure link. */

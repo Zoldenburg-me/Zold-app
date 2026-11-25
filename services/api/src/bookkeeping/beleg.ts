@@ -100,14 +100,46 @@ export const UNEXECUTED_NOTE =
   "No conversion has yet executed with real money on this deployment. The conversion figures on this " +
   "document come from a path that has not moved real funds; they are recorded, not proven.";
 
+/** The conversion a line books. A partial fill's line (key ending :p<n>)
+ *  books that fill; the final line books the last conversion alone, the
+ *  partials' share taken out. Undefined while there is none to book. Shared
+ *  with the verifier, so a Beleg is checked against the fill it froze. */
+function conversionFill(d: CryptoDeposit, key: string) {
+  const partials = d.partials ?? [];
+  const pi = /:p(\d+)$/.exec(key);
+  if (pi) {
+    const partial = partials[Number(pi[1]) - 1];
+    return partial
+      ? {
+          conversion: partial.conversion, provider: partial.provider, rate: partial.rate, midRate: partial.midRate,
+          creditedEur: partial.creditedEur,
+          gainEur: partial.receiptPortionEur === undefined ? undefined : r2(partial.creditedEur - partial.receiptPortionEur),
+          leftoverUnits: undefined, totalEur: undefined,
+        }
+      : undefined;
+  }
+  if (d.holding !== "converted" || d.creditedEur === undefined) return undefined;
+  const partialEur = partials.reduce((n, p) => n + p.creditedEur, 0);
+  const partialGain = partials.reduce((n, p) => n + (p.receiptPortionEur === undefined ? 0 : p.creditedEur - p.receiptPortionEur), 0);
+  return {
+    conversion: d.conversion, provider: d.provider, rate: d.rate, midRate: d.midRate,
+    creditedEur: r2(d.creditedEur - partialEur),
+    gainEur: d.realisedGainEur === undefined ? undefined : r2(d.realisedGainEur - partialGain),
+    leftoverUnits: d.leftoverUnits, totalEur: d.creditedEur,
+  };
+}
+
 export function buildBeleg(entry: LedgerEntry, ctx: BelegContext): BelegSnapshot {
   const s = entry.statement;
   if (!s) throw new Error("only a statement line has a Beleg");
+  // The code on the line is this Beleg's own, or on a replacement the
+  // revoked one's: a credential to that document's figures, never in a snapshot.
+  const { documentCode: _code, ...facts } = s;
   const snap: BelegSnapshot = {
     kind: "beleg",
     holder: ctx.holder,
     line: {
-      ...s,
+      ...facts,
       lineId: entry.id,
       ...(bookedCode(entry) ? { accountCode: bookedCode(entry) } : {}),
       ...(isOwnTransfer(entry) ? { ownTransfer: true } : {}),
@@ -158,28 +190,7 @@ export function buildBeleg(entry: LedgerEntry, ctx: BelegContext): BelegSnapshot
     // to the disposal line (or, for an unvalued receipt, the one line that
     // books the proceeds).
     const conversionLine = s.event === "crypto_disposal" || s.event === "crypto_converted";
-    // A partial fill's line (key ending :p<n>) shows that fill; the final
-    // line shows the last conversion alone, the partials' share taken out.
-    const partials = d.partials ?? [];
-    const pi = /:p(\d+)$/.exec(s.key);
-    const partial = pi ? partials[Number(pi[1]) - 1] : undefined;
-    const partialEur = partials.reduce((n, p) => n + p.creditedEur, 0);
-    const partialGain = partials.reduce((n, p) => n + (p.receiptPortionEur === undefined ? 0 : p.creditedEur - p.receiptPortionEur), 0);
-    const fill = partial
-      ? {
-          conversion: partial.conversion, provider: partial.provider, rate: partial.rate, midRate: partial.midRate,
-          creditedEur: partial.creditedEur,
-          gainEur: partial.receiptPortionEur === undefined ? undefined : r2(partial.creditedEur - partial.receiptPortionEur),
-          leftoverUnits: undefined, totalEur: undefined,
-        }
-      : d.holding === "converted" && d.creditedEur !== undefined
-        ? {
-            conversion: d.conversion, provider: d.provider, rate: d.rate, midRate: d.midRate,
-            creditedEur: r2(d.creditedEur - partialEur),
-            gainEur: d.realisedGainEur === undefined ? undefined : r2(d.realisedGainEur - partialGain),
-            leftoverUnits: d.leftoverUnits, totalEur: d.creditedEur,
-          }
-        : undefined;
+    const fill = conversionFill(d, s.key);
     if (conversionLine && fill) {
       const amountIn = fill.conversion?.amountInUnits ? usd.fromUnits(BigInt(fill.conversion.amountInUnits)) : d.amountUsdc;
       const expected = req?.amountEur ?? (req?.payments.find((p) => p.depositId === d.id)?.amountEur);
@@ -240,10 +251,15 @@ export function belegStillAgrees(
     if (!ctx.deposit) diffs.push("the deposit record is gone");
     else {
       if (ctx.deposit.txHash.toLowerCase() !== snap.receipt.txHash.toLowerCase()) diffs.push("the receipt transaction differs");
-      if (snap.conversion?.creditedEur !== undefined && ctx.deposit.creditedEur !== snap.conversion.creditedEur) diffs.push("the credited amount differs");
       // A later conversion does not change what arrived, so a receipt Beleg
-      // stays valid; a conversion Beleg needs the conversion to still stand.
-      if (snap.conversion && ctx.deposit.holding !== "converted") diffs.push(`the deposit is now ${ctx.deposit.holding}`);
+      // stays valid; a conversion Beleg needs the fill it books to still
+      // stand, with the same proceeds. A partial fill stands while the rest
+      // is held.
+      if (snap.conversion) {
+        const fill = conversionFill(ctx.deposit, snap.line.key);
+        if (!fill) diffs.push(/:p\d+$/.test(snap.line.key) ? "the partial conversion is no longer recorded" : `the deposit is now ${ctx.deposit.holding}`);
+        else if (snap.conversion.creditedEur !== undefined && fill.creditedEur !== snap.conversion.creditedEur) diffs.push("the credited amount differs");
+      }
     }
   }
   if (snap.bank?.transferId) {

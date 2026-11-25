@@ -18,7 +18,7 @@
  */
 import { MONERIUM, moneriumSandboxEnabled } from "../config.js";
 import { store, type User } from "../store.js";
-import { MoneriumApiError, MoneriumClient, type MoneriumOrder } from "./monerium-client.js";
+import { isMoneriumOrderId, MoneriumApiError, MoneriumClient, moneriumFailureReason, type MoneriumOrder } from "./monerium-client.js";
 import { hasOwnMoneriumCredentials, moneriumAppClient, moneriumClientFor, usersWithOwnCredentials } from "./monerium-connection.js";
 import { auditEntry } from "../audit.js";
 import { HARNESS } from "../config.js";
@@ -29,7 +29,6 @@ import { attributeMoneriumOrder, attributeMoneriumOrderToInvoice } from "../rout
 import { noteMoneriumIssue, writeStatementLines } from "../bookkeeping/writer.js";
 import { bookHolderLabel, moneyInHolder, type MoneyInHolder } from "../bookkeeping/money-in.js";
 import { moneriumOrderProcessed } from "../domain/monerium-order.js";
-import { describeCause } from "../http/log-cause.js";
 import { can } from "../domain/segments.js";
 
 /**
@@ -175,7 +174,7 @@ export async function verifyIbanBinding(user: User): Promise<User> {
   try {
     ibans = ibanList(await moneriumClientFor(user).ibans());
   } catch (err: any) {
-    console.warn(`monerium: could not re-read the IBAN of ${user.id}: ${describeCause(err)}`);
+    console.warn(`monerium: could not re-read the IBAN of ${user.id}: ${moneriumFailureReason(err)}`);
     return user;
   }
   // The read is an await: take the row as it is now.
@@ -250,6 +249,23 @@ export function ibanActivationRefusal(user: User): { error: string; code: string
   return undefined;
 }
 
+/**
+ * The funding of an account Zold may not bank (`ibanActivationRefusal` says
+ * IBAN_NOT_OFFERED): no IBAN is coming, and the refusal says why. One shape
+ * for the OAuth callback, the API-key connect and the poller. Named fields
+ * only: the mode, and the address verdict, which stays true of the address.
+ * Nothing tied to an IBAN carries over.
+ */
+export function refusedFunding(user: User, moneriumProfileId: string | undefined, detail: string): NonNullable<User["funding"]> {
+  return {
+    mode: user.funding?.mode ?? "sandbox",
+    status: "kyc_pending",
+    ...(moneriumProfileId ? { moneriumProfileId } : {}),
+    detail,
+    ...(user.funding?.addressUnlinkable ? { addressUnlinkable: true } : {}),
+  };
+}
+
 /** Mark the newest unconfirmed move of `iban` on this user as confirmed. */
 export function confirmedMoves(user: User, iban: string): User["moneriumIbanMoves"] {
   const moves = user.moneriumIbanMoves;
@@ -297,7 +313,7 @@ export async function refreshPendingIban(user: User): Promise<User> {
   if (user.funding?.status !== "iban_pending") return user;
   const refused = ibanActivationRefusal(user);
   if (refused?.code === "IBAN_NOT_OFFERED") {
-    return store.updateUser(user.id, { funding: { ...user.funding, status: "provisioning", detail: refused.error } });
+    return store.updateUser(user.id, { funding: refusedFunding(user, user.funding.moneriumProfileId, refused.error) });
   }
   try {
     const list = ibanList(await moneriumClientFor(user).ibans());
@@ -421,8 +437,14 @@ export async function redeemToIban(
   });
 }
 
+/** An order as Monerium reports it, read on the client that can see this
+ *  user's orders (the one a redeem was placed on). */
+export function readOrder(orderId: string, user?: User): Promise<MoneriumOrder> {
+  return (user ? moneriumClientFor(user) : getClient()).getOrder(orderId);
+}
+
 export async function getOrderState(orderId: string, user?: User): Promise<string> {
-  const order = await (user ? moneriumClientFor(user) : getClient()).getOrder(orderId);
+  const order = await readOrder(orderId, user);
   return order.meta?.state ?? order.state ?? "unknown";
 }
 
@@ -488,7 +510,7 @@ async function mirrorOrder(order: MoneriumOrder): Promise<MirrorOutcome> {
       eure = await moneriumEureOrUnavailable(MONERIUM.baseUrl, CHAIN_ID);
     } catch (err: any) {
       if (!(err instanceof MoneriumTokensUnavailable)) throw err;
-      console.warn(`monerium: could not read Monerium's tokens for order ${order.id}, will retry: ${describeCause(err)}`);
+      console.warn(`monerium: could not read Monerium's tokens for order ${order.id}, will retry: ${moneriumFailureReason(err)}`);
       return "unavailable";
     }
     if (!eure) {
@@ -534,20 +556,24 @@ async function mintLocalTestEure(to: `0x${string}`, amountEur: number, ref: stri
 export async function mirrorOrderById(orderId: string): Promise<MirrorOutcome> {
   if (store.isOrderProcessed(orderId)) return "duplicate";
   if (recording.has(orderId)) return "unavailable";
+  if (!isMoneriumOrderId(orderId)) return "ignored";
   let order: MoneriumOrder;
   try {
     order = await getClient().getOrder(orderId);
   } catch (err: any) {
-    // A 404 is Monerium telling us this order does not exist — a settled
-    // answer. Anything else (5xx, a timeout, DNS) means we simply could not
-    // ask, and the caller must be free to try again rather than treat the
-    // delivery as spent.
+    // Only a 404 is Monerium saying this order does not exist — a settled
+    // answer that spends the delivery. Any other refusal (400, 401/403 on our
+    // credentials, a 429), a 5xx, a timeout or DNS means the lookup itself
+    // failed, and the caller must be free to try the same delivery again.
+    // The status alone is logged, for the order read and the token request
+    // alike: a refusal's body is Monerium's, not ours.
     const status = err instanceof MoneriumApiError ? err.status : 0;
-    if (status >= 400 && status < 500) {
-      console.warn(`monerium: refusing unknown order ${orderId}: ${describeCause(err)}`);
+    const reason = moneriumFailureReason(err);
+    if (status === 404) {
+      console.warn(`monerium: refusing unknown order ${orderId}: ${reason}`);
       return "ignored";
     }
-    console.warn(`monerium: could not read order ${orderId}, will retry: ${describeCause(err)}`);
+    console.warn(`monerium: could not read order ${orderId}, will retry: ${reason}`);
     return "unavailable";
   }
   if (order.id !== orderId) return "ignored";
@@ -641,7 +667,7 @@ export async function pollDepositsOnce(): Promise<number> {
       try {
         list = orderList(await moneriumClientFor(u).orders(profile));
       } catch (err: any) {
-        console.warn(`monerium: could not read orders for ${u.id} on their own credentials: ${describeCause(err)}`);
+        console.warn(`monerium: could not read orders for ${u.id} on their own credentials: ${moneriumFailureReason(err)}`);
         continue;
       }
       for (const order of list) {
@@ -715,7 +741,7 @@ export function startDepositPoller() {
         else if (u.funding?.status === "active" && u.iban) await verifyIbanBinding(u);
       }
     } catch (err: any) {
-      console.error(`monerium poll failed: ${describeCause(err)}`);
+      console.error(`monerium poll failed: ${moneriumFailureReason(err)}`);
     } finally {
       busy = false;
     }

@@ -319,6 +319,7 @@ PH.convert = {
       const text = !d ? "We can’t find this payment in your account."
         : d.holding === "converted" ? "This payment is already converted."
           : d.holding === "none" ? `This payment was kept as ${usdSym()}.`
+          : d.conversionReverted ? "A conversion of this payment didn’t go through, so nothing was converted. We’re checking it before it can be converted again. Nothing to do for now."
           : d.holding === "unconfirmed" ? "A conversion of this payment was sent and its result isn’t confirmed yet. We’re checking it, so it can’t be converted again. Nothing to do for now."
             : "This payment isn’t waiting to convert.";
       return `${top}${phMain(`${Z.note({ text })}${Z.button({ variant: "primary", full: true, label: "Back to your wallet", href: "#add/wallet" })}`)}`;

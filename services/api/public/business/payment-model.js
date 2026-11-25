@@ -86,7 +86,11 @@ export const runIdFrom = (search, picked) => new URLSearchParams(search).get("id
  * transfer on a 2xx, or the thrown error (its status and body) after the
  * request went out. The server answers 200 for review and refunds too, so a
  * 2xx alone is not "sent". A 409 can mean another submission holds the claim,
- * and a 5xx without FAILED or a dropped answer can still be paying.
+ * a 408 can come from in front of the API after the claim, and a 5xx without
+ * FAILED or a dropped answer can still be paying. FAILED after money left the
+ * Safe is being returned by the server, and is not refunded yet. The debit
+ * steps are the server's DEBIT_STEP (as phone-send.js reads them): an intent
+ * step is not money that left.
  */
 export function signedLineOutcome(answer, ok) {
   if (ok) {
@@ -95,21 +99,69 @@ export function signedLineOutcome(answer, ok) {
     if (answer?.state === "REFUNDED") return "refunded";
     return "unknown";
   }
-  if (answer?.state === "FAILED") return "not_sent";
-  return answer?.status >= 400 && answer.status < 500 && answer.status !== 409 ? "not_sent" : "unknown";
+  if (answer?.state === "FAILED") {
+    const debited = (answer.txs || []).some((x) => x.step === "safe.transfer(orchestrator)" || x.step === "safe.transfer(fee)");
+    return debited && !answer.refund ? "refund_pending" : "not_sent";
+  }
+  return answer?.status >= 400 && answer.status < 500 && answer.status !== 408 && answer.status !== 409 ? "not_sent" : "unknown";
 }
+
+/** A payee name is supplier text: in the toast it must not write a group or heading of its own
+ *  (as routes/business/state.ts lineReport, plus the toast's own "; " separator). */
+const toastName = (name) => String(name ?? "").replace(/[.:;,()€]/g, "").replace(/\s+/g, " ").trim().slice(0, 70);
 
 /** The toast after signing a run, from each line's outcome: "sent to the bank" only for lines Monerium took. */
 export function signedRunToast(total, lines) {
   const by = (o) => lines.filter((l) => l.outcome === o);
   const sent = by("sent").length;
   if (sent === total) return { text: `All ${total} payment${total === 1 ? "" : "s"} approved and sent to the bank.`, error: false };
-  const group = (label, list) => (list.length ? ` ${label}: ${list.map((l) => (l.why ? `${l.recipient}: ${l.why}` : l.recipient)).join("; ")}.` : "");
+  const group = (label, list) => (list.length ? ` ${label}: ${list.map((l) => (l.why ? `${toastName(l.recipient)}: ${l.why}` : toastName(l.recipient))).join("; ")}.` : "");
   return {
     text: `${sent} of ${total} sent.` +
       group("In review, not confirmed", by("review")) +
       group("Not sent", [...by("not_sent"), ...by("refunded").map((l) => ({ ...l, why: "refunded" }))]) +
+      group("Not sent, the money that left is being returned", by("refund_pending")) +
       group("Outcome unknown, check the payment before trying again", by("unknown")),
     error: true,
   };
+}
+
+/**
+ * "Approved n of N…" while a run is signed. A line skipped as expired is not
+ * an approval: it is counted apart. A line that failed is not named here
+ * (signedRunToast says what became of it) but still counts toward the end.
+ * Once every line is done it is null: the run's toast, drawn in the same
+ * frame, says how it ended, so a final count would never be seen.
+ */
+export function approvalProgress(approved, expired, total, failed = 0) {
+  if (approved + expired + failed >= total) return null;
+  return `Approved ${approved} of ${total}${expired ? `, ${expired} expired, not sent` : ""}…`;
+}
+
+/** A progress line while a run is signed: inside the open dialog, where a
+ *  toast would render under its backdrop (core.js dialog()), else a toast.
+ *  Nothing for a null line (the run is done). */
+export function showProgress(msg, dlg, statusEl, toast) {
+  if (msg == null) return;
+  if (dlg?.open && statusEl) statusEl.textContent = msg;
+  else toast(msg);
+}
+
+/**
+ * What a signer is told before the first passkey prompt of a run with more
+ * than one line, or null for one line (or none left to approve). Every line was prepared when the run
+ * was sent, so each approval's deadline is already running; the count and
+ * the first deadline come from the authorizations the server returned. A
+ * line already past its deadline is skipped without a prompt.
+ */
+export function signingWarning(authorizations, nowSec) {
+  const live = authorizations.filter((a) => Number(a.authorization.typedData.message.deadline) >= nowSec);
+  if (authorizations.length < 2 || !live.length) return null;
+  const prompts = live.reduce((n, a) => n + 1 + (a.authorization.safeExecution ? 1 : 0) + (a.authorization.moneriumRedeem ? 1 : 0), 0);
+  const first = Math.min(...live.map((a) => Number(a.authorization.typedData.message.deadline)));
+  const minutes = Math.floor((first - nowSec) / 60);
+  const left = minutes < 1 ? "the first in less than a minute" : `the first in about ${minutes} minute${minutes === 1 ? "" : "s"}`;
+  return `Each of these ${authorizations.length} payments is approved on its own, up to ${prompts} passkey prompts in all. ` +
+    `Each approval has a deadline, ${left}, and a payment whose approval runs out is not sent. ` +
+    "If only some are sent, create a new payment for the others only: a copy of the whole run would pay the sent ones again.";
 }

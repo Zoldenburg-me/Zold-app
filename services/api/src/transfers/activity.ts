@@ -39,6 +39,8 @@ export type ActivityRow =
       /** The block time, when the chain recorded it. */
       arrivedAt?: string;
       holding: CryptoDeposit["holding"];
+      /** Unconfirmed because its conversion reverted (conversionReverted). */
+      conversionReverted?: true;
       /** What a conversion delivered, measured, and its transaction. */
       creditedEur?: number;
       conversionTxHash?: string;
@@ -95,6 +97,18 @@ export function withoutConversionOutputs(deposits: CryptoDeposit[], transfers: T
   return deposits.filter((d) => !(d.token === "EURE" && isConversionOutput(d.txHash, d.logIndex, d.userId)));
 }
 
+/**
+ * An unconfirmed row whose last conversion attempt was included but reverted:
+ * that attempt converted nothing, and the row waits for review. Decided by the
+ * last swap step, so an earlier revert is never blamed for a retry that is
+ * still unconfirmed or that executed.
+ */
+export function conversionReverted(d: Pick<CryptoDeposit, "holding" | "txs">): boolean {
+  if (d.holding !== "unconfirmed") return false;
+  const last = d.txs.filter((t) => t.step.startsWith("safe.swap(usdc->eure)")).at(-1);
+  return last?.step === "safe.swap(usdc->eure).reverted";
+}
+
 const fundingRow = (d: CryptoDeposit): ActivityRow => ({
   kind: "funding",
   id: d.id,
@@ -107,6 +121,7 @@ const fundingRow = (d: CryptoDeposit): ActivityRow => ({
   ...(d.from ? { from: d.from } : {}),
   ...(d.arrivedAt ? { arrivedAt: d.arrivedAt } : {}),
   holding: d.holding,
+  ...(conversionReverted(d) ? { conversionReverted: true as const } : {}),
   ...(d.token === "USDC" && d.holding === "converted" && typeof d.creditedEur === "number"
     ? { creditedEur: d.creditedEur, conversionTxHash: d.conversion?.txHash, convertedAt: d.conversion?.at }
     : {}),

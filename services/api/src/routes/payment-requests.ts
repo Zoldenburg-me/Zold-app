@@ -571,14 +571,14 @@ function record(r: PaymentRequest, payment: Parameters<typeof applyPayment>[1]):
     ...(request.state !== r.state ? { state: request.state, paidAt: request.paidAt } : {}),
   });
   console.log(
-    `pay-request: ${displayCode(saved.code)} received €${payment.amountEur} by ${payment.method} (${payment.kind})` +
+    `pay-request: ${saved.id} received €${payment.amountEur} by ${payment.method} (${payment.kind})` +
       (saved.state === "PAID" ? " — PAID" : ""),
   );
   if (saved.state === "PAID" && !wasPaid) {
     for (const hook of paidHooks) {
       Promise.resolve()
         .then(() => hook(saved))
-        .catch((e) => console.error(`pay-request: paid hook failed for ${displayCode(saved.code)}: ${describeCause(e)}`));
+        .catch((e) => console.error(`pay-request: paid hook failed for ${saved.id}: ${describeCause(e)}`));
     }
   }
   return saved;
@@ -767,7 +767,7 @@ export async function sweepPaymentRequests(now = new Date()): Promise<{ expired:
         try {
           await hook(r);
         } catch (e: any) {
-          console.error(`pay-request: paid hook retry failed for ${displayCode(r.code)}: ${describeCause(e)}`);
+          console.error(`pay-request: paid hook retry failed for ${r.id}: ${describeCause(e)}`);
         }
       }
     }

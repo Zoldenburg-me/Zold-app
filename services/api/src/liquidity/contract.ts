@@ -22,6 +22,7 @@ import {
   publicClient,
   } from "../chain.js";
 import type { Transfer } from "../store.js";
+import { redactedMessage } from "../http/log-cause.js";
 /**
  * A venue's calldata is executed with the orchestrator's key or, in a batch,
  * the user's passkey. Whatever the API answered is therefore a transaction we
@@ -374,4 +375,59 @@ export async function deliveredFromReceipt(
   const r = to.toLowerCase();
   const transfers = (await tokenTransfers(txHash, token, userOpHash))?.filter((t) => t.to === r && t.from !== r);
   return transfers && { wei: transfers.reduce((n, t) => n + t.value, 0n), logIndexes: transfers.map((t) => t.logIndex) };
+}
+
+/**
+ * Settle a swap from its own receipt: what `txHash` delivered of `token` to
+ * `to` (deliveredFromReceipt), with the balance delta since `before` as the
+ * check. A larger delta is someone else's money arriving in the same window
+ * and is not output; a smaller one means the token left `to` while the swap
+ * ran, or the read is behind. No receipt, or a short delta, refuses: the
+ * caller must not settle on a guess.
+ */
+export async function settleFromReceipt(
+  venue: string,
+  txHash: string | undefined,
+  token: `0x${string}`,
+  to: `0x${string}`,
+  before: bigint,
+  userOpHash?: string | null,
+): Promise<bigint> {
+  const output = await deliveredFromReceipt(txHash, token, to, userOpHash);
+  if (!output) throw new Error(`${venue}: no transaction receipt to measure what the swap delivered to ${to} — refusing to settle`);
+  const after = await balanceAfterWrite(token, to, before, before + output.wei);
+  if (after - before < output.wei) {
+    throw new Error(
+      `${venue}: the swap delivered ${output.wei} to ${to}, but its balance shows only ${after - before} more — ` +
+        `the token may have left ${to} while it ran, or the read is behind; refusing to settle`,
+    );
+  }
+  return output.wei;
+}
+
+/**
+ * A venue's refusal after its swap landed. The swap moved money whether or
+ * not it settles, so the txs it sent ride on the error and the caller records
+ * them before the refusal propagates: a reverse swap's step must be on record
+ * or the scanner books its EURe as a new deposit, and a forward swap's hash is
+ * what an operator reconciles against.
+ */
+export class SwapSettlementError extends Error {
+  constructor(
+    message: string,
+    readonly txs: Transfer["txs"],
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = "SwapSettlementError";
+  }
+}
+
+/** Settle a landed swap; any refusal carries the swap's `txs`. */
+export async function settleLanded<T>(txs: Transfer["txs"], settle: () => Promise<T>): Promise<T> {
+  try {
+    return await settle();
+  } catch (err) {
+    throw new SwapSettlementError(redactedMessage(err), txs, { cause: err });
+  }
 }

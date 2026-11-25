@@ -50,9 +50,9 @@ export const adminHostPolicy: express.RequestHandler = (req, res, next) => {
   // path that could change under decoding (an escape, a dot segment, a
   // backslash, an empty segment) is refused, not matched.
   if (!/[%\\]|\.\.|\/\//.test(req.path) && ADMIN_HOST_PATHS.test(req.path)) {
-    // The dashboard has no inline script, so its host allows none: an
-    // injected <script> cannot run where the operator's session lives.
-    res.setHeader("content-security-policy", ADMIN_CONTENT_SECURITY_POLICY);
+    // The site policy allows no inline script, so an injected <script>
+    // cannot run where the operator's session lives.
+    res.setHeader("content-security-policy", CONTENT_SECURITY_POLICY);
     return next();
   }
   res.status(404).type("text/plain").send("not found");
@@ -68,15 +68,16 @@ export const adminHostPolicy: express.RequestHandler = (req, res, next) => {
  *
  * The CSP keeps every script, style, font, fetch and worker on our own
  * origin: the app holds a session and a device key in localStorage, so the
- * thing to deny an injected script is somewhere to send them. It still allows
- * 'unsafe-inline' for scripts because every page bootstraps from an inline
- * block today; moving those to files (or nonces) is what lets that go.
+ * thing to deny an injected script is somewhere to send them, and no page
+ * runs inline script. Every page shares that origin and that localStorage,
+ * so one page allowing inline script would expose all of them. /app and
+ * /business add one hash, APP_CONTENT_SECURITY_POLICY.
  * frame-ancestors 'none' because nothing embeds us (the Shopify app is not
  * embedded) and a framed pay or passkey page is a clickjacking surface.
  */
 export const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline'",
+  "script-src 'self'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
@@ -89,20 +90,26 @@ export const CONTENT_SECURITY_POLICY = [
   "frame-ancestors 'none'",
 ].join("; ");
 
-/** The admin host's policy: the site's, with inline scripts refused. The
- *  dashboard loads every script from a file. */
-export const ADMIN_CONTENT_SECURITY_POLICY = CONTENT_SECURITY_POLICY.replace("script-src 'self' 'unsafe-inline'", "script-src 'self'");
+/**
+ * The import map index.html and business.html carry inline (a browser will
+ * not load one from a file). Its hash is the only inline script /app and
+ * /business allow; editing the map means recomputing this, and
+ * turnkey-guardian-page-test says the value.
+ */
+export const IMPORT_MAP_SHA256 = "sha256-+5Oy6AHENgQqMIceBeJtYIO+9+G1BYWRmAXrpuZEt24=";
+
+/** /app and /business: the site's policy plus the import map. Every other
+ *  script, and every handler, is in a file. */
+export const APP_CONTENT_SECURITY_POLICY = CONTENT_SECURITY_POLICY.replace("script-src 'self'", `script-src 'self' '${IMPORT_MAP_SHA256}'`);
 
 /**
- * /guardian and /recovery: the app's policy without inline script. They drive
- * a passkey approval, a Google/Apple login and a Turnkey signature, so only
- * their own module files may run there, and they alone may reach Turnkey's
- * API (the origin, when the switch is on). /app keeps 'unsafe-inline' for its
- * classic scripts and connect-src 'self'.
+ * /guardian and /recovery: the site's policy. They drive a passkey approval,
+ * a Google/Apple login and a Turnkey signature, and they alone may reach
+ * Turnkey's API (the origin, when the switch is on); /app keeps
+ * connect-src 'self'.
  */
 export function guardianPageCsp(turnkeyOrigin?: string): string {
   return CONTENT_SECURITY_POLICY
-    .replace("script-src 'self' 'unsafe-inline'", "script-src 'self'")
     .replace("connect-src 'self'", turnkeyOrigin ? `connect-src 'self' ${turnkeyOrigin}` : "connect-src 'self'");
 }
 
@@ -125,6 +132,9 @@ export function securityHeadersFor(production: boolean): express.RequestHandler 
     res.setHeader("cross-origin-opener-policy", "same-origin");
     res.setHeader("permissions-policy", "camera=(), microphone=(), geolocation=(), payment=()");
     if (production) res.setHeader("strict-transport-security", STRICT_TRANSPORT_SECURITY);
+    // Zold wrote this answer. A proxy's own 4xx can look like Zold's refusal
+    // ({ error }), and only a refusal may offer a retry: the app checks this.
+    res.setHeader("x-zold-answer", "1");
     next();
   };
 }
@@ -230,6 +240,8 @@ function isAuthRoute(req: express.Request): boolean {
     path.startsWith("/admin") ||
     path.startsWith("/invoice-links/") ||
     (path.endsWith("/monerium/api-keys") && req.method === "POST") ||
+    // A company's own Monerium keys, checked against Monerium on every POST.
+    (/^\/orgs\/[^/]+\/monerium$/.test(path) && req.method === "POST") ||
     (path === "/users" && req.method === "POST") ||
     // A 6-digit code is a guessable credential; sending one spends mail.
     /^\/users\/[^/]+\/email\/(code|verify)$/.test(path) ||
@@ -255,6 +267,7 @@ function partnerBucket(req: express.Request): "p" | "d" | undefined {
   if (
     (path === "/quotes" && req.method === "POST") ||
     /^\/users\/[^/]+\/monerium(\/|$)/.test(path) ||
+    /^\/orgs\/[^/]+\/monerium(\/|$)/.test(path) ||
     path.startsWith("/gnosis-pay/") ||
     /^\/orgs\/[^/]+\/integrations(\/|$)/.test(path) ||
     /^\/orgs\/[^/]+\/invoicing\/vat-check$/.test(path) ||

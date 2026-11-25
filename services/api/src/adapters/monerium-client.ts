@@ -11,6 +11,12 @@
 
 import { partnerTimeout } from "../http.js";
 import { moneriumFetch } from "./monerium-limit.js";
+import { describeCause } from "../http/log-cause.js";
+
+/** The shape an order id must have before it may go into a request path. */
+export function isMoneriumOrderId(orderId: string): boolean {
+  return /^[A-Za-z0-9._~-]{1,128}$/.test(orderId);
+}
 
 /** A non-2xx response from Monerium, carrying the status so callers can tell
  *  "this order does not exist" from "Monerium is briefly unreachable". */
@@ -35,11 +41,45 @@ export class MoneriumAccessError extends Error {
 }
 
 /** Monerium's own refusal of a token request is an access error; its 5xx
- *  (or a proxy's) is a transient and stays a plain Error. */
+ *  (or a proxy's) is a transient and stays a plain Error. Both carry the
+ *  status as `partnerStatus`, so a log line can name it without the body. */
 const tokenError = (what: string, status: number, body: string) =>
   status >= 400 && status < 500
     ? new MoneriumAccessError(`${what} (${status}): ${body}`, status)
-    : new Error(`${what} (${status}): ${body}`);
+    : Object.assign(new Error(`${what} (${status}): ${body}`), { partnerStatus: status });
+
+/** Monerium's body, parsed. A body that is not JSON (a proxy's HTML page)
+ *  throws a fixed message: Node's own parse error quotes the body's start. */
+export function moneriumJson<T>(text: string, what: string, status: number): T {
+  if (!text) return {} as T;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error(`${what} answered with a body that is not JSON (HTTP ${status})`);
+  }
+}
+
+/** A token endpoint's 200, parsed. One with no access token (an empty body)
+ *  is a plain Error, so no request goes out as `Bearer undefined`. */
+function moneriumToken<T extends { access_token: string }>(text: string, what: string, status: number): T {
+  const data = moneriumJson<T>(text, what, status);
+  if (typeof data?.access_token !== "string" || !data.access_token) {
+    throw new Error(`${what} answered with no access token (HTTP ${status})`);
+  }
+  return data;
+}
+
+/**
+ * What a log line may say about a failed Monerium call: the HTTP status, and
+ * for a token request a fixed label, never Monerium's body. A failure with no
+ * status (a timeout, DNS, a missing secret) is ours and described in full.
+ */
+export function moneriumFailureReason(err: unknown): string {
+  if (err instanceof MoneriumApiError) return `HTTP ${err.status}`;
+  const status = (err as { partnerStatus?: unknown } | null)?.partnerStatus;
+  if (typeof status === "number") return `token request failed, HTTP ${status}`;
+  return describeCause(err);
+}
 
 export interface MoneriumConfig {
   baseUrl: string; // https://api.monerium.dev (sandbox) | .app (production)
@@ -90,7 +130,7 @@ export class MoneriumClient {
     if (!res.ok) {
       throw tokenError("Monerium auth failed", res.status, await res.text());
     }
-    const data = (await res.json()) as { access_token: string; expires_in: number };
+    const data = moneriumToken<{ access_token: string; expires_in: number }>(await res.text(), "Monerium auth", res.status);
     this.token = { value: data.access_token, expiresAt: Date.now() + data.expires_in * 1000 };
     return this.token.value;
   }
@@ -114,7 +154,7 @@ export class MoneriumClient {
         res.status,
       );
     }
-    return (text ? JSON.parse(text) : {}) as T;
+    return moneriumJson<T>(text, `Monerium ${method} ${path}`, res.status);
   }
 
   /** App-level (client-credentials) bearer token, for callers that talk to
@@ -165,6 +205,13 @@ export class MoneriumClient {
     return this.request<any>("GET", "/addresses");
   }
 
+  /** One linked address: `profile` is the profile it is linked under. The
+   *  address becomes a path segment, so its shape is checked first. */
+  address(address: string) {
+    if (!/^0x[0-9a-fA-F]{40}$/.test(address)) throw new MoneriumApiError("malformed address", 400);
+    return this.request<any>("GET", `/addresses/${address}`);
+  }
+
   requestIban(address: string, chain: string) {
     return this.request<any>("POST", "/ibans", { address, chain });
   }
@@ -191,9 +238,8 @@ export class MoneriumClient {
     // This id reaches us from a webhook body and lands in a request path on an
     // authenticated connection, so its shape is checked rather than trusted:
     // `../`, `?` and `#` would retarget the call somewhere else in Monerium's
-    // API. Rejected as a 4xx so the caller treats it as a settled "no such
-    // order" rather than a transient failure to retry.
-    if (!/^[A-Za-z0-9._~-]{1,128}$/.test(orderId)) {
+    // API. mirrorOrderById settles a malformed id before it gets here.
+    if (!isMoneriumOrderId(orderId)) {
       throw new MoneriumApiError(`malformed Monerium order id: ${orderId.slice(0, 40)}`, 400);
     }
     return this.request<MoneriumOrder>("GET", `/orders/${encodeURIComponent(orderId)}`);
@@ -259,7 +305,7 @@ export async function exchangeAuthorizationCode(cfg: MoneriumConfig, params: {
   if (!res.ok) {
     throw tokenError("Monerium OAuth code exchange failed", res.status, await res.text());
   }
-  return (await res.json()) as MoneriumTokenResponse;
+  return moneriumToken<MoneriumTokenResponse>(await res.text(), "Monerium OAuth token", res.status);
 }
 
 export async function refreshAuthorizationToken(
@@ -280,7 +326,7 @@ export async function refreshAuthorizationToken(
   if (!res.ok) {
     throw tokenError("Monerium OAuth refresh failed", res.status, await res.text());
   }
-  return (await res.json()) as MoneriumTokenResponse;
+  return moneriumToken<MoneriumTokenResponse>(await res.text(), "Monerium OAuth token", res.status);
 }
 
 
@@ -308,7 +354,7 @@ export async function moneriumBearerRequest<T>(
       res.status,
     );
   }
-  return (text ? JSON.parse(text) : {}) as T;
+  return moneriumJson<T>(text, `Monerium ${method} ${path}`, res.status);
 }
 
 export const LINK_MESSAGE = "I hereby declare that I am the address owner.";

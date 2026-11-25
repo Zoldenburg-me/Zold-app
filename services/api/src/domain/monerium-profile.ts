@@ -206,11 +206,14 @@ export type ProfileStanding =
  * reads as needing a check, and execution refuses it until one passes.
  */
 export function accountProfileStanding(
-  org: Pick<Organisation, "type" | "name" | "legalName">,
+  org: Pick<Organisation, "type" | "name" | "legalName"> & Partial<Pick<Organisation, "entity">>,
   account: Pick<Account, "backingUserId" | "moneriumProfile" | "status">,
 ): ProfileStanding {
   // Gated with a backer is a wallet-tier Safe: no IBAN, so no profile to check.
-  if (!account.backingUserId || account.status === "gated") return { status: "not_applicable" };
+  // A company's account has no backer: its IBAN is on its own Safe, and the
+  // profile recorded when Monerium attributed it is what is judged.
+  const companyOwn = org.type === "business" && org.entity === "company" && !!account.moneriumProfile;
+  if ((!account.backingUserId && !companyOwn) || account.status === "gated") return { status: "not_applicable" };
   const p = account.moneriumProfile;
   if (!p) {
     if (org.type !== "business") return { status: "not_applicable" };

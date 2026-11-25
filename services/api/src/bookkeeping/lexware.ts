@@ -60,14 +60,16 @@ export interface LexwareRow {
   extra: string;
 }
 
-export function lexwareRow(e: LedgerEntry, holderName: string): LexwareRow {
+/** `belegCode` is the line's Beleg only if it may be handed out (not
+ *  revoked): the caller decides, as the ZIP does, so the two agree. */
+export function lexwareRow(e: LedgerEntry, holderName: string, belegCode: string | undefined): LexwareRow {
   const s = e.statement!;
   const cp = [s.counterparty.name, s.counterparty.iban, s.counterparty.address].filter(Boolean).join(" ");
   const credit = s.amountCents >= 0;
   const extra = [
     // The line stays: it is on the account, and the import must reconcile to it.
     isOwnTransfer(e) ? "Zwischen eigenen Konten (kein Ertrag, kein Aufwand)" : undefined,
-    s.documentCode ? `Beleg ${s.documentCode}` : undefined,
+    belegCode ? `Beleg ${belegCode}` : undefined,
     s.links.invoiceNumber ? `Rechnung ${s.links.invoiceNumber}` : undefined,
     s.links.txHashes[0] ? `tx ${s.links.txHashes[0]}` : undefined,
     s.unexecuted ? "Zahl aus nicht ausgeführtem Pfad (kein Swap mit echtem Geld)" : undefined,

@@ -70,6 +70,7 @@ export const STEP_UP_ACTIONS = [
   "authorizer.bind",
   "org.payment-review.off",
   "org.invoice-iban.change",
+  "org.monerium.keys",
   "safe.import",
   "recovery.enrolment",
 ] as const;

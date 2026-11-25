@@ -129,6 +129,9 @@ export interface GmiBankLineResult {
   transactionUid?: number;
   /** The Beleg is attached to the line in GetMyInvoices. */
   assigned?: boolean;
+  /** Revoked Belege of the line still attached to it there. Zold does not
+   *  detach them (no call for it is used), so the user removes them. */
+  revokedStillAttached?: number;
   error?: string;
 }
 
@@ -281,14 +284,28 @@ export class GetMyInvoicesClient {
   /**
    * The bank line for one Beleg, once, with the Beleg assigned to it.
    *
-   * `marker` (the Beleg code) is in the description, and is what makes a
-   * re-send find the line instead of adding it twice. An add that got no
-   * answer may have landed, so it is looked up again rather than retried.
+   * A marker (a Beleg code) is in the description, and is what makes a
+   * re-send find the line instead of adding it twice. `markers` are every
+   * code the line's Belege have had, so a line sent before its Beleg was
+   * replaced is found by the old one. An add that got no answer may have
+   * landed, so it is looked up again rather than retried. `superseded` are
+   * the documentUids of the line's revoked Belege: any still attached is
+   * counted, and one that cannot be checked counts as attached. `held` is
+   * called before the add goes out, and with the uid once it is known, so
+   * the caller can record the line before anything after it can fail.
    */
-  async pushBankLine(bankAccountUid: number, tx: GmiBankTransaction, marker: string, documentUid?: number): Promise<GmiBankLineResult> {
-    let transactionUid: number | undefined = (await this.findBankTransactions(bankAccountUid, marker, tx.bookingDate))[0]?.transactionUid;
+  async pushBankLine(bankAccountUid: number, tx: GmiBankTransaction, markers: string[], documentUid?: number, superseded: number[] = [], held: (transactionUid?: number) => void = () => {}): Promise<GmiBankLineResult> {
+    const find = async (): Promise<number | undefined> => {
+      for (const m of markers) {
+        const uid = (await this.findBankTransactions(bankAccountUid, m, tx.bookingDate))[0]?.transactionUid;
+        if (uid) return uid;
+      }
+      return undefined;
+    };
+    let transactionUid: number | undefined = await find();
     let outcome: GmiBankLineResult["outcome"] = transactionUid ? "exists" : "added";
     if (!transactionUid) {
+      held();
       try {
         transactionUid = await this.addBankTransaction(bankAccountUid, tx);
       } catch (err) {
@@ -301,16 +318,19 @@ export class GetMyInvoicesClient {
         } else if (!(err instanceof GmiApiError) || (err.status !== 0 && err.status < 500)) throw err;
         for (const wait of transactionUid ? [] : this.relookupDelaysMs) {
           await new Promise((r) => setTimeout(r, wait));
-          transactionUid = (await this.findBankTransactions(bankAccountUid, marker, tx.bookingDate).catch(() => []))[0]?.transactionUid;
+          transactionUid = await find().catch(() => undefined);
           if (transactionUid) break;
         }
         if (!transactionUid) return { outcome: "unknown", error: redactedMessage(err) };
       }
     }
-    if (!documentUid) return { outcome, transactionUid, assigned: false };
-    const already = await this.assignedDocumentUids(bankAccountUid, transactionUid).catch(() => [] as number[]);
-    if (!already.includes(documentUid)) await this.assignDocument(bankAccountUid, transactionUid, documentUid);
-    return { outcome, transactionUid, assigned: true };
+    held(transactionUid);
+    const already = await this.assignedDocumentUids(bankAccountUid, transactionUid).catch(() => undefined);
+    const stale = superseded.filter((uid) => !already || already.includes(uid)).length;
+    const flag = stale ? { revokedStillAttached: stale } : {};
+    if (!documentUid) return { outcome, transactionUid, assigned: false, ...flag };
+    if (!already?.includes(documentUid)) await this.assignDocument(bankAccountUid, transactionUid, documentUid);
+    return { outcome, transactionUid, assigned: true, ...flag };
   }
 }
 
