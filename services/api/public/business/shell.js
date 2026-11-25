@@ -237,6 +237,7 @@ export async function boot() {
     // The server makes no organisation for a login that has not said where it lives.
     const undecided = u?.segment?.value === "UNDECIDED";
     $("#no-orgs-residence").classList.toggle("hidden", !undecided);
+    if (forInvoices) $("#no-orgs-residence a").href = "/app?from=business&setup=invoices#residence";
     $("#new-org").classList.toggle("hidden", undecided);
     if (u?.accountType === "company") {
       $("#new-org-type option[value=personal]")?.remove();

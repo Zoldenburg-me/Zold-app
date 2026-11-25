@@ -26,7 +26,7 @@ const store = () => {
   return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, String(v)), removeItem: (k: string) => void m.delete(k) };
 };
 const ctx: any = {
-  console, setTimeout, clearTimeout, setInterval, clearInterval, URL, Blob, Intl, TextEncoder, btoa, atob, JSON, Promise,
+  console, setTimeout, clearTimeout, setInterval, clearInterval, URL, URLSearchParams, Blob, Intl, TextEncoder, btoa, atob, JSON, Promise,
   addEventListener() {}, removeEventListener() {},
   PublicKeyCredential: function PublicKeyCredential() {},
   matchMedia: () => ({ matches: false }),
@@ -158,6 +158,12 @@ test("the Terms are accepted on the sign-in step, where the account is made", ()
   await run("obSendResidence(document.createElement('button'))");
   assert.deepEqual(JSON.parse(JSON.stringify(ctx.__posts)), [{ url: "/api/users/u1/residence", body: { country: "AT", usAnswers: { usPerson: true, companyUsNexus: false } } }]);
   assert.equal(run("user.segment.value"), "EU_FULL");
+  // Opened from /business: saving goes back to the set-up that sent them.
+  ctx.__to = [];
+  run(`user = __u; obDraft.residenceFor = "u1"; location.search = "?from=business&setup=invoices"; location.assign = (u) => __to.push(u)`);
+  await run("obSendResidence(document.createElement('button'))");
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx.__to)), ["/business?setup=invoices"]);
+  run('location.search = ""; location.assign = () => {}');
   // Decided: the screen is not offered again.
   assert.notEqual(run("obGuard('residence')"), "residence");
   run("api = __realApi; delete globalThis.renderUser; obFinish = __realFinish; user = null; obScreen = null");

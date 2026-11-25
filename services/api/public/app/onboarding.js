@@ -615,6 +615,9 @@ async function obSendResidence(btn) {
     });
     renderUser({ ...user, ...u });
     obClearDraft();
+    // Opened from /business (its "First: where you live"): back to the set-up that sent them.
+    const qs = new URLSearchParams(location.search);
+    if (qs.get("from") === "business") return location.assign(qs.get("setup") === "invoices" ? "/business?setup=invoices" : "/business");
     obFinish();
   } catch (e) {
     obShowErr(e);
