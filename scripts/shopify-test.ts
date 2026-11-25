@@ -72,6 +72,7 @@ rmSync(process.env.TRANSF_DB_PATH, { force: true });
 const { initStore, store } = await import("../services/api/src/store.js");
 const { createShopifyRouter, resolveShopifyRequest } = await import("../services/api/src/routes/shopify.js");
 const { attributeDepositToRequest, onPaymentRequestPaid, sweepPaymentRequests } = await import("../services/api/src/routes/payment-requests.js");
+const { displayCode } = await import("../services/api/src/payment-requests.js");
 const { signBody, signQuery } = await import("../services/api/src/shopify/hmac.js");
 const { fieldKeyId } = await import("../services/api/src/crypto-at-rest.js");
 const { SECRETS } = await import("../services/api/src/stored-secrets.js");
@@ -355,7 +356,11 @@ await check("the sweep stops retrying a failing resolve after RESOLVE_MAX_ATTEMP
   assert.ok(after.source.resolveError, "the last error stays on the row");
   assert.equal(calls.filter((c) => c.op === "paymentSessionResolve" && c.vars.id === s.gid).length, RESOLVE_MAX_ATTEMPTS);
   assert.equal(logged.filter((l) => l.includes("gave up") && l.includes(req.id)).length, 1, logged.join("\n"));
-  assert.ok(!logged.some((l) => l.includes(req.code.slice(0, 5))), "no log line carries the payment code");
+  // The request id is random too and may share 5 characters with the code: take it out first.
+  const shown = logged.map((l) => l.replaceAll(req.id, "<id>"));
+  for (const part of [req.code.slice(0, 5), displayCode(req.code).slice(0, 11)]) {
+    assert.ok(!shown.some((l) => l.includes(part)), `no log line carries the payment code (${part.length} chars)`);
+  }
 });
 await check("a buyer who cancels is sent back to the store; the unauthenticated GET does not close the request", async () => {
   const s = session();

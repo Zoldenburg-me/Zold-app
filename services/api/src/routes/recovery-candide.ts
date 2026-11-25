@@ -194,8 +194,18 @@ function publicCandideRecovery(user: User) {
 }
 
 function publicRequest(r: RecoveryRequest) {
-  return starterRecoveryRequest(r);
+  return { ...starterRecoveryRequest(r), ...(passkeySubmits.has(r.id) ? { passkeySubmitting: true } : {}) };
 }
+
+/** Requests whose passkey submit is waiting on the guardian. A second submit
+ *  meanwhile is refused, and a read says so: the browser must not run another
+ *  ceremony with the same handle, which on a security key replaces the passkey
+ *  the first submit is about to record. In memory: a restart ends the wait. */
+const passkeySubmits = new Set<string>();
+
+/** A ticket the browser made and kept before submitting, so a lost answer
+ *  does not lose it (32 random bytes, base64url). */
+const OTP_TICKET_RE = /^[A-Za-z0-9_-]{43,128}$/;
 
 // ---------------------------------------------------------------------------
 // shared: the user's plan, or a refusal
@@ -876,7 +886,13 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       }
       const user = store.findUser(request.userId);
       if (!user?.passkeySafe) return res.status(410).json({ error: "the account behind this recovery no longer exists" });
-      const { credentialId, attestation, clientDataJSON } = req.body ?? {};
+      if (passkeySubmits.has(request.id)) {
+        return res.status(409).json({ ...publicRequest(request), error: "a passkey for this recovery is still being checked", code: "PASSKEY_SUBMIT_IN_PROGRESS" });
+      }
+      const { credentialId, attestation, clientDataJSON, otpTicket: offeredTicket } = req.body ?? {};
+      if (offeredTicket !== undefined && (typeof offeredTicket !== "string" || !OTP_TICKET_RE.test(offeredTicket))) {
+        return res.status(400).json({ error: "otpTicket must be 32 or more random bytes, base64url" });
+      }
       if (!credentialId || typeof credentialId !== "string" || !attestation || !clientDataJSON) {
         return res.status(400).json({ error: "credentialId, attestation and clientDataJSON required" });
       }
@@ -898,12 +914,24 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       const newOwners: `0x${string}`[] = [passkeyAccountAddress(owner)];
       const newThreshold = 1;
 
-      const sig = await requestSignatureChallenge(plan.address, newOwners, newThreshold);
-      const otpTicket = randomBytes(32).toString("base64url");
+      // No await since the check above, so no second submit got past it.
+      passkeySubmits.add(request.id);
+      let sig;
+      try {
+        sig = await requestSignatureChallenge(plan.address, newOwners, newThreshold);
+      } finally {
+        passkeySubmits.delete(request.id);
+      }
+      // Canceled or expired during the wait: record nothing.
+      const current = store.findRecoveryRequest(request.id);
+      if (current?.status !== "PASSKEY_PENDING") {
+        return res.status(409).json({ ...(current ? publicRequest(current) : {}), error: `recovery is ${current?.status ?? "gone"}` });
+      }
+      const otpTicket = typeof offeredTicket === "string" ? offeredTicket : randomBytes(32).toString("base64url");
       const updated = store.updateRecoveryRequest(request.id, {
         status: "OTP_PENDING",
         candide: {
-          ...(request.candide ?? {}),
+          ...(current.candide ?? {}),
           newPasskey: {
             credentialId,
             publicKey: reg.key,
@@ -920,8 +948,9 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
           auths: sig.auths.map((a) => ({ challengeId: a.challengeId, channel: a.channel, target: a.target, verified: false })),
         },
       });
-      // Returned once: the codes the owner receives confirm the credential
-      // registered HERE, so only this browser may submit them.
+      // Returned once (or the browser's own, kept before it submitted): the
+      // codes the owner receives confirm the credential registered HERE, so
+      // only this browser may submit them.
       res.json({ ...publicRequest(updated), otpTicket, submitTo: `/api/recovery/candide/${request.id}/otp` });
     }),
   );
