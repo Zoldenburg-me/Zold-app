@@ -17,11 +17,13 @@ async store with `store.tx`, a JSON backend and a Postgres backend behind one
 interface until cut-over, PGlite for the offline suites and a real Postgres 17
 for the concurrency tests, plain numbered SQL migrations, an outbox for
 webhooks, a ledger whose rows cannot be deleted and whose every change is kept,
-Postgres on a unix socket on the Oracle host with pgBackRest PITR to OCI
-Object Storage in two regions, a rebuild path for losing the host, and
-eight slices. **What it leaves to the owner:** whether the hub stays
+one API process per deployment, enforced at start, two Postgres clusters (one
+per deployment) on unix sockets with peer authentication on the Oracle host,
+pgBackRest PITR to OCI Object Storage in two regions plus daily dumps the host
+cannot delete, a rebuild path for losing the host, and eight slices. **What it leaves to the owner:** whether the hub stays
 separate, the OCI region, processing agreement and account type, the
-recovery-time target, and when to cut over (§9).
+recovery-time target, whether to lock the dump bucket's retention rule, and
+when to cut over (§9).
 
 ## 0. What exists today
 
@@ -117,7 +119,7 @@ move byte for byte. "Credential" means a hash or code that grants access
 | processedMoneriumWebhooks (81) | webhook_id (PK) | — | — | — | append |
 | moneriumIssueOrders (83) | order_id (:1360) | account / user | — | payer name, IBAN | append |
 | conversionSweeps (85) | — | user_id | user_id | — | append |
-| cryptoDeposits (87) | (lower(tx_hash), log_index) (:984-1009) | user_id, holding, invoice_id, payment_request_id | user_id | — | update |
+| cryptoDeposits (87) | (chain_id, lower(tx_hash), log_index) (:985-1009, §2) | user_id, holding, invoice_id, payment_request_id | user_id | — | update |
 | cryptoSends (88) | — | user_id, state, account | user_id | — | update |
 | audit (90) | — | user_id, at | — | operator notes | **append only** (:235-242) |
 | recoveryRequests (92) | (user_id) WHERE mode='zoldenburg' AND status='GRACE_PERIOD' (§2) | user_id, status | user_id | access hash (credential) | update |
@@ -125,11 +127,11 @@ move byte for byte. "Credential" means a hash or code that grants access
 | cryptoDepositCursor (102) | chain_key (PK) | — | — | — | upsert |
 | organisations (110) | payment-page handle, lower (:933), and across users through `payment_handles` (below) | — | — | GetMyInvoices key, Monerium API secret (sealed, :41, :45) | update; never deleted |
 | members (111) | invite token hash (:1142); (org_id, user_id) WHERE status <> 'deactivated' (:1136-1141) | org_id, user_id | org_id, user_id | credential | update; never deleted |
-| accounts (112) | — | org_id, lower(address) (:1167), backing_user_id (:185) | org_id, backing_user_id | IBAN | update; never deleted |
+| accounts (112) | lower(address) (:1167; the add scans for it today, §2) | org_id, backing_user_id (:185) | org_id, backing_user_id | IBAN | update; never deleted |
 | importedWallets (113) | — | org_id | org_id | — | update; **deleted** (:1290) |
 | contacts (114) | — | org_id | org_id | payee IBAN, address | update; **deleted** (:1197) |
 | drafts (115) | — | org_id, state | org_id | — | update |
-| invoices (116) | link token hash (:1258) | org_id, state | org_id | credential; payer data | update; never deleted (`DELETED` is a state, `routes/business/invoices.ts:154`) |
+| invoices (116) | link token hash (:1258); (org_id, number) for issued invoices (§2, invoice numbers) | org_id, state | org_id | credential; payer data | update; never deleted (`DELETED` is a state, `routes/business/invoices.ts:154`) |
 | chartAccounts (117) | (org_id, code) | org_id | org_id | — | update |
 | accountRules (118) | — | org_id | org_id | — | update; **deleted** (:1320) |
 | ledger (119) | (org_id, statement key) WHERE statement IS NOT NULL (`bookkeeping/statement.ts:559-572` matches by key) | org_id, lower(tx_hash) (`hashOnRecord` :135) | org_id | — | no delete; updated (§5) |
@@ -166,10 +168,55 @@ a finding.
 ## 2. The async problem
 
 Once a store read is awaited, another request can run between a check and the
-write that depends on it. On Postgres a second API instance could too, so
-in-memory guards are not enough for the target either.
+write that depends on it. Many handlers are safe today only because they are
+synchronous from check to write (drafts edit and cancel, last-owner, invoice
+numbering, pay-to submit, Shopify cancel); S2 makes their reads awaited, so
+each such window opens unless the check moves into the write.
 
-Two rules cover most of it:
+**One API process per deployment** is a hard invariant, enforced at start:
+the Postgres backend takes `pg_try_advisory_lock(hashtext('api:'||<deployment>))`
+on a dedicated connection before it serves anything, and the process refuses
+to start if the lock is held. The lock lives as long as that connection, so
+a crashed process releases it. These in-memory guards on money and identity
+paths rely on it, and stay in memory in #166:
+
+- `executing` / `compensating` (`orchestrator.ts:556`, `:561`), which the
+  stranded sweep's `busy()` (`:869`) reads; `refreshPayoutLocks` (`:1288`)
+  and `sweepAnchorPayouts` (`:913`);
+- the deposit conversion guards `pendingDepositConversions` and
+  `convertingDeposits` (`routes/crypto-deposits.ts:56`, `:70`, checked at
+  `:200`);
+- Turnkey `signing` / `finishing` (`recovery/turnkey-recovery.ts:90`, `:96`)
+  and `harnessPending` (`:55`);
+- `submitting` (`routes/business/org-safe-deployment.ts:145`), `issuing`
+  (`bookkeeping/issue.ts:94`), `invoiceLocks`
+  (`routes/business/invoice-pay-link.ts:80`), `pendingLinks`
+  (`merchant-links.ts:95`), Shopify `opening` / `resolving`
+  (`routes/shopify.ts:120`, `:259`);
+- the Monerium refresh single-flight `refreshing`
+  (`adapters/monerium-connection.ts:232`), `recording`
+  (`adapters/monerium-sandbox.ts`), the WebAuthn challenge map
+  (`webauthn.ts:157`), and the pending maps of `http/pending.ts` that stay in
+  memory (below).
+
+Moving any of them to a lease column (`UPDATE … SET lease_until=… WHERE
+lease_until IS NULL OR lease_until < now() RETURNING`) is the work a second
+process would need first; it is not in #166. The restore drill and a
+returning old host must not start an API for a deployment for the same
+reason (§7, §7.1). A start-up test runs two API processes against one
+database: the second exits non-zero before it listens.
+
+**Sweeps are single-flight.** The sweeps in `server.ts:334-396` are bare
+`setInterval`s, and a tick can outlast its interval today: the Zoldenburg
+sweep runs every 60 s (`config/security.ts:51`) and waits up to 90 s for a
+receipt (`recovery/zoldenburg-guardian.ts:260`). Every tick runs inside
+`pg_try_advisory_lock(hashtext('job:'||<deployment>||':'||<job>))` and
+returns at once if the lock is held; the JSON backend uses an in-memory flag
+per job. Only the verifier sweep has one today (`sweeping`,
+`recovery/recovered-passkey.ts:125`). Test: a tick held open past its
+interval; the next tick does nothing.
+
+Five rules cover most of it:
 
 1. **Every store write method is one transaction that locks its row.** It
    runs `SELECT doc … FOR UPDATE`, applies the method's existing body, and
@@ -179,33 +226,101 @@ Two rules cover most of it:
    `claimDraftExecution`, `consumeQuote`, `updateTransfer`'s final-state
    guard, `resolveTransferReview`, `setOrgSafePlan`) stays correct without
    being rewritten.
-2. **A check in the caller and a write later is a race** unless a unique
-   constraint or a lock covers it. Those are the cases below.
+2. **Arrays and sub-objects change inside the store method, on the locked
+   row, never as a whole value the caller built.** A patch like
+   `{ txs }` or `{ sepa: { ...t.sepa, state } }` was computed from a row read
+   before an await; locking the row then writes a stale array, and an
+   executor's intent step and a compensator's or poller's write can erase
+   each other. The orchestrator does exactly this today: `txs.push` then
+   `updateTransfer(id, { txs })` (`orchestrator.ts:530-533`, `:543-546`,
+   `:1351-1355`), and `adapters/monerium-sandbox.ts:709`, `:711` write
+   `sepa: { ...t.sepa, state }`. An intent that vanishes lets the next sweep
+   refund a transfer whose funds left. So: `appendTransferStep(id, step)` and
+   `patchTransferSub(id, key, fn)` for transfers, `patchUserSub(id, key, fn)`
+   for `passkeySafe` / `monerium`, `patchOrgSub(id, key, fn)` for
+   `invoicing` / `integrations`, `appendDraftActivity(id, entry)`,
+   `recordPaymentRequestPayment` and `settleInvoice` (table below). `fn`
+   receives the locked current value and returns the new one; in SQL that is
+   `jsonb_set` or `||` on the locked row. S2 adds a grep gate to
+   `scripts/check.ts` that refuses, outside `store.ts` and `store/`, a patch
+   built from these spreads and pushes: `...user.passkeySafe` (9 today),
+   `...user.monerium` (4), `...t.sepa`, `...ctx.org.invoicing` (1),
+   `...ctx.org.integrations` (1), `...draft.activity` (4),
+   `transfer.txs.push` / `txs.push` followed by an `updateTransfer`, writes of
+   `r.payments` and `invoice.settlements`. Test (S3, Postgres 17): an
+   executor append and a compensator append on one transfer in parallel;
+   both steps survive, in commit order.
+3. **Every state write names the states it may leave.** The store method
+   takes the allowed from-states and runs `UPDATE … WHERE id=$1 AND state =
+   ANY($from) RETURNING doc`; no row back means the state moved, and the
+   caller refuses (409) instead of writing. This is a conditional write, not
+   a check in the caller.
+4. **A rule over other rows locks a parent row or is a unique index.** Row
+   locks cannot see write skew (last owner, four eyes, invoice numbers), so
+   those take the organisation row `FOR UPDATE` or rely on `UNIQUE`.
+5. **A partner or chain call between a check and a write claims a reserve
+   status first.** The claim is a conditional write (rule 3) to a status
+   such as `EXECUTING` or `FINALIZING`, committed before the call; the call's
+   outcome moves it on; the sweep reconciles a reserve older than its
+   timeout from the chain, as `RELAYING` does below. A second caller finds
+   the reserve and refuses.
+
+Anything else that checks in the caller and writes later is a race unless
+one of these covers it.
 
 Isolation is `READ COMMITTED` with explicit `FOR UPDATE`. `SERIALIZABLE`
 would also be correct, but its retries would reach code that calls partners
 between reads, and we would rather refuse than retry a money path.
 
+The table below is built in S3 (money paths on Postgres, `check:pg`).
+
 | Path | Today's guard (evidence) | On Postgres | Concurrency test (Postgres 17) |
 |---|---|---|---|
-| Quote → transfer | `holdDailyCap` takes an in-memory hold with no yield between count and record (`transfers/build.ts:157-168`, `store.ts:470-481`); `consumeQuote` (`build.ts:169`, `store.ts:441-448`); `addTransferUnderHold` (`build.ts:370`) | Hold: `store.tx` takes `pg_advisory_xact_lock(hashtext('cap:'||capKey))`, recomputes `used` from the database inside the lock, and inserts a `cap_holds` row with an expiry. Consume: one conditional `UPDATE quotes … WHERE status='OPEN'`. The transfer insert and the hold delete are one transaction, and `UNIQUE(transfers.quote_id)` refuses a second transfer for a quote whatever the code does | 20 parallel `POST /transfers` on one quote: one 201, the rest 409. 2 parallel transfers each at the full cap: one passes |
+| Quote → transfer | `holdDailyCap` takes an in-memory hold with no yield between count and record (`transfers/build.ts:157-168`, `store.ts:470-481`); `consumeQuote` (`build.ts:169`, `store.ts:441-448`); `addTransferUnderHold` (`build.ts:370`) | Hold: `store.tx` takes `pg_advisory_xact_lock(hashtext('cap:'||capKey))`, recomputes `used` from the database inside the lock, counting only `cap_holds` rows with `expires_at > now()` (an expired hold is ignored by the sum, then pruned), and inserts a `cap_holds` row with an expiry. Consume: one conditional `UPDATE quotes … WHERE status='OPEN' AND expires_at > now()`; today `consumeQuote` checks the status only (`store.ts:441-447`). The expiry write (`routes/transfers.ts:115`, unconditional today) becomes `UPDATE quotes SET status='EXPIRED' WHERE id=$1 AND status='OPEN'`, so it cannot overwrite a consumed quote. The transfer insert and the hold delete are one transaction, and `UNIQUE(transfers.quote_id)` refuses a second transfer for a quote whatever the code does | 20 parallel `POST /transfers` on one quote: one 201, the rest 409. 2 parallel transfers each at the full cap: one passes. A quote past `expires_at` but still `OPEN`: consume refused. An expired hold leaves the cap free |
 | Authorise and submit a transfer | `claimAuthorization` after the `CREATED` check (`routes/transfers.ts:444`, `store.ts:513-521`) | Rule 1. The caller's earlier `CREATED` check is advisory only | 10 parallel `/authorize` with one signature: exactly one reaches the orchestrator |
 | Transfer state machine | `updateTransfer` refuses to leave REFUNDED/PAID/MANUAL_REVIEW (`store.ts:525-540`) | Rule 1 (the guard runs on the locked row). State-change listeners (`:80-89`) move to the outbox, written in the same transaction (§5) | A late `PAID` racing a sweep `REFUNDED`: the final state is the first one committed; the other write keeps its other fields |
 | Outbound intents | Intent written and fsynced before the call; a failed write exits, so "no intent on disk means the call never went out" (`orchestrator.ts:529-533`, `:848-851`) | The intent write is awaited and committed before the call. A failed commit throws, so the call is not made. A commit whose outcome is unknown (connection lost during `COMMIT`) is treated as written: the sweep reads the intent and the transfer goes to review, the safe direction. No exit needed | Kill the connection during the intent commit: no partner call; on restart the transfer is either untouched or in review |
 | Crypto send | `holdDailyCap` (`routes/crypto-sends.ts:262`), `addCryptoSendUnderHold` (:356, :437), `claimCryptoSend` (:619, `store.ts:964-972`) | As quote → transfer for the hold; rule 1 for the claim | Parallel submits of one send: one `SENT`/`SUBMITTED`. Parallel sends at the cap from one org Safe: one passes (cap key `orgSafeCapKey`, `wallet/org-debit.ts:174`) |
 | Org Safe op queue | `addSafeOpSignature` (`routes/business/safe-ops.ts:180`), `claimSafeOpRelay` / `finishSafeOp` (`wallet/org-safe-queue.ts:174-196`) | Rule 1 on the op row | Two owners sign at once: both signatures land. One owner twice: one lands. Two relays: one claims |
 | Draft payments | `claimDraftExecution` with `expectedUpdatedAt` (`routes/business/drafts.ts:408`, `:704`) | Rule 1 | Two parallel executes of one reviewed draft: one claims |
-| Managed recovery start | Check open requests, maybe cancel the idle one, then add (`routes/recovery-zoldenburg.ts:629-674`); `relaying` is an in-memory set (`:322`) | `store.tx` locks the user row (`SELECT … FROM users WHERE id=$1 FOR UPDATE`) for the whole check-cancel-add. The partial unique index on one `GRACE_PERIOD` request per user backs it. `relaying` becomes a `RELAYING` status in the row, written before the chain call, with the status it came from and the time. Cancel and expiry wait while it is set, as they wait on the set today. A restart can leave it set, so the sweep (`:327-342`) reconciles: a `RELAYING` row older than the relay timeout is synced from the chain (`syncZoldenburgFromChain`); a relayed signature or finalisation moves it to the status the chain shows, and nothing on chain moves it back to the status it came from, so the next sweep or admin action relays again. It never stays `RELAYING` across a sweep that has passed the timeout | Parallel starts for one account at `MAX_OPEN_REQUESTS`: never more than the limit; two finalisers: one relays. Stop the process after `RELAYING` is written: with the relay on chain the row reaches its grace period; without, it is back in its old status and relays once |
+| Managed recovery start | Check open requests, maybe cancel the idle one, then add (`routes/recovery-zoldenburg.ts:629-674`); `relaying` is an in-memory set (`:322`) | `store.tx` locks the user row (`SELECT … FROM users WHERE id=$1 FOR UPDATE`) for the whole check-cancel-add. The partial unique index on one `GRACE_PERIOD` request per user backs it. `relaying` becomes a `RELAYING` status in the row, written before the chain call, with the status it came from and the time. Cancel and expiry wait while it is set, as they wait on the set today. The start gate filters open requests by status and expiry before it looks for a relay (`:629-633`, then `relaying.has` at `:644`), so `RELAYING` joins `OPEN` and is exempt from the expiry filter, as `GRACE_PERIOD` is: a request whose relay is in flight past its `expiresAt` still blocks a new start. A restart can leave it set, so the sweep (`:327-342`) reconciles: a `RELAYING` row older than the relay timeout is synced from the chain (`syncZoldenburgFromChain`); a relayed signature or finalisation moves it to the status the chain shows, and nothing on chain moves it back to the status it came from, so the next sweep or admin action relays again. It never stays `RELAYING` across a sweep that has passed the timeout | Parallel starts for one account at `MAX_OPEN_REQUESTS`: never more than the limit; two finalisers: one relays. A `RELAYING` request past its `expiresAt`: a new start answers 409. Stop the process after `RELAYING` is written: with the relay on chain the row reaches its grace period; without, it is back in its old status and relays once |
 | Payment request paid | `record()` reads the row, `applyPayment` merges in place, then writes (`routes/payment-requests.ts:559-575`; in-place merge `payment-requests.ts:551`) | One store method, `recordPaymentRequestPayment(id, payment)`, runs `applyPayment` on the locked row. The "became PAID" hook is an outbox row in the same transaction | A Monerium order and our own transfer for one payment, recorded in parallel: one payment row, merged; the PAID hook fires once |
 | Invoice paid | Read the invoice, check its settlement ref, write (`routes/payment-requests.ts:656-663`, `adapters/crypto-deposits.ts:627-632`, `routes/business/state.ts:97-144`) | One store method, `settleInvoice(id, settlement)`, checks the ref on the locked row | The poller and a webhook settle one order in parallel: one settlement |
 | Ledger | `batched` blocks in `wallet-sync/sync.ts:300`, `wallet-sync/revalue.ts:82`, `bookkeeping/writer.ts:260`, `routes/orgs.ts:1147`; rule runs compute replacements from rows read earlier, then replace them (`routes/business/bookkeeping.ts:152-162`) | `store.tx` holding `pg_advisory_xact_lock(hashtext('ledger:'||org_id))`, taken by every ledger write: statement writer, sync, revalue, rule run, categorise. A write reads the rows it changes inside that lock, never before it: the rule run becomes one store method, `applyAccountRules(orgId)`, that reads rules and rows, runs `applyRules` and writes, all under the lock. `replaceLedgerEntries` also refuses a row whose stored `updatedAt` is not the one the caller read, so a replacement computed from a stale row fails instead of overwriting. The statement writer's add path is backed by `UNIQUE(org_id, statement key)`, so two sweeps cannot add a line twice | Two statement sweeps in parallel: same lines as one sweep. Revalue racing a categorise: both changes kept, in history. A rule run racing a revalue and a hand categorisation: the revalued value and the hand category both survive |
 | Monerium order dedupe | `isOrderProcessed`, then an in-memory `recording` claim, then awaits, then `markOrderProcessed` (`adapters/monerium-sandbox.ts:466-527`) | The claim is `INSERT INTO processed_monerium_orders … ON CONFLICT DO NOTHING` as the last step of the recording transaction, with `recordMoneriumIssue` in the same transaction. `recording` stays for the in-flight window (one process); a second instance would get the duplicate refused by the key | Poller and two webhook deliveries for one order in parallel: one `recorded`, one issue record, one statement line |
 | Monerium webhook dedupe | `isWebhookProcessed`, handle, `markWebhookProcessed` (`routes/monerium-webhook.ts:51-63`); today an array scan | `webhook_id` primary key; the mark is `ON CONFLICT DO NOTHING`. Handling twice is already safe because the order dedupe above holds | Two deliveries of one id in parallel: one is recorded and answered 2xx. The other answers 2xx `duplicate` if it arrives after, or 503 `retry` if it arrives while the first is recording (`mirrorOrder` returns `unavailable`, `adapters/monerium-sandbox.ts:490-502`, and the route answers 503, `routes/monerium-webhook.ts:55-64`); its retry then answers 2xx `duplicate`. One issue record either way |
 | Shopify delivery dedupe | `shopifyDelivery`, record, mark on finish (`routes/shopify.ts:668-678`) | `INSERT … ON CONFLICT (id) DO NOTHING RETURNING`; a conflict reads the row and checks its shop. Order create is backed by `UNIQUE(kind, shop, external_id)` on payment requests | One delivery id twice in parallel: one request created. Same order id from two shops: two requests |
-| Crypto deposits | Idempotent on (txHash, logIndex) (`store.ts:990-1009`) | `UNIQUE(lower(tx_hash), log_index)`, `ON CONFLICT DO NOTHING` then read | Two overlapping scans of one window: one row |
-| Passkey sign count | `recordPasskeyUse` only while the credential is still the account's (`store.ts:202-206`), 11 callers (`http/passkey-assertion.ts:44`, `routes/auth.ts:122`, …) | Rule 1 on the user row | A recovery replacing the passkey while an assertion records its count: the count is refused, the new passkey stays |
-| Sessions | `findSessionByTokenHash`, `touchSession` (`store.ts:819-841`) | One indexed read per request; the touch is a conditional `UPDATE … WHERE last_used_at < now() - 60s`. Pruning is a periodic `DELETE`, not part of `addSession` | — (not a money path) |
+| Crypto deposits | Idempotent on (txHash, logIndex) (`store.ts:985-1009`) | `UNIQUE(chain_id, lower(tx_hash), log_index)`, `ON CONFLICT DO NOTHING` then read. The scanner covers one chain per deployment (`CHAIN_ID`, `adapters/crypto-deposits.ts:34`), but each deposit records its `chainId` (`store/types.ts:540`) and the cursor is per chain, so the key carries it: a second chain cannot collide with the first | Two overlapping scans of one window: one row |
+| Passkey sign count | `recordPasskeyUse` only while the credential is still the account's (`store.ts:202-206`), 11 callers (`http/passkey-assertion.ts:44`, `routes/auth.ts:122`, …). The counter check (`webauthn.ts:323`) compares against the count the caller read before its await, and the method writes whatever came back | Rule 1 on the user row, and the compare moves into the method: the write happens only if `stored = 0 AND new = 0` or `new > stored` on the locked row; otherwise the method returns false and the caller answers 401, as for a replaced credential (S3) | A recovery replacing the passkey while an assertion records its count: the count is refused, the new passkey stays. Two assertions with counts 5 and 6 recorded in the order 6, 5: the stored count is 6 and the second is refused |
+| Sessions | `findSessionByTokenHash`, `touchSession` (`store.ts:819-841`); login mints its session synchronously after `recordPasskeyUse` so that a recovery landing later revokes it too (`routes/auth.ts:440-448`); recovery revokes the others (`recovery/recovered-passkey.ts:155`, `revokeOtherSessions` `http/sessions.ts:32-36`) | On an async store the credential check and the session insert are separate awaits, and a recovery can swap the passkey and revoke between them, leaving the old device a 24 h bearer. So `users.session_epoch` (an integer in `doc`, generated column): every passkey replace or recovery bumps it in the same transaction as the swap and the revoke; `addSession` copies the epoch it read with the credential check and inserts only `WHERE` the user's epoch still equals it; `requireSession` (`http/sessions.ts:44-61`) refuses a session whose epoch is below the user's. The touch is a conditional `UPDATE … WHERE last_used_at < now() - 60s`. Pruning is a periodic `DELETE`, not part of `addSession` (S4) | Login paused after its credential check while a recovery swaps the passkey: the login gets 401, or its session is refused on first use; never a live session on the old passkey |
 | Imported-wallet proof | `batched` re-reads before writing (`routes/orgs.ts:1244-1294`) | `store.tx` with the wallet row locked | Two proofs at once: one wins, the other 409 |
+
+
+The paths below are not covered by rule 1 alone. "Today" says whether the
+window is open now (an await between check and write) or opens with S2 (the
+handler is synchronous from check to write today). The slice is where the
+store-level rule and its test land; every test runs on JSON in `check` and
+in parallel on Postgres 17 in `check:pg`.
+
+| Path | Today | Store-level rule | Test | Slice |
+|---|---|---|---|---|
+| Draft edit, cancel, `reconcileDrift` vs `EXECUTING` | Edit and cancel check the state on the row they read and write it (`routes/business/drafts.ts:179`→`:200`, `:339`→`:347`/`:351`), synchronous today. `reconcileDrift` (`business/state.ts:153`→`:156`) trusts the draft passed in; `drafts.ts:403`, `:590` re-read after awaits, `:239`, `:300`, `:491` pass the row first read | Rule 3: `updateDraft(id, patch, { from })` with `WHERE state = ANY($from)`; edit and cancel from the editable states only, `reconcileDrift` from the states it reconciles; never from `EXECUTING`. Activity via `appendDraftActivity` (rule 2) | An edit and a cancel each racing `claimDraftExecution`: either the claim wins and the edit/cancel answers 409, or the edit wins and the claim's `expectedUpdatedAt` refuses; the draft never leaves `EXECUTING` by an edit | S2 |
+| Crypto send `FAILED` | The `FAILED` writes after the screening await (`routes/crypto-sends.ts:572`, `:585`, `:612`) run before `claimCryptoSend` (`:619`) with no state check; `updateCryptoSend` has no guard (`store.ts:973-979`). Open today: a second submit can have claimed it meanwhile | Rule 3: `FAILED` only from the pre-submit states, never over `SUBMITTED` or `SENT`; a refused write leaves the row and the cap hold alone | A screening failure written while a parallel submit has claimed the send: the send stays `SUBMITTED`, the cap still counts it, the draft cannot re-run | S2 |
+| Invoice `/pay` twice | `assertPayable(syncInvoicePayment(invoice))` then the draft insert (`routes/business/invoices.ts:178`→`:257`→`:268`), synchronous today | One store method, `startInvoicePayment(invoiceId, draft)`: conditional `SUBMITTED`→`PAYING` and the draft insert in one transaction | Two parallel `/pay` on one invoice: one draft, one 409 | S2 |
+| Supplier pay-to submit | State check then `payTo` write (`routes/business/invoice-links.ts:179`→`:212`/`:254`), synchronous after the `load` await at `:177` | Rule 3: `WHERE state='LINK_CREATED'` on the write | Two submits with different `payTo`: the first stands, the second answers 409 | S2 |
+| Payment-request expiry sweep | Filters `OPEN` once (`routes/payment-requests.ts:743`), awaits `hook(r)` (`:768`) inside the loop, writes `EXPIRED` without re-checking (`:746`). Open today | Rule 3: `EXPIRED` only `WHERE state='OPEN'` | A payment recorded while the sweep is mid-loop: the request stays `PAID` | S2 |
+| Shopify cancel | `payments.length === 0` on the row read, then cancel (`routes/shopify.ts:685`→`:686`), synchronous today | One store method: cancel `WHERE state='OPEN' AND jsonb_array_length(doc->'payments') = 0` on the locked row | A payment recorded in parallel with a Shopify cancel: one of them; never a cancelled request with a payment | S2 |
+| One deposit matched twice | A deposit is attributed to a request (`attributeDepositToRequest`, `payment-requests.ts:593`→`:620`) or linked to an invoice (`routes/crypto-deposits.ts:141`→`:175`), synchronous today | `attachDeposit(id, target)`: `WHERE payment_request_id IS NULL AND invoice_id IS NULL` on the deposit row, in the same transaction as the payment or settlement it records | One deposit attributed by the scanner and an invoice link in parallel: one target | S3 |
+| Deposit conversion and partials | Guarded by deleting the pending entry and `convertingDeposits` (`routes/crypto-deposits.ts:288`, `:295`), both in memory, before the submit (`:299`→`:358`); `settleConvertedDeposit` reads `deposit.partials` after awaits (`adapters/crypto-deposits.ts:414-480`) | Rule 5: a `CONVERTING` reserve on the deposit row before the submit; partials appended with rule 2 | Two conversions of one deposit: one submits. Two partials settling in parallel: both kept | S3 |
+| Last owner | Count of owners then the role change or deactivation (`routes/orgs.ts:606`→`:616`), synchronous today | Rule 4: the method locks the `organisations` row, counts active owners inside the lock, then writes | Two owners each demoting the other in parallel: one succeeds, one answers 409; one owner remains | S2 |
+| Four eyes | `canReviewDraft` compares reviewer and drafter (`routes/business/drafts.ts:282-309`), synchronous today | The review write is conditional on the draft's `updated_at` and drafter read with the check (`WHERE doc->>'updatedAt' = $read AND doc->>'createdByMemberId' = $drafterMember`, and the review state from rule 3), so an edit that makes the reviewer the drafter lands first or refuses the review | A line edit by the reviewer racing their own approval: the approval is refused | S2 |
+| Invoice numbers | `nextNumberOf(ctx.org, issueDate)` (`routes/business/issue-outgoing.ts:115`), then `addInvoice` (`:192`), the series bump (`:213-216`) and `updateInvoice` (`:237`), synchronous today | Rule 4: the series is on the organisation row (`invoicing.numberSeries`), so one store method locks that row `FOR UPDATE`, picks the number, inserts the invoice and bumps the series (rule 2) in one transaction; `UNIQUE(org_id, number)` on issued invoices (§1.2) refuses a duplicate whatever the code does, including a number typed by hand. A unique number per invoice is what §14 UStG requires | Two automatic issues in parallel: two different, consecutive numbers. A typed number racing an automatic one that picks it: one 409 | S2 |
+| Candide recovery | Execute after an admin reject re-checks nothing after its awaits (`routes/recovery-candide.ts:935`/`:947`→`:960`→`:972`→`:1006`, `GRACE_PERIOD` written unconditionally); the passkey step (`:874`/`:883`→`:901`→`:903`) and finalize (`:295`→`:316`→`:350`/`:352`) likewise. Open today | Rule 5: `EXECUTING`, `PASSKEY_BINDING` and `FINALIZING` reserves, each claimed with rule 3 from the status it requires before the chain call; a reject is a rule-3 write that refuses on a reserve | Admin reject racing execute: either the reject wins and nothing goes on chain, or execute holds the reserve and the reject answers 409 | S4 |
+| Turnkey recovery | Re-checks at `recovery/turnkey-recovery.ts:185`, then `GRACE_PERIOD` unconditional at `:207` after awaits (`:187`, `:188`, `:196`); `signing` stops a second call in one process only | Rule 5: a `SIGNING` reserve claimed from the required status before the first await | Two starts in parallel: one signs | S4 |
+| Zoldenburg finalize | The finalize route (`routes/recovery-zoldenburg.ts:805`), the admin route (`:1116`) and the sweep each reach `finalizeZoldenburgRecovery` (`:290`→`:299`/`:307`) and `bindAndFinish` (`:273-284`) without `relaying`. Open today: a second bind sets the registration `signCount` again (`recovery/recovered-passkey.ts:142`) and revokes sessions again (`:155`), logging out the recovered device | Rule 5: a `FINALIZING` reserve from `GRACE_PERIOD`, reconciled by the sweep from the Safe's owners as `RELAYING` is; the bind runs only for the caller that claimed it | Two finalisers in parallel: one bind; the recovered device's session survives | S4 |
+| Monerium refresh | Single-flight per user in memory (`adapters/monerium-connection.ts:232`, `:245-249`) and a compare on `refreshTokenEnc` after the await (`:271-274`) on the live row | The compare moves into `storeMoneriumTokens(userId, expectedRefreshEnc, next)`: `WHERE doc->'monerium'->>'refreshTokenEnc' = $expected` on the locked row; no row means the connection changed and the new tokens are not written. Replacing API keys already compares the keys (`routes/business/org-monerium.ts:234`) and moves into its method the same way | Two refreshes with one token in parallel (single-flight bypassed): one stores, the other refuses; the stored refresh token is the newest | S4 |
+| Ceremony challenges | Login challenges are single-use and consumed on read (`webauthn.ts:157`, `consumeChallenge` `:205-210`). `verifyAssertionForChallenge` (9 callers) only compares; single use rests on each flow consuming its pending entry or claim | They stay in memory under the one-process invariant: a restart drops them and the user repeats the ceremony. For a money action the single-use point is the claim in the same transaction (`claimAuthorization`, `claimCryptoSend`, `pending_executions` deleted with the claim), so a replayed assertion finds nothing to claim. S4 lists each of the 9 callers with its single-use point; one without becomes `DELETE … RETURNING` on its pending row | Each caller: one assertion presented twice; the second is refused | S4 |
+| One Safe, two accounts | `accounts` has no unique address; importer and add scan with `toLowerCase()` (`routes/safe-import.ts:271-276`, `routes/orgs.ts:792-804`, `store.ts:1167-1170`) | `UNIQUE(lower(address))` on accounts where the importer finds no duplicate (§1.2); the add is `INSERT … ON CONFLICT DO NOTHING RETURNING`, and no row back answers 409 | Two imports of one Safe in parallel: one account | S3 |
 
 **Approvals waiting for a passkey move to the database.** Preparing a
 transfer's or a crypto send's UserOperation and approving it are separate
@@ -214,14 +329,18 @@ and `pendingCryptoSends` (`http/pending.ts:56`, `:71`), so a restart, or a
 second process, answers the approval 410 (`routes/crypto-sends.ts:531-534`).
 S3 moves both to `pending_executions(kind, id, user_id, expires_at, doc)`:
 the plan, the unsigned UserOperation, its challenge and the batch recipient,
-none of them a secret. The approval reads it on the locked transfer or send
+none of them a secret. A UserOperation is mostly `bigint`s, which JSON cannot
+hold, so `doc` stores it through `encodeUserOperation` /
+`decodeUserOperation` (`domain/safe-op-queue.ts:109-120`), as the Safe op
+queue does, and a round-trip test compares the decoded operation and its hash
+with the original. The approval reads it on the locked transfer or send
 row, deletes it in the same transaction as the claim, and expired rows are
 pruned. The other pending maps in `http/pending.ts` (Safe deployments,
 Monerium link signatures) stay in memory: a restart asks the user to repeat a
 setup step and moves no money. The checkout-webhook retry timers stay until
 S4 replaces them. `capHolds` (`store.ts:72`) and `relaying` move to the
-database as above. With those moved, nothing on a money path depends on
-there being one process; running a second one is still a separate decision.
+database as above; the other in-memory guards stay, under the one-process
+invariant above.
 
 ## 3. Store API
 
@@ -261,6 +380,9 @@ t.lockUser(id) / t.lockKey(key)                      // FOR UPDATE / advisory lo
   too. One known case: `applyPayment` merges into the stored row in place
   (`payment-requests.ts:551`) and `record()` then writes `r.payments`
   (`routes/payment-requests.ts:567`); S3 moves it into the store method.
+  Copies make the other case visible too: a caller that builds an array or
+  sub-object from a row it read earlier and writes it back whole. §2 rule 2
+  moves those into the store method, and its grep gate keeps them there.
 - `store.ts` stays the only code that touches the database. Its header and
   the invariants (no method deletes an org, account, invoice or ledger row)
   stay; §5 adds the database's own refusal.
@@ -288,8 +410,9 @@ methods synchronous inside and one process-wide async mutex in front of
 Behaviour does not change; only the call sites gain `await`, and requests
 that used to interleave between synchronous calls now queue behind a
 transaction. The JSON suites assert both: a read issued while a `store.tx`
-callback awaits returns the state from before the transaction, and a write
-outside it is on disk when it resolves.
+callback awaits does not resolve until the transaction has ended, and then
+returns its committed state, never a half-made one; and a write outside a
+transaction is on disk when it resolves.
 
 Mechanical order for S2 (each step leaves `npm run check` green):
 
@@ -318,7 +441,7 @@ Mechanical order for S2 (each step leaves `npm run check` green):
 - **Driver:** `pg` (node-postgres, MIT, 8.x). Small, plain, a pool and
   parameterised queries; nothing else is needed.
 - **Offline suites on PGlite.** `@electric-sql/pglite` 0.6.0, Apache-2.0,
-  about 27 MB unpacked (WASM Postgres, in process, no server, no network). It
+  about 27 MB unpacked (WASM Postgres, in process, no server, no network; version and size are re-checked in S1). It
   runs one connection and serialises queries, so it cannot show a race. It is
   right for "does every query, constraint and migration work" and wrong for
   "does the lock hold". It goes in `devDependencies` only; production never
@@ -496,47 +619,140 @@ stopped and read-only, until the owner closes it (§6 step 8).
 - **Postgres 17** from the PostgreSQL project's own packages (PGDG), which
   build for aarch64. A major upgrade is a planned task, not automatic; minor
   versions follow the distribution's security updates.
-- **No network port.** `listen_addresses = ''`: Postgres listens on its unix
-  socket only. `pg_hba.conf` allows `local` connections with
-  `scram-sha-256`, and nothing else. `DATABASE_URL` is then
-  `postgresql://<role>@/<db>?host=/var/run/postgresql`. No TLS is needed on
-  a socket. The OCI security list opens no database port.
+- **Two clusters, one per deployment.** PITR, WAL, `archive_command` and a
+  pgBackRest stanza all belong to a cluster, so one cluster would tie the
+  deployments together: restoring testnet to a time T would roll mainnet back
+  with it, and testnet filling WAL or disk would stop mainnet. So:
+  `pg_createcluster 17 mainnet -u pg-mainnet` and
+  `pg_createcluster 17 testnet -u pg-testnet`, each run by its own OS user,
+  each with its own data directory, its own socket directory
+  (`/run/postgresql-mainnet`, `/run/postgresql-testnet`) and port number (the
+  port only names the socket file; nothing listens on TCP), its own systemd
+  unit, its own pgBackRest stanza and config file, its own bucket per region,
+  and its own repository passphrase. The API of a deployment runs as a third
+  OS user (`zold-mainnet`, `zold-testnet`) and can reach only its own
+  cluster's socket directory.
+- **No network port.** `listen_addresses = ''`: each cluster listens on its
+  unix socket only. The OCI security list opens no database port.
+- **Peer authentication, no database password.** Each cluster's `pg_hba.conf`
+  has `local` lines only, one per database, with `peer` and a `pg_ident.conf`
+  map from that deployment's OS users to its roles (`zold-mainnet` → the
+  application role, the deploy user → the owner role), and a final `local all
+  all reject`. `REVOKE CONNECT ON DATABASE <db> FROM PUBLIC`, then `GRANT
+  CONNECT` to the two roles of that database. A testnet process cannot open
+  mainnet's socket (directory permissions), would not be mapped if it could
+  (`pg_ident`), and has no `CONNECT` grant on the database. `DATABASE_URL` is
+  `postgresql://<role>@/<db>?host=/run/postgresql-<deployment>` with no
+  password, so the environment file holds no database credential.
 - **The code still takes only `DATABASE_URL`** (and `DATABASE_CA` when it is
   given). It fails closed: on a real-money chain a TCP host other than
   loopback is refused unless the URL asks for `sslmode=verify-full` and a CA
   is given. Moving the database to another host later is a config change, not
   a code change.
-- **Two deployments, one host:** testnet and mainnet each get their own OS
-  user, API process, database and roles. Neither role can connect to the
-  other's database. Staging stays off the passkey domain, as today.
 - **Roles:** per database, an owner role that runs the migrations (at
   deploy, before the API starts) and an application role the API runs as.
-  The application role has no DDL and the grants in §5.
+  The application role has no DDL and the grants in §5. Staging stays off the
+  passkey domain, as today.
 - **Disk encryption:** OCI encrypts boot and block volumes at rest by
   default, with Oracle-managed keys. A key of our own in OCI Vault is
   possible later; not needed for #166.
 - **PITR: pgBackRest** (MIT, packaged by PGDG for aarch64) to OCI Object
-  Storage through its S3-compatible API, off the host. Two repositories:
-  `repo1` a bucket in the host's region, `repo2` a bucket in a second EU
-  region (for example `eu-amsterdam-1`), so losing a region does not lose the
-  backups. Continuous WAL archiving to both with `archive_timeout = 60s`, so
-  at most about a minute of committed writes is lost with the host; a weekly
-  full and daily differential backup, 14 days of retention. The repository is
-  encrypted by pgBackRest (`aes-256-cbc`) under a key that is not on the
-  host's disk in plaintext beside the backups, so a copy of the bucket alone
-  opens nothing. The owner keeps that passphrase outside OCI; without it no
-  restore is possible, on this host or a new one. pgBackRest over WAL-G: it encrypts the repository, has a
-  `verify` command, and is in the same package repository as Postgres.
-- **Restore drill:** before the cut-over, then monthly, **onto a new OCI
-  instance**, not the running host: follow the rebuild below up to the
-  restore, restore to a time T, start Postgres, and compare per-table row
-  counts and hashes (the importer's verify, §6) against an export taken at T.
-  The drill restores from `repo1` and `repo2` in alternate months. It times
-  the rebuild from "instance requested" to "verify passed", and the time is
-  logged on the board with the result. A drill over the recovery-time target
-  is a finding. The instance is deleted afterwards.
+  Storage through its S3-compatible API, off the host. Per cluster, two
+  repositories: `repo1` a bucket in the host's region, `repo2` a bucket in a
+  second EU region (for example `eu-amsterdam-1`), so losing a region does not
+  lose the backups. Bucket names carry the deployment
+  (`zold-pgbackrest-mainnet-fra`, `…-testnet-fra`, and the same in the second
+  region), and each deployment's OCI user has a policy for its own two buckets
+  only. WAL is archived continuously to both, with `archive-async=y` and
+  `archive_timeout = 60s`; a weekly full and a daily differential backup to
+  each repository (pgBackRest schedules backups per repository), 14 days of
+  retention.
+- **Recovery point.** `archive_timeout` forces a segment switch every 60 s;
+  it does not make the upload finish. The one-minute RPO of §7.1 holds only
+  while archiving keeps up, which the alerts below watch: a backlog is a
+  larger loss window, and is an alert, not a silent change of the target.
+- **The repository passphrase is on the host.** `archive-push` encrypts each
+  WAL segment (`repo-cipher-type=aes-256-cbc`), so it needs
+  `repo-cipher-pass` at every push. It sits in that cluster's pgBackRest
+  config file, mode `0600`, owned by the cluster's OS user (`pg-mainnet` /
+  `pg-testnet`: `archive_command` runs as that user, so root-only would not
+  work), and nowhere else on the host. Each cluster has its own passphrase.
+  The owner holds the off-host copy outside OCI; without it no restore is
+  possible, on this host or a new one. A copy of a bucket alone opens
+  nothing; a copy of the host opens its own cluster's repositories.
+- **What pgBackRest does when one repository fails** (user guide, "Multiple
+  Repositories", <https://pgbackrest.org/user-guide.html#multi-repo>):
+  `archive-push` "will always push WAL to the archive in all configured
+  repositories"; "when a repository cannot be reached, WAL will still be
+  pushed to other repositories", but only with `archive-async=y`, "otherwise,
+  the other repositories can only get one WAL segment ahead of the
+  unreachable repository"; and "if WAL cannot be pushed to any repository,
+  then PostgreSQL will not remove it from the pg_wal directory, which may
+  cause the volume to run out of space". The documentation does not say
+  whether a segment stored in one repository but not the other is reported
+  to Postgres as archived. S7 tests it on the host by blocking `repo2` and
+  watching `pg_wal` and `pg_stat_archiver`, and writes the result here. We do
+  **not** set `archive-push-queue-max`: on reaching it pgBackRest reports the
+  WAL as archived and drops it, and "PITR will not be possible past that
+  point" (<https://pgbackrest.org/configuration.html#section-archive/option-archive-push-queue-max>).
+  A cluster that stops on a full WAL volume refuses writes and keeps its
+  history; one that drops WAL keeps taking money writes with no way to
+  restore them. A repository that stays unreachable is removed from the
+  config by hand (as in §7.1 step 4), with a new full backup to the one that
+  remains, so its segments stop piling up.
+- **Alerts** (per cluster, every minute, to the owner's phone through the
+  same channel as the reconciler): `pg_stat_archiver.failed_count` rose, or
+  `now() - last_archived_time` over 5 minutes; free space on the Postgres
+  volume under 30 % and under 15 %; `pgbackrest check` failing. Each cluster's
+  data directory is on its own block volume, so one cluster filling its disk
+  does not fill the other's.
+- **Backups the host cannot delete.** The host's Object Storage key can
+  overwrite and delete in the pgBackRest buckets, because pgBackRest needs
+  both (it rewrites `backup.info`, and `expire` deletes old backups), so a
+  compromised host or a bad `expire` can empty both repositories. OCI
+  retention rules cannot protect those buckets: a time-bound rule refuses
+  overwriting and deleting every object in the bucket for its duration
+  ("You can't update, overwrite, or delete objects or object metadata …
+  for the duration specified (time-bound rules)", and rules apply to the
+  whole bucket,
+  <https://docs.oracle.com/en-us/iaas/Content/Object/Tasks/usingretentionrules.htm>),
+  which stops pgBackRest itself. Instead each deployment gets a third bucket,
+  `zold-dumps-<deployment>`, in the second region, with a **time-bound
+  retention rule of 14 days**. A systemd timer writes a daily `pg_dump`
+  piped to `age` (to the owner's age key) into it, each as a new object. The
+  host's credential for it has create and read only (no overwrite, no
+  delete); a lifecycle rule deletes objects after 30 days. A compromised
+  host can then wipe the PITR repositories but not the last 14 days of
+  dumps: the worst case is a restore from the last daily dump. The rule
+  starts unlocked; whether to lock it (irreversible, "not even a tenancy
+  administrator or Oracle Support can delete a locked rule") is the owner's
+  call (§9).
+- pgBackRest over WAL-G: it encrypts the repository, has a `verify` command,
+  and is in the same package repository as Postgres.
+- **Restore drill:** before the cut-over, then monthly per cluster, **onto a
+  new OCI instance**, not the running host. The drill must never write to
+  the production repositories: its OCI user holds a **read-only** credential
+  for the pgBackRest buckets (read and list, no create, overwrite or
+  delete), the restore runs with `pgbackrest restore --archive-mode=off`
+  (<https://pgbackrest.org/command.html#command-restore>: "it is not a good
+  idea to push WAL from the cluster into the repository"), and
+  `pgbackrest stop` runs on the drill instance before Postgres starts, which
+  blocks `archive-push`, `backup` and `expire` there. It follows the rebuild
+  below up to the restore, restores to a time T, starts Postgres, and
+  compares per-table row counts and hashes (the importer's verify, §6)
+  against an export taken at T. It does not start the API: a restored
+  mainnet API would run the sweeps against real partners, a second API
+  process (§2). The drill restores from `repo1` and `repo2` in alternate
+  months. It times the database part, from "instance requested" to "verify
+  passed". The service part of the recovery target (API, tunnel, smoke) is
+  timed on testnet: once before the cut-over and then quarterly, testnet is
+  rebuilt for real onto a new instance (its old API stopped first), the
+  tunnel moved to it and the smoke run, and the time from "instance
+  requested" to "smoke passed" logged. Both times are logged on the board
+  with the result; either over the recovery-time target is a finding. Drill
+  instances are deleted afterwards.
 - **Off-box copy:** `scripts/backup-db.sh` gains a Postgres mode (`pg_dump`
-  piped to `age`) for a copy outside OCI.
+  piped to `age`) for a copy outside OCI, run by the owner.
 - **Running it:** systemd units for the API and `cloudflared`, restart on
   failure. Deploys keep today's pull model: the host polls the `production`
   branch, so nothing on GitHub holds a credential for it (§18.1). This
@@ -554,35 +770,46 @@ that the drill runs.
 
 **Proposed target, for the owner to accept (§9):** service back within
 **4 hours** of the decision to rebuild (RTO), losing at most the writes of
-the last minute before the host died (RPO, `archive_timeout`). Testnet
-follows mainnet, within a further 4 hours.
+the last minute before the host died (RPO, `archive_timeout`, while
+archiving keeps up, §7). Testnet follows mainnet, within a further 4 hours.
+If both pgBackRest repositories are lost too, the fallback is the last daily
+dump in the retention bucket (§7), and the loss window is up to a day.
 
 What must exist outside the host for this to work: the pgBackRest
-repositories (both regions), the repository passphrase, an age-encrypted copy
-of each deployment's environment file, and the Cloudflare tunnel, all held by
-the owner; the code is on GitHub (`production`).
+repositories (both regions), the dump bucket, the repository passphrases, an
+age-encrypted copy of each deployment's environment file, and the Cloudflare
+tunnel, all held by the owner; the code is on GitHub (`production`).
 
-Rebuild:
+Rebuild, mainnet first, then testnet the same way:
 
 1. Create an Ampere A1 instance from the same image in the same (or the
-   second) EU region; attach a block volume for the Postgres data directory.
-2. Run the provisioning script: OS users per deployment, PGDG Postgres 17
-   and pgBackRest, `listen_addresses = ''`, `pg_hba.conf` local
-   `scram-sha-256` only, Node 22.23.4 linux-arm64.
-3. `pgbackrest restore` from `repo1` (or `repo2` if the region is gone), to
-   the latest point or a chosen time. Start Postgres. The owner and
-   application roles and their grants come back with the restore; the
-   script checks that both exist and that the application role has only the
-   §5 grants.
-4. `pgbackrest check` on both repositories, so WAL archiving runs again from
-   the new host before it takes a write.
+   second) EU region; attach one block volume per cluster for its data
+   directory.
+2. Run the provisioning script: the OS users per deployment, PGDG Postgres
+   17 and pgBackRest, the two clusters with their socket directories,
+   `listen_addresses = ''`, `pg_hba.conf` and `pg_ident.conf` with `peer`
+   only (§7), Node 22.23.4 linux-arm64.
+3. Write the cluster's pgBackRest config with **only the repositories that
+   can be reached**. With a region gone, that is `repo2` alone:
+   `pgbackrest check` checks "all repositories … that are configured"
+   (<https://pgbackrest.org/command.html#command-check>), and an unreachable
+   one would fail it and hold WAL. `pgbackrest restore --repo=<n>` to the
+   latest point or a chosen time. Start Postgres. The owner and application
+   roles and their grants come back with the restore; the script checks that
+   both exist, that the application role has only the §5 grants, and that
+   `CONNECT` is revoked from `PUBLIC`.
+4. `pgbackrest check`, so WAL archiving runs again from the new host before
+   it takes a write. A repository left out in step 3 is added back, with a
+   new stanza in a reachable region if its own is gone, and a full backup is
+   taken to it before it counts as a second copy.
 5. Restore the environment files, then the systemd units for the API (per
    deployment) and `cloudflared`, and the deploy pull loop on `production`.
    `npm run preflight`.
 6. Start `cloudflared` with the tunnel's credentials; the hostnames follow
    the tunnel, so DNS does not change.
 7. Smoke as in §6 step 7. The old instance, if it comes back, stays stopped:
-   two hosts must never write to the same repositories.
+   two hosts must never write to the same repositories, and two API
+   processes must never run for one deployment (§2).
 
 Transfers in flight when the host died are handled by the existing sweeps
 after the restart: an intent without a known outcome goes to review (§2,
@@ -602,12 +829,12 @@ stays the default until the cut-over.
 |---|---|---|
 | S0 | This note | approval |
 | S1 | `pg` dependency, PGlite dev dependency, migration runner, `0001_init.sql` (§1), the Postgres backend behind the interface with the same method bodies, store suites run on JSON and PGlite. No caller switched | — |
-| S2 | Async store API and the mechanical conversion (§3), on the JSON backend. `store.tx` replaces `batched`. Rows are clones. Caller check-then-writes in §2 moved into store methods first | — |
-| S3 | Money-path transactions and locks on Postgres: `cap_holds`, recovery-start lock, `recordPaymentRequestPayment`, `settleInvoice`, the dedupe keys. `npm run check:pg` with every concurrency test in §2 | — |
-| S4 | Outbox and its worker (checkout hints, PAID hooks); audit and no-delete triggers; `ledger_history`; the application role's grants | — |
+| S2 | Async store API and the mechanical conversion (§3), on the JSON backend. `store.tx` replaces `batched`. Rows are clones. Caller check-then-writes in §2 moved into store methods first: the sub-object methods and the spread/push grep gate (rule 2), conditional state writes (rule 3), and the §2 rows marked S2 with their tests on JSON | — |
+| S3 | Money-path transactions and locks on Postgres: the one-process start lock and the sweep locks, `cap_holds`, recovery-start lock, `recordPaymentRequestPayment`, `settleInvoice`, the dedupe keys, monotonic sign count, the §2 rows marked S3. `npm run check:pg` with the concurrency tests of §2's first table, the executor ‖ compensator append, and the S2 rows run in parallel | — |
+| S4 | Outbox and its worker (checkout hints, PAID hooks); audit and no-delete triggers; `ledger_history`; the application role's grants. Identity and recovery: `session_epoch`, the ceremony-challenge audit of the 9 callers, the Candide, Turnkey and Zoldenburg-finalize reserve statuses, the Monerium token compare in the store; their tests on JSON and Postgres 17 | — |
 | S5 | Importer, export, verify (§6), run against a copy of the testnet `db.json` on the local Postgres 17. Constraint findings reported to the lead | — |
 | S6 | Docs: AGENTS.md (where the code lives, secrets and storage), `docs/running-locally.md` (local Postgres, `check:pg`), technical-architecture §18.1, `docs/roadmap.md`, `docs/status.md` | — |
-| S7 | The Oracle host (§7): Postgres 17 and roles, pgBackRest to Object Storage in two regions, systemd units, the deploy pipeline in place of the Akash leg, the aarch64 toolchain check, the cut-over runbook, the host-loss runbook and provisioning script (§7.1), and the first restore drill onto a new instance, timed | region, DPA and Pay As You Go account confirmed; recovery-time target accepted; host access |
+| S7 | The Oracle host (§7): Postgres 17 and roles, two clusters with peer authentication, pgBackRest to Object Storage in two regions, the dump bucket with its retention rule, the archiver and disk alerts, the one-repository-down test, systemd units, the deploy pipeline in place of the Akash leg, the aarch64 toolchain check, the cut-over runbook, the host-loss runbook and provisioning script (§7.1), and the first restore drill onto a new instance and the first testnet rebuild, both timed | region, DPA and Pay As You Go account confirmed; recovery-time target accepted; host access |
 | S8 | Cut-over (§6): testnet, then app.zoldhq.com. `STORE_BACKEND=postgres` becomes the default; the JSON backend stays one release as the rollback path, then goes | the owner picks the time |
 
 S2 is the largest (about 1,250 call sites and 2,000 in tests) and can be cut
@@ -624,5 +851,8 @@ by directory if one PR is too big to review. S7 can run alongside S2-S5.
    EU region holds `repo2`?
 3. **Recovery target:** accept or change the proposed 4 hours to restore
    service and one minute of lost writes after losing the host (§7.1).
+   And: lock the dump bucket's retention rule once S7 has run it for a
+   while? Locked, not even Oracle can shorten it; unlocked, an OCI
+   administrator account can delete the rule (§7).
 4. **Cut-over:** the owner's call, once S7 is done (§6). Nothing to answer
    now.
