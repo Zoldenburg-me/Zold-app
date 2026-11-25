@@ -39,7 +39,7 @@ process.env.DEPLOY_EURUSD_RATE ??= String(Math.round(MID * 1e6));
 // forwarder. Configured before config.js reads the environment; it answers
 // with the app's USDC once the chain half has deployed it.
 const FORWARDER = `0x${"33".repeat(20)}` as `0x${string}`;
-const candide = { up: true, usdc: "", calls: 0 };
+const candide = { up: true, usdc: "", calls: 0, active: true as unknown, address: "" };
 const candideStub = createServer((req, res) => {
   let raw = "";
   req.on("data", (c) => (raw += c));
@@ -52,8 +52,8 @@ const candideStub = createServer((req, res) => {
       method === "forwarding_getRoutes"
         ? { routes: [{ sourceChainId: 31337, destinationChainId: 31337, tokens: [{ address: candide.usdc, symbol: "USDC", decimals: 6, destinationAddress: candide.usdc }] }] }
         : method === "forwarding_getAddress"
-          ? { address: FORWARDER }
-          : { address: FORWARDER, active: true, expiresAt: Math.floor(Date.now() / 1000) + 30 * 86_400 };
+          ? { address: candide.address || FORWARDER }
+          : { address: candide.address || FORWARDER, active: candide.active, expiresAt: Math.floor(Date.now() / 1000) + 30 * 86_400 };
     res.end(JSON.stringify({ jsonrpc: "2.0", id, result }));
   });
 });
@@ -810,6 +810,55 @@ try {
     const lapsed = await call("POST", `/api/pay/ravi/${tip.body.code}/quote`, { amountEur: 7 });
     check("a lapsed forwarder is not quoted against on the quote route", lapsed.status === 503, JSON.stringify(lapsed));
     candide.up = true;
+
+    // An activation stored as not active forwards nothing, however far off its expiry.
+    const later = new Date(Date.now() + 10 * 86_400_000).toISOString();
+    const inactive = (p: typeof page) => ({ ...p, forwarder: { ...p.forwarder!, active: false, expiresAt: later } });
+    const realNow2 = Date.now;
+    let t = 2 * RENEW_RETRY_MS;
+    const pastBackoff = () => { t += RENEW_RETRY_MS + 1000; Date.now = () => realNow2() + t; };
+    try {
+      store.updateUser(ravi.id, { paymentPage: inactive(store.findUser(ravi.id)!.paymentPage!) });
+      candide.active = false;
+      pastBackoff();
+      check("a page whose stored activation is not active is closed while Candide still says not active", (await livePaymentPage(store.findUser(ravi.id)!)) === false);
+      const shown = await call("GET", `/api/pay/ravi/${fixed.body.code}`);
+      check("and its request page shows no crypto address", shown.body.methods?.crypto === undefined && !JSON.stringify(shown.body).includes(FORWARDER), JSON.stringify(shown.body.methods));
+      check("the refused renewal stored nothing", store.findUser(ravi.id)!.paymentPage!.forwarder!.active === false);
+      candide.active = true;
+      pastBackoff();
+      check("once Candide activates it, the renewal opens the page", (await livePaymentPage(store.findUser(ravi.id)!)) === true && store.findUser(ravi.id)!.paymentPage!.forwarder!.active === true);
+
+      // Stored active, inside the renewal window, and Candide now answers the
+      // same address as not active: a definite answer, not an outage.
+      const renewDue = () => { const p = store.findUser(ravi.id)!.paymentPage!; store.updateUser(ravi.id, { paymentPage: { ...p, forwarder: { ...p.forwarder!, active: true, expiresAt: new Date(realNow2() + t + 6 * 3600_000).toISOString() } } }); };
+      renewDue();
+      candide.active = false;
+      pastBackoff();
+      check("a renewal Candide answers not active closes a stored-active page", (await livePaymentPage(store.findUser(ravi.id)!)) === false);
+      check("and records the activation as not active", store.findUser(ravi.id)!.paymentPage!.forwarder!.active === false);
+      check("the backoff that follows keeps it closed", (await livePaymentPage(store.findUser(ravi.id)!)) === false);
+      const unquoted = await call("POST", `/api/pay/ravi/${tip.body.code}/quote`, { amountEur: 7 });
+      check("and the quote route refuses it", unquoted.status === 503, JSON.stringify(unquoted));
+      candide.active = true;
+      candide.up = false;
+      pastBackoff();
+      check("a later outage does not reopen it", (await livePaymentPage(store.findUser(ravi.id)!)) === false);
+      candide.up = true;
+      pastBackoff();
+      check("only a same-address active renewal reopens it", (await livePaymentPage(store.findUser(ravi.id)!)) === true && store.findUser(ravi.id)!.paymentPage!.forwarder!.active === true);
+
+      // A renewal that comes back with another address: the page keeps its address and stays closed.
+      store.updateUser(ravi.id, { paymentPage: { ...store.findUser(ravi.id)!.paymentPage!, forwarder: { ...store.findUser(ravi.id)!.paymentPage!.forwarder!, expiresAt: new Date(realNow2() + t + 60_000).toISOString() } } });
+      candide.address = "0x4444444444444444444444444444444444444444";
+      pastBackoff();
+      check("a renewal that moves the address does not open the page", (await livePaymentPage(store.findUser(ravi.id)!)) === false);
+      check("nor replace the address the page shows", store.findUser(ravi.id)!.paymentPage!.depositAddress === FORWARDER);
+    } finally {
+      Date.now = realNow2;
+      candide.active = true;
+      candide.address = "";
+    }
   }
 
   {

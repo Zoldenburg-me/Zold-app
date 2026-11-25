@@ -58,6 +58,7 @@ const scripts = [
   "send-record-crash:test",
   "bridge:harness:test",
   "safe-op-uncertain:test",
+  "candide:matrix:test",
   "verifier-sweep:test",
   "device-key:test",
   "authorizer-bind:test",
