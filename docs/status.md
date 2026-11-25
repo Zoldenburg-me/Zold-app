@@ -141,9 +141,19 @@ Say this plainly rather than letting the surface imply otherwise:
   unverified against the real server (without `profile` it waits, failing
   closed). An issued IBAN is re-read only when someone presses **Check
   again**: there is no poller. Deposits are listed live from Monerium and
-  booked nowhere. **Paying a bank
-  account from the company's IBAN is not built**: a company bank run is
-  refused with `COMPANY_BANK_PAYOUT_NOT_BUILT`.
+  booked nowhere.
+- **A bank payout from a company's own IBAN has never been sent.** It is off
+  unless `MONERIUM_ORG_PAYOUTS=on`. With it on, Settings → Monerium lets an
+  owner whose passkey owns the company Safe (threshold 1 only) sign Monerium's
+  redeem message as the Safe and place one SEPA payout on the company's own
+  keys (`routes/business/org-monerium-payouts.ts`). It has run only against
+  stubs (`org-monerium-payouts:test`): no company redeem order has reached
+  Monerium's sandbox or production, and no org Safe EIP-1271 redeem signature
+  has been checked by Monerium. Pending orders are re-read only when Settings
+  lists the payouts (five a call); there is no poller. A payout is booked in
+  the company's statement only once Monerium reports it processed. A company
+  bank run (several payees from one draft) is still refused with
+  `COMPANY_BANK_PAYOUT_NOT_BUILT`.
   The check gates sending only: invoices and pay links still receive into
   an account whose profile has not been checked.
 - **The VIES lookup of a customer's VAT ID** (`adapters/vies.ts`) has run

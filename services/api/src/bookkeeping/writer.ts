@@ -231,6 +231,7 @@ export function writeAccountStatementLines(account: Account, rows: Rows = storeR
     invoices: rows.invoicesOf(account.orgId),
     paymentRequests: [],
     cryptoSends: rows.cryptoSendsOfAccount(account),
+    companyPayouts: account.moneriumPayouts ?? [],
     swapsHaveExecuted: rows.swapsHaveExecuted(),
   };
   return writeProjected(inp, undefined, rows);

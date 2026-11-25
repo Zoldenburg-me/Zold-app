@@ -42,3 +42,13 @@ export const recentPayouts = (payouts: CompanyBankPayout[] | undefined, limit = 
   [...(payouts ?? [])]
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .slice(0, limit);
+
+/** The rows to keep on the account. An unresolved payout (`pending` or
+ *  `unknown`) reserves money, so it is never dropped by the history cap: only
+ *  terminal rows are capped, newest first. */
+export function capPayouts(payouts: CompanyBankPayout[], terminalLimit = 50): CompanyBankPayout[] {
+  const unresolved = payouts.filter((p) => p.state === "pending" || p.state === "unknown");
+  const terminal = payouts.filter((p) => p.state !== "pending" && p.state !== "unknown").slice(0, terminalLimit);
+  const keep = new Set([...unresolved, ...terminal]);
+  return payouts.filter((p) => keep.has(p));
+}

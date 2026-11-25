@@ -79,11 +79,12 @@ function companyIbanPart(keys, deposits, payoutsOn) {
  *  `payouts` is undefined while loading, null when unread, [] none. The form is
  *  drawn only where the deployment has switched payouts on and this member is
  *  an owner who can sign; the history stays readable either way. */
-function payoutsHtml(payouts, on) {
-  const add = on && roleCan(org.role, "sign")
+function payoutsHtml(payouts, on, keysOk) {
+  const add = on && keysOk && roleCan(org.role, "sign")
     ? `<div class="zb-actions"><button type="button" class="z-btn z-btn--primary z-btn--sm" data-act="org-payout-new">Pay a bank account</button></div>`
     : "";
-  const off = on ? "" : `<p class="zb-hint">Bank payouts from the company’s IBAN are switched off on this deployment.</p>`;
+  const off = !on ? `<p class="zb-hint">Bank payouts from the company’s IBAN are switched off on this deployment.</p>`
+    : !keysOk ? `<p class="zb-hint">Connect the company’s Monerium keys again to send a payout. The history below stays readable.</p>` : "";
   const body = payouts === undefined
     ? `<p class="zb-hint">Loading payouts…</p>`
     : payouts === null
@@ -124,7 +125,7 @@ function companyMoneriumSection(keys, deposits, payouts, payoutsOn) {
   return section("Monerium", "The company’s own Monerium account, connected with API keys from its Monerium developer section. Monerium issues the IBANs and the euros; Zold is the software you use them with.",
     rows(keyRows(keys)) + (hint ? `<p class="zb-hint">${esc(plain(hint))}</p>` : "")
     + actions + companyIbanPart(keys, deposits, payoutsOn)
-    + (issued ? payoutsHtml(payouts, payoutsOn) : ""));
+    + (issued ? payoutsHtml(payouts, payoutsOn, keys?.status === "connected") : ""));
 }
 
 function moneriumSection(accounts) {
@@ -179,7 +180,7 @@ RENDER.settings = async () => {
       payoutsLoad?.then((p) => {
         payouts = p;
         const el = root.querySelector("#om-payouts");
-        if (el) el.outerHTML = payoutsHtml(p, payoutsOn);
+        if (el) el.outerHTML = payoutsHtml(p, payoutsOn, keys?.status === "connected");
       });
       root.addEventListener("click", (ev) => {
         const b = ev.target.closest("[data-ss]");

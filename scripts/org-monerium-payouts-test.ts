@@ -119,6 +119,7 @@ const reset = () => {
   chain.owners = [addr.anna];
   chain.threshold = 1;
   signed.length = 0;
+  store.updateMember("m_anna", { role: "owner", status: "active" } as any);
   bal = 1000;
   clearPendingPayouts();
 };
@@ -151,6 +152,7 @@ const client = {
   },
   async placeOrder(body: any) {
     mon.attempts++;
+    meanwhile("place");
     if (mon.placeError) throw mon.placeError;
     mon.placed.push(body);
     return mon.placeAnswer ?? { id: "ord_1", meta: { state: "pending" } };
@@ -480,6 +482,75 @@ try {
     assert.equal(r.data.payouts[0].id, id);
     assert.equal(r.data.payouts[0].state, "sent");
     assert.equal(r.text.includes("signature"), false);
+  });
+
+  await check("a role revoked while the passkey is checked: nothing is sent", async () => {
+    reset();
+    const start = await call("POST", "/org_co/monerium/payouts/start", "u_anna", input());
+    mon.during = { call: "ibans", act: () => store.updateMember("m_anna", { role: "viewer" } as any) };
+    const r = await call("POST", "/org_co/monerium/payouts", "u_anna", { requestId: start.data.requestId, ...(await keys.anna.assert(start.data.challenge)) });
+    assert.equal(r.status, 403, r.text);
+    assert.equal(r.data.code, "NOT_A_SIGNER");
+    assert.equal(mon.placed.length, 0);
+    assert.equal(payouts().length, 0);
+    reset();
+  });
+
+  await check("the row is written as unknown before Monerium is asked", async () => {
+    reset();
+    let seen: string | undefined;
+    mon.during = { call: "place", act: () => { seen = payouts()[0]?.state; } };
+    assert.equal((await pay()).status, 200);
+    assert.equal(seen, "unknown", "a crash mid-call must not leave a row claiming Monerium holds an order");
+    assert.equal(payouts()[0].state, "pending");
+  });
+
+  await check("a new start replaces this owner's unsubmitted approval: a cancelled prompt does not block a retry", async () => {
+    reset();
+    bal = 300;
+    const first = await call("POST", "/org_co/monerium/payouts/start", "u_anna", input({ amountEur: 300 }));
+    assert.equal(first.status, 201, first.text);
+    const again = await call("POST", "/org_co/monerium/payouts/start", "u_anna", input({ amountEur: 300 }));
+    assert.equal(again.status, 201, again.text);
+    const old = await call("POST", "/org_co/monerium/payouts", "u_anna", { requestId: first.data.requestId, ...(await keys.anna.assert(first.data.challenge)) });
+    assert.equal(old.data.code, "PAYOUT_NOT_STARTED", "the replaced approval is gone");
+    assert.equal(mon.placed.length, 0);
+  });
+
+  await check("unresolved payouts keep their holds past the history cap, and old pending orders are re-read", async () => {
+    reset();
+    const { capPayouts } = await import("../services/api/src/domain/org-monerium-payout.js");
+    const row = (i: number, state: string) => ({ id: `p${i}`, amountEur: 1, state, createdAt: new Date(Date.UTC(2026, 0, 1, 0, i)).toISOString() }) as any;
+    const many = [...Array.from({ length: 60 }, (_, i) => row(100 - i, "sent")), row(1, "pending"), row(2, "unknown")];
+    const kept = capPayouts(many);
+    assert.equal(kept.filter((p) => p.state === "sent").length, 50);
+    assert.ok(kept.some((p) => p.id === "p1") && kept.some((p) => p.id === "p2"), "pending and unknown rows are never dropped");
+    // 7 pending orders, older than 20 newer finished rows: every one is re-read within two lists.
+    const at = (i: number) => new Date(Date.UTC(2026, 0, 1, 0, i)).toISOString();
+    const pend = Array.from({ length: 7 }, (_, i) => ({ ...row(i, "pending"), id: `old${i}`, orderId: `ord_old${i}`, createdAt: at(i), updatedAt: at(i), recipientName: "Bob", recipientIban: OTHER_IBAN, memo: "m", message: "x", issuedAt: at(i), safeAddress: SAFE, profileId: PROFILE, signedByMemberId: "m_anna" }));
+    const newer = Array.from({ length: 25 }, (_, i) => ({ ...pend[0], id: `new${i}`, orderId: `ord_new${i}`, state: "sent", createdAt: at(100 + i) }));
+    store.updateAccount("acc_co", { moneriumPayouts: [...newer, ...pend] } as any);
+    mon.orders = Object.fromEntries(pend.map((p) => [p.orderId, { id: p.orderId, meta: { state: "processed" } }]));
+    await call("GET", "/org_co/monerium/payouts", "u_adam");
+    await call("GET", "/org_co/monerium/payouts", "u_adam");
+    assert.deepEqual(payouts().filter((p) => p.id.startsWith("old")).map((p) => p.state), Array(7).fill("sent"));
+  });
+
+  await check("a company statement books a payout once Monerium carried it out, never before", async () => {
+    const { projectStatementLines } = await import("../services/api/src/bookkeeping/statement.js");
+    const base = { id: "px", amountEur: 42.5, recipientName: "Bob GmbH", recipientIban: OTHER_IBAN, reference: "INV-7", memo: "m", message: "x", issuedAt: now, safeAddress: SAFE, profileId: PROFILE, signedByMemberId: "m_anna", orderId: "ord_px", createdAt: now, updatedAt: now };
+    const lines = (state: string) => projectStatementLines({
+      orgId: "org_co", accountId: "acc_co", safeAddress: SAFE, timeZone: "Europe/Berlin",
+      transfers: [], deposits: [], issueOrders: [], sweeps: [], invoices: [], paymentRequests: [],
+      companyPayouts: [{ ...base, state } as any], swapsHaveExecuted: false,
+    });
+    for (const state of ["pending", "unknown", "failed"]) assert.equal(lines(state).length, 0, state);
+    const [line] = lines("sent");
+    assert.equal(line.direction, "out");
+    assert.equal(line.statement!.amountCents, -4250);
+    assert.equal(line.statement!.event, "sepa_out");
+    assert.equal(line.statement!.reference, "INV-7");
+    assert.equal(line.statement!.counterparty.iban, OTHER_IBAN);
   });
 
   await check("Settings words: pending is not sent, unclear says to check, the IBAN is masked", () => {
