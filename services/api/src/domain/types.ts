@@ -397,6 +397,19 @@ export interface Account {
   };
   /** Provider-side provisioning detail, for support. */
   detail?: string;
+  /**
+   * A company's own IBAN, as Monerium last reported it for this account. On
+   * the account rather than the Monerium key record: removing and
+   * reconnecting keys must not lose the fact that Monerium moved the IBAN
+   * elsewhere (routes/business/org-monerium-iban.ts). `movedAwayAt` is read
+   * only while the current profile and Safe still match, and cleared when
+   * Monerium attributes the IBAN to the Safe again.
+   */
+  moneriumIban?: {
+    safeAddress: `0x${string}`;
+    profileId: string;
+    movedAwayAt?: string;
+  };
   createdAt: string;
   updatedAt: string;
 }

@@ -107,7 +107,7 @@ const connected = (state = "approved") => ({
 });
 const reset = () => {
   store.updateOrganisation("org_co", { monerium: connected() as any });
-  store.updateAccount("acc_co", { status: "gated", provider: null, identifier: {}, moneriumProfile: undefined, address: SAFE } as any);
+  store.updateAccount("acc_co", { status: "gated", provider: null, identifier: {}, moneriumProfile: undefined, moneriumIban: undefined, address: SAFE } as any);
   Object.assign(mon, freshMon());
   chain.owners = [addr.anna];
   chain.threshold = 1;
@@ -271,6 +271,7 @@ try {
     assert.equal(a.address, SAFE);
     assert.equal(a.backingUserId, undefined, "no person backs a company account");
     assert.deepEqual({ id: a.moneriumProfile!.id, kind: a.moneriumProfile!.kind }, { id: PROFILE, kind: "corporate" });
+    assert.equal(a.moneriumIban?.movedAwayAt, undefined, "no move is recorded on a fresh issue");
     assert.equal(r.data.monerium.companyIban.state, "issued");
     assert.equal(r.data.monerium.companyIban.iban, IBAN);
     assert.ok(!r.text.includes("clientSecret"), "no secret in the answer");
@@ -411,7 +412,8 @@ try {
     gatedStill();
     // And it is not re-adopted for the Safe while it pays elsewhere.
     const again = await call("POST", "/org_co/monerium/iban/check", "u_adam");
-    assert.equal(again.data.code, "PROFILE_IBAN_ELSEWHERE");
+    assert.equal(again.status, 200, again.text);
+    assert.equal(again.data.monerium.companyIban.state, "moved");
     gatedStill();
     // Moved to the same address on another chain: also closed.
     reset();
@@ -419,6 +421,40 @@ try {
     mon.ibans = [{ iban: IBAN, profile: PROFILE, address: SAFE, chain: "gnosis", state: "approved" }];
     await call("POST", "/org_co/monerium/iban/check", "u_adam");
     gatedStill();
+  });
+
+  await check("a moved IBAN stays moved after the keys are removed and reconnected", async () => {
+    reset();
+    await issue();
+    mon.ibans = [{ iban: IBAN, profile: PROFILE, address: OWN_SAFE, chain: MONERIUM.chain, state: "approved" }];
+    await call("POST", "/org_co/monerium/iban/check", "u_adam");
+    assert.ok(account().moneriumIban?.movedAwayAt, "the move is kept on the EUR account");
+    // Remove keys (the key record, and the link inside it, is gone).
+    store.updateOrganisation("org_co", { monerium: undefined });
+    assert.equal(companyIbanState(store.findOrganisation("org_co")!, account()), "keys_needed");
+    // Reconnect keys for the same profile: the account still knows it moved.
+    store.updateOrganisation("org_co", { monerium: connected() as any });
+    assert.equal(companyIbanState(store.findOrganisation("org_co")!, account()), "moved", "not a first-time issue");
+    const panel = model.ibanPanel({ status: "connected", companyIban: { state: "moved" } }, true);
+    assert.equal(panel.action, "check");
+    assert.match(panel.text, /another address or network/);
+    const again = await call("POST", "/org_co/monerium/iban/check", "u_adam");
+    assert.equal(again.data.monerium.companyIban.state, "moved", "and a check does not adopt it");
+    gatedStill();
+    // Keys that open another company profile do not inherit this move.
+    store.updateOrganisation("org_co", {
+      monerium: { ...connected(), profile: { id: "prof-other", name: "Other GmbH", state: "approved" } } as any,
+    });
+    assert.equal(companyIbanState(store.findOrganisation("org_co")!, account()), "ready");
+    // Monerium attributes the IBAN to the Safe again: the check reopens the
+    // account and clears the marker, whichever key record is current.
+    store.updateOrganisation("org_co", { monerium: connected() as any });
+    mon.ibans = [{ iban: IBAN, profile: PROFILE, address: SAFE, chain: MONERIUM.chain, state: "approved" }];
+    const back = await call("POST", "/org_co/monerium/iban/check", "u_adam");
+    assert.equal(back.status, 200, back.text);
+    assert.equal(back.data.monerium.companyIban.state, "issued");
+    assert.equal(account().identifier.iban, IBAN);
+    assert.equal(account().moneriumIban?.movedAwayAt, undefined);
   });
 
   await check("keys removed or replaced while Monerium answers are never written back", async () => {
