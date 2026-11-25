@@ -161,11 +161,11 @@ export const usd = {
  * neither, because the transaction may still land.
  */
 export interface WriteHooks {
-  beforeSend?: () => void;
+  beforeSend?: () => void | Promise<void>;
   /** The write threw before any hash existed with an error that proves the node refused it. */
-  onNotSent?: () => void;
+  onNotSent?: () => void | Promise<void>;
   /** The transaction was mined and reverted: nothing it carried moved. */
-  onReverted?: (hash: `0x${string}`) => void;
+  onReverted?: (hash: `0x${string}`) => void | Promise<void>;
 }
 
 /**
@@ -238,17 +238,17 @@ export async function writeAndWait(
     account: client.account,
     ...args,
   });
-  opts.beforeSend?.();
+  await opts.beforeSend?.();
   let hash: `0x${string}`;
   try {
     hash = await client.writeContract(request);
   } catch (err) {
-    if (writeDefinitelyRefused(err)) opts.onNotSent?.();
+    if (writeDefinitelyRefused(err)) await opts.onNotSent?.();
     throw err;
   }
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
   if (receipt.status !== "success") {
-    opts.onReverted?.(hash);
+    await opts.onReverted?.(hash);
     throw new Error(`tx reverted: ${args.functionName}`);
   }
   return hash;

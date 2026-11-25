@@ -370,6 +370,38 @@ console.log("a passkey replaced by recovery while an approval is being verified"
     }
   });
 
+  await check("a recovery that lands after the login's passkey check and before its session is minted leaves no session of the old device", async () => {
+    await reset();
+    const app = express().use(express.json()).use("/api", createAuthRouter({ requireUserSession: async () => undefined }));
+    const server = app.listen(0);
+    const s = store as any;
+    const realUse = s.recordPasskeyUse;
+    let reached!: () => void;
+    const minting = new Promise<void>((r) => (reached = r));
+    let release!: () => void;
+    const go = new Promise<void>((r) => (release = r));
+    // Held once the passkey check has passed: the window before the session.
+    s.recordPasskeyUse = async (...args: unknown[]) => { const out = await realUse(...args); reached(); await go; return out; };
+    try {
+      const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/passkey/login`;
+      const body = await oldKey.assert(issueChallenge("login"));
+      // Read before the login holds the store.
+      const owner = (await store.findUser(uid))!;
+      const login = fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      await minting;
+      // Started, not awaited: while the login holds the store it waits behind it.
+      const recovered = bindRecoveredPasskey(owner, { ...newKey.stored(), attestation: "none" } as any, new Date());
+      await new Promise((r) => setTimeout(r, 30));
+      release();
+      await Promise.all([login, recovered]);
+      assert.equal((await store.list("sessions")).filter((x) => x.userId === uid && !x.revokedAt).length, 0, "no session of the old device outlives the recovery");
+      assert.equal((await store.findUser(uid))!.passkey!.credentialId, newKey.credentialId);
+    } finally {
+      s.recordPasskeyUse = realUse;
+      server.close();
+    }
+  });
+
   await check("sign-out revokes the session on the server: the old token is refused, other sessions live", async () => {
     await reset();
     const { issueSession } = await import("../services/api/src/http/sessions.js");

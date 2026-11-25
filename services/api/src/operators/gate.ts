@@ -18,6 +18,7 @@
  * session and check the Access identity themselves.
  */
 import type express from "express";
+import { describeCause } from "../http/log-cause.js";
 import { OPERATOR, SECURITY } from "../config.js";
 import { auditEntry } from "../audit.js";
 import { recordFailure, tooManyFailures } from "../http/policy.js";
@@ -81,8 +82,10 @@ function auditOnFinish(req: express.Request, res: express.Response, who: Operato
       ...(res.writableFinished ? {} : { clientGone: true }),
     }, userId));
   };
-  res.on("finish", write);
-  res.on("close", write);
+  // An async listener's rejection is unhandled, and that exits the API.
+  const writeLogged = () => void write().catch((e) => console.error(`operator audit not written for ${req.method} ${asSent}: ${describeCause(e)}`));
+  res.on("finish", writeLogged);
+  res.on("close", writeLogged);
 }
 
 async function admit(req: express.Request, res: express.Response): Promise<boolean> {

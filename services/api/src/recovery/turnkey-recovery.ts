@@ -144,16 +144,21 @@ export async function acceptTurnkeySignature(
   chain: TurnkeyRecoveryChain,
   { ownerAlerted = ownerWasAlerted, now = new Date() }: { ownerAlerted?: (r: RecoveryRequest) => boolean; now?: Date } = {},
 ): Promise<RecoveryRequest> {
-  if (request.status !== "REVIEW_PENDING") throw new TurnkeyGuardianError(`recovery is ${request.status}`, 409, "NOT_WAITING");
-  if (!ownerAlerted((await store.findRecoveryRequest(request.id)) ?? request)) {
-    throw new TurnkeyGuardianError(
-      "the account's owner has not been emailed about this recovery yet — try again in a few minutes",
-      409,
-      "OWNER_NOT_ALERTED",
-    );
-  }
-  if (signing.has(request.id)) throw new TurnkeyGuardianError("this recovery is already being approved", 409, "BUSY");
-  signing.add(request.id);
+  // The re-read, the checks and the claim are one transaction: the expiry
+  // sweep either lands before it (seen here) or after it (and sees `signing`).
+  await store.tx(async () => {
+    const current = (await store.findRecoveryRequest(request.id)) ?? request;
+    if (current.status !== "REVIEW_PENDING") throw new TurnkeyGuardianError(`recovery is ${current.status}`, 409, "NOT_WAITING");
+    if (!ownerAlerted(current)) {
+      throw new TurnkeyGuardianError(
+        "the account's owner has not been emailed about this recovery yet — try again in a few minutes",
+        409,
+        "OWNER_NOT_ALERTED",
+      );
+    }
+    if (signing.has(request.id)) throw new TurnkeyGuardianError("this recovery is already being approved", 409, "BUSY");
+    signing.add(request.id);
+  });
   try {
     return await relayApproved(request, sig, chain, now);
   } finally {
@@ -298,9 +303,10 @@ async function relayFinalize(request: RecoveryRequest, t: NonNullable<RecoveryRe
 /** Expire unanswered requests, pick up executions, finalise after the wait. */
 export async function sweepTurnkeyRecoveries(now = new Date(), chain: TurnkeyRecoveryChain = turnkeyRecoveryChain): Promise<number> {
   let n = 0;
-  for (const r of [...await store.list("recoveryRequests")]) {
-    if (r.mode !== "turnkey") continue;
-    // The store updates rows in place, so read the status before any write.
+  for (const snap of [...await store.list("recoveryRequests")]) {
+    if (snap.mode !== "turnkey") continue;
+    // Read again: an earlier row's chain calls give a relay time to move this one.
+    const r = (await store.findRecoveryRequest(snap.id)) ?? snap;
     const before = r.status;
     try {
       if (finishing.has(r.id) || signing.has(r.id)) continue;
@@ -308,7 +314,10 @@ export async function sweepTurnkeyRecoveries(now = new Date(), chain: TurnkeyRec
       // recorded must still reach its grace period.
       let cur = r.status === "REVIEW_PENDING" ? await syncTurnkeyFromChain(r, chain, now) : r;
       if (["PASSKEY_PENDING", "REVIEW_PENDING"].includes(cur.status) && now >= new Date(cur.expiresAt)) {
-        await store.updateRecoveryRequest(r.id, { status: "EXPIRED" });
+        // Only from the status it was read in, and not once a signer has claimed it.
+        await store.tx(async () => {
+          if (!finishing.has(r.id) && !signing.has(r.id)) await store.updateRecoveryRequestFrom(r.id, ["PASSKEY_PENDING", "REVIEW_PENDING"], { status: "EXPIRED" });
+        });
         continue;
       }
       if (cur.status === "GRACE_PERIOD" && cur.turnkey?.finalizeAfter && now >= new Date(cur.turnkey.finalizeAfter)) {

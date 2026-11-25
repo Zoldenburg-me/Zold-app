@@ -513,6 +513,29 @@ export async function conditionalWriteSuite(s: StoreBackend): Promise<void> {
   assert.deepEqual([over?.over, over?.request.status], [true, "CANCELED"]);
   assert.equal(await s.countRecoveryOtpAttempt("rr_otp", 2), null, "nothing counted once it left OTP_PENDING");
 
+  // A recovery status leaves only the statuses named: of a cancel and a relay
+  // made at once, one lands.
+  await s.addRecoveryRequest({ id: "rr_from", userId: "u_a", mode: "zoldenburg", status: "REVIEW_PENDING", requestedAt: now } as any);
+  const moves = await Promise.all([
+    s.updateRecoveryRequestFrom("rr_from", ["REVIEW_PENDING"], { status: "CANCELED", cancelReason: "owner" }),
+    s.updateRecoveryRequestFrom("rr_from", ["REVIEW_PENDING"], { status: "GRACE_PERIOD" }),
+  ]);
+  assert.equal(moves.filter(Boolean).length, 1, "one of two parallel moves from REVIEW_PENDING lands");
+  assert.equal(await s.updateRecoveryRequestFrom("rr_from", ["PASSKEY_PENDING", "REVIEW_PENDING"], { status: "EXPIRED" }), null, "the sweep's EXPIRED never lands on a moved row");
+  await assert.rejects(async () => await s.updateRecoveryRequestFrom("rr_none", ["REVIEW_PENDING"], { status: "EXPIRED" }), /unknown recovery request rr_none/);
+
+  // Email code: each guess counted on the stored row, parallel ones too.
+  await s.updateUser("u_a", { emailCode: { hash: "h", email: "ada@example.com", expiresAt: iso(DAY), attempts: 0, sentAt: [] } } as any);
+  const guesses = await Promise.all(Array.from({ length: 8 }, () => s.countEmailCodeAttempt("u_a", 5)));
+  assert.equal(guesses.filter(Boolean).length, 5, "8 parallel guesses against a limit of 5: 5 counted");
+  assert.deepEqual(guesses.filter(Boolean).map((u) => u!.emailCode!.attempts).sort(), [1, 2, 3, 4, 5], "each sees the ones before");
+  assert.equal((await s.findUser("u_a"))?.emailCode?.attempts, 5);
+  await s.updateUser("u_a", { emailCode: { hash: "h", email: "ada@example.com", expiresAt: iso(-1000), attempts: 0, sentAt: [] } } as any);
+  assert.equal(await s.countEmailCodeAttempt("u_a", 5), undefined, "an expired code takes no guess");
+  await s.updateUser("u_a", { emailCode: { hash: "h", email: "other@example.com", expiresAt: iso(DAY), attempts: 0, sentAt: [] } } as any);
+  assert.equal(await s.countEmailCodeAttempt("u_a", 5), undefined, "nor one sent to another address");
+  await s.updateUser("u_a", { emailCode: undefined } as any);
+
   // Rule 4 over an organisation: a write only while a check on it holds.
   assert.equal(await s.updateOrganisationIf("org_b", () => false, () => ({ name: "never" })), null);
   assert.equal((await s.updateOrganisationIf("org_b", (o) => o.name === "B 2", (o) => ({ name: `${o.name}!` })))?.name, "B 2!");

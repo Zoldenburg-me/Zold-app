@@ -87,6 +87,75 @@ console.log("ok - store suite on the JSON backend");
   await Promise.all([1, 2, 3].map((n) => store.updateOrganisation("org_mx", { name: `N${n}` }).then(() => order.push(n))));
   assert.deepEqual(order, [1, 2, 3]);
   assert.equal((await store.findOrganisation("org_mx"))?.name, "N3");
+
+  // A state-change listener runs only once its write is on disk: a call that
+  // releases the mutex to a transaction never fires that transaction's
+  // announcements before the transaction persisted.
+  {
+    await store.addTransfer({ id: "t_ann_a", userId: "u", quoteId: "q_ann_a", state: "CREATED", txs: [], createdAt: now, updatedAt: now } as any);
+    await store.addTransfer({ id: "t_ann_b", userId: "u", quoteId: "q_ann_b", state: "CREATED", txs: [], createdAt: now, updatedAt: now } as any);
+    const heard: string[] = [];
+    store.onTransferStateChange((t) => {
+      if (!t.id.startsWith("t_ann_")) return;
+      const stored = onDisk().transfers.find((x: any) => x.id === t.id)?.state;
+      heard.push(`${t.id}:${t.state}:${stored === t.state ? "on disk" : `disk says ${stored}`}`);
+    });
+    let letGo!: () => void;
+    const gate = new Promise<void>((r) => (letGo = r));
+    const a = store.updateTransfer("t_ann_a", { state: "DEBITED" });
+    const b = store.tx(async (t) => {
+      await t.updateTransfer("t_ann_b", { state: "DEBITED" });
+      await gate;
+    });
+    await a;
+    await new Promise((r) => setTimeout(r, 20));
+    assert.deepEqual(heard, ["t_ann_a:DEBITED:on disk"], "the transaction's change is not announced while it is open");
+    letGo();
+    await b;
+    await new Promise((r) => setTimeout(r, 0));
+    assert.deepEqual(heard, ["t_ann_a:DEBITED:on disk", "t_ann_b:DEBITED:on disk"]);
+  }
+
+  // A response sent inside a transaction goes out after the file write; one
+  // from a transaction that throws is dropped for the error handler's.
+  {
+    const express = (await import("express")).default;
+    const { sendAfterCommit } = await import("../services/api/src/http/send-after-commit.js");
+    let letGo!: () => void;
+    const gate = new Promise<void>((r) => (letGo = r));
+    const app = express().use(sendAfterCommit);
+    app.post("/ok", async (_req, res) => {
+      await store.tx(async (t) => {
+        await t.updateOrganisation("org_mx", { name: "Answered" });
+        res.status(201).json({ name: "Answered" });
+        await gate;
+      });
+    });
+    app.post("/boom", async (_req, res, next) => {
+      await store.tx(async () => {
+        res.json({ ok: true });
+        throw new Error("after the answer");
+      }).catch(next);
+    });
+    app.use(((_err, _req, res, _next) => void res.status(500).json({ error: "internal" })) as import("express").ErrorRequestHandler);
+    const server = app.listen(0, "127.0.0.1");
+    await new Promise<void>((r) => server.once("listening", () => r()));
+    const url = `http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}`;
+    try {
+      let answered = false;
+      const ok = fetch(`${url}/ok`, { method: "POST" }).then((r) => ((answered = true), r));
+      await new Promise((r) => setTimeout(r, 50));
+      assert.equal(answered, false, "no answer while the transaction is open");
+      letGo();
+      const r = await ok;
+      assert.equal(r.status, 201);
+      assert.equal(onDisk().organisations.find((o: any) => o.id === "org_mx")?.name, "Answered");
+      const boom = await fetch(`${url}/boom`, { method: "POST" });
+      assert.equal(boom.status, 500, "the held 200 is dropped; the error handler answers");
+    } finally {
+      server.close();
+    }
+  }
   console.log("ok - JSON backend: every call behind one mutex, store.tx holds it, rows are copies, a write is on disk when it resolves");
 }
 

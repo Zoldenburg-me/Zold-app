@@ -40,6 +40,7 @@ const { createOperatorGate } = await import("../services/api/src/operators/gate.
 const { createOperatorAuthRouter } = await import("../services/api/src/routes/operator-auth.js");
 const { OPERATOR: OPERATOR_CONFIG, SECURITY } = await import("../services/api/src/config.js");
 const { operatorKit } = await import("./_operator.js");
+const { holdUntil } = await import("./_interleave.js");
 type Reads = import("../services/api/src/recovery/zoldenburg-enrolment.js").EnrolmentReads;
 
 let failed = 0;
@@ -799,6 +800,118 @@ await t("a recovery finishing while another is being relayed leaves the relayed 
     zoldenburgChain.relayRecovery = relayRecovery;
     zoldenburgChain.relayFinalize = relayFinalize;
   }
+});
+
+// ---- races the async store opens (each held at one await) ----------------
+
+const closeOpen = async () => {
+  for (const r of (await store.recoveryRequestsForUser("u1"))) if (["PASSKEY_PENDING", "REVIEW_PENDING", "GRACE_PERIOD"].includes(r.status)) await store.updateRecoveryRequest(r.id, { status: "FINALIZED" });
+};
+
+await t("race: a reject and an execute at once — one of them wins, never a relay under a CANCELED row", async () => {
+  await closeOpen();
+  await newRequest("race-rj");
+  await store.updateRecoveryRequest("race-rj", { zoldenburg: { ...(await req("race-rj")).zoldenburg, bankCheck: { codesIssued: 1, passedAt: at(1).toISOString(), orderId: "o-race-rj", enrolledAt: (await user()).zoldenburgEnrolment!.enrolledAt } } });
+  const sr = await opCall("/admin/recoveries/race-rj/sign-request", {});
+  assert.equal(sr.status, 200, sr.text);
+  const { EIP712Domain: _d, ...types } = sr.data.typedData.types;
+  const m = sr.data.typedData.message;
+  const signature = await guardianWallet.signTypedData({ ...sr.data.typedData, types, message: { ...m, newThreshold: BigInt(m.newThreshold), nonce: BigInt(m.nonce) } });
+  // Both approvals signed up front, execute's first: the passkey's counter
+  // must rise in the order the gate checks them.
+  const executeBody = { signature, reviewNote: "Video call, matched Monerium profile" };
+  const executeHeaders = kit.headers({ ...(await kit.stepUp("POST", "/api/admin/recoveries/race-rj/execute", executeBody)), "content-type": "application/json" });
+  const rejectBody = { reason: "Could not verify the caller" };
+  const rejectHeaders = kit.headers({ ...(await kit.stepUp("POST", "/api/admin/recoveries/race-rj/reject", rejectBody)), "content-type": "application/json" });
+  const { onChainDigest, relayRecovery } = zoldenburgChain;
+  let relayed = 0;
+  let rejected: Promise<Response> | undefined;
+  let restore = () => {};
+  zoldenburgChain.onChainDigest = async (td) => {
+    // From here, execute's re-read and the reject's read meet at one await.
+    if (!rejected) {
+      restore = holdUntil(store, "findRecoveryRequest", 2);
+      rejected = fetch(`${base}/admin/recoveries/race-rj/reject`, { method: "POST", headers: rejectHeaders, body: JSON.stringify(rejectBody) });
+    }
+    return onChainDigest(td);
+  };
+  zoldenburgChain.relayRecovery = async (...a) => { relayed++; return relayRecovery(...a); };
+  try {
+    const exRes = await fetch(`${base}/admin/recoveries/race-rj/execute`, { method: "POST", headers: executeHeaders, body: JSON.stringify(executeBody) });
+    const ex = { status: exRes.status, text: await exRes.text() };
+    const rj = await rejected!;
+    const final = (await req("race-rj")).status;
+    assert.notEqual(ex.status === 200 && rj.status === 200, true, `both answered 200: execute relayed and reject cancelled (final ${final})`);
+    if (ex.status === 200) {
+      assert.equal(rj.status, 409);
+      assert.equal(final, "GRACE_PERIOD");
+    } else {
+      assert.equal(rj.status, 200);
+      assert.equal(relayed, 0, "nothing relayed after the reject");
+      assert.equal(final, "CANCELED");
+    }
+  } finally {
+    restore();
+    Object.assign(zoldenburgChain, { onChainDigest, relayRecovery });
+  }
+});
+
+await t("race: parallel starts never open more than the cap", async () => {
+  await closeOpen();
+  const restore = holdUntil(store, "recoveryRequestsForUser", 12);
+  let results: { status: number }[];
+  try {
+    results = await Promise.all(Array.from({ length: 12 }, () => call("/recovery/zoldenburg", { email: "anna@example.com" })));
+  } finally {
+    restore();
+  }
+  const open = (await store.recoveryRequestsForUser("u1")).filter((r) => ["PASSKEY_PENDING", "REVIEW_PENDING", "GRACE_PERIOD"].includes(r.status));
+  assert.equal(open.length, 10, `${open.length} open after 12 parallel starts`);
+  assert.deepEqual(results.map((r) => r.status).sort(), [...Array(10).fill(201), 409, 409]);
+  await closeOpen();
+});
+
+await t("race: one 1 € payment checked for two requests at once passes one of them", async () => {
+  await closeOpen();
+  await newRequest("race-x");
+  await newRequest("race-y");
+  const x = await B.issueRecoveryBankCode(await req("race-x"), at(200));
+  const y = await B.issueRecoveryBankCode(await req("race-y"), at(200));
+  const paid = { ...order(paidAt(201)), memo: `${x.memo} ${y.memo}` };
+  const restore = holdUntil(store, "list", 2);
+  let outcomes: string[];
+  try {
+    outcomes = await Promise.all(["race-x", "race-y"].map((id) => B.checkRecoveryBankPayment(id, reads([paid]), at(202))));
+  } finally {
+    restore();
+  }
+  assert.equal(outcomes.filter((o) => o === "passed").length, 1, outcomes.join(","));
+  assert.equal([await req("race-x"), await req("race-y")].filter((r) => r.zoldenburg?.bankCheck?.passedAt).length, 1, "one payment, one passed request");
+  await closeOpen();
+});
+
+await t("race: the sweep never writes EXPIRED over a row that moved after it read the list", async () => {
+  await closeOpen();
+  await newRequest("sw-moved");
+  await store.updateRecoveryRequest("sw-moved", { expiresAt: new Date(Date.now() - 1000).toISOString() });
+  const realList = store.list;
+  let moved = false;
+  (store as any).list = async (name: any) => {
+    const snap = await realList.call(store, name);
+    // A relay lands between the sweep's read and its write.
+    if (name === "recoveryRequests" && !moved) {
+      moved = true;
+      await store.updateRecoveryRequest("sw-moved", { status: "GRACE_PERIOD" });
+    }
+    return snap;
+  };
+  try {
+    await sweepZoldenburgRecoveries(new Date(), (async (r: any) => r) as any);
+  } finally {
+    (store as any).list = realList;
+  }
+  assert.equal((await req("sw-moved")).status, "GRACE_PERIOD");
+  await closeOpen();
 });
 
 server.close();

@@ -152,7 +152,11 @@ export async function checkRecoveryBankPayment(
   const unreadable = async (cause: UnreadableCause) => await record("unreadable", UNREADABLE_REASON, cause);
   try {
     // The throttle's clock, set before Monerium is asked.
-    await store.updateRecoveryRequest(requestId, { zoldenburg: { ...r.zoldenburg, bankCheck: { ...r.zoldenburg!.bankCheck, lastReadAt: now.toISOString() } } });
+    // On the stored row: a code issued since the read above keeps it.
+    await store.tx(async () => {
+      const z = (await store.findRecoveryRequest(requestId))!.zoldenburg;
+      await store.updateRecoveryRequest(requestId, { zoldenburg: { ...z, bankCheck: { ...z!.bankCheck, lastReadAt: now.toISOString() } } });
+    });
     if (!zoldenburgArmed(user)) {
       // Also what a server without the HMAC key or the guardian sees: the
       // reason names no cause, and the next check looks again.
@@ -183,27 +187,35 @@ export async function checkRecoveryBankPayment(
     const spentElsewhere = async (orderId: string) =>
       (await store.list("recoveryRequests")).some((x) => x.id !== requestId && x.zoldenburg?.bankCheck?.orderId === orderId);
     for (const o of found) {
-      if ((await spentElsewhere(o.id))) {
-        reason = "This payment already counted for another recovery. Send 1 € with this recovery's reference.";
-        continue;
+      // The spend check, the open check and the pass are one transaction
+      // under the user's lock: two requests checking one payment at once
+      // would otherwise both see it unspent.
+      const step = await store.tx(async () => {
+        await store.lockUser(user.id);
+        if ((await spentElsewhere(o.id))) {
+          return { reason: "This payment already counted for another recovery. Send 1 € with this recovery's reference." };
+        }
+        // The account as it is now: an enrolment removed or replaced during
+        // the reads is not the one this payment can pass against.
+        const live = await store.findUser(user.id);
+        if (!live || !zoldenburgArmed(live)) return "not_armed" as const;
+        const verdict = judgeRecoveryOrder(o, live, name);
+        if (!verdict.ok) return { reason: verdict.reason };
+        const fresh = await stillOpen();
+        if (!fresh) return "no_code" as const;
+        // The codes are spent: the pass replaces them.
+        const { codesIssued, lastReadAt } = fresh.zoldenburg!.bankCheck!;
+        const passed: BankCheck = { codesIssued, lastReadAt, passedAt: now.toISOString(), orderId: o.id, enrolledAt: live.zoldenburgEnrolment!.enrolledAt };
+        await store.updateRecoveryRequest(requestId, { zoldenburg: { ...fresh.zoldenburg, bankCheck: passed } });
+        return "passed" as const;
+      });
+      if (step === "not_armed") return await unreadable("not_armed");
+      if (step === "no_code") return "no_code";
+      if (step === "passed") {
+        console.log(`RECOVERY: ${requestId} passed the 1 € check from the enrolled account (order ${o.id})`);
+        return "passed";
       }
-      // The account as it is now: an enrolment removed or replaced during
-      // the reads is not the one this payment can pass against.
-      const live = await store.findUser(user.id);
-      if (!live || !zoldenburgArmed(live)) return await unreadable("not_armed");
-      const verdict = judgeRecoveryOrder(o, live, name);
-      if (!verdict.ok) {
-        reason = verdict.reason;
-        continue;
-      }
-      const fresh = await stillOpen();
-      if (!fresh) return "no_code";
-      // The codes are spent: the pass replaces them.
-      const { codesIssued, lastReadAt } = fresh.zoldenburg!.bankCheck!;
-      const passed: BankCheck = { codesIssued, lastReadAt, passedAt: now.toISOString(), orderId: o.id, enrolledAt: live.zoldenburgEnrolment!.enrolledAt };
-      await store.updateRecoveryRequest(requestId, { zoldenburg: { ...fresh.zoldenburg, bankCheck: passed } });
-      console.log(`RECOVERY: ${requestId} passed the 1 € check from the enrolled account (order ${o.id})`);
-      return "passed";
+      reason = step.reason;
     }
     return await record("mismatch", reason);
   } catch (err) {

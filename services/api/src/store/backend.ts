@@ -30,7 +30,7 @@ import type { Transfer, User } from "./types.js";
 
 type Core = typeof jsonCore;
 type Listener = "onTransferStateChange" | "onPaymentRequestStateChange";
-type Special = Listener | Generic | "list" | "holdDailyCap" | "beginTx" | "endTx" | "drainAnnouncements";
+type Special = Listener | Generic | "list" | "holdDailyCap" | "beginTx" | "endTx" | "takeAnnouncements";
 /** Generic methods: a mapped type would lose their type parameter. */
 type Generic = "patchUserSub" | "patchOrgSub" | "patchTransferSub";
 type MethodName = {
@@ -79,8 +79,9 @@ class Mutex {
   }
 }
 
-/** The transaction a call is made in, while it lasts, and whose it is. */
-type Scope = { open: boolean; owner: object; t: StoreMethods };
+/** The transaction a call is made in, while it lasts, and whose it is, and
+ *  what waits for it to commit. */
+type Scope = { open: boolean; owner: object; t: StoreMethods; afterCommit: (() => void)[] };
 const scope = new AsyncLocalStorage<Scope>();
 
 /** The open transaction of the backend `owner` this call runs in, if any. */
@@ -89,9 +90,26 @@ export function currentTx(owner: object): StoreMethods | undefined {
   return s?.open && s.owner === owner ? s.t : undefined;
 }
 
+/**
+ * Inside an open transaction, hold `fn` until it has committed (and drop it if
+ * the transaction fails); true when held. A response sent from a `store.tx`
+ * callback goes out after the write is on disk (http/send-after-commit.ts).
+ */
+export function deferToCommit(fn: () => void): boolean {
+  const s = scope.getStore();
+  if (!s?.open) return false;
+  s.afterCommit.push(fn);
+  return true;
+}
+
+/** Run what a committed transaction held back, in order. */
+export function runAfterCommit(queue: (() => void)[]): void {
+  for (const fn of queue.splice(0)) fn();
+}
+
 /** Run `fn` as `owner`'s transaction `t`: calls made from it join `t`. */
-export async function inScope<T>(owner: object, t: StoreMethods, fn: (t: StoreMethods) => Promise<T> | T): Promise<T> {
-  const s: Scope = { open: true, owner, t };
+export async function inScope<T>(owner: object, t: StoreMethods, fn: (t: StoreMethods) => Promise<T> | T, afterCommit: (() => void)[] = []): Promise<T> {
+  const s: Scope = { open: true, owner, t, afterCommit };
   try {
     return await scope.run(s, () => fn(t));
   } finally {
@@ -106,12 +124,31 @@ const copyArgs = (args: unknown[]) => args.map((a) => (typeof a === "function" ?
 export function jsonBackend(core: Core): StoreBackend {
   const mutex = new Mutex();
   const owner = {};
-  const flush = () => core.drainAnnouncements();
+  /**
+   * Run `fn` holding the mutex, then the announcements of what it wrote.
+   * They are taken before the mutex is released, so a holder that comes
+   * after (and has not persisted yet) never has its announcements fired by
+   * this one.
+   */
+  const held = <T>(fn: () => Promise<T> | T): Promise<T> => {
+    let taken: (() => void)[] = [];
+    return mutex
+      .run(async () => {
+        try {
+          return await fn();
+        } finally {
+          taken = core.takeAnnouncements();
+        }
+      })
+      .finally(() => {
+        for (const run of taken) run();
+      });
+  };
 
   /** One call, inside the open transaction or under the mutex. */
   const call = <T>(fn: () => T): Promise<T> => {
     if (currentTx(owner)) return Promise.resolve().then(() => copy(fn()));
-    return mutex.run(() => copy(fn())).finally(flush);
+    return held(() => copy(fn()));
   };
 
   const methods: Record<string, unknown> = {
@@ -126,7 +163,7 @@ export function jsonBackend(core: Core): StoreBackend {
   };
   for (const [name, d] of Object.entries(Object.getOwnPropertyDescriptors(core))) {
     if (name in methods || typeof d.value !== "function") continue;
-    if (name === "beginTx" || name === "endTx" || name === "drainAnnouncements") continue;
+    if (name === "beginTx" || name === "endTx" || name === "takeAnnouncements") continue;
     const fn = d.value as (...args: unknown[]) => unknown;
     methods[name] = (...args: unknown[]) => call(() => fn.apply(core, copyArgs(args)));
   }
@@ -137,16 +174,18 @@ export function jsonBackend(core: Core): StoreBackend {
     tx<T>(fn: (t: StoreMethods) => Promise<T> | T): Promise<T> {
       const open = currentTx(owner);
       if (open) return Promise.resolve().then(() => fn(open));
-      return mutex
-        .run(async () => {
-          core.beginTx();
-          try {
-            return await inScope(owner, t, fn);
-          } finally {
-            core.endTx();
-          }
-        })
-        .finally(flush);
+      const after: (() => void)[] = [];
+      return held(async () => {
+        core.beginTx();
+        try {
+          return await inScope(owner, t, fn, after);
+        } finally {
+          core.endTx();
+        }
+      }).then((out) => {
+        runAfterCommit(after);
+        return out;
+      });
     },
     close: async () => {},
   };

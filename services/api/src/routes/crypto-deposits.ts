@@ -136,53 +136,60 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
       );
       if (!deposit) return res.status(404).json({ error: "deposit not found" });
 
-      // A deposit pays one invoice once. After its payment is on an invoice,
-      // moving or dropping the link would leave that payment where it is and
-      // let the same money settle a second invoice.
-      const ref = `deposit:${deposit.id}`;
-      const settled = (await store.list("invoices")).find((i) => (i.settlements ?? []).some((s) => settlementRef(s) === ref));
       const invoiceId = req.body?.invoiceId;
-      if (settled && invoiceId !== settled.id) {
-        return res.status(409).json({
-          error: "This payment is already recorded on an invoice. Reconcile that invoice instead of moving the payment.",
-        });
+      const invoice = invoiceId === null ? undefined : (await store.list("invoices")).find((i) => i.id === String(invoiceId ?? ""));
+      if (invoiceId !== null) {
+        // An invoice belongs to an organisation. Membership alone is not enough:
+        // marking the org's invoice paid is invoice management, which a viewer
+        // or an accountant does not have. The id is not a capability either.
+        const member = invoice
+          ? (await store.membersOf(invoice.orgId)).find((m) => m.userId === user.id && m.status === "active")
+          : undefined;
+        if (!invoice || !member) return res.status(404).json({ error: "invoice not found" });
+        if (!roleCan(member.role, "invoices.manage")) {
+          return res.status(403).json({ error: "Your role cannot record payments on this organisation's invoices." });
+        }
+        // The deposit landed in this user's Safe, so that Safe must be the one
+        // behind the org's account, as for payment links and bank memos: a
+        // member's personal Safe never closes the company's invoice.
+        if (!(await orgsBackedBy(user.id)).has(invoice.orgId)) {
+          return res.status(403).json({ error: "This deposit went to your own account, not the one behind this organisation, so it cannot pay its invoice." });
+        }
       }
-      if (invoiceId === null) {
-        await store.updateCryptoDeposit(deposit.id, { invoiceId: undefined });
-        return res.json({ deposit: (await store.list("cryptoDeposits")).find((d) => d.id === deposit.id) });
-      }
-      const invoice = (await store.list("invoices")).find((i) => i.id === String(invoiceId ?? ""));
-      // An invoice belongs to an organisation. Membership alone is not enough:
-      // marking the org's invoice paid is invoice management, which a viewer
-      // or an accountant does not have. The id is not a capability either.
-      const member = invoice
-        ? (await store.membersOf(invoice.orgId)).find((m) => m.userId === user.id && m.status === "active")
-        : undefined;
-      if (!invoice || !member) return res.status(404).json({ error: "invoice not found" });
-      if (!roleCan(member.role, "invoices.manage")) {
-        return res.status(403).json({ error: "Your role cannot record payments on this organisation's invoices." });
-      }
-      // The deposit landed in this user's Safe, so that Safe must be the one
-      // behind the org's account, as for payment links and bank memos: a
-      // member's personal Safe never closes the company's invoice.
-      if (!(await orgsBackedBy(user.id)).has(invoice.orgId)) {
-        return res.status(403).json({ error: "This deposit went to your own account, not the one behind this organisation, so it cannot pay its invoice." });
-      }
-      // Money that arrived settles an invoice the org issued, never a bill it owes.
-      if (invoice.direction !== "outgoing") return res.status(409).json({ error: "Only an invoice your organisation issued can be paid by a deposit." });
-      // A draft made from receipts is settled by its own ledger rows; a
-      // deposit tied to it would be a second payment once it is issued.
-      if (invoice.state === "DRAFT") return res.status(409).json({ error: "That invoice is a draft and has not been issued." });
 
-      const linked = await store.updateCryptoDeposit(deposit.id, { invoiceId: invoice.id });
-      // Already settled (it arrived before the link existed)? Then it belongs on
-      // the invoice now; the settlement will not be written again on arrival.
-      if (linked.settledAt) await recordInvoiceSettlement(linked);
-      const after = (await store.list("invoices")).find((i) => i.id === invoice.id)!;
-      res.json({
-        deposit: (await store.list("cryptoDeposits")).find((d) => d.id === deposit.id),
-        invoice: ownerInvoiceView(after),
+      // The settled check, the link and the settlement are one transaction on
+      // rows read inside it: two links of one deposit, or a link and its
+      // arrival, otherwise both pass the check and settle two invoices.
+      const out = await store.tx(async (t) => {
+        // A deposit pays one invoice once. After its payment is on an invoice,
+        // moving or dropping the link would leave that payment where it is and
+        // let the same money settle a second invoice.
+        const ref = `deposit:${deposit.id}`;
+        const settled = (await t.list("invoices")).find((i) => (i.settlements ?? []).some((s) => settlementRef(s) === ref));
+        if (settled && invoiceId !== settled.id) {
+          return { status: 409, body: { error: "This payment is already recorded on an invoice. Reconcile that invoice instead of moving the payment." } };
+        }
+        if (invoiceId === null) {
+          const unlinked = await t.updateCryptoDeposit(deposit.id, { invoiceId: undefined });
+          return { status: 200, body: { deposit: unlinked } };
+        }
+        const current = (await t.findInvoice(invoice!.id))!;
+        // Money that arrived settles an invoice the org issued, never a bill it owes.
+        if (current.direction !== "outgoing") return { status: 409, body: { error: "Only an invoice your organisation issued can be paid by a deposit." } };
+        // A draft made from receipts is settled by its own ledger rows; a
+        // deposit tied to it would be a second payment once it is issued.
+        if (current.state === "DRAFT") return { status: 409, body: { error: "That invoice is a draft and has not been issued." } };
+
+        const linked = await t.updateCryptoDeposit(deposit.id, { invoiceId: current.id });
+        // Already settled (it arrived before the link existed)? Then it belongs on
+        // the invoice now; the settlement will not be written again on arrival.
+        if (linked.settledAt) await recordInvoiceSettlement(linked);
+        return {
+          status: 200,
+          body: { deposit: linked, invoice: ownerInvoiceView((await t.findInvoice(current.id))!) },
+        };
       });
+      res.status(out.status).json(out.body);
     }),
   );
 

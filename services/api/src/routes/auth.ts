@@ -307,10 +307,11 @@ export function createAuthRouter(deps: AuthDeps) {
       }
       if (deployment.challenge === "0x") {
         // An earlier "unconfirmed" deployment may have landed with the guardian.
-        const updated = await markSignupGuardian(await store.updateUser(user.id, {
+        // From the stored plan: a guardian or channel written during the
+        // bundler calls stays.
+        const updated = await markSignupGuardian(await store.patchUserSub(user.id, "passkeySafe", (ps) => activatePasskeySafePlan(ps!), {
           address: user.passkeySafe.address,
           wallet: { type: "candide-safe", deployed: true },
-          passkeySafe: activatePasskeySafePlan(user.passkeySafe),
         }));
         return res.json(await publicUser(updated));
       }
@@ -387,10 +388,11 @@ export function createAuthRouter(deps: AuthDeps) {
         });
       }
       const opHash = op.userOpHash;
-      let updated = await store.updateUser(user.id, {
+      // From the stored plan: a guardian or channel written during the
+      // bundler calls stays.
+      let updated = await store.patchUserSub(user.id, "passkeySafe", (ps) => activatePasskeySafePlan(ps!), {
         address: user.passkeySafe.address,
         wallet: { type: "candide-safe", deployed: true, deployOpHash: opHash ?? undefined },
-        passkeySafe: activatePasskeySafePlan(user.passkeySafe),
       });
       updated = await markSignupGuardian(updated);
       // The Safe can be linked to Monerium now, but the link signature is a
@@ -411,7 +413,7 @@ export function createAuthRouter(deps: AuthDeps) {
       }
       // Fire-and-forget: the testnet faucet seeds the new Safe with EURe, and
       // its failure must never fail a deployment that already succeeded.
-      void faucetFundSafe(user.id);
+      void faucetFundSafe(user.id).catch((e) => console.error(`faucet: funding the new Safe of ${user.id} failed: ${describeCause(e)}`));
       res.status(201).json({ ...(await publicUser(updated)), deployOpHash: opHash });
     }),
   );
@@ -432,8 +434,9 @@ export function createAuthRouter(deps: AuthDeps) {
       if (!user?.passkey?.publicKey) {
         return res.status(404).json({ error: "no verified passkey for this credential — register again" });
       }
+      let signCount: number;
       try {
-        const { signCount } = await verifyAssertion(
+        ({ signCount } = await verifyAssertion(
           authenticatorData,
           clientDataJSON,
           signature,
@@ -441,16 +444,18 @@ export function createAuthRouter(deps: AuthDeps) {
           user.passkey.signCount ?? 0,
           user.passkey.rpId ?? SECURITY.rpId,
           SECURITY.origins,
-        );
-        if (!(await store.recordPasskeyUse(user.id, credentialId, signCount))) {
-          throw new Error("this passkey is no longer the account's passkey");
-        }
+        ));
       } catch (err: any) {
         return res.status(401).json({ error: redactedMessage(err) });
       }
-      // Minted before the next await, so a recovery that lands during it
-      // revokes this session too.
-      const session = await withSession(user);
+      // The passkey check and the session are one transaction: a recovery
+      // either lands before it (the check fails) or after it (and revokes
+      // this session with the others).
+      const session = await store.tx(async () => {
+        const used = await store.recordPasskeyUse(user.id, credentialId, signCount);
+        return used ? await withSession(used) : undefined;
+      });
+      if (!session) return res.status(401).json({ error: "this passkey is no longer the account's passkey" });
       const balances = await shownBalances(user.address);
       res.json({ ...session, ...balances });
     }),

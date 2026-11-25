@@ -96,6 +96,22 @@ for (const [what, key] of SPREADS) {
     assert.deepEqual(found, []);
   });
 }
+check("outside the store, passkeySafe changes go through patchUserSub; updateUser writes only a new plan", () => {
+  // The two whole writes that replace the plan with a new one: a passkey's
+  // first plan, and an imported Safe. Any other would erase a field another
+  // writer put there since the row was read.
+  const allowed = new Set(["services/api/src/routes/auth.ts: plannedSafe", "services/api/src/routes/safe-import.ts: {"]);
+  const found: string[] = [];
+  for (const p of outsideStore) {
+    const text = readFileSync(p, "utf8");
+    for (const { at, args } of storeWrites(text)) {
+      if (!text.startsWith("store.updateUser(", at)) continue;
+      const m = /\bpasskeySafe\s*:\s*(\{|[\w.]+)/.exec(args);
+      if (m && !allowed.has(`${rel(p)}: ${m[1]}`)) found.push(`${rel(p)}:${lineOf(text, at)}: passkeySafe: ${m[1]}`);
+    }
+  }
+  assert.deepEqual(found, []);
+});
 check("no payment request's payments and no invoice's settlements are written whole outside the store", () => {
   assert.deepEqual(
     [
@@ -131,13 +147,15 @@ function txBodies(text: string): { at: number; body: string }[] {
   }
   return out;
 }
+/** Adapter exports that only read and write the store (no partner, no chain). */
+const STORE_ONLY = new Set(["recordInvoiceSettlement"]);
 /** Names a file imports from adapters/ or stellar/, the partner clients. */
 function partnerImports(text: string): string[] {
   const names: string[] = [];
   for (const m of text.matchAll(/import\s*\{([^}]*)\}\s*from\s*"[^"]*\/(?:adapters|stellar)\/[^"]*"/g)) {
     for (const part of m[1].split(",")) {
       const name = part.trim().replace(/^type\s+/, "").split(/\s+as\s+/).pop()!.trim();
-      if (name && !/^type\s/.test(part.trim()) && /^[a-z]/.test(name)) names.push(name);
+      if (name && !/^type\s/.test(part.trim()) && /^[a-z]/.test(name) && !STORE_ONLY.has(name)) names.push(name);
     }
   }
   return names;

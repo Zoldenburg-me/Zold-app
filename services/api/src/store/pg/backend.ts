@@ -29,7 +29,7 @@ import type {
   OrgSafePlan,
 } from "../../domain/types.js";
 import { describeCause } from "../../http/log-cause.js";
-import { currentTx, inScope, type Collection, type StoreBackend, type StoreMethods } from "../backend.js";
+import { currentTx, inScope, runAfterCommit, type Collection, type StoreBackend, type StoreMethods } from "../backend.js";
 import { defaultChartRows, type Db } from "../db.js";
 import {
   applyOrgSafePlan,
@@ -46,6 +46,7 @@ import {
   followIban,
   hashOnRecordIn,
   passkeyUsePatch,
+  emailCodeAttemptPatch,
   reviewRefundTx,
   sessionDead,
 } from "../rules.js";
@@ -351,6 +352,11 @@ export function createPgStore(database: Database): StoreBackend {
         const patch = passkeyUsePatch(await locked<User>(t, TABLE.users, id), credentialId, signCount);
         return patch ? updateUserIn(t, id, patch) : undefined;
       }),
+    countEmailCodeAttempt: (id, max, now = Date.now()) =>
+      tx(async (t) => {
+        const patch = emailCodeAttemptPatch(await locked<User>(t, TABLE.users, id), max, now);
+        return patch ? updateUserIn(t, id, patch) : undefined;
+      }),
     serviceCredentials: (service) => rows<ServiceCredential>(q, TABLE.serviceCredentials, "service = $1", [service]),
     rotateServiceCredential: (next, overlapMs, by, revoked = false) =>
       tx(async (t) => {
@@ -413,6 +419,10 @@ export function createPgStore(database: Database): StoreBackend {
       await insert(q, TABLE.recoveryRequests, r);
     },
     updateRecoveryRequest: (id, patch) => patchRow<RecoveryRequest>(TABLE.recoveryRequests, id, "recovery request", patch, false),
+    updateRecoveryRequestFrom: (id, from, patch) =>
+      change<RecoveryRequest>(TABLE.recoveryRequests, id, `unknown recovery request ${id}`, (row) =>
+        from.includes(row.status) ? Object.assign(row, patch) : null,
+      ),
     async countRecoveryOtpAttempt(id, max) {
       let out: { attempts: number; over: boolean } | undefined;
       const r = await change<RecoveryRequest>(TABLE.recoveryRequests, id, null, (row) => {
@@ -1093,7 +1103,13 @@ export function createPgStore(database: Database): StoreBackend {
     tx<T>(fn: (t: StoreMethods) => Promise<T> | T): Promise<T> {
       const open = currentTx(owner);
       if (open) return Promise.resolve().then(() => fn(open));
-      return database.tx((client) => inScope(owner, build(client, (f) => f(client)), fn));
+      const after: (() => void)[] = [];
+      return database
+        .tx((client) => inScope(owner, build(client, (f) => f(client)), fn, after))
+        .then((out) => {
+          runAfterCommit(after);
+          return out;
+        });
     },
     close: () => database.close(),
   };

@@ -24,6 +24,7 @@ process.env.LOCAL_HARNESS = "";
 
 const { initStore, store } = await import("../services/api/src/store.js");
 const { createCryptoDepositRouter } = await import("../services/api/src/routes/crypto-deposits.js");
+const { holdUntil } = await import("./_interleave.js");
 
 let passed = 0;
 const check = async (name: string, fn: () => void | Promise<void>) => {
@@ -132,6 +133,21 @@ await check("nor unlinked and then linked again elsewhere", async () => {
   assert.equal((await link("u_owner", d, null)).status, 409);
   assert.equal((await link("u_owner", d, b)).status, 409);
   assert.equal(await stateOf(b), "SUBMITTED");
+});
+
+await check("parallel links of one settled deposit to different invoices: one settles, the rest are refused", async () => {
+  const invs = [await invoice(), await invoice(), await invoice(), await invoice()];
+  const d = await deposit("u_owner");
+  // Every link reaches the membership read before any links: the window
+  // between the settled check and the settlement.
+  const restore = holdUntil(store, "membersOf", invs.length);
+  const results = await Promise.all(invs.map((inv) => link("u_owner", d, inv))).finally(restore);
+  assert.equal(results.filter((r) => r.status === 200).length, 1, JSON.stringify(results.map((r) => r.status)));
+  const paid = [];
+  for (const inv of invs) if (await stateOf(inv) === "PAID") paid.push(inv);
+  assert.equal(paid.length, 1, "one deposit, one invoice paid");
+  const dep = (await store.list("cryptoDeposits")).find((x) => x.id === d)!;
+  assert.equal(dep.invoiceId, paid[0], "the deposit points at the invoice it paid");
 });
 
 await check("linking the same invoice again records the payment once", async () => {

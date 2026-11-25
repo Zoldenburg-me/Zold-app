@@ -22,7 +22,6 @@ export interface EmailVerificationDeps {
   requireUserSession: (req: express.Request, res: express.Response, userId: string) => Promise<unknown>;
 }
 
-const sameEmail = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 const codeHash = (userId: string, code: string) => createHash("sha256").update(`zold/email-code/v1:${userId}:${code}`).digest("hex");
 
 /** Another account already confirmed this address. */
@@ -124,28 +123,31 @@ export function createEmailVerificationRouter(deps: EmailVerificationDeps) {
       if (!user) return;
       if (user.emailVerifiedAt) return res.json(await publicUser(user));
       const typed = String(req.body?.code ?? "").replace(/\s/g, "");
-      const c = user.emailCode;
       const refuse = (error: string, code: string) => res.status(400).json({ error, code });
       if (!/^\d{6}$/.test(typed)) return refuse("Enter the 6-digit code from the email.", "EMAIL_CODE_FORMAT");
-      if (!c || !user.email || !sameEmail(c.email, user.email) || Date.now() > Date.parse(c.expiresAt) || c.attempts >= EMAIL_VERIFICATION.maxAttempts) {
-        return refuse("This code is no longer valid. Ask for a new one.", "EMAIL_CODE_EXPIRED");
-      }
+      // Counted on the stored row before it is compared: parallel guesses
+      // each see the ones before, so the limit bounds guesses, not rounds.
+      const c = (await store.countEmailCodeAttempt(user.id, EMAIL_VERIFICATION.maxAttempts))?.emailCode;
+      if (!c) return refuse("This code is no longer valid. Ask for a new one.", "EMAIL_CODE_EXPIRED");
       const ok = timingSafeEqual(Buffer.from(codeHash(user.id, typed), "hex"), Buffer.from(c.hash, "hex"));
       if (!ok) {
-        const attempts = c.attempts + 1;
-        await store.updateUser(user.id, { emailCode: { ...c, attempts } });
-        const left = EMAIL_VERIFICATION.maxAttempts - attempts;
+        const left = EMAIL_VERIFICATION.maxAttempts - c.attempts;
         return left > 0
           ? refuse(`That code is not right. ${left} ${left === 1 ? "try" : "tries"} left.`, "EMAIL_CODE_WRONG")
           : refuse("That code is not right, and it no longer works. Ask for a new one.", "EMAIL_CODE_EXPIRED");
       }
       // Checked again at the moment of the write: two accounts may have had
-      // codes out for one address, and the first to confirm keeps it.
-      if ((await confirmedElsewhere(user))) return res.status(409).json(IN_USE);
-      const updated = await store.updateUser(user.id, {
-        emailVerifiedAt: new Date().toISOString(),
-        emailCode: undefined,
+      // codes out for one address, and the first to confirm keeps it. One
+      // transaction, on the code that was compared: a new code sent since
+      // voids this one.
+      const updated = await store.tx(async () => {
+        const now = await store.findUser(user.id);
+        if (now?.emailCode?.hash !== c.hash) return "expired" as const;
+        if ((await confirmedElsewhere(now))) return "in_use" as const;
+        return await store.updateUser(user.id, { emailVerifiedAt: new Date().toISOString(), emailCode: undefined });
       });
+      if (updated === "expired") return refuse("This code is no longer valid. Ask for a new one.", "EMAIL_CODE_EXPIRED");
+      if (updated === "in_use") return res.status(409).json(IN_USE);
       res.json(await publicUser(updated));
     }),
   );

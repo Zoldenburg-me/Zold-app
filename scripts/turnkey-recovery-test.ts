@@ -421,6 +421,32 @@ try {
     chainState.pending = null;
   });
 
+  await check("the sweep never writes EXPIRED over a row that moved after it read the list", async () => {
+    await store.addRecoveryRequest({
+      id: "sw-moved", userId: "u_none", safeAddress: SAFE, mode: "turnkey", status: "PASSKEY_PENDING", requestedAt: now,
+      expiresAt: new Date(Date.now() - 1000).toISOString(), recoveryDelayHours: 1, guardianAddress: guardian.address,
+      recoveryModuleAddress: MODULE, factors: { kyc: "pending", otp: "pending", liveness: "pending", manualReview: "pending" }, turnkey: {},
+    } as any);
+    const realList = store.list;
+    let moved = false;
+    (store as any).list = async (name: any) => {
+      const snap = await realList.call(store, name);
+      // The guardian's approval lands between the sweep's read and its write.
+      if (name === "recoveryRequests" && !moved) {
+        moved = true;
+        await store.updateRecoveryRequest("sw-moved", { status: "GRACE_PERIOD" });
+      }
+      return snap;
+    };
+    try {
+      await sweepTurnkeyRecoveries(new Date(), chain);
+    } finally {
+      (store as any).list = realList;
+    }
+    assert.equal((await store.findRecoveryRequest("sw-moved"))!.status, "GRACE_PERIOD");
+    await store.updateRecoveryRequest("sw-moved", { status: "FINALIZED" });
+  });
+
   await check("the owner cancels a request still waiting for the guardian", async () => {
     await store.updateUser("u_none", { passkeySafe: { ...(await store.findUser("u_none"))!.passkeySafe!, socialGuardians: [tkGuardian()] as any } });
     chainState.owners = [addr("e")];

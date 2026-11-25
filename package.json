@@ -101,6 +101,7 @@
     "turnkey-page:test": "tsx scripts/turnkey-guardian-page-test.ts",
     "security-txt:test": "tsx scripts/security-txt-test.ts",
     "turnkey-recovery:test": "tsx scripts/turnkey-recovery-test.ts",
+    "candide-sweep-race:test": "tsx scripts/candide-sweep-race-test.ts",
     "vendor:turnkey": "tsx scripts/build-turnkey-bundle.ts",
     "documents:test": "tsx scripts/documents-test.ts",
     "paylinks:test": "tsx scripts/payment-requests-test.ts",

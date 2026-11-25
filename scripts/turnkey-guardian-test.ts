@@ -336,6 +336,7 @@ const baseUser = (id: string, extra: Record<string, unknown> = {}) => ({
 });
 await store.addUser(baseUser("u_ok", { passkeySafe: { address: addr("a"), status: "active", threshold: 1, passkeyPublicKey: pk, createdAt: now } }) as any);
 await store.addUser(baseUser("u_nosafe") as any);
+await store.addUser(baseUser("u_race6", { address: addr("7"), passkeySafe: { address: addr("7"), status: "active", threshold: 1, passkeyPublicKey: pk, createdAt: now } }) as any);
 await store.addUser(baseUser("u_mail", { passkeySafe: { address: addr("5"), status: "active", threshold: 1, passkeyPublicKey: pk, createdAt: now } }) as any);
 await store.addUser(baseUser("u_key", { passkeySafe: { address: addr("6"), status: "active", threshold: 1, passkeyPublicKey: pk, createdAt: now } }) as any);
 await store.addUser(baseUser("u_planned", { passkeySafe: { address: addr("d"), status: "planned", threshold: 1, passkeyPublicKey: pk, createdAt: now } }) as any);
@@ -548,6 +549,33 @@ try {
     assert.equal(stored[0].address, addr("1"));
     assert.equal(stored[0].turnkeySubOrgId, "sub-1");
     assert.ok(!JSON.stringify(await store.findUser("u_ok")).includes("accounts.google.com"), "no token or issuer stored");
+  });
+
+  await check("a change to the Safe plan landing just before the guardian is written survives it", async () => {
+    // Another writer of passkeySafe (a Candide channel, the verifier) lands
+    // right before whichever write the route makes.
+    const s = store as any;
+    const originals = { updateUser: s.updateUser, patchUserSub: s.patchUserSub };
+    let landed = false;
+    const landFirst = (name: keyof typeof originals) => async (...args: unknown[]) => {
+      if (!landed && args[0] === "u_race6") {
+        landed = true;
+        await originals.patchUserSub("u_race6", "passkeySafe", (ps: any) => ({ ...ps, recoveryChoice: { choice: "declined", at: now } }));
+      }
+      return originals[name](...args);
+    };
+    s.updateUser = landFirst("updateUser");
+    s.patchUserSub = landFirst("patchUserSub");
+    try {
+      const r = await call("POST", "/users/u_race6/guardians", addBody(googleClaims({ sub: "race-6" })), "u_race6");
+      assert.equal(r.status, 201, JSON.stringify(r.body));
+    } finally {
+      Object.assign(s, originals);
+    }
+    const ps = (await store.findUser("u_race6"))!.passkeySafe!;
+    assert.ok(landed);
+    assert.equal(ps.socialGuardians?.length, 1, "the guardian is there");
+    assert.equal((ps as any).recoveryChoice?.choice, "declined", "and so is the change made meanwhile");
   });
 
   await check("the same login again reuses its sub-org: no second create, no duplicate row", async () => {

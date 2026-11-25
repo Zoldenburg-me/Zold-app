@@ -569,6 +569,32 @@ await check("cancelling it again is 409 NOT_CANCELLABLE with the view unchanged"
   assert.equal(r.body.code, "NOT_CANCELLABLE");
   assert.equal(r.body.request.state, "CANCELLED");
 });
+await check("a payment recorded between the cancel's read and its write keeps the request: 409, not a CANCELLED request holding money", async () => {
+  const r0 = (await create(link.linkId, { amountEur: 16, order: { gid: ORDER(7002) } })).body;
+  // The payment lands just before whichever write the cancel makes.
+  const s = store as any;
+  const originals = { updatePaymentRequest: s.updatePaymentRequest, cancelUnpaidPaymentRequest: s.cancelUnpaidPaymentRequest };
+  let landed = false;
+  const landFirst = (name: keyof typeof originals) => async (...args: unknown[]) => {
+    if (!landed) {
+      landed = true;
+      await originals.updatePaymentRequest(r0.id, { payments: [{ id: "p_mid", method: "crypto", ref: "deposit:mid", amountEur: 16, kind: "full", at: now }] });
+    }
+    return originals[name](...args);
+  };
+  s.updatePaymentRequest = landFirst("updatePaymentRequest");
+  s.cancelUnpaidPaymentRequest = landFirst("cancelUnpaidPaymentRequest");
+  try {
+    const r = await call("POST", `/api/service/merchant/links/${link.linkId}/payment-requests/${r0.id}/cancel`, { bearer: token });
+    assert.equal(r.status, 409);
+    assert.equal(r.body.code, "NOT_CANCELLABLE");
+  } finally {
+    Object.assign(s, originals);
+  }
+  const stored = (await store.findPaymentRequest(r0.id))!;
+  assert.notEqual(stored.state, "CANCELLED");
+  assert.equal(stored.payments.length, 1);
+});
 
 console.log("payment, settlement and the core Shopify path");
 const pay = async (id: string) => {

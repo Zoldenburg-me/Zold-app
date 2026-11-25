@@ -80,6 +80,7 @@ import {
   } from "./chain.js";
 import { CANDIDE, SafeGasError, SafeThresholdError, SafeVerifierMissingError } from "./wallet/candide.js";
 import { routeAsyncRejections } from "./http/async-errors.js";
+import { sendAfterCommit } from "./http/send-after-commit.js";
 import { describeCause, describeError, redactedMessage } from "./http/log-cause.js";
 import { recordServerError } from "./http/error-log.js";
 import { knownError } from "./http/known-errors.js";
@@ -92,6 +93,8 @@ const app = express();
 // Security headers come before the body parser, so its own 400 and 413
 // carry them and x-zold-answer too.
 app.use(securityHeaders);
+// Before every router: a response sent inside a store.tx waits for its commit.
+app.use(sendAfterCommit);
 // Keep the raw body around for webhook signature checks — HMAC has to run
 // over the exact bytes sent, not a re-serialised object.
 app.use(express.json({

@@ -72,6 +72,19 @@ export function passkeyUsePatch(u: User | undefined, credentialId: string, signC
 }
 
 /**
+ * One guess at the email code, counted on the stored row before it is
+ * compared: parallel guesses each see the ones before. Undefined when there
+ * is no code for the account's address, it expired, or its guesses are
+ * used up; the caller refuses the guess.
+ */
+export function emailCodeAttemptPatch(u: User | undefined, max: number, now: number): Partial<User> | undefined {
+  const c = u?.emailCode;
+  if (!c || !u.email || c.email.trim().toLowerCase() !== u.email.trim().toLowerCase()) return undefined;
+  if (now > Date.parse(c.expiresAt) || c.attempts >= max) return undefined;
+  return { emailCode: { ...c, attempts: c.attempts + 1 } };
+}
+
+/**
  * REFUNDED and PAID are final. A slow live leg finishing after the sweep
  * refunded the transfer must not move it back and complete a payout the
  * sender was already repaid for; the late write keeps its other fields.

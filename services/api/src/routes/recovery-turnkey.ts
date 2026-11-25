@@ -155,20 +155,16 @@ const view = (g: SocialGuardian) => ({
 /** The user's row for this sub-org taken off the account (the Turnkey wallet
  *  itself stays the person's; adding the same login again finds it). */
 async function dropGuardian(userId: string, subOrgId: string) {
-  return store.tx(async () => {
-    const safe = (await store.findUser(userId))!.passkeySafe!;
-    await store.updateUser(userId, { passkeySafe: { ...safe, socialGuardians: (safe.socialGuardians ?? []).filter((g) => g.turnkeySubOrgId !== subOrgId) } });
-  });
+  await store.patchUserSub(userId, "passkeySafe", (safe) => ({ ...safe!, socialGuardians: (safe!.socialGuardians ?? []).filter((g) => g.turnkeySubOrgId !== subOrgId) }));
 }
 
 /** The user's row for this sub-org changed to `patch`, written back. */
 async function updateGuardian(userId: string, subOrgId: string, patch: Partial<SocialGuardian>): Promise<SocialGuardian> {
-  return store.tx(async () => {
-    const safe = (await store.findUser(userId))!.passkeySafe!;
-    const rows = (safe.socialGuardians ?? []).map((g) => (g.turnkeySubOrgId === subOrgId ? { ...g, ...patch } : g));
-    await store.updateUser(userId, { passkeySafe: { ...safe, socialGuardians: rows } });
-    return rows.find((g) => g.turnkeySubOrgId === subOrgId)!;
-  });
+  const updated = await store.patchUserSub(userId, "passkeySafe", (safe) => ({
+    ...safe!,
+    socialGuardians: (safe!.socialGuardians ?? []).map((g) => (g.turnkeySubOrgId === subOrgId ? { ...g, ...patch } : g)),
+  }));
+  return updated.passkeySafe!.socialGuardians!.find((g) => g.turnkeySubOrgId === subOrgId)!;
 }
 
 export function createTurnkeyGuardianRouter({
@@ -251,12 +247,15 @@ export function createTurnkeyGuardianRouter({
         const found = ids.length === 1 ? { subOrgId: ids[0], address: await turnkey.walletAddress(ids[0]) } : undefined;
         const { subOrgId, address } = found ?? (await turnkey.createSubOrg(buildGuardianSubOrg(login)));
 
-        const fresh = (await store.findUser(user.id))!;
-        const current = fresh.passkeySafe!;
-        const existing = (current.socialGuardians ?? []).find((g) => g.turnkeySubOrgId === subOrgId);
-        if (existing) return res.json({ guardian: view(existing) });
+        // Checked and added on the stored plan, in one write: another field
+        // of it written during the Turnkey calls stays.
+        let existing: SocialGuardian | undefined;
         const guardian: SocialGuardian = { kind: "self-social", address, turnkeySubOrgId: subOrgId, status: "created", createdAt: new Date().toISOString() };
-        await store.updateUser(user.id, { passkeySafe: { ...current, socialGuardians: [...(current.socialGuardians ?? []), guardian] } });
+        await store.patchUserSub(user.id, "passkeySafe", (current) => {
+          existing = (current!.socialGuardians ?? []).find((g) => g.turnkeySubOrgId === subOrgId);
+          return existing ? current : { ...current!, socialGuardians: [...(current!.socialGuardians ?? []), guardian] };
+        });
+        if (existing) return res.json({ guardian: view(existing) });
         res.status(201).json({ guardian: view(guardian) });
       } catch (e) {
         sendError(res, e);

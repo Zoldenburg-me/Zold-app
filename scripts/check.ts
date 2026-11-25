@@ -29,6 +29,7 @@ const scripts = [
   "recovery:test",
   "recovery:remove:test",
   "recovery:candide:test",
+  "candide-sweep-race:test",
   "turnkey:test",
   "turnkey-page:test",
   "security-txt:test",

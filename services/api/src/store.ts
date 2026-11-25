@@ -46,6 +46,7 @@ import {
   followIban,
     hashOnRecordIn,
   passkeyUsePatch,
+  emailCodeAttemptPatch,
   reviewRefundTx,
   sessionDead,
   type ReviewResolution,
@@ -147,9 +148,10 @@ export const jsonCore = {
   /** A transaction's writes land as one file write, at endTx. */
   beginTx: beginWrites,
   endTx: endWrites,
-  /** Run the listeners of the state changes written so far. */
-  drainAnnouncements() {
-    for (const run of announcements.splice(0)) run();
+  /** The announcements queued so far, taken out of the queue: the backend
+   *  takes them while it still holds the store and runs them after. */
+  takeAnnouncements(): (() => void)[] {
+    return announcements.splice(0);
   },
   /** One whole collection, as stored (the `list` of store/backend.ts). */
   list<K extends keyof Db>(name: K): Db[K] {
@@ -171,7 +173,7 @@ export const jsonCore = {
   patchUserSub<K extends "passkeySafe" | "monerium">(id: string, key: K, fn: (current: User[K]) => User[K], patch: Partial<User> = {}) {
     const u = db.users.find((x) => x.id === id);
     if (!u) throw new Error(`unknown user ${id}`);
-    return jsonCore.updateUser(id, { ...patch, [key]: fn(structuredClone(u[key])) } as Partial<User>);
+    return jsonCore.updateUser(id, { ...patch, [key]: structuredClone(fn(structuredClone(u[key]))) } as Partial<User>);
   },
   updateUser(id: string, patch: Partial<User>) {
     const u = db.users.find((x) => x.id === id);
@@ -190,6 +192,11 @@ export const jsonCore = {
    */
   recordPasskeyUse(id: string, credentialId: string, signCount: number) {
     const patch = passkeyUsePatch(db.users.find((x) => x.id === id), credentialId, signCount);
+    return patch ? jsonCore.updateUser(id, patch) : undefined;
+  },
+  /** Count one email-code guess on the stored row (rules.ts emailCodeAttemptPatch); undefined when refused. */
+  countEmailCodeAttempt(id: string, max: number, now = Date.now()) {
+    const patch = emailCodeAttemptPatch(db.users.find((x) => x.id === id), max, now);
     return patch ? jsonCore.updateUser(id, patch) : undefined;
   },
   serviceCredentials(service: ServiceCredential["service"]): readonly ServiceCredential[] {
@@ -278,6 +285,13 @@ export const jsonCore = {
     Object.assign(r, patch);
     persist();
     return r;
+  },
+  /** Write a request only from the statuses it may leave; null when it moved on. */
+  updateRecoveryRequestFrom(id: string, from: readonly RecoveryRequest["status"][], patch: Partial<RecoveryRequest>) {
+    const r = db.recoveryRequests.find((x) => x.id === id);
+    if (!r) throw new Error(`unknown recovery request ${id}`);
+    if (!from.includes(r.status)) return null;
+    return jsonCore.updateRecoveryRequest(id, patch);
   },
   /**
    * Count one OTP guess on the stored row, while it is OTP_PENDING. Past
@@ -544,7 +558,7 @@ export const jsonCore = {
   patchTransferSub<K extends keyof Transfer>(id: string, key: K, fn: (current: Transfer[K]) => Transfer[K], patch: Partial<Transfer> = {}) {
     const t = db.transfers.find((x) => x.id === id);
     if (!t) throw new Error(`unknown transfer ${id}`);
-    return jsonCore.updateTransfer(id, { ...patch, [key]: fn(structuredClone(t[key])) });
+    return jsonCore.updateTransfer(id, { ...patch, [key]: structuredClone(fn(structuredClone(t[key]))) });
   },
   /** Subscribe to transfer state changes (checkout-webhook.ts). */
   onTransferStateChange(listener: TransferStateListener) {
@@ -642,7 +656,8 @@ export const jsonCore = {
     const r = db.paymentRequests.find((x) => x.id === id);
     if (!r) throw new Error(`unknown payment request ${id}`);
     const from = r.state;
-    const patch = apply(structuredClone(r));
+    // Cloned: the callback's own object must not be the stored one.
+    const patch = structuredClone(apply(structuredClone(r)));
     return { request: patch ? jsonCore.updatePaymentRequest(id, patch) : r, from, written: !!patch };
   },
   /** Subscribe to payment request state changes (checkout-webhook.ts). */
@@ -960,7 +975,7 @@ export const jsonCore = {
     const d = db.cryptoDeposits.find((x) => x.id === id);
     if (!d) throw new Error(`unknown crypto deposit ${id}`);
     if (d.settledAt) return null;
-    return jsonCore.updateCryptoDeposit(id, { ...decide(structuredClone(d)), settledAt: new Date().toISOString() });
+    return jsonCore.updateCryptoDeposit(id, { ...structuredClone(decide(structuredClone(d))), settledAt: new Date().toISOString() });
   },
   cryptoDepositCursor(chainId: number | string): bigint | undefined {
     const v = db.cryptoDepositCursor[String(chainId)];
@@ -1010,7 +1025,7 @@ export const jsonCore = {
   patchOrgSub<K extends "invoicing" | "integrations">(id: string, key: K, fn: (current: Organisation[K]) => Organisation[K], patch: Partial<Organisation> = {}) {
     const o = db.organisations.find((x) => x.id === id);
     if (!o) throw new Error(`unknown organisation ${id}`);
-    return jsonCore.updateOrganisation(id, { ...patch, [key]: fn(structuredClone(o[key])) } as Partial<Organisation>);
+    return jsonCore.updateOrganisation(id, { ...patch, [key]: structuredClone(fn(structuredClone(o[key]))) } as Partial<Organisation>);
   },
   updateOrganisation(id: string, patch: Partial<Organisation>) {
     if ("safe" in patch) throw new Error("an org Safe plan is written through setOrgSafePlan only");
@@ -1250,7 +1265,7 @@ export const jsonCore = {
     const i = db.invoices.find((x) => x.id === id);
     if (!i) throw new Error(`unknown invoice ${id}`);
     const patch = settlementOnRow(structuredClone(i), ref, update, replace);
-    return patch ? jsonCore.updateInvoice(id, patch) : null;
+    return patch ? jsonCore.updateInvoice(id, structuredClone(patch)) : null;
   },
   /**
    * Start paying an invoice: from `from` to PAYING, with the draft that pays

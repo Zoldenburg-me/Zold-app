@@ -371,7 +371,13 @@ export function createServiceMerchantRouter() {
         await audit("service.merchant_request_cancel", caller, linkId, "not_cancellable", extra, r.userId);
         return res.status(409).json({ error: "this request is not open, or a payment has arrived against it", code: "NOT_CANCELLABLE", request: serviceRequestView(r, base) });
       }
-      const cancelled = await store.updatePaymentRequest(r.id, { state: "CANCELLED", cancelledAt: new Date().toISOString() });
+      // Checked again on the stored row: a payment recorded since the read keeps it.
+      const cancelled = await store.cancelUnpaidPaymentRequest(r.id);
+      if (!cancelled) {
+        await audit("service.merchant_request_cancel", caller, linkId, "not_cancellable", extra, r.userId);
+        const now = await store.findPaymentRequest(r.id);
+        return res.status(409).json({ error: "this request is not open, or a payment has arrived against it", code: "NOT_CANCELLABLE", request: serviceRequestView(now!, base) });
+      }
       await audit("service.merchant_request_cancel", caller, linkId, "cancelled", extra, r.userId);
       res.json(serviceRequestView(cancelled, base));
     }),

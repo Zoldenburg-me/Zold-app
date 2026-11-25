@@ -599,9 +599,9 @@ try {
     // writeAndWait itself: the hooks fire only on a definite outcome.
     const calls: string[] = [];
     const hooks = {
-      beforeSend: () => calls.push("before"),
-      onNotSent: () => calls.push("not-sent"),
-      onReverted: (h: string) => calls.push(`reverted:${h}`),
+      beforeSend: () => void calls.push("before"),
+      onNotSent: () => void calls.push("not-sent"),
+      onReverted: (h: string) => void calls.push(`reverted:${h}`),
     };
     const args = {
       address: addrs().eure,
@@ -647,6 +647,38 @@ try {
       restore();
     }
     check("insufficient funds is a definite refusal", calls.join(",") === "before,not-sent", calls.join(","));
+    // An async hook is awaited: the intent is stored before the send, and a
+    // hook that rejects stops the write (nothing went out unrecorded).
+    {
+      const order: string[] = [];
+      const slow = (label: string) => async () => {
+        await new Promise((r) => setTimeout(r, 20));
+        order.push(label);
+      };
+      (orchestratorWallet as any).writeContract = async () => {
+        order.push("send");
+        throw new TransactionExecutionError(new InsufficientFundsError({ cause: new InternalRpcError(new Error("insufficient funds")) }), {
+          account: orchestratorWallet.account,
+        } as any);
+      };
+      try {
+        await assert.rejects(writeAndWait(orchestratorWallet, args, { beforeSend: slow("before"), onNotSent: slow("not-sent") }), /insufficient funds/i);
+      } finally {
+        restore();
+      }
+      check("an async beforeSend finishes before the send, and onNotSent before the error propagates", order.join(",") === "before,send,not-sent", order.join(","));
+      order.length = 0;
+      (orchestratorWallet as any).writeContract = async () => {
+        order.push("send");
+        return "0x" as const;
+      };
+      try {
+        await assert.rejects(writeAndWait(orchestratorWallet, args, { beforeSend: async () => { throw new Error("intent not stored"); } }), /intent not stored/);
+      } finally {
+        restore();
+      }
+      check("a beforeSend that rejects stops the write", order.length === 0, order.join(","));
+    }
     // The refusal classifier reads only the error viem throws, which after a
     // retry is the LAST attempt's: an accepted first attempt would hide behind
     // a refusal on the retry. Write clients therefore never retry.
@@ -691,6 +723,11 @@ try {
     const intentAt = src.indexOf('recordOutboundIntent(transfer.id, txs, "liquidity.swap.pending")');
     const swapAt = src.indexOf("executeTransferLiquidity({ ...transfer, liquidity: liquidityPlan })");
     check("the swap intent is recorded before the orchestrator runs the swap", intentAt > 0 && intentAt < swapAt, `${intentAt} vs ${swapAt}`);
+    // Inside try/finally, a returned promise that is not awaited lets the
+    // finally (executing.delete) run before compensation's first write: a
+    // stranded sweep in that window sees neither marker.
+    const bare = [...src.matchAll(/return failAndCompensate\(/g)].length;
+    check("every failAndCompensate returned is awaited (return await), so `executing` holds until it is done", bare === 0 && /return await failAndCompensate\(/.test(src), `${bare} bare`);
   }
 
   console.log("   daily cap counts both pots…");

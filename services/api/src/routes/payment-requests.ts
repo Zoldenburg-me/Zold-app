@@ -604,8 +604,11 @@ async function record(r: PaymentRequest, payment: Parameters<typeof applyPayment
  * open requests? Called by the crypto poller for every fresh deposit. Writes
  * `paymentRequestId` on the deposit so the two records point at each other.
  */
-export async function attributeDepositToRequest(deposit: CryptoDeposit): Promise<PaymentRequest | undefined> {
+export async function attributeDepositToRequest(given: CryptoDeposit): Promise<PaymentRequest | undefined> {
   return store.tx(async () => {
+    // The stored row, not the caller's copy: a link or an attribution made
+    // since it was read decides what this one may write.
+    const deposit = (await store.list("cryptoDeposits")).find((d) => d.id === given.id) ?? given;
     if (deposit.paymentRequestId) return await store.findPaymentRequest(deposit.paymentRequestId);
     const user = await store.findUser(deposit.userId);
     const page = user?.paymentPage;

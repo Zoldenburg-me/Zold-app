@@ -203,6 +203,8 @@ function publicRequest(r: RecoveryRequest) {
  *  ceremony with the same handle, which on a security key replaces the passkey
  *  the first submit is about to record. In memory: a restart ends the wait. */
 const passkeySubmits = new Set<string>();
+/** Requests whose recovery is being executed on chain now (the OTP route), in this process. */
+const executing = new Set<string>();
 
 /** A ticket the browser made and kept before submitting, so a lost answer
  *  does not lose it (32 random bytes, base64url). */
@@ -382,8 +384,10 @@ export function sameOwnerSet(owners: string[], newOwners: string[]): boolean {
 export async function sweepCandideRecoveries(now = new Date()): Promise<number> {
   if (!candideRecoveryEnabled()) return 0;
   let n = 0;
-  for (const r of [...await store.list("recoveryRequests")]) {
-    if (r.mode !== "candide") continue;
+  for (const snap of [...await store.list("recoveryRequests")]) {
+    if (snap.mode !== "candide") continue;
+    // Read again: an earlier row's chain calls give the OTP route time to move this one.
+    const r = (await store.findRecoveryRequest(snap.id)) ?? snap;
     if (r.status === "GRACE_PERIOD" && r.candide?.finalizeAfter && now >= new Date(r.candide.finalizeAfter)) {
       try {
         const out = await finalizeCandideRecovery(r, now);
@@ -392,7 +396,10 @@ export async function sweepCandideRecoveries(now = new Date()): Promise<number> 
         console.error(`recovery sweep: ${r.id}: ${describeCause(err)}`);
       }
     } else if (["PASSKEY_PENDING", "OTP_PENDING"].includes(r.status) && now >= new Date(r.expiresAt)) {
-      await store.updateRecoveryRequest(r.id, { status: "EXPIRED" });
+      // Only from the status it was read in, and not while the OTP route executes it.
+      await store.tx(async () => {
+        if (!executing.has(r.id)) await store.updateRecoveryRequestFrom(r.id, ["PASSKEY_PENDING", "OTP_PENDING"], { status: "EXPIRED" });
+      });
     }
   }
   return n;
@@ -1005,7 +1012,22 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       if (result.guardianSignature && result.guardianAddress) {
         // Every channel is verified: Candide has signed. Execute now — the
         // grace period starts on chain, not when someone remembers to click.
-        const executed = await executeRecovery(request.safeAddress, c.newOwners, c.newThreshold ?? 1, result.guardianAddress, result.guardianSignature);
+        // Claimed first, in one transaction with the re-read: a reject either
+        // landed before (seen here) or comes after (and sees `executing`).
+        const claimed = await store.tx(async () => {
+          const now = await store.findRecoveryRequest(request.id);
+          if (now?.status !== "OTP_PENDING" || executing.has(request.id)) return false;
+          executing.add(request.id);
+          return true;
+        });
+        if (!claimed) return res.status(409).json({ error: "this recovery is no longer waiting for codes" });
+        let executed: Awaited<ReturnType<typeof executeRecovery>>;
+        try {
+          executed = await executeRecovery(request.safeAddress, c.newOwners, c.newThreshold ?? 1, result.guardianAddress, result.guardianSignature);
+        } catch (err) {
+          executing.delete(request.id);
+          throw err;
+        }
         // Harness-only: a test cannot wait for even the 3-minute module.
         // HARNESS.enabled is false on every real-money chain by construction,
         // so this can never shorten a production grace period.
@@ -1039,7 +1061,8 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
         };
         console.log(`RECOVERY: ${request.id} executed on chain for Safe ${request.safeAddress}; finalizable after ${patch.candide!.finalizeAfter}`);
       }
-      const updated = await store.updateRecoveryRequest(request.id, patch);
+      // On chain now, whatever the row says: the write is what happened.
+      const updated = await store.updateRecoveryRequest(request.id, patch).finally(() => executing.delete(request.id));
       res.json({
         ...publicRequest(updated),
         ...(updated.status === "GRACE_PERIOD" ? { finalizeVia: `/api/recovery/candide/${request.id}/finalize` } : {}),
@@ -1106,20 +1129,28 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
     "/admin/recoveries/candide/:id/reject",
     wrap(async (req, res) => {
       if (!requireOperator(req, res)) return;
-      const r = await store.findRecoveryRequest(req.params.id);
-      if (!r || r.mode !== "candide") return res.status(404).json({ error: "recovery not found" });
-      if (!["PASSKEY_PENDING", "OTP_PENDING"].includes(r.status)) {
-        return res.status(409).json({ error: `recovery is ${r.status} — once executed only the owner's passkey can cancel it` });
-      }
       const reason = typeof req.body?.reason === "string" ? req.body.reason.trim().slice(0, 500) : "";
-      if (!reason) return res.status(400).json({ error: "give a reason — the person sees it" });
-      const updated = await store.updateRecoveryRequest(r.id, {
-        status: "CANCELED",
-        canceledAt: new Date().toISOString(),
-        cancelReason: reason,
-        reviewedBy: operatorLabel(req),
+      // The status, the execute test and the write are one transaction, as
+      // the OTP route's claim is: one of the two sees the other.
+      const out = await store.tx(async () => {
+        const r = await store.findRecoveryRequest(req.params.id);
+        if (!r || r.mode !== "candide") return { status: 404, body: { error: "recovery not found" } };
+        const from = ["PASSKEY_PENDING", "OTP_PENDING"] as const;
+        if (!(from as readonly string[]).includes(r.status) || executing.has(r.id)) {
+          return { status: 409, body: { error: `recovery is ${executing.has(r.id) ? "being executed" : r.status} — once executed only the owner's passkey can cancel it` } };
+        }
+        if (!reason) return { status: 400, body: { error: "give a reason — the person sees it" } };
+        const updated = await store.updateRecoveryRequestFrom(r.id, from, {
+          status: "CANCELED",
+          canceledAt: new Date().toISOString(),
+          cancelReason: reason,
+          reviewedBy: operatorLabel(req),
+        });
+        return updated ? { updated } : { status: 409, body: { error: "recovery moved on — reload" } };
       });
-      console.log(`RECOVERY: ${r.id} rejected by ${operatorLabel(req)}`);
+      const { updated } = out;
+      if (!updated) return res.status(out.status!).json(out.body);
+      console.log(`RECOVERY: ${updated.id} rejected by ${operatorLabel(req)}`);
       res.json({ id: updated.id, status: updated.status, cancelReason: updated.cancelReason });
     }),
   );

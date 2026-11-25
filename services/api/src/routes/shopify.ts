@@ -679,8 +679,10 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       if (!seen) await store.recordShopifyDelivery({ id: deliveryId, shop: c.shop, at: new Date().toISOString(), handled: false });
       // Handled once it has been answered without a server error; a failed one
       // is processed again on Shopify's retry.
-      res.once("finish", async () => {
-        if (res.statusCode < 500) await store.markShopifyDeliveryHandled(deliveryId);
+      res.once("finish", () => {
+        if (res.statusCode >= 500) return;
+        // Not marked is processed again on Shopify's retry; an unhandled rejection would exit the API.
+        store.markShopifyDeliveryHandled(deliveryId).catch((e) => console.error(`shopify: delivery ${deliveryId} not marked handled: ${describeCause(e)}`));
       });
       const topic = String(req.header("x-shopify-topic") ?? "");
       const o = req.body ?? {};

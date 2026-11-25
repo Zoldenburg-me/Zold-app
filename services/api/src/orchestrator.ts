@@ -1128,7 +1128,7 @@ export async function executeTransfer(
       });
     } catch (err: any) {
       // Fail closed: a failed real payout must not masquerade as success.
-      return failAndCompensate(
+      return await failAndCompensate(
         transfer.id,
         new Error(`anchor payout failed: ${redactedMessage(err).slice(0, 200)}`),
         txs,
@@ -1159,7 +1159,7 @@ export async function executeTransfer(
       pickup: storedPickup,
     });
   } catch (err: any) {
-    return failAndCompensate(transfer.id, err, txs);
+    return await failAndCompensate(transfer.id, err, txs);
   } finally {
     executing.delete(transfer.id);
   }
@@ -1257,7 +1257,7 @@ export async function executeSepaTransfer(
           });
         }
         txs.push({ step: "monerium.redeem.refused", hash: "0x" });
-        return failAndCompensate(
+        return await failAndCompensate(
           transfer.id,
           err instanceof MoneriumAccessError
             ? new Error("Monerium refused Zold's access to your Monerium account, so no payment was sent. Connect Monerium again, then send it again.")
@@ -1267,7 +1267,7 @@ export async function executeSepaTransfer(
       }
     }
   } catch (err: any) {
-    return failAndCompensate(transfer.id, err, txs);
+    return await failAndCompensate(transfer.id, err, txs);
   } finally {
     executing.delete(transfer.id);
   }
@@ -1384,7 +1384,7 @@ async function refreshPayoutUnlocked(
           `a Stellar payment may already have been sent, so no automatic refund; ${STELLAR_REVIEW_STEP}`,
       });
     }
-    return failAndCompensate(
+    return await failAndCompensate(
       transfer.id,
       new Error(`anchor settlement failed: ${redactedMessage(err).slice(0, 200)}`),
       transfer.txs,

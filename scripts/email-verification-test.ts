@@ -69,6 +69,7 @@ process.env.SMTP_PASS = "p";
 process.env.MAIL_FROM = "Zold <no-reply@zoldhq.com>";
 
 const { store } = await import("../services/api/src/store.js");
+const { holdUntil } = await import("./_interleave.js");
 const { createEmailVerificationRouter } = await import("../services/api/src/routes/email-verification.js");
 const { emailHeldBy } = await import("../services/api/src/domain/email.js");
 const { publicUser } = await import("../services/api/src/users/public-user.js");
@@ -187,6 +188,25 @@ await t("a refused recipient is logged by error code, never by address", async (
   assert.match(line, /550/, "with the server's code");
   assert.ok(!/example\.com/i.test(line), `no address in the log: ${line}`);
   assert.ok(!JSON.stringify(r.body).toLowerCase().includes("example.com"), "nor in the answer");
+});
+
+await t("twenty wrong guesses at once: five are counted, the rest refused, and the code is void", async () => {
+  await back("anna", 61_000);
+  assert.equal((await post("/users/anna/email/code", "anna")).status, 200);
+  code = codeIn(inbox[inbox.length - 1])!;
+  const wrong = code === "000000" ? "111111" : "000000";
+  // Every guess reads the account before any of them writes.
+  const restore = holdUntil(store, "findUser", 20);
+  let answers: { status: number; body: any }[];
+  try {
+    answers = await Promise.all(Array.from({ length: 20 }, () => post("/users/anna/email/verify", "anna", { code: wrong })));
+  } finally {
+    restore();
+  }
+  const counted = answers.filter((a) => a.body.code === "EMAIL_CODE_WRONG" || /not right/.test(a.body.error ?? ""));
+  assert.equal(counted.length, 5, `${counted.length} guesses were checked against the code`);
+  assert.equal((await store.findUser("anna"))!.emailCode!.attempts, 5);
+  assert.equal((await post("/users/anna/email/verify", "anna", { code })).body.code, "EMAIL_CODE_EXPIRED", "the right code after five wrong ones no longer works");
 });
 
 await t("the right code confirms the email, once", async () => {

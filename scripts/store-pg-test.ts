@@ -18,7 +18,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import pg from "pg";
 import { conditionalWriteSuite, storeSuite } from "./_store-suite.js";
-import { mapSeq } from "../services/api/src/seq.js";
 
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-store-pg-")), "db.json");
 
@@ -69,7 +68,7 @@ try {
 
   await s.addSafeOp({ id: "so_race", orgId: "org_race", state: "PENDING", signatures: [], dropped: [], createdAt: now, updatedAt: now } as any);
   const owners = Array.from({ length: 5 }, (_, i) => ({ memberId: `m${i}`, ownerAddress: `0x${String(i).repeat(40)}`, signature: "0x", signedAt: now }));
-  const signed = await Promise.all(await mapSeq(owners, async (o) => await s.addSafeOpSignature("so_race", o as any)));
+  const signed = await Promise.all(owners.map(async (o) => await s.addSafeOpSignature("so_race", o as any)));
   assert.ok(signed.every(Boolean));
   assert.equal((await s.findSafeOp("so_race"))?.signatures.length, 5, "5 owners signing at once: every signature lands");
 
@@ -101,7 +100,7 @@ try {
     await s.addTransfer({ id, userId: "u_race", quoteId: `q-${id}`, state: "MANUAL_REVIEW", txs: [], createdAt: now, updatedAt: now } as any);
   }
   const refund = { state: "REFUNDED" as const, note: "Refunded by hand after checking the chain.", by: "op", evidence: `0x${"4f".repeat(32)}`, refund: { amountEur: 1, movedEur: 1 } };
-  const results = await Promise.all(await mapSeq(["t_ref_a", "t_ref_b"], async (id) => await srr.resolveTransferReview(id, refund)));
+  const results = await Promise.all(["t_ref_a", "t_ref_b"].map(async (id) => await srr.resolveTransferReview(id, refund)));
   assert.equal(results.filter((r) => r.ok).length, 1, "one refund tx, one transfer");
   assert.ok(results.some((r) => !r.ok && r.code === "EVIDENCE_ON_RECORD"));
   console.log("ok - parallel: one authorization claim, every Safe op signature, one deposit row, one refund tx per transfer");
