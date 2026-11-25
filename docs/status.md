@@ -151,9 +151,9 @@ Say this plainly rather than letting the surface imply otherwise:
   Monerium's sandbox or production, and no org Safe EIP-1271 redeem signature
   has been checked by Monerium. Pending orders are re-read only when Settings
   lists the payouts (five a call); there is no poller. A payout is booked in
-  the company's statement only once Monerium reports it processed. A company
-  bank run (several payees from one draft) is still refused with
-  `COMPANY_BANK_PAYOUT_NOT_BUILT`.
+  the company's statement only once Monerium reports it processed. A payment
+  run with bank payees, even one, is still refused for a company with
+  `COMPANY_BANK_RUN_NOT_BUILT`.
   The check gates sending only: invoices and pay links still receive into
   an account whose profile has not been checked.
 - **The VIES lookup of a customer's VAT ID** (`adapters/vies.ts`) has run
