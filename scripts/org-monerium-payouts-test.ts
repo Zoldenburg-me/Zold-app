@@ -139,6 +139,8 @@ const freshMon = () => ({
   orders: {} as Record<string, any>,
   orderError: undefined as any,
   during: undefined as undefined | { call: string; act: () => void },
+  /** Awaited inside placeOrder: another request runs to its end meanwhile. */
+  wait: undefined as undefined | (() => Promise<void>),
 });
 const meanwhile = (name: string) => {
   if (mon.during?.call === name) { const act = mon.during.act; mon.during = undefined; act(); }
@@ -153,6 +155,7 @@ const client = {
   async placeOrder(body: any) {
     mon.attempts++;
     meanwhile("place");
+    if (mon.wait) { const w = mon.wait; mon.wait = undefined; await w(); }
     if (mon.placeError) throw mon.placeError;
     mon.placed.push(body);
     return mon.placeAnswer ?? { id: "ord_1", meta: { state: "pending" } };
@@ -551,6 +554,32 @@ try {
     assert.equal(line.statement!.event, "sepa_out");
     assert.equal(line.statement!.reference, "INV-7");
     assert.equal(line.statement!.counterparty.iban, OTHER_IBAN);
+  });
+
+  await check("Monerium's processing time is kept and is the statement's value date; the sweep books a payout-only account", async () => {
+    reset();
+    mon.placeAnswer = { id: "ord_late", meta: { state: "pending" } };
+    assert.equal((await pay({ amountEur: 75 })).status, 200);
+    mon.orders = { ord_late: { id: "ord_late", meta: { state: "processed", processedAt: "2026-10-31T22:30:00Z" } } };
+    await call("GET", "/org_co/monerium/payouts", "u_adam");
+    const p = payouts()[0];
+    assert.equal(p.state, "sent");
+    assert.equal(p.processedAt, "2026-10-31T22:30:00.000Z");
+    const { writeStatementLines } = await import("../services/api/src/bookkeeping/writer.js");
+    writeStatementLines();
+    const line = store.ledgerOf("org_co").find((e) => e.statement?.key === `org-payout:${p.id}`);
+    assert.ok(line, "an account with only a payout is still swept");
+    assert.equal(line!.statement!.valueDate, "2026-10-31", "the day Monerium processed it, not the day Zold read it");
+  });
+
+  await check("a payout being answered by Monerium is not counted twice against the next one", async () => {
+    reset();
+    bal = 100;
+    let r: any;
+    // A second payout is started while Monerium is still answering the first.
+    mon.wait = async () => { r = await call("POST", "/org_co/monerium/payouts/start", "u_anna", input({ amountEur: 40 })); };
+    assert.equal((await pay({ amountEur: 60 })).status, 200);
+    assert.equal(r.status, 201, `60 held once leaves 40: ${r.text}`);
   });
 
   await check("Settings words: pending is not sent, unclear says to check, the IBAN is masked", () => {

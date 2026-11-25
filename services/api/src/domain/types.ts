@@ -360,6 +360,9 @@ export interface CompanyBankPayout {
   orderId?: string;
   /** Monerium's own order state, as last read. */
   providerState?: string;
+  /** When Monerium processed it (its `meta.processedAt`), once `sent`: the
+   *  statement's value date, not the day Zold first read it. */
+  processedAt?: string;
   /** A fixed explanation for `failed` or `unknown`; never Monerium's body. */
   error?: string;
   createdAt: string;

@@ -87,6 +87,12 @@ class Refusal extends Error {
 
 const low = (a: string) => a.toLowerCase();
 
+/** Monerium's processing time of an order, when it gives a valid one. */
+const processedAtOf = (order: any): string | undefined => {
+  const t = order?.meta?.processedAt;
+  return typeof t === "string" && Number.isFinite(Date.parse(t)) ? new Date(t).toISOString() : undefined;
+};
+
 /** A Monerium failure as an answer: its response body stays out of the
  *  browser and the log, only the status is logged. */
 function moneriumFailure(what: string, err: unknown): Refusal {
@@ -510,6 +516,9 @@ export function createOrgMoneriumPayoutRoutes(
         updatedAt: at,
       };
       writePayout(s.account.id, payout);
+      // The row holds the euros now: the approval's own hold is let go, so a
+      // second payout is not refused for money counted twice.
+      pendingPayouts.delete(requestId);
       const audit = (kind: "org_payout.placed" | "org_payout.sent" | "org_payout.refused" | "org_payout.unknown", extra: Record<string, unknown>) =>
         store.audit(auditEntry(kind, { orgId: ctx.org.id, accountId: s.account.id, payoutId: payout.id, amountEur: payout.amountEur, safeAddress: payout.safeAddress, ...extra }, ctx.userId));
       try {
@@ -537,9 +546,11 @@ export function createOrgMoneriumPayoutRoutes(
           return res.status(202).json({ payout: publicPayout(payoutOf(s.account.id, payout.id)) });
         }
         const state = payoutStateOf(providerState);
+        const processedAt = state === "sent" ? processedAtOf(order) : undefined;
         patchPayout(s.account.id, payout.id, {
           orderId,
           ...(providerState ? { providerState } : {}),
+          ...(processedAt ? { processedAt } : {}),
           state,
           error: state === "failed" ? "Monerium rejected the payout order. Nothing was sent." : undefined,
         });
@@ -600,8 +611,10 @@ export function createOrgMoneriumPayoutRoutes(
           const providerState = typeof order?.meta?.state === "string" ? order.meta.state : typeof order?.state === "string" ? order.state : undefined;
           if (!providerState || providerState === p.providerState) continue;
           const state = payoutStateOf(providerState);
+          const processedAt = state === "sent" ? processedAtOf(order) : undefined;
           patchPayout(account.id, p.id, {
             providerState,
+            ...(processedAt ? { processedAt } : {}),
             state,
             ...(state === "failed" ? { error: "Monerium rejected the payout order. Nothing was sent." } : {}),
           });

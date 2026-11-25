@@ -279,7 +279,7 @@ function companyPayoutLines(inp: StatementInputs): LineDraft[] {
       event: "sepa_out",
       key: `org-payout:${p.id}`,
       bookingAt: p.createdAt,
-      valueAt: p.updatedAt,
+      valueAt: p.processedAt ?? p.updatedAt,
       amountCents: -cents(p.amountEur),
       counterparty: { name: p.recipientName, iban: p.recipientIban },
       reference: referenceFor([p.reference, p.memo], p.orderId),

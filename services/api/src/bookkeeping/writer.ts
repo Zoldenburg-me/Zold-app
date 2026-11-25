@@ -275,7 +275,8 @@ export function writeStatementLines(): { added: number; updated: number } {
         }
       }
       for (const a of store.accounts) {
-        if (!a.address || (!rows.issueOrdersOfAccount(a.id).length && !rows.cryptoSendsOfAccount(a).length)) continue;
+        const paidOut = (a.moneriumPayouts ?? []).some((p) => p.state === "sent");
+        if (!a.address || (!rows.issueOrdersOfAccount(a.id).length && !rows.cryptoSendsOfAccount(a).length && !paidOut)) continue;
         try {
           const r = writeAccountStatementLines(a, rows);
           added += r.added;
