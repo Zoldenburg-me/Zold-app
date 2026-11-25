@@ -76,7 +76,7 @@ export async function buildTransferFromQuote(
   try {
     return await prepareTransferFromQuote(quote, recipient, hold);
   } finally {
-    if (hold.id) store.releaseCapHold(hold.id);
+    if (hold.id) await store.releaseCapHold(hold.id);
   }
 }
 
@@ -92,7 +92,7 @@ async function prepareTransferFromQuote(
 ): Promise<TransferBuildResult> {
   const { res, out } = responseCollector();
   const { recipientName, recipientPhone, recipientIban, reference } = recipient;
-    const user = store.findUser(quote.userId)!;
+    const user = (await store.findUser(quote.userId))!;
     if (!requireKycApproved(user, res)) return out;
     const balances = await accountBalances(user.address);
     const fundingSource: Transfer["fundingSource"] = "safe";
@@ -154,8 +154,8 @@ async function prepareTransferFromQuote(
      * live Bridge transfer is created — a refusal here leaves no spent quote
      * and no unfunded transfer at Bridge behind it.
      */
-    const held = store.holdDailyCap(user.id, transfer.sendEur, FX.DAILY_CAP_EUR, () =>
-      safeFundedEurToday(user.id),
+    const held = await store.holdDailyCap(user.id, transfer.sendEur, FX.DAILY_CAP_EUR, async () =>
+      await safeFundedEurToday(user.id),
     );
     if (!held.ok) {
       return res.status(409).json({
@@ -166,7 +166,7 @@ async function prepareTransferFromQuote(
       });
     }
     hold.id = held.holdId;
-    if (!store.consumeQuote(quote.id)) {
+    if (!(await store.consumeQuote(quote.id))) {
       return res.status(409).json({ error: "quote already consumed" });
     }
     // Fix the exact terms the device is asked to sign. Nothing moves until a
@@ -367,7 +367,7 @@ async function prepareTransferFromQuote(
     }
     transfer.custody = custody;
     // The hold taken before any partner call becomes this row, in one step.
-    store.addTransferUnderHold(transfer, held.holdId);
+    await store.addTransferUnderHold(transfer, held.holdId);
     return {
       ok: true as const,
       transfer,

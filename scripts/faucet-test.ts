@@ -80,7 +80,7 @@ try {
   const { abis, addrs, eur, publicClient, writeAndWait, deployerWallet, faucetWallet } = await import("../services/api/src/chain.js");
   const { faucetEnabled, faucetFundSafe, drip, dripTokens } = await import("../services/api/src/faucet.js");
   const { capabilities } = await import("../services/api/src/capabilities.js");
-  initStore();
+  await initStore();
   assert.ok(faucetWallet, "faucet wallet missing");
   const faucetAddress = faucetWallet.account.address;
 
@@ -89,7 +89,7 @@ try {
   const mintToFaucet = (amount: number) =>
     writeAndWait(deployerWallet!, { address: addrs().eure, abi: abis.MockToken, functionName: "mint", args: [faucetAddress, eur.toWei(amount)] });
 
-  function addUser(name: string, opts: { address?: `0x${string}`; deployed?: boolean } = {}) {
+  async function addUser(name: string, opts: { address?: `0x${string}`; deployed?: boolean } = {}) {
     const user = {
       id: randomUUID(),
       name,
@@ -100,21 +100,21 @@ try {
       createdAt: new Date().toISOString(),
       ...(opts.deployed === false ? {} : { wallet: { type: "candide-safe", deployed: true } }),
     } as any;
-    store.addUser(user);
+    await store.addUser(user);
     return user;
   }
 
   console.log("2/6 a deployed Safe gets exactly the grant, from the faucet wallet…");
   check("faucet is enabled on a local chain with a key and a grant", faucetEnabled());
-  check("/api/health advertises the grant", capabilities().faucetEur === 50);
+  check("/api/health advertises the grant", (await capabilities()).faucetEur === 50);
   check("the faucet wallet is not the deployer", faucetAddress.toLowerCase() !== deployerWallet!.account.address.toLowerCase());
   await mintToFaucet(60);
   const deployerBefore = await balanceOf(deployerWallet!.account.address);
-  const alice = addUser("Faucet Alice");
+  const alice = await addUser("Faucet Alice");
   const a1 = await faucetFundSafe(alice.id);
   check("50 EURe arrived at the Safe", a1.ok && (await balanceOf(alice.address)) === 50);
   check("it came out of the faucet wallet", (await balanceOf(faucetAddress)) === 10 && (await balanceOf(deployerWallet!.account.address)) === deployerBefore);
-  const rec = store.findUser(alice.id)?.faucet;
+  const rec = (await store.findUser(alice.id))?.faucet;
   check("the grant is recorded with its tx hash", rec?.grantedEur === 50 && /^0x[0-9a-f]{64}$/i.test(rec?.txHash ?? ""));
 
   console.log("3/6 a second call pays nothing, a parallel pair pays once…");
@@ -122,18 +122,18 @@ try {
   check("a repeat call is ALREADY_GRANTED", !a2.ok && a2.code === "ALREADY_GRANTED");
   check("the balance is unchanged after a repeat call", (await balanceOf(alice.address)) === 50);
   await mintToFaucet(200);
-  const carol = addUser("Faucet Carol");
+  const carol = await addUser("Faucet Carol");
   const pair = await Promise.all([faucetFundSafe(carol.id), faucetFundSafe(carol.id)]);
   check("two parallel claims pay exactly once", pair.filter((r) => r.ok).length === 1 && (await balanceOf(carol.address)) === 50);
 
   console.log("4/6 a dry faucet refuses, and a top-up can retry…");
   // 210 - 50 (Carol) = 160 left; drain to below one grant.
-  const dave = addUser("Faucet Dave"), erin = addUser("Faucet Erin"), finn = addUser("Faucet Finn");
+  const dave = await addUser("Faucet Dave"), erin = await addUser("Faucet Erin"), finn = await addUser("Faucet Finn");
   for (const u of [dave, erin, finn]) await faucetFundSafe(u.id);
-  const bob = addUser("Faucet Bob");
+  const bob = await addUser("Faucet Bob");
   const b1 = await faucetFundSafe(bob.id);
   check("a dry faucet answers FAUCET_DRY and sends nothing", !b1.ok && b1.code === "FAUCET_DRY" && (await balanceOf(bob.address)) === 0);
-  check("the claim was released so a retry stays possible", store.findUser(bob.id)?.faucet === undefined);
+  check("the claim was released so a retry stays possible", (await store.findUser(bob.id))?.faucet === undefined);
   await mintToFaucet(100);
   const b2 = await faucetFundSafe(bob.id);
   check("after a top-up the same account is funded", b2.ok && (await balanceOf(bob.address)) === 50);
@@ -142,23 +142,23 @@ try {
   // The RPC drops while waiting for the receipt, after the transfer is out.
   const realWait = publicClient.waitForTransactionReceipt;
   (publicClient as any).waitForTransactionReceipt = async () => { throw new Error("receipt wait timed out"); };
-  const gus = addUser("Faucet Gus");
+  const gus = await addUser("Faucet Gus");
   let g1: Awaited<ReturnType<typeof faucetFundSafe>>;
   try { g1 = await faucetFundSafe(gus.id); } finally { (publicClient as any).waitForTransactionReceipt = realWait; }
-  const kept = store.findUser(gus.id)?.faucet;
+  const kept = (await store.findUser(gus.id))?.faucet;
   check("the claim keeps the sent tx hash", g1.ok && /^0x[0-9a-f]{64}$/i.test(kept?.txHash ?? ""));
   const g2 = await faucetFundSafe(gus.id);
   check("a retry pays nothing: the account was paid once", !g2.ok && g2.code === "ALREADY_GRANTED" && (await balanceOf(gus.address)) === 50);
 
   console.log("5/6 accounts without a Safe are refused…");
-  const noSafe = addUser("No-Safe Nia", { deployed: false });
+  const noSafe = await addUser("No-Safe Nia", { deployed: false });
   const n = await faucetFundSafe(noSafe.id);
-  check("an undeployed Safe answers NO_SAFE", !n.ok && n.code === "NO_SAFE" && store.findUser(noSafe.id)?.faucet === undefined);
+  check("an undeployed Safe answers NO_SAFE", !n.ok && n.code === "NO_SAFE" && (await store.findUser(noSafe.id))?.faucet === undefined);
   const u = await faucetFundSafe("no-such-user");
   check("an unknown user answers NO_SAFE", !u.ok && u.code === "NO_SAFE");
-  const zero = addUser("Zero Zoe", { address: "0x0000000000000000000000000000000000000000" });
+  const zero = await addUser("Zero Zoe", { address: "0x0000000000000000000000000000000000000000" });
   const z = await faucetFundSafe(zero.id);
-  check("a zero address is never funded", !z.ok && store.findUser(zero.id)?.faucet === undefined);
+  check("a zero address is never funded", !z.ok && (await store.findUser(zero.id))?.faucet === undefined);
 
   console.log("5b/6 the public drip: any address, chosen token, limits…");
   await writeAndWait(deployerWallet!, { address: addrs().usdc, abi: abis.MockToken, functionName: "mint", args: [faucetAddress, 100_000_000n] }); // 100 USDC
@@ -166,7 +166,7 @@ try {
   const usdcOf = async (who: `0x${string}`) =>
     Number((await publicClient.readContract({ address: addrs().usdc, abi: abis.MockToken, functionName: "balanceOf", args: [who] })) as bigint) / 1e6;
   check("the page lists EURe, USDC and the configured extra token", dripTokens().map((t) => t.symbol).join(",") === "EURe,USDC,USDX");
-  check("/api/health advertises the drip tokens", capabilities().faucetTokens.join(",") === "EURe,USDC,USDX");
+  check("/api/health advertises the drip tokens", (await capabilities()).faucetTokens.join(",") === "EURe,USDC,USDX");
   const payer = `0x${randomBytes(20).toString("hex")}` as `0x${string}`;
   const d1 = await drip(payer, "eure", "10.0.0.1");
   check("a drip sends the chosen token to any address", d1.ok && (await balanceOf(payer)) === 5);

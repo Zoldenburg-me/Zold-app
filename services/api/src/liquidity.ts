@@ -73,7 +73,7 @@ export function liquidityProvider(): LiquidityProvider {
 }
 
 export async function executeTransferLiquidity(transfer: Transfer): Promise<LiquidityExecution> {
-  const storedQuote = store.findQuote(transfer.quoteId);
+  const storedQuote = await store.findQuote(transfer.quoteId);
   const quote = transfer.liquidity
     ? hydrateQuote(transfer.liquidity)
     : await liquidityProvider().quote(
@@ -92,7 +92,7 @@ export async function executeTransferLiquidity(transfer: Transfer): Promise<Liqu
 
 export async function prepareTransferLiquidity(transfer: Transfer): Promise<NonNullable<Transfer["liquidity"]>> {
   if (transfer.liquidity) return transfer.liquidity;
-  const storedQuote = store.findQuote(transfer.quoteId);
+  const storedQuote = await store.findQuote(transfer.quoteId);
   const quote = await liquidityProvider().quote(
     "EURE_TO_USDC",
     eur.toWei(transfer.sendEur - railFeeEur("cash")),
@@ -120,7 +120,7 @@ export async function prepareSafeSwapForTransfer(
 ): Promise<{ plan: SafeSwapPlan; serialized: NonNullable<Transfer["liquidity"]> } | null> {
   const provider = liquidityProvider();
   if (!provider.safeSwapPlan) return null;
-  const storedQuote = store.findQuote(transfer.quoteId);
+  const storedQuote = await store.findQuote(transfer.quoteId);
   const plan = await provider.safeSwapPlan(
     "EURE_TO_USDC",
     eur.toWei(transfer.sendEur - railFeeEur("cash")),

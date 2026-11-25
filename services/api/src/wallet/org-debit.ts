@@ -19,6 +19,7 @@ import { OrgSafePlanRefusal, orgSafePlan } from "../domain/org-safe-plan.js";
 import { assertReadableSafeState } from "../domain/safe-op-queue.js";
 import { prepareSafeOperation, webauthnOwnerFromJwk, type PreparedSafeOperation } from "./candide.js";
 import { liveOrgSafeReader, ownerAddressOfMember, type OrgSafeReader } from "./org-signers.js";
+import { filterSeq, mapSeq } from "../seq.js";
 
 export class OrgDebitRefusal extends Error {
   constructor(readonly status: number, readonly code: string, message: string) {
@@ -65,25 +66,24 @@ export async function orgDebitSigners(org: Organisation, plan: OrgSafePlan, read
   const chain = await reader.read(plan.address);
   assertReadableSafeState(plan.address, chain);
   const byOwner = new Map<string, Member[]>();
-  for (const m of store.membersOf(org.id)) {
+  for (const m of (await store.membersOf(org.id))) {
     if (m.status !== "active" || m.role !== "owner") continue;
-    const a = ownerAddressOfMember(m);
+    const a = await ownerAddressOfMember(m);
     if (!a || !chain.owners.some((o) => low(o) === low(a))) continue;
     byOwner.set(low(a), [...(byOwner.get(low(a)) ?? []), m]);
   }
   if ([...byOwner.values()].some((ms) => ms.length > 1)) {
     throw new OrgDebitRefusal(409, "AMBIGUOUS_SIGNER", "Two members of this company sign with the same passkey, so Zold cannot tell who signs. Nothing was created.");
   }
-  const deployed = (m: Member) => !!m.signerAddress && low(m.signerAddress) === low(ownerAddressOfMember(m)!);
-  const members = chain.owners
-    .map((o) => byOwner.get(low(o))?.[0])
-    .filter((m): m is Member => !!m)
-    .sort((a, b) => Number(deployed(b)) - Number(deployed(a)));
+  const deployed = async (m: Member) => !!m.signerAddress && low(m.signerAddress) === low((await ownerAddressOfMember(m))!);
+  const candidates = chain.owners.map((o) => byOwner.get(low(o))?.[0]).filter((m): m is Member => !!m);
+  const isDeployed = new Map(await mapSeq(candidates, async (m) => [m.id, await deployed(m)] as const));
+  const members = candidates.sort((a, b) => Number(isDeployed.get(b.id)) - Number(isDeployed.get(a.id)));
   if (members.length < chain.threshold) {
     throw new OrgDebitRefusal(409, "NOT_ENOUGH_SIGNERS", `The company’s Safe needs ${chain.threshold} owner signature${chain.threshold === 1 ? "" : "s"}, and ${members.length} of its owners sign with a passkey here. Nothing was created.`);
   }
   // ownerAddressOfMember found a P-256 login passkey for each of these.
-  return members.slice(0, chain.threshold).map((m) => webauthnOwnerFromJwk(store.findUser(m.userId!)!.passkey!.publicKey!.jwk!)!);
+  return await mapSeq(members.slice(0, chain.threshold), async (m) => webauthnOwnerFromJwk((await store.findUser(m.userId!))!.passkey!.publicKey!.jwk!)!);
 }
 
 export type OrgDebitPrepare = (plan: OrgSafePlan, txs: MetaTransaction[], signers: WebauthnPublicKey[]) => Promise<PreparedSafeOperation & { nonce: bigint }>;
@@ -146,9 +146,9 @@ export function orgOpOutcome(op: PendingSafeOp | undefined, now = Date.now()): O
  * never leaves: a receipt check (settleUnconfirmedCryptoSends) writes what the
  * chain said onto the send, and that answer is used.
  */
-export function liveCryptoSend(send: CryptoSend, now = Date.now()): CryptoSend {
+export async function liveCryptoSend(send: CryptoSend, now = Date.now()): Promise<CryptoSend> {
   if (!send.safeOpId) return send;
-  const op = store.findSafeOp(send.safeOpId);
+  const op = await store.findSafeOp(send.safeOpId);
   const o = orgOpOutcome(op, now);
   const settled = op?.state === "MANUAL_REVIEW" && (send.state === "SENT" || send.state === "FAILED");
   if (settled) return send;
@@ -169,10 +169,8 @@ export const orgSafeCapKey = (safeAddress: string) => `org-safe:${low(safeAddres
 
 /** Euros sent or held today from this org Safe. A send whose op ended any way
  *  but executed (or may have) stops counting, so its hold is given back. */
-export function orgSafeSpentEurToday(safeAddress: string, now = new Date()): number {
+export async function orgSafeSpentEurToday(safeAddress: string, now = new Date()): Promise<number> {
   const day = now.toISOString().slice(0, 10);
-  return store.heldEurToday(orgSafeCapKey(safeAddress), day) + store.cryptoSends
-    .filter((c) => c.safeOpId && c.createdAt.slice(0, 10) === day && low(store.findSafeOp(c.safeOpId)?.safeAddress ?? "") === low(safeAddress))
-    .filter((c) => liveCryptoSend(c, now.getTime()).state !== "FAILED")
+  return (await store.heldEurToday(orgSafeCapKey(safeAddress), day)) + (await filterSeq((await filterSeq((await store.list("cryptoSends")), async (c) => c.safeOpId && c.createdAt.slice(0, 10) === day && low((await store.findSafeOp(c.safeOpId))?.safeAddress ?? "") === low(safeAddress))), async (c) => (await liveCryptoSend(c, now.getTime())).state !== "FAILED"))
     .reduce((sum, c) => sum + c.capEur, 0);
 }

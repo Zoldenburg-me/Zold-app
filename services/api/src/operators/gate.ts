@@ -67,11 +67,11 @@ function auditOnFinish(req: express.Request, res: express.Response, who: Operato
   if (read && !readAuditDue(key, Date.now())) return;
   const userId = /^\/users\/([^/]+)/i.exec(asSent)?.[1];
   let written = false;
-  const write = () => {
+  const write = async () => {
     if (written) return;
     written = true;
     if (read) lastReadAudit.set(key, Date.now());
-    store.audit(auditEntry("operator.request", {
+    await store.audit(auditEntry("operator.request", {
       operator: `operator:${who.id}`,
       operatorName: who.name,
       method: req.method,
@@ -111,7 +111,7 @@ async function admit(req: express.Request, res: express.Response): Promise<boole
     return false;
   }
 
-  const found = operatorSessionFor(bearerToken(req));
+  const found = await operatorSessionFor(bearerToken(req));
   if ("refused" in found) {
     res.status(401).json({ error: found.refused, code: "OPERATOR_SIGN_IN" });
     return false;
@@ -130,8 +130,8 @@ async function admit(req: express.Request, res: express.Response): Promise<boole
       if (!(err instanceof StepUpRefusal)) throw err;
       recordFailure(key, STEP_UP_FAILURE_WINDOW_MS);
       const locked = tooManyFailures(key, STEP_UP_FAILURES_MAX);
-      if (locked) store.revokeOperatorSession(session.id);
-      store.audit(auditEntry("operator.step_up_refused", {
+      if (locked) await store.revokeOperatorSession(session.id);
+      await store.audit(auditEntry("operator.step_up_refused", {
         operator: `operator:${operator.id}`, operatorName: operator.name, method: req.method,
         path: `/api/admin${req.path}`, code: err.code, ...(locked ? { sessionRevoked: true } : {}),
       }));
@@ -141,7 +141,7 @@ async function admit(req: express.Request, res: express.Response): Promise<boole
       return false;
     }
   }
-  store.touchOperatorSession(session.id);
+  await store.touchOperatorSession(session.id);
   const who: OperatorPrincipal = { id: operator.id, name: operator.name, sessionId: session.id };
   setOperator(req, who);
   auditOnFinish(req, res, who);

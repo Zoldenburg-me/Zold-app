@@ -57,7 +57,7 @@ const check = (name: string, fn: () => void | Promise<void>) =>
     .then(() => { passed++; console.log(`  ok  ${name}`); })
     .catch((err) => { console.error(`FAIL  ${name}\n      ${(err as Error).stack ?? err}`); process.exitCode = 1; });
 
-initStore();
+await initStore();
 const NOW = new Date().toISOString();
 // The issue date is the day in the org's reporting zone (org_1: Europe/Berlin), not the UTC day.
 const TODAY = dayOf(NOW, "Europe/Berlin");
@@ -72,42 +72,42 @@ const ARB = `0x${"a7".repeat(20)}` as `0x${string}`;
 const H = (n: number) => `0x${n.toString(16).padStart(64, "0")}`;
 const reporting = { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" } as const;
 
-const addOrg = (id: string, plan: string, over: Record<string, unknown> = {}) =>
-  store.addOrganisation({
+const addOrg = async (id: string, plan: string, over: Record<string, unknown> = {}) =>
+  await store.addOrganisation({
     id, type: "business", name: "Zoldenburg", legalName: "Zoldenburg UG (haftungsbeschränkt)", plan, reporting,
     address: { line1: "Hauptstraße 1", postalCode: "93047", city: "Regensburg", country: "DE" },
     invoicing: { vatId: "DE123456789" }, verifications: {}, createdAt: NOW, updatedAt: NOW, ...over,
   } as any);
-addOrg("org_1", "business");
-addOrg("org_2", "business");
-addOrg("org_free", "starter");
+await addOrg("org_1", "business");
+await addOrg("org_2", "business");
+await addOrg("org_free", "starter");
 for (const id of ["u_owner", "u_viewer", "u_outsider"]) {
-  store.addUser({ id, name: id, country: "DE", kycStatus: "approved", createdAt: NOW } as any);
+  await store.addUser({ id, name: id, country: "DE", kycStatus: "approved", createdAt: NOW } as any);
 }
-const member = (id: string, orgId: string, userId: string, role: string) =>
-  store.addMember({ id, orgId, userId, email: "", role, status: "active", invitedAt: NOW, acceptedAt: NOW } as any);
-member("m_owner", "org_1", "u_owner", "owner");
-member("m_viewer", "org_1", "u_viewer", "viewer");
-member("m_owner2", "org_2", "u_owner", "owner");
-member("m_free", "org_free", "u_owner", "owner");
+const member = async (id: string, orgId: string, userId: string, role: string) =>
+  await store.addMember({ id, orgId, userId, email: "", role, status: "active", invitedAt: NOW, acceptedAt: NOW } as any);
+await member("m_owner", "org_1", "u_owner", "owner");
+await member("m_viewer", "org_1", "u_viewer", "viewer");
+await member("m_owner2", "org_2", "u_owner", "owner");
+await member("m_free", "org_free", "u_owner", "owner");
 
-const addContact = (id: string, orgId: string, name: string, addresses: string[]) =>
-  store.addContact({
+const addContact = async (id: string, orgId: string, name: string, addresses: string[]) =>
+  await store.addContact({
     id, orgId, name, wallets: addresses.map((address, i) => ({ id: `w_${id}_${i}`, chainId: 1, address: address as `0x${string}` })),
     bankAccounts: [], createdAt: NOW, updatedAt: NOW,
   });
-addContact("c_dao", "org_1", "Example DAO", [DAO, STREAM, SHARED]);
-addContact("c_other", "org_1", "Other DAO", [OTHER_DAO, SHARED]);
-addContact("c_norule", "org_1", "No Rule DAO", [NO_RULE]);
-addContact("c_dao2", "org_2", "Example DAO", [DAO]);
-addContact("c_free", "org_free", "Example DAO", [DAO]);
+await addContact("c_dao", "org_1", "Example DAO", [DAO, STREAM, SHARED]);
+await addContact("c_other", "org_1", "Other DAO", [OTHER_DAO, SHARED]);
+await addContact("c_norule", "org_1", "No Rule DAO", [NO_RULE]);
+await addContact("c_dao2", "org_2", "Example DAO", [DAO]);
+await addContact("c_free", "org_free", "Example DAO", [DAO]);
 
 // Each organisation's wallet, proven: only a proven wallet's receipts are
 // invoiced (wallet-proof-test.ts covers the proof itself).
 for (const [id, orgId, key] of [["iw_1", "org_1", `0x${"a1".repeat(32)}`], ["iw_org2", "org_2", `0x${"a2".repeat(32)}`]] as const) {
   const owner = privateKeyToAccount(key as `0x${string}`);
   const message = `proof for ${orgId}`;
-  store.addImportedWallet({
+  await store.addImportedWallet({
     id, orgId, address: owner.address.toLowerCase() as `0x${string}`, chainId: 1, label: "Treasury", kind: "eoa", custody: "external",
     sync: { status: "synced", lastSyncedAt: NOW },
     ownership: { status: "proven", method: "ecdsa", message, signature: await owner.signMessage({ message }), provenAt: NOW, checkedAt: NOW },
@@ -185,7 +185,7 @@ await check("a rule without a description, without a tax line, or with a rate th
     const r = await call("PUT", "/org_1/contacts/c_other/payer-rule", bad);
     assert.equal(r.status, 400, JSON.stringify(bad));
   }
-  assert.equal(store.findContact("c_other")!.payerRule, undefined);
+  assert.equal((await store.findContact("c_other"))!.payerRule, undefined);
 });
 
 await check("no membership is 404 and a viewer is 403; an org with no plan may use invoices", async () => {
@@ -196,7 +196,7 @@ await check("no membership is 404 and a viewer is 403; an org with no plan may u
   assert.equal((await call("POST", "/org_1/income-invoices/inv_x/issue", {}, "u_viewer")).status, 403);
   assert.equal((await call("DELETE", "/org_1/contacts/c_dao/payer-rule", undefined, "u_viewer")).status, 403);
   assert.equal((await call("PUT", "/org_free/contacts/c_free/payer-rule", RULE)).status, 200);
-  assert.ok(store.findContact("c_dao")!.payerRule, "a refused removal removes nothing");
+  assert.ok((await store.findContact("c_dao"))!.payerRule, "a refused removal removes nothing");
 });
 
 await check("another organisation's contact cannot be given a rule through this one", async () => {
@@ -205,7 +205,7 @@ await check("another organisation's contact cannot be given a rule through this 
 
 console.log("\nWhich rows land on the month's draft");
 
-store.addLedgerEntries([
+await store.addLedgerEntries([
   row({ id: "r_usdc", at: "2026-08-10T10:00:00.000Z", amount: "1000", fiatValue: "800.00" }),
   row({ id: "r_arb", at: "2026-08-20T10:00:00.000Z", asset: "ARB", token: ARB, amount: "2500.5", fiatValue: "928.19", fiatRate: "0.3712" }),
   row({ id: "r_eure", at: "2026-08-25T10:00:00.000Z", asset: "EURe", amount: "50", fiatValue: "50.00", fiatRate: "1", tags: ["wallet", "e-money"] }),
@@ -244,13 +244,13 @@ await check("one draft per contact and month holds exactly that contact's valued
   assert.equal(august.issued, undefined, "a draft has no number and no issue date");
 });
 
-await check("a line names the date, token, quantity, EUR value at receipt and transaction", () => {
+await check("a line names the date, token, quantity, EUR value at receipt and transaction", async () => {
   const line = august.lines.find((l: any) => l.receipt.ledgerEntryId === "r_arb");
   assert.equal(line.receipt.asset, "ARB");
   assert.equal(line.receipt.amount, "2500.5");
   assert.equal(line.receipt.eurCents, 92819);
   assert.equal(line.receipt.at, "2026-08-20T10:00:00.000Z");
-  assert.equal(line.receipt.txHash, store.ledgerOf("org_1").find((e) => e.id === "r_arb")!.txHash);
+  assert.equal(line.receipt.txHash, (await store.ledgerOf("org_1")).find((e) => e.id === "r_arb")!.txHash);
   assert.equal(line.amount, "928.19", "the line is the receipt's EUR value, not quantity times a rounded unit price");
   for (const part of ["Delegate services", "2026-08-20", "2500.5 ARB", line.receipt.txHash]) {
     assert.ok(line.description.includes(part), `${line.description} should name ${part}`);
@@ -310,7 +310,7 @@ await check("running the month again changes nothing: same draft, same lines, no
 });
 
 await check("a row that has since been given a value joins the draft and leaves the not-included list", async () => {
-  store.updateLedgerEntry("r_unvalued", { fiatValue: "12.34", fiatCurrency: "EUR", fiatRate: "1.5", asset: "OP", tags: ["wallet"] });
+  await store.updateLedgerEntry("r_unvalued", { fiatValue: "12.34", fiatCurrency: "EUR", fiatRate: "1.5", asset: "OP", tags: ["wallet"] });
   await run("2026-08");
   const [d] = await draftsFor("c_dao", "2026-08");
   assert.ok(lineRows(d).includes("r_unvalued"));
@@ -319,7 +319,7 @@ await check("a row that has since been given a value joins the draft and leaves 
 });
 
 await check("a receipt synced before its address was in the address book is matched at the run, by the same exactly-one-contact rule", async () => {
-  store.addLedgerEntries([row({ id: "r_late_contact", at: "2026-08-05T10:00:00.000Z", fiatValue: "1.00", counterparty: { address: STREAM } })]);
+  await store.addLedgerEntries([row({ id: "r_late_contact", at: "2026-08-05T10:00:00.000Z", fiatValue: "1.00", counterparty: { address: STREAM } })]);
   await run("2026-08");
   const [d] = await draftsFor("c_dao", "2026-08");
   assert.ok(lineRows(d).includes("r_late_contact"));
@@ -336,13 +336,13 @@ await check("a second contact with a rule gets its own draft, and no row is on t
 });
 
 await check("a month that has not begun in the organisation's time zone, or is no month, is refused and creates nothing; the running month is collectable", async () => {
-  const before = store.invoicesOf("org_1").length;
+  const before = (await store.invoicesOf("org_1")).length;
   const [year, mon] = monthOf(NOW, "Europe/Berlin").split("-").map(Number);
   const next = mon === 12 ? `${year + 1}-01` : `${year}-${String(mon + 1).padStart(2, "0")}`;
   assert.equal((await run(next)).status, 400);
   assert.equal((await run(monthOf(NOW, "Europe/Berlin"))).status, 200);
   for (const bad of ["2026-13", "2026-8", "", "08/2026"]) assert.equal((await run(bad)).status, 400, bad);
-  assert.equal(store.invoicesOf("org_1").length, before);
+  assert.equal((await store.invoicesOf("org_1")).length, before);
 });
 
 console.log("\nMonth edges");
@@ -360,22 +360,22 @@ console.log("\nA draft is not an issued invoice");
 
 await check("no payment link can be made for a draft: its money has already arrived", async () => {
   // The member whose account backs the organisation, who could collect an issued invoice.
-  store.updateUser("u_owner", { paymentPage: { handle: "zoldenburg", depositAddress: `0x${"aa".repeat(20)}` } } as any);
-  store.addAccount({ id: "acc_1", orgId: "org_1", currency: "EUR", label: "main", status: "active", provider: "monerium", identifier: {}, backingUserId: "u_owner", createdAt: NOW, updatedAt: NOW } as any);
-  const user = store.users.find((u) => u.id === "u_owner")!;
+  await store.updateUser("u_owner", { paymentPage: { handle: "zoldenburg", depositAddress: `0x${"aa".repeat(20)}` } } as any);
+  await store.addAccount({ id: "acc_1", orgId: "org_1", currency: "EUR", label: "main", status: "active", provider: "monerium", identifier: {}, backingUserId: "u_owner", createdAt: NOW, updatedAt: NOW } as any);
+  const user = (await store.list("users")).find((u) => u.id === "u_owner")!;
   const expiresAt = new Date(Date.now() + 3600_000).toISOString();
   await assert.rejects(
     createPaymentRequest(user, { methods: ["bank"], expiresAt, invoiceId: august.id }, { kind: "app" }, "org_1"),
     (err: any) => err.status === 409 && /draft/i.test(err.message),
   );
-  assert.equal(store.paymentRequestsForUser("u_owner").length, 0);
+  assert.equal((await store.paymentRequestsForUser("u_owner")).length, 0);
 });
 
 await check("a draft cannot be paid or reconciled as if it were a supplier's invoice", async () => {
   const pay = await call("POST", `/org_1/invoices/${august.id}/pay`, {});
   assert.ok(pay.status === 400 || pay.status === 409, `pay answered ${pay.status}`);
   assert.equal((await call("POST", `/org_1/invoices/${august.id}/reconcile`, {})).status, 409);
-  assert.equal(store.findInvoice(august.id)?.state, "DRAFT");
+  assert.equal((await store.findInvoice(august.id))?.state, "DRAFT");
 });
 
 console.log("\nIssuing");
@@ -383,25 +383,25 @@ console.log("\nIssuing");
 let issued = {} as Invoice;
 
 await check("issuing refuses when a row on the draft has changed since the run, names it, and refreshes the draft", async () => {
-  store.updateLedgerEntry("r_eure", { tags: ["wallet", "e-money", "internal"] });
+  await store.updateLedgerEntry("r_eure", { tags: ["wallet", "e-money", "internal"] });
   const r = await call("POST", `/org_1/income-invoices/${august.id}/issue`, { acceptWarnings: true });
   assert.equal(r.status, 409, JSON.stringify(r.body));
   assert.deepEqual(r.body.changed, ["r_eure"]);
-  const d = store.findInvoice(august.id)!;
+  const d = (await store.findInvoice(august.id))!;
   assert.equal(d.state, "DRAFT");
   assert.ok(!lineRows(d).includes("r_eure"));
   assert.ok(d.fromReceipts!.excluded.some((x) => x.ledgerEntryId === "r_eure"));
 });
 
 await check("issuing gives the draft the next number and today's date, never the receipt month's, and the month as supply period", async () => {
-  const numberBefore = store.findOrganisation("org_1")!.invoicing?.numberSeries?.next ?? 1;
+  const numberBefore = (await store.findOrganisation("org_1"))!.invoicing?.numberSeries?.next ?? 1;
   const r = await call("POST", `/org_1/income-invoices/${august.id}/issue`, { acceptWarnings: true, issueDate: "2026-08-31" });
   assert.equal(r.status, 201, JSON.stringify(r.body));
-  issued = store.findInvoice(august.id)!;
+  issued = (await store.findInvoice(august.id))!;
   assert.equal(issued.issued!.issueDate, TODAY);
   assert.deepEqual(issued.issued!.supplyPeriod, { from: "2026-08-01", to: "2026-08-31" });
   assert.match(issued.issued!.number, /^RE-\d{4}-0001$/);
-  assert.equal(store.findOrganisation("org_1")!.invoicing!.numberSeries!.next, numberBefore + 1);
+  assert.equal((await store.findOrganisation("org_1"))!.invoicing!.numberSeries!.next, numberBefore + 1);
   assert.equal(issued.issued!.vatTreatment.kind, "exempt", "the rule's tax line, as chosen");
   assert.equal((issued.issued!.vatTreatment as { reason: string }).reason, "not_taxable_place_of_supply");
   assert.equal(issued.issued!.recipient.name, "Example DAO Foundation");
@@ -421,14 +421,14 @@ await check("an issued invoice cannot be issued again, and the client cannot sup
   const [other] = await draftsFor("c_other", "2026-08");
   const r = await call("POST", `/org_1/income-invoices/${other.id}/issue`, { acceptWarnings: true, lines: [{ description: "x", quantity: "1", unitPriceNet: "9999.00" }] });
   assert.equal(r.status, 201, JSON.stringify(r.body));
-  assert.equal(store.findInvoice(other.id)!.issued!.grossCents, 7000);
+  assert.equal((await store.findInvoice(other.id))!.issued!.grossCents, 7000);
 });
 
 await check("after issue the invoice is frozen: a re-run leaves it alone and puts a late receipt on a new draft for the same month", async () => {
-  const frozen = JSON.stringify(store.findInvoice(august.id));
-  store.addLedgerEntries([row({ id: "r_late", at: "2026-08-28T10:00:00.000Z", fiatValue: "3.00", amount: "3.75" })]);
+  const frozen = JSON.stringify(await store.findInvoice(august.id));
+  await store.addLedgerEntries([row({ id: "r_late", at: "2026-08-28T10:00:00.000Z", fiatValue: "3.00", amount: "3.75" })]);
   await run("2026-08");
-  assert.equal(JSON.stringify(store.findInvoice(august.id)), frozen);
+  assert.equal(JSON.stringify(await store.findInvoice(august.id)), frozen);
   const drafts = (await draftsFor("c_dao", "2026-08")).filter((i) => i.state === "DRAFT");
   assert.equal(drafts.length, 1);
   assert.notEqual(drafts[0].id, august.id);
@@ -441,7 +441,7 @@ await check("after issue the invoice is frozen: a re-run leaves it alone and put
 await check("a draft can be discarded; its rows are free for the next run, and the discarded draft is not shown", async () => {
   const [d] = (await draftsFor("c_dao", "2026-08")).filter((i) => i.state === "DRAFT");
   assert.equal((await call("DELETE", `/org_1/invoices/${d.id}`)).status, 200);
-  assert.equal(store.findInvoice(d.id)!.state, "DELETED", "discarding is a state, not a delete");
+  assert.equal((await store.findInvoice(d.id))!.state, "DELETED", "discarding is a state, not a delete");
   await run("2026-08");
   const again = (await draftsFor("c_dao", "2026-08")).filter((i) => i.state === "DRAFT");
   assert.equal(again.length, 1);
@@ -451,23 +451,23 @@ await check("a draft can be discarded; its rows are free for the next run, and t
 
 await check("an issued invoice with receipts against it cannot be deleted", async () => {
   assert.equal((await call("DELETE", `/org_1/invoices/${august.id}`)).status, 409);
-  assert.equal(store.findInvoice(august.id)!.state, "PAID");
+  assert.equal((await store.findInvoice(august.id))!.state, "PAID");
 });
 
 await check("issuing refuses once the contact's rule is gone; removing the rule removes neither the contact nor the draft", async () => {
   const [d] = (await draftsFor("c_dao", "2026-08")).filter((i) => i.state === "DRAFT");
   assert.equal((await call("DELETE", "/org_1/contacts/c_dao/payer-rule")).status, 200);
-  assert.ok(store.findContact("c_dao"), "removing the rule removes no contact");
-  assert.equal(store.findContact("c_dao")!.payerRule, undefined);
+  assert.ok(await store.findContact("c_dao"), "removing the rule removes no contact");
+  assert.equal((await store.findContact("c_dao"))!.payerRule, undefined);
   assert.equal((await call("POST", `/org_1/income-invoices/${d.id}/issue`, { acceptWarnings: true })).status, 409);
-  assert.equal(store.findInvoice(d.id)!.state, "DRAFT");
+  assert.equal((await store.findInvoice(d.id))!.state, "DRAFT");
 });
 
 console.log("\nA tax line with a rate");
 
 await check("with a standard rate the receipts are the gross: net and VAT are derived so the invoice total still equals what was received", async () => {
   // 119.00 received at 19% is 100.00 net and 19.00 VAT.
-  store.addLedgerEntries([
+  await store.addLedgerEntries([
     row({ id: "s_1", at: "2026-06-10T10:00:00.000Z", fiatValue: "59.50", amount: "70" }),
     row({ id: "s_2", at: "2026-06-11T10:00:00.000Z", fiatValue: "59.50", amount: "70" }),
   ]);
@@ -479,7 +479,7 @@ await check("with a standard rate the receipts are the gross: net and VAT are de
   assert.equal(d.fromReceipts.mismatchCents, undefined);
   const r = await call("POST", `/org_1/income-invoices/${d.id}/issue`, { acceptWarnings: true });
   assert.equal(r.status, 201, JSON.stringify(r.body));
-  const inv = store.findInvoice(d.id)!;
+  const inv = (await store.findInvoice(d.id))!;
   assert.equal(inv.issued!.netCents, 10000);
   assert.equal(inv.issued!.vatCents, 1900);
   assert.equal(inv.issued!.grossCents, 11900);
@@ -488,14 +488,14 @@ await check("with a standard rate the receipts are the gross: net and VAT are de
 
 await check("a received amount no net plus VAT adds up to is flagged on the draft and refused at issue: no invoice that differs from the money by a cent", async () => {
   // At 19%, no net gives 0.03 gross (0.02 -> 0.02, 0.03 -> 0.04).
-  store.addLedgerEntries([row({ id: "s_gap", at: "2026-05-10T10:00:00.000Z", fiatValue: "0.03", amount: "0.04" })]);
+  await store.addLedgerEntries([row({ id: "s_gap", at: "2026-05-10T10:00:00.000Z", fiatValue: "0.03", amount: "0.04" })]);
   await run("2026-05");
   const [d] = await draftsFor("c_dao", "2026-05");
   assert.equal(cents(d.total), 3);
   assert.notEqual(d.fromReceipts.mismatchCents ?? 0, 0);
   const r = await call("POST", `/org_1/income-invoices/${d.id}/issue`, { acceptWarnings: true });
   assert.equal(r.status, 422, JSON.stringify(r.body));
-  assert.equal(store.findInvoice(d.id)!.state, "DRAFT");
+  assert.equal((await store.findInvoice(d.id))!.state, "DRAFT");
 });
 
 console.log("\nEvery receipt is accounted for");
@@ -505,11 +505,11 @@ console.log("\nEvery receipt is accounted for");
 const row2 = (over: Partial<LedgerEntry> & { id: string }) => row({ orgId: "org_2", counterparty: { address: DAO }, ...over });
 const run2 = (month: string) => run(month, "org_2");
 const drafts2 = (month: string) => draftsFor("c_dao2", month, "org_2");
-const wallet2 = (over: Record<string, unknown> = {}) =>
-  store.addImportedWallet({ id: `iw_${++seq}`, orgId: "org_2", address: `0x${String(seq).padStart(40, "0")}`, chainId: 1, label: "Treasury", kind: "safe", custody: "external", sync: { status: "synced", lastSyncedAt: NOW }, createdAt: "2025-01-01T00:00:00.000Z", ...over } as any);
+const wallet2 = async (over: Record<string, unknown> = {}) =>
+  await store.addImportedWallet({ id: `iw_${++seq}`, orgId: "org_2", address: `0x${String(seq).padStart(40, "0")}`, chainId: 1, label: "Treasury", kind: "safe", custody: "external", sync: { status: "synced", lastSyncedAt: NOW }, createdAt: "2025-01-01T00:00:00.000Z", ...over } as any);
 
 await check("a receipt with no value from a sender without a rule or without a contact is counted, not dropped", async () => {
-  store.addLedgerEntries([
+  await store.addLedgerEntries([
     row2({ id: "u_valued", at: "2026-03-05T10:00:00.000Z", fiatValue: "11.00" }),
     row2({ id: "u_unvalued", at: "2026-03-06T10:00:00.000Z", fiatValue: undefined, fiatCurrency: undefined, tags: ["wallet", "needs-valuation"] }),
     row2({ id: "u_stranger", at: "2026-03-07T10:00:00.000Z", fiatValue: undefined, fiatCurrency: undefined, tags: ["wallet", "unlisted"], txType: "unlisted_token", counterparty: { address: STRANGER } }),
@@ -524,7 +524,7 @@ await check("a receipt with no value from a sender without a rule or without a c
 await check("the rule and the addresses it reads are saved together: a bad address saves neither", async () => {
   const bad = await call("PUT", "/org_2/contacts/c_dao2/payer-rule", { ...RULE, wallets: [{ chainId: 1, address: "0x123" }] });
   assert.equal(bad.status, 400);
-  assert.equal(store.findContact("c_dao2")!.payerRule, undefined);
+  assert.equal((await store.findContact("c_dao2"))!.payerRule, undefined);
   const ok = await call("PUT", "/org_2/contacts/c_dao2/payer-rule", { ...RULE, wallets: [{ chainId: 1, address: DAO }, { chainId: 1, address: STREAM }] });
   assert.equal(ok.status, 200, JSON.stringify(ok.body));
   assert.deepEqual(ok.body.contact.wallets.map((w: any) => w.address), [DAO, STREAM]);
@@ -532,11 +532,11 @@ await check("the rule and the addresses it reads are saved together: a bad addre
 });
 
 await check("a wallet that is behind, booked from mid-month, or skipped transfers is named by the run and on the draft", async () => {
-  wallet2({ label: "Behind", sync: { status: "error", error: "rpc down" } });
-  wallet2({ label: "Late start", sync: { status: "synced", lastSyncedAt: NOW, from: "2026-03-10" } });
-  wallet2({ label: "Unreadable", sync: { status: "synced", lastSyncedAt: NOW, skipped: 2 } });
-  wallet2({ label: "Stale", sync: { status: "synced", lastSyncedAt: "2026-03-20T00:00:00.000Z" } });
-  wallet2({ label: "Fine" });
+  await wallet2({ label: "Behind", sync: { status: "error", error: "rpc down" } });
+  await wallet2({ label: "Late start", sync: { status: "synced", lastSyncedAt: NOW, from: "2026-03-10" } });
+  await wallet2({ label: "Unreadable", sync: { status: "synced", lastSyncedAt: NOW, skipped: 2 } });
+  await wallet2({ label: "Stale", sync: { status: "synced", lastSyncedAt: "2026-03-20T00:00:00.000Z" } });
+  await wallet2({ label: "Fine" });
   const r = await run2("2026-03");
   const text = r.body.syncWarnings.join("\n");
   for (const name of ["Behind", "Late start", "Unreadable", "Stale"]) assert.match(text, new RegExp(name), name);
@@ -556,14 +556,14 @@ await check("a draft shows who it is addressed to and the tax line, and issuing 
   const r = await call("POST", `/org_2/income-invoices/${d.id}/issue`, { acceptWarnings: true });
   assert.equal(r.status, 409, JSON.stringify(r.body));
   assert.match(r.body.error, /payer rule/i);
-  assert.equal(store.findInvoice(d.id)!.state, "DRAFT");
-  assert.equal(store.findInvoice(d.id)!.fromReceipts!.recipientName, "Someone Else Ltd", "and the draft now shows the new recipient");
+  assert.equal((await store.findInvoice(d.id))!.state, "DRAFT");
+  assert.equal((await store.findInvoice(d.id))!.fromReceipts!.recipientName, "Someone Else Ltd", "and the draft now shows the new recipient");
 });
 
 await check("receipts an issued invoice already bills, and receipts held by a draft whose rule is gone, are counted by a later run", async () => {
   const [d] = await drafts2("2026-03");
   assert.equal((await call("POST", `/org_2/income-invoices/${d.id}/issue`, { acceptWarnings: true })).status, 201);
-  store.addLedgerEntries([row2({ id: "u_later", at: "2026-03-25T10:00:00.000Z", fiatValue: "4.00" })]);
+  await store.addLedgerEntries([row2({ id: "u_later", at: "2026-03-25T10:00:00.000Z", fiatValue: "4.00" })]);
   const second = await run2("2026-03");
   assert.deepEqual(second.body.alreadyInvoiced, { receipts: 1 });
   const [followUp] = (await drafts2("2026-03")).filter((i) => i.state === "DRAFT");
@@ -571,14 +571,14 @@ await check("receipts an issued invoice already bills, and receipts held by a dr
   assert.equal((await call("DELETE", "/org_2/contacts/c_dao2/payer-rule")).status, 200);
   const third = await run2("2026-03");
   assert.deepEqual(third.body.onOtherDrafts, [{ invoiceId: followUp.id, contactId: "c_dao2", receipts: 1 }]);
-  assert.deepEqual(lineRows(store.findInvoice(followUp.id)), ["u_later"], "the stale draft keeps its rows until it is issued or discarded");
+  assert.deepEqual(lineRows(await store.findInvoice(followUp.id)), ["u_later"], "the stale draft keeps its rows until it is issued or discarded");
 });
 
 await check("an address moved to another contact is billed to the contact that lists it now", async () => {
-  addContact("c_new2", "org_2", "New Payer", [OTHER_DAO]);
+  await addContact("c_new2", "org_2", "New Payer", [OTHER_DAO]);
   assert.equal((await call("PUT", "/org_2/contacts/c_new2/payer-rule", RULE)).status, 200);
   // Synced while c_dao2 listed the address; c_dao2 no longer does.
-  store.addLedgerEntries([row2({ id: "u_moved", at: "2026-02-05T10:00:00.000Z", fiatValue: "9.00", counterparty: { address: OTHER_DAO, contactId: "c_dao2", name: "Example DAO" } })]);
+  await store.addLedgerEntries([row2({ id: "u_moved", at: "2026-02-05T10:00:00.000Z", fiatValue: "9.00", counterparty: { address: OTHER_DAO, contactId: "c_dao2", name: "Example DAO" } })]);
   await run2("2026-02");
   assert.deepEqual((await draftsFor("c_new2", "2026-02", "org_2")).map(lineRows), [["u_moved"]]);
   assert.deepEqual(await drafts2("2026-02"), []);
@@ -586,20 +586,20 @@ await check("an address moved to another contact is billed to the contact that l
 
 await check("twenty receipts of one cent at 19% are issuable: the net is sought for the whole amount, not line by line", async () => {
   assert.equal((await call("PUT", "/org_2/contacts/c_dao2/payer-rule", { ...RULE, vat: { kind: "standard", rate: 19 }, recipient: { ...RULE.recipient, country: "DE" } })).status, 200);
-  store.addLedgerEntries(Array.from({ length: 20 }, (_, i) => row2({ id: `cent_${String(i).padStart(2, "0")}`, at: `2026-01-${String(i + 1).padStart(2, "0")}T10:00:00.000Z`, fiatValue: "0.01", amount: "0.01" })));
+  await store.addLedgerEntries(Array.from({ length: 20 }, (_, i) => row2({ id: `cent_${String(i).padStart(2, "0")}`, at: `2026-01-${String(i + 1).padStart(2, "0")}T10:00:00.000Z`, fiatValue: "0.01", amount: "0.01" })));
   await run2("2026-01");
   const [d] = await drafts2("2026-01");
   assert.equal(d.fromReceipts.mismatchCents, undefined);
   assert.equal(cents(d.total), 20);
   const r = await call("POST", `/org_2/income-invoices/${d.id}/issue`, { acceptWarnings: true });
   assert.equal(r.status, 201, JSON.stringify(r.body));
-  const inv = store.findInvoice(d.id)!;
+  const inv = (await store.findInvoice(d.id))!;
   assert.deepEqual([inv.issued!.netCents, inv.issued!.vatCents, inv.issued!.grossCents, inv.state], [17, 3, 20, "PAID"]);
 });
 
 await check("more receipts than an invoice holds: the first 200 are on the draft, the rest are named and wait for the next one", async () => {
   assert.equal((await call("PUT", "/org_2/contacts/c_dao2/payer-rule", RULE)).status, 200);
-  store.addLedgerEntries(Array.from({ length: 203 }, (_, i) => row2({ id: `many_${String(i).padStart(3, "0")}`, at: new Date(Date.UTC(2025, 11, 1, 0, i)).toISOString(), fiatValue: "1.00", amount: "1" })));
+  await store.addLedgerEntries(Array.from({ length: 203 }, (_, i) => row2({ id: `many_${String(i).padStart(3, "0")}`, at: new Date(Date.UTC(2025, 11, 1, 0, i)).toISOString(), fiatValue: "1.00", amount: "1" })));
   await run2("2025-12");
   const [d] = await drafts2("2025-12");
   assert.equal(d.lines.length, 200);
@@ -612,7 +612,7 @@ await check("more receipts than an invoice holds: the first 200 are on the draft
 });
 
 await check("rows that only look invoiceable are left out and named: a value in another currency, a zero value, no transaction, a type that says internal or unlisted under edited tags, a refund tag, a swap leg, a realised gain, no type", async () => {
-  store.addLedgerEntries([
+  await store.addLedgerEntries([
     row2({ id: "x_ok", at: "2025-10-01T10:00:00.000Z", fiatValue: "5.00" }),
     row2({ id: "x_usd", at: "2025-10-02T10:00:00.000Z", fiatValue: "7.00", fiatCurrency: "USD" }),
     row2({ id: "x_zero", at: "2025-10-03T10:00:00.000Z", fiatValue: "0.00" }),
@@ -636,65 +636,65 @@ await check("another organisation's draft cannot be issued through this one", as
   const [d] = await drafts2("2025-10");
   const r = await call("POST", `/org_1/income-invoices/${d.id}/issue`, { acceptWarnings: true });
   assert.equal(r.status, 404);
-  assert.equal(store.findInvoice(d.id)!.state, "DRAFT");
+  assert.equal((await store.findInvoice(d.id))!.state, "DRAFT");
 });
 
 await check("a number already issued is refused; a number of one's own is used and does not advance the series", async () => {
   const [d] = await drafts2("2025-10");
-  const taken = store.invoicesOf("org_2").find((i) => i.issued)!.issued!.number;
+  const taken = (await store.invoicesOf("org_2")).find((i) => i.issued)!.issued!.number;
   const clash = await call("POST", `/org_2/income-invoices/${d.id}/issue`, { acceptWarnings: true, number: taken });
   assert.equal(clash.status, 409, JSON.stringify(clash.body));
-  assert.equal(store.findInvoice(d.id)!.state, "DRAFT");
-  const next = store.findOrganisation("org_2")!.invoicing!.numberSeries!.next;
+  assert.equal((await store.findInvoice(d.id))!.state, "DRAFT");
+  const next = (await store.findOrganisation("org_2"))!.invoicing!.numberSeries!.next;
   const own = await call("POST", `/org_2/income-invoices/${d.id}/issue`, { acceptWarnings: true, number: "DAO-2025-10" });
   assert.equal(own.status, 201, JSON.stringify(own.body));
   assert.equal(own.body.invoice.issued.number, "DAO-2025-10");
   assert.ok(own.body.invoice.issued.acceptedWarnings.some((w: string) => /^receipts: .*Behind/.test(w)), "the accepted incomplete-month warning is on the invoice");
-  assert.equal(store.findOrganisation("org_2")!.invoicing!.numberSeries!.next, next);
+  assert.equal((await store.findOrganisation("org_2"))!.invoicing!.numberSeries!.next, next);
 });
 
 await check("warnings must be accepted: without that the draft stays a draft, and the warnings are named", async () => {
-  store.addLedgerEntries([row2({ id: "w_1", at: "2025-09-01T10:00:00.000Z", fiatValue: "5.00" })]);
+  await store.addLedgerEntries([row2({ id: "w_1", at: "2025-09-01T10:00:00.000Z", fiatValue: "5.00" })]);
   await run2("2025-09");
   const [d] = await drafts2("2025-09");
   const r = await call("POST", `/org_2/income-invoices/${d.id}/issue`, {});
   assert.equal(r.status, 409, JSON.stringify(r.body));
   assert.ok(r.body.warnings.length > 0);
-  assert.equal(store.findInvoice(d.id)!.state, "DRAFT");
+  assert.equal((await store.findInvoice(d.id))!.state, "DRAFT");
 });
 
 await check("a draft whose receipts have all gone is not issuable", async () => {
   const [d] = await drafts2("2025-09");
-  store.updateLedgerEntry("w_1", { txType: "internal_transfer" });
+  await store.updateLedgerEntry("w_1", { txType: "internal_transfer" });
   assert.equal((await call("POST", `/org_2/income-invoices/${d.id}/issue`, { acceptWarnings: true })).status, 409);
   const r = await call("POST", `/org_2/income-invoices/${d.id}/issue`, { acceptWarnings: true });
   assert.equal(r.status, 422, JSON.stringify(r.body));
-  assert.equal(store.findInvoice(d.id)!.state, "DRAFT");
+  assert.equal((await store.findInvoice(d.id))!.state, "DRAFT");
 });
 
 await check("a wallet row whose time cannot be read stops the run and is named: skipped, it would be in no month", async () => {
-  const before = store.invoicesOf("org_2").length;
-  store.addLedgerEntries([row2({ id: "bad_time", at: "garbage", fiatValue: "5.00" })]);
+  const before = (await store.invoicesOf("org_2")).length;
+  await store.addLedgerEntries([row2({ id: "bad_time", at: "garbage", fiatValue: "5.00" })]);
   const r = await run2("2025-08");
   assert.equal(r.status, 400);
   assert.match(r.body.error, /bad_time/);
-  assert.equal(store.invoicesOf("org_2").length, before);
-  store.updateLedgerEntry("bad_time", { at: "2020-01-01T00:00:00.000Z" });
+  assert.equal((await store.invoicesOf("org_2")).length, before);
+  await store.updateLedgerEntry("bad_time", { at: "2020-01-01T00:00:00.000Z" });
 });
 
 await check("a reporting time zone that is none is refused by the run, which creates nothing", async () => {
-  const before = store.invoicesOf("org_2").length;
-  store.updateOrganisation("org_2", { reporting: { ...reporting, timeZone: "Mars/Olympus" } });
+  const before = (await store.invoicesOf("org_2")).length;
+  await store.updateOrganisation("org_2", { reporting: { ...reporting, timeZone: "Mars/Olympus" } });
   const r = await run2("2025-08");
   assert.equal(r.status, 400);
   assert.match(r.body.error, /time zone/i);
-  assert.equal(store.invoicesOf("org_2").length, before);
-  store.updateOrganisation("org_2", { reporting });
+  assert.equal((await store.invoicesOf("org_2")).length, before);
+  await store.updateOrganisation("org_2", { reporting });
 });
 
 await check("the customer's view of an issued invoice has the printed columns and no ledger references", async () => {
   const { supplierView } = await import("../services/api/src/domain/invoices.js");
-  const view = supplierView(store.findInvoice(august.id)!, "Zoldenburg");
+  const view = supplierView((await store.findInvoice(august.id))!, "Zoldenburg");
   assert.ok(view.lines.length > 0);
   for (const line of view.lines) assert.deepEqual(Object.keys(line).sort(), ["amount", "description", "quantity", "unitPrice"]);
   assert.ok(!("fromReceipts" in view) && !("settlements" in view));
@@ -717,26 +717,26 @@ await check("dayOf reads 00:30 Berlin as the Berlin day, in winter, in summer an
 
 await check("a draft made at 00:30 Berlin is dated the Berlin day and numbered in the Berlin year", async () => {
   const { draftFrom } = await import("../services/api/src/routes/business/shared.js");
-  const org = store.findOrganisation("org_1")!;
-  const winter = draftFrom(org, {}, WINTER);
+  const org = (await store.findOrganisation("org_1"))!;
+  const winter = await draftFrom(org, {}, WINTER);
   assert.equal(winter.issueDate, "2026-01-16");
   assert.match(winter.number!, /^RE-2026-/);
-  assert.equal(draftFrom(org, {}, SUMMER).issueDate, "2026-07-16");
-  const newYear = draftFrom(org, {}, NEW_YEAR);
+  assert.equal((await draftFrom(org, {}, SUMMER)).issueDate, "2026-07-16");
+  const newYear = await draftFrom(org, {}, NEW_YEAR);
   assert.equal(newYear.issueDate, "2027-01-01");
   assert.match(newYear.number!, /^RE-2027-/, "the number's year is the Berlin year, not 2026");
 });
 
 await check("a typed invoice without an issue date takes the Berlin day; one with an issue date keeps it", async () => {
   const { draftFrom } = await import("../services/api/src/routes/business/shared.js");
-  const org = store.findOrganisation("org_1")!;
+  const org = (await store.findOrganisation("org_1"))!;
   const typed = {
     recipient: { name: "Example DAO Foundation", country: "CH" },
     lines: [{ description: "Consulting", quantity: "1", unitPrice: "100.00" }],
   };
-  assert.equal(draftFrom(org, typed, WINTER).issueDate, "2026-01-16");
-  assert.equal(draftFrom(org, typed, NEW_YEAR).issueDate, "2027-01-01");
-  const dated = draftFrom(org, { ...typed, issueDate: "2026-12-31" }, NEW_YEAR);
+  assert.equal((await draftFrom(org, typed, WINTER)).issueDate, "2026-01-16");
+  assert.equal((await draftFrom(org, typed, NEW_YEAR)).issueDate, "2027-01-01");
+  const dated = await draftFrom(org, { ...typed, issueDate: "2026-12-31" }, NEW_YEAR);
   assert.equal(dated.issueDate, "2026-12-31");
   assert.match(dated.number!, /^RE-2026-/, "a typed date picks the number's year");
 });

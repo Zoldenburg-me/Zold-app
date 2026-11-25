@@ -19,15 +19,15 @@ import { sendVerificationCode } from "../adapters/mailer.js";
 import { publicUser } from "../users/public-user.js";
 
 export interface EmailVerificationDeps {
-  requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
+  requireUserSession: (req: express.Request, res: express.Response, userId: string) => Promise<unknown>;
 }
 
 const sameEmail = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 const codeHash = (userId: string, code: string) => createHash("sha256").update(`zold/email-code/v1:${userId}:${code}`).digest("hex");
 
 /** Another account already confirmed this address. */
-function confirmedElsewhere(user: User): boolean {
-  return !!user.email && store.usersByEmail(user.email).some((u) => u.id !== user.id && !!u.emailVerifiedAt);
+async function confirmedElsewhere(user: User): Promise<boolean> {
+  return !!user.email && (await store.usersByEmail(user.email)).some((u) => u.id !== user.id && !!u.emailVerifiedAt);
 }
 
 /** Addresses a code mail is going to right now. A send is recorded only once
@@ -43,28 +43,28 @@ export function createEmailVerificationRouter(deps: EmailVerificationDeps) {
   const { requireUserSession } = deps;
   const router = express.Router();
 
-  const owner = (req: express.Request, res: express.Response): User | undefined => {
+  const owner = async (req: express.Request, res: express.Response): Promise<User | undefined> => {
     if (!EMAIL_VERIFICATION.enabled) {
       res.status(404).json({ error: "not found" });
       return undefined;
     }
-    const user = store.findUser(req.params.id);
+    const user = await store.findUser(req.params.id);
     if (!user) {
       res.status(404).json({ error: "user not found" });
       return undefined;
     }
-    if (!requireUserSession(req, res, user.id)) return undefined;
+    if (!(await requireUserSession(req, res, user.id))) return undefined;
     return user;
   };
 
   router.post(
     "/users/:id/email/code",
     wrap(async (req, res) => {
-      const user = owner(req, res);
+      const user = await owner(req, res);
       if (!user) return;
       if (!user.email) return res.status(409).json({ error: "this account has no email to confirm" });
       if (user.emailVerifiedAt) return res.status(409).json({ error: "this email is already confirmed", code: "EMAIL_VERIFIED" });
-      if (confirmedElsewhere(user)) return res.status(409).json(IN_USE);
+      if ((await confirmedElsewhere(user))) return res.status(409).json(IN_USE);
 
       const to = user.email.trim().toLowerCase();
       if (sending.has(to)) {
@@ -76,7 +76,7 @@ export function createEmailVerificationRouter(deps: EmailVerificationDeps) {
       const recent = sentLastHour(user);
       // The wait and the hourly cap are per address: every account that signed
       // up with it counts, so more accounts mean neither more mail nor more guesses.
-      const toAddress = store.usersByEmail(user.email).flatMap(sentLastHour);
+      const toAddress = (await store.usersByEmail(user.email)).flatMap(sentLastHour);
       const last = toAddress.length ? Math.max(...toAddress.map((t) => Date.parse(t))) : 0;
       if (now - last < EMAIL_VERIFICATION.resendAfterMs) {
         const wait = Math.ceil((EMAIL_VERIFICATION.resendAfterMs - (now - last)) / 1000);
@@ -101,7 +101,7 @@ export function createEmailVerificationRouter(deps: EmailVerificationDeps) {
         sending.delete(to);
       }
       const sentAt = new Date(now).toISOString();
-      store.updateUser(user.id, {
+      await store.updateUser(user.id, {
         emailCode: {
           hash: codeHash(user.id, code),
           email: user.email,
@@ -117,9 +117,9 @@ export function createEmailVerificationRouter(deps: EmailVerificationDeps) {
   router.post(
     "/users/:id/email/verify",
     wrap(async (req, res) => {
-      const user = owner(req, res);
+      const user = await owner(req, res);
       if (!user) return;
-      if (user.emailVerifiedAt) return res.json(publicUser(user));
+      if (user.emailVerifiedAt) return res.json(await publicUser(user));
       const typed = String(req.body?.code ?? "").replace(/\s/g, "");
       const c = user.emailCode;
       const refuse = (error: string, code: string) => res.status(400).json({ error, code });
@@ -130,7 +130,7 @@ export function createEmailVerificationRouter(deps: EmailVerificationDeps) {
       const ok = timingSafeEqual(Buffer.from(codeHash(user.id, typed), "hex"), Buffer.from(c.hash, "hex"));
       if (!ok) {
         const attempts = c.attempts + 1;
-        store.updateUser(user.id, { emailCode: { ...c, attempts } });
+        await store.updateUser(user.id, { emailCode: { ...c, attempts } });
         const left = EMAIL_VERIFICATION.maxAttempts - attempts;
         return left > 0
           ? refuse(`That code is not right. ${left} ${left === 1 ? "try" : "tries"} left.`, "EMAIL_CODE_WRONG")
@@ -138,12 +138,12 @@ export function createEmailVerificationRouter(deps: EmailVerificationDeps) {
       }
       // Checked again at the moment of the write: two accounts may have had
       // codes out for one address, and the first to confirm keeps it.
-      if (confirmedElsewhere(user)) return res.status(409).json(IN_USE);
-      const updated = store.updateUser(user.id, {
+      if ((await confirmedElsewhere(user))) return res.status(409).json(IN_USE);
+      const updated = await store.updateUser(user.id, {
         emailVerifiedAt: new Date().toISOString(),
         emailCode: undefined,
       });
-      res.json(publicUser(updated));
+      res.json(await publicUser(updated));
     }),
   );
 

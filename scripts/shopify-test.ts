@@ -76,7 +76,7 @@ const { displayCode } = await import("../services/api/src/payment-requests.js");
 const { signBody, signQuery } = await import("../services/api/src/shopify/hmac.js");
 const { fieldKeyId } = await import("../services/api/src/crypto-at-rest.js");
 const { SECRETS } = await import("../services/api/src/stored-secrets.js");
-initStore();
+await initStore();
 onPaymentRequestPaid(resolveShopifyRequest);
 
 const now = new Date().toISOString();
@@ -88,18 +88,18 @@ const merchant: any = {
 };
 const viewer: any = { id: randomUUID(), name: "Vic Viewer", country: "DE", address: `0x${"cd".repeat(20)}`, iban: "", kycStatus: "approved", createdAt: now };
 const noPage: any = { id: randomUUID(), name: "No Page", country: "DE", address: `0x${"ef".repeat(20)}`, iban: "", kycStatus: "approved", createdAt: now };
-for (const u of [merchant, viewer, noPage]) store.addUser(u);
+for (const u of [merchant, viewer, noPage]) await store.addUser(u);
 const org: any = { id: randomUUID(), type: "business", name: "Lena GmbH", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now };
-store.addOrganisation(org, false);
-store.addMember({ id: randomUUID(), orgId: org.id, userId: merchant.id, email: "lena@example.com", role: "owner", status: "active", invitedAt: now, acceptedAt: now } as any);
-store.addMember({ id: randomUUID(), orgId: org.id, userId: viewer.id, email: "vic@example.com", role: "viewer", status: "active", invitedAt: now, acceptedAt: now } as any);
+await store.addOrganisation(org, false);
+await store.addMember({ id: randomUUID(), orgId: org.id, userId: merchant.id, email: "lena@example.com", role: "owner", status: "active", invitedAt: now, acceptedAt: now } as any);
+await store.addMember({ id: randomUUID(), orgId: org.id, userId: viewer.id, email: "vic@example.com", role: "viewer", status: "active", invitedAt: now, acceptedAt: now } as any);
 const org2: any = { ...org, id: randomUUID(), name: "No Page Ltd" };
-store.addOrganisation(org2, false);
-store.addMember({ id: randomUUID(), orgId: org2.id, userId: noPage.id, email: "np@example.com", role: "owner", status: "active", invitedAt: now, acceptedAt: now } as any);
+await store.addOrganisation(org2, false);
+await store.addMember({ id: randomUUID(), orgId: org2.id, userId: noPage.id, email: "np@example.com", role: "owner", status: "active", invitedAt: now, acceptedAt: now } as any);
 
 const app = express();
 app.use(express.json({ verify: (req, _res, buf) => { (req as any).rawBody = buf; } }));
-app.use("/api", createShopifyRouter((req, res) => {
+app.use("/api", createShopifyRouter(async (req, res) => {
   const u = req.header("x-user");
   if (u) return { userId: u };
   res.status(401).json({ error: "authorization required" });
@@ -138,7 +138,7 @@ const fromShopify = (p: string, payload: unknown, shop = SHOP, secret = "shpss_t
   const raw = JSON.stringify(payload);
   return call("POST", p, { raw, headers: { "shopify-hmac-sha256": signBody(raw, secret), "shopify-shop-domain": shop, "shopify-request-id": randomUUID(), "shopify-api-version": "2026-07" } });
 };
-const until = async (fn: () => boolean, ms = 3000) => { const t0 = Date.now(); while (!fn() && Date.now() - t0 < ms) await new Promise((r) => setTimeout(r, 25)); return fn(); };
+const until = async (fn: () => boolean | Promise<boolean>, ms = 3000) => { const t0 = Date.now(); while (!(await fn()) && Date.now() - t0 < ms) await new Promise((r) => setTimeout(r, 25)); return await fn(); };
 
 let n = 0;
 const failures: string[] = [];
@@ -183,12 +183,12 @@ await check("the callback with a forged hmac stores nothing", async () => {
   const r = await call("GET", `/api/shopify/callback?${tampered}`);
   assert.equal(r.status, 302);
   assert.match(r.location, /did not verify/);
-  assert.equal(store.findShopifyConnectionByShop(SHOP), undefined);
+  assert.equal(await store.findShopifyConnectionByShop(SHOP), undefined);
 });
 await check("a callback for a state we never issued is refused", async () => {
   const r = await call("GET", `/api/shopify/callback?${oauthQuery("not-our-state")}`);
   assert.match(r.location, /not started from Zold/);
-  assert.equal(store.findShopifyConnectionByShop(SHOP), undefined);
+  assert.equal(await store.findShopifyConnectionByShop(SHOP), undefined);
 });
 await check("starting an install sets an HttpOnly, SameSite=Lax cookie scoped to the callback", async () => {
   const res = await fetch(`${API}/api/orgs/${org.id}/shopify/install`, {
@@ -207,20 +207,20 @@ await check("the approval link opened in another browser (no install cookie) con
   assert.equal(r.status, 302);
   assert.match(r.location, /browser where you started it/);
   assert.match(r.location, /INSTALL_OTHER_BROWSER/);
-  assert.equal(store.findShopifyConnectionByShop(SHOP), undefined);
+  assert.equal(await store.findShopifyConnectionByShop(SHOP), undefined);
 });
 await check("a callback carrying another install's cookie is refused the same way", async () => {
   const state = new URL(authorizeUrl).searchParams.get("state")!;
   const r = await call("GET", `/api/shopify/callback?${oauthQuery(state)}`, { headers: { cookie: "zold_shopify_install=someone-elses-nonce" } });
   assert.match(r.location, /INSTALL_OTHER_BROWSER/);
-  assert.equal(store.findShopifyConnectionByShop(SHOP), undefined);
+  assert.equal(await store.findShopifyConnectionByShop(SHOP), undefined);
 });
 await check("the genuine callback exchanges the code, stores the token ENCRYPTED and configures the app ready", async () => {
   const state = new URL(authorizeUrl).searchParams.get("state")!;
   const r = await call("GET", `/api/shopify/callback?${oauthQuery(state)}`);
   assert.equal(r.status, 302, JSON.stringify(r.body));
   assert.match(r.location, /\/business\?view=shopify&shop=demo-store\.myshopify\.com$/);
-  const c = store.findShopifyConnectionByShop(SHOP)!;
+  const c = (await store.findShopifyConnectionByShop(SHOP))!;
   assert.ok(c, "no connection stored");
   assert.notEqual(c.accessTokenEnc, TOKEN);
   assert.equal(fieldKeyId(c.accessTokenEnc), "t1", "written as v2 under the active key");
@@ -249,7 +249,7 @@ await check("a signed payment session becomes a EUR request payable in USDC only
   assert.equal(r.status, 201, JSON.stringify(r.body));
   redirect = r.body.redirect_url;
   assert.match(redirect, new RegExp(`^${API}/pay/lena-shop/[0-9A-Z]{5}-[0-9A-Z]{5}-[0-9A-Z]{5}$`));
-  const req = store.findPaymentRequestBySource("shopify", s1.id, SHOP)!;
+  const req = (await store.findPaymentRequestBySource("shopify", s1.id, SHOP))!;
   assert.equal(req.amountEur, 49.9);
   assert.deepEqual(req.methods, ["crypto"]);
   assert.equal(req.test, true);
@@ -261,10 +261,10 @@ await check("a signed payment session becomes a EUR request payable in USDC only
   assert.ok(!JSON.stringify(req).includes("buyer@example.com"), "the buyer's email is not ours to keep");
 });
 await check("Shopify's retry of the same session gets the same page and creates nothing new", async () => {
-  const before = store.paymentRequests.length;
+  const before = (await store.list("paymentRequests")).length;
   const r = await fromShopify("/api/shopify/payment", s1);
   assert.equal(r.body.redirect_url, redirect);
-  assert.equal(store.paymentRequests.length, before);
+  assert.equal((await store.list("paymentRequests")).length, before);
 });
 await check("an unsigned or mis-signed session is a 401", async () => {
   assert.equal((await fromShopify("/api/shopify/payment", session(), SHOP, "wrong-secret")).status, 401);
@@ -289,26 +289,26 @@ await check("manual capture (kind=authorization) is refused and the merchant is 
 });
 
 console.log("\nSettlement");
-const payRequest = (req: any) => {
+const payRequest = async (req: any) => {
   const q = req.cryptoQuotes[req.cryptoQuotes.length - 1];
-  const d = store.addCryptoDeposit({
+  const d = await store.addCryptoDeposit({
     id: randomUUID(), userId: merchant.id, chainId: 31337, token: "USDC", txHash: `0x${randomUUID().replace(/-/g, "").padEnd(64, "0")}`, logIndex: 0,
     amountUnits: String(Math.round(q.amountUsdc * 1e6)), amountUsdc: q.amountUsdc, settlementAsset: "USDC", paymentAddress: owner,
     holding: "awaiting_approval", txs: [], detectedAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   });
-  return attributeDepositToRequest(d);
+  return await attributeDepositToRequest(d);
 };
 await check("the buyer's USDC deposit marks the request PAID and Shopify is told exactly once, with the buyer's onward URL recorded", async () => {
-  const req = store.findPaymentRequestBySource("shopify", s1.id, SHOP)!;
-  const paid = payRequest(req)!;
+  const req = (await store.findPaymentRequestBySource("shopify", s1.id, SHOP))!;
+  const paid = (await payRequest(req))!;
   assert.equal(paid.state, "PAID");
-  assert.ok(await until(() => Boolean(store.findPaymentRequest(req.id)!.source.resolvedAt)), `not resolved: ${store.findPaymentRequest(req.id)!.source.resolveError}`);
+  assert.ok(await until(async () => Boolean((await store.findPaymentRequest(req.id))!.source.resolvedAt)), `not resolved: ${(await store.findPaymentRequest(req.id))!.source.resolveError}`);
   const resolves = calls.filter((c) => c.op === "paymentSessionResolve" && c.vars.id === s1.gid);
   assert.equal(resolves.length, 1);
-  assert.match(store.findPaymentRequest(req.id)!.source.returnUrl!, /thank_you/);
+  assert.match((await store.findPaymentRequest(req.id))!.source.returnUrl!, /thank_you/);
 });
 await check("the return link sends the buyer to the URL Shopify gave", async () => {
-  const req = store.findPaymentRequestBySource("shopify", s1.id, SHOP)!;
+  const req = (await store.findPaymentRequestBySource("shopify", s1.id, SHOP))!;
   const r = await call("GET", `/api/shopify/return/${req.code}`);
   assert.equal(r.status, 302);
   assert.equal(r.location, decodeURIComponent(req.source.returnUrl!));
@@ -316,13 +316,13 @@ await check("the return link sends the buyer to the URL Shopify gave", async () 
 await check("a paid request whose resolve failed keeps the error and the sweep retries it", async () => {
   const s = session();
   await fromShopify("/api/shopify/payment", s);
-  const req = store.findPaymentRequestBySource("shopify", s.id, SHOP)!;
+  const req = (await store.findPaymentRequestBySource("shopify", s.id, SHOP))!;
   failNextResolve = true;
-  payRequest(req);
-  assert.ok(await until(() => Boolean(store.findPaymentRequest(req.id)!.source.resolveError)), "no error recorded");
-  assert.equal(store.findPaymentRequest(req.id)!.source.resolvedAt, undefined);
+  await payRequest(req);
+  assert.ok(await until(async () => Boolean((await store.findPaymentRequest(req.id))!.source.resolveError)), "no error recorded");
+  assert.equal((await store.findPaymentRequest(req.id))!.source.resolvedAt, undefined);
   await sweepPaymentRequests();
-  const after = store.findPaymentRequest(req.id)!;
+  const after = (await store.findPaymentRequest(req.id))!;
   assert.ok(after.source.resolvedAt, `still unresolved: ${after.source.resolveError}`);
   assert.equal(after.source.resolveAttempts, 2);
   assert.equal(calls.filter((c) => c.op === "paymentSessionResolve" && c.vars.id === s.gid).length, 2);
@@ -331,26 +331,26 @@ await check("the sweep stops retrying a failing resolve after RESOLVE_MAX_ATTEMP
   const { RESOLVE_MAX_ATTEMPTS } = await import("../services/api/src/config.js");
   const s = session();
   await fromShopify("/api/shopify/payment", s);
-  const req = store.findPaymentRequestBySource("shopify", s.id, SHOP)!;
+  const req = (await store.findPaymentRequestBySource("shopify", s.id, SHOP))!;
   failAllResolves = true;
   const logged: string[] = [];
   const error = console.error;
   console.error = (...a: unknown[]) => { logged.push(a.join(" ")); };
   try {
-    payRequest(req);
-    assert.ok(await until(() => store.findPaymentRequest(req.id)!.source.resolveAttempts === 1), "first attempt not recorded");
+    await payRequest(req);
+    assert.ok(await until(async () => (await store.findPaymentRequest(req.id))!.source.resolveAttempts === 1), "first attempt not recorded");
     // A sweep and a buyer's return visit at once spend one attempt, not two.
-    const live = store.findPaymentRequest(req.id)!;
+    const live = (await store.findPaymentRequest(req.id))!;
     const both = await Promise.allSettled([resolveShopifyRequest(live), resolveShopifyRequest(live)]);
     assert.ok(both.every((x) => x.status === "rejected"), "the second caller waits for the first and sees its outcome");
-    assert.equal(store.findPaymentRequest(req.id)!.source.resolveAttempts, 2);
+    assert.equal((await store.findPaymentRequest(req.id))!.source.resolveAttempts, 2);
     assert.equal(calls.filter((c) => c.op === "paymentSessionResolve" && c.vars.id === s.gid).length, 2);
     for (let i = 0; i < RESOLVE_MAX_ATTEMPTS + 3; i++) await sweepPaymentRequests();
   } finally {
     failAllResolves = false;
     console.error = error;
   }
-  const after = store.findPaymentRequest(req.id)!;
+  const after = (await store.findPaymentRequest(req.id))!;
   assert.equal(after.source.resolveAttempts, RESOLVE_MAX_ATTEMPTS);
   assert.equal(after.source.resolvedAt, undefined);
   assert.ok(after.source.resolveError, "the last error stays on the row");
@@ -365,15 +365,15 @@ await check("the sweep stops retrying a failing resolve after RESOLVE_MAX_ATTEMP
 await check("a buyer who cancels is sent back to the store; the unauthenticated GET does not close the request", async () => {
   const s = session();
   await fromShopify("/api/shopify/payment", s);
-  const req = store.findPaymentRequestBySource("shopify", s.id, SHOP)!;
+  const req = (await store.findPaymentRequestBySource("shopify", s.id, SHOP))!;
   const r = await call("GET", `/api/shopify/cancel/${req.code}`);
   assert.equal(r.location, `https://${SHOP}/checkouts/c/cancel`);
-  assert.equal(store.findPaymentRequest(req.id)!.state, "OPEN");
+  assert.equal((await store.findPaymentRequest(req.id))!.state, "OPEN");
 });
 await check("a paid request cannot be cancelled by visiting the cancel link", async () => {
-  const req = store.findPaymentRequestBySource("shopify", s1.id, SHOP)!;
+  const req = (await store.findPaymentRequestBySource("shopify", s1.id, SHOP))!;
   await call("GET", `/api/shopify/cancel/${req.code}`);
-  assert.equal(store.findPaymentRequest(req.id)!.state, "PAID");
+  assert.equal((await store.findPaymentRequest(req.id))!.state, "PAID");
 });
 await check("a refund session is acknowledged, then REJECTED with a merchant message — refunds are manual", async () => {
   const gid = `gid://shopify/RefundSession/${randomUUID()}`;
@@ -408,10 +408,10 @@ await check("a viewer sees the dashboard but a non-member does not", async () =>
   assert.equal((await call("GET", `/api/orgs/${org.id}/shopify`, { user: noPage.id })).status, 404);
 });
 await check("disconnecting tells the store the method is gone and removes the connection", async () => {
-  const c = store.findShopifyConnectionByShop(SHOP)!;
+  const c = (await store.findShopifyConnectionByShop(SHOP))!;
   const r = await call("DELETE", `/api/orgs/${org.id}/shopify/${c.id}`, { user: merchant.id });
   assert.equal(r.status, 200);
-  assert.equal(store.findShopifyConnectionByShop(SHOP), undefined);
+  assert.equal(await store.findShopifyConnectionByShop(SHOP), undefined);
   assert.ok(calls.some((x) => x.op === "paymentsAppConfigure" && x.vars.ready === false));
   assert.equal((await fromShopify("/api/shopify/payment", session())).status, 404, "a disconnected store must not open checkouts");
 });

@@ -205,32 +205,32 @@ await check("deleteDocument sends DELETE with a JSON content type and an {} body
 
 console.log("\nRoutes");
 
-initStore();
+await initStore();
 const SAFE = `0x${"aa".repeat(20)}` as const;
 const now = new Date().toISOString();
 const H = (n: number) => `0x${n.toString(16).padStart(64, "0")}`;
-store.addUser({ id: "u_owner", name: "Sara Lindner", country: "DE", kycStatus: "approved", address: SAFE, createdAt: "2026-01-01T00:00:00.000Z" } as any);
-store.addUser({ id: "u_viewer", name: "Viewer", country: "DE", kycStatus: "approved", address: `0x${"bb".repeat(20)}`, createdAt: now } as any);
-store.addOrganisation({ id: "org_1", type: "business", name: "Zoldenburg UG", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });
-store.addOrganisation({ id: "org_starter", type: "personal", name: "Sara Lindner", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });
-store.addMember({ id: "m_owner", orgId: "org_1", userId: "u_owner", email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now });
-store.addMember({ id: "m_viewer", orgId: "org_1", userId: "u_viewer", email: "", role: "viewer", status: "active", invitedAt: now, acceptedAt: now });
-store.addMember({ id: "m_owner2", orgId: "org_starter", userId: "u_owner", email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now });
-store.addAccount({ id: "acc_1", orgId: "org_1", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: SAFE, backingUserId: "u_owner", createdAt: now, updatedAt: now });
-store.recordMoneriumIssue({ orderId: "ord-1", userId: "u_owner", amountEur: 119, counterpartyName: "Kunde AG", counterpartyIban: "DE89370400440532013000", memo: "RE-2026-0041", processedAt: "2026-09-03T09:00:00.000Z", recordedAt: now });
-store.addPaymentRequest({ id: "pr_1", code: "ABCDEFGHJKMNPQR", userId: "u_owner", orgId: "org_1", handle: "zold", amountEur: 119, currency: "EUR", methods: ["crypto"], state: "PAID", externalInvoiceNumber: "RE-2026-0042", cryptoQuotes: [], payments: [], source: { kind: "app" }, expiresAt: now, createdAt: now, updatedAt: now });
-store.addCryptoDeposit({ id: "d-1", userId: "u_owner", chainId: 31337, token: "USDC", txHash: H(5), logIndex: 0, amountUnits: "137000000", amountUsdc: 137, receipt: { amountEur: 120.14, rate: 1.1403, rateProvider: "ecb", rateAsOf: "2026-09-10", ratedAt: now, blockTimestamp: "2026-09-10T09:58:00.000Z" }, holding: "converted", settledAt: now, settlementAsset: "EURE", creditedEur: 119.62, provider: "dex", rate: 1.1452, midRate: 1.1403, conversion: { txHash: H(7), at: "2026-09-10T10:02:00.000Z", amountInUnits: "137000000" }, paymentRequestId: "pr_1", txs: [], detectedAt: now, updatedAt: now });
-writeStatementLines();
+await store.addUser({ id: "u_owner", name: "Sara Lindner", country: "DE", kycStatus: "approved", address: SAFE, createdAt: "2026-01-01T00:00:00.000Z" } as any);
+await store.addUser({ id: "u_viewer", name: "Viewer", country: "DE", kycStatus: "approved", address: `0x${"bb".repeat(20)}`, createdAt: now } as any);
+await store.addOrganisation({ id: "org_1", type: "business", name: "Zoldenburg UG", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });
+await store.addOrganisation({ id: "org_starter", type: "personal", name: "Sara Lindner", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });
+await store.addMember({ id: "m_owner", orgId: "org_1", userId: "u_owner", email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now });
+await store.addMember({ id: "m_viewer", orgId: "org_1", userId: "u_viewer", email: "", role: "viewer", status: "active", invitedAt: now, acceptedAt: now });
+await store.addMember({ id: "m_owner2", orgId: "org_starter", userId: "u_owner", email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now });
+await store.addAccount({ id: "acc_1", orgId: "org_1", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: SAFE, backingUserId: "u_owner", createdAt: now, updatedAt: now });
+await store.recordMoneriumIssue({ orderId: "ord-1", userId: "u_owner", amountEur: 119, counterpartyName: "Kunde AG", counterpartyIban: "DE89370400440532013000", memo: "RE-2026-0041", processedAt: "2026-09-03T09:00:00.000Z", recordedAt: now });
+await store.addPaymentRequest({ id: "pr_1", code: "ABCDEFGHJKMNPQR", userId: "u_owner", orgId: "org_1", handle: "zold", amountEur: 119, currency: "EUR", methods: ["crypto"], state: "PAID", externalInvoiceNumber: "RE-2026-0042", cryptoQuotes: [], payments: [], source: { kind: "app" }, expiresAt: now, createdAt: now, updatedAt: now });
+await store.addCryptoDeposit({ id: "d-1", userId: "u_owner", chainId: 31337, token: "USDC", txHash: H(5), logIndex: 0, amountUnits: "137000000", amountUsdc: 137, receipt: { amountEur: 120.14, rate: 1.1403, rateProvider: "ecb", rateAsOf: "2026-09-10", ratedAt: now, blockTimestamp: "2026-09-10T09:58:00.000Z" }, holding: "converted", settledAt: now, settlementAsset: "EURE", creditedEur: 119.62, provider: "dex", rate: 1.1452, midRate: 1.1403, conversion: { txHash: H(7), at: "2026-09-10T10:02:00.000Z", amountInUnits: "137000000" }, paymentRequestId: "pr_1", txs: [], detectedAt: now, updatedAt: now });
+await writeStatementLines();
 
 const app = express();
 app.use(express.json());
-const requireSession = (req: any, res: any) => {
+const requireSession = async (req: any, res: any) => {
   const id = req.header("x-user");
   if (id) return { userId: id };
   res.status(401).json({ error: "no session" });
   return undefined;
 };
-const deps = { ctxOf: (req: any, res: any) => resolveOrg(req, res, requireSession) };
+const deps = { ctxOf: async (req: any, res: any) => await resolveOrg(req, res, requireSession) };
 app.use("/api/orgs", createIntegrationRoutes(deps));
 app.use("/api/orgs", createBookkeepingExportRoutes(deps));
 const server = app.listen(0, "127.0.0.1");
@@ -259,7 +259,7 @@ await check("connecting verifies the key against /account, stores it encrypted a
   assert.equal(ok.body.integrations.getmyinvoices.connected, true);
   assert.equal(ok.body.integrations.getmyinvoices.accountName, "Zoldenburg UG");
   assert.ok(!JSON.stringify(ok.body).includes(GOOD_KEY), "the key is not in the response");
-  const stored = store.findOrganisation("org_1")!.integrations!.getmyinvoices!;
+  const stored = (await store.findOrganisation("org_1"))!.integrations!.getmyinvoices!;
   assert.notEqual(stored.apiKeyEnc, GOOD_KEY);
   assert.equal(fieldKeyId(stored.apiKeyEnc), "t1", "written as v2 under the active key");
   assert.equal(SECRETS.gmiApiKey.open("org_1", stored.apiKeyEnc), GOOD_KEY);
@@ -293,8 +293,8 @@ await check("the export prepares Belege for the month; the CSV and the ZIP follo
   assert.equal(entries.length, 3);
   assert.ok(entries.every((e) => e.name.endsWith(".pdf") && e.crcOk));
   // A revoked Beleg is not shipped as a valid PDF: the ZIP lists its line as missing.
-  const revoked = store.documentsForOrg("org_1")[0];
-  store.updateDocument(revoked.id, { revokedAt: new Date().toISOString() });
+  const revoked = (await store.documentsForOrg("org_1"))[0];
+  await store.updateDocument(revoked.id, { revokedAt: new Date().toISOString() });
   const zip2 = await fetch(`${API}/api/orgs/org_1/bookkeeping/export/2026-09/belege.zip`, { headers: { "x-user": "u_owner" } });
   const names = listZip(Buffer.from(await zip2.arrayBuffer())).map((e) => e.name);
   assert.equal(names.filter((n) => n.endsWith(".pdf")).length, 2);
@@ -320,8 +320,8 @@ await check("the export prepares Belege for the month; the CSV and the ZIP follo
 });
 
 await check("the upload body carries the document number (the Beleg code), the amounts, paid state, receipt date and the tx hashes", async () => {
-  const docOf = (event: string) => store.documentsForOrg("org_1").find((d) => (d.snapshot as any).line?.event === event)!;
-  const doc = docOf("crypto_held");
+  const docOf = async (event: string) => (await store.documentsForOrg("org_1")).find((d) => (d.snapshot as any).line?.event === event)!;
+  const doc = await docOf("crypto_held");
   const up = belegUpload(doc.snapshot as any, doc.code, doc.createdAt, 12);
   assert.equal(up.documentNumber, doc.code);
   assert.equal(up.grossAmount, "120.14", "the payment at its value on arrival");
@@ -332,7 +332,7 @@ await check("the upload body carries the document number (the Beleg code), the a
   assert.ok(up.tags!.includes(`tx:${H(5)}`) && up.tags!.includes("invoice:RE-2026-0042"));
   assert.equal(up.companyId, 12);
   assert.ok(up.file.subarray(0, 5).toString() === "%PDF-");
-  const disp = docOf("crypto_disposal");
+  const disp = await docOf("crypto_disposal");
   const upD = belegUpload(disp.snapshot as any, disp.code, disp.createdAt, 12);
   assert.equal(upD.grossAmount, "0.52", "the disposal is the realised loss");
   assert.equal(upD.documentType, "RECEIPT", "a loss is not a payment received");
@@ -352,13 +352,13 @@ await check("push uploads each Beleg once; a second push uploads nothing", async
   const pushed = seen.requests.slice(startIdx).filter((r) => r.path.startsWith("/documents"));
   assert.ok(pushed.length >= 6, "three lookups and three uploads, then three lookups");
   assert.ok(pushed.every((r) => r.key === GOOD_KEY && r.ua?.includes("account 4711")), "the stored key and the account-bearing User-Agent are used");
-  const audit = store.auditFor("u_owner").find((a) => a.kind === "partner.documents_pushed");
+  const audit = (await store.auditFor("u_owner")).find((a) => a.kind === "partner.documents_pushed");
   assert.ok(audit, "the push is audited");
 });
 
 await check("a receipt revoked before it was ever sent: its code never goes to GetMyInvoices", async () => {
   // The export test revoked one Beleg and issued its line another before any push.
-  const neverSent = store.documentsForOrg("org_1").filter((d) => d.revokedAt).map((d) => d.code);
+  const neverSent = (await store.documentsForOrg("org_1")).filter((d) => d.revokedAt).map((d) => d.code);
   assert.ok(neverSent.length >= 1);
   for (const code of neverSent) {
     assert.ok(!seen.requests.some((r) => r.path.includes(code) || JSON.stringify(r.body ?? "").includes(code)), `the revoked code ${code} went to GetMyInvoices`);
@@ -370,7 +370,7 @@ await check("push adds each line to the manual bank account once, with its Beleg
   const r = await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09" });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.bankAccountUid, 77, "the only manual account is used and remembered");
-  assert.equal(store.findOrganisation("org_1")!.integrations!.getmyinvoices!.bankAccountUid, 77);
+  assert.equal((await store.findOrganisation("org_1"))!.integrations!.getmyinvoices!.bankAccountUid, 77);
   assert.ok(r.body.results.every((x: any) => ["added", "exists"].includes(x.bankLine?.outcome) && x.bankLine.assigned === true), JSON.stringify(r.body.results));
   const added = bank.lines.slice(lines);
   const total = bank.lines.length;
@@ -391,9 +391,9 @@ await check("push adds each line to the manual bank account once, with its Beleg
 
 await check("a Beleg replaced after its line went up: the re-send finds the line by the old code and adds nothing", async () => {
   const IN = lineId("org_1", "monerium:issue:ord-1");
-  const before = store.findDocumentByCode(store.ledgerOf("org_1").find((e) => e.id === IN)!.statement!.documentCode!)!;
+  const before = (await store.findDocumentByCode((await store.ledgerOf("org_1")).find((e) => e.id === IN)!.statement!.documentCode!))!;
   assert.ok(bank.lines.some((t) => String(t.description).includes(before.code)), "the line is in GetMyInvoices under the old code");
-  store.updateDocument(before.id, { revokedAt: new Date().toISOString() });
+  await store.updateDocument(before.id, { revokedAt: new Date().toISOString() });
   const rep = await call("POST", `/api/orgs/org_1/bookkeeping/lines/${IN}/beleg/replace`, {});
   assert.equal(rep.status, 201, JSON.stringify(rep.body));
   const total = bank.lines.length;
@@ -422,10 +422,10 @@ for (const [name, mode] of [["the Beleg could not be attached (5xx)", "assignDow
     const X = listed.body.results.find((y: any) => y.lineId !== IN && y.bankLine?.transactionUid);
     assert.ok(X, JSON.stringify(listed.body.results));
     // Back to a line never banked: its Beleg is in GetMyInvoices, its line is not.
-    const doc = store.findDocumentByCode(X.code)!;
+    const doc = (await store.findDocumentByCode(X.code))!;
     bank.lines = bank.lines.filter((t) => t.transactionUid !== X.bankLine.transactionUid);
     bank.assigned = bank.assigned.filter((a) => a.transactionUid !== X.bankLine.transactionUid);
-    store.updateDocument(doc.id, { sentTo: { getmyinvoices: { documentUid: doc.sentTo!.getmyinvoices!.documentUid } } });
+    await store.updateDocument(doc.id, { sentTo: { getmyinvoices: { documentUid: doc.sentTo!.getmyinvoices!.documentUid } } });
     fakeMode[mode] = true;
     let first: any;
     try {
@@ -434,7 +434,7 @@ for (const [name, mode] of [["the Beleg could not be attached (5xx)", "assignDow
     assert.ok(["failed", "unknown"].includes(first.bankLine.outcome), JSON.stringify(first));
     const landed = bank.lines.filter((t) => String(t.description).includes(X.code));
     assert.equal(landed.length, 1, "the line landed once");
-    store.updateDocument(doc.id, { revokedAt: new Date().toISOString() });
+    await store.updateDocument(doc.id, { revokedAt: new Date().toISOString() });
     const rep = await call("POST", `/api/orgs/org_1/bookkeeping/lines/${X.lineId}/beleg/replace`, {});
     assert.equal(rep.status, 201, JSON.stringify(rep.body));
     const total = bank.lines.length;
@@ -512,14 +512,14 @@ await check("push: a refused upload (4xx) is still failed, and audited as such",
     assert.deepEqual(r.body.results.map((x: any) => x.outcome), ["failed", "failed", "failed"]);
     assert.match(r.body.results[0].error, /422/);
   } finally { fakeMode.upload = "normal"; }
-  const audit = store.auditFor("u_owner").find((a) => a.kind === "partner.documents_pushed") as any; // newest first
+  const audit = (await store.auditFor("u_owner")).find((a) => a.kind === "partner.documents_pushed") as any; // newest first
   assert.equal(audit.data.failed, 3, JSON.stringify(audit));
   assert.equal(audit.data.unknown, 0);
 });
 
 await check("removing the key stops pushes and leaves nothing of it in the org", async () => {
   assert.equal((await call("DELETE", "/api/orgs/org_1/integrations/getmyinvoices")).status, 200);
-  assert.equal(store.findOrganisation("org_1")!.integrations?.getmyinvoices, undefined);
+  assert.equal((await store.findOrganisation("org_1"))!.integrations?.getmyinvoices, undefined);
   assert.equal((await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09" })).status, 409);
 });
 

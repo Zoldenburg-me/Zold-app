@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import express from "express";
+import { forEachSeq } from "../services/api/src/seq.js";
 
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-role-table-")), "db.json");
 
@@ -112,31 +113,31 @@ const { initStore, store } = await import("../services/api/src/store.js");
 const { createDraftRoutes } = await import("../services/api/src/routes/business/drafts.js");
 const { createTransferRouter } = await import("../services/api/src/routes/transfers.js");
 const { resolveOrg } = await import("../services/api/src/routes/org-context.js");
-initStore();
+await initStore();
 
 const now = new Date().toISOString();
 const CO_SAFE = "0x00000000000000000000000000000000000000c0";
 const ST_SAFE = "0x00000000000000000000000000000000000000c1";
 for (const [orgId, entity] of [["org_co", "company"], ["org_st", "sole_trader"]] as const) {
-  store.addOrganisation({ id: orgId, type: "business", entity, name: orgId, plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now } as any);
+  await store.addOrganisation({ id: orgId, type: "business", entity, name: orgId, plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now } as any);
   for (const role of ROLES) {
-    store.addMember({ id: `m_${orgId}_${role}`, orgId, userId: `u_${role}`, email: "", role, status: "active", invitedAt: now, acceptedAt: now } as any);
+    await store.addMember({ id: `m_${orgId}_${role}`, orgId, userId: `u_${role}`, email: "", role, status: "active", invitedAt: now, acceptedAt: now } as any);
   }
 }
-ROLES.forEach((role, i) => store.addUser({ id: `u_${role}`, name: role, country: "DE", kycStatus: "approved", address: `0x${(i + 1).toString(16).padStart(40, "0")}`, createdAt: now } as any));
-store.addAccount({ id: "acc_co", orgId: "org_co", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: CO_SAFE, createdAt: now, updatedAt: now } as any);
-store.addAccount({ id: "acc_st", orgId: "org_st", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: ST_SAFE, backingUserId: "u_st", createdAt: now, updatedAt: now } as any);
-store.addUser({ id: "u_co_safe", name: "co", country: "DE", kycStatus: "approved", address: CO_SAFE, createdAt: now } as any);
-store.addUser({ id: "u_st", name: "st", country: "DE", kycStatus: "approved", address: ST_SAFE, createdAt: now } as any);
+await forEachSeq(ROLES, async (role, i) => await store.addUser({ id: `u_${role}`, name: role, country: "DE", kycStatus: "approved", address: `0x${(i + 1).toString(16).padStart(40, "0")}`, createdAt: now } as any));
+await store.addAccount({ id: "acc_co", orgId: "org_co", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: CO_SAFE, createdAt: now, updatedAt: now } as any);
+await store.addAccount({ id: "acc_st", orgId: "org_st", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: ST_SAFE, backingUserId: "u_st", createdAt: now, updatedAt: now } as any);
+await store.addUser({ id: "u_co_safe", name: "co", country: "DE", kycStatus: "approved", address: CO_SAFE, createdAt: now } as any);
+await store.addUser({ id: "u_st", name: "st", country: "DE", kycStatus: "approved", address: ST_SAFE, createdAt: now } as any);
 
 const app = express();
 app.use(express.json());
 const who = (req: any) => req.header("x-user");
 const requireSession = (req: any, res: any) => (who(req) ? { userId: who(req) } : (res.status(401).json({ error: "no session" }), undefined));
 const never = async () => { throw new Error("not reached"); };
-app.use("/api/orgs", createDraftRoutes({ ctxOf: (req, res) => resolveOrg(req, res, requireSession as any) }, never as any, never as any, never as any));
+app.use("/api/orgs", createDraftRoutes({ ctxOf: async (req, res) => await resolveOrg(req, res, requireSession as any) }, never as any, never as any, never as any));
 app.use("/api", createTransferRouter({
-  requireUserSession: (req, res, userId) => (who(req) === userId ? { id: "s" } : (res.status(403).json({ error: "not yours" }), undefined)),
+  requireUserSession: async (req, res, userId) => (who(req) === userId ? { id: "s" } : (res.status(403).json({ error: "not yours" }), undefined)),
 }));
 const server = app.listen(0, "127.0.0.1");
 await new Promise<void>((r) => server.once("listening", () => r()));
@@ -162,16 +163,16 @@ try {
   });
 
   await t("/transfers/:id/authorize refuses a company's Safe before reading any signature", async () => {
-    const add = (id: string, userId: string) => store.addTransfer({
+    const add = async (id: string, userId: string) => await store.addTransfer({
       id, userId, quoteId: `q_${id}`, rail: "sepa", recipientName: "R", state: "CREATED", sendEur: 10, txs: [], createdAt: now, updatedAt: now,
       auth: { to: CO_SAFE, amountWei: "1", destination: `0x${"11".repeat(32)}`, deadline: Math.floor(Date.now() / 1000) + 900 },
     } as any);
-    add("t_co", "u_co_safe");
-    add("t_st", "u_st");
+    await add("t_co", "u_co_safe");
+    await add("t_st", "u_st");
     const co = await call("POST", "/transfers/t_co/authorize", "u_co_safe", { signature: "0x1234" });
     assert.equal(co.status, 403, JSON.stringify(co.data));
     assert.equal(co.data.code, "COMPANY_SAFE");
-    assert.equal(store.findTransfer("t_co")!.state, "CREATED");
+    assert.equal((await store.findTransfer("t_co"))!.state, "CREATED");
     const st = await call("POST", "/transfers/t_st/authorize", "u_st", { signature: "0x1234" });
     assert.notEqual(st.data.code, "COMPANY_SAFE", "a sole trader's Safe is its owner's own");
   });

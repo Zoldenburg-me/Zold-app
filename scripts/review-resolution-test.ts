@@ -39,25 +39,25 @@ const { strandedAction, compensateTransfer, DEBIT_STEP } = await import("../serv
 const { projectStatementLines } = await import("../services/api/src/bookkeeping/statement.js");
 const { moneriumAmountString, paymentMemo } = await import("../services/api/src/sepa.js");
 
-initStore();
+await initStore();
 const now = new Date().toISOString();
-store.addUser({ id: "u_review", name: "Review User", country: "DE", address: `0x${"22".repeat(20)}`, createdAt: now } as any);
-function row(id: string, state: string) {
-  store.addTransfer({
+await store.addUser({ id: "u_review", name: "Review User", country: "DE", address: `0x${"22".repeat(20)}`, createdAt: now } as any);
+async function row(id: string, state: string) {
+  await store.addTransfer({
     id, userId: "u_review", quoteId: `q-${id}`, rail: "sepa", recipientName: "Payee", state, sendEur: 10,
     receiveEur: 9, fundingSource: "safe", txs: [{ step: DEBIT_STEP.safeFee, hash: `0x${"11".repeat(32)}` }],
     error: "redeem order outcome unknown: socket hang up", createdAt: now, updatedAt: now,
   } as any);
 }
-row("t_review", "MANUAL_REVIEW");
-row("t_review2", "MANUAL_REVIEW");
-row("t_failed", "FAILED");
-row("t_paid", "MANUAL_REVIEW");
-store.updateTransfer("t_paid", {
-  txs: [...store.findTransfer("t_paid")!.txs, { step: "monerium.redeem.pending", hash: "0x" }, { step: "monerium.redeem.placed", hash: "ord-abc-123" }],
+await row("t_review", "MANUAL_REVIEW");
+await row("t_review2", "MANUAL_REVIEW");
+await row("t_failed", "FAILED");
+await row("t_paid", "MANUAL_REVIEW");
+await store.updateTransfer("t_paid", {
+  txs: [...(await store.findTransfer("t_paid"))!.txs, { step: "monerium.redeem.pending", hash: "0x" }, { step: "monerium.redeem.placed", hash: "ord-abc-123" }],
   sepa: { mode: "sandbox", orderId: "ord-abc-123", state: "pending" },
 });
-row("t_paid_none", "MANUAL_REVIEW");
+await row("t_paid_none", "MANUAL_REVIEW");
 // Hashes already on record somewhere the statement books from.
 const DEPOSIT_TX = `0x${"d1".repeat(32)}`;
 const DEPOSIT_CONVERSION_TX = `0x${"d2".repeat(32)}`;
@@ -66,57 +66,57 @@ const SWEEP_TX = `0x${"e1".repeat(32)}`;
 const SWEEP_CONVERSION_TX = `0x${"e2".repeat(32)}`;
 const OTHER_TRANSFER_TX = `0x${"f1".repeat(32)}`;
 const FRESH_TX = `0x${"c0".repeat(32)}`;
-store.addCryptoDeposit({
+await store.addCryptoDeposit({
   id: "dep_other", userId: "u_someone_else", token: "EURE", txHash: DEPOSIT_TX, logIndex: 0, amountEur: 5,
   from: `0x${"33".repeat(20)}`, holding: "none", settledAt: now, detectedAt: now,
   conversion: { txHash: DEPOSIT_CONVERSION_TX }, txs: [{ step: "swap", hash: DEPOSIT_STEP_TX }],
 } as any);
-store.addConversionSweep({
+await store.addConversionSweep({
   id: "sweep_other", userId: "u_someone_else", createdAt: now,
   conversion: { txHash: SWEEP_CONVERSION_TX }, txs: [{ step: "sweep", hash: SWEEP_TX }],
 } as any);
-row("t_other", "PAID");
-store.updateTransfer("t_other", { txs: [{ step: "safe.refundTransfer", hash: OTHER_TRANSFER_TX }] });
-for (const id of ["t_ref_1", "t_ref_2"]) row(id, "MANUAL_REVIEW");
+await row("t_other", "PAID");
+await store.updateTransfer("t_other", { txs: [{ step: "safe.refundTransfer", hash: OTHER_TRANSFER_TX }] });
+for (const id of ["t_ref_1", "t_ref_2"]) await row(id, "MANUAL_REVIEW");
 // The operator's refund, already seen by the deposit scanner as a plain EURe
 // arrival into this user's Safe.
 const ARRIVED_REFUND_TX = `0x${"a7".repeat(32)}`;
-row("t_ref_3", "MANUAL_REVIEW");
-store.addCryptoDeposit({
+await row("t_ref_3", "MANUAL_REVIEW");
+await store.addCryptoDeposit({
   id: "dep_refund", userId: "u_review", token: "EURE", txHash: ARRIVED_REFUND_TX, logIndex: 0, amountEur: 1,
   from: `0x${"44".repeat(20)}`, holding: "none", settledAt: now, detectedAt: now, txs: [],
 } as any);
 const DEST_TX = `0x${"de".repeat(32)}`;
-row("t_bridge_plan", "MANUAL_REVIEW");
-store.updateTransfer("t_bridge_plan", { pickup: { bridgeDestinationTxHash: DEST_TX } as any });
-row("t_bridge_done", "MANUAL_REVIEW");
-store.updateTransfer("t_bridge_done", {
-  txs: [...store.findTransfer("t_bridge_done")!.txs, { step: "bridge.xyz.destination_tx", hash: DEST_TX }],
+await row("t_bridge_plan", "MANUAL_REVIEW");
+await store.updateTransfer("t_bridge_plan", { pickup: { bridgeDestinationTxHash: DEST_TX } as any });
+await row("t_bridge_done", "MANUAL_REVIEW");
+await store.updateTransfer("t_bridge_done", {
+  txs: [...(await store.findTransfer("t_bridge_done"))!.txs, { step: "bridge.xyz.destination_tx", hash: DEST_TX }],
 });
 
 // Transfers whose redeem order is at Monerium but not on the transfer: the
 // order placement's answer was lost, so the transfer went to review.
 const SAFE = `0x${"22".repeat(20)}`;
 const IBAN = "DE89370400440532013000";
-function sepaRow(id: string) {
-  row(id, "MANUAL_REVIEW");
-  store.updateTransfer(id, {
+async function sepaRow(id: string) {
+  await row(id, "MANUAL_REVIEW");
+  await store.updateTransfer(id, {
     recipientIban: IBAN, reference: "Invoice 42",
     moneriumRedeem: { amount: moneriumAmountString(9), iban: IBAN, issuedAt: now, message: "m", memo: paymentMemo(id, "Invoice 42"), signature: "0x01" },
-    txs: [...store.findTransfer(id)!.txs, { step: "monerium.redeem.pending", hash: "0x" }],
+    txs: [...(await store.findTransfer(id))!.txs, { step: "monerium.redeem.pending", hash: "0x" }],
   } as any);
 }
-sepaRow("t_attach");
-sepaRow("t_attach_bad");
-sepaRow("t_attach_flaky");
-row("t_owns_order", "PAYOUT_SUBMITTED");
-store.updateTransfer("t_owns_order", { sepa: { mode: "sandbox", orderId: "ord-taken", state: "processed" } });
+await sepaRow("t_attach");
+await sepaRow("t_attach_bad");
+await sepaRow("t_attach_flaky");
+await row("t_owns_order", "PAYOUT_SUBMITTED");
+await store.updateTransfer("t_owns_order", { sepa: { mode: "sandbox", orderId: "ord-taken", state: "processed" } });
 // The other two ways a transfer owns an order: an operator's PAID evidence,
 // and a placed step without a recorded order.
-row("t_owns_evidence", "MANUAL_REVIEW");
-store.updateTransfer("t_owns_evidence", { reviewResolution: { state: "PAID", note: "n", by: "op", at: now, evidence: "ord-taken-evidence" } } as any);
-row("t_owns_placed", "MANUAL_REVIEW");
-store.updateTransfer("t_owns_placed", { txs: [...store.findTransfer("t_owns_placed")!.txs, { step: "monerium.redeem.placed", hash: "ord-taken-placed" }] });
+await row("t_owns_evidence", "MANUAL_REVIEW");
+await store.updateTransfer("t_owns_evidence", { reviewResolution: { state: "PAID", note: "n", by: "op", at: now, evidence: "ord-taken-evidence" } } as any);
+await row("t_owns_placed", "MANUAL_REVIEW");
+await store.updateTransfer("t_owns_placed", { txs: [...(await store.findTransfer("t_owns_placed"))!.txs, { step: "monerium.redeem.placed", hash: "ord-taken-placed" }] });
 /** The redeem order Monerium holds for `transferId`, processed. */
 function redeemOrder(id: string, transferId: string, patch: Record<string, unknown> = {}) {
   return {
@@ -168,7 +168,7 @@ app.use("/api/admin", createOperatorGate());
 app.use("/api", createOperatorAuthRouter());
 app.use("/api", createAdminRouter());
 // The session is not under test here: every request is the owner.
-app.use("/api", createTransferRouter({ requireUserSession: () => true }));
+app.use("/api", createTransferRouter({ requireUserSession: async () => true }));
 const server = app.listen(0, "127.0.0.1");
 await new Promise<void>((r) => server.once("listening", () => r()));
 const API = `http://127.0.0.1:${(server.address() as any).port}`;
@@ -193,21 +193,21 @@ async function check(name: string, fn: () => Promise<void> | void) {
 }
 
 try {
-  await check("store.updateTransfer still refuses to move MANUAL_REVIEW", () => {
-    store.updateTransfer("t_review", { state: "REFUNDED" });
-    assert.equal(store.findTransfer("t_review")!.state, "MANUAL_REVIEW");
+  await check("store.updateTransfer still refuses to move MANUAL_REVIEW", async () => {
+    await store.updateTransfer("t_review", { state: "REFUNDED" });
+    assert.equal((await store.findTransfer("t_review"))!.state, "MANUAL_REVIEW");
   });
 
   await check("the route refuses without an operator session", async () => {
     assert.equal((await post("t_review", { state: "REFUNDED", note: NOTE }, null)).status, 401);
     assert.equal((await post("t_review", { state: "REFUNDED", note: NOTE }, "wrong-token-of-sufficient-length-000000")).status, 401);
-    assert.equal(store.findTransfer("t_review")!.state, "MANUAL_REVIEW");
+    assert.equal((await store.findTransfer("t_review"))!.state, "MANUAL_REVIEW");
   });
 
   await check("the route refuses without a note, or with a short one", async () => {
     assert.equal((await post("t_review", { state: "REFUNDED" })).status, 400);
     assert.equal((await post("t_review", { state: "REFUNDED", note: "done" })).status, 400);
-    assert.equal(store.findTransfer("t_review")!.state, "MANUAL_REVIEW");
+    assert.equal((await store.findTransfer("t_review"))!.state, "MANUAL_REVIEW");
   });
 
   await check("the route refuses a state outside REFUNDED, PAID, FAILED", async () => {
@@ -218,7 +218,7 @@ try {
 
   await check("the route refuses a transfer that is not in review, and an unknown one", async () => {
     assert.equal((await post("t_failed", { state: "REFUNDED", note: NOTE })).status, 409);
-    assert.equal(store.findTransfer("t_failed")!.state, "FAILED");
+    assert.equal((await store.findTransfer("t_failed"))!.state, "FAILED");
     assert.equal((await post("t_nope", { state: "REFUNDED", note: NOTE })).status, 404);
   });
 
@@ -235,20 +235,20 @@ try {
       const r = await post("t_review", body);
       assert.equal(r.status, 400, `${JSON.stringify(body)} -> ${r.status} ${JSON.stringify(r.body)}`);
     }
-    assert.equal(store.findTransfer("t_review")!.state, "MANUAL_REVIEW");
+    assert.equal((await store.findTransfer("t_review"))!.state, "MANUAL_REVIEW");
   });
 
   await check("MANUAL_REVIEW moves to the chosen state with the resolution and an audit entry", async () => {
     const r = await post("t_review", { state: "REFUNDED", note: NOTE, amountEur: 1, evidence: REFUND_TX });
     assert.equal(r.status, 200, JSON.stringify(r.body));
-    const t = store.findTransfer("t_review")! as any;
+    const t = (await store.findTransfer("t_review"))! as any;
     assert.equal(t.state, "REFUNDED");
     assert.equal(t.reviewResolution.state, "REFUNDED");
     assert.equal(t.reviewResolution.note, NOTE);
     assert.equal(t.reviewResolution.by, `operator:${kit.operator.id}`);
     assert.equal(t.reviewResolution.previousError, "redeem order outcome unknown: socket hang up");
     assert.ok(Date.parse(t.reviewResolution.at));
-    const entry = store.auditFor("u_review").find((e: any) => e.kind === "operator.transfer_review_resolved") as any;
+    const entry = (await store.auditFor("u_review")).find((e: any) => e.kind === "operator.transfer_review_resolved") as any;
     assert.ok(entry, "no audit entry");
     assert.equal(entry.data.transferId, "t_review");
     assert.equal(entry.data.from, "MANUAL_REVIEW");
@@ -277,8 +277,8 @@ try {
     }
   });
 
-  await check("an operator's REFUNDED records the refund and the statement books it", () => {
-    const t = store.findTransfer("t_review")!;
+  await check("an operator's REFUNDED records the refund and the statement books it", async () => {
+    const t = (await store.findTransfer("t_review"))!;
     assert.deepEqual(
       { amountEur: t.refund?.amountEur, recoveredFrom: t.refund?.recoveredFrom, deductions: t.refund?.deductions },
       { amountEur: 1, recoveredFrom: "operator-resolved", deductions: "none" },
@@ -300,32 +300,32 @@ try {
     assert.match(String(none.body.error), /evidence/i);
     const wrong = await post("t_paid", { state: "PAID", note: NOTE, evidence: "ord-not-ours" });
     assert.equal(wrong.status, 409, JSON.stringify(wrong.body));
-    assert.equal(store.findTransfer("t_paid")!.state, "MANUAL_REVIEW");
+    assert.equal((await store.findTransfer("t_paid"))!.state, "MANUAL_REVIEW");
     const unrecorded = await post("t_paid_none", { state: "PAID", note: NOTE, evidence: "ord-abc-123" });
     assert.equal(unrecorded.status, 409, "a transfer with no recorded payout cannot be marked PAID");
-    assert.equal(store.findTransfer("t_paid_none")!.state, "MANUAL_REVIEW");
+    assert.equal((await store.findTransfer("t_paid_none"))!.state, "MANUAL_REVIEW");
   });
 
   await check("a placed Monerium order that is not processed is no evidence of payout", async () => {
     const r = await post("t_paid", { state: "PAID", note: NOTE, evidence: "ord-abc-123" });
     assert.equal(r.status, 409, JSON.stringify(r.body));
     assert.match(String(r.body.error), /processed/);
-    assert.equal(store.findTransfer("t_paid")!.state, "MANUAL_REVIEW");
+    assert.equal((await store.findTransfer("t_paid"))!.state, "MANUAL_REVIEW");
   });
 
   await check("a Bridge plan's destination hash is no evidence; the executed destination tx is", async () => {
     const plan = await post("t_bridge_plan", { state: "PAID", note: NOTE, evidence: DEST_TX });
     assert.equal(plan.status, 409, JSON.stringify(plan.body));
-    assert.equal(store.findTransfer("t_bridge_plan")!.state, "MANUAL_REVIEW");
+    assert.equal((await store.findTransfer("t_bridge_plan"))!.state, "MANUAL_REVIEW");
     const done = await post("t_bridge_done", { state: "PAID", note: NOTE, evidence: DEST_TX });
     assert.equal(done.status, 200, JSON.stringify(done.body));
   });
 
   await check("PAID with the recorded order id resolves once Monerium processed it", async () => {
-    store.updateTransfer("t_paid", { sepa: { mode: "sandbox", orderId: "ord-abc-123", state: "processed" } });
+    await store.updateTransfer("t_paid", { sepa: { mode: "sandbox", orderId: "ord-abc-123", state: "processed" } });
     const r = await post("t_paid", { state: "PAID", note: NOTE, evidence: " ord-abc-123 " });
     assert.equal(r.status, 200, JSON.stringify(r.body));
-    const t = store.findTransfer("t_paid")! as any;
+    const t = (await store.findTransfer("t_paid"))! as any;
     assert.equal(t.state, "PAID");
     assert.equal(t.reviewResolution.evidence, "ord-abc-123");
   });
@@ -341,12 +341,12 @@ try {
       const r = await post("t_attach_bad", { state: "PAID", note: NOTE, evidence: id });
       assert.equal(r.status, 409, `${id}: ${r.status} ${JSON.stringify(r.body)}`);
       assert.match(String(r.body.error), why, id);
-      const t = store.findTransfer("t_attach_bad")! as any;
+      const t = (await store.findTransfer("t_attach_bad"))! as any;
       assert.equal(t.state, "MANUAL_REVIEW", id);
       assert.ok(!t.reviewResolution, `${id}: resolved`);
       assert.ok(!t.sepa, `${id}: an order was attached`);
     }
-    assert.equal(store.findTransfer("t_owns_order")!.sepa!.orderId, "ord-taken", "the owner keeps its order");
+    assert.equal((await store.findTransfer("t_owns_order"))!.sepa!.orderId, "ord-taken", "the owner keeps its order");
   });
 
   await check("a 403 on the order read says Monerium refused the read, not that the order is wrong; nothing changed", async () => {
@@ -358,13 +358,13 @@ try {
     assert.equal(r.body.code, "MONERIUM_READ_REFUSED", "a tool tells it from the 409 for an order that is not this transfer's by code");
     assert.match(String(r.body.error), /check the connection or the order id/);
     assert.doesNotMatch(String(r.body.error), /not this transfer's/);
-    const t = store.findTransfer("t_attach_bad")! as any;
+    const t = (await store.findTransfer("t_attach_bad"))! as any;
     assert.equal(t.state, "MANUAL_REVIEW");
     assert.ok(!t.reviewResolution && !t.sepa, "nothing was resolved or attached");
   });
 
   await check("no working Monerium connection is not answered Try again: 409 MONERIUM_NOT_CONNECTED, nothing changed", async () => {
-    const u = store.findUser("u_review")! as any;
+    const u = (await store.findUser("u_review"))! as any;
     const own = u.monerium;
     const cases: Array<[string, string, () => void]> = [
       // A connection that holds no credential: moneriumClientFor refuses before any request.
@@ -379,7 +379,7 @@ try {
         assert.equal(r.status, 409, `${label}: ${r.status} ${JSON.stringify(r.body)}`);
         assert.equal(r.body.code, "MONERIUM_NOT_CONNECTED", label);
         assert.doesNotMatch(String(r.body.error), /try again/i, label);
-        const t = store.findTransfer("t_attach_bad")! as any;
+        const t = (await store.findTransfer("t_attach_bad"))! as any;
         assert.equal(t.state, "MANUAL_REVIEW", label);
         assert.ok(!t.reviewResolution && !t.sepa, `${label}: the transfer changed`);
       }
@@ -392,34 +392,34 @@ try {
     for (const status of [503, 429]) {
       const r = await post("t_attach_flaky", { state: "PAID", note: NOTE, evidence: "ord-flaky" });
       assert.equal(r.status, 503, `after ${status}: ${JSON.stringify(r.body)}`);
-      const t = store.findTransfer("t_attach_flaky")! as any;
+      const t = (await store.findTransfer("t_attach_flaky"))! as any;
       assert.equal(t.state, "MANUAL_REVIEW");
       assert.ok(!t.reviewResolution && !t.sepa, "a failed read changed the transfer");
     }
     const r = await post("t_attach_flaky", { state: "PAID", note: NOTE, evidence: "ord-flaky" });
     assert.equal(r.status, 200, JSON.stringify(r.body));
-    assert.equal(store.findTransfer("t_attach_flaky")!.state, "PAID");
+    assert.equal((await store.findTransfer("t_attach_flaky"))!.state, "PAID");
   });
 
   await check("PAID attaches the processed redeem order Monerium holds for this transfer, then resolves", async () => {
     const r = await post("t_attach", { state: "PAID", note: NOTE, evidence: " ord-attach " });
     assert.equal(r.status, 200, JSON.stringify(r.body));
-    const t = store.findTransfer("t_attach")! as any;
+    const t = (await store.findTransfer("t_attach"))! as any;
     assert.equal(t.state, "PAID");
     assert.equal(t.sepa.orderId, "ord-attach");
     assert.equal(t.sepa.state, "processed");
     assert.equal(t.reviewResolution.evidence, "ord-attach");
-    const entry = store.auditFor("u_review").find((e: any) => e.kind === "operator.transfer_review_resolved" && e.data.transferId === "t_attach");
+    const entry = (await store.auditFor("u_review")).find((e: any) => e.kind === "operator.transfer_review_resolved" && e.data.transferId === "t_attach");
     assert.ok(entry, "no audit entry");
     // Attached to one transfer, the order is no evidence for another.
     const again = await post("t_attach_bad", { state: "PAID", note: NOTE, evidence: "ord-attach" });
     assert.equal(again.status, 409, JSON.stringify(again.body));
     assert.match(String(again.body.error), /another transfer/);
-    assert.equal(store.findTransfer("t_attach_bad")!.state, "MANUAL_REVIEW");
+    assert.equal((await store.findTransfer("t_attach_bad"))!.state, "MANUAL_REVIEW");
   });
 
   await check("a REFUNDED evidence hash already on record is refused", async () => {
-    const own = store.findTransfer("t_ref_1")!.txs[0].hash;
+    const own = (await store.findTransfer("t_ref_1"))!.txs[0].hash;
     for (const [label, hash] of [
       ["this transfer's own debit", own],
       ["another transfer's step", OTHER_TRANSFER_TX],
@@ -433,7 +433,7 @@ try {
       const r = await post("t_ref_1", { state: "REFUNDED", note: NOTE, amountEur: 1, evidence: hash.toUpperCase().replace("0X", "0x") });
       assert.equal(r.status, 409, `${label}: ${JSON.stringify(r.body)}`);
       assert.match(String(r.body.error), /already on record/, label);
-      const t = store.findTransfer("t_ref_1")!;
+      const t = (await store.findTransfer("t_ref_1"))!;
       assert.equal(t.state, "MANUAL_REVIEW", label);
       assert.ok(!t.refund, `${label}: a refund was written`);
     }
@@ -442,13 +442,13 @@ try {
   await check("a fresh REFUNDED hash is recorded as the operator's refund step; a reference is not", async () => {
     const fresh = await post("t_ref_1", { state: "REFUNDED", note: NOTE, amountEur: 1, evidence: FRESH_TX });
     assert.equal(fresh.status, 200, JSON.stringify(fresh.body));
-    const t = store.findTransfer("t_ref_1")!;
+    const t = (await store.findTransfer("t_ref_1"))!;
     assert.deepEqual(t.txs.filter((x) => x.step === "operator.refund").map((x) => x.hash), [FRESH_TX]);
     const reused = await post("t_ref_2", { state: "REFUNDED", note: NOTE, amountEur: 1, evidence: FRESH_TX });
     assert.equal(reused.status, 409, "the same hash on a second transfer");
     const ref = await post("t_ref_2", { state: "REFUNDED", note: NOTE, amountEur: 1, evidence: "Monerium ticket 4711" });
     assert.equal(ref.status, 200, JSON.stringify(ref.body));
-    const t2 = store.findTransfer("t_ref_2")! as any;
+    const t2 = (await store.findTransfer("t_ref_2"))! as any;
     assert.ok(!t2.txs.some((x: any) => x.step === "operator.refund"), "a reference became a tx step");
     assert.equal(t2.reviewResolution.evidence, "Monerium ticket 4711");
   });
@@ -456,9 +456,9 @@ try {
   await check("the refund tx the deposit scanner already recorded for this user is accepted and booked once, as the reversal", async () => {
     const r = await post("t_ref_3", { state: "REFUNDED", note: NOTE, amountEur: 1, evidence: ARRIVED_REFUND_TX });
     assert.equal(r.status, 200, JSON.stringify(r.body));
-    const t = store.findTransfer("t_ref_3")!;
+    const t = (await store.findTransfer("t_ref_3"))!;
     assert.deepEqual(t.txs.filter((x) => x.step === "operator.refund").map((x) => x.hash), [ARRIVED_REFUND_TX]);
-    const dep = store.cryptoDeposits.find((d: any) => d.id === "dep_refund");
+    const dep = (await store.list("cryptoDeposits")).find((d: any) => d.id === "dep_refund");
     const lines = projectStatementLines({
       orgId: "o_review", accountId: "a_review", userId: "u_review", safeAddress: `0x${"22".repeat(20)}`, timeZone: "UTC",
       transfers: [t], deposits: [dep!], issueOrders: [], sweeps: [], invoices: [], paymentRequests: [], swapsHaveExecuted: false,
@@ -470,20 +470,20 @@ try {
 
   await check("a resolved transfer is resolved once", async () => {
     assert.equal((await post("t_review", { state: "PAID", note: NOTE })).status, 409);
-    assert.equal(store.findTransfer("t_review")!.state, "REFUNDED");
+    assert.equal((await store.findTransfer("t_review"))!.state, "REFUNDED");
   });
 
   await check("resolved FAILED is never compensated or moved by an automatic path", async () => {
     const r = await post("t_review2", { state: "FAILED", note: NOTE });
     assert.equal(r.status, 200, JSON.stringify(r.body));
-    const t = store.findTransfer("t_review2")!;
+    const t = (await store.findTransfer("t_review2"))!;
     assert.equal(t.state, "FAILED");
     assert.equal(strandedAction(t, Date.now(), () => false), null, "the sweep would compensate it");
     const after = await compensateTransfer("t_review2");
     assert.equal(after.state, "FAILED");
     assert.ok(!after.refund, "compensation wrote a refund");
-    store.updateTransfer("t_review2", { state: "PAID" });
-    assert.equal(store.findTransfer("t_review2")!.state, "FAILED");
+    await store.updateTransfer("t_review2", { state: "PAID" });
+    assert.equal((await store.findTransfer("t_review2"))!.state, "FAILED");
   });
 } finally {
   globalThis.fetch = realFetch;

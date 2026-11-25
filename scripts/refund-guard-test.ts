@@ -15,10 +15,10 @@ rmSync(process.env.TRANSF_DB_PATH!, { force: true });
 const { initStore, store } = await import("../services/api/src/store.js");
 const { compensateTransfer } = await import("../services/api/src/orchestrator.js");
 
-initStore();
+await initStore();
 
 const now = new Date().toISOString();
-store.addUser({
+await store.addUser({
   id: "u-refund-guard",
   name: "Refund Guard",
   country: "DE",
@@ -27,7 +27,7 @@ store.addUser({
   address: "0x0000000000000000000000000000000000001001",
   createdAt: now,
 });
-store.addTransfer({
+await store.addTransfer({
   id: "t-refund-guard",
   userId: "u-refund-guard",
   quoteId: "q-refund-guard",
@@ -47,7 +47,7 @@ await assert.rejects(
   () => compensateTransfer("t-refund-guard"),
   /fetch failed|getaddrinfo|ENOTFOUND|network/i,
 );
-const t = store.findTransfer("t-refund-guard")!;
+const t = (await store.findTransfer("t-refund-guard"))!;
 
 assert.equal(t.state, "FAILED");
 assert.equal(t.refund, undefined, "no refund record should be written without moving value");

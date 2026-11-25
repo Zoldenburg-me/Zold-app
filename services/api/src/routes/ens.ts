@@ -32,7 +32,7 @@ import { wrap } from "./util.js";
 
 /** requireSession is injected — server.ts owns authentication. */
 export interface EnsDeps {
-  requireSession: (req: express.Request, res: express.Response) => unknown;
+  requireSession: (req: express.Request, res: express.Response) => Promise<unknown>;
 }
 
 /** A resolve(bytes,bytes) call is a few hundred bytes; this bounds the work a
@@ -180,7 +180,7 @@ interface Lookup {
  */
 async function handleRecords(handle: string | undefined, lookup: Lookup): Promise<EnsRecords> {
   if (!handle) return NO_RECORDS;
-  const user = store.findUserByHandle(handle);
+  const user = await store.findUserByHandle(handle);
   // findUserByHandle trims and lowercases; the label must be the handle as stored.
   if (!user?.paymentPage?.handle || user.paymentPage.handle !== handle) return NO_RECORDS;
   // The same test the session's ensName uses (users/ens-name.ts).
@@ -317,7 +317,7 @@ export function createEnsRouter({ requireSession }: EnsDeps) {
   router.get(
     "/ens/lookup",
     wrap(async (req, res) => {
-      if (!requireSession(req, res)) return;
+      if (!(await requireSession(req, res))) return;
       const found = await resolveEnsName(String(req.query.name ?? ""));
       if (!found.ok) return res.status(found.status).json({ error: found.error, code: found.code });
       res.setHeader("cache-control", "private, no-store");

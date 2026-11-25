@@ -48,17 +48,17 @@ function hashToken(token: string): Buffer {
 
 /** Whether any checkout credential was ever issued: none means the route is
  *  not set up (503), not that the caller is wrong (401). */
-export function checkoutCredentialIssued(): boolean {
-  return store.serviceCredentials("checkout").length > 0;
+export async function checkoutCredentialIssued(): Promise<boolean> {
+  return (await store.serviceCredentials("checkout")).length > 0;
 }
 
 /** The credential this bearer token is, if it is current at `now`. Compares
  *  hashes in constant time against every row, matched or not. */
-export function checkoutCredentialFor(token: string | undefined, now = Date.now()): ServiceCredential | undefined {
+export async function checkoutCredentialFor(token: string | undefined, now = Date.now()): Promise<ServiceCredential | undefined> {
   if (!token) return undefined;
   const presented = hashToken(token);
   let found: ServiceCredential | undefined;
-  for (const c of store.serviceCredentials("checkout")) {
+  for (const c of (await store.serviceCredentials("checkout"))) {
     const stored = Buffer.from(c.tokenHash, "hex");
     const same = stored.length === presented.length && timingSafeEqual(stored, presented);
     const live = !c.expiresAt || Date.parse(c.expiresAt) > now;
@@ -70,10 +70,10 @@ export function checkoutCredentialFor(token: string | undefined, now = Date.now(
 /** Issue a new checkout credential. The token is returned once and never
  *  stored; losing it means rotating again. `revokePrevious` ends every
  *  earlier credential now instead of after the overlap: for a leaked one. */
-export function rotateCheckoutCredential(
+export async function rotateCheckoutCredential(
   by: string,
   revokePrevious = false,
-): { id: string; token: string; previousValidUntil: string } {
+): Promise<{ id: string; token: string; previousValidUntil: string }> {
   const token = `zsc_${randomBytes(32).toString("base64url")}`;
   const row: ServiceCredential = {
     id: randomUUID(),
@@ -81,6 +81,6 @@ export function rotateCheckoutCredential(
     tokenHash: hashToken(token).toString("hex"),
     createdAt: new Date().toISOString(),
   };
-  const previousValidUntil = store.rotateServiceCredential(row, revokePrevious ? 0 : CHECKOUT_SERVICE.rotationOverlapMs, by, revokePrevious);
+  const previousValidUntil = await store.rotateServiceCredential(row, revokePrevious ? 0 : CHECKOUT_SERVICE.rotationOverlapMs, by, revokePrevious);
   return { id: row.id, token, previousValidUntil };
 }

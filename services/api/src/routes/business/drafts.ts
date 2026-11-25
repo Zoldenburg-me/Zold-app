@@ -57,6 +57,7 @@ import type { User } from "../../store.js";
 import type { Account } from "../../domain/types.js";
 import { orgEntity } from "../../domain/org-entity.js";
 import { publicSafeOp } from "./safe-ops.js";
+import { mapSeq } from "../../seq.js";
 
 export type CryptoSendPreparer = ReturnType<typeof createCryptoSendPreparer>;
 export type CompanyCryptoSendPreparer = ReturnType<typeof createCompanyCryptoSendPreparer>;
@@ -64,7 +65,7 @@ export type CompanyCryptoSendPreparer = ReturnType<typeof createCompanyCryptoSen
 /** Resolving the org and the caller's role for a request — injected so this
  *  module cannot acquire its own way of deciding who is calling. */
 export interface OrgRoutes {
-  ctxOf: (req: express.Request, res: express.Response) => OrgContext | undefined;
+  ctxOf: (req: express.Request, res: express.Response) => Promise<OrgContext | undefined>;
 }
 
 /** Reads an account's EUR balance. The chain read in production; a suite
@@ -75,11 +76,11 @@ export type BalanceReader = (address: `0x${string}`) => Promise<{ safeBalanceEur
  * Why a run with a wallet line can never be sent, or undefined. Checked at
  * submit and at execution, so a run is not approved only to be refused.
  */
-export function walletRunProblem(draft: DraftPayment): string | undefined {
+export async function walletRunProblem(draft: DraftPayment): Promise<string | undefined> {
   if (!draft.lines.some((l) => l.destination.kind === "wallet")) return undefined;
   const [line] = draft.lines;
   const d = line.destination;
-  const contact = line.contactId ? store.findContact(line.contactId) : undefined;
+  const contact = line.contactId ? (await store.findContact(line.contactId)) : undefined;
   return draft.lines.length !== 1 ? "A run that pays a wallet has exactly one line: two payments from one Safe cannot be signed at once."
     : d.kind !== "wallet" || !d.address || !contact || contact.orgId !== draft.orgId ? "A wallet payment goes to a saved contact's wallet address."
       : d.chainId !== CHAIN_ID ? `That wallet is on network ${d.chainId}; this account pays on network ${CHAIN_ID}.`
@@ -97,226 +98,234 @@ export function createDraftRoutes(
   const { ctxOf } = deps;
   const r = express.Router();
 
-  r.get("/:orgId/drafts", (req, res) => {
-    const ctx = ctxOf(req, res);
+  r.get("/:orgId/drafts", async (req, res) => {
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     if (!requirePermission(ctx, res, "drafts.read")) return;
-    const drafts = store.draftsOf(ctx.org.id);
+    const drafts = await store.draftsOf(ctx.org.id);
     res.json({
-      drafts: drafts.map((d) => ({ ...withExecutionState(d), totals: totalsByAsset(d) })),
+      drafts: await mapSeq(drafts, async (d) => ({ ...(await withExecutionState(d)), totals: totalsByAsset(d) })),
     });
   });
 
-  r.post("/:orgId/drafts", (req, res) => {
-    const ctx = ctxOf(req, res);
-    if (!ctx) return;
-    if (!requirePermission(ctx, res, "drafts.create")) return;
-    // Counted by the state reads show (withExecutionState, which writes
-    // nothing), though the row still says EXECUTING: a run is EXECUTED once
-    // every line is PAID, and FAILED once any line is FAILED, REFUNDED,
-    // MANUAL_REVIEW or past its signing deadline, even while its other lines
-    // are still live. This is a resource cap, not a money guard.
-    const open = store.draftsOf(ctx.org.id).map(withExecutionState).filter((d) => !["EXECUTED", "FAILED", "REJECTED", "CANCELLED"].includes(d.state)).length;
-    if (open >= CEILINGS.openDraftsPerOrg) {
-      return res.status(409).json(ceilingRefusal("payment runs not yet executed", CEILINGS.openDraftsPerOrg));
-    }
-    if (!Array.isArray(req.body?.lines) || req.body.lines.length > CEILINGS.linesPerDraft) {
-      return res.status(400).json({ error: `A draft needs a list of lines, at most ${CEILINGS.linesPerDraft}.` });
-    }
+  r.post("/:orgId/drafts", async (req, res) => {
+    return store.tx(async () => {
+      const ctx = await ctxOf(req, res);
+      if (!ctx) return;
+      if (!requirePermission(ctx, res, "drafts.create")) return;
+      // Counted by the state reads show (withExecutionState, which writes
+      // nothing), though the row still says EXECUTING: a run is EXECUTED once
+      // every line is PAID, and FAILED once any line is FAILED, REFUNDED,
+      // MANUAL_REVIEW or past its signing deadline, even while its other lines
+      // are still live. This is a resource cap, not a money guard.
+      const open = (await mapSeq(await store.draftsOf(ctx.org.id), withExecutionState)).filter((d) => !["EXECUTED", "FAILED", "REJECTED", "CANCELLED"].includes(d.state)).length;
+      if (open >= CEILINGS.openDraftsPerOrg) {
+        return res.status(409).json(ceilingRefusal("payment runs not yet executed", CEILINGS.openDraftsPerOrg));
+      }
+      if (!Array.isArray(req.body?.lines) || req.body.lines.length > CEILINGS.linesPerDraft) {
+        return res.status(400).json({ error: `A draft needs a list of lines, at most ${CEILINGS.linesPerDraft}.` });
+      }
 
-    // The funding source is resolved INSIDE this org and stored as an id only:
-    // an account or wallet id from another org must not be accepted, and the
-    // body must not be spread into the row.
-    const raw = req.body?.source;
-    const source: DraftPayment["source"] | undefined =
-      raw?.kind === "account" && store.accountsOf(ctx.org.id).some((a) => a.id === String(raw.accountId))
-        ? { kind: "account", accountId: String(raw.accountId) }
-        : raw?.kind === "wallet" && store.importedWalletsOf(ctx.org.id).some((w) => w.id === String(raw.walletId))
-          ? { kind: "wallet", walletId: String(raw.walletId) }
-          : undefined;
-    if (!source) {
-      return res
-        .status(400)
-        .json({ error: "A draft needs a funding source: an account or an imported wallet of this organisation." });
-    }
+      // The funding source is resolved INSIDE this org and stored as an id only:
+      // an account or wallet id from another org must not be accepted, and the
+      // body must not be spread into the row.
+      const raw = req.body?.source;
+      const source: DraftPayment["source"] | undefined =
+        raw?.kind === "account" && (await store.accountsOf(ctx.org.id)).some((a) => a.id === String(raw.accountId))
+          ? { kind: "account", accountId: String(raw.accountId) }
+          : raw?.kind === "wallet" && (await store.importedWalletsOf(ctx.org.id)).some((w) => w.id === String(raw.walletId))
+            ? { kind: "wallet", walletId: String(raw.walletId) }
+            : undefined;
+      if (!source) {
+        return res
+          .status(400)
+          .json({ error: "A draft needs a funding source: an account or an imported wallet of this organisation." });
+      }
 
-    try {
-      const contacts = contactsById(ctx.org.id);
-      const lines = (req.body?.lines ?? []).map((l: Record<string, unknown>) => ({
-        id: `dl_${randomUUID()}`,
-        ...validateLine(l, typeof l?.contactId === "string" ? contacts.get(l.contactId) : undefined),
-      }));
-      if (!lines.length) return res.status(400).json({ error: "A draft needs at least one line." });
-      assertOneLinePerInvoice(lines);
+      try {
+        const contacts = await contactsById(ctx.org.id);
+        const lines = (req.body?.lines ?? []).map((l: Record<string, unknown>) => ({
+          id: `dl_${randomUUID()}`,
+          ...validateLine(l, typeof l?.contactId === "string" ? contacts.get(l.contactId) : undefined),
+        }));
+        if (!lines.length) return res.status(400).json({ error: "A draft needs at least one line." });
+        assertOneLinePerInvoice(lines);
 
-      const now = new Date().toISOString();
-      const draft = store.addDraft({
-        id: `dft_${randomUUID()}`,
-        orgId: ctx.org.id,
-        source,
-        state: "DRAFT",
-        lines,
-        createdByMemberId: ctx.member.id,
-        activity: [activity(ctx.member.id, "created")],
-        createdAt: now,
-        updatedAt: now,
-      });
-      res.status(201).json({ draft, totals: totalsByAsset(draft) });
-    } catch (err) {
-      if (badRequest(res, err)) return;
-      throw err;
-    }
+        const now = new Date().toISOString();
+        const draft = await store.addDraft({
+          id: `dft_${randomUUID()}`,
+          orgId: ctx.org.id,
+          source,
+          state: "DRAFT",
+          lines,
+          createdByMemberId: ctx.member.id,
+          activity: [activity(ctx.member.id, "created")],
+          createdAt: now,
+          updatedAt: now,
+        });
+        res.status(201).json({ draft, totals: totalsByAsset(draft) });
+      } catch (err) {
+        if (badRequest(res, err)) return;
+        throw err;
+      }
+    });
   });
 
-  r.patch("/:orgId/drafts/:draftId", (req, res) => {
-    const ctx = ctxOf(req, res);
-    if (!ctx) return;
-    if (!requirePermission(ctx, res, "drafts.create")) return;
-    const draft = store.findDraft(String(req.params.draftId));
-    if (!draft || draft.orgId !== ctx.org.id) {
-      return res.status(404).json({ error: "no such draft" });
-    }
-    if (!isEditable(draft.state)) {
-      return res.status(409).json({
-        error: {
-          EXECUTING: "This payment run is being sent, so it can no longer be edited.",
-          EXECUTED: "This payment run was sent, so it can no longer be edited.",
-          FAILED: "This payment run failed while it was being sent. Start a new payment run instead of editing it.",
-          CANCELLED: "This payment run was cancelled. Start a new payment run instead.",
-        }[draft.state as "EXECUTING" | "EXECUTED" | "FAILED" | "CANCELLED"] ?? `A draft in ${draft.state} cannot be edited.`,
-      });
-    }
-    try {
-      const contacts = contactsById(ctx.org.id);
-      const replaced = Array.isArray(req.body?.lines);
-      if (replaced && req.body.lines.length > CEILINGS.linesPerDraft) {
-        return res.status(400).json({ error: `A draft is limited to ${CEILINGS.linesPerDraft} lines.` });
+  r.patch("/:orgId/drafts/:draftId", async (req, res) => {
+    return store.tx(async () => {
+      const ctx = await ctxOf(req, res);
+      if (!ctx) return;
+      if (!requirePermission(ctx, res, "drafts.create")) return;
+      const draft = await store.findDraft(String(req.params.draftId));
+      if (!draft || draft.orgId !== ctx.org.id) {
+        return res.status(404).json({ error: "no such draft" });
       }
-      const lines = (replaced ? req.body.lines : draft.lines).map((l: Record<string, unknown>) => ({
-        id: typeof l?.id === "string" ? l.id : `dl_${randomUUID()}`,
-        ...validateLine(l, typeof l?.contactId === "string" ? contacts.get(l.contactId) : undefined),
-      }));
-      assertOneLinePerInvoice(lines);
-      const updated = store.updateDraft(draft.id, {
-        lines,
-        // Re-pointing the lines is exactly how INVALID_DATA is resolved.
-        state: "DRAFT",
-        invalidLineIds: undefined,
-        // Whoever edits authored what is now in it, so they become the drafter
-        // four-eyes measures against. That holds without `lines` too: every
-        // line is re-read from the address book above, so an empty edit is how
-        // a changed IBAN gets stamped into the draft. Without this, B could
-        // point A's payee at B's own IBAN, edit, and then review it.
-        createdByMemberId: ctx.member.id,
-        reviewedByMemberId: undefined,
-        reviewedAt: undefined,
-        rejectedReason: undefined,
-        activity: [
-          ...draft.activity,
-          activity(ctx.member.id, "edited", ["PENDING_REVIEW", "REVIEWED"].includes(draft.state) ? `was ${draft.state}; review starts again` : undefined),
-        ],
-      });
-      res.json({ draft: updated, totals: totalsByAsset(updated) });
-    } catch (err) {
-      if (badRequest(res, err)) return;
-      throw err;
-    }
+      if (!isEditable(draft.state)) {
+        return res.status(409).json({
+          error: {
+            EXECUTING: "This payment run is being sent, so it can no longer be edited.",
+            EXECUTED: "This payment run was sent, so it can no longer be edited.",
+            FAILED: "This payment run failed while it was being sent. Start a new payment run instead of editing it.",
+            CANCELLED: "This payment run was cancelled. Start a new payment run instead.",
+          }[draft.state as "EXECUTING" | "EXECUTED" | "FAILED" | "CANCELLED"] ?? `A draft in ${draft.state} cannot be edited.`,
+        });
+      }
+      try {
+        const contacts = await contactsById(ctx.org.id);
+        const replaced = Array.isArray(req.body?.lines);
+        if (replaced && req.body.lines.length > CEILINGS.linesPerDraft) {
+          return res.status(400).json({ error: `A draft is limited to ${CEILINGS.linesPerDraft} lines.` });
+        }
+        const lines = (replaced ? req.body.lines : draft.lines).map((l: Record<string, unknown>) => ({
+          id: typeof l?.id === "string" ? l.id : `dl_${randomUUID()}`,
+          ...validateLine(l, typeof l?.contactId === "string" ? contacts.get(l.contactId) : undefined),
+        }));
+        assertOneLinePerInvoice(lines);
+        const updated = await store.updateDraft(draft.id, {
+          lines,
+          // Re-pointing the lines is exactly how INVALID_DATA is resolved.
+          state: "DRAFT",
+          invalidLineIds: undefined,
+          // Whoever edits authored what is now in it, so they become the drafter
+          // four-eyes measures against. That holds without `lines` too: every
+          // line is re-read from the address book above, so an empty edit is how
+          // a changed IBAN gets stamped into the draft. Without this, B could
+          // point A's payee at B's own IBAN, edit, and then review it.
+          createdByMemberId: ctx.member.id,
+          reviewedByMemberId: undefined,
+          reviewedAt: undefined,
+          rejectedReason: undefined,
+          activity: [
+            ...draft.activity,
+            activity(ctx.member.id, "edited", ["PENDING_REVIEW", "REVIEWED"].includes(draft.state) ? `was ${draft.state}; review starts again` : undefined),
+          ],
+        });
+        res.json({ draft: updated, totals: totalsByAsset(updated) });
+      } catch (err) {
+        if (badRequest(res, err)) return;
+        throw err;
+      }
+    });
   });
 
   /** Submit for review. Drift is checked here and again at execution. */
-  r.post("/:orgId/drafts/:draftId/submit", (req, res) => {
-    const ctx = ctxOf(req, res);
-    if (!ctx) return;
-    if (!requirePermission(ctx, res, "drafts.create")) return;
-    // Submitting is possible wherever review is: a business org, or one whose
-    // policy requires it.
-    if (!paymentReviewRequired(ctx.org) && !requireCapability(ctx, res, "transfers.approvals")) return;
+  r.post("/:orgId/drafts/:draftId/submit", async (req, res) => {
+    return store.tx(async () => {
+      const ctx = await ctxOf(req, res);
+      if (!ctx) return;
+      if (!requirePermission(ctx, res, "drafts.create")) return;
+      // Submitting is possible wherever review is: a business org, or one whose
+      // policy requires it.
+      if (!paymentReviewRequired(ctx.org) && !requireCapability(ctx, res, "transfers.approvals")) return;
 
-    const draft = store.findDraft(String(req.params.draftId));
-    if (!draft || draft.orgId !== ctx.org.id) {
-      return res.status(404).json({ error: "no such draft" });
-    }
-    const checked = reconcileDrift(draft);
-    if (checked.state === "INVALID_DATA") {
-      return res.status(409).json({
-        error:
-          "Some recipients changed since this draft was saved. Re-point those lines before submitting.",
-        draft: checked,
-      });
-    }
-    const walletProblem = walletRunProblem(checked);
-    if (walletProblem) {
-      return res.status(422).json({ error: `${walletProblem} Fix the line, then submit.`, problems: [{ lineId: checked.lines[0].id, reason: walletProblem }] });
-    }
-    try {
-      assertTransition(checked.state, "PENDING_REVIEW");
-      res.json({
-        draft: store.updateDraft(draft.id, {
-          state: "PENDING_REVIEW",
-          activity: [...checked.activity, activity(ctx.member.id, "submitted_for_review")],
-        }),
-      });
-    } catch (err) {
-      if (badRequest(res, err)) return;
-      throw err;
-    }
+      const draft = await store.findDraft(String(req.params.draftId));
+      if (!draft || draft.orgId !== ctx.org.id) {
+        return res.status(404).json({ error: "no such draft" });
+      }
+      const checked = await reconcileDrift(draft);
+      if (checked.state === "INVALID_DATA") {
+        return res.status(409).json({
+          error:
+            "Some recipients changed since this draft was saved. Re-point those lines before submitting.",
+          draft: checked,
+        });
+      }
+      const walletProblem = await walletRunProblem(checked);
+      if (walletProblem) {
+        return res.status(422).json({ error: `${walletProblem} Fix the line, then submit.`, problems: [{ lineId: checked.lines[0].id, reason: walletProblem }] });
+      }
+      try {
+        assertTransition(checked.state, "PENDING_REVIEW");
+        res.json({
+          draft: await store.updateDraft(draft.id, {
+            state: "PENDING_REVIEW",
+            activity: [...checked.activity, activity(ctx.member.id, "submitted_for_review")],
+          }),
+        });
+      } catch (err) {
+        if (badRequest(res, err)) return;
+        throw err;
+      }
+    });
   });
 
   /**
    * Review. Four eyes: the reviewer may not be the drafter, whatever the role —
    * otherwise review is a button the same person presses twice.
    */
-  r.post("/:orgId/drafts/:draftId/review", (req, res) => {
-    const ctx = ctxOf(req, res);
-    if (!ctx) return;
-    // No capability check: a draft waiting for review was put there when review
-    // applied, and it stays reviewable after review is turned off. The state
-    // machine only lets PENDING_REVIEW be reviewed.
+  r.post("/:orgId/drafts/:draftId/review", async (req, res) => {
+    return store.tx(async () => {
+      const ctx = await ctxOf(req, res);
+      if (!ctx) return;
+      // No capability check: a draft waiting for review was put there when review
+      // applied, and it stays reviewable after review is turned off. The state
+      // machine only lets PENDING_REVIEW be reviewed.
 
-    const draft = store.findDraft(String(req.params.draftId));
-    if (!draft || draft.orgId !== ctx.org.id) {
-      return res.status(404).json({ error: "no such draft" });
-    }
-    // Compared as people, not member rows: someone deactivated and re-invited
-    // holds a new row. A drafter that resolves to no user counts as the reviewer.
-    const drafterUserId = store.findMember(draft.createdByMemberId)?.userId ?? ctx.userId;
-    const verdict = canReviewDraft(ctx.member.role, ctx.userId, drafterUserId);
-    if (!verdict.allowed) return res.status(403).json({ error: verdict.reason });
+      const draft = await store.findDraft(String(req.params.draftId));
+      if (!draft || draft.orgId !== ctx.org.id) {
+        return res.status(404).json({ error: "no such draft" });
+      }
+      // Compared as people, not member rows: someone deactivated and re-invited
+      // holds a new row. A drafter that resolves to no user counts as the reviewer.
+      const drafterUserId = (await store.findMember(draft.createdByMemberId))?.userId ?? ctx.userId;
+      const verdict = canReviewDraft(ctx.member.role, ctx.userId, drafterUserId);
+      if (!verdict.allowed) return res.status(403).json({ error: verdict.reason });
 
-    const approve = req.body?.approve !== false;
-    try {
-      if (!approve) {
-        assertTransition(draft.state, "REJECTED");
-        return res.json({
-          draft: store.updateDraft(draft.id, {
-            state: "REJECTED",
-            rejectedReason: String(req.body?.reason ?? "").trim() || undefined,
+      const approve = req.body?.approve !== false;
+      try {
+        if (!approve) {
+          assertTransition(draft.state, "REJECTED");
+          return res.json({
+            draft: await store.updateDraft(draft.id, {
+              state: "REJECTED",
+              rejectedReason: String(req.body?.reason ?? "").trim() || undefined,
+              reviewedByMemberId: ctx.member.id,
+              reviewedAt: new Date().toISOString(),
+              activity: [...draft.activity, activity(ctx.member.id, "rejected", req.body?.reason)],
+            }),
+          });
+        }
+        const checked = await reconcileDrift(draft);
+        if (checked.state === "INVALID_DATA") {
+          return res.status(409).json({
+            error: "Some recipients changed since this draft was submitted.",
+            draft: checked,
+          });
+        }
+        assertTransition(checked.state, "REVIEWED");
+        res.json({
+          draft: await store.updateDraft(draft.id, {
+            state: "REVIEWED",
             reviewedByMemberId: ctx.member.id,
             reviewedAt: new Date().toISOString(),
-            activity: [...draft.activity, activity(ctx.member.id, "rejected", req.body?.reason)],
+            activity: [...checked.activity, activity(ctx.member.id, "reviewed")],
           }),
         });
+      } catch (err) {
+        if (badRequest(res, err)) return;
+        throw err;
       }
-      const checked = reconcileDrift(draft);
-      if (checked.state === "INVALID_DATA") {
-        return res.status(409).json({
-          error: "Some recipients changed since this draft was submitted.",
-          draft: checked,
-        });
-      }
-      assertTransition(checked.state, "REVIEWED");
-      res.json({
-        draft: store.updateDraft(draft.id, {
-          state: "REVIEWED",
-          reviewedByMemberId: ctx.member.id,
-          reviewedAt: new Date().toISOString(),
-          activity: [...checked.activity, activity(ctx.member.id, "reviewed")],
-        }),
-      });
-    } catch (err) {
-      if (badRequest(res, err)) return;
-      throw err;
-    }
+    });
   });
 
   /**
@@ -326,30 +335,32 @@ export function createDraftRoutes(
    * back to waiting for payment. Once execution starts, transfers may exist
    * and nothing here can withdraw them.
    */
-  r.post("/:orgId/drafts/:draftId/cancel", (req, res) => {
-    const ctx = ctxOf(req, res);
-    if (!ctx) return;
-    const draft = store.findDraft(String(req.params.draftId));
-    if (!draft || draft.orgId !== ctx.org.id) {
-      return res.status(404).json({ error: "no such draft" });
-    }
-    if (!roleCan(ctx.member.role, "drafts.create") && !roleCan(ctx.member.role, "drafts.review")) {
-      return res.status(403).json({ error: "Your role cannot propose or review payments, so it cannot cancel one." });
-    }
-    if (!isCancellable(draft.state)) {
-      return res.status(409).json({
-        error: draft.state === "CANCELLED"
-          ? "This draft is already cancelled."
-          : `A draft in ${draft.state} cannot be cancelled: sending has started.`,
+  r.post("/:orgId/drafts/:draftId/cancel", async (req, res) => {
+    return store.tx(async () => {
+      const ctx = await ctxOf(req, res);
+      if (!ctx) return;
+      const draft = await store.findDraft(String(req.params.draftId));
+      if (!draft || draft.orgId !== ctx.org.id) {
+        return res.status(404).json({ error: "no such draft" });
+      }
+      if (!roleCan(ctx.member.role, "drafts.create") && !roleCan(ctx.member.role, "drafts.review")) {
+        return res.status(403).json({ error: "Your role cannot propose or review payments, so it cannot cancel one." });
+      }
+      if (!isCancellable(draft.state)) {
+        return res.status(409).json({
+          error: draft.state === "CANCELLED"
+            ? "This draft is already cancelled."
+            : `A draft in ${draft.state} cannot be cancelled: sending has started.`,
+        });
+      }
+      const reason = String(req.body?.reason ?? "").trim().slice(0, 300) || undefined;
+      const cancelled = await store.updateDraft(draft.id, {
+        state: "CANCELLED",
+        activity: [...draft.activity, activity(ctx.member.id, "cancelled", reason)],
       });
-    }
-    const reason = String(req.body?.reason ?? "").trim().slice(0, 300) || undefined;
-    const cancelled = store.updateDraft(draft.id, {
-      state: "CANCELLED",
-      activity: [...draft.activity, activity(ctx.member.id, "cancelled", reason)],
+      await releaseInvoicesOf(draft.id);
+      res.json({ draft: cancelled });
     });
-    releaseInvoicesOf(draft.id);
-    res.json({ draft: cancelled });
   });
 
   /**
@@ -369,10 +380,10 @@ export function createDraftRoutes(
       return res.status(503).json({ error: "Sending to a crypto wallet is not open on this deployment.", code: "CRYPTO_SEND_OFF" });
     }
     if (!requireCapability(ctx, res, "transfers.drafts")) return;
-    if ("user" in payer && !requireUserCapability(payer.user, "onchain_balance", res)) return;
+    if ("user" in payer && !(await requireUserCapability(payer.user, "onchain_balance", res))) return;
     const [line] = draft.lines;
     const d = line.destination;
-    const problem = walletRunProblem(draft);
+    const problem = await walletRunProblem(draft);
     if (problem || !d.address) {
       return res.status(422).json({ error: `${problem} Nothing was created.`, problems: [{ lineId: line.id, reason: problem }] });
     }
@@ -392,29 +403,31 @@ export function createDraftRoutes(
     const { send } = prepared;
     const op = "op" in prepared ? prepared.op : undefined;
     // A company send fails with its op (liveCryptoSend); nobody signs it after.
-    const drop = (why: string) => {
-      if (op) store.endPendingSafeOp(op.id, { state: "INVALIDATED", reason: why });
-      else {
-        store.updateCryptoSend(send.id, { state: "FAILED", error: why });
-        pendingCryptoSends.delete(send.id);
-      }
+    const drop = async (why: string) => {
+      return store.tx(async () => {
+        if (op) await store.endPendingSafeOp(op.id, { state: "INVALIDATED", reason: why });
+        else {
+          await store.updateCryptoSend(send.id, { state: "FAILED", error: why });
+          pendingCryptoSends.delete(send.id);
+        }
+      });
     };
     // The checks above awaited the chain: an address-book edit may have landed.
-    const now = reconcileDrift(store.findDraft(draft.id) ?? draft);
+    const now = await reconcileDrift((await store.findDraft(draft.id)) ?? draft);
     if (now.state === "INVALID_DATA") {
-      drop("the payee changed before the send");
+      await drop("the payee changed before the send");
       return res.status(409).json({ error: "Some recipients changed since this draft was approved. It has been held.", draft: now });
     }
-    const claimed = store.claimDraftExecution(draft.id, claimable, plannedAt);
+    const claimed = await store.claimDraftExecution(draft.id, claimable, plannedAt);
     if (!claimed) {
-      drop("the payment run changed before the send");
+      await drop("the payment run changed before the send");
       return res.status(409).json({ error: "This draft changed while it was being prepared. Nothing was sent; check it and send again." });
     }
-    const found = line.invoiceId ? store.findInvoice(line.invoiceId) : undefined;
+    const found = line.invoiceId ? (await store.findInvoice(line.invoiceId)) : undefined;
     if (found && found.orgId === ctx.org.id && found.state === "PAYING" && found.payment?.draftId === claimed.id) {
-      store.updateInvoice(found.id, { payment: { ...found.payment, cryptoSendId: send.id } });
+      await store.updateInvoice(found.id, { payment: { ...found.payment, cryptoSendId: send.id } });
     }
-    const updated = store.updateDraft(claimed.id, {
+    const updated = await store.updateDraft(claimed.id, {
       cryptoSendIds: [send.id],
       activity: [...claimed.activity, activity(ctx.member.id, "executing", op
         ? "1 crypto send queued, waiting for the owners to sign."
@@ -434,7 +447,7 @@ export function createDraftRoutes(
           state: "CREATED",
           safeOpId: op.id,
         }],
-        safeOp: publicSafeOp(op),
+        safeOp: await publicSafeOp(op),
         note: "1 crypto send queued. It is waiting for the owners to sign it in the company's queue. Nothing has moved yet.",
       });
     }
@@ -469,26 +482,26 @@ export function createDraftRoutes(
    * approval and execution.
    */
   r.post("/:orgId/drafts/:draftId/execute", wrap(async (req, res) => {
-    const ctx = ctxOf(req, res);
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     // Queue, not sign: on a company org a payer starts the run and an owner
     // signs it. Elsewhere the payer's own Safe pays and the table gives both.
     if (!requirePermission(ctx, res, "transfers.queue")) return;
 
-    const draft = store.findDraft(String(req.params.draftId));
+    const draft = await store.findDraft(String(req.params.draftId));
     if (!draft || draft.orgId !== ctx.org.id) {
       return res.status(404).json({ error: "no such draft" });
     }
     // A run that is sending is answered as it reads, never re-planned.
     if (draft.state === "EXECUTING") {
-      const shown = withExecutionState(draft);
+      const shown = await withExecutionState(draft);
       return res.status(409).json({
         error: shown.state === "FAILED"
           ? "This payment run failed. Nothing more can be sent from it: create a new payment."
           : shown.state === "EXECUTED" ? "This payment run was sent." : "This payment run is being sent.",
       });
     }
-    let checked = reconcileDrift(draft);
+    let checked = await reconcileDrift(draft);
     const heldForDrift = () =>
       res.status(409).json({
         error: "Some recipients changed since this draft was approved. It has been held.",
@@ -500,7 +513,7 @@ export function createDraftRoutes(
     // owner signs them. The response says so explicitly.
     if (checked.source.kind === "wallet") {
       const walletId = checked.source.walletId;
-      const wallet = store.importedWalletsOf(ctx.org.id).find((w) => w.id === walletId);
+      const wallet = (await store.importedWalletsOf(ctx.org.id)).find((w) => w.id === walletId);
       return res.status(200).json({
         unsigned: true,
         wallet: wallet
@@ -513,7 +526,7 @@ export function createDraftRoutes(
     }
 
     // ── Funding identity ──────────────────────────────────────────────────
-    const account = store.findAccount(checked.source.accountId);
+    const account = await store.findAccount(checked.source.accountId);
     if (!account || account.orgId !== ctx.org.id) {
       return res.status(404).json({ error: "This draft's funding account no longer exists." });
     }
@@ -550,7 +563,7 @@ export function createDraftRoutes(
           "Only the person holding this account's device key can authorise its payments. Your role permits sending, but the signature has to come from that device.",
       });
     }
-    const user = store.findUser(account.backingUserId);
+    const user = await store.findUser(account.backingUserId);
     if (!user) {
       return res.status(409).json({ error: "This account's funding identity is missing." });
     }
@@ -568,7 +581,7 @@ export function createDraftRoutes(
         });
       }
       const profile = await checkBackingProfile(ctx.org, user, account.moneriumProfile.id);
-      auditProfileCheck("execute", { orgId: ctx.org.id, accountId: account.id }, user.id, profile, ctx.userId);
+      await auditProfileCheck("execute", { orgId: ctx.org.id, accountId: account.id }, user.id, profile, ctx.userId);
       if (!profile.ok) {
         return res.status(profile.status).json({ code: profile.code, error: profile.error });
       }
@@ -587,7 +600,7 @@ export function createDraftRoutes(
     // The address book is checked here, with nothing awaited between this
     // check and the bank details read below, so every IBAN and name planned
     // is the one that was approved; later awaits use these copies.
-    checked = reconcileDrift(store.findDraft(checked.id) ?? checked);
+    checked = await reconcileDrift((await store.findDraft(checked.id)) ?? checked);
     if (checked.state === "INVALID_DATA") return heldForDrift();
     // The row is live and written in place, so this is copied now: the claim
     // below compares against the draft as it was when it was planned.
@@ -609,7 +622,7 @@ export function createDraftRoutes(
         }
         invoiced.add(line.invoiceId);
       }
-      const contact = line.contactId ? store.findContact(line.contactId) : undefined;
+      const contact = line.contactId ? (await store.findContact(line.contactId)) : undefined;
       const bank = contact?.bankAccounts.find((b) => b.id === d.bankAccountId);
       if (!bank) {
         problems.push({ lineId: line.id, reason: "The saved bank account is gone." });
@@ -701,9 +714,9 @@ export function createDraftRoutes(
 
     // Refused if anyone wrote the draft since the plans above were made from
     // it (an edit, a cancel, a review): what is sent is what was checked.
-    const claimed = store.claimDraftExecution(checked.id, claimable, plannedAt);
+    const claimed = await store.claimDraftExecution(checked.id, claimable, plannedAt);
     if (!claimed) {
-      const now = store.findDraft(checked.id);
+      const now = await store.findDraft(checked.id);
       return res.status(409).json(
         now && now.updatedAt !== plannedAt && claimable.includes(now.state)
           ? { error: "This draft changed while it was being prepared. Nothing was sent; check it and send again." }
@@ -725,7 +738,7 @@ export function createDraftRoutes(
       // A line's invoiceId arrived in a request body, so it is only honoured
       // for an invoice of THIS org — otherwise a member could stamp another
       // org's invoice number on a transfer, or overwrite its payment link.
-      const found = plan.invoiceId ? store.findInvoice(plan.invoiceId) : undefined;
+      const found = plan.invoiceId ? (await store.findInvoice(plan.invoiceId)) : undefined;
       const invoice = found && found.orgId === ctx.org.id ? found : undefined;
       let built;
       try {
@@ -755,8 +768,8 @@ export function createDraftRoutes(
         // first.
         // Invoices this draft was paying go back to SUBMITTED so they can be
         // paid again by a fresh draft; the failed one is not their payment.
-        releaseInvoicesOf(claimed.id);
-        store.updateDraft(claimed.id, {
+        await releaseInvoicesOf(claimed.id);
+        await store.updateDraft(claimed.id, {
           state: "FAILED",
           transferIds: authorizations.map((a) => a.transferId),
           failureReason: `Line ${plan.lineId} could not be prepared: ${built.body?.error ?? "unknown"}`,
@@ -778,7 +791,7 @@ export function createDraftRoutes(
       }
 
       if (invoice && invoice.state === "PAYING" && invoice.payment?.draftId === claimed.id) {
-        store.updateInvoice(invoice.id, {
+        await store.updateInvoice(invoice.id, {
           payment: { ...invoice.payment, transferId: built.transfer.id },
         });
       }
@@ -791,7 +804,7 @@ export function createDraftRoutes(
       });
     }
 
-    const updated = store.updateDraft(claimed.id, {
+    const updated = await store.updateDraft(claimed.id, {
       transferIds: authorizations.map((a) => a.transferId),
       activity: [
         ...claimed.activity,
@@ -818,20 +831,20 @@ export function createDraftRoutes(
    * Derived, not stored, because the transfers are the source of truth: a
    * stored EXECUTED could disagree with a transfer sitting in MANUAL_REVIEW.
    */
-  r.get("/:orgId/drafts/:draftId", (req, res) => {
-    const ctx = ctxOf(req, res);
+  r.get("/:orgId/drafts/:draftId", async (req, res) => {
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     if (!requirePermission(ctx, res, "drafts.read")) return;
-    const draft = store.findDraft(String(req.params.draftId));
+    const draft = await store.findDraft(String(req.params.draftId));
     if (!draft || draft.orgId !== ctx.org.id) {
       return res.status(404).json({ error: "no such draft" });
     }
-    res.json({ draft: withExecutionState(draft), totals: totalsByAsset(draft) });
+    res.json({ draft: await withExecutionState(draft), totals: totalsByAsset(draft) });
   });
 
   /** Bulk import lines from a CSV. */
-  r.post("/:orgId/drafts/import-csv", express.text({ type: "*/*", limit: CSV_MAX_BYTES }), (req, res) => {
-    const ctx = ctxOf(req, res);
+  r.post("/:orgId/drafts/import-csv", express.text({ type: "*/*", limit: CSV_MAX_BYTES }), async (req, res) => {
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     if (!requirePermission(ctx, res, "drafts.create")) return;
     if (!requireCapability(ctx, res, "transfers.bulkCsv")) return;
@@ -850,7 +863,7 @@ export function createDraftRoutes(
     }
     try {
       const knownTags = new Set(
-        store.ledgerOf(ctx.org.id).flatMap((e) => e.tags),
+        (await store.ledgerOf(ctx.org.id)).flatMap((e) => e.tags),
       );
       const result = importCsv(req.body, mapping, {
         maxRows: LIMITS.bulkCsvRows,

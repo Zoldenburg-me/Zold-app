@@ -62,7 +62,7 @@ const { orgPageAccount } = await import("../services/api/src/routes/business/org
 const { MONERIUM } = await import("../services/api/src/config.js");
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const model: any = await import(pathToFileURL(path.join(ROOT, "services/api/public/business/org-monerium-model.js")).href);
-initStore();
+await initStore();
 
 let passed = 0;
 const check = async (name: string, fn: () => void | Promise<void>) => {
@@ -82,32 +82,32 @@ const OTHER_IBAN = "DE89370400440532013000";
 const keys: Record<string, Awaited<ReturnType<typeof makeSoftwarePasskey>>> = {};
 const addr: Record<string, `0x${string}`> = {};
 const hex = (b64: string) => ("0x" + Buffer.from(b64, "base64url").toString("hex")) as `0x${string}`;
-const orgRow = (id: string, entity: string) =>
-  store.addOrganisation({ id, type: "business", entity, name: "Acme GmbH", legalName: "Acme GmbH", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now } as any);
-orgRow("org_co", "company");
-orgRow("org_st", "sole_trader");
+const orgRow = async (id: string, entity: string) =>
+  await store.addOrganisation({ id, type: "business", entity, name: "Acme GmbH", legalName: "Acme GmbH", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now } as any);
+await orgRow("org_co", "company");
+await orgRow("org_st", "sole_trader");
 for (const p of ["anna", "otto", "adam", "pia"] as const) {
   keys[p] = await makeSoftwarePasskey(p, ORIGIN);
   addr[p] = passkeyOwnerAddressOfJwk(keys[p].jwk)!;
-  store.addUser({
+  await store.addUser({
     id: `u_${p}`, name: p, country: "DE", kycStatus: "approved", address: p === "anna" ? OWN_SAFE : undefined,
     passkey: { credentialId: keys[p].credentialId, publicKey: { alg: "ES256", jwk: keys[p].jwk }, signCount: 0, rpId: "localhost", createdAt: now },
     createdAt: now,
   } as any);
   const role = p === "adam" ? "admin" : p === "pia" ? "payer" : "owner";
-  store.addMember({ id: `m_${p}`, orgId: "org_co", userId: `u_${p}`, email: "", role, status: "active", invitedAt: now, acceptedAt: now } as any);
+  await store.addMember({ id: `m_${p}`, orgId: "org_co", userId: `u_${p}`, email: "", role, status: "active", invitedAt: now, acceptedAt: now } as any);
 }
-store.addMember({ id: "m_st", orgId: "org_st", userId: "u_anna", email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now } as any);
-store.setOrgSafePlan("org_co", { kind: "org", status: "active", address: SAFE, owners: [{ x: hex(keys.anna.jwk.x!), y: hex(keys.anna.jwk.y!) }], createdAt: now } as any);
-store.addAccount({ id: "acc_co", orgId: "org_co", currency: "EUR", label: "EUR", status: "gated", provider: null, identifier: {}, address: SAFE, createdAt: now, updatedAt: now } as any);
+await store.addMember({ id: "m_st", orgId: "org_st", userId: "u_anna", email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now } as any);
+await store.setOrgSafePlan("org_co", { kind: "org", status: "active", address: SAFE, owners: [{ x: hex(keys.anna.jwk.x!), y: hex(keys.anna.jwk.y!) }], createdAt: now } as any);
+await store.addAccount({ id: "acc_co", orgId: "org_co", currency: "EUR", label: "EUR", status: "gated", provider: null, identifier: {}, address: SAFE, createdAt: now, updatedAt: now } as any);
 const connected = (state = "approved") => ({
   clientId: "test-client-id-0000-1111",
   clientSecretEnc: SECRETS.orgMoneriumApiSecret.seal("org_co", "test-secret-placeholder-" + Math.random().toString(36).slice(2)),
   profile: { id: PROFILE, name: "Acme GmbH", state }, connectedAt: now, checkedAt: now, connectedByMemberId: "m_adam",
 });
-const reset = () => {
-  store.updateOrganisation("org_co", { monerium: connected() as any });
-  store.updateAccount("acc_co", { status: "gated", provider: null, identifier: {}, moneriumProfile: undefined, address: SAFE } as any);
+const reset = async () => {
+  await store.updateOrganisation("org_co", { monerium: connected() as any });
+  await store.updateAccount("acc_co", { status: "gated", provider: null, identifier: {}, moneriumProfile: undefined, address: SAFE } as any);
   Object.assign(mon, freshMon());
   chain.owners = [addr.anna];
   chain.threshold = 1;
@@ -182,7 +182,7 @@ const app = express();
 app.use(express.json());
 const who = (req: any) => req.header("x-user");
 const requireSession = (req: any, res: any) => (who(req) ? { userId: who(req) } : (res.status(401).json({ error: "no session" }), undefined));
-app.use("/api/orgs", createOrgMoneriumIbanRoutes({ ctxOf: (req, res) => resolveOrg(req, res, requireSession as any) }, io as any));
+app.use("/api/orgs", createOrgMoneriumIbanRoutes({ ctxOf: async (req, res) => await resolveOrg(req, res, requireSession as any) }, io as any));
 app.use((err: unknown, _req: any, res: any, _next: any) => res.status(500).json({ error: String((err as Error)?.stack ?? err) }));
 const server = app.listen(0, "127.0.0.1");
 await new Promise<void>((r) => server.once("listening", () => r()));
@@ -201,14 +201,14 @@ const issue = async (p = "anna", tamper?: (start: any, signed: any) => void) => 
   tamper?.(start.data, body);
   return call("POST", "/org_co/monerium/link", `u_${p}`, body);
 };
-const account = () => store.findAccount("acc_co")!;
-const gatedStill = () => {
-  assert.equal(account().status, "gated", "the account stays closed");
-  assert.equal(account().identifier.iban, undefined, "no IBAN shown");
+const account = async () => (await store.findAccount("acc_co"))!;
+const gatedStill = async () => {
+  assert.equal((await account()).status, "gated", "the account stays closed");
+  assert.equal((await account()).identifier.iban, undefined, "no IBAN shown");
 };
 
 try {
-  reset();
+  await reset();
 
   await check("only an owner whose passkey is on the Safe signs; payers, admins and sole traders are refused", async () => {
     for (const u of ["u_pia", "u_adam"]) {
@@ -225,22 +225,22 @@ try {
   });
 
   await check("keys not approved, no Safe, or a Safe needing two signatures: refused before Monerium is asked", async () => {
-    store.updateOrganisation("org_co", { monerium: connected("pending") as any });
+    await store.updateOrganisation("org_co", { monerium: connected("pending") as any });
     assert.equal((await call("POST", "/org_co/monerium/link/start", "u_anna")).data.code, "MONERIUM_NOT_CONNECTED");
-    store.updateOrganisation("org_co", { monerium: undefined });
+    await store.updateOrganisation("org_co", { monerium: undefined });
     assert.equal((await call("POST", "/org_co/monerium/link/start", "u_anna")).data.code, "MONERIUM_NOT_CONNECTED");
-    reset();
-    store.updateAccount("acc_co", { address: undefined } as any);
+    await reset();
+    await store.updateAccount("acc_co", { address: undefined } as any);
     assert.equal((await call("POST", "/org_co/monerium/link/start", "u_anna")).data.code, "ORG_SAFE_NOT_DEPLOYED");
-    reset();
+    await reset();
     chain.owners = [addr.anna, addr.otto];
     chain.threshold = 2;
     const two = await call("POST", "/org_co/monerium/link/start", "u_anna");
     assert.equal(two.status, 409);
     assert.equal(two.data.code, "ORG_SAFE_NEEDS_MORE_SIGNATURES");
     assert.equal(mon.links.length, 0);
-    gatedStill();
-    reset();
+    await gatedStill();
+    await reset();
   });
 
   await check("the challenge is the Safe message hash of Monerium's declaration", async () => {
@@ -253,7 +253,7 @@ try {
   });
 
   await check("an owner signs: the company Safe is linked under the company profile, the IBAN issued onto it, the account opened", async () => {
-    reset();
+    await reset();
     const r = await issue();
     assert.equal(r.status, 200, r.text);
     assert.equal(mon.links.length, 1);
@@ -265,7 +265,7 @@ try {
     assert.equal(link.signature, "0x5167", "the signature built from this owner's assertion");
     assert.deepEqual(signed, [`${BigInt(hex(keys.anna.jwk.x!))}:${BigInt(hex(keys.anna.jwk.y!))}`], "signed as anna's passkey owner");
     assert.deepEqual(mon.ibanRequests, [SAFE]);
-    const a = account();
+    const a = await account();
     assert.equal(a.status, "active");
     assert.equal(a.identifier.iban, IBAN);
     assert.equal(a.address, SAFE);
@@ -274,18 +274,18 @@ try {
     assert.equal(r.data.monerium.companyIban.state, "issued");
     assert.equal(r.data.monerium.companyIban.iban, IBAN);
     assert.ok(!r.text.includes("clientSecret"), "no secret in the answer");
-    assert.equal(companyIbanState(store.findOrganisation("org_co")!, a), "issued");
+    assert.equal(companyIbanState((await store.findOrganisation("org_co"))!, a), "issued");
     // Issued: nothing more to sign.
     assert.equal((await call("POST", "/org_co/monerium/link/start", "u_anna")).data.code, "IBAN_ISSUED");
   });
 
   await check("a request is spent on use and bound to its owner; an assertion over another challenge is refused", async () => {
-    reset();
+    await reset();
     // Replayed request id.
     const start = await call("POST", "/org_co/monerium/link/start", "u_anna");
     const a = await keys.anna.assert(start.data.challenge);
     const body = { requestId: start.data.requestId, ...a };
-    store.updateOrganisation("org_co", { monerium: { ...connected(), safe: undefined } as any });
+    await store.updateOrganisation("org_co", { monerium: { ...connected(), safe: undefined } as any });
     const first = await call("POST", "/org_co/monerium/link", "u_anna", { ...body, signature: "AAAA" });
     assert.equal(first.status, 401, first.text);
     const replay = await call("POST", "/org_co/monerium/link", "u_anna", body);
@@ -303,11 +303,11 @@ try {
     const w = await call("POST", "/org_co/monerium/link", "u_anna", { requestId: s3.data.requestId, ...wrong });
     assert.equal(w.status, 401, w.text);
     assert.equal(mon.links.length, 0, "nothing reached Monerium");
-    gatedStill();
+    await gatedStill();
   });
 
   await check("the Safe's owners changing after the challenge: the owner no longer on the Safe is refused", async () => {
-    reset();
+    await reset();
     const start = await call("POST", "/org_co/monerium/link/start", "u_anna");
     const a = await keys.anna.assert(start.data.challenge);
     chain.owners = [addr.otto];
@@ -315,24 +315,24 @@ try {
     assert.equal(r.status, 403, r.text);
     assert.equal(r.data.code, "NOT_A_SIGNER");
     assert.equal(mon.links.length, 0);
-    gatedStill();
+    await gatedStill();
   });
 
   await check("a link Monerium makes later, then an IBAN issued later: waiting states a check moves on", async () => {
-    reset();
+    await reset();
     mon.linkAfterReads = 1;
     mon.issueOnRequest = false;
     const r = await issue();
     assert.equal(r.status, 200, r.text);
     assert.equal(r.data.monerium.companyIban.state, "link_pending");
     assert.deepEqual(mon.ibanRequests, [], "no IBAN requested before Monerium shows the link");
-    gatedStill();
+    await gatedStill();
     assert.equal((await call("POST", "/org_co/monerium/iban/check", "u_pia")).status, 403, "a payer cannot");
     const c1 = await call("POST", "/org_co/monerium/iban/check", "u_adam");
     assert.equal(c1.status, 200, c1.text);
     assert.equal(c1.data.monerium.companyIban.state, "iban_requested");
     assert.deepEqual(mon.ibanRequests, [SAFE]);
-    gatedStill();
+    await gatedStill();
     const c2 = await call("POST", "/org_co/monerium/iban/check", "u_adam");
     assert.equal(c2.data.monerium.companyIban.state, "iban_requested", "still not issued");
     assert.equal(mon.ibanRequests.length, 1, "requested once, not on every check");
@@ -341,54 +341,54 @@ try {
     mon.ibans[0].state = "approved";
     const c3 = await call("POST", "/org_co/monerium/iban/check", "u_adam");
     assert.equal(c3.data.monerium.companyIban.state, "issued");
-    assert.equal(account().status, "active");
+    assert.equal((await account()).status, "active");
   });
 
   await check("a Safe Monerium has under another profile is refused: no IBAN requested, nothing opened", async () => {
-    reset();
+    await reset();
     mon.linkedUnder = "prof-someone-else";
     const r = await issue();
     assert.equal(r.status, 409, r.text);
     assert.equal(r.data.code, "ADDRESS_NOT_ON_PROFILE");
     assert.deepEqual(mon.ibanRequests, []);
-    gatedStill();
+    await gatedStill();
   });
 
   await check("the profile's one IBAN paying the founder's own Safe is never adopted for the company", async () => {
-    reset();
+    await reset();
     mon.ibanAnswer = "304";
     mon.ibans = [{ iban: OTHER_IBAN, profile: PROFILE, address: OWN_SAFE, state: "approved" }];
     const r = await issue();
     assert.equal(r.status, 409, r.text);
     assert.equal(r.data.code, "PROFILE_IBAN_ELSEWHERE");
     assert.ok(!r.text.includes(OTHER_IBAN), "the other IBAN is not shown");
-    gatedStill();
+    await gatedStill();
     // Even without the 304, an IBAN on the profile for another address is not this Safe's.
-    reset();
+    await reset();
     mon.issueOnRequest = false;
     mon.ibans = [{ iban: OTHER_IBAN, profile: PROFILE, address: OWN_SAFE, state: "approved" }];
     assert.equal((await issue()).data.code, "PROFILE_IBAN_ELSEWHERE");
-    gatedStill();
+    await gatedStill();
     // An IBAN for this Safe on another profile is not the company's either.
-    reset();
+    await reset();
     mon.issueOnRequest = false;
     mon.ibans = [{ iban: OTHER_IBAN, profile: "prof-someone-else", address: SAFE, state: "approved" }];
     assert.equal((await issue()).data.monerium.companyIban.state, "iban_requested");
-    gatedStill();
+    await gatedStill();
   });
 
   await check("an IBAN record for the Safe's address on another chain is never adopted", async () => {
-    reset();
+    await reset();
     mon.issueOnRequest = false;
     mon.ibans = [{ iban: OTHER_IBAN, profile: PROFILE, address: SAFE, chain: "gnosis", state: "approved" }];
     const r = await issue();
     assert.equal(r.status, 409, r.text);
     assert.equal(r.data.code, "PROFILE_IBAN_ELSEWHERE");
-    gatedStill();
+    await gatedStill();
   });
 
   await check("an issued IBAN read again: moved elsewhere closes the account; an outage or an unlisted IBAN changes nothing", async () => {
-    reset();
+    await reset();
     assert.equal((await issue()).data.monerium.companyIban.state, "issued");
     mon.ibansFail = true;
     const warn = console.warn;
@@ -397,7 +397,7 @@ try {
     try { down = await call("POST", "/org_co/monerium/iban/check", "u_adam"); } finally { console.warn = warn; }
     mon.ibansFail = false;
     assert.equal(down.status, 503);
-    assert.equal(account().status, "active", "an outage changes nothing");
+    assert.equal((await account()).status, "active", "an outage changes nothing");
     mon.ibans = [];
     assert.equal((await call("POST", "/org_co/monerium/iban/check", "u_adam")).data.monerium.companyIban.state, "issued", "an IBAN Monerium does not list is not taken off");
     mon.ibans = [{ iban: IBAN, profile: PROFILE, address: SAFE, chain: MONERIUM.chain, state: "approved" }];
@@ -408,48 +408,48 @@ try {
     assert.equal(moved.status, 200, moved.text);
     assert.equal(moved.data.monerium.companyIban.state, "moved", "said as moved, not as waiting for issuance");
     assert.match(model.ibanNotice(moved.data.monerium), /elsewhere/);
-    gatedStill();
+    await gatedStill();
     // And it is not re-adopted for the Safe while it pays elsewhere.
     const again = await call("POST", "/org_co/monerium/iban/check", "u_adam");
     assert.equal(again.data.code, "PROFILE_IBAN_ELSEWHERE");
-    gatedStill();
+    await gatedStill();
     // Moved to the same address on another chain: also closed.
-    reset();
+    await reset();
     await issue();
     mon.ibans = [{ iban: IBAN, profile: PROFILE, address: SAFE, chain: "gnosis", state: "approved" }];
     await call("POST", "/org_co/monerium/iban/check", "u_adam");
-    gatedStill();
+    await gatedStill();
   });
 
   await check("keys removed or replaced while Monerium answers are never written back", async () => {
     for (const at of ["link", "requestIban"] as const) {
       for (const change of ["remove", "replace"] as const) {
-        reset();
+        await reset();
         const replacement = { ...connected(), clientId: "test-client-id-2222-3333" };
-        mon.during = { call: at, act: () => store.updateOrganisation("org_co", { monerium: change === "remove" ? undefined : replacement as any }) };
+        mon.during = { call: at, act: async () => await store.updateOrganisation("org_co", { monerium: change === "remove" ? undefined : replacement as any }) };
         const r = await issue();
         assert.equal(r.status, 409, `${at}/${change}: ${r.text}`);
         assert.equal(r.data.code, "MONERIUM_KEYS_CHANGED");
-        const now = store.findOrganisation("org_co")!.monerium;
+        const now = (await store.findOrganisation("org_co"))!.monerium;
         if (change === "remove") assert.equal(now, undefined, `${at}: the removal stands`);
         else assert.deepEqual(now, replacement, `${at}: the replacement is not written over`);
-        gatedStill();
+        await gatedStill();
       }
     }
   });
 
   await check("an issued company account reads as verified: its payment page can show it", async () => {
-    reset();
-    assert.equal("code" in orgPageAccount(store.findOrganisation("org_co")!), true, "no page before the IBAN");
+    await reset();
+    assert.equal("code" in (await orgPageAccount((await store.findOrganisation("org_co"))!)), true, "no page before the IBAN");
     await issue();
-    const page = orgPageAccount(store.findOrganisation("org_co")!) as any;
+    const page = (await orgPageAccount((await store.findOrganisation("org_co"))!)) as any;
     assert.equal(page.code, undefined, JSON.stringify(page));
     assert.equal(page.account.identifier.iban, IBAN);
     assert.equal(page.holder, "Acme GmbH");
   });
 
   await check("Monerium refusing or down: a fixed answer, never Monerium's body", async () => {
-    reset();
+    await reset();
     mon.linkFails = "refuse";
     const warn = console.warn;
     const logged: string[] = [];
@@ -459,7 +459,7 @@ try {
       r = await issue();
       mon.linkFails = "down";
       d = await issue();
-      reset();
+      await reset();
       mon.ibanAnswer = "refuse";
       i = await issue();
     } finally { console.warn = warn; }
@@ -469,11 +469,11 @@ try {
     assert.equal(i.status, 400);
     for (const x of [r, d, i]) assert.ok(!x.text.includes(PROVIDER_BODY), "not in the answer");
     assert.ok(!logged.join("\n").includes(PROVIDER_BODY), "not in the log");
-    gatedStill();
+    await gatedStill();
   });
 
   await check("deposits: only Monerium's issue orders into the company Safe, newest first, no payer IBAN", async () => {
-    reset();
+    await reset();
     assert.deepEqual((await call("GET", "/org_co/monerium/deposits", "u_adam")).data.deposits, [], "none before the IBAN is issued");
     await issue();
     mon.orders = [

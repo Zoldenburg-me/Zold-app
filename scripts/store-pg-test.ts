@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import pg from "pg";
 import { storeSuite } from "./_store-suite.js";
+import { mapSeq } from "../services/api/src/seq.js";
 
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-store-pg-")), "db.json");
 
@@ -60,17 +61,17 @@ try {
   const now = new Date().toISOString();
   await s.addUser({ id: "u_race", address: `0x${"99".repeat(20)}`, iban: "", createdAt: now } as any);
   await s.addTransfer({ id: "t_race", userId: "u_race", quoteId: "q_race", state: "CREATED", auth: { challenge: "c" }, txs: [], createdAt: now, updatedAt: now } as any);
-  const claims = await Promise.all(Array.from({ length: 10 }, () => s.claimAuthorization("t_race")));
+  const claims = await Promise.all(Array.from({ length: 10 }, async () => await s.claimAuthorization("t_race")));
   assert.equal(claims.filter(Boolean).length, 1, "10 parallel claims: one wins");
 
   await s.addSafeOp({ id: "so_race", orgId: "org_race", state: "PENDING", signatures: [], dropped: [], createdAt: now, updatedAt: now } as any);
   const owners = Array.from({ length: 5 }, (_, i) => ({ memberId: `m${i}`, ownerAddress: `0x${String(i).repeat(40)}`, signature: "0x", signedAt: now }));
-  const signed = await Promise.all(owners.map((o) => s.addSafeOpSignature("so_race", o as any)));
+  const signed = await Promise.all(await mapSeq(owners, async (o) => await s.addSafeOpSignature("so_race", o as any)));
   assert.ok(signed.every(Boolean));
   assert.equal((await s.findSafeOp("so_race"))?.signatures.length, 5, "5 owners signing at once: every signature lands");
 
   const dep = { userId: "u_race", chainId: 84532, token: "EURE", txHash: `0x${"5e".repeat(32)}`, logIndex: 0, amountUnits: "1", holding: "none", txs: [], createdAt: now, updatedAt: now };
-  const deps = await Promise.all(Array.from({ length: 5 }, (_, i) => s.addCryptoDeposit({ ...dep, id: `dep_race_${i}` } as any)));
+  const deps = await Promise.all(Array.from({ length: 5 }, async (_, i) => await s.addCryptoDeposit({ ...dep, id: `dep_race_${i}` } as any)));
   assert.equal(new Set(deps.map((d) => d.id)).size, 1, "5 parallel records of one transfer: one row, returned to each");
   assert.equal((await a.query("SELECT 1 FROM crypto_deposits WHERE tx_hash_lc = $1", [dep.txHash])).rows.length, 1);
 
@@ -85,7 +86,7 @@ try {
     await s.addTransfer({ id, userId: "u_race", quoteId: `q-${id}`, state: "MANUAL_REVIEW", txs: [], createdAt: now, updatedAt: now } as any);
   }
   const refund = { state: "REFUNDED" as const, note: "Refunded by hand after checking the chain.", by: "op", evidence: `0x${"4f".repeat(32)}`, refund: { amountEur: 1, movedEur: 1 } };
-  const results = await Promise.all(["t_ref_a", "t_ref_b"].map((id) => srr.resolveTransferReview(id, refund)));
+  const results = await Promise.all(await mapSeq(["t_ref_a", "t_ref_b"], async (id) => await srr.resolveTransferReview(id, refund)));
   assert.equal(results.filter((r) => r.ok).length, 1, "one refund tx, one transfer");
   assert.ok(results.some((r) => !r.ok && r.code === "EVIDENCE_ON_RECORD"));
   console.log("ok - parallel: one authorization claim, every Safe op signature, one deposit row, one refund tx per transfer");

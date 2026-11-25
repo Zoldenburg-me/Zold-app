@@ -31,8 +31,8 @@ export interface Issue {
   target?: { kind: "transfer" | "user" | "recovery" | "server"; id: string };
 }
 
-export function issues(now = Date.now()): Issue[] {
-  const name = (id?: string) => (id ? store.findUser(id)?.name : undefined);
+export async function issues(now = Date.now()): Promise<Issue[]> {
+  const name = async (id?: string) => (id ? (await store.findUser(id))?.name : undefined);
   const out: Issue[] = [];
 
   for (const e of recentServerErrors()) {
@@ -43,34 +43,34 @@ export function issues(now = Date.now()): Issue[] {
     });
   }
 
-  for (const t of store.transfers) {
+  for (const t of (await store.list("transfers"))) {
     const at = t.updatedAt || t.createdAt;
     if (ATTENTION.has(t.state)) {
       out.push({
         id: `transfer:${t.id}`, source: "transfer", severity: t.state === "REFUNDED" ? "warning" : "error", at,
         title: `Transfer ${t.state.toLowerCase().replace("_", " ")}`,
         detail: t.error ?? t.sepa?.detail ?? t.refund?.deductions,
-        userId: t.userId, userName: name(t.userId), target: { kind: "transfer", id: t.id },
+        userId: t.userId, userName: await name(t.userId), target: { kind: "transfer", id: t.id },
       });
     } else if (!TERMINAL.has(t.state) && now - Date.parse(at) > STALE_MS) {
       out.push({
         id: `stuck:${t.id}`, source: "transfer", severity: "warning", at,
         title: `Transfer stuck in ${t.state}`, detail: t.sepa?.detail ?? t.sepa?.state,
-        userId: t.userId, userName: name(t.userId), target: { kind: "transfer", id: t.id },
+        userId: t.userId, userName: await name(t.userId), target: { kind: "transfer", id: t.id },
       });
     }
   }
 
-  for (const d of store.cryptoDeposits) {
+  for (const d of (await store.list("cryptoDeposits"))) {
     if (d.holding !== "refused" && d.holding !== "unconfirmed") continue;
     out.push({
       id: `deposit:${d.id}`, source: "deposit", severity: "warning", at: d.updatedAt || d.detectedAt,
       title: d.holding === "unconfirmed" ? `${d.token} conversion unconfirmed` : `${d.token} deposit refused`, detail: d.reason,
-      userId: d.userId, userName: name(d.userId), target: { kind: "transfer", id: d.id },
+      userId: d.userId, userName: await name(d.userId), target: { kind: "transfer", id: d.id },
     });
   }
 
-  for (const u of store.users) {
+  for (const u of (await store.list("users"))) {
     if (u.moneriumRefusal) {
       out.push({
         id: `refusal:${u.id}`, source: "monerium", severity: "warning", at: u.moneriumRefusal.at,
@@ -87,24 +87,24 @@ export function issues(now = Date.now()): Issue[] {
     }
   }
 
-  for (const r of store.recoveryRequests) {
+  for (const r of (await store.list("recoveryRequests"))) {
     const finalizeError = r.zoldenburg?.finalizeError ?? r.candide?.finalizeError;
     if (!finalizeError || r.status === "FINALIZED" || r.status === "CANCELED") continue;
     out.push({
       id: `recovery:${r.id}`, source: "recovery", severity: "error", at: r.zoldenburg?.finalizeAfter ?? r.requestedAt,
       title: `Recovery would not finalize${r.zoldenburg?.reference ? ` (${r.zoldenburg.reference})` : ""}`,
       detail: `${finalizeError}${r.zoldenburg?.finalizeAttempts ? ` — ${r.zoldenburg.finalizeAttempts} attempts` : ""}`,
-      userId: r.userId, userName: name(r.userId), target: { kind: "recovery", id: r.id },
+      userId: r.userId, userName: await name(r.userId), target: { kind: "recovery", id: r.id },
     });
   }
 
-  for (const e of store.auditFor(undefined, 2000)) {
+  for (const e of (await store.auditFor(undefined, 2000))) {
     if (e.kind !== "partner.call_refused") continue;
     out.push({
       id: `policy:${e.id}`, source: "policy", severity: "warning", at: e.at,
       title: `Partner call refused${e.data.partner ? ` (${e.data.partner})` : ""}`,
       detail: Object.entries(e.data).filter(([k]) => k !== "partner").map(([k, v]) => `${k}: ${v}`).join(" · "),
-      userId: e.userId, userName: name(e.userId), target: e.userId ? { kind: "user", id: e.userId } : undefined,
+      userId: e.userId, userName: await name(e.userId), target: e.userId ? { kind: "user", id: e.userId } : undefined,
     });
   }
 
@@ -133,11 +133,11 @@ function tally<T>(items: T[], key: (x: T) => string | undefined) {
   return out;
 }
 
-export function overview(now = Date.now()) {
-  const users = store.users;
-  const transfers = store.transfers;
-  const zRecoveries = store.recoveryRequests.filter((r) => r.mode === "zoldenburg");
-  const list = issues(now);
+export async function overview(now = Date.now()) {
+  const users = await store.list("users");
+  const transfers = await store.list("transfers");
+  const zRecoveries = (await store.list("recoveryRequests")).filter((r) => r.mode === "zoldenburg");
+  const list = await issues(now);
   const since = (ms: number) => (iso: string) => now - Date.parse(iso) <= ms;
   const paid = transfers.filter((t) => t.state === "PAID");
   const volume = (ms: number) => paid.filter((t) => since(ms)(t.updatedAt)).reduce((s, t) => s + (t.sendEur || 0), 0);
@@ -159,8 +159,8 @@ export function overview(now = Date.now()) {
       methods: tally(users.filter((u) => u.monerium), (u: User) => u.monerium?.method ?? (u.monerium?.accessTokenEnc ? "oauth" : undefined)),
       profileStates: tally(users.filter((u) => u.monerium || u.funding?.moneriumProfileId), moneriumProfileState),
       refusals: users.filter((u) => u.moneriumRefusal).length,
-      issueOrders: store.moneriumIssueOrders.length,
-      issuedEur: store.moneriumIssueOrders.reduce((s, r) => s + (r.amountEur || 0), 0),
+      issueOrders: (await store.list("moneriumIssueOrders")).length,
+      issuedEur: (await store.list("moneriumIssueOrders")).reduce((s, r) => s + (r.amountEur || 0), 0),
     },
     transfers: {
       total: transfers.length,

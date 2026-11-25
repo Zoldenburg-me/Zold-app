@@ -13,7 +13,8 @@
  * ./store/db.ts; both are re-exported here.
  */
 import { randomUUID } from "node:crypto";
-import { batched, db, persist, pruneSessions, seedChartOfAccounts, type Db } from "./store/db.js";
+import { beginWrites, db, endWrites, persist, pruneSessions, seedChartOfAccounts, type Db } from "./store/db.js";
+import { jsonBackend } from "./store/backend.js";
 import { auditEntry } from "./audit.js";
 import type {
   Account,
@@ -77,35 +78,49 @@ export { REVIEW_EVIDENCE_MAX, REVIEW_NOTE_MAX, REVIEW_NOTE_MIN } from "./store/r
 const capHolds = new Map<string, { userId: string; eur: number; day: string }>();
 
 /** Called after a transfer's state changed and was persisted. */
-type TransferStateListener = (t: Transfer, from: Transfer["state"]) => void;
+type TransferStateListener = (t: Transfer, from: Transfer["state"]) => void | Promise<void>;
 const transferStateListeners: TransferStateListener[] = [];
+
+/** State changes written but not yet announced: listeners run once the
+ *  write is on disk and the store is free again (store/backend.ts). */
+const announcements: (() => void)[] = [];
 
 /** A listener's failure is logged, never thrown into the write that moved the
  *  state: the change is already on disk. */
 function announceStateChange(t: Transfer, from: Transfer["state"]) {
   if (t.state === from) return;
-  for (const listener of transferStateListeners) {
-    try {
-      listener(t, from);
-    } catch (err) {
-      console.error(`store: transfer state listener failed for ${t.id}: ${describeCause(err)}`);
+  const row = structuredClone(t);
+  announcements.push(() => {
+    for (const listener of transferStateListeners) {
+      try {
+        Promise.resolve(listener(row, from)).catch((err) =>
+          console.error(`store: transfer state listener failed for ${row.id}: ${describeCause(err)}`),
+        );
+      } catch (err) {
+        console.error(`store: transfer state listener failed for ${row.id}: ${describeCause(err)}`);
+      }
     }
-  }
+  });
 }
 
-type PaymentRequestStateListener = (r: PaymentRequest, from: PaymentRequest["state"]) => void;
+type PaymentRequestStateListener = (r: PaymentRequest, from: PaymentRequest["state"]) => void | Promise<void>;
 const paymentRequestStateListeners: PaymentRequestStateListener[] = [];
 
 /** As for transfers: logged, never thrown into the write. */
 function announcePaymentRequestState(r: PaymentRequest, from: PaymentRequest["state"]) {
   if (r.state === from) return;
-  for (const listener of paymentRequestStateListeners) {
-    try {
-      listener(r, from);
-    } catch (err) {
-      console.error(`store: payment request state listener failed for ${r.id}: ${describeCause(err)}`);
+  const row = structuredClone(r);
+  announcements.push(() => {
+    for (const listener of paymentRequestStateListeners) {
+      try {
+        Promise.resolve(listener(row, from)).catch((err) =>
+          console.error(`store: payment request state listener failed for ${row.id}: ${describeCause(err)}`),
+        );
+      } catch (err) {
+        console.error(`store: payment request state listener failed for ${row.id}: ${describeCause(err)}`);
+      }
     }
-  }
+  });
 }
 
 /** Which record already holds `hash` (store/rules.ts hashOnRecordIn). */
@@ -113,27 +128,22 @@ function hashOnRecord(hash: string, userId: string): string | undefined {
   return hashOnRecordIn(db, hash, userId);
 }
 
-export const store = {
-  /** Several writes, one file write (store/db.ts). */
-  batched,
+/**
+ * The JSON backend's synchronous core. Nothing outside store.ts and
+ * store/backend.ts calls it: everything else calls `store`, which runs these
+ * methods one at a time behind the store's mutex and hands out copies.
+ */
+export const jsonCore = {
+  /** A transaction's writes land as one file write, at endTx. */
+  beginTx: beginWrites,
+  endTx: endWrites,
+  /** Run the listeners of the state changes written so far. */
+  drainAnnouncements() {
+    for (const run of announcements.splice(0)) run();
+  },
   /** One whole collection, as stored (the `list` of store/backend.ts). */
   list<K extends keyof Db>(name: K): Db[K] {
     return db[name];
-  },
-  get users() {
-    return db.users;
-  },
-  get quotes() {
-    return db.quotes;
-  },
-  get transfers() {
-    return db.transfers;
-  },
-  get sessions() {
-    return db.sessions;
-  },
-  get recoveryRequests() {
-    return db.recoveryRequests;
   },
   addUser(u: User) {
     db.users.push(u);
@@ -156,7 +166,7 @@ export const store = {
    */
   recordPasskeyUse(id: string, credentialId: string, signCount: number) {
     const patch = passkeyUsePatch(db.users.find((x) => x.id === id), credentialId, signCount);
-    return patch ? store.updateUser(id, patch) : undefined;
+    return patch ? jsonCore.updateUser(id, patch) : undefined;
   },
   serviceCredentials(service: ServiceCredential["service"]): readonly ServiceCredential[] {
     return db.serviceCredentials.filter((c) => c.service === service);
@@ -343,7 +353,7 @@ export const store = {
    *  address (routes/email-verification.ts), then one that can actually be
    *  recovered when the same address was used more than once. */
   findUserByEmail(email: string) {
-    const matches = store.usersByEmail(email);
+    const matches = jsonCore.usersByEmail(email);
     return (
       matches.find((u) => !!u.emailVerifiedAt) ??
       matches.find((u) => u.passkeySafe?.candideRecovery?.guardianStatus === "active") ??
@@ -518,9 +528,6 @@ export const store = {
   findReceiptShareBySlug(slug: string) {
     return db.receiptShares.find((s) => s.slug === slug);
   },
-  get documents() {
-    return db.documents;
-  },
   addDocument(d: StoredDocument) {
     db.documents.push(d);
     persist();
@@ -545,9 +552,6 @@ export const store = {
   // No delete. A request somebody may have paid against is a record; the
   // owner cancels it (state CANCELLED) and a visitor is told so rather than
   // getting a 404 that reads like a typo.
-  get paymentRequests() {
-    return db.paymentRequests;
-  },
   addPaymentRequest(r: PaymentRequest) {
     db.paymentRequests.push(r);
     persist();
@@ -587,9 +591,6 @@ export const store = {
   },
 
   // ── Shopify connections ───────────────────────────────────────────────────
-  get shopifyConnections() {
-    return db.shopifyConnections;
-  },
   addShopifyConnection(c: ShopifyConnection) {
     db.shopifyConnections.push(c);
     persist();
@@ -659,9 +660,6 @@ export const store = {
   merchantLinksForOrg(orgId: string): readonly MerchantLink[] {
     return db.merchantLinks.filter((l) => l.orgId === orgId);
   },
-  get merchantLinks(): readonly MerchantLink[] {
-    return db.merchantLinks;
-  },
   addReceiptShare(s: ReceiptShare) {
     db.receiptShares.push(s);
     persist();
@@ -708,9 +706,6 @@ export const store = {
     s.lastUsedAt = new Date(now).toISOString();
     persist();
     return s;
-  },
-  get operators() {
-    return db.operators;
   },
   findOperator(id: string) {
     return db.operators.find((o) => o.id === id);
@@ -811,9 +806,6 @@ export const store = {
     return db.transfers.find((t) => t.id === id);
   },
 
-  get cryptoSends() {
-    return db.cryptoSends;
-  },
   findCryptoSend(id: string) {
     return db.cryptoSends.find((s) => s.id === id);
   },
@@ -844,9 +836,6 @@ export const store = {
     return s;
   },
 
-  get cryptoDeposits() {
-    return db.cryptoDeposits;
-  },
   /** An ERC-20 transfer is identified by its tx and position in it. */
   findCryptoDeposit(txHash: string, logIndex: number) {
     return db.cryptoDeposits.find(
@@ -896,36 +885,6 @@ export const store = {
   // accounts, invoices or ledger entries: archival must not be reachable by a
   // code path that removes rows (see plans.ts).
 
-  get organisations() {
-    return db.organisations;
-  },
-  get members() {
-    return db.members;
-  },
-  get accounts() {
-    return db.accounts;
-  },
-  get contacts() {
-    return db.contacts;
-  },
-  get drafts() {
-    return db.drafts;
-  },
-  get invoices() {
-    return db.invoices;
-  },
-  get importedWallets() {
-    return db.importedWallets;
-  },
-  get chartAccounts() {
-    return db.chartAccounts;
-  },
-  get accountRules() {
-    return db.accountRules;
-  },
-  get ledger() {
-    return db.ledger;
-  },
 
   addOrganisation(org: Organisation, seedCoa = true) {
     db.organisations.push(org);
@@ -1202,9 +1161,6 @@ export const store = {
 
   // ── Bookkeeping inputs the statement writer needs ─────────────────────────
 
-  get moneriumIssueOrders() {
-    return db.moneriumIssueOrders;
-  },
   /** The bank facts of a processed issue order, once per order id. */
   recordMoneriumIssue(r: MoneriumIssueRecord) {
     const existing = db.moneriumIssueOrders.find((x) => x.orderId === r.orderId);
@@ -1212,9 +1168,6 @@ export const store = {
     db.moneriumIssueOrders.push(r);
     persist();
     return r;
-  },
-  get conversionSweeps() {
-    return db.conversionSweeps;
   },
   addConversionSweep(s: ConversionSweep) {
     db.conversionSweeps.push(s);
@@ -1225,3 +1178,6 @@ export const store = {
     return db.documents.filter((d) => d.orgId === orgId);
   },
 };
+
+/** The store (store/backend.ts): every method async, behind one mutex. */
+export const store = jsonBackend(jsonCore);

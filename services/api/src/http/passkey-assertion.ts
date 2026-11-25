@@ -41,7 +41,7 @@ export async function checkOpAssertion(
       challenge,
       true,
     );
-    const updated = store.recordPasskeyUse(user.id, passkey.credentialId, signCount);
+    const updated = await store.recordPasskeyUse(user.id, passkey.credentialId, signCount);
     if (!updated) throw new Error("this passkey is no longer the account's passkey");
     return updated;
   } catch (err: any) {

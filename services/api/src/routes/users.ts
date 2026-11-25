@@ -38,7 +38,7 @@ const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as `0x${string
 
 /** requireUserSession is injected — server.ts owns authentication. */
 export interface UserDeps {
-  requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
+  requireUserSession: (req: express.Request, res: express.Response, userId: string) => Promise<unknown>;
 }
 
 
@@ -116,7 +116,7 @@ export function createUserRouter(deps: UserDeps) {
       // lookup ambiguous. A row with no passkey is onboarding that stopped
       // before any credential existed (nothing can sign in to it), so the same
       // person may start again after a failed ceremony.
-      if (emailHeldBy(store.usersByEmail(emailNorm), EMAIL_VERIFICATION.enabled)) {
+      if (emailHeldBy(await store.usersByEmail(emailNorm), EMAIL_VERIFICATION.enabled)) {
         return res.status(409).json({
           error: "an account already uses this email — sign in with your passkey, or recover the account if you lost the device",
           code: "EMAIL_IN_USE",
@@ -180,7 +180,7 @@ export function createUserRouter(deps: UserDeps) {
       // be auditable whether or not an account exists, and "we refused someone
       // and kept no record of why" is the failure this log exists to prevent.
       if (decision.segment.startsWith("BLOCKED_")) {
-        store.audit(auditEntry("segment.decided", {
+        await store.audit(auditEntry("segment.decided", {
           residence: normaliseCountryCode(String(country)),
           ...(declaredCitizenships ? { citizenships: declaredCitizenships } : {}),
           accountType: type,
@@ -223,15 +223,15 @@ export function createUserRouter(deps: UserDeps) {
           : { mode: "sandbox", status: "kyc_pending" },
         createdAt: new Date().toISOString(),
       };
-      store.addUser(user);
-      store.setSegment(user.id, {
+      await store.addUser(user);
+      await store.setSegment(user.id, {
         value: decision.segment,
         reasonCode: decision.reasonCode,
         decidedAt: new Date().toISOString(),
         decidedBy: "system",
         ...(decision.gate ? { gate: decision.gate } : {}),
       });
-      store.updateUser(user.id, {
+      await store.updateUser(user.id, {
         ...(declaredCitizenships ? { citizenships: declaredCitizenships } : {}),
         accountType: type,
         ...(companyIncorporationCountry
@@ -251,7 +251,7 @@ export function createUserRouter(deps: UserDeps) {
             }
           : {}),
       });
-      store.addUsAnswers(user.id, {
+      await store.addUsAnswers(user.id, {
         ...answers,
         answeredAt: new Date().toISOString(),
         version: combined ? US_QUESTION_COMBINED_VERSION : US_QUESTIONS_VERSION,
@@ -265,9 +265,9 @@ export function createUserRouter(deps: UserDeps) {
         const partner = typeof c.partner === "string" && c.partner ? c.partner.slice(0, 80) : undefined;
         given.set(`${c.kind}:${partner ?? ""}`, { ...c, partner });
       }
-      store.batched(() => {
+      await store.tx(async () => {
         for (const c of given.values()) {
-          store.addConsent(user.id, {
+          await store.addConsent(user.id, {
             kind: c.kind,
             ...(c.partner ? { partner: c.partner } : {}),
             version: typeof c.version === "string" && c.version ? c.version.slice(0, 40) : CONSENT_VERSION,
@@ -277,7 +277,7 @@ export function createUserRouter(deps: UserDeps) {
           });
         }
       });
-      store.audit(auditEntry("segment.decided", {
+      await store.audit(auditEntry("segment.decided", {
         residence: user.country,
         accountType: type,
         usAnswers: answers,
@@ -286,16 +286,16 @@ export function createUserRouter(deps: UserDeps) {
         softUsSignals: decision.review?.softUsSignals ?? [],
         outcome: "account_created",
       }, user.id));
-      res.status(201).json(withSession(user));
+      res.status(201).json(await withSession(user));
     }),
   );
 
   router.get(
     "/users/:id",
     wrap(async (req, res) => {
-      let user = store.findUser(req.params.id);
+      let user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
       if (user.funding?.status === "iban_pending") {
         user = await refreshPendingIban(user);
       } else {
@@ -303,7 +303,7 @@ export function createUserRouter(deps: UserDeps) {
         user = await verifyIbanBinding(user);
       }
       const balances = await accountBalances(user.address);
-      res.json({ ...publicUser(user), ...balances });
+      res.json({ ...(await publicUser(user)), ...balances });
     }),
   );
 
@@ -315,18 +315,18 @@ export function createUserRouter(deps: UserDeps) {
   router.patch(
     "/users/:id/name",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
       const r = nameChange(user, req.body?.name);
       if ("code" in r) return res.status(r.status).json({ code: r.code, error: r.error });
-      const updated = store.updateUser(user.id, { name: r.name });
+      const updated = await store.updateUser(user.id, { name: r.name });
       // That it changed, not to what: the name itself is on the user row.
-      store.audit(auditEntry("user.name_changed", {}, user.id));
-      for (const { org } of store.organisationsForUser(user.id)) {
-        if (org.type === "personal") store.updateOrganisation(org.id, { name: r.name });
+      await store.audit(auditEntry("user.name_changed", {}, user.id));
+      for (const { org } of (await store.organisationsForUser(user.id))) {
+        if (org.type === "personal") await store.updateOrganisation(org.id, { name: r.name });
       }
-      res.json(publicUser(updated));
+      res.json(await publicUser(updated));
     }),
   );
 
@@ -339,9 +339,9 @@ export function createUserRouter(deps: UserDeps) {
   router.get(
     "/users/:id/bic",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
       if (!user.iban) return res.json({ bic: null });
       const current = normalizeIban(user.iban);
       if (user.ibanBic && normalizeIban(user.ibanBic.iban) === current) return res.json({ bic: user.ibanBic.bic });
@@ -353,7 +353,7 @@ export function createUserRouter(deps: UserDeps) {
         return res.status(502).json({ error: "Monerium did not answer. Try again in a moment." });
       }
       if (!bic) return res.json({ bic: null });
-      store.updateUser(user.id, { ibanBic: { iban: current, bic, checkedAt: new Date().toISOString() } });
+      await store.updateUser(user.id, { ibanBic: { iban: current, bic, checkedAt: new Date().toISOString() } });
       res.json({ bic });
     }),
   );
@@ -361,9 +361,9 @@ export function createUserRouter(deps: UserDeps) {
   router.get(
     "/users/:id/kyc",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
       res.json({
         userId: user.id,
         country: user.country,
@@ -394,9 +394,9 @@ export function createUserRouter(deps: UserDeps) {
   router.post(
     "/users/:id/privacy-bundle",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
       // Fail closed before any record: nothing bills it or delivers it yet.
       if (!privacyBundleLive()) return res.status(503).json({ error: "privacy bundle is not available", code: "PRIVACY_BUNDLE_UNAVAILABLE" });
       if (!requireKycApproved(user, res)) return;
@@ -412,7 +412,7 @@ export function createUserRouter(deps: UserDeps) {
       }
 
       const now = new Date().toISOString();
-      const updated = store.updateUser(user.id, {
+      const updated = await store.updateUser(user.id, {
         privacyBundle: {
           planId: plan.id,
           // Nothing here bills or calls Kokio or Mysterium, so nothing is active yet.
@@ -438,27 +438,27 @@ export function createUserRouter(deps: UserDeps) {
           },
         },
       });
-      res.status(201).json({ user: publicUser(updated), plan: publicPlan });
+      res.status(201).json({ user: await publicUser(updated), plan: publicPlan });
     }),
   );
 
   router.post(
     "/users/:id/privacy-bundle/cancel",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
       if (!user.privacyBundle || user.privacyBundle.status === "canceled") {
         return res.status(409).json({ error: "no active privacy bundle" });
       }
-      const updated = store.updateUser(user.id, {
+      const updated = await store.updateUser(user.id, {
         privacyBundle: {
           ...user.privacyBundle,
           status: "canceled",
           canceledAt: new Date().toISOString(),
         },
       });
-      res.json(publicUser(updated));
+      res.json(await publicUser(updated));
     }),
   );
 

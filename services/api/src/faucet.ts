@@ -91,7 +91,7 @@ export type FaucetResult =
 
 export async function faucetFundSafe(userId: string): Promise<FaucetResult> {
   if (!faucetEnabled()) return { ok: false, code: "FAUCET_OFF", error: "no faucet on this deployment" };
-  const user = store.findUser(userId);
+  const user = await store.findUser(userId);
   if (!user?.wallet?.deployed) return { ok: false, code: "NO_SAFE", error: "deploy your smart wallet first" };
   const to = user.address;
   if (!ADDRESS_RE.test(to) || /^0x0{40}$/.test(to)) return { ok: false, code: "NO_SAFE", error: "deploy your smart wallet first" };
@@ -99,29 +99,29 @@ export async function faucetFundSafe(userId: string): Promise<FaucetResult> {
   // Claim before the first await: nothing yields between the check above and
   // this write, so a concurrent second call sees the claim and returns.
   const grantEur = TESTNET_FAUCET.grantEur;
-  store.updateUser(user.id, { faucet: { grantedEur: grantEur, txHash: "", at: new Date().toISOString() } });
-  const release = () => store.updateUser(user.id, { faucet: undefined });
+  await store.updateUser(user.id, { faucet: { grantedEur: grantEur, txHash: "", at: new Date().toISOString() } });
+  const release = async () => await store.updateUser(user.id, { faucet: undefined });
   let sent: Sent;
   try {
     sent = await sendToken(addrs().eure, to, eur.toWei(grantEur), `grant to ${user.id}`);
   } catch (err: any) {
-    release();
+    await release();
     console.error(`faucet: funding ${user.id} failed: ${describeCause(err)}`);
     return { ok: false, code: "FAUCET_FAILED", error: UNAVAILABLE };
   }
   if (sent.kind === "dry") {
     // Nothing was sent, so a top-up plus retry can still fund this account.
-    release();
+    await release();
     console.warn(`faucet: ${faucetWallet!.account.address} holds ${eur.fromWei(sent.have)} EURe on chain ${CHAIN_ID}, below the ${grantEur} EURe grant — top it up; skipped ${user.id}`);
     return { ok: false, code: "FAUCET_DRY", error: "the test faucet is empty — try again later" };
   }
   if (sent.reverted) {
     // A reverted transfer moved nothing, so the account may claim again.
-    release();
+    await release();
     console.error(`faucet: grant to ${to} (${user.id}) reverted: ${sent.txHash}`);
     return { ok: false, code: "FAUCET_FAILED", error: UNAVAILABLE };
   }
-  store.updateUser(user.id, { faucet: { grantedEur: grantEur, txHash: sent.txHash, at: new Date().toISOString() } });
+  await store.updateUser(user.id, { faucet: { grantedEur: grantEur, txHash: sent.txHash, at: new Date().toISOString() } });
   console.log(`faucet: ${grantEur} EURe -> ${to} (${user.id}) ${sent.txHash}`);
   return { ok: true, grantedEur: grantEur, txHash: sent.txHash };
 }

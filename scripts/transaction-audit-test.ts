@@ -127,7 +127,7 @@ const transfer = (id: string, sendEur: number, over: Partial<Transfer> = {}): Tr
 });
 
 // The real cap sum, not a copy of it: a copy drifts from the code it guards.
-const usedByCapUser = () => safeFundedEurToday("cap-user");
+const usedByCapUser = async () => await safeFundedEurToday("cap-user");
 
 console.log("─── (a) clean, valid transactions ───");
 
@@ -166,16 +166,16 @@ await check("two open requests for the same euro amount get distinguishable USDC
 });
 
 /** What buildTransferFromQuote does: hold the cap, then commit the row. */
-const addUnderCap = (t: Transfer) => {
-  const held = store.holdDailyCap(t.userId, t.sendEur, FX.DAILY_CAP_EUR, usedByCapUser);
-  if (held.ok) store.addTransferUnderHold(t, held.holdId);
+const addUnderCap = async (t: Transfer) => {
+  const held = await store.holdDailyCap(t.userId, t.sendEur, FX.DAILY_CAP_EUR, usedByCapUser);
+  if (held.ok) await store.addTransferUnderHold(t, held.holdId);
   return held;
 };
 
-await check("a transfer that fits under the cap is written", () => {
-  const res = addUnderCap(transfer("t-fits", 100));
+await check("a transfer that fits under the cap is written", async () => {
+  const res = await addUnderCap(transfer("t-fits", 100));
   assert.equal(res.ok, true);
-  assert.ok(store.findTransfer("t-fits"), "the transfer was accepted but not persisted");
+  assert.ok(await store.findTransfer("t-fits"), "the transfer was accepted but not persisted");
 });
 
 await check("the destination commitment binds the recipient's NAME, not just the account", () => {
@@ -296,23 +296,23 @@ await check("an equidistant tie goes to the OLDER request", () => {
   assert.equal(m.request.id, reversed?.request.id, "attribution depends on the order requests are listed in");
 });
 
-await check("a transfer landing exactly ON the cap is allowed", () => {
-  store.transfers.length = 0;
-  const res = addUnderCap(transfer("t-on-cap", FX.DAILY_CAP_EUR));
+await check("a transfer landing exactly ON the cap is allowed", async () => {
+  (await store.list("transfers")).length = 0;
+  const res = await addUnderCap(transfer("t-on-cap", FX.DAILY_CAP_EUR));
   assert.equal(res.ok, true, "the cap is exclusive where it should be inclusive");
 });
 
-await check("one cent over the cap is refused", () => {
-  store.transfers.length = 0;
-  const res = addUnderCap(transfer("t-over-cap", FX.DAILY_CAP_EUR + 0.01));
+await check("one cent over the cap is refused", async () => {
+  (await store.list("transfers")).length = 0;
+  const res = await addUnderCap(transfer("t-over-cap", FX.DAILY_CAP_EUR + 0.01));
   assert.equal(res.ok, false);
-  assert.equal(store.findTransfer("t-over-cap"), undefined, "a refused transfer was still written");
+  assert.equal(await store.findTransfer("t-over-cap"), undefined, "a refused transfer was still written");
 });
 
 console.log("─── (d) partner and network failure ───");
 
 await check("two transfers prepared in parallel cannot both reserve the whole cap", async () => {
-  store.transfers.length = 0;
+  (await store.list("transfers")).length = 0;
   const half = FX.DAILY_CAP_EUR * 0.6; // two of these exceed the cap
   // Each "request" does its slow work (a balance read, a venue call) and only
   // then writes its row — which is exactly the window the audit found open.
@@ -320,15 +320,15 @@ await check("two transfers prepared in parallel cannot both reserve the whole ca
   // written — so the second request must be refused while the first is still
   // preparing, before it could have called Bridge.
   const race = async (id: string) => {
-    const held = store.holdDailyCap("cap-user", half, FX.DAILY_CAP_EUR, usedByCapUser);
+    const held = await store.holdDailyCap("cap-user", half, FX.DAILY_CAP_EUR, usedByCapUser);
     await new Promise((r) => setTimeout(r, 5));
     if (!held.ok) return false;
-    store.addTransferUnderHold(transfer(id, half), held.holdId);
+    await store.addTransferUnderHold(transfer(id, half), held.holdId);
     return true;
   };
   const [a, b] = await Promise.all([race("race-a"), race("race-b")]);
   assert.equal([a, b].filter(Boolean).length, 1, "both concurrent transfers reserved the full cap");
-  assert.equal(usedByCapUser(), half, "the cap ledger does not match the transfers that were written");
+  assert.equal(await usedByCapUser(), half, "the cap ledger does not match the transfers that were written");
 });
 
 await check("transfer creation RESERVES the cap rather than only checking it", () => {
@@ -350,28 +350,28 @@ await check("transfer creation RESERVES the cap rather than only checking it", (
   );
 });
 
-await check("a released hold frees the cap; a committed one cannot be released twice", () => {
-  store.transfers.length = 0;
-  const a = store.holdDailyCap("cap-user", FX.DAILY_CAP_EUR, FX.DAILY_CAP_EUR, usedByCapUser);
+await check("a released hold frees the cap; a committed one cannot be released twice", async () => {
+  (await store.list("transfers")).length = 0;
+  const a = await store.holdDailyCap("cap-user", FX.DAILY_CAP_EUR, FX.DAILY_CAP_EUR, usedByCapUser);
   assert.equal(a.ok, true);
-  const blocked = store.holdDailyCap("cap-user", 1, FX.DAILY_CAP_EUR, usedByCapUser);
+  const blocked = await store.holdDailyCap("cap-user", 1, FX.DAILY_CAP_EUR, usedByCapUser);
   assert.equal(blocked.ok, false, "a second hold fit beside a full-cap hold that is still preparing");
-  store.releaseCapHold((a as { holdId: string }).holdId);
-  assert.equal(usedByCapUser(), 0, "a released hold still counts against the cap");
-  const b = store.holdDailyCap("cap-user", 10, FX.DAILY_CAP_EUR, usedByCapUser);
+  await store.releaseCapHold((a as { holdId: string }).holdId);
+  assert.equal(await usedByCapUser(), 0, "a released hold still counts against the cap");
+  const b = await store.holdDailyCap("cap-user", 10, FX.DAILY_CAP_EUR, usedByCapUser);
   assert.equal(b.ok, true, "the cap stayed taken after the refused transfer released it");
   const id = (b as { holdId: string }).holdId;
-  store.addTransferUnderHold(transfer("t-held", 10), id);
-  store.releaseCapHold(id); // what the finally block does after success
-  assert.equal(usedByCapUser(), 10, "committing a hold counted the amount twice, or releasing it uncounted the row");
-  assert.throws(() => store.addTransferUnderHold(transfer("t-held-2", 10), id), /no cap hold/);
+  await store.addTransferUnderHold(transfer("t-held", 10), id);
+  await store.releaseCapHold(id); // what the finally block does after success
+  assert.equal(await usedByCapUser(), 10, "committing a hold counted the amount twice, or releasing it uncounted the row");
+  await assert.rejects(async () => await store.addTransferUnderHold(transfer("t-held-2", 10), id), /no cap hold/);
 });
 
-await check("an abandoned unsigned transfer frees the cap; a still-signable one holds it", () => {
-  store.transfers.length = 0;
+await check("an abandoned unsigned transfer frees the cap; a still-signable one holds it", async () => {
+  (await store.list("transfers")).length = 0;
   const now = new Date();
   const nowSec = now.getTime() / 1000;
-  const used = () => safeFundedEurToday("cap-user", now);
+  const used = async () => await safeFundedEurToday("cap-user", now);
   // Same clock as `now`, so a run across UTC midnight cannot change the day.
   const row = (id: string, sendEur: number, over: Partial<Transfer> = {}) =>
     transfer(id, sendEur, { createdAt: now.toISOString(), ...over });
@@ -383,24 +383,24 @@ await check("an abandoned unsigned transfer frees the cap; a still-signable one 
     ...(authorizedAt ? { authorizedAt } : {}),
   });
   try {
-    store.addTransfer(row("t-abandoned", FX.DAILY_CAP_EUR, { auth: auth(nowSec - 1) }));
-    assert.equal(used(), 0, "a never-signed transfer past its deadline still counts against the cap");
-    store.addTransfer(row("t-live", 10, { auth: auth(nowSec + 600) }));
-    assert.equal(used(), 10, "an unsigned transfer that can still be signed stopped counting");
+    await store.addTransfer(row("t-abandoned", FX.DAILY_CAP_EUR, { auth: auth(nowSec - 1) }));
+    assert.equal(await used(), 0, "a never-signed transfer past its deadline still counts against the cap");
+    await store.addTransfer(row("t-live", 10, { auth: auth(nowSec + 600) }));
+    assert.equal(await used(), 10, "an unsigned transfer that can still be signed stopped counting");
     // AT the deadline assertDeviceAuthorization still accepts a signature.
-    store.addTransfer(row("t-at-deadline", 5, { auth: auth(nowSec) }));
-    assert.equal(used(), 15, "a transfer signable at exactly its deadline stopped counting");
+    await store.addTransfer(row("t-at-deadline", 5, { auth: auth(nowSec) }));
+    assert.equal(await used(), 15, "a transfer signable at exactly its deadline stopped counting");
     // Claimed past its deadline: the debit may be in flight, so it still counts.
-    store.addTransfer(row("t-claimed", 20, { auth: auth(nowSec - 1, now.toISOString()) }));
+    await store.addTransfer(row("t-claimed", 20, { auth: auth(nowSec - 1, now.toISOString()) }));
     // CREATED with no terms at all: fail closed and count it.
-    store.addTransfer(row("t-no-auth", 30));
-    assert.equal(used(), 65);
+    await store.addTransfer(row("t-no-auth", 30));
+    assert.equal(await used(), 65);
   } finally {
-    store.transfers.length = 0;
+    (await store.list("transfers")).length = 0;
   }
 });
 
-await check("a deposit recorded twice by overlapping scans is stored once", () => {
+await check("a deposit recorded twice by overlapping scans is stored once", async () => {
   const base = {
     userId: "u1",
     chainId: 31337,
@@ -416,10 +416,10 @@ await check("a deposit recorded twice by overlapping scans is stored once", () =
     detectedAt: iso(0),
     updatedAt: iso(0),
   };
-  const before = store.cryptoDeposits.length;
-  const first = store.addCryptoDeposit({ id: "dep-first", ...base });
-  const second = store.addCryptoDeposit({ id: "dep-second", ...base });
-  assert.equal(store.cryptoDeposits.length, before + 1, "one on-chain transfer was recorded as two deposits");
+  const before = (await store.list("cryptoDeposits")).length;
+  const first = await store.addCryptoDeposit({ id: "dep-first", ...base });
+  const second = await store.addCryptoDeposit({ id: "dep-second", ...base });
+  assert.equal((await store.list("cryptoDeposits")).length, before + 1, "one on-chain transfer was recorded as two deposits");
   assert.equal(second.id, first.id, "the second write did not return the row that already existed");
 });
 

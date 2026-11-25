@@ -26,24 +26,26 @@ import type { LedgerEntry } from "../../domain/types.js";
 import { bookedCode, isOwnTransfer } from "../../domain/ledger.js";
 import { redactedMessage } from "../../http/log-cause.js";
 import { auditEntry } from "../../audit.js";
+import { mapSeq } from "../../seq.js";
 
 export interface OrgRoutes {
-  ctxOf: (req: express.Request, res: express.Response) => OrgContext | undefined;
+  ctxOf: (req: express.Request, res: express.Response) => Promise<OrgContext | undefined>;
 }
 
 /** The line's Beleg if it may be handed out. The statement, the CSV and the
  *  ZIP all use this one rule, so a revoked Beleg reads as missing everywhere
  *  until prepare issues a new one, and one that stopped verifying until it is
  *  replaced. */
-function liveBeleg(e: LedgerEntry) {
-  const b = belegOfLine(e);
+async function liveBeleg(e: LedgerEntry) {
+  const b = await belegOfLine(e);
   return b && "live" in b ? b.live : undefined;
 }
 
 /** The line as the dashboard and the accountant see it. A listing builds `paid` once. */
-export function publicStatementLine(e: LedgerEntry, paid: InvoicePayments = invoicePayments(store.invoices)) {
+export async function publicStatementLine(e: LedgerEntry, given?: InvoicePayments) {
+  const paid = given ?? invoicePayments(await store.list("invoices"));
   const s = e.statement!;
-  const b = belegOfLine(e);
+  const b = await belegOfLine(e);
   const beleg = b && "live" in b ? b.live : undefined;
   return {
     id: e.id,
@@ -69,8 +71,8 @@ export function publicStatementLine(e: LedgerEntry, paid: InvoicePayments = invo
   };
 }
 
-const holderNameFor = (orgId: string): string => {
-  const org = store.findOrganisation(orgId);
+const holderNameFor = async (orgId: string): Promise<string> => {
+  const org = await store.findOrganisation(orgId);
   return org?.legalName || org?.name || "Account holder";
 };
 
@@ -87,54 +89,56 @@ export function createBookkeepingExportRoutes(deps: OrgRoutes): express.Router {
   const { ctxOf } = deps;
   const r = express.Router();
 
-  r.get("/:orgId/bookkeeping/statement", (req, res) => {
-    const ctx = ctxOf(req, res);
+  r.get("/:orgId/bookkeeping/statement", async (req, res) => {
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     if (!requireCapability(ctx, res, "ledger.transactions")) return;
     if (!requirePermission(ctx, res, "ledger.read")) return;
     const month = req.query.month ? String(req.query.month) : undefined;
     if (month && !isMonth(month)) return res.status(400).json({ error: "month must be YYYY-MM" });
-    const all = statementLinesOf(ctx.org.id);
-    const paid = invoicePayments(store.invoices);
-    const lines = (month ? linesInMonth(all, month) : all).map((e) => publicStatementLine(e, paid));
+    const all = await statementLinesOf(ctx.org.id);
+    const paid = invoicePayments(await store.list("invoices"));
+    const lines = await mapSeq((month ? linesInMonth(all, month) : all), async (e) => await publicStatementLine(e, paid));
     const months = [...new Set(all.map((e) => e.statement!.valueDate.slice(0, 7)))].sort().reverse();
     res.json({
       month,
       months,
       lines,
-      swapsHaveExecuted: swapsHaveExecuted(),
-      ...(swapsHaveExecuted() ? {} : { note: UNEXECUTED_NOTE }),
+      swapsHaveExecuted: await swapsHaveExecuted(),
+      ...((await swapsHaveExecuted()) ? {} : { note: UNEXECUTED_NOTE }),
     });
   });
 
   /** Re-run the writer for this org's accounts. Idempotent; human codes stay. */
-  r.post("/:orgId/bookkeeping/statement/rebuild", (req, res) => {
-    const ctx = ctxOf(req, res);
-    if (!ctx) return;
-    if (!requireCapability(ctx, res, "ledger.transactions")) return;
-    if (!requirePermission(ctx, res, "ledger.categorise")) return;
-    let added = 0;
-    let updated = 0;
-    for (const a of store.accountsOf(ctx.org.id)) {
-      const u = a.backingUserId ? store.findUser(a.backingUserId) : undefined;
-      // A company's own Safe has no backing user: its lines are its own.
-      if (!u && !a.address) continue;
-      const r2 = u ? writeStatementLinesFor(u) : writeAccountStatementLines(a);
-      added += r2.added;
-      updated += r2.updated;
-    }
-    res.json({ added, updated });
+  r.post("/:orgId/bookkeeping/statement/rebuild", async (req, res) => {
+    return store.tx(async () => {
+      const ctx = await ctxOf(req, res);
+      if (!ctx) return;
+      if (!requireCapability(ctx, res, "ledger.transactions")) return;
+      if (!requirePermission(ctx, res, "ledger.categorise")) return;
+      let added = 0;
+      let updated = 0;
+      for (const a of (await store.accountsOf(ctx.org.id))) {
+        const u = a.backingUserId ? (await store.findUser(a.backingUserId)) : undefined;
+        // A company's own Safe has no backing user: its lines are its own.
+        if (!u && !a.address) continue;
+        const r2 = u ? (await writeStatementLinesFor(u)) : (await writeAccountStatementLines(a));
+        added += r2.added;
+        updated += r2.updated;
+      }
+      res.json({ added, updated });
+    });
   });
 
   r.post("/:orgId/bookkeeping/export/:month/prepare", async (req, res, next) => {
     try {
-      const ctx = ctxOf(req, res);
+      const ctx = await ctxOf(req, res);
       if (!ctx) return;
       if (!requireCapability(ctx, res, "export.ledger")) return;
       if (!requirePermission(ctx, res, "reports.run")) return;
       const month = monthOf(req, res);
       if (!month) return;
-      const lines = linesInMonth(statementLinesOf(ctx.org.id), month);
+      const lines = linesInMonth(await statementLinesOf(ctx.org.id), month);
       const issued: string[] = [];
       const failed: { lineId: string; error: string }[] = [];
       for (const line of lines) {
@@ -149,7 +153,7 @@ export function createBookkeepingExportRoutes(deps: OrgRoutes): express.Router {
         month,
         // Which legal entity owns each IBAN, as Monerium reported it at the
         // account's last profile check; null for an account never checked.
-        ibanOwners: store.accountsOf(ctx.org.id).filter((a) => a.backingUserId).map((a) => ({
+        ibanOwners: (await store.accountsOf(ctx.org.id)).filter((a) => a.backingUserId).map((a) => ({
           accountId: a.id,
           currency: a.currency,
           moneriumProfile: a.moneriumProfile ?? null,
@@ -167,17 +171,17 @@ export function createBookkeepingExportRoutes(deps: OrgRoutes): express.Router {
     }
   });
 
-  r.get("/:orgId/bookkeeping/export/:month/lexware.csv", (req, res) => {
-    const ctx = ctxOf(req, res);
+  r.get("/:orgId/bookkeeping/export/:month/lexware.csv", async (req, res) => {
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     if (!requireCapability(ctx, res, "export.ledger")) return;
     if (!requirePermission(ctx, res, "ledger.read")) return;
     const month = monthOf(req, res);
     if (!month) return;
-    const lines = linesInMonth(statementLinesOf(ctx.org.id), month);
-    const holder = holderNameFor(ctx.org.id);
-    const rows = lines.map((e) => {
-      const b = belegOfLine(e);
+    const lines = linesInMonth(await statementLinesOf(ctx.org.id), month);
+    const holder = await holderNameFor(ctx.org.id);
+    const rows = await mapSeq(lines, async (e) => {
+      const b = await belegOfLine(e);
       const code = b && "live" in b ? b.live.code : undefined;
       const row = lexwareRow(e, holder, code);
       const why = b && "stale" in b ? "Beleg stimmt nicht mehr (in Zold ersetzen)" : "Beleg fehlt (Export noch nicht vorbereitet)";
@@ -191,19 +195,19 @@ export function createBookkeepingExportRoutes(deps: OrgRoutes): express.Router {
     res.send(lexwareCsvBytes(rows));
   });
 
-  r.get("/:orgId/bookkeeping/export/:month/belege.zip", (req, res) => {
-    const ctx = ctxOf(req, res);
+  r.get("/:orgId/bookkeeping/export/:month/belege.zip", async (req, res) => {
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     if (!requireCapability(ctx, res, "export.ledger")) return;
     if (!requirePermission(ctx, res, "ledger.read")) return;
     const month = monthOf(req, res);
     if (!month) return;
-    const lines = linesInMonth(statementLinesOf(ctx.org.id), month);
+    const lines = linesInMonth(await statementLinesOf(ctx.org.id), month);
     const entries = [];
     const missing: string[] = [];
     const stale: string[] = [];
     for (const e of lines) {
-      const b = belegOfLine(e);
+      const b = await belegOfLine(e);
       if (!b) {
         missing.push(e.id);
         continue;
@@ -228,11 +232,11 @@ export function createBookkeepingExportRoutes(deps: OrgRoutes): express.Router {
   /** One line's Beleg on demand, for the dashboard. */
   r.post("/:orgId/bookkeeping/lines/:lineId/beleg", async (req, res, next) => {
     try {
-      const ctx = ctxOf(req, res);
+      const ctx = await ctxOf(req, res);
       if (!ctx) return;
       if (!requireCapability(ctx, res, "export.ledger")) return;
       if (!requirePermission(ctx, res, "reports.run")) return;
-      const line = store.ledgerOf(ctx.org.id).find((e) => e.id === String(req.params.lineId) && e.statement);
+      const line = (await store.ledgerOf(ctx.org.id)).find((e) => e.id === String(req.params.lineId) && e.statement);
       if (!line) return res.status(404).json({ error: "no such statement line" });
       const { doc, issued } = await issueBelegForLine(line);
       res.status(issued ? 201 : 200).json({ code: doc.code, url: documentUrl(doc.code), issued });
@@ -247,11 +251,11 @@ export function createBookkeepingExportRoutes(deps: OrgRoutes): express.Router {
    *  revoked. */
   r.post("/:orgId/bookkeeping/lines/:lineId/beleg/replace", async (req, res, next) => {
     try {
-      const ctx = ctxOf(req, res);
+      const ctx = await ctxOf(req, res);
       if (!ctx) return;
       if (!requireCapability(ctx, res, "export.ledger")) return;
       if (!requirePermission(ctx, res, "reports.run")) return;
-      const line = store.ledgerOf(ctx.org.id).find((e) => e.id === String(req.params.lineId) && e.statement);
+      const line = (await store.ledgerOf(ctx.org.id)).find((e) => e.id === String(req.params.lineId) && e.statement);
       if (!line) return res.status(404).json({ error: "no such statement line" });
       let out;
       try {
@@ -262,7 +266,7 @@ export function createBookkeepingExportRoutes(deps: OrgRoutes): express.Router {
         throw err;
       }
       // Document ids, never codes: a verification code is a credential.
-      store.audit(auditEntry("document.reissued", {
+      await store.audit(auditEntry("document.reissued", {
         orgId: ctx.org.id, memberId: ctx.member.id, lineId: line.id, documentId: out.doc.id, ...(out.revoked ? { revokedDocumentId: out.revoked.id } : {}),
       }, ctx.userId));
       res.status(201).json({ code: out.doc.code, url: documentUrl(out.doc.code), issued: out.issued, revoked: !!out.revoked });

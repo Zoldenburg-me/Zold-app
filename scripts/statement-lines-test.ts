@@ -354,82 +354,82 @@ const { initStore, store } = await import("../services/api/src/store.js");
 const { writeStatementLines, writeStatementLinesFor, booksFor, noteMoneriumIssue } = await import("../services/api/src/bookkeeping/writer.js");
 const imported = await import("../services/api/src/domain/safe-books.js");
 const SAFE2 = `0x${"ab".repeat(20)}` as `0x${string}`;
-initStore();
+await initStore();
 const now = new Date().toISOString();
 const user: any = { id: "u_1", name: "Zoldenburg UG", country: "DE", kycStatus: "approved", address: SAFE, createdAt: "2026-01-01T00:00:00.000Z", passkey: { credentialId: "c" }, passkeySafe: { status: "active", address: SAFE } };
-store.addUser(user);
-store.addUser({ ...user, id: "u_orphan", address: `0x${"cc".repeat(20)}` });
-store.addOrganisation({ id: "org_1", type: "business", name: "Zoldenburg UG", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });
-store.addAccount({ id: "acc_1", orgId: "org_1", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: { iban: "EE382200221020145685" }, address: SAFE, backingUserId: "u_1", createdAt: now, updatedAt: now });
-store.addCryptoDeposit(usdcDeposit({ paymentRequestId: undefined }) as any);
+await store.addUser(user);
+await store.addUser({ ...user, id: "u_orphan", address: `0x${"cc".repeat(20)}` });
+await store.addOrganisation({ id: "org_1", type: "business", name: "Zoldenburg UG", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });
+await store.addAccount({ id: "acc_1", orgId: "org_1", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: { iban: "EE382200221020145685" }, address: SAFE, backingUserId: "u_1", createdAt: now, updatedAt: now });
+await store.addCryptoDeposit(usdcDeposit({ paymentRequestId: undefined }) as any);
 
-await check("the writer maps a user to the org whose EUR account their Safe backs; a user with none writes nothing", () => {
-  assert.deepEqual(booksFor("u_1"), { orgId: "org_1", accountId: "acc_1", since: "2026-01-01T00:00:00.000Z" });
-  assert.equal(booksFor("u_orphan"), undefined);
-  assert.deepEqual(writeStatementLinesFor(store.findUser("u_orphan")!), { added: 0, updated: 0 });
+await check("the writer maps a user to the org whose EUR account their Safe backs; a user with none writes nothing", async () => {
+  assert.deepEqual(await booksFor("u_1"), { orgId: "org_1", accountId: "acc_1", since: "2026-01-01T00:00:00.000Z" });
+  assert.equal(await booksFor("u_orphan"), undefined);
+  assert.deepEqual(await writeStatementLinesFor((await store.findUser("u_orphan"))!), { added: 0, updated: 0 });
 });
 
-await check("a Safe connected to a company books there, from when its books start; a Zold-deployed Safe from its creation", () => {
-  store.addUser({ ...user, id: "u_both", address: `0x${"dd".repeat(20)}`, passkeySafe: { ...user.passkeySafe, createdAt: "2026-09-01T00:00:00.000Z" } });
-  store.addOrganisation({ id: "org_p", type: "personal", name: "Me", plan: "starter", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });
-  store.addOrganisation({ id: "org_b", type: "business", name: "Co", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });
-  store.addAccount({ id: "acc_p", orgId: "org_p", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: `0x${"dd".repeat(20)}`, backingUserId: "u_both", createdAt: now, updatedAt: now });
-  store.addAccount({ id: "acc_b", orgId: "org_b", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: `0x${"dd".repeat(20)}`, backingUserId: "u_both", createdAt: now, updatedAt: now });
-  assert.deepEqual(booksFor("u_both"), { orgId: "org_b", accountId: "acc_b", since: "2026-09-01T00:00:00.000Z" }, "no recorded date: worked out from the Safe");
-  store.updateAccount("acc_b", { backedSince: "2026-09-05T00:00:00.000Z" });
-  assert.equal(booksFor("u_both")!.since, "2026-09-05T00:00:00.000Z", "a recorded date wins");
+await check("a Safe connected to a company books there, from when its books start; a Zold-deployed Safe from its creation", async () => {
+  await store.addUser({ ...user, id: "u_both", address: `0x${"dd".repeat(20)}`, passkeySafe: { ...user.passkeySafe, createdAt: "2026-09-01T00:00:00.000Z" } });
+  await store.addOrganisation({ id: "org_p", type: "personal", name: "Me", plan: "starter", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });
+  await store.addOrganisation({ id: "org_b", type: "business", name: "Co", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });
+  await store.addAccount({ id: "acc_p", orgId: "org_p", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: `0x${"dd".repeat(20)}`, backingUserId: "u_both", createdAt: now, updatedAt: now });
+  await store.addAccount({ id: "acc_b", orgId: "org_b", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: `0x${"dd".repeat(20)}`, backingUserId: "u_both", createdAt: now, updatedAt: now });
+  assert.deepEqual(await booksFor("u_both"), { orgId: "org_b", accountId: "acc_b", since: "2026-09-01T00:00:00.000Z" }, "no recorded date: worked out from the Safe");
+  await store.updateAccount("acc_b", { backedSince: "2026-09-05T00:00:00.000Z" });
+  assert.equal((await booksFor("u_both"))!.since, "2026-09-05T00:00:00.000Z", "a recorded date wins");
 });
 
-await check("an imported Safe's books start when it got its IBAN here, else at the import; the IBAN date is stamped by the store", () => {
+await check("an imported Safe's books start when it got its IBAN here, else at the import; the IBAN date is stamped by the store", async () => {
   const { safeBooksStart } = imported;
   const base = { createdAt: "2026-01-01T00:00:00.000Z", passkeySafe: { createdAt: "2026-01-02T00:00:00.000Z" } } as any;
   assert.equal(safeBooksStart(base), "2026-01-02T00:00:00.000Z", "deployed by Zold: from its creation");
   const imp = { ...base, passkeySafe: { ...base.passkeySafe, importedAt: "2026-05-01T00:00:00.000Z" } };
   assert.equal(safeBooksStart(imp), "2026-05-01T00:00:00.000Z", "imported, no IBAN: from the import");
   assert.equal(safeBooksStart({ ...imp, ibanSince: "2026-06-01T00:00:00.000Z" }), "2026-06-01T00:00:00.000Z", "imported: from the IBAN");
-  store.addUser({ ...user, id: "u_iban", address: `0x${"ee".repeat(20)}`, iban: "" } as any);
-  assert.equal(store.findUser("u_iban")!.ibanSince, undefined);
-  store.updateUser("u_iban", { iban: "EE382200221020145685" });
-  const first = store.findUser("u_iban")!.ibanSince;
+  await store.addUser({ ...user, id: "u_iban", address: `0x${"ee".repeat(20)}`, iban: "" } as any);
+  assert.equal((await store.findUser("u_iban"))!.ibanSince, undefined);
+  await store.updateUser("u_iban", { iban: "EE382200221020145685" });
+  const first = (await store.findUser("u_iban"))!.ibanSince;
   assert.ok(first, "a new IBAN stamps its date");
-  store.updateUser("u_iban", { iban: "EE382200221020145685", name: "x" });
-  assert.equal(store.findUser("u_iban")!.ibanSince, first, "the same IBAN again keeps it");
+  await store.updateUser("u_iban", { iban: "EE382200221020145685", name: "x" });
+  assert.equal((await store.findUser("u_iban"))!.ibanSince, first, "the same IBAN again keeps it");
 });
 
-await check("lines from before the Safe's books start are not written", () => {
-  store.addUser({ ...user, id: "u_imp", address: SAFE2, passkeySafe: { ...user.passkeySafe, address: SAFE2, importedAt: "2026-09-10T09:59:00.000Z" } });
-  store.addOrganisation({ id: "org_imp", type: "business", name: "Imp", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });
-  store.addAccount({ id: "acc_imp", orgId: "org_imp", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: SAFE2, backingUserId: "u_imp", backedSince: "2026-09-10T10:03:00.000Z", createdAt: now, updatedAt: now });
-  store.addCryptoDeposit(usdcDeposit({ id: "d-old", userId: "u_imp", txHash: H(40), paymentRequestId: undefined }) as any);
-  writeStatementLinesFor(store.findUser("u_imp")!);
-  assert.equal(store.ledgerOf("org_imp").length, 0, "the receipt (09:58) and the disposal (10:02) are both before the books start at 10:03");
-  store.updateAccount("acc_imp", { backedSince: "2026-09-10T09:00:00.000Z" });
-  writeStatementLinesFor(store.findUser("u_imp")!);
-  assert.equal(store.ledgerOf("org_imp").length, 2, "the receipt and the disposal");
+await check("lines from before the Safe's books start are not written", async () => {
+  await store.addUser({ ...user, id: "u_imp", address: SAFE2, passkeySafe: { ...user.passkeySafe, address: SAFE2, importedAt: "2026-09-10T09:59:00.000Z" } });
+  await store.addOrganisation({ id: "org_imp", type: "business", name: "Imp", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });
+  await store.addAccount({ id: "acc_imp", orgId: "org_imp", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: SAFE2, backingUserId: "u_imp", backedSince: "2026-09-10T10:03:00.000Z", createdAt: now, updatedAt: now });
+  await store.addCryptoDeposit(usdcDeposit({ id: "d-old", userId: "u_imp", txHash: H(40), paymentRequestId: undefined }) as any);
+  await writeStatementLinesFor((await store.findUser("u_imp"))!);
+  assert.equal((await store.ledgerOf("org_imp")).length, 0, "the receipt (09:58) and the disposal (10:02) are both before the books start at 10:03");
+  await store.updateAccount("acc_imp", { backedSince: "2026-09-10T09:00:00.000Z" });
+  await writeStatementLinesFor((await store.findUser("u_imp"))!);
+  assert.equal((await store.ledgerOf("org_imp")).length, 2, "the receipt and the disposal");
 });
 
-await check("first run writes the receipt and the disposal with rule-mapped codes; a second run adds nothing", () => {
-  const r1 = writeStatementLines();
+await check("first run writes the receipt and the disposal with rule-mapped codes; a second run adds nothing", async () => {
+  const r1 = await writeStatementLines();
   assert.equal(r1.added, 2);
-  const row = store.ledgerOf("org_1").find((e) => e.statement!.key === "deposit:d-1:held")!;
+  const row = (await store.ledgerOf("org_1")).find((e) => e.statement!.key === "deposit:d-1:held")!;
   assert.ok(row, "the receipt line");
-  assert.ok(store.ledgerOf("org_1").find((e) => e.statement!.key === "deposit:d-1:disposal"), "the disposal line");
+  assert.ok((await store.ledgerOf("org_1")).find((e) => e.statement!.key === "deposit:d-1:disposal"), "the disposal line");
   assert.equal(row.accountCodeAuto, true, "a default rule mapped it");
   assert.ok(row.accountCode, "invoice_payment maps to a default account");
-  const r2 = writeStatementLines();
+  const r2 = await writeStatementLines();
   assert.deepEqual(r2, { added: 0, updated: 0 });
-  assert.equal(store.ledgerOf("org_1").length, 2);
+  assert.equal((await store.ledgerOf("org_1")).length, 2);
 });
 
-await check("a human's account code survives a later fact change; the Monerium issue snapshot is recorded once", () => {
-  const row = store.ledgerOf("org_1").find((e) => e.statement!.key === "deposit:d-1:held")!;
-  store.updateLedgerEntry(row.id, { accountCode: "4100", accountCodeAuto: false });
-  const rec = noteMoneriumIssue({ id: "ord-9", kind: "issue", amount: "20.00", address: SAFE, memo: "hello", meta: { state: "processed", processedAt: "2026-09-12T08:00:00.000Z" }, counterpart: { identifier: { iban: "DE02120300000000202051" }, details: { name: "Kunde AG" } } }, { kind: "user", user });
+await check("a human's account code survives a later fact change; the Monerium issue snapshot is recorded once", async () => {
+  const row = (await store.ledgerOf("org_1")).find((e) => e.statement!.key === "deposit:d-1:held")!;
+  await store.updateLedgerEntry(row.id, { accountCode: "4100", accountCodeAuto: false });
+  const rec = await noteMoneriumIssue({ id: "ord-9", kind: "issue", amount: "20.00", address: SAFE, memo: "hello", meta: { state: "processed", processedAt: "2026-09-12T08:00:00.000Z" }, counterpart: { identifier: { iban: "DE02120300000000202051" }, details: { name: "Kunde AG" } } }, { kind: "user", user });
   assert.ok(rec);
-  assert.equal(noteMoneriumIssue({ id: "ord-9", kind: "issue", amount: "999", address: SAFE, meta: { state: "processed" } }, { kind: "user", user })!.amountEur, 20, "the first snapshot wins");
-  const r = writeStatementLines();
+  assert.equal((await noteMoneriumIssue({ id: "ord-9", kind: "issue", amount: "999", address: SAFE, meta: { state: "processed" } }, { kind: "user", user }))!.amountEur, 20, "the first snapshot wins");
+  const r = await writeStatementLines();
   assert.equal(r.added, 1);
-  const rows = store.ledgerOf("org_1");
+  const rows = await store.ledgerOf("org_1");
   assert.equal(rows.length, 3);
   assert.equal(rows.find((e) => e.statement!.key === "deposit:d-1:held")!.accountCode, "4100");
   const sepa = rows.find((e) => e.statement!.key === "monerium:issue:ord-9")!;

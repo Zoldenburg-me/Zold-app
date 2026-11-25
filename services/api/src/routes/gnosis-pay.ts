@@ -93,12 +93,12 @@ export function createGnosisPayRouter(requireSession: SessionResolver): express.
    * the router so a new endpoint cannot miss it. A pre-segmentation account
    * defaults to EU_FULL, as in the server-side guard.
    */
-  r.use((req, res, next) => {
-    const session = requireSession(req, res);
+  r.use(async (req, res, next) => {
+    const session = await requireSession(req, res);
     if (!session) return;
     // Resolved once here; every handler below reads it from res.locals.
     res.locals.session = session;
-    const user = store.findUser(session.userId);
+    const user = await store.findUser(session.userId);
     const segment = user?.segment?.value ?? "EU_FULL";
     if (!can(segment, "gnosis_pay")) {
       return res.status(403).json({
@@ -111,9 +111,9 @@ export function createGnosisPayRouter(requireSession: SessionResolver): express.
   });
 
   /** What this deployment can do, so the client renders a real state. */
-  r.get("/config", (req, res) => {
-    const session = res.locals.session as NonNullable<ReturnType<typeof requireSession>>;
-    const user = store.findUser(session.userId);
+  r.get("/config", async (req, res) => {
+    const session = res.locals.session as NonNullable<Awaited<ReturnType<typeof requireSession>>>;
+    const user = await store.findUser(session.userId);
     res.json({
       chainId: GNOSIS_PAY.siweChainId,
       partnerMode: Boolean(GNOSIS_PAY.partnerId),
@@ -128,7 +128,7 @@ export function createGnosisPayRouter(requireSession: SessionResolver): express.
    * signature against the session that issued the nonce.
    */
   r.post("/siwe/start", async (req, res) => {
-    const session = res.locals.session as NonNullable<ReturnType<typeof requireSession>>;
+    const session = res.locals.session as NonNullable<Awaited<ReturnType<typeof requireSession>>>;
     const address = String(req.body?.address ?? "").trim();
     if (!ADDRESS.test(address)) {
       return res.status(400).json({ error: "address must be an EVM address" });
@@ -152,8 +152,8 @@ export function createGnosisPayRouter(requireSession: SessionResolver): express.
 
   /** Finish SIWE. The token is RETURNED to the browser, never stored here. */
   r.post("/siwe/verify", async (req, res) => {
-    const session = res.locals.session as NonNullable<ReturnType<typeof requireSession>>;
-    const user = store.findUser(session.userId);
+    const session = res.locals.session as NonNullable<Awaited<ReturnType<typeof requireSession>>>;
+    const user = await store.findUser(session.userId);
     if (!user) return res.status(404).json({ error: "no such account" });
 
     const message = String(req.body?.message ?? "");
@@ -168,7 +168,7 @@ export function createGnosisPayRouter(requireSession: SessionResolver): express.
       // and it is the one thing here we know for certain.
       const signedBy = message.split("\n")[1]?.trim() ?? "";
       const { token } = await verifyAndProfile(message, signature, cookie, user.id, signedBy);
-      res.json({ token, ...PROVENANCE, connected: store.findUser(user.id)?.gnosisPay ?? null });
+      res.json({ token, ...PROVENANCE, connected: (await store.findUser(user.id))?.gnosisPay ?? null });
     } catch (err) {
       return fail(req, res, err);
     }
@@ -178,7 +178,7 @@ export function createGnosisPayRouter(requireSession: SessionResolver): express.
    *  render anything at all, and three round trips to show one screen is three
    *  chances to render half of it. */
   r.get("/account", async (req, res) => {
-    const session = res.locals.session as NonNullable<ReturnType<typeof requireSession>>;
+    const session = res.locals.session as NonNullable<Awaited<ReturnType<typeof requireSession>>>;
     const jwt = tokenOf(req, res);
     if (!jwt) return;
     try {
@@ -191,7 +191,7 @@ export function createGnosisPayRouter(requireSession: SessionResolver): express.
         getAccountBalances(jwt).catch(() => null),
       ]);
       const asOf = new Date().toISOString();
-      recordStatus(session.userId, profile, cards?.length, asOf);
+      await recordStatus(session.userId, profile, cards?.length, asOf);
       res.json({
         ...PROVENANCE,
         asOf,
@@ -213,7 +213,7 @@ export function createGnosisPayRouter(requireSession: SessionResolver): express.
   });
 
   r.get("/transactions", async (req, res) => {
-    const session = res.locals.session as NonNullable<ReturnType<typeof requireSession>>;
+    const session = res.locals.session as NonNullable<Awaited<ReturnType<typeof requireSession>>>;
     const jwt = tokenOf(req, res);
     if (!jwt) return;
     try {
@@ -226,9 +226,9 @@ export function createGnosisPayRouter(requireSession: SessionResolver): express.
 
   /** Forget the connection. Only status is held, so this is a status delete —
    *  it does NOT close the user's Gnosis Pay account, and says so. */
-  r.delete("/connection", (req, res) => {
-    const session = res.locals.session as NonNullable<ReturnType<typeof requireSession>>;
-    store.updateUser(session.userId, { gnosisPay: undefined });
+  r.delete("/connection", async (req, res) => {
+    const session = res.locals.session as NonNullable<Awaited<ReturnType<typeof requireSession>>>;
+    await store.updateUser(session.userId, { gnosisPay: undefined });
     res.json({
       disconnected: true,
       note:
@@ -253,7 +253,7 @@ async function verifyAndProfile(
   try {
     const profile = await getUser(token);
     const cards = await listCards(token).catch(() => undefined);
-    recordStatus(userId, profile, cards?.length, new Date().toISOString(), signedBy);
+    await recordStatus(userId, profile, cards?.length, new Date().toISOString(), signedBy);
   } catch {
     // A profile read that fails right after a successful sign-in is worth not
     // failing the sign-in over: the token is valid, and /account will report
@@ -262,33 +262,35 @@ async function verifyAndProfile(
   return { token };
 }
 
-function recordStatus(
+async function recordStatus(
   userId: string,
   profile: Awaited<ReturnType<typeof getUser>>,
   cardCount: number | undefined,
   asOf: string,
   signedBy?: string,
-): void {
-  const signer = Array.isArray(profile.signInWallets)
-    ? profile.signInWallets
-        .map((w) => (typeof w === "string" ? w : w?.address))
-        .find((a) => typeof a === "string" && ADDRESS.test(a))
-    : undefined;
-  const existing = store.findUser(userId)?.gnosisPay;
-  const fromMessage = signedBy && ADDRESS.test(signedBy) ? signedBy : undefined;
-  const connectedAddress = (fromMessage ?? signer ?? existing?.connectedAddress) as
-    | `0x${string}`
-    | undefined;
-  if (!connectedAddress) return;
-  store.updateUser(userId, {
-    gnosisPay: {
-      connectedAddress,
-      userId: profile.id,
-      safeAddress: safeAddressOf(profile) as `0x${string}` | undefined,
-      kycStatus: profile.kycStatus,
-      accountStatus: profile.status,
-      cardCount,
-      asOf,
-    },
+): Promise<void> {
+  return store.tx(async () => {
+    const signer = Array.isArray(profile.signInWallets)
+      ? profile.signInWallets
+          .map((w) => (typeof w === "string" ? w : w?.address))
+          .find((a) => typeof a === "string" && ADDRESS.test(a))
+      : undefined;
+    const existing = (await store.findUser(userId))?.gnosisPay;
+    const fromMessage = signedBy && ADDRESS.test(signedBy) ? signedBy : undefined;
+    const connectedAddress = (fromMessage ?? signer ?? existing?.connectedAddress) as
+      | `0x${string}`
+      | undefined;
+    if (!connectedAddress) return;
+    await store.updateUser(userId, {
+      gnosisPay: {
+        connectedAddress,
+        userId: profile.id,
+        safeAddress: safeAddressOf(profile) as `0x${string}` | undefined,
+        kycStatus: profile.kycStatus,
+        accountStatus: profile.status,
+        cardCount,
+        asOf,
+      },
+    });
   });
 }

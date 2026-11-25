@@ -23,7 +23,7 @@ const { AnchorPaymentUncertainError } = await import("../services/api/src/stella
 const { Keypair } = await import("@stellar/stellar-sdk");
 const { anchorMemoForPickup, senderMemo } = await import("../services/api/src/adapters/moneygram.js");
 
-initStore();
+await initStore();
 
 const now = new Date(Date.now() - 60_000).toISOString();
 const user: User = {
@@ -35,8 +35,8 @@ const user: User = {
   address: "0x0000000000000000000000000000000000001002",
   createdAt: now,
 };
-store.addUser(user);
-store.addTransfer({
+await store.addUser(user);
+await store.addTransfer({
   id: "t-anchor-sweep",
   userId: "u-anchor-sweep",
   quoteId: "q-anchor-sweep",
@@ -63,13 +63,13 @@ store.addTransfer({
 });
 
 const refreshed = await sweepAnchorPayouts();
-const t = store.findTransfer("t-anchor-sweep")!;
+const t = (await store.findTransfer("t-anchor-sweep"))!;
 
 assert.equal(refreshed, 1);
 assert.equal(t.state, "PAID");
 assert.equal(t.pickup?.status, "PAID");
 assert.equal(
-  anchorMemoForPickup(t.id, t.pickup),
+  await anchorMemoForPickup(t.id, t.pickup),
   senderMemo(user.id),
   "anchor pickups stored without a memo must recover the same per-user SEP-10 memo on refresh",
 );
@@ -79,7 +79,7 @@ assert.equal(
 // checks the treasury at once can see nothing and pay again.
 const strandedTxs = [{ step: "bridge.xyz.deposit.transfer", hash: "0x33" }, { step: "anchor.payment.pending", hash: "0x" }];
 for (const state of ["PAYOUT_FUNDING_PENDING", "PAYOUT_READY"] as const) {
-  store.addTransfer({
+  await store.addTransfer({
     id: `t-stranded-${state}`,
     userId: "u-anchor-sweep",
     quoteId: "q-anchor-sweep",
@@ -106,14 +106,14 @@ for (const state of ["PAYOUT_FUNDING_PENDING", "PAYOUT_READY"] as const) {
 }
 assert.equal(await sweepAnchorPayouts(), 2);
 for (const state of ["PAYOUT_FUNDING_PENDING", "PAYOUT_READY"]) {
-  const stranded = store.findTransfer(`t-stranded-${state}`)!;
+  const stranded = (await store.findTransfer(`t-stranded-${state}`))!;
   assert.equal(stranded.state, "MANUAL_REVIEW", state);
   assert.match(stranded.error ?? "", /wait 5 minutes/i, state);
 }
 
 // A refresh that fails after the payment may have gone out (an uncertain
 // submit) goes to review with the same operator step, never a refund.
-store.addTransfer({
+await store.addTransfer({
   id: "t-uncertain",
   userId: "u-anchor-sweep",
   quoteId: "q-anchor-sweep",
@@ -144,7 +144,7 @@ globalThis.fetch = (async () => {
   throw new AnchorPaymentUncertainError("submit timed out");
 }) as typeof fetch;
 try {
-  const uncertain = await refreshPayout(store.findTransfer("t-uncertain")!);
+  const uncertain = await refreshPayout((await store.findTransfer("t-uncertain"))!);
   assert.equal(uncertain.state, "MANUAL_REVIEW");
   assert.match(uncertain.error ?? "", /no automatic refund; wait 5 minutes, then check the treasury account/);
   assert.equal(uncertain.refund, undefined);
@@ -157,7 +157,7 @@ try {
 // (desktop Under review card, phone detail) must not read as "pay again in 5
 // minutes"; the admin view reads the stored error and keeps the full text.
 for (const id of ["t-stranded-PAYOUT_FUNDING_PENDING", "t-stranded-PAYOUT_READY", "t-uncertain"]) {
-  const stored = store.findTransfer(id)!;
+  const stored = (await store.findTransfer(id))!;
   assert.match(stored.error ?? "", /treasury account before paying again/, id);
   const seen = userTransfer(stored).error ?? "";
   assert.doesNotMatch(seen, /5 minutes|treasury|again or|paying again|refunding|hash|Stellar/i, id);
@@ -168,17 +168,17 @@ for (const id of ["t-stranded-PAYOUT_FUNDING_PENDING", "t-stranded-PAYOUT_READY"
 
 // Once an operator resolves the review, the row is not under review any more:
 // the sender reads the state it resolved into, not the review note.
-const refunded = store.resolveTransferReview("t-uncertain", {
+const refunded = await store.resolveTransferReview("t-uncertain", {
   state: "REFUNDED", note: "Treasury checked: nothing left, sender refunded by hand.", by: "op-test",
   evidence: "partner ref R-1", refund: { amountEur: 0, movedEur: 0 },
 });
 assert.ok(refunded.ok, JSON.stringify(refunded));
-assert.match(store.findTransfer("t-uncertain")!.reviewResolution?.previousError ?? "", /treasury account/, "the operator keeps the old error");
-assert.equal(userTransfer(store.findTransfer("t-uncertain")!).error, undefined, "REFUNDED: no under-review note");
-const failed = store.resolveTransferReview("t-stranded-PAYOUT_READY", { state: "FAILED", note: "Anchor confirms nothing was paid out.", by: "op-test" });
+assert.match((await store.findTransfer("t-uncertain"))!.reviewResolution?.previousError ?? "", /treasury account/, "the operator keeps the old error");
+assert.equal(userTransfer((await store.findTransfer("t-uncertain"))!).error, undefined, "REFUNDED: no under-review note");
+const failed = await store.resolveTransferReview("t-stranded-PAYOUT_READY", { state: "FAILED", note: "Anchor confirms nothing was paid out.", by: "op-test" });
 assert.ok(failed.ok, JSON.stringify(failed));
-assert.equal(userTransfer(store.findTransfer("t-stranded-PAYOUT_READY")!).error, undefined, "FAILED: no under-review note");
-const paid = { ...store.findTransfer("t-stranded-PAYOUT_FUNDING_PENDING")!, state: "PAID" as const, reviewResolution: { state: "PAID" as const, note: "paid on Stellar", by: "op-test", at: now } };
+assert.equal(userTransfer((await store.findTransfer("t-stranded-PAYOUT_READY"))!).error, undefined, "FAILED: no under-review note");
+const paid = { ...(await store.findTransfer("t-stranded-PAYOUT_FUNDING_PENDING"))!, state: "PAID" as const, reviewResolution: { state: "PAID" as const, note: "paid on Stellar", by: "op-test", at: now } };
 assert.equal(userTransfer(paid).error, undefined, "PAID: no under-review note");
 
 // A failed refresh may have paid whenever a payment intent has no settling

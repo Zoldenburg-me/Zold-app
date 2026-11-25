@@ -75,10 +75,11 @@ import { hostedGuardianBlocked, ONE_GUARDIAN_MESSAGE } from "../recovery/one-gua
 import { bindRecoveredPasskey, deployVerifierForOwner } from "../recovery/recovered-passkey.js";
 import { ADDRESS_RE } from "../domain/contacts.js";
 import { describeCause, describeError, shortErrorForClient, redactedMessage } from "../http/log-cause.js";
+import { mapSeq } from "../seq.js";
 
 export interface CandideRecoveryDeps {
-  requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
-  publicUser: (user: User) => Record<string, unknown>;
+  requireUserSession: (req: express.Request, res: express.Response, userId: string) => Promise<unknown>;
+  publicUser: (user: User) => Promise<Record<string, unknown>>;
 }
 
 const CEREMONY_TTL_MS = 5 * 60_000;
@@ -123,8 +124,8 @@ function prune<T extends { expiresAt: number }>(map: Map<string, T>, now = Date.
 }
 
 
-function newCandideRequest(r: RecoveryRequest): RecoveryRequest {
-  store.addRecoveryRequest(r);
+async function newCandideRequest(r: RecoveryRequest): Promise<RecoveryRequest> {
+  await store.addRecoveryRequest(r);
   return r;
 }
 
@@ -240,7 +241,7 @@ async function verifyOwnerAssertion(user: User, body: any, challenge: string): P
       challenge,
       true,
     );
-    const updated = store.recordPasskeyUse(user.id, passkey.credentialId, signCount);
+    const updated = await store.recordPasskeyUse(user.id, passkey.credentialId, signCount);
     if (!updated) throw new Error("this passkey is no longer the account's passkey");
     return updated;
   } catch (err: any) {
@@ -316,7 +317,7 @@ export async function finalizeCandideRecovery(
       "GRACE_PERIOD",
     );
   }
-  const user = store.findUser(request.userId);
+  const user = await store.findUser(request.userId);
   if (!user?.passkeySafe) throw new CandideGuardianError("the account behind this recovery no longer exists", 410, "GONE");
   const newOwners = (c.newOwners ?? []).map((a) => a.toLowerCase());
   const attempts = (c.finalizeAttempts ?? 0) + 1;
@@ -347,7 +348,7 @@ export async function finalizeCandideRecovery(
   }
   const recovered = sameOwnerSet(owners, newOwners);
   if (!recovered) {
-    return store.updateRecoveryRequest(request.id, {
+    return await store.updateRecoveryRequest(request.id, {
       candide: {
         ...c,
         finalizeAttempts: attempts,
@@ -357,9 +358,9 @@ export async function finalizeCandideRecovery(
   }
 
   // The chain says the new passkey owns the Safe.
-  bindRecoveredPasskey(user, np, now);
+  await bindRecoveredPasskey(user, np, now);
   console.log(`RECOVERY: ${request.id} finalized — ${user.id}'s Safe ${request.safeAddress} now owned by the new passkey`);
-  return store.updateRecoveryRequest(request.id, {
+  return await store.updateRecoveryRequest(request.id, {
     status: "FINALIZED",
     finalizedAt: now.toISOString(),
     factors: { ...request.factors, otp: "passed" },
@@ -381,7 +382,7 @@ export function sameOwnerSet(owners: string[], newOwners: string[]): boolean {
 export async function sweepCandideRecoveries(now = new Date()): Promise<number> {
   if (!candideRecoveryEnabled()) return 0;
   let n = 0;
-  for (const r of [...store.recoveryRequests]) {
+  for (const r of [...await store.list("recoveryRequests")]) {
     if (r.mode !== "candide") continue;
     if (r.status === "GRACE_PERIOD" && r.candide?.finalizeAfter && now >= new Date(r.candide.finalizeAfter)) {
       try {
@@ -391,7 +392,7 @@ export async function sweepCandideRecoveries(now = new Date()): Promise<number> 
         console.error(`recovery sweep: ${r.id}: ${describeCause(err)}`);
       }
     } else if (["PASSKEY_PENDING", "OTP_PENDING"].includes(r.status) && now >= new Date(r.expiresAt)) {
-      store.updateRecoveryRequest(r.id, { status: "EXPIRED" });
+      await store.updateRecoveryRequest(r.id, { status: "EXPIRED" });
     }
   }
   return n;
@@ -407,13 +408,13 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
     (req: express.Request, res: express.Response, next: express.NextFunction) =>
       Promise.resolve(fn(req, res)).catch((err) => (res.headersSent ? next(err) : fail(res, err)));
 
-  const userFor = (req: express.Request, res: express.Response): User | undefined => {
-    const user = store.findUser(req.params.id);
+  const userFor = async (req: express.Request, res: express.Response): Promise<User | undefined> => {
+    const user = await store.findUser(req.params.id);
     if (!user) {
       res.status(404).json({ error: "user not found" });
       return undefined;
     }
-    if (!deps.requireUserSession(req, res, user.id)) return undefined;
+    if (!(await deps.requireUserSession(req, res, user.id))) return undefined;
     return user;
   };
 
@@ -422,7 +423,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
   router.get(
     "/users/:id/recovery/candide",
     wrap(async (req, res) => {
-      const user = userFor(req, res);
+      const user = await userFor(req, res);
       if (!user) return;
       const out: Record<string, unknown> = publicCandideRecovery(user);
       if (user.passkeySafe?.status === "active" && user.passkeySafe.candideRecovery) {
@@ -440,8 +441,8 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
           out.onChain = { error: redactedMessage(err).slice(0, 160) };
         }
       }
-      out.requests = store
-        .recoveryRequestsForUser(user.id)
+      out.requests = (await store
+        .recoveryRequestsForUser(user.id))
         .filter((r) => r.mode === "candide")
         .map(publicRecoveryRequest);
       res.json(out);
@@ -451,7 +452,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
   router.post(
     "/users/:id/recovery/candide/channels",
     wrap(async (req, res) => {
-      const user = userFor(req, res);
+      const user = await userFor(req, res);
       if (!user) return;
       if (!candideRecoveryEnabled()) {
         return res.status(503).json({ error: "email/SMS recovery is not available on this deployment — RECOVERY_SERVICE_URL is unset" });
@@ -503,7 +504,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
   router.post(
     "/users/:id/recovery/candide/channels/:requestId/signature",
     wrap(async (req, res) => {
-      let user = userFor(req, res);
+      let user = await userFor(req, res);
       if (!user) return;
       prune(pendingChannelRegistrations);
       const pending = pendingChannelRegistrations.get(req.params.requestId);
@@ -530,7 +531,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
   router.post(
     "/users/:id/recovery/candide/channels/:requestId/otp",
     wrap(async (req, res) => {
-      const user = userFor(req, res);
+      const user = await userFor(req, res);
       if (!user) return;
       prune(pendingChannelRegistrations);
       const pending = pendingChannelRegistrations.get(req.params.requestId);
@@ -557,7 +558,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       const state = await readRecoveryState(plan, existing ? [existing.guardianAddress] : []);
       const onChain = state.guardians.some((g) => g.toLowerCase() === guardianAddress.toLowerCase());
       const channel = { registrationId, channel: pending.channel, target: pending.target, verifiedAt: new Date().toISOString() };
-      const updated = store.updateUser(user.id, {
+      const updated = await store.updateUser(user.id, {
         passkeySafe: {
           ...user.passkeySafe!,
           candideRecovery: {
@@ -571,7 +572,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
         },
       });
       res.status(201).json({
-        ...deps.publicUser(updated),
+        ...(await deps.publicUser(updated)),
         recovery: publicCandideRecovery(updated),
         next: onChain ? null : "guardian",
       });
@@ -581,17 +582,17 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
   router.post(
     "/users/:id/recovery/candide/guardian",
     wrap(async (req, res) => {
-      const user = userFor(req, res);
+      const user = await userFor(req, res);
       if (!user) return;
       const plan = activePlan(user);
       const c = user.passkeySafe!.candideRecovery;
       if (!c) return res.status(409).json({ error: "register an email or phone for recovery first" });
       const state = await readRecoveryState(plan);
       if (state.guardians.some((g) => g.toLowerCase() === c.guardianAddress.toLowerCase())) {
-        const updated = store.updateUser(user.id, {
+        const updated = await store.updateUser(user.id, {
           passkeySafe: { ...user.passkeySafe!, candideRecovery: { ...c, guardianStatus: "active", activatedAt: c.activatedAt ?? new Date().toISOString() } },
         });
-        return res.json({ ...deps.publicUser(updated), recovery: publicCandideRecovery(updated), status: "active" });
+        return res.json({ ...(await deps.publicUser(updated)), recovery: publicCandideRecovery(updated), status: "active" });
       }
       if (hostedGuardianBlocked(user, state.guardians)) {
         return res.status(409).json({ error: ONE_GUARDIAN_MESSAGE, code: "OTHER_GUARDIAN" });
@@ -627,7 +628,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
   router.post(
     "/users/:id/recovery/candide/guardian/:requestId",
     wrap(async (req, res) => {
-      const user = userFor(req, res);
+      const user = await userFor(req, res);
       if (!user) return;
       prune(pendingSafeOperations);
       const pending = pendingSafeOperations.get(req.params.requestId);
@@ -656,20 +657,20 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
           opHash,
         });
       }
-      const updated = store.updateUser(user.id, {
+      const updated = await store.updateUser(user.id, {
         passkeySafe: {
           ...user.passkeySafe!,
           candideRecovery: { ...c, guardianStatus: "active", guardianOpHash: opHash ?? undefined, activatedAt: new Date().toISOString() },
         },
       });
-      res.status(201).json({ ...deps.publicUser(updated), recovery: publicCandideRecovery(updated), opHash });
+      res.status(201).json({ ...(await deps.publicUser(updated)), recovery: publicCandideRecovery(updated), opHash });
     }),
   );
 
   router.delete(
     "/users/:id/recovery/candide/channels/:registrationId",
     wrap(async (req, res) => {
-      const user = userFor(req, res);
+      const user = await userFor(req, res);
       if (!user) return;
       const plan = activePlan(user);
       const c = user.passkeySafe!.candideRecovery;
@@ -700,7 +701,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
   router.post(
     "/users/:id/recovery/candide/channels/:registrationId/remove/:requestId",
     wrap(async (req, res) => {
-      let user = userFor(req, res);
+      let user = await userFor(req, res);
       if (!user) return;
       prune(pendingChannelRemovals);
       const pending = pendingChannelRemovals.get(req.params.requestId);
@@ -713,13 +714,13 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       await deleteRegistration(pending.registrationId, pending.statement, signature);
       pendingChannelRemovals.delete(req.params.requestId);
       const c = user.passkeySafe!.candideRecovery!;
-      const updated = store.updateUser(user.id, {
+      const updated = await store.updateUser(user.id, {
         passkeySafe: {
           ...user.passkeySafe!,
           candideRecovery: { ...c, channels: c.channels.filter((x) => x.registrationId !== pending.registrationId) },
         },
       });
-      res.json({ ...deps.publicUser(updated), recovery: publicCandideRecovery(updated) });
+      res.json({ ...(await deps.publicUser(updated)), recovery: publicCandideRecovery(updated) });
     }),
   );
 
@@ -728,7 +729,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
   router.post(
     "/users/:id/recovery/candide/cancel",
     wrap(async (req, res) => {
-      const user = userFor(req, res);
+      const user = await userFor(req, res);
       if (!user) return;
       const plan = activePlan(user);
       const state = await readRecoveryState(plan);
@@ -757,7 +758,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
   router.post(
     "/users/:id/recovery/candide/cancel/:requestId",
     wrap(async (req, res) => {
-      const user = userFor(req, res);
+      const user = await userFor(req, res);
       if (!user) return;
       prune(pendingSafeOperations);
       const pending = pendingSafeOperations.get(req.params.requestId);
@@ -775,11 +776,11 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       if (!op) return;
       const opHash = op.userOpHash;
       const now = new Date().toISOString();
-      for (const r of store.recoveryRequestsForUser(user.id)) {
+      for (const r of (await store.recoveryRequestsForUser(user.id))) {
         // The module holds one recovery per Safe, whoever's guardian started
         // it, so the owner's cancel ends a Zoldenburg or Turnkey one too.
         if ((r.mode === "candide" || r.mode === "zoldenburg" || r.mode === "turnkey") && ["OTP_PENDING", "REVIEW_PENDING", "GRACE_PERIOD"].includes(r.status)) {
-          store.updateRecoveryRequest(r.id, { status: "CANCELED", canceledAt: now, cancelReason: "cancelled on chain by the account owner" });
+          await store.updateRecoveryRequest(r.id, { status: "CANCELED", canceledAt: now, cancelReason: "cancelled on chain by the account owner" });
         }
       }
       res.json({ canceled: true, opHash });
@@ -788,30 +789,32 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
 
   // ---- recovery from a new device (no session) ---------------------------
 
-  const findRecoverable = (body: any): User | undefined => {
+  const findRecoverable = async (body: any): Promise<User | undefined> => {
     const email = typeof body?.email === "string" ? body.email : "";
     const address = typeof body?.safeAddress === "string" && ADDRESS_RE.test(body.safeAddress) ? body.safeAddress : "";
-    const user = email ? store.findUserByEmail(email) : address ? store.findUserBySafeAddress(address) : undefined;
+    const user = email ? (await store.findUserByEmail(email)) : address ? (await store.findUserBySafeAddress(address)) : undefined;
     if (!user) return undefined;
     const c = user.passkeySafe?.candideRecovery;
     if (!c || c.guardianStatus !== "active" || user.passkeySafe?.status !== "active") return undefined;
     return user;
   };
 
-  const requestFor = (req: express.Request, res: express.Response): RecoveryRequest | undefined => {
-    const r = store.findRecoveryRequest(req.params.id);
-    // A wrong or missing secret reads exactly like an unknown id: no oracle
-    // for which ids exist.
-    if (!r || r.mode !== "candide" || !secretMatches(r, presentedSecret(req))) {
-      res.status(404).json({ error: "recovery not found" });
-      return undefined;
-    }
-    if (["PASSKEY_PENDING", "OTP_PENDING"].includes(r.status) && Date.now() >= Date.parse(r.expiresAt)) {
-      const expired = store.updateRecoveryRequest(r.id, { status: "EXPIRED" });
-      res.status(410).json({ ...publicRequest(expired), error: "this recovery expired — start again" });
-      return undefined;
-    }
-    return r;
+  const requestFor = async (req: express.Request, res: express.Response): Promise<RecoveryRequest | undefined> => {
+    return store.tx(async () => {
+      const r = await store.findRecoveryRequest(req.params.id);
+      // A wrong or missing secret reads exactly like an unknown id: no oracle
+      // for which ids exist.
+      if (!r || r.mode !== "candide" || !secretMatches(r, presentedSecret(req))) {
+        res.status(404).json({ error: "recovery not found" });
+        return undefined;
+      }
+      if (["PASSKEY_PENDING", "OTP_PENDING"].includes(r.status) && Date.now() >= Date.parse(r.expiresAt)) {
+        const expired = await store.updateRecoveryRequest(r.id, { status: "EXPIRED" });
+        res.status(410).json({ ...publicRequest(expired), error: "this recovery expired — start again" });
+        return undefined;
+      }
+      return r;
+    });
   };
 
   router.post(
@@ -820,14 +823,14 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       if (!candideRecoveryEnabled()) {
         return res.status(503).json({ error: "email/SMS recovery is not available on this deployment" });
       }
-      const user = findRecoverable(req.body);
+      const user = await findRecoverable(req.body);
       if (!user) {
         return res.status(404).json({ error: "no account with email or SMS recovery set up matches that" });
       }
       const c = user.passkeySafe!.candideRecovery!;
       const now = new Date();
-      let open = store
-        .recoveryRequestsForUser(user.id)
+      let open = (await store
+        .recoveryRequestsForUser(user.id))
         .find((r) => r.mode === "candide" && ["PASSKEY_PENDING", "OTP_PENDING", "GRACE_PERIOD"].includes(r.status) && Date.now() < Date.parse(r.expiresAt));
       // Only the browser that started a request may resume it. Anyone else who
       // names the account gets no id: a request with nothing invested yet
@@ -840,12 +843,12 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
             code: "RECOVERY_IN_PROGRESS",
           });
         }
-        store.updateRecoveryRequest(open.id, { status: "CANCELED", canceledAt: now.toISOString(), cancelReason: "superseded by a new recovery start" });
+        await store.updateRecoveryRequest(open.id, { status: "CANCELED", canceledAt: now.toISOString(), cancelReason: "superseded by a new recovery start" });
         open = undefined;
       }
       const grace = recoveryGracePeriodSeconds(c.moduleAddress) ?? 0;
       const secret = open ? undefined : randomBytes(32).toString("base64url");
-      const request: RecoveryRequest = open ?? newCandideRequest({
+      const request: RecoveryRequest = open ?? (await newCandideRequest({
           id: randomUUID(),
           userId: user.id,
           safeAddress: user.passkeySafe!.address,
@@ -858,7 +861,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
           recoveryModuleAddress: c.moduleAddress,
           factors: { kyc: "passed", otp: "pending", liveness: "pending", manualReview: "pending" },
           candide: { gracePeriodSeconds: grace, accessHash: hashSecret(secret!) },
-        });
+        }));
       const out: Record<string, unknown> = {
         ...publicRequest(request),
         // Returned once, at creation; the caller sends it back in the
@@ -879,12 +882,12 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
   router.post(
     "/recovery/candide/:id/passkey",
     wrap(async (req, res) => {
-      const request = requestFor(req, res);
+      const request = await requestFor(req, res);
       if (!request) return;
       if (request.status !== "PASSKEY_PENDING") {
         return res.status(409).json({ ...publicRequest(request), error: `recovery is ${request.status}` });
       }
-      const user = store.findUser(request.userId);
+      const user = await store.findUser(request.userId);
       if (!user?.passkeySafe) return res.status(410).json({ error: "the account behind this recovery no longer exists" });
       if (passkeySubmits.has(request.id)) {
         return res.status(409).json({ ...publicRequest(request), error: "a passkey for this recovery is still being checked", code: "PASSKEY_SUBMIT_IN_PROGRESS" });
@@ -896,7 +899,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       if (!credentialId || typeof credentialId !== "string" || !attestation || !clientDataJSON) {
         return res.status(400).json({ error: "credentialId, attestation and clientDataJSON required" });
       }
-      if (store.findUserByCredential(credentialId)) {
+      if ((await store.findUserByCredential(credentialId))) {
         return res.status(409).json({ error: "that passkey already belongs to an account" });
       }
       let reg;
@@ -923,12 +926,12 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
         passkeySubmits.delete(request.id);
       }
       // Canceled or expired during the wait: record nothing.
-      const current = store.findRecoveryRequest(request.id);
+      const current = await store.findRecoveryRequest(request.id);
       if (current?.status !== "PASSKEY_PENDING") {
         return res.status(409).json({ ...(current ? publicRequest(current) : {}), error: `recovery is ${current?.status ?? "gone"}` });
       }
       const otpTicket = typeof offeredTicket === "string" ? offeredTicket : randomBytes(32).toString("base64url");
-      const updated = store.updateRecoveryRequest(request.id, {
+      const updated = await store.updateRecoveryRequest(request.id, {
         status: "OTP_PENDING",
         candide: {
           ...(current.candide ?? {}),
@@ -958,7 +961,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
   router.post(
     "/recovery/candide/:id/otp",
     wrap(async (req, res) => {
-      const request = requestFor(req, res);
+      const request = await requestFor(req, res);
       if (!request) return;
       const c = request.candide;
       if (request.status !== "OTP_PENDING" || !c?.serviceRequestId || !c.auths || !c.newOwners || !c.newPasskey) {
@@ -981,10 +984,10 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       // before, and a wrong code the SDK throws on still counts.
       const attempts = (c.otpAttempts ?? 0) + 1;
       if (attempts > OTP_MAX_ATTEMPTS) {
-        store.updateRecoveryRequest(request.id, { status: "CANCELED", canceledAt: new Date().toISOString(), cancelReason: "too many wrong codes" });
+        await store.updateRecoveryRequest(request.id, { status: "CANCELED", canceledAt: new Date().toISOString(), cancelReason: "too many wrong codes" });
         return res.status(429).json({ error: "too many wrong codes — this recovery is canceled; start again" });
       }
-      store.updateRecoveryRequest(request.id, { candide: { ...c, otpAttempts: attempts } });
+      await store.updateRecoveryRequest(request.id, { candide: { ...c, otpAttempts: attempts } });
 
       const result = await submitSignatureChallenge(c.serviceRequestId, challengeId, req.body?.otp);
       if (!result.success) {
@@ -1032,7 +1035,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
         };
         console.log(`RECOVERY: ${request.id} executed on chain for Safe ${request.safeAddress}; finalizable after ${patch.candide!.finalizeAfter}`);
       }
-      const updated = store.updateRecoveryRequest(request.id, patch);
+      const updated = await store.updateRecoveryRequest(request.id, patch);
       res.json({
         ...publicRequest(updated),
         ...(updated.status === "GRACE_PERIOD" ? { finalizeVia: `/api/recovery/candide/${request.id}/finalize` } : {}),
@@ -1043,7 +1046,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
   router.post(
     "/recovery/candide/:id/finalize",
     wrap(async (req, res) => {
-      const request = requestFor(req, res);
+      const request = await requestFor(req, res);
       if (!request) return;
       if (request.status === "FINALIZED") return res.json(publicRequest(request));
       if (request.status !== "GRACE_PERIOD") {
@@ -1064,7 +1067,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
   router.get(
     "/recovery/candide/:id",
     wrap(async (req, res) => {
-      const request = requestFor(req, res);
+      const request = await requestFor(req, res);
       if (!request) return;
       res.json(publicRequest(request));
     }),
@@ -1079,14 +1082,13 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
     "/admin/recoveries/candide",
     wrap(async (req, res) => {
       if (!requireOperator(req, res)) return;
-      const requests = store.recoveryRequests
+      const requests = await mapSeq((await store.list("recoveryRequests"))
         .filter((r) => r.mode === "candide" && ["PASSKEY_PENDING", "OTP_PENDING"].includes(r.status) && Date.now() < Date.parse(r.expiresAt))
         .sort((a, b) => Date.parse(b.requestedAt) - Date.parse(a.requestedAt))
-        .slice(0, 200)
-        .map((r) => ({
+        .slice(0, 200), async (r) => ({
           id: r.id,
           userId: r.userId,
-          email: store.findUser(r.userId)?.email ?? null,
+          email: (await store.findUser(r.userId))?.email ?? null,
           safeAddress: r.safeAddress,
           status: r.status,
           requestedAt: r.requestedAt,
@@ -1100,14 +1102,14 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
     "/admin/recoveries/candide/:id/reject",
     wrap(async (req, res) => {
       if (!requireOperator(req, res)) return;
-      const r = store.findRecoveryRequest(req.params.id);
+      const r = await store.findRecoveryRequest(req.params.id);
       if (!r || r.mode !== "candide") return res.status(404).json({ error: "recovery not found" });
       if (!["PASSKEY_PENDING", "OTP_PENDING"].includes(r.status)) {
         return res.status(409).json({ error: `recovery is ${r.status} — once executed only the owner's passkey can cancel it` });
       }
       const reason = typeof req.body?.reason === "string" ? req.body.reason.trim().slice(0, 500) : "";
       if (!reason) return res.status(400).json({ error: "give a reason — the person sees it" });
-      const updated = store.updateRecoveryRequest(r.id, {
+      const updated = await store.updateRecoveryRequest(r.id, {
         status: "CANCELED",
         canceledAt: new Date().toISOString(),
         cancelReason: reason,

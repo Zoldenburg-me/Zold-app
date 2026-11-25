@@ -70,22 +70,22 @@ const check = async (name: string, fn: () => void | Promise<void>) => {
   catch (err) { console.error(`FAIL  ${name}\n      ${(err as Error).stack}`); process.exitCode = 1; }
 };
 
-initStore();
+await initStore();
 const now = new Date().toISOString();
 const reporting = { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" } as const;
 const addr = (c: string) => `0x${c.repeat(40)}` as `0x${string}`;
 
-function org(id: string, type: "personal" | "business", entity?: "company" | "sole_trader") {
-  store.addOrganisation({ id, type, ...(entity ? { entity } : {}), name: id, reporting, verifications: {}, createdAt: now, updatedAt: now } as any);
+async function org(id: string, type: "personal" | "business", entity?: "company" | "sole_trader") {
+  await store.addOrganisation({ id, type, ...(entity ? { entity } : {}), name: id, reporting, verifications: {}, createdAt: now, updatedAt: now } as any);
 }
-function account(id: string, orgId: string, address: `0x${string}`, backingUserId?: string) {
-  store.addAccount({
+async function account(id: string, orgId: string, address: `0x${string}`, backingUserId?: string) {
+  await store.addAccount({
     id, orgId, currency: "EUR", label: "EUR account", status: backingUserId ? "active" : "gated", provider: "monerium" as any,
     identifier: {}, address, ...(backingUserId ? { backingUserId, backedSince: "2026-01-01T00:00:00.000Z" } : {}), createdAt: now, updatedAt: now,
   } as any);
 }
-function user(id: string, address: `0x${string}`) {
-  store.addUser({ id, name: id, country: "DE", kycStatus: "approved", createdAt: "2026-01-01T00:00:00.000Z", address, iban: "" } as any);
+async function user(id: string, address: `0x${string}`) {
+  await store.addUser({ id, name: id, country: "DE", kycStatus: "approved", createdAt: "2026-01-01T00:00:00.000Z", address, iban: "" } as any);
 }
 let n = 0;
 function issue(address: string, amount = "12.50") {
@@ -98,30 +98,30 @@ function issue(address: string, amount = "12.50") {
   });
   return id;
 }
-const recordOf = (orderId: string) => store.moneriumIssueOrders.find((o) => o.orderId === orderId);
-const lineOf = (orgId: string, orderId: string) => store.ledgerOf(orgId).find((e) => e.statement?.links.orderId === orderId);
+const recordOf = async (orderId: string) => (await store.list("moneriumIssueOrders")).find((o) => o.orderId === orderId);
+const lineOf = async (orgId: string, orderId: string) => (await store.ledgerOf(orgId)).find((e) => e.statement?.links.orderId === orderId);
 
 // A company with its own Safe (no backing user), and its owner's personal Safe.
 const COMPANY_SAFE = addr("c");
-org("org_co", "business", "company");
-account("acc_co", "org_co", COMPANY_SAFE);
-user("u_owner", addr("a"));
-org("org_owner", "personal");
-account("acc_owner", "org_owner", addr("a"), "u_owner");
+await org("org_co", "business", "company");
+await account("acc_co", "org_co", COMPANY_SAFE);
+await user("u_owner", addr("a"));
+await org("org_owner", "personal");
+await account("acc_owner", "org_owner", addr("a"), "u_owner");
 // A sole trader: the person's Safe backs both their personal and business accounts.
-user("u_st", addr("b"));
-org("org_st_personal", "personal");
-account("acc_st_personal", "org_st_personal", addr("b"), "u_st");
-org("org_st", "business", "sole_trader");
-account("acc_st", "org_st", addr("b"), "u_st");
+await user("u_st", addr("b"));
+await org("org_st_personal", "personal");
+await account("acc_st_personal", "org_st_personal", addr("b"), "u_st");
+await org("org_st", "business", "sole_trader");
+await account("acc_st", "org_st", addr("b"), "u_st");
 // Ambiguous: a user's Safe that is also a company's account; two company accounts on one address.
-user("u_clash", addr("d"));
-org("org_clash", "business", "company");
-account("acc_clash", "org_clash", addr("d"));
-org("org_twin_1", "business", "company");
-org("org_twin_2", "business", "company");
-account("acc_twin_1", "org_twin_1", addr("e"));
-account("acc_twin_2", "org_twin_2", addr("e"));
+await user("u_clash", addr("d"));
+await org("org_clash", "business", "company");
+await account("acc_clash", "org_clash", addr("d"));
+await org("org_twin_1", "business", "company");
+await org("org_twin_2", "business", "company");
+await account("acc_twin_1", "org_twin_1", addr("e"));
+await account("acc_twin_2", "org_twin_2", addr("e"));
 
 console.log("\nA failed token request");
 
@@ -146,7 +146,7 @@ await check("a refused or failed token request leaves the delivery unresolved an
     tokenFault = 0;
     console.warn = realWarn;
   }
-  assert.equal(store.isOrderProcessed(id), false);
+  assert.equal(await store.isOrderProcessed(id), false);
   orders.delete(id);
 });
 
@@ -155,39 +155,39 @@ console.log("\nBooked to the holder");
 await check("a SEPA credit to a company's own Safe is booked to the company's account and books, not a person", async () => {
   const id = issue(COMPANY_SAFE.toUpperCase().replace("0X", "0x"));
   assert.equal(await mirrorOrderById(id), "recorded");
-  assert.ok(store.isOrderProcessed(id));
-  const r = recordOf(id)!;
+  assert.ok(await store.isOrderProcessed(id));
+  const r = (await recordOf(id))!;
   assert.equal(r.accountId, "acc_co");
   assert.equal(r.userId, undefined, "no person's record");
-  writeStatementLines();
-  const line = lineOf("org_co", id);
+  await writeStatementLines();
+  const line = await lineOf("org_co", id);
   assert.ok(line, "the company's books have the line");
   assert.equal(line!.statement!.event, "sepa_in");
   assert.equal(line!.statement!.amountCents, 1250);
   assert.equal(line!.source.kind === "account" && line!.source.accountId, "acc_co");
-  assert.equal(lineOf("org_owner", id), undefined, "nothing on the owner's personal books");
+  assert.equal(await lineOf("org_owner", id), undefined, "nothing on the owner's personal books");
   // The org's refresh (bookkeeping-export.ts) re-projects the account: nothing new, nothing doubled.
-  assert.deepEqual(writeAccountStatementLines(store.findAccount("acc_co")!), { added: 0, updated: 0 });
+  assert.deepEqual(await writeAccountStatementLines((await store.findAccount("acc_co"))!), { added: 0, updated: 0 });
 });
 
 await check("a SEPA credit to a person's Safe is booked under the user, on their personal books (unchanged)", async () => {
   const id = issue(addr("a"));
   assert.equal(await mirrorOrderById(id), "recorded");
-  const r = recordOf(id)!;
+  const r = (await recordOf(id))!;
   assert.equal(r.userId, "u_owner");
   assert.equal(r.accountId, undefined);
-  writeStatementLines();
-  assert.ok(lineOf("org_owner", id));
-  assert.equal(lineOf("org_co", id), undefined, "the owner's own money is not the company's");
+  await writeStatementLines();
+  assert.ok(await lineOf("org_owner", id));
+  assert.equal(await lineOf("org_co", id), undefined, "the owner's own money is not the company's");
 });
 
 await check("a SEPA credit to a sole trader's Safe is booked under the user, on the business's books (unchanged)", async () => {
   const id = issue(addr("b"));
   assert.equal(await mirrorOrderById(id), "recorded");
-  assert.equal(recordOf(id)!.userId, "u_st");
-  writeStatementLines();
-  assert.ok(lineOf("org_st", id));
-  assert.equal(lineOf("org_st_personal", id), undefined);
+  assert.equal((await recordOf(id))!.userId, "u_st");
+  await writeStatementLines();
+  assert.ok(await lineOf("org_st", id));
+  assert.equal(await lineOf("org_st_personal", id), undefined);
 });
 
 console.log("\nFail closed");
@@ -195,8 +195,8 @@ console.log("\nFail closed");
 await check("a user's Safe that is also another org's account books nothing, and the reconciler reports it", async () => {
   const id = issue(addr("d"));
   assert.equal(await mirrorOrderById(id), "ignored");
-  assert.equal(store.isOrderProcessed(id), false);
-  assert.equal(recordOf(id), undefined);
+  assert.equal(await store.isOrderProcessed(id), false);
+  assert.equal(await recordOf(id), undefined);
   const report = await reconcile();
   assert.ok(report.findings.some((f) => f.kind === "UNMIRRORED" && f.orderId === id));
 });
@@ -205,10 +205,10 @@ await check("two accounts at one address book nothing, by the webhook or the pol
   const id = issue(addr("e"));
   assert.equal(await mirrorOrderById(id), "ignored");
   await pollDepositsOnce();
-  assert.equal(store.isOrderProcessed(id), false);
-  assert.equal(recordOf(id), undefined, "keepIssueFacts refuses it too");
-  assert.equal(lineOf("org_twin_1", id), undefined);
-  assert.equal(lineOf("org_twin_2", id), undefined);
+  assert.equal(await store.isOrderProcessed(id), false);
+  assert.equal(await recordOf(id), undefined, "keepIssueFacts refuses it too");
+  assert.equal(await lineOf("org_twin_1", id), undefined);
+  assert.equal(await lineOf("org_twin_2", id), undefined);
 });
 
 await check("an address no one holds is ignored and not reported", async () => {
@@ -224,8 +224,8 @@ await check("a recorded company order delivered again is `duplicate`, and the po
   const id = [...orders.keys()][0];
   assert.equal(await mirrorOrderById(id), "duplicate");
   await pollDepositsOnce();
-  assert.equal(store.moneriumIssueOrders.filter((o) => o.orderId === id).length, 1);
-  assert.equal(store.ledgerOf("org_co").filter((e) => e.statement?.links.orderId === id).length, 1);
+  assert.equal((await store.list("moneriumIssueOrders")).filter((o) => o.orderId === id).length, 1);
+  assert.equal((await store.ledgerOf("org_co")).filter((e) => e.statement?.links.orderId === id).length, 1);
 });
 
 monerium.close();

@@ -27,18 +27,18 @@ export function holderFor(user: Parameters<typeof holderBlock>[0], profile: Hold
   };
 }
 
-export function belegContextFor(entry: LedgerEntry): BelegContext & { userId: string } {
+export async function belegContextFor(entry: LedgerEntry): Promise<BelegContext & { userId: string }> {
   const s = entry.statement;
   if (!s) throw new Error("only a statement line has a Beleg");
-  const account = entry.source.kind === "account" ? store.findAccount(entry.source.accountId) : undefined;
-  const user = account?.backingUserId ? store.findUser(account.backingUserId) : undefined;
+  const account = entry.source.kind === "account" ? (await store.findAccount(entry.source.accountId)) : undefined;
+  const user = account?.backingUserId ? (await store.findUser(account.backingUserId)) : undefined;
   if (!user) throw new Error("the line's account has no backing user, so there is no account holder to name");
-  const deposit = s.links.depositId ? store.cryptoDeposits.find((d) => d.id === s.links.depositId) : undefined;
-  const transfer = s.links.transferId ? store.findTransfer(s.links.transferId) : undefined;
-  const issueOrder = s.links.orderId && !transfer ? store.moneriumIssueOrders.find((o) => o.orderId === s.links.orderId) : undefined;
-  const sweep = s.event === "sweep" ? store.conversionSweeps.find((x) => `sweep:${x.id}` === s.key) : undefined;
-  const paymentRequest = s.links.paymentRequestId ? store.findPaymentRequest(s.links.paymentRequestId) : undefined;
-  const invoice = s.links.invoiceId ? store.findInvoice(s.links.invoiceId) : undefined;
+  const deposit = s.links.depositId ? (await store.list("cryptoDeposits")).find((d) => d.id === s.links.depositId) : undefined;
+  const transfer = s.links.transferId ? (await store.findTransfer(s.links.transferId)) : undefined;
+  const issueOrder = s.links.orderId && !transfer ? (await store.list("moneriumIssueOrders")).find((o) => o.orderId === s.links.orderId) : undefined;
+  const sweep = s.event === "sweep" ? (await store.list("conversionSweeps")).find((x) => `sweep:${x.id}` === s.key) : undefined;
+  const paymentRequest = s.links.paymentRequestId ? (await store.findPaymentRequest(s.links.paymentRequestId)) : undefined;
+  const invoice = s.links.invoiceId ? (await store.findInvoice(s.links.invoiceId)) : undefined;
   const invoicePayerName = invoice?.issued?.recipient?.name ?? invoice?.supplier?.orgName;
   return {
     userId: user.id,
@@ -55,13 +55,13 @@ export function belegContextFor(entry: LedgerEntry): BelegContext & { userId: st
 /** The records check of the verify page, /v/<code>: does the store still say
  *  what this Beleg says? The exports use the same check, so a Beleg that
  *  fails it there is not handed out here. */
-export function belegRecordsAgree(s: BelegSnapshot, line?: LedgerEntry): { ok: boolean; detail: string } {
+export async function belegRecordsAgree(s: BelegSnapshot, line?: LedgerEntry): Promise<{ ok: boolean; detail: string }> {
   return belegStillAgrees(s, {
-    entry: line?.id === s.line.lineId ? line : store.ledger.find((e) => e.id === s.line.lineId),
-    deposit: s.line.links.depositId ? store.cryptoDeposits.find((d) => d.id === s.line.links.depositId) : undefined,
-    transfer: s.line.links.transferId ? store.findTransfer(s.line.links.transferId) : undefined,
-    issueOrder: s.line.links.orderId ? store.moneriumIssueOrders.find((o) => o.orderId === s.line.links.orderId) : undefined,
-    sweep: s.sweep ? store.conversionSweeps.find((x) => `sweep:${x.id}` === s.line.key) : undefined,
+    entry: line?.id === s.line.lineId ? line : (await store.list("ledger")).find((e) => e.id === s.line.lineId),
+    deposit: s.line.links.depositId ? (await store.list("cryptoDeposits")).find((d) => d.id === s.line.links.depositId) : undefined,
+    transfer: s.line.links.transferId ? (await store.findTransfer(s.line.links.transferId)) : undefined,
+    issueOrder: s.line.links.orderId ? (await store.list("moneriumIssueOrders")).find((o) => o.orderId === s.line.links.orderId) : undefined,
+    sweep: s.sweep ? (await store.list("conversionSweeps")).find((x) => `sweep:${x.id}` === s.line.key) : undefined,
   });
 }
 
@@ -71,12 +71,12 @@ type BelegDoc = StoredDocument & { snapshot: BelegSnapshot };
  *  not revoked, and its records still agree. `stale`: not revoked, but it no
  *  longer agrees, so it is replaced, never shipped. A revoked one is neither:
  *  the line has no Beleg until one is issued. */
-export function belegOfLine(e: LedgerEntry): { live: BelegDoc } | { stale: BelegDoc; detail: string } | undefined {
+export async function belegOfLine(e: LedgerEntry): Promise<{ live: BelegDoc } | { stale: BelegDoc; detail: string } | undefined> {
   const code = e.statement?.documentCode;
-  const doc = code ? store.findDocumentByCode(code) : undefined;
+  const doc = code ? (await store.findDocumentByCode(code)) : undefined;
   if (!doc || doc.snapshot.kind !== "beleg" || doc.revokedAt) return undefined;
   const d = { ...doc, snapshot: doc.snapshot };
-  const agree = belegRecordsAgree(d.snapshot, e);
+  const agree = await belegRecordsAgree(d.snapshot, e);
   return agree.ok ? { live: d } : { stale: d, detail: agree.detail };
 }
 
@@ -106,16 +106,16 @@ export function issueBelegForLine(entry: LedgerEntry): Promise<{ doc: StoredDocu
  *  (BelegWouldNotVerify); with no live Beleg this just issues. */
 export function replaceBelegForLine(entry: LedgerEntry): Promise<{ doc: StoredDocument; issued: boolean; revoked?: StoredDocument }> {
   return queued(entry, async () => {
-    const now = store.ledgerOf(entry.orgId).find((e) => e.id === entry.id) ?? entry;
-    const current = belegOfLine(now);
+    const now = (await store.ledgerOf(entry.orgId)).find((e) => e.id === entry.id) ?? entry;
+    const current = await belegOfLine(now);
     if (!current) return issueOnce(now);
     if ("live" in current) throw new BelegStillVerifies("this Beleg still matches the books");
     const doc = await draft(now);
-    const agree = belegRecordsAgree(doc.snapshot as BelegSnapshot, now);
+    const agree = await belegRecordsAgree(doc.snapshot as BelegSnapshot, now);
     if (!agree.ok) throw new BelegWouldNotVerify(agree.detail);
-    store.batched(() => {
-      store.updateDocument(current.stale.id, { revokedAt: new Date().toISOString() });
-      commit(now, doc);
+    await store.tx(async () => {
+      await store.updateDocument(current.stale.id, { revokedAt: new Date().toISOString() });
+      await commit(now, doc);
     });
     return { doc, issued: true, revoked: current.stale };
   });
@@ -124,8 +124,8 @@ export function replaceBelegForLine(entry: LedgerEntry): Promise<{ doc: StoredDo
 /** Every Beleg a line has had, revoked ones included: what was sent to a
  *  partner under an earlier code is found again by it. Server-side only; a
  *  code is a credential. */
-export function belegeOfLine(orgId: string, lineId: string): StoredDocument[] {
-  return store.documentsForOrg(orgId).filter((d) => d.snapshot.kind === "beleg" && d.snapshot.line.lineId === lineId);
+export async function belegeOfLine(orgId: string, lineId: string): Promise<StoredDocument[]> {
+  return (await store.documentsForOrg(orgId)).filter((d) => d.snapshot.kind === "beleg" && d.snapshot.line.lineId === lineId);
 }
 
 function queued<T extends { doc: StoredDocument; issued: boolean }>(entry: LedgerEntry, fn: () => Promise<T>): Promise<T> {
@@ -138,21 +138,21 @@ function queued<T extends { doc: StoredDocument; issued: boolean }>(entry: Ledge
 
 async function issueOnce(given: LedgerEntry): Promise<{ doc: StoredDocument; issued: boolean }> {
   // The row as it is now: the caller's copy may predate a Beleg just issued.
-  const entry = store.ledgerOf(given.orgId).find((e) => e.id === given.id) ?? given;
+  const entry = (await store.ledgerOf(given.orgId)).find((e) => e.id === given.id) ?? given;
   const s = entry.statement;
   if (!s) throw new Error("only a statement line has a Beleg");
   if (s.documentCode) {
-    const existing = store.findDocumentByCode(s.documentCode);
+    const existing = await store.findDocumentByCode(s.documentCode);
     if (existing && !existing.revokedAt) return { doc: existing, issued: false };
   }
   const doc = await draft(entry);
-  commit(entry, doc);
+  await commit(entry, doc);
   return { doc, issued: true };
 }
 
 /** The Beleg for the line as the books are now, signed, not yet stored. */
 async function draft(entry: LedgerEntry): Promise<StoredDocument> {
-  const ctx = belegContextFor(entry);
+  const ctx = await belegContextFor(entry);
   const snapshot: BelegSnapshot = buildBeleg(entry, ctx);
   const code = newDocumentCode();
   return {
@@ -167,9 +167,11 @@ async function draft(entry: LedgerEntry): Promise<StoredDocument> {
   };
 }
 
-function commit(entry: LedgerEntry, doc: StoredDocument): void {
-  // Re-read after the signing await: the writer may have updated the row.
-  const s = (store.ledgerOf(entry.orgId).find((e) => e.id === entry.id) ?? entry).statement!;
-  store.addDocument(doc);
-  store.updateLedgerEntry(entry.id, { statement: { ...s, documentCode: doc.code } });
+async function commit(entry: LedgerEntry, doc: StoredDocument): Promise<void> {
+  return store.tx(async () => {
+    // Re-read after the signing await: the writer may have updated the row.
+    const s = ((await store.ledgerOf(entry.orgId)).find((e) => e.id === entry.id) ?? entry).statement!;
+    await store.addDocument(doc);
+    await store.updateLedgerEntry(entry.id, { statement: { ...s, documentCode: doc.code } });
+  });
 }

@@ -169,7 +169,8 @@ export let db: Db = {
   ledger: [],
 };
 
-export function initStore() {
+/** Load the store, run the load-time migrations, write it back. */
+export async function initStore() {
   // 700 only when we create it: TRANSF_DB_PATH may sit in a shared dir such as the OS temp dir.
   mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
   if (existsSync(DB_PATH)) {
@@ -442,7 +443,7 @@ export function defaultChartRows(orgId: string, at: string): { chart: ChartAccou
 /* Every write rewrites the whole file, synchronously, and syncs it, so the state
  * survives a host crash as well as a process exit before the caller goes on to
  * the chain or a partner: recovery reads a missing intent as "nothing was sent". A loop of writes inside
- * one request runs in `batched` and lands as one write at its end; nothing is
+ * one `store.tx` lands as one write at its end; nothing is
  * deferred past the call that made it.
  *
  * Written without indentation: the serialise blocks the event loop, and on a
@@ -485,22 +486,16 @@ export function persist() {
   }
 }
 
-/** Run `fn` with its writes collected into one, written before this returns
- *  (also when `fn` throws, so a partial batch is never only in memory).
- *  Synchronous only: an await inside would hold writes across I/O. */
-export function batched<T>(fn: () => T): T {
+/** A transaction's writes are collected into one, written at endWrites
+ *  (store/backend.ts calls it also when the transaction throws, so a partial
+ *  transaction is never only in memory). */
+export function beginWrites() {
   batchDepth++;
-  try {
-    const out = fn();
-    if (out && typeof (out as { then?: unknown }).then === "function") {
-      throw new Error("batched() takes a synchronous function");
-    }
-    return out;
-  } finally {
-    batchDepth--;
-    if (batchDepth === 0 && batchDirty) {
-      batchDirty = false;
-      persist();
-    }
+}
+export function endWrites() {
+  batchDepth--;
+  if (batchDepth === 0 && batchDirty) {
+    batchDirty = false;
+    persist();
   }
 }

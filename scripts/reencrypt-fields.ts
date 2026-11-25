@@ -27,11 +27,12 @@ import { existsSync, statSync } from "node:fs";
 import { fieldKeyId } from "../services/api/src/crypto-at-rest.js";
 import { dataKeyring } from "../services/api/src/config/data-keys.js";
 import { STORED_SECRETS } from "../services/api/src/stored-secrets.js";
-import { batched, DB_PATH, initStore, loadStoreReadOnly } from "../services/api/src/store/db.js";
+import { DB_PATH, initStore, loadStoreReadOnly } from "../services/api/src/store/db.js";
+import { store } from "../services/api/src/store.js";
 
 const apply = process.argv.includes("--apply");
 
-function main(): number {
+async function main(): Promise<number> {
   const keyring = dataKeyring();
   if (apply && !keyring) {
     console.error("--apply needs DATA_ENCRYPTION_KEYS: there is no key to move rows to");
@@ -41,7 +42,7 @@ function main(): number {
     console.error(`no store at ${DB_PATH}: set TRANSF_DB_PATH to the store to check`);
     return 1;
   }
-  if (apply) initStore();
+  if (apply) await initStore();
   else loadStoreReadOnly();
   const seenAt = statSync(DB_PATH, { throwIfNoEntry: false });
   console.log(`${apply ? "Applying" : "Dry run"}: ${DB_PATH}${keyring ? `, active key ${keyring.activeId}` : ", no DATA_ENCRYPTION_KEYS"}`);
@@ -54,7 +55,7 @@ function main(): number {
   for (const entry of STORED_SECRETS) {
     const { site } = entry;
     const counts = new Map<string, number>([["v1", 0], ...ringIds.map((id) => [id, 0] as [string, number])]);
-    for (const { rowId, stored } of entry.rows()) {
+    for (const { rowId, stored } of await entry.rows()) {
       let keyId: string;
       try { keyId = fieldKeyId(stored); } catch { failures.push(`${site.table}.${site.field} ${rowId}: not ciphertext`); continue; }
       counts.set(keyId, (counts.get(keyId) ?? 0) + 1);
@@ -89,15 +90,16 @@ function main(): number {
       console.error("the store changed while the job ran (is the API running?): nothing written");
       return 1;
     }
-    // batched() writes what changed even when it throws, so a failure part-way
-    // keeps the rows moved before it; each of those reads back on its own.
+    // store.tx writes what changed even when it throws (the JSON backend has
+    // no rollback), so a failure part-way keeps the rows moved before it; each
+    // of those reads back on its own.
     let moved = 0;
     try {
-      batched(() => {
+      await store.tx(async () => {
         for (const { entry, rowId, plaintext } of moves) {
           const sealed = entry.site.seal(rowId, plaintext);
           if (entry.site.open(rowId, sealed) !== plaintext) throw new Error(`${entry.site.table}.${entry.site.field} ${rowId}: re-encrypted value does not read back`);
-          entry.write(rowId, sealed);
+          await entry.write(rowId, sealed);
           moved++;
         }
       });
@@ -112,4 +114,4 @@ function main(): number {
   return failures.length ? 1 : 0;
 }
 
-process.exitCode = main();
+process.exitCode = await main();

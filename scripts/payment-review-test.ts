@@ -114,30 +114,30 @@ async function makePasskey(userId: string) {
 }
 
 // ── An org with an owner (whose account funds it), an admin and a payer ─────
-initStore();
+await initStore();
 const now = new Date().toISOString();
 const ownerKey = await makePasskey("u_owner");
-store.addUser({
+await store.addUser({
   id: "u_owner", name: "Olga Owner", country: "DE", kycStatus: "approved", createdAt: now,
   address: `0x${"1".repeat(40)}`, iban: "DE89370400440532013000",
   funding: { mode: "sandbox", status: "active", moneriumProfileId: CORP.id },
   monerium: { connectedAt: now, method: "oauth", profileId: CORP.id, accessTokenEnc: SECRETS.moneriumAccessToken.seal("u_owner", "tok-owner"), profiles: [{ id: CORP.id, kind: CORP.kind, state: CORP.state }] },
   passkey: ownerKey.stored,
 } as any);
-for (const id of ["u_admin", "u_payer", "u_viewer"]) store.addUser({ id, name: id, country: "DE", kycStatus: "approved", createdAt: now } as any);
+for (const id of ["u_admin", "u_payer", "u_viewer"]) await store.addUser({ id, name: id, country: "DE", kycStatus: "approved", createdAt: now } as any);
 
-function addOrg(id: string, plan: Organisation["plan"]) {
-  store.addOrganisation(businessOrg(id, "Acme Technik GmbH", { legalName: "Acme Technik GmbH", plan }));
+async function addOrg(id: string, plan: Organisation["plan"]) {
+  await store.addOrganisation(businessOrg(id, "Acme Technik GmbH", { legalName: "Acme Technik GmbH", plan }));
   for (const [userId, role] of [["u_owner", "owner"], ["u_admin", "admin"], ["u_payer", "payer"], ["u_viewer", "viewer"]]) {
-    store.addMember(member(`m_${id}_${userId}`, id, userId, role as Role));
+    await store.addMember(member(`m_${id}_${userId}`, id, userId, role as Role));
   }
-  store.addAccount(gatedEurAccount(`acc_${id}`, id, { label: "EUR", gate: { reason: "no funding identity", needs: "a member's account" } }));
-  store.addContact({ id: `c_${id}`, orgId: id, name: "Supplier GmbH", wallets: [], bankAccounts: [{ id: `ba_${id}`, currency: "EUR", country: "DE", iban: "DE02120300000000202051", holderName: "Supplier GmbH" }], createdAt: now, updatedAt: now } as any);
+  await store.addAccount(gatedEurAccount(`acc_${id}`, id, { label: "EUR", gate: { reason: "no funding identity", needs: "a member's account" } }));
+  await store.addContact({ id: `c_${id}`, orgId: id, name: "Supplier GmbH", wallets: [], bankAccounts: [{ id: `ba_${id}`, currency: "EUR", country: "DE", iban: "DE02120300000000202051", holderName: "Supplier GmbH" }], createdAt: now, updatedAt: now } as any);
 }
 
 const app = express();
 app.use(express.json());
-const requireSession = (req: any, res: any) => {
+const requireSession = async (req: any, res: any) => {
   const id = req.header("x-user");
   if (id) return { userId: id };
   res.status(401).json({ error: "no session" });
@@ -148,8 +148,8 @@ const noTransfers = (async () => { throw new Error("no transfer is built in this
 /** Runs inside the balance read, the last await before the claim. */
 let duringBalanceRead: (() => void) | undefined;
 const richBalance = async () => { duringBalanceRead?.(); return { safeBalanceEur: 1_000_000 }; };
-app.use("/api/orgs", createInvoicingRoutes({ ctxOf: (req: any, res: any) => resolveOrg(req, res, requireSession) }));
-app.use("/api/orgs", createDraftRoutes({ ctxOf: (req: any, res: any) => resolveOrg(req, res, requireSession) }, noTransfers, richBalance));
+app.use("/api/orgs", createInvoicingRoutes({ ctxOf: async (req: any, res: any) => await resolveOrg(req, res, requireSession) }));
+app.use("/api/orgs", createDraftRoutes({ ctxOf: async (req: any, res: any) => await resolveOrg(req, res, requireSession) }, noTransfers, richBalance));
 const server = app.listen(0, "127.0.0.1");
 // Seeding a full ceiling of drafts blocks for longer than the default keep-alive.
 server.keepAliveTimeout = 60_000;
@@ -168,7 +168,7 @@ async function draftIn(orgId: string, asUser = "u_payer", amount?: string) {
   assert.equal(r.status, 201, JSON.stringify(r.data));
   return r.data.draft.id as string;
 }
-const stateOf = (id: string) => store.findDraft(id)!.state;
+const stateOf = async (id: string) => (await store.findDraft(id))!.state;
 const GATE = /requires a second person to review|is waiting for review/;
 /** Execute as the owner (the only member who can sign for the account) and
  *  say whether the review gate let it through. */
@@ -208,7 +208,7 @@ await check("a draft is editable and cancellable until execution starts, and CAN
 
 console.log("\nAn org that worked under review keeps it");
 
-addOrg("org_a", "business");
+await addOrg("org_a", "business");
 await check("the owner funds the business account from their own Monerium company profile", async () => {
   const r = await call("POST", "/api/orgs/org_a/accounts/acc_org_a/fund", "u_owner");
   assert.equal(r.status, 200, JSON.stringify(r.data));
@@ -219,13 +219,13 @@ let approved = "";
 await check("with review kept from the business plan a draft is submitted, and an unreviewed draft is not sent", async () => {
   waiting = await draftIn("org_a");
   assert.equal((await call("POST", `/api/orgs/org_a/drafts/${waiting}/submit`, "u_payer")).status, 200);
-  assert.equal(stateOf(waiting), "PENDING_REVIEW");
+  assert.equal(await stateOf(waiting), "PENDING_REVIEW");
   approved = await draftIn("org_a");
   assert.equal((await call("POST", `/api/orgs/org_a/drafts/${approved}/submit`, "u_payer")).status, 200);
   assert.equal((await call("POST", `/api/orgs/org_a/drafts/${approved}/review`, "u_admin", { approve: true })).status, 200);
   const plain = await draftIn("org_a");
   assert.equal((await sendGate("org_a", plain)).passed, false);
-  assert.equal(stateOf(plain), "DRAFT");
+  assert.equal(await stateOf(plain), "DRAFT");
 });
 
 await check("every feature is granted, review still applies: an unreviewed draft is not sent, and a new one can be submitted", async () => {
@@ -235,7 +235,7 @@ await check("every feature is granted, review still applies: an unreviewed draft
   const d = await draftIn("org_a");
   const g = await sendGate("org_a", d);
   assert.equal(g.passed, false, JSON.stringify(g.r.data));
-  assert.equal(stateOf(d), "DRAFT");
+  assert.equal(await stateOf(d), "DRAFT");
   assert.equal((await call("POST", `/api/orgs/org_a/drafts/${d}/submit`, "u_payer")).status, 200);
 });
 
@@ -243,7 +243,7 @@ await check("a waiting draft is reviewed, by someone other than its drafter", as
   assert.equal((await call("POST", `/api/orgs/org_a/drafts/${waiting}/review`, "u_payer", { approve: true })).status, 403);
   const r = await call("POST", `/api/orgs/org_a/drafts/${waiting}/review`, "u_admin", { approve: true });
   assert.equal(r.status, 200, JSON.stringify(r.data));
-  assert.equal(stateOf(waiting), "REVIEWED");
+  assert.equal(await stateOf(waiting), "REVIEWED");
 });
 
 await check("an approved draft passes the review gate", async () => {
@@ -259,13 +259,13 @@ await check("an admin cannot turn review off", async () => {
   assert.equal((await call("POST", `/api/orgs/org_a/drafts/${stillWaiting}/submit`, "u_payer")).status, 200);
   const r = await call("POST", "/api/orgs/org_a/payment-review", "u_admin", { required: false });
   assert.equal(r.status, 403, JSON.stringify(r.data));
-  assert.equal(paymentReviewRequired(store.findOrganisation("org_a")!), true);
+  assert.equal(paymentReviewRequired((await store.findOrganisation("org_a"))!), true);
 });
 
 await check("an owner without a fresh passkey approval cannot turn it off, and nothing changes", async () => {
   const r = await call("POST", "/api/orgs/org_a/payment-review", "u_owner", { required: false });
   assert.equal(r.status, 401, JSON.stringify(r.data));
-  assert.equal(store.findOrganisation("org_a")!.paymentReview, undefined);
+  assert.equal((await store.findOrganisation("org_a"))!.paymentReview, undefined);
 });
 
 await check("an owner with a fresh passkey approval turns it off, and the change is audited", async () => {
@@ -273,7 +273,7 @@ await check("an owner with a fresh passkey approval turns it off, and the change
   assert.equal(r.status, 200, JSON.stringify(r.data));
   assert.equal(r.data.organisation.paymentReview.required, false);
   assert.equal(r.data.organisation.paymentReview.source, "owner");
-  const audit = store.auditFor(undefined, 10_000).filter((e) => e.kind === "org.payment_review_changed");
+  const audit = (await store.auditFor(undefined, 10_000)).filter((e) => e.kind === "org.payment_review_changed");
   assert.equal(audit.length, 1);
   assert.equal(audit[0].data.required, false);
   assert.equal(audit[0].userId, "u_owner");
@@ -289,13 +289,13 @@ await check("with review off a draft that was waiting still waits: it is not sen
   const g = await sendGate("org_a", stillWaiting);
   assert.equal(g.passed, false, JSON.stringify(g.r.data));
   assert.match(g.r.data.error, /waiting for review/);
-  assert.equal(stateOf(stillWaiting), "PENDING_REVIEW");
+  assert.equal(await stateOf(stillWaiting), "PENDING_REVIEW");
   assert.equal((await call("POST", `/api/orgs/org_a/drafts/${stillWaiting}/review`, "u_admin", { approve: true })).status, 200);
-  assert.equal(stateOf(stillWaiting), "REVIEWED");
+  assert.equal(await stateOf(stillWaiting), "REVIEWED");
 });
 
 await check("an owner turns review back on without a passkey (it adds a control)", async () => {
-  addOrg("org_b", "starter");
+  await addOrg("org_b", "starter");
   const off = await call("POST", "/api/orgs/org_b/payment-review", "u_owner", { required: false, stepUp: await ownerKey.stepUp() });
   assert.equal(off.status, 200, JSON.stringify(off.data));
   const on = await call("POST", "/api/orgs/org_b/payment-review", "u_owner", { required: true });
@@ -305,15 +305,15 @@ await check("an owner turns review back on without a passkey (it adds a control)
 
 await check("with review off, an edit that lands while a run is being prepared stops it: what is sent is what was checked", async () => {
   const d = await draftIn("org_a");
-  duringBalanceRead = () => {
-    const row = store.findDraft(d)!;
-    store.updateDraft(d, { lines: row.lines.map((l) => ({ ...l, amount: "9000.00" })) });
+  duringBalanceRead = async () => {
+    const row = (await store.findDraft(d))!;
+    await store.updateDraft(d, { lines: row.lines.map((l) => ({ ...l, amount: "9000.00" })) });
   };
   try {
     const r = await call("POST", `/api/orgs/org_a/drafts/${d}/execute`, "u_owner");
     assert.equal(r.status, 409, JSON.stringify(r.data));
     assert.match(r.data.error, /changed while it was being prepared/);
-    assert.equal(stateOf(d), "DRAFT");
+    assert.equal(await stateOf(d), "DRAFT");
   } finally {
     duringBalanceRead = undefined;
   }
@@ -323,30 +323,30 @@ await check("a stored run with two lines on one invoice is refused at execution,
   // Create and edit refuse this (assertOneLinePerInvoice); a row stored
   // before that check can still hold it, and would execute last-wins.
   const d = await draftIn("org_a");
-  const [first] = store.findDraft(d)!.lines;
-  store.updateDraft(d, { lines: [{ ...first, invoiceId: "inv_legacy" }, { ...first, id: `${first.id}_2`, invoiceId: "inv_legacy" }] });
+  const [first] = (await store.findDraft(d))!.lines;
+  await store.updateDraft(d, { lines: [{ ...first, invoiceId: "inv_legacy" }, { ...first, id: `${first.id}_2`, invoiceId: "inv_legacy" }] });
   const r = await call("POST", `/api/orgs/org_a/drafts/${d}/execute`, "u_owner");
   assert.equal(r.status, 422, JSON.stringify(r.data));
   assert.match(String(r.data.error), /Nothing was created/);
   assert.deepEqual(r.data.problems.map((p: any) => p.lineId), [`${first.id}_2`]);
   assert.match(r.data.problems[0].reason, /same invoice/);
-  assert.equal(stateOf(d), "DRAFT");
+  assert.equal(await stateOf(d), "DRAFT");
 });
 
 console.log("\nEdit and cancel a draft");
 
-addOrg("org_c", "business");
+await addOrg("org_c", "business");
 {
   // One Monerium profile backs one org's account, so this org's account is
   // given the same funding identity directly rather than adopted again.
-  const { id, orgId, ...funded } = store.findAccount("acc_org_a")! as any;
-  store.updateAccount("acc_org_c", { ...funded, gate: undefined } as any);
+  const { id, orgId, ...funded } = (await store.findAccount("acc_org_a"))! as any;
+  await store.updateAccount("acc_org_c", { ...funded, gate: undefined } as any);
 }
 await check("an approved draft can be edited: it goes back to DRAFT, its review is cleared and the editor becomes its drafter", async () => {
   const d = await draftIn("org_c");
   await call("POST", `/api/orgs/org_c/drafts/${d}/submit`, "u_payer");
   assert.equal((await call("POST", `/api/orgs/org_c/drafts/${d}/review`, "u_admin", { approve: true })).status, 200);
-  const row = store.findDraft(d)!;
+  const row = (await store.findDraft(d))!;
   const r = await call("PATCH", `/api/orgs/org_c/drafts/${d}`, "u_admin", { lines: row.lines.map((l) => ({ ...l, amount: "12.50" })) });
   assert.equal(r.status, 200, JSON.stringify(r.data));
   assert.equal(r.data.draft.state, "DRAFT");
@@ -370,9 +370,9 @@ await check("an edit without lines re-reads the payees and still makes the edito
 await check("a waiting draft can be edited too, and goes back to DRAFT", async () => {
   const d = await draftIn("org_c");
   await call("POST", `/api/orgs/org_c/drafts/${d}/submit`, "u_payer");
-  const r = await call("PATCH", `/api/orgs/org_c/drafts/${d}`, "u_payer", { lines: store.findDraft(d)!.lines });
+  const r = await call("PATCH", `/api/orgs/org_c/drafts/${d}`, "u_payer", { lines: (await store.findDraft(d))!.lines });
   assert.equal(r.status, 200, JSON.stringify(r.data));
-  assert.equal(stateOf(d), "DRAFT");
+  assert.equal(await stateOf(d), "DRAFT");
 });
 
 await check("a draft is cancelled by whoever may propose or review payments; the row is kept with who and why", async () => {
@@ -380,12 +380,12 @@ await check("a draft is cancelled by whoever may propose or review payments; the
   assert.equal((await call("POST", `/api/orgs/org_c/drafts/${d}/cancel`, "u_viewer")).status, 403);
   const r = await call("POST", `/api/orgs/org_c/drafts/${d}/cancel`, "u_payer", { reason: "Paid by card instead" });
   assert.equal(r.status, 200, JSON.stringify(r.data));
-  assert.equal(stateOf(d), "CANCELLED");
-  const last = store.findDraft(d)!.activity.at(-1)!;
+  assert.equal(await stateOf(d), "CANCELLED");
+  const last = (await store.findDraft(d))!.activity.at(-1)!;
   assert.equal(last.action, "cancelled");
   assert.equal(last.detail, "Paid by card instead");
   assert.equal(last.actorMemberId, "m_org_c_u_payer");
-  assert.ok(store.draftsOf("org_c").some((x) => x.id === d), "a cancelled draft is kept, not deleted");
+  assert.ok((await store.draftsOf("org_c")).some((x) => x.id === d), "a cancelled draft is kept, not deleted");
 });
 
 await check("waiting and approved drafts can be cancelled; a cancelled one cannot be sent, edited, reviewed or cancelled again", async () => {
@@ -398,92 +398,92 @@ await check("waiting and approved drafts can be cancelled; a cancelled one canno
   assert.equal((await call("POST", `/api/orgs/org_c/drafts/${a}/cancel`, "u_payer")).status, 200);
   const sent = await sendGate("org_c", a);
   assert.equal(sent.passed, false, JSON.stringify(sent.r));
-  assert.equal((await call("PATCH", `/api/orgs/org_c/drafts/${a}`, "u_payer", { lines: store.findDraft(a)!.lines })).status, 409);
+  assert.equal((await call("PATCH", `/api/orgs/org_c/drafts/${a}`, "u_payer", { lines: (await store.findDraft(a))!.lines })).status, 409);
   assert.equal((await call("POST", `/api/orgs/org_c/drafts/${a}/review`, "u_admin", { approve: true })).status, 400);
   assert.equal((await call("POST", `/api/orgs/org_c/drafts/${a}/cancel`, "u_payer")).status, 409);
-  assert.equal(stateOf(a), "CANCELLED");
+  assert.equal(await stateOf(a), "CANCELLED");
 });
 
 await check("a draft that has started sending cannot be cancelled", async () => {
   const d = await draftIn("org_c");
-  store.updateDraft(d, { state: "EXECUTING" });
+  await store.updateDraft(d, { state: "EXECUTING" });
   const r = await call("POST", `/api/orgs/org_c/drafts/${d}/cancel`, "u_owner");
   assert.equal(r.status, 409, JSON.stringify(r.data));
-  assert.equal(stateOf(d), "EXECUTING");
+  assert.equal(await stateOf(d), "EXECUTING");
 });
 
 await check("cancelled drafts do not count against the open-drafts ceiling", async () => {
-  const before = store.draftsOf("org_c").filter((x) => !["EXECUTED", "FAILED", "REJECTED", "CANCELLED"].includes(x.state)).length;
+  const before = (await store.draftsOf("org_c")).filter((x) => !["EXECUTED", "FAILED", "REJECTED", "CANCELLED"].includes(x.state)).length;
   const d = await draftIn("org_c");
   await call("POST", `/api/orgs/org_c/drafts/${d}/cancel`, "u_payer");
-  const after = store.draftsOf("org_c").filter((x) => !["EXECUTED", "FAILED", "REJECTED", "CANCELLED"].includes(x.state)).length;
+  const after = (await store.draftsOf("org_c")).filter((x) => !["EXECUTED", "FAILED", "REJECTED", "CANCELLED"].includes(x.state)).length;
   assert.equal(after, before);
 });
 
 await check("a run whose transfers all finished counts as finished against the ceiling, though its row still says EXECUTING", async () => {
-  addOrg("org_ceil", "business");
+  await addOrg("org_ceil", "business");
   const at = new Date().toISOString();
-  const seedTransfer = (id: string, state: string, row: object = {}) => store.addTransfer({
+  const seedTransfer = async (id: string, state: string, row: object = {}) => await store.addTransfer({
     id, userId: "u_owner", quoteId: `q-${id}`, rail: "sepa", recipientName: "Supplier GmbH", recipientIban: "DE02120300000000202051",
     sendEur: 10, state, txs: [], createdAt: at, updatedAt: at, ...row,
   } as any);
-  const seedDraft = (id: string, state: string, transferIds?: string[]) => store.addDraft({
+  const seedDraft = async (id: string, state: string, transferIds?: string[]) => await store.addDraft({
     id, orgId: "org_ceil", source: { kind: "account", accountId: "acc_org_ceil" }, state, lines: [],
     createdByMemberId: "m_org_ceil_u_payer", activity: [], createdAt: at, updatedAt: at, ...(transferIds ? { transferIds } : {}),
   } as any);
-  for (let i = 0; i < CEILINGS.openDraftsPerOrg - 2; i++) seedDraft(`dft_ceil_${i}`, "DRAFT");
-  seedTransfer("t_ceil_paid", "PAID");
-  seedDraft("dft_ceil_paid", "EXECUTING", ["t_ceil_paid"]);
-  seedTransfer("t_ceil_failed", "FAILED");
-  seedDraft("dft_ceil_failed", "EXECUTING", ["t_ceil_failed"]);
-  assert.equal(store.draftsOf("org_ceil").filter((d) => d.state === "EXECUTING").length, 2, "both rows still read EXECUTING");
+  for (let i = 0; i < CEILINGS.openDraftsPerOrg - 2; i++) await seedDraft(`dft_ceil_${i}`, "DRAFT");
+  await seedTransfer("t_ceil_paid", "PAID");
+  await seedDraft("dft_ceil_paid", "EXECUTING", ["t_ceil_paid"]);
+  await seedTransfer("t_ceil_failed", "FAILED");
+  await seedDraft("dft_ceil_failed", "EXECUTING", ["t_ceil_failed"]);
+  assert.equal((await store.draftsOf("org_ceil")).filter((d) => d.state === "EXECUTING").length, 2, "both rows still read EXECUTING");
 
   const r = await call("POST", "/api/orgs/org_ceil/drafts", "u_payer", { source: { kind: "account", accountId: "acc_org_ceil" }, lines: [line("org_ceil")] });
   assert.equal(r.status, 201, JSON.stringify(r.data));
 
   // One payment still on its way does hold a slot: the ceiling is reached again.
-  seedTransfer("t_ceil_live", "CREATED", { auth: { deadline: Math.floor(Date.now() / 1000) + 240 } });
-  seedDraft("dft_ceil_live", "EXECUTING", ["t_ceil_live"]);
+  await seedTransfer("t_ceil_live", "CREATED", { auth: { deadline: Math.floor(Date.now() / 1000) + 240 } });
+  await seedDraft("dft_ceil_live", "EXECUTING", ["t_ceil_live"]);
   const full = await call("POST", "/api/orgs/org_ceil/drafts", "u_payer", { source: { kind: "account", accountId: "acc_org_ceil" }, lines: [line("org_ceil")] });
   assert.equal(full.status, 409, JSON.stringify(full.data));
 
   // One stuck line makes the run read FAILED, as list and detail show it, and
   // frees its slot though its other line is still live.
-  seedTransfer("t_ceil_stuck", "MANUAL_REVIEW");
-  store.updateDraft("dft_ceil_live", { transferIds: ["t_ceil_stuck", "t_ceil_live"] });
+  await seedTransfer("t_ceil_stuck", "MANUAL_REVIEW");
+  await store.updateDraft("dft_ceil_live", { transferIds: ["t_ceil_stuck", "t_ceil_live"] });
   const freed = await call("POST", "/api/orgs/org_ceil/drafts", "u_payer", { source: { kind: "account", accountId: "acc_org_ceil" }, lines: [line("org_ceil")] });
   assert.equal(freed.status, 201, JSON.stringify(freed.data));
 });
 
 await check("two lines may not pay the same invoice, on create or edit", async () => {
   const body = (lines: object[]) => ({ source: { kind: "account", accountId: "acc_org_c" }, lines });
-  const count = () => store.draftsOf("org_c").length;
-  const before = count();
+  const count = async () => (await store.draftsOf("org_c")).length;
+  const before = await count();
   const dup = await call("POST", "/api/orgs/org_c/drafts", "u_payer", body([{ ...line("org_c"), invoiceId: "inv_dup" }, { ...line("org_c"), invoiceId: "inv_dup" }]));
   assert.equal(dup.status, 400, JSON.stringify(dup.data));
   assert.match(String(dup.data.error), /same invoice/);
-  assert.equal(count(), before, "no draft is created");
+  assert.equal(await count(), before, "no draft is created");
 
   const ok = await call("POST", "/api/orgs/org_c/drafts", "u_payer", body([{ ...line("org_c"), invoiceId: "inv_a" }, { ...line("org_c"), invoiceId: "inv_b" }, line("org_c"), line("org_c")]));
   assert.equal(ok.status, 201, JSON.stringify(ok.data));
   const d = ok.data.draft.id as string;
-  const lines = store.findDraft(d)!.lines;
+  const lines = (await store.findDraft(d))!.lines;
   const edit = await call("PATCH", `/api/orgs/org_c/drafts/${d}`, "u_payer", { lines: [lines[0], { ...lines[1], invoiceId: "inv_a" }] });
   assert.equal(edit.status, 400, JSON.stringify(edit.data));
-  assert.deepEqual(store.findDraft(d)!.lines.map((l) => l.invoiceId), ["inv_a", "inv_b", undefined, undefined], "the draft is unchanged");
+  assert.deepEqual((await store.findDraft(d))!.lines.map((l) => l.invoiceId), ["inv_a", "inv_b", undefined, undefined], "the draft is unchanged");
 });
 
 console.log("\nThe payout IBAN on invoices takes an owner or admin and a passkey");
 
-addOrg("org_iban", "business");
+await addOrg("org_iban", "business");
 const PAYOUT = "DE89370400440532013000";
 const OTHER = "EE382200221020145685";
-const ibanOf = () => store.findOrganisation("org_iban")!.invoicing?.bank?.iban;
+const ibanOf = async () => (await store.findOrganisation("org_iban"))!.invoicing?.bank?.iban;
 await check("an owner with a fresh passkey approval sets the payout IBAN, and the change is audited by last four", async () => {
   const r = await call("PATCH", "/api/orgs/org_iban/invoicing/profile", "u_owner", { bank: { iban: PAYOUT }, stepUp: await ownerKey.stepUp("org.invoice-iban.change") });
   assert.equal(r.status, 200, JSON.stringify(r.data));
-  assert.equal(ibanOf(), PAYOUT);
-  const audit = store.auditFor(undefined, 10_000).filter((e) => e.kind === "org.invoice_iban_changed");
+  assert.equal(await ibanOf(), PAYOUT);
+  const audit = (await store.auditFor(undefined, 10_000)).filter((e) => e.kind === "org.invoice_iban_changed");
   assert.equal(audit.length, 1);
   assert.equal(audit[0].data.oldLast4, null);
   assert.equal(audit[0].data.newLast4, "3000");
@@ -493,31 +493,31 @@ await check("an owner with a fresh passkey approval sets the payout IBAN, and th
 await check("a payer, who may manage invoices, cannot change the payout IBAN", async () => {
   const r = await call("PATCH", "/api/orgs/org_iban/invoicing/profile", "u_payer", { bank: { iban: OTHER } });
   assert.equal(r.status, 403, JSON.stringify(r.data));
-  assert.equal(ibanOf(), PAYOUT);
+  assert.equal(await ibanOf(), PAYOUT);
 });
 await check("a payer still saves the rest of the profile when the IBAN is unchanged", async () => {
   const r = await call("PATCH", "/api/orgs/org_iban/invoicing/profile", "u_payer", { paymentTermsNote: "Danke", bank: { iban: "de89 3704 0044 0532 0130 00" } });
   assert.equal(r.status, 200, JSON.stringify(r.data));
-  assert.equal(store.findOrganisation("org_iban")!.invoicing?.paymentTermsNote, "Danke");
-  assert.equal(ibanOf(), PAYOUT);
+  assert.equal((await store.findOrganisation("org_iban"))!.invoicing?.paymentTermsNote, "Danke");
+  assert.equal(await ibanOf(), PAYOUT);
 });
 await check("an owner without a fresh passkey approval cannot change it, and nothing else in the request is saved", async () => {
   const r = await call("PATCH", "/api/orgs/org_iban/invoicing/profile", "u_owner", { paymentTermsNote: "changed", bank: { iban: OTHER } });
   assert.equal(r.status, 401, JSON.stringify(r.data));
-  assert.equal(ibanOf(), PAYOUT);
-  assert.equal(store.findOrganisation("org_iban")!.invoicing?.paymentTermsNote, "Danke");
+  assert.equal(await ibanOf(), PAYOUT);
+  assert.equal((await store.findOrganisation("org_iban"))!.invoicing?.paymentTermsNote, "Danke");
 });
 await check("an admin with no passkey cannot change it", async () => {
   const r = await call("PATCH", "/api/orgs/org_iban/invoicing/profile", "u_admin", { bank: { iban: OTHER } });
   assert.equal(r.status, 409, JSON.stringify(r.data));
-  assert.equal(ibanOf(), PAYOUT);
+  assert.equal(await ibanOf(), PAYOUT);
 });
 await check("clearing it is a change too, and is audited", async () => {
   assert.equal((await call("PATCH", "/api/orgs/org_iban/invoicing/profile", "u_payer", { bank: { iban: "" } })).status, 403);
   const r = await call("PATCH", "/api/orgs/org_iban/invoicing/profile", "u_owner", { bank: { iban: "" }, stepUp: await ownerKey.stepUp("org.invoice-iban.change") });
   assert.equal(r.status, 200, JSON.stringify(r.data));
-  assert.equal(ibanOf(), undefined);
-  const audit = store.auditFor(undefined, 10_000).filter((e) => e.kind === "org.invoice_iban_changed");
+  assert.equal(await ibanOf(), undefined);
+  const audit = (await store.auditFor(undefined, 10_000)).filter((e) => e.kind === "org.invoice_iban_changed");
   assert.equal(audit.length, 2);
   assert.equal(audit[0].data.oldLast4, "3000", "newest first");
   assert.equal(audit[0].data.newLast4, null);
@@ -526,22 +526,22 @@ await check("clearing it is a change too, and is audited", async () => {
 console.log("\nFour eyes is the person, not the member row");
 
 /** A user whose email is proven, the way invite acceptance requires. */
-function addProvenUser(id: string) {
+async function addProvenUser(id: string) {
   const email = `${id}@example.test`;
-  store.addUser({
+  await store.addUser({
     id, name: id, country: "DE", kycStatus: "approved", createdAt: now, email,
     passkeySafe: { candideRecovery: { channels: [{ channel: "email", target: email, verifiedAt: now }] } },
   } as any);
   return email;
 }
-function addReviewOrg(id: string, members: [string, string][]) {
-  store.addOrganisation(businessOrg(id, "Rejoin GmbH", { legalName: "Rejoin GmbH" }));
+async function addReviewOrg(id: string, members: [string, string][]) {
+  await store.addOrganisation(businessOrg(id, "Rejoin GmbH", { legalName: "Rejoin GmbH" }));
   for (const [userId, role] of members) {
-    store.addMember(member(`m_${id}_${userId}`, id, userId, role as Role));
+    await store.addMember(member(`m_${id}_${userId}`, id, userId, role as Role));
   }
-  store.addAccount(gatedEurAccount(`acc_${id}`, id, { label: "EUR", gate: { reason: "no funding identity", needs: "a member's account" } }));
-  const supplier = store.findContact("c_org_a")!;
-  store.addContact({ ...supplier, id: `c_${id}`, orgId: id, bankAccounts: [{ ...supplier.bankAccounts[0], id: `ba_${id}` }] } as any);
+  await store.addAccount(gatedEurAccount(`acc_${id}`, id, { label: "EUR", gate: { reason: "no funding identity", needs: "a member's account" } }));
+  const supplier = (await store.findContact("c_org_a"))!;
+  await store.addContact({ ...supplier, id: `c_${id}`, orgId: id, bankAccounts: [{ ...supplier.bankAccounts[0], id: `ba_${id}` }] } as any);
 }
 /** Deactivate `who`'s row as `by`, re-invite their email, and accept as them. */
 async function rejoin(orgId: string, who: string, email: string, role: string, by: string) {
@@ -551,13 +551,13 @@ async function rejoin(orgId: string, who: string, email: string, role: string, b
   assert.equal(off.status, 200, JSON.stringify(off.data));
   const accept = await call("POST", "/api/orgs/invites/accept", who, { token: invite.data.inviteToken });
   assert.equal(accept.status, 200, JSON.stringify(accept.data));
-  assert.notEqual(store.memberFor(orgId, who)!.id, `m_${orgId}_${who}`, "a new member row");
+  assert.notEqual((await store.memberFor(orgId, who))!.id, `m_${orgId}_${who}`, "a new member row");
 }
 const REVIEW_SELF = /someone other than the person who drafted it/;
 
-addProvenUser("u_rj_owner");
-const rjAdminEmail = addProvenUser("u_rj_admin");
-addReviewOrg("org_rj", [["u_rj_owner", "owner"], ["u_rj_admin", "admin"]]);
+await addProvenUser("u_rj_owner");
+const rjAdminEmail = await addProvenUser("u_rj_admin");
+await addReviewOrg("org_rj", [["u_rj_owner", "owner"], ["u_rj_admin", "admin"]]);
 await check("an admin removed and re-invited cannot approve the draft they submitted under their old row", async () => {
   const draft = await draftIn("org_rj", "u_rj_admin");
   assert.equal((await call("POST", `/api/orgs/org_rj/drafts/${draft}/submit`, "u_rj_admin")).status, 200);
@@ -565,17 +565,17 @@ await check("an admin removed and re-invited cannot approve the draft they submi
   const r = await call("POST", `/api/orgs/org_rj/drafts/${draft}/review`, "u_rj_admin", { approve: true });
   assert.equal(r.status, 403, JSON.stringify(r.data));
   assert.match(String(r.data.error), REVIEW_SELF);
-  assert.equal(stateOf(draft), "PENDING_REVIEW");
+  assert.equal(await stateOf(draft), "PENDING_REVIEW");
   const reject = await call("POST", `/api/orgs/org_rj/drafts/${draft}/review`, "u_rj_admin", { approve: false });
   assert.equal(reject.status, 403, "rejecting is reviewing too");
   const other = await call("POST", `/api/orgs/org_rj/drafts/${draft}/review`, "u_rj_owner", { approve: true });
   assert.equal(other.status, 200, JSON.stringify(other.data));
-  assert.equal(stateOf(draft), "REVIEWED");
+  assert.equal(await stateOf(draft), "REVIEWED");
 });
 
-const soloEmail = addProvenUser("u_solo");
-addProvenUser("u_solo_co");
-addReviewOrg("org_solo", [["u_solo", "owner"], ["u_solo_co", "owner"]]);
+const soloEmail = await addProvenUser("u_solo");
+await addProvenUser("u_solo_co");
+await addReviewOrg("org_solo", [["u_solo", "owner"], ["u_solo_co", "owner"]]);
 await check("an owner cannot re-invite themselves under a new row to approve their own draft", async () => {
   const draft = await draftIn("org_solo", "u_solo");
   assert.equal((await call("POST", `/api/orgs/org_solo/drafts/${draft}/submit`, "u_solo")).status, 200);
@@ -583,7 +583,7 @@ await check("an owner cannot re-invite themselves under a new row to approve the
   const r = await call("POST", `/api/orgs/org_solo/drafts/${draft}/review`, "u_solo", { approve: true });
   assert.equal(r.status, 403, JSON.stringify(r.data));
   assert.match(String(r.data.error), REVIEW_SELF);
-  assert.equal(stateOf(draft), "PENDING_REVIEW");
+  assert.equal(await stateOf(draft), "PENDING_REVIEW");
 });
 
 await check("a rejoined member still reviews a draft someone else submitted", async () => {
@@ -591,16 +591,16 @@ await check("a rejoined member still reviews a draft someone else submitted", as
   assert.equal((await call("POST", `/api/orgs/org_solo/drafts/${draft}/submit`, "u_solo_co")).status, 200);
   const r = await call("POST", `/api/orgs/org_solo/drafts/${draft}/review`, "u_solo", { approve: true });
   assert.equal(r.status, 200, JSON.stringify(r.data));
-  assert.equal(stateOf(draft), "REVIEWED");
+  assert.equal(await stateOf(draft), "REVIEWED");
 });
 
 await check("a draft whose drafter resolves to no person is refused, not approved", async () => {
   const draft = await draftIn("org_solo", "u_solo_co");
   assert.equal((await call("POST", `/api/orgs/org_solo/drafts/${draft}/submit`, "u_solo_co")).status, 200);
-  store.updateDraft(draft, { createdByMemberId: "m_missing" });
+  await store.updateDraft(draft, { createdByMemberId: "m_missing" });
   const r = await call("POST", `/api/orgs/org_solo/drafts/${draft}/review`, "u_solo", { approve: true });
   assert.equal(r.status, 403, JSON.stringify(r.data));
-  assert.equal(stateOf(draft), "PENDING_REVIEW");
+  assert.equal(await stateOf(draft), "PENDING_REVIEW");
 });
 
 server.close();

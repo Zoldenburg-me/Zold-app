@@ -32,34 +32,34 @@ const check = async (name: string, fn: () => void | Promise<void>) => {
   catch (err) { console.error(`FAIL  ${name}\n      ${(err as Error).stack}`); process.exitCode = 1; }
 };
 
-initStore();
+await initStore();
 const now = new Date().toISOString();
-store.addUser({ id: "u_tony", name: "Tony Payer", country: "DE", kycStatus: "approved", createdAt: now } as any);
-store.addUser({ id: "u_other", name: "Olive Other", country: "DE", kycStatus: "approved", createdAt: now } as any);
-store.addOrganisation({
+await store.addUser({ id: "u_tony", name: "Tony Payer", country: "DE", kycStatus: "approved", createdAt: now } as any);
+await store.addUser({ id: "u_other", name: "Olive Other", country: "DE", kycStatus: "approved", createdAt: now } as any);
+await store.addOrganisation({
   id: "org_p", type: "personal", name: "Tony Payer", legalName: "Tony Payer",
   address: { line1: "1 Main Street", postalCode: "10115", city: "Berlin", country: "DE" },
   reporting: { currency: "EUR", timeZone: "UTC", costBasisMethod: "FIFO" }, verifications: {},
   createdAt: now, updatedAt: now,
 } as any);
-store.addOrganisation({
+await store.addOrganisation({
   id: "org_b", type: "business", name: "Tony GmbH", legalName: "Tony GmbH",
   address: { line1: "1 Main Street", postalCode: "10115", city: "Berlin", country: "DE" },
   reporting: { currency: "EUR", timeZone: "UTC", costBasisMethod: "FIFO" }, verifications: {},
   createdAt: now, updatedAt: now,
 } as any);
-store.addMember({ id: "m_tony_b", orgId: "org_b", userId: "u_tony", email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now });
-store.addMember({ id: "m_tony", orgId: "org_p", userId: "u_tony", email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now });
+await store.addMember({ id: "m_tony_b", orgId: "org_b", userId: "u_tony", email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now });
+await store.addMember({ id: "m_tony", orgId: "org_p", userId: "u_tony", email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now });
 
 const app = express();
 app.use(express.json());
-const requireSession = (req: any, res: any) => {
+const requireSession = async (req: any, res: any) => {
   const id = req.header("x-user");
   if (id) return { userId: id };
   res.status(401).json({ error: "no session" });
   return undefined;
 };
-const ctxOf = (req: any, res: any) => resolveOrg(req, res, requireSession);
+const ctxOf = async (req: any, res: any) => await resolveOrg(req, res, requireSession);
 app.use("/api/orgs", createInvoiceRoutes({ ctxOf }));
 app.use("/api/invoice-links", createInvoiceLinkRouter());
 const server = app.listen(0, "127.0.0.1");
@@ -87,14 +87,14 @@ const fill = (token: string, over: Record<string, unknown> = {}) =>
   });
 const listed = async (id: string) => (await call("GET", "/api/orgs/org_p/invoices", "u_tony")).data.invoices.find((i: any) => i.id === id);
 let seq = 0;
-const transfer = (over: Record<string, unknown> = {}) => {
+const transfer = async (over: Record<string, unknown> = {}) => {
   const id = `tr_${++seq}`;
-  store.addTransfer({ id, userId: "u_tony", rail: "sepa", recipientName: "Bob Example", recipientIban: IBAN, sendEur: 11.45, receiveEur: 11.45, state: "CREATED", createdAt: new Date().toISOString(), updatedAt: now, ...over } as any);
+  await store.addTransfer({ id, userId: "u_tony", rail: "sepa", recipientName: "Bob Example", recipientIban: IBAN, sendEur: 11.45, receiveEur: 11.45, state: "CREATED", createdAt: new Date().toISOString(), updatedAt: now, ...over } as any);
   return id;
 };
-const cryptoSend = (over: Record<string, unknown> = {}) => {
+const cryptoSend = async (over: Record<string, unknown> = {}) => {
   const id = `cs_${++seq}`;
-  store.cryptoSends.push({ id, userId: "u_tony", to: WALLET, token: "EURE", amount: "11.45", capEur: 11.45, state: "SUBMITTED", deadline: Math.floor(Date.now() / 1000) + 600, createdAt: new Date().toISOString(), updatedAt: now, ...over } as any);
+  (await store.list("cryptoSends")).push({ id, userId: "u_tony", to: WALLET, token: "EURE", amount: "11.45", capEur: 11.45, state: "SUBMITTED", deadline: Math.floor(Date.now() / 1000) + 600, createdAt: new Date().toISOString(), updatedAt: now, ...over } as any);
   return id;
 };
 
@@ -117,14 +117,14 @@ await check("a send link cannot have a password: its page has no password step",
 await check("a wallet send whose authorize answer was lost still ties, and the payee's page sees it paid", async () => {
   const l = await newLink("13");
   await fill(l.token, { payTo: { kind: "wallet", chainId: CHAIN_ID, address: WALLET } });
-  const unsigned = cryptoSend({ state: "CREATED" });
+  const unsigned = await cryptoSend({ state: "CREATED" });
   const r = await call("POST", `/api/orgs/org_p/invoices/${l.id}/paying`, "u_tony", { cryptoSendId: unsigned });
   assert.equal(r.status, 200, JSON.stringify(r.data));
   assert.equal((await call("GET", `/api/invoice-links/${l.token}`)).data.invoice.state, "SUBMITTED", "unsigned: nothing is on its way yet");
-  assert.equal(store.findInvoice(l.id)?.state, "PAYING", "but the payer's side keeps Pay off");
-  store.updateCryptoSend(unsigned, { state: "SUBMITTED" });
+  assert.equal((await store.findInvoice(l.id))?.state, "PAYING", "but the payer's side keeps Pay off");
+  await store.updateCryptoSend(unsigned, { state: "SUBMITTED" });
   assert.equal((await call("GET", `/api/invoice-links/${l.token}`)).data.invoice.state, "PAYING", "signed: on its way");
-  store.updateCryptoSend(unsigned, { state: "SENT", txHash: `0x${"aa".repeat(32)}` as `0x${string}` });
+  await store.updateCryptoSend(unsigned, { state: "SENT", txHash: `0x${"aa".repeat(32)}` as `0x${string}` });
   assert.equal((await call("GET", `/api/invoice-links/${l.token}`)).data.invoice.state, "PAID", "the payee's own read follows the payment");
 });
 
@@ -201,7 +201,7 @@ await check("what was filled in becomes one line, the name is the account holder
   assert.match(inv.supplier.invoiceNumber, /^LINK-[0-9A-F-]{8}$/);
   assert.equal(inv.payTo.kind, "bank");
   assert.equal(inv.payTo.bank.iban, "DE89••••3000", "the answer is masked too");
-  assert.equal(store.findInvoice(l.id)?.payTo?.bank?.iban, IBAN, "stored in full for the payer");
+  assert.equal((await store.findInvoice(l.id))?.payTo?.bank?.iban, IBAN, "stored in full for the payer");
   assert.equal(inv.payTo.bank.holderName, "Bob Example");
   const again = await fill(l.token, { amount: "1" });
   assert.equal(again.status, 409);
@@ -223,7 +223,7 @@ await check("no reason, no name, a bad IBAN, no destination or a wallet on anoth
     const r = await fill(l.token, over);
     assert.equal(r.status, 400, `${JSON.stringify(over)}: ${JSON.stringify(r.data)}`);
   }
-  assert.equal(store.findInvoice(l.id)?.state, "LINK_CREATED", "nothing refused moved the link");
+  assert.equal((await store.findInvoice(l.id))?.state, "LINK_CREATED", "nothing refused moved the link");
 });
 
 await check("a wallet on this deployment's chain is taken", async () => {
@@ -236,7 +236,7 @@ await check("a wallet on this deployment's chain is taken", async () => {
 await check("the email for a filled-in send link is the send-link one", async () => {
   const l = await newLink("13");
   await fill(l.token);
-  const inv = store.findInvoice(l.id)!;
+  const inv = (await store.findInvoice(l.id))!;
   // No confirmed email on file: told nothing, and the send-link path is taken without throwing.
   assert.equal(await notifyRequester(inv, { mailOn: true }), "no-email");
 });
@@ -247,17 +247,17 @@ await check("a bank payment ties on only if it is the caller's, to the link's IB
   const l = await newLink("13");
   await fill(l.token);
   const path = `/api/orgs/org_p/invoices/${l.id}/paying`;
-  assert.equal((await call("POST", path, "u_tony", { transferId: transfer({ userId: "u_other" }) })).status, 404, "someone else's payment");
-  assert.equal((await call("POST", path, "u_tony", { transferId: transfer({ recipientIban: OTHER_IBAN }) })).status, 409, "another IBAN");
-  assert.equal((await call("POST", path, "u_tony", { transferId: transfer({ sendEur: 11.44, receiveEur: 11.44 }) })).status, 409, "a cent short");
-  assert.equal((await call("POST", path, "u_tony", { transferId: transfer({ state: "FAILED" }) })).status, 409, "a failed payment");
-  assert.equal((await call("POST", path, "u_tony", { transferId: transfer({ createdAt: now }) })).status, 409, "made before the link was filled in");
-  assert.equal((await call("POST", path, "u_tony", { transferId: transfer({ sendEur: 11.454, receiveEur: 11.454 }) })).status, 409, "a fraction of a cent over");
-  assert.equal((await call("POST", path, "u_tony", { transferId: transfer({ receiveEur: 10.95 }) })).status, 409, "a fee taken out of what arrives");
+  assert.equal((await call("POST", path, "u_tony", { transferId: await transfer({ userId: "u_other" }) })).status, 404, "someone else's payment");
+  assert.equal((await call("POST", path, "u_tony", { transferId: await transfer({ recipientIban: OTHER_IBAN }) })).status, 409, "another IBAN");
+  assert.equal((await call("POST", path, "u_tony", { transferId: await transfer({ sendEur: 11.44, receiveEur: 11.44 }) })).status, 409, "a cent short");
+  assert.equal((await call("POST", path, "u_tony", { transferId: await transfer({ state: "FAILED" }) })).status, 409, "a failed payment");
+  assert.equal((await call("POST", path, "u_tony", { transferId: await transfer({ createdAt: now }) })).status, 409, "made before the link was filled in");
+  assert.equal((await call("POST", path, "u_tony", { transferId: await transfer({ sendEur: 11.454, receiveEur: 11.454 }) })).status, 409, "a fraction of a cent over");
+  assert.equal((await call("POST", path, "u_tony", { transferId: await transfer({ receiveEur: 10.95 }) })).status, 409, "a fee taken out of what arrives");
   assert.equal((await call("POST", path, "u_tony", {})).status, 400, "no payment named");
-  assert.equal(store.findInvoice(l.id)?.state, "SUBMITTED");
+  assert.equal((await store.findInvoice(l.id))?.state, "SUBMITTED");
 
-  const good = transfer();
+  const good = await transfer();
   const r = await call("POST", path, "u_tony", { transferId: good });
   assert.equal(r.status, 200, JSON.stringify(r.data));
   assert.equal(r.data.invoice.state, "PAYING");
@@ -269,16 +269,16 @@ await check("a bank payment ties on only if it is the caller's, to the link's IB
   assert.equal(twice.status, 409);
   assert.match(twice.data.error, /already pays another link/);
 
-  store.updateTransfer(good, { state: "PAID" } as any);
+  await store.updateTransfer(good, { state: "PAID" } as any);
   assert.equal((await listed(l.id)).state, "PAID", "the link follows its transfer");
 });
 
 await check("a refunded bank payment puts the link back to pay", async () => {
   const l = await newLink("13");
   await fill(l.token);
-  const t = transfer();
+  const t = await transfer();
   await call("POST", `/api/orgs/org_p/invoices/${l.id}/paying`, "u_tony", { transferId: t });
-  store.updateTransfer(t, { state: "REFUNDED" } as any);
+  await store.updateTransfer(t, { state: "REFUNDED" } as any);
   const inv = await listed(l.id);
   assert.equal(inv.state, "SUBMITTED");
   assert.equal(inv.payment?.transferId, undefined);
@@ -288,19 +288,19 @@ await check("a wallet payment ties on only to the link's address, in EURe, for e
   const l = await newLink("13");
   await fill(l.token, { payTo: { kind: "wallet", chainId: CHAIN_ID, address: WALLET } });
   const path = `/api/orgs/org_p/invoices/${l.id}/paying`;
-  assert.equal((await call("POST", path, "u_tony", { cryptoSendId: cryptoSend({ to: `0x${"cd".repeat(20)}` }) })).status, 409, "another address");
-  assert.equal((await call("POST", path, "u_tony", { cryptoSendId: cryptoSend({ token: "USDC" }) })).status, 409, "dollars");
-  assert.equal((await call("POST", path, "u_tony", { cryptoSendId: cryptoSend({ amount: "11.454" }) })).status, 409, "a fraction of a cent over");
-  assert.equal((await call("POST", path, "u_tony", { cryptoSendId: cryptoSend({ userId: "u_other" }) })).status, 404, "someone else's send");
-  assert.equal((await call("POST", path, "u_tony", { cryptoSendId: cryptoSend({ state: "CREATED", deadline: Math.floor(Date.now() / 1000) - 1 }) })).status, 409, "never signed, past its deadline");
-  assert.equal((await call("POST", path, "u_tony", { cryptoSendId: cryptoSend({ createdAt: now }) })).status, 409, "made before the link was filled in");
-  assert.equal((await call("POST", path, "u_tony", { transferId: transfer() })).status, 409, "a bank payment for a wallet link");
+  assert.equal((await call("POST", path, "u_tony", { cryptoSendId: await cryptoSend({ to: `0x${"cd".repeat(20)}` }) })).status, 409, "another address");
+  assert.equal((await call("POST", path, "u_tony", { cryptoSendId: await cryptoSend({ token: "USDC" }) })).status, 409, "dollars");
+  assert.equal((await call("POST", path, "u_tony", { cryptoSendId: await cryptoSend({ amount: "11.454" }) })).status, 409, "a fraction of a cent over");
+  assert.equal((await call("POST", path, "u_tony", { cryptoSendId: await cryptoSend({ userId: "u_other" }) })).status, 404, "someone else's send");
+  assert.equal((await call("POST", path, "u_tony", { cryptoSendId: await cryptoSend({ state: "CREATED", deadline: Math.floor(Date.now() / 1000) - 1 }) })).status, 409, "never signed, past its deadline");
+  assert.equal((await call("POST", path, "u_tony", { cryptoSendId: await cryptoSend({ createdAt: now }) })).status, 409, "made before the link was filled in");
+  assert.equal((await call("POST", path, "u_tony", { transferId: await transfer() })).status, 409, "a bank payment for a wallet link");
 
-  const good = cryptoSend({ amount: "11.450000", to: WALLET.toUpperCase().replace("0X", "0x") });
+  const good = await cryptoSend({ amount: "11.450000", to: WALLET.toUpperCase().replace("0X", "0x") });
   const r = await call("POST", path, "u_tony", { cryptoSendId: good });
   assert.equal(r.status, 200, JSON.stringify(r.data));
   assert.equal(r.data.invoice.state, "PAYING");
-  store.updateCryptoSend(good, { state: "SENT", txHash: `0x${"ef".repeat(32)}` as `0x${string}` });
+  await store.updateCryptoSend(good, { state: "SENT", txHash: `0x${"ef".repeat(32)}` as `0x${string}` });
   const paid = await listed(l.id);
   assert.equal(paid.state, "PAID");
   assert.equal(paid.payment.txHash, `0x${"ef".repeat(32)}`);
@@ -309,19 +309,19 @@ await check("a wallet payment ties on only to the link's address, in EURe, for e
 await check("a failed wallet send puts the link back to pay", async () => {
   const l = await newLink("13");
   await fill(l.token, { payTo: { kind: "wallet", chainId: CHAIN_ID, address: WALLET } });
-  const s = cryptoSend();
+  const s = await cryptoSend();
   await call("POST", `/api/orgs/org_p/invoices/${l.id}/paying`, "u_tony", { cryptoSendId: s });
-  store.updateCryptoSend(s, { state: "FAILED" });
+  await store.updateCryptoSend(s, { state: "FAILED" });
   assert.equal((await listed(l.id)).state, "SUBMITTED");
 });
 
 await check("only a filled-in send link can be tied to a payment", async () => {
   const open = await newLink("13");
-  assert.equal((await call("POST", `/api/orgs/org_p/invoices/${open.id}/paying`, "u_tony", { transferId: transfer() })).status, 409, "not filled in yet");
+  assert.equal((await call("POST", `/api/orgs/org_p/invoices/${open.id}/paying`, "u_tony", { transferId: await transfer() })).status, 409, "not filled in yet");
   const plain = await call("POST", "/api/orgs/org_p/invoices", "u_tony", {});
   assert.equal(plain.status, 201);
-  assert.equal((await call("POST", `/api/orgs/org_p/invoices/${plain.data.invoice.id}/paying`, "u_tony", { transferId: transfer() })).status, 404, "an ordinary invoice link");
-  const stranger = await call("POST", `/api/orgs/org_p/invoices/${open.id}/paying`, "u_other", { transferId: transfer({ userId: "u_other" }) });
+  assert.equal((await call("POST", `/api/orgs/org_p/invoices/${plain.data.invoice.id}/paying`, "u_tony", { transferId: await transfer() })).status, 404, "an ordinary invoice link");
+  const stranger = await call("POST", `/api/orgs/org_p/invoices/${open.id}/paying`, "u_other", { transferId: await transfer({ userId: "u_other" }) });
   assert.ok(stranger.status === 403 || stranger.status === 404, `someone outside the org: ${stranger.status}`);
 });
 
@@ -340,18 +340,18 @@ await check("the limit is checked last: a refusal for anything else is the same 
 await check("a wallet send past its deadline cannot be claimed, so it never goes out while its link reads to pay", async () => {
   const l = await newLink("13");
   await fill(l.token, { payTo: { kind: "wallet", chainId: CHAIN_ID, address: WALLET } });
-  const id = cryptoSend({ state: "CREATED" });
+  const id = await cryptoSend({ state: "CREATED" });
   assert.equal((await call("POST", `/api/orgs/org_p/invoices/${l.id}/paying`, "u_tony", { cryptoSendId: id })).status, 200);
-  (store.findCryptoSend(id) as any).deadline = Math.floor(Date.now() / 1000) - 1;
+  ((await store.findCryptoSend(id)) as any).deadline = Math.floor(Date.now() / 1000) - 1;
   assert.equal((await listed(l.id)).state, "SUBMITTED", "the link is to pay again");
-  assert.equal(store.claimCryptoSend(id), false, "authorize can no longer claim it");
-  assert.equal(store.findCryptoSend(id)?.state, "CREATED");
+  assert.equal(await store.claimCryptoSend(id), false, "authorize can no longer claim it");
+  assert.equal((await store.findCryptoSend(id))?.state, "CREATED");
 });
 
 await check("a bank payment whose approval window closed unsigned does not tie", async () => {
   const l = await newLink("13");
   await fill(l.token);
-  const expired = transfer({ auth: { deadline: Math.floor(Date.now() / 1000) - 1 } });
+  const expired = await transfer({ auth: { deadline: Math.floor(Date.now() / 1000) - 1 } });
   const r = await call("POST", `/api/orgs/org_p/invoices/${l.id}/paying`, "u_tony", { transferId: expired });
   assert.equal(r.status, 409, JSON.stringify(r.data));
   assert.equal(r.data.code, "PAYMENT_DEAD");
@@ -359,13 +359,13 @@ await check("a bank payment whose approval window closed unsigned does not tie",
 });
 
 await check("another member of the personal org cannot tie their payment to the maker's link", async () => {
-  store.addMember({ id: "m_other_p", orgId: "org_p", userId: "u_other", email: "", role: "payer", status: "active", invitedAt: now, acceptedAt: now });
+  await store.addMember({ id: "m_other_p", orgId: "org_p", userId: "u_other", email: "", role: "payer", status: "active", invitedAt: now, acceptedAt: now });
   const l = await newLink("13");
   await fill(l.token);
-  const r = await call("POST", `/api/orgs/org_p/invoices/${l.id}/paying`, "u_other", { transferId: transfer({ userId: "u_other" }) });
+  const r = await call("POST", `/api/orgs/org_p/invoices/${l.id}/paying`, "u_other", { transferId: await transfer({ userId: "u_other" }) });
   assert.equal(r.status, 403, JSON.stringify(r.data));
   assert.equal((await listed(l.id)).state, "SUBMITTED", "the link stays the maker's to pay");
-  assert.equal((await call("POST", `/api/orgs/org_p/invoices/${l.id}/paying`, "u_tony", { transferId: transfer() })).status, 200);
+  assert.equal((await call("POST", `/api/orgs/org_p/invoices/${l.id}/paying`, "u_tony", { transferId: await transfer() })).status, 200);
 });
 
 server.close();

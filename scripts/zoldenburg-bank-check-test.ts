@@ -62,7 +62,7 @@ const BANK = "DE00370400440532013000";
 const OTHER_BANK = "FR0030006000011234567890189";
 const T0 = new Date("2026-10-11T08:00:00Z");
 const at = (min: number) => new Date(T0.getTime() + min * 60_000);
-store.addUser({
+await store.addUser({
   id: "u1", name: "Anna Müller", email: "anna@example.com", country: "DE", kycStatus: "approved", iban: ZOLD_IBAN,
   address: SAFE, createdAt: T0.toISOString(), monerium: { profileId: "p1" },
   passkeySafe: { address: SAFE, status: "active", threshold: 1, passkeyPublicKey: { x: "1", y: "2" }, createdAt: T0.toISOString(),
@@ -73,10 +73,10 @@ store.addUser({
     orderId: "enrol-order", enrolledAt: T0.toISOString(),
   },
 } as any);
-const user = () => store.findUser("u1")!;
+const user = async () => (await store.findUser("u1"))!;
 
 const SECRET = "the-recovering-browsers-secret";
-const newRequest = (id: string, status = "REVIEW_PENDING") => store.addRecoveryRequest({
+const newRequest = async (id: string, status = "REVIEW_PENDING") => await store.addRecoveryRequest({
   id, userId: "u1", safeAddress: SAFE, mode: "zoldenburg", status: status as any,
   requestedAt: at(1).toISOString(), expiresAt: new Date(Date.now() + 14 * 24 * 3600_000).toISOString(),
   recoveryDelayHours: 72, guardianAddress: process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS as `0x${string}`,
@@ -84,8 +84,8 @@ const newRequest = (id: string, status = "REVIEW_PENDING") => store.addRecoveryR
   factors: { kyc: "pending", otp: "pending", liveness: "pending", manualReview: "pending" },
   zoldenburg: { accessHash: createHash("sha256").update(SECRET, "utf8").digest("hex"), reference: "ABCDE-12345", newOwners: [`0x${"c".repeat(40)}`], newThreshold: 1 },
 });
-newRequest("r1");
-const req = (id = "r1") => store.findRecoveryRequest(id)!;
+await newRequest("r1");
+const req = async (id = "r1") => (await store.findRecoveryRequest(id))!;
 
 let open = { code: "", memo: "" };
 let n = 0;
@@ -101,20 +101,20 @@ const reads = (orders: any[] | Error, name: string | Error | null = "Anna Mülle
   profileName: async () => { if (name instanceof Error) throw name; return name ?? undefined; },
 });
 
-open = B.issueRecoveryBankCode(req(), at(5));
+open = await B.issueRecoveryBankCode(await req(), at(5));
 
 // ---- the code --------------------------------------------------------------
 
-await t("a recovery code is not an enrolment code, and the other way round", () => {
-  const hash = req().zoldenburg!.bankCheck!.code!.hash;
+await t("a recovery code is not an enrolment code, and the other way round", async () => {
+  const hash = (await req()).zoldenburg!.bankCheck!.code!.hash;
   assert.ok(E.memoCarriesCode(open.memo, hash, "recovery"));
   assert.ok(!E.memoCarriesCode(open.memo, hash, "enrolment"));
   const enrol = E.newEnrolmentCode();
   assert.ok(!E.memoCarriesCode(E.memoFor(enrol.code), enrol.hash, "recovery"));
-  assert.ok(!JSON.stringify(req()).includes(open.code.replace("-", "")), "only the hash is stored");
+  assert.ok(!JSON.stringify(await req()).includes(open.code.replace("-", "")), "only the hash is stored");
 });
 
-await t("only processed issues to this Safe, after the code, carrying the recovery code, are candidates", () => {
+await t("only processed issues to this Safe, after the code, carrying the recovery code, are candidates", async () => {
   const good = order();
   const enrolmentStyle = E.newEnrolmentCode();
   const cands = E.ordersCarrying([
@@ -123,30 +123,30 @@ await t("only processed issues to this Safe, after the code, carrying the recove
     order({ address: `0x${"b".repeat(40)}` }),
     order(paidAt(2)),
     order({ memo: E.memoFor(enrolmentStyle.code) }),
-  ] as any, user(), req().zoldenburg!.bankCheck!.code, "recovery");
+  ] as any, await user(), (await req()).zoldenburg!.bankCheck!.code, "recovery");
   assert.deepEqual(cands.map((o) => o.id), [good.id]);
 });
 
 // ---- judging an order ------------------------------------------------------
 
-await t("refusals: another bank account, another name, the Zold IBAN, under 1 €", () => {
-  const j = (o: any) => B.judgeRecoveryOrder(o, user(), "Anna Müller") as any;
-  const other = j(order({ counterpart: { details: { name: "Anna Müller" }, identifier: { iban: OTHER_BANK } } }));
+await t("refusals: another bank account, another name, the Zold IBAN, under 1 €", async () => {
+  const j = async (o: any) => B.judgeRecoveryOrder(o, await user(), "Anna Müller") as any;
+  const other = await j(order({ counterpart: { details: { name: "Anna Müller" }, identifier: { iban: OTHER_BANK } } }));
   assert.match(other.reason, /different bank account/);
   assert.ok(!other.reason.includes("3000"), "no digits of the enrolled account");
-  assert.match(j(order({ counterpart: { details: { name: "Peter Schmidt" }, identifier: { iban: BANK } } })).reason, /does not match/);
-  assert.match(j(order({ counterpart: { details: { name: "Anna Müller" }, identifier: { iban: ZOLD_IBAN.replace(/ /g, "") } } })).reason, /Zold IBAN/);
-  assert.match(j(order({ amount: "0.50" })).reason, /under 1 €/);
-  assert.deepEqual(j(order({ counterpart: { details: { firstName: "Anna", lastName: "Mueller" }, identifier: { iban: BANK.toLowerCase() } } })), { ok: true, iban: BANK });
+  assert.match((await j(order({ counterpart: { details: { name: "Peter Schmidt" }, identifier: { iban: BANK } } }))).reason, /does not match/);
+  assert.match((await j(order({ counterpart: { details: { name: "Anna Müller" }, identifier: { iban: ZOLD_IBAN.replace(/ /g, "") } } }))).reason, /Zold IBAN/);
+  assert.match((await j(order({ amount: "0.50" }))).reason, /under 1 €/);
+  assert.deepEqual(await j(order({ counterpart: { details: { firstName: "Anna", lastName: "Mueller" }, identifier: { iban: BANK.toLowerCase() } } })), { ok: true, iban: BANK });
 });
 
 await t("refusals: no enrolment on the account, or one made under another key", async () => {
-  const e = structuredClone(user().zoldenburgEnrolment!);
-  store.updateUser("u1", { zoldenburgEnrolment: undefined });
-  assert.match((B.judgeRecoveryOrder(order() as any, user(), "Anna Müller") as any).reason, /never confirmed/);
-  store.updateUser("u1", { zoldenburgEnrolment: e });
-  await withKey("n".repeat(40), () => assert.match((B.judgeRecoveryOrder(order() as any, user(), "Anna Müller") as any).reason, /never confirmed/));
-  assert.ok(B.judgeRecoveryOrder(order() as any, user(), "Anna Müller").ok);
+  const e = structuredClone((await user()).zoldenburgEnrolment!);
+  await store.updateUser("u1", { zoldenburgEnrolment: undefined });
+  assert.match((B.judgeRecoveryOrder(order() as any, await user(), "Anna Müller") as any).reason, /never confirmed/);
+  await store.updateUser("u1", { zoldenburgEnrolment: e });
+  await withKey("n".repeat(40), async () => assert.match((B.judgeRecoveryOrder(order() as any, await user(), "Anna Müller") as any).reason, /never confirmed/));
+  assert.ok(B.judgeRecoveryOrder(order() as any, await user(), "Anna Müller").ok);
 });
 
 // ---- the check -------------------------------------------------------------
@@ -155,62 +155,62 @@ await t("fail closed: unreadable orders or profile name leave the check open", a
   assert.equal(await B.checkRecoveryBankPayment("r1", reads(new Error("401")), at(20)), "unreadable");
   assert.equal(await B.checkRecoveryBankPayment("r1", reads([order()], new Error("down")), at(20)), "unreadable");
   assert.equal(await B.checkRecoveryBankPayment("r1", reads([order()], null), at(20)), "unreadable");
-  assert.equal(req().zoldenburg!.bankCheck!.passedAt, undefined);
-  assert.equal(req().zoldenburg!.bankCheck!.lastCheck!.outcome, "unreadable");
-  assert.equal(B.bankCheckPassed(req(), user()), false);
+  assert.equal((await req()).zoldenburg!.bankCheck!.passedAt, undefined);
+  assert.equal((await req()).zoldenburg!.bankCheck!.lastCheck!.outcome, "unreadable");
+  assert.equal(B.bankCheckPassed(await req(), await user()), false);
 });
 
 await t("no payment yet: waiting; from another account: the reason, and not passed", async () => {
   assert.equal(await B.checkRecoveryBankPayment("r1", reads([]), at(21)), "waiting");
   const wrong = order({ counterpart: { details: { name: "Anna Müller" }, identifier: { iban: OTHER_BANK } } });
   assert.equal(await B.checkRecoveryBankPayment("r1", reads([wrong]), at(22)), "mismatch");
-  assert.match(req().zoldenburg!.bankCheck!.lastCheck!.reason, /different bank account/);
-  assert.ok(!JSON.stringify(req()).includes(OTHER_BANK), "no payer IBAN stored");
-  assert.equal(B.bankCheckPassed(req(), user()), false);
+  assert.match((await req()).zoldenburg!.bankCheck!.lastCheck!.reason, /different bank account/);
+  assert.ok(!JSON.stringify(await req()).includes(OTHER_BANK), "no payer IBAN stored");
+  assert.equal(B.bankCheckPassed(await req(), await user()), false);
 });
 
 await t("an account that is not armed never passes, whatever was paid, and the next check looks again", async () => {
-  const safe = structuredClone(user().passkeySafe!);
-  store.updateUser("u1", { passkeySafe: { ...safe, recovery: { ...safe.recovery!, status: "planned" } } });
+  const safe = structuredClone((await user()).passkeySafe!);
+  await store.updateUser("u1", { passkeySafe: { ...safe, recovery: { ...safe.recovery!, status: "planned" } } });
   try {
     assert.equal(await B.checkRecoveryBankPayment("r1", reads([order()]), at(23)), "unreadable");
-    assert.equal(req().zoldenburg!.bankCheck!.lastCheck!.cause, "not_armed");
-    assert.ok(!/armed|enrol|confirm/i.test(req().zoldenburg!.bankCheck!.lastCheck!.reason), "the person's text names no cause");
-    assert.equal(req().zoldenburg!.bankCheck!.passedAt, undefined);
+    assert.equal((await req()).zoldenburg!.bankCheck!.lastCheck!.cause, "not_armed");
+    assert.ok(!/armed|enrol|confirm/i.test((await req()).zoldenburg!.bankCheck!.lastCheck!.reason), "the person's text names no cause");
+    assert.equal((await req()).zoldenburg!.bankCheck!.passedAt, undefined);
   } finally {
-    store.updateUser("u1", { passkeySafe: safe });
+    await store.updateUser("u1", { passkeySafe: safe });
   }
 });
 
 await t("the right payment passes: time, order id, the enrolment it matched; no IBAN, no name; the code is spent", async () => {
   const o = order();
   assert.equal(await B.checkRecoveryBankPayment("r1", reads([order({ amount: "0.2" }), o]), at(24)), "passed");
-  const b = req().zoldenburg!.bankCheck!;
+  const b = (await req()).zoldenburg!.bankCheck!;
   assert.deepEqual(b, { codesIssued: 1, lastReadAt: at(24).toISOString(), passedAt: at(24).toISOString(), orderId: o.id, enrolledAt: T0.toISOString() });
-  for (const s of [BANK, "MUELLER", "Müller"]) assert.ok(!JSON.stringify(req()).includes(s), `no ${s}`);
-  assert.ok(B.bankCheckPassed(req(), user()));
+  for (const s of [BANK, "MUELLER", "Müller"]) assert.ok(!JSON.stringify(await req()).includes(s), `no ${s}`);
+  assert.ok(B.bankCheckPassed(await req(), await user()));
   assert.equal(await B.checkRecoveryBankPayment("r1", reads([o]), at(25)), "no_code");
 });
 
 await t("a pass no longer counts once the owner re-enrols, or the guardian is not active", async () => {
-  const e = structuredClone(user().zoldenburgEnrolment!);
-  store.updateUser("u1", { zoldenburgEnrolment: { ...e, enrolledAt: at(30).toISOString() } });
-  assert.equal(B.bankCheckPassed(req(), user()), false);
-  store.updateUser("u1", { zoldenburgEnrolment: e });
-  assert.ok(B.bankCheckPassed(req(), user()));
-  const safe = structuredClone(user().passkeySafe!);
-  store.updateUser("u1", { passkeySafe: { ...safe, recovery: { ...safe.recovery!, status: "planned" } } });
-  assert.equal(B.bankCheckPassed(req(), user()), false);
-  store.updateUser("u1", { passkeySafe: safe });
+  const e = structuredClone((await user()).zoldenburgEnrolment!);
+  await store.updateUser("u1", { zoldenburgEnrolment: { ...e, enrolledAt: at(30).toISOString() } });
+  assert.equal(B.bankCheckPassed(await req(), await user()), false);
+  await store.updateUser("u1", { zoldenburgEnrolment: e });
+  assert.ok(B.bankCheckPassed(await req(), await user()));
+  const safe = structuredClone((await user()).passkeySafe!);
+  await store.updateUser("u1", { passkeySafe: { ...safe, recovery: { ...safe.recovery!, status: "planned" } } });
+  assert.equal(B.bankCheckPassed(await req(), await user()), false);
+  await store.updateUser("u1", { passkeySafe: safe });
 });
 
 await t("only open REVIEW_PENDING requests are checked; the sweep skips the rest", async () => {
-  newRequest("r-grace", "GRACE_PERIOD");
-  newRequest("r-old");
-  store.updateRecoveryRequest("r-old", { expiresAt: at(40).toISOString() });
-  for (const id of ["r-grace", "r-old"]) B.issueRecoveryBankCode(req(id), at(35));
-  newRequest("r2");
-  open = B.issueRecoveryBankCode(req("r2"), at(35));
+  await newRequest("r-grace", "GRACE_PERIOD");
+  await newRequest("r-old");
+  await store.updateRecoveryRequest("r-old", { expiresAt: at(40).toISOString() });
+  for (const id of ["r-grace", "r-old"]) await B.issueRecoveryBankCode(await req(id), at(35));
+  await newRequest("r2");
+  open = await B.issueRecoveryBankCode(await req("r2"), at(35));
   let asked = 0;
   const counting: Reads = { orders: async () => { asked++; return [order(paidAt(36))]; }, profileName: async () => "Anna Müller" };
   assert.equal(await B.checkRecoveryBankPayment("r-grace", counting, at(41)), "no_code");
@@ -218,82 +218,82 @@ await t("only open REVIEW_PENDING requests are checked; the sweep skips the rest
   assert.equal(asked, 0);
   assert.equal(await B.sweepRecoveryBankChecks(counting, at(41)), 1, "r2 passes");
   assert.equal(asked, 1, "r1 is spent, r-grace and r-old skipped");
-  assert.ok(B.bankCheckPassed(req("r2"), user()));
+  assert.ok(B.bankCheckPassed(await req("r2"), await user()));
   // A request on chain blocks signing any other for the account; this one has done its part.
-  store.updateRecoveryRequest("r-grace", { status: "FINALIZED" });
+  await store.updateRecoveryRequest("r-grace", { status: "FINALIZED" });
 });
 
 await t("a request that moves on while a check ran is left as it is", async () => {
-  newRequest("r3");
-  open = B.issueRecoveryBankCode(req("r3"), at(50));
+  await newRequest("r3");
+  open = await B.issueRecoveryBankCode(await req("r3"), at(50));
   const slow: Reads = {
-    orders: async () => { store.updateRecoveryRequest("r3", { status: "CANCELED" }); return [order(paidAt(52))]; },
+    orders: async () => { await store.updateRecoveryRequest("r3", { status: "CANCELED" }); return [order(paidAt(52))]; },
     profileName: async () => "Anna Müller",
   };
   assert.equal(await B.checkRecoveryBankPayment("r3", slow, at(53)), "no_code");
-  assert.equal(req("r3").zoldenburg!.bankCheck!.passedAt, undefined);
-  assert.ok(req("r3").zoldenburg!.bankCheck!.code);
-  store.updateRecoveryRequest("r3", { status: "REVIEW_PENDING" });
+  assert.equal((await req("r3")).zoldenburg!.bankCheck!.passedAt, undefined);
+  assert.ok((await req("r3")).zoldenburg!.bankCheck!.code);
+  await store.updateRecoveryRequest("r3", { status: "REVIEW_PENDING" });
 });
 
 await t("a new code issued while a check ran does not lose a payment made with the earlier one", async () => {
-  newRequest("r3b");
-  open = B.issueRecoveryBankCode(req("r3b"), at(50));
+  await newRequest("r3b");
+  open = await B.issueRecoveryBankCode(await req("r3b"), at(50));
   const slow: Reads = {
-    orders: async () => { B.issueRecoveryBankCode(req("r3b"), at(51)); return [order(paidAt(52))]; },
+    orders: async () => { await B.issueRecoveryBankCode(await req("r3b"), at(51)); return [order(paidAt(52))]; },
     profileName: async () => "Anna Müller",
   };
   assert.equal(await B.checkRecoveryBankPayment("r3b", slow, at(53)), "passed");
-  assert.equal(req("r3b").zoldenburg!.bankCheck!.codesIssued, 2, "the count survives the pass");
+  assert.equal((await req("r3b")).zoldenburg!.bankCheck!.codesIssued, 2, "the count survives the pass");
 });
 
-await t("the public projection carries none of it; the person's view no IBAN digits at all", () => {
-  const pub = JSON.stringify(publicRecoveryRequest(req("r3")));
+await t("the public projection carries none of it; the person's view no IBAN digits at all", async () => {
+  const pub = JSON.stringify(publicRecoveryRequest(await req("r3")));
   assert.ok(!pub.includes("bankCheck") && !pub.includes('"hash"'), pub);
-  const v = JSON.stringify(B.bankCheckView(req("r3"), user()));
+  const v = JSON.stringify(B.bankCheckView(await req("r3"), await user()));
   assert.ok(!/hash|hmac|last4/i.test(v), v);
   for (const s of ["3000", "0339"]) assert.ok(!v.includes(s), s);
 });
 
 await t("a transfer sent with an earlier code still counts after a new one is issued", async () => {
-  newRequest("r6");
-  const first = B.issueRecoveryBankCode(req("r6"), at(60));
-  B.issueRecoveryBankCode(req("r6"), at(70));
-  assert.equal(req("r6").zoldenburg!.bankCheck!.earlierCodes!.length, 1);
+  await newRequest("r6");
+  const first = await B.issueRecoveryBankCode(await req("r6"), at(60));
+  await B.issueRecoveryBankCode(await req("r6"), at(70));
+  assert.equal((await req("r6")).zoldenburg!.bankCheck!.earlierCodes!.length, 1);
   open = first;
   assert.equal(await B.checkRecoveryBankPayment("r6", reads([order(paidAt(65))]), at(71)), "passed");
 });
 
 await t("a request gets at most maxCodes codes; the count and the read clock survive a new code", async () => {
-  newRequest("r7");
+  await newRequest("r7");
   for (let i = 0; i < B.RECOVERY_BANK.maxCodes; i++) {
-    assert.ok(B.canIssueRecoveryBankCode(req("r7")));
-    B.issueRecoveryBankCode(req("r7"), at(80 + i));
+    assert.ok(B.canIssueRecoveryBankCode(await req("r7")));
+    await B.issueRecoveryBankCode(await req("r7"), at(80 + i));
     if (i === 0) await B.checkRecoveryBankPayment("r7", reads([]), at(80));
   }
-  assert.equal(B.canIssueRecoveryBankCode(req("r7")), false);
-  assert.equal(req("r7").zoldenburg!.bankCheck!.lastReadAt, at(80).toISOString(), "a new code does not reset the read clock");
+  assert.equal(B.canIssueRecoveryBankCode(await req("r7")), false);
+  assert.equal((await req("r7")).zoldenburg!.bankCheck!.lastReadAt, at(80).toISOString(), "a new code does not reset the read clock");
 });
 
 await t("a payment passes only the request whose code it carries, and only one request", async () => {
-  newRequest("r-a");
-  newRequest("r-b");
-  const a = B.issueRecoveryBankCode(req("r-a"), at(90));
-  const b = B.issueRecoveryBankCode(req("r-b"), at(90));
+  await newRequest("r-a");
+  await newRequest("r-b");
+  const a = await B.issueRecoveryBankCode(await req("r-a"), at(90));
+  const b = await B.issueRecoveryBankCode(await req("r-b"), at(90));
   open = a;
   const paid = order(paidAt(91));
   assert.equal(await B.checkRecoveryBankPayment("r-b", reads([paid]), at(92)), "waiting", "A's code does not pass B");
   assert.equal(await B.checkRecoveryBankPayment("r-a", reads([paid]), at(92)), "passed");
   const both = { ...paid, memo: `${a.memo} ${b.memo}` };
   assert.equal(await B.checkRecoveryBankPayment("r-b", reads([both]), at(93)), "mismatch", "an order already counted for A never passes B");
-  assert.ok(!B.bankCheckPassed(req("r-b"), user()));
+  assert.ok(!B.bankCheckPassed(await req("r-b"), await user()));
 });
 
 await t("an order processed before its code was issued never counts", async () => {
-  newRequest("r9");
-  open = B.issueRecoveryBankCode(req("r9"), at(100));
+  await newRequest("r9");
+  open = await B.issueRecoveryBankCode(await req("r9"), at(100));
   assert.equal(await B.checkRecoveryBankPayment("r9", reads([order(paidAt(99))]), at(101)), "waiting");
-  assert.equal(req("r9").zoldenburg!.bankCheck!.passedAt, undefined);
+  assert.equal((await req("r9")).zoldenburg!.bankCheck!.passedAt, undefined);
 });
 
 await t("two checks at once read Monerium once; the second says one is running", async () => {
@@ -320,14 +320,14 @@ await t("a check that throws is recorded as unreadable, and never leaves the req
   } finally {
     (store as any).updateRecoveryRequest = realUpdate;
   }
-  assert.equal(req("r9").zoldenburg!.bankCheck!.lastCheck!.outcome, "unreadable");
+  assert.equal((await req("r9")).zoldenburg!.bankCheck!.lastCheck!.outcome, "unreadable");
   let asked = 0;
   assert.equal(await B.checkRecoveryBankPayment("r9", { orders: async () => { asked++; return []; }, profileName: async () => "x" }, at(104)), "waiting");
   assert.equal(asked, 1, "the next check reads again");
   // A malformed order throws inside the check: unreadable, not an old answer.
   const bad: Reads = { orders: async () => [{ get kind(): string { throw new Error("malformed"); } }] as any, profileName: async () => "Anna Müller" };
   assert.equal(await B.checkRecoveryBankPayment("r9", bad, at(105)), "unreadable");
-  assert.equal(req("r9").zoldenburg!.bankCheck!.lastCheck!.cause, "error");
+  assert.equal((await req("r9")).zoldenburg!.bankCheck!.lastCheck!.cause, "error");
   // A programming error is not a failed read: it is thrown, not recorded.
   const buggy: Reads = { orders: async () => [{ get kind(): string { throw new TypeError("x is undefined"); } }] as any, profileName: async () => "Anna Müller" };
   await assert.rejects(B.checkRecoveryBankPayment("r9", buggy, at(106)), TypeError);
@@ -335,30 +335,30 @@ await t("a check that throws is recorded as unreadable, and never leaves the req
 });
 
 await t("an enrolment replaced during the reads by the same account binds the pass to the new one", async () => {
-  newRequest("r15");
-  open = B.issueRecoveryBankCode(req("r15"), at(120));
-  const e = structuredClone(user().zoldenburgEnrolment!);
+  await newRequest("r15");
+  open = await B.issueRecoveryBankCode(await req("r15"), at(120));
+  const e = structuredClone((await user()).zoldenburgEnrolment!);
   const later = at(121).toISOString();
-  const mid: Reads = { orders: async () => { store.updateUser("u1", { zoldenburgEnrolment: { ...e, enrolledAt: later } }); return [order(paidAt(122))]; }, profileName: async () => "Anna Müller" };
+  const mid: Reads = { orders: async () => { await store.updateUser("u1", { zoldenburgEnrolment: { ...e, enrolledAt: later } }); return [order(paidAt(122))]; }, profileName: async () => "Anna Müller" };
   try {
     assert.equal(await B.checkRecoveryBankPayment("r15", mid, at(123)), "passed");
-    assert.equal(req("r15").zoldenburg!.bankCheck!.enrolledAt, later);
-    assert.ok(B.bankCheckPassed(req("r15"), user()));
+    assert.equal((await req("r15")).zoldenburg!.bankCheck!.enrolledAt, later);
+    assert.ok(B.bankCheckPassed(await req("r15"), await user()));
   } finally {
-    store.updateUser("u1", { zoldenburgEnrolment: e });
+    await store.updateUser("u1", { zoldenburgEnrolment: e });
   }
 });
 
 await t("an enrolment removed during the reads is not passed against", async () => {
-  newRequest("r10");
-  open = B.issueRecoveryBankCode(req("r10"), at(110));
-  const e = structuredClone(user().zoldenburgEnrolment!);
-  const mid: Reads = { orders: async () => { store.updateUser("u1", { zoldenburgEnrolment: undefined }); return [order(paidAt(111))]; }, profileName: async () => "Anna Müller" };
+  await newRequest("r10");
+  open = await B.issueRecoveryBankCode(await req("r10"), at(110));
+  const e = structuredClone((await user()).zoldenburgEnrolment!);
+  const mid: Reads = { orders: async () => { await store.updateUser("u1", { zoldenburgEnrolment: undefined }); return [order(paidAt(111))]; }, profileName: async () => "Anna Müller" };
   try {
     assert.equal(await B.checkRecoveryBankPayment("r10", mid, at(112)), "unreadable");
-    assert.equal(req("r10").zoldenburg!.bankCheck!.passedAt, undefined);
+    assert.equal((await req("r10")).zoldenburg!.bankCheck!.passedAt, undefined);
   } finally {
-    store.updateUser("u1", { zoldenburgEnrolment: e });
+    await store.updateUser("u1", { zoldenburgEnrolment: e });
   }
 });
 
@@ -368,10 +368,10 @@ const app = express();
 app.use(express.json());
 app.use("/api/admin", createOperatorGate());
 app.use("/api", createOperatorAuthRouter());
-app.use("/api", createZoldenburgRecoveryRouter({ requireUserSession: () => false }));
+app.use("/api", createZoldenburgRecoveryRouter({ requireUserSession: async () => false }));
 // A second mount whose chain sync the test stages (the harness skips chain reads).
 let staged: (r: any) => Promise<any> = async (r) => r;
-app.use("/staged", createZoldenburgRecoveryRouter({ requireUserSession: () => false, sync: ((r: any) => staged(r)) as any }));
+app.use("/staged", createZoldenburgRecoveryRouter({ requireUserSession: async () => false, sync: ((r: any) => staged(r)) as any }));
 const server = app.listen(0, "127.0.0.1");
 await new Promise<void>((r) => server.once("listening", () => r()));
 const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -393,7 +393,7 @@ const call = async (p: string, body?: unknown, headers: Record<string, string> =
 };
 const person = { "x-recovery-secret": SECRET };
 
-newRequest("r4");
+await newRequest("r4");
 
 await t("routes: the request's secret is required; without it, 404", async () => {
   assert.equal((await call("/recovery/zoldenburg/r4/bank-code", {})).status, 404);
@@ -407,7 +407,7 @@ await t("routes: a code once, carried by its memo; GET shows the check, never th
   assert.equal(r.status, 201, r.text);
   routeCode = r.data.code;
   assert.match(r.data.memo, /^ZOLD [0-9A-Z]{4}-[0-9A-Z]{4}$/);
-  assert.ok(E.memoCarriesCode(r.data.memo, req("r4").zoldenburg!.bankCheck!.code!.hash, "recovery"));
+  assert.ok(E.memoCarriesCode(r.data.memo, (await req("r4")).zoldenburg!.bankCheck!.code!.hash, "recovery"));
   assert.equal(r.data.bankCheck.canIssueCode, true);
   const g = await call("/recovery/zoldenburg/r4", undefined, person);
   assert.equal(g.status, 200, g.text);
@@ -435,7 +435,7 @@ await t("routes: check-now fails closed with no Monerium connection, and is thro
 });
 
 await t("routes: past maxCodes, 429 TOO_MANY_CODES", async () => {
-  newRequest("r8");
+  await newRequest("r8");
   for (let i = 0; i < B.RECOVERY_BANK.maxCodes; i++) assert.equal((await call("/recovery/zoldenburg/r8/bank-code", {}, person)).status, 201);
   const over = await call("/recovery/zoldenburg/r8/bank-code", {}, person);
   assert.equal(over.status, 429, over.text);
@@ -469,18 +469,18 @@ await t("operator: once passed, the gate opens (execute then asks for the review
 });
 
 await t("operator: an unarmed account is NOT_ARMED, before any bank check", async () => {
-  newRequest("r5");
-  const e = structuredClone(user().zoldenburgEnrolment!);
-  store.updateUser("u1", { zoldenburgEnrolment: undefined });
+  await newRequest("r5");
+  const e = structuredClone((await user()).zoldenburgEnrolment!);
+  await store.updateUser("u1", { zoldenburgEnrolment: undefined });
   assert.equal((await opCall("/admin/recoveries/r5/sign-request", {})).data.code, "NOT_ARMED");
   assert.equal((await call("/recovery/zoldenburg/r5/bank-code", {}, person)).data.code, "NOT_ARMED");
-  store.updateUser("u1", { zoldenburgEnrolment: e });
+  await store.updateUser("u1", { zoldenburgEnrolment: e });
 });
 
 await t("operator: a pass voided by re-enrolment or a new HMAC key locks signing again, and says so", async () => {
   assert.equal((await opCall("/admin/recoveries")).data.requests.find((x: any) => x.id === "r4").bankCheck.passed, true);
-  const e = structuredClone(user().zoldenburgEnrolment!);
-  store.updateUser("u1", { zoldenburgEnrolment: { ...e, enrolledAt: new Date().toISOString() } });
+  const e = structuredClone((await user()).zoldenburgEnrolment!);
+  await store.updateUser("u1", { zoldenburgEnrolment: { ...e, enrolledAt: new Date().toISOString() } });
   try {
     for (const [p, body] of [["sign-request", {}], ["execute", { signature: "0x00", reviewNote: "Video call, matched Monerium profile" }], ["sync", {}]] as const) {
       assert.equal((await opCall(`/admin/recoveries/r4/${p}`, body)).data.code, "BANK_CHECK_PENDING", p);
@@ -492,7 +492,7 @@ await t("operator: a pass voided by re-enrolment or a new HMAC key locks signing
     // Voided, the person may ask for a reference again.
     assert.equal((await call("/recovery/zoldenburg/r4", undefined, person)).data.bankCheck.canIssueCode, true);
   } finally {
-    store.updateUser("u1", { zoldenburgEnrolment: e });
+    await store.updateUser("u1", { zoldenburgEnrolment: e });
   }
   await withKey("n".repeat(40), async () => {
     assert.equal((await opCall("/admin/recoveries/r4/sign-request", {})).data.code, "NOT_ARMED");
@@ -502,7 +502,7 @@ await t("operator: a pass voided by re-enrolment or a new HMAC key locks signing
 });
 
 await t("routes: check-now says what this click did", async () => {
-  newRequest("r11");
+  await newRequest("r11");
   assert.equal((await call("/recovery/zoldenburg/r11/bank-code", {}, person)).status, 201);
   const first = await call("/recovery/zoldenburg/r11/bank-check", {}, person);
   assert.equal(first.data.check.outcome, "unreadable", "no Monerium here: this click's own answer");
@@ -512,13 +512,13 @@ await t("routes: check-now says what this click did", async () => {
 });
 
 await t("routes: an expired request answers 410, then 409 as ended, and is never checked", async () => {
-  newRequest("r12");
+  await newRequest("r12");
   assert.equal((await call("/recovery/zoldenburg/r12/bank-code", {}, person)).status, 201);
-  store.updateRecoveryRequest("r12", { expiresAt: new Date(Date.now() - 1000).toISOString() });
+  await store.updateRecoveryRequest("r12", { expiresAt: new Date(Date.now() - 1000).toISOString() });
   const c = await call("/recovery/zoldenburg/r12/bank-check", {}, person);
   assert.equal(c.status, 410, c.text);
   assert.equal(c.data.status, "EXPIRED");
-  assert.equal(req("r12").zoldenburg!.bankCheck!.lastReadAt, undefined, "no Monerium read");
+  assert.equal((await req("r12")).zoldenburg!.bankCheck!.lastReadAt, undefined, "no Monerium read");
   const code = await call("/recovery/zoldenburg/r12/bank-code", {}, person);
   assert.equal(code.status, 409, code.text);
   assert.equal(code.data.status, "EXPIRED", "an ended request gets no new code");
@@ -526,25 +526,25 @@ await t("routes: an expired request answers 410, then 409 as ended, and is never
 
 await t("operator: references can be given back; codes stay valid", async () => {
   assert.equal((await call("/recovery/zoldenburg/r8/bank-code", {}, person)).data.code, "TOO_MANY_CODES");
-  const before = req("r8").zoldenburg!.bankCheck!.code!.hash;
+  const before = (await req("r8")).zoldenburg!.bankCheck!.code!.hash;
   const r = await opCall("/admin/recoveries/r8/bank-reset", {});
   assert.equal(r.status, 200, r.text);
   assert.equal(r.data.bankCheck.codesIssued, 0);
-  assert.equal(req("r8").zoldenburg!.bankCheck!.code!.hash, before, "the open code is kept");
+  assert.equal((await req("r8")).zoldenburg!.bankCheck!.code!.hash, before, "the open code is kept");
   assert.equal((await call("/recovery/zoldenburg/r8/bank-code", {}, person)).status, 201);
   assert.equal((await opCall("/admin/recoveries/r5/bank-reset", {})).data.code, "NOTHING_TO_RESET");
 });
 
 await t("operator: a reset keeps the read clock, refuses a passed check or an ended request, and needs an operator", async () => {
-  const before = req("r8").zoldenburg!.bankCheck!;
-  store.updateRecoveryRequest("r8", { zoldenburg: { ...req("r8").zoldenburg, bankCheck: { ...before, lastReadAt: new Date().toISOString() } } });
-  const clock = req("r8").zoldenburg!.bankCheck!.lastReadAt;
+  const before = (await req("r8")).zoldenburg!.bankCheck!;
+  await store.updateRecoveryRequest("r8", { zoldenburg: { ...(await req("r8")).zoldenburg, bankCheck: { ...before, lastReadAt: new Date().toISOString() } } });
+  const clock = (await req("r8")).zoldenburg!.bankCheck!.lastReadAt;
   assert.equal((await opCall("/admin/recoveries/r8/bank-reset", {})).status, 200);
-  assert.equal(req("r8").zoldenburg!.bankCheck!.lastReadAt, clock, "a reset buys no Monerium read");
+  assert.equal((await req("r8")).zoldenburg!.bankCheck!.lastReadAt, clock, "a reset buys no Monerium read");
   assert.equal((await opCall("/admin/recoveries/r4/bank-reset", {})).data.code, "ALREADY_PASSED");
-  store.updateRecoveryRequest("r8", { status: "CANCELED" });
+  await store.updateRecoveryRequest("r8", { status: "CANCELED" });
   assert.equal((await opCall("/admin/recoveries/r8/bank-reset", {})).status, 409);
-  store.updateRecoveryRequest("r8", { status: "REVIEW_PENDING" });
+  await store.updateRecoveryRequest("r8", { status: "REVIEW_PENDING" });
   const anon = await call("/admin/recoveries/r8/bank-reset", {});
   assert.ok([401, 403].includes(anon.status), `no operator: ${anon.status}`);
   const row = (await opCall("/admin/recoveries")).data.requests.find((x: any) => x.id === "r8");
@@ -553,11 +553,11 @@ await t("operator: a reset keeps the read clock, refuses a passed check or an en
 });
 
 await t("routes: check-now with no open code says nothing to check; a recorded reason comes with the answer", async () => {
-  newRequest("r13");
+  await newRequest("r13");
   const none = await call("/recovery/zoldenburg/r13/bank-check", {}, person);
   assert.equal(none.data.check.outcome, "no_code");
   assert.equal(none.data.check.reason, undefined);
-  newRequest("r14");
+  await newRequest("r14");
   assert.equal((await call("/recovery/zoldenburg/r14/bank-code", {}, person)).status, 201);
   const read = await call("/recovery/zoldenburg/r14/bank-check", {}, person);
   assert.equal(read.data.check.outcome, "unreadable");
@@ -568,7 +568,7 @@ await t("routes: check-now with no open code says nothing to check; a recorded r
 });
 
 await t("routes: a corrupt read clock does not 500", async () => {
-  store.updateRecoveryRequest("r14", { zoldenburg: { ...req("r14").zoldenburg, bankCheck: { ...req("r14").zoldenburg!.bankCheck, lastReadAt: "not a date" } } });
+  await store.updateRecoveryRequest("r14", { zoldenburg: { ...(await req("r14")).zoldenburg, bankCheck: { ...(await req("r14")).zoldenburg!.bankCheck, lastReadAt: "not a date" } } });
   const r = await call("/recovery/zoldenburg/r14/bank-check", {}, person);
   assert.equal(r.status, 200, r.text);
 });
@@ -583,7 +583,7 @@ await t("execute: a cancel landing while the signature is checked gets 409, and 
   let relayed = 0;
   // The owner's cancel lands during execute's chain read.
   zoldenburgChain.onChainDigest = async (td) => {
-    store.updateRecoveryRequest("r4", { status: "CANCELED", canceledAt: new Date().toISOString(), cancelReason: "cancelled by the account owner" });
+    await store.updateRecoveryRequest("r4", { status: "CANCELED", canceledAt: new Date().toISOString(), cancelReason: "cancelled by the account owner" });
     return onChainDigest(td);
   };
   zoldenburgChain.relayRecovery = async (...a) => { relayed++; return relayRecovery(...a); };
@@ -592,25 +592,25 @@ await t("execute: a cancel landing while the signature is checked gets 409, and 
     assert.equal(ex.status, 409, ex.text);
     assert.match(ex.data.error, /CANCELED/);
     assert.equal(relayed, 0, "no relay after the cancel");
-    assert.equal(req("r4").status, "CANCELED");
+    assert.equal((await req("r4")).status, "CANCELED");
   } finally {
     Object.assign(zoldenburgChain, { onChainDigest, relayRecovery });
   }
 });
 
 await t("execute: a 1 € check voided while the signature is checked gets 409, and nothing is relayed", async () => {
-  store.updateRecoveryRequest("r4", { status: "REVIEW_PENDING", canceledAt: undefined, cancelReason: undefined });
+  await store.updateRecoveryRequest("r4", { status: "REVIEW_PENDING", canceledAt: undefined, cancelReason: undefined });
   const sr = await opCall("/admin/recoveries/r4/sign-request", {});
   assert.equal(sr.status, 200, sr.text);
   const { EIP712Domain: _d, ...types } = sr.data.typedData.types;
   const m = sr.data.typedData.message;
   const signature = await guardianWallet.signTypedData({ ...sr.data.typedData, types, message: { ...m, newThreshold: BigInt(m.newThreshold), nonce: BigInt(m.nonce) } });
-  const e = structuredClone(user().zoldenburgEnrolment!);
+  const e = structuredClone((await user()).zoldenburgEnrolment!);
   const { onChainDigest, relayRecovery } = zoldenburgChain;
   let relayed = 0;
   // A re-enrolment lands during execute's chain read.
   zoldenburgChain.onChainDigest = async (td) => {
-    store.updateUser("u1", { zoldenburgEnrolment: { ...e, enrolledAt: new Date().toISOString() } });
+    await store.updateUser("u1", { zoldenburgEnrolment: { ...e, enrolledAt: new Date().toISOString() } });
     return onChainDigest(td);
   };
   zoldenburgChain.relayRecovery = async (...a) => { relayed++; return relayRecovery(...a); };
@@ -621,33 +621,33 @@ await t("execute: a 1 € check voided while the signature is checked gets 409, 
     assert.equal(relayed, 0, "no relay after the check was voided");
   } finally {
     Object.assign(zoldenburgChain, { onChainDigest, relayRecovery });
-    store.updateUser("u1", { zoldenburgEnrolment: e });
+    await store.updateUser("u1", { zoldenburgEnrolment: e });
   }
 });
 
 await t("person's routes: an expired request asks the chain first; on chain it is in its grace period, unreadable stores nothing", async () => {
-  newRequest("r22");
-  store.updateRecoveryRequest("r22", { expiresAt: new Date(Date.now() - 1000).toISOString() });
+  await newRequest("r22");
+  await store.updateRecoveryRequest("r22", { expiresAt: new Date(Date.now() - 1000).toISOString() });
   staged = async () => { throw new Error("rpc down"); };
   const r1 = await fetch(`${origin}/staged/recovery/zoldenburg/r22`, { headers: person });
   assert.equal(r1.status, 503, await r1.text());
-  assert.equal(req("r22").status, "REVIEW_PENDING", "nothing stored on an unreadable chain");
-  staged = async (r) => store.updateRecoveryRequest(r.id, { status: "GRACE_PERIOD" });
+  assert.equal((await req("r22")).status, "REVIEW_PENDING", "nothing stored on an unreadable chain");
+  staged = async (r) => await store.updateRecoveryRequest(r.id, { status: "GRACE_PERIOD" });
   const r2 = await fetch(`${origin}/staged/recovery/zoldenburg/r22`, { headers: person });
   assert.equal(r2.status, 200, await r2.text());
-  assert.equal(req("r22").status, "GRACE_PERIOD");
+  assert.equal((await req("r22")).status, "GRACE_PERIOD");
   // Done: one on chain would block signing the account's others below.
-  store.updateRecoveryRequest("r22", { status: "FINALIZED" });
-  newRequest("r23");
-  store.updateRecoveryRequest("r23", { expiresAt: new Date(Date.now() - 1000).toISOString() });
+  await store.updateRecoveryRequest("r22", { status: "FINALIZED" });
+  await newRequest("r23");
+  await store.updateRecoveryRequest("r23", { expiresAt: new Date(Date.now() - 1000).toISOString() });
   staged = async (r) => r;
   const r3 = await fetch(`${origin}/staged/recovery/zoldenburg/r23`, { headers: person });
   assert.equal(r3.status, 410);
-  assert.equal(req("r23").status, "EXPIRED");
+  assert.equal((await req("r23")).status, "EXPIRED");
 });
 
 await t("execute: while the relay is in flight nothing closes the request; afterwards it is in its grace period", async () => {
-  store.updateRecoveryRequest("r4", { status: "REVIEW_PENDING", canceledAt: undefined, cancelReason: undefined });
+  await store.updateRecoveryRequest("r4", { status: "REVIEW_PENDING", canceledAt: undefined, cancelReason: undefined });
   const sr = await opCall("/admin/recoveries/r4/sign-request", {});
   assert.equal(sr.status, 200, sr.text);
   const { EIP712Domain: _d, ...types } = sr.data.typedData.types;
@@ -657,88 +657,88 @@ await t("execute: while the relay is in flight nothing closes the request; after
   let during = "";
   zoldenburgChain.relayRecovery = async (...a) => {
     // The sweep runs mid-relay, long after the request's expiry.
-    await sweepZoldenburgRecoveries(new Date(Date.parse(req("r4").expiresAt) + 1000), (async (r: any) => r) as any);
-    during = req("r4").status;
+    await sweepZoldenburgRecoveries(new Date(Date.parse((await req("r4")).expiresAt) + 1000), (async (r: any) => r) as any);
+    during = (await req("r4")).status;
     return relayRecovery(...a);
   };
   try {
     const ex = await opCall("/admin/recoveries/r4/execute", { signature, reviewNote: "Video call, matched Monerium profile" });
     assert.equal(ex.status, 200, ex.text);
     assert.equal(during, "REVIEW_PENDING", "the sweep left the in-flight request alone");
-    assert.equal(req("r4").status, "GRACE_PERIOD");
+    assert.equal((await req("r4")).status, "GRACE_PERIOD");
   } finally {
     zoldenburgChain.relayRecovery = relayRecovery;
   }
 });
 
 await t("sweep: the chain is read before an expired request is closed", async () => {
-  newRequest("r20");
-  newRequest("r21");
-  const later = new Date(Date.parse(req("r20").expiresAt) + 1000);
+  await newRequest("r20");
+  await newRequest("r21");
+  const later = new Date(Date.parse((await req("r20")).expiresAt) + 1000);
   const synced: string[] = [];
   // r20 was signed outside /admin (Safe Cover) and is on chain; r21 is not.
   const sync = async (r: any) => {
     synced.push(r.id);
-    return r.id === "r20" ? store.updateRecoveryRequest(r.id, { status: "GRACE_PERIOD" }) : r;
+    return r.id === "r20" ? (await store.updateRecoveryRequest(r.id, { status: "GRACE_PERIOD" })) : r;
   };
   await sweepZoldenburgRecoveries(later, sync as any);
   assert.ok(synced.includes("r20") && synced.includes("r21"));
-  assert.equal(req("r20").status, "GRACE_PERIOD", "on chain: the grace period, so the owner is alerted");
-  assert.equal(req("r21").status, "EXPIRED", "not on chain: expired");
+  assert.equal((await req("r20")).status, "GRACE_PERIOD", "on chain: the grace period, so the owner is alerted");
+  assert.equal((await req("r21")).status, "EXPIRED", "not on chain: expired");
 });
 
 await t("full: only a request without a passkey past its ceremony gives way, the oldest first; an expired one holds no slot", async () => {
   // Earlier tests left u1's requests open; this one counts slots from none.
-  for (const r of store.recoveryRequestsForUser("u1")) if (["PASSKEY_PENDING", "REVIEW_PENDING", "GRACE_PERIOD"].includes(r.status)) store.updateRecoveryRequest(r.id, { status: "FINALIZED" });
+  for (const r of (await store.recoveryRequestsForUser("u1"))) if (["PASSKEY_PENDING", "REVIEW_PENDING", "GRACE_PERIOD"].includes(r.status)) await store.updateRecoveryRequest(r.id, { status: "FINALIZED" });
   const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
-  newRequest("cap-old", "PASSKEY_PENDING");
-  store.updateRecoveryRequest("cap-old", { requestedAt: ago(30) });
-  newRequest("cap-older", "PASSKEY_PENDING");
-  store.updateRecoveryRequest("cap-older", { requestedAt: ago(40) });
-  newRequest("cap-young", "PASSKEY_PENDING");
-  store.updateRecoveryRequest("cap-young", { requestedAt: ago(1) });
-  for (let i = 0; i < 7; i++) newRequest(`cap-${i}`);
-  newRequest("cap-gone", "PASSKEY_PENDING");
-  store.updateRecoveryRequest("cap-gone", { requestedAt: ago(50), expiresAt: ago(1) });
+  await newRequest("cap-old", "PASSKEY_PENDING");
+  await store.updateRecoveryRequest("cap-old", { requestedAt: ago(30) });
+  await newRequest("cap-older", "PASSKEY_PENDING");
+  await store.updateRecoveryRequest("cap-older", { requestedAt: ago(40) });
+  await newRequest("cap-young", "PASSKEY_PENDING");
+  await store.updateRecoveryRequest("cap-young", { requestedAt: ago(1) });
+  for (let i = 0; i < 7; i++) await newRequest(`cap-${i}`);
+  await newRequest("cap-gone", "PASSKEY_PENDING");
+  await store.updateRecoveryRequest("cap-gone", { requestedAt: ago(50), expiresAt: ago(1) });
   const start = () => call("/recovery/zoldenburg", { email: "anna@example.com" });
   assert.equal((await start()).status, 201, "the expired one is not counted, but ten are open: the oldest past its ceremony gives way");
-  assert.equal(req("cap-older").status, "CANCELED");
-  assert.equal(req("cap-older").cancelReason, "superseded by a new recovery start");
+  assert.equal((await req("cap-older")).status, "CANCELED");
+  assert.equal((await req("cap-older")).cancelReason, "superseded by a new recovery start");
   assert.equal((await start()).status, 201);
-  assert.equal(req("cap-old").status, "CANCELED");
+  assert.equal((await req("cap-old")).status, "CANCELED");
   // Left: cap-young (mid-ceremony), seven with a passkey, and the two new starts.
   const refused = await start();
   assert.equal(refused.status, 409, refused.text);
   assert.equal(refused.data.code, "RECOVERY_IN_PROGRESS");
-  assert.equal(req("cap-young").status, "PASSKEY_PENDING", "someone mid-ceremony is not pushed out");
+  assert.equal((await req("cap-young")).status, "PASSKEY_PENDING", "someone mid-ceremony is not pushed out");
   // An old request resumed with its secret starts a new ceremony, and is not pushed out mid-way either.
-  store.updateRecoveryRequest("cap-young", { requestedAt: ago(30) });
+  await store.updateRecoveryRequest("cap-young", { requestedAt: ago(30) });
   const resumed = await call("/recovery/zoldenburg", { email: "anna@example.com" }, person);
   assert.equal(resumed.data.id, "cap-young", resumed.text);
   assert.ok(resumed.data.registerChallenge);
   assert.equal((await start()).status, 409, "the resumed ceremony keeps its slot");
-  assert.equal(req("cap-young").status, "PASSKEY_PENDING");
-  for (const r of store.recoveryRequestsForUser("u1")) if (["PASSKEY_PENDING", "REVIEW_PENDING"].includes(r.status)) store.updateRecoveryRequest(r.id, { status: "FINALIZED" });
+  assert.equal((await req("cap-young")).status, "PASSKEY_PENDING");
+  for (const r of (await store.recoveryRequestsForUser("u1"))) if (["PASSKEY_PENDING", "REVIEW_PENDING"].includes(r.status)) await store.updateRecoveryRequest(r.id, { status: "FINALIZED" });
 });
 
 await t("while one is on chain or being signed, no other can be signed and no start is taken; signing one closes the others", async () => {
   // The earlier tests' recoveries on chain are done; one left there would block every request here.
-  for (const r of store.recoveryRequestsForUser("u1")) if (r.status === "GRACE_PERIOD") store.updateRecoveryRequest(r.id, { status: "FINALIZED" });
-  const paid = (id: string) => {
-    newRequest(id);
-    store.updateRecoveryRequest(id, { zoldenburg: { ...req(id).zoldenburg, bankCheck: { codesIssued: 1, passedAt: at(1).toISOString(), orderId: `o-${id}`, enrolledAt: user().zoldenburgEnrolment!.enrolledAt } } });
+  for (const r of (await store.recoveryRequestsForUser("u1"))) if (r.status === "GRACE_PERIOD") await store.updateRecoveryRequest(r.id, { status: "FINALIZED" });
+  const paid = async (id: string) => {
+    await newRequest(id);
+    await store.updateRecoveryRequest(id, { zoldenburg: { ...(await req(id)).zoldenburg, bankCheck: { codesIssued: 1, passedAt: at(1).toISOString(), orderId: `o-${id}`, enrolledAt: (await user()).zoldenburgEnrolment!.enrolledAt } } });
   };
-  paid("og-a");
-  paid("og-b");
-  store.updateRecoveryRequest("og-b", { status: "GRACE_PERIOD" });
+  await paid("og-a");
+  await paid("og-b");
+  await store.updateRecoveryRequest("og-b", { status: "GRACE_PERIOD" });
   for (const p of ["sign-request", "execute"]) {
     const r = await opCall(`/admin/recoveries/og-a/${p}`, { signature: "0x00", reviewNote: "Video call, matched Monerium profile" });
     assert.equal(r.data.code, "OTHER_RECOVERY", `${p}: ${r.text}`);
   }
   assert.equal((await call("/recovery/zoldenburg", { email: "anna@example.com" })).data.code, "RECOVERY_IN_PROGRESS", "no start while one is in its grace period");
-  store.updateRecoveryRequest("og-b", { status: "FINALIZED" });
+  await store.updateRecoveryRequest("og-b", { status: "FINALIZED" });
   // og-c is being relayed: og-a is refused meanwhile, and closed once og-c is on chain.
-  paid("og-c");
+  await paid("og-c");
   const sr = await opCall("/admin/recoveries/og-c/sign-request", {});
   assert.equal(sr.status, 200, sr.text);
   const { EIP712Domain: _d, ...types } = sr.data.typedData.types;
@@ -760,9 +760,9 @@ await t("while one is on chain or being signed, no other can be signed and no st
     zoldenburgChain.relayRecovery = relayRecovery;
   }
   assert.deepEqual(during, { sign: "OTHER_RECOVERY", start: "RECOVERY_IN_PROGRESS" });
-  assert.equal(req("og-a").status, "CANCELED");
-  assert.equal(req("og-a").cancelReason, "another recovery for this account was signed");
-  store.updateRecoveryRequest("og-c", { status: "FINALIZED" });
+  assert.equal((await req("og-a")).status, "CANCELED");
+  assert.equal((await req("og-a")).cancelReason, "another recovery for this account was signed");
+  await store.updateRecoveryRequest("og-c", { status: "FINALIZED" });
 });
 
 await t("a recovery finishing while another is being relayed leaves the relayed one open", async () => {
@@ -770,11 +770,11 @@ await t("a recovery finishing while another is being relayed leaves the relayed 
   const { generateKeyPairSync } = await import("node:crypto");
   const jwk = generateKeyPairSync("ec", { namedCurve: "P-256" }).publicKey.export({ format: "jwk" });
   // The earlier tests' recoveries on chain are done; one left there would block signing rel-x.
-  for (const r of store.recoveryRequestsForUser("u1")) if (r.status === "GRACE_PERIOD") store.updateRecoveryRequest(r.id, { status: "FINALIZED" });
-  newRequest("rel-x");
-  store.updateRecoveryRequest("rel-x", { zoldenburg: { ...req("rel-x").zoldenburg, bankCheck: { codesIssued: 1, passedAt: at(1).toISOString(), orderId: "o-rel", enrolledAt: user().zoldenburgEnrolment!.enrolledAt } } });
-  newRequest("rel-y");
-  store.updateRecoveryRequest("rel-y", { zoldenburg: { ...req("rel-y").zoldenburg, finalizeAfter: at(0).toISOString(),
+  for (const r of (await store.recoveryRequestsForUser("u1"))) if (r.status === "GRACE_PERIOD") await store.updateRecoveryRequest(r.id, { status: "FINALIZED" });
+  await newRequest("rel-x");
+  await store.updateRecoveryRequest("rel-x", { zoldenburg: { ...(await req("rel-x")).zoldenburg, bankCheck: { codesIssued: 1, passedAt: at(1).toISOString(), orderId: "o-rel", enrolledAt: (await user()).zoldenburgEnrolment!.enrolledAt } } });
+  await newRequest("rel-y");
+  await store.updateRecoveryRequest("rel-y", { zoldenburg: { ...(await req("rel-y")).zoldenburg, finalizeAfter: at(0).toISOString(),
     newPasskey: { credentialId: "cred-rel", publicKey: { alg: "ES256", jwk } as any, signCount: 0, rpId: "localhost", attestation: "x", createdAt: at(1).toISOString() } } } as any);
   const sr = await opCall("/admin/recoveries/rel-x/sign-request", {});
   assert.equal(sr.status, 200, sr.text);
@@ -786,14 +786,14 @@ await t("a recovery finishing while another is being relayed leaves the relayed 
   zoldenburgChain.relayFinalize = async () => ({ txHash: `0x${"2".repeat(64)}` as `0x${string}` });
   zoldenburgChain.relayRecovery = async (...a) => {
     // rel-y, signed in Safe Cover, finishes while rel-x's signature is relayed.
-    store.updateRecoveryRequest("rel-y", { status: "GRACE_PERIOD" });
-    await finalizeZoldenburgRecovery(req("rel-y"));
-    during = req("rel-x").status;
+    await store.updateRecoveryRequest("rel-y", { status: "GRACE_PERIOD" });
+    await finalizeZoldenburgRecovery(await req("rel-y"));
+    during = (await req("rel-x")).status;
     return relayRecovery(...a);
   };
   try {
     await opCall("/admin/recoveries/rel-x/execute", { signature, reviewNote: "Video call, matched Monerium profile" });
-    assert.equal(req("rel-y").status, "FINALIZED");
+    assert.equal((await req("rel-y")).status, "FINALIZED");
     assert.equal(during, "REVIEW_PENDING", "the relayed request is not closed under it");
   } finally {
     zoldenburgChain.relayRecovery = relayRecovery;
@@ -911,7 +911,7 @@ await t("the chain paths the harness skips close the account's other requests", 
 await t("a recovery that finishes closes the account's other requests, so none is left signable", async () => {
   // Its own account: binding the recovered passkey changes the owner.
   const safe = `0x${"d".repeat(40)}` as `0x${string}`;
-  store.addUser({ ...structuredClone(user()), id: "u-fin", email: "fin@example.com", address: safe, passkeySafe: { ...structuredClone(user().passkeySafe!), address: safe } } as any);
+  await store.addUser({ ...structuredClone(await user()), id: "u-fin", email: "fin@example.com", address: safe, passkeySafe: { ...structuredClone((await user()).passkeySafe!), address: safe } } as any);
   const { generateKeyPairSync } = await import("node:crypto");
   const jwk = generateKeyPairSync("ec", { namedCurve: "P-256" }).publicKey.export({ format: "jwk" });
   const base = {
@@ -921,22 +921,22 @@ await t("a recovery that finishes closes the account's other requests, so none i
     factors: { kyc: "pending", otp: "pending", liveness: "pending", manualReview: "pending" } as any,
   };
   // The state Safe Cover leaves: the owners already changed, the sibling never saw a grace period here.
-  store.addRecoveryRequest({ ...base, id: "fin-done", status: "GRACE_PERIOD", zoldenburg: {
+  await store.addRecoveryRequest({ ...base, id: "fin-done", status: "GRACE_PERIOD", zoldenburg: {
     accessHash: "00", reference: "FIN00-00001", newOwners: [`0x${"e".repeat(40)}`], newThreshold: 1, finalizeAfter: at(0).toISOString(),
     newPasskey: { credentialId: "cred-fin", publicKey: { alg: "ES256", jwk } as any, signCount: 0, rpId: "localhost", attestation: "x", createdAt: at(1).toISOString() },
   } } as any);
-  store.addRecoveryRequest({ ...base, id: "fin-other", status: "REVIEW_PENDING", zoldenburg: { accessHash: "00", reference: "FIN00-00002", newOwners: [`0x${"f".repeat(40)}`], newThreshold: 1 } } as any);
-  store.addRecoveryRequest({ ...base, id: "fin-new", status: "PASSKEY_PENDING", zoldenburg: { accessHash: "00", reference: "FIN00-00003" } } as any);
+  await store.addRecoveryRequest({ ...base, id: "fin-other", status: "REVIEW_PENDING", zoldenburg: { accessHash: "00", reference: "FIN00-00002", newOwners: [`0x${"f".repeat(40)}`], newThreshold: 1 } } as any);
+  await store.addRecoveryRequest({ ...base, id: "fin-new", status: "PASSKEY_PENDING", zoldenburg: { accessHash: "00", reference: "FIN00-00003" } } as any);
   const { relayFinalize } = zoldenburgChain;
   zoldenburgChain.relayFinalize = async () => ({ txHash: `0x${"1".repeat(64)}` as `0x${string}` });
   try {
-    assert.equal((await finalizeZoldenburgRecovery(req("fin-done"))).status, "FINALIZED");
+    assert.equal((await finalizeZoldenburgRecovery(await req("fin-done"))).status, "FINALIZED");
   } finally {
     zoldenburgChain.relayFinalize = relayFinalize;
   }
   for (const id of ["fin-other", "fin-new"]) {
-    assert.equal(req(id).status, "CANCELED", id);
-    assert.equal(req(id).cancelReason, "another recovery for this account was signed");
+    assert.equal((await req(id)).status, "CANCELED", id);
+    assert.equal((await req(id)).cancelReason, "another recovery for this account was signed");
   }
 });
 

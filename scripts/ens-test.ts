@@ -67,12 +67,12 @@ const { gatewaySignatureHash } = await import("../services/api/src/ens.js");
 const { HandleError, normaliseHandle } = await import("../services/api/src/pay.js");
 const { publicUser } = await import("../services/api/src/users/public-user.js");
 const { ensNameOf, shownParent } = await import("../services/api/src/users/ens-name.js");
-initStore();
+await initStore();
 
 const PAGE = "0x2222222222222222222222222222222222222222";
 const safeOf = (address: string, status = "active") => ({ address, status, threshold: 1, passkeyPublicKey: { x: "0x1", y: "0x2" } });
 const ALICE = "0x1111111111111111111111111111111111111111";
-store.addUser({
+await store.addUser({
   id: "u-alice", name: "Alice", country: "DE", kycStatus: "approved",
   address: ALICE, passkeySafe: safeOf(ALICE),
   createdAt: new Date().toISOString(),
@@ -80,7 +80,7 @@ store.addUser({
 } as any);
 // A forwarder that takes tokens on other chains too.
 const BOB = "0x3333333333333333333333333333333333333333";
-store.addUser({
+await store.addUser({
   id: "u-bob", name: "Bob", country: "DE", kycStatus: "approved",
   address: BOB, passkeySafe: safeOf(BOB),
   createdAt: new Date().toISOString(),
@@ -90,21 +90,21 @@ store.addUser({
     supportedTokens: [10, 42161].map((chainId) => ({ chainId, symbol: "USDC", address: PAGE, decimals: 6 })),
   },
 } as any);
-store.addOrganisation({ id: "o-acme", name: "Acme", createdAt: new Date().toISOString(), paymentPage: { handle: "acme" } } as any, false);
+await store.addOrganisation({ id: "o-acme", name: "Acme", createdAt: new Date().toISOString(), paymentPage: { handle: "acme" } } as any, false);
 // Carol's Safe is only planned; Frank's account address is not his Safe.
-store.addUser({
+await store.addUser({
   id: "u-carol", name: "Carol", country: "DE", kycStatus: "approved",
   address: "0x4444444444444444444444444444444444444444", passkeySafe: safeOf("0x4444444444444444444444444444444444444444", "planned"),
   createdAt: new Date().toISOString(),
   paymentPage: { handle: "carol", depositAddress: PAGE, autoConvert: true, settlementAsset: "EURE" },
 } as any);
-store.addUser({
+await store.addUser({
   id: "u-frank", name: "Frank", country: "DE", kycStatus: "approved",
   address: "0x9999999999999999999999999999999999999999", passkeySafe: safeOf("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
   createdAt: new Date().toISOString(),
   paymentPage: { handle: "frank", depositAddress: PAGE, autoConvert: true, settlementAsset: "EURE" },
 } as any);
-store.addUser({
+await store.addUser({
   id: "u-gina", name: "Gina", country: "DE", kycStatus: "approved",
   address: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   createdAt: new Date().toISOString(),
@@ -114,7 +114,7 @@ store.addUser({
 const app = express().use(
   "/api",
   createEnsRouter({
-    requireSession: (req, res) => (req.header("x-session") ? true : (res.status(401).json({ error: "authorization required" }), false)),
+    requireSession: async (req, res) => (req.header("x-session") ? true : (res.status(401).json({ error: "authorization required" }), false)),
   }),
 );
 
@@ -165,7 +165,7 @@ const check = async (label: string, fn: () => Promise<void> | void) => {
 // production on Base mainnet.
 const ERIN_SAFE = "0x6666666666666666666666666666666666666666";
 const FORWARDER = "0x7777777777777777777777777777777777777777";
-store.addUser({
+await store.addUser({
   id: "u-erin", name: "Erin", country: "DE", kycStatus: "approved",
   address: ERIN_SAFE,
   createdAt: new Date().toISOString(),
@@ -203,19 +203,19 @@ try {
   });
 
   await check("the session's ensName is the name the gateway answers for, and only that", async () => {
-    const nameOf = (id: string) => publicUser(store.findUser(id)!).ensName;
-    assert.equal(nameOf("u-alice"), "alice.zoldhq.com");
-    assert.equal(nameOf("u-bob"), "bob.zoldhq.com", "a page with a forwarder still names the Safe");
-    for (const id of ["u-carol", "u-frank", "u-gina"]) assert.equal(nameOf(id), undefined, `${id}: the gateway gives no answer, so Home shows no name`);
+    const nameOf = async (id: string) => (await publicUser((await store.findUser(id))!)).ensName;
+    assert.equal(await nameOf("u-alice"), "alice.zoldhq.com");
+    assert.equal(await nameOf("u-bob"), "bob.zoldhq.com", "a page with a forwarder still names the Safe");
+    for (const id of ["u-carol", "u-frank", "u-gina"]) assert.equal(await nameOf(id), undefined, `${id}: the gateway gives no answer, so Home shows no name`);
     // A second account holding the same handle (claims refuse it; old data might not): the gateway
     // finds the first, so the second is never shown a name that resolves to someone else.
-    store.addUser({ id: "u-hank", name: "Hank", country: "DE", kycStatus: "approved", address: "0xcccccccccccccccccccccccccccccccccccccccc",
+    await store.addUser({ id: "u-hank", name: "Hank", country: "DE", kycStatus: "approved", address: "0xcccccccccccccccccccccccccccccccccccccccc",
       passkeySafe: safeOf("0xcccccccccccccccccccccccccccccccccccccccc"), createdAt: new Date().toISOString(),
       paymentPage: { handle: "alice", depositAddress: PAGE, autoConvert: true, settlementAsset: "EURE" } } as any);
-    assert.equal(nameOf("u-hank"), undefined, "a duplicate handle is not shown to the account the gateway would not answer for");
-    assert.equal(nameOf("u-alice"), "alice.zoldhq.com");
-    assert.equal(ensNameOf({ ...store.findUser("u-alice")!, paymentPage: undefined }, "zoldhq.com"), null, "no page handle: no name");
-    assert.equal(ensNameOf(store.findUser("u-alice")!, null), null, "no gateway on this deployment: no name");
+    assert.equal(await nameOf("u-hank"), undefined, "a duplicate handle is not shown to the account the gateway would not answer for");
+    assert.equal(await nameOf("u-alice"), "alice.zoldhq.com");
+    assert.equal(ensNameOf({ ...(await store.findUser("u-alice"))!, paymentPage: undefined }, "zoldhq.com"), null, "no page handle: no name");
+    assert.equal(ensNameOf((await store.findUser("u-alice"))!, null), null, "no gateway on this deployment: no name");
     assert.equal(shownParent({ enabled: true, namesLive: false, parent: "zoldhq.com" }), null, "the gateway answers but no wallet has resolved a name yet: no name on Home");
     assert.equal(shownParent({ enabled: false, namesLive: true, parent: "" }), null);
     assert.equal(shownParent({ enabled: true, namesLive: true, parent: "zoldhq.com" }), "zoldhq.com");
@@ -293,7 +293,7 @@ try {
   await check("a handle with no page is cached for 30 s only, so a page claimed now shows soon", async () => {
     const call = addrCall("dave.zoldhq.com");
     assert.equal(decodeAbiParameters([{ type: "bytes" }], await answer(call))[0], "0x");
-    store.addUser({
+    await store.addUser({
       id: "u-dave", name: "Dave", country: "DE", kycStatus: "approved",
       address: "0x5555555555555555555555555555555555555555", passkeySafe: safeOf("0x5555555555555555555555555555555555555555"),
       createdAt: new Date().toISOString(),
@@ -419,7 +419,7 @@ try {
     const session = (await execFileAsync(tsx, ["-e", `(async () => {
       const { store, initStore } = await import(${JSON.stringify(path.join(api, "store.ts"))});
       const { publicUser } = await import(${JSON.stringify(path.join(api, "users", "public-user.ts"))});
-      initStore();
+      await initStore();
       const a = "0x1111111111111111111111111111111111111111";
       store.addUser({ id: "u", name: "A", country: "DE", kycStatus: "approved", address: a, createdAt: new Date().toISOString(),
         passkeySafe: { address: a, status: "active", threshold: 1, passkeyPublicKey: { x: "0x1", y: "0x2" } },

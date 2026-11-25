@@ -20,26 +20,26 @@ export function createPaymentLinkRoutes(deps: OrgRoutes): express.Router {
   const { ctxOf } = deps;
   const r = express.Router();
 
-  r.get("/:orgId/payment-requests", (req, res) => {
-    const ctx = ctxOf(req, res);
+  r.get("/:orgId/payment-requests", async (req, res) => {
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     if (!requirePermission(ctx, res, "invoices.read")) return;
     const base = baseUrlFor(req);
-    const links = store.paymentRequests
+    const links = (await store.list("paymentRequests"))
       .filter((p) => p.orgId === ctx.org.id && p.source.kind === "app")
       .map((p) => ownerPaymentRequest(p, base))
       .reverse();
-    res.json({ paymentRequests: links, payLink: payLinkOffer(ctx) });
+    res.json({ paymentRequests: links, payLink: await payLinkOffer(ctx) });
   });
 
   r.post("/:orgId/payment-requests", wrap(async (req, res) => {
-    const ctx = ctxOf(req, res);
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     if (req.body?.invoiceId && !requireCapability(ctx, res, "invoices")) return;
     if (!requirePermission(ctx, res, "invoices.manage")) return;
-    const user = store.findUser(ctx.userId);
+    const user = await store.findUser(ctx.userId);
     if (!user) return res.status(401).json({ error: "no such user" });
-    const found = payLinkPayee(ctx.org, user);
+    const found = await payLinkPayee(ctx.org, user);
     if (!("payee" in found)) return res.status(found.code === "NOT_THE_PAYEE" ? 403 : 409).json({ error: found.reason, code: found.code });
     // The payee is the member whose Safe backs the account, which may not be the caller.
     const { payee } = found;
@@ -48,11 +48,11 @@ export function createPaymentLinkRoutes(deps: OrgRoutes): express.Router {
     // now are not applied to it.
     const invoiceId = typeof req.body?.invoiceId === "string" ? req.body.invoiceId.trim() : "";
     const make = async () => {
-      const open = invoiceId ? openLinkFor({ id: invoiceId, orgId: ctx.org.id }) : undefined;
+      const open = invoiceId ? (await openLinkFor({ id: invoiceId, orgId: ctx.org.id })) : undefined;
       if (open) return { status: 200, body: { ...ownerPaymentRequest(open, baseUrlFor(req)), reused: true } };
       // No methods named: every way this link may be paid (linkMethods). The
       // caller's own account is not the one being paid, so it does not decide.
-      const allowed = linkMethods(ctx.org, payee, user);
+      const allowed = await linkMethods(ctx.org, payee, user);
       const named: unknown[] = Array.isArray(req.body?.methods) ? req.body.methods : allowed;
       // A malformed body is validateCreate's 400 first; a known method this link may not take is ours.
       const input = validateCreate({ ...req.body, methods: named }, payee);
@@ -73,17 +73,19 @@ export function createPaymentLinkRoutes(deps: OrgRoutes): express.Router {
 
   /** Cancel a company link: anyone who may make one, for any of the company's
    *  links. A link with money against it stays: the payments are facts. */
-  r.post("/:orgId/payment-requests/:reqId/cancel", (req, res) => {
-    const ctx = ctxOf(req, res);
-    if (!ctx) return;
-    if (!requirePermission(ctx, res, "invoices.manage")) return;
-    const link = store.findPaymentRequest(req.params.reqId);
-    if (!link || link.orgId !== ctx.org.id || link.source.kind !== "app") return res.status(404).json({ error: "payment request not found" });
-    if (link.invoiceId && !requireCapability(ctx, res, "invoices")) return;
-    if (link.state !== "OPEN") return res.status(409).json({ error: `this link is ${effectiveState(link).toLowerCase()}` });
-    if (link.payments.length) return res.status(409).json({ error: "a payment has already been recorded against this link — it cannot be cancelled" });
-    const done = store.updatePaymentRequest(link.id, { state: "CANCELLED", cancelledAt: new Date().toISOString() });
-    res.json(ownerPaymentRequest(done, baseUrlFor(req)));
+  r.post("/:orgId/payment-requests/:reqId/cancel", async (req, res) => {
+    return store.tx(async () => {
+      const ctx = await ctxOf(req, res);
+      if (!ctx) return;
+      if (!requirePermission(ctx, res, "invoices.manage")) return;
+      const link = await store.findPaymentRequest(req.params.reqId);
+      if (!link || link.orgId !== ctx.org.id || link.source.kind !== "app") return res.status(404).json({ error: "payment request not found" });
+      if (link.invoiceId && !requireCapability(ctx, res, "invoices")) return;
+      if (link.state !== "OPEN") return res.status(409).json({ error: `this link is ${effectiveState(link).toLowerCase()}` });
+      if (link.payments.length) return res.status(409).json({ error: "a payment has already been recorded against this link — it cannot be cancelled" });
+      const done = await store.updatePaymentRequest(link.id, { state: "CANCELLED", cancelledAt: new Date().toISOString() });
+      res.json(ownerPaymentRequest(done, baseUrlFor(req)));
+    });
   });
 
   return r;

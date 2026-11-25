@@ -92,7 +92,7 @@ const { createShopifyRouter } = await import("../services/api/src/routes/shopify
 const { attributeDepositToRequest, onPaymentRequestPaid, sweepPaymentRequests } = await import("../services/api/src/routes/payment-requests.js");
 const { resolveShopifyRequest } = await import("../services/api/src/routes/shopify.js");
 const { signBody, signQuery } = await import("../services/api/src/shopify/hmac.js");
-initStore();
+await initStore();
 onPaymentRequestPaid(resolveShopifyRequest);
 
 const now = new Date().toISOString();
@@ -101,14 +101,14 @@ const merchant: any = {
   id: randomUUID(), name: "Keycard Demo GmbH", email: "shop@example.com", country: "DE", address: owner, iban: "EE123456789012345678", kycStatus: "approved", createdAt: now,
   paymentPage: { handle: "keycard", displayName: "Keycard", depositAddress: owner, recipientAddress: owner, forwarder: { chainId: 31337, address: owner, activatedAt: now }, supportedTokens: [{ chainId: 31337, symbol: "USDC", address: `0x${"11".repeat(20)}`, decimals: 6 }], settlementAsset: "EURE", autoConvert: true, activatedAt: now, updatedAt: now },
 };
-store.addUser(merchant);
+await store.addUser(merchant);
 const org: any = { id: randomUUID(), type: "business", name: "Keycard Demo GmbH", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now };
-store.addOrganisation(org, false);
-store.addMember({ id: randomUUID(), orgId: org.id, userId: merchant.id, email: "shop@example.com", role: "owner", status: "active", invitedAt: now, acceptedAt: now } as any);
+await store.addOrganisation(org, false);
+await store.addMember({ id: randomUUID(), orgId: org.id, userId: merchant.id, email: "shop@example.com", role: "owner", status: "active", invitedAt: now, acceptedAt: now } as any);
 
 const app = express();
 app.use(express.json({ verify: (req, _res, buf) => { (req as any).rawBody = buf; } }));
-app.use("/api", createShopifyRouter((req, res) => {
+app.use("/api", createShopifyRouter(async (req, res) => {
   const u = req.header("x-user");
   if (u) return { userId: u };
   res.status(401).json({ error: "authorization required" });
@@ -147,7 +147,7 @@ const webhook = (topic: string, payload: unknown, shop = SHOP, secret = "shpss_t
   const raw = JSON.stringify(payload);
   return call("POST", "/api/shopify/webhooks/orders", { raw, headers: { "shopify-hmac-sha256": signBody(raw, secret), "shopify-shop-domain": shop, "x-shopify-topic": topic, "x-shopify-webhook-id": deliveryId } });
 };
-const until = async (fn: () => boolean, ms = 3000) => { const t0 = Date.now(); while (!fn() && Date.now() - t0 < ms) await new Promise((r) => setTimeout(r, 25)); return fn(); };
+const until = async (fn: () => boolean | Promise<boolean>, ms = 3000) => { const t0 = Date.now(); while (!(await fn()) && Date.now() - t0 < ms) await new Promise((r) => setTimeout(r, 25)); return await fn(); };
 
 let n = 0;
 const failures: string[] = [];
@@ -173,7 +173,7 @@ const oauthQuery = (st: string, code = "good-code", shop = SHOP) => {
 await check("the callback stores the connection in custom-app mode and subscribes orders/create + orders/cancelled — never touching the Payments Apps endpoint", async () => {
   const r = await call("GET", `/api/shopify/callback?${oauthQuery(state)}`);
   assert.equal(r.status, 302, JSON.stringify(r.body));
-  const c = store.findShopifyConnectionByShop(SHOP)!;
+  const c = (await store.findShopifyConnectionByShop(SHOP))!;
   assert.ok(c, "no connection stored");
   assert.equal(c.mode, "custom-app");
   assert.ok(c.configuredAt, `webhook subscription did not run: ${c.configureError}`);
@@ -187,7 +187,7 @@ await check("a reinstall whose subscription already exists is not a failure", as
   const r0 = await call("POST", `/api/orgs/${org.id}/shopify/install`, { body: { shop: SHOP }, user: merchant.id });
   const st = new URL(r0.body.authorizeUrl).searchParams.get("state")!;
   await call("GET", `/api/shopify/callback?${oauthQuery(st)}`);
-  const c = store.findShopifyConnectionByShop(SHOP)!;
+  const c = (await store.findShopifyConnectionByShop(SHOP))!;
   assert.ok(c.configuredAt, `reinstall failed: ${c.configureError}`);
   assert.equal(c.webhookSubscriptionId, "gid://shopify/WebhookSubscription/ORDERS_CREATE", "the live subscription id was lost on reinstall");
 });
@@ -209,7 +209,7 @@ const o1 = order();
 await check("orders/create for a pending EUR order on the Zold method opens a crypto-only request sized from the order, with the order's name, status URL and a day-long window", async () => {
   const r = await webhook("orders/create", o1);
   assert.equal(r.status, 200, JSON.stringify(r.body));
-  const req = store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP)!;
+  const req = (await store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP))!;
   assert.ok(req, "no request opened");
   assert.equal(req.amountEur, 129);
   assert.deepEqual(req.methods, ["crypto"]);
@@ -225,27 +225,27 @@ await check("orders/create for a pending EUR order on the Zold method opens a cr
   assert.ok(!text.includes("buyer@example.com") && !text.includes("Bea") && !text.includes("Somewhere"), "the buyer's details are not ours to keep");
 });
 await check("Shopify's redelivery of the same order opens nothing new", async () => {
-  const before = store.paymentRequests.length;
+  const before = (await store.list("paymentRequests")).length;
   const r = await webhook("orders/create", o1);
   assert.equal(r.status, 200);
-  assert.equal(store.paymentRequests.length, before);
+  assert.equal((await store.list("paymentRequests")).length, before);
 });
 await check("concurrent deliveries of one order open one request and answer the same code", async () => {
   const o = order();
-  const before = store.paymentRequests.length;
+  const before = (await store.list("paymentRequests")).length;
   const answers = await Promise.all([1, 2, 3, 4].map(() => webhook("orders/create", o)));
-  assert.equal(store.paymentRequests.length, before + 1);
+  assert.equal((await store.list("paymentRequests")).length, before + 1);
   assert.ok(answers.every((a) => a.status === 200 && a.body.code === answers[0].body.code), JSON.stringify(answers.map((a) => a.body)));
 });
 await check("a delivery id already handled is acknowledged and not processed again", async () => {
   const o = order();
   const id = randomUUID();
   assert.equal((await webhook("orders/create", o, SHOP, undefined, id)).status, 200);
-  const req = store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP)!;
+  const req = (await store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP))!;
   const again = await webhook("orders/cancelled", o, SHOP, undefined, id);
   assert.equal(again.status, 200);
   assert.equal(again.body.duplicate, true);
-  assert.equal(store.findPaymentRequest(req.id)!.state, "OPEN", "a replayed delivery id was processed as a new event");
+  assert.equal((await store.findPaymentRequest(req.id))!.state, "OPEN", "a replayed delivery id was processed as a new event");
 });
 await check("a webhook without a delivery id is refused", async () => {
   const raw = JSON.stringify(order());
@@ -257,19 +257,19 @@ await check("an order paid another way is acknowledged and ignored", async () =>
   const r = await webhook("orders/create", o);
   assert.equal(r.status, 200);
   assert.equal(r.body.ignored, "not a Zold order");
-  assert.equal(store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP), undefined);
+  assert.equal(await store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP), undefined);
 });
 await check("a Zold order that is not pending (already marked paid by hand) is ignored", async () => {
   const o = order({ financial_status: "paid" });
   assert.equal((await webhook("orders/create", o)).status, 200);
-  assert.equal(store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP), undefined);
+  assert.equal(await store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP), undefined);
 });
 await check("a non-EUR order is acknowledged (so the subscription survives) but opens nothing", async () => {
   const o = order({ currency: "USD" });
   const r = await webhook("orders/create", o);
   assert.equal(r.status, 200);
   assert.match(String(r.body.ignored), /currency USD/);
-  assert.equal(store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP), undefined);
+  assert.equal(await store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP), undefined);
 });
 await check("a mis-signed webhook is a 401 and a stranger store a 404", async () => {
   assert.equal((await webhook("orders/create", order(), SHOP, "wrong-secret")).status, 401);
@@ -278,7 +278,7 @@ await check("a mis-signed webhook is a 401 and a stranger store a 404", async ()
 await check("a test order carries the test flag", async () => {
   const o = order({ test: true });
   await webhook("orders/create", o);
-  assert.equal(store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP)!.test, true);
+  assert.equal((await store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP))!.test, true);
 });
 
 console.log("\nThank-you page lookup");
@@ -292,11 +292,11 @@ await check("the order lookup answers the checkout token's holder CORS-open with
   assert.equal(r.body.state, "OPEN");
   assert.ok(r.body.methods.crypto?.address, "no deposit address");
   assert.ok(r.body.methods.crypto?.amountUsdc > 146, "no USDC figure");
-  const code = store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP)!.code;
+  const code = (await store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP))!.code;
   assert.equal(r.body.pageUrl, `${API}/pay/keycard/${code.slice(0, 5)}-${code.slice(5, 10)}-${code.slice(10)}`);
   const text = JSON.stringify(r.body);
   for (const secret of ["EE123456789012345678", "shop@example.com", merchant.id, "buyer@example.com", TOKEN, o1.checkout_token]) assert.ok(!text.includes(secret), `leaked ${secret}`);
-  assert.ok(!JSON.stringify(store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP)).includes(o1.checkout_token), "the checkout token was stored in the clear");
+  assert.ok(!JSON.stringify(await store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP)).includes(o1.checkout_token), "the checkout token was stored in the clear");
 });
 await check("without the order's checkout token the lookup is the same 404 `pending` as for an order that does not exist — counting order ids learns nothing", async () => {
   const unknown = await call("GET", `/api/shopify/orders/${SHOP}/999?t=${o1.checkout_token}`);
@@ -313,16 +313,16 @@ await check("without the order's checkout token the lookup is the same 404 `pend
 await check("a request opened from a webhook without a checkout token cannot be read through the lookup at all", async () => {
   const o = order({ checkout_token: undefined });
   await webhook("orders/create", o);
-  assert.ok(store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP));
+  assert.ok(await store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP));
   assert.equal((await call("GET", `/api/shopify/orders/${SHOP}/${o.id}?t=`)).status, 404);
   assert.equal((await call("GET", `/api/shopify/orders/${SHOP}/${o.id}?t=undefined`)).status, 404);
 });
 await check("a lapsed forwarder's address is not handed out by the order lookup either", async () => {
   // A Candide page past its activation, whose renewal cannot give back the
   // address it shows: the pay page shows no address, and neither may this.
-  const page = store.findUser(merchant.id)!.paymentPage!;
+  const page = (await store.findUser(merchant.id))!.paymentPage!;
   const forwarded = `0x${"33".repeat(20)}` as `0x${string}`;
-  store.updateUser(merchant.id, { paymentPage: { ...page, depositAddress: forwarded, routesReadAt: now,
+  await store.updateUser(merchant.id, { paymentPage: { ...page, depositAddress: forwarded, routesReadAt: now,
     forwarder: { provider: "candide", recipient: owner, destinationChainId: 31337, sourceChainIds: [31337], custodialWithdrawer: owner, active: true, expiresAt: new Date(Date.now() - 60_000).toISOString(), activatedAt: now } } });
   try {
     const r = await lookup(o1);
@@ -330,7 +330,7 @@ await check("a lapsed forwarder's address is not handed out by the order lookup 
     assert.equal(r.body.methods.crypto, undefined, JSON.stringify(r.body.methods));
     assert.ok(!JSON.stringify(r.body).includes(forwarded), "the lapsed address went out");
   } finally {
-    store.updateUser(merchant.id, { paymentPage: page });
+    await store.updateUser(merchant.id, { paymentPage: page });
   }
 });
 await check("the lookup accepts the gid form too, and an order we do not know is a 404 marked pending", async () => {
@@ -353,7 +353,7 @@ const linkKey = async () => {
 };
 const sign = (key: string, id: number | string) => createHmac("sha256", key).update(String(id)).digest("hex");
 await check("before the store has a link key, no email link opens anything", async () => {
-  assert.equal(store.findShopifyConnectionByShop(SHOP)!.orderLinkSecretEnc, undefined);
+  assert.equal((await store.findShopifyConnectionByShop(SHOP))!.orderLinkSecretEnc, undefined);
   assert.equal((await call("GET", `/api/shopify/orders/${SHOP}/${o1.id}/pay?b=${"0".repeat(64)}`)).status, 403);
 });
 await check("with no data encryption key the store's settings still load, without a link to sign and with the reason", async () => {
@@ -365,7 +365,7 @@ await check("with no data encryption key the store's settings still load, withou
     assert.equal(r.body.connections[0].payLinkTemplate, undefined);
     assert.equal(r.body.available, false);
     assert.match(r.body.reason, /DATA_ENCRYPTION_KEYS/);
-    assert.equal(store.findShopifyConnectionByShop(SHOP)!.orderLinkSecretEnc, undefined, "no key was made");
+    assert.equal((await store.findShopifyConnectionByShop(SHOP))!.orderLinkSecretEnc, undefined, "no key was made");
   } finally {
     process.env.DATA_ENCRYPTION_KEYS = ring;
   }
@@ -374,8 +374,8 @@ await check("a viewer sees the stores but no pay-link template and no link key; 
   const key = await linkKey();
   const as = async (role: string) => {
     const u: any = { id: randomUUID(), name: `A ${role}`, country: "DE", address: `0x${"ce".repeat(20)}`, iban: "", kycStatus: "approved", createdAt: now };
-    store.addUser(u);
-    store.addMember({ id: randomUUID(), orgId: org.id, userId: u.id, email: `${role}@example.com`, role, status: "active", invitedAt: now, acceptedAt: now } as any);
+    await store.addUser(u);
+    await store.addMember({ id: randomUUID(), orgId: org.id, userId: u.id, email: `${role}@example.com`, role, status: "active", invitedAt: now, acceptedAt: now } as any);
     return call("GET", `/api/orgs/${org.id}/shopify`, { user: u.id });
   };
   const v = await as("viewer");
@@ -391,8 +391,8 @@ await check("a viewer sees the stores but no pay-link template and no link key; 
 await check("the Apps card hears why Connect store would 409 before a shop is typed, and only an owner or admin hears it", async () => {
   const as = async (role: string) => {
     const u: any = { id: randomUUID(), name: `B ${role}`, country: "DE", address: `0x${"cf".repeat(20)}`, iban: "", kycStatus: "approved", createdAt: now };
-    store.addUser(u);
-    store.addMember({ id: randomUUID(), orgId: org.id, userId: u.id, email: `b-${role}@example.com`, role, status: "active", invitedAt: now, acceptedAt: now } as any);
+    await store.addUser(u);
+    await store.addMember({ id: randomUUID(), orgId: org.id, userId: u.id, email: `b-${role}@example.com`, role, status: "active", invitedAt: now, acceptedAt: now } as any);
     return call("GET", `/api/orgs/${org.id}/shopify`, { user: u.id });
   };
   const own = await call("GET", `/api/orgs/${org.id}/shopify`, { user: merchant.id });
@@ -408,9 +408,9 @@ await check("the email link redirects to the order's pay page only with the orde
   const key = await linkKey();
   const r = await call("GET", `/api/shopify/orders/${SHOP}/${o1.id}/pay?b=${sign(key, o1.id)}`);
   assert.equal(r.status, 302);
-  const req = store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP)!;
+  const req = (await store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP))!;
   assert.ok(r.location.endsWith(`/pay/keycard/${req.code.slice(0, 5)}-${req.code.slice(5, 10)}-${req.code.slice(10)}`), r.location);
-  assert.ok(!store.findShopifyConnectionByShop(SHOP)!.orderLinkSecretEnc!.includes(key), "the link key is stored in the clear");
+  assert.ok(!(await store.findShopifyConnectionByShop(SHOP))!.orderLinkSecretEnc!.includes(key), "the link key is stored in the clear");
   assert.equal(await linkKey(), key, "the key changed between two views");
 });
 /** The pay-link template as Shopify's notification Liquid would render it
@@ -427,7 +427,7 @@ await check("the email template, rendered as Shopify would for an order, is a li
   const u = new URL(rendered);
   const r = await call("GET", `${u.pathname}${u.search}`);
   assert.equal(r.status, 302, `${u.pathname}${u.search} -> ${r.status} ${r.body.text ?? ""}`);
-  const req = store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP)!;
+  const req = (await store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP))!;
   assert.ok(r.location.endsWith(`/pay/keycard/${req.code.slice(0, 5)}-${req.code.slice(5, 10)}-${req.code.slice(10)}`), r.location);
   const other = renderPayLink(view.body.connections[0].payLinkTemplate, o1.id + 1);
   assert.equal((await call("GET", new URL(other).pathname + `?b=${new URL(rendered).searchParams.get("b")}`)).status, 403, "one order's signature opened another order");
@@ -443,7 +443,7 @@ await check("without a valid signature the email link is the same 403 whether th
     await call("GET", `/api/shopify/orders/${SHOP}/999/pay`),
     await call("GET", `/api/shopify/orders/other-store.myshopify.com/${o1.id}/pay?b=${sign(key, o1.id)}`),
   ];
-  const code = store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP)!.code;
+  const code = (await store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP))!.code;
   for (const r of refusals) {
     assert.equal(r.status, 403);
     assert.equal(r.body.text, refusals[0].body.text);
@@ -458,20 +458,20 @@ await check("a correctly signed link for an order whose webhook has not arrived 
 });
 
 console.log("\nSettlement");
-const payRequest = (req: any) => {
+const payRequest = async (req: any) => {
   const q = req.cryptoQuotes[req.cryptoQuotes.length - 1];
-  const d = store.addCryptoDeposit({
+  const d = await store.addCryptoDeposit({
     id: randomUUID(), userId: merchant.id, chainId: 31337, token: "USDC", txHash: `0x${randomUUID().replace(/-/g, "").padEnd(64, "0")}`, logIndex: 0,
     amountUnits: String(Math.round(q.amountUsdc * 1e6)), amountUsdc: q.amountUsdc, settlementAsset: "USDC", paymentAddress: owner,
     holding: "awaiting_approval", txs: [], detectedAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   });
-  return attributeDepositToRequest(d);
+  return await attributeDepositToRequest(d);
 };
 await check("the buyer's USDC deposit marks the request PAID, the order is marked paid through the Admin API exactly once, and the facts land on a zold.payment metafield", async () => {
-  const req = store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP)!;
-  const paid = payRequest(req)!;
+  const req = (await store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP))!;
+  const paid = (await payRequest(req))!;
   assert.equal(paid.state, "PAID");
-  assert.ok(await until(() => Boolean(store.findPaymentRequest(req.id)!.source.resolvedAt)), `not resolved: ${store.findPaymentRequest(req.id)!.source.resolveError}`);
+  assert.ok(await until(async () => Boolean((await store.findPaymentRequest(req.id))!.source.resolvedAt)), `not resolved: ${(await store.findPaymentRequest(req.id))!.source.resolveError}`);
   const marks = calls.filter((c) => c.op === "orderMarkAsPaid" && c.vars.input.id === o1.admin_graphql_api_id);
   assert.equal(marks.length, 1);
   assert.ok(await until(() => calls.some((c) => c.op === "metafieldsSet" && c.vars.metafields[0].ownerId === o1.admin_graphql_api_id)), "no metafield written");
@@ -486,9 +486,9 @@ await check("the lookup now reports PAID and the return link sends the buyer to 
   assert.equal(r.body.state, "PAID");
   assert.equal(r.body.payments.length, 1);
   assert.equal(r.body.payments[0].txHash, undefined, "the payer's transaction hash is in the public order lookup");
-  const paidTx = store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP)!.payments[0].txHash!;
+  const paidTx = (await store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP))!.payments[0].txHash!;
   assert.ok(!JSON.stringify(r.body).includes(paidTx));
-  const req = store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP)!;
+  const req = (await store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP))!;
   const back = await call("GET", `/api/shopify/return/${req.code}`);
   assert.equal(back.status, 302);
   assert.equal(back.location, o1.order_status_url);
@@ -496,76 +496,76 @@ await check("the lookup now reports PAID and the return link sends the buyer to 
 await check("a mark-as-paid the store refused is recorded and retried by the sweep", async () => {
   const o = order();
   await webhook("orders/create", o);
-  const req = store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP)!;
+  const req = (await store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP))!;
   failNextMarkPaid = true;
-  payRequest(req);
-  assert.ok(await until(() => Boolean(store.findPaymentRequest(req.id)!.source.resolveError)), "no error recorded");
-  assert.match(store.findPaymentRequest(req.id)!.source.resolveError!, /cannot be marked as paid/);
-  assert.equal(store.findPaymentRequest(req.id)!.source.resolvedAt, undefined);
+  await payRequest(req);
+  assert.ok(await until(async () => Boolean((await store.findPaymentRequest(req.id))!.source.resolveError)), "no error recorded");
+  assert.match((await store.findPaymentRequest(req.id))!.source.resolveError!, /cannot be marked as paid/);
+  assert.equal((await store.findPaymentRequest(req.id))!.source.resolvedAt, undefined);
   await sweepPaymentRequests();
-  const after = store.findPaymentRequest(req.id)!;
+  const after = (await store.findPaymentRequest(req.id))!;
   assert.ok(after.source.resolvedAt, `still unresolved: ${after.source.resolveError}`);
   assert.equal(calls.filter((c) => c.op === "orderMarkAsPaid" && c.vars.input.id === o.admin_graphql_api_id).length, 2);
 });
 await check("orders/cancelled closes an unpaid request but leaves a paid one alone", async () => {
   const o = order();
   await webhook("orders/create", o);
-  const open = store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP)!;
+  const open = (await store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP))!;
   assert.equal((await webhook("orders/cancelled", o)).status, 200);
-  assert.equal(store.findPaymentRequest(open.id)!.state, "CANCELLED");
+  assert.equal((await store.findPaymentRequest(open.id))!.state, "CANCELLED");
   assert.equal((await webhook("orders/cancelled", o1)).status, 200);
-  assert.equal(store.findPaymentRequest(store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP)!.id)!.state, "PAID");
+  assert.equal((await store.findPaymentRequest((await store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP))!.id))!.state, "PAID");
 });
 
 console.log("\nTwo stores, one order number");
 const SHOP_B = "other-merchant.myshopify.com";
 await check("a second store's orders/cancelled and orders/create for the SAME order id neither cancel nor swallow the first store's open request", async () => {
-  const first = store.findShopifyConnectionByShop(SHOP)!;
-  store.addShopifyConnection({ ...first, id: randomUUID(), shop: SHOP_B });
+  const first = (await store.findShopifyConnectionByShop(SHOP))!;
+  await store.addShopifyConnection({ ...first, id: randomUUID(), shop: SHOP_B });
   const o = order();
   await webhook("orders/create", o);
-  const victim = store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP)!;
+  const victim = (await store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP))!;
   assert.equal(victim.state, "OPEN");
   // Shopify order ids are per-store sequences: store B can deliver the same one.
   const cancelled = await webhook("orders/cancelled", o, SHOP_B);
   assert.equal(cancelled.status, 200);
   assert.equal(cancelled.body.cancelled, false, "store B's webhook found store A's request");
-  assert.equal(store.findPaymentRequest(victim.id)!.state, "OPEN", "store B cancelled store A's request");
+  assert.equal((await store.findPaymentRequest(victim.id))!.state, "OPEN", "store B cancelled store A's request");
   const created = await webhook("orders/create", o, SHOP_B);
   assert.equal(created.status, 200);
   assert.notEqual(created.body.code, undefined, "store B's order was deduped against store A's");
   assert.notEqual(created.body.code.replace(/-/g, ""), victim.code, "store B was handed store A's payment code");
-  const own = store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP_B)!;
+  const own = (await store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP_B))!;
   assert.notEqual(own.id, victim.id);
   assert.equal(own.source.shop, SHOP_B);
-  store.removeShopifyConnection(store.findShopifyConnectionByShop(SHOP_B)!.id);
+  await store.removeShopifyConnection((await store.findShopifyConnectionByShop(SHOP_B))!.id);
 });
 await check("a delivery signed for one store and replayed under another store's name is refused", async () => {
-  const first = store.findShopifyConnectionByShop(SHOP)!;
-  store.addShopifyConnection({ ...first, id: randomUUID(), shop: SHOP_B });
+  const first = (await store.findShopifyConnectionByShop(SHOP))!;
+  await store.addShopifyConnection({ ...first, id: randomUUID(), shop: SHOP_B });
   try {
     const o = order();
     const id = randomUUID();
     assert.equal((await webhook("orders/create", o, SHOP, undefined, id)).status, 200);
     const replay = await webhook("orders/create", o, SHOP_B, undefined, id);
     assert.equal(replay.status, 401, JSON.stringify(replay.body));
-    assert.equal(store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP_B), undefined);
+    assert.equal(await store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP_B), undefined);
   } finally {
-    store.removeShopifyConnection(store.findShopifyConnectionByShop(SHOP_B)!.id);
+    await store.removeShopifyConnection((await store.findShopifyConnectionByShop(SHOP_B))!.id);
   }
 });
 await check("after a restart, a delivery replayed under another store's name is still refused; the same store's replay is a duplicate; a new delivery opens", async () => {
-  const first = store.findShopifyConnectionByShop(SHOP)!;
-  store.addShopifyConnection({ ...first, id: randomUUID(), shop: SHOP_B });
+  const first = (await store.findShopifyConnectionByShop(SHOP))!;
+  await store.addShopifyConnection({ ...first, id: randomUUID(), shop: SHOP_B });
   const o = order();
   const id = randomUUID();
   assert.equal((await webhook("orders/create", o, SHOP, undefined, id)).status, 200);
   // A restart: the store reloads from its file, the router module starts fresh.
-  initStore();
+  await initStore();
   const fresh: typeof import("../services/api/src/routes/shopify.js") = await import(`../services/api/src/routes/shopify.js?restart=${randomUUID()}` as string);
   const app2 = express();
   app2.use(express.json({ verify: (req, _res, buf) => { (req as any).rawBody = buf; } }));
-  app2.use("/api", fresh.createShopifyRouter(() => undefined));
+  app2.use("/api", fresh.createShopifyRouter(async () => undefined));
   const server2 = app2.listen(0, "127.0.0.1");
   await new Promise<void>((r) => server2.once("listening", () => r()));
   const API2 = `http://127.0.0.1:${(server2.address() as any).port}`;
@@ -575,30 +575,30 @@ await check("after a restart, a delivery replayed under another store's name is 
     return { status: res.status, body: await res.json() as any };
   };
   try {
-    const before = store.paymentRequests.length;
+    const before = (await store.list("paymentRequests")).length;
     const replay = await hook2(o, SHOP_B, id);
     assert.equal(replay.status, 401, JSON.stringify(replay.body));
-    assert.equal(store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP_B), undefined, "the replay opened a request at the other store");
-    assert.equal(store.paymentRequests.length, before);
+    assert.equal(await store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP_B), undefined, "the replay opened a request at the other store");
+    assert.equal((await store.list("paymentRequests")).length, before);
     const same = await hook2(o, SHOP, id, "orders/cancelled");
     assert.equal(same.status, 200);
     assert.equal(same.body.duplicate, true, JSON.stringify(same.body));
-    assert.equal(store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP)!.state, "OPEN");
+    assert.equal((await store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP))!.state, "OPEN");
     const o2 = order();
     const created = await hook2(o2, SHOP_B, randomUUID());
     assert.equal(created.status, 200, JSON.stringify(created.body));
-    assert.ok(store.findPaymentRequestBySource("shopify", o2.admin_graphql_api_id, SHOP_B), "a new delivery opened nothing");
+    assert.ok(await store.findPaymentRequestBySource("shopify", o2.admin_graphql_api_id, SHOP_B), "a new delivery opened nothing");
   } finally {
     server2.close();
-    store.removeShopifyConnection(store.findShopifyConnectionByShop(SHOP_B)!.id);
+    await store.removeShopifyConnection((await store.findShopifyConnectionByShop(SHOP_B))!.id);
   }
 });
 await check("delivery ids are kept 72 hours, then dropped", async () => {
   const old = new Date(Date.now() - 73 * 3_600_000).toISOString();
-  store.recordShopifyDelivery({ id: "stale-delivery", shop: SHOP, at: old, handled: true });
-  assert.ok(store.shopifyDelivery("stale-delivery"));
-  store.recordShopifyDelivery({ id: randomUUID(), shop: SHOP, at: new Date().toISOString(), handled: false });
-  assert.equal(store.shopifyDelivery("stale-delivery"), undefined);
+  await store.recordShopifyDelivery({ id: "stale-delivery", shop: SHOP, at: old, handled: true });
+  assert.ok(await store.shopifyDelivery("stale-delivery"));
+  await store.recordShopifyDelivery({ id: randomUUID(), shop: SHOP, at: new Date().toISOString(), handled: false });
+  assert.equal(await store.shopifyDelivery("stale-delivery"), undefined);
 });
 
 console.log("\nDashboard");
@@ -620,28 +620,28 @@ await check("the org view says custom-app mode, lists the webhook endpoint, each
   assert.ok(!text.includes(TOKEN) && !text.includes("accessTokenEnc"), "the store token crossed the API");
 });
 await check("disconnecting removes the webhook subscription and the connection, and a later webhook is a 404", async () => {
-  const c = store.findShopifyConnectionByShop(SHOP)!;
+  const c = (await store.findShopifyConnectionByShop(SHOP))!;
   const r = await call("DELETE", `/api/orgs/${org.id}/shopify/${c.id}`, { user: merchant.id });
   assert.equal(r.status, 200);
   assert.ok(calls.some((x) => x.op === "webhookSubscriptionDelete" && x.vars.id === "gid://shopify/WebhookSubscription/ORDERS_CREATE"));
-  assert.equal(store.findShopifyConnectionByShop(SHOP), undefined);
+  assert.equal(await store.findShopifyConnectionByShop(SHOP), undefined);
   assert.equal((await webhook("orders/create", order())).status, 404);
 });
 
 console.log("\nOne store, two organisations");
 const CONTESTED = "contested-store.myshopify.com";
 /** An organisation whose owner has a claimed payment page. */
-const orgWithPayee = (label: string) => {
+const orgWithPayee = async (label: string) => {
   const addr = `0x${randomUUID().replace(/-/g, "").padEnd(40, "0").slice(0, 40)}` as `0x${string}`;
   const user: any = {
     ...merchant, id: randomUUID(), name: `${label} owner`, email: `${label}@example.com`, address: addr,
     paymentPage: { ...merchant.paymentPage, handle: label, displayName: label, depositAddress: addr, recipientAddress: addr },
   };
-  store.addUser(user);
+  await store.addUser(user);
   const o: any = { ...org, id: randomUUID(), name: `${label} GmbH` };
-  store.addOrganisation(o, false);
+  await store.addOrganisation(o, false);
   const member: any = { id: randomUUID(), orgId: o.id, userId: user.id, email: user.email, role: "owner", status: "active", invitedAt: now, acceptedAt: now };
-  store.addMember(member);
+  await store.addMember(member);
   return { user, org: o, member };
 };
 const startInstall = async (who: { user: any; org: any }, shop = CONTESTED) => {
@@ -649,13 +649,13 @@ const startInstall = async (who: { user: any; org: any }, shop = CONTESTED) => {
   assert.equal(r.status, 200, JSON.stringify(r.body));
   return new URL(r.body.authorizeUrl).searchParams.get("state")!;
 };
-const A = orgWithPayee("alpha");
-const B = orgWithPayee("bravo");
+const A = await orgWithPayee("alpha");
+const B = await orgWithPayee("bravo");
 await check("a callback holding org A's install state cannot rewrite the payee or installer of a store org B has since connected (BUG: B's buyers paid A)", async () => {
   const stateA = await startInstall(A);
   const stateB = await startInstall(B);
   assert.equal((await call("GET", `/api/shopify/callback?${oauthQuery(stateB, "good-code", CONTESTED)}`)).status, 302);
-  const before = { ...store.findShopifyConnectionByShop(CONTESTED)! };
+  const before = { ...(await store.findShopifyConnectionByShop(CONTESTED))! };
   assert.equal(before.orgId, B.org.id);
   assert.equal(before.payeeUserId, B.user.id);
   const exchangesBefore = exchanges.length;
@@ -663,10 +663,10 @@ await check("a callback holding org A's install state cannot rewrite the payee o
   const r = await call("GET", `/api/shopify/callback?${oauthQuery(stateA, "good-code", CONTESTED)}`);
   assert.equal(r.status, 302);
   const view = await call("GET", `/api/orgs/${B.org.id}/shopify`, { user: B.user.id });
-  const after = store.findShopifyConnectionByShop(CONTESTED)!;
+  const after = (await store.findShopifyConnectionByShop(CONTESTED))!;
   const o = order();
   await webhook("orders/create", o, CONTESTED);
-  const opened = store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, CONTESTED);
+  const opened = await store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, CONTESTED);
   assert.deepEqual(
     {
       redirectCode: new URL(r.location).searchParams.get("code"),
@@ -694,44 +694,44 @@ await check("a callback holding org A's install state cannot rewrite the payee o
 });
 await check("a reinstall from the org that owns the store still rewrites its payee, within that org", async () => {
   const st = await startInstall(B);
-  const treasurer = orgWithPayee("bravo-treasury");
-  store.addMember({ ...treasurer.member, id: randomUUID(), orgId: B.org.id });
+  const treasurer = await orgWithPayee("bravo-treasury");
+  await store.addMember({ ...treasurer.member, id: randomUUID(), orgId: B.org.id });
   const st2 = await startInstall({ user: treasurer.user, org: B.org });
   assert.equal((await call("GET", `/api/shopify/callback?${oauthQuery(st, "good-code", CONTESTED)}`)).status, 302);
   const r = await call("GET", `/api/shopify/callback?${oauthQuery(st2, "good-code", CONTESTED)}`);
   assert.equal(new URL(r.location).searchParams.get("error"), null, r.location);
-  const c = store.findShopifyConnectionByShop(CONTESTED)!;
+  const c = (await store.findShopifyConnectionByShop(CONTESTED))!;
   assert.deepEqual({ orgId: c.orgId, payee: c.payeeUserId, installer: c.installedByUserId }, { orgId: B.org.id, payee: treasurer.user.id, installer: treasurer.user.id });
-  assert.equal(store.shopifyConnectionsForOrg(B.org.id).filter((x) => x.shop === CONTESTED).length, 1, "a reinstall added a second connection");
+  assert.equal((await store.shopifyConnectionsForOrg(B.org.id)).filter((x) => x.shop === CONTESTED).length, 1, "a reinstall added a second connection");
 });
 await check("an installer deactivated between starting the install and Shopify's callback cannot complete it", async () => {
   const SHOP_C = "fresh-store.myshopify.com";
-  const C = orgWithPayee("charlie");
+  const C = await orgWithPayee("charlie");
   const st = await startInstall(C, SHOP_C);
-  store.updateMember(C.member.id, { status: "deactivated" });
+  await store.updateMember(C.member.id, { status: "deactivated" });
   const exchangesBefore = exchanges.length;
   const r = await call("GET", `/api/shopify/callback?${oauthQuery(st, "good-code", SHOP_C)}`);
   assert.equal(new URL(r.location).searchParams.get("code"), "INSTALLER_NOT_ALLOWED", r.location);
-  assert.equal(store.findShopifyConnectionByShop(SHOP_C), undefined, "the deactivated member connected the store");
+  assert.equal(await store.findShopifyConnectionByShop(SHOP_C), undefined, "the deactivated member connected the store");
   assert.equal(exchanges.length, exchangesBefore, "a token was fetched for a refused install");
 });
 await check("an installer whose role no longer allows org.update cannot complete the install", async () => {
   const SHOP_V = "demoted-store.myshopify.com";
-  const V = orgWithPayee("victor");
-  const co = orgWithPayee("victor-co");
-  store.addMember({ ...co.member, id: randomUUID(), orgId: V.org.id });
+  const V = await orgWithPayee("victor");
+  const co = await orgWithPayee("victor-co");
+  await store.addMember({ ...co.member, id: randomUUID(), orgId: V.org.id });
   const st = await startInstall(V, SHOP_V);
-  store.updateMember(V.member.id, { role: "viewer" });
+  await store.updateMember(V.member.id, { role: "viewer" });
   const exchangesBefore = exchanges.length;
   const r = await call("GET", `/api/shopify/callback?${oauthQuery(st, "good-code", SHOP_V)}`);
   assert.equal(new URL(r.location).searchParams.get("code"), "INSTALLER_NOT_ALLOWED", r.location);
-  assert.equal(store.findShopifyConnectionByShop(SHOP_V), undefined, "a viewer connected the store");
+  assert.equal(await store.findShopifyConnectionByShop(SHOP_V), undefined, "a viewer connected the store");
   assert.equal(exchanges.length, exchangesBefore, "a token was fetched for a refused install");
 });
 await check("two orgs' callbacks for one unconnected store, interleaved around the code exchange: the first to connect keeps it", async () => {
   const SHOP_D = "raced-store.myshopify.com";
-  const D = orgWithPayee("delta");
-  const E = orgWithPayee("echo");
+  const D = await orgWithPayee("delta");
+  const E = await orgWithPayee("echo");
   const stD = await startInstall(D, SHOP_D);
   const stE = await startInstall(E, SHOP_D);
   heldExchange = new Promise<void>((r) => (releaseExchange = r));
@@ -742,18 +742,18 @@ await check("two orgs' callbacks for one unconnected store, interleaved around t
     assert.ok(await until(() => exchanges.filter((s) => s === SHOP_D).length === 1), "D's exchange never started");
     const fast = await call("GET", `/api/shopify/callback?${oauthQuery(stE, "good-code", SHOP_D)}`);
     assert.equal(new URL(fast.location).searchParams.get("error"), null, fast.location);
-    won = { ...store.findShopifyConnectionByShop(SHOP_D)! };
+    won = { ...(await store.findShopifyConnectionByShop(SHOP_D))! };
   } finally {
     releaseExchange();
   }
   const late = await slow;
   assert.equal(new URL(late.location).searchParams.get("code"), "SHOP_CONNECTED_ELSEWHERE", late.location);
-  const c = store.findShopifyConnectionByShop(SHOP_D)!;
+  const c = (await store.findShopifyConnectionByShop(SHOP_D))!;
   assert.deepEqual(
     { orgId: c.orgId, payee: c.payeeUserId, installer: c.installedByUserId, token: c.accessTokenEnc, installedAt: c.installedAt },
     { orgId: E.org.id, payee: E.user.id, installer: E.user.id, token: won.accessTokenEnc, installedAt: won.installedAt },
   );
-  assert.equal(store.shopifyConnectionsForOrg(D.org.id).length, 0);
+  assert.equal((await store.shopifyConnectionsForOrg(D.org.id)).length, 0);
 });
 
 server.close();

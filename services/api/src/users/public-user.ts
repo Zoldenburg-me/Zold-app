@@ -76,14 +76,14 @@ function publicPasskeySafe(plan: NonNullable<User["passkeySafe"]>) {
  *  answers for it (it looks the handle up the same way, so this account must
  *  be the one found) and only once names are known to resolve
  *  (ENS_NAMES_LIVE). Absent otherwise. */
-function ensNameField(u: User): { ensName?: string } {
+async function ensNameField(u: User): Promise<{ ensName?: string }> {
   const ensName = ensNameOf(u, shownParent(ENS_GATEWAY));
-  return ensName && store.findUserByHandle(u.paymentPage!.handle)?.id === u.id ? { ensName } : {};
+  return ensName && (await store.findUserByHandle(u.paymentPage!.handle))?.id === u.id ? { ensName } : {};
 }
 
-export const publicUser = (u: User) => ({
+export const publicUser = async (u: User) => ({
   ...pick(u, TOP_LEVEL),
-  ...ensNameField(u),
+  ...(await ensNameField(u)),
   ...(u.kyc ? { kyc: pick(u.kyc, ["provider", "onboardingPath", "applicantId", "checkedAt", "reason"] as const) } : {}),
   ...(u.wallet ? { wallet: pick(u.wallet, ["type", "deployed", "deployOpHash"] as const) } : {}),
   ...(u.faucet ? { faucet: pick(u.faucet, ["grantedEur", "txHash", "at"] as const) } : {}),
@@ -195,4 +195,4 @@ export const publicUser = (u: User) => ({
       }
     : {}),
 });
-export const withSession = (user: User) => ({ ...publicUser(user), sessionToken: issueSession(user.id) });
+export const withSession = async (user: User) => store.tx(async () => ({ ...(await publicUser(user)), sessionToken: await issueSession(user.id) }));

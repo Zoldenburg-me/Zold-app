@@ -49,7 +49,7 @@ export async function issueOutgoing(
   fromDraft?: Invoice,
   /** Run with nothing awaited before the write: a reason the draft may no
    *  longer be issued (what it bills changed during the lookups), or none. */
-  stillIssuable?: () => string | undefined,
+  stillIssuable?: () => Promise<string | undefined>,
 ): Promise<IssueAnswer> {
   const body = fromDraft ? { ...requestBody, issueDate: undefined, dueDate: undefined } : requestBody;
   // Taken now: the store hands out the row itself, so after the lookups below
@@ -60,7 +60,7 @@ export async function issueOutgoing(
   let dueDate: string | undefined;
   let report;
   try {
-    draft = await withConversion(draftFrom(ctx.org, body));
+    draft = await withConversion(await draftFrom(ctx.org, body));
     // Chosen per invoice; the profile's language and payment terms are the
     // defaults.
     language = invoiceLanguage(body.language, languageOf(ctx.org));
@@ -112,18 +112,18 @@ export async function issueOutgoing(
   // number the caller supplied is refused if issued; an automatic one steps
   // over any number already issued, say one typed by hand.
   const numberSupplied = typeof body.number === "string" && body.number.trim() !== "";
-  const picked = numberSupplied ? undefined : nextNumberOf(ctx.org, draft.issueDate!);
+  const picked = numberSupplied ? undefined : (await nextNumberOf(ctx.org, draft.issueDate!));
   const number = picked?.number ?? draft.number!;
-  if (numberSupplied && issuedNumbersOf(ctx.org.id).has(number)) {
+  if (numberSupplied && (await issuedNumbersOf(ctx.org.id)).has(number)) {
     return refusal(409, `Invoice number ${number} has already been issued.`);
   }
   if (fromDraft) {
     // The lookups above awaited: the draft must still be the one that was read.
-    const current = store.findInvoice(fromDraft.id);
+    const current = await store.findInvoice(fromDraft.id);
     if (!current || current.state !== "DRAFT" || current.updatedAt !== draftReadAt) {
       return refusal(409, "This draft changed while it was being issued. Nothing was issued; look at it again.");
     }
-    const changed = stillIssuable?.();
+    const changed = await stillIssuable?.();
     if (changed) return refusal(409, changed);
   }
   const now = new Date();
@@ -188,8 +188,8 @@ export async function issueOutgoing(
   };
 
   const invoice = fromDraft
-    ? issueDraft(fromDraft, document, hash)
-    : store.addInvoice({
+    ? (await issueDraft(fromDraft, document, hash))
+    : (await store.addInvoice({
         id: `inv_${randomUUID()}`,
         direction: "outgoing",
         orgId: ctx.org.id,
@@ -199,7 +199,7 @@ export async function issueOutgoing(
         createdByMemberId: ctx.member.id,
         createdAt: now.toISOString(),
         updatedAt: now.toISOString(),
-      });
+      }));
 
   // Burn the number only once the invoice exists: §14 Abs. 4 Nr. 4 wants each
   // number assigned once, and advancing before the write would leave a gap
@@ -210,7 +210,7 @@ export async function issueOutgoing(
   // not this invoice's: a one-off override — say a customer's payer rule —
   // stays on its own invoice.
   if (!numberSupplied || !ctx.org.invoicing?.language) {
-    store.updateOrganisation(ctx.org.id, {
+    await store.updateOrganisation(ctx.org.id, {
       invoicing: {
         ...(ctx.org.invoicing ?? {}),
         ...(picked ? { numberSeries: { ...seriesOf(ctx.org), next: picked.at + 1 } } : {}),
@@ -232,10 +232,12 @@ export async function issueOutgoing(
 
 /** Turn the draft into the issued document, then close it with the receipts
  *  it already carries. */
-function issueDraft(draft: Invoice, document: Partial<Invoice>, linkTokenHash: string): Invoice {
-  assertTransition(draft.state, "SUBMITTED");
-  const submitted = store.updateInvoice(draft.id, { ...document, state: "SUBMITTED", linkTokenHash });
-  const settlements = submitted.settlements ?? [];
-  const last = settlements[settlements.length - 1];
-  return last ? store.updateInvoice(draft.id, settlementUpdate(submitted, last)) : submitted;
+async function issueDraft(draft: Invoice, document: Partial<Invoice>, linkTokenHash: string): Promise<Invoice> {
+  return store.tx(async () => {
+    assertTransition(draft.state, "SUBMITTED");
+    const submitted = await store.updateInvoice(draft.id, { ...document, state: "SUBMITTED", linkTokenHash });
+    const settlements = submitted.settlements ?? [];
+    const last = settlements[settlements.length - 1];
+    return last ? (await store.updateInvoice(draft.id, settlementUpdate(submitted, last))) : submitted;
+  });
 }

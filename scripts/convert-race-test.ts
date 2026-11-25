@@ -124,7 +124,7 @@ const { FxSwapperLiquidityProvider } = await import("../services/api/src/liquidi
 const { eureSwappedOut, pollCryptoDepositsOnce } = await import("../services/api/src/adapters/crypto-deposits.js");
 const { tokenTransfers } = await import("../services/api/src/liquidity.js");
 
-initStore();
+await initStore();
 usdcAddress = addrs().usdc.toLowerCase();
 eureAddress = addrs().eure.toLowerCase();
 
@@ -142,7 +142,7 @@ const ORIGIN = "http://localhost:3000";
 const passkey = await makeSoftwarePasskey("race", ORIGIN);
 const hex = (b64: string) => "0x" + Buffer.from(b64, "base64url").toString("hex");
 const now = new Date().toISOString();
-store.addUser({
+await store.addUser({
   id: "u-race", name: "Race GmbH", country: "DE", kycStatus: "approved", address: SAFE,
   wallet: { type: "candide-safe", deployed: true },
   passkey: { credentialId: passkey.credentialId, publicKey: { alg: "ES256", jwk: passkey.jwk }, signCount: 0, rpId: "localhost" },
@@ -154,7 +154,7 @@ store.addUser({
   paymentPage: { handle: "race", autoConvert: false, settlementAsset: "EURE" },
   createdAt: now,
 } as any);
-store.addCryptoDeposit({
+await store.addCryptoDeposit({
   id: "d-race", userId: "u-race", chainId: 31337, token: "USDC",
   txHash: "0x" + "ab".repeat(32), logIndex: 0, amountUnits: "500000000", amountUsdc: 500,
   holding: "held", settlementAsset: "USDC", creditedUsdc: 500, settledAt: now, txs: [],
@@ -163,7 +163,7 @@ store.addCryptoDeposit({
 
 const app = express();
 app.use(express.json());
-app.use("/api", createCryptoDepositRouter({ requireUserSession: () => ({ id: "s" }) }));
+app.use("/api", createCryptoDepositRouter({ requireUserSession: async () => ({ id: "s" }) }));
 const server = app.listen(0, "127.0.0.1");
 await new Promise<void>((r) => server.once("listening", () => r()));
 const API = `http://127.0.0.1:${(server.address() as any).port}/api/users/u-race/crypto-deposits/d-race`;
@@ -182,7 +182,7 @@ try {
   const statuses = both.map((r) => r.status).sort();
   assert.deepEqual(statuses, [200, 409], `two parallel conversions answered ${JSON.stringify(both)}`);
 
-  const d = store.cryptoDeposits.find((x) => x.id === "d-race")!;
+  const d = (await store.list("cryptoDeposits")).find((x) => x.id === "d-race")!;
   const swaps = d.txs.filter((t) => t.step === "safe.swap(usdc->eure)");
   assert.equal(swaps.length, 1, `the deposit records ${swaps.length} swaps`);
   assert.equal(d.holding, "converted");
@@ -198,10 +198,10 @@ try {
 
   // The scanner then reads the same transaction: the other op's payment is
   // money in and booked once; the conversion's own output is not.
-  store.setCryptoDepositCursor("31337:safe-funding-v1", 0n);
+  await store.setCryptoDepositCursor("31337:safe-funding-v1", 0n);
   await pollCryptoDepositsOnce();
   await pollCryptoDepositsOnce();
-  const inflows = store.cryptoDeposits.filter((x) => x.userId === "u-race" && x.token === "EURE");
+  const inflows = (await store.list("cryptoDeposits")).filter((x) => x.userId === "u-race" && x.token === "EURE");
   assert.equal(inflows.length, 1, `the bundle's EURe is booked as ${JSON.stringify(inflows.map((x) => [x.logIndex, x.amountEur]))}`);
   assert.ok(inflows[0].logIndex === 1 && inflows[0].amountEur === 50, `the other op's 50 EURe is the deposit: ${JSON.stringify(inflows[0])}`);
   console.log("  ok  the scanner books the other op's payment in that bundle once, and not the conversion's output");

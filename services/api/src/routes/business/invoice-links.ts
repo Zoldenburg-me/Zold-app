@@ -39,8 +39,8 @@ const SEND_LIMIT_MISSES_MAX = 5;
 const SEND_LIMIT_MISS_WINDOW_MS = 24 * 60 * 60_000;
 const DUE_DATE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 
-const payorName = (invoice: Invoice) =>
-  store.findOrganisation(invoice.orgId)?.name ?? "";
+const payorName = async (invoice: Invoice) =>
+  (await store.findOrganisation(invoice.orgId))?.name ?? "";
 
 /** "Managing director" in each language an invoice can be written in. */
 const DIRECTOR_LABEL: Record<string, string> = {
@@ -56,9 +56,9 @@ const DIRECTOR_LABEL: Record<string, string> = {
  * details to the supplier who filled it in. The footer's labels are in the
  * invoice's language, not German by default.
  */
-const issuerExtras = (invoice: Invoice) => {
+const issuerExtras = async (invoice: Invoice) => {
   if (invoice.direction !== "outgoing") return undefined;
-  const org = store.findOrganisation(invoice.orgId);
+  const org = await store.findOrganisation(invoice.orgId);
   const director = DIRECTOR_LABEL[invoice.issued?.language ?? "en"] ?? DIRECTOR_LABEL.en;
   const footerNote = [
     org?.invoicing?.footerNote,
@@ -69,28 +69,28 @@ const issuerExtras = (invoice: Invoice) => {
     .join(" · ");
   const settled = invoice.state === "PAID" || invoice.state === "RECONCILED";
   return {
-    bank: org ? invoiceBankOf(org) : undefined,
+    bank: org ? (await invoiceBankOf(org)) : undefined,
     footerNote: footerNote || undefined,
     // The customer holding the invoice link is the one its payment link was
     // made for; a settled invoice has nothing left to pay.
-    payPath: settled ? undefined : openLinkPath(invoice),
-    payLinkLapsed: settled ? undefined : payLinkLapsed(invoice) || undefined,
+    payPath: settled ? undefined : (await openLinkPath(invoice)),
+    payLinkLapsed: settled ? undefined : (await payLinkLapsed(invoice)) || undefined,
   };
 };
 
 /** The issued document exactly as the link holder sees it; the owner's
  *  print view (routes/business/invoices.ts) reads the same projection. */
-export const linkInvoiceView = (invoice: Invoice) =>
-  supplierView(payeeState(invoice), payorName(invoice), issuerExtras(invoice));
+export const linkInvoiceView = async (invoice: Invoice) =>
+  supplierView(await payeeState(invoice), await payorName(invoice), await issuerExtras(invoice));
 
 /** A send link tied to a payment the payer has not yet signed reads as
  *  still waiting to the payee: nothing is on its way until it is signed. */
-const payeeState = (invoice: Invoice): Invoice => {
+const payeeState = async (invoice: Invoice): Promise<Invoice> => {
   if (!invoice.sendLink || invoice.state !== "PAYING") return invoice;
   const p = invoice.payment;
-  const stored = p?.cryptoSendId ? store.findCryptoSend(p.cryptoSendId) : undefined;
-  const send = stored && liveCryptoSend(stored);
-  const t = p?.transferId ? store.findTransfer(p.transferId) : undefined;
+  const stored = p?.cryptoSendId ? (await store.findCryptoSend(p.cryptoSendId)) : undefined;
+  const send = stored && (await liveCryptoSend(stored));
+  const t = p?.transferId ? (await store.findTransfer(p.transferId)) : undefined;
   const unsigned = send ? send.state === "CREATED" : !!t && t.state === "CREATED" && !t.auth?.authorizedAt && !t.moneriumRedeem?.signedAt;
   return unsigned ? { ...invoice, state: "SUBMITTED" } : invoice;
 };
@@ -112,14 +112,14 @@ export async function notifyRequester(
   // All of it in the try: this runs unawaited, and an unhandled rejection exits the API.
   try {
     // A requester who has left the org, or never confirmed the address, is told nothing.
-    const member = invoice.createdByMemberId ? store.findMember(invoice.createdByMemberId) : undefined;
-    const user = member?.status === "active" && member.userId ? store.findUser(member.userId) : undefined;
+    const member = invoice.createdByMemberId ? (await store.findMember(invoice.createdByMemberId)) : undefined;
+    const user = member?.status === "active" && member.userId ? (await store.findUser(member.userId)) : undefined;
     const email = user?.emailVerifiedAt ? user.email : undefined;
     if (!email) {
       console.error(`invoice submitted: ${invoice.id}: the requester has no confirmed email or left the org`);
       return "no-email";
     }
-    await send(email, store.findOrganisation(invoice.orgId)?.name ?? "your organisation");
+    await send(email, (await store.findOrganisation(invoice.orgId))?.name ?? "your organisation");
     return "sent";
   } catch (err: any) {
     // Codes only: the SMTP server's reply can quote the address.
@@ -136,9 +136,9 @@ export function createInvoiceLinkRouter(): express.Router {
     res: express.Response,
   ): Promise<Invoice | undefined> => {
     const token = String(req.params.token ?? "");
-    const found = store.findInvoiceByLinkHash(hashToken(token));
+    const found = await store.findInvoiceByLinkHash(hashToken(token));
     // The payee's receipt follows the payment too, not only the owner's list.
-    const invoice = found ? syncInvoicePayment(found) : undefined;
+    const invoice = found ? (await syncInvoicePayment(found)) : undefined;
     if (!invoice || invoice.state === "DELETED" || invoice.state === "DRAFT") {
       res.status(404).json({ error: "That invoice link is not valid." });
       return undefined;
@@ -169,7 +169,7 @@ export function createInvoiceLinkRouter(): express.Router {
   r.get("/:token", async (req, res) => {
     const invoice = await load(req, res);
     if (!invoice) return;
-    res.json({ invoice: linkInvoiceView(invoice), payoutChains: payoutChains() });
+    res.json({ invoice: await linkInvoiceView(invoice), payoutChains: payoutChains() });
   });
 
   /** The supplier fills the invoice in. Locked once submitted. */
@@ -181,7 +181,7 @@ export function createInvoiceLinkRouter(): express.Router {
         error: invoice.sendLink
           ? "This link was already filled in."
           : "This invoice was already submitted. Submitted invoices are timestamped and locked.",
-        invoice: linkInvoiceView(invoice),
+        invoice: await linkInvoiceView(invoice),
       });
     }
     if (invoice.sendLink) {
@@ -209,7 +209,7 @@ export function createInvoiceLinkRouter(): express.Router {
           throw err;
         }
         assertInvoiceTransition(invoice.state, "SUBMITTED");
-        const updated = store.updateInvoice(invoice.id, {
+        const updated = await store.updateInvoice(invoice.id, {
           state: "SUBMITTED",
           // The number is the SEPA reference the payer's transfer carries.
           supplier: { orgName: name, email: "", invoiceNumber: `LINK-${invoice.id.slice(4, 12).toUpperCase()}` },
@@ -218,7 +218,7 @@ export function createInvoiceLinkRouter(): express.Router {
           payTo,
           submittedAt: new Date().toISOString(),
         });
-        res.json({ invoice: linkInvoiceView(updated) });
+        res.json({ invoice: await linkInvoiceView(updated) });
         void notifyRequester(updated);
       } catch (err) {
         if (err instanceof InvoiceError || err instanceof ContactError) return res.status(400).json({ error: err.message, ...(err instanceof InvoiceError && err.code ? { code: err.code } : {}) });
@@ -251,7 +251,7 @@ export function createInvoiceLinkRouter(): express.Router {
         return res.status(400).json({ error: `A wallet must be on ${payoutChains().map((c) => c.name).join(" or ")}.` });
       }
       assertInvoiceTransition(invoice.state, "SUBMITTED");
-      const updated = store.updateInvoice(invoice.id, {
+      const updated = await store.updateInvoice(invoice.id, {
         state: "SUBMITTED",
         supplier: {
           orgName: String(supplier.orgName).trim(),
@@ -266,7 +266,7 @@ export function createInvoiceLinkRouter(): express.Router {
         dueDate: typeof dueDate === "string" && dueDate ? dueDate : invoice.dueDate,
         submittedAt: new Date().toISOString(),
       });
-      res.json({ invoice: linkInvoiceView(updated) });
+      res.json({ invoice: await linkInvoiceView(updated) });
       void notifyRequester(updated);
     } catch (err) {
       if (err instanceof InvoiceError || err instanceof ContactError) return res.status(400).json({ error: err.message, ...(err instanceof InvoiceError && err.code ? { code: err.code } : {}) });

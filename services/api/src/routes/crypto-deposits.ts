@@ -50,7 +50,7 @@ import { describeCause, redactedMessage } from "../http/log-cause.js";
 
 /** requireUserSession is injected — server.ts owns authentication. */
 export interface CryptoDepositDeps {
-  requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
+  requireUserSession: (req: express.Request, res: express.Response, userId: string) => Promise<unknown>;
 }
 
 const pendingDepositConversions = new Map<string, {
@@ -70,10 +70,12 @@ const pendingDepositConversions = new Map<string, {
 const convertingDeposits = new Set<string>();
 
 /** A failure write that never moves a converted deposit backwards. */
-function parkDeposit(id: string, patch: Partial<CryptoDeposit>): void {
-  const now = store.cryptoDeposits.find((d) => d.id === id);
-  if (!now || now.holding === "converted") return;
-  store.updateCryptoDeposit(id, patch);
+async function parkDeposit(id: string, patch: Partial<CryptoDeposit>): Promise<void> {
+  return store.tx(async () => {
+    const now = (await store.list("cryptoDeposits")).find((d) => d.id === id);
+    if (!now || now.holding === "converted") return;
+    await store.updateCryptoDeposit(id, patch);
+  });
 }
 
 /**
@@ -126,10 +128,10 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
   router.post(
     "/users/:id/crypto-deposits/:depositId/invoice",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
-      const deposit = store.cryptoDeposits.find(
+      if (!(await requireUserSession(req, res, user.id))) return;
+      const deposit = (await store.list("cryptoDeposits")).find(
         (d) => d.id === req.params.depositId && d.userId === user.id,
       );
       if (!deposit) return res.status(404).json({ error: "deposit not found" });
@@ -138,7 +140,7 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
       // moving or dropping the link would leave that payment where it is and
       // let the same money settle a second invoice.
       const ref = `deposit:${deposit.id}`;
-      const settled = store.invoices.find((i) => (i.settlements ?? []).some((s) => settlementRef(s) === ref));
+      const settled = (await store.list("invoices")).find((i) => (i.settlements ?? []).some((s) => settlementRef(s) === ref));
       const invoiceId = req.body?.invoiceId;
       if (settled && invoiceId !== settled.id) {
         return res.status(409).json({
@@ -146,15 +148,15 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
         });
       }
       if (invoiceId === null) {
-        store.updateCryptoDeposit(deposit.id, { invoiceId: undefined });
-        return res.json({ deposit: store.cryptoDeposits.find((d) => d.id === deposit.id) });
+        await store.updateCryptoDeposit(deposit.id, { invoiceId: undefined });
+        return res.json({ deposit: (await store.list("cryptoDeposits")).find((d) => d.id === deposit.id) });
       }
-      const invoice = store.invoices.find((i) => i.id === String(invoiceId ?? ""));
+      const invoice = (await store.list("invoices")).find((i) => i.id === String(invoiceId ?? ""));
       // An invoice belongs to an organisation. Membership alone is not enough:
       // marking the org's invoice paid is invoice management, which a viewer
       // or an accountant does not have. The id is not a capability either.
       const member = invoice
-        ? store.membersOf(invoice.orgId).find((m) => m.userId === user.id && m.status === "active")
+        ? (await store.membersOf(invoice.orgId)).find((m) => m.userId === user.id && m.status === "active")
         : undefined;
       if (!invoice || !member) return res.status(404).json({ error: "invoice not found" });
       if (!roleCan(member.role, "invoices.manage")) {
@@ -163,7 +165,7 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
       // The deposit landed in this user's Safe, so that Safe must be the one
       // behind the org's account, as for payment links and bank memos: a
       // member's personal Safe never closes the company's invoice.
-      if (!orgsBackedBy(user.id).has(invoice.orgId)) {
+      if (!(await orgsBackedBy(user.id)).has(invoice.orgId)) {
         return res.status(403).json({ error: "This deposit went to your own account, not the one behind this organisation, so it cannot pay its invoice." });
       }
       // Money that arrived settles an invoice the org issued, never a bill it owes.
@@ -172,13 +174,13 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
       // deposit tied to it would be a second payment once it is issued.
       if (invoice.state === "DRAFT") return res.status(409).json({ error: "That invoice is a draft and has not been issued." });
 
-      const linked = store.updateCryptoDeposit(deposit.id, { invoiceId: invoice.id });
+      const linked = await store.updateCryptoDeposit(deposit.id, { invoiceId: invoice.id });
       // Already settled (it arrived before the link existed)? Then it belongs on
       // the invoice now; the settlement will not be written again on arrival.
-      if (linked.settledAt) recordInvoiceSettlement(linked);
-      const after = store.invoices.find((i) => i.id === invoice.id)!;
+      if (linked.settledAt) await recordInvoiceSettlement(linked);
+      const after = (await store.list("invoices")).find((i) => i.id === invoice.id)!;
       res.json({
-        deposit: store.cryptoDeposits.find((d) => d.id === deposit.id),
+        deposit: (await store.list("cryptoDeposits")).find((d) => d.id === deposit.id),
         invoice: ownerInvoiceView(after),
       });
     }),
@@ -187,12 +189,12 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
   router.post(
     "/users/:id/crypto-deposits/:depositId/convert/prepare",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
-      if (!requireCapability(user, "onchain_balance", res)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
+      if (!(await requireCapability(user, "onchain_balance", res))) return;
 
-      const deposit = store.cryptoDeposits.find(
+      const deposit = (await store.list("cryptoDeposits")).find(
         (d) => d.id === req.params.depositId && d.userId === user.id,
       );
       if (!deposit) return res.status(404).json({ error: "deposit not found" });
@@ -268,12 +270,12 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
   router.post(
     "/users/:id/crypto-deposits/:depositId/convert",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
-      if (!requireCapability(user, "onchain_balance", res)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
+      if (!(await requireCapability(user, "onchain_balance", res))) return;
 
-      const deposit = store.cryptoDeposits.find(
+      const deposit = (await store.list("cryptoDeposits")).find(
         (d) => d.id === req.params.depositId && d.userId === user.id,
       );
       if (!deposit) return res.status(404).json({ error: "deposit not found" });
@@ -295,7 +297,7 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
       convertingDeposits.add(deposit.id);
       try {
         // Prepared minutes ago: what was convertible then may not be now.
-        const current = store.cryptoDeposits.find((d) => d.id === deposit.id) ?? deposit;
+        const current = (await store.list("cryptoDeposits")).find((d) => d.id === deposit.id) ?? deposit;
         const stale = depositConversionBlocker(user, current);
         if (stale) return res.status(409).json({ error: stale });
 
@@ -318,7 +320,7 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
             user.passkey.publicKey, user.passkey.signCount ?? 0,
             user.passkey.rpId ?? SECURITY.rpId, SECURITY.origins, pending.challenge,
           );
-          if (!store.recordPasskeyUse(user.id, a.credentialId, signCount)) throw new Error("this passkey is no longer the account's passkey");
+          if (!(await store.recordPasskeyUse(user.id, a.credentialId, signCount))) throw new Error("this passkey is no longer the account's passkey");
         } catch (err: any) {
           return res.status(401).json({ error: redactedMessage(err) });
         }
@@ -341,7 +343,7 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
         // On disk BEFORE the swap is submitted: if a later write is refused
         // (the process exits), the restart finds this and does not offer the
         // deposit again. Refused here, the process exits with nothing sent.
-        store.updateCryptoDeposit(deposit.id, {
+        await store.updateCryptoDeposit(deposit.id, {
           conversionIntent: {
             at: new Date().toISOString(),
             amountUnits: unconvertedUnits(current).toString(),
@@ -367,21 +369,21 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
           // for someone to check the operation on chain.
           if (err instanceof SafeOperationUncertainError) {
             console.error(`convert: Safe operation ${err.userOpHash} unconfirmed:`, describeCause(err.cause));
-            parkDeposit(deposit.id, {
+            await parkDeposit(deposit.id, {
               holding: "unconfirmed",
               reason: `${reason} — check the operation before converting again`,
               txs: [...current.txs, { step: "safe.swap(usdc->eure).unconfirmed", hash: err.userOpHash }],
             });
             return res.status(502).json({ error: reason, code: "SAFE_OP_UNCONFIRMED", userOpHash: err.userOpHash });
           }
-          parkDeposit(deposit.id, { holding: "refused", reason, conversionIntent: undefined });
+          await parkDeposit(deposit.id, { holding: "refused", reason, conversionIntent: undefined });
           return res.status(502).json({ error: reason });
         }
         // Included but reverted: the chain undid the swap, so nothing moved and
         // nothing is settled.
         if (submitted.success !== true) {
           const reason = `the swap ${submitted.userOpHash ?? ""} was included but reverted — nothing was converted`;
-          parkDeposit(deposit.id, {
+          await parkDeposit(deposit.id, {
             holding: "refused",
             reason,
             conversionIntent: undefined,
@@ -400,7 +402,7 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
         // The swap executed. Record that now, before anything below can fail,
         // so the deposit is never offered again on a stale holding; settling
         // then moves it on (converted, or held after a partial fill).
-        const executed = store.updateCryptoDeposit(deposit.id, {
+        const executed = await store.updateCryptoDeposit(deposit.id, {
           holding: "unconfirmed",
           reason: "the swap went through; recording what arrived",
           txs,
@@ -425,19 +427,19 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
             await conversionFacts(submitted, amountIn.toString()),
           );
           // Recorded: the swap step is on the row, so the intent has done its job.
-          settled = store.updateCryptoDeposit(deposit.id, { conversionIntent: undefined });
+          settled = await store.updateCryptoDeposit(deposit.id, { conversionIntent: undefined });
         } catch (err: any) {
           const reason = redactedMessage(err);
           console.error(`convert: swap ${submitted.txHash ?? submitted.userOpHash} executed but was not recorded:`, describeCause(err));
           // Settled before the throw: the outcome is on record and keeps its
           // own reason; only the intent is left to clear, and the answer is
           // the settled row.
-          const recorded = store.cryptoDeposits.find((x) => x.id === deposit.id);
+          const recorded = (await store.list("cryptoDeposits")).find((x) => x.id === deposit.id);
           if (recorded && recorded.holding !== "unconfirmed") {
-            clearSettledIntent(deposit.id);
+            await clearSettledIntent(deposit.id);
             settled = recorded;
           } else {
-            store.updateCryptoDeposit(deposit.id, {
+            await store.updateCryptoDeposit(deposit.id, {
               reason: `the swap went through, but what arrived could not be recorded (${reason}) — it is being checked and will not be offered again`,
             });
             return res.status(502).json({ error: reason, code: "SAFE_OP_UNCONFIRMED", userOpHash: submitted.userOpHash });
@@ -454,9 +456,9 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
   router.post(
     "/users/:id/auto-convert",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
       const { enabled } = req.body ?? {};
       if (typeof enabled !== "boolean") {
         return res.status(400).json({ error: "enabled must be true or false" });
@@ -464,34 +466,34 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
       // Conversion is a swap the user signs from their own Safe: it needs an
       // on-chain balance in the segment, not Monerium approval
       // (docs/wallet-tier.md).
-      if (enabled && !requireCapability(user, "onchain_balance", res)) return;
+      if (enabled && !(await requireCapability(user, "onchain_balance", res))) return;
       const custodyBlocked = enabled ? custodyBlockerBeforeFunding(user) : null;
       if (custodyBlocked) return res.status(409).json({ error: custodyBlocked });
       const page = user.paymentPage;
       if (!page) return res.status(409).json({ error: "claim a payment page before enabling auto-settlement" });
-      const updated = store.updateUser(user.id, {
+      const updated = await store.updateUser(user.id, {
         paymentPage: { ...page, autoConvert: enabled, updatedAt: new Date().toISOString() },
       });
       // Off: nothing waits for a signature any more; the USDC is held and can
       // still be converted by hand. On: deposits already held stay held
       // ("convert any time") rather than all asking at once.
       if (!enabled) {
-        for (const d of store.cryptoDeposits) {
+        for (const d of (await store.list("cryptoDeposits"))) {
           if (d.userId === user.id && d.holding === "awaiting_approval") {
-            store.updateCryptoDeposit(d.id, { holding: "held", reason: undefined });
+            await store.updateCryptoDeposit(d.id, { holding: "held", reason: undefined });
           }
         }
       }
-      res.json({ ...publicUser(updated), ...(await accountBalances(updated.address).catch(() => ({}))) });
+      res.json({ ...(await publicUser(updated)), ...(await accountBalances(updated.address).catch(() => ({}))) });
     }),
   );
 
   router.get(
     "/users/:id/crypto-deposits",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
       res.json({
         autoConvert: !!user.paymentPage?.autoConvert,
         settlementAsset: settlementTarget(user),
@@ -500,7 +502,7 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
         // convert", held and refused are "held, convert any time", and
         // convertBlocker (null when convertible) says why not. The chain
         // balance is checked at prepare, not here.
-        deposits: store.cryptoDeposits
+        deposits: (await store.list("cryptoDeposits"))
           .filter((d) => d.userId === user.id)
           .sort((a, b) => b.detectedAt.localeCompare(a.detectedAt))
           .map((d) => ({ ...d, convertBlocker: depositConversionBlocker(user, d), ...(conversionReverted(d) ? { conversionReverted: true } : {}) })),

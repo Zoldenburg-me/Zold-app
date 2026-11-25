@@ -31,6 +31,7 @@ import { MoneriumClient } from "../services/api/src/adapters/monerium-client.js"
 import { initStore, store, type User } from "../services/api/src/store.js";
 import { redeemToIban } from "../services/api/src/adapters/monerium-sandbox.js";
 import { urlForLog } from "../services/api/src/http/log-safe.js";
+import { filterSeq } from "../services/api/src/seq.js";
 
 // The configured chain, never a hardcoded testnet: reading balances elsewhere
 // reports "the mint did not land" against the wrong ledger.
@@ -108,7 +109,7 @@ const stateOf = (o: any) => o?.meta?.state ?? o?.state ?? "unknown";
 
 console.log(`\nEUR corridor proof — ${urlForLog(MONERIUM.baseUrl)} (chain: ${MONERIUM.chain})\n`);
 
-initStore();
+await initStore();
 const token = await eureToken();
 console.log(`EURe on ${MONERIUM.chain}: ${token.address} (${token.decimals} dp)\n`);
 
@@ -127,7 +128,7 @@ const onMonerium = new Map<string, any>(
 );
 
 const wanted = argOf("--address");
-const users: User[] = (store.users as User[]) ?? [];
+const users: User[] = ((await store.list("users")) as User[]) ?? [];
 const candidates = users.filter((u) => u.address && onMonerium.has(getAddress(u.address)));
 const user = wanted
   ? users.find((u) => u.address.toLowerCase() === wanted.toLowerCase())
@@ -200,7 +201,7 @@ if (onChain + 0.005 < issuedEur) {
 
 /* ---------- 4. our mirror agrees ---------- */
 console.log("\n4. Our mirror records it");
-const mirrored = issues.filter((o) => store.isOrderProcessed(o.id));
+const mirrored = await filterSeq(issues, async (o) => await store.isOrderProcessed(o.id));
 if (mirrored.length === issues.length) {
   ok(`all ${issues.length} deposit(s) recorded locally`);
 } else {

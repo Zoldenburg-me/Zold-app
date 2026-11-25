@@ -49,14 +49,14 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
   assert.ok(moved.ibanSince, "a new IBAN gets its date");
   assert.equal((await s.findAccount("acc_eur"))?.identifier.iban, "DE02120300000000202051", "the backed account follows, bare");
   assert.deepEqual((await s.findAccount("acc_gated"))?.identifier, {}, "a gated account without an IBAN does not follow");
-  await assert.rejects(() => s.updateUser("nobody", { name: "x" }), /unknown user nobody/);
+  await assert.rejects(async () => await s.updateUser("nobody", { name: "x" }), /unknown user nobody/);
 
   assert.equal((await s.recordPasskeyUse("u_a", "cred-a", 7))?.passkey?.signCount, 7);
   assert.equal(await s.recordPasskeyUse("u_a", "cred-old", 8), undefined, "a replaced credential records nothing");
   assert.equal((await s.findUser("u_a"))?.passkey?.signCount, 7);
 
   await s.setSegment("u_a", { value: "consumer", reason: "test" } as any);
-  await assert.rejects(() => s.setSegment("u_a", { value: "business" } as any), /already has segment/);
+  await assert.rejects(async () => await s.setSegment("u_a", { value: "business" } as any), /already has segment/);
   assert.equal((await s.setSegment("u_a", { value: "business" } as any, "admin")).segment?.decidedBy, "admin");
   await s.addConsent("u_a", { kind: "terms", at: now } as any);
   await s.addConsent("u_a", { kind: "privacy", at: now } as any);
@@ -71,11 +71,11 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
   await s.addOrganisation({ id: "org_b", type: "business", name: "B GmbH", createdAt: now, updatedAt: now, paymentPage: { handle: "bshop" } } as any, false);
   assert.equal((await s.chartOf("org_b")).length, 0, "seedCoa false seeds nothing");
   assert.equal((await s.findOrgByHandle("BSHOP"))?.id, "org_b");
-  await assert.rejects(() => s.updateOrganisation("org_b", { safe: {} } as any), /setOrgSafePlan only/);
+  await assert.rejects(async () => await s.updateOrganisation("org_b", { safe: {} } as any), /setOrgSafePlan only/);
   assert.equal((await s.updateOrganisation("org_b", { name: "B AG" })).name, "B AG");
-  await assert.rejects(() => s.setOrgSafePlan("org_a", {} as any), /not a company/);
-  await assert.rejects(() => s.setOrgSafePlan("nobody", {} as any), /unknown organisation/);
-  await assert.rejects(() => s.replaceUndeployedOrgSafePlan("org_b", `0x${"00".repeat(20)}`, {} as any), /no planned Safe/);
+  await assert.rejects(async () => await s.setOrgSafePlan("org_a", {} as any), /not a company/);
+  await assert.rejects(async () => await s.setOrgSafePlan("nobody", {} as any), /unknown organisation/);
+  await assert.rejects(async () => await s.replaceUndeployedOrgSafePlan("org_b", `0x${"00".repeat(20)}`, {} as any), /no planned Safe/);
 
   await s.addMember({ id: "mem_old", orgId: "org_b", userId: "u_a", email: "a@x", role: "member", status: "deactivated", invitedAt: now } as any);
   await s.addMember({ id: "mem_a", orgId: "org_b", userId: "u_a", email: "a@x", role: "owner", status: "active", invitedAt: now, invite: { tokenHash: "inv-1" } } as any);
@@ -102,12 +102,12 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
   assert.ok(await s.findQuote("q_kept"), "a consumed quote stays");
   assert.equal(await s.consumeQuote("q_1"), true);
   assert.equal(await s.consumeQuote("q_1"), false, "a quote is consumed once");
-  await assert.rejects(() => s.consumeQuote("nobody"), /unknown quote/);
+  await assert.rejects(async () => await s.consumeQuote("nobody"), /unknown quote/);
   assert.equal((await s.updateQuote("q_1", { rate: 2 } as any) as any).rate, 2);
 
   // ── Transfers ────────────────────────────────────────────────────────────
   const seen: string[] = [];
-  s.onTransferStateChange((t, from) => seen.push(`${t.id}:${from}->${t.state}`));
+  s.onTransferStateChange((t, from) => { seen.push(`${t.id}:${from}->${t.state}`); });
   const transfer = (id: string, state: string, extra: object = {}) =>
     ({ id, userId: "u_a", quoteId: `q-${id}`, rail: "sepa", state, sendEur: 10, txs: [], createdAt: now, updatedAt: now, ...extra }) as any;
   await s.addTransfer(transfer("t_1", "CREATED", { auth: { challenge: "c" } }));
@@ -119,13 +119,13 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
   assert.equal(late.state, "PAID", "PAID is final");
   assert.equal(late.error, "late leg", "the late write keeps its other fields");
   assert.deepEqual(seen, ["t_1:CREATED->PAID"], "one state change announced, after it was written");
-  await assert.rejects(() => s.updateTransfer("nobody", {}), /unknown transfer/);
+  await assert.rejects(async () => await s.updateTransfer("nobody", {}), /unknown transfer/);
 
   // A review resolves once, and a refund tx another record holds is refused.
   await s.addTransfer(transfer("t_other", "PAID", { txs: [{ step: "x", hash: hash("cd") }] }));
   await s.addTransfer(transfer("t_rev", "MANUAL_REVIEW", { error: "unknown outcome" }));
   const review = (evidence: string) => ({ state: "REFUNDED" as const, note: "Refunded by hand after checking the chain.", by: "op_1", evidence, refund: { amountEur: 10, movedEur: 10 } });
-  await assert.rejects(async () => s.resolveTransferReview("t_rev", { ...review(hash("ef")), note: "short" }), /note of/);
+  await assert.rejects(async () => await s.resolveTransferReview("t_rev", { ...review(hash("ef")), note: "short" }), /note of/);
   assert.deepEqual(await s.resolveTransferReview("nobody", review(hash("ef"))), { ok: false, code: "NOT_FOUND" });
   assert.deepEqual(await s.resolveTransferReview("t_1", review(hash("ef"))), { ok: false, code: "NOT_IN_REVIEW" });
   assert.deepEqual(await s.resolveTransferReview("t_rev", review(hash("CD"))), { ok: false, code: "EVIDENCE_ON_RECORD", recordedOn: "transfer t_other" });
@@ -144,7 +144,7 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
   assert.ok(hold.ok);
   assert.deepEqual(await s.holdDailyCap("u_a", 20, 100, () => 90), { ok: false, usedEur: 90, capEur: 100 });
   assert.equal(await s.heldEurToday("u_a"), 60);
-  await assert.rejects(() => s.addTransferUnderHold(transfer("t_nohold", "CREATED"), "nohold"), /no cap hold/);
+  await assert.rejects(async () => await s.addTransferUnderHold(transfer("t_nohold", "CREATED"), "nohold"), /no cap hold/);
   assert.equal(await s.findTransfer("t_nohold"), undefined);
   await s.addTransferUnderHold(transfer("t_held", "CREATED"), hold.holdId);
   assert.ok(await s.findTransfer("t_held"));
@@ -163,16 +163,16 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
   await s.touchSession("s_2");
   assert.ok(Date.parse((await s.findSessionByTokenHash("th-2"))!.lastUsedAt) > Date.now() - 60_000, "an idle session's touch is written");
   assert.ok((await s.revokeSession("s_1")).revokedAt);
-  await assert.rejects(() => s.touchSession("nobody"), /unknown session/);
+  await assert.rejects(async () => await s.touchSession("nobody"), /unknown session/);
 
   // ── Operators ────────────────────────────────────────────────────────────
   const op = await s.addOperator({ id: "op_1", email: " Op@Zold.test ", name: "Op", credentials: [{ credentialId: "oc-1", publicKey: "pk", signCount: 0 }], createdAt: now } as any);
   assert.equal(op.email, "op@zold.test", "stored lowercase");
   await s.addOperator({ id: "op_2", email: "two@zold.test", name: "Two", credentials: [], createdAt: now } as any);
-  await assert.rejects(() => s.addOperator({ id: "op_3", email: "two@zold.test", credentials: [] } as any), /exists/);
+  await assert.rejects(async () => await s.addOperator({ id: "op_3", email: "two@zold.test", credentials: [] } as any), /exists/);
   assert.equal((await s.findOperatorByEmail("OP@zold.test"))?.id, "op_1");
   assert.equal((await s.findOperator("op_2"))?.name, "Two");
-  await assert.rejects(() => s.addOperatorCredential("op_2", { credentialId: "oc-1" } as any), /already registered/, "one passkey, one operator");
+  await assert.rejects(async () => await s.addOperatorCredential("op_2", { credentialId: "oc-1" } as any), /already registered/, "one passkey, one operator");
   await s.addOperatorCredential("op_2", { credentialId: "oc-2", publicKey: "pk", signCount: 0 } as any);
   const found = await s.findOperatorCredential("oc-2");
   assert.equal(found?.operator.id, "op_2");
@@ -180,7 +180,7 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
   assert.equal(await s.findOperatorCredential("nope"), undefined);
   await s.recordOperatorCredentialUse("op_2", "oc-2", 5);
   assert.equal((await s.findOperatorCredential("oc-2"))?.credential.signCount, 5);
-  await assert.rejects(() => s.recordOperatorCredentialUse("op_2", "nope", 1), /unknown operator credential/);
+  await assert.rejects(async () => await s.recordOperatorCredentialUse("op_2", "nope", 1), /unknown operator credential/);
   await s.addOperatorSession({ id: "os_1", operatorId: "op_2", tokenHash: "oth-1", createdAt: now, lastUsedAt: now, expiresAt: iso(DAY) });
   assert.equal((await s.findOperatorSessionByTokenHash("oth-1"))?.id, "os_1");
   assert.equal((await s.touchOperatorSession("os_1")).lastUsedAt, now);
@@ -207,7 +207,7 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
   assert.equal((await s.updateRecoveryRequest("rr_1", { status: "CANCELED" } as any)).status, "CANCELED");
   assert.equal((await s.findRecoveryRequest("rr_1"))?.status, "CANCELED");
   assert.deepEqual((await s.recoveryRequestsForUser("u_a")).map((r) => r.id), ["rr_1"]);
-  await assert.rejects(() => s.updateRecoveryRequest("nobody", {}), /unknown recovery request/);
+  await assert.rejects(async () => await s.updateRecoveryRequest("nobody", {}), /unknown recovery request/);
 
   const sig = (memberId: string, owner: string) => ({ memberId, ownerAddress: owner as `0x${string}`, signature: "0x", signedAt: iso(1) });
   await s.addSafeOp({ id: "so_1", orgId: "org_b", state: "PENDING", signatures: [], dropped: [], createdAt: now, updatedAt: now } as any);
@@ -221,9 +221,9 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
   assert.ok(await s.claimSafeOpRelay("so_1"));
   assert.equal(await s.claimSafeOpRelay("so_1"), null, "one relay");
   assert.equal(await s.endPendingSafeOp("so_1", { state: "EXPIRED", reason: "late" }), null, "only a pending op ends");
-  await assert.rejects(() => s.finishSafeOp("so_1", { state: "PENDING" } as any), /final state/);
+  await assert.rejects(async () => await s.finishSafeOp("so_1", { state: "PENDING" } as any), /final state/);
   assert.equal((await s.finishSafeOp("so_1", { state: "EXECUTED", txHash: hash("12") } as any)).state, "EXECUTED");
-  await assert.rejects(() => s.finishSafeOp("so_1", { state: "FAILED" } as any), /not relaying/);
+  await assert.rejects(async () => await s.finishSafeOp("so_1", { state: "FAILED" } as any), /not relaying/);
   await s.addSafeOp({ id: "so_2", orgId: "org_b", state: "PENDING", signatures: [], dropped: [], createdAt: now, updatedAt: now } as any);
   assert.equal((await s.endPendingSafeOp("so_2", { state: "CANCELLED", reason: "owner" }))?.state, "CANCELLED");
   assert.equal((await s.findSafeOp("so_2"))?.reason, "owner");
@@ -257,7 +257,7 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
 
   // ── Payment requests ─────────────────────────────────────────────────────
   const prSeen: string[] = [];
-  s.onPaymentRequestStateChange((r, from) => prSeen.push(`${r.id}:${from}->${r.state}`));
+  s.onPaymentRequestStateChange((r, from) => { prSeen.push(`${r.id}:${from}->${r.state}`); });
   await s.addPaymentRequest({ id: "pr_1", code: "ABCD1234", userId: "u_a", state: "OPEN", payments: [], cryptoQuotes: [], source: { kind: "shopify", externalId: "1001", shop: "a.myshopify.com" }, createdAt: now, updatedAt: now } as any);
   await s.addPaymentRequest({ id: "pr_2", code: "EFGH5678", userId: "u_a", state: "OPEN", payments: [], cryptoQuotes: [], source: { kind: "shopify", externalId: "1001", shop: "b.myshopify.com" }, createdAt: now, updatedAt: now } as any);
   assert.equal((await s.findPaymentRequestByCode("abcd-1234"))?.id, "pr_1");

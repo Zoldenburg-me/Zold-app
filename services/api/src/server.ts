@@ -85,6 +85,7 @@ import { recordServerError } from "./http/error-log.js";
 import { knownError } from "./http/known-errors.js";
 import { createOperatorGate } from "./operators/gate.js";
 import { createOperatorAuthRouter } from "./routes/operator-auth.js";
+import { store } from "./store.js";
 const app = express();
 // Origin policy + per-IP rate limiting live in http/policy.ts — the
 // outermost thing every request passes through, readable in one place.
@@ -165,7 +166,7 @@ app.get(
     // chainId and realMoney let the landing page name the network it runs on
     // instead of hardcoding "Live on Base" over a testnet deployment.
     res.json({
-      ok: true, chainId: CHAIN_ID, realMoney: IS_REAL_MONEY_CHAIN, block: Number(block), contracts: addrs(), capabilities: capabilities(),
+      ok: true, chainId: CHAIN_ID, realMoney: IS_REAL_MONEY_CHAIN, block: Number(block), contracts: addrs(), capabilities: await capabilities(),
       // Whether incoming crypto is being seen. A scan that fails every tick
       // books nothing and says so nowhere else.
       ...(CRYPTO_IN.enabled ? { cryptoIn: { ...cryptoInScan } } : {}),
@@ -319,7 +320,7 @@ app.use(((err, req, res, next) => {
 // exit (http/async-errors.ts).
 routeAsyncRejections(app);
 
-initStore();
+await initStore();
 // Fail fast on a chain mismatch: signatures built for the wrong chain id are
 // rejected as "bad authorization", which reads like a signing bug.
 assertChainMatches().catch((e) => {
@@ -417,11 +418,11 @@ setInterval(
 // The ledger writer: one statement line per economic event, projected from
 // the store. Hooked where money changes state, and swept here so a REFUNDED
 // written by compensation, or an event a crash cut short, still gets its line.
-setTimeout(() => {
-  try { writeStatementLines(); } catch (e: any) { console.error(`bookkeeping: ${describeCause(e)}`); }
+setTimeout(async () => {
+  try { await writeStatementLines(); } catch (e: any) { console.error(`bookkeeping: ${describeCause(e)}`); }
 }, 3_000).unref();
-setInterval(() => {
-  try { writeStatementLines(); } catch (e: any) { console.error(`bookkeeping: ${describeCause(e)}`); }
+setInterval(async () => {
+  try { await writeStatementLines(); } catch (e: any) { console.error(`bookkeeping: ${describeCause(e)}`); }
 }, 60_000).unref();
 
 // Imported wallets: ERC-20 transfers on their own chains, read only.

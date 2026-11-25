@@ -82,29 +82,29 @@ type InvoiceBank = NonNullable<NonNullable<Organisation["invoicing"]>["bank"]>;
 
 /** The IBAN of the org's own EUR account, when one is connected: the only
  *  one whose incoming payments Zold sees and matches to invoices. */
-export function accountBankOf(org: Organisation): InvoiceBank | undefined {
-  const acc = store.accountsOf(org.id).find((a) => a.currency === "EUR" && a.status === "active" && a.identifier?.iban);
+export async function accountBankOf(org: Organisation): Promise<InvoiceBank | undefined> {
+  const acc = (await store.accountsOf(org.id)).find((a) => a.currency === "EUR" && a.status === "active" && a.identifier?.iban);
   if (!acc?.identifier?.iban) return undefined;
   return { holder: org.legalName?.trim() || org.name, iban: normaliseIban(acc.identifier.iban) };
 }
 
 /** The bank details an invoice prints: the profile's when it names an IBAN,
  *  else the org account's own. */
-export function invoiceBankOf(org: Organisation): InvoiceBank | undefined {
+export async function invoiceBankOf(org: Organisation): Promise<InvoiceBank | undefined> {
   const set = org.invoicing?.bank;
   if (set?.iban) return { ...set, holder: set.holder || org.legalName?.trim() || org.name };
-  return accountBankOf(org);
+  return await accountBankOf(org);
 }
 
-export function issuerSuggestions(org: Organisation, callerId: string): { name?: string; source?: "monerium" } {
+export async function issuerSuggestions(org: Organisation, callerId: string): Promise<{ name?: string; source?: "monerium" }> {
   if (org.legalName?.trim()) return {};
   const kind = org.type === "business" ? "corporate" : "personal";
-  const fromAccount = store
-    .accountsOf(org.id)
+  const fromAccount = (await store
+    .accountsOf(org.id))
     .map((a) => a.moneriumProfile)
     .find((p) => p?.kind === kind && p.name?.trim());
   if (fromAccount?.name) return { name: fromAccount.name.trim(), source: "monerium" };
-  const caller = store.findUser(callerId);
+  const caller = await store.findUser(callerId);
   const profileId = caller?.monerium?.profileId ?? caller?.funding?.moneriumProfileId;
   const own = (caller?.monerium?.profiles ?? []).find((p: any) => p?.id === profileId);
   if (own && own.kind === kind && typeof own.name === "string" && own.name.trim()) {
@@ -127,12 +127,12 @@ export const jurisdictionOf = (org: Organisation) => jurisdictionFor(org.address
 export const seriesOf = (org: Organisation) => org.invoicing?.numberSeries ?? defaultSeriesFor(org.address?.country);
 
 /** Every number this org has issued, for §14 Abs. 4 Nr. 4's "once". */
-export const issuedNumbersOf = (orgId: string): Set<string> =>
-  new Set(store.invoicesOf(orgId).flatMap((i) => (i.issued?.number ? [i.issued.number] : [])));
+export const issuedNumbersOf = async (orgId: string): Promise<Set<string>> =>
+  new Set((await store.invoicesOf(orgId)).flatMap((i) => (i.issued?.number ? [i.issued.number] : [])));
 
 /** The number the next auto-numbered invoice dated `issueDate` gets. */
-export const nextNumberOf = (org: Organisation, issueDate: string) =>
-  nextFreeNumber(seriesOf(org), new Date(issueDate), issuedNumbersOf(org.id));
+export const nextNumberOf = async (org: Organisation, issueDate: string) =>
+  nextFreeNumber(seriesOf(org), new Date(issueDate), await issuedNumbersOf(org.id));
 
 /** The language this org's invoices are written in unless one is chosen. */
 export const languageOf = (org: Organisation): InvoiceLanguage =>
@@ -208,7 +208,7 @@ const VAT_NOTE_MAX = 300;
  * A Kleinunternehmer must not get a VAT rate by default: showing tax you do
  * not owe makes you liable for it under §14c.
  */
-export function draftFrom(org: Organisation, body: Record<string, any>, now = new Date()): InvoiceDraft {
+export async function draftFrom(org: Organisation, body: Record<string, any>, now = new Date()): Promise<InvoiceDraft> {
   const inv = org.invoicing ?? {};
   // Refuses an unrepresentable code before anything else is computed.
   const currency = normaliseInvoiceCurrency(body.currency);
@@ -304,7 +304,7 @@ export function draftFrom(org: Organisation, body: Record<string, any>, now = ne
 
   return {
     // A preview: issuing picks the number again at write time (issue-outgoing.ts).
-    number: str(body.number) ?? nextNumberOf(org, issueDate).number,
+    number: str(body.number) ?? (await nextNumberOf(org, issueDate)).number,
     issueDate,
     supplyDate: str(body.supplyDate),
     supplyPeriod:

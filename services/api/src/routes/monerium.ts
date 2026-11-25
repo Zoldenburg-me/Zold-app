@@ -80,7 +80,7 @@ const sha256Hex = (v: string) => createHash("sha256").update(v).digest("hex");
 
 /** requireUserSession is injected — server.ts owns authentication. */
 export interface MoneriumDeps {
-  requireUserSession: (req: express.Request, res: express.Response, userId: string) => { id: string } | undefined;
+  requireUserSession: (req: express.Request, res: express.Response, userId: string) => Promise<{ id: string } | undefined>;
 }
 
 /** The configured Monerium redirect URI, or the callback on a trusted origin. */
@@ -224,7 +224,7 @@ async function passkeySafeLinkSignature(
     challenge,
     true,
   );
-  const updated = store.recordPasskeyUse(user.id, passkey.credentialId, signCount);
+  const updated = await store.recordPasskeyUse(user.id, passkey.credentialId, signCount);
   if (!updated) throw new Error("this passkey is no longer the account's passkey");
   const signature = await signMessageAsPasskeySafe(user.passkeySafe, user.address, LINK_MESSAGE, {
     authenticatorData: b64urlToBuf(authenticatorData),
@@ -262,7 +262,7 @@ async function linkSafeAddress(
     // record it: the client stops offering an activation that can only
     // fail, and the account page says why instead of erroring forever.
     if (/cannot link/i.test(errorText(err))) {
-      store.updateUser(user.id, {
+      await store.updateUser(user.id, {
         funding: {
           ...(user.funding ?? { mode: "sandbox" as const }),
           mode: "sandbox",
@@ -329,10 +329,10 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
   router.post(
     "/users/:id/monerium/connect/start",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
-      if (!requireCapability(user, "monerium", res)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
+      if (!(await requireCapability(user, "monerium", res))) return;
       if (!moneriumOAuthEnabled()) {
         return res.status(503).json({ error: "Monerium OAuth client is not configured" });
       }
@@ -355,7 +355,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       // victim's Monerium tokens land on the attacker's account.
       const nonce = randomBytes(24).toString("base64url");
       const approved = user.kycStatus === "approved";
-      store.updateUser(user.id, {
+      await store.updateUser(user.id, {
         kyc: { ...user.kyc, provider: "monerium", onboardingPath: "existing_monerium" },
         // A live account re-connecting keeps its funding state; only a pending
         // one is (re)marked as waiting on Monerium.
@@ -404,9 +404,9 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       // A person lands here from Monerium's site, so every refusal goes back
       // to the app, which shows the reason on the IBAN step, never raw JSON.
       // Nothing is connected on any of these paths.
-      const backToApp = (userId: string | undefined, error: string) => {
+      const backToApp = async (userId: string | undefined, error: string) => {
         if (userId) {
-          store.updateUser(userId, {
+          await store.updateUser(userId, {
             moneriumConnect: undefined,
             moneriumRefusal: { code: "MONERIUM_CONNECT_FAILED", error, at: new Date().toISOString() },
           });
@@ -415,12 +415,12 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       };
       const state = typeof req.query.state === "string" ? req.query.state : "";
       const code = typeof req.query.code === "string" ? req.query.code : "";
-      const user = state ? store.users.find((u) => u.moneriumConnect?.state === state) : undefined;
+      const user = state ? (await store.list("users")).find((u) => u.moneriumConnect?.state === state) : undefined;
       if (!state || !code || !user?.moneriumConnect) {
-        return backToApp(user?.id, "The sign-in at Monerium did not finish. Connect again from here.");
+        return await backToApp(user?.id, "The sign-in at Monerium did not finish. Connect again from here.");
       }
       if (Date.now() - Date.parse(user.moneriumConnect.createdAt) > 10 * 60_000) {
-        return backToApp(user.id, "The sign-in at Monerium took longer than 10 minutes, so it expired. Connect again from here.");
+        return await backToApp(user.id, "The sign-in at Monerium took longer than 10 minutes, so it expired. Connect again from here.");
       }
       const nonce = cookieValue(req, CONNECT_COOKIE);
       if (!nonce || sha256Hex(nonce) !== user.moneriumConnect.nonceHash) {
@@ -450,7 +450,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         snapshot = await readMoneriumAccountSnapshot(user, token.access_token);
       } catch (err: any) {
         console.error(`monerium oauth: callback for ${user.id} failed: ${describeCause(err)}`);
-        store.updateUser(user.id, {
+        await store.updateUser(user.id, {
           moneriumConnect: undefined,
           moneriumRefusal: {
             code: "MONERIUM_CONNECT_FAILED",
@@ -465,11 +465,11 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       // not even the token, and the app shows why.
       const pick = pickProfileForSignup(user.accountType, snapshot.profiles);
       if (!pick.ok) {
-        store.updateUser(user.id, {
+        await store.updateUser(user.id, {
           moneriumConnect: undefined,
           moneriumRefusal: { code: pick.code, error: pick.error, at: new Date().toISOString() },
         });
-        store.audit(auditEntry(
+        await store.audit(auditEntry(
           "partner.connect_refused",
           { partner: "monerium", method: "oauth", code: pick.code, accountType: user.accountType ?? "individual" },
           user.id,
@@ -485,7 +485,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       // An IBAN from another profile is not carried into this connection.
       const dropIban = Boolean(user.iban) && (notOffered || !storedIbanOnProfile(user, snapshot.ibans, profileId));
 
-      store.updateUser(user.id, {
+      await store.updateUser(user.id, {
         moneriumConnect: undefined,
         moneriumRefusal: undefined,
         ...(dropIban ? { iban: undefined } : {}),
@@ -528,28 +528,28 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
   router.get(
     "/users/:id/monerium/accounts",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
       if (!hasOwnMoneriumCredentials(user)) {
         return res.status(409).json({ error: "no Monerium account is connected to this account — connect one by OAuth or with your own API keys" });
       }
       const snapshot = await readMoneriumAccountSnapshot(user);
-      let updated = store.updateUser(user.id, {
+      let updated = await store.updateUser(user.id, {
         monerium: { ...user.monerium!, ...snapshot },
       });
       // The list was just read: check the stored IBAN still pays in here.
-      updated = applyIbanBinding(updated, snapshot.ibans);
-      res.json(publicUser(updated).monerium);
+      updated = await applyIbanBinding(updated, snapshot.ibans);
+      res.json((await publicUser(updated)).monerium);
     }),
   );
 
   router.post(
     "/users/:id/monerium/link-signature/start",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
       const custodyBlocked = custodyBlockerBeforeFunding(user);
       if (custodyBlocked) return res.status(409).json({ error: custodyBlocked });
       if (!user.passkey?.publicKey || !user.passkeySafe || user.passkeySafe.status !== "active") {
@@ -607,10 +607,10 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
   router.post(
     "/users/:id/monerium/activate",
     wrap(async (req, res) => {
-      let user = store.findUser(req.params.id);
+      let user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
-      if (!requireCapability(user, "monerium", res)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
+      if (!(await requireCapability(user, "monerium", res))) return;
       const custodyBlocked = custodyBlockerBeforeFunding(user);
       if (custodyBlocked) {
         return res.status(409).json({ error: custodyBlocked });
@@ -712,7 +712,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         const detail = linkedUnder
           ? `address is linked under Monerium profile ${linkedUnder}${other ? ` (${other})` : ""}, not ${profileId}; needs Monerium support to move; do NOT unlink`
           : `Monerium does not show this address linked under profile ${profileId}`;
-        store.updateUser(user.id, {
+        await store.updateUser(user.id, {
           funding: { ...(user.funding ?? { mode: "sandbox" as const, status: "provisioning" as const }), detail },
         });
         return res.status(409).json({
@@ -768,14 +768,14 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
          * this Safe. With the app's credentials the list is every customer's
          * IBANs, so nothing from it is shown.
          */
-        const say = (status: number, body: Record<string, unknown>, detail: string) => {
-          store.updateUser(user.id, {
+        const say = async (status: number, body: Record<string, unknown>, detail: string) => {
+          await store.updateUser(user.id, {
             funding: { ...(user.funding ?? { mode: "sandbox" as const, status: "provisioning" as const }), detail },
           });
           return res.status(status).json(body);
         };
         if (viaApp) {
-          return say(409, {
+          return await say(409, {
             error: "Monerium says this profile already has an IBAN. Connect your own Monerium account to see it and move it here.",
           }, "Monerium profile already has an IBAN; connect your own Monerium account to move it");
         }
@@ -787,7 +787,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
           const why = !linkedUnder
             ? "Monerium does not say which profile this Safe is linked under"
             : `Monerium lists no IBAN on profile ${linkedUnder}`;
-          return say(409, {
+          return await say(409, {
             error: `Monerium says this profile already has an IBAN, but ${why}, so Zold cannot tell which one to offer. Nothing was changed.`,
             code: "IBAN_EXISTS_UNRESOLVED",
           }, `Monerium profile already has an IBAN; ${why}`);
@@ -805,7 +805,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         const where = one
           ? `(${maskIban(one.iban)}), currently paying into ${one.address ?? "another address"} on ${one.chain ?? "another chain"}`
           : `on this profile: Monerium lists ${choices.length}, none paying into this account`;
-        return say(409, {
+        return await say(409, {
           error: `You already have an IBAN at Monerium ${where}. Zold uses that same IBAN: move ${one ? "it" : "one of them"} to this account to finish. Nothing has changed yet.`,
           code: "IBAN_EXISTS_ELSEWHERE",
           ...(one ? { existing: one } : {}),
@@ -813,7 +813,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         }, `Your Monerium profile already has an IBAN ${where} — move ${one ? "it" : "one"} to this account, or keep ${one ? "it" : "them"} where ${one ? "it is" : "they are"}`);
       }
 
-      const updated = store.updateUser(user.id, {
+      const updated = await store.updateUser(user.id, {
         // What Monerium attributes to THIS address, or nothing. Falling back to
         // a previously stored value would preserve a mis-attribution.
         iban,
@@ -843,7 +843,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         monerium: { ...user.monerium!, profileId, ...snapshot },
       });
       const balances = await shownBalances(updated.address);
-      res.json({ ...publicUser(updated), ...balances });
+      res.json({ ...(await publicUser(updated)), ...balances });
     }),
   );
 
@@ -866,10 +866,10 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
   router.post(
     "/users/:id/monerium/move-iban",
     wrap(async (req, res) => {
-      let user = store.findUser(req.params.id);
+      let user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
-      if (!requireCapability(user, "monerium", res)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
+      if (!(await requireCapability(user, "monerium", res))) return;
       const custodyBlocked = custodyBlockerBeforeFunding(user);
       if (custodyBlocked) return res.status(409).json({ error: custodyBlocked });
       if (!hasActiveSafe(user)) {
@@ -1007,8 +1007,8 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       let updated: User;
       if (confirmed) {
         const iban = ibanKey(landed[0].iban);
-        releaseIbanFromOtherUsers(iban, user.id);
-        updated = store.updateUser(user.id, {
+        await releaseIbanFromOtherUsers(iban, user.id);
+        updated = await store.updateUser(user.id, {
           iban,
           moneriumIbanElsewhere: undefined,
           moneriumIbanMoves: moves,
@@ -1033,9 +1033,9 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
           },
           monerium: { ...user.monerium!, profileId: ibanProfile, ...after },
         });
-        updated = store.updateUser(user.id, { moneriumIbanMoves: confirmedMoves(updated, iban) });
+        updated = await store.updateUser(user.id, { moneriumIbanMoves: confirmedMoves(updated, iban) });
       } else {
-        updated = store.updateUser(user.id, {
+        updated = await store.updateUser(user.id, {
           iban: "",
           moneriumIbanMoves: moves,
           funding: {
@@ -1048,43 +1048,43 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
           ...(after ? { monerium: { ...user.monerium!, profileId: ibanProfile, ...after } } : {}),
         });
       }
-      store.audit(auditEntry(
+      await store.audit(auditEntry(
         "partner.iban_moved",
         { partner: "monerium", profileId: ibanProfile, ibanLast4: requested.slice(-4), fromChain: move.fromChain, confirmed },
         user.id,
       ));
       const balances = await shownBalances(updated.address);
-      res.json({ ...publicUser(updated), ...balances });
+      res.json({ ...(await publicUser(updated)), ...balances });
     }),
   );
 
   router.delete(
     "/users/:id/monerium/connect",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      const session = requireUserSession(req, res, user.id);
+      const session = await requireUserSession(req, res, user.id);
       if (!session) return;
       if (!(await approvesMoneriumChange(user, req.body, res, true))) return;
       forgetUserClient(user.id);
-      const updated = store.updateUser(user.id, {
+      const updated = await store.updateUser(user.id, {
         moneriumConnect: undefined,
         monerium: undefined,
         funding: { ...(user.funding ?? { mode: "sandbox", status: "kyc_pending" as const }), status: "kyc_pending" as const },
       });
-      revokeOtherSessions(user.id, session.id);
-      res.json(publicUser(updated));
+      await revokeOtherSessions(user.id, session.id);
+      res.json(await publicUser(updated));
     }),
   );
 
   router.post(
     "/users/:id/monerium/api-keys",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      const session = requireUserSession(req, res, user.id);
+      const session = await requireUserSession(req, res, user.id);
       if (!session) return;
-      if (!requireCapability(user, "monerium", res)) return;
+      if (!(await requireCapability(user, "monerium", res))) return;
       if (!moneriumApiKeysAvailable()) {
         return res.status(503).json({
           error: `${dataEncryptionProblem()}; API keys are never stored in plaintext`,
@@ -1103,7 +1103,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         verified = await verifyApiKeys(input.clientId, input.clientSecret);
       } catch (err: any) {
         if (err instanceof MoneriumApiError && err.status < 500) {
-          store.audit(auditEntry("partner.call_refused", { partner: "monerium", capability: "api_keys", status: err.status }, user.id));
+          await store.audit(auditEntry("partner.call_refused", { partner: "monerium", capability: "api_keys", status: err.status }, user.id));
           return res.status(400).json({ error: err.message });
         }
         return res.status(503).json({ error: `Monerium could not be reached to verify the keys: ${redactedMessage(err).slice(0, 200)}` });
@@ -1113,7 +1113,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       // signup kind, or a refusal that stores nothing.
       const pick = pickProfileForSignup(user.accountType, verified.profiles);
       if (!pick.ok) {
-        store.audit(auditEntry(
+        await store.audit(auditEntry(
           "partner.connect_refused",
           { partner: "monerium", method: "api_keys", code: pick.code, accountType: user.accountType ?? "individual" },
           user.id,
@@ -1133,7 +1133,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       const now = new Date().toISOString();
       const wasApproved = user.kycStatus === "approved";
 
-      const updated = store.updateUser(user.id, {
+      const updated = await store.updateUser(user.id, {
         moneriumConnect: undefined,
         moneriumRefusal: undefined,
         ...(wasApproved || !mayApproveOnIban(user)
@@ -1191,30 +1191,30 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         },
       });
       forgetUserClient(user.id);
-      store.audit(auditEntry(
+      await store.audit(auditEntry(
         "partner.credentials_connected",
         { partner: "monerium", method: "api_keys", clientId: input.clientId, environment: moneriumEnvironment(), profileId, ibanAttributed: Boolean(ownIban), ...(dropIban && user.iban ? { ibanDroppedLast4: user.iban.slice(-4) } : {}) },
         user.id,
       ));
-      if (replacing) revokeOtherSessions(user.id, session.id);
+      if (replacing) await revokeOtherSessions(user.id, session.id);
       const balances = await shownBalances(updated.address);
-      res.status(201).json({ ...publicUser(updated), ...balances });
+      res.status(201).json({ ...(await publicUser(updated)), ...balances });
     }),
   );
 
   router.delete(
     "/users/:id/monerium/api-keys",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      const session = requireUserSession(req, res, user.id);
+      const session = await requireUserSession(req, res, user.id);
       if (!session) return;
       if (user.monerium?.method !== "api_keys") {
         return res.status(409).json({ error: "no Monerium API keys are connected to this account" });
       }
       if (!(await approvesMoneriumChange(user, req.body, res, true))) return;
       forgetUserClient(user.id);
-      const updated = store.updateUser(user.id, {
+      const updated = await store.updateUser(user.id, {
         monerium: undefined,
         funding: user.funding
           ? {
@@ -1225,9 +1225,9 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
             }
           : user.funding,
       });
-      store.audit(auditEntry("partner.credentials_removed", { partner: "monerium", method: "api_keys" }, user.id));
-      revokeOtherSessions(user.id, session.id);
-      res.json(publicUser(updated));
+      await store.audit(auditEntry("partner.credentials_removed", { partner: "monerium", method: "api_keys" }, user.id));
+      await revokeOtherSessions(user.id, session.id);
+      res.json(await publicUser(updated));
     }),
   );
 

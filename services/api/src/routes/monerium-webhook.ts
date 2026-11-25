@@ -49,7 +49,7 @@ export function createMoneriumWebhookRouter() {
         return res.status(401).json({ error: "invalid webhook signature" });
       }
       const webhookId = req.header("webhook-id");
-      if (webhookId && store.isWebhookProcessed(webhookId)) {
+      if (webhookId && (await store.isWebhookProcessed(webhookId))) {
         return res.json({ handled: false, duplicate: true });
       }
       const result = await handleWebhookEvent(req.body);
@@ -60,7 +60,7 @@ export function createMoneriumWebhookRouter() {
       if (result.outcome === "unavailable") {
         return res.status(503).json({ ...result, retry: true });
       }
-      if (webhookId) store.markWebhookProcessed(webhookId);
+      if (webhookId) await store.markWebhookProcessed(webhookId);
       res.json(result);
     }),
   );

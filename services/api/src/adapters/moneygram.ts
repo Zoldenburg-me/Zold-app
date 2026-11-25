@@ -53,13 +53,13 @@ const pickups = new Map<string, CashPickup>(); // transferId -> pickup
 
 /** Return the memo this pickup must use for every SEP-10 call. Stored pickups
  *  from before this field existed can recover it from the transfer's user. */
-export function anchorMemoForPickup(
+export async function anchorMemoForPickup(
   transferId: string,
   pickup?: Pick<CashPickup, "anchorMemo">,
-): string | undefined {
+): Promise<string | undefined> {
   if (pickup?.anchorMemo) return pickup.anchorMemo;
-  const transfer = store.findTransfer(transferId);
-  const user = transfer ? store.findUser(transfer.userId) : undefined;
+  const transfer = await store.findTransfer(transferId);
+  const user = transfer ? (await store.findUser(transfer.userId)) : undefined;
   return user ? senderMemo(user.id) : undefined;
 }
 
@@ -282,7 +282,7 @@ export async function refreshAnchorPickup(
 ): Promise<CashPickup | undefined> {
   const pickup = pickups.get(transferId) ?? existing;
   if (!pickup?.anchorTransactionId || !anchorModeEnabled()) return undefined;
-  pickup.anchorMemo = anchorMemoForPickup(transferId, pickup);
+  pickup.anchorMemo = await anchorMemoForPickup(transferId, pickup);
   pickups.set(transferId, pickup);
   const treasury = await getTreasury();
   const jwt = await sep10Auth(
@@ -337,7 +337,7 @@ export async function fundAndRefreshAnchorPickup(
   }
 
   const treasury = await getTreasury();
-  pickup.anchorMemo = anchorMemoForPickup(transferId, pickup);
+  pickup.anchorMemo = await anchorMemoForPickup(transferId, pickup);
   const jwt = await sep10Auth(
     STELLAR.anchorDomain,
     treasury,

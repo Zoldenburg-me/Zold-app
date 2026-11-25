@@ -91,7 +91,7 @@ export async function createQuote(userId: string, req: QuoteRequest): Promise<Qu
       receiveKes,
     };
   }
-  store.addQuote(quote);
+  await store.addQuote(quote);
   return quote;
 }
 

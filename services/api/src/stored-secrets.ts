@@ -48,72 +48,78 @@ export const SECRETS = {
 export interface StoredSecret {
   site: SecretSite;
   /** Every row holding a value for this site. */
-  rows(): { rowId: string; stored: string }[];
+  rows(): Promise<{ rowId: string; stored: string }[]>;
   /** Replace one row's stored value. */
-  write(rowId: string, stored: string): void;
+  write(rowId: string, stored: string): Promise<void>;
 }
 
 /** Rewrite one field of a user's Monerium connection, keeping the rest. */
-function writeMonerium(userId: string, patch: (m: NonNullable<User["monerium"]>) => Partial<NonNullable<User["monerium"]>>) {
-  const m = store.findUser(userId)?.monerium;
-  if (!m) throw new Error(`user ${userId} has no Monerium connection`);
-  store.updateUser(userId, { monerium: { ...m, ...patch(m) } });
+async function writeMonerium(userId: string, patch: (m: NonNullable<User["monerium"]>) => Partial<NonNullable<User["monerium"]>>) {
+  return store.tx(async () => {
+    const m = (await store.findUser(userId))?.monerium;
+    if (!m) throw new Error(`user ${userId} has no Monerium connection`);
+    await store.updateUser(userId, { monerium: { ...m, ...patch(m) } });
+  });
 }
 
 export const STORED_SECRETS: StoredSecret[] = [
   {
     site: SECRETS.moneriumAccessToken,
-    rows: () => store.users.flatMap((u) => (u.monerium?.accessTokenEnc ? [{ rowId: u.id, stored: u.monerium.accessTokenEnc }] : [])),
-    write: (id, stored) => writeMonerium(id, () => ({ accessTokenEnc: stored })),
+    rows: async () => (await store.list("users")).flatMap((u) => (u.monerium?.accessTokenEnc ? [{ rowId: u.id, stored: u.monerium.accessTokenEnc }] : [])),
+    write: async (id, stored) => await writeMonerium(id, () => ({ accessTokenEnc: stored })),
   },
   {
     site: SECRETS.moneriumRefreshToken,
-    rows: () => store.users.flatMap((u) => (u.monerium?.refreshTokenEnc ? [{ rowId: u.id, stored: u.monerium.refreshTokenEnc }] : [])),
-    write: (id, stored) => writeMonerium(id, () => ({ refreshTokenEnc: stored })),
+    rows: async () => (await store.list("users")).flatMap((u) => (u.monerium?.refreshTokenEnc ? [{ rowId: u.id, stored: u.monerium.refreshTokenEnc }] : [])),
+    write: async (id, stored) => await writeMonerium(id, () => ({ refreshTokenEnc: stored })),
   },
   {
     site: SECRETS.moneriumApiSecret,
-    rows: () => store.users.flatMap((u) => (u.monerium?.apiKeys?.clientSecretEnc ? [{ rowId: u.id, stored: u.monerium.apiKeys.clientSecretEnc }] : [])),
-    write: (id, stored) => writeMonerium(id, (m) => {
+    rows: async () => (await store.list("users")).flatMap((u) => (u.monerium?.apiKeys?.clientSecretEnc ? [{ rowId: u.id, stored: u.monerium.apiKeys.clientSecretEnc }] : [])),
+    write: async (id, stored) => await writeMonerium(id, (m) => {
       if (!m.apiKeys) throw new Error(`user ${id} has no Monerium API keys`);
       return { apiKeys: { ...m.apiKeys, clientSecretEnc: stored } };
     }),
   },
   {
     site: SECRETS.shopifyAccessToken,
-    rows: () => store.shopifyConnections.filter((c) => c.accessTokenEnc).map((c) => ({ rowId: c.id, stored: c.accessTokenEnc })),
-    write: (id, stored) => { store.updateShopifyConnection(id, { accessTokenEnc: stored }); },
+    rows: async () => (await store.list("shopifyConnections")).filter((c) => c.accessTokenEnc).map((c) => ({ rowId: c.id, stored: c.accessTokenEnc })),
+    write: async (id, stored) => { await store.updateShopifyConnection(id, { accessTokenEnc: stored }); },
   },
   {
     site: SECRETS.shopifyOrderLinkSecret,
-    rows: () => store.shopifyConnections.flatMap((c) => (c.orderLinkSecretEnc ? [{ rowId: c.id, stored: c.orderLinkSecretEnc }] : [])),
-    write: (id, stored) => { store.updateShopifyConnection(id, { orderLinkSecretEnc: stored }); },
+    rows: async () => (await store.list("shopifyConnections")).flatMap((c) => (c.orderLinkSecretEnc ? [{ rowId: c.id, stored: c.orderLinkSecretEnc }] : [])),
+    write: async (id, stored) => { await store.updateShopifyConnection(id, { orderLinkSecretEnc: stored }); },
   },
   {
     site: SECRETS.merchantLinkSecret,
-    rows: () => store.merchantLinks.map((l) => ({ rowId: l.id, stored: l.linkSecretEnc })),
-    write: (id, stored) => { store.updateMerchantLink(id, { linkSecretEnc: stored }); },
+    rows: async () => (await store.list("merchantLinks")).map((l) => ({ rowId: l.id, stored: l.linkSecretEnc })),
+    write: async (id, stored) => { await store.updateMerchantLink(id, { linkSecretEnc: stored }); },
   },
   {
     site: SECRETS.gmiApiKey,
-    rows: () => store.organisations.flatMap((o) => {
+    rows: async () => (await store.list("organisations")).flatMap((o) => {
       const g = o.integrations?.getmyinvoices;
       return g?.apiKeyEnc ? [{ rowId: o.id, stored: g.apiKeyEnc }] : [];
     }),
-    write: (id, stored) => {
-      const org = store.findOrganisation(id);
-      const g = org?.integrations?.getmyinvoices;
-      if (!org || !g) throw new Error(`organisation ${id} has no GetMyInvoices connection`);
-      store.updateOrganisation(id, { integrations: { ...org.integrations, getmyinvoices: { ...g, apiKeyEnc: stored } } });
+    write: async (id, stored) => {
+      return store.tx(async () => {
+        const org = await store.findOrganisation(id);
+        const g = org?.integrations?.getmyinvoices;
+        if (!org || !g) throw new Error(`organisation ${id} has no GetMyInvoices connection`);
+        await store.updateOrganisation(id, { integrations: { ...org.integrations, getmyinvoices: { ...g, apiKeyEnc: stored } } });
+      });
     },
   },
   {
     site: SECRETS.orgMoneriumApiSecret,
-    rows: () => store.organisations.flatMap((o) => (o.monerium?.clientSecretEnc ? [{ rowId: o.id, stored: o.monerium.clientSecretEnc }] : [])),
-    write: (id, stored) => {
-      const m = store.findOrganisation(id)?.monerium;
-      if (!m) throw new Error(`organisation ${id} has no Monerium API keys`);
-      store.updateOrganisation(id, { monerium: { ...m, clientSecretEnc: stored } });
+    rows: async () => (await store.list("organisations")).flatMap((o) => (o.monerium?.clientSecretEnc ? [{ rowId: o.id, stored: o.monerium.clientSecretEnc }] : [])),
+    write: async (id, stored) => {
+      return store.tx(async () => {
+        const m = (await store.findOrganisation(id))?.monerium;
+        if (!m) throw new Error(`organisation ${id} has no Monerium API keys`);
+        await store.updateOrganisation(id, { monerium: { ...m, clientSecretEnc: stored } });
+      });
     },
   },
 ];

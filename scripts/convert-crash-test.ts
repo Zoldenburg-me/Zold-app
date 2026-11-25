@@ -91,11 +91,11 @@ async function child(which: string, name: string) {
   const { initStore, store } = await import("../services/api/src/store.js");
   const dbm = await import("../services/api/src/store/db.js");
   const { depositConversionBlocker } = await import("../services/api/src/adapters/crypto-deposits.js");
-  initStore();
+  await initStore();
 
   if (which === "restart") {
-    const d = store.cryptoDeposits.find((x) => x.id === "d-crash")!;
-    const blocker = depositConversionBlocker(store.findUser(d.userId)!, d);
+    const d = (await store.list("cryptoDeposits")).find((x) => x.id === "d-crash")!;
+    const blocker = depositConversionBlocker((await store.findUser(d.userId))!, d);
     console.log(`RESULT ${JSON.stringify({ blocker, holding: d.holding })}`);
     process.exit(0);
   }
@@ -120,7 +120,7 @@ async function child(which: string, name: string) {
   const passkey = await makeSoftwarePasskey("crash", ORIGIN);
   const hex = (b64: string) => "0x" + Buffer.from(b64, "base64url").toString("hex");
   const now = new Date().toISOString();
-  store.addUser({
+  await store.addUser({
     id: "u-crash", name: "Crash GmbH", country: "DE", kycStatus: "approved", address: SAFE,
     wallet: { type: "candide-safe", deployed: true },
     passkey: { credentialId: passkey.credentialId, publicKey: { alg: "ES256", jwk: passkey.jwk }, signCount: 0, rpId: "localhost" },
@@ -131,7 +131,7 @@ async function child(which: string, name: string) {
     paymentPage: { handle: "crash", autoConvert: false, settlementAsset: "EURE" },
     createdAt: now,
   } as any);
-  store.addCryptoDeposit({
+  await store.addCryptoDeposit({
     id: "d-crash", userId: "u-crash", chainId: 31337, token: "USDC",
     txHash: "0x" + "ab".repeat(32), logIndex: 0, amountUnits: "500000000", amountUsdc: 500,
     holding: "held", settlementAsset: "USDC", creditedUsdc: 500, settledAt: now, txs: [],
@@ -140,7 +140,7 @@ async function child(which: string, name: string) {
 
   const app = express();
   app.use(express.json());
-  app.use("/api", createCryptoDepositRouter({ requireUserSession: () => ({ id: "s" }) }));
+  app.use("/api", createCryptoDepositRouter({ requireUserSession: async () => ({ id: "s" }) }));
   const server = app.listen(0, "127.0.0.1");
   await new Promise<void>((r) => server.once("listening", () => r()));
   const api = `http://127.0.0.1:${(server.address() as any).port}/api/users/u-crash/crypto-deposits/d-crash`;

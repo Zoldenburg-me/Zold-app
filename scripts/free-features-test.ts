@@ -21,22 +21,22 @@ const { initStore, store } = await import("../services/api/src/store.js");
 const { createOrgRouter } = await import("../services/api/src/routes/orgs.js");
 const { CAPABILITIES, LIMITS } = await import("../services/api/src/domain/plans.js");
 
-initStore();
+await initStore();
 const now = new Date().toISOString();
 const reporting = { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" } as const;
 for (const id of ["u_owner", "u_viewer", "u_admin", "u_stranger"]) {
-  store.addUser({ id, name: id, country: "DE", kycStatus: "approved", createdAt: now } as any);
+  await store.addUser({ id, name: id, country: "DE", kycStatus: "approved", createdAt: now } as any);
 }
 // No `plan`, no `trial`: what every org created now looks like.
-store.addOrganisation({ id: "org_b", type: "business", name: "Free GmbH", reporting, verifications: {}, createdAt: now, updatedAt: now } as any);
-store.addOrganisation({ id: "org_p", type: "personal", name: "Me", reporting, verifications: {}, createdAt: now, updatedAt: now } as any);
+await store.addOrganisation({ id: "org_b", type: "business", name: "Free GmbH", reporting, verifications: {}, createdAt: now, updatedAt: now } as any);
+await store.addOrganisation({ id: "org_p", type: "personal", name: "Me", reporting, verifications: {}, createdAt: now, updatedAt: now } as any);
 for (const [orgId, userId, role] of [["org_b", "u_owner", "owner"], ["org_b", "u_viewer", "viewer"], ["org_b", "u_admin", "admin"], ["org_p", "u_owner", "owner"]]) {
-  store.addMember({ id: `m_${orgId}_${userId}`, orgId, userId, email: "", role: role as any, status: "active", invitedAt: now, acceptedAt: now });
+  await store.addMember({ id: `m_${orgId}_${userId}`, orgId, userId, email: "", role: role as any, status: "active", invitedAt: now, acceptedAt: now });
 }
 
 const app = express();
 app.use(express.json());
-const requireSession = (req: any, res: any) => {
+const requireSession = async (req: any, res: any) => {
   const id = req.header("x-user");
   if (id) return { userId: id };
   res.status(401).json({ error: "no session" });
@@ -44,7 +44,7 @@ const requireSession = (req: any, res: any) => {
 };
 app.use("/api/orgs", createOrgRouter(requireSession));
 const server = app.listen(0, "127.0.0.1");
-await new Promise<void>((r) => server.once("listening", () => r()));
+await new Promise<void>(async (r) => server.once("listening", () => r()));
 const API = `http://127.0.0.1:${(server.address() as any).port}`;
 const call = async (method: string, p: string, user?: string, body?: unknown) => {
   const res = await fetch(`${API}${p}`, {

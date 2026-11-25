@@ -77,7 +77,7 @@ const { checkoutCredentialFor, isCheckoutTransfer } = await import("../services/
 const { startCheckoutWebhook } = await import("../services/api/src/checkout-webhook.js");
 const { verifyStandardWebhook, withinReplayWindow } = await import("../services/api/src/http/standard-webhooks.js");
 
-initStore();
+await initStore();
 startCheckoutWebhook();
 
 let failed = 0;
@@ -116,8 +116,8 @@ async function rotate(bearer?: string, body?: Record<string, unknown>) {
 }
 
 const now = new Date().toISOString();
-function transfer(id: string, over: Record<string, unknown>) {
-  store.addTransfer({
+async function transfer(id: string, over: Record<string, unknown>) {
+  await store.addTransfer({
     id,
     userId: "user-checkout",
     quoteId: "q-" + id,
@@ -135,16 +135,16 @@ function transfer(id: string, over: Record<string, unknown>) {
   } as any);
 }
 
-transfer("t-ok", { reference: "Order 4711 ZP0123456789ab" });
-transfer("t-ok-upper", { reference: "ZPABCDEF012345", recipientIban: "DE89 3704 0044 0532 0130 00" });
-transfer("t-cash", { rail: "cash", recipientIban: undefined, recipientPhone: "+254700000000", reference: "ZP0123456789ab" });
-transfer("t-noref", {});
-transfer("t-plain", { reference: "invoice 2026-17" });
-transfer("t-short", { reference: "ZP0123456789a" });
-transfer("t-long", { reference: "ZP0123456789abc" });
-transfer("t-glued", { reference: "XZP0123456789ab" });
-transfer("t-nonhex", { reference: "ZP0123456789zz" });
-transfer("t-review", { reference: "ZP00000000beef", state: "MANUAL_REVIEW" });
+await transfer("t-ok", { reference: "Order 4711 ZP0123456789ab" });
+await transfer("t-ok-upper", { reference: "ZPABCDEF012345", recipientIban: "DE89 3704 0044 0532 0130 00" });
+await transfer("t-cash", { rail: "cash", recipientIban: undefined, recipientPhone: "+254700000000", reference: "ZP0123456789ab" });
+await transfer("t-noref", {});
+await transfer("t-plain", { reference: "invoice 2026-17" });
+await transfer("t-short", { reference: "ZP0123456789a" });
+await transfer("t-long", { reference: "ZP0123456789abc" });
+await transfer("t-glued", { reference: "XZP0123456789ab" });
+await transfer("t-nonhex", { reference: "ZP0123456789zz" });
+await transfer("t-review", { reference: "ZP00000000beef", state: "MANUAL_REVIEW" });
 
 console.log("credential");
 await check("no credential issued answers 503", async () => {
@@ -201,14 +201,14 @@ for (const id of ["t-cash", "t-noref", "t-plain", "t-short", "t-long", "t-glued"
     assert.deepEqual(r.body, notFound.body);
   });
 }
-await check("isCheckoutTransfer agrees with the route", () => {
-  assert.equal(isCheckoutTransfer(store.findTransfer("t-ok")!), true);
-  assert.equal(isCheckoutTransfer(store.findTransfer("t-cash")!), false);
+await check("isCheckoutTransfer agrees with the route", async () => {
+  assert.equal(isCheckoutTransfer((await store.findTransfer("t-ok"))!), true);
+  assert.equal(isCheckoutTransfer((await store.findTransfer("t-cash"))!), false);
 });
 
 console.log("audit");
-await check("every authenticated read is audited, served or not, without the token", () => {
-  const rows = store.auditFor(undefined, 1000).filter((a) => a.kind === "service.checkout_transfer_read");
+await check("every authenticated read is audited, served or not, without the token", async () => {
+  const rows = (await store.auditFor(undefined, 1000)).filter((a) => a.kind === "service.checkout_transfer_read");
   const served = rows.filter((a) => a.data.outcome === "served");
   const missing = rows.filter((a) => a.data.outcome === "not_found");
   assert.equal(served.length, 2);
@@ -218,8 +218,8 @@ await check("every authenticated read is audited, served or not, without the tok
   assert.ok(missing.every((a) => !a.userId), "a 404 names no account");
   assert.ok(!JSON.stringify(rows).includes(token1));
 });
-await check("rotation is audited", () => {
-  const rows = store.auditFor(undefined, 1000).filter((a) => a.kind === "service.credential_rotated");
+await check("rotation is audited", async () => {
+  const rows = (await store.auditFor(undefined, 1000)).filter((a) => a.kind === "service.credential_rotated");
   assert.equal(rows.length, 1);
   assert.equal(rows[0].data.credentialId, first.body.id);
 });
@@ -232,18 +232,18 @@ await check("after rotation both the new and the previous credential work", asyn
   assert.equal((await get("t-ok", token2)).status, 200);
   assert.equal((await get("t-ok", token1)).status, 200);
 });
-await check("the previous credential stops at the end of the overlap", () => {
+await check("the previous credential stops at the end of the overlap", async () => {
   const later = Date.now() + 3601_000;
-  assert.equal(checkoutCredentialFor(token1, later), undefined);
-  assert.ok(checkoutCredentialFor(token2, later));
-  assert.ok(checkoutCredentialFor(token1, Date.now() + 3500_000));
+  assert.equal(await checkoutCredentialFor(token1, later), undefined);
+  assert.ok(await checkoutCredentialFor(token2, later));
+  assert.ok(await checkoutCredentialFor(token1, Date.now() + 3500_000));
 });
 const third = await rotate(OPERATOR);
-await check("a second rotation does not extend an already-expiring credential", () => {
+await check("a second rotation does not extend an already-expiring credential", async () => {
   const soon = Date.now() + 3601_000;
-  assert.equal(checkoutCredentialFor(token1, soon), undefined);
-  assert.ok(checkoutCredentialFor(token2, soon - 2000));
-  assert.ok(checkoutCredentialFor(third.body.token, soon));
+  assert.equal(await checkoutCredentialFor(token1, soon), undefined);
+  assert.ok(await checkoutCredentialFor(token2, soon - 2000));
+  assert.ok(await checkoutCredentialFor(third.body.token, soon));
 });
 
 const fourth = await rotate(OPERATOR, { revokePrevious: true });
@@ -265,8 +265,8 @@ await check("a revoke sent as a form is refused, not read as a plain rotation", 
   });
   assert.equal(res.status, 415);
 });
-await check("the rotation audit row records a revoke", () => {
-  const row = store.auditFor(undefined, 1000).find((a) => a.kind === "service.credential_rotated" && a.data.credentialId === fourth.body.id);
+await check("the rotation audit row records a revoke", async () => {
+  const row = (await store.auditFor(undefined, 1000)).find((a) => a.kind === "service.credential_rotated" && a.data.credentialId === fourth.body.id);
   assert.equal(row?.data.revokedPrevious, true);
   assert.equal(row?.data.operator, `operator:${kit.operator.id}`);
 });
@@ -275,7 +275,7 @@ const token4: string = fourth.body.token;
 console.log("webhook");
 await check("signing matches an independent Standard Webhooks HMAC", async () => {
   deliveries.length = 0;
-  store.updateTransfer("t-ok", { state: "DEBITED" });
+  await store.updateTransfer("t-ok", { state: "DEBITED" });
   await waitFor(() => deliveries.length >= 1);
   const d = deliveries[0];
   assert.deepEqual(JSON.parse(d.raw), { transferId: "t-ok" });
@@ -302,7 +302,7 @@ await check("the verifier refuses a stale timestamp and a wrong secret", () => {
 await check("a failed delivery is retried under the same webhook-id", async () => {
   deliveries.length = 0;
   failNext = 1;
-  store.updateTransfer("t-ok", { state: "PAID" });
+  await store.updateTransfer("t-ok", { state: "PAID" });
   await waitFor(() => deliveries.length >= 2);
   assert.equal(deliveries[0].headers["webhook-id"], deliveries[1].headers["webhook-id"]);
   await sleep(150);
@@ -311,7 +311,7 @@ await check("a failed delivery is retried under the same webhook-id", async () =
 await check("delivery stops after the attempt limit", async () => {
   deliveries.length = 0;
   failNext = 10;
-  store.updateTransfer("t-ok-upper", { state: "FAILED" });
+  await store.updateTransfer("t-ok-upper", { state: "FAILED" });
   await waitFor(() => deliveries.length >= 3);
   await sleep(300);
   assert.equal(deliveries.length, 3);
@@ -319,7 +319,7 @@ await check("delivery stops after the attempt limit", async () => {
 });
 await check("resolving a checkout transfer's review announces it", async () => {
   deliveries.length = 0;
-  store.resolveTransferReview("t-review", { state: "FAILED", note: "operator checked Monerium: the redeem never left", by: "operator:test" });
+  await store.resolveTransferReview("t-review", { state: "FAILED", note: "operator checked Monerium: the redeem never left", by: "operator:test" });
   await waitFor(() => deliveries.length >= 1);
   assert.deepEqual(JSON.parse(deliveries[0].raw), { transferId: "t-review" });
 });
@@ -363,9 +363,9 @@ await check("the replay window reads both timestamp forms and refuses anything e
 });
 await check("no delivery for a non-checkout transfer or a patch without a state change", async () => {
   deliveries.length = 0;
-  store.updateTransfer("t-cash", { state: "DEBITED" });
-  store.updateTransfer("t-plain", { state: "DEBITED" });
-  store.updateTransfer("t-ok", { recipientName: "Merchant AG" });
+  await store.updateTransfer("t-cash", { state: "DEBITED" });
+  await store.updateTransfer("t-plain", { state: "DEBITED" });
+  await store.updateTransfer("t-ok", { recipientName: "Merchant AG" });
   await sleep(150);
   assert.equal(deliveries.length, 0);
 });
@@ -374,8 +374,8 @@ await check("a listener that throws neither fails the write nor stops the next l
   let reached = false;
   store.onTransferStateChange(() => { throw new Error("listener blew up"); });
   store.onTransferStateChange(() => { reached = true; });
-  assert.doesNotThrow(() => store.updateTransfer("t-noref", { state: "DEBITED" }));
-  assert.equal(store.findTransfer("t-noref")?.state, "DEBITED");
+  await assert.doesNotReject(async () => await store.updateTransfer("t-noref", { state: "DEBITED" }));
+  assert.equal((await store.findTransfer("t-noref"))?.state, "DEBITED");
   assert.equal(reached, true);
 });
 console.log("rate limit");

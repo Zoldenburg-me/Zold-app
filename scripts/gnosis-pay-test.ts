@@ -200,8 +200,8 @@ await check("an internal failure answers 500 with a reference, never the raw err
   const express = (await import("express")).default;
   const { initStore, store } = await import("../services/api/src/store.js");
   const { createGnosisPayRouter } = await import("../services/api/src/routes/gnosis-pay.js");
-  initStore();
-  store.addUser({ id: "u_gp", name: "u", country: "DE", kycStatus: "approved", createdAt: new Date().toISOString() } as any);
+  await initStore();
+  await store.addUser({ id: "u_gp", name: "u", country: "DE", kycStatus: "approved", createdAt: new Date().toISOString() } as any);
   const app = express();
   app.use("/api/gnosis-pay", createGnosisPayRouter(() => ({ userId: "u_gp" }) as any));
   const server = app.listen(0, "127.0.0.1");

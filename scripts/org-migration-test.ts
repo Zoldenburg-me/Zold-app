@@ -4,7 +4,7 @@
  * personal space. Its Safe and IBAN are the company's, so a personal org
  * backed by them would put one Safe behind a personal and a business org.
  *
- * Seeds an existing store file, then loads it with initStore() as a process
+ * Seeds an existing store file, then loads it with await initStore() as a process
  * start does. No chain, no network.
  *
  * Run: npm run org-migration:test
@@ -36,7 +36,7 @@ writeFileSync(process.env.TRANSF_DB_PATH, JSON.stringify({
 }));
 
 const { initStore, store } = await import("../services/api/src/store.js");
-initStore();
+await initStore();
 
 let passed = 0;
 const check = (label: string, cond: boolean, detail = "") => {
@@ -47,15 +47,15 @@ const check = (label: string, cond: boolean, detail = "") => {
 
 console.log("boot migration and company logins");
 {
-  const orgs = store.organisationsForUser("u_company").map((x) => x.org);
+  const orgs = (await store.organisationsForUser("u_company")).map((x) => x.org);
   check("a company login gets no personal space", !orgs.some((o) => o.type === "personal"), JSON.stringify(orgs.map((o) => o.type)));
-  const backed = store.accounts.filter((a: any) => a.backingUserId === "u_company");
+  const backed = (await store.list("accounts")).filter((a: any) => a.backingUserId === "u_company");
   check("and no account is backed by its Safe", backed.length === 0, `${backed.length} account(s)`);
 }
 {
-  const orgs = store.organisationsForUser("u_person").map((x) => x.org);
+  const orgs = (await store.organisationsForUser("u_person")).map((x) => x.org);
   check("a person still gets their personal space", orgs.length === 1 && orgs[0].type === "personal");
-  const acc = store.accounts.find((a: any) => a.orgId === orgs[0].id);
+  const acc = (await store.list("accounts")).find((a: any) => a.orgId === orgs[0].id);
   check("backed by their own Safe, open since their funding is", acc?.backingUserId === "u_person" && acc?.status === "active");
 }
 console.log(`\norg migration: ${passed}/${passed} checks passed`);

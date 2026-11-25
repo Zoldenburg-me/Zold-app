@@ -16,12 +16,12 @@ export function tokenHash(token: string) {
   return createHash("sha256").update(token).digest("hex");
 }
 
-export function issueSession(userId: string) {
+export async function issueSession(userId: string) {
   const token = randomBytes(32).toString("base64url");
   const nowMs = Date.now();
   const now = new Date(nowMs).toISOString();
   const expiresAt = new Date(nowMs + SECURITY.sessionTtlMs).toISOString();
-  store.addSession({ id: randomUUID(), userId, tokenHash: tokenHash(token), createdAt: now, lastUsedAt: now, expiresAt });
+  await store.addSession({ id: randomUUID(), userId, tokenHash: tokenHash(token), createdAt: now, lastUsedAt: now, expiresAt });
   return token;
 }
 
@@ -29,10 +29,12 @@ export function issueSession(userId: string) {
  * End every live session of this user except `keepId`. After a credential
  * changes, a token copied before the change must not outlive it.
  */
-export function revokeOtherSessions(userId: string, keepId?: string) {
-  for (const s of store.sessions) {
-    if (s.userId === userId && s.id !== keepId && !s.revokedAt) store.revokeSession(s.id);
-  }
+export async function revokeOtherSessions(userId: string, keepId?: string) {
+  return store.tx(async () => {
+    for (const s of (await store.list("sessions"))) {
+      if (s.userId === userId && s.id !== keepId && !s.revokedAt) await store.revokeSession(s.id);
+    }
+  });
 }
 
 export function bearerToken(req: express.Request): string | undefined {
@@ -41,27 +43,29 @@ export function bearerToken(req: express.Request): string | undefined {
   return m?.[1];
 }
 
-export function requireSession(req: express.Request, res: express.Response) {
-  const token = bearerToken(req);
-  if (!token) {
-    res.status(401).json({ error: "authorization required" });
-    return undefined;
-  }
-  const session = store.findSessionByTokenHash(tokenHash(token));
-  if (!session) {
-    res.status(401).json({ error: "invalid session" });
-    return undefined;
-  }
-  if (session.revokedAt || Date.now() >= Date.parse(session.expiresAt)) {
-    res.status(401).json({ error: "session expired" });
-    return undefined;
-  }
-  store.touchSession(session.id);
-  return session;
+export async function requireSession(req: express.Request, res: express.Response) {
+  return store.tx(async () => {
+    const token = bearerToken(req);
+    if (!token) {
+      res.status(401).json({ error: "authorization required" });
+      return undefined;
+    }
+    const session = await store.findSessionByTokenHash(tokenHash(token));
+    if (!session) {
+      res.status(401).json({ error: "invalid session" });
+      return undefined;
+    }
+    if (session.revokedAt || Date.now() >= Date.parse(session.expiresAt)) {
+      res.status(401).json({ error: "session expired" });
+      return undefined;
+    }
+    await store.touchSession(session.id);
+    return session;
+  });
 }
 
-export function requireUserSession(req: express.Request, res: express.Response, userId: string) {
-  const session = requireSession(req, res);
+export async function requireUserSession(req: express.Request, res: express.Response, userId: string) {
+  const session = await requireSession(req, res);
   if (!session) return undefined;
   if (session.userId !== userId) {
     res.status(403).json({ error: "forbidden" });

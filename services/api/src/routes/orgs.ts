@@ -51,6 +51,7 @@ import { verifyPasskeyStepUp } from "./auth.js";
 import { clearsSignupTaxId, issuerIdentityFrom } from "./business/shared.js";
 import { entityLocked, isOrgEntity, orgEntity } from "../domain/org-entity.js";
 import { orgSafeDeployOffer } from "./org-safe-deployment.js";
+import { mapSeq } from "../seq.js";
 
 const INVITE_TTL_MS = 3 * 24 * 60 * 60 * 1000; // Gnosis expired invites at 3 days
 
@@ -121,11 +122,11 @@ function gateOf(org: Pick<Organisation, "type" | "entity">, a: Account): Account
 }
 
 /** An account as the API returns it: read-time gate and profile standing. */
-function accountView(org: Organisation, a: Account) {
+async function accountView(org: Organisation, a: Account) {
   // Who backs it, by the name members already see on Members: Home says
   // "Spends from Jonas's account" instead of a bare user id.
   const backer = a.backingUserId
-    ? store.membersOf(org.id).find((m) => m.userId === a.backingUserId && m.status === "active")
+    ? (await store.membersOf(org.id)).find((m) => m.userId === a.backingUserId && m.status === "active")
     : undefined;
   return {
     ...a, gate: gateOf(org, a), profile: accountProfileStanding(org, a),
@@ -141,14 +142,14 @@ function accountView(org: Organisation, a: Account) {
  * person's own (personal) space does not count, since connecting the Safe to a
  * company is how it moves there. Returns that company, if it is not `orgId`.
  */
-export function safeTakenBy(user: { id: string; address?: string }, orgId: string): { id: string; name: string } | undefined {
+export async function safeTakenBy(user: { id: string; address?: string }, orgId: string): Promise<{ id: string; name: string } | undefined> {
   const safe = user.address?.toLowerCase();
-  for (const a of store.accounts) {
+  for (const a of (await store.list("accounts"))) {
     // `gated` with a backer and no IBAN: a wallet-tier Safe connected (POST .../fund).
     const wallet = a.status === "gated" && !a.identifier?.iban;
     const mine = a.backingUserId === user.id || (!!safe && a.address?.toLowerCase() === safe);
     if (!mine || a.orgId === orgId || (a.status !== "active" && !wallet)) continue;
-    const other = store.findOrganisation(a.orgId);
+    const other = await store.findOrganisation(a.orgId);
     if (other?.type === "business") return { id: other.id, name: other.name };
   }
   return undefined;
@@ -159,8 +160,8 @@ const safeTakenError = (o: { name: string }) =>
 
 export function createOrgRouter(requireSession: SessionResolver): express.Router {
   const r = express.Router();
-  const ctxOf = (req: express.Request, res: express.Response) =>
-    resolveOrg(req, res, requireSession);
+  const ctxOf = async (req: express.Request, res: express.Response) =>
+    await resolveOrg(req, res, requireSession);
 
   // ── Reference data (no org needed) ────────────────────────────────────────
 
@@ -173,290 +174,293 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
   // ── Organisations ─────────────────────────────────────────────────────────
 
   /** Every org this session can reach. The app's org switcher reads this. */
-  r.get("/", (req, res) => {
-    const session = requireSession(req, res);
+  r.get("/", async (req, res) => {
+    const session = await requireSession(req, res);
     if (!session) return;
     res.json({
-      organisations: store
-        .organisationsForUser(session.userId)
-        .map(({ org, member }) => publicOrg(org, member)),
+      organisations: await mapSeq((await store
+        .organisationsForUser(session.userId)), async ({ org, member }) => await publicOrg(org, member)),
     });
   });
 
-  r.post("/", (req, res) => {
-    const session = requireSession(req, res);
-    if (!session) return;
+  r.post("/", async (req, res) => {
+    return store.tx(async () => {
+      const session = await requireSession(req, res);
+      if (!session) return;
 
-    const { name, type, country, legalName, taxId, email, timeZone, entity } = req.body ?? {};
-    const orgType: OrgType = type === "business" ? "business" : "personal";
-    // Company or sole trader decides who will own the org's money, so a
-    // business org states it; a personal one is its person and has none.
-    if (orgType === "business" && !isOrgEntity(entity)) {
-      return res.status(400).json({ code: "ENTITY_REQUIRED", error: "Say whether the business is a company or a sole trader.", field: "entity" });
-    }
-    if (orgType === "personal" && entity !== undefined) {
-      return res.status(400).json({ code: "ENTITY_PERSONAL", error: "A personal space is not a company or a sole trader.", field: "entity" });
-    }
-    // Printed on invoices and documents: the same rule as a person's name.
-    const orgName = cleanName(name, { min: 2, max: ORG_NAME_MAX });
-    if (orgName === null) {
-      return res.status(400).json({ code: "NAME_INVALID", error: `An organisation needs a name of 2 to ${ORG_NAME_MAX} characters, without hidden or control characters.` });
-    }
-    const orgLegalName = typeof legalName === "string" && legalName.trim() ? cleanName(legalName, { min: 2, max: ORG_NAME_MAX }) : undefined;
-    if (orgLegalName === null) {
-      return res.status(400).json({ code: "NAME_INVALID", error: `The legal name needs 2 to ${ORG_NAME_MAX} characters, without hidden or control characters.` });
-    }
-    if (typeof country !== "string" || !/^[A-Za-z]{2}$/.test(country)) {
-      return res
-        .status(400)
-        .json({ error: "Country must be an ISO 3166-1 alpha-2 code, e.g. DE." });
-    }
-    if (timeZone !== undefined && !timeZoneLooksValid(timeZone)) {
-      return res
-        .status(400)
-        .json({ error: `"${String(timeZone)}" is not a time zone. Use an IANA name like Europe/Berlin.`, field: "timeZone" });
-    }
-    // Printed as the issuer's contact on invoices.
-    if (typeof email === "string" && email.trim() && !emailLooksValid(email.trim())) {
-      return res.status(400).json({ error: "Enter an email address for your invoices, or leave it empty.", field: "email" });
-    }
-
-    /**
-     * A personal org is the person's own books, so there is one per person,
-     * and none for a company login: its Safe and IBAN are the company's.
-     */
-    if (orgType === "personal") {
-      if (store.findUser(session.userId)?.accountType === "company") {
-        return res.status(409).json({
-          code: "PERSONAL_ORG_COMPANY_LOGIN",
-          error: "This is a company login, so it has no personal space. For your own money, sign up for Zold as a person with your own email.",
-        });
+      const { name, type, country, legalName, taxId, email, timeZone, entity } = req.body ?? {};
+      const orgType: OrgType = type === "business" ? "business" : "personal";
+      // Company or sole trader decides who will own the org's money, so a
+      // business org states it; a personal one is its person and has none.
+      if (orgType === "business" && !isOrgEntity(entity)) {
+        return res.status(400).json({ code: "ENTITY_REQUIRED", error: "Say whether the business is a company or a sole trader.", field: "entity" });
       }
-      if (store.organisationsForUser(session.userId).some(({ org: o }) => o.type === "personal")) {
-        return res.status(409).json({ code: "PERSONAL_ORG_EXISTS", error: "You already have a personal space." });
-      }
-    }
-
-    if (orgType === "business") {
-      const owned = store
-        .organisationsForUser(session.userId)
-        .filter(({ org: o, member: m }) => o.type === "business" && m.role === "owner").length;
-      if (owned >= CEILINGS.businessOrgsPerUser) {
-        return res.status(409).json(ceilingRefusal("business organisations you own", CEILINGS.businessOrgsPerUser));
-      }
-    }
-
-    const now = new Date().toISOString();
-    const org: Organisation = {
-      id: `org_${randomUUID()}`,
-      type: orgType,
-      ...(orgType === "business" ? { entity } : {}),
-      name: orgName,
-      legalName: orgLegalName,
-      taxId: typeof taxId === "string" ? taxId.trim() : undefined,
-      email: typeof email === "string" ? email.trim() : undefined,
-      address: { country: country.toUpperCase() },
-      reporting: {
-        // Reporting currency follows the local currency where we know it, so a
-        // German business does not start out reporting in something else. The
-        // time zone comes from the caller's browser — a zone named wrong fails
-        // inside the month math, so it is checked now, and an absent one keeps
-        // the old default.
-        currency: suggestedCurrency({ address: { country: country.toUpperCase() } }),
-        timeZone: (timeZone as string) ?? "Europe/Berlin",
-        costBasisMethod: "FIFO",
-      },
-      verifications: {},
-      createdAt: now,
-      updatedAt: now,
-    };
-    store.addOrganisation(org);
-
-    const member = store.addMember({
-      id: `mem_${randomUUID()}`,
-      orgId: org.id,
-      userId: session.userId,
-      email: org.email ?? "",
-      role: "owner",
-      status: "active",
-      invitedAt: now,
-      acceptedAt: now,
-    });
-
-    /**
-     * A company signup's first business org is the company that login was
-     * made for, so it gets its EUR account now and the Accounts screen is not
-     * empty. Without an IBAN behind it: the owner connects the company's IBAN
-     * (POST .../fund) once Monerium has issued it, and that call is the live
-     * profile check. Any further business org opens its accounts by hand.
-     */
-    const caller = store.findUser(session.userId);
-    const firstCompanyOrg =
-      orgType === "business" &&
-      caller?.accountType === "company" &&
-      !store.organisationsForUser(session.userId).some(({ org: o }) => o.id !== org.id && o.type === "business");
-    if (firstCompanyOrg) {
-      store.addAccount({
-        id: `acc_${randomUUID()}`,
-        orgId: org.id,
-        currency: "EUR",
-        label: defaultLabel("EUR"),
-        status: "gated",
-        provider: CURRENCY_REGISTRY.EUR.provider,
-        identifier: {},
-        // A company's account has no address until its own Safe is deployed.
-        gate: orgEntity(org) === "company" ? ORG_SAFE_GATE : noIbanGate("business"),
-        createdAt: now,
-        updatedAt: now,
-      });
-    }
-
-    res.status(201).json({ organisation: publicOrg(org, member) });
-  });
-
-  r.get("/:orgId", (req, res) => {
-    const ctx = ctxOf(req, res);
-    if (!ctx) return;
-    res.json({ organisation: publicOrg(ctx.org, ctx.member) });
-  });
-
-  r.patch("/:orgId", (req, res) => {
-    const ctx = ctxOf(req, res);
-    if (!ctx) return;
-    if (!requirePermission(ctx, res, "org.update")) return;
-
-    const patch: Partial<Organisation> = {};
-    const b = req.body ?? {};
-    // Settings sends every field on save: a name it did not change is left as
-    // stored, so one an older rule let in does not block the rest of the save.
-    if (typeof b.name === "string" && !sameName(b.name, ctx.org.name)) {
-      const n = cleanName(b.name, { min: 2, max: ORG_NAME_MAX });
-      if (n === null) return res.status(400).json({ code: "NAME_INVALID", error: `The name needs 2 to ${ORG_NAME_MAX} characters, without hidden or control characters.` });
-      patch.name = n;
-    }
-    // A personal space is named after its person: one name, changed in the app.
-    if (ctx.org.type === "personal" && patch.name !== undefined) {
-      return res.status(409).json({
-        code: "PERSONAL_ORG_NAME",
-        error: "Your personal space is named after you. Change your name in the Zold app, under Profile.",
-      });
-    }
-    // Only an owner changes it, and only until an EUR account has somewhere
-    // for money to land (domain/org-entity.ts). The same value is let through,
-    // as Settings sends every field.
-    if (b.entity !== undefined && b.entity !== orgEntity(ctx.org)) {
-      if (ctx.org.type !== "business") {
+      if (orgType === "personal" && entity !== undefined) {
         return res.status(400).json({ code: "ENTITY_PERSONAL", error: "A personal space is not a company or a sole trader.", field: "entity" });
       }
-      if (!isOrgEntity(b.entity)) {
-        return res.status(400).json({ code: "ENTITY_INVALID", error: "The business is a company or a sole trader.", field: "entity" });
+      // Printed on invoices and documents: the same rule as a person's name.
+      const orgName = cleanName(name, { min: 2, max: ORG_NAME_MAX });
+      if (orgName === null) {
+        return res.status(400).json({ code: "NAME_INVALID", error: `An organisation needs a name of 2 to ${ORG_NAME_MAX} characters, without hidden or control characters.` });
       }
-      if (ctx.member.role !== "owner") {
-        return res.status(403).json({ code: "OWNER_ONLY", error: "Only an owner can change whether the business is a company or a sole trader." });
+      const orgLegalName = typeof legalName === "string" && legalName.trim() ? cleanName(legalName, { min: 2, max: ORG_NAME_MAX }) : undefined;
+      if (orgLegalName === null) {
+        return res.status(400).json({ code: "NAME_INVALID", error: `The legal name needs 2 to ${ORG_NAME_MAX} characters, without hidden or control characters.` });
       }
-      if (entityLocked(ctx.org, store.accountsOf(ctx.org.id))) {
-        return res.status(409).json({
-          code: "ENTITY_LOCKED",
-          error: "The euro account is already set up, so whether the business is a company or a sole trader can no longer change.",
-          field: "entity",
-        });
+      if (typeof country !== "string" || !/^[A-Za-z]{2}$/.test(country)) {
+        return res
+          .status(400)
+          .json({ error: "Country must be an ISO 3166-1 alpha-2 code, e.g. DE." });
       }
-      // A company's own Monerium keys belong to the company: they are removed
-      // in Settings → Monerium first, not stranded on a sole trader, where
-      // that section no longer reaches them (routes/business/org-monerium.ts).
-      if (ctx.org.monerium) {
-        return res.status(409).json({
-          code: "MONERIUM_KEYS_CONNECTED",
-          error: "The company's Monerium keys are still connected. Remove them in Settings → Monerium first, then change whether the business is a company or a sole trader.",
-          field: "entity",
-        });
+      if (timeZone !== undefined && !timeZoneLooksValid(timeZone)) {
+        return res
+          .status(400)
+          .json({ error: `"${String(timeZone)}" is not a time zone. Use an IANA name like Europe/Berlin.`, field: "timeZone" });
       }
-      patch.entity = b.entity;
-    }
-    if (typeof b.legalName === "string" && !sameName(b.legalName, ctx.org.legalName ?? "")) {
-      // Empty clears it; anything else follows the name rule.
-      const n = b.legalName.trim() ? cleanName(b.legalName, { min: 2, max: ORG_NAME_MAX }) : "";
-      if (n === null) return res.status(400).json({ code: "NAME_INVALID", error: `The legal name needs 2 to ${ORG_NAME_MAX} characters, without hidden or control characters.` });
-      patch.legalName = n;
-    }
-    if (typeof b.taxId === "string") patch.taxId = b.taxId.trim();
-    if (typeof b.email === "string") {
-      // The issuer's contact on invoices; empty clears it. An unchanged one is
-      // let through, so an older unchecked value never blocks the other fields.
-      if (b.email.trim() && b.email.trim() !== (ctx.org.email ?? "") && !emailLooksValid(b.email.trim())) {
+      // Printed as the issuer's contact on invoices.
+      if (typeof email === "string" && email.trim() && !emailLooksValid(email.trim())) {
         return res.status(400).json({ error: "Enter an email address for your invoices, or leave it empty.", field: "email" });
       }
-      patch.email = b.email.trim();
-    }
-    if (typeof b.notificationEmail === "string") {
-      patch.notificationEmail = b.notificationEmail.trim();
-    }
-    if (b.address && typeof b.address === "object") {
-      const country = String(b.address.country ?? ctx.org.address?.country ?? "");
-      if (!/^[A-Za-z]{2}$/.test(country)) {
-        return res.status(400).json({ error: "Country must be an alpha-2 code." });
-      }
-      // Only the known fields, as strings — the body is untrusted and the
-      // address is printed verbatim on issued invoices.
-      const next = { ...ctx.org.address, country: country.toUpperCase() };
-      for (const k of ["line1", "line2", "city", "postalCode", "stateOrProvince"] as const) {
-        if (typeof b.address[k] === "string") {
-          const v = b.address[k].trim();
-          if (v) next[k] = v; else delete next[k];
-        }
-      }
-      patch.address = next;
-    }
-    // The business profile is where the issuer's tax and registration details
-    // are kept; invoices read them from here. They are company facts, so they
-    // take org.update like the name and address, not the invoices plan (the
-    // signup tax id they replace never did). Checked by the country this same
-    // save leaves the organisation in.
-    const nextCountry = patch.address?.country ?? ctx.org.address?.country;
-    const identity = issuerIdentityFrom(b, nextCountry);
-    if (!identity.ok) return res.status(400).json({ error: identity.error, field: identity.field });
-    // A country change re-checks the numbers already stored that this save
-    // does not replace: a German VAT ID kept on a French entity would print.
-    if (patch.address && patch.address.country !== ctx.org.address?.country) {
-      for (const field of ["vatId", "taxNumber"] as const) {
-        const stored = ctx.org.invoicing?.[field];
-        if (field in identity.patch || typeof stored !== "string" || !stored) continue;
-        const again = issuerIdentityFrom({ [field]: stored }, nextCountry);
-        if (!again.ok) {
-          return res.status(400).json({
-            error: `${again.error} The stored number does not fit the new country: correct or clear it in the same save.`,
-            field,
+
+      /**
+       * A personal org is the person's own books, so there is one per person,
+       * and none for a company login: its Safe and IBAN are the company's.
+       */
+      if (orgType === "personal") {
+        if ((await store.findUser(session.userId))?.accountType === "company") {
+          return res.status(409).json({
+            code: "PERSONAL_ORG_COMPANY_LOGIN",
+            error: "This is a company login, so it has no personal space. For your own money, sign up for Zold as a person with your own email.",
           });
         }
-      }
-    }
-    if (Object.keys(identity.patch).length) {
-      patch.invoicing = { ...ctx.org.invoicing, ...identity.patch };
-      // The signup tax id stands in until these are saved, and the form shows
-      // it in their place: saving them, even empty, replaces it. A cleared
-      // field must not print the old number again.
-      if (clearsSignupTaxId(identity.patch) && typeof b.taxId !== "string") patch.taxId = undefined;
-    }
-    if (b.reporting && typeof b.reporting === "object") {
-      const next = { ...ctx.org.reporting };
-      if (b.reporting.timeZone !== undefined) {
-        if (!timeZoneLooksValid(b.reporting.timeZone)) {
-          return res.status(400).json({ error: `"${String(b.reporting.timeZone)}" is not a time zone. Use an IANA name like Europe/Berlin.`, field: "timeZone" });
+        if ((await store.organisationsForUser(session.userId)).some(({ org: o }) => o.type === "personal")) {
+          return res.status(409).json({ code: "PERSONAL_ORG_EXISTS", error: "You already have a personal space." });
         }
-        next.timeZone = b.reporting.timeZone;
       }
-      // Reporting currency is a paid feature — Gnosis reserved it for Business.
-      if (
-        typeof b.reporting.currency === "string" &&
-        b.reporting.currency !== ctx.org.reporting.currency
-      ) {
-        if (!requireCapability(ctx, res, "settings.reportingCurrency")) return;
-        next.currency = b.reporting.currency.toUpperCase();
-      }
-      patch.reporting = next;
-    }
 
-    res.json({ organisation: publicOrg(store.updateOrganisation(ctx.org.id, patch), ctx.member) });
+      if (orgType === "business") {
+        const owned = (await store
+          .organisationsForUser(session.userId))
+          .filter(({ org: o, member: m }) => o.type === "business" && m.role === "owner").length;
+        if (owned >= CEILINGS.businessOrgsPerUser) {
+          return res.status(409).json(ceilingRefusal("business organisations you own", CEILINGS.businessOrgsPerUser));
+        }
+      }
+
+      const now = new Date().toISOString();
+      const org: Organisation = {
+        id: `org_${randomUUID()}`,
+        type: orgType,
+        ...(orgType === "business" ? { entity } : {}),
+        name: orgName,
+        legalName: orgLegalName,
+        taxId: typeof taxId === "string" ? taxId.trim() : undefined,
+        email: typeof email === "string" ? email.trim() : undefined,
+        address: { country: country.toUpperCase() },
+        reporting: {
+          // Reporting currency follows the local currency where we know it, so a
+          // German business does not start out reporting in something else. The
+          // time zone comes from the caller's browser — a zone named wrong fails
+          // inside the month math, so it is checked now, and an absent one keeps
+          // the old default.
+          currency: suggestedCurrency({ address: { country: country.toUpperCase() } }),
+          timeZone: (timeZone as string) ?? "Europe/Berlin",
+          costBasisMethod: "FIFO",
+        },
+        verifications: {},
+        createdAt: now,
+        updatedAt: now,
+      };
+      await store.addOrganisation(org);
+
+      const member = await store.addMember({
+        id: `mem_${randomUUID()}`,
+        orgId: org.id,
+        userId: session.userId,
+        email: org.email ?? "",
+        role: "owner",
+        status: "active",
+        invitedAt: now,
+        acceptedAt: now,
+      });
+
+      /**
+       * A company signup's first business org is the company that login was
+       * made for, so it gets its EUR account now and the Accounts screen is not
+       * empty. Without an IBAN behind it: the owner connects the company's IBAN
+       * (POST .../fund) once Monerium has issued it, and that call is the live
+       * profile check. Any further business org opens its accounts by hand.
+       */
+      const caller = await store.findUser(session.userId);
+      const firstCompanyOrg =
+        orgType === "business" &&
+        caller?.accountType === "company" &&
+        !(await store.organisationsForUser(session.userId)).some(({ org: o }) => o.id !== org.id && o.type === "business");
+      if (firstCompanyOrg) {
+        await store.addAccount({
+          id: `acc_${randomUUID()}`,
+          orgId: org.id,
+          currency: "EUR",
+          label: defaultLabel("EUR"),
+          status: "gated",
+          provider: CURRENCY_REGISTRY.EUR.provider,
+          identifier: {},
+          // A company's account has no address until its own Safe is deployed.
+          gate: orgEntity(org) === "company" ? ORG_SAFE_GATE : noIbanGate("business"),
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+
+      res.status(201).json({ organisation: await publicOrg(org, member) });
+    });
+  });
+
+  r.get("/:orgId", async (req, res) => {
+    const ctx = await ctxOf(req, res);
+    if (!ctx) return;
+    res.json({ organisation: await publicOrg(ctx.org, ctx.member) });
+  });
+
+  r.patch("/:orgId", async (req, res) => {
+    return store.tx(async () => {
+      const ctx = await ctxOf(req, res);
+      if (!ctx) return;
+      if (!requirePermission(ctx, res, "org.update")) return;
+
+      const patch: Partial<Organisation> = {};
+      const b = req.body ?? {};
+      // Settings sends every field on save: a name it did not change is left as
+      // stored, so one an older rule let in does not block the rest of the save.
+      if (typeof b.name === "string" && !sameName(b.name, ctx.org.name)) {
+        const n = cleanName(b.name, { min: 2, max: ORG_NAME_MAX });
+        if (n === null) return res.status(400).json({ code: "NAME_INVALID", error: `The name needs 2 to ${ORG_NAME_MAX} characters, without hidden or control characters.` });
+        patch.name = n;
+      }
+      // A personal space is named after its person: one name, changed in the app.
+      if (ctx.org.type === "personal" && patch.name !== undefined) {
+        return res.status(409).json({
+          code: "PERSONAL_ORG_NAME",
+          error: "Your personal space is named after you. Change your name in the Zold app, under Profile.",
+        });
+      }
+      // Only an owner changes it, and only until an EUR account has somewhere
+      // for money to land (domain/org-entity.ts). The same value is let through,
+      // as Settings sends every field.
+      if (b.entity !== undefined && b.entity !== orgEntity(ctx.org)) {
+        if (ctx.org.type !== "business") {
+          return res.status(400).json({ code: "ENTITY_PERSONAL", error: "A personal space is not a company or a sole trader.", field: "entity" });
+        }
+        if (!isOrgEntity(b.entity)) {
+          return res.status(400).json({ code: "ENTITY_INVALID", error: "The business is a company or a sole trader.", field: "entity" });
+        }
+        if (ctx.member.role !== "owner") {
+          return res.status(403).json({ code: "OWNER_ONLY", error: "Only an owner can change whether the business is a company or a sole trader." });
+        }
+        if (entityLocked(ctx.org, await store.accountsOf(ctx.org.id))) {
+          return res.status(409).json({
+            code: "ENTITY_LOCKED",
+            error: "The euro account is already set up, so whether the business is a company or a sole trader can no longer change.",
+            field: "entity",
+          });
+        }
+        // A company's own Monerium keys belong to the company: they are removed
+        // in Settings → Monerium first, not stranded on a sole trader, where
+        // that section no longer reaches them (routes/business/org-monerium.ts).
+        if (ctx.org.monerium) {
+          return res.status(409).json({
+            code: "MONERIUM_KEYS_CONNECTED",
+            error: "The company's Monerium keys are still connected. Remove them in Settings → Monerium first, then change whether the business is a company or a sole trader.",
+            field: "entity",
+          });
+        }
+        patch.entity = b.entity;
+      }
+      if (typeof b.legalName === "string" && !sameName(b.legalName, ctx.org.legalName ?? "")) {
+        // Empty clears it; anything else follows the name rule.
+        const n = b.legalName.trim() ? cleanName(b.legalName, { min: 2, max: ORG_NAME_MAX }) : "";
+        if (n === null) return res.status(400).json({ code: "NAME_INVALID", error: `The legal name needs 2 to ${ORG_NAME_MAX} characters, without hidden or control characters.` });
+        patch.legalName = n;
+      }
+      if (typeof b.taxId === "string") patch.taxId = b.taxId.trim();
+      if (typeof b.email === "string") {
+        // The issuer's contact on invoices; empty clears it. An unchanged one is
+        // let through, so an older unchecked value never blocks the other fields.
+        if (b.email.trim() && b.email.trim() !== (ctx.org.email ?? "") && !emailLooksValid(b.email.trim())) {
+          return res.status(400).json({ error: "Enter an email address for your invoices, or leave it empty.", field: "email" });
+        }
+        patch.email = b.email.trim();
+      }
+      if (typeof b.notificationEmail === "string") {
+        patch.notificationEmail = b.notificationEmail.trim();
+      }
+      if (b.address && typeof b.address === "object") {
+        const country = String(b.address.country ?? ctx.org.address?.country ?? "");
+        if (!/^[A-Za-z]{2}$/.test(country)) {
+          return res.status(400).json({ error: "Country must be an alpha-2 code." });
+        }
+        // Only the known fields, as strings — the body is untrusted and the
+        // address is printed verbatim on issued invoices.
+        const next = { ...ctx.org.address, country: country.toUpperCase() };
+        for (const k of ["line1", "line2", "city", "postalCode", "stateOrProvince"] as const) {
+          if (typeof b.address[k] === "string") {
+            const v = b.address[k].trim();
+            if (v) next[k] = v; else delete next[k];
+          }
+        }
+        patch.address = next;
+      }
+      // The business profile is where the issuer's tax and registration details
+      // are kept; invoices read them from here. They are company facts, so they
+      // take org.update like the name and address, not the invoices plan (the
+      // signup tax id they replace never did). Checked by the country this same
+      // save leaves the organisation in.
+      const nextCountry = patch.address?.country ?? ctx.org.address?.country;
+      const identity = issuerIdentityFrom(b, nextCountry);
+      if (!identity.ok) return res.status(400).json({ error: identity.error, field: identity.field });
+      // A country change re-checks the numbers already stored that this save
+      // does not replace: a German VAT ID kept on a French entity would print.
+      if (patch.address && patch.address.country !== ctx.org.address?.country) {
+        for (const field of ["vatId", "taxNumber"] as const) {
+          const stored = ctx.org.invoicing?.[field];
+          if (field in identity.patch || typeof stored !== "string" || !stored) continue;
+          const again = issuerIdentityFrom({ [field]: stored }, nextCountry);
+          if (!again.ok) {
+            return res.status(400).json({
+              error: `${again.error} The stored number does not fit the new country: correct or clear it in the same save.`,
+              field,
+            });
+          }
+        }
+      }
+      if (Object.keys(identity.patch).length) {
+        patch.invoicing = { ...ctx.org.invoicing, ...identity.patch };
+        // The signup tax id stands in until these are saved, and the form shows
+        // it in their place: saving them, even empty, replaces it. A cleared
+        // field must not print the old number again.
+        if (clearsSignupTaxId(identity.patch) && typeof b.taxId !== "string") patch.taxId = undefined;
+      }
+      if (b.reporting && typeof b.reporting === "object") {
+        const next = { ...ctx.org.reporting };
+        if (b.reporting.timeZone !== undefined) {
+          if (!timeZoneLooksValid(b.reporting.timeZone)) {
+            return res.status(400).json({ error: `"${String(b.reporting.timeZone)}" is not a time zone. Use an IANA name like Europe/Berlin.`, field: "timeZone" });
+          }
+          next.timeZone = b.reporting.timeZone;
+        }
+        // Reporting currency is a paid feature — Gnosis reserved it for Business.
+        if (
+          typeof b.reporting.currency === "string" &&
+          b.reporting.currency !== ctx.org.reporting.currency
+        ) {
+          if (!requireCapability(ctx, res, "settings.reportingCurrency")) return;
+          next.currency = b.reporting.currency.toUpperCase();
+        }
+        patch.reporting = next;
+      }
+
+      res.json({ organisation: await publicOrg(await store.updateOrganisation(ctx.org.id, patch), ctx.member) });
+    });
   });
 
   // ── Payment review policy ─────────────────────────────────────────────────
@@ -468,7 +472,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
    * approval. Drafts already waiting for review keep waiting either way.
    */
   r.post("/:orgId/payment-review", wrap(async (req, res) => {
-    const ctx = ctxOf(req, res);
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     if (!requirePermission(ctx, res, "payments.policy")) return;
     if (ctx.org.type !== "business") {
@@ -480,197 +484,203 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     const required: boolean = req.body.required;
     const was = paymentReviewRequired(ctx.org);
     if (!required && was) {
-      const user = store.findUser(ctx.userId);
+      const user = await store.findUser(ctx.userId);
       if (!user) return res.status(401).json({ error: "no such user" });
       if (!(await verifyPasskeyStepUp(user, req.body, res, "org.payment-review.off"))) return;
     }
-    const org = store.updateOrganisation(ctx.org.id, {
+    const org = await store.updateOrganisation(ctx.org.id, {
       paymentReview: { required, changedAt: new Date().toISOString(), source: "owner", changedByMemberId: ctx.member.id },
     });
     if (required !== was) {
-      store.audit(auditEntry("org.payment_review_changed", { orgId: org.id, required, memberId: ctx.member.id }, ctx.userId));
+      await store.audit(auditEntry("org.payment_review_changed", { orgId: org.id, required, memberId: ctx.member.id }, ctx.userId));
     }
-    res.json({ organisation: publicOrg(org, ctx.member) });
+    res.json({ organisation: await publicOrg(org, ctx.member) });
   }));
 
   // ── Members ───────────────────────────────────────────────────────────────
 
-  r.get("/:orgId/members", (req, res) => {
-    const ctx = ctxOf(req, res);
+  r.get("/:orgId/members", async (req, res) => {
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     if (!requirePermission(ctx, res, "members.read")) return;
-    res.json({ members: store.membersOf(ctx.org.id).map(publicMember) });
+    res.json({ members: (await store.membersOf(ctx.org.id)).map(publicMember) });
   });
 
-  r.post("/:orgId/members", (req, res) => {
-    const ctx = ctxOf(req, res);
-    if (!ctx) return;
-    if (!requireCapability(ctx, res, "members.manage")) return;
-    if (!requirePermission(ctx, res, "members.invite")) return;
+  r.post("/:orgId/members", async (req, res) => {
+    return store.tx(async () => {
+      const ctx = await ctxOf(req, res);
+      if (!ctx) return;
+      if (!requireCapability(ctx, res, "members.manage")) return;
+      if (!requirePermission(ctx, res, "members.invite")) return;
 
-    const email = String(req.body?.email ?? "").trim().toLowerCase();
-    const role = String(req.body?.role ?? "viewer") as Role;
-    if (!emailLooksValid(email)) {
-      return res.status(400).json({ error: "A member needs a valid email address." });
-    }
-    if (!ROLES.includes(role)) {
-      return res.status(400).json({ error: `Role must be one of ${ROLES.join(", ")}.` });
-    }
-    // Optional, and shown on Members until they accept: the person name rule.
-    const rawName = req.body?.name;
-    const checkedInvite = typeof rawName === "string" && rawName.trim() ? cleanPersonName(rawName, { min: 1, max: 120 }) : undefined;
-    if (checkedInvite && "code" in checkedInvite) return res.status(400).json(checkedInvite);
-    const inviteName = checkedInvite?.name;
-    // Only an owner may mint another owner; otherwise an admin could promote
-    // themselves past the person who pays the bill.
-    if (role === "owner" && ctx.member.role !== "owner") {
-      return res.status(403).json({ error: "Only an owner can invite another owner." });
-    }
-    const existing = store
-      .membersOf(ctx.org.id)
-      .find((m) => m.email.toLowerCase() === email && m.status !== "deactivated");
-    if (existing) {
-      return res.status(409).json({ error: `${email} is already on this organisation.` });
-    }
-    const active = store.membersOf(ctx.org.id).filter((m) => m.status !== "deactivated");
-    if (!requireWithinLimit(ctx, res, "members", active.length, "member")) return;
-
-    // The plaintext token is returned exactly once and is not recoverable.
-    const token = randomBytes(24).toString("base64url");
-    const member = store.addMember({
-      id: `mem_${randomUUID()}`,
-      orgId: ctx.org.id,
-      email,
-      name: inviteName,
-      role,
-      status: "invited",
-      invite: {
-        tokenHash: hashToken(token),
-        expiresAt: new Date(Date.now() + INVITE_TTL_MS).toISOString(),
-        invitedBy: ctx.member.id,
-        message: typeof req.body?.message === "string" ? req.body.message : undefined,
-      },
-      invitedAt: new Date().toISOString(),
-    });
-
-    res.status(201).json({
-      member: publicMember(member),
-      // The caller sends this on; we have no mail transport, and pretending to
-      // have sent an email nobody receives is worse than saying so.
-      inviteToken: token,
-      note: "Send this link yourself — this deployment has no mail transport, so no invitation email was sent.",
-    });
-  });
-
-  r.patch("/:orgId/members/:memberId", (req, res) => {
-    const ctx = ctxOf(req, res);
-    if (!ctx) return;
-    if (!requireCapability(ctx, res, "members.manage")) return;
-    if (!requirePermission(ctx, res, "members.update")) return;
-
-    const member = store.findMember(String(req.params.memberId));
-    if (!member || member.orgId !== ctx.org.id) {
-      return res.status(404).json({ error: "no such member" });
-    }
-    // Checked before either field: an admin deactivating an owner is the
-    // same escalation as demoting one, reached through the other field.
-    if (member.role === "owner" && ctx.member.role !== "owner") {
-      return res.status(403).json({ error: "Only an owner can change an owner." });
-    }
-    const next: { role?: Role; status?: string } = {};
-    if (req.body?.role !== undefined) {
-      const role = String(req.body.role) as Role;
+      const email = String(req.body?.email ?? "").trim().toLowerCase();
+      const role = String(req.body?.role ?? "viewer") as Role;
+      if (!emailLooksValid(email)) {
+        return res.status(400).json({ error: "A member needs a valid email address." });
+      }
       if (!ROLES.includes(role)) {
         return res.status(400).json({ error: `Role must be one of ${ROLES.join(", ")}.` });
       }
+      // Optional, and shown on Members until they accept: the person name rule.
+      const rawName = req.body?.name;
+      const checkedInvite = typeof rawName === "string" && rawName.trim() ? cleanPersonName(rawName, { min: 1, max: 120 }) : undefined;
+      if (checkedInvite && "code" in checkedInvite) return res.status(400).json(checkedInvite);
+      const inviteName = checkedInvite?.name;
+      // Only an owner may mint another owner; otherwise an admin could promote
+      // themselves past the person who pays the bill.
       if (role === "owner" && ctx.member.role !== "owner") {
-        return res.status(403).json({ error: "Only an owner can make another owner." });
+        return res.status(403).json({ error: "Only an owner can invite another owner." });
       }
-      next.role = role;
-    }
-    if (req.body?.status !== undefined) {
-      const status = String(req.body.status);
-      if (!["active", "deactivated"].includes(status)) {
-        return res.status(400).json({ error: "Status must be active or deactivated." });
+      const existing = (await store
+        .membersOf(ctx.org.id))
+        .find((m) => m.email.toLowerCase() === email && m.status !== "deactivated");
+      if (existing) {
+        return res.status(409).json({ error: `${email} is already on this organisation.` });
       }
-      // An invited row has no login behind it; activating it by hand would
-      // make a member nobody can be, and strand the invitee's own accept.
-      if (status === "active" && !member.userId) {
-        return res.status(409).json({ error: "That person has not accepted their invitation yet." });
-      }
-      next.status = status;
-    }
+      const active = (await store.membersOf(ctx.org.id)).filter((m) => m.status !== "deactivated");
+      if (!requireWithinLimit(ctx, res, "members", active.length, "member")) return;
 
-    // An org must never lose its last owner — by role change or deactivation,
-    // which are the same hole reached two ways.
-    if (wouldOrphanOrg(store.membersOf(ctx.org.id), member.id, next)) {
-      return res.status(409).json({
-        error:
-          "That would leave the organisation with no active owner. Make someone else an owner first.",
+      // The plaintext token is returned exactly once and is not recoverable.
+      const token = randomBytes(24).toString("base64url");
+      const member = await store.addMember({
+        id: `mem_${randomUUID()}`,
+        orgId: ctx.org.id,
+        email,
+        name: inviteName,
+        role,
+        status: "invited",
+        invite: {
+          tokenHash: hashToken(token),
+          expiresAt: new Date(Date.now() + INVITE_TTL_MS).toISOString(),
+          invitedBy: ctx.member.id,
+          message: typeof req.body?.message === "string" ? req.body.message : undefined,
+        },
+        invitedAt: new Date().toISOString(),
       });
-    }
 
-    const patch: Record<string, unknown> = { ...next };
-    if (next.status === "deactivated") patch.deactivatedAt = new Date().toISOString();
-    if (next.status === "active") patch.deactivatedAt = undefined;
-    res.json({ member: publicMember(store.updateMember(member.id, patch)) });
+      res.status(201).json({
+        member: publicMember(member),
+        // The caller sends this on; we have no mail transport, and pretending to
+        // have sent an email nobody receives is worse than saying so.
+        inviteToken: token,
+        note: "Send this link yourself — this deployment has no mail transport, so no invitation email was sent.",
+      });
+    });
+  });
+
+  r.patch("/:orgId/members/:memberId", async (req, res) => {
+    return store.tx(async () => {
+      const ctx = await ctxOf(req, res);
+      if (!ctx) return;
+      if (!requireCapability(ctx, res, "members.manage")) return;
+      if (!requirePermission(ctx, res, "members.update")) return;
+
+      const member = await store.findMember(String(req.params.memberId));
+      if (!member || member.orgId !== ctx.org.id) {
+        return res.status(404).json({ error: "no such member" });
+      }
+      // Checked before either field: an admin deactivating an owner is the
+      // same escalation as demoting one, reached through the other field.
+      if (member.role === "owner" && ctx.member.role !== "owner") {
+        return res.status(403).json({ error: "Only an owner can change an owner." });
+      }
+      const next: { role?: Role; status?: string } = {};
+      if (req.body?.role !== undefined) {
+        const role = String(req.body.role) as Role;
+        if (!ROLES.includes(role)) {
+          return res.status(400).json({ error: `Role must be one of ${ROLES.join(", ")}.` });
+        }
+        if (role === "owner" && ctx.member.role !== "owner") {
+          return res.status(403).json({ error: "Only an owner can make another owner." });
+        }
+        next.role = role;
+      }
+      if (req.body?.status !== undefined) {
+        const status = String(req.body.status);
+        if (!["active", "deactivated"].includes(status)) {
+          return res.status(400).json({ error: "Status must be active or deactivated." });
+        }
+        // An invited row has no login behind it; activating it by hand would
+        // make a member nobody can be, and strand the invitee's own accept.
+        if (status === "active" && !member.userId) {
+          return res.status(409).json({ error: "That person has not accepted their invitation yet." });
+        }
+        next.status = status;
+      }
+
+      // An org must never lose its last owner — by role change or deactivation,
+      // which are the same hole reached two ways.
+      if (wouldOrphanOrg(await store.membersOf(ctx.org.id), member.id, next)) {
+        return res.status(409).json({
+          error:
+            "That would leave the organisation with no active owner. Make someone else an owner first.",
+        });
+      }
+
+      const patch: Record<string, unknown> = { ...next };
+      if (next.status === "deactivated") patch.deactivatedAt = new Date().toISOString();
+      if (next.status === "active") patch.deactivatedAt = undefined;
+      res.json({ member: publicMember(await store.updateMember(member.id, patch)) });
+    });
   });
 
   /** Accept an invitation. The invitation was addressed to an email, so the
    *  accepting session must belong to an account that has PROVEN it controls
    *  that email — the token alone is a link anyone could have been forwarded,
    *  and the account's email field is whatever was typed at signup. */
-  r.post("/invites/accept", (req, res) => {
-    const session = requireSession(req, res);
-    if (!session) return;
-    const token = String(req.body?.token ?? "");
-    if (!token) return res.status(400).json({ error: "An invitation token is required." });
+  r.post("/invites/accept", async (req, res) => {
+    return store.tx(async () => {
+      const session = await requireSession(req, res);
+      if (!session) return;
+      const token = String(req.body?.token ?? "");
+      if (!token) return res.status(400).json({ error: "An invitation token is required." });
 
-    const member = store.findMemberByInviteHash(hashToken(token));
-    if (!member || member.status !== "invited") {
-      return res.status(404).json({ error: "That invitation is not valid." });
-    }
-    if (Date.now() > Date.parse(member.invite!.expiresAt)) {
-      return res.status(410).json({
-        error: "That invitation has expired. Invitations last 3 days — ask for a new one.",
+      const member = await store.findMemberByInviteHash(hashToken(token));
+      if (!member || member.status !== "invited") {
+        return res.status(404).json({ error: "That invitation is not valid." });
+      }
+      if (Date.now() > Date.parse(member.invite!.expiresAt)) {
+        return res.status(410).json({
+          error: "That invitation has expired. Invitations last 3 days — ask for a new one.",
+        });
+      }
+      const user = await store.findUser(session.userId);
+      if (!user?.email || user.email.trim().toLowerCase() !== member.email.toLowerCase()) {
+        return res.status(403).json({ error: "This invitation was sent to a different email address." });
+      }
+      // Typing the address at signup proves nothing; a code sent to it does.
+      // KYC.autoApprove is the harness seam (hardhat 31337 only, refused in
+      // production) that approves test identities up front.
+      if (!emailIsProven(user, member.email) && !KYC.autoApprove) {
+        return res.status(403).json({
+          error:
+            "Confirm you own this email first: add it as your email recovery channel (Settings → Recovery), enter the code it receives, then open the invitation again.",
+          code: "EMAIL_UNVERIFIED",
+        });
+      }
+      const existing = await store.memberFor(member.orgId, session.userId);
+      if (existing && existing.status !== "deactivated") {
+        return res.status(409).json({ error: "You are already on this organisation." });
+      }
+      const accepted = await store.updateMember(member.id, {
+        userId: session.userId,
+        status: "active",
+        acceptedAt: new Date().toISOString(),
+        invite: undefined, // spend the token
       });
-    }
-    const user = store.findUser(session.userId);
-    if (!user?.email || user.email.trim().toLowerCase() !== member.email.toLowerCase()) {
-      return res.status(403).json({ error: "This invitation was sent to a different email address." });
-    }
-    // Typing the address at signup proves nothing; a code sent to it does.
-    // KYC.autoApprove is the harness seam (hardhat 31337 only, refused in
-    // production) that approves test identities up front.
-    if (!emailIsProven(user, member.email) && !KYC.autoApprove) {
-      return res.status(403).json({
-        error:
-          "Confirm you own this email first: add it as your email recovery channel (Settings → Recovery), enter the code it receives, then open the invitation again.",
-        code: "EMAIL_UNVERIFIED",
-      });
-    }
-    const existing = store.memberFor(member.orgId, session.userId);
-    if (existing && existing.status !== "deactivated") {
-      return res.status(409).json({ error: "You are already on this organisation." });
-    }
-    const accepted = store.updateMember(member.id, {
-      userId: session.userId,
-      status: "active",
-      acceptedAt: new Date().toISOString(),
-      invite: undefined, // spend the token
+      const org = (await store.findOrganisation(member.orgId))!;
+      res.json({ organisation: await publicOrg(org, accepted), member: publicMember(accepted) });
     });
-    const org = store.findOrganisation(member.orgId)!;
-    res.json({ organisation: publicOrg(org, accepted), member: publicMember(accepted) });
   });
 
   // ── Accounts ──────────────────────────────────────────────────────────────
 
-  r.get("/:orgId/accounts", (req, res) => {
-    const ctx = ctxOf(req, res);
+  r.get("/:orgId/accounts", async (req, res) => {
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     if (!requirePermission(ctx, res, "accounts.read")) return;
-    const accounts = store.accountsOf(ctx.org.id);
-    const caller = store.findUser(ctx.userId);
+    const accounts = await store.accountsOf(ctx.org.id);
+    const caller = await store.findUser(ctx.userId);
     const company = orgEntity(ctx.org) === "company";
     const adoption = company
       ? { allowed: false, reason: COMPANY_OWN_SAFE, code: "COMPANY_OWN_SAFE" }
@@ -684,7 +694,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     res.json({
       // `gate` and `profile` are derived here, at read time: no row is
       // rewritten when the wording or the Monerium check changes.
-      accounts: accounts.map((a) => accountView(ctx.org, a)),
+      accounts: await mapSeq(accounts, async (a) => await accountView(ctx.org, a)),
       // Whether "fund from my account" would pass, from stored facts only, so
       // the UI offers it only where the API would accept it.
       adoption,
@@ -693,7 +703,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       ...(adoption.allowed ? { profileWait: profileWait(caller) } : {}),
       // A company's own Safe, while its EUR account has none: whether this
       // member may set it up (POST .../safe/deployment would accept them).
-      ...(company ? { orgSafeDeploy: orgSafeDeployOffer(ctx, caller ?? undefined, accounts) } : {}),
+      ...(company ? { orgSafeDeploy: await orgSafeDeployOffer(ctx, caller ?? undefined, accounts) } : {}),
       mayManageAccounts: roleCan(ctx.member.role, "accounts.open"),
       currencies: currencyAvailability(),
       // What a second account would cost, so the UI can show the ceiling
@@ -703,7 +713,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
   });
 
   r.post("/:orgId/accounts", wrap(async (req, res) => {
-    const ctx = ctxOf(req, res);
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     if (!requirePermission(ctx, res, "accounts.open")) return;
 
@@ -714,7 +724,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
         currencies: currencyAvailability(),
       });
     }
-    const existing = store.accountsOf(ctx.org.id);
+    const existing = await store.accountsOf(ctx.org.id);
     const company = orgEntity(ctx.org) === "company";
     // One Safe per company, so one EUR account: a second would have no Safe to point at.
     if (company && currency === "EUR" && existing.some((a) => a.currency === "EUR")) {
@@ -756,7 +766,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
      * business, `personal` for a personal org (domain/monerium-profile.ts).
      * A member's personal IBAN cannot back a company.
      */
-    const caller = store.findUser(ctx.userId);
+    const caller = await store.findUser(ctx.userId);
     const callerFunded =
       caller && caller.iban && caller.funding?.status === "active" ? caller : undefined;
     const wantsAdoption =
@@ -778,21 +788,21 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     // refuses the whole request: nothing is opened half-adopted.
     let profileRecord: NonNullable<Account["moneriumProfile"]> | undefined;
     let profileWarning: string | undefined;
-    const takenBy = wantsAdoption ? safeTakenBy(callerFunded!, ctx.org.id) : undefined;
+    const takenBy = wantsAdoption ? (await safeTakenBy(callerFunded!, ctx.org.id)) : undefined;
     if (takenBy) return res.status(409).json({ error: safeTakenError(takenBy), code: "SAFE_IN_OTHER_ORG" });
     if (wantsAdoption) {
       const checked = await checkBackingProfile(ctx.org, callerFunded!);
-      auditProfileCheck("adopt", { orgId: ctx.org.id }, callerFunded!.id, checked, ctx.userId);
+      await auditProfileCheck("adopt", { orgId: ctx.org.id }, callerFunded!.id, checked, ctx.userId);
       if (!checked.ok) {
         return res.status(checked.status).json({ error: checked.error, code: checked.code });
       }
       profileRecord = checked.record;
       profileWarning = checked.warning;
       // The Monerium read is an await: a parallel open may have landed in it.
-      if (store.accountsOf(ctx.org.id).some((a) => a.currency === currency)) {
+      if ((await store.accountsOf(ctx.org.id)).some((a) => a.currency === currency)) {
         return res.status(409).json({ error: `This organisation already has a ${currency} account.` });
       }
-      const lateTaken = safeTakenBy(callerFunded!, ctx.org.id);
+      const lateTaken = await safeTakenBy(callerFunded!, ctx.org.id);
       if (lateTaken) return res.status(409).json({ error: safeTakenError(lateTaken), code: "SAFE_IN_OTHER_ORG" });
     }
 
@@ -801,7 +811,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       ? undefined
       : (initial.gate ?? (company ? ORG_SAFE_GATE : noIbanGate(ctx.org.type)));
 
-    const account = store.addAccount({
+    const account = await store.addAccount({
       id: `acc_${randomUUID()}`,
       orgId: ctx.org.id,
       currency,
@@ -828,7 +838,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     }
 
     res.status(201).json({
-      account: accountView(ctx.org, account),
+      account: await accountView(ctx.org, account),
       note,
       ...(profileWarning ? { warning: profileWarning } : {}),
     });
@@ -844,11 +854,11 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
    * plain-language response.
    */
   r.post("/:orgId/accounts/:accountId/fund", wrap(async (req, res) => {
-    const ctx = ctxOf(req, res);
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     if (!requirePermission(ctx, res, "accounts.open")) return;
 
-    const account = store.findAccount(String(req.params.accountId));
+    const account = await store.findAccount(String(req.params.accountId));
     if (!account || account.orgId !== ctx.org.id) {
       return res.status(404).json({ error: "no such account" });
     }
@@ -879,25 +889,25 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     // A wallet-tier owner (no IBAN, none on offer) connects their Safe as
     // where the business is paid. The row stays `gated`: there is no IBAN, so
     // nothing is sent from it by bank, and no Monerium profile to check.
-    const walletCaller = store.findUser(ctx.userId);
+    const walletCaller = await store.findUser(ctx.userId);
     if (ctx.org.type === "business" && walletConnectable(walletCaller, ctx.org)) {
-      const taken = safeTakenBy(walletCaller, ctx.org.id);
+      const taken = await safeTakenBy(walletCaller, ctx.org.id);
       if (taken) return res.status(409).json({ error: safeTakenError(taken), code: "SAFE_IN_OTHER_ORG" });
-      const connected = store.updateAccount(account.id, {
+      const connected = await store.updateAccount(account.id, {
         address: walletCaller.address,
         backingUserId: walletCaller.id,
         backedSince: safeBooksStart(walletCaller),
         gate: WALLET_GATE,
       });
       return res.json({
-        account: accountView(ctx.org, connected),
+        account: await accountView(ctx.org, connected),
         note: `Payments to ${ctx.org.name} now arrive in your wallet. It has no IBAN, so nothing is sent from it by bank.`,
       });
     }
     // `active` is set exactly when Monerium attributed an IBAN to the Safe
     // (activation), so the status alone is the funded test; the hardhat
     // harness marks its auto-approved accounts active with no IBAN.
-    const caller = store.findUser(ctx.userId);
+    const caller = await store.findUser(ctx.userId);
     if (caller?.funding?.status !== "active") {
       return res.status(409).json({
         error:
@@ -905,24 +915,24 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       });
     }
 
-    const takenBy = safeTakenBy(caller, ctx.org.id);
+    const takenBy = await safeTakenBy(caller, ctx.org.id);
     if (takenBy) return res.status(409).json({ error: safeTakenError(takenBy), code: "SAFE_IN_OTHER_ORG" });
 
     // The account stays gated on any refusal, including Monerium not
     // answering: fail closed, write nothing.
     const checked = await checkBackingProfile(ctx.org, caller);
-    auditProfileCheck("fund", { orgId: ctx.org.id, accountId: account.id }, caller.id, checked, ctx.userId);
+    await auditProfileCheck("fund", { orgId: ctx.org.id, accountId: account.id }, caller.id, checked, ctx.userId);
     if (!checked.ok) {
       return res.status(checked.status).json({ error: checked.error, code: checked.code });
     }
     // The Monerium read is an await: another adoption may have landed in it.
-    if (store.findAccount(account.id)?.backingUserId) {
+    if ((await store.findAccount(account.id))?.backingUserId) {
       return res.status(409).json({ error: "This account was funded by another request while we checked with Monerium." });
     }
-    const lateTaken = safeTakenBy(caller, ctx.org.id);
+    const lateTaken = await safeTakenBy(caller, ctx.org.id);
     if (lateTaken) return res.status(409).json({ error: safeTakenError(lateTaken), code: "SAFE_IN_OTHER_ORG" });
 
-    const funded = store.updateAccount(account.id, {
+    const funded = await store.updateAccount(account.id, {
       status: "active",
       identifier: { iban: caller.iban },
       address: caller.address,
@@ -932,7 +942,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       gate: undefined,
     });
     res.json({
-      account: accountView(ctx.org, funded),
+      account: await accountView(ctx.org, funded),
       note:
         ctx.org.type === "business"
           ? `This organisation is now funded from the Monerium company profile${checked.record.name ? ` "${checked.record.name}"` : ""} connected to your login. Only your device key can authorise its payments.`
@@ -948,15 +958,15 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
    * result only when it passes; a refusal changes nothing.
    */
   r.post("/:orgId/accounts/:accountId/profile-check", wrap(async (req, res) => {
-    const ctx = ctxOf(req, res);
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     if (!requirePermission(ctx, res, "accounts.open")) return;
 
-    const account = store.findAccount(String(req.params.accountId));
+    const account = await store.findAccount(String(req.params.accountId));
     if (!account || account.orgId !== ctx.org.id) {
       return res.status(404).json({ error: "no such account" });
     }
-    const backer = account.backingUserId ? store.findUser(account.backingUserId) : undefined;
+    const backer = account.backingUserId ? (await store.findUser(account.backingUserId)) : undefined;
     if (!backer) {
       return res.status(409).json({ error: "This account has no funding identity, so there is no Monerium profile to check." });
     }
@@ -964,125 +974,131 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       return res.status(409).json({ error: "This account is a connected wallet with no IBAN, so there is no Monerium profile to check." });
     }
     const checked = await checkBackingProfile(ctx.org, backer);
-    auditProfileCheck("recheck", { orgId: ctx.org.id, accountId: account.id }, backer.id, checked, ctx.userId);
+    await auditProfileCheck("recheck", { orgId: ctx.org.id, accountId: account.id }, backer.id, checked, ctx.userId);
     if (!checked.ok) {
       return res.status(checked.status).json({ error: checked.error, code: checked.code });
     }
-    const updated = store.updateAccount(account.id, { moneriumProfile: checked.record });
+    const updated = await store.updateAccount(account.id, { moneriumProfile: checked.record });
     res.json({
-      account: accountView(ctx.org, updated),
+      account: await accountView(ctx.org, updated),
       ...(checked.warning ? { warning: checked.warning } : {}),
     });
   }));
 
   // ── Contacts (the address book) ───────────────────────────────────────────
 
-  r.get("/:orgId/contacts", (req, res) => {
-    const ctx = ctxOf(req, res);
+  r.get("/:orgId/contacts", async (req, res) => {
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     if (!requirePermission(ctx, res, "contacts.read")) return;
-    res.json({ contacts: store.contactsOf(ctx.org.id) });
+    res.json({ contacts: await store.contactsOf(ctx.org.id) });
   });
 
-  r.post("/:orgId/contacts", (req, res) => {
-    const ctx = ctxOf(req, res);
-    if (!ctx) return;
-    if (!requirePermission(ctx, res, "contacts.manage")) return;
+  r.post("/:orgId/contacts", async (req, res) => {
+    return store.tx(async () => {
+      const ctx = await ctxOf(req, res);
+      if (!ctx) return;
+      if (!requirePermission(ctx, res, "contacts.manage")) return;
 
-    // A payee: printed on payment runs and documents, so the name rule applies.
-    const name = cleanName(req.body?.name, { min: 2, max: CONTACT_NAME_MAX });
-    if (name === null) return res.status(400).json({ code: "NAME_INVALID", error: `A contact needs a name of 2 to ${CONTACT_NAME_MAX} characters, without hidden or control characters.` });
-    if (store.contactsOf(ctx.org.id).length >= CEILINGS.contactsPerOrg) {
-      return res.status(409).json(ceilingRefusal("contacts in this organisation", CEILINGS.contactsPerOrg));
-    }
+      // A payee: printed on payment runs and documents, so the name rule applies.
+      const name = cleanName(req.body?.name, { min: 2, max: CONTACT_NAME_MAX });
+      if (name === null) return res.status(400).json({ code: "NAME_INVALID", error: `A contact needs a name of 2 to ${CONTACT_NAME_MAX} characters, without hidden or control characters.` });
+      if ((await store.contactsOf(ctx.org.id)).length >= CEILINGS.contactsPerOrg) {
+        return res.status(409).json(ceilingRefusal("contacts in this organisation", CEILINGS.contactsPerOrg));
+      }
 
-    try {
-      const now = new Date().toISOString();
-      const contact = store.addContact({
-        id: `con_${randomUUID()}`,
-        orgId: ctx.org.id,
-        name,
-        email: typeof req.body?.email === "string" ? req.body.email.trim() : undefined,
-        wallets: (Array.isArray(req.body?.wallets) ? req.body.wallets : []).map((w: unknown) => ({
-          id: `cw_${randomUUID()}`,
-          ...validateWallet(w),
-        })),
-        bankAccounts: (Array.isArray(req.body?.bankAccounts) ? req.body.bankAccounts : []).map((b: unknown) => ({
-          id: `cb_${randomUUID()}`,
-          ...validateBankAccount(b),
-        })),
-        notes: typeof req.body?.notes === "string" ? req.body.notes : undefined,
-        createdAt: now,
-        updatedAt: now,
-      });
-      res.status(201).json({ contact });
-    } catch (err) {
-      if (err instanceof ContactError) return res.status(400).json({ error: err.message });
-      throw err;
-    }
+      try {
+        const now = new Date().toISOString();
+        const contact = await store.addContact({
+          id: `con_${randomUUID()}`,
+          orgId: ctx.org.id,
+          name,
+          email: typeof req.body?.email === "string" ? req.body.email.trim() : undefined,
+          wallets: (Array.isArray(req.body?.wallets) ? req.body.wallets : []).map((w: unknown) => ({
+            id: `cw_${randomUUID()}`,
+            ...validateWallet(w),
+          })),
+          bankAccounts: (Array.isArray(req.body?.bankAccounts) ? req.body.bankAccounts : []).map((b: unknown) => ({
+            id: `cb_${randomUUID()}`,
+            ...validateBankAccount(b),
+          })),
+          notes: typeof req.body?.notes === "string" ? req.body.notes : undefined,
+          createdAt: now,
+          updatedAt: now,
+        });
+        res.status(201).json({ contact });
+      } catch (err) {
+        if (err instanceof ContactError) return res.status(400).json({ error: err.message });
+        throw err;
+      }
+    });
   });
 
-  r.patch("/:orgId/contacts/:contactId", (req, res) => {
-    const ctx = ctxOf(req, res);
-    if (!ctx) return;
-    if (!requirePermission(ctx, res, "contacts.manage")) return;
+  r.patch("/:orgId/contacts/:contactId", async (req, res) => {
+    return store.tx(async () => {
+      const ctx = await ctxOf(req, res);
+      if (!ctx) return;
+      if (!requirePermission(ctx, res, "contacts.manage")) return;
 
-    const contact = store.findContact(String(req.params.contactId));
-    if (!contact || contact.orgId !== ctx.org.id) {
-      return res.status(404).json({ error: "no such contact" });
-    }
-    try {
-      const patch: Record<string, unknown> = {};
-      // The edit form sends the name on every save: unchanged is left as stored.
-      if (typeof req.body?.name === "string" && !sameName(req.body.name, contact.name)) {
-        const n = cleanName(req.body.name, { min: 2, max: CONTACT_NAME_MAX });
-        if (n === null) return res.status(400).json({ code: "NAME_INVALID", error: `A contact needs a name of 2 to ${CONTACT_NAME_MAX} characters, without hidden or control characters.` });
-        patch.name = n;
+      const contact = await store.findContact(String(req.params.contactId));
+      if (!contact || contact.orgId !== ctx.org.id) {
+        return res.status(404).json({ error: "no such contact" });
       }
-      if (typeof req.body?.email === "string") patch.email = req.body.email.trim();
-      if (typeof req.body?.notes === "string") patch.notes = req.body.notes;
-      if (Array.isArray(req.body?.wallets)) {
-        patch.wallets = req.body.wallets.map((w: Record<string, unknown>) => ({
-          id: typeof w?.id === "string" ? w.id : `cw_${randomUUID()}`,
-          ...validateWallet(w),
-        }));
+      try {
+        const patch: Record<string, unknown> = {};
+        // The edit form sends the name on every save: unchanged is left as stored.
+        if (typeof req.body?.name === "string" && !sameName(req.body.name, contact.name)) {
+          const n = cleanName(req.body.name, { min: 2, max: CONTACT_NAME_MAX });
+          if (n === null) return res.status(400).json({ code: "NAME_INVALID", error: `A contact needs a name of 2 to ${CONTACT_NAME_MAX} characters, without hidden or control characters.` });
+          patch.name = n;
+        }
+        if (typeof req.body?.email === "string") patch.email = req.body.email.trim();
+        if (typeof req.body?.notes === "string") patch.notes = req.body.notes;
+        if (Array.isArray(req.body?.wallets)) {
+          patch.wallets = req.body.wallets.map((w: Record<string, unknown>) => ({
+            id: typeof w?.id === "string" ? w.id : `cw_${randomUUID()}`,
+            ...validateWallet(w),
+          }));
+        }
+        if (Array.isArray(req.body?.bankAccounts)) {
+          // Ids are preserved where supplied so a draft referencing a bank
+          // account keeps pointing at it — and so an edit shows up as DRIFT on
+          // that draft rather than silently re-targeting the payment.
+          patch.bankAccounts = req.body.bankAccounts.map((b: Record<string, unknown>) => ({
+            id: typeof b?.id === "string" ? b.id : `cb_${randomUUID()}`,
+            ...validateBankAccount(b),
+          }));
+        }
+        const saved = await store.updateContact(contact.id, patch);
+        res.json({ contact: saved });
+      } catch (err) {
+        if (err instanceof ContactError) return res.status(400).json({ error: err.message });
+        throw err;
       }
-      if (Array.isArray(req.body?.bankAccounts)) {
-        // Ids are preserved where supplied so a draft referencing a bank
-        // account keeps pointing at it — and so an edit shows up as DRIFT on
-        // that draft rather than silently re-targeting the payment.
-        patch.bankAccounts = req.body.bankAccounts.map((b: Record<string, unknown>) => ({
-          id: typeof b?.id === "string" ? b.id : `cb_${randomUUID()}`,
-          ...validateBankAccount(b),
-        }));
-      }
-      const saved = store.updateContact(contact.id, patch);
-      res.json({ contact: saved });
-    } catch (err) {
-      if (err instanceof ContactError) return res.status(400).json({ error: err.message });
-      throw err;
-    }
+    });
   });
 
-  r.delete("/:orgId/contacts/:contactId", (req, res) => {
-    const ctx = ctxOf(req, res);
-    if (!ctx) return;
-    if (!requirePermission(ctx, res, "contacts.manage")) return;
-    const contact = store.findContact(String(req.params.contactId));
-    if (!contact || contact.orgId !== ctx.org.id) {
-      return res.status(404).json({ error: "no such contact" });
-    }
-    store.removeContact(contact.id);
-    res.json({ deleted: true });
+  r.delete("/:orgId/contacts/:contactId", async (req, res) => {
+    return store.tx(async () => {
+      const ctx = await ctxOf(req, res);
+      if (!ctx) return;
+      if (!requirePermission(ctx, res, "contacts.manage")) return;
+      const contact = await store.findContact(String(req.params.contactId));
+      if (!contact || contact.orgId !== ctx.org.id) {
+        return res.status(404).json({ error: "no such contact" });
+      }
+      await store.removeContact(contact.id);
+      res.json({ deleted: true });
+    });
   });
 
   // ── Imported wallets (read-only treasury view) ────────────────────────────
 
-  r.get("/:orgId/wallets", (req, res) => {
-    const ctx = ctxOf(req, res);
+  r.get("/:orgId/wallets", async (req, res) => {
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     if (!requirePermission(ctx, res, "wallets.read")) return;
-    res.json({ wallets: store.importedWalletsOf(ctx.org.id).map(publicWallet) });
+    res.json({ wallets: (await store.importedWalletsOf(ctx.org.id)).map(publicWallet) });
   });
 
   /**
@@ -1090,89 +1106,91 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
    * stamped `custody: "external"` and the signing paths assert on it. A payment
    * from an imported wallet is built here and signed by its owner.
    */
-  r.post("/:orgId/wallets", (req, res) => {
-    const ctx = ctxOf(req, res);
-    if (!ctx) return;
-    if (!requirePermission(ctx, res, "wallets.manage")) return;
+  r.post("/:orgId/wallets", async (req, res) => {
+    return store.tx(async () => {
+      const ctx = await ctxOf(req, res);
+      if (!ctx) return;
+      if (!requirePermission(ctx, res, "wallets.manage")) return;
 
-    const address = String(req.body?.address ?? "").trim();
-    if (!ADDRESS_RE.test(address)) {
-      return res.status(400).json({ error: `${address || "(empty)"} is not an EVM address.` });
-    }
-    const chainId = Number(req.body?.chainId);
-    if (!Number.isInteger(chainId) || chainId <= 0) {
-      return res.status(400).json({ error: "A wallet needs the chain id it lives on." });
-    }
-    const kind = ["eoa", "safe", "mpc"].includes(String(req.body?.kind))
-      ? (String(req.body.kind) as "eoa" | "safe" | "mpc")
-      : "eoa";
+      const address = String(req.body?.address ?? "").trim();
+      if (!ADDRESS_RE.test(address)) {
+        return res.status(400).json({ error: `${address || "(empty)"} is not an EVM address.` });
+      }
+      const chainId = Number(req.body?.chainId);
+      if (!Number.isInteger(chainId) || chainId <= 0) {
+        return res.status(400).json({ error: "A wallet needs the chain id it lives on." });
+      }
+      const kind = ["eoa", "safe", "mpc"].includes(String(req.body?.kind))
+        ? (String(req.body.kind) as "eoa" | "safe" | "mpc")
+        : "eoa";
 
-    const existing = store.importedWalletsOf(ctx.org.id);
-    if (
-      existing.some(
-        (w) => w.address.toLowerCase() === address.toLowerCase() && w.chainId === chainId,
-      )
-    ) {
-      return res.status(409).json({ error: "That wallet is already imported." });
-    }
-    if (!requireWithinLimit(ctx, res, "importedWallets", existing.length, "imported wallet")) {
-      return;
-    }
-    // The org's own Zold account is already in the books (statement lines);
-    // watching it too would book every movement twice.
-    if (
-      chainId === CHAIN_ID &&
-      store.accounts.some((a) => a.orgId === ctx.org.id && a.address?.toLowerCase() === address.toLowerCase())
-    ) {
-      return res.status(409).json({ error: "That is this organisation's own Zold account. It is already in the books." });
-    }
-    // Books from a past day: the sync starts at that day's first block.
-    // Without it, the wallet is booked from now on.
-    const syncFrom = req.body?.syncFrom ? String(req.body.syncFrom).trim() : undefined;
-    if (syncFrom !== undefined) {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(syncFrom) || !Number.isFinite(Date.parse(`${syncFrom}T00:00:00Z`))) {
-        return res.status(400).json({ error: "Start day must be a date, YYYY-MM-DD." });
+      const existing = await store.importedWalletsOf(ctx.org.id);
+      if (
+        existing.some(
+          (w) => w.address.toLowerCase() === address.toLowerCase() && w.chainId === chainId,
+        )
+      ) {
+        return res.status(409).json({ error: "That wallet is already imported." });
       }
-      if (Date.parse(`${syncFrom}T00:00:00Z`) > Date.now()) {
-        return res.status(400).json({ error: "Start day is in the future." });
+      if (!requireWithinLimit(ctx, res, "importedWallets", existing.length, "imported wallet")) {
+        return;
       }
-      // No ERC-20 exists before Ethereum's first block; an earlier day only
-      // costs the binary search over block times.
-      if (syncFrom < "2015-07-30") {
-        return res.status(400).json({ error: "Start day is before any chain existed; the earliest is 2015-07-30." });
+      // The org's own Zold account is already in the books (statement lines);
+      // watching it too would book every movement twice.
+      if (
+        chainId === CHAIN_ID &&
+        (await store.list("accounts")).some((a) => a.orgId === ctx.org.id && a.address?.toLowerCase() === address.toLowerCase())
+      ) {
+        return res.status(409).json({ error: "That is this organisation's own Zold account. It is already in the books." });
       }
-      if (!requireCapability(ctx, res, "ledger.historicalSync")) return;
-    }
+      // Books from a past day: the sync starts at that day's first block.
+      // Without it, the wallet is booked from now on.
+      const syncFrom = req.body?.syncFrom ? String(req.body.syncFrom).trim() : undefined;
+      if (syncFrom !== undefined) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(syncFrom) || !Number.isFinite(Date.parse(`${syncFrom}T00:00:00Z`))) {
+          return res.status(400).json({ error: "Start day must be a date, YYYY-MM-DD." });
+        }
+        if (Date.parse(`${syncFrom}T00:00:00Z`) > Date.now()) {
+          return res.status(400).json({ error: "Start day is in the future." });
+        }
+        // No ERC-20 exists before Ethereum's first block; an earlier day only
+        // costs the binary search over block times.
+        if (syncFrom < "2015-07-30") {
+          return res.status(400).json({ error: "Start day is before any chain existed; the earliest is 2015-07-30." });
+        }
+        if (!requireCapability(ctx, res, "ledger.historicalSync")) return;
+      }
 
-    const wallet = store.batched(() => {
-      const added = store.addImportedWallet({
-      id: `iw_${randomUUID()}`,
-      orgId: ctx.org.id,
-      address: address.toLowerCase() as `0x${string}`,
-      chainId,
-      label: String(req.body?.label ?? "").trim() || `${kind.toUpperCase()} ${address.slice(0, 8)}`,
-      kind,
-      custody: "external",
-      sync: { status: "pending", ...(syncFrom ? { from: syncFrom } : {}) },
-      createdAt: new Date().toISOString(),
+      const wallet = await store.tx(async () => {
+        const added = await store.addImportedWallet({
+        id: `iw_${randomUUID()}`,
+        orgId: ctx.org.id,
+        address: address.toLowerCase() as `0x${string}`,
+        chainId,
+        label: String(req.body?.label ?? "").trim() || `${kind.toUpperCase()} ${address.slice(0, 8)}`,
+        kind,
+        custody: "external",
+        sync: { status: "pending", ...(syncFrom ? { from: syncFrom } : {}) },
+        createdAt: new Date().toISOString(),
+        });
+        // Rows booked for this address while it was imported before (removing a
+        // wallet keeps its rows) point at the removed wallet. They are this
+        // address's rows exactly when their id is this address's row id, and
+        // they follow the new wallet, its sync and its proof.
+        const live = new Set((await store.importedWalletsOf(ctx.org.id)).map((w) => w.id));
+        const orphans = (await store.ledgerOf(ctx.org.id)).flatMap((e) =>
+          e.source.kind === "wallet" && !live.has(e.source.walletId) && e.chainId === chainId && e.txHash && e.logIndex !== undefined &&
+          e.id === walletEntryId(ctx.org.id, added.address, chainId, e.txHash, e.logIndex)
+            ? [{ ...e, source: { kind: "wallet" as const, walletId: added.id } }]
+            : [],
+        );
+        if (orphans.length) await store.replaceLedgerEntries(orphans);
+        return added;
       });
-      // Rows booked for this address while it was imported before (removing a
-      // wallet keeps its rows) point at the removed wallet. They are this
-      // address's rows exactly when their id is this address's row id, and
-      // they follow the new wallet, its sync and its proof.
-      const live = new Set(store.importedWalletsOf(ctx.org.id).map((w) => w.id));
-      const orphans = store.ledgerOf(ctx.org.id).flatMap((e) =>
-        e.source.kind === "wallet" && !live.has(e.source.walletId) && e.chainId === chainId && e.txHash && e.logIndex !== undefined &&
-        e.id === walletEntryId(ctx.org.id, added.address, chainId, e.txHash, e.logIndex)
-          ? [{ ...e, source: { kind: "wallet" as const, walletId: added.id } }]
-          : [],
-      );
-      if (orphans.length) store.replaceLedgerEntries(orphans);
-      return added;
-    });
-    res.status(201).json({
-      wallet,
-      note: "Imported read-only. We never hold a key for this wallet — payments from it are built here and signed by you. Token transfers in and out are booked from " + (syncFrom ? syncFrom : "now") + " on, once an RPC is configured for its chain.",
+      res.status(201).json({
+        wallet,
+        note: "Imported read-only. We never hold a key for this wallet — payments from it are built here and signed by you. Token transfers in and out are booked from " + (syncFrom ? syncFrom : "now") + " on, once an RPC is configured for its chain.",
+      });
     });
   });
 
@@ -1182,38 +1200,40 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
   // asked whether the signature is valid. Zold holds no key and proposes no
   // transaction. See domain/wallet-ownership.ts.
 
-  const walletOf = (ctx: OrgContext, req: express.Request) => {
-    const wallet = store.findImportedWallet(String(req.params.walletId));
+  const walletOf = async (ctx: OrgContext, req: express.Request) => {
+    const wallet = await store.findImportedWallet(String(req.params.walletId));
     return wallet && wallet.orgId === ctx.org.id ? wallet : undefined;
   };
   const mayProve = (ctx: OrgContext, res: express.Response) =>
     requirePermission(ctx, res, "wallets.manage") && requireCapability(ctx, res, "wallets.manage");
 
   /** A new challenge for the wallet, replacing any that is waiting. */
-  r.post("/:orgId/wallets/:walletId/ownership/challenge", (req, res) => {
-    const ctx = ctxOf(req, res);
-    if (!ctx) return;
-    if (!mayProve(ctx, res)) return;
-    const wallet = walletOf(ctx, req);
-    if (!wallet) return res.status(404).json({ error: "no such wallet" });
-    const challenge = newChallenge(ctx.org, wallet, randomBytes(16).toString("hex"), new Date());
-    store.updateImportedWallet(wallet.id, { ownershipChallenge: challenge });
-    res.status(201).json({
-      challenge: { ...challenge, messageHash: hashMessage(challenge.message) },
-      howToSign:
-        "Sign this exact text in the wallet itself. An ordinary wallet: sign it as a message and send back the signature. " +
-        "A Safe: sign it as a message in Safe{Wallet}; send back the signature it shows once enough owners have signed, " +
-        "or nothing if the Safe signed the message on chain. Zold then asks the wallet's own chain.",
+  r.post("/:orgId/wallets/:walletId/ownership/challenge", async (req, res) => {
+    return store.tx(async () => {
+      const ctx = await ctxOf(req, res);
+      if (!ctx) return;
+      if (!mayProve(ctx, res)) return;
+      const wallet = await walletOf(ctx, req);
+      if (!wallet) return res.status(404).json({ error: "no such wallet" });
+      const challenge = newChallenge(ctx.org, wallet, randomBytes(16).toString("hex"), new Date());
+      await store.updateImportedWallet(wallet.id, { ownershipChallenge: challenge });
+      res.status(201).json({
+        challenge: { ...challenge, messageHash: hashMessage(challenge.message) },
+        howToSign:
+          "Sign this exact text in the wallet itself. An ordinary wallet: sign it as a message and send back the signature. " +
+          "A Safe: sign it as a message in Safe{Wallet}; send back the signature it shows once enough owners have signed, " +
+          "or nothing if the Safe signed the message on chain. Zold then asks the wallet's own chain.",
+      });
     });
   });
 
   /** Prove the wallet with its current challenge. Only the chain's answer
    *  writes anything; a challenge is spent by the proof it produces. */
   r.post("/:orgId/wallets/:walletId/ownership", wrap(async (req, res) => {
-    const ctx = ctxOf(req, res);
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     if (!mayProve(ctx, res)) return;
-    const wallet = walletOf(ctx, req);
+    const wallet = await walletOf(ctx, req);
     if (!wallet) return res.status(404).json({ error: "no such wallet" });
     const challengeId = String(req.body?.challengeId ?? "");
     const pending = wallet.ownershipChallenge;
@@ -1221,33 +1241,33 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       return res.status(409).json({ error: "That is not this wallet's current challenge. Ask for a new one and sign that." });
     }
     if (Date.parse(pending.expiresAt) <= Date.now()) {
-      store.updateImportedWallet(wallet.id, { ownershipChallenge: undefined });
+      await store.updateImportedWallet(wallet.id, { ownershipChallenge: undefined });
       return res.status(410).json({ error: "The challenge has expired. Ask for a new one and sign that." });
     }
     const signature = parseSignature(req.body?.signature);
     if (!signature) return res.status(400).json({ error: "The signature is hex, starting 0x." });
 
     const result = await verifyOwnership(wallet, pending.message, signature);
-    const audit = (outcome: string, reason?: string) =>
-      store.audit(auditEntry("wallet.ownership_checked", {
+    const audit = async (outcome: string, reason?: string) =>
+      await store.audit(auditEntry("wallet.ownership_checked", {
         orgId: ctx.org.id, walletId: wallet.id, chainId: wallet.chainId, address: wallet.address,
         check: "prove", outcome, ...(reason ? { reason } : {}),
       }, ctx.userId));
     if (result.verdict === "unverified") {
-      audit("unverified", result.reason);
+      await audit("unverified", result.reason);
       return res.status(503).json({ proven: false, error: `Not verified: ${result.reason}. Nothing was recorded; try again with the same challenge.` });
     }
     if (result.verdict === "rejected") {
-      audit("rejected", result.reason);
+      await audit("rejected", result.reason);
       return res.status(422).json({ proven: false, error: `The chain does not accept this as the wallet's signature of the challenge: ${result.reason}.` });
     }
-    const answer = store.batched(() => {
+    const answer = await store.tx(async () => {
       // Another request may have spent or replaced the challenge meanwhile.
-      const current = store.findImportedWallet(wallet.id);
+      const current = await store.findImportedWallet(wallet.id);
       if (!current || current.orgId !== ctx.org.id || current.ownershipChallenge?.id !== pending.id) return undefined;
       const at = new Date().toISOString();
-      audit("proven");
-      return store.updateImportedWallet(wallet.id, {
+      await audit("proven");
+      return await store.updateImportedWallet(wallet.id, {
         ownershipChallenge: undefined,
         ownership: {
           status: "proven", method: result.method, message: pending.message, signature,
@@ -1262,28 +1282,28 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
   /** Ask the chain again about the stored proof. A refusal lapses it; a
    *  chain that cannot be asked changes nothing. */
   r.post("/:orgId/wallets/:walletId/ownership/recheck", wrap(async (req, res) => {
-    const ctx = ctxOf(req, res);
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     if (!mayProve(ctx, res)) return;
-    const wallet = walletOf(ctx, req);
+    const wallet = await walletOf(ctx, req);
     if (!wallet) return res.status(404).json({ error: "no such wallet" });
     const proof = wallet.ownership;
     if (!proof) return res.status(409).json({ error: "This wallet has no proof to check. Prove it first." });
 
     const result = await verifyOwnership(wallet, proof.message, proof.signature, proof.method);
-    store.audit(auditEntry("wallet.ownership_checked", {
+    await store.audit(auditEntry("wallet.ownership_checked", {
       orgId: ctx.org.id, walletId: wallet.id, chainId: wallet.chainId, address: wallet.address,
       check: "recheck", outcome: result.verdict, ...(result.verdict !== "valid" ? { reason: result.reason } : {}),
     }, ctx.userId));
     if (result.verdict === "unverified") {
       return res.status(503).json({ error: `Not checked: ${result.reason}. The proof stays as it was.`, wallet: publicWallet(wallet) });
     }
-    const updated = store.batched(() => {
-      const current = store.findImportedWallet(wallet.id);
+    const updated = await store.tx(async () => {
+      const current = await store.findImportedWallet(wallet.id);
       // Proven again meanwhile with another signature: this answer is about the old one.
       if (!current?.ownership || current.ownership.signature !== proof.signature || current.ownership.message !== proof.message) return undefined;
       const at = new Date().toISOString();
-      return store.updateImportedWallet(wallet.id, {
+      return await store.updateImportedWallet(wallet.id, {
         ownership:
           result.verdict === "valid"
             ? { ...current.ownership, status: "proven", checkedAt: at, lapsedAt: undefined, lapseReason: undefined }
@@ -1294,16 +1314,18 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     res.json({ wallet: publicWallet(updated) });
   }));
 
-  r.delete("/:orgId/wallets/:walletId", (req, res) => {
-    const ctx = ctxOf(req, res);
-    if (!ctx) return;
-    if (!requirePermission(ctx, res, "wallets.manage")) return;
-    const wallet = store.findImportedWallet(String(req.params.walletId));
-    if (!wallet || wallet.orgId !== ctx.org.id) {
-      return res.status(404).json({ error: "no such wallet" });
-    }
-    store.removeImportedWallet(wallet.id);
-    res.json({ deleted: true });
+  r.delete("/:orgId/wallets/:walletId", async (req, res) => {
+    return store.tx(async () => {
+      const ctx = await ctxOf(req, res);
+      if (!ctx) return;
+      if (!requirePermission(ctx, res, "wallets.manage")) return;
+      const wallet = await store.findImportedWallet(String(req.params.walletId));
+      if (!wallet || wallet.orgId !== ctx.org.id) {
+        return res.status(404).json({ error: "no such wallet" });
+      }
+      await store.removeImportedWallet(wallet.id);
+      res.json({ deleted: true });
+    });
   });
 
   return r;

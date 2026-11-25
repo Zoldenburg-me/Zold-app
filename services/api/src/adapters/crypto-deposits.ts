@@ -46,6 +46,7 @@ import { readLogWindow } from "../log-range.js";
 import { conversionOutputs } from "../transfers/conversion-outputs.js";
 import { conversionReverted } from "../transfers/activity.js";
 import { userOperationOutcome } from "../wallet/candide.js";
+import { someSeq } from "../seq.js";
 
 
 interface WatchedAddress {
@@ -73,10 +74,10 @@ interface WatchedAddress {
  *   pending account's Safe can already receive, and skipping it moves the
  *   cursor past the transfer for good.
  */
-function watchedAddresses(): WatchedAddress[] {
+async function watchedAddresses(): Promise<WatchedAddress[]> {
   const seen = new Set<string>();
   const out: WatchedAddress[] = [];
-  for (const user of store.users) {
+  for (const user of (await store.list("users"))) {
     const add = (address: `0x${string}`, source: WatchedAddress["source"]) => {
       if (!/^0x[0-9a-fA-F]{40}$/.test(address ?? "") || /^0x0{40}$/i.test(address)) return;
       const key = address.toLowerCase();
@@ -275,22 +276,24 @@ function holdingOnArrival(user: User, deposit: CryptoDeposit): Pick<CryptoDeposi
  * The swap is not performed here. Moving the user's USDC needs a UserOperation
  * their passkey signed, and this runs unattended.
  */
-export function settleOnArrival(deposit: CryptoDeposit): CryptoDeposit {
-  if (deposit.settledAt) return deposit;
-  const user = store.findUser(deposit.userId);
-  if (!user) throw new Error(`unknown user for crypto deposit ${deposit.id}`);
-  const settled = store.updateCryptoDeposit(deposit.id, {
-    // A migrated row may already know its holding (held, refused); only a
-    // fresh one is decided here.
-    ...(deposit.holding === "awaiting_approval" || deposit.holding === undefined
-      ? holdingOnArrival(user, deposit)
-      : {}),
-    ...(deposit.token === "USDC" && deposit.holding !== "converted" ? { creditedUsdc: deposit.amountUsdc ?? 0 } : {}),
-    settledAt: new Date().toISOString(),
+export async function settleOnArrival(deposit: CryptoDeposit): Promise<CryptoDeposit> {
+  return store.tx(async () => {
+    if (deposit.settledAt) return deposit;
+    const user = await store.findUser(deposit.userId);
+    if (!user) throw new Error(`unknown user for crypto deposit ${deposit.id}`);
+    const settled = await store.updateCryptoDeposit(deposit.id, {
+      // A migrated row may already know its holding (held, refused); only a
+      // fresh one is decided here.
+      ...(deposit.holding === "awaiting_approval" || deposit.holding === undefined
+        ? holdingOnArrival(user, deposit)
+        : {}),
+      ...(deposit.token === "USDC" && deposit.holding !== "converted" ? { creditedUsdc: deposit.amountUsdc ?? 0 } : {}),
+      settledAt: new Date().toISOString(),
+    });
+    if (settled.invoiceId) await recordInvoiceSettlement(settled);
+    await noteDepositSettled(settled);
+    return settled;
   });
-  if (settled.invoiceId) recordInvoiceSettlement(settled);
-  noteDepositSettled(settled);
-  return settled;
 }
 
 
@@ -375,7 +378,7 @@ export async function settleConvertedDeposit(
   const deltaWei = after - balanceBeforeWei;
 
   if (receivedWei <= 0n) {
-    return store.updateCryptoDeposit(deposit.id, {
+    return await store.updateCryptoDeposit(deposit.id, {
       holding: "refused",
       reason: "the swap delivered no EURe to your account — nothing has been credited",
       txs,
@@ -384,15 +387,15 @@ export async function settleConvertedDeposit(
   // The scanner read this transaction before the conversion was recorded and
   // booked its output as money in. Crediting it as well would book it twice;
   // the scanner's row stays the one record of that EURe until reviewed.
-  if (output.logIndexes.some((i) => store.findCryptoDeposit(swapTx, i))) {
-    return store.updateCryptoDeposit(deposit.id, {
+  if ((await someSeq(output.logIndexes, async (i) => await store.findCryptoDeposit(swapTx, i)))) {
+    return await store.updateCryptoDeposit(deposit.id, {
       holding: "refused",
       reason: "what the swap delivered was already recorded as a deposit — left for review rather than credited twice",
       txs: stepped([]),
     });
   }
   if (deltaWei < receivedWei) {
-    return store.updateCryptoDeposit(deposit.id, {
+    return await store.updateCryptoDeposit(deposit.id, {
       holding: "refused",
       reason:
         `the swap delivered €${eur.fromWei(receivedWei)}, but the account's balance shows only €${eur.fromWei(deltaWei)} more ` +
@@ -401,7 +404,7 @@ export async function settleConvertedDeposit(
     });
   }
   if (receivedWei < quote.minOut) {
-    return store.updateCryptoDeposit(deposit.id, {
+    return await store.updateCryptoDeposit(deposit.id, {
       holding: "refused",
       reason:
         `the swap delivered €${eur.fromWei(receivedWei)}, under the €${eur.fromWei(quote.minOut)} ` +
@@ -438,7 +441,7 @@ export async function settleConvertedDeposit(
     const receiptPortionEur = deposit.receipt
       ? Number((BigInt(Math.round(deposit.receipt.amountEur * 100)) * amountInUnits) / BigInt(deposit.amountUnits)) / 100
       : undefined;
-    const held = store.updateCryptoDeposit(deposit.id, {
+    const held = await store.updateCryptoDeposit(deposit.id, {
       holding: "held",
       partials: [
         ...partials,
@@ -454,7 +457,7 @@ export async function settleConvertedDeposit(
       txs,
       reason: `part of it converted; ${usd.fromUnits(leftover)} ${usdToken().symbol} is still held and can be converted any time`,
     });
-    writeStatementLines();
+    await writeStatementLines();
     return held;
   }
 
@@ -477,7 +480,7 @@ export async function settleConvertedDeposit(
    * value they were paid at does not change), and the statement writer adds
    * the disposal line — never a second receipt.
    */
-  const settled = store.updateCryptoDeposit(deposit.id, {
+  const settled = await store.updateCryptoDeposit(deposit.id, {
     holding: "converted",
     creditedEur,
     creditedUsdc: undefined,
@@ -489,9 +492,9 @@ export async function settleConvertedDeposit(
     txs,
     reason: undefined,
   });
-  if (settled.invoiceId) recordInvoiceSettlement(settled);
-  noteDepositSettled(settled);
-  writeStatementLines();
+  if (settled.invoiceId) await recordInvoiceSettlement(settled);
+  await noteDepositSettled(settled);
+  await writeStatementLines();
   return settled;
 }
 
@@ -500,9 +503,9 @@ export async function settleConvertedDeposit(
  * `unconfirmed`, after a later write threw. A second failure leaves it set:
  * the row is then blocked (fail closed), as before.
  */
-export function clearSettledIntent(id: string): void {
+export async function clearSettledIntent(id: string): Promise<void> {
   try {
-    store.updateCryptoDeposit(id, { conversionIntent: undefined });
+    await store.updateCryptoDeposit(id, { conversionIntent: undefined });
   } catch (err) {
     console.error(`crypto-in: deposit ${id}: conversion intent not cleared: ${describeCause(err)}`);
   }
@@ -523,7 +526,7 @@ export function clearSettledIntent(id: string): void {
  * Runs before a scan, so the step is on the row before its logs are read.
  */
 export async function settleUnconfirmedConversions(outcome = userOperationOutcome): Promise<void> {
-  for (const d of [...store.cryptoDeposits]) {
+  for (const d of [...await store.list("cryptoDeposits")]) {
     const step = d.holding === "unconfirmed" ? d.txs.find((t) => t.step === "safe.swap(usdc->eure).unconfirmed") : undefined;
     if (!step) continue;
     const userOpHash = step.hash;
@@ -537,13 +540,13 @@ export async function settleUnconfirmedConversions(outcome = userOperationOutcom
     if (!op) continue;
     const rest = d.txs.filter((t) => t !== step);
     if (!op.success) {
-      store.updateCryptoDeposit(d.id, {
+      await store.updateCryptoDeposit(d.id, {
         reason: `the swap ${userOpHash} was included but reverted — nothing was converted; it is being checked before it is offered again`,
         txs: [...rest, { step: "safe.swap(usdc->eure).reverted", hash: op.txHash }, { step: "userOperation", hash: userOpHash }],
       });
       continue;
     }
-    const user = store.findUser(d.userId);
+    const user = await store.findUser(d.userId);
     if (!user) continue;
     /**
      * The swap's own EURe logs, read before the step is rewritten. A swap
@@ -561,7 +564,7 @@ export async function settleUnconfirmedConversions(outcome = userOperationOutcom
     }
     if (!output) continue;
     // Output the scanner booked first stays its record, as settling would leave it.
-    const booked = output.logIndexes.some((i) => store.findCryptoDeposit(op.txHash, i));
+    const booked = await someSeq(output.logIndexes, async (i) => await store.findCryptoDeposit(op.txHash, i));
     const txs = [
       ...rest,
       { step: "safe.swap(usdc->eure)", hash: op.txHash, outputLogIndexes: booked ? [] : output.logIndexes },
@@ -570,14 +573,14 @@ export async function settleUnconfirmedConversions(outcome = userOperationOutcom
     const intent = d.conversionIntent;
     // Without the signed quote there is no floor to settle against.
     if (!intent) {
-      store.updateCryptoDeposit(d.id, {
+      await store.updateCryptoDeposit(d.id, {
         holding: "refused",
         reason: "the swap went through, but its signed quote was not kept — nothing has been credited; it is being checked and will not be offered again",
         txs,
       });
       continue;
     }
-    const executed = store.updateCryptoDeposit(d.id, { reason: "the swap went through; recording what arrived", txs });
+    const executed = await store.updateCryptoDeposit(d.id, { reason: "the swap went through; recording what arrived", txs });
     try {
       const receipt = await publicClient.getTransactionReceipt({ hash: op.txHash as `0x${string}` });
       // The block before the swap: what the Safe held when it ran.
@@ -596,18 +599,18 @@ export async function settleUnconfirmedConversions(outcome = userOperationOutcom
         before, txs,
         { userOpHash, txHash: op.txHash, blockNumber: Number(receipt.blockNumber), ...(at ? { at } : {}), amountInUnits: amountIn.toString() },
       );
-      store.updateCryptoDeposit(d.id, { conversionIntent: undefined });
+      await store.updateCryptoDeposit(d.id, { conversionIntent: undefined });
     } catch (err) {
       console.error(`crypto-in: deposit ${d.id}: swap ${op.txHash} executed but was not recorded: ${describeCause(err)}`);
       // Settling may have credited the row before the throw; that credit stands.
       // Its outcome is on record (settling writes holding, fill and txs in one
       // write), so the intent goes too, or the rest of a partial fill would be
       // blocked as an unrecorded outcome.
-      if (store.cryptoDeposits.find((x) => x.id === d.id)?.holding !== "unconfirmed") {
-        clearSettledIntent(d.id);
+      if ((await store.list("cryptoDeposits")).find((x) => x.id === d.id)?.holding !== "unconfirmed") {
+        await clearSettledIntent(d.id);
         continue;
       }
-      store.updateCryptoDeposit(d.id, {
+      await store.updateCryptoDeposit(d.id, {
         holding: "refused",
         reason: "the swap went through, but what arrived could not be recorded — nothing has been credited; it is being checked and will not be offered again",
       });
@@ -624,11 +627,13 @@ export async function settleUnconfirmedConversions(outcome = userOperationOutcom
  *
  * Appends: an invoice can be settled by more than one payment.
  */
-export function recordInvoiceSettlement(deposit: CryptoDeposit): void {
-  if (!deposit.invoiceId) return;
-  const invoice = store.invoices.find((i) => i.id === deposit.invoiceId);
-  if (!invoice) return;
-  store.updateInvoice(invoice.id, settlementUpdate(invoice, buildCryptoSettlement(deposit)));
+export async function recordInvoiceSettlement(deposit: CryptoDeposit): Promise<void> {
+  return store.tx(async () => {
+    if (!deposit.invoiceId) return;
+    const invoice = (await store.list("invoices")).find((i) => i.id === deposit.invoiceId);
+    if (!invoice) return;
+    await store.updateInvoice(invoice.id, settlementUpdate(invoice, buildCryptoSettlement(deposit)));
+  });
 }
 
 
@@ -690,7 +695,7 @@ export async function pollCryptoDepositsOnce(outcome = userOperationOutcome): Pr
     let found = 0;
     try {
       // Nothing watched asks the chain nothing, and still counts as a scan.
-      if (watchedAddresses().length > 0) {
+      if ((await watchedAddresses()).length > 0) {
         /**
          * One head per tick, not per window: a tick reads the chain up to where
          * it stood when the tick began, and the next tick goes on from there.
@@ -726,7 +731,7 @@ export async function pollCryptoDepositsOnce(outcome = userOperationOutcome): Pr
 }
 
 async function scanCryptoDeposits(head: bigint): Promise<{ found: number; more: boolean }> {
-  const watched = watchedAddresses();
+  const watched = await watchedAddresses();
   if (watched.length === 0) return { found: 0, more: false };
   const cursorKey = SCAN_CURSOR_KEY();
   const safeHead = head - BigInt(CRYPTO_IN.confirmations);
@@ -734,11 +739,11 @@ async function scanCryptoDeposits(head: bigint): Promise<{ found: number; more: 
 
   // A fresh install looks back one bounded window so a just-finished deposit
   // can still appear in Activity after the scanner deploys or restarts.
-  const cursor = store.cryptoDepositCursor(cursorKey);
+  const cursor = await store.cryptoDepositCursor(cursorKey);
   if (cursor === undefined) {
     // Read later in windows of maxBlockSpan, so it can be longer than one.
     const lookback = CRYPTO_IN.firstLookbackBlocks;
-    store.setCryptoDepositCursor(cursorKey, safeHead > lookback ? safeHead - lookback : 0n);
+    await store.setCryptoDepositCursor(cursorKey, safeHead > lookback ? safeHead - lookback : 0n);
     return { found: 0, more: false };
   }
   if (safeHead <= cursor) return { found: 0, more: false };
@@ -798,7 +803,7 @@ async function scanCryptoDeposits(head: bigint): Promise<{ found: number; more: 
       if (token.token === "EURE" && from === (addrs().swapper ?? "").toLowerCase()) continue;
       const txHash = log.transactionHash!;
       const logIndex = Number(log.logIndex);
-      if (store.findCryptoDeposit(txHash, logIndex)) continue;
+      if ((await store.findCryptoDeposit(txHash, logIndex))) continue;
 
       const pageMatch = matches.find((m) => m.source === "payment-page" && m.user.paymentPage?.autoConvert);
       const match = token.token === "USDC" && pageMatch ? pageMatch : matches[0];
@@ -813,7 +818,7 @@ async function scanCryptoDeposits(head: bigint): Promise<{ found: number; more: 
       // (transfers/activity.ts lists the same rule). Another EURe
       // log in the same bundle is money in. Read now, not before this scan's
       // awaits: a conversion settled meanwhile has named its output.
-      if (token.token === "EURE" && conversionOutputs(store.cryptoDeposits, store.transfers)(txHash, logIndex, user.id)) continue;
+      if (token.token === "EURE" && conversionOutputs(await store.list("cryptoDeposits"), await store.list("transfers"))(txHash, logIndex, user.id)) continue;
       const now = new Date().toISOString();
       /**
        * The acquisition value, stamped once at detection with the rate's
@@ -834,7 +839,7 @@ async function scanCryptoDeposits(head: bigint): Promise<{ found: number; more: 
        * payment link or converted a second time.
        */
       const depositId = randomUUID();
-      const recorded = store.addCryptoDeposit({
+      const recorded = await store.addCryptoDeposit({
           id: depositId,
           userId: user.id,
           chainId: CHAIN_ID,
@@ -863,28 +868,28 @@ async function scanCryptoDeposits(head: bigint): Promise<{ found: number; more: 
     }
   }
 
-  store.setCryptoDepositCursor(cursorKey, toBlock);
+  await store.setCryptoDepositCursor(cursorKey, toBlock);
 
   // Does this money pay a link? Decided BEFORE settlement, so the link's
   // invoice is on the deposit when the settlement is written.
   for (const deposit of fresh) {
     try {
-      attributeDepositToRequest(deposit);
+      await attributeDepositToRequest(deposit);
     } catch (err: any) {
       console.error(`crypto-in: could not attribute deposit ${deposit.id} to a request: ${describeCause(err)}`);
     }
   }
 
   for (const stale of fresh) {
-    const deposit = store.cryptoDeposits.find((d) => d.id === stale.id) ?? stale;
+    const deposit = (await store.list("cryptoDeposits")).find((d) => d.id === stale.id) ?? stale;
     try {
-      settleOnArrival(deposit);
+      await settleOnArrival(deposit);
     } catch (err: any) {
       // Left without settledAt, so the next sweep writes it.
       console.error(`crypto-in: could not settle deposit ${deposit.id}: ${describeCause(err)}`);
     }
   }
-  if (fresh.length) writeStatementLines();
+  if (fresh.length) await writeStatementLines();
   return { found: fresh.length, more: toBlock < safeHead };
 }
 
@@ -898,23 +903,23 @@ async function scanCryptoDeposits(head: bigint): Promise<{ found: number; more: 
 export async function sweepPendingCryptoDeposits(): Promise<number> {
   if (!CRYPTO_IN.enabled) return 0;
   let n = 0;
-  for (const d of [...store.cryptoDeposits]) {
+  for (const d of [...await store.list("cryptoDeposits")]) {
     if (d.settledAt) continue;
     try {
       // A crash between recording and attributing would otherwise settle the
       // deposit with no pay link, and nothing attributes it afterwards.
-      attributeDepositToRequest(d);
+      await attributeDepositToRequest(d);
     } catch (err: any) {
       console.error(`crypto-in: could not attribute deposit ${d.id} to a request: ${describeCause(err)}`);
     }
     try {
-      settleOnArrival(store.cryptoDeposits.find((x) => x.id === d.id) ?? d);
+      await settleOnArrival((await store.list("cryptoDeposits")).find((x) => x.id === d.id) ?? d);
       n++;
     } catch (err: any) {
       console.error(`crypto-in: could not settle deposit ${d.id}: ${describeCause(err)}`);
     }
   }
-  if (n) writeStatementLines();
+  if (n) await writeStatementLines();
   return n;
 }
 
@@ -935,7 +940,7 @@ export async function applyCryptoRescan(
     cryptoInScan.rescan = { fromBlock: fromBlock.toString(), state };
     return state;
   };
-  if (store.cryptoDepositCursor(RESCAN_APPLIED_KEY()) === fromBlock) return note("already-applied");
+  if ((await store.cryptoDepositCursor(RESCAN_APPLIED_KEY())) === fromBlock) return note("already-applied");
 
   const head = await publicClient.getBlockNumber({ cacheTime: 0 });
   if (fromBlock > head || head - fromBlock > maxBlocks) {
@@ -946,9 +951,9 @@ export async function applyCryptoRescan(
     return note("refused");
   }
   const target = fromBlock > 0n ? fromBlock - 1n : 0n;
-  const cursor = store.cryptoDepositCursor(SCAN_CURSOR_KEY());
-  if (cursor === undefined || cursor > target) store.setCryptoDepositCursor(SCAN_CURSOR_KEY(), target);
-  store.setCryptoDepositCursor(RESCAN_APPLIED_KEY(), fromBlock);
+  const cursor = await store.cryptoDepositCursor(SCAN_CURSOR_KEY());
+  if (cursor === undefined || cursor > target) await store.setCryptoDepositCursor(SCAN_CURSOR_KEY(), target);
+  await store.setCryptoDepositCursor(RESCAN_APPLIED_KEY(), fromBlock);
   console.log(`crypto-in: rescanning from block ${fromBlock} (cursor was ${cursor ?? "unset"}, head ${head})`);
   return note("applied");
 }

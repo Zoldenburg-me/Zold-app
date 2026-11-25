@@ -27,7 +27,7 @@ import { turnkeyGuardiansEnabled } from "./wallet/turnkey.js";
  * flag can be learned from a single refused request anyway. /api/health
  * already publishes the contract addresses.
  */
-export function capabilities() {
+export async function capabilities() {
   return {
     /** Deposits are real Monerium IBAN transfers, always: there is no mock. */
     sandbox: true,
@@ -58,8 +58,8 @@ export function capabilities() {
      *  (merchant-links.ts)? Needs CHECKOUT_SERVICE_ORIGIN, an issued checkout
      *  credential and the data encryption key. The dashboard draws the
      *  connect flow only when this is true. */
-    merchantLinks: (() => {
-      const m = merchantLinksAvailable();
+    merchantLinks: await (async () => {
+      const m = await merchantLinksAvailable();
       return m.available ? { available: true, checkoutOrigin: m.checkoutOrigin } : { available: false };
     })(),
     /**

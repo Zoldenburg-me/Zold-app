@@ -34,9 +34,10 @@ import { liveMonerium, moneriumOverview, storedMonerium } from "../admin/moneriu
 import { maskIdentifier } from "../admin/mask.js";
 import { attachRedeemOrder, mayAttachRedeemOrder } from "../transfers/attach-redeem-order.js";
 import { matchesPayoutEvidence } from "../transfers/review-evidence.js";
+import { mapSeq } from "../seq.js";
 
-function adminUserSummary(userId: string) {
-  const u = store.findUser(userId);
+async function adminUserSummary(userId: string) {
+  const u = await store.findUser(userId);
   if (!u) return undefined;
   return {
     id: u.id,
@@ -55,8 +56,8 @@ function lastHash(txs: { step: string; hash: string }[] = []) {
   return txs.at(-1)?.hash;
 }
 
-function adminTransfer(transfer: Transfer) {
-  const quote = store.findQuote(transfer.quoteId);
+async function adminTransfer(transfer: Transfer) {
+  const quote = await store.findQuote(transfer.quoteId);
   // A modern row records the Stellar hash as anchor.payment.sent too; only a
   // hash no such step carries (a legacy row, or one that differs) adds an entry.
   const payoutHash = transfer.pickup?.anchorPaymentHash;
@@ -73,7 +74,7 @@ function adminTransfer(transfer: Transfer) {
   return {
     kind: "transfer" as const,
     id: transfer.id,
-    user: adminUserSummary(transfer.userId),
+    user: await adminUserSummary(transfer.userId),
     quote,
     rail: transfer.rail,
     state: transfer.state,
@@ -128,11 +129,11 @@ function adminTransfer(transfer: Transfer) {
 
 const NOT_IN_REVIEW = "only a transfer in MANUAL_REVIEW can be resolved, and only once";
 
-function adminFunding(deposit: CryptoDeposit) {
+async function adminFunding(deposit: CryptoDeposit) {
   return {
     kind: "funding" as const,
     id: deposit.id,
-    user: adminUserSummary(deposit.userId),
+    user: await adminUserSummary(deposit.userId),
     chainId: deposit.chainId,
     token: deposit.token,
     holding: deposit.holding,
@@ -196,8 +197,8 @@ export function createAdminRouter() {
     "/admin/stats",
     wrap(async (req, res) => {
       if (!requireOperator(req, res)) return;
-      const users = store.users;
-      const transfers = store.transfers;
+      const users = await store.list("users");
+      const transfers = await store.list("transfers");
       const totalUsers = users.length;
       const kycPending = users.filter((u) => u.kycStatus === "pending" || u.kycStatus === "manual_review").length;
       const kycApproved = users.filter((u) => u.kycStatus === "approved").length;
@@ -239,7 +240,7 @@ export function createAdminRouter() {
       if (evidence.length > REVIEW_EVIDENCE_MAX) {
         return res.status(400).json({ error: `evidence must be ${REVIEW_EVIDENCE_MAX} characters or fewer` });
       }
-      const transfer = store.findTransfer(String(req.params.id));
+      const transfer = await store.findTransfer(String(req.params.id));
       if (!transfer) return res.status(404).json({ error: "transfer not found" });
       if (transfer.state !== "MANUAL_REVIEW" || transfer.reviewResolution) {
         return res.status(409).json({ error: NOT_IN_REVIEW });
@@ -282,7 +283,7 @@ export function createAdminRouter() {
           return res.status(409).json({ error: `that is not this transfer's processed Monerium redeem order: ${attached.reason}` });
         }
       }
-      const result = store.resolveTransferReview(String(req.params.id), {
+      const result = await store.resolveTransferReview(String(req.params.id), {
         state: state as ReviewResolutionState,
         note,
         by: operatorLabel(req),
@@ -304,7 +305,7 @@ export function createAdminRouter() {
         }
         return res.status(409).json({ error: NOT_IN_REVIEW });
       }
-      res.json(adminTransfer(result.transfer));
+      res.json(await adminTransfer(result.transfer));
     }),
   );
 
@@ -321,22 +322,22 @@ export function createAdminRouter() {
     wrap(async (req, res) => {
       if (!requireOperator(req, res)) return;
       res.json({
-        ...overview(),
+        ...(await overview()),
         operatorGas: await operatorGas().catch(() => null),
       });
     }),
   );
 
   /** Every open problem from every place one is recorded (admin/overview.ts). */
-  router.get("/admin/issues", (req, res) => {
+  router.get("/admin/issues", async (req, res) => {
     if (!requireOperator(req, res)) return;
-    res.json({ issues: issues() });
+    res.json({ issues: await issues() });
   });
 
   // The same allowlisted projection the app gets, plus where the account
   // stands. No token, secret or ciphertext is in either.
-  const adminUser = (u: Parameters<typeof publicUser>[0]) => ({
-    ...publicUser(u),
+  const adminUser = async (u: Parameters<typeof publicUser>[0]) => ({
+    ...(await publicUser(u)),
     onboarding: onboardingOf(u),
     recoveryEnrolment: recoveryEnrolment(u),
   });
@@ -345,7 +346,7 @@ export function createAdminRouter() {
     "/admin/users",
     wrap(async (req, res) => {
       if (!requireOperator(req, res)) return;
-      res.json(store.users.map(adminUser));
+      res.json(await mapSeq(await store.list("users"), adminUser));
     }),
   );
 
@@ -354,23 +355,22 @@ export function createAdminRouter() {
     "/admin/users/:id",
     wrap(async (req, res) => {
       if (!requireOperator(req, res)) return;
-      const u = store.findUser(String(req.params.id));
+      const u = await store.findUser(String(req.params.id));
       if (!u) return res.status(404).json({ error: "user not found" });
       res.json({
-        user: adminUser(u),
+        user: await adminUser(u),
         transactions: [
-          ...store.transfers.filter((t) => t.userId === u.id).map(adminTransfer),
-          ...store.cryptoDeposits.filter((d) => d.userId === u.id).map(adminFunding),
+          ...(await mapSeq((await store.list("transfers")).filter((t) => t.userId === u.id), adminTransfer)),
+          ...(await mapSeq((await store.list("cryptoDeposits")).filter((d) => d.userId === u.id), adminFunding)),
         ].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)),
-        recoveries: store.recoveryRequestsForUser(u.id).map((r) => ({
+        recoveries: (await store.recoveryRequestsForUser(u.id)).map((r) => ({
           id: r.id, mode: r.mode, status: r.status, requestedAt: r.requestedAt,
           reference: r.zoldenburg?.reference, finalizedAt: r.finalizedAt, canceledAt: r.canceledAt,
         })),
-        memberships: store.members
-          .filter((m) => m.userId === u.id)
-          .map((m) => ({ orgId: m.orgId, org: store.findOrganisation(m.orgId)?.name, role: m.role, status: m.status })),
-        issues: issues().filter((i) => i.userId === u.id),
-        audit: store.auditFor(u.id, 100),
+        memberships: await mapSeq((await store.list("members"))
+          .filter((m) => m.userId === u.id), async (m) => ({ orgId: m.orgId, org: (await store.findOrganisation(m.orgId))?.name, role: m.role, status: m.status })),
+        issues: (await issues()).filter((i) => i.userId === u.id),
+        audit: await store.auditFor(u.id, 100),
       });
     }),
   );
@@ -384,10 +384,10 @@ export function createAdminRouter() {
     "/admin/users/:id/monerium",
     wrap(async (req, res) => {
       if (!requireOperator(req, res)) return;
-      const u = store.findUser(String(req.params.id));
+      const u = await store.findUser(String(req.params.id));
       if (!u) return res.status(404).json({ error: "user not found" });
       res.json({
-        stored: storedMonerium(u),
+        stored: await storedMonerium(u),
         ...(req.query.live === "1" ? { live: await liveMonerium(u, operatorLabel(req)) } : {}),
       });
     }),
@@ -416,8 +416,8 @@ export function createAdminRouter() {
       const limit = Math.min(500, Math.max(1, asInt(req.query.limit, 200)));
       const offset = Math.max(0, asInt(req.query.offset, 0));
       const entries = [
-        ...store.transfers.map(adminTransfer),
-        ...store.cryptoDeposits.map(adminFunding),
+        ...(await mapSeq(await store.list("transfers"), adminTransfer)),
+        ...(await mapSeq(await store.list("cryptoDeposits"), adminFunding)),
       ].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
       res.json({
         total: entries.length,

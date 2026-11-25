@@ -23,7 +23,6 @@ const tmp = mkdtempSync(path.join(tmpdir(), "zold-store-backend-"));
 process.env.TRANSF_DB_PATH = path.join(tmp, "db.json");
 
 const { initStore, store } = await import("../services/api/src/store.js");
-const { jsonBackend } = await import("../services/api/src/store/backend.js");
 const { createPgStore } = await import("../services/api/src/store/pg/backend.js");
 const { migrate, readMigrations } = await import("../services/api/src/store/pg/migrate.js");
 const { pgliteDatabase, pgPoolConfig } = await import("../services/api/src/store/pg/sql.js");
@@ -31,8 +30,8 @@ const { pgliteDatabase, pgPoolConfig } = await import("../services/api/src/store
 const pglite = async () => pgliteDatabase((await PGlite.create()) as never);
 
 // ── The suite, on both backends ────────────────────────────────────────────
-initStore();
-await storeSuite(jsonBackend(store));
+await initStore();
+await storeSuite(store);
 console.log("ok - store suite on the JSON backend");
 
 {
@@ -77,15 +76,15 @@ console.log("ok - store suite on the JSON backend");
   // A user's and an organisation's pages share one namespace (§1.2).
   await s.addUser({ id: "u_1", address: `0x${"11".repeat(20)}`, iban: "", createdAt: now, paymentPage: { handle: "shared" } } as any);
   await assert.rejects(
-    () => s.addOrganisation({ id: "org_1", type: "business", name: "O", createdAt: now, updatedAt: now, paymentPage: { handle: "SHARED" } } as any, false),
+    async () => await s.addOrganisation({ id: "org_1", type: "business", name: "O", createdAt: now, updatedAt: now, paymentPage: { handle: "SHARED" } } as any, false),
     /payment page handle is taken/,
   );
   assert.equal(await s.findOrganisation("org_1"), undefined, "the refused org was not written");
   await s.addOrganisation({ id: "org_1", type: "business", name: "O", createdAt: now, updatedAt: now } as any, false);
-  await assert.rejects(() => s.updateOrganisation("org_1", { paymentPage: { handle: "shared" } } as any), /taken/);
+  await assert.rejects(async () => await s.updateOrganisation("org_1", { paymentPage: { handle: "shared" } } as any), /taken/);
   await s.updateUser("u_1", { paymentPage: { handle: "mine" } } as any);
   assert.equal((await s.updateOrganisation("org_1", { paymentPage: { handle: "shared" } } as any)).paymentPage?.handle, "shared", "a freed handle can be claimed");
-  await assert.rejects(() => s.updateUser("u_1", { paymentPage: { handle: "Shared" } } as any), /taken/);
+  await assert.rejects(async () => await s.updateUser("u_1", { paymentPage: { handle: "Shared" } } as any), /taken/);
   assert.deepEqual(
     (await db.query("SELECT handle_lc, owner_kind, owner_id FROM payment_handles ORDER BY handle_lc")).rows,
     [{ handle_lc: "mine", owner_kind: "user", owner_id: "u_1" }, { handle_lc: "shared", owner_kind: "organisation", owner_id: "org_1" }],
@@ -93,12 +92,12 @@ console.log("ok - store suite on the JSON backend");
 
   // Credentials and idempotency keys are unique in the table, whatever the caller checked.
   await s.addSession({ id: "s_1", userId: "u_1", tokenHash: "th", createdAt: now, lastUsedAt: now, expiresAt: now });
-  await assert.rejects(() => s.addSession({ id: "s_2", userId: "u_1", tokenHash: "th", createdAt: now, lastUsedAt: now, expiresAt: now }), /duplicate key/);
+  await assert.rejects(async () => await s.addSession({ id: "s_2", userId: "u_1", tokenHash: "th", createdAt: now, lastUsedAt: now, expiresAt: now }), /duplicate key/);
   await s.addUser({ id: "u_2", address: `0x${"22".repeat(20)}`, iban: "", createdAt: now, passkey: { credentialId: "cred" } } as any);
-  await assert.rejects(() => s.addUser({ id: "u_3", address: `0x${"33".repeat(20)}`, iban: "", createdAt: now, passkey: { credentialId: "cred" } } as any), /duplicate key/);
+  await assert.rejects(async () => await s.addUser({ id: "u_3", address: `0x${"33".repeat(20)}`, iban: "", createdAt: now, passkey: { credentialId: "cred" } } as any), /duplicate key/);
   await s.addReceiptShare({ id: "rs_1", slug: "a", transferId: "t", userId: "u_1", fields: {} as any, createdAt: now, updatedAt: now, expiresAt: now });
   await assert.rejects(
-    () => s.addReceiptShare({ id: "rs_2", slug: "b", transferId: "t", userId: "u_1", fields: {} as any, createdAt: now, updatedAt: now, expiresAt: now }),
+    async () => await s.addReceiptShare({ id: "rs_2", slug: "b", transferId: "t", userId: "u_1", fields: {} as any, createdAt: now, updatedAt: now, expiresAt: now }),
     /duplicate key/,
     "one live share per transfer",
   );

@@ -29,7 +29,7 @@ import type {
   OrgSafePlan,
 } from "../../domain/types.js";
 import { describeCause } from "../../http/log-cause.js";
-import type { Collection, StoreBackend } from "../backend.js";
+import { currentTx, inScope, type Collection, type StoreBackend, type StoreMethods } from "../backend.js";
 import { defaultChartRows, type Db } from "../db.js";
 import {
   applyOrgSafePlan,
@@ -198,13 +198,12 @@ async function hashOnRecord(q: Sql, hash: string, userId: string): Promise<strin
   );
 }
 
-type TransferStateListener = (t: Transfer, from: Transfer["state"]) => void;
-type PaymentRequestStateListener = (r: PaymentRequest, from: PaymentRequest["state"]) => void;
+type TransferStateListener = (t: Transfer, from: Transfer["state"]) => void | Promise<void>;
+type PaymentRequestStateListener = (r: PaymentRequest, from: PaymentRequest["state"]) => void | Promise<void>;
+
+type TxFn = <T>(fn: (q: Sql) => Promise<T>) => Promise<T>;
 
 export function createPgStore(database: Database): StoreBackend {
-  const tx = <T>(fn: (q: Sql) => Promise<T>) => database.tx(fn);
-  const q: Sql = database;
-
   const capHolds = new Map<string, { userId: string; eur: number; day: string }>();
   const transferStateListeners: TransferStateListener[] = [];
   const paymentRequestStateListeners: PaymentRequestStateListener[] = [];
@@ -214,7 +213,9 @@ export function createPgStore(database: Database): StoreBackend {
     if (t.state === from) return;
     for (const listener of transferStateListeners) {
       try {
-        listener(t, from);
+        Promise.resolve(listener(t, from)).catch((err) =>
+          console.error(`store: transfer state listener failed for ${t.id}: ${describeCause(err)}`),
+        );
       } catch (err) {
         console.error(`store: transfer state listener failed for ${t.id}: ${describeCause(err)}`);
       }
@@ -224,13 +225,18 @@ export function createPgStore(database: Database): StoreBackend {
     if (r.state === from) return;
     for (const listener of paymentRequestStateListeners) {
       try {
-        listener(r, from);
+        Promise.resolve(listener(r, from)).catch((err) =>
+          console.error(`store: payment request state listener failed for ${r.id}: ${describeCause(err)}`),
+        );
       } catch (err) {
         console.error(`store: payment request state listener failed for ${r.id}: ${describeCause(err)}`);
       }
     }
   }
 
+  /** The store's methods over `q`; `tx` runs a block as one transaction (on
+   *  a transaction's own client it just runs it there). */
+  function build(q: Sql, tx: TxFn): StoreMethods {
   async function updateUserIn(t: Sql, id: string, patch: Partial<User>): Promise<User> {
     const u = await locked<User>(t, TABLE.users, id);
     if (!u) throw new Error(`unknown user ${id}`);
@@ -274,7 +280,7 @@ export function createPgStore(database: Database): StoreBackend {
     return r.rows.length > 0;
   }
 
-  const backend: StoreBackend = {
+  const backend: StoreMethods = {
     async list<K extends Collection>(name: K): Promise<Db[K]> {
       if (name === "processedMoneriumOrders") {
         const r = await q.query<{ id: string }>("SELECT order_id AS id FROM processed_monerium_orders ORDER BY seq");
@@ -294,7 +300,6 @@ export function createPgStore(database: Database): StoreBackend {
       }
       return (await rows(q, TABLE[name as keyof typeof TABLE])) as Db[K];
     },
-    close: () => database.close(),
 
     async addUser(u: User) {
       await tx((t) => insertUser(t, u));
@@ -472,7 +477,7 @@ export function createPgStore(database: Database): StoreBackend {
       await insert(q, TABLE.transfers, t);
     },
     async holdDailyCap(userId, eur, capEur, used) {
-      const usedEur = used();
+      const usedEur = await used();
       if (usedEur + eur > capEur) return { ok: false, usedEur, capEur };
       const holdId = randomUUID();
       capHolds.set(holdId, { userId, eur, day: new Date().toISOString().slice(0, 10) });
@@ -914,4 +919,26 @@ export function createPgStore(database: Database): StoreBackend {
     documentsForOrg: (orgId) => rows<StoredDocument>(q, TABLE.documents, "org_id = $1", [orgId]),
   };
   return backend;
+  }
+
+  const owner = {};
+  const base = build(database, (fn) => database.tx(fn));
+  // A call made inside a transaction runs on its client, through `t` or `store`.
+  const routed: Record<string, unknown> = {};
+  for (const [name, f] of Object.entries(base)) {
+    routed[name] =
+      typeof f !== "function" || name === "onTransferStateChange" || name === "onPaymentRequestStateChange"
+        ? f
+        : (...args: unknown[]) => ((currentTx(owner) ?? base) as unknown as Record<string, (...a: unknown[]) => unknown>)[name](...args);
+  }
+  const store: StoreBackend = {
+    ...(routed as StoreMethods),
+    tx<T>(fn: (t: StoreMethods) => Promise<T> | T): Promise<T> {
+      const open = currentTx(owner);
+      if (open) return Promise.resolve().then(() => fn(open));
+      return database.tx((client) => inScope(owner, build(client, (f) => f(client)), fn));
+    },
+    close: () => database.close(),
+  };
+  return store;
 }

@@ -388,24 +388,24 @@ const fixedValue = async (q: { amount: number; token: string }) => ({
   valuation: { eurPerUnit: 0.8, eurValue: Math.round(q.amount * 80) / 100, source: "fixed", asOf: "2026-09-30", symbol: q.token.toLowerCase() === USDC_MAINNET.toLowerCase() ? "USDC" : "ARB" },
 });
 
-const freshWallet = (over: Partial<ImportedWallet> = {}) => {
+const freshWallet = async (over: Partial<ImportedWallet> = {}) => {
   const w = wallet({ id: `iw_${Math.random().toString(36).slice(2)}`, ...over });
-  store.addImportedWallet(w);
+  await store.addImportedWallet(w);
   return w;
 };
 
 await check("a first sync with no start date books nothing old: the cursor starts at the safe head", async () => {
-  const w = freshWallet();
+  const w = await freshWallet();
   const reader = fakeReader({ head: 1000n, logs: [transfer({ blockNumber: 500n })] });
   const r = await syncWallet(w, reader, { value: fixedValue, lists: listedAll, now: () => NOW });
   assert.equal(r.added, 0);
-  const after = store.findImportedWallet(w.id)!;
+  const after = (await store.findImportedWallet(w.id))!;
   assert.equal(after.sync.cursor, "998");
   assert.equal(after.sync.status, "synced");
 });
 
 await check("from a start date: windows of maxBlockSpan, up to windowsPerTick per run, rows written once", async () => {
-  const w = freshWallet({ sync: { status: "pending", from: "2026-09-01" } });
+  const w = await freshWallet({ sync: { status: "pending", from: "2026-09-01" } });
   const logs = [
     transfer({ blockNumber: 10n, txHash: H(10), logIndex: 0 }),
     transfer({ blockNumber: 150n, txHash: H(11), logIndex: 1, token: ARB_MAINNET, valueUnits: 5n * 10n ** 18n }),
@@ -415,59 +415,59 @@ await check("from a start date: windows of maxBlockSpan, up to windowsPerTick pe
   const reader = fakeReader({ head: 1000n, logs });
   const first = await syncWallet(w, reader, { value: fixedValue, lists: listedAll, now: () => NOW });
   assert.equal(first.added, 3, "three windows of 100 blocks: 0-99, 100-199, 200-299");
-  assert.equal(store.findImportedWallet(w.id)!.sync.cursor, "299");
-  assert.equal(store.findImportedWallet(w.id)!.sync.status, "syncing", "behind the head after this run");
-  const rows = store.ledgerOf("org_1").filter((e) => e.source.kind === "wallet" && e.source.walletId === w.id);
+  assert.equal((await store.findImportedWallet(w.id))!.sync.cursor, "299");
+  assert.equal((await store.findImportedWallet(w.id))!.sync.status, "syncing", "behind the head after this run");
+  const rows = (await store.ledgerOf("org_1")).filter((e) => e.source.kind === "wallet" && e.source.walletId === w.id);
   assert.deepEqual(rows.map((e) => [e.direction, e.asset, e.amount]).sort(), [["in", "ARB", "5"], ["in", "USDC", "4000"], ["out", "USDC", "1"]].sort());
   const second = await syncWallet(w, reader, { value: fixedValue, lists: listedAll, now: () => NOW });
   assert.equal(second.added, 1);
   // Rewind the cursor: a re-scan of booked blocks adds nothing.
-  store.updateImportedWallet(w.id, { sync: { ...store.findImportedWallet(w.id)!.sync, cursor: "-1" } });
+  await store.updateImportedWallet(w.id, { sync: { ...(await store.findImportedWallet(w.id))!.sync, cursor: "-1" } });
   const again = await syncWallet(w, reader, { value: fixedValue, lists: listedAll, now: () => NOW });
   assert.equal(again.added, 0);
 });
 
 await check("a transfer in a block the chain still might reorg is left for the next run", async () => {
-  const w = freshWallet({ sync: { status: "pending", cursor: "990" } });
+  const w = await freshWallet({ sync: { status: "pending", cursor: "990" } });
   const reader = fakeReader({ head: 1000n, logs: [transfer({ blockNumber: 999n, txHash: H(20) })] });
   const r = await syncWallet(w, reader, { value: fixedValue, lists: listedAll, now: () => NOW });
   assert.equal(r.added, 0);
-  assert.equal(store.findImportedWallet(w.id)!.sync.cursor, "998");
+  assert.equal((await store.findImportedWallet(w.id))!.sync.cursor, "998");
 });
 
 await check("an RPC on the wrong chain is an error on the wallet, and the cursor does not move", async () => {
-  const w = freshWallet({ sync: { status: "pending", cursor: "10" } });
+  const w = await freshWallet({ sync: { status: "pending", cursor: "10" } });
   const r = await syncWallet(w, fakeReader({ chainId: 8453, head: 1000n, logs: [] }), { value: fixedValue, lists: listedAll, now: () => NOW });
   assert.equal(r.added, 0);
-  const after = store.findImportedWallet(w.id)!;
+  const after = (await store.findImportedWallet(w.id))!;
   assert.equal(after.sync.status, "error");
   assert.match(after.sync.error ?? "", /8453/);
   assert.equal(after.sync.cursor, "10");
 });
 
 await check("a token whose decimals cannot be read is counted as skipped, with the reason, not booked at a guessed scale", async () => {
-  const w = freshWallet({ sync: { status: "pending", cursor: "0" } });
+  const w = await freshWallet({ sync: { status: "pending", cursor: "0" } });
   const reader = fakeReader({ head: 1000n, logs: [transfer({ blockNumber: 5n, token: ARB_MAINNET, txHash: H(30) })], noDecimals: [ARB_MAINNET.toLowerCase()] });
   const r = await syncWallet(w, reader, { value: fixedValue, lists: listedAll, now: () => NOW });
   assert.equal(r.added, 0);
   assert.equal(r.skipped, 1);
-  const after = store.findImportedWallet(w.id)!;
+  const after = (await store.findImportedWallet(w.id))!;
   assert.equal(after.sync.skipped, 1);
   assert.match(after.sync.lastSkipReason ?? "", /decimals/);
 });
 
 await check("a valuation that fails still books the row, tagged needs-valuation", async () => {
-  const w = freshWallet({ sync: { status: "pending", cursor: "0" } });
+  const w = await freshWallet({ sync: { status: "pending", cursor: "0" } });
   const reader = fakeReader({ head: 1000n, logs: [transfer({ blockNumber: 5n, txHash: H(40) })] });
   const r = await syncWallet(w, reader, { value: async () => ({ ok: false as const, reason: "no price for this token", transient: false }), lists: listedAll, now: () => NOW });
   assert.equal(r.added, 1);
-  const row = store.ledgerOf("org_1").find((e) => e.txHash === H(40))!;
+  const row = (await store.ledgerOf("org_1")).find((e) => e.txHash === H(40))!;
   assert.ok(row.tags.includes("needs-valuation"));
   assert.equal(row.fiatValue, undefined);
 });
 
 await check("an unlisted token in a window books nothing and asks no price (anyone can mint one and send it); EURe is booked at par", async () => {
-  const w = freshWallet({ sync: { status: "pending", cursor: "0" } });
+  const w = await freshWallet({ sync: { status: "pending", cursor: "0" } });
   const eure = Object.keys(EMONEY_TOKENS[1])[0] as `0x${string}`;
   const priced: string[] = [];
   const logs = [
@@ -478,7 +478,7 @@ await check("an unlisted token in a window books nothing and asks no price (anyo
   const reader = fakeReader({ head: 100n, logs });
   const lists = async () => ({ ok: true as const, lists: { has: (c: number, a: string) => a === USDC_MAINNET.toLowerCase(), size: 1 } });
   await syncWallet(w, reader, { value: async (q) => { priced.push(q.token); return fixedValue(q); }, lists, now: () => NOW });
-  const rows = store.ledgerOf(w.orgId).filter((e) => e.source.kind === "wallet" && e.source.walletId === w.id);
+  const rows = (await store.ledgerOf(w.orgId)).filter((e) => e.source.kind === "wallet" && e.source.walletId === w.id);
   assert.equal(rows.find((e) => e.txHash === H(60)), undefined, "no row for an unlisted token");
   assert.ok(!priced.some((t) => t.toLowerCase() === FAKE_USDC.toLowerCase()), "no price asked for an unlisted token");
   const em = rows.find((e) => e.txHash === H(61))!;
@@ -490,20 +490,20 @@ await check("an unlisted token in a window books nothing and asks no price (anyo
 });
 
 await check("at the books' row ceiling a wallet's sync pauses: nothing is booked or skipped, the cursor stays, the reason is shown", async () => {
-  const w = freshWallet({ sync: { status: "pending", cursor: "0" } });
+  const w = await freshWallet({ sync: { status: "pending", cursor: "0" } });
   const logs = [10n, 11n, 12n].map((b, i) => transfer({ blockNumber: b, txHash: H(80 + i), logIndex: 0 }));
   const reader = fakeReader({ head: 100n, logs });
-  const ledgerCeiling = store.ledgerOf(w.orgId).length + 1;
+  const ledgerCeiling = (await store.ledgerOf(w.orgId)).length + 1;
   const paused = await syncWallet(w, reader, { value: fixedValue, lists: listedAll, now: () => NOW, ledgerCeiling });
   assert.equal(paused.added, 0);
-  assert.equal(store.ledgerOf(w.orgId).filter((e) => e.source.kind === "wallet" && e.source.walletId === w.id).length, 0);
-  const after = store.findImportedWallet(w.id)!;
+  assert.equal((await store.ledgerOf(w.orgId)).filter((e) => e.source.kind === "wallet" && e.source.walletId === w.id).length, 0);
+  const after = (await store.findImportedWallet(w.id))!;
   assert.equal(after.sync.cursor, "0", "the cursor does not move past what was not booked");
   assert.equal(after.sync.status, "error");
   assert.match(after.sync.error ?? "", /paused/);
   // Already at the ceiling: paused before any chain read.
   const idle = fakeReader({ head: 100n, logs });
-  const still = await syncWallet(store.findImportedWallet(w.id)!, idle, { value: fixedValue, lists: listedAll, now: () => NOW, ledgerCeiling: store.ledgerOf(w.orgId).length });
+  const still = await syncWallet((await store.findImportedWallet(w.id))!, idle, { value: fixedValue, lists: listedAll, now: () => NOW, ledgerCeiling: (await store.ledgerOf(w.orgId)).length });
   assert.equal(still.added, 0);
   assert.deepEqual(idle.calls, [], "no log read for a wallet that cannot book");
   // Raised (by support): the same blocks are read again and booked.
@@ -512,7 +512,7 @@ await check("at the books' row ceiling a wallet's sync pauses: nothing is booked
 });
 
 await check("one block with more of the wallet's logs than the RPC returns is a counted gap, and sync carries on past it", async () => {
-  const w = freshWallet({ sync: { status: "pending", cursor: "40" } });
+  const w = await freshWallet({ sync: { status: "pending", cursor: "40" } });
   const base = fakeReader({ head: 100n, logs: [49n, 50n, 51n, 60n].map((b, i) => transfer({ blockNumber: b, txHash: H(90 + i), logIndex: 0 })) });
   const reader: ChainReader = {
     ...base,
@@ -522,20 +522,20 @@ await check("one block with more of the wallet's logs than the RPC returns is a 
     },
   };
   let skipped = 0;
-  for (let run = 0; run < 5 && store.findImportedWallet(w.id)!.sync.status !== "synced"; run++) {
-    skipped += (await syncWallet(store.findImportedWallet(w.id)!, reader, { value: fixedValue, lists: listedAll, now: () => NOW })).skipped;
+  for (let run = 0; run < 5 && (await store.findImportedWallet(w.id))!.sync.status !== "synced"; run++) {
+    skipped += (await syncWallet((await store.findImportedWallet(w.id))!, reader, { value: fixedValue, lists: listedAll, now: () => NOW })).skipped;
   }
-  const after = store.findImportedWallet(w.id)!;
+  const after = (await store.findImportedWallet(w.id))!;
   assert.equal(after.sync.status, "synced", JSON.stringify(after.sync));
   assert.equal(after.sync.cursor, "98");
   assert.equal(skipped, 1);
   assert.match(after.sync.lastSkipReason ?? "", /block 50\b/);
-  const booked = new Set(store.ledgerOf(w.orgId).filter((e) => e.source.kind === "wallet" && e.source.walletId === w.id).map((e) => e.txHash));
+  const booked = new Set((await store.ledgerOf(w.orgId)).filter((e) => e.source.kind === "wallet" && e.source.walletId === w.id).map((e) => e.txHash));
   assert.ok(booked.has(H(90)) && booked.has(H(92)) && booked.has(H(93)), "the blocks either side of the stuffed one, and later ones, are booked");
   assert.ok(!booked.has(H(91)), "a transfer inside the skipped block is not booked");
   assert.equal(after.sync.skipped, 1);
   // A gap is counted once, even when a later window of the same run holds.
-  const twice = freshWallet({ sync: { status: "pending", cursor: "40" } });
+  const twice = await freshWallet({ sync: { status: "pending", cursor: "40" } });
   let limited = true;
   const stalled: ChainReader = {
     ...base,
@@ -548,15 +548,15 @@ await check("one block with more of the wallet's logs than the RPC returns is a 
   // A rate limit is not a range refusal: the window is held whole, never
   // narrowed to read around the limited block.
   for (let run = 0; run < 5; run++) {
-    await syncWallet(store.findImportedWallet(twice.id)!, stalled, { value: fixedValue, lists: listedAll, now: () => NOW });
+    await syncWallet((await store.findImportedWallet(twice.id))!, stalled, { value: fixedValue, lists: listedAll, now: () => NOW });
   }
-  assert.equal(store.findImportedWallet(twice.id)!.sync.cursor, "50", "held at the rate-limited window");
+  assert.equal((await store.findImportedWallet(twice.id))!.sync.cursor, "50", "held at the rate-limited window");
   limited = false;
-  for (let run = 0; run < 5 && store.findImportedWallet(twice.id)!.sync.status !== "synced"; run++) {
-    await syncWallet(store.findImportedWallet(twice.id)!, stalled, { value: fixedValue, lists: listedAll, now: () => NOW });
+  for (let run = 0; run < 5 && (await store.findImportedWallet(twice.id))!.sync.status !== "synced"; run++) {
+    await syncWallet((await store.findImportedWallet(twice.id))!, stalled, { value: fixedValue, lists: listedAll, now: () => NOW });
   }
-  assert.equal(store.findImportedWallet(twice.id)!.sync.status, "synced");
-  assert.equal(store.findImportedWallet(twice.id)!.sync.skipped, 1, "the stuffed block is counted once");
+  assert.equal((await store.findImportedWallet(twice.id))!.sync.status, "synced");
+  assert.equal((await store.findImportedWallet(twice.id))!.sync.skipped, 1, "the stuffed block is counted once");
   // The shared readLogWindow still refuses at one block, so the crypto-in
   // poller, which uses it directly, holds rather than passing a block.
   const { readLogWindow } = await import("../services/api/src/log-range.js");
@@ -566,57 +566,57 @@ await check("one block with more of the wallet's logs than the RPC returns is a 
   );
   // A rate limit or quota is a reason to wait, never to pass a block.
   for (const limited of ["daily request count exceeded, request rate limited", "rate limit exceeded", "Your app has exceeded its compute units per second capacity."]) {
-    const held = freshWallet({ sync: { status: "pending", cursor: "40" } });
+    const held = await freshWallet({ sync: { status: "pending", cursor: "40" } });
     const r = await syncWallet(held, fakeReader({ head: 100n, logs: [], logsError: new Error(limited) }), { value: fixedValue, lists: listedAll, now: () => NOW });
     assert.equal(r.skipped, 0, limited);
-    assert.equal(store.findImportedWallet(held.id)!.sync.cursor, "40", limited);
-    assert.equal(store.findImportedWallet(held.id)!.sync.status, "error", limited);
+    assert.equal((await store.findImportedWallet(held.id))!.sync.cursor, "40", limited);
+    assert.equal((await store.findImportedWallet(held.id))!.sync.status, "error", limited);
   }
 });
 
 await check("token lists that never loaded hold the window: nothing is called unlisted by accident", async () => {
-  const w = freshWallet({ sync: { status: "pending", cursor: "0" } });
+  const w = await freshWallet({ sync: { status: "pending", cursor: "0" } });
   const reader = fakeReader({ head: 100n, logs: [transfer({ blockNumber: 10n, txHash: H(63), logIndex: 0 })] });
   await syncWallet(w, reader, { value: fixedValue, lists: async () => ({ ok: false as const, reason: "1 of 7 token lists never loaded" }), now: () => NOW });
-  const after = store.findImportedWallet(w.id)!;
+  const after = (await store.findImportedWallet(w.id))!;
   assert.equal(after.sync.status, "error");
   assert.match(after.sync.error ?? "", /token lists/);
   assert.equal(after.sync.cursor, "0");
-  assert.equal(store.ledgerOf(w.orgId).filter((e) => e.txHash === H(63)).length, 0);
+  assert.equal((await store.ledgerOf(w.orgId)).filter((e) => e.txHash === H(63)).length, 0);
 });
 
 await check("a price feed outage holds the window: nothing booked, the cursor stays, the wallet says why", async () => {
-  const w = freshWallet({ sync: { status: "pending", cursor: "0" } });
+  const w = await freshWallet({ sync: { status: "pending", cursor: "0" } });
   const reader = fakeReader({ head: 1000n, logs: [transfer({ blockNumber: 5n, txHash: H(50) })] });
   const r = await syncWallet(w, reader, { value: async () => ({ ok: false as const, reason: "the price feed answered 503", transient: true }), lists: listedAll, now: () => NOW });
   assert.equal(r.added, 0);
-  const after = store.findImportedWallet(w.id)!;
+  const after = (await store.findImportedWallet(w.id))!;
   assert.equal(after.sync.cursor, "0");
   assert.equal(after.sync.status, "error");
   assert.match(after.sync.error ?? "", /price/);
-  assert.equal(store.ledgerOf("org_1").some((e) => e.txHash === H(50)), false);
+  assert.equal((await store.ledgerOf("org_1")).some((e) => e.txHash === H(50)), false);
 });
 
 await check("an RPC failure reading a token holds the window rather than skipping the transfer", async () => {
-  const w = freshWallet({ sync: { status: "pending", cursor: "0" } });
+  const w = await freshWallet({ sync: { status: "pending", cursor: "0" } });
   const reader = fakeReader({ head: 1000n, logs: [transfer({ blockNumber: 5n, txHash: H(51) })], tokenError: new Error("HTTP request failed.") });
   await syncWallet(w, reader, { value: fixedValue, lists: listedAll, now: () => NOW });
-  const after = store.findImportedWallet(w.id)!;
+  const after = (await store.findImportedWallet(w.id))!;
   assert.equal(after.sync.cursor, "0");
   assert.equal(after.sync.skipped, undefined);
   assert.equal(after.sync.status, "error");
 });
 
 await check("an RPC error never puts the RPC URL (and its API key) on the wallet", async () => {
-  const w = freshWallet({ sync: { status: "pending", cursor: "0" } });
+  const w = await freshWallet({ sync: { status: "pending", cursor: "0" } });
   const err = Object.assign(new Error("HTTP request failed.\n\nStatus: 429\nURL: https://eth-mainnet.g.alchemy.com/v2/SECRETKEY123\nRequest body: {}"), { shortMessage: "HTTP request failed." });
   await syncWallet(w, fakeReader({ head: 1000n, logs: [], logsError: err }), { value: fixedValue, lists: listedAll, now: () => NOW });
-  const msg = store.findImportedWallet(w.id)!.sync.error ?? "";
+  const msg = (await store.findImportedWallet(w.id))!.sync.error ?? "";
   assert.ok(msg.length > 0);
   assert.doesNotMatch(msg, /SECRETKEY123|alchemy|https?:/);
   const plain = new Error("call to https://rpc.example/v1/KEY987 failed");
   await syncWallet(w, fakeReader({ head: 1000n, logs: [], logsError: plain }), { value: fixedValue, lists: listedAll, now: () => NOW });
-  assert.doesNotMatch(store.findImportedWallet(w.id)!.sync.error ?? "", /KEY987|https?:/);
+  assert.doesNotMatch((await store.findImportedWallet(w.id))!.sync.error ?? "", /KEY987|https?:/);
 });
 
 await check("a token whose decimals() returns bytes that do not decode is a fact about the token (skipped), not an outage (held)", async () => {
@@ -636,11 +636,11 @@ await check("a Node transport error (which names the host) is summarised on the 
 });
 
 await check("a window the RPC refuses as too large is halved until it answers", async () => {
-  const w = freshWallet({ sync: { status: "pending", cursor: "0" } });
+  const w = await freshWallet({ sync: { status: "pending", cursor: "0" } });
   const reader = fakeReader({ head: 1000n, logs: [transfer({ blockNumber: 30n, txHash: H(60) })], maxSpan: 25n });
   const r = await syncWallet(w, reader, { value: fixedValue, lists: listedAll, now: () => NOW });
   assert.equal(r.added, 1);
-  const after = store.findImportedWallet(w.id)!;
+  const after = (await store.findImportedWallet(w.id))!;
   assert.notEqual(after.sync.status, "error", after.sync.error);
   assert.ok(BigInt(after.sync.cursor!) >= 30n);
 });
@@ -663,20 +663,20 @@ await check("Base's public RPC wording (\"limited to a 1,000 range\") is a range
 });
 
 await check("a wallet removed while it syncs books nothing and does not stop the run", async () => {
-  const w = freshWallet({ sync: { status: "pending", cursor: "0" } });
-  const reader = fakeReader({ head: 1000n, logs: [transfer({ blockNumber: 5n, txHash: H(70) })], onLogs: () => { store.removeImportedWallet(w.id); } });
+  const w = await freshWallet({ sync: { status: "pending", cursor: "0" } });
+  const reader = fakeReader({ head: 1000n, logs: [transfer({ blockNumber: 5n, txHash: H(70) })], onLogs: async () => { await store.removeImportedWallet(w.id); } });
   const r = await syncWallet(w, reader, { value: fixedValue, lists: listedAll, now: () => NOW });
   assert.equal(r.added, 0);
-  assert.equal(store.ledgerOf("org_1").some((e) => e.txHash === H(70)), false);
+  assert.equal((await store.ledgerOf("org_1")).some((e) => e.txHash === H(70)), false);
 });
 
 await check("an already-booked log is not priced again on a re-scan", async () => {
-  const w = freshWallet({ sync: { status: "pending", cursor: "0" } });
+  const w = await freshWallet({ sync: { status: "pending", cursor: "0" } });
   const reader = fakeReader({ head: 1000n, logs: [transfer({ blockNumber: 5n, txHash: H(80) })] });
   let priced = 0;
   const counting = async (q: any) => { priced++; return fixedValue(q); };
   await syncWallet(w, reader, { value: counting, lists: listedAll, now: () => NOW });
-  store.updateImportedWallet(w.id, { sync: { ...store.findImportedWallet(w.id)!.sync, cursor: "0" } });
+  await store.updateImportedWallet(w.id, { sync: { ...(await store.findImportedWallet(w.id))!.sync, cursor: "0" } });
   await syncWallet(w, reader, { value: counting, lists: listedAll, now: () => NOW });
   assert.equal(priced, 1);
 });
@@ -696,18 +696,18 @@ console.log("\nImport route");
   const express = (await import("express")).default;
   const { initStore } = await import("../services/api/src/store.js");
   const { createOrgRouter } = await import("../services/api/src/routes/orgs.js");
-  initStore();
+  await initStore();
   const at = new Date().toISOString();
   const reporting = { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" } as const;
-  store.addUser({ id: "u_owner", name: "Owner", country: "DE", kycStatus: "approved", address: SAFE, createdAt: at } as any);
-  store.addOrganisation({ id: "org_paid", type: "business", name: "Zoldenburg UG", plan: "business", reporting, verifications: {}, createdAt: at, updatedAt: at } as any);
-  store.addOrganisation({ id: "org_free", type: "business", name: "Starter GmbH", plan: "starter", reporting, verifications: {}, createdAt: at, updatedAt: at } as any);
+  await store.addUser({ id: "u_owner", name: "Owner", country: "DE", kycStatus: "approved", address: SAFE, createdAt: at } as any);
+  await store.addOrganisation({ id: "org_paid", type: "business", name: "Zoldenburg UG", plan: "business", reporting, verifications: {}, createdAt: at, updatedAt: at } as any);
+  await store.addOrganisation({ id: "org_free", type: "business", name: "Starter GmbH", plan: "starter", reporting, verifications: {}, createdAt: at, updatedAt: at } as any);
   for (const o of ["org_paid", "org_free"]) {
-    store.addMember({ id: `m_${o}`, orgId: o, userId: "u_owner", email: "", role: "owner", status: "active", invitedAt: at, acceptedAt: at });
+    await store.addMember({ id: `m_${o}`, orgId: o, userId: "u_owner", email: "", role: "owner", status: "active", invitedAt: at, acceptedAt: at });
   }
   const app = express();
   app.use(express.json());
-  app.use("/api/orgs", createOrgRouter((req: any, res: any) => {
+  app.use("/api/orgs", createOrgRouter(async (req: any, res: any) => {
     const id = req.header("x-user");
     if (id) return { userId: id };
     res.status(401).json({ error: "no session" });
@@ -748,7 +748,7 @@ console.log("\nImport route");
   });
 
   await check("the org's own Zold account cannot be imported: it would be booked twice", async () => {
-    store.addAccount({ id: "acc_paid", orgId: "org_paid", currency: "EUR", label: "Operating EUR", status: "open", provider: "monerium", identifier: {}, address: addr(9), createdAt: at, updatedAt: at } as any);
+    await store.addAccount({ id: "acc_paid", orgId: "org_paid", currency: "EUR", label: "Operating EUR", status: "open", provider: "monerium", identifier: {}, address: addr(9), createdAt: at, updatedAt: at } as any);
     const r = await post("org_paid", { address: addr(9), chainId: 31337, kind: "safe" });
     assert.equal(r.status, 409, JSON.stringify(r.data));
     assert.equal((await post("org_paid", { address: addr(9), chainId: 1, kind: "safe" })).status, 201, "the same address on another chain is a different wallet");

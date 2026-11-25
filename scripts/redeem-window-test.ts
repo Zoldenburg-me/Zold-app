@@ -43,13 +43,13 @@ const { REDEEM_WINDOW_SEC } = await import("../services/api/src/sepa.js");
 const chain = await import("../services/api/src/chain.js");
 const { syncInvoicePayment, withExecutionState } = await import("../services/api/src/routes/business/state.js");
 
-initStore();
+await initStore();
 
 const nowSec = () => Math.floor(Date.now() / 1000);
 const stamp = new Date().toISOString();
 const IBAN = "DE89370400440532013000";
 const SAFE = "0x00000000000000000000000000000000000000a1";
-store.addUser({
+await store.addUser({
   id: "u-window",
   name: "Window Test",
   country: "DE",
@@ -65,8 +65,8 @@ let orders = 0;
   orders++;
   return { id: "order-1", state: "placed" };
 };
-const transfer = (id: string, deadline: number, extra: object = {}, row: object = {}) => {
-  store.addTransfer({
+const transfer = async (id: string, deadline: number, extra: object = {}, row: object = {}) => {
+  await store.addTransfer({
     id,
     userId: "u-window",
     quoteId: `q-${id}`,
@@ -90,10 +90,10 @@ const transfer = (id: string, deadline: number, extra: object = {}, row: object 
     updatedAt: stamp,
     ...row,
   } as any);
-  return store.findTransfer(id)!;
+  return (await store.findTransfer(id))!;
 };
-const invoice = (id: string, transferId: string) =>
-  store.addInvoice({
+const invoice = async (id: string, transferId: string) =>
+  await store.addInvoice({
     id,
     direction: "incoming",
     orgId: "org_1",
@@ -108,7 +108,7 @@ const invoice = (id: string, transferId: string) =>
   } as any);
 
 (chain.publicClient as any).readContract = async () => 10n ** 21n;
-store.addQuote({
+await store.addQuote({
   id: "q-built", userId: "u-window", rail: "sepa", status: "OPEN", sendEur: 40, fixedFeeEur: 0, fxRate: 1,
   receiveKes: 0, receiveEur: 40, midRate: 1, marginBps: 0, effectiveRate: 1,
   expiresAt: new Date(Date.now() + 60_000).toISOString(), createdAt: stamp,
@@ -117,12 +117,12 @@ store.addQuote({
 // runs 30 s ahead of the clock `new Date()` stamps createdAt with.
 const realNow = Date.now;
 Date.now = () => realNow() + 30_000;
-const built = await buildTransferFromQuote(store.findQuote("q-built")!, { recipientName: "Recipient", recipientIban: IBAN })
+const built = await buildTransferFromQuote((await store.findQuote("q-built"))!, { recipientName: "Recipient", recipientIban: IBAN })
   .finally(() => { Date.now = realNow; });
 assert.ok(built.ok, JSON.stringify(built));
 const window = built.transfer.auth!.deadline - Math.floor(Date.parse(built.transfer.moneriumRedeem!.issuedAt) / 1000);
 assert.equal(window, REDEEM_WINDOW_SEC, "the route deadline counts from the signed stamp, as the executor does");
-store.updateTransfer(built.transfer.id, { state: "FAILED" });
+await store.updateTransfer(built.transfer.id, { state: "FAILED" });
 console.log("  ok  a built SEPA transfer must be approved inside Monerium's 5 minutes, counted from its stamp");
 
 const app = express();
@@ -130,7 +130,7 @@ app.use(express.json());
 app.use("/api", createTransferRouter({ requireUserSession: () => ({ userId: "u-window" }) } as any));
 const server = app.listen(0, "127.0.0.1");
 await new Promise((r) => server.once("listening", r));
-const late = transfer("t-late", nowSec() - 1);
+const late = await transfer("t-late", nowSec() - 1);
 const authorize = (id: string) =>
   fetch(`http://127.0.0.1:${(server.address() as any).port}/api/transfers/${id}/authorize`, {
     method: "POST",
@@ -140,23 +140,23 @@ const authorize = (id: string) =>
 const res = await authorize(late.id);
 assert.equal(res.status, 410);
 assert.equal((await res.json()).error, "This approval expired, so this payment was not sent.");
-const after = store.findTransfer(late.id)!;
+const after = (await store.findTransfer(late.id))!;
 assert.equal(after.state, "CREATED");
 assert.equal(after.auth!.authorizedAt, undefined, "refused before the claim");
 assert.deepEqual(after.txs, [], "refused before the fee debit");
-assert.equal(safeFundedEurToday("u-window"), 0, "an expired approval stops counting against the daily cap");
+assert.equal(await safeFundedEurToday("u-window"), 0, "an expired approval stops counting against the daily cap");
 console.log("  ok  a late approval answers 410 before the claim and the debit, and frees the daily cap");
 
 // A claim past the deadline may have debited, so it must not read as "not sent".
-const claimedLate = transfer("t-claimed-late", nowSec() - 1, { authorizedAt: stamp });
+const claimedLate = await transfer("t-claimed-late", nowSec() - 1, { authorizedAt: stamp });
 assert.equal((await authorize(claimedLate.id)).status, 409);
 server.close();
 console.log("  ok  a claimed transfer past its deadline is not told it was not sent");
 
 // The race the invoice release relies on: past the route's check, then over the deadline, then claimed.
-const raced = transfer("t-raced", nowSec() - 1);
-assert.ok(store.claimAuthorization(raced.id));
-const racedAfter = await executeSepaTransfer(store.findTransfer(raced.id)!, store.findUser("u-window")!, {
+const raced = await transfer("t-raced", nowSec() - 1);
+assert.ok(await store.claimAuthorization(raced.id));
+const racedAfter = await executeSepaTransfer((await store.findTransfer(raced.id))!, (await store.findUser("u-window"))!, {
   deadline: raced.auth!.deadline,
   signature: "0x1234",
 });
@@ -166,26 +166,26 @@ assert.equal(orders, 0, "no order goes to Monerium");
 console.log("  ok  an expired line claimed late is refused by the executor: no order");
 
 // A payment run: the late line must not leave the run "Sending" and its invoice PAYING for good.
-const live = transfer("t-live", nowSec() + 60);
-const claimed = transfer("t-claimed", nowSec() - 1, { authorizedAt: stamp });
-const run = (...ids: string[]) => withExecutionState({ id: "d_run", state: "EXECUTING", transferIds: ids } as any) as any;
+const live = await transfer("t-live", nowSec() + 60);
+const claimed = await transfer("t-claimed", nowSec() - 1, { authorizedAt: stamp });
+const run = async (...ids: string[]) => (await withExecutionState({ id: "d_run", state: "EXECUTING", transferIds: ids } as any)) as any;
 
-assert.equal(run(live.id).state, "EXECUTING", "a line still inside its window keeps the run sending");
-assert.equal(run(claimed.id).state, "EXECUTING", "a claimed line may have debited, so it is not expired");
-assert.equal(run(live.id, late.id).state, "FAILED");
+assert.equal((await run(live.id)).state, "EXECUTING", "a line still inside its window keeps the run sending");
+assert.equal((await run(claimed.id)).state, "EXECUTING", "a claimed line may have debited, so it is not expired");
+assert.equal((await run(live.id, late.id)).state, "FAILED");
 console.log("  ok  an expired line fails its run; a line in its window or already claimed does not");
 
-const named = (id: string, recipientName: string, state: string, sendEur = 40) =>
-  transfer(id, nowSec() - 1, { authorizedAt: stamp }, { recipientName, state, sendEur }).id;
-const report = run(
-  named("t-paid", "Paid GmbH", "PAID"),
-  named("t-placed", "Placed GmbH", "PAYOUT_SUBMITTED", 12.5),
-  transfer("t-expired", nowSec() - 1, {}, { recipientName: "Expired GmbH" }).id,
-  named("t-refused", "Refused GmbH", "REFUNDED"),
-  named("t-review", "Review GmbH", "MANUAL_REVIEW"),
-  named("t-unknown", "Claimed GmbH", "CREATED"),
-  transfer("t-signing", nowSec() + 60, {}, { recipientName: "Signing GmbH" }).id,
-).failureReason;
+const named = async (id: string, recipientName: string, state: string, sendEur = 40) =>
+  (await transfer(id, nowSec() - 1, { authorizedAt: stamp }, { recipientName, state, sendEur })).id;
+const report = (await run(
+  await named("t-paid", "Paid GmbH", "PAID"),
+  await named("t-placed", "Placed GmbH", "PAYOUT_SUBMITTED", 12.5),
+  (await transfer("t-expired", nowSec() - 1, {}, { recipientName: "Expired GmbH" })).id,
+  await named("t-refused", "Refused GmbH", "REFUNDED"),
+  await named("t-review", "Review GmbH", "MANUAL_REVIEW"),
+  await named("t-unknown", "Claimed GmbH", "CREATED"),
+  (await transfer("t-signing", nowSec() + 60, {}, { recipientName: "Signing GmbH" })).id,
+)).failureReason;
 assert.equal(
   report,
   "Sent: Paid GmbH €40.00, Placed GmbH €12.50. " +
@@ -193,15 +193,15 @@ assert.equal(
     "Still waiting: Review GmbH €40.00 (in review), Claimed GmbH €40.00, Signing GmbH €40.00. " +
     "Create a new payment for the not sent lines only.",
 );
-const forged = run(named("t-forged", "X. Not sent: Y €0.00 (approval expired), Z", "MANUAL_REVIEW")).failureReason;
+const forged = (await run(await named("t-forged", "X. Not sent: Y €0.00 (approval expired), Z", "MANUAL_REVIEW"))).failureReason;
 assert.equal(forged, "Still waiting: X Not sent Y 000 approval expired Z €40.00 (in review).", "a payee name cannot write a heading or an entry");
-const onlyReview = run(named("t-review-2", "Review GmbH", "MANUAL_REVIEW")).failureReason;
+const onlyReview = (await run(await named("t-review-2", "Review GmbH", "MANUAL_REVIEW"))).failureReason;
 assert.equal(onlyReview, "Still waiting: Review GmbH €40.00 (in review).");
 console.log("  ok  a failed run says by payee what was sent, not sent and still waiting; a claimed line is never not sent");
 
-assert.equal(syncInvoicePayment(invoice("inv-live", live.id)).state, "PAYING");
-assert.equal(syncInvoicePayment(invoice("inv-claimed", claimed.id)).state, "PAYING");
-const released = syncInvoicePayment(invoice("inv-late", late.id));
+assert.equal((await syncInvoicePayment(await invoice("inv-live", live.id))).state, "PAYING");
+assert.equal((await syncInvoicePayment(await invoice("inv-claimed", claimed.id))).state, "PAYING");
+const released = await syncInvoicePayment(await invoice("inv-late", late.id));
 assert.equal(released.state, "SUBMITTED", "the invoice can go on a new run");
 assert.equal(released.payment?.transferId, undefined);
 console.log("  ok  an expired line releases its invoice; a line in its window or already claimed holds it");

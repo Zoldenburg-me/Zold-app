@@ -36,19 +36,21 @@ import { can } from "../domain/segments.js";
  * line. Runs for every processed order seen, whether or not this poll
  * mirrored it, so orders recorded before the table existed still get lines.
  */
-function keepIssueFacts(order: MoneriumOrder): void {
-  if (order.kind !== "issue" || !isProcessed(order)) return;
-  if (order.chain !== MONERIUM.chain) return;
-  if (String(order.currency ?? "eur").toLowerCase() !== "eur") return;
-  const holder = bookableHolder(order);
-  if (holder) noteMoneriumIssue(order, holder);
+async function keepIssueFacts(order: MoneriumOrder): Promise<void> {
+  return store.tx(async () => {
+    if (order.kind !== "issue" || !isProcessed(order)) return;
+    if (order.chain !== MONERIUM.chain) return;
+    if (String(order.currency ?? "eur").toLowerCase() !== "eur") return;
+    const holder = await bookableHolder(order);
+    if (holder) await noteMoneriumIssue(order, holder);
+  });
 }
 
 /** Who a deposit is booked to, or undefined. An address naming more than one
  *  holder books nothing and says so once per order: never a guess. */
 const unbookableWarned = new Set<string>();
-function bookableHolder(order: MoneriumOrder): MoneyInHolder | undefined {
-  const r = moneyInHolder(String(order.address ?? ""));
+async function bookableHolder(order: MoneriumOrder): Promise<MoneyInHolder | undefined> {
+  const r = await moneyInHolder(String(order.address ?? ""));
   if (r.kind === "user" || r.kind === "account") return r;
   if (r.kind === "unbookable" && !unbookableWarned.has(order.id)) {
     unbookableWarned.add(order.id);
@@ -122,39 +124,41 @@ const ibanList = (res: any): any[] => (Array.isArray(res) ? res : (res?.ibans ??
  * no verdict and changes nothing. Only an active account with an IBAN is
  * checked.
  */
-export function applyIbanBinding(user: User, ibans: any[]): User {
-  if (user.funding?.status !== "active" || !user.iban) return user;
-  const target = normalizeIban(user.iban);
-  const hits = ibans.filter((i: any) => typeof i?.iban === "string" && normalizeIban(i.iban) === target);
-  if (hits.length !== 1) return user;
-  const hit = hits[0];
-  if (!hit.address || paysInto(hit, user.address)) return user;
-  const address = String(hit.address);
-  const chain = typeof hit.chain === "string" ? hit.chain : "";
-  const short = `${address.slice(0, 6)}…${address.slice(-4)}`;
-  const onChain = chain && chain !== MONERIUM.chain ? ` on ${chain}` : "";
-  const updated = store.updateUser(user.id, {
-    iban: "",
-    funding: {
-      ...user.funding,
-      status: "iban_pending",
-      detail: `IBAN ending ${target.slice(-4)} now pays into another address at Monerium (${short}${onChain}); it no longer pays into this account`,
-    },
-    moneriumIbanElsewhere: {
-      iban: target,
-      address,
-      chain,
-      ...(typeof hit.profile === "string" ? { profileId: hit.profile } : {}),
-      seenAt: new Date().toISOString(),
-    },
+export async function applyIbanBinding(user: User, ibans: any[]): Promise<User> {
+  return store.tx(async () => {
+    if (user.funding?.status !== "active" || !user.iban) return user;
+    const target = normalizeIban(user.iban);
+    const hits = ibans.filter((i: any) => typeof i?.iban === "string" && normalizeIban(i.iban) === target);
+    if (hits.length !== 1) return user;
+    const hit = hits[0];
+    if (!hit.address || paysInto(hit, user.address)) return user;
+    const address = String(hit.address);
+    const chain = typeof hit.chain === "string" ? hit.chain : "";
+    const short = `${address.slice(0, 6)}…${address.slice(-4)}`;
+    const onChain = chain && chain !== MONERIUM.chain ? ` on ${chain}` : "";
+    const updated = await store.updateUser(user.id, {
+      iban: "",
+      funding: {
+        ...user.funding,
+        status: "iban_pending",
+        detail: `IBAN ending ${target.slice(-4)} now pays into another address at Monerium (${short}${onChain}); it no longer pays into this account`,
+      },
+      moneriumIbanElsewhere: {
+        iban: target,
+        address,
+        chain,
+        ...(typeof hit.profile === "string" ? { profileId: hit.profile } : {}),
+        seenAt: new Date().toISOString(),
+      },
+    });
+    await store.audit(auditEntry(
+      "partner.iban_moved_elsewhere",
+      { partner: "monerium", ibanLast4: target.slice(-4), toAddress: address, toChain: chain },
+      user.id,
+    ));
+    console.warn(`monerium: IBAN …${target.slice(-4)} of ${user.id} now pays into ${short} (${chain || "no chain"}); cleared`);
+    return updated;
   });
-  store.audit(auditEntry(
-    "partner.iban_moved_elsewhere",
-    { partner: "monerium", ibanLast4: target.slice(-4), toAddress: address, toChain: chain },
-    user.id,
-  ));
-  console.warn(`monerium: IBAN …${target.slice(-4)} of ${user.id} now pays into ${short} (${chain || "no chain"}); cleared`);
-  return updated;
 }
 
 /** When each user's IBAN was last re-read by verifyIbanBinding. */
@@ -178,7 +182,7 @@ export async function verifyIbanBinding(user: User): Promise<User> {
     return user;
   }
   // The read is an await: take the row as it is now.
-  return applyIbanBinding(store.findUser(user.id) ?? user, ibans);
+  return await applyIbanBinding((await store.findUser(user.id)) ?? user, ibans);
 }
 
 /** The BIC Monerium lists for this user's IBAN, or undefined when Monerium
@@ -199,20 +203,22 @@ export async function findIbanBic(user: User): Promise<string | undefined> {
  * funding goes back to iban_pending, so moving the IBAN back at Monerium
  * re-attributes it through refreshPendingIban.
  */
-export function releaseIbanFromOtherUsers(iban: string, keepUserId: string): void {
-  const target = normalizeIban(iban);
-  for (const other of store.users) {
-    if (other.id === keepUserId || !other.iban || normalizeIban(other.iban) !== target) continue;
-    store.updateUser(other.id, {
-      iban: "",
-      funding: {
-        ...(other.funding ?? { mode: "sandbox" as const }),
-        mode: other.funding?.mode ?? "sandbox",
-        status: "iban_pending",
-        detail: `IBAN ${target.slice(-4).padStart(8, "•")} was moved at Monerium to another address on ${new Date().toISOString().slice(0, 10)}; it no longer pays into this account`,
-      },
-    });
-  }
+export async function releaseIbanFromOtherUsers(iban: string, keepUserId: string): Promise<void> {
+  return store.tx(async () => {
+    const target = normalizeIban(iban);
+    for (const other of (await store.list("users"))) {
+      if (other.id === keepUserId || !other.iban || normalizeIban(other.iban) !== target) continue;
+      await store.updateUser(other.id, {
+        iban: "",
+        funding: {
+          ...(other.funding ?? { mode: "sandbox" as const }),
+          mode: other.funding?.mode ?? "sandbox",
+          status: "iban_pending",
+          detail: `IBAN ${target.slice(-4).padStart(8, "•")} was moved at Monerium to another address on ${new Date().toISOString().slice(0, 10)}; it no longer pays into this account`,
+        },
+      });
+    }
+  });
 }
 
 /**
@@ -313,7 +319,7 @@ export async function refreshPendingIban(user: User): Promise<User> {
   if (user.funding?.status !== "iban_pending") return user;
   const refused = ibanActivationRefusal(user);
   if (refused?.code === "IBAN_NOT_OFFERED") {
-    return store.updateUser(user.id, { funding: refusedFunding(user, user.funding.moneriumProfileId, refused.error) });
+    return await store.updateUser(user.id, { funding: refusedFunding(user, user.funding.moneriumProfileId, refused.error) });
   }
   try {
     const list = ibanList(await moneriumClientFor(user).ibans());
@@ -324,19 +330,19 @@ export async function refreshPendingIban(user: User): Promise<User> {
       const away = pendingIbanElsewhere(user, list);
       const was = user.moneriumIbanElsewhere;
       if (away && (was?.iban !== away.iban || was?.address.toLowerCase() !== away.address.toLowerCase() || was?.chain !== away.chain)) {
-        store.audit(auditEntry(
+        await store.audit(auditEntry(
           "partner.iban_moved_elsewhere",
           { partner: "monerium", ibanLast4: away.iban.slice(-4), toAddress: away.address, toChain: away.chain },
           user.id,
         ));
-        return store.updateUser(user.id, { moneriumIbanElsewhere: away });
+        return await store.updateUser(user.id, { moneriumIbanElsewhere: away });
       }
       return user;
     }
     if (iban) {
       // A move (PATCH /ibans) that Monerium has now carried out: record it
       // and take the IBAN off whichever account it used to pay.
-      releaseIbanFromOtherUsers(iban, user.id);
+      await releaseIbanFromOtherUsers(iban, user.id);
       // An address-matched IBAN is what approves an account (activate does the
       // same when the IBAN is there at once). Without this, an IBAN issued
       // after activation was stored but the account stayed pending, and the
@@ -344,7 +350,7 @@ export async function refreshPendingIban(user: User): Promise<User> {
       // Allowlist, not denylist: only a pending account is approved by its
       // IBAN. manual_review (and anything added later) stays where it is.
       const approve = mayApproveOnIban(user);
-      return store.updateUser(user.id, {
+      return await store.updateUser(user.id, {
         iban,
         funding: { ...user.funding, status: "active", detail: undefined },
         moneriumIbanElsewhere: undefined,
@@ -493,9 +499,9 @@ async function mirrorOrder(order: MoneriumOrder): Promise<MirrorOutcome> {
   // only an EURe issue on OUR chain is a euro deposit to this account.
   if (order.chain !== MONERIUM.chain) return "ignored";
   if (String(order.currency ?? "eur").toLowerCase() !== "eur") return "ignored";
-  if (store.isOrderProcessed(order.id)) return "duplicate";
+  if ((await store.isOrderProcessed(order.id))) return "duplicate";
   if (recording.has(order.id)) return "unavailable";
-  const holder = bookableHolder(order);
+  const holder = await bookableHolder(order);
   if (!holder) return "ignored";
   const amount = Number(order.amount);
   if (!(amount > 0)) return "ignored";
@@ -524,8 +530,8 @@ async function mirrorOrder(order: MoneriumOrder): Promise<MirrorOutcome> {
         return "ignored";
       }
     }
-    store.markOrderProcessed(order.id);
-    noteMoneriumIssue(order, holder);
+    await store.markOrderProcessed(order.id);
+    await noteMoneriumIssue(order, holder);
     console.log(`monerium: recorded issue order ${order.id} (€${amount}) for ${bookHolderLabel(holder)}`);
     return "recorded";
   } finally {
@@ -554,7 +560,7 @@ async function mintLocalTestEure(to: `0x${string}`, amountEur: number, ref: stri
  * idempotent.
  */
 export async function mirrorOrderById(orderId: string): Promise<MirrorOutcome> {
-  if (store.isOrderProcessed(orderId)) return "duplicate";
+  if ((await store.isOrderProcessed(orderId))) return "duplicate";
   if (recording.has(orderId)) return "unavailable";
   if (!isMoneriumOrderId(orderId)) return "ignored";
   let order: MoneriumOrder;
@@ -588,9 +594,9 @@ export async function mirrorOrderById(orderId: string): Promise<MirrorOutcome> {
  * Monerium's profile list, which holds abandoned shells from earlier runs
  * that would be pointless traffic to poll.
  */
-function ourProfileIds(): (string | undefined)[] {
+async function ourProfileIds(): Promise<(string | undefined)[]> {
   const ids = new Set<string>();
-  for (const u of store.users) {
+  for (const u of (await store.list("users"))) {
     const id = u.funding?.moneriumProfileId;
     if (id) ids.add(id);
   }
@@ -604,7 +610,7 @@ function ourProfileIds(): (string | undefined)[] {
  *  of what should have been credited locally. */
 export async function listProcessedIssueOrders(): Promise<MoneriumOrder[]> {
   const seen = new Map<string, MoneriumOrder>();
-  for (const profile of moneriumSandboxEnabled() ? ourProfileIds() : []) {
+  for (const profile of moneriumSandboxEnabled() ? (await ourProfileIds()) : []) {
     let list: MoneriumOrder[] = [];
     try {
       list = orderList(await getClient().orders(profile));
@@ -613,7 +619,7 @@ export async function listProcessedIssueOrders(): Promise<MoneriumOrder[]> {
     }
     for (const o of list) if (o.kind === "issue" && isProcessed(o)) seen.set(o.id, o);
   }
-  for (const u of usersWithOwnCredentials()) {
+  for (const u of (await usersWithOwnCredentials())) {
     for (const profile of ownProfilesOf(u)) {
       let list: MoneriumOrder[] = [];
       try {
@@ -636,7 +642,7 @@ export async function pollDepositsOnce(): Promise<number> {
   // Once per profile. An unscoped call returns ONLY the default profile's
   // orders, so with a profile per user this loop is the difference between
   // seeing every customer deposit and seeing none of them.
-  for (const profile of moneriumSandboxEnabled() ? ourProfileIds() : []) {
+  for (const profile of moneriumSandboxEnabled() ? (await ourProfileIds()) : []) {
     let list: MoneriumOrder[] = [];
     try {
       list = orderList(await getClient().orders(profile));
@@ -647,11 +653,11 @@ export async function pollDepositsOnce(): Promise<number> {
       if ((await mirrorOrder(order)) === "recorded") credited++;
       // A payer who wrote a pay-link code on their transfer: the order's memo
       // carries it. Idempotent, so re-seeing an order records nothing twice.
-      attributeMoneriumOrder(order);
+      await attributeMoneriumOrder(order);
       // Or the ordinary case: they wrote the invoice number, because that is
       // what is printed beside the bank details on the sheet.
-      attributeMoneriumOrderToInvoice(order);
-      keepIssueFacts(order);
+      await attributeMoneriumOrderToInvoice(order);
+      await keepIssueFacts(order);
     }
   }
   /**
@@ -661,7 +667,7 @@ export async function pollDepositsOnce(): Promise<number> {
    * order's address, and dedupes on the order id, so an order seen twice
    * (default profile and named profile) is recorded once.
    */
-  for (const u of usersWithOwnCredentials()) {
+  for (const u of (await usersWithOwnCredentials())) {
     for (const profile of ownProfilesOf(u)) {
       let list: MoneriumOrder[] = [];
       try {
@@ -672,13 +678,13 @@ export async function pollDepositsOnce(): Promise<number> {
       }
       for (const order of list) {
         if ((await mirrorOrder(order)) === "recorded") credited++;
-        attributeMoneriumOrder(order);
-        attributeMoneriumOrderToInvoice(order);
-        keepIssueFacts(order);
+        await attributeMoneriumOrder(order);
+        await attributeMoneriumOrderToInvoice(order);
+        await keepIssueFacts(order);
       }
     }
   }
-  writeStatementLines();
+  await writeStatementLines();
   return credited;
 }
 
@@ -695,7 +701,7 @@ function ownProfilesOf(u: User): (string | undefined)[] {
  * state is what lets an operator cite the order as paid (review-evidence.ts).
  */
 export async function pollRedeemOrdersOnce(): Promise<void> {
-  const waiting = store.transfers.filter(
+  const waiting = (await store.list("transfers")).filter(
     (t) =>
       (t.state === "PAYOUT_SUBMITTED" || (t.state === "MANUAL_REVIEW" && !t.reviewResolution)) &&
       t.sepa?.mode === "sandbox" &&
@@ -704,21 +710,21 @@ export async function pollRedeemOrdersOnce(): Promise<void> {
   for (const t of waiting) {
     try {
       // The order was placed on this user's client, so it is read on it too.
-      const state = await getOrderState(t.sepa!.orderId!, store.findUser(t.userId));
+      const state = await getOrderState(t.sepa!.orderId!, await store.findUser(t.userId));
       if (t.state === "MANUAL_REVIEW") {
-        if (state !== t.sepa!.state) store.updateTransfer(t.id, { sepa: { ...t.sepa!, state } });
+        if (state !== t.sepa!.state) await store.updateTransfer(t.id, { sepa: { ...t.sepa!, state } });
       } else if (moneriumOrderProcessed(state)) {
-        store.updateTransfer(t.id, { state: "PAID", sepa: { ...t.sepa!, state } });
+        await store.updateTransfer(t.id, { state: "PAID", sepa: { ...t.sepa!, state } });
         console.log(`monerium: redeem order ${t.sepa!.orderId} processed (transfer ${t.id})`);
-        writeStatementLines();
+        await writeStatementLines();
       } else if (state === "rejected" || state === "failed") {
-        store.updateTransfer(t.id, {
+        await store.updateTransfer(t.id, {
           state: "FAILED",
           error: `Monerium redeem order ${state}`,
           sepa: { ...t.sepa!, state },
         });
       } else if (state !== t.sepa!.state) {
-        store.updateTransfer(t.id, { sepa: { ...t.sepa!, state } });
+        await store.updateTransfer(t.id, { sepa: { ...t.sepa!, state } });
       }
     } catch {
       // transient — retry next tick
@@ -736,7 +742,7 @@ export function startDepositPoller() {
     try {
       await pollDepositsOnce();
       await pollRedeemOrdersOnce();
-      for (const u of store.users) {
+      for (const u of (await store.list("users"))) {
         if (u.funding?.status === "iban_pending") await refreshPendingIban(u);
         else if (u.funding?.status === "active" && u.iban) await verifyIbanBinding(u);
       }

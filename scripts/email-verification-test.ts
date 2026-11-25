@@ -18,6 +18,7 @@ import os from "node:os";
 import path from "node:path";
 import { mkdtempSync } from "node:fs";
 import express from "express";
+import { forEachSeq } from "../services/api/src/seq.js";
 
 // ---- a fake SMTP server: accepts everything, keeps each message ----------
 const inbox: string[] = [];
@@ -77,7 +78,7 @@ const app = express().use(express.json()).use(
   "/api",
   createEmailVerificationRouter({
     // The session is the x-user header: who is calling is not under test here.
-    requireUserSession: (req, res, id) => (req.header("x-user") === id ? true : (res.status(401).json({ error: "no" }), false)),
+    requireUserSession: async (req, res, id) => (req.header("x-user") === id ? true : (res.status(401).json({ error: "no" }), false)),
   }),
 );
 const server = app.listen(0);
@@ -87,12 +88,12 @@ const post = async (p: string, as: string, body: unknown = {}) => {
   return { status: r.status, body: (await r.json()) as any };
 };
 
-const mk = (id: string, email: string, extra: object = {}) =>
-  store.addUser({ id, name: id, email, country: "DE", kycStatus: "pending", iban: "", address: `0x${"0".repeat(39)}${id.length}`, createdAt: new Date().toISOString(), passkey: { credentialId: id } as any, ...extra } as any);
+const mk = async (id: string, email: string, extra: object = {}) =>
+  await store.addUser({ id, name: id, email, country: "DE", kycStatus: "pending", iban: "", address: `0x${"0".repeat(39)}${id.length}`, createdAt: new Date().toISOString(), passkey: { credentialId: id } as any, ...extra } as any);
 const codeIn = (msg: string) => /code to confirm this email for Zold is (\d{6})/.exec(msg.replace(/=\r\n/g, ""))?.[1];
-const back = (id: string, ms: number) => {
-  const c = store.findUser(id)!.emailCode!;
-  store.updateUser(id, { emailCode: { ...c, sentAt: c.sentAt.map((t) => new Date(Date.parse(t) - ms).toISOString()) } });
+const back = async (id: string, ms: number) => {
+  const c = (await store.findUser(id))!.emailCode!;
+  await store.updateUser(id, { emailCode: { ...c, sentAt: c.sentAt.map((t) => new Date(Date.parse(t) - ms).toISOString()) } });
 };
 
 let failed = 0;
@@ -101,10 +102,10 @@ async function t(name: string, fn: () => Promise<void> | void) {
 }
 
 console.log("email verification");
-mk("anna", "Anna@Example.com");
-mk("squat", "anna@example.com");
+await mk("anna", "Anna@Example.com");
+await mk("squat", "anna@example.com");
 
-await t("the app is told verification is on", () => assert.equal(capabilities().emailVerification, true));
+await t("the app is told verification is on", async () => assert.equal((await capabilities()).emailVerification, true));
 
 await t("another person's session cannot ask for a code", async () => {
   assert.equal((await post("/users/anna/email/code", "squat")).status, 401);
@@ -122,9 +123,9 @@ await t("a code goes out by SMTP to the account's email, and only its hash is st
   const subject = /^Subject: (.*)$/im.exec(inbox[0])?.[1] ?? "";
   assert.ok(subject, "the message has a subject");
   assert.ok(!subject.includes(code), `the code is not in the subject: ${subject}`);
-  const stored = JSON.stringify(store.findUser("anna"));
+  const stored = JSON.stringify(await store.findUser("anna"));
   assert.ok(!stored.includes(`"${code}"`), "the code itself is never stored");
-  assert.ok(!JSON.stringify(publicUser(store.findUser("anna")!)).includes("emailCode"), "the hash is in no projection");
+  assert.ok(!JSON.stringify(await publicUser((await store.findUser("anna"))!)).includes("emailCode"), "the hash is in no projection");
 });
 
 await t("a second code within a minute is refused with the wait", async () => {
@@ -147,31 +148,31 @@ await t("five wrong tries void the code, even the right one after", async () => 
   for (let i = 0; i < 4; i++) await post("/users/anna/email/verify", "anna", { code: wrong });
   const r = await post("/users/anna/email/verify", "anna", { code });
   assert.equal(r.body.code, "EMAIL_CODE_EXPIRED");
-  assert.equal(store.findUser("anna")!.emailVerifiedAt, undefined);
+  assert.equal((await store.findUser("anna"))!.emailVerifiedAt, undefined);
 });
 
 await t("an expired code does not work", async () => {
-  back("anna", 61_000);
+  await back("anna", 61_000);
   assert.equal((await post("/users/anna/email/code", "anna")).status, 200);
   code = codeIn(inbox[inbox.length - 1])!;
-  const c = store.findUser("anna")!.emailCode!;
-  store.updateUser("anna", { emailCode: { ...c, expiresAt: new Date(Date.now() - 1).toISOString() } });
+  const c = (await store.findUser("anna"))!.emailCode!;
+  await store.updateUser("anna", { emailCode: { ...c, expiresAt: new Date(Date.now() - 1).toISOString() } });
   assert.equal((await post("/users/anna/email/verify", "anna", { code })).body.code, "EMAIL_CODE_EXPIRED");
 });
 
 await t("a failed send stores nothing and says so", async () => {
-  back("anna", 61_000);
-  const before = store.findUser("anna")!.emailCode!.hash;
+  await back("anna", 61_000);
+  const before = (await store.findUser("anna"))!.emailCode!.hash;
   smtpDown = true;
   const r = await post("/users/anna/email/code", "anna");
   smtpDown = false;
   assert.equal(r.status, 502);
   assert.equal(r.body.code, "MAIL_UNAVAILABLE");
-  assert.equal(store.findUser("anna")!.emailCode!.hash, before);
+  assert.equal((await store.findUser("anna"))!.emailCode!.hash, before);
 });
 
 await t("a refused recipient is logged by error code, never by address", async () => {
-  back("anna", 61_000);
+  await back("anna", 61_000);
   const logged: string[] = [];
   const err = console.error;
   console.error = (...a: unknown[]) => { logged.push(a.map(String).join(" ")); };
@@ -189,17 +190,17 @@ await t("a refused recipient is logged by error code, never by address", async (
 });
 
 await t("the right code confirms the email, once", async () => {
-  back("anna", 61_000);
+  await back("anna", 61_000);
   assert.equal((await post("/users/anna/email/code", "anna")).status, 200);
   code = codeIn(inbox[inbox.length - 1])!;
   const r = await post("/users/anna/email/verify", "anna", { code });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.ok(r.body.emailVerifiedAt);
-  assert.equal(store.findUser("anna")!.emailCode, undefined);
+  assert.equal((await store.findUser("anna"))!.emailCode, undefined);
 });
 
-await t("a confirmed email wins the recovery lookup over another account on it", () => {
-  assert.equal(store.findUserByEmail("ANNA@example.com")!.id, "anna");
+await t("a confirmed email wins the recovery lookup over another account on it", async () => {
+  assert.equal((await store.findUserByEmail("ANNA@example.com"))!.id, "anna");
 });
 
 await t("once confirmed, nobody else can confirm the same address", async () => {
@@ -209,10 +210,10 @@ await t("once confirmed, nobody else can confirm the same address", async () => 
 });
 
 await t("five sends an hour at most", async () => {
-  mk("bo", "bo@example.com");
+  await mk("bo", "bo@example.com");
   for (let i = 0; i < 5; i++) {
     assert.equal((await post("/users/bo/email/code", "bo")).status, 200);
-    back("bo", 61_000);
+    await back("bo", 61_000);
   }
   const r = await post("/users/bo/email/code", "bo");
   assert.equal(r.body.code, "EMAIL_CODE_LIMIT");
@@ -220,10 +221,10 @@ await t("five sends an hour at most", async () => {
 
 await t("the wait and the hourly cap count every account on the address, not each one alone", async () => {
   const ids = ["v1", "v2", "v3"];
-  mk("v1", "victim@example.test");
-  mk("v2", "Victim@Example.test");
-  mk("v3", " victim@example.test ");
-  const backAll = () => ids.forEach((id) => store.findUser(id)!.emailCode && back(id, 61_000));
+  await mk("v1", "victim@example.test");
+  await mk("v2", "Victim@Example.test");
+  await mk("v3", " victim@example.test ");
+  const backAll = async () => await forEachSeq(ids, async (id) => (await store.findUser(id))!.emailCode && (await back(id, 61_000)));
   const before = inbox.length;
   assert.equal((await post("/users/v1/email/code", "v1")).status, 200);
   const r2 = await post("/users/v2/email/code", "v2");
@@ -232,17 +233,17 @@ await t("the wait and the hourly cap count every account on the address, not eac
   assert.equal((await post("/users/v3/email/code", "v3")).status, 429);
   assert.equal(inbox.length, before + 1, "one mail to the address in the minute");
   for (const id of ["v2", "v3", "v1", "v2"]) {
-    backAll();
+    await backAll();
     assert.equal((await post(`/users/${id}/email/code`, id)).status, 200, `${id} after the wait`);
   }
-  backAll();
+  await backAll();
   const r6 = await post("/users/v3/email/code", "v3");
   assert.equal(r6.body.code, "EMAIL_CODE_LIMIT", "five mails an hour to one address, whichever accounts asked");
   assert.equal(inbox.length, before + 5);
 });
 
 await t("six requests at once send one mail; the rest wait", async () => {
-  mk("cy", "cy@example.com");
+  await mk("cy", "cy@example.com");
   const before = inbox.length;
   smtpDelayMs = 500;
   let rs;
@@ -251,8 +252,8 @@ await t("six requests at once send one mail; the rest wait", async () => {
   assert.deepEqual(rs.map((r) => r.status).sort(), [200, 429, 429, 429, 429, 429], JSON.stringify(rs.map((r) => r.body)));
   for (const r of rs.filter((r) => r.status === 429)) assert.equal(r.body.code, "EMAIL_CODE_WAIT");
   assert.equal(inbox.length - before, 1, "one mail");
-  assert.equal(store.findUser("cy")!.emailCode!.sentAt.length, 1, "every mail sent is counted");
-  back("cy", 61_000);
+  assert.equal((await store.findUser("cy"))!.emailCode!.sentAt.length, 1, "every mail sent is counted");
+  await back("cy", 61_000);
   assert.equal((await post("/users/cy/email/code", "cy")).status, 200, "the next minute's request goes through");
 });
 

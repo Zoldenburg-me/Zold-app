@@ -59,7 +59,7 @@ const { passkeyOwnerAddressOfJwk } = await import("../services/api/src/wallet/sa
 const { safeOperationDigest } = await import("../services/api/src/wallet/candide.js");
 const { FX } = await import("../services/api/src/config.js");
 const { writeStatementLines } = await import("../services/api/src/bookkeeping/writer.js");
-initStore();
+await initStore();
 
 let passed = 0;
 const check = async (name: string, fn: () => void | Promise<void>) => {
@@ -77,33 +77,33 @@ const people = ["anna", "bert", "cara", "admin", "payer"] as const;
 const keys: Record<string, Awaited<ReturnType<typeof makeSoftwarePasskey>>> = {};
 const addr: Record<string, `0x${string}`> = {};
 const hex = (b64: string) => ("0x" + Buffer.from(b64, "base64url").toString("hex")) as `0x${string}`;
-store.addOrganisation({ id: "org_1", type: "business", entity: "company", name: "Acme GmbH", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now } as any);
+await store.addOrganisation({ id: "org_1", type: "business", entity: "company", name: "Acme GmbH", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now } as any);
 for (const p of people) {
   keys[p] = await makeSoftwarePasskey(p, ORIGIN);
   addr[p] = passkeyOwnerAddressOfJwk(keys[p].jwk)!;
-  store.addUser({
+  await store.addUser({
     id: `u_${p}`, name: p, country: "DE", kycStatus: "approved", address: `0x${randomBytes(20).toString("hex")}`,
     passkey: { credentialId: keys[p].credentialId, publicKey: { alg: "ES256", jwk: keys[p].jwk }, signCount: 0, rpId: "localhost", createdAt: now },
     createdAt: now,
   } as any);
   const role = p === "admin" ? "admin" : p === "payer" ? "payer" : "owner";
   // anna deployed the Safe: her signerAddress is her passkey's address.
-  store.addMember({ id: `m_${p}`, orgId: "org_1", userId: `u_${p}`, email: "", role, status: "active", invitedAt: now, acceptedAt: now, ...(p === "anna" ? { signerAddress: addr.anna } : {}) } as any);
+  await store.addMember({ id: `m_${p}`, orgId: "org_1", userId: `u_${p}`, email: "", role, status: "active", invitedAt: now, acceptedAt: now, ...(p === "anna" ? { signerAddress: addr.anna } : {}) } as any);
 }
 const planOwners = [keys.anna, keys.bert].map((k) => ({ x: hex(k.jwk.x!), y: hex(k.jwk.y!) }));
-store.setOrgSafePlan("org_1", { kind: "org", status: "active", address: SAFE, owners: planOwners, createdAt: now } as any);
+await store.setOrgSafePlan("org_1", { kind: "org", status: "active", address: SAFE, owners: planOwners, createdAt: now } as any);
 // No IBAN, no backer, no Monerium profile: only the org Safe.
-store.addAccount({ id: "acc_1", orgId: "org_1", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: SAFE, createdAt: now, updatedAt: now } as any);
-store.addContact({ id: "c_w", orgId: "org_1", name: "Alice Studio", wallets: [{ id: "cw_1", chainId: 31337, address: ALICE }], bankAccounts: [], createdAt: now, updatedAt: now } as any);
+await store.addAccount({ id: "acc_1", orgId: "org_1", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: SAFE, createdAt: now, updatedAt: now } as any);
+await store.addContact({ id: "c_w", orgId: "org_1", name: "Alice Studio", wallets: [{ id: "cw_1", chainId: 31337, address: ALICE }], bankAccounts: [], createdAt: now, updatedAt: now } as any);
 // A company whose Safe is planned, not deployed.
-store.addOrganisation({ id: "org_2", type: "business", entity: "company", name: "Later GmbH", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now } as any);
+await store.addOrganisation({ id: "org_2", type: "business", entity: "company", name: "Later GmbH", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now } as any);
 const SAFE2 = "0x5afe00000000000000000000000000000000beef" as const;
-store.setOrgSafePlan("org_2", { kind: "org", status: "planned", address: SAFE2, owners: planOwners.slice(0, 1), createdAt: now } as any);
+await store.setOrgSafePlan("org_2", { kind: "org", status: "planned", address: SAFE2, owners: planOwners.slice(0, 1), createdAt: now } as any);
 for (const p of ["anna", "admin", "payer"] as const) {
-  store.addMember({ id: `m2_${p}`, orgId: "org_2", userId: `u_${p}`, email: "", role: p === "anna" ? "owner" : p, status: "active", invitedAt: now, acceptedAt: now } as any);
+  await store.addMember({ id: `m2_${p}`, orgId: "org_2", userId: `u_${p}`, email: "", role: p === "anna" ? "owner" : p, status: "active", invitedAt: now, acceptedAt: now } as any);
 }
-store.addAccount({ id: "acc_2", orgId: "org_2", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: SAFE2, createdAt: now, updatedAt: now } as any);
-store.addContact({ id: "c_w2", orgId: "org_2", name: "Alice Studio", wallets: [{ id: "cw_2", chainId: 31337, address: ALICE }], bankAccounts: [], createdAt: now, updatedAt: now } as any);
+await store.addAccount({ id: "acc_2", orgId: "org_2", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: SAFE2, createdAt: now, updatedAt: now } as any);
+await store.addContact({ id: "c_w2", orgId: "org_2", name: "Alice Studio", wallets: [{ id: "cw_2", chainId: 31337, address: ALICE }], bankAccounts: [], createdAt: now, updatedAt: now } as any);
 
 // ── the fake chain and prepare ──────────────────────────────────────────────
 const chain = {
@@ -142,14 +142,14 @@ const app = express();
 app.use(express.json());
 const who = (req: any) => req.header("x-user");
 const requireSession = (req: any, res: any) => (who(req) ? { userId: who(req) } : (res.status(401).json({ error: "no session" }), undefined));
-const deps = { ctxOf: (req: any, res: any) => resolveOrg(req, res, requireSession as any) };
+const deps = { ctxOf: async (req: any, res: any) => await resolveOrg(req, res, requireSession as any) };
 const noSepa = async () => { throw new Error("a wallet run builds no SEPA transfer"); };
 const failPersonal = createCryptoSendPreparer({ ...stubs, prepare: async () => { throw new Error("a company run never prepares a personal op"); } });
 app.use("/api/orgs", createDraftRoutes(deps, noSepa as any, async () => ({ safeBalanceEur: 1000 }) as any, failPersonal,
   createCompanyCryptoSendPreparer({ ...stubs, orgSafeReader: fakeChain, prepareOrg })));
 app.use("/api/orgs", createSafeOpRoutes(deps, fakeChain as any, (op) => companySendSignRefusal(op, stubs.screen as any)));
 app.use("/api", createCryptoSendsRouter({
-  requireUserSession: (req, res, userId) => (who(req) === userId ? { id: "s" } : (res.status(403).json({ error: "not yours" }), undefined)),
+  requireUserSession: async (req, res, userId) => (who(req) === userId ? { id: "s" } : (res.status(403).json({ error: "not yours" }), undefined)),
   ...stubs,
 }));
 app.use((err: unknown, _req: any, res: any, _next: any) => res.status(500).json({ error: String((err as Error)?.stack ?? err) }));
@@ -179,22 +179,22 @@ const queued = async (amount = "10") => {
 };
 const challengeOf = (op: { digest: string }) => Buffer.from(op.digest.slice(2), "hex").toString("base64url");
 const sign = async (p: string, opId: string) => {
-  const a = await keys[p].assert(challengeOf(store.findSafeOp(opId)!));
+  const a = await keys[p].assert(challengeOf((await store.findSafeOp(opId))!));
   return call("POST", `/orgs/org_1/safe-ops/${opId}/signatures`, `u_${p}`, a);
 };
-const live = (id: string) => liveCryptoSend(store.findCryptoSend(id)!);
+const live = async (id: string) => await liveCryptoSend((await store.findCryptoSend(id))!);
 const draftState = async (id: string) => (await call("GET", `/orgs/org_1/drafts/${id}`, "u_payer")).data.draft.state;
 let sentId = "";
-const reset = () => {
+const reset = async () => {
   chain.owners = [addr.anna, addr.bert]; chain.threshold = 1; chain.nonce = 0n; chain.relays = [];
   chain.relayResult = () => ({ userOpHash: `0x${"ab".repeat(32)}`, txHash: `0x${"cd".repeat(32)}`, success: true, gasPaidBy: "sponsored" });
   // Each op ends before the next is queued; the nonce moves on with it.
-  for (const op of store.safeOpsOf("org_1")) if (op.state === "PENDING") store.endPendingSafeOp(op.id, { state: "CANCELLED", reason: "test reset" });
+  for (const op of (await store.safeOpsOf("org_1"))) if (op.state === "PENDING") await store.endPendingSafeOp(op.id, { state: "CANCELLED", reason: "test reset" });
 };
 
 try {
   await check("a company wallet run is queued as an org Safe op, not refused for a missing IBAN or backer", async () => {
-    reset();
+    await reset();
     prepares.length = 0;
     const { send, op, body, draftId } = await queued();
     assert.equal(send.state, "CREATED");
@@ -203,7 +203,7 @@ try {
     assert.equal(op.state, "PENDING");
     assert.equal(body.cryptoSends[0].submitTo, undefined, "nobody signs it at /authorize");
     assert.match(body.note, /waiting for the owners/);
-    const stored = store.findCryptoSend(send.cryptoSendId)!;
+    const stored = (await store.findCryptoSend(send.cryptoSendId))!;
     assert.equal(stored.orgId, "org_1");
     assert.equal(stored.userId, "u_payer", "attribution only");
     assert.deepEqual(prepares[0].signers, [keyOf("anna")], "1-of-1: the deploying owner, never the payer");
@@ -211,7 +211,7 @@ try {
   });
 
   await check("the payer queues but cannot sign; an owner signs and the send reads SENT", async () => {
-    reset();
+    await reset();
     const { send, op, draftId } = await queued();
     const p = await sign("payer", op.id);
     assert.equal(p.status, 403, JSON.stringify(p.data));
@@ -222,8 +222,8 @@ try {
     const s = await sign("anna", op.id);
     assert.equal(s.status, 201, JSON.stringify(s.data));
     assert.equal(s.data.op.state, "EXECUTED");
-    assert.equal(live(send.cryptoSendId).state, "SENT");
-    assert.equal(live(send.cryptoSendId).txHash, `0x${"cd".repeat(32)}`);
+    assert.equal((await live(send.cryptoSendId)).state, "SENT");
+    assert.equal((await live(send.cryptoSendId)).txHash, `0x${"cd".repeat(32)}`);
     assert.equal(await draftState(draftId), "EXECUTED");
     sentId = send.cryptoSendId;
     chain.nonce = 1n;
@@ -231,27 +231,27 @@ try {
 
   await check("an executed send is booked on the company's statement, not the queuer's", async () => {
     // The payer also has books of their own: a personal account backed by their Safe.
-    store.addOrganisation({ id: "org_p", type: "personal", name: "payer", plan: "personal", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now } as any);
-    store.addAccount({ id: "acc_p", orgId: "org_p", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, backingUserId: "u_payer", createdAt: now, updatedAt: now } as any);
-    writeStatementLines();
+    await store.addOrganisation({ id: "org_p", type: "personal", name: "payer", plan: "personal", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now } as any);
+    await store.addAccount({ id: "acc_p", orgId: "org_p", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, backingUserId: "u_payer", createdAt: now, updatedAt: now } as any);
+    await writeStatementLines();
     const key = `cryptosend:${sentId}`;
-    const line = store.ledgerOf("org_1").find((e) => e.statement?.key === key);
+    const line = (await store.ledgerOf("org_1")).find((e) => e.statement?.key === key);
     assert.ok(line, "the company's books carry the send");
     assert.equal(line!.direction, "out");
     assert.equal(Number(line!.amount), 10);
     assert.deepEqual(line!.source, { kind: "account", accountId: "acc_1" });
-    assert.ok(!store.ledgerOf("org_p").some((e) => e.statement?.key === key), "the queuer's books do not");
+    assert.ok(!(await store.ledgerOf("org_p")).some((e) => e.statement?.key === key), "the queuer's books do not");
     // A queued send that has not executed is not booked yet.
-    reset();
+    await reset();
     chain.nonce = 1n;
     const { send } = await queued();
-    writeStatementLines();
-    assert.ok(!store.ledgerOf("org_1").some((e) => e.statement?.key === `cryptosend:${send.cryptoSendId}`));
-    reset();
+    await writeStatementLines();
+    assert.ok(!(await store.ledgerOf("org_1")).some((e) => e.statement?.key === `cryptosend:${send.cryptoSendId}`));
+    await reset();
   });
 
   await check("signers come from the chain's owners, not plan.owners or the caller", async () => {
-    reset();
+    await reset();
     prepares.length = 0;
     chain.nonce = 1n;
     // At 2-of-3 with cara added on chain only, the two owners named are anna
@@ -260,41 +260,41 @@ try {
     chain.threshold = 2;
     const { op } = await queued();
     assert.deepEqual(prepares[0].signers, [keyOf("anna"), keyOf("bert")]);
-    store.endPendingSafeOp(op.id, { state: "CANCELLED", reason: "test" });
+    await store.endPendingSafeOp(op.id, { state: "CANCELLED", reason: "test" });
     // bert is on the plan but no longer on chain: at 2-of-2 there is one
     // member left to sign, so nothing is created.
     chain.owners = [addr.anna, `0x${"77".repeat(20)}`];
-    const before = store.cryptoSends.length;
+    const before = (await store.list("cryptoSends")).length;
     const id = await approvedRun();
     const x = await call("POST", `/orgs/org_1/drafts/${id}/execute`, "u_payer");
     assert.equal(x.status, 409, JSON.stringify(x.data));
     assert.equal(x.data.code, "NOT_ENOUGH_SIGNERS");
-    assert.equal(store.cryptoSends.length, before, "nothing created");
+    assert.equal((await store.list("cryptoSends")).length, before, "nothing created");
   });
 
   await check("two owner members on one passkey are refused as ambiguous", async () => {
-    reset();
+    await reset();
     chain.nonce = 1n;
-    store.addMember({ id: "m_anna_twin", orgId: "org_1", userId: "u_anna", email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now } as any);
+    await store.addMember({ id: "m_anna_twin", orgId: "org_1", userId: "u_anna", email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now } as any);
     try {
       const id = await approvedRun();
       const x = await call("POST", `/orgs/org_1/drafts/${id}/execute`, "u_payer");
       assert.equal(x.status, 409, JSON.stringify(x.data));
       assert.equal(x.data.code, "AMBIGUOUS_SIGNER");
     } finally {
-      store.updateMember("m_anna_twin", { status: "deactivated" } as any);
+      await store.updateMember("m_anna_twin", { status: "deactivated" } as any);
     }
   });
 
   await check("every end but executed fails the send and gives the cap back; executed keeps it", async () => {
-    reset();
+    await reset();
     chain.nonce = 1n;
-    const spent = () => orgSafeSpentEurToday(SAFE);
-    const base = spent();
+    const spent = async () => await orgSafeSpentEurToday(SAFE);
+    const base = await spent();
     const ends: [string, (opId: string) => Promise<void> | void][] = [
-      ["CANCELLED", (id) => { store.endPendingSafeOp(id, { state: "CANCELLED", reason: "withdrawn" }); }],
-      ["INVALIDATED", (id) => { store.endPendingSafeOp(id, { state: "INVALIDATED", reason: "nonce moved" }); }],
-      ["EXPIRED", (id) => { store.endPendingSafeOp(id, { state: "EXPIRED", reason: "not enough owners signed in time" }); }],
+      ["CANCELLED", async (id) => { await store.endPendingSafeOp(id, { state: "CANCELLED", reason: "withdrawn" }); }],
+      ["INVALIDATED", async (id) => { await store.endPendingSafeOp(id, { state: "INVALIDATED", reason: "nonce moved" }); }],
+      ["EXPIRED", async (id) => { await store.endPendingSafeOp(id, { state: "EXPIRED", reason: "not enough owners signed in time" }); }],
       ["FAILED", async (id) => {
         chain.relayResult = () => ({ userOpHash: `0x${"ab".repeat(32)}`, txHash: `0x${"ef".repeat(32)}`, success: false, gasPaidBy: "sponsored" });
         await sign("anna", id);
@@ -302,34 +302,34 @@ try {
     ];
     for (const [state, end] of ends) {
       const { send, op, draftId } = await queued("7");
-      assert.equal(spent(), base + 7, `${state}: held while queued`);
+      assert.equal(await spent(), base + 7, `${state}: held while queued`);
       await end(op.id);
-      assert.equal(store.findSafeOp(op.id)!.state, state);
-      assert.equal(live(send.cryptoSendId).state, "FAILED", state);
-      assert.equal(spent(), base, `${state}: the hold is given back`);
+      assert.equal((await store.findSafeOp(op.id))!.state, state);
+      assert.equal((await live(send.cryptoSendId)).state, "FAILED", state);
+      assert.equal(await spent(), base, `${state}: the hold is given back`);
       assert.equal(await draftState(draftId), "FAILED", state);
-      reset();
+      await reset();
       chain.nonce = 1n;
     }
     // A pending op past its expiry reads FAILED before anything ends it.
     const { send, op } = await queued("7");
-    const expired = { ...store.findSafeOp(op.id)!, expiresAt: new Date(Date.now() - 1000).toISOString() };
-    assert.equal(liveCryptoSend(store.findCryptoSend(send.cryptoSendId)!, Date.now()).state, "CREATED");
+    const expired = { ...(await store.findSafeOp(op.id))!, expiresAt: new Date(Date.now() - 1000).toISOString() };
+    assert.equal((await liveCryptoSend((await store.findCryptoSend(send.cryptoSendId))!, Date.now())).state, "CREATED");
     const { orgOpOutcome } = await import("../services/api/src/wallet/org-debit.js");
     assert.equal(orgOpOutcome(expired).state, "FAILED");
-    reset();
+    await reset();
     chain.nonce = 1n;
     const ok = await queued("7");
     await sign("anna", ok.op.id);
-    assert.equal(live(ok.send.cryptoSendId).state, "SENT");
-    assert.equal(spent(), base + 7, "an executed send keeps counting");
+    assert.equal((await live(ok.send.cryptoSendId)).state, "SENT");
+    assert.equal(await spent(), base + 7, "an executed send keeps counting");
     chain.nonce = 2n;
   });
 
   await check("the daily cap is the org Safe's, whoever queues", async () => {
-    reset();
+    await reset();
     chain.nonce = 2n;
-    const room = FX.DAILY_CAP_EUR - orgSafeSpentEurToday(SAFE);
+    const room = FX.DAILY_CAP_EUR - (await orgSafeSpentEurToday(SAFE));
     const id = await approvedRun(String(Math.floor(room) + 1));
     const x = await call("POST", `/orgs/org_1/drafts/${id}/execute`, "u_payer");
     assert.equal(x.status, 409, JSON.stringify(x.data));
@@ -337,24 +337,24 @@ try {
   });
 
   await check("a payee edit after queueing invalidates the op at the first signature", async () => {
-    reset();
+    await reset();
     chain.nonce = 2n;
     const { send, op } = await queued();
-    store.updateContact("c_w", { wallets: [{ id: "cw_1", chainId: 31337, address: MALLORY as `0x${string}` }] });
+    await store.updateContact("c_w", { wallets: [{ id: "cw_1", chainId: 31337, address: MALLORY as `0x${string}` }] });
     try {
       const s = await sign("anna", op.id);
       assert.equal(s.status, 409, JSON.stringify(s.data));
       assert.equal(s.data.code, "INVALID_DATA");
-      assert.equal(store.findSafeOp(op.id)!.state, "INVALIDATED");
-      assert.equal(live(send.cryptoSendId).state, "FAILED");
+      assert.equal((await store.findSafeOp(op.id))!.state, "INVALIDATED");
+      assert.equal((await live(send.cryptoSendId)).state, "FAILED");
       assert.equal(chain.relays.length, 0, "nothing relayed");
     } finally {
-      store.updateContact("c_w", { wallets: [{ id: "cw_1", chainId: 31337, address: ALICE as `0x${string}` }] });
+      await store.updateContact("c_w", { wallets: [{ id: "cw_1", chainId: 31337, address: ALICE as `0x${string}` }] });
     }
   });
 
   await check("a sanctioned address is refused at the signature and the op ends", async () => {
-    reset();
+    await reset();
     chain.nonce = 2n;
     const { op } = await queued();
     sanctioned.add(ALICE.toLowerCase());
@@ -362,58 +362,58 @@ try {
       const s = await sign("anna", op.id);
       assert.equal(s.status, 403, JSON.stringify(s.data));
       assert.equal(s.data.code, "SANCTIONED");
-      assert.equal(store.findSafeOp(op.id)!.state, "INVALIDATED");
+      assert.equal((await store.findSafeOp(op.id))!.state, "INVALIDATED");
     } finally {
       sanctioned.clear();
     }
   });
 
   await check("an org Safe that is not deployed refuses before anything is created", async () => {
-    const before = store.cryptoSends.length;
-    const ops = store.safeOpsOf("org_2").length;
+    const before = (await store.list("cryptoSends")).length;
+    const ops = (await store.safeOpsOf("org_2")).length;
     const id = await approvedRun("10", "org_2");
     const x = await call("POST", `/orgs/org_2/drafts/${id}/execute`, "u_payer");
     assert.equal(x.status, 409, JSON.stringify(x.data));
     assert.equal(x.data.code, "ORG_SAFE_NOT_DEPLOYED");
-    assert.equal(store.cryptoSends.length, before);
-    assert.equal(store.safeOpsOf("org_2").length, ops);
+    assert.equal((await store.list("cryptoSends")).length, before);
+    assert.equal((await store.safeOpsOf("org_2")).length, ops);
   });
 
   await check("a company bank run is refused by name, even with the company's IBAN issued: nothing is built", async () => {
-    store.addContact({ id: "c_b", orgId: "org_1", name: "Bob GmbH", wallets: [], bankAccounts: [{ id: "cb_1", currency: "EUR", country: "DE", holderName: "Bob GmbH", iban: "DE89370400440532013000" }], createdAt: now, updatedAt: now } as any);
-    store.updateAccount("acc_1", { identifier: { iban: "DE02100100109307118603" } });
+    await store.addContact({ id: "c_b", orgId: "org_1", name: "Bob GmbH", wallets: [], bankAccounts: [{ id: "cb_1", currency: "EUR", country: "DE", holderName: "Bob GmbH", iban: "DE89370400440532013000" }], createdAt: now, updatedAt: now } as any);
+    await store.updateAccount("acc_1", { identifier: { iban: "DE02100100109307118603" } });
     try {
       const d = await call("POST", "/orgs/org_1/drafts", "u_payer", { source: { kind: "account", accountId: "acc_1" }, lines: [{ contactId: "c_b", destination: { kind: "bank", bankAccountId: "cb_1", displayName: "Bob GmbH" }, asset: "EUR", amount: "5" }] });
       assert.equal(d.status, 201, JSON.stringify(d.data));
       const id = d.data.draft.id as string;
       assert.equal((await call("POST", `/orgs/org_1/drafts/${id}/submit`, "u_payer")).status, 200);
       assert.equal((await call("POST", `/orgs/org_1/drafts/${id}/review`, "u_admin", { approve: true })).status, 200);
-      const ops = store.safeOpsOf("org_1").length;
-      const transfers = store.transfers.length;
+      const ops = (await store.safeOpsOf("org_1")).length;
+      const transfers = (await store.list("transfers")).length;
       // noSepa throws if a transfer were built: the refusal comes first.
       const x = await call("POST", `/orgs/org_1/drafts/${id}/execute`, "u_payer");
       assert.equal(x.status, 409, JSON.stringify(x.data));
       assert.equal(x.data.code, "COMPANY_BANK_PAYOUT_NOT_BUILT");
-      assert.equal(store.safeOpsOf("org_1").length, ops, "nothing queued");
-      assert.equal(store.transfers.length, transfers, "no transfer");
+      assert.equal((await store.safeOpsOf("org_1")).length, ops, "nothing queued");
+      assert.equal((await store.list("transfers")).length, transfers, "no transfer");
     } finally {
-      store.updateAccount("acc_1", { identifier: {} });
+      await store.updateAccount("acc_1", { identifier: {} });
     }
   });
 
   await check("the personal route refuses a company Safe", async () => {
-    store.addUser({
+    await store.addUser({
       id: "u_rogue", name: "Rogue", country: "DE", kycStatus: "approved", address: SAFE,
       wallet: { type: "candide-safe", deployed: true },
       passkey: { credentialId: keys.anna.credentialId, publicKey: { alg: "ES256", jwk: keys.anna.jwk }, signCount: 0, rpId: "localhost" },
       passkeySafe: { status: "active", address: SAFE, threshold: 1, importedAt: now, passkeyPublicKey: planOwners[0] },
       createdAt: now,
     } as any);
-    const before = store.cryptoSends.length;
+    const before = (await store.list("cryptoSends")).length;
     const r = await call("POST", "/users/u_rogue/crypto-sends", "u_rogue", { token: "EURE", amount: "1", to: ALICE, confirmedAddress: ALICE });
     assert.equal(r.status, 403, JSON.stringify(r.data));
     assert.equal(r.data.code, "COMPANY_SAFE");
-    assert.equal(store.cryptoSends.length, before);
+    assert.equal((await store.list("cryptoSends")).length, before);
   });
 } finally {
   server.close();

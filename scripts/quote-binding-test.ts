@@ -69,7 +69,7 @@ try {
     0,
   );
   rmSync(process.env.TRANSF_DB_PATH!, { force: true });
-  initStore();
+  await initStore();
 
   console.log("2/3 quote records the locked rate...");
   // Record the rate the way fx.ts does: whatever the filling provider reports
@@ -94,7 +94,7 @@ try {
     expiresAt: new Date(Date.now() + 60_000).toISOString(),
     createdAt: now,
   };
-  store.addQuote(quote);
+  await store.addQuote(quote);
   const transfer: Transfer = {
     id: "t-quote-binding",
     userId: "u-quote-binding",
