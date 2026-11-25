@@ -4,9 +4,11 @@ Board #166. Not yet approved by the owner. Code references were checked against
 main 9f905eb (2026-11-25). Paths are under `services/api/src/` unless they
 start with `scripts/`.
 
-The owner chose managed EU Postgres on 2026-11-05 and skipped SQLite, so there
-is one migration. This note does not reopen that choice. The hub's own
-database (`hub.db` in Agentic-payment-protocol) is out of scope.
+The owner chose Postgres on 2026-11-05 and skipped SQLite, so there is one
+migration. On 2026-11-25 the owner chose to run it, and the API, on the
+owner's own Oracle Cloud ARM server (§7). This note does not reopen either
+choice. The hub's own database (`hub.db` in Agentic-payment-protocol) is out
+of scope.
 
 **What this note decides:** one table per collection, typed key columns
 generated from a JSONB document, uniqueness enforced by the database, an
@@ -14,8 +16,10 @@ async store with `store.tx`, a JSON backend and a Postgres backend behind one
 interface until cut-over, PGlite for the offline suites and a real Postgres 17
 for the concurrency tests, plain numbered SQL migrations, an outbox for
 webhooks, a ledger whose rows cannot be deleted and whose every change is kept,
-and seven slices. **What it leaves to the owner:** the provider, whether the
-hub stays separate, and the cut-over window (§9).
+Postgres on a unix socket on the Oracle host with pgBackRest PITR to OCI
+Object Storage, and eight slices. **What it leaves to the owner:** whether
+the hub stays separate, the OCI region and processing agreement, and when to
+cut over (§9).
 
 ## 0. What exists today
 
@@ -140,8 +144,8 @@ Rules for the table above:
   (`shopifyConnections`, not `shopify_connections`), and `rowId` stays the
   row's `id`. Changing either makes every sealed value unopenable. The SQL
   table names are snake_case; `stored-secrets.ts` does not change.
-- Field encryption stays exactly as it is. Disk encryption comes from the
-  provider (§7). No new field is encrypted in #166.
+- Field encryption stays exactly as it is. Disk encryption comes from OCI
+  (§7). No new field is encrypted in #166.
 - Ids keep their current text values (`org_…`, `acc_…`, uuids). No serials.
 
 New tables: `schema_migrations`, `outbox` (§5), `ledger_history` (§5),
@@ -268,11 +272,11 @@ Mechanical order for S2 (each step leaves `npm run check` green):
 ## 4. Backends and tests
 
 - **One interface, two backends** until cut-over: `STORE_BACKEND=json`
-  (default until S7) or `postgres` with `DATABASE_URL`. The Postgres backend
-  takes `DATABASE_URL` and an optional `DATABASE_CA` (PEM path) for TLS
-  verification, nothing provider-specific. `sslmode=verify-full` is required
-  on any chain other than 31337, so a missing CA fails at start rather than
-  connecting unverified.
+  (default until S8) or `postgres` with `DATABASE_URL`. The Postgres backend
+  takes `DATABASE_URL` and an optional `DATABASE_CA` (PEM path), nothing
+  host-specific. A unix socket or loopback needs no TLS. Any other host on a
+  real-money chain needs `sslmode=verify-full` and the CA, or the API refuses
+  to start (§7).
 - **Driver:** `pg` (node-postgres, MIT, 8.x). Small, plain, a pool and
   parameterised queries; nothing else is needed.
 - **Offline suites on PGlite.** `@electric-sql/pglite` 0.6.0, Apache-2.0,
@@ -349,7 +353,7 @@ only: quote and session pruning, Shopify delivery pruning,
 
 ## 6. Data migration and cut-over
 
-**Importer** (`scripts/pg-import.ts`, S6):
+**Importer** (`scripts/pg-import.ts`, S5):
 
 - Reads `db.json` with `loadStoreReadOnly` (`db.ts:229-232`), runs the
   load-time migrations in memory, and writes every row in one transaction.
@@ -369,65 +373,97 @@ only: quote and session pruning, Shopify delivery pruning,
 `Db` shape, so `db.json` can be rebuilt from Postgres. It is the rollback
 path and the test of the importer.
 
-**Cut-over on an Akash lease** (testnet first, then app.zoldhq.com; the
-runbook goes in `docs/running-locally.md` in S7):
+**Cut-over** (the runbook is written in S7; the owner picks the time). The
+API and the data move together, from the Akash lease to the Oracle host
+(§7), testnet (zoldhq.com) first, then app.zoldhq.com:
 
-1. Run `npm run preflight` and the Postgres 17 suite against the target
-   database.
+1. On the Oracle host: the Postgres 17 suite (`check:pg`) passes against the
+   target cluster, `npm run preflight` passes, and a restore drill (§7) has
+   been done once.
 2. Drain: no transfer, crypto send or safe op in a non-final state, and the
-   #167 condition (no no-reference SEPA transfer waiting). Announce the
-   window.
-3. Stop writes: stop the API (it is the only writer).
-4. Back up `db.json` with `scripts/backup-db.sh` (age-encrypted). Make the
-   lease copy read-only (`chmod 400`).
-5. Import, then verify (counts and hashes both ways). A mismatch stops the
-   cut-over; restart on JSON.
-6. Set `STORE_BACKEND=postgres`, `DATABASE_URL` and the CA in the lease
-   environment, start, wait for `/api/health`.
+   #167 condition (no no-reference SEPA transfer waiting).
+3. Stop writes: stop the API on the lease (it is the only writer).
+4. Copy `db.json` off the lease with `scripts/backup-db.sh` (age-encrypted).
+   Keep the lease and its volume, read-only, until step 8.
+5. On the Oracle host: import, then verify (counts and hashes both ways). A
+   mismatch stops the cut-over; start the lease again on JSON.
+6. Start the API on the Oracle host with `STORE_BACKEND=postgres` and
+   `DATABASE_URL`, wait for `/api/health`, then point the Cloudflare tunnel's
+   hostname at the new `cloudflared` (DNS does not change; §18.1).
 7. Smoke: sign in with the owner's passkey, read balances and the last
    transfers, list the audit. No money moves in the smoke.
+8. Close the lease only after the owner says so.
 
-**Rollback:** while nothing has been written on Postgres, set
-`STORE_BACKEND=json` and start on the read-only `db.json` (make it writable
-first). After Postgres has taken writes, export Postgres to `db.json` shape
-and start on that, so those writes are not lost. The `db.json` copy is kept,
-encrypted, until the owner deletes it.
+**Rollback:** while nothing has been written on Postgres, point the tunnel
+back at the lease and start it on its `db.json`. After Postgres has taken
+writes, export Postgres to `db.json` shape and start the lease on that, so
+those writes are not lost. The encrypted `db.json` copy is kept until the
+owner deletes it.
 
-**Backups:** point-in-time recovery from the provider, at least 7 days.
-`scripts/backup-db.sh` gains a Postgres mode (`pg_dump` piped to `age`) for an
-off-provider copy. The lease's own `db.json` backups on deploy
-(technical-architecture §18.1) stop once the lease no longer holds the data.
+**Backups:** §7.
 
-## 7. Provider
+## 7. Where it runs: the Oracle host
 
-The owner chooses. Each option below is an EU region, offers a DPA, encrypts
-at rest, and accepts TLS connections from the internet with an IP allowlist.
-Prices are approximate list prices for the smallest plan with PITR, at our
-size (well under 10 GB); check them at order.
+The owner's decision (2026-11-25): the API and Postgres move off Akash to the
+owner's Oracle Cloud (OCI) ARM server (Ampere, aarch64), on the same host.
+Postgres is self-hosted, not a managed service.
 
-| Provider | EU region | PITR | DPA | Encryption at rest | Approx. monthly | Reachability from Akash |
-|---|---|---|---|---|---|---|
-| Aiven (Finland) | Frankfurt, Helsinki, … (AWS/GCP/Azure/UpCloud) | Startup: 2 days; Business: 14 days | yes | yes | Startup-4 about $75; Business from about $180 | TLS with a project CA; IP allowlist |
-| OVHcloud (France) | Gravelines, Strasbourg, Frankfurt, … | on the higher plans only | yes | yes | check at order; backups billed per GB | TLS; IP allowlist |
-| Neon (US company, AWS EU) | Frankfurt, London | yes, restore window by plan | yes | yes | about $20 plus usage | TLS; IP allowlist on paid plans; compute can scale to zero (cold start on first query) |
-| Supabase (US company, AWS EU) | Frankfurt, … | paid add-on, about $100 for 7 days | yes | yes | Pro $25 plus PITR add-on | TLS; network restrictions on paid plans |
+- **Region:** an EU region. Recommended: Frankfurt (`eu-frankfurt-1`). The
+  owner confirms (§9).
+- **Processing agreement:** Oracle's Data Processing Agreement for Oracle
+  Cloud Services covers OCI. AGENTS.md needs one before user data lands, so
+  the owner confirms that the account is covered (§9).
+- **Postgres 17** from the PostgreSQL project's own packages (PGDG), which
+  build for aarch64. A major upgrade is a planned task, not automatic; minor
+  versions follow the distribution's security updates.
+- **No network port.** `listen_addresses = ''`: Postgres listens on its unix
+  socket only. `pg_hba.conf` allows `local` connections with
+  `scram-sha-256`, and nothing else. `DATABASE_URL` is then
+  `postgresql://<role>@/<db>?host=/var/run/postgresql`. No TLS is needed on
+  a socket. The OCI security list opens no database port.
+- **The code still takes only `DATABASE_URL`** (and `DATABASE_CA` when it is
+  given). It fails closed: on a real-money chain a TCP host other than
+  loopback is refused unless the URL asks for `sslmode=verify-full` and a CA
+  is given. Moving the database to another host later is a config change, not
+  a code change.
+- **Two deployments, one host:** testnet and mainnet each get their own OS
+  user, API process, database and roles. Neither role can connect to the
+  other's database. Staging stays off the passkey domain, as today.
+- **Roles:** per database, an owner role that runs the migrations (at
+  deploy, before the API starts) and an application role the API runs as.
+  The application role has no DDL and the grants in §5.
+- **Disk encryption:** OCI encrypts boot and block volumes at rest by
+  default, with Oracle-managed keys. A key of our own in OCI Vault is
+  possible later; not needed for #166.
+- **PITR: pgBackRest** (MIT, packaged by PGDG for aarch64) to OCI Object
+  Storage through its S3-compatible API. Continuous WAL archiving, a weekly
+  full and daily differential backup, 14 days of retention. The repository is
+  encrypted by pgBackRest (`aes-256-cbc`) under a key that is not on the
+  host's disk in plaintext beside the backups, so a copy of the bucket alone
+  opens nothing. pgBackRest over WAL-G: it encrypts the repository, has a
+  `verify` command, and is in the same package repository as Postgres.
+- **Restore drill:** before the cut-over, then monthly. Restore to a time T
+  into a scratch cluster on the host, start it on its own socket, and compare
+  per-table row counts and hashes (the importer's verify, §6) against an
+  export taken at T. The drill and its result are logged on the board.
+- **Off-box copy:** `scripts/backup-db.sh` gains a Postgres mode (`pg_dump`
+  piped to `age`) for a copy outside OCI.
+- **Running it:** systemd units for the API and `cloudflared`, restart on
+  failure. Deploys keep today's pull model: the host polls the `production`
+  branch, so nothing on GitHub holds a credential for it (§18.1). This
+  replaces the Akash leg of the `production` workflow.
+- **Toolchain:** Node 22.23.4 for linux-arm64. S7 checks that
+  `npm ci --omit=dev` builds on aarch64 and that no dependency ships only an
+  x64 binary.
 
-Scaleway is left out: we found scheduled backups and snapshots in its
-documentation, but no restore to a point in time.
-
-The Akash lease's egress IP changes when the lease moves to another
-provider, so an IP allowlist needs updating on every lease move. That step
-goes in the runbook. The database password and CA go in the lease
-environment like the other secrets; the provider can read them
-(technical-architecture §18.1), which is the limit #166 already names.
-
-**Recommendation:** Aiven Business in Frankfurt: an EU company, 14 days of
-PITR, a CA we can pin, and no scale-to-zero.
+The limit #166 names ("the API still sees the data in memory and holds the
+database credentials") holds on the Oracle host too: Oracle, as the host,
+can reach the disk and memory, under its processing agreement.
 
 ## 8. Slices
 
 Each slice is one PR, mergeable on its own with main green. The JSON backend
-stays the default until S7.
+stays the default until the cut-over.
 
 | Slice | What | Owner needed |
 |---|---|---|
@@ -435,19 +471,20 @@ stays the default until S7.
 | S1 | `pg` dependency, PGlite dev dependency, migration runner, `0001_init.sql` (§1), the Postgres backend behind the interface with the same method bodies, store suites run on JSON and PGlite. No caller switched | — |
 | S2 | Async store API and the mechanical conversion (§3), on the JSON backend. `store.tx` replaces `batched`. Rows are clones. Caller check-then-writes in §2 moved into store methods first | — |
 | S3 | Money-path transactions and locks on Postgres: `cap_holds`, recovery-start lock, `recordPaymentRequestPayment`, `settleInvoice`, the dedupe keys. `npm run check:pg` with every concurrency test in §2 | — |
-| S4 | Outbox and its worker (checkout hints, PAID hooks); audit and no-delete triggers; `ledger_history` | — |
+| S4 | Outbox and its worker (checkout hints, PAID hooks); audit and no-delete triggers; `ledger_history`; the application role's grants | — |
 | S5 | Importer, export, verify (§6), run against a copy of the testnet `db.json` on the local Postgres 17. Constraint findings reported to the lead | — |
-| S6 | Docs: AGENTS.md (where the code lives, secrets and storage), `docs/running-locally.md` (local Postgres, `check:pg`, the runbook), technical-architecture §18.1, `docs/roadmap.md`, `docs/status.md` | — |
-| S7 | Cut-over: testnet lease first, then app.zoldhq.com; `STORE_BACKEND=postgres` becomes the default; JSON backend kept for one release as the rollback path, then removed | provider account and DPA; cut-over window |
+| S6 | Docs: AGENTS.md (where the code lives, secrets and storage), `docs/running-locally.md` (local Postgres, `check:pg`), technical-architecture §18.1, `docs/roadmap.md`, `docs/status.md` | — |
+| S7 | The Oracle host (§7): Postgres 17 and roles, pgBackRest to Object Storage and the first restore drill, systemd units, the deploy pipeline in place of the Akash leg, the aarch64 toolchain check, and the cut-over runbook | region and DPA confirmed; host access |
+| S8 | Cut-over (§6): testnet, then app.zoldhq.com. `STORE_BACKEND=postgres` becomes the default; the JSON backend stays one release as the rollback path, then goes | the owner picks the time |
 
 S2 is the largest (about 1,250 call sites and 2,000 in tests) and can be cut
-by directory if a single PR is too big to review.
+by directory if one PR is too big to review. S7 can run alongside S2-S5.
 
 ## 9. Owner questions
 
-1. **Provider:** which one, and the owner signs its DPA (§7). The
-   recommendation is Aiven Business, Frankfurt.
-2. **Hub database:** does `hub.db` (Agentic-payment-protocol, `packages/hosted`)
+1. **Hub database:** does `hub.db` (Agentic-payment-protocol, `packages/hosted`)
    stay a separate store, as #166 assumes? This note assumes yes.
-3. **Cut-over window:** when the testnet lease and then app.zoldhq.com may be
-   stopped for about 30 minutes each (§6).
+2. **Region and DPA:** is `eu-frankfurt-1` the region, and is the OCI account
+   one that Oracle's Data Processing Agreement covers (§7)?
+3. **Cut-over:** the owner's call, once S7 is done (§6). Nothing to answer
+   now.
