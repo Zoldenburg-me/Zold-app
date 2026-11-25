@@ -281,18 +281,24 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
         } catch (err: any) {
           pushed = { lineId: line.id, code: doc.code, outcome: "failed", error: redactedMessage(err).slice(0, 200) };
         }
-        const sent = (): NonNullable<NonNullable<typeof doc.sentTo>["getmyinvoices"]> => store.findDocumentByCode(doc.code)?.sentTo?.getmyinvoices ?? {};
-        if (pushed.documentUid) store.updateDocument(doc.id, { sentTo: { getmyinvoices: { ...sent(), documentUid: pushed.documentUid } } });
+        // Written only when it changes: each write persists the whole store.
+        const hold = (patch: NonNullable<NonNullable<typeof doc.sentTo>["getmyinvoices"]>) => {
+          const was = store.findDocumentByCode(doc.code)?.sentTo?.getmyinvoices ?? {};
+          if (Object.entries(patch).some(([k, v]) => (was as Record<string, unknown>)[k] !== v)) store.updateDocument(doc.id, { sentTo: { getmyinvoices: { ...was, ...patch } } });
+        };
+        if (pushed.documentUid) hold({ documentUid: pushed.documentUid });
         if (bankAccountUid !== undefined) {
           try {
             // Current code first; an earlier one finds a line sent before a
             // replace. Only codes GetMyInvoices already holds go up: a revoked
             // code still opens its snapshot at /v.
             const earlier = belegeOfLine(ctx.org.id, line.id).filter((d) => d.id !== doc.id && d.sentTo?.getmyinvoices);
-            const markers = [doc.code, ...earlier.filter((d) => d.sentTo!.getmyinvoices!.transactionUid).map((d) => d.code)];
+            const markers = [doc.code, ...earlier.filter((d) => d.sentTo!.getmyinvoices!.transactionUid || d.sentTo!.getmyinvoices!.bankLine).map((d) => d.code)];
             const superseded = earlier.map((d) => d.sentTo!.getmyinvoices!.documentUid).filter((n): n is number => !!n);
-            pushed.bankLine = await client.pushBankLine(bankAccountUid, bankLineFor(doc.snapshot, doc.code), markers, pushed.documentUid, superseded);
-            if (pushed.bankLine.transactionUid) store.updateDocument(doc.id, { sentTo: { getmyinvoices: { ...sent(), transactionUid: pushed.bankLine.transactionUid } } });
+            // Recorded before the add goes out: one that fails or gets no
+            // answer may still have landed, and a replace must find it.
+            pushed.bankLine = await client.pushBankLine(bankAccountUid, bankLineFor(doc.snapshot, doc.code), markers, pushed.documentUid, superseded,
+              (transactionUid) => hold(transactionUid ? { transactionUid } : { bankLine: true }));
           } catch (err: any) {
             pushed.bankLine = { outcome: "failed", error: redactedMessage(err).slice(0, 200) };
           }

@@ -31,7 +31,7 @@ let nextUid = 1000;
 const bank = { lines: [] as any[], assigned: [] as { transactionUid: number; documentUid: number }[] };
 /** normal | slow (records, answers after 1.5 s) | slow-drop (answers after
  *  1.5 s, records nothing) | reject (422). readDelayMs slows GET /account. */
-const fakeMode = { upload: "normal" as "normal" | "slow" | "slow-drop" | "reject", readDelayMs: 0, banksDown: false };
+const fakeMode = { upload: "normal" as "normal" | "slow" | "slow-drop" | "reject", readDelayMs: 0, banksDown: false, assignDown: false, addLost: false };
 const SLOW_MS = 1500;
 
 const fake = createServer((req, res) => {
@@ -67,18 +67,21 @@ const fake = createServer((req, res) => {
       const same = bank.lines.find((t) => t.bankAccountUid === Number(txPath[1]) && t.description === body.description && t.bookingDate === body.bookingDate && t.amount === body.amount);
       if (same) return send(422, { errors: [{ code: 127, detail: "Transaction Record Already Exist.", transactionUid: same.transactionUid }] });
       const transactionUid = nextUid++;
-      bank.lines.push({ transactionUid, bankAccountUid: Number(txPath[1]), ...body });
+      bank.lines.push({ transactionUid, bankAccountUid: Number(txPath[1]), ...body, ...(fakeMode.addLost ? { hidden: true } : {}) });
+      // addLost: the line lands, the answer is a 503 and lookups miss it.
+      if (fakeMode.addLost) return send(503, { success: false, detail: "gateway timeout" });
       return send(200, { success: true, meta_data: { transactionUid } });
     }
     if (txPath && req.method === "GET") {
       const text = url.searchParams.get("textFilter") ?? "";
       const day = url.searchParams.get("startDateFilter");
-      const records = bank.lines.filter((t) => t.bankAccountUid === Number(txPath[1]) && String(t.description).includes(text) && (!day || t.bookingDate === day));
+      const records = bank.lines.filter((t) => t.bankAccountUid === Number(txPath[1]) && String(t.description).includes(text) && (!day || t.bookingDate === day) && !(t.hidden && fakeMode.addLost));
       // Live answers key the records by transactionUid, not as an array.
       return send(200, { totalCount: records.length, records: Object.fromEntries(records.map((t) => [String(t.transactionUid), t])) });
     }
     const assignPath = /^\/bankAccounts\/\d+\/transactions\/(\d+)\/assign$/.exec(url.pathname);
     if (assignPath && req.method === "GET") return send(200, { records: bank.assigned.filter((a) => a.transactionUid === Number(assignPath[1])).map((a) => ({ documentUid: a.documentUid })) });
+    if (assignPath && req.method === "POST" && fakeMode.assignDown) return send(503, { success: false, detail: "down" });
     if (assignPath && req.method === "POST") { bank.assigned.push({ transactionUid: Number(assignPath[1]), documentUid: body.documentUid }); return send(200, { success: true, meta_data: { assignmentUid: nextUid++ } }); }
     send(404, { success: false, detail: "unhandled " + url.pathname });
   });
@@ -407,6 +410,52 @@ await check("a Beleg replaced after its line went up: the re-send finds the line
   assert.ok(bank.assigned.some((a) => a.transactionUid === x.bankLine.transactionUid && a.documentUid === oldUid), "the revoked one is still attached in GetMyInvoices");
   assert.equal(x.bankLine.revokedStillAttached, 1, JSON.stringify(x.bankLine));
   assert.ok(!r.body.results.filter((y: any) => y.lineId !== IN).some((y: any) => y.bankLine?.revokedStillAttached), "only the replaced line is flagged");
+});
+
+// A line whose bank line went up but whose send did not end in a saved
+// transactionUid: it is held from the moment the add goes out, so a replace
+// then finds it by the old code.
+for (const [name, mode] of [["the Beleg could not be attached (5xx)", "assignDown"], ["the add got no answer and the re-lookups missed it", "addLost"]] as const) {
+  await check(`${name}, then a replace: the re-send finds the line by the old code and adds nothing`, async () => {
+    const IN = lineId("org_1", "monerium:issue:ord-1");
+    const listed = await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09" });
+    const X = listed.body.results.find((y: any) => y.lineId !== IN && y.bankLine?.transactionUid);
+    assert.ok(X, JSON.stringify(listed.body.results));
+    // Back to a line never banked: its Beleg is in GetMyInvoices, its line is not.
+    const doc = store.findDocumentByCode(X.code)!;
+    bank.lines = bank.lines.filter((t) => t.transactionUid !== X.bankLine.transactionUid);
+    bank.assigned = bank.assigned.filter((a) => a.transactionUid !== X.bankLine.transactionUid);
+    store.updateDocument(doc.id, { sentTo: { getmyinvoices: { documentUid: doc.sentTo!.getmyinvoices!.documentUid } } });
+    fakeMode[mode] = true;
+    let first: any;
+    try {
+      first = (await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09" })).body.results.find((y: any) => y.lineId === X.lineId);
+    } finally { fakeMode[mode] = false; }
+    assert.ok(["failed", "unknown"].includes(first.bankLine.outcome), JSON.stringify(first));
+    const landed = bank.lines.filter((t) => String(t.description).includes(X.code));
+    assert.equal(landed.length, 1, "the line landed once");
+    store.updateDocument(doc.id, { revokedAt: new Date().toISOString() });
+    const rep = await call("POST", `/api/orgs/org_1/bookkeeping/lines/${X.lineId}/beleg/replace`, {});
+    assert.equal(rep.status, 201, JSON.stringify(rep.body));
+    const total = bank.lines.length;
+    const r = await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09" });
+    const y = r.body.results.find((z: any) => z.lineId === X.lineId);
+    assert.equal(bank.lines.length, total, `no second bank line: ${JSON.stringify(y)}`);
+    assert.equal(y.bankLine.outcome, "exists");
+    assert.equal(y.bankLine.transactionUid, landed[0].transactionUid);
+  });
+}
+
+await check("a re-send with nothing new writes nothing to the store", async () => {
+  await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09" });
+  const real = store.updateDocument;
+  let writes = 0;
+  store.updateDocument = ((...a: Parameters<typeof real>) => { writes++; return real(...a); }) as typeof real;
+  try {
+    const r = await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09" });
+    assert.ok(r.body.results.every((x: any) => x.outcome === "exists" && x.bankLine?.outcome === "exists"), JSON.stringify(r.body.results));
+  } finally { store.updateDocument = real; }
+  assert.equal(writes, 0);
 });
 
 await check("a line the lookup misses is found by GetMyInvoices' own duplicate refusal (code 127), not added twice", async () => {
