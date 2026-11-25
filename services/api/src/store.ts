@@ -14,9 +14,6 @@
  */
 import { randomUUID } from "node:crypto";
 import { batched, db, persist, pruneSessions, seedChartOfAccounts } from "./store/db.js";
-import { nextProfileHistory } from "./domain/monerium-identity.js";
-import { orgEntity } from "./domain/org-entity.js";
-import { copyOrgSafePlan, isOrgSafePlan } from "./domain/org-safe-plan.js";
 import { auditEntry } from "./audit.js";
 import type {
   Account,
@@ -31,8 +28,21 @@ import type {
   Organisation,
   OrgSafePlan,
 } from "./domain/types.js";
-import { OPERATOR_REFUND_STEP, REVIEW_RESOLUTION_STATES } from "./store/types.js";
-import { matchesPayoutEvidence } from "./transfers/review-evidence.js";
+import {
+  applyOrgSafePlan,
+  applyReplacedOrgSafePlan,
+  applyReviewResolution,
+  applyUserPatch,
+  checkReviewResolution,
+  followIban,
+  guardTransferPatch,
+  hashOnRecordIn,
+  passkeyUsePatch,
+  reviewRefundTx,
+  sessionDead,
+  type ReviewResolution,
+  type ReviewResult,
+} from "./store/rules.js";
 import type {
   ConversionSweep,
   CryptoDeposit,
@@ -47,7 +57,6 @@ import type {
   Quote,
   ReceiptShare,
   RecoveryRequest,
-  ReviewResolutionState,
   SafeOpSignature,
   ServiceCredential,
   Session,
@@ -62,11 +71,7 @@ import { describeCause } from "./http/log-cause.js";
 export * from "./store/types.js";
 export { initStore } from "./store/db.js";
 
-/** Bounds of an operator's review-resolution note. */
-export const REVIEW_NOTE_MIN = 20;
-export const REVIEW_NOTE_MAX = 2000;
-/** Bound of the order id, tx hash or reference an operator cites. */
-export const REVIEW_EVIDENCE_MAX = 200;
+export { REVIEW_EVIDENCE_MAX, REVIEW_NOTE_MAX, REVIEW_NOTE_MIN } from "./store/rules.js";
 
 /** Daily-cap holds for transfers being prepared — see store.holdDailyCap. */
 const capHolds = new Map<string, { userId: string; eur: number; day: string }>();
@@ -103,38 +108,9 @@ function announcePaymentRequestState(r: PaymentRequest, from: PaymentRequest["st
   }
 }
 
-/**
- * Which record already holds `hash`, among everything the bank statement
- * books hashes from (bookkeeping/statement.ts): every transfer's steps, every
- * crypto deposit's tx, conversion and steps, every sweep's conversion and
- * steps, and the ledger's own lines. Undefined when none does.
- */
+/** Which record already holds `hash` (store/rules.ts hashOnRecordIn). */
 function hashOnRecord(hash: string, userId: string): string | undefined {
-  const h = hash.toLowerCase();
-  const is = (x: string | undefined) => typeof x === "string" && x.toLowerCase() === h;
-  const t = db.transfers.find((x) => x.txs.some((s) => is(s.hash)));
-  if (t) return `transfer ${t.id}`;
-  // The refund itself, sent to this user's Safe, is recorded by the deposit
-  // scanner as a plain EURe arrival, usually before the operator resolves.
-  // That one is the refund: citing it books it as the reversal instead of a
-  // deposit. A deposit that is anyone else's, was converted, or pays an
-  // invoice or a pay link is a different payment.
-  const refundArrival = (x: (typeof db.cryptoDeposits)[number]) =>
-    x.userId === userId && x.token === "EURE" && is(x.txHash) && !x.conversion && !x.invoiceId && !x.paymentRequestId &&
-    !(x.txs ?? []).some((s) => is(s.hash));
-  const d = db.cryptoDeposits.find(
-    (x) =>
-      !refundArrival(x) &&
-      (is(x.txHash) || is(x.conversion?.txHash) || is(x.conversion?.userOpHash) || (x.txs ?? []).some((s) => is(s.hash))),
-  );
-  if (d) return `deposit ${d.id}`;
-  const sw = db.conversionSweeps.find(
-    (x) => is(x.conversion?.txHash) || is(x.conversion?.userOpHash) || x.txs.some((s) => is(s.hash)),
-  );
-  if (sw) return `sweep ${sw.id}`;
-  const l = db.ledger.find((x) => is(x.txHash));
-  if (l) return `ledger line ${l.id}`;
-  return undefined;
+  return hashOnRecordIn(db, hash, userId);
 }
 
 export const store = {
@@ -162,33 +138,8 @@ export const store = {
   updateUser(id: string, patch: Partial<User>) {
     const u = db.users.find((x) => x.id === id);
     if (!u) throw new Error(`unknown user ${id}`);
-    // The one place an IBAN changes, so the one place its date is kept.
-    const bare = (v?: string) => (v ?? "").replace(/\s+/g, "").toUpperCase();
-    const ibanChanged = typeof patch.iban === "string" && bare(patch.iban) !== "" && bare(patch.iban) !== bare(u.iban);
-    // Cleared counts too: an org account backed by this user prints the IBAN.
-    const ibanReplaced = "iban" in patch && bare(patch.iban) !== bare(u.iban);
-    // The one place a Monerium profile is recorded, so the one place its
-    // history is appended to. A patch cannot write the history itself.
-    const { moneriumProfileHistory: _ignored, ...rest } = patch;
-    const history = nextProfileHistory(u, rest, new Date().toISOString());
-    Object.assign(
-      u,
-      rest,
-      ibanChanged && !patch.ibanSince ? { ibanSince: new Date().toISOString() } : {},
-      history ? { moneriumProfileHistory: history } : {},
-    );
-    // An org account backed by this user's Safe shows the IBAN that pays into
-    // that Safe, so it follows the user's: a moved-away IBAN is taken off the
-    // account (the row stays), and one attributed to the Safe again returns.
-    if (ibanReplaced) {
-      const iban = bare(u.iban) || undefined;
-      for (const a of db.accounts) {
-        if (a.backingUserId !== id || a.currency !== "EUR") continue;
-        // A wallet-connected row (gated, no IBAN) gets an IBAN only through
-        // POST .../fund and its Monerium profile check, never by following.
-        if (a.status === "gated" && !a.identifier?.iban) continue;
-        Object.assign(a, { identifier: { ...a.identifier, iban }, updatedAt: new Date().toISOString() });
-      }
+    if (applyUserPatch(u, patch)) {
+      for (const a of db.accounts) followIban(a, id, u.iban);
     }
     persist();
     return u;
@@ -200,9 +151,8 @@ export const store = {
    * refuses the assertion.
    */
   recordPasskeyUse(id: string, credentialId: string, signCount: number) {
-    const u = db.users.find((x) => x.id === id);
-    if (!u?.passkey || u.passkey.credentialId !== credentialId) return undefined;
-    return store.updateUser(id, { passkey: { ...u.passkey, signCount } });
+    const patch = passkeyUsePatch(db.users.find((x) => x.id === id), credentialId, signCount);
+    return patch ? store.updateUser(id, patch) : undefined;
   },
   serviceCredentials(service: ServiceCredential["service"]): readonly ServiceCredential[] {
     return db.serviceCredentials.filter((c) => c.service === service);
@@ -522,22 +472,7 @@ export const store = {
   updateTransfer(id: string, patch: Partial<Transfer>) {
     const t = db.transfers.find((x) => x.id === id);
     if (!t) throw new Error(`unknown transfer ${id}`);
-    // REFUNDED and PAID are final. A slow live leg finishing after the sweep
-    // refunded the transfer must not move it back and complete a payout the
-    // sender was already repaid for; the late write keeps its other fields.
-    // MANUAL_REVIEW belongs to an operator: no automatic path moves it on,
-    // since FAILED is what the sweep refunds. resolveTransferReview is the one
-    // way out, and the state an operator resolved into is final too.
-    if (
-      (t.state === "REFUNDED" || t.state === "PAID" || t.state === "MANUAL_REVIEW" || t.reviewResolution) &&
-      patch.state &&
-      patch.state !== t.state
-    ) {
-      console.error(`store: refusing to move transfer ${id} from ${t.state} to ${patch.state}`);
-      // Omit state. Assigning `state: undefined` copies the key and erases the field.
-      const { state: _dropped, ...rest } = patch;
-      patch = rest;
-    }
+    patch = guardTransferPatch(t, patch);
     const from = t.state;
     Object.assign(t, patch, { updatedAt: new Date().toISOString() });
     persist();
@@ -553,85 +488,16 @@ export const store = {
    * after acting on chain or at the partner. Moves no money. Records the
    * resolution on the transfer and an audit entry, once per transfer.
    */
-  resolveTransferReview(
-    id: string,
-    r: { state: ReviewResolutionState; note: string; by: string; evidence?: string; refund?: { amountEur: number; movedEur: number } },
-  ):
-    | { ok: true; transfer: Transfer }
-    | { ok: false; code: "NOT_FOUND" | "NOT_IN_REVIEW" | "NO_PAYOUT_EVIDENCE" }
-    | { ok: false; code: "EVIDENCE_ON_RECORD"; recordedOn: string } {
-    if (!(REVIEW_RESOLUTION_STATES as readonly string[]).includes(r.state)) {
-      throw new Error(`a review resolves to ${REVIEW_RESOLUTION_STATES.join(", ")}, not ${r.state}`);
-    }
-    const note = r.note.trim();
-    if (note.length < REVIEW_NOTE_MIN || note.length > REVIEW_NOTE_MAX) {
-      throw new Error(`a review resolution needs a note of ${REVIEW_NOTE_MIN}-${REVIEW_NOTE_MAX} characters`);
-    }
-    if (!r.by) throw new Error("a review resolution names its operator");
-    if (r.state === "REFUNDED") {
-      const a = r.refund?.amountEur;
-      if (typeof a !== "number" || !Number.isFinite(a) || a < 0 || a > (r.refund?.movedEur ?? 0) || !r.evidence?.trim()) {
-        throw new Error("a review resolved as REFUNDED names the amount returned (0 up to what left the Safe) and its evidence");
-      }
-    }
+  resolveTransferReview(id: string, r: ReviewResolution): ReviewResult {
+    checkReviewResolution(r);
     const t = db.transfers.find((x) => x.id === id);
-    if (!t) return { ok: false, code: "NOT_FOUND" };
-    if (t.state !== "MANUAL_REVIEW" || t.reviewResolution) return { ok: false, code: "NOT_IN_REVIEW" };
-    // PAID settles linked pay links, invoices and shop orders: the operator
-    // cites a payout the transfer recorded as carried out (review-evidence.ts).
-    const evidence = r.evidence?.trim() || undefined;
-    if (r.state === "PAID" && !(evidence && matchesPayoutEvidence(t, evidence))) {
-      return { ok: false, code: "NO_PAYOUT_EVIDENCE" };
-    }
-    // A refund tx hash is booked as the reversal and kept out of the EURe
-    // arrivals, so it must be one no record holds yet: otherwise it would hide
-    // a real arrival, take a debit line's link, or count for two transfers.
-    const refundTx = r.state === "REFUNDED" && evidence && /^0x[0-9a-fA-F]{64}$/.test(evidence) ? evidence : undefined;
-    if (refundTx) {
-      const recordedOn = hashOnRecord(refundTx, t.userId);
-      if (recordedOn) return { ok: false, code: "EVIDENCE_ON_RECORD", recordedOn };
-    }
-    const at = new Date().toISOString();
-    t.reviewResolution = {
-      state: r.state,
-      note,
-      by: r.by,
-      at,
-      ...(t.error ? { previousError: t.error } : {}),
-      ...(evidence ? { evidence } : {}),
-    };
-    if (r.state === "REFUNDED" && r.refund) {
-      const short = Math.round((r.refund.movedEur - r.refund.amountEur) * 100) / 100;
-      t.refund = {
-        amountEur: r.refund.amountEur,
-        recoveredFrom: "operator-resolved",
-        deductions: short > 0 ? `€${short.toFixed(2)} not returned` : "none",
-        at,
-      };
-      // A fresh refund tx is booked as the reversal, not as a stray EURe
-      // arrival. A partner reference stays in reviewResolution.evidence only.
-      if (refundTx) t.txs.push({ step: OPERATOR_REFUND_STEP, hash: refundTx });
-    }
-    t.state = r.state;
-    t.updatedAt = at;
-    db.audit.push(
-      auditEntry(
-        "operator.transfer_review_resolved",
-        {
-          transferId: t.id,
-          from: "MANUAL_REVIEW",
-          to: r.state,
-          note,
-          operator: r.by,
-          ...(evidence ? { evidence } : {}),
-          ...(t.refund && r.state === "REFUNDED" ? { refundedEur: t.refund.amountEur } : {}),
-        },
-        t.userId,
-      ),
-    );
+    const refundTx = reviewRefundTx(r);
+    const { result, audit } = applyReviewResolution(t, r, t && refundTx ? hashOnRecord(refundTx, t.userId) : undefined);
+    if (!audit) return result;
+    db.audit.push(audit);
     persist();
-    announceStateChange(t, "MANUAL_REVIEW");
-    return { ok: true, transfer: t };
+    announceStateChange(t!, "MANUAL_REVIEW");
+    return result;
   },
   /**
    * One share per transfer, deliberately.
@@ -893,11 +759,7 @@ export const store = {
     return o;
   },
   addOperatorSession(s: OperatorSession) {
-    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-    db.operatorSessions = db.operatorSessions.filter((x) => {
-      const dead = x.revokedAt ? Date.parse(x.revokedAt) : Date.parse(x.expiresAt);
-      return !(Number.isFinite(dead) && dead < cutoff);
-    });
+    db.operatorSessions = db.operatorSessions.filter((x) => !sessionDead(x, 24 * 60 * 60 * 1000));
     db.operatorSessions.push(s);
     persist();
   },
@@ -1085,16 +947,7 @@ export const store = {
    * list may change (membership drives it); the address never does.
    */
   setOrgSafePlan(orgId: string, plan: OrgSafePlan) {
-    const o = db.organisations.find((x) => x.id === orgId);
-    if (!o) throw new Error(`unknown organisation ${orgId}`);
-    if (orgEntity(o) !== "company") throw new Error(`organisation ${orgId} is not a company and has no Safe of its own`);
-    if (!isOrgSafePlan(plan)) throw new Error("not a valid org Safe plan");
-    if (o.safe && o.safe.address.toLowerCase() !== plan.address.toLowerCase()) {
-      throw new Error(`organisation ${orgId} already has its Safe at ${o.safe.address}`);
-    }
-    if (o.safe?.status === "active" && plan.status !== "active") throw new Error(`organisation ${orgId}'s Safe is deployed; it cannot go back to planned`);
-    o.safe = { ...copyOrgSafePlan(plan), createdAt: o.safe?.createdAt ?? plan.createdAt };
-    o.updatedAt = new Date().toISOString();
+    const o = applyOrgSafePlan(db.organisations.find((x) => x.id === orgId), orgId, plan);
     persist();
     return o;
   },
@@ -1105,14 +958,7 @@ export const store = {
    * that does not exist. A deployed Safe is never re-pointed.
    */
   replaceUndeployedOrgSafePlan(orgId: string, oldAddress: string, plan: OrgSafePlan) {
-    const o = db.organisations.find((x) => x.id === orgId);
-    if (!o) throw new Error(`unknown organisation ${orgId}`);
-    if (!o.safe || o.safe.status !== "planned" || o.safe.address.toLowerCase() !== oldAddress.toLowerCase()) {
-      throw new Error(`organisation ${orgId} has no planned Safe at ${oldAddress} to replace`);
-    }
-    if (!isOrgSafePlan(plan) || plan.status !== "planned") throw new Error("a replacement Safe plan is a valid, planned one");
-    o.safe = copyOrgSafePlan(plan);
-    o.updatedAt = new Date().toISOString();
+    const o = applyReplacedOrgSafePlan(db.organisations.find((x) => x.id === orgId), orgId, oldAddress, plan);
     persist();
     return o;
   },
