@@ -5,7 +5,17 @@
  * recorded version with no file. We roll forward: there are no down files.
  *
  * Every transaction takes one advisory lock first, so two runners on one
- * database queue and a file is never applied twice.
+ * database queue and a file is never applied twice. The key carries the
+ * database name: advisory locks are cluster-wide, and two databases on one
+ * server (parallel test runs) must not queue behind each other.
+ *
+ * A file runs inside our transaction, so it may not hold its own BEGIN,
+ * COMMIT or ROLLBACK (refused: it would commit half the file), and anything
+ * that cannot run in a transaction cannot go in one: no CREATE INDEX
+ * CONCURRENTLY. A plain CREATE INDEX takes a SHARE lock on its table while it
+ * builds. Each file waits at most LOCK_TIMEOUT for a lock and runs at most
+ * STATEMENT_TIMEOUT per statement, so a deploy queued behind a long API
+ * transaction fails instead of hanging and blocking every query behind it.
  */
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
@@ -16,6 +26,25 @@ import type { Database, Sql } from "./sql.js";
 export const MIGRATIONS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../migrations");
 
 const FILE = /^(\d{4})_[a-z0-9_]+\.sql$/;
+const LOCK_TIMEOUT = "5s";
+const STATEMENT_TIMEOUT = "2min";
+
+/** Statements outside comments, quotes and dollar-quoted bodies that start a transaction command. */
+const TX_CONTROL = /^(begin|commit|rollback|abort|end|start\s+transaction|savepoint|release|prepare\s+transaction)\b/i;
+
+export function transactionControl(sql: string): string | undefined {
+  const bare = sql
+    .replace(/\$([a-z_][a-z0-9_]*)?\$[\s\S]*?\$\1\$/gi, "''")
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/--[^\n]*/g, " ")
+    .replace(/'(?:[^']|'')*'/g, "''")
+    .replace(/"(?:[^"]|"")*"/g, '""');
+  for (const stmt of bare.split(";")) {
+    const m = TX_CONTROL.exec(stmt.trim());
+    if (m) return m[1].toUpperCase().replace(/\s+/g, " ");
+  }
+  return undefined;
+}
 
 export interface Migration {
   version: number;
@@ -41,7 +70,7 @@ export function readMigrations(dir = MIGRATIONS_DIR): Migration[] {
 
 /** Lock, then the applied rows, refusing any whose file is gone or changed. */
 async function applied(q: Sql, migrations: Migration[]): Promise<Set<number>> {
-  await q.query("SELECT pg_advisory_xact_lock(hashtext('zold:migrations'))");
+  await q.query("SELECT pg_advisory_xact_lock(hashtext(current_database() || ':zold:migrations'))");
   await q.query(
     "CREATE TABLE IF NOT EXISTS schema_migrations (version integer PRIMARY KEY, name text NOT NULL, sha256 text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())",
   );
@@ -58,6 +87,10 @@ async function applied(q: Sql, migrations: Migration[]): Promise<Set<number>> {
 
 /** Apply what is not applied yet. Returns the versions this call applied. */
 export async function migrate(db: Database, migrations = readMigrations()): Promise<number[]> {
+  for (const m of migrations) {
+    const control = transactionControl(m.sql);
+    if (control) throw new Error(`migration ${m.name} contains ${control}: each file already runs in one transaction`);
+  }
   const done: number[] = [];
   const before = await db.tx((q) => applied(q, migrations));
   for (const m of migrations) {
@@ -65,6 +98,9 @@ export async function migrate(db: Database, migrations = readMigrations()): Prom
     const ran = await db.tx(async (q) => {
       // Another runner may have applied it while this one waited for the lock.
       if ((await applied(q, migrations)).has(m.version)) return false;
+      // After the advisory lock: a runner queued behind another must not time out.
+      await q.query(`SET LOCAL lock_timeout = '${LOCK_TIMEOUT}'`);
+      await q.query(`SET LOCAL statement_timeout = '${STATEMENT_TIMEOUT}'`);
       await q.exec(m.sql);
       await q.query("INSERT INTO schema_migrations (version, name, sha256) VALUES ($1, $2, $3)", [m.version, m.name, m.sha256]);
       return true;

@@ -522,7 +522,7 @@ export function createPgStore(database: Database): StoreBackend {
         // Two reviews of different transfers citing one refund tx lock
         // different rows; this lock makes the second wait for the first's
         // commit, so its hashOnRecord sees the hash booked.
-        if (row && refundTx) await t.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`refund-evidence:${refundTx.toLowerCase()}`]);
+        if (row && refundTx) await t.query("SELECT pg_advisory_xact_lock(hashtext(current_database() || $1))", [`:refund-evidence:${refundTx.toLowerCase()}`]);
         const out = applyReviewResolution(row, r, row && refundTx ? await hashOnRecord(t, refundTx, row.userId) : undefined);
         if (out.audit) {
           await save(t, TABLE.transfers, row!);
