@@ -317,6 +317,17 @@ try {
     assert.equal(lateMon.status, 403);
     assert.equal(lateMon.data.capability, "monerium");
   });
+  const lateHandle = await call("POST", `/api/users/${lateId}/handle`, { token: lateTok, body: { handle: "late-gmbh" } });
+  check("an UNDECIDED account cannot open a payment page", () => {
+    assert.equal(lateHandle.status, 403);
+    assert.equal(lateHandle.data.capability, "onchain_balance");
+  });
+  const orgBody = { type: "business", entity: "company", name: "Late GmbH", country: "DE" };
+  const lateOrg = await call("POST", "/api/orgs", { token: lateTok, body: orgBody });
+  check("an UNDECIDED login cannot create an organisation", () => {
+    assert.equal(lateOrg.status, 403);
+    assert.equal(lateOrg.data.code, "RESIDENCE_NEEDED");
+  });
   const residence = (token: string | undefined, id: string, body: any) => call("POST", `/api/users/${id}/residence`, { token, body });
   const noSession = await residence(undefined, lateId, { country: "DE", usAnswers: { usPerson: false, companyUsNexus: false } });
   await check("the residence answer needs the account's own session", async () => {
@@ -343,6 +354,9 @@ try {
     const row = dbNow().users.find((u: any) => u.id === lateId);
     assert.equal(row.usPersonAnswers.length, 1);
     assert.equal(row.softSignals, undefined, "soft signals are not the client's to raise here");
+  });
+  await check("and then it may create its organisation", async () => {
+    assert.equal((await call("POST", "/api/orgs", { token: lateTok, body: orgBody })).status, 201);
   });
   const again = await residence(lateTok, lateId, { country: "IN", usAnswers: { usPerson: false, companyUsNexus: false } });
   await check("it is decided once", async () => {

@@ -48,7 +48,7 @@ for (const f of ["ui.js", "app/core.js", "app/recovery.js", "app/monerium.js", "
 }
 const run = (code: string) => vm.runInContext(code, ctx);
 
-const EMPTY = { type: null, given: "", family: "", email: "", legalName: "", social: null, country: "", usPerson: null, companyUsNexus: null };
+const EMPTY = { type: null, given: "", family: "", email: "", legalName: "", social: null, country: "", usPerson: null, companyUsNexus: null, residenceFor: null };
 const reset = (over: any = {}, u: any = null, screen: string | null = null) => {
   ctx.__d = { ...EMPTY, ...over }; ctx.__u = u; ctx.__s = screen;
   run("Object.assign(obDraft, __d); obChatEdit = null; obEmailInUse = false; user = __u; obScreen = __s");
@@ -133,7 +133,11 @@ test("the Terms are accepted on the sign-in step, where the account is made", ()
 {
   // Home's "Where you live": asked of an account that exists, sent as one body.
   const undecided = (accountType: string) => ({ id: "u1", accountType, segment: { value: "UNDECIDED", capabilities: ["safe"] } });
-  reset({}, undecided("individual"), "residence");
+  // Answers another account left in this tab are dropped, not shown.
+  reset({ country: "FR", usPerson: true, residenceFor: "someone-else" }, undecided("individual"));
+  run("enterResidence()");
+  assert.deepEqual([draft().country, draft().usPerson, draft().residenceFor], ["", null, "u1"]);
+  assert.equal(run("obScreen"), "residence");
   assert.equal(run("obGuard('residence')"), "residence");
   assert.equal(run("obPath()"), "pr");
   const seen: string[] = [];
@@ -142,7 +146,7 @@ test("the Terms are accepted on the sign-in step, where the account is made", ()
   assert.deepEqual(seen, ["country", "usPerson"]);
   assert.equal(next("pr"), null);
 
-  reset({}, undecided("company"), "residence");
+  reset({ residenceFor: "u1" }, undecided("company"), "residence");
   seen.length = 0;
   seen.push(next("br")); pick("country", "AT");
   seen.push(next("br")); tap("No");

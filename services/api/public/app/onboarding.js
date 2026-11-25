@@ -69,6 +69,8 @@ function enterKycReview(_name) {
 
 /* Home's "Where you live" row. */
 function enterResidence() {
+  // Another account's answers left in this tab are not this one's.
+  if (obDraft.residenceFor !== user.id) obSaveDraft({ country: "", usPerson: null, companyUsNexus: null, residenceFor: user.id });
   obShow();
   obGo("residence", { replace: true });
 }
@@ -118,7 +120,7 @@ function obGuard(name) {
     if (name === "email") return caps.emailVerification && user.email && !user.emailVerifiedAt ? name : obNextAfterAccount() || "monerium";
     if (name === "monerium-keys") return caps.moneriumApiKeys && (!kycApproved(user) || !user.iban) ? name : obNextAfterAccount() || "monerium";
     if (name === "activate") return ibanActivationOffered(user) ? name : obNextAfterAccount() || "monerium";
-    if (name === "residence") return residenceAsked(user) ? name : obNextAfterAccount() || "monerium";
+    if (name === "residence") return residenceAsked(user) && obDraft.residenceFor === user.id ? name : obNextAfterAccount() || "monerium";
     return name;
   }
   if (kind === "import") {
@@ -305,7 +307,7 @@ let obDraftTouched = false;
 const obDraft = (() => {
   const empty = {
     type: null, given: "", family: "", email: "", legalName: "", social: null,
-    country: "", usPerson: null, companyUsNexus: null, // Home's "Where you live"
+    country: "", usPerson: null, companyUsNexus: null, residenceFor: null, // Home's "Where you live", and whose answers they are
   };
   try { return { ...empty, ...JSON.parse(sessionStorage.getItem(OB_DRAFT_KEY) || "{}") }; } catch { return empty; }
 })();

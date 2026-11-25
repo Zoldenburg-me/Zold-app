@@ -234,6 +234,10 @@ export async function boot() {
     // account; a company login has none, and nobody has two (routes/orgs.ts).
     const u = await session;
     only("#no-orgs");
+    // The server makes no organisation for a login that has not said where it lives.
+    const undecided = u?.segment?.value === "UNDECIDED";
+    $("#no-orgs-residence").classList.toggle("hidden", !undecided);
+    $("#new-org").classList.toggle("hidden", undecided);
     if (u?.accountType === "company") {
       $("#new-org-type option[value=personal]")?.remove();
       // The name given at signup; the rest is asked here.
@@ -257,7 +261,8 @@ export async function boot() {
           method: "POST",
           body: {
             // A personal space is named after its person; what they typed is the name on invoices.
-            ...(type === "personal" ? { name: u?.name || typed, legalName: typed } : { name: typed }),
+            // A company login gave its registered name at signup: it stays the legal name if the name here is changed.
+            ...(type === "personal" ? { name: u?.name || typed, legalName: typed } : { name: typed, ...(u?.companyName ? { legalName: u.companyName } : {}) }),
             type,
             ...(type === "business" ? { entity } : {}),
             country: $("#new-org-country").value,

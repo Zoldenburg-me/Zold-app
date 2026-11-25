@@ -346,7 +346,6 @@ function securityCard(rows) {
 const STEP = {
   passkey: () => ({ title: `${Z.passkeyName().replace(/^./, (c) => c.toUpperCase())} sign-in`, sub: "Approves the company’s payments." }),
   account: () => ({ title: "Company account live", sub: "The Safe the company’s money is held in. It is deployed when the company signs up." }),
-  residence: () => ({ title: "Where you live", sub: "Two questions. Needed before money comes in.", action: { label: "Answer", href: "/app?from=business#residence" } }),
   monerium: () => ({ title: "Connect Monerium", sub: "Monerium verifies the company before it issues an IBAN.", action: { label: "Connect", href: "/app?from=business#monerium-settings" } }),
   iban: (s) => ({ title: "Activate the euro IBAN", sub: s.monerium ? "Receives and sends bank transfers." : "Follows the Monerium check.",
     ...(!s.monerium ? {} : me?.iban ? { view: "accounts" } : { action: { label: "Activate", href: "/app?from=business#monerium-settings" } }) }),

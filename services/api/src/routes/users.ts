@@ -154,6 +154,9 @@ const decisionAudit = (d: Decided, type: "individual" | "company") => ({
 /** Write a decision that opened (or keeps) an account onto its row. */
 function applyDecision(userId: string, d: Decided, softSignals: any) {
   const { decision } = d;
+  // One write: a segment saved without its country and answers could not be
+  // retried, as the route decides once.
+  store.batched(() => {
   store.setSegment(userId, {
     value: decision.segment,
     reasonCode: decision.reasonCode,
@@ -183,6 +186,7 @@ function applyDecision(userId: string, d: Decided, softSignals: any) {
     ...d.answers,
     answeredAt: new Date().toISOString(),
     version: d.combined ? US_QUESTION_COMBINED_VERSION : US_QUESTIONS_VERSION,
+  });
   });
 }
 

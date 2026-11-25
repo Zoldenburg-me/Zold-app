@@ -165,8 +165,8 @@ sequenceDiagram
   participant Z as Zold API
   participant C as Candide (bundler/paymaster)
   participant M as Monerium
-  B->>Z: 1. POST /users (name, email, country, citizenships, US-person answer, consents)
-  Z-->>B: segment decided · session token · kycStatus=pending
+  B->>Z: 1. POST /users (name, email, account type, company name, consents)
+  Z-->>B: segment UNDECIDED · session token · kycStatus=pending
   B->>B: 2. create passkey (P-256)
   B->>Z: register passkey → Safe address planned
   B->>Z: 3. (optional) the Google/Apple login from the screen before the passkey → recorded as guardian once the account exists
@@ -174,8 +174,9 @@ sequenceDiagram
   Z->>C: UserOperation (sponsored)
   B->>B: passkey signs UserOp hash
   B->>Z: submit → Safe deployed → Home and its checklist
-  B->>M: 5. connect Monerium (OAuth) — or paste own API keys
-  B->>Z: 6. "Activate IBAN": passkey signs Monerium's ownership declaration as the Safe
+  B->>Z: 5. "Where you live": POST /users/:id/residence (country, US answers) → segment decided
+  B->>M: 6. connect Monerium (OAuth) — or paste own API keys
+  B->>Z: 7. "Activate IBAN": passkey signs Monerium's ownership declaration as the Safe
   Z->>M: link address + request IBAN
   M-->>Z: IBAN for this Safe address → kycStatus=approved
 ```
@@ -193,7 +194,7 @@ answers so far sit under it as chips that reopen their question
    (its own Safe, no partner, no balance route) and Home's "Where you live"
    decides it (`POST /api/users/:id/residence`: country and the US questions).
    A US person or a sanctioned residence is refused there, audited, and stays
-   UNDECIDED. A body that carries a country is decided at signup and a blocked
+   UNDECIDED. An UNDECIDED login can create no organisation and no payment page. A body that carries a country is decided at signup and a blocked
    one is refused before any row is created.
 2. **Passkey.** There is no skip and no password path.
 3. **Safe deployment.** An ERC-4337 Safe is deployed through Candide's
