@@ -168,6 +168,11 @@ export interface StoredDocument {
   snapshot: DocumentSnapshot;
   attestations: DocumentAttestations;
   revokedAt?: string;
+  /** What a partner holds of this Beleg, server-side only (publicDocument
+   *  is an allowlist): set once GetMyInvoices has the document, and
+   *  `bankLine` before a bank line carrying the code is added (an add that
+   *  failed may still have landed). A code is sent to it only if it is here. */
+  sentTo?: { getmyinvoices?: { documentUid?: number; transactionUid?: number; bankLine?: true } };
 }
 
 // ---------------------------------------------------------------------------

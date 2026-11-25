@@ -193,6 +193,7 @@
     "lexware:csv:test": "tsx scripts/lexware-csv-test.ts",
     "exact-output:test": "tsx scripts/exact-output-test.ts",
     "gmi:test": "tsx scripts/getmyinvoices-test.ts",
+    "beleg-reissue:test": "tsx scripts/beleg-reissue-test.ts",
     "gmi:smoke": "tsx scripts/getmyinvoices-smoke.ts",
     "preview:bookkeeping": "tsx scripts/preview-bookkeeping.ts"
   },
