@@ -1,8 +1,9 @@
 /**
  * Accounts: signup, the account read, the KYC state, and the privacy bundle.
  *
- * Signup resolves the country, citizenship and US answers to a segment, whose
- * capabilities every later route checks. A blocked applicant is told what Zold
+ * The country, citizenship and US answers resolve to a segment, whose
+ * capabilities every later route checks: at signup when the body carries
+ * them, otherwise from Home (POST /users/:id/residence). A blocked applicant is told what Zold
  * cannot offer, not which rule fired: naming the rule tells someone which
  * answer to change. The internal reason code goes to the audit log.
  *
@@ -22,7 +23,7 @@ import { resolveSegment, type Segment } from "../domain/segments.js";
 import { store, type User } from "../store.js";
 import { requireKycApproved } from "../http/guards.js";
 import { publicUser, withSession } from "../users/public-user.js";
-import { cleanPersonName, nameChange } from "../users/display-name.js";
+import { cleanName, cleanPersonName, nameChange } from "../users/display-name.js";
 import { findIbanBic, refreshPendingIban, verifyIbanBinding } from "../adapters/monerium-sandbox.js";
 import { normalizeIban } from "../sepa.js";
 import { emailHeldBy, emailLooksValid } from "../domain/email.js";
@@ -81,6 +82,110 @@ const BLOCKED_COPY: Record<Extract<Segment, `BLOCKED_${string}`>, string> = {
   BLOCKED_UNSUPPORTED: "Zold cannot open an account for residents of your country yet.",
 };
 
+/** What a blocked person is sent: what Zold cannot offer, not which rule
+ *  fired. reasonCode stays in the log: publishing it tells someone which
+ *  answer to change. */
+const blockedBody = (segment: Segment) => ({ error: BLOCKED_COPY[segment as keyof typeof BLOCKED_COPY], code: segment });
+
+/**
+ * A body's residence, citizenships and US answers, resolved to a segment.
+ *
+ * Don't call `countryBlock()` first: it only answers "will Monerium serve this
+ * residence", so on its own it would refuse, say, Nigerians with a message
+ * about Monerium's country policy, naming a partner the user was never going
+ * to use. resolveSegment consults it internally, asks the questions
+ * separately and returns which one decided.
+ */
+function decideSegment(body: any, type: "individual" | "company") {
+  const { country, citizenships, usAnswers, companyIncorporationCountry, softSignals } = body ?? {};
+  // The app asks one combined question (citizen, Green Card or tax
+  // resident); older clients and the harnesses still send the three. Keep
+  // whichever shape was answered; don't translate one into the other.
+  const combined = typeof usAnswers?.usPerson === "boolean";
+  const answers = {
+    ...(combined
+      ? { usPerson: usAnswers.usPerson === true }
+      : {
+          usCitizen: usAnswers?.usCitizen === true,
+          usGreenCard: usAnswers?.usGreenCard === true,
+          usTaxResident: usAnswers?.usTaxResident === true,
+        }),
+    ...(type === "company"
+      ? { companyUsNexus: usAnswers?.companyUsNexus === true }
+      : { companyUsNexus: null }),
+  };
+  // Store only citizenships the caller declared. Without any, screening
+  // uses residence, but residence is never saved as a citizenship.
+  // The list is anonymous and kept whole (on the row, or in the audit row
+  // on a refusal), so it is de-duplicated and refused when too long. It is
+  // never cut: a cut could drop the entry screening has to see.
+  const declaredCitizenships: string[] | null = Array.isArray(citizenships) && citizenships.length
+    ? [...new Set<string>(citizenships.map((c: any) => normaliseCountryCode(String(c))))]
+    : null;
+  if (declaredCitizenships && declaredCitizenships.length > MAX_DECLARED_CITIZENSHIPS) {
+    return { refuse: { error: `declare at most ${MAX_DECLARED_CITIZENSHIPS} citizenships` } };
+  }
+  const incorporation = companyIncorporationCountry ? String(companyIncorporationCountry) : undefined;
+  try {
+    const decision = resolveSegment({
+      residence: String(country),
+      citizenships: declaredCitizenships ?? [String(country)],
+      accountType: type,
+      usAnswers: answers,
+      ...(incorporation ? { companyIncorporationCountry: incorporation } : {}),
+      ...(softSignals ? { softSignals } : {}),
+    });
+    return { decision, answers, combined, declaredCitizenships, incorporation, residence: normaliseCountryCode(String(country)) };
+  } catch (err: any) {
+    return { refuse: { error: redactedMessage(err) } };
+  }
+}
+type Decided = Exclude<ReturnType<typeof decideSegment>, { refuse: unknown }>;
+
+const decisionAudit = (d: Decided, type: "individual" | "company") => ({
+  residence: d.residence,
+  ...(d.declaredCitizenships ? { citizenships: d.declaredCitizenships } : {}),
+  accountType: type,
+  usAnswers: d.answers,
+  segment: d.decision.segment,
+  reasonCode: d.decision.reasonCode,
+});
+
+/** Write a decision that opened (or keeps) an account onto its row. */
+function applyDecision(userId: string, d: Decided, softSignals: any) {
+  const { decision } = d;
+  store.setSegment(userId, {
+    value: decision.segment,
+    reasonCode: decision.reasonCode,
+    decidedAt: new Date().toISOString(),
+    decidedBy: "system",
+    ...(decision.gate ? { gate: decision.gate } : {}),
+  });
+  store.updateUser(userId, {
+    country: d.residence,
+    ...(d.declaredCitizenships ? { citizenships: d.declaredCitizenships } : {}),
+    ...(d.incorporation ? { companyIncorporationCountry: normaliseCountryCode(d.incorporation) } : {}),
+    ...(decision.review
+      ? {
+          softSignals: {
+            // Only the three signals the resolver knows; the body is not
+            // spread into the row.
+            ...(softSignals?.usPhoneCode === true ? { usPhoneCode: true } : {}),
+            ...(softSignals?.usMailingAddress === true ? { usMailingAddress: true } : {}),
+            ...(softSignals?.usIpAtSignup === true ? { usIpAtSignup: true } : {}),
+            flaggedAt: new Date().toISOString(),
+            reconfirmationPending: true,
+          },
+        }
+      : {}),
+  });
+  store.addUsAnswers(userId, {
+    ...d.answers,
+    answeredAt: new Date().toISOString(),
+    version: d.combined ? US_QUESTION_COMBINED_VERSION : US_QUESTIONS_VERSION,
+  });
+}
+
 export function createUserRouter(deps: UserDeps) {
   const { requireUserSession } = deps;
   const router = express.Router();
@@ -88,10 +193,9 @@ export function createUserRouter(deps: UserDeps) {
   router.post(
     "/users",
     wrap(async (req, res) => {
-      const { name, country, email, citizenships, accountType, usAnswers, consents,
-        companyIncorporationCountry, softSignals } = req.body ?? {};
-      if (typeof name !== "string" || !name.trim() || typeof country !== "string" || !country) {
-        return res.status(400).json({ error: "name, email and country required" });
+      const { name, country, email, accountType, consents, companyName } = req.body ?? {};
+      if (typeof name !== "string" || !name.trim()) {
+        return res.status(400).json({ error: "name and email required" });
       }
       // The same rule as a later rename (users/display-name.ts); a company
       // signup's representative may have a longer name than a person's own.
@@ -107,7 +211,7 @@ export function createUserRouter(deps: UserDeps) {
        * Candide's OTP at recovery enrolment. Nothing here sends mail.
        */
       const emailNorm = typeof email === "string" ? email.trim() : "";
-      if (!emailNorm) return res.status(400).json({ error: "name, email and country required" });
+      if (!emailNorm) return res.status(400).json({ error: "name and email required" });
       if (!emailLooksValid(emailNorm)) {
         return res.status(400).json({ error: "invalid email" });
       }
@@ -123,79 +227,34 @@ export function createUserRouter(deps: UserDeps) {
         });
       }
 
+
       /**
-       * Segmentation. Don't call `countryBlock()` here first: it only answers
-       * "will Monerium serve this residence", so on its own it would refuse,
-       * say, Nigerians with a message about Monerium's country policy, naming a
-       * partner the user was never going to use. resolveSegment consults it
-       * internally, asks the three questions separately and returns which one
-       * decided.
+       * Segmentation. The app's signup sends no country: the account opens
+       * UNDECIDED, with its own Safe and no partner or balance route, and
+       * POST /users/:id/residence decides it from Home. A body that does carry
+       * a country (the harnesses, older clients) is decided here, as before.
        *
-       * Callers that send no segmentation fields are read as an individual,
-       * screened on residence alone, with all-no US answers.
+       * Callers that send no account type are read as an individual.
        */
       const type: "individual" | "company" = accountType === "company" ? "company" : "individual";
-      // The app asks one combined question (citizen, Green Card or tax
-      // resident); older clients and the harnesses still send the three. Keep
-      // whichever shape was answered; don't translate one into the other.
-      const combined = typeof usAnswers?.usPerson === "boolean";
-      const answers = {
-        ...(combined
-          ? { usPerson: usAnswers.usPerson === true }
-          : {
-              usCitizen: usAnswers?.usCitizen === true,
-              usGreenCard: usAnswers?.usGreenCard === true,
-              usTaxResident: usAnswers?.usTaxResident === true,
-            }),
-        ...(type === "company"
-          ? { companyUsNexus: usAnswers?.companyUsNexus === true }
-          : { companyUsNexus: null }),
-      };
-      // Store only citizenships the caller declared. Without any, screening
-      // uses residence, but residence is never saved as a citizenship.
-      // The list is anonymous and kept whole (on the row, or in the audit row
-      // on a refusal), so it is de-duplicated and refused when too long. It is
-      // never cut: a cut could drop the entry screening has to see.
-      const declaredCitizenships: string[] | null = Array.isArray(citizenships) && citizenships.length
-        ? [...new Set(citizenships.map((c: any) => normaliseCountryCode(String(c))))]
-        : null;
-      if (declaredCitizenships && declaredCitizenships.length > MAX_DECLARED_CITIZENSHIPS) {
-        return res.status(400).json({ error: `declare at most ${MAX_DECLARED_CITIZENSHIPS} citizenships` });
-      }
-      let decision;
-      try {
-        decision = resolveSegment({
-          residence: String(country),
-          citizenships: declaredCitizenships ?? [String(country)],
-          accountType: type,
-          usAnswers: answers,
-          ...(companyIncorporationCountry ? { companyIncorporationCountry: String(companyIncorporationCountry) } : {}),
-          ...(softSignals ? { softSignals } : {}),
-        });
-      } catch (err: any) {
-        return res.status(400).json({ error: redactedMessage(err) });
-      }
+      const d = typeof country === "string" && country ? decideSegment(req.body, type) : null;
+      if (d && "refuse" in d) return res.status(400).json(d.refuse);
 
       // A blocked segment is recorded before it is refused: the decision has to
       // be auditable whether or not an account exists, and "we refused someone
       // and kept no record of why" is the failure this log exists to prevent.
-      if (decision.segment.startsWith("BLOCKED_")) {
+      if (d?.decision.segment.startsWith("BLOCKED_")) {
         store.audit(auditEntry("segment.decided", {
-          residence: normaliseCountryCode(String(country)),
-          ...(declaredCitizenships ? { citizenships: declaredCitizenships } : {}),
-          accountType: type,
-          usAnswers: answers,
-          segment: decision.segment,
-          reasonCode: decision.reasonCode,
+          ...decisionAudit(d, type),
           email: redact(emailNorm),
           outcome: "refused_at_signup",
         }));
-        // Says what Zold cannot offer, not which rule fired. reasonCode stays in
-        // the log: publishing it tells someone which answer to change.
-        return res.status(403).json({
-          error: BLOCKED_COPY[decision.segment as keyof typeof BLOCKED_COPY],
-          code: decision.segment,
-        });
+        return res.status(403).json(blockedBody(d.decision.segment));
+      }
+      const orgName = type === "company" && typeof companyName === "string" && companyName.trim()
+        ? cleanName(companyName, { min: 2, max: 120 }) : undefined;
+      if (orgName === null) {
+        return res.status(400).json({ code: "NAME_INVALID", error: `The company name needs 2 to 120 characters, without hidden or control characters.` });
       }
       const id = randomUUID();
       // The real address is set by passkey Safe deployment. Identity
@@ -208,7 +267,7 @@ export function createUserRouter(deps: UserDeps) {
         id,
         name: signupName,
         email: emailNorm,
-        country: normaliseCountryCode(String(country)),
+        country: d?.residence ?? "",
         kycStatus: approved ? "approved" : "pending",
         kyc: approved
           ? { provider: "mock", checkedAt: new Date().toISOString(), reason: "hardhat harness auto-approval" }
@@ -224,38 +283,11 @@ export function createUserRouter(deps: UserDeps) {
         createdAt: new Date().toISOString(),
       };
       store.addUser(user);
-      store.setSegment(user.id, {
-        value: decision.segment,
-        reasonCode: decision.reasonCode,
-        decidedAt: new Date().toISOString(),
-        decidedBy: "system",
-        ...(decision.gate ? { gate: decision.gate } : {}),
-      });
-      store.updateUser(user.id, {
-        ...(declaredCitizenships ? { citizenships: declaredCitizenships } : {}),
-        accountType: type,
-        ...(companyIncorporationCountry
-          ? { companyIncorporationCountry: normaliseCountryCode(String(companyIncorporationCountry)) }
-          : {}),
-        ...(decision.review
-          ? {
-              softSignals: {
-                // Only the three signals the resolver knows; the body is not
-                // spread into the row.
-                ...(softSignals?.usPhoneCode === true ? { usPhoneCode: true } : {}),
-                ...(softSignals?.usMailingAddress === true ? { usMailingAddress: true } : {}),
-                ...(softSignals?.usIpAtSignup === true ? { usIpAtSignup: true } : {}),
-                flaggedAt: new Date().toISOString(),
-                reconfirmationPending: true,
-              },
-            }
-          : {}),
-      });
-      store.addUsAnswers(user.id, {
-        ...answers,
-        answeredAt: new Date().toISOString(),
-        version: combined ? US_QUESTION_COMBINED_VERSION : US_QUESTIONS_VERSION,
-      });
+      store.updateUser(user.id, { accountType: type, ...(orgName ? { companyName: orgName } : {}) });
+      if (d) applyDecision(user.id, d, req.body?.softSignals);
+      else {
+        store.setSegment(user.id, { value: "UNDECIDED", reasonCode: "residence_not_given", decidedAt: new Date().toISOString(), decidedBy: "system" });
+      }
       // One consent per kind and partner, at most MAX_SIGNUP_CONSENTS, in one
       // write: the list comes from an unauthenticated body, and every store
       // write rewrites the whole database file.
@@ -278,12 +310,8 @@ export function createUserRouter(deps: UserDeps) {
         }
       });
       store.audit(auditEntry("segment.decided", {
-        residence: user.country,
-        accountType: type,
-        usAnswers: answers,
-        segment: decision.segment,
-        reasonCode: decision.reasonCode,
-        softUsSignals: decision.review?.softUsSignals ?? [],
+        ...(d ? decisionAudit(d, type) : { accountType: type, segment: "UNDECIDED", reasonCode: "residence_not_given" }),
+        softUsSignals: d?.decision.review?.softUsSignals ?? [],
         outcome: "account_created",
       }, user.id));
       res.status(201).json(withSession(user));
@@ -304,6 +332,41 @@ export function createUserRouter(deps: UserDeps) {
       }
       const balances = await accountBalances(user.address);
       res.json({ ...publicUser(user), ...balances });
+    }),
+  );
+
+  /**
+   * Where the person lives and the US question, asked on Home after a signup
+   * that gave neither. Decides the segment once: an account that has one is
+   * refused. A blocked answer opens nothing and leaves the account as it is.
+   */
+  router.post(
+    "/users/:id/residence",
+    wrap(async (req, res) => {
+      const user = store.findUser(req.params.id);
+      if (!user) return res.status(404).json({ error: "user not found" });
+      if (!requireUserSession(req, res, user.id)) return;
+      if (user.segment?.value !== "UNDECIDED") {
+        return res.status(409).json({ code: "RESIDENCE_SET", error: "This account has already said where it is based." });
+      }
+      const type = user.accountType === "company" ? "company" : "individual";
+      if (typeof req.body?.country !== "string" || !req.body.country) return res.status(400).json({ error: "country required" });
+      // Asked and answered, not assumed: a missing answer is not a "no".
+      const ua = req.body.usAnswers;
+      if (typeof ua?.usPerson !== "boolean" || (type === "company" && typeof ua.companyUsNexus !== "boolean")) {
+        return res.status(400).json({ error: "The US questions must be answered yes or no." });
+      }
+      // Never from the body here: the signals are the server's to raise.
+      const d = decideSegment({ ...req.body, softSignals: undefined }, type);
+      if ("refuse" in d) return res.status(400).json(d.refuse);
+      const blocked = d.decision.segment.startsWith("BLOCKED_");
+      store.audit(auditEntry("segment.decided", {
+        ...decisionAudit(d, type),
+        outcome: blocked ? "refused_at_residence" : "residence_given",
+      }, user.id));
+      if (blocked) return res.status(403).json(blockedBody(d.decision.segment));
+      applyDecision(user.id, d, undefined);
+      res.json(publicUser(store.findUser(user.id)!));
     }),
   );
 

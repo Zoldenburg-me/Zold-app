@@ -147,7 +147,9 @@ export interface User {
     createdAt: string;
   };
   /**
-   * Which path this account takes, decided once by resolveSegment at signup.
+   * Which path this account takes, decided once by resolveSegment: at signup
+   * when the body carries a country, otherwise from UNDECIDED by
+   * POST /users/:id/residence.
    *
    * No route accepts it in a body: a client that could set it could set
    * EU_FULL. The only writers are the signup path and an admin action, which
@@ -184,6 +186,8 @@ export interface User {
   citizenships?: string[];
   accountType?: "individual" | "company";
   companyIncorporationCountry?: string;
+  /** A company signup's name for the company, until its organisation exists. */
+  companyName?: string;
   /** Weak US evidence. Flags for review; never blocks on its own. */
   softSignals?: {
     usPhoneCode?: boolean;

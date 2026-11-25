@@ -234,8 +234,11 @@ export async function boot() {
     // account; a company login has none, and nobody has two (routes/orgs.ts).
     const u = await session;
     only("#no-orgs");
-    if (u?.accountType === "company") $("#new-org-type option[value=personal]")?.remove();
-    else if (u?.name) $("#new-org-name").defaultValue = u.name;
+    if (u?.accountType === "company") {
+      $("#new-org-type option[value=personal]")?.remove();
+      // The name given at signup; the rest is asked here.
+      if (u.companyName) $("#new-org-name").defaultValue = u.companyName;
+    } else if (u?.name) $("#new-org-name").defaultValue = u.name;
     if (u?.country) $("#new-org-country").defaultValue = u.country;
     // A business says whether it is a company or a sole trader; a personal space is neither.
     const showEntity = () => $("#new-org-entity-row")?.classList.toggle("hidden", $("#new-org-type").value !== "business");

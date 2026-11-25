@@ -79,6 +79,8 @@ export function setupSteps(me, accounts, access) {
   return [
     { id: "passkey", done: !!me?.passkey?.credentialId },
     { id: "account", done: safeOn },
+    // Only for a login that has not said where it lives: the server opens no bank step before.
+    ...(me?.segment?.value === "UNDECIDED" ? [{ id: "residence", done: false }] : []),
     // Connected now, not once: a removed connection is a step to do again.
     { id: "monerium", done: !!me?.monerium?.connectedAt },
     { id: "iban", done: iban },

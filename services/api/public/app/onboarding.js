@@ -1,7 +1,8 @@
 /**
- * Sign-in and onboarding: Auth, the install screens, account type, one
- * screen about you (or the company), the Google/Apple recovery login, Face ID
- * set-up, then Home, whose checklist opens the email and Monerium screens. Plus the passkey ceremonies every
+ * Sign-in and onboarding: Auth, the install screens, account type, your name
+ * and email (and the company's name), the Google/Apple recovery login, Face ID
+ * set-up, then Home, whose checklist opens "Where you live", the email and
+ * the Monerium screens. Plus the passkey ceremonies every
  * later screen uses (sign-in, account set-up, IBAN link, send approvals).
  *
  * One screen at a time is rendered into #ob-root from a template, so the page
@@ -66,6 +67,12 @@ function enterKycReview(_name) {
   obGo(obNextAfterAccount() || (activate ? "activate" : "monerium"), { replace: true });
 }
 
+/* Home's "Where you live" row. */
+function enterResidence() {
+  obShow();
+  obGo("residence", { replace: true });
+}
+
 /* Home's "Confirm your email" row: the code screen, then back to Home. */
 function enterEmailConfirm() {
   obShow();
@@ -111,6 +118,7 @@ function obGuard(name) {
     if (name === "email") return caps.emailVerification && user.email && !user.emailVerifiedAt ? name : obNextAfterAccount() || "monerium";
     if (name === "monerium-keys") return caps.moneriumApiKeys && (!kycApproved(user) || !user.iban) ? name : obNextAfterAccount() || "monerium";
     if (name === "activate") return ibanActivationOffered(user) ? name : obNextAfterAccount() || "monerium";
+    if (name === "residence") return residenceAsked(user) ? name : obNextAfterAccount() || "monerium";
     return name;
   }
   if (kind === "import") {
@@ -296,8 +304,8 @@ const OB_DRAFT_KEY = "zold-signup-draft";
 let obDraftTouched = false;
 const obDraft = (() => {
   const empty = {
-    type: null, given: "", family: "", email: "", country: "", usPerson: null, companyUsNexus: null,
-    legalName: "", tradingName: "", noTrading: false, entity: null, incorp: "", terms: false, authorised: false, social: null,
+    type: null, given: "", family: "", email: "", legalName: "", social: null,
+    country: "", usPerson: null, companyUsNexus: null, // Home's "Where you live"
   };
   try { return { ...empty, ...JSON.parse(sessionStorage.getItem(OB_DRAFT_KEY) || "{}") }; } catch { return empty; }
 })();
@@ -320,7 +328,7 @@ function obClearDraft() {
 }
 
 const obFullName = () => `${obDraft.given} ${obDraft.family}`.replace(/\s+/g, " ").trim();
-const obCompany = () => obDraft.legalName || user?.orgName || "the company";
+const obCompany = () => obDraft.legalName || user?.companyName || "the company";
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
 /* Every ISO 3166-1 alpha-2 country, not the ones we serve: which countries
@@ -432,73 +440,35 @@ const OB_YES_NO =(key, yes, no) => [{ label: "Yes", patch: { [key]: true }, show
 /* Every question: what the narwhal says, how it is answered, when it counts as
    answered (the same rules as each screen's done()), and the chip it leaves. */
 const OB_ASK = {
-  given: {
-    say: () => "Hi! I’m the Zold narwhal. What’s your first name?",
-    tip: "Middle names too, as on your ID. It’s the name you’ll give Monerium.",
-    input: { autocomplete: "given-name", maxlength: 60, placeholder: "Miriam" },
-    done: () => !!obDraft.given.trim(),
-    take: (v) => (v ? { given: v } : "Enter your first name, as it is on your ID."),
-    chip: () => obDraft.given,
-  },
-  family: {
-    say: () => `Nice to meet you, ${obFirst()}! And your last name?`,
-    input: { autocomplete: "family-name", maxlength: 60, placeholder: "Zoldenburg" },
-    done: () => !!obDraft.family.trim(),
-    take: (v) => (v ? { family: v } : "Enter your last name, as it is on your ID."),
-    chip: () => obDraft.family,
-  },
-  legalName: {
-    say: () => "Hi! I’m the Zold narwhal. What’s the company’s legal name?",
-    tip: "Exactly as registered, with the legal form.",
-    input: { autocomplete: "organization", maxlength: 120, placeholder: "Lindner Holzbau GmbH" },
-    done: () => obDraft.legalName.trim().length >= 2,
-    take: (v) => (v.length >= 2 ? { legalName: v } : "Enter the company’s registered name."),
-    chip: () => obDraft.legalName,
-  },
-  entity: {
-    say: () => `Is ${obDraft.legalName} a company of its own, or do you trade under your own name?`,
-    tip: "A GmbH, UG, AG or Ltd is a company. It can’t change once the euro account is set up.",
-    choices: () => [
-      { label: "A company", patch: { entity: "company" }, shown: "Company" },
-      { label: "I’m a sole trader", patch: { entity: "sole_trader" }, shown: "Sole trader" },
-    ],
-    done: () => obDraft.entity === "company" || obDraft.entity === "sole_trader",
-    chip: () => (obDraft.entity === "company" ? "A company" : "Sole trader"),
-  },
-  tradingName: {
-    say: () => `Do customers know ${obDraft.legalName} by another name?`,
-    tip: "A trading name, if there is one.",
-    input: { maxlength: 120, placeholder: "Lindner Holz" },
-    choices: () => [{ label: "No other name", patch: { tradingName: "", noTrading: true }, shown: "" }],
-    done: () => !!obDraft.tradingName || obDraft.noTrading,
-    take: (v) => (v ? { tradingName: v, noTrading: false } : "Type the trading name, or tap “No other name”."),
-    chip: () => (obDraft.tradingName ? `Trades as ${obDraft.tradingName}` : "No other name"),
-  },
-  incorp: {
-    say: () => "Which country is it registered in?",
-    country: "incorp",
-    done: () => !!obDraft.incorp,
-    chip: () => `Registered in ${countryName(obDraft.incorp)}`,
-  },
   fullName: {
-    say: () => "And your full name? You’ll be the company’s first owner.",
-    tip: "Add teammates after the account opens.",
-    input: { autocomplete: "name", maxlength: 120, placeholder: "Miriam Zoldenburg" },
+    say: () => "Hi! I’m the Zold narwhal. What’s your name?",
+    tip: "First and last name, as on your ID.",
+    input: { autocomplete: "name", maxlength: 120, placeholder: "Miriam Zoldenburg…" },
     done: () => !!obDraft.given.trim(),
-    // One name on this path; the API takes the full name as one string.
-    take: (v) => (v ? { given: v, family: "" } : "Enter your full name."),
+    // The API takes the full name as one string.
+    take: (v) => (v ? { given: v, family: "" } : "Enter your name, as it is on your ID."),
     chip: () => obFullName(),
   },
   email: {
-    say: () => (obDraft.type === "company" ? `Thanks, ${obFirst()}. Your work email?` : `Which email should I use, ${obFirst()}?`),
+    say: () => `Nice to meet you, ${obFirst()}! Which email should I use?`,
     tip: `Recovery and sign-in help find your account by it.${obDraft.type === "company" ? "" : " No newsletters."}`,
-    input: { type: "email", inputmode: "email", autocomplete: "email", maxlength: 254, placeholder: "miriam@example.com" },
+    input: { type: "email", inputmode: "email", autocomplete: "email", maxlength: 254, placeholder: "miriam@example.com…" },
     done: () => EMAIL_RE.test(obDraft.email),
     take: (v) => (!v ? "Enter your email address." : EMAIL_RE.test(v) ? { email: v } : "Enter an email address like miriam@example.com."),
     chip: () => obDraft.email,
   },
+  legalName: {
+    say: () => "And what’s the company called?",
+    tip: "Its registered name, with the legal form.",
+    input: { autocomplete: "organization", maxlength: 120, placeholder: "Lindner Holzbau GmbH…" },
+    done: () => obDraft.legalName.trim().length >= 2,
+    take: (v) => (v.length >= 2 ? { legalName: v } : "Enter the company’s registered name."),
+    chip: () => obDraft.legalName,
+  },
+  // Asked from Home, after the account exists (OB.residence).
   country: {
-    say: () => (obDraft.type === "company" ? "Where do you live?" : "Which country do you live in?"),
+    say: () => "Which country do you live in?",
+    tip: "It decides which bank account I can offer you.",
     country: "country",
     done: () => !!obDraft.country,
     chip: () => countryName(obDraft.country),
@@ -515,33 +485,19 @@ const OB_ASK = {
     done: () => obDraft.usPerson !== null,
     chip: () => (obDraft.usPerson ? "US person" : "Not a US person"),
   },
-  authorised: {
-    say: () => `Are you authorised to open an account for ${obCompany()}?`,
-    tip: "Only someone who may act for the company can open its account.",
-    choices: () => [{ label: "Yes, I’m authorised", patch: { authorised: true }, shown: "Authorised" }],
-    done: () => obDraft.authorised,
-    chip: () => "Authorised",
-  },
-  terms: {
-    say: () => "Last question: do you accept Zold’s Terms?",
-    tipHtml: () => `Read the ${LEGAL_LINKS} first. They open in a new tab.`,
-    choices: () => [{ label: "I accept the Terms", patch: { terms: true }, shown: "Terms accepted" }],
-    done: () => obDraft.terms,
-    chip: () => "Terms accepted",
-  },
 };
+/* Signup asks p or b; Home's "Where you live" asks pr or br. */
 const OB_CHAT_ORDER = {
-  p: ["given", "family", "email", "country", "usPerson", "terms"],
-  b: ["legalName", "entity", "tradingName", "incorp", "fullName", "country", "email", "companyUsNexus", "usPerson", "authorised", "terms"],
+  p: ["fullName", "email"],
+  b: ["fullName", "email", "legalName"],
+  pr: ["country", "usPerson"],
+  br: ["country", "companyUsNexus", "usPerson"],
 };
-const obPath = () => (obDraft.type === "company" ? "b" : "p");
+const obAsksResidence = () => obScreen === "residence";
+const obPath = () => `${(user?.id ? user.accountType : obDraft.type) === "company" ? "b" : "p"}${obAsksResidence() ? "r" : ""}`;
 
-/* A new account type. The business path keeps the full name in `given`, so
-   moving to the personal path asks first and last name again; the consents
-   are asked again on either. */
 function obPickType(type) {
-  if (obDraft.type === type) return;
-  obSaveDraft({ type, terms: false, authorised: false, ...(obDraft.type === "company" ? { given: "", family: "" } : {}) });
+  if (obDraft.type !== type) obSaveDraft({ type });
 }
 
 /* The question to ask on this path: one being changed, a refused email, or
@@ -554,7 +510,7 @@ function obChatKey(p) {
 
 /* The answers so far. Gone once the account exists: the draft is spent then. */
 function obChatChips() {
-  if (user?.id || !obDraft.type) return "";
+  if (!obAsksResidence() && (user?.id || !obDraft.type)) return "";
   const chips = OB_CHAT_ORDER[obPath()].filter((k) => OB_ASK[k].done()).map((k) => [k, OB_ASK[k].chip()]).filter(([, t]) => t);
   if (!chips.length) return "";
   return `<ul class="ob-chips" aria-label="Your answers">${chips.map(([k, t]) =>
@@ -609,45 +565,71 @@ function obAskDock(key) {
     const rows = countryOptions().map((c) =>
       `<button type="button" class="ob-country${c.code === now ? " is-on" : ""}" data-code="${c.code}"><span aria-hidden="true">${obFlag(c.code)}</span>${esc(c.name)}</button>`).join("");
     return `<div class="ob-fade"><div class="ob-fade__scroll" id="ob-countries" role="group" aria-label="Countries">${rows}<p class="ob-country-none" hidden>No country matches.</p></div></div>
-      ${obComposer({ label, value: countryName(now), autocomplete: "country-name", placeholder: "Search countries" })}`;
+      ${obComposer({ label, value: countryName(now), autocomplete: "country-name", placeholder: "Search countries…" })}`;
   }
   const choices = q.choices ? obChatChoices(q.choices()) : "";
   if (!q.input) return choices;
   let error = "";
   if (key === "email" && obEmailInUse) error = "An account already uses this email. Sign in instead, or recover it if you lost your phone.";
-  const value = key === "fullName" ? obFullName() : key === "legalName" || key === "tradingName" || key === "given" || key === "family" || key === "email" ? obDraft[key] : "";
+  const value = key === "fullName" ? obFullName() : obDraft[key];
   return `${choices}${obComposer({ label, value, error, ...q.input })}`;
 }
 
-/* The about screen of path p, as a chat. */
+/* The questions of order p, as a chat: signup's about screen, or "Where you
+   live" from Home, whose answers are sent together once all are given. */
 function obAboutChat(p) {
-  const key = obChatKey(p);
-  const back = "account-type";
-  const head = obSignupProgress(`${p}-about`, p === "b" ? "About the company" : "About you", back);
-  const title = p === "b" ? "The company and you" : "About you";
+  const key = obChatKey(p), res = obAsksResidence();
+  const head = res ? obBackHead(null) : obSignupProgress(`${p}-about`, p === "b" ? "You and the company" : "About you", "account-type");
+  const title = res ? "Where you live" : p === "b" ? "You and the company" : "About you";
+  const later = res ? `<p class="z-screen__alt"><button type="button" class="z-link-btn" id="btn-later">Do this later</button></p>` : "";
   if (!key) {
-    return obChat({ title, head, say: "That’s everything I need. Tap an answer to change it, or carry on.",
-      dock: Z.button({ variant: "primary", full: true, label: "Continue", id: "btn-next" }) });
+    return obChat({ title, head, say: res ? "That’s all. Tap an answer to change it, or save." : "That’s everything I need. Tap an answer to change it, or carry on.",
+      extra: res ? obAlert() : "",
+      dock: `${Z.button({ variant: "primary", full: true, label: res ? "Save" : "Continue", id: "btn-next" })}${later}` });
   }
   const q = OB_ASK[key];
   // Buttons alone answer in the conversation, under the question; only the chat bar docks.
   const answer = obAskDock(key), inChat = !q.input && !q.country;
-  return obChat({ title, head, say: q.say(), tip: q.tip || "", tipHtml: q.tipHtml?.() || "", extra: inChat ? answer : "", dock: inChat ? "" : answer });
+  return obChat({ title, head, say: q.say(), tip: q.tip || "", tipHtml: q.tipHtml?.() || "", extra: inChat ? answer + later : "", dock: inChat ? "" : answer + later });
 }
 
 /* After an answer: the next question on this screen, or the next screen. */
 function obChatNext(p) {
-  if (obChatKey(p)) return obRender({ focus: false });
+  if (obChatKey(p) || obAsksResidence()) return obRender({ focus: false });
   obGo(obSignupSteps()[2]);
+}
+
+/* Home's "Where you live": the server decides the account from it, once. A
+   refusal says what Zold can't offer and leaves the account as it is. */
+async function obSendResidence(btn) {
+  if (Z.isDisabled(btn)) return;
+  obClearErr();
+  Z.setLoading(btn, true);
+  try {
+    const company = user.accountType === "company";
+    const u = await api(`/api/users/${user.id}/residence`, {
+      country: obDraft.country,
+      usAnswers: { usPerson: obDraft.usPerson === true, ...(company ? { companyUsNexus: obDraft.companyUsNexus === true } : {}) },
+    });
+    renderUser({ ...user, ...u });
+    obClearDraft();
+    obFinish();
+  } catch (e) {
+    obShowErr(e);
+  } finally {
+    Z.setLoading(btn, false);
+  }
 }
 
 function obBindAbout(root, p) {
   const key = obChatKey(p);
   obEmailInUse = false;
   obChatBind(root);
+  const later = root.querySelector("#btn-later");
+  if (later) later.onclick = () => obFinish();
   if (!key) {
     const go = root.querySelector("#btn-next");
-    if (go) go.onclick = () => obGo(obSignupSteps()[2]);
+    if (go) go.onclick = obAsksResidence() ? (e) => obSendResidence(e.currentTarget) : () => obGo(obSignupSteps()[2]);
     return;
   }
   const q = OB_ASK[key];
@@ -750,7 +732,7 @@ function obChatBind(root) {
     const c = e.target.closest?.("[data-edit]");
     if (!c) return;
     obChatEdit = c.dataset.edit || null;
-    const about = `${obPath()}-about`;
+    const about = obAsksResidence() ? "residence" : `${obPath()}-about`;
     if (obScreen === about) obRender({ focus: false }); else obGo(about);
   });
   Narwhal.watch(nw, input, () => {
@@ -916,8 +898,7 @@ OB["account-type"] = {
 OB["p-about"] = {
   kind: "form",
   title: "Personal: about you",
-  done: () => !!(obDraft.given.trim() && obDraft.family.trim() && EMAIL_RE.test(obDraft.email) && obDraft.country
-    && obDraft.usPerson !== null && obDraft.terms),
+  done: () => OB_CHAT_ORDER.p.every((k) => OB_ASK[k].done()),
   html: () => obAboutChat("p"),
   bind: (root) => obBindAbout(root, "p"),
 };
@@ -933,7 +914,7 @@ OB["p-passkey"] = {
     tip: Z.onPhone() ? "The key never leaves this phone, and Zold never sees it." : "Your browser asks to save a passkey: approve it with Touch ID, Windows Hello, your phone or a security key.",
     chips: "summary",
     extra: `${obSetupSteps()}${obAlert()}`,
-    dock: Z.button({ variant: "primary", full: true, icon: "fingerprint", label: obPasskeyLabel(), id: "btn-passkey" }),
+    dock: `${Z.button({ variant: "primary", full: true, icon: "fingerprint", label: obPasskeyLabel(), id: "btn-passkey" })}${obTermsLine()}`,
   }),
   bind: (root) => {
     obChatBind(root);
@@ -944,11 +925,18 @@ OB["p-passkey"] = {
 /* ---- Business ------------------------------------------------------------ */
 OB["b-about"] = {
   kind: "form",
-  title: "Business: the company and you",
-  done: () => !!(obDraft.legalName.trim().length >= 2 && OB_ASK.entity.done() && obDraft.incorp && obDraft.given.trim() && EMAIL_RE.test(obDraft.email)
-    && obDraft.country && obDraft.companyUsNexus !== null && obDraft.usPerson !== null && obDraft.terms && obDraft.authorised),
+  title: "Business: you and the company",
+  done: () => OB_CHAT_ORDER.b.every((k) => OB_ASK[k].done()),
   html: () => obAboutChat("b"),
   bind: (root) => obBindAbout(root, "b"),
+};
+
+/* ---- Where you live (from Home) --------------------------------------------- */
+OB.residence = {
+  kind: "after",
+  title: "Where you live",
+  html: () => obAboutChat(obPath()),
+  bind: (root) => obBindAbout(root, obPath()),
 };
 
 /* ---- Recovery login (Google or Apple) ---------------------------------------
@@ -1114,7 +1102,7 @@ OB["b-passkey"] = {
     tip: "Company payments still need a teammate’s approval. Zold can’t approve any.",
     chips: "summary",
     extra: `${obSetupSteps()}${obAlert()}`,
-    dock: Z.button({ variant: "primary", full: true, icon: "fingerprint", label: obPasskeyLabel(), id: "btn-passkey" }),
+    dock: `${Z.button({ variant: "primary", full: true, icon: "fingerprint", label: obPasskeyLabel(), id: "btn-passkey" })}${obTermsLine()}`,
   }),
   bind: (root) => {
     obChatBind(root);
@@ -1518,6 +1506,8 @@ function obSetupSteps() {
   const phone = Z.onPhone();
   return `<ul class="z-steps" aria-live="polite">${row(0, phone ? "Face ID sign-in on this phone" : "Sign-in on this device", keyDone)}${row(1, phone ? "Your account, approved with Face ID" : "Your account, approved on this device", !!user?.passkey && !needsPasskeySafeSetup(user) && !!user?.passkeySafe)}</ul>`;
 }
+/* Accepting the Terms is this tap, said where it happens. */
+const obTermsLine = () => (user?.id ? "" : `<p class="z-screen__fine">By setting up sign-in you accept the ${LEGAL_LINKS}.</p>`);
 const obPasskeyLabel = () => Z.onPhone()
   ? (user?.passkey ? "Finish with Face ID" : "Set up Face ID")
   : (user?.passkey ? "Finish with biometrics" : "Set up biometrics");
@@ -1527,10 +1517,9 @@ function obSignupBody() {
   return {
     name: obFullName(),
     email: obDraft.email,
-    country: obDraft.country,
     accountType: company ? "company" : "individual",
-    usAnswers: { usPerson: obDraft.usPerson === true, ...(company ? { companyUsNexus: obDraft.companyUsNexus === true } : {}) },
-    ...(company && obDraft.incorp ? { companyIncorporationCountry: obDraft.incorp } : {}),
+    // Kept for the company's set-up in /business, which asks the rest.
+    ...(company ? { companyName: obDraft.legalName } : {}),
     // Only Zold's own terms. Zold sends Monerium nothing: the user gives
     // Monerium their details on Monerium's site.
     consents: [{ kind: "zold_terms" }],
@@ -1577,7 +1566,6 @@ async function obCreateAccount(btn) {
       renderUser(u);
     }
     pendingInfo ||= { name: user.name, email: user.email };
-    if (user.accountType === "company") await obEnsureOrg();
 
     if (!user.passkey) {
       obSetup = { step: 0, state: "now" }; obRerenderSteps();
@@ -1640,24 +1628,6 @@ function obSetupFailed(e) {
 
 /* Set when signup refused the email: the email field says why, once. */
 let obEmailInUse = false;
-
-/* A company account is an organisation with this person as its owner. Made
-   once: a retry after a reload finds the one already there. */
-async function obEnsureOrg() {
-  const { organisations = [] } = await api("/api/orgs");
-  if (organisations.some((o) => o.type === "business")) return;
-  if (!obDraft.legalName || !obDraft.incorp || !OB_ASK.entity.done()) return; // answers gone (another tab): the owner adds it from /business
-  await api("/api/orgs", {
-    type: "business",
-    entity: obDraft.entity,
-    name: obDraft.tradingName || obDraft.legalName,
-    legalName: obDraft.legalName,
-    country: obDraft.incorp,
-    email: obDraft.email,
-    // Monthly reports run in this zone; the settings screen can change it.
-    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-  });
-}
 
 /* ---- Blocked --------------------------------------------------------------- */
 /* An outcome, not an error. Says what Zold cannot offer and stops: naming the
@@ -2539,6 +2509,7 @@ async function resumeSession(capabilitiesLoaded) {
     // "Do this later" on the Monerium step opened the app: a reload on an app
     // screen stays in the app, whose Home offers the step again. An IBAN that
     // is requested waits on Monerium, not on the person: Home, not the gate.
+    if (!next && location.hash === "#residence" && residenceAsked(user)) return enterResidence();
     if (!next || (["monerium", "activate"].includes(next) && (phParse(location.hash) || ibanWait(user)))) {
       enterDashboard(user.name);
       return;

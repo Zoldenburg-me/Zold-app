@@ -77,7 +77,7 @@ const NO_US = { usCitizen: false, usGreenCard: false, usTaxResident: false };
 const signup = (body: any) => call("POST", "/api/users", { body });
 
 let passed = 0;
-const check = (name: string, fn: () => void) => { fn(); passed++; console.log(`  ok  ${name}`); };
+const check = async (name: string, fn: () => void | Promise<void>) => { await fn(); passed++; console.log(`  ok  ${name}`); };
 
 for (const [name, url] of [[`api :${API_PORT}`, `${API}/api/health`], [`chain :${RPC_PORT}`, RPC_URL]] as const) {
   const busy = await fetch(url, { signal: AbortSignal.timeout(1500) }).then(() => true).catch(() => false);
@@ -299,6 +299,56 @@ try {
     // It may still fail later for balance or Safe reasons; what matters is that
     // it is not the capability guard refusing it.
     assert.notEqual(euQuote.data.code, "CAPABILITY_UNAVAILABLE");
+  });
+
+  console.log("\nA signup with no country is decided later, from Home");
+
+  const late = await signup({ name: "Late", email: "late@example.com", accountType: "company", companyName: "Late GmbH", consents: [{ kind: "zold_terms" }] });
+  check("it opens with its own Safe and nothing else", () => {
+    assert.equal(late.status, 201, JSON.stringify(late.data));
+    assert.equal(late.data.segment.value, "UNDECIDED");
+    assert.deepEqual(late.data.segment.capabilities, ["safe"]);
+    assert.equal(late.data.country, "");
+    assert.equal(late.data.companyName, "Late GmbH");
+  });
+  const lateTok: string = late.data.sessionToken, lateId: string = late.data.id;
+  const lateMon = await call("POST", `/api/users/${lateId}/monerium/connect/start`, { token: lateTok });
+  check("an UNDECIDED account cannot reach Monerium", () => {
+    assert.equal(lateMon.status, 403);
+    assert.equal(lateMon.data.capability, "monerium");
+  });
+  const residence = (token: string | undefined, id: string, body: any) => call("POST", `/api/users/${id}/residence`, { token, body });
+  const noSession = await residence(undefined, lateId, { country: "DE", usAnswers: { usPerson: false, companyUsNexus: false } });
+  await check("the residence answer needs the account's own session", async () => {
+    assert.equal(noSession.status, 401);
+    assert.equal((await residence(de.data.sessionToken, lateId, { country: "DE", usAnswers: { usPerson: false, companyUsNexus: false } })).status, 403);
+  });
+  await check("a company that was not asked the ownership question is not decided", async () => {
+    assert.equal((await residence(lateTok, lateId, { country: "DE", usAnswers: { usPerson: false } })).status, 400);
+  });
+  const lateUs = await residence(lateTok, lateId, { country: "DE", usAnswers: { usPerson: true, companyUsNexus: false } });
+  check("a US person is refused there too, audited, and the account stays undecided", () => {
+    assert.equal(lateUs.status, 403);
+    assert.equal(lateUs.data.code, "BLOCKED_US");
+    const db = dbNow();
+    assert.equal(db.users.find((u: any) => u.id === lateId).segment.value, "UNDECIDED");
+    const row = db.audit.filter((a: any) => a.kind === "segment.decided").at(-1);
+    assert.equal(row.data.outcome, "refused_at_residence");
+  });
+  const lateOk = await residence(lateTok, lateId, { country: "DE", usAnswers: { usPerson: false, companyUsNexus: false }, segment: { value: "EU_FULL" }, softSignals: { usPhoneCode: true } });
+  check("a German resident is decided EU_FULL, with the answers on the row", () => {
+    assert.equal(lateOk.status, 200, JSON.stringify(lateOk.data));
+    assert.equal(lateOk.data.segment.value, "EU_FULL");
+    assert.equal(lateOk.data.country, "DE");
+    const row = dbNow().users.find((u: any) => u.id === lateId);
+    assert.equal(row.usPersonAnswers.length, 1);
+    assert.equal(row.softSignals, undefined, "soft signals are not the client's to raise here");
+  });
+  const again = await residence(lateTok, lateId, { country: "IN", usAnswers: { usPerson: false, companyUsNexus: false } });
+  await check("it is decided once", async () => {
+    assert.equal(again.status, 409);
+    assert.equal(again.data.code, "RESIDENCE_SET");
+    assert.equal((await residence(de.data.sessionToken, de.data.id, { country: "IN", usAnswers: { usPerson: false } })).status, 409);
   });
 
   console.log(`\nONBOARDING SEGMENTS TEST PASSED — ${passed}/${passed} checks.`);

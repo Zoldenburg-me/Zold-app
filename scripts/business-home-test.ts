@@ -92,6 +92,7 @@ const done = (steps: any[]) => Object.fromEntries(steps.map((s) => [s.id, s.done
   const me = { passkey: { credentialId: "k" }, passkeySafe: { status: "active" } };
   assert.deepEqual(done(m.setupSteps(me, [], { signers })), { passkey: true, account: true, monerium: false, iban: false, backup: false });
   assert.equal(done(m.setupSteps(me, [], { signers: null })).backup, null, "signers unread: backup unknown, not missing");
+  assert.equal(done(m.setupSteps({ ...me, segment: { value: "UNDECIDED" } }, [], { signers })).residence, false, "a login that has not said where it lives is asked");
   assert.equal(done(m.setupSteps({ ...me, monerium: { connectedAt: "2026-10-01" } }, [], { signers })).monerium, true);
   assert.deepEqual(done(m.setupSteps({ ...me, monerium: { connectedAt: "2026-10-01" } }, [active], { signers: { ...signers, otherOwners: ["0xb"] } })), { passkey: true, account: true, monerium: true, iban: true, backup: true });
   assert.equal(done(m.setupSteps(me, [{ ...active, status: "gated" }], { signers })).iban, false, "a gated account's IBAN does not count");
