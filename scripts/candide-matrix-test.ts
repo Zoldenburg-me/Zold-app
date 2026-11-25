@@ -41,9 +41,10 @@ process.env.TRANSF_CHAIN_ID = "31337";
 process.env.TRANSF_RPC_URL = "http://127.0.0.1:9";
 process.env.CANDIDE_CHAIN_ID = "84532";
 process.env.LOCAL_HARNESS = "";
-delete process.env.SAFE_GAS_PAYMENT;
-delete process.env.SAFE_GAS_TOKEN;
-delete process.env.CANDIDE_SPONSORSHIP_POLICY_ID;
+// Set, not deleted: loadEnvFile would put an operator's .env value back.
+process.env.SAFE_GAS_PAYMENT = "sponsored";
+process.env.SAFE_GAS_TOKEN = "";
+process.env.CANDIDE_SPONSORSHIP_POLICY_ID = "";
 
 type Answer = unknown | typeof HANG | typeof DROP | typeof HTML | { __error: { code: number; message: string } };
 const HANG = Symbol("hang");

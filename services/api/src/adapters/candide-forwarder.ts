@@ -127,6 +127,15 @@ async function acceptedTokens(sourceChainIds: number[], token: `0x${string}`): P
   return accepts;
 }
 
+/** Candide answered, and said this address is not active: a definite answer
+ *  (a deposit there is not forwarded), unlike a transport or upstream error. */
+export class ForwarderInactiveError extends Error {
+  constructor(readonly address: string) {
+    super(`Candide reports forwarding address ${address} as not active`);
+    this.name = "ForwarderInactiveError";
+  }
+}
+
 /**
  * Activate the public receive address for a payment page.
  *
@@ -198,7 +207,7 @@ export async function activatePaymentForwarder(params: {
   // An address Candide does not report active is not forwarded: a deposit to
   // it stays in the forwarder, so it is never shown as the page's.
   if (activation.active !== true) {
-    throw new Error(`Candide reports forwarding address ${address} as not active`);
+    throw new ForwarderInactiveError(address);
   }
 
   return {

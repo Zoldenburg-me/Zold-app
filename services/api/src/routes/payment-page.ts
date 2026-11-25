@@ -15,7 +15,7 @@ import { wrap } from "./util.js";
 import { CHAIN_ID } from "../config.js";
 import { addrs } from "../chain.js";
 import { isDeployed } from "../wallet/candide.js";
-import { activatePaymentForwarder } from "../adapters/candide-forwarder.js";
+import { activatePaymentForwarder, ForwarderInactiveError } from "../adapters/candide-forwarder.js";
 import { HandleError, normaliseDisplayName, normaliseHandle, publicOrgPayee, publicPayee } from "../pay.js";
 import { orgPageAccount } from "./business/org-payment-page.js";
 import { accountProfileStanding } from "../domain/monerium-profile.js";
@@ -71,9 +71,10 @@ const RENEW_BEFORE_MS = 24 * 3600 * 1000;
  *  public GET lands here, so without it a Candide outage is retried per hit. */
 export const RENEW_RETRY_MS = 5 * 60 * 1000;
 const renewing = new Map<string, Promise<boolean>>();
-/** Per user: until when not to retry, and whether the last renewal moved the
- *  address (then the page stays closed, whatever the old activation says). */
-const renewFailed = new Map<string, { until: number; addressMoved: boolean }>();
+/** Per user: until when not to retry, and whether the last renewal closed the
+ *  page (moved the address, or Candide said not active), whatever the old
+ *  activation says. */
+const renewFailed = new Map<string, { until: number; closed: boolean }>();
 
 /**
  * May this page's deposit address be shown to a payer right now? A Candide
@@ -88,7 +89,11 @@ const renewFailed = new Map<string, { until: number; addressMoved: boolean }>();
  * is closed. So is a page whose stored activation Candide did not report
  * active: that address forwards nothing.
  *
- * A failed renewal still answers yes while the old activation runs, is
+ * A renewal Candide answers "not active" for the page's address is a definite
+ * answer, not an outage: the activation is stored as not active, so the page
+ * stays closed until a renewal of that address comes back active.
+ *
+ * Any other failed renewal still answers yes while the old activation runs, is
  * active and its list came from the routes; once it has lapsed the answer is no, and the
  * caller shows no address. Failures back off for RENEW_RETRY_MS.
  */
@@ -101,7 +106,7 @@ export async function livePaymentPage(user: User): Promise<boolean> {
   const expires = f.expiresAt ? Date.parse(f.expiresAt) : Number.POSITIVE_INFINITY;
   if (listed && expires - Date.now() > RENEW_BEFORE_MS) return true;
   const failed = renewFailed.get(user.id);
-  if (failed && failed.until > Date.now()) return !failed.addressMoved && listed && expires > Date.now();
+  if (failed && failed.until > Date.now()) return !failed.closed && listed && expires > Date.now();
   let run = renewing.get(user.id);
   if (!run) {
     run = (async () => {
@@ -109,7 +114,7 @@ export async function livePaymentPage(user: User): Promise<boolean> {
         const next = await activatePaymentForwarder({ userId: user.id, handle: page.handle, recipient: f.recipient, token: addrs().usdc });
         if (next.address.toLowerCase() !== page.depositAddress.toLowerCase()) {
           console.error(`payment page: renewal for ${user.id} gave ${next.address}, page shows ${page.depositAddress}`);
-          renewFailed.set(user.id, { until: Date.now() + RENEW_RETRY_MS, addressMoved: true });
+          renewFailed.set(user.id, { until: Date.now() + RENEW_RETRY_MS, closed: true });
           return false;
         }
         renewFailed.delete(user.id);
@@ -122,7 +127,18 @@ export async function livePaymentPage(user: User): Promise<boolean> {
         return true;
       } catch (err: any) {
         console.error(`payment page: renewing forwarder for ${user.id} failed: ${describeCause(err)}`);
-        renewFailed.set(user.id, { until: Date.now() + RENEW_RETRY_MS, addressMoved: false });
+        if (err instanceof ForwarderInactiveError) {
+          renewFailed.set(user.id, { until: Date.now() + RENEW_RETRY_MS, closed: true });
+          const fresh = store.findUser(user.id);
+          const shown = fresh?.paymentPage;
+          if (shown?.handle === page.handle && shown.forwarder && shown.depositAddress.toLowerCase() === err.address.toLowerCase()) {
+            store.updateUser(user.id, {
+              paymentPage: { ...shown, forwarder: { ...shown.forwarder, active: false }, updatedAt: new Date().toISOString() },
+            });
+          }
+          return false;
+        }
+        renewFailed.set(user.id, { until: Date.now() + RENEW_RETRY_MS, closed: false });
         return listed && expires > Date.now();
       } finally {
         renewing.delete(user.id);

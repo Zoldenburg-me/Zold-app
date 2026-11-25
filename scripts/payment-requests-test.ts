@@ -829,6 +829,25 @@ try {
       pastBackoff();
       check("once Candide activates it, the renewal opens the page", (await livePaymentPage(store.findUser(ravi.id)!)) === true && store.findUser(ravi.id)!.paymentPage!.forwarder!.active === true);
 
+      // Stored active, inside the renewal window, and Candide now answers the
+      // same address as not active: a definite answer, not an outage.
+      const renewDue = () => { const p = store.findUser(ravi.id)!.paymentPage!; store.updateUser(ravi.id, { paymentPage: { ...p, forwarder: { ...p.forwarder!, active: true, expiresAt: new Date(realNow2() + t + 6 * 3600_000).toISOString() } } }); };
+      renewDue();
+      candide.active = false;
+      pastBackoff();
+      check("a renewal Candide answers not active closes a stored-active page", (await livePaymentPage(store.findUser(ravi.id)!)) === false);
+      check("and records the activation as not active", store.findUser(ravi.id)!.paymentPage!.forwarder!.active === false);
+      check("the backoff that follows keeps it closed", (await livePaymentPage(store.findUser(ravi.id)!)) === false);
+      const unquoted = await call("POST", `/api/pay/ravi/${tip.body.code}/quote`, { amountEur: 7 });
+      check("and the quote route refuses it", unquoted.status === 503, JSON.stringify(unquoted));
+      candide.active = true;
+      candide.up = false;
+      pastBackoff();
+      check("a later outage does not reopen it", (await livePaymentPage(store.findUser(ravi.id)!)) === false);
+      candide.up = true;
+      pastBackoff();
+      check("only a same-address active renewal reopens it", (await livePaymentPage(store.findUser(ravi.id)!)) === true && store.findUser(ravi.id)!.paymentPage!.forwarder!.active === true);
+
       // A renewal that comes back with another address: the page keeps its address and stays closed.
       store.updateUser(ravi.id, { paymentPage: { ...store.findUser(ravi.id)!.paymentPage!, forwarder: { ...store.findUser(ravi.id)!.paymentPage!.forwarder!, expiresAt: new Date(realNow2() + t + 60_000).toISOString() } } });
       candide.address = "0x4444444444444444444444444444444444444444";
