@@ -9,6 +9,12 @@
  * PDF is a real PDF holding the same facts, a tampered snapshot fails, and a
  * deposit that changed under the document makes it fail verification.
  *
+ * Hostile text in the PDF: parentheses, backslashes, CRLF, NUL and Unicode
+ * stay inside their string (every content operator is one the writer emits),
+ * a very long word is broken inside the margins, a free-text cell is cut
+ * before the next one and the Beleg then names it in full, and the file name
+ * is one safe path component whatever the stored date, code and reference say.
+ *
  * Run: npm run beleg:test
  */
 import "./_test-env.js";
@@ -27,7 +33,7 @@ const { writeStatementLines } = await import("../services/api/src/bookkeeping/wr
 const { holderFor, issueBelegForLine } = await import("../services/api/src/bookkeeping/issue.js");
 const { belegFileName, belegLines, belegPdf, belegStillAgrees, belegTitle, buildBeleg, UNEXECUTED_NOTE } = await import("../services/api/src/bookkeeping/beleg.js");
 const { verifyZoldAttestation, snapshotDigest } = await import("../services/api/src/documents.js");
-const { winAnsi } = await import("../services/api/src/bookkeeping/pdf.js");
+const { textPdf, winAnsi } = await import("../services/api/src/bookkeeping/pdf.js");
 
 let passed = 0;
 const check = async (name: string, fn: () => void | Promise<void>) => {
@@ -141,6 +147,101 @@ await check("the text rendering states the ECB rate is a daily fixing, and the P
   assert.equal(body.slice(startxref, startxref + 4), "xref");
   assert.equal(winAnsi("€ Müller — 東").toString("hex"), "80204dfc6c6c65722097203f", "euro and dash are WinAnsi; CJK is ?");
   assert.equal(belegFileName(snap, "ABCDEFGHJKMNPQR"), "2026-09-10_ABCDEFGHJKMNPQR_RE-2026-0042.pdf");
+});
+
+console.log("\nHostile text in the PDF");
+
+/** Every page's content stream, read by its /Length the way a viewer does. */
+const contentStreams = (pdf: Buffer): string[] => {
+  const body = pdf.toString("latin1");
+  const out: string[] = [];
+  const re = /<< \/Length (\d+) >>\nstream\n/g;
+  for (let m; (m = re.exec(body)); ) {
+    const start = m.index + m[0].length;
+    const len = Number(m[1]);
+    assert.equal(body.slice(start + len, start + len + 10), "\nendstream", "the stream ends where /Length says");
+    out.push(body.slice(start, start + len));
+  }
+  return out;
+};
+// The only operators the writer emits: a text show or a hairline.
+const TEXT_OP = /^(?:0\.38|0) g BT \/F[12] [\d.]+ Tf -?[\d.]+ -?[\d.]+ Td \(((?:[\x20-\x27\x2a-\x5b\x5d-\x7e]|\\[()\\]|\\[0-7]{3})*)\) Tj ET$/;
+const RULE_OP = /^(?:0 G 0\.8|0\.85 G 0\.4) w [\d.]+ [\d.]+ m [\d.]+ [\d.]+ l S$/;
+const shown = (pdf: Buffer): string[] => contentStreams(pdf).flatMap((c) => c.split("\n")).map((op) => {
+  const m = TEXT_OP.exec(op);
+  assert.ok(m || RULE_OP.test(op), `an operator the writer does not emit: ${JSON.stringify(op)}`);
+  return m ? m[1].replace(/\\([0-7]{3})/g, (_, o) => String.fromCharCode(parseInt(o, 8))).replace(/\\([()\\])/g, "$1") : undefined;
+}).filter((t): t is string => t !== undefined);
+const HOSTILE = ["a(b)c\\d)", ") Tj ET BT /F1 99 Tf 0 0 Td (owned", "x\r\ny\rz\n", "nul\u0000end\u0007", "endstream\nendobj\n%%EOF", "Müller € 東京 𝔘 \uD800", "\\) \\\\ ( \\("];
+
+await check("parentheses, backslashes, CRLF, NUL and Unicode stay inside their string: no operator, stream or object can be injected", () => {
+  const pdf = textPdf([
+    ...HOSTILE.map((t) => ({ text: t })),
+    ...HOSTILE.map((t) => ({ text: "", cells: [{ text: t, at: 0 }, { text: t, at: 1, align: "right" as const }] })),
+  ], { title: HOSTILE.join(" "), author: ")>> /JavaScript (x)", subject: "\u0000\r\n)" });
+  const streams = contentStreams(pdf);
+  assert.equal(streams.length, Number(/\/Count (\d+)/.exec(pdf.toString("latin1"))![1]), "one content stream per page, none injected");
+  const texts = shown(pdf);
+  for (const t of HOSTILE) {
+    const want = winAnsi(t).toString("latin1");
+    assert.ok(texts.includes(want), `a cell shows ${JSON.stringify(t)} byte for byte (non-WinAnsi as ?)`);
+    assert.ok(texts.join(" ").includes(want.split(/\s+/).filter(Boolean)[0]), "a wrapped line keeps its words");
+  }
+  const info = /5 0 obj\n([^\n]*)\nendobj/.exec(pdf.toString("latin1"))![1];
+  assert.match(info, /^<< \/Title <FEFF[0-9A-F]*> \/Producer \(Zold\) \/Author <FEFF[0-9A-F]*> \/Subject <FEFF[0-9A-F]*> >>$/, "metadata is hex, never a literal string");
+});
+
+await check("a very long single word is broken across lines inside the margins, every character kept", () => {
+  // Helvetica advance in points at 10 pt: W is the widest glyph; 東 prints as ?.
+  for (const [ch, pt] of [["W", 8.3], ["i", 2.8], ["€", 5.56], ["東", 5.5]] as const) {
+    const word = ch.repeat(3000);
+    const want = winAnsi(word).toString("latin1");
+    for (const [ln, room] of [[{ text: word }, 483.28], [{ text: `RE ${word} tail`, indent: 24, size: 7.5 }, 459.28]] as const) {
+      const texts = shown(textPdf([ln], { title: "t" }));
+      assert.equal(texts.join("").replace(/RE|tail|\s/g, ""), want, `${ch}: every character is on the page`);
+      const widest = Math.max(...texts.map((t) => t.length * pt * ((ln as any).size ?? 10) / 10));
+      assert.ok(widest <= room + 1, `${ch}: a line ${widest.toFixed(0)} pt wide runs past the margin`);
+    }
+  }
+});
+
+await check("a free-text cell too long for its column is cut with an ellipsis before the next cell, never drawn over the amount", () => {
+  const long = "R".repeat(400);
+  const texts = shown(textPdf([{ text: "", cells: [{ text: "26 October 2026", at: 0 }, { text: long, at: 0.2, clip: true }, { text: long, at: 0.52, clip: true }, { text: "+€33.00", at: 1, align: "right" }] }], { title: "t" }));
+  const cut = texts.filter((t) => t.startsWith("R"));
+  assert.equal(cut.length, 2);
+  for (const t of cut) assert.ok(t.endsWith("\x85") && t.length < 60, `cut with … (${t.length} chars)`);
+  assert.ok(texts.includes("+\x8033.00"), "the amount is drawn whole");
+});
+
+await check("the Beleg names a reference or counterparty its row had to cut in full under Booked against", () => {
+  const reference = `RE-2026-0042 ${"Rechnungsnummer-und-Kundennummer-".repeat(4)}Ende`;
+  const name = "Sehr Lange Firmenbezeichnung Gesellschaft mit beschraenkter Haftung und Co KG";
+  const snap = buildBeleg({ ...line, statement: { ...line.statement!, reference, counterparty: { name } } } as any, { holder: { name: "Zoldenburg UG", addressLines: [], safeAddress: SAFE, chainId: 31337, accountSince: now }, deposit });
+  const text = belegLines(snap, "ABCDEFGHJKMNPQR", now).map((l) => l.text).join("\n");
+  assert.ok(text.includes(reference), "the full reference");
+  assert.ok(text.includes(name), "the full counterparty");
+  // Drawn whole somewhere (wrapped over lines), not only cut in the row.
+  const pdfText = shown(belegPdf(snap, "ABCDEFGHJKMNPQR", now)).join("").replace(/\s/g, "");
+  assert.ok(pdfText.includes(reference.replace(/\s/g, "")), "the PDF carries the full reference");
+  assert.ok(pdfText.includes(name.replace(/\s/g, "")), "the PDF carries the full counterparty");
+});
+
+await check("a Beleg file name is one safe path component whatever the stored date, code and reference say", () => {
+  const base = buildBeleg(line, { holder: { name: "Z", addressLines: [], safeAddress: SAFE, chainId: 31337, accountSince: now }, deposit });
+  const cases: [string, string, string][] = [
+    ["../../../etc/x", "../../evil", "../..\\a/b"],
+    ["2026-09-10\r\nSet-Cookie: x", "ABC\"DEF", "\" ; filename=evil.exe"],
+    ["/abs", "C:\\Windows", "É東𝔘\u0000\u202e"],
+    ["", "", ""],
+    ["..", "..", ".."],
+  ];
+  for (const [valueDate, code, reference] of cases) {
+    const n = belegFileName({ ...base, line: { ...base.line, valueDate, reference } }, code);
+    assert.match(n, /^[A-Za-z0-9][A-Za-z0-9._-]*\.pdf$/, JSON.stringify([valueDate, code, reference, n]));
+    assert.ok(!n.includes(".."), n);
+  }
+  assert.equal(belegFileName(base, "ABCDE-FGHJK-MNPQR"), "2026-09-10_ABCDEFGHJKMNPQR_RE-2026-0042.pdf", "a real one is unchanged");
 });
 
 console.log("\nIssue, sign, verify");

@@ -78,17 +78,26 @@ export function documentsByCode(): DocumentsByCode {
   return byCode;
 }
 
-/** The line's Beleg as the books may hand it out. `live`: issued, a Beleg,
- *  not revoked, and its records still agree. `stale`: not revoked, but it no
- *  longer agrees, so it is replaced, never shipped. A revoked one is neither:
- *  the line has no Beleg until one is issued. */
+/** The document a line's code names is that line's Beleg only if it is a
+ *  Beleg of the line's org issued for this very line. A code is text on the
+ *  row: a stale or corrupt one naming another org's or another line's
+ *  document is no link at all, so the line has no Beleg and gets its own. */
+function isBelegOf(doc: StoredDocument | undefined, e: LedgerEntry): doc is BelegDoc {
+  return !!doc && doc.kind === "beleg" && doc.snapshot.kind === "beleg" && doc.orgId === e.orgId && doc.snapshot.line.lineId === e.id;
+}
+
+/** The line's Beleg as the books may hand it out. `live`: issued for this
+ *  line, not revoked, and its records still agree. `stale`: not revoked, but
+ *  it no longer agrees, so it is replaced, never shipped. A revoked one is
+ *  neither, nor is one that is not the line's own (isBelegOf): the line has
+ *  no Beleg until one is issued. */
 export function belegOfLine(
   e: LedgerEntry,
   docs?: DocumentsByCode,
 ): { live: BelegDoc } | { stale: BelegDoc; detail: string } | undefined {
   const code = e.statement?.documentCode;
   const doc = code ? (docs ? docs.get(code) : store.findDocumentByCode(code)) : undefined;
-  if (!doc || doc.snapshot.kind !== "beleg" || doc.revokedAt) return undefined;
+  if (!isBelegOf(doc, e) || doc.revokedAt) return undefined;
   const d = { ...doc, snapshot: doc.snapshot };
   const agree = belegRecordsAgree(d.snapshot, e);
   return agree.ok ? { live: d } : { stale: d, detail: agree.detail };
@@ -157,7 +166,7 @@ async function issueOnce(given: LedgerEntry): Promise<{ doc: StoredDocument; iss
   if (!s) throw new Error("only a statement line has a Beleg");
   if (s.documentCode) {
     const existing = store.findDocumentByCode(s.documentCode);
-    if (existing && !existing.revokedAt) return { doc: existing, issued: false };
+    if (isBelegOf(existing, entry) && !existing.revokedAt) return { doc: existing, issued: false };
   }
   const doc = await draft(entry);
   commit(entry, doc);

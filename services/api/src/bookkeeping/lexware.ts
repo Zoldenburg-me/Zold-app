@@ -31,8 +31,10 @@ export const germanDate = (isoDay: string) => {
   return m ? `${m[3]}.${m[2]}.${m[1]}` : isoDay;
 };
 
-/** -1234,56 from signed cents. */
+/** -1234,56 from signed cents. Only a whole number of cents: anything else
+ *  in the store refuses the export rather than becoming a figure in it. */
 export const germanAmount = (cents: number) => {
+  if (!Number.isSafeInteger(cents)) throw new Error(`refusing to export an amount that is not whole cents: ${JSON.stringify(String(cents)).slice(0, 40)}`);
   const sign = cents < 0 ? "-" : "";
   const abs = Math.abs(cents);
   return `${sign}${Math.floor(abs / 100)},${String(abs % 100).padStart(2, "0")}`;

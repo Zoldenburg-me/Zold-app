@@ -20,7 +20,7 @@ import { statementLinesOf, swapsHaveExecuted, writeAccountStatementLines, writeS
 import { belegOfLine, documentsByCode, type DocumentsByCode, BelegStillVerifies, BelegWouldNotVerify, issueBelegForLine, replaceBelegForLine } from "../../bookkeeping/issue.js";
 import { belegFileName, belegPdf, UNEXECUTED_NOTE } from "../../bookkeeping/beleg.js";
 import { lexwareCsvBytes, lexwareRow } from "../../bookkeeping/lexware.js";
-import { zipStored } from "../../bookkeeping/zip.js";
+import { zipStored, type ZipEntry } from "../../bookkeeping/zip.js";
 import { documentUrl } from "../../documents.js";
 import type { LedgerEntry } from "../../domain/types.js";
 import { bookedCode, isOwnTransfer } from "../../domain/ledger.js";
@@ -200,7 +200,7 @@ export function createBookkeepingExportRoutes(deps: OrgRoutes): express.Router {
     const month = monthOf(req, res);
     if (!month) return;
     const lines = linesInMonth(statementLinesOf(ctx.org.id), month);
-    const entries = [];
+    const entries: ZipEntry[] = [];
     const missing: string[] = [];
     const stale: string[] = [];
     const docs = documentsByCode();
@@ -215,7 +215,11 @@ export function createBookkeepingExportRoutes(deps: OrgRoutes): express.Router {
         continue;
       }
       const doc = b.live;
-      entries.push({ name: belegFileName(doc.snapshot, doc.code), data: belegPdf(doc.snapshot, doc.code, doc.createdAt), modifiedAt: new Date(doc.createdAt) });
+      // Unique in the archive even where two stored codes clean to one name.
+      const base = belegFileName(doc.snapshot, doc.code);
+      let name = base;
+      for (let n = 2; entries.some((x) => x.name === name); n++) name = base.replace(/\.pdf$/, `_${n}.pdf`);
+      entries.push({ name, data: belegPdf(doc.snapshot, doc.code, doc.createdAt), modifiedAt: new Date(doc.createdAt) });
     }
     if (missing.length || stale.length) {
       const text = [

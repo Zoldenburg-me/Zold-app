@@ -35,11 +35,21 @@ export interface ZipEntry {
   modifiedAt?: Date;
 }
 
+/** One plain file name: no directory part, no "." or ".." or hidden file,
+ *  no drive letter, no control characters. Whatever unpacks the archive puts
+ *  it inside the folder it unpacks to. */
+const PLAIN_NAME = /^[^./\\:\x00-\x1f\x7f][^/\\:\x00-\x1f\x7f]*$/;
+
 export function zipStored(entries: ZipEntry[], now = new Date()): Buffer {
   const parts: Buffer[] = [];
   const central: Buffer[] = [];
+  const names = new Set<string>();
   let offset = 0;
   for (const e of entries) {
+    // Refused, not fixed up: the caller names the entries, and a second entry
+    // under one name would overwrite the first when unpacked.
+    if (!PLAIN_NAME.test(e.name) || names.has(e.name)) throw new Error(`zip entry name refused: ${JSON.stringify(e.name.slice(0, 80))}`);
+    names.add(e.name);
     const name = Buffer.from(e.name, "utf8");
     const crc = crc32(e.data);
     const { date, time } = dosDateTime(e.modifiedAt ?? now);

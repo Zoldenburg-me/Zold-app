@@ -39,11 +39,15 @@ export interface PdfCell {
   bold?: boolean;
   muted?: boolean;
   size?: number;
+  /** Free text of any length (a left-aligned cell): cut with an ellipsis
+   *  where the next cell starts, never drawn over it. */
+  clip?: boolean;
 }
 
 const PAGE_W = 595.28;
 const PAGE_H = 841.89;
 const MARGIN = 56;
+export const TEXT_WIDTH = PAGE_W - 2 * MARGIN;
 const LEADING = 1.35;
 
 /** Characters WinAnsi has that Latin-1 does not, at their WinAnsi codes. */
@@ -74,7 +78,7 @@ function escapePdfString(b: Buffer): string {
 }
 
 /** Rough Helvetica advance, enough to wrap a line before the right margin. */
-function approxWidth(text: string, size: number): number {
+export function approxWidth(text: string, size: number): number {
   let w = 0;
   for (const ch of text) {
     w += /[iljtfI.,:;'|!]/.test(ch) ? 0.28 : /[mwMW]/.test(ch) ? 0.83 : /[A-Z]/.test(ch) ? 0.67 : /[0-9€+\-]/.test(ch) ? 0.556 : ch === " " ? 0.28 : 0.55;
@@ -82,8 +86,24 @@ function approxWidth(text: string, size: number): number {
   return w * size;
 }
 
+/** A word wider than the line, cut into pieces that fit (at least one
+ *  character each), so no text runs off the page. */
+function breakWord(word: string, size: number, width: number): string[] {
+  const pieces: string[] = [];
+  let cur = "";
+  for (const ch of word) {
+    if (cur && approxWidth(cur + ch, size) > width) {
+      pieces.push(cur);
+      cur = "";
+    }
+    cur += ch;
+  }
+  if (cur) pieces.push(cur);
+  return pieces;
+}
+
 function wrap(text: string, size: number, width: number): string[] {
-  const words = text.split(/\s+/);
+  const words = text.split(/\s+/).flatMap((w) => (approxWidth(w, size) > width ? breakWord(w, size, width) : [w]));
   const lines: string[] = [];
   let cur = "";
   for (const w of words) {
@@ -96,6 +116,17 @@ function wrap(text: string, size: number, width: number): string[] {
   }
   if (cur) lines.push(cur);
   return lines;
+}
+
+/** A cell cut with an ellipsis to fit `width` points; whole if it fits. */
+export function fitCell(text: string, size: number, width: number): string {
+  if (approxWidth(text, size) <= width) return text;
+  let cur = "";
+  for (const ch of text) {
+    if (approxWidth(`${cur}${ch}…`, size) > width) break;
+    cur += ch;
+  }
+  return `${cur}…`;
 }
 
 /**
@@ -123,11 +154,18 @@ export function textPdf(lines: PdfLine[], meta: { title: string; author?: string
       const tallest = Math.max(size, ...ln.cells.map((c) => c.size ?? size));
       if (y - tallest * LEADING < MARGIN) newPage();
       y -= tallest * LEADING;
+      // A clipped cell ends where the next cell starts (a right-aligned one
+      // where its text starts), or at the right margin: cut, not drawn over.
+      const left = (c: PdfCell) => (c.align === "right" ? MARGIN + c.at * width - approxWidth(c.text, c.size ?? size) : MARGIN + c.at * width);
       for (const c of ln.cells) {
         const cs = c.size ?? size;
         const edge = MARGIN + c.at * width;
-        const x = c.align === "right" ? edge - approxWidth(c.text, cs) : edge;
-        ops.push(text(x, cs, c.bold ?? ln.bold, c.muted ?? ln.muted, c.text));
+        if (!c.clip || c.align === "right") {
+          ops.push(text(c.align === "right" ? edge - approxWidth(c.text, cs) : edge, cs, c.bold ?? ln.bold, c.muted ?? ln.muted, c.text));
+          continue;
+        }
+        const next = Math.min(MARGIN + width, ...ln.cells.filter((o) => o !== c && o.text && left(o) > edge).map(left));
+        ops.push(text(edge, cs, c.bold ?? ln.bold, c.muted ?? ln.muted, fitCell(c.text, cs, next - edge - 4)));
       }
     } else {
       const pieces = ln.text === "" ? [""] : wrap(ln.text, size, width - (ln.indent ?? 0));
