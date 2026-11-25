@@ -74,12 +74,18 @@ try {
   assert.equal(new Set(deps.map((d) => d.id)).size, 1, "5 parallel records of one transfer: one row, returned to each");
   assert.equal((await a.query("SELECT 1 FROM crypto_deposits WHERE tx_hash_lc = $1", [dep.txHash])).rows.length, 1);
 
+  // Every transaction is READ COMMITTED, whatever the database default says.
+  await admin.query(`ALTER DATABASE ${name} SET default_transaction_isolation = 'repeatable read'`);
+  const rr = open();
+  assert.equal((await rr.tx((q) => q.query<{ transaction_isolation: string }>("SHOW transaction_isolation"))).rows[0].transaction_isolation, "read committed");
+  const srr = createPgStore(rr);
+
   // Two reviews of different transfers citing one fresh refund tx: one books it.
   for (const id of ["t_ref_a", "t_ref_b"]) {
     await s.addTransfer({ id, userId: "u_race", quoteId: `q-${id}`, state: "MANUAL_REVIEW", txs: [], createdAt: now, updatedAt: now } as any);
   }
   const refund = { state: "REFUNDED" as const, note: "Refunded by hand after checking the chain.", by: "op", evidence: `0x${"4f".repeat(32)}`, refund: { amountEur: 1, movedEur: 1 } };
-  const results = await Promise.all(["t_ref_a", "t_ref_b"].map((id) => s.resolveTransferReview(id, refund)));
+  const results = await Promise.all(["t_ref_a", "t_ref_b"].map((id) => srr.resolveTransferReview(id, refund)));
   assert.equal(results.filter((r) => r.ok).length, 1, "one refund tx, one transfer");
   assert.ok(results.some((r) => !r.ok && r.code === "EVIDENCE_ON_RECORD"));
   console.log("ok - parallel: one authorization claim, every Safe op signature, one deposit row, one refund tx per transfer");

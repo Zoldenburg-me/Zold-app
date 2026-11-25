@@ -43,7 +43,10 @@ export function poolDatabase(pool: pg.Pool): Database {
       const client = await pool.connect();
       let broken: Error | undefined;
       try {
-        await client.query("BEGIN");
+        // Named, not inherited: a role or database default of REPEATABLE READ
+        // would keep one snapshot for the whole transaction, and a write that
+        // waited on a lock would not see what the holder committed (§2).
+        await client.query("BEGIN ISOLATION LEVEL READ COMMITTED");
         const out = await fn({
           query: async (text, params) => client.query(text, params as unknown[]) as never,
           // No parameters: the simple protocol, which takes several statements.
