@@ -12,7 +12,7 @@
  * database to connect to as a role that may CREATE DATABASE and CREATE ROLE.
  * Each run creates a uniquely named database and application role and drops
  * both at the end, pass or fail. The API suites run as that role, as the API
- * does (§7), with the grants of zold_grant_app (migrations/0006).
+ * does (§7), with the grants of zold_grant_app (migrations/0006, 0007).
  */
 // Must be first: pins chain, keys and a throwaway database.
 import "./_local-chain.js";
@@ -418,7 +418,52 @@ try {
       await admin.query(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`);
     }
   }
-  console.log("ok - the application role: the store suite runs on its grants; no DELETE or TRUNCATE on kept rows, no UPDATE on audit, no write to history or schema_migrations, no DDL, no TEMP; a shadowing temporary ledger_history does not take the history row");
+  // zold_grant_app in a schema whose name needs quotes, owned by a role that
+  // does not own the database: run by the database's owner it grants; run by
+  // the schema's owner, whose REVOKE TEMPORARY is only a warning, it refuses.
+  {
+    const db = `${name}_s${Math.random().toString(16).slice(2, 10)}`;
+    // Named like the application role, so a killed run's is swept the same way.
+    const schemaOwner = `zold_test_app_${Math.floor(Date.now() / 1000)}_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    const pw = randomUUID();
+    await admin.query(`CREATE DATABASE ${db}`);
+    await admin.query(`CREATE ROLE ${schemaOwner} LOGIN PASSWORD '${pw}'`);
+    try {
+      const dbOwner = openPool(urlFor(db), { realMoney: false });
+      try {
+        await dbOwner.query(`CREATE SCHEMA "Zold Q" AUTHORIZATION ${schemaOwner}`);
+        await admin.query(`ALTER DATABASE ${db} SET search_path = "Zold Q"`);
+        const asSchemaOwner = (() => {
+          const u = urlFor(db).replace(/^(postgres(?:ql)?:\/\/)[^@/]*@/, "$1");
+          return `${u}${u.includes("?") ? "&" : "?"}user=${schemaOwner}&password=${pw}`;
+        })();
+        const so = openPool(asSchemaOwner, { realMoney: false });
+        try {
+          await migrate(so);
+          await assert.rejects(() => so.query("SELECT zold_grant_app($1)", [appRole]), /can still create temporary tables/, "run by a role that cannot revoke TEMP, the grant fails loudly");
+        } finally {
+          await so.close();
+        }
+        const fresh = openPool(urlFor(db), { realMoney: false });
+        try {
+          await fresh.query("SELECT zold_grant_app($1)", [appRole]);
+          const can = await fresh.query<{ ok: boolean; temp: boolean }>(
+            `SELECT has_table_privilege($1, '"Zold Q".ledger', 'UPDATE') AS ok, has_database_privilege($1, current_database(), 'TEMPORARY') AS temp`,
+            [appRole],
+          );
+          assert.deepEqual(can.rows[0], { ok: true, temp: false }, "run by the database owner: granted on the quoted schema's tables, no TEMP");
+        } finally {
+          await fresh.close();
+        }
+      } finally {
+        await dbOwner.close();
+      }
+    } finally {
+      await admin.query(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`);
+      await admin.query(`DROP ROLE IF EXISTS ${schemaOwner}`);
+    }
+  }
+  console.log("ok - the application role: the store suite runs on its grants; no DELETE or TRUNCATE on kept rows, no UPDATE on audit, no write to history or schema_migrations, no DDL, no TEMP; a shadowing temporary ledger_history does not take the history row; granted in a schema whose name needs quotes; a grant run by a role that cannot revoke TEMP fails");
 
   // The API's own store on Postgres (STORE_BACKEND=postgres): the §2
   // concurrency tests, and the suites that hold the S2 race tests, each in a

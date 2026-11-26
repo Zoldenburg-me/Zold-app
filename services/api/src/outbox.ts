@@ -78,8 +78,12 @@ async function deliverOne(row: OutboxRow, h: OutboxHandler): Promise<void> {
   // The claim counts the attempt before the send, so a claim past the limit
   // means the last attempt's lease ran out unsettled (a crash, or a save that
   // failed): its outcome is unknown, and the row ends there, not sent again.
+  // Or the limit was lowered since a retry was settled: that retry's error is
+  // the row's real one, and is kept.
   if (row.attempts > h.maxAttempts) {
-    const reason = `attempt ${row.attempts - 1} was not settled before its lease ran out; outcome unknown`;
+    const reason = row.lastError
+      ? `${row.lastError} (attempt ${row.attempts} is past the limit of ${h.maxAttempts}; not sent again)`
+      : `attempt ${row.attempts - 1} was not settled before its lease ran out; outcome unknown`;
     if (await store.settleOutbox(row.id, row.attempts, { ok: false, error: reason, dead: true })) {
       outboxMetrics.dead++;
       console.error(`outbox: ${row.kind} ${row.id} dead: ${reason}`);
