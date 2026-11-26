@@ -42,6 +42,7 @@ case "$cmd" in
   encrypt)
     require_age; require_recipients
     src="${1:?usage: secrets.sh encrypt FILE}"
+    trap 'rm -f "$src.age.tmp"' EXIT
     "$AGE" -R "$AGE_RECIPIENTS" -o "$src.age.tmp" "$src"
     mv "$src.age.tmp" "$src.age"
     echo "wrote $src.age. Check it with 'secrets.sh run -- true', then delete $src."
@@ -100,6 +101,7 @@ case "$cmd" in
     require_age; require_recipients
     dir="${1:?usage: secrets.sh seal DIR}"
     dir="${dir%/}"
+    trap 'rm -f "$dir.tar.age.tmp"' EXIT
     tar -C "$(dirname "$dir")" -czf - "$(basename "$dir")" | "$AGE" -R "$AGE_RECIPIENTS" -o "$dir.tar.age.tmp"
     mv "$dir.tar.age.tmp" "$dir.tar.age"
     echo "wrote $dir.tar.age. Check it with 'secrets.sh unseal $dir.tar.age \"\$(mktemp -d)/check\"', then delete that and $dir."
@@ -115,8 +117,16 @@ case "$cmd" in
     mkdir -p "$(dirname "$dest")"
     staging="$(mktemp -d "$(dirname "$dest")/.unseal.XXXXXX")"
     trap 'rm -rf "$staging"' EXIT
-    "$AGE" -d -i <(age_identity) "$src" | tar -C "$staging" -xzf -
-    mv "$staging" "$dest"
+    # Decrypted in full first (a damaged file fails before tar sees it), into
+    # the owner-only staging dir. seal writes relative names and no link that
+    # leaves the tree; tar itself strips a leading / and keeps links pointing
+    # out, so unseal-check.mjs refuses both, before and after unpacking.
+    "$AGE" -d -i <(age_identity) -o "$staging/archive" "$src"
+    tar -tzf "$staging/archive" | node "$ROOT/scripts/unseal-check.mjs" names
+    mkdir "$staging/tree"
+    tar -C "$staging/tree" -xzf "$staging/archive"
+    node "$ROOT/scripts/unseal-check.mjs" tree "$staging/tree"
+    mv "$staging/tree" "$dest"
     echo "unsealed into $dest"
     ;;
 
