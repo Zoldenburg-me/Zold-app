@@ -161,12 +161,25 @@ export function clientKey(ip: string | undefined): string {
   return `${groups.slice(0, 4).map((g) => (parseInt(g, 16) || 0).toString(16)).join(":")}::/64`;
 }
 
+/**
+ * Most rate-limit windows held at once (about 15 MB). A caller rotating
+ * through fresh addresses (an IPv6 /48 holds 65,536 /64s) or fresh credential
+ * ids opens one window per request, so without a cap the map grows with the
+ * flood's rate until the sweep catches up.
+ */
+export const RATE_BUCKETS_MAX = 100_000;
+
 const hits = new Map<string, { n: number; reset: number }>();
 
 export function rateLimit(key: string, perMin: number): boolean {
   const now = Date.now();
   const h = hits.get(key);
   if (!h || h.reset < now) {
+    // Re-inserted, so the map stays in window order, oldest first.
+    hits.delete(key);
+    // At the cap the oldest window goes and that one caller counts afresh.
+    // Refusing new keys instead would let a flood lock out every new caller.
+    if (hits.size >= RATE_BUCKETS_MAX) hits.delete(hits.keys().next().value!);
     hits.set(key, { n: 1, reset: now + 60_000 });
     return true;
   }
@@ -209,11 +222,14 @@ export function recordFailure(key: string, windowMs: number): void {
 /* Expired buckets are dropped on a timer, not by a request: a scan on the
  * request path would run on every request once a caller rotating through
  * fresh IPv6 /64s keeps the map large. */
-setInterval(() => {
-  const now = Date.now();
+export function sweepExpiredBuckets(now = Date.now()): void {
   for (const [k, v] of hits) if (v.reset < now) hits.delete(k);
   for (const [k, v] of failures) if (v.reset < now) failures.delete(k);
-}, 10_000).unref();
+}
+setInterval(() => sweepExpiredBuckets(), 10_000).unref();
+
+/** How many windows each map holds, for the bounds test. */
+export const bucketCounts = () => ({ hits: hits.size, failures: failures.size });
 
 /**
  * Which paths sit on the tight bucket: everything where a request is a GUESS

@@ -18,9 +18,11 @@
  *    is real money or in production; faucetLive() re-checks;
  *  - a claim (grant row, drip slot) is taken synchronously before the first
  *    await, so two concurrent calls cannot both pay;
- *  - a dry faucet, or a failure BEFORE the transfer is sent, releases the
- *    claim; once sent, the claim stands even if waiting for the receipt then
- *    fails — the transfer may still land, and releasing would pay twice;
+ *  - a dry faucet, or a failure BEFORE the transfer is handed to the node,
+ *    releases the claim; from the hand-over on, the claim stands even if the
+ *    node's answer or the receipt wait then fails — the transfer may still
+ *    land, and releasing would pay twice. Such a claim is never resent: a
+ *    person reconciles it against the faucet wallet's history;
  *  - sends are queued one at a time: parallel sends from one wallet would
  *    race for the same nonce;
  *  - a faucet problem never breaks onboarding.
@@ -58,12 +60,17 @@ function queued<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
-type Sent = { kind: "dry"; have: bigint } | { kind: "sent"; txHash: `0x${string}`; reverted: boolean };
+type Sent =
+  | { kind: "dry"; have: bigint }
+  | { kind: "sent"; txHash: `0x${string}`; reverted: boolean }
+  | { kind: "uncertain"; cause: unknown };
 
 /**
  * Check the balance, then send — both inside the queue, so the balance is
- * read after the previous send was handed over. Throws only BEFORE the send;
- * once a hash exists it is returned, and a failed receipt wait counts as sent.
+ * read after the previous send was handed over. Throws only BEFORE the send.
+ * A throw from the send itself is `uncertain`: the node may have taken the
+ * transaction and lost only its answer. Once a hash exists it is returned,
+ * and a failed receipt wait counts as sent.
  */
 async function sendToken(token: `0x${string}`, to: `0x${string}`, units: bigint, label: string): Promise<Sent> {
   const wallet = faucetWallet!;
@@ -71,7 +78,11 @@ async function sendToken(token: `0x${string}`, to: `0x${string}`, units: bigint,
     const have = await publicClient.readContract({ address: token, abi: erc20Abi, functionName: "balanceOf", args: [wallet.account.address] });
     if (have < units) return { kind: "dry", have };
     const { request } = await publicClient.simulateContract({ account: wallet.account, address: token, abi: erc20Abi, functionName: "transfer", args: [to, units] });
-    return { kind: "sent", txHash: await wallet.writeContract(request), reverted: false };
+    try {
+      return { kind: "sent", txHash: await wallet.writeContract(request), reverted: false };
+    } catch (cause) {
+      return { kind: "uncertain", cause };
+    }
   });
   if (out.kind !== "sent") return out;
   try {
@@ -114,6 +125,11 @@ export async function faucetFundSafe(userId: string): Promise<FaucetResult> {
     release();
     console.warn(`faucet: ${faucetWallet!.account.address} holds ${eur.fromWei(sent.have)} EURe on chain ${CHAIN_ID}, below the ${grantEur} EURe grant — top it up; skipped ${user.id}`);
     return { ok: false, code: "FAUCET_DRY", error: "the test faucet is empty — try again later" };
+  }
+  if (sent.kind === "uncertain") {
+    // The claim stays, without a hash: a retry is ALREADY_GRANTED.
+    console.error(`faucet: grant to ${to} (${user.id}) may have been sent (${describeCause(sent.cause)}); claim kept — reconcile against ${faucetWallet!.account.address}'s history`);
+    return { ok: false, code: "FAUCET_FAILED", error: UNAVAILABLE };
   }
   if (sent.reverted) {
     // A reverted transfer moved nothing, so the account may claim again.
@@ -207,6 +223,11 @@ export async function drip(address: string, symbol: string, ip: string): Promise
     release();
     console.warn(`faucet: ${faucetWallet!.account.address} holds ${formatUnits(sent.have, decimals)} ${token.symbol}, below one ${token.amount} drip — top it up`);
     return { ok: false, code: "FAUCET_DRY", error: `the faucet is out of ${token.symbol} — try another token or come back later` };
+  }
+  if (sent.kind === "uncertain") {
+    // The slot stays taken: the drip may have gone out.
+    console.error(`faucet: ${token.symbol} drip to ${to} may have been sent (${describeCause(sent.cause)}); slot kept`);
+    return { ok: false, code: "FAUCET_FAILED", error: UNAVAILABLE };
   }
   if (sent.reverted) {
     release();

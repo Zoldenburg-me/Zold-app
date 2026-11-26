@@ -8,7 +8,14 @@
  *  - a dry faucet answers FAUCET_DRY with the claim released, and a later
  *    top-up can fund the same account after all;
  *  - an account without a deployed Safe, an unknown user and a zero address
- *    are refused.
+ *    are refused;
+ *  - a crash at every persistence boundary (before the claim, after it and
+ *    before the send, after the send and before the hash is written, a
+ *    receipt-wait timeout, sends still queued) leaves at most one grant per
+ *    Safe after a restart, and an uncertain send is never resent: the claim
+ *    stays for a person to reconcile against the faucet wallet's history.
+ *    A crash is a snapshot of db.json at that instant plus a call that never
+ *    resumes; a restart reloads that file and imports a fresh faucet module.
  *
  * What it cannot prove in-process: the real-money-chain refusal. CHAIN_ID is
  * frozen at first import, so it is checked in a child process started on
@@ -18,7 +25,7 @@ import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID, randomBytes } from "node:crypto";
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { hardhatNode } from "./_free-port.js";
@@ -150,6 +157,119 @@ try {
   const g2 = await faucetFundSafe(gus.id);
   check("a retry pays nothing: the account was paid once", !g2.ok && g2.code === "ALREADY_GRANTED" && (await balanceOf(gus.address)) === 50);
 
+  console.log("4c/6 crash and restart at every persistence boundary…");
+  const { DB_PATH } = await import("../services/api/src/store/db.js");
+  const { linesFromFaucet } = await import("../services/api/src/documents.js");
+  const { HttpRequestError } = await import("viem");
+  await mintToFaucet(1000);
+  type FaucetModule = typeof import("../services/api/src/faucet.js");
+  let snapshot: Buffer | undefined;
+  let crashed: () => void = () => {};
+  // The process dies here: the disk holds what it holds, the call never resumes.
+  const crash = () => {
+    snapshot = readFileSync(DB_PATH);
+    crashed();
+    return new Promise<never>(() => {});
+  };
+  /** Crash on the next call of `obj[method]`, once; `before` runs the real call first. */
+  const crashOn = (obj: any, method: string, before = false) => new Promise<void>((resolve) => {
+    crashed = resolve;
+    const real = obj[method];
+    obj[method] = async (...args: unknown[]) => {
+      obj[method] = real;
+      if (before) await real.apply(obj, args);
+      return crash();
+    };
+  });
+  let boot = 0;
+  // A restart: the store reloads the crash's file and the faucet module comes
+  // up fresh, its send queue empty.
+  const restart = async (): Promise<FaucetModule> => {
+    writeFileSync(DB_PATH, snapshot!);
+    initStore();
+    return import(`../services/api/src/faucet.js?boot=${++boot}`);
+  };
+  const lostAnswer = () => new HttpRequestError({ url: RPC, details: "The request took too long to respond." });
+
+  const hana = addUser("Crash Hana");
+  snapshot = readFileSync(DB_PATH);
+  let f = await restart();
+  const h1 = await f.faucetFundSafe(hana.id);
+  check("crash before the claim: after a restart the Safe is funded, once", h1.ok && (await balanceOf(hana.address)) === 50);
+
+  const ivan = addUser("Crash Ivan");
+  let armed = crashOn(publicClient, "readContract");
+  void f.faucetFundSafe(ivan.id);
+  await armed;
+  f = await restart();
+  const ivanClaim = store.findUser(ivan.id)?.faucet;
+  check("crash after the claim, before the send: the claim survived the restart without a hash", ivanClaim?.txHash === "" && ivanClaim.grantedEur === 50);
+  const i2 = await f.faucetFundSafe(ivan.id);
+  check("…a retry is ALREADY_GRANTED, nothing is sent", !i2.ok && i2.code === "ALREADY_GRANTED" && (await balanceOf(ivan.address)) === 0);
+  check("…and the statement shows no faucet credit for it", linesFromFaucet(ivanClaim).length === 0);
+
+  const jule = addUser("Crash Jule");
+  armed = crashOn(faucetWallet, "writeContract", true);
+  void f.faucetFundSafe(jule.id);
+  await armed;
+  f = await restart();
+  const j2 = await f.faucetFundSafe(jule.id);
+  check("crash after the send, before the hash is written: a retry is ALREADY_GRANTED and the Safe holds one grant",
+    !j2.ok && j2.code === "ALREADY_GRANTED" && store.findUser(jule.id)?.faucet?.txHash === "" && (await balanceOf(jule.address)) === 50);
+
+  const kai = addUser("Crash Kai");
+  armed = crashOn(publicClient, "waitForTransactionReceipt");
+  void f.faucetFundSafe(kai.id);
+  await armed;
+  f = await restart();
+  const k2 = await f.faucetFundSafe(kai.id);
+  check("crash while waiting for the receipt: a retry is ALREADY_GRANTED and the Safe holds one grant",
+    !k2.ok && k2.code === "ALREADY_GRANTED" && (await balanceOf(kai.address)) === 50);
+
+  const lia = addUser("Timeout Lia");
+  (publicClient as any).waitForTransactionReceipt = async () => { throw new Error("receipt wait timed out"); };
+  let l1: Awaited<ReturnType<FaucetModule["faucetFundSafe"]>>;
+  try { l1 = await f.faucetFundSafe(lia.id); } finally { (publicClient as any).waitForTransactionReceipt = realWait; }
+  snapshot = readFileSync(DB_PATH);
+  f = await restart();
+  const l2 = await f.faucetFundSafe(lia.id);
+  check("a receipt-wait timeout, then a restart: the hash is on disk and a retry is ALREADY_GRANTED",
+    l1.ok && store.findUser(lia.id)?.faucet?.txHash === l1.txHash && !l2.ok && l2.code === "ALREADY_GRANTED" && (await balanceOf(lia.address)) === 50);
+
+  const queuedUsers = [addUser("Queued Mo"), addUser("Queued Nell"), addUser("Queued Ola")];
+  armed = crashOn(publicClient, "readContract");
+  for (const qu of queuedUsers) void f.faucetFundSafe(qu.id);
+  await armed;
+  f = await restart();
+  const qRetry = await Promise.all(queuedUsers.map((qu) => f.faucetFundSafe(qu.id)));
+  const qHeld = await Promise.all(queuedUsers.map((qu) => balanceOf(qu.address)));
+  check("a restart with sends still queued resends none of them: each claim stands, nothing arrived",
+    qRetry.every((r) => !r.ok && r.code === "ALREADY_GRANTED") && qHeld.every((b) => b === 0));
+  const pia = addUser("After-restart Pia");
+  const p1 = await f.faucetFundSafe(pia.id);
+  check("…and the fresh queue still funds a new Safe", p1.ok && (await balanceOf(pia.address)) === 50);
+
+  const quinn = addUser("Lost-answer Quinn");
+  const realWrite = faucetWallet.writeContract;
+  (faucetWallet as any).writeContract = async (...args: unknown[]) => {
+    (faucetWallet as any).writeContract = realWrite;
+    await (realWrite as any).apply(faucetWallet, args);
+    throw lostAnswer();
+  };
+  const q1 = await f.faucetFundSafe(quinn.id);
+  check("a send whose answer is lost is FAUCET_FAILED and keeps the claim: the transfer may be out",
+    !q1.ok && q1.code === "FAUCET_FAILED" && store.findUser(quinn.id)?.faucet?.txHash === "", JSON.stringify(q1));
+  const q2 = await f.faucetFundSafe(quinn.id);
+  check("…a retry is ALREADY_GRANTED: the Safe holds one grant, not two", !q2.ok && q2.code === "ALREADY_GRANTED" && (await balanceOf(quinn.address)) === 50);
+
+  const rosa = addUser("Refused Rosa");
+  const realSimulate = publicClient.simulateContract;
+  (publicClient as any).simulateContract = async () => { (publicClient as any).simulateContract = realSimulate; throw new Error("execution reverted"); };
+  const r1 = await f.faucetFundSafe(rosa.id);
+  check("a send refused before it went out releases the claim", !r1.ok && r1.code === "FAUCET_FAILED" && store.findUser(rosa.id)?.faucet === undefined);
+  const r2 = await f.faucetFundSafe(rosa.id);
+  check("…so a retry funds the Safe, once", r2.ok && (await balanceOf(rosa.address)) === 50);
+
   console.log("5/6 accounts without a Safe are refused…");
   const noSafe = addUser("No-Safe Nia", { deployed: false });
   const n = await faucetFundSafe(noSafe.id);
@@ -190,6 +310,17 @@ try {
   for (let i = 0; i < 5; i++) ipRuns.push(await drip(`0x${randomBytes(20).toString("hex")}`, "EURe", "10.9.9.9"));
   check("one IP gets FAUCET_DRIPS_PER_IP drips, then IP_LIMIT", ipRuns.slice(0, 4).every((r) => r.ok) && !ipRuns[4].ok && ipRuns[4].code === "IP_LIMIT");
 
+  const lostTo = `0x${randomBytes(20).toString("hex")}` as `0x${string}`;
+  (faucetWallet as any).writeContract = async (...args: unknown[]) => {
+    (faucetWallet as any).writeContract = realWrite;
+    await (realWrite as any).apply(faucetWallet, args);
+    throw lostAnswer();
+  };
+  const lostDrip = await drip(lostTo, "EURe", "10.7.0.1");
+  const lostAgain = await drip(lostTo, "EURe", "10.7.0.2");
+  check("a drip whose answer is lost keeps its slot: the next one is COOLDOWN, the address got one drip",
+    !lostDrip.ok && lostDrip.code === "FAUCET_FAILED" && !lostAgain.ok && lostAgain.code === "COOLDOWN" && (await balanceOf(lostTo)) === 5, JSON.stringify([lostDrip, lostAgain]));
+
   console.log("6/6 a real-money chain refuses to start with a faucet key…");
   const real = spawnSync(process.execPath, [bin("tsx"), "-e", 'import("./services/api/src/config.ts").catch((e) => { console.error(e.message); process.exit(1); })'], {
     cwd: ROOT,
@@ -204,7 +335,7 @@ try {
   });
   check("chain 8453 with only FAUCET_DRIPS set fails at config load too", realDrips.status !== 0 && /testnet-only/.test(realDrips.stderr), realDrips.stderr.slice(-300));
 
-  console.log(`\nFAUCET TEST PASSED — ${passed} checks: one grant per Safe, drips per address and token, limits hold, real-money chain refuses`);
+  console.log(`\nFAUCET TEST PASSED — ${passed} checks: one grant per Safe across crashes and restarts, no resend of an uncertain send, drips per address and token, limits hold, real-money chain refuses`);
 } finally {
   for (const c of children) c.kill();
   rmSync(process.env.TRANSF_DB_PATH!, { force: true });
