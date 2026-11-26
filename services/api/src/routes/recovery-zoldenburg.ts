@@ -67,6 +67,7 @@ import {
 } from "../wallet/candide.js";
 import { b64urlToBuf, bufToB64url, issueChallenge, verifyRegistration } from "../webauthn.js";
 import { ADDRESS_RE } from "../domain/contacts.js";
+import { RELAY_TIMEOUT_MS, relayFrom, releaseRelay } from "../recovery.js";
 import { checkOpAssertion } from "../http/passkey-assertion.js";
 import { ENROLMENT, enrolmentAvailable, enrolmentView, zoldenburgArmed } from "../recovery/zoldenburg-enrolment.js";
 import {
@@ -96,26 +97,6 @@ const MAX_OPEN_REQUESTS = 10;
 const OPEN = ["PASSKEY_PENDING", "REVIEW_PENDING", "GRACE_PERIOD", "RELAYING"] as const;
 /** A request no one has signed: the owner or the reviewer may still end it. */
 const CANCELLABLE = ["PASSKEY_PENDING", "REVIEW_PENDING"] as const;
-
-/**
- * How long a relay may hold RELAYING before the sweep asks the chain. The
- * relay call is bounded at about 3.5 minutes: viem's send makes six RPC
- * requests (chain id, block, priority fee, nonce, gas estimate, the raw
- * send), each at most 10 s with one retry (recovered-passkey.ts), and the
- * receipt wait is 90 s (recovery/zoldenburg-guardian.ts). Once the receipt is
- * in, the chain shows the relay and the sweep moves the row on, not back. So
- * a row still RELAYING after this was cut off (a restart, a crash).
- */
-export const RELAY_TIMEOUT_MS = 10 * 60_000;
-
-/** The reserve a relay claims before its chain call (§2 rule 5). */
-const relayFrom = (from: "REVIEW_PENDING" | "GRACE_PERIOD") => ({ status: "RELAYING" as const, relaying: { from, at: new Date().toISOString() } });
-
-/** A relay that ended with nothing on chain gives the request back to the
- *  status it came from. A no-op once the relay's outcome moved it on. */
-async function releaseRelay(id: string, from: "REVIEW_PENDING" | "GRACE_PERIOD", patch: Partial<RecoveryRequest> = {}) {
-  return store.updateRecoveryRequestFrom(id, ["RELAYING"], { ...patch, status: from, relaying: undefined });
-}
 
 const pendingOps = new Map<string, { userId: string; kind: "add" | "remove"; userOperation: any; expiresAt: number; challenge: string }>();
 const prune = (now = Date.now()) => {
@@ -550,6 +531,9 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       prune();
       const pending = pendingOps.get(req.params.requestId);
       if (!pending || pending.userId !== user.id) return res.status(404).json({ error: "request not found or expired — start again" });
+      // Taken before the first await: one approval, one submit. A refused
+      // assertion or a submit that throws puts it back for a retry.
+      pendingOps.delete(req.params.requestId);
       let plan;
       try {
         plan = activePlan(user);
@@ -557,10 +541,12 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
         // approving it; check again before it is submitted.
         if (pending.kind === "remove") assertCanRemove(await readState(plan));
       } catch (err) {
-        pendingOps.delete(req.params.requestId);
         return fail(res, err);
       }
-      if (!(await checkOpAssertion(user, req.body, pending.challenge, res))) return;
+      if (!(await checkOpAssertion(user, req.body, pending.challenge, res))) {
+        pendingOps.set(req.params.requestId, pending);
+        return;
+      }
       if (pending.kind === "add") {
         // A Google/Apple guardian added since this op was prepared would sit
         // beside Zoldenburg at threshold 1.
@@ -568,15 +554,15 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
         const onChain = await readRecoveryState(
           { ...plan, recovery: { moduleAddress: moduleFor(user), guardianAddress: zold, threshold: 1, status: "planned" } } as PasskeySafeDeploymentPlan,
         );
-        try {
-          assertNoOtherGuardian(user, onChain.guardians);
-        } catch (err) {
-          pendingOps.delete(req.params.requestId);
-          throw err;
-        }
+        assertNoOtherGuardian(user, onChain.guardians);
       }
-      const op = await submitPasskeySafeOperationWithReceipt(plan, pending.userOperation, toAssertion(req.body));
-      pendingOps.delete(req.params.requestId);
+      let op;
+      try {
+        op = await submitPasskeySafeOperationWithReceipt(plan, pending.userOperation, toAssertion(req.body));
+      } catch (err) {
+        pendingOps.set(req.params.requestId, pending);
+        throw err;
+      }
       if (op.success === false) {
         return res.status(502).json({ error: "the operation was included but reverted — nothing changed", txHash: op.txHash });
       }

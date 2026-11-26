@@ -1002,7 +1002,7 @@ export interface RecoveryRequest {
   mode?: "managed" | "candide" | "zoldenburg" | "turnkey";
   status: RecoveryRequestStatus;
   /** Set with RELAYING: the status the relay left and when it started. */
-  relaying?: { from: "REVIEW_PENDING" | "GRACE_PERIOD"; at: string };
+  relaying?: { from: "OTP_PENDING" | "REVIEW_PENDING" | "GRACE_PERIOD"; at: string };
   requestedAt: string;
   expiresAt: string;
   recoveryDelayHours: number;

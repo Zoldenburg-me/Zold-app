@@ -363,9 +363,12 @@ export function createAuthRouter(deps: AuthDeps) {
           ...balances,
         });
       }
-      // Claimed BEFORE the await: two parallel submits of one signature must
-      // not both send the deployment operation.
-      pendingPasskeySafeDeployments.delete(req.params.requestId);
+      // Claimed BEFORE the assertion's await, and only by the request that
+      // still finds it after the balance read: two parallel submits of one
+      // signature must not both send the deployment operation.
+      if (!pendingPasskeySafeDeployments.delete(req.params.requestId)) {
+        return res.status(404).json({ error: "passkey Safe deployment request not found or expired" });
+      }
       const approved = await checkOpAssertion(user, req.body, pending.challenge, res);
       if (!approved) return;
       let op: SubmittedOperation;

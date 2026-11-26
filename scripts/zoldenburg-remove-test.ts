@@ -55,10 +55,11 @@ async function makePasskey(label: string) {
   return {
     stored: { credentialId, publicKey: { jwk, alg: "ES256" as const }, signCount: 0, rpId: "localhost", createdAt: new Date().toISOString() },
     point: { x: hex(jwk.x!), y: hex(jwk.y!) },
-    assert: async (challenge: string) => {
-      count += 1;
+    /** `synced`: a counter-less authenticator (iCloud, Google), signCount 0. */
+    assert: async (challenge: string, synced = false) => {
+      if (!synced) count += 1;
       const cd = b64url(Buffer.from(JSON.stringify({ type: "webauthn.get", challenge, origin: ORIGIN })));
-      const ad = Buffer.alloc(37); sha256("localhost").copy(ad, 0); ad[32] = 0x05; ad.writeUInt32BE(count, 33);
+      const ad = Buffer.alloc(37); sha256("localhost").copy(ad, 0); ad[32] = 0x05; ad.writeUInt32BE(synced ? 0 : count, 33);
       const raw = Buffer.from(await webcrypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, pair.privateKey, Buffer.concat([ad, sha256(Buffer.from(cd, "base64url"))])));
       return { authenticatorData: b64url(ad), clientDataJSON: cd, signature: b64url(derOf(raw)) };
     },
@@ -66,9 +67,10 @@ async function makePasskey(label: string) {
 }
 
 // ── the chain, as the router reads it ──────────────────────────────────────
-const chain = { pending: false, reads: 0 };
+const chain = { pending: false, reads: 0, delayMs: 0 };
 const readState = async (): Promise<RecoveryModuleState> => {
   chain.reads += 1;
+  if (chain.delayMs) await new Promise((r) => setTimeout(r, chain.delayMs));
   return {
     moduleAddress: MODULE,
     moduleEnabled: true,
@@ -157,6 +159,17 @@ await check("with no recovery pending, the passkey-approved removal goes through
   const user = (await store.findUser(a.id))!;
   assert.equal(user.passkeySafe!.recovery, undefined);
   assert.equal(user.passkeySafe!.recoveryChoice?.choice, "declined");
+});
+
+await check("one approval presented twice at once, by a passkey with no counter: one removal, the other 404", async () => {
+  const a = await guardedAccount();
+  const prep = await call(removeUrl(a.id), a.token);
+  assert.equal(prep.status, 201, prep.text);
+  const approval = await a.key.assert(prep.data.challenge, true);
+  // Both requests are past the lookup while the chain is read.
+  chain.delayMs = 50;
+  const both = await Promise.all([call(prep.data.submitTo, a.token, approval), call(prep.data.submitTo, a.token, approval)]).finally(() => (chain.delayMs = 0));
+  assert.deepEqual(both.map((r) => r.status).sort(), [200, 404], both.map((r) => r.text).join(" | "));
 });
 
 server.close();
