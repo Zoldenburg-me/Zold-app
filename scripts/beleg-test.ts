@@ -191,18 +191,68 @@ await check("parentheses, backslashes, CRLF, NUL and Unicode stay inside their s
   assert.match(info, /^<< \/Title <FEFF[0-9A-F]*> \/Producer \(Zold\) \/Author <FEFF[0-9A-F]*> \/Subject <FEFF[0-9A-F]*> >>$/, "metadata is hex, never a literal string");
 });
 
-await check("a very long single word is broken across lines inside the margins, every character kept", () => {
-  // Helvetica advance in points at 10 pt: W is the widest glyph; 東 prints as ?.
-  for (const [ch, pt] of [["W", 8.3], ["i", 2.8], ["€", 5.56], ["東", 5.5]] as const) {
-    const word = ch.repeat(3000);
-    const want = winAnsi(word).toString("latin1");
-    for (const [ln, room] of [[{ text: word }, 483.28], [{ text: `RE ${word} tail`, indent: 24, size: 7.5 }, 459.28]] as const) {
-      const texts = shown(textPdf([ln], { title: "t" }));
-      assert.equal(texts.join("").replace(/RE|tail|\s/g, ""), want, `${ch}: every character is on the page`);
-      const widest = Math.max(...texts.map((t) => t.length * pt * ((ln as any).size ?? 10) / 10));
-      assert.ok(widest <= room + 1, `${ch}: a line ${widest.toFixed(0)} pt wide runs past the margin`);
+// Helvetica and Helvetica-Bold advances in 1/1000 em, typed from Adobe's AFM
+// files for printable ASCII (32-126) and the few WinAnsi glyphs a Beleg
+// shows, independent of the writer's own table. A glyph not listed counts as
+// 1000, so a measurement here is never short.
+const AFM_REGULAR = [278,278,355,556,556,889,667,191,333,333,389,584,278,333,278,278,556,556,556,556,556,556,556,556,556,556,278,278,584,584,584,556,1015,667,667,722,722,667,611,778,722,278,500,667,556,833,722,778,667,778,722,667,611,722,667,944,667,667,611,278,278,278,469,556,333,556,556,500,556,556,278,556,556,222,222,500,222,833,556,556,556,556,333,500,278,556,500,722,500,500,500,334,260,334,584];
+const AFM_BOLD = [278,333,474,556,556,889,722,238,333,333,389,584,278,333,278,278,556,556,556,556,556,556,556,556,556,556,333,333,584,584,584,611,975,722,722,722,722,667,611,778,722,278,556,722,611,833,722,778,667,778,722,667,611,722,667,944,667,667,611,333,278,333,584,556,333,556,611,556,611,556,333,611,611,278,278,556,278,889,611,611,611,611,389,556,333,611,556,778,556,556,500,389,280,389,584];
+const AFM_EXTRA: Record<number, [number, number]> = { 0x80: [556, 556], 0x85: [1000, 1000], 0xb7: [278, 278] };
+const afmWidth = (shownBytes: string, size: number, bold: boolean) => {
+  let w = 0;
+  for (const ch of shownBytes) {
+    const b = ch.charCodeAt(0);
+    w += b >= 32 && b <= 126 ? (bold ? AFM_BOLD : AFM_REGULAR)[b - 32] : AFM_EXTRA[b]?.[bold ? 1 : 0] ?? 1000;
+  }
+  return (w * size) / 1000;
+};
+const PAGE_RIGHT = 595.28 - 56;
+// Every text show with where it starts and ends on its page, by AFM metrics.
+const placed = (pdf: Buffer) => contentStreams(pdf).flatMap((c, page) => c.split("\n").flatMap((op) => {
+  const m = /^(?:0\.38|0) g BT \/F([12]) ([\d.]+) Tf (-?[\d.]+) (-?[\d.]+) Td \(((?:[^\\)]|\\[()\\]|\\[0-7]{3})*)\) Tj ET$/.exec(op);
+  if (!m) return [];
+  const t = m[5].replace(/\\([0-7]{3})/g, (_, o) => String.fromCharCode(parseInt(o, 8))).replace(/\\([()\\])/g, "$1");
+  const x = Number(m[3]);
+  return [{ page, y: m[4], x, end: x + afmWidth(t, Number(m[2]), m[1] === "2"), t }];
+}));
+const assertLaidOut = (pdf: Buffer, what: string) => {
+  const ops = placed(pdf);
+  for (const o of ops) {
+    assert.ok(o.x >= 56 - 0.01 && o.end <= PAGE_RIGHT + 0.01, `${what}: ${JSON.stringify(o.t.slice(0, 30))} spans ${o.x.toFixed(2)}-${o.end.toFixed(2)}, outside 56-${PAGE_RIGHT.toFixed(2)}`);
+  }
+  const rows = new Map<string, typeof ops>();
+  for (const o of ops) rows.set(`${o.page}:${o.y}`, [...(rows.get(`${o.page}:${o.y}`) ?? []), o]);
+  for (const row of rows.values()) {
+    const byX = [...row].sort((a, b) => a.x - b.x);
+    for (let i = 1; i < byX.length; i++) {
+      assert.ok(byX[i - 1].end <= byX[i].x + 0.01, `${what}: ${JSON.stringify(byX[i - 1].t.slice(0, 30))} ends at ${byX[i - 1].end.toFixed(2)}, over ${JSON.stringify(byX[i].t.slice(0, 30))} at ${byX[i].x.toFixed(2)}`);
     }
   }
+  return ops;
+};
+
+await check("a very long single word is broken across lines inside the margins, every character kept", () => {
+  // W is Helvetica's widest letter; 東 prints as ?.
+  for (const ch of ["W", "i", "€", "東"]) {
+    const word = ch.repeat(3000);
+    const want = winAnsi(word).toString("latin1");
+    for (const ln of [{ text: word }, { text: `RE ${word} tail`, indent: 24, size: 7.5 }, { text: word, bold: true }]) {
+      const pdf = textPdf([ln], { title: "t" });
+      assert.equal(shown(pdf).join("").replace(/RE|tail|\s/g, ""), want, `${ch}: every character is on the page`);
+      assertLaidOut(pdf, ch);
+    }
+  }
+});
+
+await check("a 140-character W reference and a 22-character all-caps name stay inside their cells and the page, by Helvetica's own metrics", () => {
+  const reference = "W".repeat(140);
+  const name = "MOHRMANN WOLLWERK GMBH";
+  assert.equal(name.length, 22);
+  const snap = buildBeleg({ ...line, statement: { ...line.statement!, reference, counterparty: { name, iban: "DE89370400440532013000" } } } as any, { holder: { name: "WWWWWWWW WWWWWWWW WWWWWWWW", addressLines: [], safeAddress: SAFE, chainId: 31337, accountSince: now }, deposit });
+  const pdf = belegPdf(snap, "ABCDEFGHJKMNPQR", now);
+  const ops = assertLaidOut(pdf, "the Beleg");
+  assert.ok(ops.map((o) => o.t).join("").includes(reference), "the full reference is drawn, wrapped");
+  assert.ok(ops.some((o) => o.t === name) || ops.some((o) => o.t.includes(name)), "the full name is drawn");
 });
 
 await check("a free-text cell too long for its column is cut with an ellipsis before the next cell, never drawn over the amount", () => {

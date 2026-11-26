@@ -112,6 +112,11 @@ export class BelegStillVerifies extends Error {}
  *  it is and nothing is issued. */
 export class BelegWouldNotVerify extends Error {}
 
+/** Issue refused: the line's link is unusable and more than one live Beleg
+ *  of its own exists, so which one the line had is not known. Nothing is
+ *  relinked or signed; the store needs a look. */
+export class BelegAmbiguous extends Error {}
+
 /** One issue per line at a time: two sends at once must not both find no
  *  Beleg, sign two, and leave the line pointing at the second. */
 const issuing = new Map<string, Promise<unknown>>();
@@ -129,7 +134,7 @@ export function issueBelegForLine(entry: LedgerEntry): Promise<{ doc: StoredDocu
  *  (BelegWouldNotVerify); with no live Beleg this just issues. */
 export function replaceBelegForLine(entry: LedgerEntry): Promise<{ doc: StoredDocument; issued: boolean; revoked?: StoredDocument }> {
   return queued(entry, async () => {
-    const now = store.ledgerOf(entry.orgId).find((e) => e.id === entry.id) ?? entry;
+    const now = restoreOwnLink(store.ledgerOf(entry.orgId).find((e) => e.id === entry.id) ?? entry);
     const current = belegOfLine(now);
     if (!current) return issueOnce(now);
     if ("live" in current) throw new BelegStillVerifies("this Beleg still matches the books");
@@ -161,7 +166,7 @@ function queued<T extends { doc: StoredDocument; issued: boolean }>(entry: Ledge
 
 async function issueOnce(given: LedgerEntry): Promise<{ doc: StoredDocument; issued: boolean }> {
   // The row as it is now: the caller's copy may predate a Beleg just issued.
-  const entry = store.ledgerOf(given.orgId).find((e) => e.id === given.id) ?? given;
+  const entry = restoreOwnLink(store.ledgerOf(given.orgId).find((e) => e.id === given.id) ?? given);
   const s = entry.statement;
   if (!s) throw new Error("only a statement line has a Beleg");
   if (s.documentCode) {
@@ -171,6 +176,22 @@ async function issueOnce(given: LedgerEntry): Promise<{ doc: StoredDocument; iss
   const doc = await draft(entry);
   commit(entry, doc);
   return { doc, issued: true };
+}
+
+/** A line whose code names no live Beleg of its own gets its link back to
+ *  the one it has, if it has exactly one: signing a second would leave two
+ *  that both verify for one bank line. Two or more is refused, not guessed.
+ *  Called inside the line's queue. Returns the row as it is now. */
+function restoreOwnLink(entry: LedgerEntry): LedgerEntry {
+  const s = entry.statement;
+  if (!s) return entry;
+  const linked = s.documentCode ? store.findDocumentByCode(s.documentCode) : undefined;
+  if (isBelegOf(linked, entry) && !linked.revokedAt) return entry;
+  const own = store.documentsForOrg(entry.orgId).filter((d) => isBelegOf(d, entry) && !d.revokedAt);
+  if (own.length > 1) throw new BelegAmbiguous(`this line has ${own.length} live receipts, more than one, so none is relinked or issued`);
+  if (!own.length) return entry;
+  store.updateLedgerEntry(entry.id, { statement: { ...s, documentCode: own[0].code } });
+  return store.ledgerOf(entry.orgId).find((e) => e.id === entry.id) ?? entry;
 }
 
 /** The Beleg for the line as the books are now, signed, not yet stored. */

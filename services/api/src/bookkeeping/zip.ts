@@ -36,9 +36,12 @@ export interface ZipEntry {
 }
 
 /** One plain file name: no directory part, no "." or ".." or hidden file,
- *  no drive letter, no control characters. Whatever unpacks the archive puts
- *  it inside the folder it unpacks to. */
-const PLAIN_NAME = /^[^./\\:\x00-\x1f\x7f][^/\\:\x00-\x1f\x7f]*$/;
+ *  no drive letter, no C0 or C1 control or bidi mark (a name that reads as
+ *  "x.pdf" but is not), no trailing dot or space (Windows drops them, so two
+ *  names would unpack as one). Whatever unpacks the archive puts it inside
+ *  the folder it unpacks to. */
+const UNSAFE_IN_NAME = /[/\\:\x00-\x1f\x7f-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
+const plainName = (n: string) => n !== "" && !n.startsWith(".") && !/[.\s]$/.test(n) && !UNSAFE_IN_NAME.test(n);
 
 export function zipStored(entries: ZipEntry[], now = new Date()): Buffer {
   const parts: Buffer[] = [];
@@ -48,7 +51,7 @@ export function zipStored(entries: ZipEntry[], now = new Date()): Buffer {
   for (const e of entries) {
     // Refused, not fixed up: the caller names the entries, and a second entry
     // under one name would overwrite the first when unpacked.
-    if (!PLAIN_NAME.test(e.name) || names.has(e.name)) throw new Error(`zip entry name refused: ${JSON.stringify(e.name.slice(0, 80))}`);
+    if (!plainName(e.name) || names.has(e.name)) throw new Error(`zip entry name refused: ${JSON.stringify(e.name.slice(0, 80))}`);
     names.add(e.name);
     const name = Buffer.from(e.name, "utf8");
     const crc = crc32(e.data);

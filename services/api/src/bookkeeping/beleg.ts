@@ -23,7 +23,7 @@ import type { ConversionSweep, CryptoDeposit, MoneriumIssueRecord, Transfer } fr
 import type { PaymentRequest } from "../payment-requests.js";
 import { usd } from "../chain.js";
 import type { PdfLine } from "./pdf.js";
-import { approxWidth, fitCell, TEXT_WIDTH, textPdf } from "./pdf.js";
+import { fitCell, TEXT_WIDTH, textPdf, textWidth } from "./pdf.js";
 
 export interface BelegSnapshot {
   kind: "beleg";
@@ -303,7 +303,7 @@ const shortAddr = (a: string) => `${a.slice(0, 8)}…${a.slice(-6)}`;
 const CHAIN_NAME: Record<number, string> = { 8453: "Base", 84532: "Base Sepolia", 31337: "local hardhat" };
 /** Room for a value right of its label, in Helvetica points at 9pt. */
 const VALUE_ROOM = 300;
-const fits = (t: string, size = 9) => t.length * 0.55 * size <= VALUE_ROOM;
+const fits = (t: string, size = 9) => textWidth(t, size) <= VALUE_ROOM;
 /** Whether a clipped statement-row cell at `from` (a fraction of the text
  *  width) fits uncut before `to` points; textPdf cuts it there otherwise. */
 const rowFits = (t: string, size: number, from: number, to: number) => fitCell(t, size, to - from * TEXT_WIDTH - 4) === t;
@@ -377,7 +377,7 @@ export function belegLines(snap: BelegSnapshot, code: string, issuedAt: string):
   heading("Booked against");
   // The row cuts what does not fit its column; the whole text is here.
   if (!rowFits(name, 10, 0.2, 0.52 * TEXT_WIDTH)) kv("Counterparty", name);
-  if (!rowFits(line.reference || "—", 10, 0.52, TEXT_WIDTH - approxWidth(amount, 10))) kv("Reference", line.reference);
+  if (!rowFits(line.reference || "—", 10, 0.52, TEXT_WIDTH - textWidth(amount, 10, true))) kv("Reference", line.reference);
   if (!rowFits(account, 8.5, 0.2, memoInRow ? 0.52 * TEXT_WIDTH : TEXT_WIDTH)) kv("Counterparty account", account);
   const invoiceParty = snap.invoice?.counterparty ?? snap.invoice?.payer;
   if (snap.invoice) kv("Invoice", `${snap.invoice.number}${invoiceParty ? ` · ${invoiceParty}` : ""}${snap.invoice.source === "external" ? " (issued outside Zold)" : ""}`);

@@ -77,22 +77,59 @@ function escapePdfString(b: Buffer): string {
   return s;
 }
 
-/** Rough Helvetica advance, enough to wrap a line before the right margin. */
-export function approxWidth(text: string, size: number): number {
+/** Advance widths in 1/1000 em of WinAnsi codes 32-255, from Adobe's
+ *  Helvetica and Helvetica-Bold AFM files (the standard 14 fonts every
+ *  viewer has). 0 is a code WinAnsi leaves unassigned. */
+const HELVETICA = [
+  278,278,355,556,556,889,667,191,333,333,389,584,278,333,278,278,
+  556,556,556,556,556,556,556,556,556,556,278,278,584,584,584,556,
+  1015,667,667,722,722,667,611,778,722,278,500,667,556,833,722,778,
+  667,778,722,667,611,722,667,944,667,667,611,278,278,278,469,556,
+  333,556,556,500,556,556,278,556,556,222,222,500,222,833,556,556,
+  556,556,333,500,278,556,500,722,500,500,500,334,260,334,584,0,
+  556,0,222,556,333,1000,556,556,333,1000,667,333,1000,0,611,0,
+  0,222,222,333,333,350,556,1000,333,1000,500,333,944,0,500,667,
+  278,333,556,556,556,556,260,556,333,737,370,556,584,333,737,333,
+  400,584,333,333,333,556,537,278,333,333,365,556,834,834,834,611,
+  667,667,667,667,667,667,1000,722,667,667,667,667,278,278,278,278,
+  722,722,778,778,778,778,778,584,778,722,722,722,722,667,667,611,
+  556,556,556,556,556,556,889,500,556,556,556,556,278,278,278,278,
+  556,556,556,556,556,556,556,584,611,556,556,556,556,500,556,500,
+];
+const HELVETICA_BOLD = [
+  278,333,474,556,556,889,722,238,333,333,389,584,278,333,278,278,
+  556,556,556,556,556,556,556,556,556,556,333,333,584,584,584,611,
+  975,722,722,722,722,667,611,778,722,278,556,722,611,833,722,778,
+  667,778,722,667,611,722,667,944,667,667,611,333,278,333,584,556,
+  333,556,611,556,611,556,333,611,611,278,278,556,278,889,611,611,
+  611,611,389,556,333,611,556,778,556,556,500,389,280,389,584,0,
+  556,0,278,556,500,1000,556,556,333,1000,667,333,1000,0,611,0,
+  0,278,278,500,500,350,556,1000,333,1000,556,333,944,0,500,667,
+  278,333,556,556,556,556,280,556,333,737,370,556,584,333,737,333,
+  400,584,333,333,333,611,556,278,333,333,365,556,834,834,834,611,
+  722,722,722,722,722,722,1000,722,667,667,667,667,278,278,278,278,
+  722,722,778,778,778,778,778,584,778,722,722,722,722,667,667,611,
+  556,556,556,556,556,556,889,556,556,556,556,556,278,278,278,278,
+  611,611,611,611,611,611,611,584,611,611,611,611,611,556,611,556,
+];
+
+/** The width `text` takes in points, measured on the bytes the PDF shows.
+ *  A byte with no glyph (a control character) counts as the widest one, so
+ *  a measurement is never short. */
+export function textWidth(text: string, size: number, bold = false): number {
+  const table = bold ? HELVETICA_BOLD : HELVETICA;
   let w = 0;
-  for (const ch of text) {
-    w += /[iljtfI.,:;'|!]/.test(ch) ? 0.28 : /[mwMW]/.test(ch) ? 0.83 : /[A-Z]/.test(ch) ? 0.67 : /[0-9€+\-]/.test(ch) ? 0.556 : ch === " " ? 0.28 : 0.55;
-  }
-  return w * size;
+  for (const b of winAnsi(text)) w += (b >= 32 && table[b - 32]) || 1015;
+  return (w * size) / 1000;
 }
 
 /** A word wider than the line, cut into pieces that fit (at least one
  *  character each), so no text runs off the page. */
-function breakWord(word: string, size: number, width: number): string[] {
+function breakWord(word: string, size: number, width: number, bold?: boolean): string[] {
   const pieces: string[] = [];
   let cur = "";
   for (const ch of word) {
-    if (cur && approxWidth(cur + ch, size) > width) {
+    if (cur && textWidth(cur + ch, size, bold) > width) {
       pieces.push(cur);
       cur = "";
     }
@@ -102,13 +139,13 @@ function breakWord(word: string, size: number, width: number): string[] {
   return pieces;
 }
 
-function wrap(text: string, size: number, width: number): string[] {
-  const words = text.split(/\s+/).flatMap((w) => (approxWidth(w, size) > width ? breakWord(w, size, width) : [w]));
+function wrap(text: string, size: number, width: number, bold?: boolean): string[] {
+  const words = text.split(/\s+/).flatMap((w) => (textWidth(w, size, bold) > width ? breakWord(w, size, width, bold) : [w]));
   const lines: string[] = [];
   let cur = "";
   for (const w of words) {
     const next = cur ? `${cur} ${w}` : w;
-    if (approxWidth(next, size) <= width || !cur) cur = next;
+    if (textWidth(next, size, bold) <= width || !cur) cur = next;
     else {
       lines.push(cur);
       cur = w;
@@ -119,11 +156,11 @@ function wrap(text: string, size: number, width: number): string[] {
 }
 
 /** A cell cut with an ellipsis to fit `width` points; whole if it fits. */
-export function fitCell(text: string, size: number, width: number): string {
-  if (approxWidth(text, size) <= width) return text;
+export function fitCell(text: string, size: number, width: number, bold?: boolean): string {
+  if (textWidth(text, size, bold) <= width) return text;
   let cur = "";
   for (const ch of text) {
-    if (approxWidth(`${cur}${ch}…`, size) > width) break;
+    if (textWidth(`${cur}${ch}…`, size, bold) > width) break;
     cur += ch;
   }
   return `${cur}…`;
@@ -156,19 +193,20 @@ export function textPdf(lines: PdfLine[], meta: { title: string; author?: string
       y -= tallest * LEADING;
       // A clipped cell ends where the next cell starts (a right-aligned one
       // where its text starts), or at the right margin: cut, not drawn over.
-      const left = (c: PdfCell) => (c.align === "right" ? MARGIN + c.at * width - approxWidth(c.text, c.size ?? size) : MARGIN + c.at * width);
+      const left = (c: PdfCell) => (c.align === "right" ? MARGIN + c.at * width - textWidth(c.text, c.size ?? size, c.bold ?? ln.bold) : MARGIN + c.at * width);
       for (const c of ln.cells) {
         const cs = c.size ?? size;
+        const bold = c.bold ?? ln.bold;
         const edge = MARGIN + c.at * width;
         if (!c.clip || c.align === "right") {
-          ops.push(text(c.align === "right" ? edge - approxWidth(c.text, cs) : edge, cs, c.bold ?? ln.bold, c.muted ?? ln.muted, c.text));
+          ops.push(text(c.align === "right" ? edge - textWidth(c.text, cs, bold) : edge, cs, bold, c.muted ?? ln.muted, c.text));
           continue;
         }
         const next = Math.min(MARGIN + width, ...ln.cells.filter((o) => o !== c && o.text && left(o) > edge).map(left));
-        ops.push(text(edge, cs, c.bold ?? ln.bold, c.muted ?? ln.muted, fitCell(c.text, cs, next - edge - 4)));
+        ops.push(text(edge, cs, bold, c.muted ?? ln.muted, fitCell(c.text, cs, next - edge - 4, bold)));
       }
     } else {
-      const pieces = ln.text === "" ? [""] : wrap(ln.text, size, width - (ln.indent ?? 0));
+      const pieces = ln.text === "" ? [""] : wrap(ln.text, size, width - (ln.indent ?? 0), ln.bold);
       for (const piece of pieces) {
         if (y - size * LEADING < MARGIN) newPage();
         y -= size * LEADING;

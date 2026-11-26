@@ -331,6 +331,7 @@ console.log("\nA line's link to a Beleg that is not its own (stale or corrupt st
 // Another org with a live Beleg of its own: its holder and its code must never
 // come out of org_co's books, whatever org_co's line says.
 const { issueBelegForLine } = await import("../services/api/src/bookkeeping/issue.js");
+const { normaliseCode } = await import("../services/api/src/documents.js");
 store.addUser({ id: "u_other", name: "Fremd Holder", country: "DE", kycStatus: "approved", address: safe("dd"), createdAt: "2026-01-01T00:00:00.000Z" } as any);
 store.addOrganisation({ id: "org_other", type: "business", name: "Other", legalName: "Fremd GmbH", plan: "business", reporting, invoicing: {}, verifications: {}, createdAt: NOW, updatedAt: NOW } as any);
 store.addAccount({ id: "acc_other", orgId: "org_other", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: safe("dd"), backingUserId: "u_other", createdAt: NOW } as any);
@@ -349,7 +350,8 @@ const linkIN2 = (code: string | undefined) => {
   const e = store.ledgerOf("org_co").find((x) => x.id === IN2)!;
   store.updateLedgerEntry(IN2, { statement: { ...e.statement!, documentCode: code } });
 };
-const liveOn = (orgId: string, id: string) => store.documentsForOrg(orgId).filter((d) => !d.revokedAt && (d.snapshot as any).line?.lineId === id);
+const liveOn = (orgId: string, id: string) => store.documentsForOrg(orgId).filter((d) => d.kind === "beleg" && !d.revokedAt && (d.snapshot as any).line?.lineId === id);
+const ofIN2 = () => store.documents.filter((d) => (d.snapshot as any).line?.lineId === IN2).length;
 // The same frozen Beleg of IN2 filed under another document kind.
 const asStatement = { ...store.findDocumentByCode(OWN2)!, id: "doc_kind", code: "KKKKKKKKKKKKKKK", kind: "statement" as const };
 store.addDocument(asStatement as any);
@@ -388,7 +390,42 @@ for (const [what, code, secrets] of wrongLinks) {
   });
 }
 
-await check("issuing on such a line never hands back the code it points at: a new Beleg of org_co's for this line, nothing else revoked", async () => {
+await check("issuing on such a line restores its own live Beleg instead of signing another, and touches nothing it pointed at", async () => {
+  for (const [what, code] of wrongLinks) {
+    linkIN2(code);
+    const before = JSON.stringify(store.findDocumentByCode(code) ?? null);
+    const count = store.documents.length;
+    const r = await call("POST", `/orgs/org_co/bookkeeping/lines/${IN2}/beleg`, {});
+    assert.equal(r.status, 200, `${what}: ${JSON.stringify(r.body)}`);
+    assert.equal(r.body.issued, false, what);
+    assert.equal(r.body.code, OWN2, `${what}: the line's own Beleg, not a second one`);
+    assert.equal(store.documents.length, count, `${what}: nothing signed`);
+    assert.equal(JSON.stringify(store.findDocumentByCode(code) ?? null), before, `${what}: the linked document is untouched`);
+    assert.equal((await lineOf(IN2)).documentCode, OWN2, what);
+    assert.equal(liveOn("org_co", IN2).length, 1, what);
+  }
+  assert.equal(store.findDocumentByCode(FOREIGN.code)!.revokedAt, undefined, "the other org's Beleg is not revoked");
+  assert.equal(liveOn("org_other", OTHER_LINE.id).length, 1);
+});
+
+await check("two live Belege of the line's own: issue, replace and prepare refuse to guess and leave the link as it is", async () => {
+  const twin = { ...store.findDocumentByCode(OWN2)!, id: "doc_twin", code: "TTTTTTTTTTTTTTT" };
+  store.addDocument(twin as any);
+  linkIN2(FOREIGN.code);
+  const count = ofIN2();
+  const r = await call("POST", `/orgs/org_co/bookkeeping/lines/${IN2}/beleg`, {});
+  assert.equal(r.status, 409, JSON.stringify(r.body));
+  assert.match(r.body.error, /more than one/);
+  assert.equal((await call("POST", `/orgs/org_co/bookkeeping/lines/${IN2}/beleg/replace`, {})).status, 409);
+  const prep = await call("POST", `/orgs/org_co/bookkeeping/export/${MONTH}/prepare`);
+  assert.ok(prep.body.failed.some((f: any) => f.lineId === IN2), JSON.stringify(prep.body.failed));
+  assert.equal(ofIN2(), count, "nothing signed for the line");
+  assert.equal(store.ledgerOf("org_co").find((x) => x.id === IN2)!.statement!.documentCode, FOREIGN.code, "the link is not guessed");
+  store.updateDocument("doc_twin", { revokedAt: NOW });
+});
+
+await check("issuing on such a line with no live Beleg of its own: a new Beleg of org_co's for this line, nothing else revoked", async () => {
+  store.updateDocument(store.findDocumentByCode(OWN2)!.id, { revokedAt: NOW });
   for (const [what, code] of wrongLinks) {
     linkIN2(code);
     const before = JSON.stringify(store.findDocumentByCode(code) ?? null);
@@ -402,7 +439,7 @@ await check("issuing on such a line never hands back the code it points at: a ne
     assert.ok(!JSON.stringify(doc.snapshot).includes("Fremd"), what);
     assert.equal(JSON.stringify(store.findDocumentByCode(code) ?? null), before, `${what}: the linked document is untouched`);
     assert.equal((await lineOf(IN2)).documentCode, r.body.code, what);
-    // Back to a clean line for the next case: revoke the one just issued.
+    // Back to a line with no live Beleg for the next case: revoke the one just issued.
     store.updateDocument(doc.id, { revokedAt: NOW });
   }
   assert.equal(store.findDocumentByCode(FOREIGN.code)!.revokedAt, undefined, "the other org's Beleg is not revoked");
@@ -419,14 +456,25 @@ await check("replace on a line pointing at another org's Beleg issues one of org
   assert.equal(store.findDocumentByCode(r.body.code)!.orgId, "org_co");
 });
 
-await check("prepare relinks such a line to a Beleg of its own; two prepares at once leave exactly one live Beleg per line", async () => {
-  for (const d of liveOn("org_co", IN2)) store.updateDocument(d.id, { revokedAt: NOW });
+await check("replace on such a line whose own Beleg still verifies restores the link and refuses: nothing true is revoked", async () => {
+  const own = liveOn("org_co", IN2);
+  assert.equal(own.length, 1);
+  linkIN2(FOREIGN.code);
+  const r = await call("POST", `/orgs/org_co/bookkeeping/lines/${IN2}/beleg/replace`, {});
+  assert.equal(r.status, 409, JSON.stringify(r.body));
+  assert.equal((await lineOf(IN2)).documentCode, own[0].code);
+  assert.equal(liveOn("org_co", IN2).length, 1);
+});
+
+await check("prepare relinks such a line to its own live Beleg; two prepares at once leave exactly one live Beleg per line", async () => {
+  const own = liveOn("org_co", IN2);
+  assert.equal(own.length, 1);
   linkIN2(FOREIGN.code);
   const both = await Promise.all([call("POST", `/orgs/org_co/bookkeeping/export/${MONTH}/prepare`), call("POST", `/orgs/org_co/bookkeeping/export/${MONTH}/prepare`)]);
   assert.deepEqual(both.map((r) => r.status), [200, 200]);
   const live = liveOn("org_co", IN2);
-  assert.equal(live.length, 1, live.map((d) => d.code).join("|"));
-  assert.equal((await lineOf(IN2)).documentCode, live[0].code);
+  assert.deepEqual(live.map((d) => d.code), [own[0].code], "the same Beleg, not a second one");
+  assert.equal((await lineOf(IN2)).documentCode, own[0].code);
   for (const e of store.ledgerOf("org_co").filter((x) => x.statement?.valueDate.startsWith(MONTH))) {
     assert.ok(liveOn("org_co", e.id).length <= 1, `${e.id} has more than one live Beleg`);
   }
@@ -444,9 +492,15 @@ await check("belege.zip entry names are relative, unique and stay inside the fol
     store.updateDocument(doc.id, { code, snapshot: { ...(doc.snapshot as any), line: { ...(doc.snapshot as any).line, valueDate: `${MONTH}-05/../../x` } } } as any);
     const e = store.ledgerOf("org_co").find((x) => x.id === IN2)!;
     store.updateLedgerEntry(IN2, { statement: { ...e.statement!, documentCode: code, valueDate: `${MONTH}-05/../../x` } });
-    const entries = listZip((await call("GET", `/orgs/org_co/bookkeeping/export/${MONTH}/belege.zip`)).bytes);
+    const bytes = (await call("GET", `/orgs/org_co/bookkeeping/export/${MONTH}/belege.zip`)).bytes;
+    const entries = listZip(bytes);
     const names = entries.map((x) => x.name);
     assert.ok(names.length >= 2, names.join("|"));
+    // The altered Beleg itself is in the archive, under its cleaned code, and the line is not listed as missing.
+    const mine = entries.filter((x) => x.name.startsWith(`undated_${normaliseCode(code) || "nocode"}`));
+    assert.equal(mine.length, 1, `${code}: ${names.join("|")}`);
+    assert.ok(mine[0].size > 0 && mine[0].crcOk, `${code}: ${mine[0].name}`);
+    assert.ok(!bytes.toString("latin1").includes(IN2), `${code}: the line is listed as missing`);
     assert.equal(new Set(names).size, names.length, `duplicate names: ${names.join("|")}`);
     const dir = mkdtempSync(path.join(tmpdir(), "zold-unzip-"));
     for (const n of names) {

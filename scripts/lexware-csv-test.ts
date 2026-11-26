@@ -179,7 +179,7 @@ check("a stored archive lists its entries with valid CRCs and the line-mapping n
 
 check("the archive refuses an entry name that is not one plain, unique file name", () => {
   const pdf = Buffer.from("%PDF-1.4");
-  for (const name of ["../x.pdf", "a/b.pdf", "a\\b.pdf", "/abs.pdf", "..", ".", ".hidden", "", "a\u0000.pdf", "a\r\n.pdf", "C:x.pdf"]) {
+  for (const name of ["../x.pdf", "a/b.pdf", "a\\b.pdf", "/abs.pdf", "..", ".", ".hidden", "", "a\u0000.pdf", "a\r\n.pdf", "C:x.pdf", "a\u0085.pdf", "a\u009b.pdf", "fdp.\u202ex.pdf", "a\u2066.pdf", "a\u200f.pdf", "a.pdf.", "a.pdf ", "a.pdf\u00a0"]) {
     assert.throws(() => zipStored([{ name, data: pdf }]), /name/, JSON.stringify(name));
   }
   assert.throws(() => zipStored([{ name: "a.pdf", data: pdf }, { name: "a.pdf", data: pdf }]), /name/, "a duplicate would overwrite");

@@ -17,7 +17,7 @@ import { store } from "../../store.js";
 import { requireCapability, requirePermission, type OrgContext } from "../org-context.js";
 import { invoicePayments, isMonth, linesInMonth, ownTransferAllowed, type InvoicePayments } from "../../bookkeeping/statement.js";
 import { statementLinesOf, swapsHaveExecuted, writeAccountStatementLines, writeStatementLinesFor } from "../../bookkeeping/writer.js";
-import { belegOfLine, documentsByCode, type DocumentsByCode, BelegStillVerifies, BelegWouldNotVerify, issueBelegForLine, replaceBelegForLine } from "../../bookkeeping/issue.js";
+import { belegOfLine, documentsByCode, type DocumentsByCode, BelegAmbiguous, BelegStillVerifies, BelegWouldNotVerify, issueBelegForLine, replaceBelegForLine } from "../../bookkeeping/issue.js";
 import { belegFileName, belegPdf, UNEXECUTED_NOTE } from "../../bookkeeping/beleg.js";
 import { lexwareCsvBytes, lexwareRow } from "../../bookkeeping/lexware.js";
 import { zipStored, type ZipEntry } from "../../bookkeeping/zip.js";
@@ -240,7 +240,14 @@ export function createBookkeepingExportRoutes(deps: OrgRoutes): express.Router {
       if (!requirePermission(ctx, res, "reports.run")) return;
       const line = store.ledgerOf(ctx.org.id).find((e) => e.id === String(req.params.lineId) && e.statement);
       if (!line) return res.status(404).json({ error: "no such statement line" });
-      const { doc, issued } = await issueBelegForLine(line);
+      let out;
+      try {
+        out = await issueBelegForLine(line);
+      } catch (err) {
+        if (err instanceof BelegAmbiguous) return res.status(409).json({ error: err.message });
+        throw err;
+      }
+      const { doc, issued } = out;
       res.status(issued ? 201 : 200).json({ code: doc.code, url: documentUrl(doc.code), issued });
     } catch (err) {
       next(err);
@@ -264,6 +271,7 @@ export function createBookkeepingExportRoutes(deps: OrgRoutes): express.Router {
         out = await replaceBelegForLine(line);
       } catch (err) {
         if (err instanceof BelegStillVerifies) return res.status(409).json({ error: "this receipt still matches the books, so there is nothing to replace" });
+        if (err instanceof BelegAmbiguous) return res.status(409).json({ error: err.message });
         if (err instanceof BelegWouldNotVerify) return res.status(409).json({ error: `a new receipt would not match the books either (${err.message}), so this one is left as it is` });
         throw err;
       }
