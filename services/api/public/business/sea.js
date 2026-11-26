@@ -53,12 +53,14 @@ function wire() {
   document.documentElement.addEventListener("pointerleave", () => on && sea.clearPointer());
   document.addEventListener("input", (e) => on && e.target.id === "hm-q" && sea.nudge());
   document.addEventListener("visibilitychange", () => on && (document.hidden ? sea.stop() : swim()));
+  // Reduced motion switched on while the sea swims: stop and hold one still frame; off again: swim.
+  calm.addEventListener("change", () => { if (!on) return; if (calm.matches) { sea.stop(); sea.frame(); } else swim(); });
 }
 
 /** Called after every render: the sea swims on Home and nowhere else. */
 export async function seaFor(view) {
   on = view === "overview";
-  document.documentElement.classList.toggle("has-sea", on && !!sea);
+  document.documentElement.classList.toggle("has-sea", on && !!sea && !broken);
   if (!on) { sea?.stop(); return; }
   const M = await load();
   if (!M || !on || broken) return;

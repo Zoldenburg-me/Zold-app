@@ -72,6 +72,8 @@ let seq = 0;
 export async function render({ focus = false } = {}) {
   if (!org) return;
   const mine = ++seq;
+  // Leaving Home: the sea goes now, not once the next screen has loaded.
+  if (view !== "overview") seaFor(view);
   renderNav();
   refreshSide().catch(() => { /* the sidebar keeps what it had */ });
   paintBanner();
