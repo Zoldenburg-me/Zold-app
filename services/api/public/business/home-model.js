@@ -132,9 +132,10 @@ export function assetTotals(runs) {
 }
 
 /** Supplier invoices Pay has turned into a payment run that is not sent
- *  yet: still unpaid, so still due. */
+ *  yet: still unpaid, so still due. A wallet send (cryptoSendId) or a bank
+ *  transfer (transferId) on it means it is already on its way. */
 export const payingInvoices = (invoices) => (invoices || [])
-  .filter((i) => i.direction !== "outgoing" && i.state === "PAYING" && !i.payment?.transferId);
+  .filter((i) => i.direction !== "outgoing" && i.state === "PAYING" && !i.payment?.transferId && !i.payment?.cryptoSendId);
 
 /** The calendar month before `now`'s, as "YYYY-MM". */
 export function lastMonth(now = new Date()) {

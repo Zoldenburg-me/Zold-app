@@ -192,6 +192,7 @@ assert.deepEqual(
   assert.deepEqual(m.payingInvoices([
     { id: "a", direction: "incoming", state: "PAYING" },
     { id: "b", direction: "incoming", state: "PAYING", payment: { transferId: "t" } },
+    { id: "w", direction: "incoming", state: "PAYING", payment: { cryptoSendId: "s" } },
     { id: "c", direction: "incoming", state: "SUBMITTED" },
   ]).map((i: any) => i.id), ["a"], "a prepared payment not yet sent is still due");
   assert.equal(m.monthIn("/where did june go", now), "2026-06");
