@@ -408,6 +408,7 @@ export async function redeemToIban(
       authorization.amount !== amount ||
       authorization.iban !== iban ||
       authorization.message !== expected.message ||
+      // The executor passes both from the stored record; kept for any caller that does not.
       (authorization.memo ?? "") !== (memo ?? "")
     ) {
       throw new Error("Monerium redeem authorization does not match this payout");
