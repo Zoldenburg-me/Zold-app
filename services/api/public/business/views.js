@@ -464,6 +464,7 @@ RENDER.soon = async () => {
     Z.row({ lead, title: "More countries", sub: "Bank transfers reach Europe only, for now", soon: true }),
     Z.row({ lead, title: "Paying a crypto wallet", sub: "Not built yet", soon: true }),
     Z.row({ lead, title: "sevDesk and DATEV", sub: "Use the Lexware CSV and the receipts ZIP until then", soon: true }),
+    Z.row({ lead, title: "Ask Zold in your own words", sub: "Connecting NEAR AI, an AI model. Until then Home answers set questions", soon: true }),
   ];
   return Z.listGroup({ rows });
 };
