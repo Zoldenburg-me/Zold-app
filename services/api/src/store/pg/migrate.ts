@@ -29,25 +29,70 @@ const FILE = /^(\d{4})_[a-z0-9_]+\.sql$/;
 const LOCK_TIMEOUT = "5s";
 const STATEMENT_TIMEOUT = "2min";
 
-/** Statements outside comments, quotes and dollar-quoted bodies that start a transaction command. */
+/** A statement's first word, when it starts a transaction command. */
 const TX_CONTROL = /^(begin|commit|rollback|abort|end|start\s+transaction|savepoint|release|prepare\s+transaction)\b/i;
 
+/**
+ * The first transaction command in the file, read the way Postgres reads it:
+ * one scan from left to right, so a marker inside a string, a quoted name, a
+ * dollar-quoted body or a comment (nested, as Postgres nests them) never
+ * opens or closes anything else.
+ */
 export function transactionControl(sql: string): string | undefined {
-  let bare = sql.replace(/\$([a-z_][a-z0-9_]*)?\$[\s\S]*?\$\1\$/gi, "''");
-  // Postgres nests block comments: strip the innermost until none is left.
-  for (let prev = ""; prev !== bare; ) {
-    prev = bare;
-    bare = bare.replace(/\/\*(?:(?!\/\*)[\s\S])*?\*\//g, " ");
-  }
-  bare = bare
-    .replace(/--[^\n]*/g, " ")
-    .replace(/'(?:[^']|'')*'/g, "''")
-    .replace(/"(?:[^"]|"")*"/g, '""');
-  for (const stmt of bare.split(";")) {
+  let stmt = "";
+  let i = 0;
+  const word = (ch: string | undefined) => ch !== undefined && /[\w$]/.test(ch);
+  const quoted = (q: string, backslash: boolean) => {
+    for (i++; i < sql.length; i++) {
+      if (backslash && sql[i] === "\\") i++;
+      else if (sql[i] === q && sql[i + 1] === q) i++;
+      else if (sql[i] === q) return void i++;
+    }
+  };
+  const command = () => {
     const m = TX_CONTROL.exec(stmt.trim());
-    if (m) return m[1].toUpperCase().replace(/\s+/g, " ");
+    stmt = "";
+    return m ? m[1].toUpperCase().replace(/\s+/g, " ") : undefined;
+  };
+  while (i < sql.length) {
+    const c = sql[i];
+    const tag = c === "$" && !word(sql[i - 1]) ? /^\$(?:[A-Za-z_]\w*)?\$/.exec(sql.slice(i, i + 64)) : null;
+    if (c === ";") {
+      const hit = command();
+      if (hit) return hit;
+      i++;
+    } else if (sql.startsWith("--", i)) {
+      const end = sql.indexOf("\n", i);
+      i = end < 0 ? sql.length : end;
+      stmt += " ";
+    } else if (sql.startsWith("/*", i)) {
+      for (let depth = 0; i < sql.length; ) {
+        if (sql.startsWith("/*", i)) {
+          depth++;
+          i += 2;
+        } else if (sql.startsWith("*/", i)) {
+          i += 2;
+          if (--depth === 0) break;
+        } else i++;
+      }
+      stmt += " ";
+    } else if (c === "'") {
+      // E'...' takes backslash escapes, so E'\'' is one string.
+      quoted("'", /e/i.test(sql[i - 1] ?? "") && !word(sql[i - 2]));
+      stmt += "''";
+    } else if (c === '"') {
+      quoted('"', false);
+      stmt += '""';
+    } else if (tag) {
+      const end = sql.indexOf(tag[0], i + tag[0].length);
+      i = end < 0 ? sql.length : end + tag[0].length;
+      stmt += "''";
+    } else {
+      stmt += c;
+      i++;
+    }
   }
-  return undefined;
+  return command();
 }
 
 export interface Migration {
