@@ -52,7 +52,10 @@ const tokenError = (what: string, status: number, body: string) =>
  *  body past this is not one, and is not read into memory to find out. */
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 
-/** The body as text, up to MAX_BODY_BYTES, under the request's own timeout. */
+/** The body as text, up to MAX_BODY_BYTES, under the request's own timeout.
+ *  A leading byte-order mark is dropped, as Response.text() does. A refusal
+ *  past the cap is returned as a placeholder, so the caller still throws on
+ *  its status (a 401/403 stays a definite refusal). */
 export async function moneriumText(res: Response): Promise<string> {
   if (!res.body) return "";
   const reader = res.body.getReader();
@@ -64,11 +67,12 @@ export async function moneriumText(res: Response): Promise<string> {
     size += value.byteLength;
     if (size > MAX_BODY_BYTES) {
       await reader.cancel().catch(() => {});
+      if (!res.ok) return `(a body larger than ${MAX_BODY_BYTES} bytes, not read)`;
       throw new Error(`Monerium answered with a body larger than ${MAX_BODY_BYTES} bytes (HTTP ${res.status})`);
     }
     chunks.push(value);
   }
-  return Buffer.concat(chunks).toString("utf8");
+  return new TextDecoder().decode(Buffer.concat(chunks));
 }
 
 /** Monerium's body, parsed. A body that is not JSON (a proxy's HTML page)

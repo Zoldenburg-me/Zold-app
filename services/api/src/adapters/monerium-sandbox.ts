@@ -17,14 +17,14 @@
  * used here because local dev has no public URL.
  */
 import { MONERIUM, moneriumSandboxEnabled } from "../config.js";
-import { store, type User } from "../store.js";
+import { store, type Transfer, type User } from "../store.js";
 import { isMoneriumOrderId, MoneriumApiError, MoneriumClient, moneriumFailureReason, type MoneriumOrder } from "./monerium-client.js";
 import { hasOwnMoneriumCredentials, moneriumAppClient, moneriumClientFor, usersWithOwnCredentials } from "./monerium-connection.js";
 import { auditEntry } from "../audit.js";
 import { HARNESS } from "../config.js";
 import { abis, addrs, deployerWallet, eur, writeAndWait } from "../chain.js";
 import { keccak256, toHex } from "viem";
-import { moneriumAmountString, moneriumRedeemMessage, normalizeIban } from "../sepa.js";
+import { moneriumAmountString, moneriumRedeemMessage, normalizeIban, paymentMemo } from "../sepa.js";
 import { attributeMoneriumOrder, attributeMoneriumOrderToInvoice } from "../routes/payment-requests.js";
 import { noteMoneriumIssue, writeStatementLines } from "../bookkeeping/writer.js";
 import { bookHolderLabel, moneyInHolder, type MoneyInHolder } from "../bookkeeping/money-in.js";
@@ -673,6 +673,8 @@ export async function pollDepositsOnce(): Promise<number> {
     }
     for (const order of list) {
       if ((await mirrorOrder(order)) === "recorded") credited++;
+      // An amount the mirror refuses (not a euro decimal) settles nothing.
+      if (moneriumAmountEur(order.amount) === undefined) continue;
       // A payer who wrote a pay-link code on their transfer: the order's memo
       // carries it. Idempotent, so re-seeing an order records nothing twice.
       attributeMoneriumOrder(order);
@@ -700,6 +702,7 @@ export async function pollDepositsOnce(): Promise<number> {
       }
       for (const order of list) {
         if ((await mirrorOrder(order)) === "recorded") credited++;
+        if (moneriumAmountEur(order.amount) === undefined) continue;
         attributeMoneriumOrder(order);
         attributeMoneriumOrderToInvoice(order);
         keepIssueFacts(order);
@@ -727,6 +730,22 @@ function ownProfilesOf(u: User): (string | undefined)[] {
  * amount, IBAN, kind, currency or Safe differs goes to review, never PAID or
  * FAILED.
  */
+/** The stored order state of a redeem that is not the one the transfer
+ *  signed. Not `processed`, so payoutEvidence refuses the order. */
+const REDEEM_MISMATCH = "mismatch";
+
+/** Why a processed, rejected or failed `order` is not the redeem `t` signed:
+ *  the fields redeemOrderDiffers checks, plus chain and memo, as an operator's
+ *  attach-redeem-order requires. */
+function terminalRedeemMismatch(t: Transfer, order: MoneriumOrder, user: User | undefined): string | undefined {
+  if (!t.moneriumRedeem) return "no signed redeem";
+  const differs = redeemOrderDiffers(order, t.moneriumRedeem, user?.address ?? "");
+  if (differs) return differs;
+  if (order.chain !== MONERIUM.chain) return "chain";
+  if (order.memo !== paymentMemo(t.id, t.reference)) return "payment memo";
+  return undefined;
+}
+
 export async function pollRedeemOrdersOnce(): Promise<void> {
   const waiting = store.transfers.filter(
     (t) =>
@@ -743,15 +762,21 @@ export async function pollRedeemOrdersOnce(): Promise<void> {
         console.warn(`monerium: the read of redeem order ${t.sepa!.orderId} answered another order or none (transfer ${t.id})`);
         continue;
       }
+      // Another pass may have settled it while this read was in flight.
+      if (t.state !== "PAYOUT_SUBMITTED" && !(t.state === "MANUAL_REVIEW" && !t.reviewResolution)) continue;
       const state = order.meta?.state ?? order.state ?? "unknown";
       // PAID and FAILED are decided on an order that is the signed redeem.
       if (moneriumOrderProcessed(state) || state === "rejected" || state === "failed") {
-        const differs = t.moneriumRedeem ? redeemOrderDiffers(order, t.moneriumRedeem, user?.address ?? "") : "no signed redeem";
+        const differs = terminalRedeemMismatch(t, order, user);
         if (differs) {
-          if (t.state !== "MANUAL_REVIEW") {
+          // The stored state can already read processed (Monerium's first
+          // answer): overwrite it, so review evidence cannot cite this order.
+          if (t.state !== "MANUAL_REVIEW" || t.sepa!.state !== REDEEM_MISMATCH) {
             store.updateTransfer(t.id, {
-              state: "MANUAL_REVIEW",
-              error: `Monerium's redeem order does not match this transfer (${differs}); not marked paid or failed`,
+              ...(t.state === "MANUAL_REVIEW"
+                ? {}
+                : { state: "MANUAL_REVIEW", error: `Monerium's redeem order does not match this transfer (${differs}); not marked paid or failed` }),
+              sepa: { ...t.sepa!, state: REDEEM_MISMATCH, detail: `the order does not match the signed redeem (${differs})` },
             });
           }
           continue;

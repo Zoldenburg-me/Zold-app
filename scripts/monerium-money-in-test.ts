@@ -164,7 +164,9 @@ const { MoneriumClient } = await import("../services/api/src/adapters/monerium-c
 const { createMoneriumWebhookRouter } = await import("../services/api/src/routes/monerium-webhook.js");
 const { signStandardWebhook } = await import("../services/api/src/http/standard-webhooks.js");
 const { SECURITY } = await import("../services/api/src/config.js");
-const dbm = await import("../services/api/src/store/db.js");
+const { payoutEvidence } = await import("../services/api/src/transfers/review-evidence.js");
+const { paymentMemo } = await import("../services/api/src/sepa.js");
+const { moneriumText } = await import("../services/api/src/adapters/monerium-client.js");
 
 let passed = 0;
 const check = async (name: string, fn: () => void | Promise<void>) => {
@@ -395,7 +397,7 @@ await check("restart while a worker holds the claim: the new process books it on
   releaseHeldOrders();
   assert.ok(["duplicate", "unavailable"].includes(await stuck), "the stale worker does not record");
   assert.equal(issueRecords(id), 1);
-  assert.equal(dbm.db.processedMoneriumOrders.filter((x: string) => x === id).length, 1);
+  assert.equal(store.mirroredOrderIds().filter((x) => x === id).length, 1);
 });
 
 await check("restart before the claim: nothing was written, the redelivery books it", async () => {
@@ -420,6 +422,44 @@ await check("an issue order with an amount that is not a euro decimal is not boo
     const id = issue(addr("a"), amount);
     assert.equal(await mirrorOrderById(id), "recorded", `amount ${amount}`);
     assert.equal(recordOf(id)!.amountEur, Number(amount));
+  }
+});
+
+await check("an issue order whose amount is not a euro decimal settles no invoice and no payment link", async () => {
+  const number = `RE-2026-${9000 + ++n}`;
+  const invoiceId = `inv_0x10_${n}`;
+  store.addInvoice({
+    id: invoiceId, orgId: "org_owner", direction: "outgoing", state: "SUBMITTED", linkTokenHash: `h${n}`,
+    lines: [{ description: "Work", quantity: "1", unitPrice: "16.00", amount: "16.00" }], currency: "EUR", total: "16.00",
+    createdByMemberId: "m", createdAt: now, updatedAt: now,
+    issued: { number, issueDate: now.slice(0, 10), issuer: { name: "u_owner" }, recipient: { name: "Kunde" }, vatTreatment: { kind: "exempt", reason: "kleinunternehmer" },
+      netCents: 1600, vatCents: 0, grossCents: 1600, buckets: [{ rate: 0, netCents: 1600, vatCents: 0 }], currency: "EUR" },
+  } as any);
+  const code = "0X10ABCDEFGH234";
+  const linkId = `pr_0x10_${n}`;
+  store.addPaymentRequest({
+    id: linkId, code, userId: "u_owner", handle: "owner", amountEur: 16, currency: "EUR", methods: ["bank"], state: "OPEN",
+    payments: [], createdAt: now, updatedAt: now, expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+  } as any);
+  const realWarn = console.warn;
+  console.warn = () => {};
+  try {
+    for (const amount of ["0x10", "1.6e1", "Infinity"]) {
+      const id = issue(addr("a"), amount);
+      orders.get(id).memo = `${number} ${code}`;
+      await pollDepositsOnce();
+      orders.delete(id);
+      assert.equal(issueRecords(id), 0, amount);
+      const inv = store.findInvoice(invoiceId)!;
+      assert.equal(inv.state, "SUBMITTED", `${amount}: the invoice is not marked paid`);
+      assert.equal((inv.settlements ?? []).length, 0, `${amount}: no settlement on the invoice`);
+      const link = store.findPaymentRequest(linkId)!;
+      assert.equal(link.state, "OPEN", `${amount}: the link is not marked paid`);
+      assert.equal(link.payments.length, 0, `${amount}: no payment on the link`);
+    }
+  } finally {
+    console.warn = realWarn;
+    store.updatePaymentRequest(linkId, { state: "CANCELLED" });
   }
 });
 
@@ -462,6 +502,28 @@ await check("an order read answered with nothing usable leaves the delivery unre
     console.warn = realWarn;
   }
   assert.equal(issueRecords(id), 0);
+});
+
+await check("a body that starts with a UTF-8 byte-order mark reads as Response.text() does", async () => {
+  const body = new Uint8Array([0xef, 0xbb, 0xbf, ...new TextEncoder().encode('{"id":"ord-bom"}')]);
+  const text = await moneriumText(new Response(body));
+  assert.equal(text, await new Response(body).text());
+  assert.equal(JSON.parse(text).id, "ord-bom");
+});
+
+await check("an oversized 401 or 403 keeps its status, so the refusal stays definite", async () => {
+  const client = new MoneriumClient({ baseUrl: process.env.MONERIUM_BASE_URL!, clientId: "app-client", clientSecret: "app-secret-0001" });
+  const id = `ord-big-refusal-${++n}`;
+  try {
+    for (const status of [401, 403]) {
+      stub.orderAnswer.set(id, { status, raw: JSON.stringify({ pad: "x".repeat(20 * 1024 * 1024) }) });
+      const err: any = await client.getOrder(id).then(() => undefined, (e) => e);
+      assert.equal(err?.name, "MoneriumApiError", String(err));
+      assert.equal(err.status, status);
+    }
+  } finally {
+    stub.orderAnswer.delete(id);
+  }
 });
 
 await check("an app client without a secret refuses before any request", async () => {
@@ -601,15 +663,17 @@ await check("the remembered unknown ids are capped: past the cap the oldest is r
   for (let i = 1; i <= 1000; i++) await mirrorOrderById(`ord-cap-${n}-${i}`);
   await mirrorOrderById(first);
   assert.equal(stub.lookups.get(first), 2, "evicted, so read again rather than remembered without bound");
+  const recent = `ord-cap-${n}-1000`;
+  await mirrorOrderById(recent);
+  assert.equal(stub.lookups.get(recent), 1, "a recently remembered id costs no second read");
 });
 
 await check("an unsigned delivery's webhook-id is not stored; an unknown id answered 404 is remembered instead", async () => {
-  const before = dbm.db.processedMoneriumWebhooks.length;
   for (let i = 0; i < 20; i++) {
     const res = await post(JSON.stringify({ data: { id: `ord-nobody-${n}-${i}` } }), { "webhook-id": `msg_forged_${n}_${i}` });
     assert.equal(res.status, 200);
+    assert.equal(store.isWebhookProcessed(`msg_forged_${n}_${i}`), false, "an id nobody signed costs no store write");
   }
-  assert.equal(dbm.db.processedMoneriumWebhooks.length, before, "an id nobody signed costs no store write");
 });
 
 await check("with MONERIUM_WEBHOOK_SECRET: a missing, wrong or stale signature is 401 with no upstream read; a valid one is read, its id spent", async () => {
@@ -657,7 +721,7 @@ function placedRedeem(amount = "20.00", state = "PAYOUT_SUBMITTED") {
   orders.set(orderId, {
     id: orderId, kind: "redeem", address: addr("a"), chain: "base", currency: "eur", amount,
     counterpart: { identifier: { standard: "iban", iban: PAYEE_IBAN }, details: { firstName: "Supplier", lastName: "GmbH" } },
-    meta: { state: "processed", placedAt: now, processedAt: now },
+    meta: { state: "processed", placedAt: now, processedAt: now }, memo: paymentMemo(id, `RE-${tn}`),
   });
   return { id, orderId };
 }
@@ -665,10 +729,21 @@ const stateOf = (id: string) => store.findTransfer(id)!.state;
 
 await check("a processed redeem that matches the transfer is PAID once, by two pollers at once and after a restart", async () => {
   const { id } = placedRedeem();
-  await Promise.all([pollRedeemOrdersOnce(), pollRedeemOrdersOnce()]);
-  assert.equal(stateOf(id), "PAID");
-  const { sandbox } = await restart();
-  await sandbox.pollRedeemOrdersOnce();
+  const update = store.updateTransfer;
+  let paidWrites = 0;
+  store.updateTransfer = (tid, patch) => {
+    if (tid === id && patch.state === "PAID") paidWrites++;
+    return update.call(store, tid, patch);
+  };
+  try {
+    await Promise.all([pollRedeemOrdersOnce(), pollRedeemOrdersOnce()]);
+    assert.equal(stateOf(id), "PAID");
+    const { sandbox } = await restart();
+    await sandbox.pollRedeemOrdersOnce();
+  } finally {
+    store.updateTransfer = update;
+  }
+  assert.equal(paidWrites, 1, "PAID is written once");
   writeStatementLines();
   assert.equal(stateOf(id), "PAID");
   assert.equal(store.ledgerOf("org_owner").filter((e) => e.statement?.links.transferId === id).length, 1, "one statement line");
@@ -685,6 +760,8 @@ await check("a processed or rejected redeem whose amount, IBAN, kind, currency o
       ["kind", (o) => { o.kind = "issue"; }],
       ["currency", (o) => { o.currency = "usd"; }],
       ["address", (o) => { o.address = addr("c"); }],
+      ["chain", (o) => { o.chain = "ethereum"; }],
+      ["memo", (o) => { o.memo = "another payment"; }],
     ];
     for (const final of ["processed", "rejected"]) {
       for (const [what, change] of variants) {
@@ -697,6 +774,27 @@ await check("a processed or rejected redeem whose amount, IBAN, kind, currency o
         assert.equal(t.state, "MANUAL_REVIEW", `${final} with a different ${what} goes to review`);
         assert.match(t.error ?? "", /does not match/, what);
       }
+    }
+  } finally {
+    console.warn = realWarn;
+  }
+});
+
+await check("a mismatched redeem whose stored state already reads processed is no payout evidence", async () => {
+  const realWarn = console.warn;
+  console.warn = () => {};
+  try {
+    for (const start of ["PAYOUT_SUBMITTED", "MANUAL_REVIEW"]) {
+      const { id, orderId } = placedRedeem("20.00", start);
+      // executeSepaTransfer copies the state of Monerium's first answer, which can be processed.
+      store.updateTransfer(id, { sepa: { ...store.findTransfer(id)!.sepa!, state: "processed" } });
+      orders.get(orderId).amount = "2000.00";
+      await pollRedeemOrdersOnce();
+      const t = store.findTransfer(id)!;
+      assert.equal(t.state, "MANUAL_REVIEW", start);
+      assert.deepEqual(payoutEvidence(t), [], `${start}: a mismatched order cannot be cited as paid`);
+      await pollRedeemOrdersOnce();
+      assert.deepEqual(payoutEvidence(store.findTransfer(id)!), [], `${start}: nor after a second pass`);
     }
   } finally {
     console.warn = realWarn;
