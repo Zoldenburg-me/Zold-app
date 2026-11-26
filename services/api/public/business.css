@@ -54,6 +54,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .has-sea .zb { position: relative; z-index: 1; }
 /* a phone has no room to keep the middle clear, so the narwhals swim behind the text, dimmed */
 @media (max-width: 759px) { .zb-sea { opacity: .32; } }
+@media print { .zb-sea { display: none !important; } }
 /* The sidebar's lower part. A plain part of the sidebar on a desktop; on a
    phone it is what Menu opens. */
 .zb-side__menu { display: contents; }

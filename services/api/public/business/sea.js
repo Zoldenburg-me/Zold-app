@@ -3,8 +3,8 @@
  * is missing the script fails to load and Home simply has no sea. Only Home has it; any other view
  * stops it. Reduced motion paints one still frame.
  *
- * shortcut: no sea on any deployment built from git (production included), and each Home visit there
- * logs the engine's 404; commit vendor/mobula-sea.js once the repo is private. */
+ * shortcut: no sea on any deployment built from git (production included), and each page load there
+ * logs the engine's 404 once (load() is memoised); commit vendor/mobula-sea.js once the repo is private. */
 
 // Vendor paths keep the long default cache (routes/pages.ts): bump v whenever the engine file changes.
 const SRC = "/business/vendor/mobula-sea.js?v=1";
@@ -32,22 +32,30 @@ function canvas(id) {
 }
 
 /** Keep the narwhals out of the block they would swim across: the command section while it is there. */
-function fit() {
-  if (!sea) return;
-  sea.resize(innerWidth, innerHeight, Math.min(devicePixelRatio || 1, 2));
+function focus() {
+  if (!sea || !on) return;
   const q = document.querySelector(".zb-h-cmd")?.getBoundingClientRect();
   if (q && q.width > 1) sea.setFocus((q.left + q.right) / 2 / innerWidth, (q.top + q.bottom) / 2 / innerHeight, q.width / 2 / innerWidth, q.height / 2 / innerHeight);
   if (calm.matches) sea.frame();
 }
 
+/** resize() reallocates both canvases, so only when the window changes, never per scroll. */
+function fit() {
+  if (!sea || !on) return;
+  sea.resize(innerWidth, innerHeight, Math.min(devicePixelRatio || 1, 2));
+  focus();
+}
+
+const swim = () => { if (!calm.matches && !document.hidden) sea.start(); };
+
 function wire() {
   addEventListener("resize", fit);
   // The canvases are fixed and the page scrolls: the command section's place on screen moves with it.
-  addEventListener("scroll", () => on && fit(), { passive: true });
+  addEventListener("scroll", focus, { passive: true });
   addEventListener("pointermove", (e) => on && sea.setPointer(e.clientX / innerWidth, e.clientY / innerHeight));
-  document.documentElement.addEventListener("pointerleave", () => sea.clearPointer());
+  document.documentElement.addEventListener("pointerleave", () => on && sea.clearPointer());
   document.addEventListener("input", (e) => on && e.target.id === "hm-q" && sea.nudge());
-  document.addEventListener("visibilitychange", () => on && !calm.matches && (document.hidden ? sea.stop() : sea.start()));
+  document.addEventListener("visibilitychange", () => on && (document.hidden ? sea.stop() : swim()));
 }
 
 /** Called after every render: the sea swims on Home and nowhere else. */
@@ -66,7 +74,7 @@ export async function seaFor(view) {
     }
     document.documentElement.classList.add("has-sea");
     fit();
-    if (!calm.matches) sea.start();
+    swim();
   } catch {
     // An engine that cannot run here (no 2D canvas, a different API) is the same as no engine.
     broken = true;
