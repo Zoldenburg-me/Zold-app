@@ -73,7 +73,10 @@ export function quoteConsumable(q: Quote, now: number): boolean {
  */
 export function assertCapAmounts(eur: number, usedEur: number, capEur: number): void {
   if (!Number.isFinite(eur) || eur < 0) throw new Error("daily cap: the amount to hold is not a finite, non-negative number");
-  if (!Number.isFinite(usedEur) || !Number.isFinite(capEur)) throw new Error("daily cap: the used or cap amount is not a finite number");
+  // A negative used total would raise what is left of the cap.
+  if (!Number.isFinite(usedEur) || usedEur < 0 || !Number.isFinite(capEur) || capEur < 0) {
+    throw new Error("daily cap: the used or cap amount is not a finite, non-negative number");
+  }
 }
 
 /**

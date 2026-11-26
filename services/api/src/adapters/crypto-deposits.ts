@@ -787,6 +787,18 @@ async function scanCryptoDeposits(head: bigint): Promise<{ found: number; more: 
     const key = item.address.toLowerCase();
     byAddress.set(key, [...(byAddress.get(key) ?? []), item]);
   }
+  // (txHash, logIndex) is the deposit's idempotency key. A log to a watched
+  // address without one (a pending log, a broken RPC answer) would become
+  // Number(null) = 0 and dedupe against the real index-0 log of the same
+  // transaction, and the cursor would move past it. The whole window is
+  // refused before anything is written, so a later answer reads it again.
+  for (const log of logs) {
+    if (!byAddress.has(String(log.args.to ?? "").toLowerCase())) continue;
+    const idx = log.logIndex as unknown;
+    if (typeof idx !== "number" || !Number.isSafeInteger(idx) || idx < 0 || !log.transactionHash) {
+      throw new Error(`crypto-in: the RPC returned a Transfer log to a watched address without a transaction hash or log index (blocks ${fromBlock}..${toBlock}); the window is read again`);
+    }
+  }
   const fresh: CryptoDeposit[] = [];
   for (const [i, token] of tokens.entries()) {
     const logs = logsByToken[i];
@@ -812,7 +824,7 @@ async function scanCryptoDeposits(head: bigint): Promise<{ found: number; more: 
       const from = String(log.args.from ?? "").toLowerCase();
       if (token.token === "EURE" && from === (addrs().swapper ?? "").toLowerCase()) continue;
       const txHash = log.transactionHash!;
-      const logIndex = Number(log.logIndex);
+      const logIndex = log.logIndex as number; // checked above
       if ((await store.findCryptoDeposit(CHAIN_ID, txHash, logIndex))) continue;
 
       const pageMatch = matches.find((m) => m.source === "payment-page" && m.user.paymentPage?.autoConvert);

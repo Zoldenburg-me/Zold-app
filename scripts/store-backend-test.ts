@@ -438,6 +438,8 @@ console.log("ok - store suite on the JSON backend");
   assert.equal(databaseUrlIsLocal("postgresql://u@[::1]/zold"), true);
   assert.equal(databaseUrlIsLocal("postgresql://u@db.example.com/zold"), false);
   assert.equal(databaseUrlIsLocal("postgresql://u@localhost/zold?host=db.example.com"), false);
+  assert.equal(databaseUrlIsLocal("postgresql://u@db.example.com/zold?host=127.0.0.1"), true);
+  assert.equal(databaseUrlIsLocal("postgresql://u@/zold?host=localhost"), true);
   assert.deepEqual(tls.ssl, { ca: "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n", rejectUnauthorized: true });
   assert.equal(tls.connectionString, "postgresql://u@db.example.com/zold", "our CA object is not replaced by the driver's sslmode parsing");
   assert.equal(

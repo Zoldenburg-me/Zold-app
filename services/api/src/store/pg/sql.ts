@@ -101,8 +101,10 @@ export const LOCK_TIMEOUT = "10s";
 /**
  * Bounds on every pooled connection. A transaction spans no partner I/O (§3),
  * so one idle inside a transaction past IDLE_IN_TX_TIMEOUT_MS is stuck: the
- * server ends it and its row locks go, instead of holding a pooled client for
- * good. A statement past STATEMENT_TIMEOUT_MS is cancelled (a migration sets
+ * server ends it and its row and advisory locks go, so other connections are
+ * not blocked behind it. The pool slot comes back only when the callback
+ * settles (its next statement fails on the closed connection); a callback that
+ * awaits something that never settles still holds its slot. A statement past STATEMENT_TIMEOUT_MS is cancelled (a migration sets
  * its own, longer one). A request waits CONNECT_TIMEOUT_MS for a pooled
  * client, then fails, instead of queueing forever behind a drained pool.
  */
@@ -191,8 +193,9 @@ function parseDatabaseUrl(url: string): { u: URL; local: boolean } {
   }
   const socketHost = u.searchParams.get("host");
   const host = u.hostname === EMPTY_HOST ? "" : decodeURIComponent(u.hostname);
-  const onSocket = (socketHost ?? "").startsWith("/") || (!socketHost && host.startsWith("/"));
-  return { u, local: onSocket || (!socketHost && (host === "" || LOOPBACK.has(host))) };
+  // A `host=` parameter overrides the authority, so it alone decides.
+  if (socketHost) return { u, local: socketHost.startsWith("/") || LOOPBACK.has(socketHost) };
+  return { u, local: host.startsWith("/") || host === "" || LOOPBACK.has(host) };
 }
 
 /** A unix socket or loopback: the server is on this machine. */

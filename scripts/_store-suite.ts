@@ -167,7 +167,7 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
   assert.ok(await s.findTransfer("t_held"));
   assert.equal(await s.heldEurToday("u_a"), 0, "the hold became the transfer");
   // NaN passes `used + eur > cap`; a stored NaN hold would open the cap all day.
-  for (const [eur, used, cap] of [[Number.NaN, 0, 100], [-1, 0, 100], [Infinity, 0, 100], [1, Number.NaN, 100], [1, 0, Number.NaN]]) {
+  for (const [eur, used, cap] of [[Number.NaN, 0, 100], [-1, 0, 100], [Infinity, 0, 100], [1, Number.NaN, 100], [1, 0, Number.NaN], [1, -50, 100], [1, 0, -1]]) {
     await assert.rejects(async () => await s.holdDailyCap("u_nan", eur, cap, () => used), /daily cap/, `refused: ${eur} ${used} ${cap}`);
   }
   assert.equal(await s.heldEurToday("u_nan"), 0, "a refused amount holds nothing");
