@@ -28,3 +28,7 @@ data/db*.json
 # Internal notes kept out of the public repo (decision history, partner docs)
 .private/
 
+
+# Scrolltide's Mobula sea engine sources (design/agentic/vendor/src): only the
+# built bundle, services/api/public/business/vendor/mobula-sea.js, is committed.
+design/agentic/vendor/
