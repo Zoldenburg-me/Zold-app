@@ -44,7 +44,8 @@ export interface User {
   wallet?: { type: "candide-safe"; deployed: boolean; deployOpHash?: string };
   /** Testnet faucet grant, so one account is funded exactly once. txHash is
    *  empty while the transfer is in flight (the synchronous claim that stops a
-   *  second call from paying twice). */
+   *  second call from paying twice), and stays empty when a crash or a lost
+   *  node answer left the send uncertain: never resent, reconciled by hand. */
   faucet?: { grantedEur: number; txHash: string; at: string };
   /**
    * The 1 € check that arms Zoldenburg as guardian
@@ -147,7 +148,9 @@ export interface User {
     createdAt: string;
   };
   /**
-   * Which path this account takes, decided once by resolveSegment at signup.
+   * Which path this account takes, decided once by resolveSegment: at signup
+   * when the body carries a country, otherwise from UNDECIDED by
+   * POST /users/:id/residence.
    *
    * No route accepts it in a body: a client that could set it could set
    * EU_FULL. The only writers are the signup path and an admin action, which
@@ -184,6 +187,8 @@ export interface User {
   citizenships?: string[];
   accountType?: "individual" | "company";
   companyIncorporationCountry?: string;
+  /** A company signup's name for the company, until its organisation exists. */
+  companyName?: string;
   /** Weak US evidence. Flags for review; never blocks on its own. */
   softSignals?: {
     usPhoneCode?: boolean;
@@ -246,6 +251,8 @@ export interface User {
       active: boolean;
       expiresAt?: string;
       activatedAt: string;
+      /** Absent on activations stored before it existed. */
+      activationId?: string;
     };
     /** What a payer may send to depositAddress, as the forwarder's routes
      *  said at the last activation (adapters/candide-forwarder.ts). */
@@ -908,6 +915,10 @@ export interface Transfer {
    * settlement custodian — which is why compensation must not assume it can
    * reverse-swap them.
    */
+  /** bridgeRequestHash of the Bridge order /api/transfers sent under this
+   *  transfer's Idempotency-Key, recorded before it went out. Execute sends
+   *  only that order again; anything else is refused before the debit. */
+  bridgeRequest?: string;
   safeSwap?: {
     recipient: `0x${string}`;
     mode: "dry-run" | "live";

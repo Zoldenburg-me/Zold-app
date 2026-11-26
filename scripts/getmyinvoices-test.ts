@@ -517,6 +517,32 @@ await check("push: a refused upload (4xx) is still failed, and audited as such",
   assert.equal(audit.data.unknown, 0);
 });
 
+await check("a line whose stored code points at another org's Beleg: push sends org_1 a new Beleg of its own, never the other org's code or PDF", async () => {
+  const { issueBelegForLine } = await import("../services/api/src/bookkeeping/issue.js");
+  const { writeStatementLinesFor } = await import("../services/api/src/bookkeeping/writer.js");
+  await store.addUser({ id: "u_other", name: "Fremd Holder", country: "DE", kycStatus: "approved", address: `0x${"dd".repeat(20)}`, createdAt: "2026-01-01T00:00:00.000Z" } as any);
+  await store.addOrganisation({ id: "org_other", type: "business", name: "Fremd GmbH", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });
+  await store.addAccount({ id: "acc_other", orgId: "org_other", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: `0x${"dd".repeat(20)}`, backingUserId: "u_other", createdAt: now, updatedAt: now });
+  await store.recordMoneriumIssue({ orderId: "ord-other", userId: "u_other", amountEur: 55, counterpartyName: "Geheim Kunde", processedAt: "2026-09-04T09:00:00.000Z", recordedAt: now });
+  await writeStatementLinesFor((await store.findUser("u_other"))!);
+  const foreign = (await issueBelegForLine((await store.ledgerOf("org_other")).find((e) => e.statement?.links.orderId === "ord-other")!)).doc;
+  const mine = (await store.ledgerOf("org_1")).find((e) => e.statement?.links.orderId === "ord-1")!;
+  await store.updateLedgerEntry(mine.id, { statement: { ...mine.statement!, documentCode: foreign.code } });
+  const from = seen.requests.length;
+  const r = await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09" });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const res = r.body.results.find((x: any) => x.lineId === mine.id);
+  assert.ok(res.code && res.code !== foreign.code, JSON.stringify(res));
+  assert.equal((await store.findDocumentByCode(res.code))!.orgId, "org_1");
+  const sent = JSON.stringify(seen.requests.slice(from));
+  assert.ok(!sent.includes(foreign.code), "the other org's code went to org_1's GetMyInvoices");
+  for (const up of seen.requests.slice(from).filter((x) => x.method === "POST" && x.path === "/documents")) {
+    const pdf = Buffer.from(up.body.fileContent, "base64").toString("latin1");
+    assert.ok(!pdf.includes("FREMD HOLDER") && !pdf.includes("Geheim Kunde"), "the other org's holder or payer is in an upload");
+  }
+  assert.equal((await store.findDocumentByCode(foreign.code))!.revokedAt, undefined);
+});
+
 await check("removing the key stops pushes and leaves nothing of it in the org", async () => {
   assert.equal((await call("DELETE", "/api/orgs/org_1/integrations/getmyinvoices")).status, 200);
   assert.equal((await store.findOrganisation("org_1"))!.integrations?.getmyinvoices, undefined);

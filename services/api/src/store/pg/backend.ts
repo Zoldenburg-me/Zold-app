@@ -491,7 +491,8 @@ export function createPgStore(database: Database): StoreBackend {
     },
     setSegment: (id, segment, by = "system") =>
       change<User>(TABLE.users, id, `unknown user ${id}`, (u) => {
-        if (u.segment && by !== "admin") {
+        // An account that has not said where it lives is decided once, later.
+        if (u.segment && u.segment.value !== "UNDECIDED" && by !== "admin") {
           throw new Error(`user ${id} already has segment ${u.segment.value}; only an admin action may change it`);
         }
         u.segment = { ...segment, decidedBy: by };
@@ -733,7 +734,8 @@ export function createPgStore(database: Database): StoreBackend {
     },
     async findReceiptShareByTransfer(transferId) {
       const shares = await rows<ReceiptShare>(q, TABLE.receiptShares, "transfer_id = $1", [transferId]);
-      return shares.find((s) => !s.revokedAt) ?? shares.at(-1);
+      // A live share first; an expired one stays recorded beside its successor.
+      return shares.find((s) => !s.revokedAt && Date.parse(s.expiresAt) >= Date.now()) ?? shares.at(-1);
     },
     findReceiptShareBySlug: (slug) => first<ReceiptShare>(q, TABLE.receiptShares, "slug = $1", [slug]),
     async addDocument(d: StoredDocument) {

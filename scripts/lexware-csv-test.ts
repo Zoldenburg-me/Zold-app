@@ -6,10 +6,15 @@
  * like a formula is neutralised; the ZIP is a stored archive whose entries
  * carry a valid CRC and a name that maps to the line.
  *
+ * The formula guard over every text cell, every formula start (ASCII and
+ * full-width) behind every prefix a spreadsheet may skip (whitespace, C0/C1
+ * controls, DEL, Unicode spaces); the amount only from whole cents; the
+ * archive refuses a name that is not one plain, unique file name.
+ *
  * Run: npm run lexware:csv:test
  */
 import assert from "node:assert/strict";
-import { LEXWARE_HEADER, germanAmount, germanDate, lexwareCell, lexwareCsv, lexwareCsvBytes, lexwareRow } from "../services/api/src/bookkeeping/lexware.js";
+import { LEXWARE_HEADER, germanAmount, germanDate, lexwareCell, lexwareCsv, lexwareCsvBytes, lexwareRow, type LexwareRow } from "../services/api/src/bookkeeping/lexware.js";
 import { crc32, listZip, zipStored } from "../services/api/src/bookkeeping/zip.js";
 import type { LedgerEntry } from "../services/api/src/domain/types.js";
 
@@ -93,6 +98,70 @@ check("the bytes are ISO-8859-1 like the template, with characters outside it re
   assert.equal(bytes.indexOf(Buffer.from([0xef, 0xbb, 0xbf])), -1, "no UTF-8 BOM");
 });
 
+/** One CSV row's cells, unquoted the way a spreadsheet reads them. */
+const cellsOf = (row: string): string[] => {
+  const out: string[] = [];
+  let cur = "", quoted = false;
+  for (let i = 0; i < row.length; i++) {
+    const c = row[i];
+    if (quoted) {
+      if (c === '"' && row[i + 1] === '"') { cur += '"'; i++; }
+      else if (c === '"') quoted = false;
+      else cur += c;
+    } else if (c === '"' && cur === "") quoted = true;
+    else if (c === ";") { out.push(cur); cur = ""; }
+    else cur += c;
+  }
+  out.push(cur);
+  return out;
+};
+// What a spreadsheet may skip before it decides a cell is a formula, in the
+// file's own encoding (Latin-1): whitespace, C0 and C1 controls, DEL, NBSP.
+const show = (s: string) => JSON.stringify(s).replace(/[\u007f-\u00a0\u2000-\u200f\u2028\u3000\ufeff]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+const RUNS = /^[\s\x00-\x20\x7f-\xa0]*[=+\-@]/;
+const FORMULA = ["=", "+", "-", "@", "＝", "＋", "－", "＠"];
+const PREFIX = ["", " ", "  ", "\t", "\r", "\n", "\r\n", "\u0000", "\u0001", "\u001f", "\u007f", "\u0085", "\u009f", " ", " ", "​", " ", "　", "﻿", "  \t\u0085"];
+const FIELDS: [string, (v: string) => LexwareRow][] = [
+  ["counterparty name", (v) => lexwareRow(entry({ counterparty: { name: v } }), "Z", undefined)],
+  ["counterparty IBAN", (v) => lexwareRow(entry({ counterparty: { iban: v } }), "Z", undefined)],
+  ["counterparty address", (v) => lexwareRow(entry({ counterparty: { address: v } }), "Z", undefined)],
+  ["reference", (v) => lexwareRow(entry({ reference: v }), "Z", undefined)],
+  ["holder name (credit)", (v) => lexwareRow(entry(), v, undefined)],
+  ["holder name (debit)", (v) => lexwareRow(entry({ amountCents: -100 }), v, undefined)],
+  ["booking date", (v) => lexwareRow(entry({ bookingDate: v }), "Z", undefined)],
+  ["value date", (v) => lexwareRow(entry({ valueDate: v }), "Z", undefined)],
+  ["Zusatzinfo", (v) => ({ ...lexwareRow(entry(), "Z", undefined), extra: v })],
+];
+
+check("formula guard matrix: every text cell, every formula start (ASCII and full-width), behind every skippable prefix", () => {
+  let cases = 0;
+  for (const [field, row] of FIELDS) for (const f of FORMULA) for (const pre of PREFIX) {
+    const v = `${pre}${f}HYPERLINK("http://x";"y")`;
+    const text = lexwareCsvBytes([row(v)]).toString("latin1");
+    const rows = text.split("\r\n");
+    assert.equal(rows.length, 3, `${field} ${JSON.stringify(v)}: a line break in a cell split the row`);
+    const cells = cellsOf(rows[1]);
+    assert.equal(cells.length, 7, `${field} ${JSON.stringify(v)}: ${rows[1]}`);
+    for (const c of cells.filter((_, i) => i !== 5)) {
+      assert.ok(c.startsWith("'") || !RUNS.test(c), `${field} ${show(v)}: cell ${show(c)} runs as a formula`);
+    }
+    cases++;
+  }
+  assert.equal(cases, FIELDS.length * FORMULA.length * PREFIX.length);
+});
+
+check("the amount cell comes only from a whole number of cents: anything else refuses the export instead of writing it", () => {
+  for (const cents of [0, 1, -1, 99, -100, 123456789, -987654321, Number.MAX_SAFE_INTEGER]) {
+    const a = germanAmount(cents);
+    assert.match(a, /^-?\d+,\d\d$/, a);
+    assert.equal(BigInt(a.replace(",", "")), BigInt(cents), "round-trips");
+  }
+  for (const bad of [NaN, Infinity, -Infinity, 1.5, -0.01, 2 ** 60, "=1+1", "100", null, undefined, {}] as any[]) {
+    assert.throws(() => germanAmount(bad), /amount/, JSON.stringify(String(bad)));
+    assert.throws(() => lexwareCsv([lexwareRow(entry({ amountCents: bad }), "Z", undefined)]), /amount/, String(bad));
+  }
+});
+
 console.log("\nBelege ZIP");
 
 check("a stored archive lists its entries with valid CRCs and the line-mapping names", () => {
@@ -106,6 +175,15 @@ check("a stored archive lists its entries with valid CRCs and the line-mapping n
   assert.ok(entries.every((e) => e.crcOk));
   assert.equal(entries[0].size, a.length);
   assert.equal(crc32(Buffer.from("123456789")), 0xcbf43926, "the CRC-32 check value");
+});
+
+check("the archive refuses an entry name that is not one plain, unique file name", () => {
+  const pdf = Buffer.from("%PDF-1.4");
+  for (const name of ["../x.pdf", "a/b.pdf", "a\\b.pdf", "/abs.pdf", "..", ".", ".hidden", "", "a\u0000.pdf", "a\r\n.pdf", "C:x.pdf", "a\u0085.pdf", "a\u009b.pdf", "fdp.\u202ex.pdf", "a\u2066.pdf", "a\u200f.pdf", "a.pdf.", "a.pdf ", "a.pdf\u00a0"]) {
+    assert.throws(() => zipStored([{ name, data: pdf }]), /name/, JSON.stringify(name));
+  }
+  assert.throws(() => zipStored([{ name: "a.pdf", data: pdf }, { name: "a.pdf", data: pdf }]), /name/, "a duplicate would overwrite");
+  assert.equal(listZip(zipStored([{ name: "2026-09-10_ABC_Ü-ref.pdf", data: pdf }]))[0].name, "2026-09-10_ABC_Ü-ref.pdf", "Unicode in a plain name is kept");
 });
 
 console.log(`\nlexware-csv: ${passed} checks passed${process.exitCode ? " (with failures)" : ""}`);

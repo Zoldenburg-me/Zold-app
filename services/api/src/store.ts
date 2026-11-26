@@ -268,7 +268,8 @@ export const jsonCore = {
   ) {
     const u = db.users.find((x) => x.id === id);
     if (!u) throw new Error(`unknown user ${id}`);
-    if (u.segment && by !== "admin") {
+    // An account that has not said where it lives is decided once, later.
+    if (u.segment && u.segment.value !== "UNDECIDED" && by !== "admin") {
       throw new Error(
         `user ${id} already has segment ${u.segment.value}; only an admin action may change it`,
       );
@@ -646,7 +647,8 @@ export const jsonCore = {
    */
   findReceiptShareByTransfer(transferId: string) {
     const shares = db.receiptShares.filter((s) => s.transferId === transferId);
-    return shares.find((s) => !s.revokedAt) ?? shares.at(-1);
+    // A live share first; an expired one stays recorded beside its successor.
+    return shares.find((s) => !s.revokedAt && Date.parse(s.expiresAt) >= Date.now()) ?? shares.at(-1);
   },
   findReceiptShareBySlug(slug: string) {
     return db.receiptShares.find((s) => s.slug === slug);

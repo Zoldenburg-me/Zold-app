@@ -626,7 +626,7 @@ PH["send/progress"] = {
         { key: "Payment ID", value: t.id, mono: true },
         ...(t.sepa?.orderId ? [{ key: "Monerium order", value: t.sepa.orderId, mono: true }, { key: "Order state", value: t.sepa.state || "" }] : []),
       ])}</details>
-    `)}${phFoot(`<div class="z-pair">${t.state !== "CREATED" ? Z.button({ icon: "ios_share", label: "Share receipt", href: phHref("share", t.id) }) : ""}${Z.button({ variant: "primary", label: "Done", href: "#home", className: t.state === "CREATED" ? "z-btn--full" : "" })}</div>`)}`;
+    `)}${phFoot(`<div class="z-pair">${t.state !== "CREATED" ? Z.button({ icon: "ios_share", label: "Share receipt", href: phHref("share-compose", t.id) }) : ""}${Z.button({ variant: "primary", label: "Done", href: "#home", className: t.state === "CREATED" ? "z-btn--full" : "" })}</div>`)}`;
   },
   bind(root, id) {
     if (!hist.some((x) => x.id === id) && id) {

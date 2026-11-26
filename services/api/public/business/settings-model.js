@@ -8,7 +8,7 @@
  *  so a link opened in a new tab lands where it points; null when none or unknown. */
 export const settingsSecFrom = (search) => {
   const sec = new URLSearchParams(search || "").get("sec");
-  return sec === "org" || sec === "monerium" ? sec : null;
+  return sec === "org" || sec === "monerium" || sec === "ai" ? sec : null;
 };
 
 /** May this member change the legal form here? An owner of a business org,

@@ -78,6 +78,9 @@ function phParse(hash) {
   const h = String(hash || "").replace(/^#/, "");
   const [path] = h.split("?");
   const parts = path.split("/");
+  // #share/<id> is the old name of the share composer: it still opens it, and
+  // phStart rewrites the address bar, since #share reads as the link to send.
+  if (parts[0] === "share") parts[0] = "share-compose";
   // Two-part names first: send/amount, add/wallet, get-paid/page …
   const two = `${parts[0]}/${parts[1] || ""}`;
   if (parts[1] && PH[two]) return { name: two, arg: parts.slice(2).join("/") || null };
@@ -110,7 +113,7 @@ function phShowRoot(on) {
 /* A company login's money moves in Zold Business, where drafts and approvals
    apply. Here it may only see to its sign-in and recovery, its Monerium
    connection, its payment page, and a receipt it shares from there. */
-const PH_COMPANY_APP = new Set(["security", "signers", "recovery-settings", "recovery-alert", "monerium-settings", "page-settings", "share"]);
+const PH_COMPANY_APP = new Set(["security", "signers", "recovery-settings", "recovery-alert", "monerium-settings", "page-settings", "share-compose"]);
 
 /* On its way to /business, a company login is first shown a recovery under
    way on its Safe, unless "It was me" already hid that one. A check that
@@ -138,8 +141,12 @@ function phOpen(route, { focus = false } = {}) {
     phSig = "";
     window.scrollTo(0, 0);
     // The share composer needs its payment; the others open by name.
-    document.title = `${{ plus: "Privacy Bundle", bundle: "Privacy Bundle", card: "Card", documents: "Documents", signers: "Who approves payments", "monerium-settings": "Monerium", "recovery-settings": "Recovery", "page-settings": "Your page", share: "Share receipt" }[route.name] || "Zold"} · Zold`;
-    if (route.name === "share") return route.arg ? openShare(route.arg) : phGo("activity", null, { replace: true });
+    document.title = `${{ plus: "Privacy Bundle", bundle: "Privacy Bundle", card: "Card", documents: "Documents", signers: "Who approves payments", "monerium-settings": "Monerium", "recovery-settings": "Recovery", "page-settings": "Your page", "share-compose": "Share receipt" }[route.name] || "Zold"} · Zold`;
+    if (route.name === "share-compose") {
+      // Back or a pasted hash can still land on the old #share/ name.
+      if (/^#share\//.test(location.hash)) history.replaceState(history.state, "", `${location.pathname}${location.search}${phHref(route.name, route.arg)}`);
+      return route.arg ? openShare(route.arg) : phGo("activity", null, { replace: true });
+    }
     mobileNavLegacy(PH_LEGACY[route.name]);
     return;
   }

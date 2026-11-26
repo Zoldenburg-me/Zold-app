@@ -129,7 +129,12 @@ export function createEmailVerificationRouter(deps: EmailVerificationDeps) {
       // Counted on the stored row before it is compared: parallel guesses
       // each see the ones before, so the limit bounds guesses, not rounds.
       const c = (await store.countEmailCodeAttempt(user.id, EMAIL_VERIFICATION.maxAttempts))?.emailCode;
-      if (!c) return refuse("This code is no longer valid. Ask for a new one.", "EMAIL_CODE_EXPIRED");
+      if (!c) {
+        // A confirmation sent at the same moment may have spent the code.
+        const fresh = await store.findUser(user.id);
+        if (fresh?.emailVerifiedAt) return res.json(await publicUser(fresh));
+        return refuse("This code is no longer valid. Ask for a new one.", "EMAIL_CODE_EXPIRED");
+      }
       const ok = timingSafeEqual(Buffer.from(codeHash(user.id, typed), "hex"), Buffer.from(c.hash, "hex"));
       if (!ok) {
         const left = EMAIL_VERIFICATION.maxAttempts - c.attempts;
@@ -146,6 +151,8 @@ export function createEmailVerificationRouter(deps: EmailVerificationDeps) {
         // address at once each lock only their own row.
         const now = await store.lockUser(user.id);
         if (now?.email) await store.lockKey(emailLockKey(now.email));
+        // Confirmed by a request sent with this one: the same confirmation.
+        if (now?.emailVerifiedAt) return now;
         if (now?.emailCode?.hash !== c.hash) return "expired" as const;
         if ((await confirmedElsewhere(now))) return "in_use" as const;
         return await store.updateUser(user.id, { emailVerifiedAt: new Date().toISOString(), emailCode: undefined });
