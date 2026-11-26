@@ -38,6 +38,9 @@ export async function buildTurnkeyBundle(): Promise<string> {
   const result = await build({
     stdin: { contents: ENTRY, resolveDir: ROOT, sourcefile: "turnkey-entry.js", loader: "js" },
     absWorkingDir: ROOT,
+    // The module comments name each file by the path it was found at, not
+    // where a symlinked node_modules (a shared worktree's) really lives.
+    preserveSymlinks: true,
     bundle: true,
     format: "esm",
     platform: "browser",
