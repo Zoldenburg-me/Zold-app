@@ -176,6 +176,7 @@ const scripts = [
   "income-invoices:test",
   "wallet-proof:test",
   "outbox:test",
+  "identity-race:test",
   "holdings:test",
   "org-ceiling:test",
   "beleg:test",

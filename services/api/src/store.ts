@@ -61,6 +61,8 @@ import {
   passkeyUsePatch,
   quoteConsumable,
   emailCodeAttemptPatch,
+  moneriumTokensPatch,
+  type MoneriumTokens,
   reviewRefundTx,
   sessionDead,
   type ReviewResolution,
@@ -211,6 +213,12 @@ export const jsonCore = {
     const patch = passkeyUsePatch(db.users.find((x) => x.id === id), credentialId, signCount);
     return patch ? jsonCore.updateUser(id, patch) : undefined;
   },
+  /** Store a Monerium refresh's tokens on the connection that spent
+   *  `expectedRefreshEnc` (rules.ts moneriumTokensPatch); undefined when it changed. */
+  storeMoneriumTokens(id: string, expectedRefreshEnc: string, next: MoneriumTokens) {
+    const patch = moneriumTokensPatch(db.users.find((x) => x.id === id), expectedRefreshEnc, next);
+    return patch ? jsonCore.updateUser(id, patch) : undefined;
+  },
   /** Count one email-code guess on the stored row (rules.ts emailCodeAttemptPatch); undefined when refused. */
   countEmailCodeAttempt(id: string, max: number, now = Date.now()) {
     const patch = emailCodeAttemptPatch(db.users.find((x) => x.id === id), max, now);
@@ -309,6 +317,15 @@ export const jsonCore = {
     const r = db.recoveryRequests.find((x) => x.id === id);
     if (!r) throw new Error(`unknown recovery request ${id}`);
     if (!from.includes(r.status)) return null;
+    return jsonCore.updateRecoveryRequest(id, patch);
+  },
+  /** Write a request only over the RELAYING reserve with this token (one
+   *  compare-and-write); null when that reserve is gone. A reserve stored
+   *  without a token matches "". */
+  updateRecoveryRelay(id: string, token: string, patch: Partial<RecoveryRequest>) {
+    const r = db.recoveryRequests.find((x) => x.id === id);
+    if (!r) throw new Error(`unknown recovery request ${id}`);
+    if (r.status !== "RELAYING" || (r.relaying?.token ?? "") !== token) return null;
     return jsonCore.updateRecoveryRequest(id, patch);
   },
   /**
@@ -885,10 +902,43 @@ export const jsonCore = {
     persist();
     return s;
   },
+  /**
+   * Insert a session only while its user is still at the epoch it was issued
+   * under: a recovery or passkey replacement between the caller's credential
+   * check and this insert bumps it, and the session is refused (false).
+   */
   addSession(s: Session) {
+    const u = db.users.find((x) => x.id === s.userId);
+    if (!u || (u.sessionEpoch ?? 0) !== (s.epoch ?? 0)) return false;
     pruneSessions();
     db.sessions.push(s);
     persist();
+    return true;
+  },
+  /**
+   * After a credential changes: move the user to a new session epoch, revoke
+   * every live session but `keepId`, and move `keepId` to the new epoch so it
+   * stays signed in. One write. Returns the new epoch.
+   */
+  revokeOtherSessions(userId: string, keepId?: string) {
+    const u = db.users.find((x) => x.id === userId);
+    if (!u) throw new Error(`unknown user ${userId}`);
+    const epoch = (u.sessionEpoch ?? 0) + 1;
+    u.sessionEpoch = epoch;
+    const now = new Date().toISOString();
+    for (const s of db.sessions) {
+      if (s.userId !== userId) continue;
+      if (s.id === keepId && !s.revokedAt) s.epoch = epoch;
+      else s.revokedAt ??= now;
+    }
+    persist();
+    return epoch;
+  },
+  /** Drop sessions that can no longer authenticate (store/db.ts pruneSessions). */
+  pruneSessions() {
+    const before = db.sessions.length;
+    pruneSessions();
+    if (db.sessions.length !== before) persist();
   },
   findSessionByTokenHash(tokenHash: string) {
     return db.sessions.find((s) => s.tokenHash === tokenHash);

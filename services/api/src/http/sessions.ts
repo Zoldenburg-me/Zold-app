@@ -10,7 +10,7 @@
 import type express from "express";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { SECURITY } from "../config.js";
-import { store } from "../store.js";
+import { store, type User } from "../store.js";
 import { deferToCommit, openTxToken } from "../store/backend.js";
 import { describeCause } from "./log-cause.js";
 
@@ -18,25 +18,38 @@ export function tokenHash(token: string) {
   return createHash("sha256").update(token).digest("hex");
 }
 
-export async function issueSession(userId: string) {
+/** Refused when the user's session epoch moved after `user` was read. */
+export class SessionEpochMoved extends Error {
+  constructor() {
+    super("this passkey is no longer the account's passkey");
+  }
+}
+
+/**
+ * Issue a session under the epoch `user` was read with, in the credential
+ * check: if a recovery or passkey replacement has bumped it since, no session
+ * is stored and this throws SessionEpochMoved.
+ */
+export async function issueSession(user: Pick<User, "id" | "sessionEpoch">) {
   const token = randomBytes(32).toString("base64url");
   const nowMs = Date.now();
   const now = new Date(nowMs).toISOString();
   const expiresAt = new Date(nowMs + SECURITY.sessionTtlMs).toISOString();
-  await store.addSession({ id: randomUUID(), userId, tokenHash: tokenHash(token), createdAt: now, lastUsedAt: now, expiresAt });
+  const added = await store.addSession({
+    id: randomUUID(), userId: user.id, tokenHash: tokenHash(token), createdAt: now, lastUsedAt: now, expiresAt, epoch: user.sessionEpoch ?? 0,
+  });
+  if (!added) throw new SessionEpochMoved();
   return token;
 }
 
 /**
- * End every live session of this user except `keepId`. After a credential
- * changes, a token copied before the change must not outlive it.
+ * End every live session of this user except `keepId`, and move the user to
+ * a new session epoch (store.revokeOtherSessions). After a credential
+ * changes, a token copied before the change, or issued by a login whose
+ * credential check ran before it, must not outlive it.
  */
 export async function revokeOtherSessions(userId: string, keepId?: string) {
-  return store.tx(async () => {
-    for (const s of (await store.list("sessions"))) {
-      if (s.userId === userId && s.id !== keepId && !s.revokedAt) await store.revokeSession(s.id);
-    }
-  });
+  await store.revokeOtherSessions(userId, keepId);
 }
 
 export function bearerToken(req: express.Request): string | undefined {
@@ -62,6 +75,13 @@ export async function requireSession(req: express.Request, res: express.Response
       return undefined;
     }
     if (session.revokedAt || Date.now() >= Date.parse(session.expiresAt)) {
+      res.status(401).json({ error: "session expired" });
+      return undefined;
+    }
+    // A session issued under an older epoch: a credential changed after the
+    // login's passkey check (revokeOtherSessions).
+    const user = await store.findUser(session.userId);
+    if (!user || (session.epoch ?? 0) < (user.sessionEpoch ?? 0)) {
       res.status(401).json({ error: "session expired" });
       return undefined;
     }

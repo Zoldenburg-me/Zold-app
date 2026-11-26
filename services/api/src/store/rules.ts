@@ -13,7 +13,7 @@ import { auditEntry, type AuditEntry } from "../audit.js";
 import { matchesPayoutEvidence } from "../transfers/review-evidence.js";
 import { OPERATOR_REFUND_STEP, REVIEW_RESOLUTION_STATES } from "./types.js";
 import type { ConversionSweep, CryptoDeposit, OutboxDraft, OutboxOutcome, OutboxRow, PaymentRequest, Quote, ReviewResolutionState, Transfer, User } from "./types.js";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { describeCause } from "../http/log-cause.js";
 
 /** Bounds of an operator's review-resolution note. */
@@ -108,6 +108,39 @@ export function passkeyUsePatch(u: User | undefined, credentialId: string, signC
   const stored = u.passkey.signCount ?? 0;
   if (stored > 0 && signCount <= stored) return undefined;
   return { passkey: { ...u.passkey, signCount } };
+}
+
+/**
+ * Two stored secrets (sealed tokens, sealed API secrets) compared in constant
+ * time: over their SHA-256, so neither the length nor the first differing
+ * byte shows in the timing. Absent equals only absent.
+ */
+export function sameSecret(a: string | undefined, b: string | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return timingSafeEqual(createHash("sha256").update(a).digest(), createHash("sha256").update(b).digest());
+}
+
+/** The new OAuth tokens a Monerium refresh returned. */
+export type MoneriumTokens = { accessTokenEnc: string; refreshTokenEnc?: string; expiresAt?: string };
+
+/**
+ * The patch that stores a refresh's tokens, only on the connection whose
+ * refresh token was spent: an OAuth connection still holding
+ * `expectedRefreshEnc`. Undefined when the user disconnected, connected by
+ * another method or another refresh stored first; the caller writes nothing.
+ * An absent refresh or expiry in `next` keeps the stored one.
+ */
+export function moneriumTokensPatch(u: User | undefined, expectedRefreshEnc: string, next: MoneriumTokens): Partial<User> | undefined {
+  const m = u?.monerium;
+  if (!m || (m.method ?? "oauth") !== "oauth" || !sameSecret(m.refreshTokenEnc, expectedRefreshEnc)) return undefined;
+  return {
+    monerium: {
+      ...m,
+      accessTokenEnc: next.accessTokenEnc,
+      refreshTokenEnc: next.refreshTokenEnc ?? m.refreshTokenEnc,
+      expiresAt: next.expiresAt ?? m.expiresAt,
+    },
+  };
 }
 
 /**

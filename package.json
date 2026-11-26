@@ -201,6 +201,7 @@
     "income-invoices:test": "tsx scripts/income-invoices-test.ts",
     "wallet-proof:test": "tsx scripts/wallet-proof-test.ts",
     "outbox:test": "tsx scripts/outbox-test.ts",
+    "identity-race:test": "tsx scripts/identity-race-test.ts",
     "org-ceiling:test": "tsx scripts/org-ceiling-test.ts",
     "holdings:test": "tsx scripts/holdings-test.ts",
     "beleg:test": "tsx scripts/beleg-test.ts",

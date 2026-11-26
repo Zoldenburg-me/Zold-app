@@ -195,4 +195,4 @@ export const publicUser = async (u: User) => ({
       }
     : {}),
 });
-export const withSession = async (user: User) => store.tx(async () => ({ ...(await publicUser(user)), sessionToken: await issueSession(user.id) }));
+export const withSession = async (user: User) => store.tx(async () => ({ ...(await publicUser(user)), sessionToken: await issueSession(user) }));

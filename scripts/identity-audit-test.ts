@@ -108,7 +108,7 @@ async function account(extra: Record<string, unknown> = {}) {
     passkey: key.stored,
     ...extra,
   } as any);
-  const token = await issueSession(id);
+  const token = await issueSession({ id: id });
   /** A step-up assertion over a challenge the server issued for `action`. */
   const stepUp = async (action?: string) => {
     const c = await call("POST", "/api/webauthn/challenge", token, { purpose: "step_up", ...(action ? { action } : {}) });

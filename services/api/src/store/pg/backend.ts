@@ -54,6 +54,7 @@ import {
   emailCodeAttemptPatch,
   reviewRefundTx,
   sessionDead,
+  moneriumTokensPatch,
   announceOutbox,
   newOutboxRow,
   outboxDraftsFor,
@@ -444,6 +445,11 @@ export function createPgStore(database: Database): StoreBackend {
         const patch = passkeyUsePatch(await locked<User>(t, TABLE.users, id), credentialId, signCount);
         return patch ? updateUserIn(t, id, patch) : undefined;
       }),
+    storeMoneriumTokens: (id, expectedRefreshEnc, next) =>
+      tx(async (t) => {
+        const patch = moneriumTokensPatch(await locked<User>(t, TABLE.users, id), expectedRefreshEnc, next);
+        return patch ? updateUserIn(t, id, patch) : undefined;
+      }),
     countEmailCodeAttempt: (id, max, now = Date.now()) =>
       tx(async (t) => {
         const patch = emailCodeAttemptPatch(await locked<User>(t, TABLE.users, id), max, now);
@@ -515,6 +521,10 @@ export function createPgStore(database: Database): StoreBackend {
     updateRecoveryRequestFrom: (id, from, patch) =>
       change<RecoveryRequest>(TABLE.recoveryRequests, id, `unknown recovery request ${id}`, (row) =>
         from.includes(row.status) ? Object.assign(row, patch) : null,
+      ),
+    updateRecoveryRelay: (id, token, patch) =>
+      change<RecoveryRequest>(TABLE.recoveryRequests, id, `unknown recovery request ${id}`, (row) =>
+        row.status === "RELAYING" && (row.relaying?.token ?? "") === token ? Object.assign(row, patch) : null,
       ),
     async countRecoveryOtpAttempt(id, max) {
       let out: { attempts: number; over: boolean } | undefined;
@@ -867,11 +877,34 @@ export function createPgStore(database: Database): StoreBackend {
         s.updatedAt = s.revokedAt;
         return s;
       }))!,
+    // The user row is locked before the session rows, as in
+    // revokeOtherSessions, so the two never wait on each other in a cycle.
     addSession: (s: Session) =>
       tx(async (t) => {
-        await prune<Session>(t, TABLE.sessions, "TRUE", [], (x) => sessionDead(x, DAY_MS));
+        const u = await locked<User>(t, TABLE.users, s.userId);
+        if (!u || (u.sessionEpoch ?? 0) !== (s.epoch ?? 0)) return false;
         await insert(t, TABLE.sessions, s);
+        return true;
       }),
+    revokeOtherSessions: (userId, keepId) =>
+      tx(async (t) => {
+        const u = await locked<User>(t, TABLE.users, userId);
+        if (!u) throw new Error(`unknown user ${userId}`);
+        const epoch = (u.sessionEpoch ?? 0) + 1;
+        u.sessionEpoch = epoch;
+        await saveUser(t, u, pageHandle(u));
+        const now = new Date().toISOString();
+        for (const s of await rows<Session>(t, TABLE.sessions, "user_id = $1", [userId], "FOR UPDATE")) {
+          if (s.id === keepId && !s.revokedAt) s.epoch = epoch;
+          else if (!s.revokedAt) s.revokedAt = now;
+          else continue;
+          await save(t, TABLE.sessions, s);
+        }
+        return epoch;
+      }),
+    // Periodic (server.ts), not part of addSession: a prune there would scan
+    // and lock the whole table on every login.
+    pruneSessions: () => tx((t) => prune<Session>(t, TABLE.sessions, "TRUE", [], (x) => sessionDead(x, DAY_MS))),
     findSessionByTokenHash: (tokenHash) => first<Session>(q, TABLE.sessions, "token_hash = $1", [tokenHash]),
     revokeSession: async (id) =>
       (await change<Session>(TABLE.sessions, id, `unknown session ${id}`, (s) => {

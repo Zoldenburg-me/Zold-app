@@ -440,6 +440,11 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
       if (!authenticatorData || !clientDataJSON || !signature) {
         return res.status(400).json({ error: "authenticatorData, clientDataJSON and signature required" });
       }
+      // Taken before the assertion's await: one approval, one attestation. A
+      // refused assertion puts it back for a retry.
+      if (!pendingOwnershipSignatures.delete(req.params.requestId)) {
+        return res.status(404).json({ error: "ownership signature request not found or expired" });
+      }
       const passkey = user.passkey!;
       let signCount: number;
       try {
@@ -455,6 +460,7 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
           true,
         ));
       } catch (err: any) {
+        pendingOwnershipSignatures.set(req.params.requestId, pending);
         return res.status(401).json({ error: redactedMessage(err) });
       }
       if (!(await store.recordPasskeyUse(user.id, passkey.credentialId, signCount))) {
@@ -466,7 +472,6 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
         clientDataJSON: b64urlToBuf(clientDataJSON),
         signature: b64urlToBuf(signature),
       });
-      pendingOwnershipSignatures.delete(req.params.requestId);
       const updated = await store.updateDocument(doc.id, {
         attestations: {
           ...doc.attestations,
