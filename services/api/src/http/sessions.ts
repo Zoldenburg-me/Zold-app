@@ -11,6 +11,8 @@ import type express from "express";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { SECURITY } from "../config.js";
 import { store } from "../store.js";
+import { deferToCommit, openTxToken } from "../store/backend.js";
+import { describeCause } from "./log-cause.js";
 
 export function tokenHash(token: string) {
   return createHash("sha256").update(token).digest("hex");
@@ -44,6 +46,10 @@ export function bearerToken(req: express.Request): string | undefined {
 }
 
 export async function requireSession(req: express.Request, res: express.Response) {
+  // Called inside a caller's transaction, the touch waits for its commit: it
+  // is telemetry, and a session row locked until then would be taken before
+  // the user row, the opposite order of a recovery revoking that session.
+  const inCallerTx = !!openTxToken();
   return store.tx(async () => {
     const token = bearerToken(req);
     if (!token) {
@@ -59,7 +65,8 @@ export async function requireSession(req: express.Request, res: express.Response
       res.status(401).json({ error: "session expired" });
       return undefined;
     }
-    await store.touchSession(session.id);
+    const touch = () => store.touchSession(session.id);
+    if (!inCallerTx || !deferToCommit(() => void touch().catch((e) => console.error(`session touch failed: ${describeCause(e)}`)))) await touch();
     return session;
   });
 }

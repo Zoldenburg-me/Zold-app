@@ -310,10 +310,12 @@ export async function syncWallet(
       await store.tx(async () => {
         // Every ledger writer of the org takes this lock before it reads the
         // rows it changes; a row booked since `known` was read is not added twice.
-        await store.lockKey(`ledger:${wallet.orgId}`);
-        const booked = new Set((await store.ledgerOf(wallet.orgId)).map((e) => e.id));
-        const toBook = fresh.filter((e) => !booked.has(e.id));
-        if (toBook.length) await store.addLedgerEntries(applyRules(await store.rulesOf(wallet.orgId), toBook).entries);
+        if (fresh.length) {
+          await store.lockKey(`ledger:${wallet.orgId}`);
+          const booked = new Set((await store.ledgerOf(wallet.orgId)).map((e) => e.id));
+          const toBook = fresh.filter((e) => !booked.has(e.id));
+          if (toBook.length) await store.addLedgerEntries(applyRules(await store.rulesOf(wallet.orgId), toBook).entries);
+        }
         await store.lockKey(`imported-wallet:${wallet.id}`);
         const prior = (await store.findImportedWallet(wallet.id))?.sync.skipped ?? 0;
         await patchSync(wallet.id, {

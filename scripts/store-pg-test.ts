@@ -251,15 +251,33 @@ try {
     }
     // A database restart or a silent loss is the same to the process: its
     // lock connection is gone. Once it has exited, a new process starts.
+    // A connection that stops answering without closing (a half-open socket):
+    // the backend is stopped, so the ping is never answered and no event
+    // fires. The process exits on the unanswered ping all the same.
     const third = startApi(200);
     try {
       await third.listening();
+      const [stuck] = await lockHolder();
+      process.kill(stuck, "SIGSTOP");
+      try {
+        assert.equal(await third.exited, 1, "an unanswered ping exits the API");
+        assert.match(third.output().err, /lost its start lock \(ping (failed|unanswered)\)/);
+      } finally {
+        process.kill(stuck, "SIGCONT");
+        await admin.query("SELECT pg_terminate_backend($1)", [stuck]);
+      }
     } finally {
       third.child.kill();
-      await third.exited;
+    }
+    const fourth = startApi(200);
+    try {
+      await fourth.listening();
+    } finally {
+      fourth.child.kill();
+      await fourth.exited;
     }
   }
-  console.log("ok - start lock: a second API exits before it listens; a cut lock connection exits the first; a new one then starts");
+  console.log("ok - start lock: a second API exits before it listens; a cut lock connection exits the first; so does one that stops answering; a new one then starts");
 
   // An idle pooled connection killed by the server (a restart, an OOM-killed
   // backend): the pool logs it without the URL, the process lives on, and the

@@ -195,7 +195,10 @@ async function orderLinkSecret(c: ShopifyConnection): Promise<string> {
   // email template of the one that lost would sign links nobody accepts.
   return store.tx(async () => {
     await store.lockKey(`shopify-connection:${c.id}`);
-    const now = (await store.findShopifyConnectionByShop(c.shop)) ?? c;
+    const now = await store.findShopifyConnectionByShop(c.shop);
+    // The shop reconnected meanwhile (maybe to another org): its key is not
+    // this caller's to read.
+    if (!now || now.id !== c.id) throw new Error("this Shopify connection was replaced; reload");
     if (now.orderLinkSecretEnc) return SECRETS.shopifyOrderLinkSecret.open(now.id, now.orderLinkSecretEnc);
     const secret = randomBytes(32).toString("hex");
     await store.updateShopifyConnection(c.id, { orderLinkSecretEnc: SECRETS.shopifyOrderLinkSecret.seal(c.id, secret) });
