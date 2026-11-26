@@ -8,8 +8,9 @@ The store moves from `db.json` straight to Postgres, with no SQLite step.
 The API and Postgres run together on one Oracle Cloud ARM host (Ampere,
 aarch64), Postgres on its unix socket only with no database port open, and
 everything moves off Akash (§7). This note does not reopen either choice.
-The hub's own database (`hub.db` in Agentic-payment-protocol) is out of
-scope.
+The `@zold/accept` hosted hub's database (`hub.db` in
+Agentic-payment-protocol) moves into the same Postgres server, in its own
+`hub` database and roles (§7.2, slice S9).
 
 **What this note decides:** one table per collection, typed key columns
 generated from a JSONB document, uniqueness enforced by the database, an
@@ -20,10 +21,11 @@ webhooks, a ledger whose rows cannot be deleted and whose every change is kept,
 one API process per deployment, enforced at start, two Postgres clusters (one
 per deployment) on unix sockets with peer authentication on the Oracle host,
 pgBackRest PITR to OCI Object Storage in two regions plus daily dumps the host
-cannot delete, a rebuild path for losing the host, and eight slices. **What it leaves to the owner:** whether the hub stays
-separate, the OCI region, processing agreement and account type, the
-recovery-time target, whether to lock the dump bucket's retention rule, and
-when to cut over (§9).
+cannot delete, a rebuild path for losing the host, the hub in its own
+database on the same server, and nine slices. It assumes the owner provides
+the OCI account (§7). **What it leaves to the owner:** the recovery-time
+target, whether to lock the dump bucket's retention rule, and when to cut
+over (§9).
 
 ## 0. What exists today
 
@@ -779,24 +781,14 @@ and listens on its unix socket only; no database port is open on the host or
 in OCI. Everything moves off Akash, both deployments. The Akash lease is kept,
 stopped and read-only, until the owner closes it (§6 step 8).
 
-- **Region:** an EU region. Recommended: Frankfurt (`eu-frankfurt-1`). The
-  owner confirms (§9).
-- **Account type: Pay As You Go, not Always Free.** Oracle's Always Free
-  page (<https://docs.oracle.com/en-us/iaas/Content/FreeTier/resourceref.htm>,
-  read 2026-11-25) says "Idle Always Free compute instances may be reclaimed
-  by Oracle", and counts an instance idle when, over 7 days, 95th-percentile
-  CPU, network and (A1 shapes only) memory utilisation are all under 20%. A
-  quiet API and Postgres on an A1 shape can meet that. Reclaimed, this host
-  takes down the API, Postgres and both deployments at once. The page does
-  not say whether a Pay As You Go account's instances are exempt; it does say
-  an upgraded account is not charged for usage within the Always Free
-  limits. So: the owner confirms the account type, an Always Free account is
-  converted to Pay As You Go before S7, and S7 checks in the console that
-  the instance carries no idle-reclamation notice. §7.1 covers the host
-  being lost anyway.
-- **Processing agreement:** Oracle's Data Processing Agreement for Oracle
-  Cloud Services covers OCI. AGENTS.md needs one before user data lands, so
-  the owner confirms that the account is covered (§9).
+- **The account is the owner's.** The owner provides the OCI account: its
+  type, its EU region and second backup region, and Oracle's Data
+  Processing Agreement for it (AGENTS.md needs one before user data lands).
+  This note assumes that account exists. S7 checks in the console that the
+  instance carries no idle-reclamation notice (Oracle's Always Free page,
+  <https://docs.oracle.com/en-us/iaas/Content/FreeTier/resourceref.htm>,
+  read 2026-11-25: "Idle Always Free compute instances may be reclaimed by
+  Oracle"); §7.1 covers the host being lost anyway.
 - **Postgres 17** from the PostgreSQL project's own packages (PGDG), which
   build for aarch64. A major upgrade is a planned task, not automatic; minor
   versions follow the distribution's security updates.
@@ -817,10 +809,27 @@ stopped and read-only, until the owner closes it (§6 step 8).
 - **No network port.** `listen_addresses = ''`: each cluster listens on its
   unix socket only. The OCI security list opens no database port.
 - **Peer authentication, no database password.** Each cluster's `pg_hba.conf`
-  has `local` lines only, one per database, with `peer` and a `pg_ident.conf`
-  map from that deployment's OS users to its roles (`zold-mainnet` → the
-  application role, the deploy user → the owner role), and a final `local all
-  all reject`. `REVOKE CONNECT ON DATABASE <db> FROM PUBLIC`, then `GRANT
+  has `local` lines only. Postgres uses the **first** line that matches the
+  connection type, database and user, and if that line's peer check or map
+  fails it tries no later line. So the bootstrap superuser's line, with no
+  map, comes first, and each database's line names that database's two
+  roles in the user column, never `all`. On mainnet:
+
+  ```
+  local  all          pg-mainnet               peer
+  local  <zold db>    <app role>,<owner role>  peer map=zold-mainnet
+  local  hub          hub_app,hub_owner        peer map=hub
+  local  all          all                      reject
+  ```
+
+  (`pg-testnet` on testnet, without the `hub` line; `pg_createcluster -u`
+  names the superuser role after the cluster's OS user.) Each map is a
+  `pg_ident.conf` map from that deployment's OS users to its roles
+  (`zold-mainnet` → the application role, the deploy user → the owner role;
+  `zold-hub` → `hub_app`, §7.2). Only the cluster's OS user connects as
+  superuser, to every database: the provisioning script, the restore and
+  its hash checks (§7.1), the daily dump (below) and the hub write stop
+  (§7.2) run as it. `REVOKE CONNECT ON DATABASE <db> FROM PUBLIC`, then `GRANT
   CONNECT` to the two roles of that database. A testnet process cannot open
   mainnet's socket (directory permissions), would not be mapped if it could
   (`pg_ident`), and has no `CONNECT` grant on the database. `DATABASE_URL` is
@@ -902,7 +911,27 @@ stopped and read-only, until the owner closes it (§6 step 8).
   `zold-dumps-<deployment>`, in the second region, with a **time-bound
   retention rule of 14 days**. A systemd timer writes a daily `pg_dump`
   piped to `age` (to the owner's age key) into it, each as a new object: `pg_dumpall --globals-only` (the roles and their attributes; there are no
-  passwords, §7) and `pg_dump -Fc` of the database, in one encrypted tar. The
+  passwords, §7) and `pg_dump -Fc` of each database in the cluster (on
+  mainnet, Zold's and `hub`, §7.2), in one encrypted tar. Each database's
+  dump carries its own check file: the timer opens a `REPEATABLE READ`
+  transaction, takes `pg_export_snapshot()`, computes per-table row counts
+  and hashes inside it, and runs
+  `pg_dump --snapshot=<id>` on the same snapshot, so the counts describe
+  exactly the rows in the dump. This is **the table check**, the one
+  every drill and restore in this note uses. It is generic, not §6's
+  `doc`-by-id one, so it fits every table: per table, the row count and a
+  SHA-256 over each row as `to_jsonb(row)::text` (every column, keys in a
+  fixed order), the rows sorted by that text `COLLATE "C"`, which needs no
+  primary key (`ledger_history`) and no btree order on a `json` column.
+  The session first runs `SET TimeZone = 'UTC'`, `SET DateStyle = 'ISO,
+  YMD'`, `SET IntervalStyle = 'postgres'`, `SET extra_float_digits = 1`
+  and `SET bytea_output = 'hex'`, so the text form does not depend on the
+  host's time zone, settings or collation library: the same rows hash the
+  same on the live host, a drill instance and a fresh `initdb`. For a document table that is `id` and `doc`; for
+  `payment_handles`, `schema_migrations`, `outbox`, `ledger_history`,
+  `cap_holds`, `pending_executions` and the hub's tables it is their own
+  columns. The drill compares the restored database against the same
+  query. The
   host's credential for it has create and read only (no overwrite, no
   delete); a lifecycle rule deletes objects after 30 days. A compromised
   host can then wipe the PITR repositories but not the last 14 days of
@@ -922,12 +951,15 @@ stopped and read-only, until the owner closes it (§6 step 8).
   `pgbackrest stop` runs on the drill instance before Postgres starts, which
   blocks `archive-push`, `backup` and `expire` there. It follows the rebuild
   below up to the restore, restores to a time T, starts Postgres, and
-  compares per-table row counts and hashes (the importer's verify, §6)
-  against an export taken at T. It does not start the API: a restored
+  runs the table check (above) on every table of every database in the
+  cluster, against the same check run on the live host at T (one
+  `REPEATABLE READ` snapshot per database). It does not start the API: a restored
   mainnet API would run the sweeps against real partners, a second API
   process (§2). The drill restores from `repo1` and `repo2` in alternate
   months, and every third month from the latest dump instead (§7.1, both
-  repositories lost), so the logical path is tried too. It times the database part, from "instance requested" to "verify
+  repositories lost), so the logical path is tried too; that month it
+  compares against the dump's own check file, not an export from the live
+  database, which has taken writes since. It times the database part, from "instance requested" to "verify
   passed". The service part of the recovery target (API, tunnel, smoke) is
   timed on testnet: once before the cut-over and then quarterly, testnet is
   rebuilt for real onto a new instance (its old API stopped first), the
@@ -998,10 +1030,28 @@ Rebuild, mainnet first, then testnet the same way:
 **Both repositories lost** (or both unreadable): steps 1-2, then fetch the
 latest dump from the dump bucket and decrypt it with the owner's age key,
 which is never on the host (the owner runs `age -d` or hands the key in for
-the restore only). Create the cluster's database from `initdb` defaults,
-load the globals (roles), `pg_restore` the database as the owner role, check
-the roles and grants as in step 3 and that `schema_migrations` is at the
-latest version. Then create a new pgBackRest stanza in each reachable
+the restore only). The cluster comes from `initdb`, so at first only its
+bootstrap superuser exists, and the `peer` mappings of step 2 point at roles
+that are not there yet. Every step below runs as the cluster's OS user
+(`pg-mainnet`) over the socket, through its own `pg_hba.conf` line (§7).
+The globals are loaded first: the dump's `CREATE ROLE "pg-mainnet";` line,
+which `initdb` already made, is filtered out (`grep -vx`), and the rest
+runs with `psql -v ON_ERROR_STOP=1`, so any error stops the restore. Then,
+for **every database in the dump** (on mainnet, Zold's and `hub`, §7.2):
+`CREATE DATABASE <db> OWNER <its owner role>`, `pg_restore --role=<its
+owner role>` into it, and run the table check (§7) on it against the dump's
+check file. `pg_restore` without `--create` does not carry the
+database-level settings (since PG 11 they are in neither the globals nor
+the restored contents), so the provisioning script's database step is run
+next: `REVOKE CONNECT … FROM PUBLIC` and the `GRANT CONNECT`s on each
+database, `CONNECTION LIMIT 25` on `hub`, and any `ALTER DATABASE … SET`.
+Only then the step-3 check, which here also checks that `CONNECT` is
+revoked from `PUBLIC` on each database, granted only to that database's two
+roles, and that `hub` has `datconnlimit = 25` (and, for `hub`, the checks of
+§7.2); and that each database's `schema_migrations` is at the latest
+version. Before S9 ports the hub, `hub` is provisioned but empty, with no
+tables and no `schema_migrations`: the check then expects exactly that, and
+any table in it fails. Then create a new pgBackRest stanza in each reachable
 region and take a full backup before step 5. Everything after the dump's
 time is lost; the reconciler reports the drift and the owner is told the
 loss window.
@@ -1014,6 +1064,100 @@ reconciler reports and does not repair.
 The limit #166 names ("the API still sees the data in memory and holds the
 database credentials") holds on the Oracle host too: Oracle, as the host,
 can reach the disk and memory, under its processing agreement.
+
+### 7.2 The hub on the same server
+
+The `@zold/accept` hosted hub (Agentic-payment-protocol, `packages/hosted`,
+today SQLite `hub.db`) moves into the mainnet cluster, in a **database of its
+own**, `hub`, not a schema in Zold's. The hub takes untrusted agent traffic
+and its code is public, so it is kept apart by the database boundary, roles
+and limits, not by trust in its code. A schema would not be enough: in one
+database the hub could take any advisory lock Zold uses (they are per
+database and need no privilege: holding `api:<deployment>` stops the API
+from starting, holding `cap:<key>` turns that cap's transfers into
+`lock_timeout` errors), and it would keep `USAGE` on `public` and `EXECUTE`
+on its functions through `PUBLIC`, whatever is revoked from its own role.
+
+- **Its own database.** `CREATE DATABASE hub OWNER hub_owner`. Advisory
+  locks, `LISTEN/NOTIFY`, the `public` schema and functions are then
+  separate from Zold's. `REVOKE CONNECT ON DATABASE <zold db> FROM PUBLIC`
+  (the §7 pattern) leaves `hub_app` and `hub_owner` unable to connect to
+  Zold's database at all; `REVOKE CONNECT ON DATABASE hub FROM PUBLIC` and
+  `GRANT CONNECT` to the two hub roles only. Postgres has no cross-database
+  query without `dblink` or `postgres_fdw`, so neither extension is
+  installed in either database, and the provisioning script checks it.
+- **Its own roles.** `hub_owner` owns the `hub` database and runs its
+  migrations; it is `NOSUPERUSER NOCREATEROLE NOCREATEDB`, and the deploy
+  user is mapped to it only at migration time, as for Zold's owner role
+  (§7). `hub_app` is what the hub process runs as, with DML on the hub's
+  tables only and no DDL. No Zold role has `CONNECT` on `hub`.
+- **Limits for untrusted traffic.** Connections, WAL and disk belong to the
+  cluster, so a hub flood must not reach Zold:
+  - connections: `ALTER ROLE hub_app CONNECTION LIMIT 20` and
+    `ALTER DATABASE hub CONNECTION LIMIT 25`, the hub's own pool below that,
+    and `reserved_connections = 10` with `pg_use_reserved_connections`
+    granted to Zold's application and owner roles (Postgres 16+), so a hub
+    flood cannot lock the API out of `max_connections`;
+  - queries, per role with `ALTER ROLE hub_app SET`: `statement_timeout =
+    '5s'`, `lock_timeout = '2s'`, `idle_in_transaction_session_timeout =
+    '10s'`, `temp_file_limit = '256MB'`, `work_mem = '4MB'`;
+  - writes: the hub rate-limits writes per agent **and in total** in its
+    own code, since a write flood fills the shared `pg_wal` and archive,
+    and under the fail-closed choice in §7 a full WAL volume stops mainnet
+    money writes. Postgres has no per-database disk quota, so a cap the
+    hub's code can miss is backed by one outside it: the per-minute alert
+    check also **stops the hub** when `hub` passes its hard size or the
+    shared volume drops under 15 % free, with `ALTER DATABASE hub
+    CONNECTION LIMIT 0` and `pg_terminate_backend` on its sessions. The
+    check runs as the cluster's OS user and bootstrap superuser
+    (`pg-mainnet`, §7), the one role that may do both. Zold keeps writing;
+    the owner lifts the stop by hand, as that same user, with `ALTER
+    DATABASE hub CONNECTION LIMIT 25` (the provisioned value, not `-1`). The
+    provisioning script leaves a limit of 0 on `hub` as it is and says so,
+    so a re-run never lifts a stop;
+  - alerts: the §7 disk and archiver alerts name the database that is
+    growing (`pg_database_size` per database, and the write counters of
+    `pg_stat_database` per database against the cluster's WAL rate in
+    `pg_stat_wal`), with an extra alert when `hub` passes a size set in
+    S7.
+  The numbers are S7's starting values, tuned under real hub load in S9.
+- **Its own OS user, hardened.** The hub process runs on the host as
+  `zold-hub`, mapped by `pg_ident.conf` to `hub_app` only, with `peer` on
+  the socket as in §7; the socket directory gives it a path and nothing
+  more. No TCP port is opened for Postgres. Its systemd unit sets
+  `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=yes`,
+  `PrivateTmp=yes` and `ReadWritePaths=` its own state directory only, and
+  `InaccessiblePaths=` the environment files of `zold-mainnet` and
+  `zold-testnet` and the pgBackRest config files; those files are not
+  readable by `zold-hub` by mode either.
+- **Shared backups, separate repair.** Being in the mainnet cluster, `hub` is
+  in the same pgBackRest stanza, the daily dump (§7: globals plus `pg_dump
+  -Fc` per database), the restore drill (both databases in its verify) and
+  the recovery target (§7.1). PITR is per cluster, so it couples the two in
+  both directions. **A hub-only incident is never repaired with a cluster
+  PITR**, because that rewinds Zold's money state. It is repaired by a
+  logical restore of the `hub` database alone: `pg_restore` of the last
+  daily dump into a fresh `hub` database, or a PITR to the chosen time onto
+  a scratch instance (the drill's read-only path) and a `pg_dump` of `hub`
+  from there restored into the host, each followed by the table check, the
+  provisioning script's database step and checks as in §7.1. The restore
+  does not lift a stop: before it, the owner records the live `hub`'s
+  `datconnlimit`; if it was 0, the database step sets 0 again, not 25, and
+  the check expects 0. The stop is then lifted by hand, as above. A Zold PITR rewinds the hub with it,
+  and the hub's agents are told which window they lost.
+- **Testnet.** The mainnet cluster holds only the mainnet hub. A testnet
+  hub, if one runs, is a `hub` database in the testnet cluster with the same
+  roles, limits and unit, as its own OS user `zold-hub-testnet`; testnet hub
+  data never sits in the mainnet cluster.
+- **Provisioned here, ported there.** The `hub` database, its roles, grants,
+  `CONNECT` revokes, limits, `pg_ident` lines and systemd unit are created
+  by S7's provisioning script (`scripts/oracle-host/`, §7.1) in this
+  repository, so the isolation is reviewed in one place. S9 only ports the
+  code and imports `hub.db` into what S7 created.
+- **No bridge yet.** Settlements stay in the hub. A later hub→Zold-ledger
+  bridge, if it is built, is narrow and audited: one store method behind its
+  own role, writing only through the ledger's append path (§5), each call in
+  the audit trail. Not part of #166.
 
 ## 8. Slices
 
@@ -1032,25 +1176,20 @@ stays the default until the cut-over.
 | S4b | Identity and recovery: `session_epoch`, the ceremony-challenge audit of the 9 callers, the Candide and Turnkey reserve statuses, the Monerium token compare in the store; their tests on JSON and Postgres 17 | — |
 | S5 | Importer, export, verify and the pre-import report (§6); migration `0008`: `cap_holds` refuses `'Infinity'`, the deposit key's `chain_id` and `tx_hash_lc` are `NOT NULL`. Tests on PGlite in `check` and on Postgres 17 in `check:pg`. Before S8: run the report against copies of the testnet and the mainnet `db.json` (`npm run pg-import -- report <copy>`) and record the counts per rule on the board: a blocking finding there refuses the import, and an orphan decides whether its foreign key goes in (§1.2) | — |
 | S6 | Docs: AGENTS.md (where the code lives, secrets and storage), `docs/running-locally.md` (local Postgres, `check:pg`), technical-architecture §18.1, `docs/roadmap.md`, `docs/status.md` | — |
-| S7 | The Oracle host (§7): Postgres 17 and roles, two clusters with peer authentication, pgBackRest to Object Storage in two regions, the dump bucket with its retention rule, the archiver and disk alerts, the one-repository-down test, systemd units, the deploy pipeline in place of the Akash leg, the aarch64 toolchain check, the cut-over runbook, the host-loss runbook and provisioning script (§7.1), and the first restore drill onto a new instance and the first testnet rebuild, both timed. Each cluster is made with `pg_createcluster --encoding=UTF8` and a UTF-8 locale (the email key's `\u` escapes and `lower()` depend on them, `0003`). The runbook says: after a migration, a bad deploy is fixed forward, never by redeploying an older build (`assertSchemaCurrent` refuses a schema ahead of the code) | region, DPA and Pay As You Go account confirmed; recovery-time target accepted; host access |
+| S7 | The Oracle host (§7): Postgres 17 and roles, two clusters with peer authentication, pgBackRest to Object Storage in two regions, the dump bucket with its retention rule, the archiver and disk alerts, the one-repository-down test, systemd units, the deploy pipeline in place of the Akash leg, the aarch64 toolchain check, the cut-over runbook, the host-loss runbook and provisioning script (§7.1) including the `hub` database, its roles, grants and limits (§7.2), and the first restore drill onto a new instance and the first testnet rebuild, both timed. Each cluster is made with `pg_createcluster --encoding=UTF8` and a UTF-8 locale (the email key's `\u` escapes and `lower()` depend on them, `0003`). The runbook says: after a migration, a bad deploy is fixed forward, never by redeploying an older build (`assertSchemaCurrent` refuses a schema ahead of the code) | recovery-time target accepted; host access |
 | S8 | Cut-over (§6): testnet, then app.zoldhq.com. `STORE_BACKEND=postgres` becomes the default; the JSON backend stays one release as the rollback path, then goes | the owner picks the time |
+| S9 | Hub on Postgres (§7.2), in Agentic-payment-protocol: `packages/hosted` ported from SQLite to the `hub` database S7 created, an import of the existing `hub.db` with a verify (row counts and hashes per table, as §6, and the isolation: `hub_app` cannot connect to Zold's database, cannot take an advisory lock in it, and holds no privilege outside `hub`; the same three checks run in the drill). Needs S7, not S8 | — |
 
 S2 is the largest (about 1,250 call sites and 2,000 in tests) and can be cut
 by directory if one PR is too big to review. S7 can run alongside S2-S5.
+S9 comes after S7 and can land before S8, so the §7.2 limits meet real hub load before Zold's cut-over. It is a PR on Agentic-payment-protocol, not on this repository; the hub code stays there for now, and its database, roles and limits come from S7's script here.
 
 ## 9. Owner questions
 
-1. **Hub database:** does `hub.db` (Agentic-payment-protocol, `packages/hosted`)
-   stay a separate store, as #166 assumes? This note assumes yes.
-2. **Region, DPA and account type:** is `eu-frankfurt-1` the region; is the
-   OCI account one that Oracle's Data Processing Agreement covers; and is it
-   Pay As You Go? If it is Always Free, convert it to Pay As You Go before S7
-   starts (§7: an idle Always Free instance may be reclaimed). Which second
-   EU region holds `repo2`?
-3. **Recovery target:** accept or change the proposed 4 hours to restore
+1. **Recovery target:** accept or change the proposed 4 hours to restore
    service and one minute of lost writes after losing the host (§7.1).
    And: lock the dump bucket's retention rule once S7 has run it for a
    while? Locked, not even Oracle can shorten it; unlocked, an OCI
    administrator account can delete the rule (§7).
-4. **Cut-over:** the owner's call, once S7 is done (§6). Nothing to answer
+2. **Cut-over:** the owner's call, once S7 is done (§6). Nothing to answer
    now.

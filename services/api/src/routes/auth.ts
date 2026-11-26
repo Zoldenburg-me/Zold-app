@@ -436,7 +436,7 @@ export function createAuthRouter(deps: AuthDeps) {
       }
       // Also limit per credential: the per-IP bucket does nothing against attempts
       // spread across many sources at one account.
-      if (!rateLimit(`c:${tokenHash(String(credentialId))}`, SECURITY.authRateLimitPerMin)) {
+      if (!rateLimit(`c:${tokenHash(String(credentialId))}`, SECURITY.authRateLimitPerMin, "credential")) {
         return res.status(429).json({ error: "rate limited — slow down" });
       }
       const user = await store.findUserByCredential(credentialId);

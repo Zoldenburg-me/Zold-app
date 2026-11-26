@@ -259,11 +259,14 @@ export function loadMigratedSnapshot(file: string): { db: Db; migratedUsers: num
   return { db, migratedUsers };
 }
 
-/** Load the store only to read it, for a report: no migration, no write, and
- *  no directory or file created. Throws when there is no store at DB_PATH. */
-export function loadStoreReadOnly() {
+/** Load the store without migrating or writing it, and create no directory
+ *  or file. Returns the text it parsed, so a job can tell whether the file
+ *  changed before it writes. Throws when there is no store at DB_PATH. */
+export function loadStoreReadOnly(): string {
   if (!existsSync(DB_PATH)) throw new Error(`no store at ${DB_PATH}`);
-  db = { ...db, ...JSON.parse(readFileSync(DB_PATH, "utf8")) };
+  const text = readFileSync(DB_PATH, "utf8");
+  db = { ...db, ...JSON.parse(text) };
+  return text;
 }
 
 /**

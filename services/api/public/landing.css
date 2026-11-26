@@ -3,7 +3,7 @@
  * shared nav, footer, buttons, legal pages and 404), and only by landing.html.
  *
  * The model: the app showcase pages of GitHub, ether.fi and Ethena Pay.
- * A light hero with the narwhal over a sample transfer, one phone that stays
+ * A light hero with the business console beside the headline, one phone that stays
  * put while the chapters scroll past it (its screen follows the chapter), a
  * pill switcher, one light "proof" panel, a product window in a lit frame, and
  * a closing call with the phone under a spotlight.
@@ -86,15 +86,12 @@
   box-shadow: 0 50px 120px rgba(8,2,6,.75), inset 0 0 0 1px color-mix(in srgb, var(--z-text) 5%, transparent); }
 .l-device img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top; border-radius: 36px; }
 
-/* ---------- hero: warm paper, the promise left, the narwhal over a transfer right ---------- */
+/* ---------- hero: warm paper, the promise left, the company home screen right, running off the edge ---------- */
 /* Drawn on first paint: no rise-in, no glow. Berry is the hero's one colour, on the main button. */
 .l-hero { --h-paper: #f5f3ee; --h-ink: #141217; --h-body: #55534e; --h-line: #e2ded6; --h-berry: #8a1f52;
   position: relative; overflow: hidden; display: grid; align-content: center; min-height: 100svh; box-sizing: border-box; margin-top: -76px; padding: calc(76px + clamp(56px, 10vh, 112px)) 0 clamp(56px, 9vh, 96px); background: var(--h-paper); color: var(--h-ink); }
-.l-hero__grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: clamp(32px, 5vw, 72px); align-items: end; }
-.l-status { margin: 0 0 24px; font-size: 14px; color: var(--h-body); }
-.l-status__test { color: #8a5a00; }
-.l-status__test::before { content: ". "; color: var(--h-body); }
-.l-hero h1 { margin: 0; max-width: 14ch; font: 600 clamp(44px, 5.6vw, 84px)/.98 var(--l-display); letter-spacing: -.045em; color: var(--h-ink); text-wrap: balance; }
+.l-hero__grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: clamp(32px, 5vw, 72px); align-items: center; }
+.l-hero h1 { margin: 0; max-width: 13ch; font: 600 clamp(40px, 4.7vw, 70px)/1 var(--l-display); letter-spacing: -.045em; color: var(--h-ink); text-wrap: balance; }
 .l-hero__sub { margin: 24px 0 0; max-width: 38ch; font-size: clamp(17px, 1.6vw, 19px); line-height: 1.55; color: var(--h-body); }
 .l-hero .l-actions { align-items: center; gap: 24px; }
 .l-hero .l-btn { color: #fff; background: var(--h-berry); border-radius: 999px; }
@@ -102,21 +99,13 @@
 .l-hero__link { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; font-weight: 500; color: var(--h-ink); }
 .l-hero__link:hover { color: var(--h-berry); }
 .l-hero :focus-visible { outline-color: var(--h-berry); }
-.l-hero__stage { position: relative; padding-top: clamp(120px, 14vw, 200px); }
-.l-hero__nw { position: absolute; top: 0; left: 50%; width: clamp(220px, 24vw, 330px); transform: translateX(-58%); }
-.l-send { position: relative; padding: 20px 22px; border: 1px solid var(--h-line); border-radius: 20px; background: #fff; font-size: 14px; color: var(--h-body); }
-.l-send p { margin: 0; }
-.l-send__title { font-weight: 600; color: var(--h-ink); }
-.l-send__amount { margin-top: 12px !important; font: 600 34px/1.1 var(--l-display); letter-spacing: -.02em; color: var(--h-ink); }
-.l-send__to { margin-top: 4px !important; }
-.l-send__to .s-mono { display: block; font-size: 13px; }
-.l-send__row { display: flex; justify-content: space-between; margin-top: 16px !important; padding: 12px 0; border-top: 1px solid var(--h-line); }
-.l-send__row span:last-child { color: var(--h-ink); font-weight: 500; }
-.l-send__go { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 48px; border-radius: 12px; background: var(--h-ink); color: #fff; font-weight: 500; }
+.l-hero__stage { margin: 0; min-width: 0; }
+/* The screenshot keeps a readable size and the hero clips what does not fit. */
+.l-hero__shot { display: block; width: clamp(620px, 60vw, 960px); max-width: none; height: auto; border-radius: 14px; border: 1px solid var(--h-line); box-shadow: 0 40px 80px -40px rgba(20, 18, 23, .45); }
 .l-hero .l-cap { color: var(--h-body); }
 @media (max-width: 860px) {
   .l-hero__grid { grid-template-columns: 1fr; }
-  .l-hero__stage { max-width: 420px; padding-top: 160px; }
+  .l-hero { min-height: 0; }
 }
 /* Pause motion: stops the narwhal (WCAG 2.2.2). Shown by motion.js. */
 .l-motion { position: absolute; right: 24px; bottom: 20px; z-index: 3; min-height: 44px; padding: 0 16px; border-radius: var(--z-radius-control); cursor: pointer;
@@ -303,7 +292,7 @@
 /* ---------- narwhal (landing/narwhal.js positions it) ---------- */
 .l-narwhal { --nw-scale: calc(150 / 244); position: fixed; left: 0; top: 0; z-index: 30; width: 150px; pointer-events: none; will-change: transform; }
 .l-narwhal__body { position: relative; transform-origin: 50% 60%; }
-/* Out of the way over the light hero, which has its own narwhal; narwhal.js sets it. */
+/* Out of the way over the light hero; narwhal.js sets it. */
 .l-narwhal { transition: opacity .4s ease; }
 .l-narwhal.is-away { opacity: 0; }
 /* A line drawing in the text colour over frosted glass in the body's shape:

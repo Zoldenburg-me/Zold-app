@@ -98,17 +98,19 @@ await store.updateTransfer("t_bridge_done", {
 // order placement's answer was lost, so the transfer went to review.
 const SAFE = `0x${"22".repeat(20)}`;
 const IBAN = "DE89370400440532013000";
-async function sepaRow(id: string) {
+async function sepaRow(id: string, memo = paymentMemo(id, "Invoice 42")) {
   await row(id, "MANUAL_REVIEW");
   await store.updateTransfer(id, {
     recipientIban: IBAN, reference: "Invoice 42",
-    moneriumRedeem: { amount: moneriumAmountString(9), iban: IBAN, issuedAt: now, message: "m", memo: paymentMemo(id, "Invoice 42"), signature: "0x01" },
+    moneriumRedeem: { amount: moneriumAmountString(9), iban: IBAN, issuedAt: now, message: "m", memo, signature: "0x01" },
     txs: [...(await store.findTransfer(id))!.txs, { step: "monerium.redeem.pending", hash: "0x" }],
   } as any);
 }
 await sepaRow("t_attach");
 await sepaRow("t_attach_bad");
 await sepaRow("t_attach_flaky");
+// An older transfer: its signed memo carries the full transfer id.
+await sepaRow("t_attach_legacy", "Powered by Zold t_attach_legacy");
 await row("t_owns_order", "PAYOUT_SUBMITTED");
 await store.updateTransfer("t_owns_order", { sepa: { mode: "sandbox", orderId: "ord-taken", state: "processed" } });
 // The other two ways a transfer owns an order: an operator's PAID evidence,
@@ -131,6 +133,8 @@ const ORDERS: Record<string, unknown> = {
   "ord-pending": redeemOrder("ord-pending", "t_attach_bad", { state: "pending", meta: { state: "pending" } }),
   "ord-placed": redeemOrder("ord-placed", "t_attach_bad", { state: "placed", meta: { state: "placed" } }),
   "ord-memo": redeemOrder("ord-memo", "t_attach_bad", { memo: paymentMemo("t_other", "Invoice 42") }),
+  "ord-no-memo": redeemOrder("ord-no-memo", "t_attach_bad", { memo: undefined }),
+  "ord-legacy": redeemOrder("ord-legacy", "t_attach_legacy", { memo: "Powered by Zold t_attach_legacy" }),
   "ord-amount": redeemOrder("ord-amount", "t_attach_bad", { amount: "9.01" }),
   "ord-iban": redeemOrder("ord-iban", "t_attach_bad", { counterpart: { identifier: { standard: "iban", iban: "DE02120300000000202051" } } }),
   "ord-safe": redeemOrder("ord-safe", "t_attach_bad", { address: `0x${"33".repeat(20)}` }),
@@ -332,7 +336,7 @@ try {
 
   await check("PAID re-reads an unrecorded redeem order and refuses one that does not match this transfer", async () => {
     for (const [id, why] of [
-      ["ord-pending", /not processed/], ["ord-placed", /not processed/], ["ord-memo", /memo/], ["ord-amount", /amount/],
+      ["ord-pending", /not processed/], ["ord-placed", /not processed/], ["ord-memo", /memo/], ["ord-no-memo", /carries none/], ["ord-amount", /amount/],
       ["ord-iban", /IBAN/], ["ord-safe", /Safe address/], ["ord-chain", /chain/], ["ord-issue", /kind/],
       ["ord-currency", /currency/], ["ord-id", /order id/], ["ord-unknown", /no such order/], ["ord-taken", /another transfer/],
       ["ord-taken-evidence", /another transfer/], ["ord-taken-placed", /another transfer/],
@@ -399,6 +403,12 @@ try {
     const r = await post("t_attach_flaky", { state: "PAID", note: NOTE, evidence: "ord-flaky" });
     assert.equal(r.status, 200, JSON.stringify(r.body));
     assert.equal((await store.findTransfer("t_attach_flaky"))!.state, "PAID");
+  });
+
+  await check("PAID attaches an older transfer's order that echoes the full-id memo it signed", async () => {
+    const r = await post("t_attach_legacy", { state: "PAID", note: NOTE, evidence: "ord-legacy" });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal((await store.findTransfer("t_attach_legacy"))!.state, "PAID");
   });
 
   await check("PAID attaches the processed redeem order Monerium holds for this transfer, then resolves", async () => {

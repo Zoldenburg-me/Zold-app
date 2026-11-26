@@ -14,6 +14,7 @@ import { META, RENDER, setExportMonth } from "./views.js";
 import { checkCustomerVatId, readInvoiceEditor, refreshInvoiceCheck } from "./invoice.js";
 import { ACTIONS } from "./actions.js";
 import { initSearch } from "./search.js";
+import { seaFor } from "./sea.js";
 
 // Elements whose action is still running. The element is also disabled, but
 // the set covers anything without a `disabled` property and a click that
@@ -30,10 +31,12 @@ document.addEventListener("click", async (ev) => {
   busy.add(el);
   const canDisable = "disabled" in el;
   if (canDisable) el.disabled = true;
+  const was = view;
   try {
     const keep = await fn(el);
     // An action that opened a dialog or drawer draws again when it closes.
-    if (keep !== "keep" && !$("#dlg").open && !document.querySelector("body > .z-scrim.is-open")) render();
+    // One that changed the screen puts focus on its title, as a link to that screen does.
+    if (keep !== "keep" && !$("#dlg").open && !document.querySelector("body > .z-scrim.is-open")) render({ focus: view !== was });
   } catch (e) { toast(e.message, true); }
   finally {
     busy.delete(el);
@@ -69,6 +72,8 @@ let seq = 0;
 export async function render({ focus = false } = {}) {
   if (!org) return;
   const mine = ++seq;
+  // Leaving Home: the sea goes now, not once the next screen has loaded.
+  if (view !== "overview") seaFor(view);
   renderNav();
   refreshSide().catch(() => { /* the sidebar keeps what it had */ });
   paintBanner();
@@ -130,6 +135,8 @@ export async function render({ focus = false } = {}) {
     $("#view-title").setAttribute("tabindex", "-1");
     $("#view-title").focus({ preventScroll: true });
   }
+  // After the scroll reset, so the sea measures the command section where it now is.
+  if (mine === seq) seaFor(view);
 }
 
 export async function loadOrg(id) {
@@ -232,8 +239,16 @@ export async function boot() {
     // account; a company login has none, and nobody has two (routes/orgs.ts).
     const u = await session;
     only("#no-orgs");
-    if (u?.accountType === "company") $("#new-org-type option[value=personal]")?.remove();
-    else if (u?.name) $("#new-org-name").defaultValue = u.name;
+    // The server makes no organisation for a login that has not said where it lives.
+    const undecided = u?.segment?.value === "UNDECIDED";
+    $("#no-orgs-residence").classList.toggle("hidden", !undecided);
+    if (forInvoices) $("#no-orgs-residence a").href = "/app?from=business&setup=invoices#residence";
+    $("#new-org").classList.toggle("hidden", undecided);
+    if (u?.accountType === "company") {
+      $("#new-org-type option[value=personal]")?.remove();
+      // The name given at signup; the rest is asked here.
+      if (u.companyName) $("#new-org-name").defaultValue = u.companyName;
+    } else if (u?.name) $("#new-org-name").defaultValue = u.name;
     if (u?.country) $("#new-org-country").defaultValue = u.country;
     // A business says whether it is a company or a sole trader; a personal space is neither.
     const showEntity = () => $("#new-org-entity-row")?.classList.toggle("hidden", $("#new-org-type").value !== "business");
@@ -252,7 +267,8 @@ export async function boot() {
           method: "POST",
           body: {
             // A personal space is named after its person; what they typed is the name on invoices.
-            ...(type === "personal" ? { name: u?.name || typed, legalName: typed } : { name: typed }),
+            // A company login gave its registered name at signup: it stays the legal name if the name here is changed.
+            ...(type === "personal" ? { name: u?.name || typed, legalName: typed } : { name: typed, ...(u?.companyName ? { legalName: u.companyName } : {}) }),
             type,
             ...(type === "business" ? { entity } : {}),
             country: $("#new-org-country").value,

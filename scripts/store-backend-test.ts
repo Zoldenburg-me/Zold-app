@@ -24,7 +24,7 @@ process.env.TRANSF_DB_PATH = path.join(tmp, "db.json");
 
 const { initStore, store } = await import("../services/api/src/store.js");
 const { createPgStore } = await import("../services/api/src/store/pg/backend.js");
-const { assertSchemaCurrent, migrate, readMigrations } = await import("../services/api/src/store/pg/migrate.js");
+const { assertSchemaCurrent, migrate, readMigrations, transactionControl } = await import("../services/api/src/store/pg/migrate.js");
 const { databaseUrlIsLocal, pgliteDatabase, pgPoolConfig } = await import("../services/api/src/store/pg/sql.js");
 /** Every migration file, and the version and name prefix of the next one. */
 const ALL_MIGRATIONS = readMigrations().map((m) => m.version);
@@ -299,11 +299,20 @@ console.log("ok - store suite on the JSON backend");
   assert.equal((await db.query("SELECT 1 FROM pg_tables WHERE tablename = 'half_done'")).rows.length, 0, "the failed file rolled back");
   assert.deepEqual((await db.query<{ version: number }>("SELECT version FROM schema_migrations")).rows.map((r) => r.version), ALL_MIGRATIONS);
   // A file that ends our transaction early is refused before anything runs.
-  for (const sql of ["CREATE TABLE a (id text);\nCOMMIT;\nCREATE TABLE b (id text);", "begin;\nSELECT 1;", "SELECT 1; ROLLBACK", "START TRANSACTION; SELECT 1;"]) {
+  for (const sql of ["CREATE TABLE a (id text);\nCOMMIT;\nCREATE TABLE b (id text);", "begin;\nSELECT 1;", "SELECT 1; ROLLBACK", "START TRANSACTION; SELECT 1;", "/* a /* nested */ still a comment */ ROLLBACK;", "SELECT '/*'; ROLLBACK; -- */", "SELECT E'\\''; COMMIT;", "SELECT $1; ROLLBACK;"]) {
     const early = { version: NEXT, name: `${NEXT_NAME}_early.sql`, sql, sha256: "c".repeat(64) };
     await assert.rejects(() => migrate(db, [...files, early]), new RegExp(`${NEXT_NAME}_early.sql contains (COMMIT|BEGIN|ROLLBACK|START TRANSACTION)`));
   }
   assert.equal((await db.query("SELECT 1 FROM pg_tables WHERE tablename = 'a'")).rows.length, 0, "nothing of a refused file ran");
+  // Markers inside strings, names, bodies and comments open or close nothing else.
+  for (const sql of [
+    "SELECT '/*'; -- */\nSELECT '; COMMIT;';",
+    "SELECT E'\\'; COMMIT; --';",
+    'CREATE TABLE "commit" (id text); SELECT \'it\'\'s; rollback;\';',
+    "CREATE FUNCTION f() RETURNS int LANGUAGE plpgsql AS $fn$ BEGIN RETURN 1; END $fn$;",
+    "/* a /* b */ COMMIT; */ SELECT 1;",
+    "SELECT a$b$ FROM (SELECT 1 AS a$b$) t; -- $b$ commit;",
+  ]) assert.equal(transactionControl(sql), undefined, sql);
   // BEGIN in a comment, a string or a function body is not transaction control,
   // and the file runs with its lock and statement timeouts set.
   const timed = {
@@ -468,6 +477,10 @@ console.log("ok - store suite on the JSON backend");
     [`postgresql://u:${secret}@db.example.com/zold?host=db.example.com`, real, /sslmode=verify-full/],
     [`mysql://u:${secret}@localhost/zold`, real, /postgresql:\/\//],
     [`not a url ${secret}`, real, /not a valid URL/],
+    // The driver connects to the last host; the first must not decide.
+    [`postgresql://u:${secret}@/zold?host=localhost&host=db.example.com`, real, /repeats the host parameter/],
+    [`postgresql://u:${secret}@db.example.com/zold?host=localhost&host=`, real, /repeats the host parameter/],
+    [`postgresql://u:${secret}@db.example.com/zold?sslmode=verify-full&sslmode=disable`, { ca, realMoney: true }, /repeats the sslmode parameter/],
   ];
   for (const [url, opts, why] of refusals) {
     assert.throws(() => pgPoolConfig(url, opts as never), (e: Error) => why.test(e.message) && !e.message.includes(secret), url.replace(secret, "…"));
@@ -478,6 +491,9 @@ console.log("ok - store suite on the JSON backend");
   assert.equal(databaseUrlIsLocal("postgresql://u@[::1]/zold"), true);
   assert.equal(databaseUrlIsLocal("postgresql://u@db.example.com/zold"), false);
   assert.equal(databaseUrlIsLocal("postgresql://u@localhost/zold?host=db.example.com"), false);
+  assert.equal(databaseUrlIsLocal("postgresql://u@db.example.com/zold?host=127.0.0.1"), true);
+  assert.equal(databaseUrlIsLocal("postgresql://u@/zold?host=localhost"), true);
+  assert.throws(() => databaseUrlIsLocal("postgresql://u@/zold?host=127.0.0.1&host=db.example.com"), /repeats the host parameter/, "check:pg's remote opt-in reads the host the driver will use");
   assert.deepEqual(tls.ssl, { ca: "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n", rejectUnauthorized: true });
   assert.equal(tls.connectionString, "postgresql://u@db.example.com/zold", "our CA object is not replaced by the driver's sslmode parsing");
   assert.equal(

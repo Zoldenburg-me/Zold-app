@@ -404,6 +404,20 @@ export function createTurnkeyRecoveryRouter({
       if (!["PASSKEY_PENDING", "REVIEW_PENDING"].includes(r.status)) {
         return res.status(409).json({ error: `recovery is ${r.status} — a recovery on chain is cancelled with your passkey`, code: "NOT_CANCELABLE" });
       }
+      // A relay that landed but was never recorded leaves the recovery on chain
+      // with the row still waiting: a local cancel would hide one that still
+      // executes. Ask the module first; no answer, no cancel.
+      if (r.status === "REVIEW_PENDING" && r.turnkey?.newOwners?.length) {
+        let synced: RecoveryRequest;
+        try {
+          synced = await syncTurnkeyFromChain(r, chain);
+        } catch (err) {
+          return fail(res, err);
+        }
+        if (synced.status !== "REVIEW_PENDING") {
+          return res.status(409).json({ error: `recovery is ${synced.status} — a recovery on chain is cancelled with your passkey`, code: "NOT_CANCELABLE" });
+        }
+      }
       // Only from the status read: a signer that claimed it since holds RELAYING.
       const updated = await store.updateRecoveryRequestFrom(r.id, ["PASSKEY_PENDING", "REVIEW_PENDING"], { status: "CANCELED", canceledAt: new Date().toISOString(), cancelReason: "cancelled by the account owner" });
       if (!updated) return busy();

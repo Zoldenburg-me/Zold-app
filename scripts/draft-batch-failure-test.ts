@@ -259,6 +259,47 @@ await check("a FAILED draft cannot be re-fired: no third build, no new transfer"
   assert.deepEqual((await store.findDraft("d_batch"))!.transferIds, ["t_first"]);
 });
 
+// An address-book edit that lands between the drift check and the bank read
+// (an await apart, so a real gap on Postgres) is refused, never planned.
+{
+  await store.addDraft({
+    id: "d_swap",
+    orgId: "org_1",
+    source: { kind: "account", accountId: "acc_1" },
+    state: "REVIEWED",
+    lines: [{ ...line("l_swap", first, "inv_first"), invoiceId: undefined }],
+    createdByMemberId: "m_owner",
+    reviewedByMemberId: "m_reviewer",
+    reviewedAt: now,
+    activity: [],
+    createdAt: now,
+    updatedAt: now,
+  } as any);
+  // The drift check reads contactsOf; the planning loop reads findContact.
+  const findContact = store.findContact.bind(store);
+  (store as any).findContact = async (id: string) => {
+    const c = await findContact(id);
+    return c && id === "c_first" ? { ...c, bankAccounts: [{ ...c.bankAccounts[0], iban: "GB29NWBK60161331926819" }] } : c;
+  };
+  const before = built.length;
+  let swap: { status: number; data: any };
+  try {
+    const res = await fetch(`${API}/api/orgs/org_1/drafts/d_swap/execute`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-user": "u_owner" },
+    });
+    swap = { status: res.status, data: await res.json() };
+  } finally {
+    (store as any).findContact = findContact;
+  }
+  await check("a bank account edited after the drift check is refused before anything is built", async () => {
+    assert.equal(swap.status, 422, JSON.stringify(swap.data));
+    assert.match(swap.data.problems?.[0]?.reason ?? "", /changed after the draft was approved/);
+    assert.equal(built.length, before, "a transfer was built to the edited IBAN");
+    assert.equal((await store.findDraft("d_swap"))!.state, "REVIEWED");
+  });
+}
+
 server.close();
 fake.close();
 if (process.exitCode) {

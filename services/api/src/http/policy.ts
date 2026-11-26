@@ -161,16 +161,136 @@ export function clientKey(ip: string | undefined): string {
   return `${groups.slice(0, 4).map((g) => (parseInt(g, 16) || 0).toString(16)).join(":")}::/64`;
 }
 
-const hits = new Map<string, { n: number; reset: number }>();
+/**
+ * Most rate-limit windows one counter class holds at once (about 36 MB with
+ * 64-character keys).
+ * A caller rotating through fresh addresses (an IPv6 /48 holds 65,536 /64s)
+ * or fresh credential ids opens one window per request, so without a cap the
+ * map grows with the flood's rate until the sweep catches up.
+ *
+ * At the cap a new key is never refused: that would lock out every caller
+ * whose window had ended, passkey login and Shopify included, for as long as
+ * a flood of ~100k fresh keys a minute kept the map full. Instead a window
+ * makes room, chosen in this order: the soonest-ended window the sweep has
+ * not dropped yet, then the least recently used one-request window (it holds
+ * nothing worth keeping: evicting it gives back at most the request the
+ * flood spends to re-open it), then the least recently used
+ * window that counted more but is not limited, and only when every window
+ * held is limited, the least recently used limited one. So a limited key (a
+ * guessed credential, a hot partner caller, the flooder's own) keeps its
+ * count unless a flood holds 100k limited windows at once, which costs it
+ * 100k x (limit + 1) requests in one window (2.1M at the auth limit).
+ *
+ * Each tier is a doubly linked list in last-use order, and a second list
+ * holds every window in end order, so a hit and an eviction are O(1). Not a
+ * JS Map in insertion order: V8 leaves a slot for every delete until it
+ * rehashes, and a fresh iterator for the oldest entry steps over all of them,
+ * about 50-90 us per new key once the map is full.
+ * Bucketing IPv6 by a wider prefix was not chosen: it puts unrelated users
+ * of one provider in one bucket and does nothing for `c:<credential>` keys.
+ */
+export const RATE_BUCKETS_MAX = 100_000;
 
-export function rateLimit(key: string, perMin: number): boolean {
-  const now = Date.now();
-  const h = hits.get(key);
-  if (!h || h.reset < now) {
-    hits.set(key, { n: 1, reset: now + 60_000 });
-    return true;
+/**
+ * Each counter class holds its own windows under its own cap. One request
+ * counts a per-IP window and then a partner or credential one; sharing a cap,
+ * a map full of two-request windows made the two evict each other, so the
+ * second limit never built up. Three caps hold at most 3 x RATE_BUCKETS_MAX
+ * windows (about 110 MB).
+ */
+export type RateCounter = "ip" | "partner" | "credential";
+
+type Window = {
+  key: string; n: number; reset: number; tier: number;
+  prev: Window | null; next: Window | null;
+  /** Neighbours in window-end order. */
+  rprev: Window | null; rnext: Window | null;
+};
+type List = { head: Window | null; tail: Window | null };
+type Counter = {
+  /** 0: one request; 1: more, not limited; 2: limited. Evicted in that order. */
+  tiers: List[];
+  /** Every window, the soonest to end first: a window is appended when it
+   *  starts and ends no sooner than the one before it (the clock). An
+   *  ended window is evicted before any live one, whatever its tier, without
+   *  waiting for the sweep. */
+  byEnd: List;
+  hits: Map<string, Window>;
+};
+const newCounter = (): Counter => ({ tiers: [0, 1, 2].map(() => ({ head: null, tail: null })), byEnd: { head: null, tail: null }, hits: new Map() });
+const counters: Record<RateCounter, Counter> = { ip: newCounter(), partner: newCounter(), credential: newCounter() };
+
+function unlink(t: List, w: Window): void {
+  if (w.prev) w.prev.next = w.next;
+  else t.head = w.next;
+  if (w.next) w.next.prev = w.prev;
+  else t.tail = w.prev;
+  w.prev = w.next = null;
+}
+
+function append(t: List, w: Window): void {
+  w.prev = t.tail;
+  if (t.tail) t.tail.next = w;
+  else t.head = w;
+  t.tail = w;
+}
+
+function unlinkEnd(t: List, w: Window): void {
+  if (w.rprev) w.rprev.rnext = w.rnext;
+  else t.head = w.rnext;
+  if (w.rnext) w.rnext.rprev = w.rprev;
+  else t.tail = w.rprev;
+  w.rprev = w.rnext = null;
+}
+
+function appendEnd(t: List, w: Window): void {
+  w.rprev = t.tail;
+  if (t.tail) t.tail.rnext = w;
+  else t.head = w;
+  t.tail = w;
+}
+
+/** Windows (rate and failure) run on a monotonic clock: a wall-clock step
+ *  (NTP, a VM resume) neither stretches nor cuts one, and a window that starts
+ *  later ends later, so appending at start keeps byEnd ordered. Tests inject
+ *  their own; with no argument it is put back. */
+const monotonic = (): number => performance.now();
+let clock: () => number = monotonic;
+export function setRateClock(c: () => number = monotonic): void {
+  clock = c;
+}
+
+function drop(c: Counter, w: Window): void {
+  unlink(c.tiers[w.tier], w);
+  unlinkEnd(c.byEnd, w);
+  c.hits.delete(w.key);
+}
+
+export function rateLimit(key: string, perMin: number, counter: RateCounter = "ip"): boolean {
+  const c = counters[counter];
+  const now = clock();
+  let w = c.hits.get(key);
+  if (w) unlink(c.tiers[w.tier], w);
+  else {
+    if (c.hits.size >= RATE_BUCKETS_MAX) {
+      const ended = c.byEnd.head!;
+      drop(c, ended.reset < now ? ended : (c.tiers[0].head ?? c.tiers[1].head ?? c.tiers[2].head)!);
+    }
+    w = { key, n: 0, reset: now + 60_000, tier: 0, prev: null, next: null, rprev: null, rnext: null };
+    c.hits.set(key, w);
+    appendEnd(c.byEnd, w);
   }
-  return ++h.n <= perMin;
+  // An ended window is renewed in place: a returning caller keeps its slot.
+  if (w.reset < now) {
+    w.n = 0;
+    unlinkEnd(c.byEnd, w);
+    w.reset = now + 60_000;
+    appendEnd(c.byEnd, w);
+  }
+  w.n++;
+  w.tier = w.n > perMin ? 2 : w.n > 1 ? 1 : 0;
+  append(c.tiers[w.tier], w);
+  return w.n <= perMin;
 }
 
 /**
@@ -185,7 +305,7 @@ const failures = new Map<string, { n: number; reset: number }>();
 
 export function tooManyFailures(key: string, max: number): boolean {
   const f = failures.get(key);
-  return !!f && f.reset >= Date.now() && f.n >= max;
+  return !!f && f.reset >= clock() && f.n >= max;
 }
 
 /** Take back one recorded failure: a guess is counted before an async check
@@ -197,7 +317,7 @@ export function forgetFailure(key: string): void {
 }
 
 export function recordFailure(key: string, windowMs: number): void {
-  const now = Date.now();
+  const now = clock();
   const f = failures.get(key);
   if (!f || f.reset < now) {
     failures.set(key, { n: 1, reset: now + windowMs });
@@ -209,11 +329,20 @@ export function recordFailure(key: string, windowMs: number): void {
 /* Expired buckets are dropped on a timer, not by a request: a scan on the
  * request path would run on every request once a caller rotating through
  * fresh IPv6 /64s keeps the map large. */
-setInterval(() => {
-  const now = Date.now();
-  for (const [k, v] of hits) if (v.reset < now) hits.delete(k);
+export function sweepExpiredBuckets(now = clock()): void {
+  for (const c of Object.values(counters)) {
+    while (c.byEnd.head && c.byEnd.head.reset < now) drop(c, c.byEnd.head);
+  }
   for (const [k, v] of failures) if (v.reset < now) failures.delete(k);
-}, 10_000).unref();
+}
+setInterval(() => sweepExpiredBuckets(), 10_000).unref();
+
+/** How many windows each map holds, and how many of them have ended, for the bounds test. */
+export const bucketCounts = (now = clock()) => ({
+  hits: Object.values(counters).reduce((n, c) => n + c.hits.size, 0),
+  ended: Object.values(counters).reduce((n, c) => n + [...c.hits.values()].filter((w) => w.reset < now).length, 0),
+  failures: failures.size,
+});
 
 /**
  * Which paths sit on the tight bucket: everything where a request is a GUESS
@@ -311,7 +440,7 @@ export const apiRateLimit: express.RequestHandler = async (req, res, next) => {
   const ok = rateLimit(`${primary}:${ip}`, perMin);
   if (!ok) return res.status(429).json({ error: "rate limited — slow down" });
   const bucket = partnerBucket(req);
-  if (bucket && !rateLimit(`${bucket}:${ip}`, bucket === "d" ? SECURITY.documentRateLimitPerMin : SECURITY.partnerRateLimitPerMin)) {
+  if (bucket && !rateLimit(`${bucket}:${ip}`, bucket === "d" ? SECURITY.documentRateLimitPerMin : SECURITY.partnerRateLimitPerMin, "partner")) {
     return res.status(429).json({ error: "rate limited — slow down" });
   }
   next();

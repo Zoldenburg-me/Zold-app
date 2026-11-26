@@ -17,8 +17,8 @@ hits: `npm run api` against Base Sepolia with a funded, deployed Safe is the
 only way past it.
 
 `npm run preflight` asks every Candide endpoint the configured chain and gas
-mode depend on whether it will do its job — bundler, paymaster (with a
-throwaway deployment op, never signed), recovery module and service,
+mode depend on whether it will do its job — bundler, paymaster (its chain and
+EntryPoint, then a throwaway deployment op, never signed), recovery module and service,
 forwarding, and that every configured wallet is in `wallets.json`
 (`docs/wallets.md`) — and exits 1 on any FAIL. `--chain 8453 --gas token` overrides.
 
@@ -79,10 +79,17 @@ file named by `AGE_IDENTITY_FILE` (an `age-plugin-yubikey` stub).
   there loses access. Run these from the main checkout: a worktree has no
   `.toolchain/` or `.env.age`.
 - `npm run secrets -- seal .private` writes `.private.tar.age`; `unseal` puts it
-  back into a directory you name, refusing one that exists. A failed unseal
-  leaves nothing behind.
+  back into a directory you name, refusing one that exists. It also refuses an
+  archive with an absolute or `..` name, a link pointing out of it (followed
+  through the other links in it) or a hard-linked file. `seal` refuses a
+  directory holding such a link (absolute ones included, and one to or through a
+  sibling of the sealed directory), a hard-linked file or a special file, and refuses a
+  sealed directory that is itself a symlink, so every archive it writes
+  unseals. A link back in through the directory's own name (`../.private/key`)
+  is kept by both. A failed unseal leaves nothing behind.
 - `npm run backup:db` is the only way to copy the database: an `age`-encrypted
-  file in `.local-backups/`. The store writes `data/db*.json` mode 600.
+  file in `.local-backups/`, one per second: a second run in the same second
+  is refused. The store writes `data/db*.json` mode 600.
 
 ## Browser pane and new pages
 

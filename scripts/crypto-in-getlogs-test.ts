@@ -103,6 +103,104 @@ await check("a conversion's EURe output is not recorded as a deposit", async () 
   assert.equal((await store.list("cryptoDeposits")).filter((d: any) => d.userId === userId).length, before);
 });
 
+await check("a log without a log index refuses the window; it is read again and both logs of the tx are recorded", async () => {
+  const tx = `0x${"ab".repeat(32)}`;
+  const at = HEAD + 15n;
+  const count = async () => (await store.list("cryptoDeposits")).filter((d: any) => d.userId === userId && d.txHash === tx).length;
+  await store.setCryptoDepositCursor("31337:safe-funding-v1", HEAD + 10n);
+  client.getBlockNumber = async () => HEAD + 20n;
+  let index: number | null = null;
+  client.getLogs = async (q: any) => (q.fromBlock <= at && q.toBlock >= at
+    ? [
+        { ...transfer(addrs().eure, at, 2n * 10n ** 18n, 0), transactionHash: tx },
+        { ...transfer(addrs().eure, at, 3n * 10n ** 18n, 0), transactionHash: tx, logIndex: index },
+      ]
+    : []);
+  await assert.rejects(pollCryptoDepositsOnce(), /the window is read again/);
+  assert.equal(await store.cryptoDepositCursor("31337:safe-funding-v1"), HEAD + 10n, "cursor held");
+  assert.equal(await count(), 0, "nothing written from the refused window");
+  index = 1;
+  await pollCryptoDepositsOnce();
+  assert.equal(await count(), 2, "index 0 and index 1 are two deposits");
+});
+
+await check("a log that is not a deposit does not hold the window, whatever its index", async () => {
+  const at = HEAD + 25n;
+  const tx = `0x${"ef".repeat(32)}`;
+  const count = async () => (await store.list("cryptoDeposits")).filter((d: any) => d.userId === userId && d.txHash === tx).length;
+  await store.setCryptoDepositCursor("31337:safe-funding-v1", HEAD + 20n);
+  client.getBlockNumber = async () => HEAD + 30n;
+  const swapper = addrs().swapper;
+  const noIndex = (l: any) => ({ ...l, logIndex: null, transactionHash: null });
+  client.getLogs = async (q: any) => (q.fromBlock <= at && q.toBlock >= at
+    ? [
+        { ...transfer(addrs().eure, at, 4n * 10n ** 18n, 0), transactionHash: tx },
+        noIndex(transfer(addrs().usdc, at, 0n, 1)),
+        ...(swapper ? [noIndex({ ...transfer(addrs().eure, at, 10n ** 18n, 2), args: { from: swapper, to: safe, value: 10n ** 18n } })] : []),
+      ]
+    : []);
+  await pollCryptoDepositsOnce();
+  assert.equal(await count(), 1, "the real deposit is recorded");
+  assert.ok((await store.cryptoDepositCursor("31337:safe-funding-v1"))! >= at, "the cursor moved past the window");
+});
+
+await check("a watched log whose amount did not decode refuses the window; it is not read as zero", async () => {
+  const at = HEAD + 35n;
+  const tx = `0x${"a1".repeat(32)}`;
+  const count = async () => (await store.list("cryptoDeposits")).filter((d: any) => d.userId === userId && d.txHash === tx).length;
+  await store.setCryptoDepositCursor("31337:safe-funding-v1", HEAD + 30n);
+  client.getBlockNumber = async () => HEAD + 40n;
+  let decoded = false;
+  client.getLogs = async (q: any) => {
+    if (!(q.fromBlock <= at && q.toBlock >= at)) return [];
+    const log = { ...transfer(addrs().usdc, at, 2_000_000n, 0), transactionHash: tx };
+    return [decoded ? log : { ...log, args: { from: log.args.from, to: safe } }];
+  };
+  await assert.rejects(pollCryptoDepositsOnce(), /the window is read again/);
+  assert.equal(await store.cryptoDepositCursor("31337:safe-funding-v1"), HEAD + 30n, "cursor held");
+  decoded = true;
+  await pollCryptoDepositsOnce();
+  assert.equal(await count(), 1, "the re-read log is recorded");
+});
+
+await check("viem keeps a watched log whose amount did not decode, recipient intact (what the stub above stands for)", async () => {
+  // getLogs names the recipient as an indexed topic, so the node returns only
+  // logs whose topic matches; viem then decodes and re-applies the filter.
+  // A data field that does not decode leaves `to` (a topic) decoded and
+  // `value` missing, and the log passes the filter: the scanner sees it.
+  const { parseEventLogs, encodeEventTopics } = await import("viem");
+  const { TRANSFER_EVENT } = await import("../services/api/src/liquidity.js");
+  const topics = encodeEventTopics({ abi: [TRANSFER_EVENT], args: { from: `0x${"11".repeat(20)}`, to: safe } });
+  const raw = {
+    address: addrs().usdc, topics, data: "0x01", blockNumber: "0x1", blockHash: `0x${"00".repeat(32)}`,
+    logIndex: "0x0", transactionHash: `0x${"b2".repeat(32)}`, transactionIndex: "0x0", removed: false,
+  } as any;
+  const [log] = parseEventLogs({ abi: [TRANSFER_EVENT], logs: [raw], args: { to: [safe] } as any, strict: false }) as any[];
+  assert.ok(log, "the log survives viem's recipient filter");
+  assert.equal(String(log.args.to).toLowerCase(), safe.toLowerCase(), "the recipient decoded from its topic");
+  assert.notEqual(typeof log.args.value, "bigint", "the amount did not decode");
+});
+
+await check("a forwarder's second hop without a log index does not hold the window", async () => {
+  const at = HEAD + 45n;
+  const page = `0x${"5a".repeat(20)}` as `0x${string}`;
+  const user = (await store.findUser(userId))!;
+  await store.updateUser(userId, { paymentPage: { ...(user.paymentPage ?? {}), depositAddress: page } } as any);
+  const before = (await store.list("cryptoDeposits")).filter((d: any) => d.userId === userId).length;
+  await store.setCryptoDepositCursor("31337:safe-funding-v1", HEAD + 40n);
+  client.getBlockNumber = async () => HEAD + 50n;
+  client.getLogs = async (q: any) => (q.fromBlock <= at && q.toBlock >= at
+    ? [{ ...transfer(addrs().usdc, at, 1_000_000n, 0), logIndex: null, transactionHash: null, args: { from: page, to: safe, value: 1_000_000n } }]
+    : []);
+  try {
+    await pollCryptoDepositsOnce();
+    assert.equal((await store.list("cryptoDeposits")).filter((d: any) => d.userId === userId).length, before, "the hop is not booked");
+    assert.ok((await store.cryptoDepositCursor("31337:safe-funding-v1"))! >= at, "the cursor moved past the window");
+  } finally {
+    await store.updateUser(userId, { paymentPage: user.paymentPage } as any);
+  }
+});
+
 const { isLogRangeRefusal } = await import("../services/api/src/log-range.js");
 const ALCHEMY_RANGE = "Under the Free tier plan, you can make eth_getLogs requests with up to a 10 block range.";
 const ALCHEMY_CUPS = "Your app has exceeded its compute units per second capacity.";

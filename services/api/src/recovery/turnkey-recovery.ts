@@ -178,8 +178,14 @@ async function relayApproved(request: RecoveryRequest, held: Relay, sig: { r: st
   const state = await chain.readState(plan);
   if (state.pending) {
     if (sameSet(state.pending.newOwners, t.newOwners ?? [])) {
-      const back = await releaseRelay(request.id, held);
-      return back ? syncTurnkeyFromChain(back, chain, now) : (await store.findRecoveryRequest(request.id)) ?? request;
+      // An earlier relay landed but was never recorded. The grace period is
+      // written over this reserve, never back through REVIEW_PENDING, where
+      // the owner's cancel would leave the recovery on chain to execute.
+      const moved = await endRelay(request.id, held, {
+        status: "GRACE_PERIOD",
+        turnkey: { ...t, executedAt: t.executedAt ?? now.toISOString(), finalizeAfter: new Date(state.pending.executeAfter * 1000).toISOString() },
+      });
+      return moved ? syncTurnkeyFromChain(moved, chain, now) : (await store.findRecoveryRequest(request.id)) ?? request;
     }
     throw new TurnkeyGuardianError("another recovery is already pending on this account", 409, "RECOVERY_PENDING");
   }
