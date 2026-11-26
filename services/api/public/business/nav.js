@@ -157,7 +157,27 @@ function accountRight(a) {
    shows a figure older than the screen it sits on. */
 let topBalance = null;
 // Only the top bar is redrawn: a whole renderNav would take focus off a sidebar link or tab.
-export function setTopBalance(b) { topBalance = b; if (org) paint($("#top-info"), topInfo(waitingForMe(side.drafts).length)); }
+export function setTopBalance(b) {
+  topBalance = b;
+  if (!org) return;
+  paint($("#top-info"), topInfo(waitingForMe(side.drafts).length));
+  bindViewLinks("#top-info a[data-view]");
+}
+
+/* A real link, so a modifier-click or middle-click opens the view in a new
+   tab (boot reads ?view=). A plain click stays in the page. */
+function bindViewLinks(sel) {
+  document.querySelectorAll(sel).forEach((a) => {
+    a.onclick = (e) => {
+      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      e.preventDefault();
+      // The screen already shown: only the Menu closes, and its entry goes.
+      if (a.dataset.view === view && document.querySelector(".zb.is-menu")) { setMenu(false); return; }
+      setView(a.dataset.view, { replace: setMenu(false, { viaHistory: false }) });
+      render({ focus: true });
+    };
+  });
+}
 
 /* From 1024px, top right beside the account chip: on Home, the balance its
    card shows, named as the card names it; Approvals with what waits for this
@@ -233,18 +253,7 @@ export function renderNav() {
     <button type="button" class="z-side__link zb-signout" id="side-signout">${Z.icon("logout")}<span>Sign out</span></button>`;
   if (testMode !== undefined) $("#side-test").innerHTML = Z.testModePill(testMode);
 
-  // A real link, so a modifier-click or middle-click opens the view in a new
-  // tab (boot reads ?view=). A plain click stays in the page.
-  document.querySelectorAll("#side a[data-view], #tabs a[data-view], #top-info a[data-view]").forEach((a) => {
-    a.onclick = (e) => {
-      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-      e.preventDefault();
-      // The screen already shown: only the Menu closes, and its entry goes.
-      if (a.dataset.view === view && document.querySelector(".zb.is-menu")) { setMenu(false); return; }
-      setView(a.dataset.view, { replace: setMenu(false, { viaHistory: false }) });
-      render({ focus: true });
-    };
-  });
+  bindViewLinks("#side a[data-view], #tabs a[data-view], #top-info a[data-view]");
   $("#org-btn").onclick = () => { setMenu(false); accountSheet($("#org-btn")); };
   // #app, which holds the chip, leaves the page when start-up ends on an error screen.
   const chip = $("#acct-btn");
