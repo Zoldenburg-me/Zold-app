@@ -909,14 +909,24 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     // nothing is sent from it by bank, and no Monerium profile to check.
     const walletCaller = await store.findUser(ctx.userId);
     if (ctx.org.type === "business" && walletConnectable(walletCaller, ctx.org)) {
-      const taken = await safeTakenBy(walletCaller, ctx.org.id);
-      if (taken) return res.status(409).json({ error: safeTakenError(taken), code: "SAFE_IN_OTHER_ORG" });
-      const connected = await store.updateAccount(account.id, {
-        address: walletCaller.address,
-        backingUserId: walletCaller.id,
-        backedSince: safeBooksStart(walletCaller),
-        gate: WALLET_GATE,
+      // Checked and written under the org row and the Safe's key, as below.
+      const wallet = await store.tx(async () => {
+        await store.lockOrganisation(ctx.org.id);
+        await store.lockKey(`safe:${walletCaller.address.toLowerCase()}`);
+        if ((await store.findAccount(account.id))?.backingUserId) return { refused: { error: "This account was connected by another request." } };
+        const taken = await safeTakenBy(walletCaller, ctx.org.id);
+        if (taken) return { refused: { error: safeTakenError(taken), code: "SAFE_IN_OTHER_ORG" } };
+        return {
+          connected: await store.updateAccount(account.id, {
+            address: walletCaller.address,
+            backingUserId: walletCaller.id,
+            backedSince: safeBooksStart(walletCaller),
+            gate: WALLET_GATE,
+          }),
+        };
       });
+      if (wallet.refused) return res.status(409).json(wallet.refused);
+      const connected = wallet.connected!;
       return res.json({
         account: await accountView(ctx.org, connected),
         note: `Payments to ${ctx.org.name} now arrive in your wallet. It has no IBAN, so nothing is sent from it by bank.`,
