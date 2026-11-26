@@ -70,8 +70,10 @@ export function readMigrations(dir = MIGRATIONS_DIR): Migration[] {
 
 /** Lock, then the applied rows, refusing any whose file is gone or changed. */
 async function applied(q: Sql, migrations: Migration[]): Promise<Set<number>> {
-  // A runner waits for another one's whole file, not the application's lock timeout.
+  // A runner waits for another one's whole file, not the application's lock
+  // or statement timeout (the pool sets both).
   await q.query("SET LOCAL lock_timeout = 0");
+  await q.query("SET LOCAL statement_timeout = 0");
   await q.query("SELECT pg_advisory_xact_lock(hashtext(current_database() || ':zold:migrations'))");
   await q.query(
     "CREATE TABLE IF NOT EXISTS schema_migrations (version integer PRIMARY KEY, name text NOT NULL, sha256 text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())",

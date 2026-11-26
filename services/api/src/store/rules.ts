@@ -66,6 +66,28 @@ export function quoteConsumable(q: Quote, now: number): boolean {
 }
 
 /**
+ * A daily-cap check only means something on finite numbers: `NaN + x > cap` is
+ * false, so a NaN amount or a NaN `used` would pass the check, and a stored NaN
+ * hold makes every later sum NaN, opening the cap for the rest of the day.
+ * Refused, not clamped (fail closed).
+ */
+export function assertCapAmounts(eur: number, usedEur: number, capEur: number): void {
+  if (!Number.isFinite(eur) || eur < 0) throw new Error("daily cap: the amount to hold is not a finite, non-negative number");
+  if (!Number.isFinite(usedEur) || !Number.isFinite(capEur)) throw new Error("daily cap: the used or cap amount is not a finite number");
+}
+
+/**
+ * `(chainId, txHash, logIndex)` is what makes a crypto deposit idempotent. A
+ * missing or non-integer logIndex would never match an existing row and would
+ * give the unique index a NULL, which Postgres treats as distinct: the same
+ * on-chain transfer could be credited twice.
+ */
+export function assertDepositKey(d: CryptoDeposit): void {
+  if (!Number.isSafeInteger(d.logIndex) || d.logIndex < 0) throw new Error(`crypto deposit ${d.id}: logIndex is not a non-negative integer`);
+  if (!Number.isSafeInteger(d.chainId) || typeof d.txHash !== "string" || !d.txHash) throw new Error(`crypto deposit ${d.id}: chainId or txHash is missing`);
+}
+
+/**
  * The patch that records a verified assertion's signCount, only while
  * `credentialId` is still the account's passkey: a recovery can replace the
  * passkey while an assertion is being verified. And only while the count
