@@ -115,8 +115,13 @@ export function createReceiptShareRouter(deps: ReceiptShareDeps) {
       };
       // A revoked or expired share is replaced rather than resurrected: the old
       // slug stays recorded, so a later visitor gets 410 rather than a typo-like
-      // 404 while the new share gets a fresh unguessable slug.
-      await store.addReceiptShare(share);
+      // 404 while the new share gets a fresh unguessable slug. An expired one
+      // is revoked in the same step: one unrevoked share per transfer
+      // (Postgres's receipt_shares_live index refuses a second).
+      await store.tx(async () => {
+        if (existing && !existing.revokedAt) await store.revokeReceiptShare(existing.id);
+        await store.addReceiptShare(share);
+      });
       res.status(201).json(shareResponse(req, share));
     }),
   );
@@ -159,8 +164,12 @@ export function createReceiptShareRouter(deps: ReceiptShareDeps) {
       res.setHeader("x-robots-tag", "noindex, nofollow");
       const share = await store.findReceiptShareBySlug(String(req.params.slug));
       if (!share) return res.status(404).json({ error: "no such receipt" });
-      if (share.revokedAt) return res.status(410).json({ error: "the sender revoked this receipt", revoked: true });
-      if (Date.parse(share.expiresAt) < Date.now()) {
+      // Revoked before it ran out: the sender's act. One revoked only when a new
+      // link replaced it after it expired reads as expired, as it was.
+      if (share.revokedAt && Date.parse(share.revokedAt) < Date.parse(share.expiresAt)) {
+        return res.status(410).json({ error: "the sender revoked this receipt", revoked: true });
+      }
+      if (share.revokedAt || Date.parse(share.expiresAt) < Date.now()) {
         return res.status(410).json({ error: "this receipt link has expired", expired: true });
       }
       const transfer = await store.findTransfer(share.transferId);

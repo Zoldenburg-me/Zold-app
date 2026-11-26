@@ -132,13 +132,16 @@ export async function livePaymentPage(user: User): Promise<boolean> {
           return false;
         }
         renewFailed.delete(user.id);
-        const fresh = await store.findUser(user.id);
-        if (fresh?.paymentPage?.handle !== page.handle || !sameActivation(fresh.paymentPage.forwarder, f)) return false;
-        const now = new Date().toISOString();
-        await store.updateUser(user.id, {
-          paymentPage: { ...fresh.paymentPage, forwarder: next.forwarder, supportedTokens: next.accepts, routesReadAt: now, updatedAt: now },
+        // The row held: a page saved meanwhile is not overwritten.
+        return await store.tx(async () => {
+          const fresh = await store.lockUser(user.id);
+          if (fresh?.paymentPage?.handle !== page.handle || !sameActivation(fresh.paymentPage.forwarder, f)) return false;
+          const now = new Date().toISOString();
+          await store.updateUser(user.id, {
+            paymentPage: { ...fresh.paymentPage, forwarder: next.forwarder, supportedTokens: next.accepts, routesReadAt: now, updatedAt: now },
+          });
+          return true;
         });
-        return true;
       } catch (err: any) {
         console.error(`payment page: renewing forwarder for ${user.id} failed: ${describeCause(err)}`);
         if (err instanceof ForwarderInactiveError) {

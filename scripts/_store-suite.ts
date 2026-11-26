@@ -62,6 +62,10 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
   await s.setSegment("u_a", { value: "consumer", reason: "test" } as any);
   await assert.rejects(async () => await s.setSegment("u_a", { value: "business" } as any), /already has segment/);
   assert.equal((await s.setSegment("u_a", { value: "business" } as any, "admin")).segment?.decidedBy, "admin");
+  // An UNDECIDED account is decided once, later, by the system; then it is set.
+  await s.setSegment("u_b", { value: "UNDECIDED", reasonCode: "residence_not_given" } as any);
+  assert.equal((await s.setSegment("u_b", { value: "EU_FULL", reasonCode: "test" } as any)).segment?.value, "EU_FULL");
+  await assert.rejects(async () => await s.setSegment("u_b", { value: "UNDECIDED" } as any), /already has segment/);
   await s.addConsent("u_a", { kind: "terms", at: now } as any);
   await s.addConsent("u_a", { kind: "privacy", at: now } as any);
   assert.equal((await s.findUser("u_a"))?.consents?.length, 2, "consents are appended");

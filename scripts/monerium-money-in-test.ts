@@ -898,10 +898,14 @@ await store.updateUser("u_oauth", {
 });
 const oauthUser = async () => (await store.findUser("u_oauth"))!;
 const expire = async () => store.updateUser("u_oauth", { monerium: { ...(await oauthUser()).monerium!, expiresAt: past() } });
-/** The refresh token as it is on disk right now. */
-const refreshOnDisk = () => {
-  const row = JSON.parse(readFileSync(process.env.TRANSF_DB_PATH!, "utf8")).users.find((u: any) => u.id === "u_oauth");
-  return SECRETS.moneriumRefreshToken.open("u_oauth", row.monerium.refreshTokenEnc);
+/** The refresh token as it is stored right now: db.json on disk, or the
+ *  committed row on Postgres (STORE_BACKEND=postgres, check:pg). The read
+ *  starts when this is called. */
+const refreshOnDisk = async () => {
+  const row = process.env.STORE_BACKEND === "postgres"
+    ? await store.findUser("u_oauth")
+    : JSON.parse(readFileSync(process.env.TRANSF_DB_PATH!, "utf8")).users.find((u: any) => u.id === "u_oauth");
+  return SECRETS.moneriumRefreshToken.open("u_oauth", row!.monerium!.refreshTokenEnc!);
 };
 
 await check("two workers inside the refresh window spend the refresh token once and get the same new token", async () => {
@@ -910,26 +914,26 @@ await check("two workers inside the refresh window spend the refresh token once 
   const [a, b, c] = await Promise.all([moneriumAccessToken(u1), moneriumAccessToken(u2), moneriumAccessToken(u3)]);
   assert.equal(stub.refresh.presented.length - presented, 1, "one refresh grant");
   assert.deepEqual([a, b, c], ["at-1", "at-1", "at-1"]);
-  assert.equal(refreshOnDisk(), "rt-1");
+  assert.equal(await refreshOnDisk(), "rt-1");
 });
 
 await check("the rotated refresh token is on disk before the new access token is used", async () => {
   await expire();
-  const seenOnDisk: string[] = [];
+  const seenOnDisk: Promise<string>[] = [];
   stub.onBearer = (token) => { if (token === "at-2") seenOnDisk.push(refreshOnDisk()); };
   try {
     await moneriumClientFor(await oauthUser()).ibans();
   } finally {
     stub.onBearer = undefined;
   }
-  assert.deepEqual(seenOnDisk, ["rt-2"]);
+  assert.deepEqual(await Promise.all(seenOnDisk), ["rt-2"]);
 });
 
 await check("after a restart the fresh process refreshes with the persisted token and never presents a spent one", async () => {
   await expire();
   const { connection } = await restart();
   assert.equal(await connection.moneriumAccessToken((await store.findUser("u_oauth"))!), "at-3");
-  assert.equal(refreshOnDisk(), "rt-3");
+  assert.equal(await refreshOnDisk(), "rt-3");
   assert.equal(stub.refresh.spentPresented, 0);
 });
 
@@ -942,7 +946,7 @@ await check("restart mid-refresh: the new process's refresh wins, the old one's 
   assert.equal(await connection.moneriumAccessToken((await store.findUser("u_oauth"))!), "at-4");
   for (const r of stub.refresh.held.splice(0)) r();
   await assert.rejects(old, (e: any) => e?.name === "MoneriumAccessError", "the spent token is refused, not retried");
-  assert.equal(refreshOnDisk(), "rt-4", "the new process's tokens stay");
+  assert.equal(await refreshOnDisk(), "rt-4", "the new process's tokens stay");
   assert.equal(SECRETS.moneriumAccessToken.open("u_oauth", (await oauthUser()).monerium!.accessTokenEnc!), "at-4");
 });
 
@@ -950,7 +954,7 @@ await check("a refresh answer lost after Monerium rotated: the next refresh is r
   await expire();
   stub.refresh.loseNext = true;
   await assert.rejects(moneriumAccessToken(await oauthUser()), (e: any) => e?.name !== "MoneriumAccessError", "a lost answer is a transient");
-  assert.equal(refreshOnDisk(), "rt-4", "nothing written");
+  assert.equal(await refreshOnDisk(), "rt-4", "nothing written");
   const bearers = stub.bearers.length;
   await assert.rejects(moneriumClientFor(await oauthUser()).ibans(), (e: any) => e?.name === "MoneriumAccessError");
   assert.equal(stub.bearers.length, bearers, "no request went out on the expired token or the app's");
