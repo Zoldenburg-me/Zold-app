@@ -41,7 +41,7 @@ const MID = 1.1379;
 const pinMid = (usd: number) =>
   (process.env.TRANSF_RATES_FIXED = JSON.stringify({ USD: usd, INR: 109.87, KES: 147.53 }));
 pinMid(MID);
-process.env.DEPLOY_EURUSD_RATE ??= String(Math.round(MID * 1e6));
+process.env.DEPLOY_EURUSD_RATE ||= String(Math.round(MID * 1e6));
 
 const bin = (n: string) => path.join(ROOT, "node_modules/.bin", n);
 const children: ChildProcess[] = [chain.child];

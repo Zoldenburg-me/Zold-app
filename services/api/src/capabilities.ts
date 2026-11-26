@@ -7,7 +7,7 @@
  * 3,800-line file.
  */
 import { CHAIN_ID, TURNKEY } from "./config.js";
-import { EMAIL_VERIFICATION, ENS_GATEWAY, ENS_LOOKUP, FORWARDING, HARNESS, MONERIUM, SHOPIFY, TESTNET_FAUCET, moneriumOAuthEnabled, privacyBundleLive, cryptoSendEnabled } from "./config.js";
+import { EMAIL_VERIFICATION, ENS_GATEWAY, ENS_LOOKUP, FORWARDING, HARNESS, MONERIUM, SHOPIFY, TESTNET_FAUCET, moneriumOAuthEnabled, orgPayoutsEnabled, privacyBundleLive, cryptoSendEnabled } from "./config.js";
 import { moneriumApiKeysAvailable, moneriumEnvironment } from "./adapters/monerium-connection.js";
 import { cashRailOpen } from "./orchestrator.js";
 import { testUsdc, usdLabel } from "./usd-token.js";
@@ -43,6 +43,10 @@ export async function capabilities() {
     privacyBundle: privacyBundleLive(),
     /** May the app offer Send → Crypto wallet? Off unless CRYPTO_SEND_ENABLED. */
     cryptoSend: cryptoSendEnabled(),
+    /** May a company pay a bank account from its own IBAN? Off unless
+     *  MONERIUM_ORG_PAYOUTS=on; the Settings → Monerium form is drawn only
+     *  when this is true. */
+    orgBankPayouts: orgPayoutsEnabled(),
     /** Does a wallet send also take Circle's test USDC (token USDC_TEST)?
      *  Only on a staging chain, beside its zUSD. */
     cryptoSendTestUsdc: Boolean(testUsdc()),

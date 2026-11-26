@@ -93,7 +93,14 @@ export type AuditKind =
   | "org_iban.link_submitted"
   | "org_iban.issued"
   /** Monerium listed the company's issued IBAN on another address or chain. */
-  | "org_iban.moved_away";
+  | "org_iban.moved_away"
+  /** A bank payout from a company's IBAN: Monerium took the redeem order
+   *  (`placed`, still pending), carried it out (`sent`), refused it, or did not
+   *  confirm it (`unknown`). */
+  | "org_payout.placed"
+  | "org_payout.sent"
+  | "org_payout.refused"
+  | "org_payout.unknown";
 
 export interface AuditEntry {
   id: string;

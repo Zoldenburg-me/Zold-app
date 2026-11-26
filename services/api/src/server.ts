@@ -1,5 +1,5 @@
 import express from "express";
-import { API_HOST, API_PORT, BRIDGE, CHAIN_ID, CRYPTO_IN, CUSTODY, IS_REAL_MONEY_CHAIN, LIQUIDITY, PAYMENT_REQUESTS, RECOVERY, moneriumSandboxEnabled, SECURITY, UNREAD_DEPLOYER_KEYS, WALLET_SYNC } from "./config.js";
+import { API_HOST, API_PORT, BRIDGE, CHAIN_ID, CRYPTO_IN, CUSTODY, IS_REAL_MONEY_CHAIN, PAYMENT_REQUESTS, RECOVERY, moneriumSandboxEnabled, SECURITY, UNREAD_DEPLOYER_KEYS, WALLET_SYNC } from "./config.js";
 import { initStore, startLockConfig } from "./store.js";
 import { takeStartLock } from "./store/pg/start-lock.js";
 import {
@@ -19,6 +19,7 @@ import {
   startCryptoDepositPoller,
   } from "./adapters/crypto-deposits.js";
 import { buildTransferFromQuote } from "./transfers/build.js";
+import { custodyPosture } from "./liquidity.js";
 import { createAuthRouter } from "./routes/auth.js";
 import { createTransferRouter } from "./routes/transfers.js";
 import { createMoneriumWebhookRouter } from "./routes/monerium-webhook.js";
@@ -510,25 +511,9 @@ app.listen(API_PORT, API_HOST, () => {
    * funds depends on the liquidity venue and whether Bridge is live, and
    * neither is visible otherwise.
    */
-  const safeExecutable = ["dex", "lifi", "rfq", "best"].includes(LIQUIDITY.PROVIDER);
-  if (!safeExecutable) {
-    console.warn(
-      `CUSTODY: LIQUIDITY_PROVIDER=${LIQUIDITY.PROVIDER} cannot be executed by a user's Safe, so ` +
-        "cash-rail transfers debit the full amount to the orchestrator and swap from there. " +
-        "The non-custodial path needs dex, lifi, rfq or best.",
-    );
-  } else if (!BRIDGE.live) {
-    console.warn(
-      "CUSTODY: the Safe-executed swap batch is available, but BRIDGE_LIVE is not set — with no " +
-        "external deposit address the batch delivers its output to the orchestrator. Cash-rail " +
-        "transfers are recorded as custodial until Bridge is live.",
-    );
-  } else {
-    console.log(
-      "CUSTODY: cash-rail transfers run non-custodially — the user's Safe signs one batch that " +
-        "delivers straight to Bridge. The SEPA rail moves only the fee.",
-    );
-  }
+  const posture = custodyPosture(BRIDGE.live);
+  if (posture.warn) console.warn(posture.message);
+  else console.log(posture.message);
   if (CUSTODY.requireNonCustodial) {
     console.log("CUSTODY: REQUIRE_NON_CUSTODIAL=1 — a transfer that would use the orchestrator is refused.");
   }

@@ -61,14 +61,21 @@ const {
 const { ENTRYPOINT_V9, calculateUserOperationMaxGasCost } = await import("abstractionkit");
 const { partnerTimeout } = await import("../services/api/src/http.js");
 
+// A keyed endpoint holds its key in the URL, and an error can carry the URL
+// (a typo'd URL, an endpoint echoing the request): every line prints each
+// configured endpoint as scheme and host only.
+const ENDPOINTS = [CANDIDE.rpcUrl, CANDIDE.bundlerUrl, CANDIDE.paymasterUrl, process.env.RECOVERY_SERVICE_URL ?? ""]
+  .filter(Boolean)
+  .sort((a, b) => b.length - a.length);
+const redact = (msg: string) => ENDPOINTS.reduce((m, url) => m.split(url).join(urlForLog(url)), msg);
 let failures = 0;
-const ok = (msg: string) => console.log(`  PASS  ${msg}`);
-const warn = (msg: string) => console.log(`  WARN  ${msg}`);
+const ok = (msg: string) => console.log(`  PASS  ${redact(msg)}`);
+const warn = (msg: string) => console.log(`  WARN  ${redact(msg)}`);
 const fail = (msg: string) => {
   failures++;
-  console.log(`  FAIL  ${msg}`);
+  console.log(`  FAIL  ${redact(msg)}`);
 };
-const info = (msg: string) => console.log(`        ${msg}`);
+const info = (msg: string) => console.log(`        ${redact(msg)}`);
 
 async function rpc(url: string, method: string, params: unknown[] = []): Promise<any> {
   const res = await fetch(url, {
@@ -79,12 +86,13 @@ async function rpc(url: string, method: string, params: unknown[] = []): Promise
   });
   const body: any = await res.json().catch(() => null);
   if (!res.ok || !body || body.error) {
-    throw new Error(`${method} → ${res.status} ${JSON.stringify(body?.error ?? body ?? "").slice(0, 200)}`);
+    throw new Error(`${method} → ${res.status} ${redact(JSON.stringify(body?.error ?? body ?? "")).slice(0, 200)}`);
   }
   return body.result;
 }
 const hexChain = `0x${CANDIDE.chainId.toString(16)}`;
-const errMsg = (e: any) => String(e?.cause?.message ? `${e.message} (${e.cause.message})` : e?.message ?? e).slice(0, 300);
+// Redacted before the cut: a URL cut short no longer matches, and would print part of its key.
+const errMsg = (e: any) => redact(String(e?.cause?.message ? `${e.message} (${e.cause.message})` : e?.message ?? e)).slice(0, 300);
 
 console.log(`Candide preflight — chain ${CANDIDE.chainId}, gas ${CANDIDE.gas.mode}${CANDIDE.gas.mode === "token" ? ` (${CANDIDE.gas.token})` : ""}`);
 console.log(`  rpc       ${urlForLog(CANDIDE.rpcUrl)}`);
@@ -119,6 +127,24 @@ try {
 }
 
 console.log(`gas (${CANDIDE.gas.mode})`);
+if (CANDIDE.gas.mode !== "native") {
+  // A paymaster for another chain or EntryPoint still answers a sponsorship
+  // request here; the op it pays for would fail only at a user's send.
+  try {
+    const id = await rpc(CANDIDE.paymasterUrl, "pm_chainId");
+    if (BigInt(id) === CANDIDE.chainId) ok(`paymaster answers for chain ${CANDIDE.chainId}`);
+    else fail(`paymaster answers for chain ${BigInt(id)}, not ${CANDIDE.chainId}`);
+  } catch (e) {
+    fail(`paymaster pm_chainId failed: ${errMsg(e)}`);
+  }
+  try {
+    const eps: string[] = await rpc(CANDIDE.paymasterUrl, "pm_supportedEntryPoints");
+    if (eps.some((e) => e.toLowerCase() === ENTRYPOINT_V9.toLowerCase())) ok("paymaster supports EntryPoint v0.9");
+    else fail(`paymaster does not list EntryPoint v0.9 (lists ${eps.join(", ")})`);
+  } catch (e) {
+    fail(`paymaster pm_supportedEntryPoints failed: ${errMsg(e)}`);
+  }
+}
 if (CANDIDE.gas.mode === "token") {
   try {
     const r = await rpc(CANDIDE.paymasterUrl, "pm_supportedERC20Tokens", [ENTRYPOINT_V9]);
