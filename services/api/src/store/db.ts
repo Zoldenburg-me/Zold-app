@@ -136,42 +136,47 @@ export const DB_PATH = process.env.TRANSF_DB_PATH
   : path.join(ROOT, "data", "db.json");
 export const DATA_DIR = path.dirname(DB_PATH);
 
-export let db: Db = {
-  users: [],
-  quotes: [],
-  transfers: [],
-  sessions: [],
-  operators: [],
-  operatorSessions: [],
-  serviceCredentials: [],
-  receiptShares: [],
-  documents: [],
-  paymentRequests: [],
-  shopifyConnections: [],
-  shopifyDeliveries: [],
-  merchantLinks: [],
-  processedMoneriumOrders: [],
-  processedMoneriumWebhooks: [],
-  moneriumIssueOrders: [],
-  conversionSweeps: [],
-  cryptoDeposits: [],
-  cryptoSends: [],
-  audit: [],
-  recoveryRequests: [],
-  safeOps: [],
-  cryptoDepositCursor: {},
-  organisations: [],
-  members: [],
-  accounts: [],
-  importedWallets: [],
-  contacts: [],
-  drafts: [],
-  invoices: [],
-  chartAccounts: [],
-  accountRules: [],
-  ledger: [],
-  outbox: [],
-};
+/** A store with every collection and no rows. */
+export function emptyDb(): Db {
+  return {
+    users: [],
+    quotes: [],
+    transfers: [],
+    sessions: [],
+    operators: [],
+    operatorSessions: [],
+    serviceCredentials: [],
+    receiptShares: [],
+    documents: [],
+    paymentRequests: [],
+    shopifyConnections: [],
+    shopifyDeliveries: [],
+    merchantLinks: [],
+    processedMoneriumOrders: [],
+    processedMoneriumWebhooks: [],
+    moneriumIssueOrders: [],
+    conversionSweeps: [],
+    cryptoDeposits: [],
+    cryptoSends: [],
+    audit: [],
+    recoveryRequests: [],
+    safeOps: [],
+    cryptoDepositCursor: {},
+    organisations: [],
+    members: [],
+    accounts: [],
+    importedWallets: [],
+    contacts: [],
+    drafts: [],
+    invoices: [],
+    chartAccounts: [],
+    accountRules: [],
+    ledger: [],
+    outbox: [],
+  };
+}
+
+export let db: Db = emptyDb();
 
 /** Load the store, run the load-time migrations, write it back. */
 export async function initStore() {
@@ -179,56 +184,75 @@ export async function initStore() {
   mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
   if (existsSync(DB_PATH)) {
     db = JSON.parse(readFileSync(DB_PATH, "utf8"));
-    db.sessions ??= [];
-    db.operators ??= [];
-    db.operatorSessions ??= [];
-    db.serviceCredentials ??= [];
-    db.receiptShares ??= [];
-    db.documents ??= [];
-    db.paymentRequests ??= [];
-    db.shopifyConnections ??= [];
-    db.shopifyDeliveries ??= [];
-    db.merchantLinks ??= [];
-    db.processedMoneriumOrders ??= [];
-    db.processedMoneriumWebhooks ??= [];
-    db.moneriumIssueOrders ??= [];
-    db.conversionSweeps ??= [];
-    db.cryptoDeposits ??= [];
-    db.cryptoSends ??= [];
-    db.audit ??= [];
-    db.recoveryRequests ??= [];
-    db.safeOps ??= [];
-    db.cryptoDepositCursor ??= {};
-    db.organisations ??= [];
-    db.members ??= [];
-    db.accounts ??= [];
-    db.importedWallets ??= [];
-    db.contacts ??= [];
-    db.drafts ??= [];
-    db.invoices ??= [];
-    db.chartAccounts ??= [];
-    db.accountRules ??= [];
-    db.ledger ??= [];
-    db.outbox ??= [];
-    if (IS_PRODUCTION) {
-      const custodial = db.users.filter((u) => (u.paymentPage as any)?.depositPrivateKey);
-      if (custodial.length) {
-        throw new Error(
-          `production store contains ${custodial.length} account(s) with API-held payment-page key material; ` +
-            "activate non-custodial payment pages before startup",
-        );
-      }
-    }
-    migrateUsersToOrganisations();
-    stripSenderProfiles();
-    migrateCryptoDepositHolding(db.cryptoDeposits, db.users);
-    for (const q of db.quotes) q.status ??= "OPEN";
-    for (const s of db.sessions) s.expiresAt ??= new Date(Date.parse(s.createdAt) + 24 * 60 * 60 * 1000).toISOString();
-    pruneSessions();
+    migrateLoaded();
     persist();
   } else {
     persist();
   }
+}
+
+/** Fill the collections an older file lacks and run the load-time
+ *  migrations on `db`, in memory. initStore writes the result back; the
+ *  Postgres importer (scripts/pg-import.ts) imports it. */
+function migrateLoaded() {
+  db.sessions ??= [];
+  db.operators ??= [];
+  db.operatorSessions ??= [];
+  db.serviceCredentials ??= [];
+  db.receiptShares ??= [];
+  db.documents ??= [];
+  db.paymentRequests ??= [];
+  db.shopifyConnections ??= [];
+  db.shopifyDeliveries ??= [];
+  db.merchantLinks ??= [];
+  db.processedMoneriumOrders ??= [];
+  db.processedMoneriumWebhooks ??= [];
+  db.moneriumIssueOrders ??= [];
+  db.conversionSweeps ??= [];
+  db.cryptoDeposits ??= [];
+  db.cryptoSends ??= [];
+  db.audit ??= [];
+  db.recoveryRequests ??= [];
+  db.safeOps ??= [];
+  db.cryptoDepositCursor ??= {};
+  db.organisations ??= [];
+  db.members ??= [];
+  db.accounts ??= [];
+  db.importedWallets ??= [];
+  db.contacts ??= [];
+  db.drafts ??= [];
+  db.invoices ??= [];
+  db.chartAccounts ??= [];
+  db.accountRules ??= [];
+  db.ledger ??= [];
+  db.outbox ??= [];
+  if (IS_PRODUCTION) {
+    const custodial = db.users.filter((u) => (u.paymentPage as any)?.depositPrivateKey);
+    if (custodial.length) {
+      throw new Error(
+        `production store contains ${custodial.length} account(s) with API-held payment-page key material; ` +
+          "activate non-custodial payment pages before startup",
+      );
+    }
+  }
+  migrateUsersToOrganisations();
+  stripSenderProfiles();
+  migrateCryptoDepositHolding(db.cryptoDeposits, db.users);
+  for (const q of db.quotes) q.status ??= "OPEN";
+  for (const s of db.sessions) s.expiresAt ??= new Date(Date.parse(s.createdAt) + 24 * 60 * 60 * 1000).toISOString();
+  pruneSessions();
+}
+
+/**
+ * The store in `file` as initStore would serve it: parsed, the load-time
+ * migrations run, sessions pruned, nothing written. What the Postgres
+ * importer imports and verifies against (docs/postgres-store-design.md §6).
+ * It replaces this process's `db`: for a process that only reads it.
+ */
+export function loadMigratedSnapshot(file: string): Db {
+  db = JSON.parse(readFileSync(file, "utf8"));
+  migrateLoaded();
+  return db;
 }
 
 /** Load the store only to read it, for a report: no migration, no write, and
