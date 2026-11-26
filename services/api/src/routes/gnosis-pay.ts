@@ -219,6 +219,10 @@ export function createGnosisPayRouter(requireSession: SessionResolver): express.
       // profile to echo it back — line 2 of a SIWE message IS the address,
       // and it is the one thing here we know for certain.
       const signedBy = message.split("\n")[1]?.trim() ?? "";
+      // Two sign-ins finishing at once on one account each save their own
+      // connection and the last save wins; the other tab's next /account read
+      // is refused (another account's token) and asks it to sign in again.
+      // Serializing them would not change which one wins.
       const { token } = await verifyAndProfile(message, signature, cookie, user.id, signedBy);
       res.json({ token, ...PROVENANCE, connected: store.findUser(user.id)?.gnosisPay ?? null });
     } catch (err) {

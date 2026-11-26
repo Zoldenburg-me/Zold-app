@@ -103,6 +103,7 @@ const scripts = [
   "enrolment:test",
   "recovery-bank:test",
   "best:test",
+  "venue-boot:test",
   "liquidity-provider:test",
   "webhook:test",
   "checkout-service:test",

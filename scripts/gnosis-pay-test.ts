@@ -52,7 +52,7 @@ const nonceOfCookie = new Map<string, string>();
 const profileOfToken = new Map<string, Record<string, unknown>>();
 let challengeCalls = 0;
 /** The next answer on a path starting with `path` is broken this way. */
-let fault: { path: string; kind: "empty" | "malformed" | "oversized" | "hang" | "echo" | "unavailable" } | undefined;
+let fault: { path: string; kind: "empty" | "malformed" | "oversized" | "hang" | "echo" | "unavailable" | "null" } | undefined;
 const WALLET_A = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const WALLET_B = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 /** Signs in, but its profile lists WALLET_B as the sign-in wallet. */
@@ -80,6 +80,7 @@ const stub: Server = createServer((req, res) => {
     if (kind === "oversized") return send(200, "x".repeat(2 * 1024 * 1024), "text/plain");
     if (kind === "echo") return send(400, { message: `rejected ${req.headers.authorization}` });
     if (kind === "unavailable") return send(503, { message: "try again later" });
+    if (kind === "null") return send(200, null);
     // Headers, a first byte, then nothing: only our timeout ends this.
     res.writeHead(200, { "content-type": "application/json" });
     return res.write("[");
@@ -408,6 +409,7 @@ await check("an internal failure answers 500 with a reference, never the raw err
     assert.equal(connectedOf("u_a"), undefined, "A connected to a profile that is not the signer's");
     const r2 = await verify("u_a", await start("u_a", WALLET_N));
     assert.notEqual(r2.status, 200, JSON.stringify(r2.body));
+    assert.equal(r2.body.token, undefined);
     assert.equal(connectedOf("u_a"), undefined, "A connected to a profile with no id");
   });
 
@@ -515,6 +517,17 @@ await check("an internal failure answers 500 with a reference, never the raw err
     const again = await verify("u_a", await start("u_a", WALLET_A));
     assert.equal(again.status, 200, JSON.stringify(again.body));
     assert.equal(connectedOf("u_a")?.userId, "gp-A");
+  });
+
+  await check("router: a sign-in whose profile read answers null or stalls connects nothing and hands back no token", async () => {
+    disconnect("u_a");
+    for (const kind of ["null", "hang"] as const) {
+      const v = await start("u_a", WALLET_A);
+      const r = await upstream("/api/v1/user", kind, () => verify("u_a", v));
+      assert.equal(r.status, 502, `${kind}: ${JSON.stringify(r.body)}`);
+      assert.equal(r.body.token, undefined, kind);
+      assert.equal(connectedOf("u_a"), undefined, kind);
+    }
   });
 
   await check("router: an oversized or stalled profile answer is a 502/504, never a 500", async () => {

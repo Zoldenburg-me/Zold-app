@@ -217,6 +217,20 @@ Say this plainly rather than letting the surface imply otherwise:
   an email code or Skip; the passkey signup makes after it is the account's
   own passkey, not a Turnkey recovery login. The /recovery page itself (all guardians) has never
   driven a real recovery. No DPA with Turnkey is signed.
+- **No real Gnosis Pay account has been connected** (`routes/gnosis-pay.ts`;
+  stub only, `gnosispay:test`). Three known behaviours, all UX only:
+  - Two sign-ins finishing at once on one Zold account (two tabs, two
+    wallets) each save their connection; the last save wins. The other tab's
+    first `/account` read is refused and it asks to sign in again. Nothing from the other account is shown or kept.
+  - An `/account` read that passed its profile check before a second sign-in
+    saved writes its own (earlier) account back after fetching cards and
+    balances, so the stored connection names that account again and the
+    second tab's next read is refused and asks to sign in again. It is the
+    user's own account either way; nothing from another Zold account is
+    shown or kept.
+  - A connection saved before the stored profile id existed has none, so
+    `/account` refuses every token for it until the user signs in again,
+    which overwrites the row.
 - **One Candide forward has run, on the same chain.** On 2026-10-11 the
   owner paid 1 USDC on Base to their app.zoldhq.com payment page's forwarding
   address, and it reached the earlier owner Safe (the conversion above spent it there).

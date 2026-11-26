@@ -869,7 +869,7 @@ try {
       const saveActive = () => {
         const p = store.findUser(ravi.id)!.paymentPage!;
         const at = new Date(realNow2() + t + 1).toISOString();
-        store.updateUser(ravi.id, { paymentPage: { ...p, forwarder: { ...p.forwarder!, active: true, activatedAt: at, expiresAt: later }, routesReadAt: at, updatedAt: at } });
+        store.updateUser(ravi.id, { paymentPage: { ...p, forwarder: { ...p.forwarder!, active: true, activatedAt: at, activationId: randomUUID(), expiresAt: later }, routesReadAt: at, updatedAt: at } });
         return at;
       };
       // A renewal asked before the page was saved, answered "not active" after.
@@ -889,6 +889,25 @@ try {
       const afterLate = store.findUser(ravi.id)!.paymentPage!.forwarder!;
       check("a late not-active answer to an earlier renewal does not overwrite the activation just saved", afterLate.active === true && afterLate.activatedAt === savedAt, JSON.stringify(afterLate));
       check("nor close the saved page through its backoff", (await livePaymentPage(store.findUser(ravi.id)!)) === true);
+
+      // The same race, with the save stamped in the very millisecond of the
+      // activation the renewal started from: only the activation id tells them apart.
+      renewDue();
+      candide.hold = new Promise<void>((r) => (release = r));
+      candide.held = 0;
+      pastBackoff();
+      const sameMs = livePaymentPage(store.findUser(ravi.id)!);
+      for (let i = 0; i < 200 && candide.held === 0; i++) await new Promise((r) => setTimeout(r, 10));
+      check("(a second renewal is waiting on Candide's answer)", candide.held === 1);
+      {
+        const p = store.findUser(ravi.id)!.paymentPage!;
+        store.updateUser(ravi.id, { paymentPage: { ...p, forwarder: { ...p.forwarder!, active: true, activationId: randomUUID(), expiresAt: later } } });
+      }
+      candide.hold = undefined;
+      release();
+      await sameMs;
+      check("a late not-active answer does not overwrite a save stamped in the same millisecond", store.findUser(ravi.id)!.paymentPage!.forwarder!.active === true, JSON.stringify(store.findUser(ravi.id)!.paymentPage!.forwarder));
+      check("nor close that page through its backoff", (await livePaymentPage(store.findUser(ravi.id)!)) === true);
 
       // A renewal that closed the page, then the page is saved: no waiting out the backoff.
       renewDue();

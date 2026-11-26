@@ -173,6 +173,41 @@ const router = (venues: [string, bigint | null][]) =>
   assert.equal(venueSettles(best([["dex", dex], ["fx-swapper", fx]])), true);
   assert.equal(venueSettles(fx), true);
   ok("a quote-only venue (CoW), alone or behind best, does not settle");
+
+  // The startup custody log is decided by venueSettles/venueServesSafe, the
+  // checks the builder uses, so a venue that cannot settle is reported as
+  // refusing cash, never as swapping it.
+  const { custodyPosture } = liquidity as any;
+  for (const p of [cow, best([["dex", dex], ["cow", cow]]), best([["fx-swapper", fx], ["cow", cow]])]) {
+    const m = custodyPosture(true, p);
+    assert.ok(m.warn);
+    assert.match(m.message, /VENUE_CANNOT_SETTLE/);
+    assert.doesNotMatch(m.message, /orchestrator and swap|batch is available|non-custodially/);
+  }
+  assert.match(custodyPosture(true, fx).message, /debit the full amount to the orchestrator/);
+  assert.match(custodyPosture(true, best([["fx-swapper", fx]])).message, /debit the full amount to the orchestrator/);
+  assert.match(custodyPosture(false, dex).message, /BRIDGE_LIVE is not set/);
+  assert.equal(custodyPosture(true, dex).warn, false);
+  ok("the startup custody log reports a venue that cannot settle as refusing cash, not swapping it");
+
+  // A bad venue config must not take the API down: the log runs in the
+  // listen callback, where a throw reaches the uncaught-exception handler and
+  // the process exits. It warns instead; the cash quote still refuses.
+  const { LIQUIDITY } = await import("../services/api/src/config.js");
+  const before = { PROVIDER: LIQUIDITY.PROVIDER, VENUES: LIQUIDITY.VENUES };
+  try {
+    for (const bad of [{ PROVIDER: "nope", VENUES: ["lifi", "dex"] }, { PROVIDER: "best", VENUES: ["nope"] }, { PROVIDER: "best", VENUES: [] }]) {
+      Object.assign(LIQUIDITY, bad);
+      const m = custodyPosture(true);
+      assert.ok(m.warn, JSON.stringify(bad));
+      assert.match(m.message, /venue configuration is invalid/);
+      assert.match(m.message, /cash quote will fail/);
+      await assert.rejects(async () => liquidity.liquidityProvider().quote("EURE_TO_USDC", ONE_HUNDRED, "q", new Date(Date.now() + 60_000).toISOString()), JSON.stringify(bad));
+    }
+  } finally {
+    Object.assign(LIQUIDITY, before);
+  }
+  ok("an unknown venue or empty LIQUIDITY_VENUES makes the startup log warn, not throw; the cash quote still refuses");
 }
 console.log(`\nBEST EXECUTION TEST PASSED — ${n}/${n}: the better price wins, losers are recorded, surplus is measured and attributed`);
 console.log("NOT covered here: a real multi-venue race. LI.FI has no testnet, so that can only be observed on a mainnet.");
