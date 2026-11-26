@@ -163,10 +163,11 @@ await check("rotation returns a fresh token once", () => {
   assert.match(token1, /^zsc_[A-Za-z0-9_-]{43}$/);
   assert.ok(first.body.id);
 });
-await check("the store holds the hash, never the token", () => {
-  const raw = readFileSync(process.env.TRANSF_DB_PATH!, "utf8");
-  assert.ok(!raw.includes(token1), "token found in the db file");
-  assert.ok(raw.includes("serviceCredentials"));
+await check("the store holds the hash, never the token", async () => {
+  // On Postgres (npm run check:pg) the rows, not the JSON file.
+  const raw = process.env.STORE_BACKEND === "postgres" ? JSON.stringify(await store.list("serviceCredentials")) : readFileSync(process.env.TRANSF_DB_PATH!, "utf8");
+  assert.ok(!raw.includes(token1), "token found in the store");
+  assert.ok(process.env.STORE_BACKEND === "postgres" ? raw.length > 2 : raw.includes("serviceCredentials"));
 });
 await check("no bearer and a wrong bearer answer 401", async () => {
   assert.equal((await get("t-ok")).status, 401);

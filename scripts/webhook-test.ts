@@ -587,7 +587,14 @@ try {
       disarmHold();
       listed.delete("real-poll");
     }
-    const retry = await post("/api/webhooks/monerium", body, signedHeaders("evt-poll", body));
+    // The credit is on chain before the poller's recording transaction
+    // commits, so a retry in between still answers 503 `retry`; once the
+    // recording has ended it is a duplicate.
+    let retry = await post("/api/webhooks/monerium", body, signedHeaders("evt-poll", body));
+    for (const s = Date.now(); retry.status === 503 && Date.now() - s < 10_000; ) {
+      await new Promise((r) => setTimeout(r, 100));
+      retry = await post("/api/webhooks/monerium", body, signedHeaders("evt-poll", body));
+    }
     assert.equal(retry.status, 200);
     assert.equal(retry.data.outcome, "duplicate");
     assert.equal(await balance(), 102, "€5 must be credited once, not twice");

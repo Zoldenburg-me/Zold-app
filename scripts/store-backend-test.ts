@@ -17,7 +17,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PGlite } from "@electric-sql/pglite";
-import { conditionalWriteSuite, storeSuite } from "./_store-suite.js";
+import { conditionalWriteSuite, keptRowsSuite, outboxSuite, storeSuite } from "./_store-suite.js";
 
 const tmp = mkdtempSync(path.join(tmpdir(), "zold-store-backend-"));
 process.env.TRANSF_DB_PATH = path.join(tmp, "db.json");
@@ -25,7 +25,7 @@ process.env.TRANSF_DB_PATH = path.join(tmp, "db.json");
 const { initStore, store } = await import("../services/api/src/store.js");
 const { createPgStore } = await import("../services/api/src/store/pg/backend.js");
 const { assertSchemaCurrent, migrate, readMigrations, transactionControl } = await import("../services/api/src/store/pg/migrate.js");
-const { pgliteDatabase, pgPoolConfig } = await import("../services/api/src/store/pg/sql.js");
+const { databaseUrlIsLocal, pgliteDatabase, pgPoolConfig } = await import("../services/api/src/store/pg/sql.js");
 /** Every migration file, and the version and name prefix of the next one. */
 const ALL_MIGRATIONS = readMigrations().map((m) => m.version);
 const NEXT = ALL_MIGRATIONS.length + 1;
@@ -37,6 +37,7 @@ const pglite = async () => pgliteDatabase((await PGlite.create()) as never);
 await initStore();
 await storeSuite(store);
 await conditionalWriteSuite(store);
+await outboxSuite(store);
 console.log("ok - store suite on the JSON backend");
 
 // ── The JSON backend's mutex, transactions and copies (§3) ─────────────────
@@ -92,17 +93,19 @@ console.log("ok - store suite on the JSON backend");
   assert.deepEqual(order, [1, 2, 3]);
   assert.equal((await store.findOrganisation("org_mx"))?.name, "N3");
 
-  // A state-change listener runs only once its write is on disk: a call that
-  // releases the mutex to a transaction never fires that transaction's
-  // announcements before the transaction persisted.
+  // A state-change listener runs inside the write and its outbox row goes to
+  // disk with the state; the outbox's listeners run only once that write is
+  // on disk: a call that releases the mutex to a transaction never fires that
+  // transaction's announcement before the transaction persisted.
   {
     await store.addTransfer({ id: "t_ann_a", userId: "u", quoteId: "q_ann_a", state: "CREATED", txs: [], createdAt: now, updatedAt: now } as any);
     await store.addTransfer({ id: "t_ann_b", userId: "u", quoteId: "q_ann_b", state: "CREATED", txs: [], createdAt: now, updatedAt: now } as any);
+    store.onTransferStateChange((t) => (t.id.startsWith("t_ann_") ? { kind: "test.ann", payload: { transferId: t.id, state: t.state } } : undefined));
     const heard: string[] = [];
-    store.onTransferStateChange((t) => {
-      if (!t.id.startsWith("t_ann_")) return;
-      const stored = onDisk().transfers.find((x: any) => x.id === t.id)?.state;
-      heard.push(`${t.id}:${t.state}:${stored === t.state ? "on disk" : `disk says ${stored}`}`);
+    store.onOutboxWritten(() => {
+      const disk = onDisk();
+      const rows = disk.outbox.filter((r: any) => r.kind === "test.ann");
+      heard.push(rows.map((r: any) => `${r.payload.transferId}:${disk.transfers.find((x: any) => x.id === r.payload.transferId)?.state}`).join(","));
     });
     let letGo!: () => void;
     const gate = new Promise<void>((r) => (letGo = r));
@@ -113,11 +116,11 @@ console.log("ok - store suite on the JSON backend");
     });
     await a;
     await new Promise((r) => setTimeout(r, 20));
-    assert.deepEqual(heard, ["t_ann_a:DEBITED:on disk"], "the transaction's change is not announced while it is open");
+    assert.deepEqual(heard, ["t_ann_a:DEBITED"], "the transaction's row is not announced while it is open");
     letGo();
     await b;
     await new Promise((r) => setTimeout(r, 0));
-    assert.deepEqual(heard, ["t_ann_a:DEBITED:on disk", "t_ann_b:DEBITED:on disk"]);
+    assert.deepEqual(heard, ["t_ann_a:DEBITED", "t_ann_a:DEBITED,t_ann_b:DEBITED"], "each row on disk with its state change when announced");
   }
 
   // A response sent inside a transaction goes out after the file write; one
@@ -173,19 +176,25 @@ console.log("ok - store suite on the JSON backend");
   const pg = createPgStore(db);
   await storeSuite(pg);
   await conditionalWriteSuite(pg);
+  await outboxSuite(pg);
+  await keptRowsSuite(pg, db);
   // A state change inside a store.tx is announced after its COMMIT, and
   // never for a transaction rolled back.
   const now = new Date().toISOString();
   for (const id of ["t_lis_ok", "t_lis_rb"]) {
     await pg.addTransfer({ id, userId: "u_a", quoteId: `q_${id}`, state: "CREATED", txs: [], createdAt: now, updatedAt: now } as any);
   }
-  const heard: string[] = [];
-  pg.onTransferStateChange((t) => void heard.push(`${t.id}:${t.state}`));
+  pg.onTransferStateChange((t) => (t.id.startsWith("t_lis_") ? { kind: "test.lis", payload: { transferId: t.id } } : undefined));
+  let announced = 0;
+  pg.onOutboxWritten(() => void announced++);
+  const lisRows = async () => (await pg.list("outbox")).filter((r) => r.kind === "test.lis").map((r) => r.payload.transferId);
   await pg.tx(async (t) => {
     await t.updateTransfer("t_lis_ok", { state: "PAID" } as any);
-    assert.deepEqual(heard, [], "not announced before the commit");
+    assert.deepEqual(await t.list("outbox").then((o) => o.filter((r) => r.kind === "test.lis").length), 1, "the row is written in the transaction");
+    assert.equal(announced, 0, "not announced before the commit");
   });
-  assert.deepEqual(heard, ["t_lis_ok:PAID"]);
+  assert.equal(announced, 1);
+  assert.deepEqual(await lisRows(), ["t_lis_ok"]);
   await assert.rejects(
     pg.tx(async (t) => {
       await t.updateTransfer("t_lis_rb", { state: "PAID" } as any);
@@ -193,8 +202,38 @@ console.log("ok - store suite on the JSON backend");
     }),
     /roll back/,
   );
-  assert.deepEqual(heard, ["t_lis_ok:PAID"], "a rolled-back change is never announced");
+  assert.equal(announced, 1, "a rolled-back change is never announced");
+  assert.deepEqual(await lisRows(), ["t_lis_ok"], "and its outbox row is rolled back with it");
   assert.equal((await pg.findTransfer("t_lis_rb"))?.state, "CREATED");
+
+  // Outside a store.tx too, the outbox's listeners run after the COMMIT of
+  // the method's own transaction: each COMMIT is held a moment and counted.
+  {
+    let commits = 0;
+    const slow = {
+      query: db.query.bind(db),
+      exec: db.exec.bind(db),
+      close: db.close.bind(db),
+      tx: async <T,>(fn: (q: any) => Promise<T>) => {
+        const out = await db.tx(async (q) => {
+          const r = await fn(q);
+          await new Promise((res) => setTimeout(res, 20));
+          return r;
+        });
+        commits++;
+        return out;
+      },
+    };
+    const sp = createPgStore(slow as any);
+    sp.onTransferStateChange((t) => (t.id === "t_own" ? { kind: "test.own", payload: {} } : undefined));
+    const at: number[] = [];
+    sp.onOutboxWritten(() => void at.push(commits));
+    await sp.addTransfer({ id: "t_own", userId: "u_a", quoteId: "q_t_own", state: "CREATED", txs: [], createdAt: now, updatedAt: now } as any);
+    const before = commits;
+    await sp.updateTransfer("t_own", { state: "DEBITED" } as any);
+    await sp.enqueueOutbox({ kind: "test.own", payload: { n: 2 } });
+    assert.deepEqual(at, [before + 1, before + 2], "each announced after its own COMMIT");
+  }
 
   // A nested store.tx that fails and is caught undoes only itself (a
   // savepoint); the transaction goes on and commits the rest.
@@ -242,7 +281,7 @@ console.log("ok - store suite on the JSON backend");
   assert.deepEqual(order, ["a+", "a-", "b+", "b-"]);
   for (const s of [pg]) await assert.rejects(s.lockUser("u_a"), /lockUser outside a store\.tx holds nothing/);
   await db.close();
-  console.log(`ok - store suite on the Postgres backend (PGlite, server_version_num ${version}); listeners after COMMIT only; nested tx savepoints; no silent COMMIT after a failed statement`);
+  console.log(`ok - store suite on the Postgres backend (PGlite, server_version_num ${version}); outbox rows commit and roll back with their change; ledger history and kept rows (§5); nested tx savepoints; no silent COMMIT after a failed statement`);
 }
 
 // ── Migration runner ───────────────────────────────────────────────────────
@@ -371,8 +410,19 @@ console.log("ok - store suite on the JSON backend");
   await s.addUser({ id: "u_mail", address: `0x${"44".repeat(20)}`, iban: "", createdAt: now, email: spaced } as any);
   assert.equal(spaced.trim().toLowerCase(), "zoe@example.de");
   assert.deepEqual((await s.usersByEmail("zoe@example.de")).map((u) => u.id), ["u_mail"], "NBSP, em space, BOM and ideographic space are trimmed");
+  // 0005: the table refuses what the store's guards refuse, whatever the code does.
+  await assert.rejects(
+    async () => await db.query("INSERT INTO cap_holds (id, cap_key, day, eur, expires_at) VALUES ('h_nan', 'k', '2026-01-01', 'NaN', now())"),
+    /cap_holds_eur_finite/,
+    "a NaN hold",
+  );
+  await assert.rejects(
+    async () => await db.query(`INSERT INTO crypto_deposits (id, doc) VALUES ('dep_null', '{"chainId":1,"txHash":"0xab","userId":"u_1"}')`),
+    /null value in column "log_index"/,
+    "a deposit with no logIndex",
+  );
   await db.close();
-  console.log("ok - Postgres keys: one payment-handle namespace, unique credentials, one live share per transfer, one issued invoice number per org, one transfer per quote, one account per company Safe, one Zoldenburg grace period per user, the email key trimmed as JavaScript trims");
+  console.log("ok - Postgres keys: one payment-handle namespace, unique credentials, one live share per transfer, one issued invoice number per org, one transfer per quote, one account per company Safe, one Zoldenburg grace period per user, the email key trimmed as JavaScript trims, no NaN cap hold, no deposit without a logIndex");
 }
 
 // ── The PGlite features the design note relies on (§4) ─────────────────────
@@ -408,6 +458,9 @@ console.log("ok - store suite on the JSON backend");
   const real = { realMoney: true };
   // The Oracle host: a unix socket, peer authentication, no password (§7).
   assert.deepEqual(pgPoolConfig("postgresql://zold_app@/zold?host=/run/postgresql-mainnet&port=5432", real), {
+    statement_timeout: 30_000,
+    idle_in_transaction_session_timeout: 30_000,
+    connectionTimeoutMillis: 10_000,
     connectionString: "postgresql://zold_app@/zold?host=/run/postgresql-mainnet&port=5432",
   });
   assert.ok(pgPoolConfig("postgresql:///zold?host=/tmp", real));
@@ -428,6 +481,11 @@ console.log("ok - store suite on the JSON backend");
     assert.throws(() => pgPoolConfig(url, opts as never), (e: Error) => why.test(e.message) && !e.message.includes(secret), url.replace(secret, "…"));
   }
   const tls = pgPoolConfig("postgresql://u@db.example.com/zold?sslmode=verify-full", { ca, realMoney: true });
+  assert.equal(tls.idle_in_transaction_session_timeout, 30_000, "the TLS branch keeps the bounds");
+  assert.equal(databaseUrlIsLocal("postgresql:///postgres?host=/tmp"), true);
+  assert.equal(databaseUrlIsLocal("postgresql://u@[::1]/zold"), true);
+  assert.equal(databaseUrlIsLocal("postgresql://u@db.example.com/zold"), false);
+  assert.equal(databaseUrlIsLocal("postgresql://u@localhost/zold?host=db.example.com"), false);
   assert.deepEqual(tls.ssl, { ca: "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n", rejectUnauthorized: true });
   assert.equal(tls.connectionString, "postgresql://u@db.example.com/zold", "our CA object is not replaced by the driver's sslmode parsing");
   assert.equal(
@@ -435,7 +493,7 @@ console.log("ok - store suite on the JSON backend");
     "postgresql://u@/zold?host=%2Frun%2Fpg",
     "the empty host survives",
   );
-  console.log("ok - DATABASE_URL: socket and loopback plain; another host on real money needs verify-full and a CA; no URL echoed");
+  console.log("ok - DATABASE_URL: statement, idle-in-transaction and connect timeouts on every pool; socket and loopback plain; another host on real money needs verify-full and a CA; no URL echoed");
 }
 
 // ── STORE_BACKEND ──────────────────────────────────────────────────────────

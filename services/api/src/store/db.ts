@@ -47,6 +47,7 @@ import type {
   ShopifyDelivery,
   StoredDocument,
   Transfer,
+  OutboxRow,
   User,
 } from "./types.js";
 
@@ -118,6 +119,8 @@ export interface Db {
   chartAccounts: ChartAccount[];
   accountRules: AccountRule[];
   ledger: LedgerEntry[];
+  /** Notifications written with the change that caused them (outbox.ts). */
+  outbox: OutboxRow[];
 }
 
 /**
@@ -167,6 +170,7 @@ export let db: Db = {
   chartAccounts: [],
   accountRules: [],
   ledger: [],
+  outbox: [],
 };
 
 /** Load the store, run the load-time migrations, write it back. */
@@ -205,6 +209,7 @@ export async function initStore() {
     db.chartAccounts ??= [];
     db.accountRules ??= [];
     db.ledger ??= [];
+    db.outbox ??= [];
     if (IS_PRODUCTION) {
       const custodial = db.users.filter((u) => (u.paymentPage as any)?.depositPrivateKey);
       if (custodial.length) {

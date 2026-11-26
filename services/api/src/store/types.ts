@@ -534,6 +534,39 @@ export interface CryptoSend {
 }
 
 /**
+ * A notification to send once the write that caused it has committed
+ * (docs/postgres-store-design.md §5): written in the same transaction as the
+ * state change, so a crash keeps both or neither. `key`, when given, is
+ * unique: a second row with the same key is not written.
+ */
+export interface OutboxDraft {
+  kind: string;
+  payload: Record<string, unknown>;
+  key?: string;
+}
+
+/**
+ * One outbox row. `id` is its idempotency key towards the receiver (the
+ * checkout webhook's `webhook-id`), kept across retries. A worker claims a
+ * due row until `claimedUntil`, counting the attempt; it ends delivered, due
+ * again later, or dead after the kind's last attempt.
+ */
+export interface OutboxRow extends OutboxDraft {
+  id: string;
+  createdAt: string;
+  attempts: number;
+  nextAttemptAt: string;
+  claimedUntil?: string;
+  deliveredAt?: string;
+  deadAt?: string;
+  lastError?: string;
+}
+
+/** How a claimed outbox attempt ended. */
+export type OutboxOutcome = { ok: true } | { ok: false; error: string; retryInMs: number } | { ok: false; error: string; dead: true };
+
+export type PendingExecutionKind = "transfer" | "cryptoSend";
+/**
  * A transfer's or a crypto send's UserOperation awaiting its passkey: the plan,
  * the unsigned operation, the challenge the passkey signs and, for a full
  * fee+approve+swap batch, where the swap output is delivered. None of it is a
@@ -541,7 +574,6 @@ export interface CryptoSend {
  * approval window, and the claim that submits it deletes it
  * (docs/postgres-store-design.md §2, approvals waiting for a passkey).
  */
-export type PendingExecutionKind = "transfer" | "cryptoSend";
 export interface PendingExecution {
   userId: string;
   /** Unix milliseconds. */
