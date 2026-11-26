@@ -8,7 +8,7 @@
  * The older views keep their ?view= ids and sit under one of these (PARENT):
  * the ledger and assets under Statement, Shopify under Apps.
  */
-import { $, Z, api, cap, esc, eur, me, mayActOnInvoice, needsPersonalOrg, org, orgs, ownSafe, personalLater, recoveryNone, recoveryPending, recoveryUnknown, reviewOn, roleCan, ROLE_WORD, setView, signOut, testMode, toast, view } from "./core.js";
+import { $, Z, api, cap, esc, eur, me, mayActOnInvoice, needsPersonalOrg, org, orgs, personalLater, recoveryNone, recoveryPending, recoveryUnknown, reviewOn, roleCan, ROLE_WORD, setView, signOut, testMode, toast, view } from "./core.js";
 import { loadOrg, render } from "./shell.js";
 import { isOwnCompanyOrg } from "./access-model.js";
 
@@ -143,17 +143,22 @@ function accountRight(a) {
   return iban ? `•••• ${String(iban).replace(/\s+/g, "").slice(-4)}` : "";
 }
 
-/* From 1024px, top right beside the account chip: the balance Home shows
-   (only where Home shows a figure), Approvals with what waits for this
-   person, and the test-mode label, which the icon rail has no room for. */
-function topInfo(accts, waiting) {
-  const mine = accts?.find((a) => a.status === "active" && a.backingUserId && me && a.backingUserId === me.id);
-  const fig = (mine || (accts && ownSafe(accts))) && typeof me?.balanceEur === "number";
+/* The balance Home's card has just read: { label, eur }, or null. Only Home
+   sets it, after its own read; any other view clears it, so the chip never
+   shows a figure older than the screen it sits on. */
+let topBalance = null;
+export function setTopBalance(b) { topBalance = b; renderNav(); }
+
+/* From 1024px, top right beside the account chip: on Home, the balance its
+   card shows, named as the card names it; Approvals with what waits for this
+   person; and the test-mode label, which the icon rail has no room for. */
+function topInfo(waiting) {
+  const fig = view === "overview" && topBalance;
   const pay = { id: "payments", capability: "transfers.drafts" };
   const approvals = shown(pay) && cap(pay.capability).allowed
-    ? `<a class="zb-topchip" href="?view=payments" data-view="payments"${view === "payments" ? ' aria-current="page"' : ""}>${Z.icon("inbox")}<span>${reviewOn() ? "Approvals" : "Payments"}</span>${waiting ? `<span class="z-side__badge"><span class="z-sr">, </span>${waiting}<span class="z-sr"> waiting for you</span></span>` : ""}</a>`
+    ? `<a class="zb-topchip" href="?view=payments" data-view="payments">${Z.icon("inbox")}<span>${reviewOn() ? "Approvals" : "Payments"}</span>${waiting ? `<span class="z-side__badge"><span class="z-sr">, </span>${waiting}<span class="z-sr"> waiting for you</span></span>` : ""}</a>`
     : "";
-  return `${testMode !== undefined ? Z.testModePill(testMode) : ""}${fig ? `<span class="zb-topchip zb-topchip--bal"><small>balance</small><b class="z-fig">${esc(eur(me.balanceEur))}</b></span>` : ""}${approvals}`;
+  return `${testMode !== undefined ? Z.testModePill(testMode) : ""}${fig ? `<span class="zb-topchip zb-topchip--bal"><small>${esc(fig.label)}</small><b class="z-fig">${esc(eur(fig.eur))}</b></span>` : ""}${approvals}`;
 }
 
 /* Only a changed trigger is redrawn, so an open menu keeps the button that
@@ -205,7 +210,8 @@ export function renderNav() {
   paint($("#acct"), `<button type="button" class="zb-chip-acct" id="acct-btn" aria-haspopup="dialog" aria-expanded="false" aria-label="Account and organisations. Current: ${esc(org.name)}"><span class="zb-chip-acct__main"><span class="zb-chip-acct__kind">${org.type === "personal" ? "Personal" : "Business"}</span><span class="zb-chip-acct__name">${esc(org.name)}</span></span>${Z.icon("expand_more")}</button>`);
 
   const accts = side.accounts;
-  paint($("#top-info"), topInfo(accts, waiting));
+  if (view !== "overview") topBalance = null;
+  paint($("#top-info"), topInfo(waiting));
   $("#side-accounts").innerHTML = accts && accts.length
     ? `<section class="zb-accts" aria-labelledby="side-acc-h"><h2 class="z-eyebrow" id="side-acc-h">Accounts</h2>${accts.map((a) =>
       `<a class="zb-acct" href="?view=accounts" data-view="accounts"${view === "accounts" ? ' aria-current="page"' : ""}>${Z.icon("account_balance_wallet")}<span>${esc(a.label || a.currency)}</span><span class="zb-acct__right">${esc(accountRight(a))}</span></a>`).join("")}</section>`
