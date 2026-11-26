@@ -116,7 +116,7 @@ await check("a log without a log index refuses the window; it is read again and 
         { ...transfer(addrs().eure, at, 3n * 10n ** 18n, 0), transactionHash: tx, logIndex: index },
       ]
     : []);
-  await assert.rejects(pollCryptoDepositsOnce(), /without a transaction hash or log index/);
+  await assert.rejects(pollCryptoDepositsOnce(), /the window is read again/);
   assert.equal(await store.cryptoDepositCursor("31337:safe-funding-v1"), HEAD + 10n, "cursor held");
   assert.equal(await count(), 0, "nothing written from the refused window");
   index = 1;
@@ -142,6 +142,45 @@ await check("a log that is not a deposit does not hold the window, whatever its 
   await pollCryptoDepositsOnce();
   assert.equal(await count(), 1, "the real deposit is recorded");
   assert.ok((await store.cryptoDepositCursor("31337:safe-funding-v1"))! >= at, "the cursor moved past the window");
+});
+
+await check("a watched log whose amount did not decode refuses the window; it is not read as zero", async () => {
+  const at = HEAD + 35n;
+  const tx = `0x${"a1".repeat(32)}`;
+  const count = async () => (await store.list("cryptoDeposits")).filter((d: any) => d.userId === userId && d.txHash === tx).length;
+  await store.setCryptoDepositCursor("31337:safe-funding-v1", HEAD + 30n);
+  client.getBlockNumber = async () => HEAD + 40n;
+  let decoded = false;
+  client.getLogs = async (q: any) => {
+    if (!(q.fromBlock <= at && q.toBlock >= at)) return [];
+    const log = { ...transfer(addrs().usdc, at, 2_000_000n, 0), transactionHash: tx };
+    return [decoded ? log : { ...log, args: { from: log.args.from, to: safe } }];
+  };
+  await assert.rejects(pollCryptoDepositsOnce(), /the window is read again/);
+  assert.equal(await store.cryptoDepositCursor("31337:safe-funding-v1"), HEAD + 30n, "cursor held");
+  decoded = true;
+  await pollCryptoDepositsOnce();
+  assert.equal(await count(), 1, "the re-read log is recorded");
+});
+
+await check("a forwarder's second hop without a log index does not hold the window", async () => {
+  const at = HEAD + 45n;
+  const page = `0x${"5a".repeat(20)}` as `0x${string}`;
+  const user = (await store.findUser(userId))!;
+  await store.updateUser(userId, { paymentPage: { ...(user.paymentPage ?? {}), depositAddress: page } } as any);
+  const before = (await store.list("cryptoDeposits")).filter((d: any) => d.userId === userId).length;
+  await store.setCryptoDepositCursor("31337:safe-funding-v1", HEAD + 40n);
+  client.getBlockNumber = async () => HEAD + 50n;
+  client.getLogs = async (q: any) => (q.fromBlock <= at && q.toBlock >= at
+    ? [{ ...transfer(addrs().usdc, at, 1_000_000n, 0), logIndex: null, transactionHash: null, args: { from: page, to: safe, value: 1_000_000n } }]
+    : []);
+  try {
+    await pollCryptoDepositsOnce();
+    assert.equal((await store.list("cryptoDeposits")).filter((d: any) => d.userId === userId).length, before, "the hop is not booked");
+    assert.ok((await store.cryptoDepositCursor("31337:safe-funding-v1"))! >= at, "the cursor moved past the window");
+  } finally {
+    await store.updateUser(userId, { paymentPage: user.paymentPage } as any);
+  }
 });
 
 const { isLogRangeRefusal } = await import("../services/api/src/log-range.js");

@@ -787,27 +787,47 @@ async function scanCryptoDeposits(head: bigint): Promise<{ found: number; more: 
     const key = item.address.toLowerCase();
     byAddress.set(key, [...(byAddress.get(key) ?? []), item]);
   }
-  // What becomes a deposit: a positive transfer of a watched token to a
-  // watched address, not EURe coming back from the swapper. The validation
-  // below and the booking loop share it, so a log that would be skipped
-  // anyway cannot hold the cursor.
-  const isDeposit = (log: (typeof logs)[number], token: "EURE" | "USDC"): boolean => {
-    if (!byAddress.has(String(log.args.to ?? "").toLowerCase())) return false;
-    if (((log.args.value ?? 0n) as bigint) <= 0n) return false;
-    const from = String(log.args.from ?? "").toLowerCase();
-    return !(token === "EURE" && from === (addrs().swapper ?? "").toLowerCase());
+  // Each log to a watched address is a deposit, definitely not one (zero
+  // value, the swapper's EURe, the forwarder's second hop), or incomplete.
+  // "Not one" needs the decoded fields that prove it: a log missing its
+  // amount or sender (viem decodes leniently), or a deposit missing its
+  // (txHash, logIndex) idempotency key, is incomplete. Number(null) = 0 would
+  // dedupe against the real index-0 log of the same transaction, and an
+  // undecoded amount would read as zero; either way the cursor would move
+  // past money. An incomplete log refuses the whole window before anything is
+  // written, so a later answer reads it again. The booking loop uses the same
+  // classification, so a log it would skip cannot hold the cursor.
+  type Classified =
+    | { kind: "skip" }
+    | { kind: "incomplete" }
+    | { kind: "deposit"; match: WatchedAddress; to: string; from: string; value: bigint; txHash: `0x${string}`; logIndex: number };
+  const classify = (log: (typeof logs)[number], token: "EURE" | "USDC"): Classified => {
+    const rawTo = log.args.to;
+    if (typeof rawTo !== "string") return { kind: "incomplete" };
+    const to = rawTo.toLowerCase();
+    const matches = byAddress.get(to);
+    if (!matches?.length) return { kind: "skip" }; // not ours; the node filtered loosely
+    const value = log.args.value as unknown;
+    const rawFrom = log.args.from;
+    if (typeof value !== "bigint" || typeof rawFrom !== "string") return { kind: "incomplete" };
+    const from = rawFrom.toLowerCase();
+    if (value <= 0n) return { kind: "skip" };
+    if (token === "EURE" && from === (addrs().swapper ?? "").toLowerCase()) return { kind: "skip" };
+    const pageMatch = matches.find((m) => m.source === "payment-page" && m.user.paymentPage?.autoConvert);
+    const match = token === "USDC" && pageMatch ? pageMatch : matches[0];
+    // The forwarder's second hop: page money already recorded when it
+    // arrived at the deposit address, now landing on the owner's Safe.
+    // Recording it again would double-count one payment.
+    const ownPage = match.user.paymentPage?.depositAddress?.toLowerCase();
+    if (match.source === "safe" && ownPage && ownPage !== to && from === ownPage) return { kind: "skip" };
+    const idx = log.logIndex as unknown;
+    if (typeof idx !== "number" || !Number.isSafeInteger(idx) || idx < 0 || !log.transactionHash) return { kind: "incomplete" };
+    return { kind: "deposit", match, to, from, value, txHash: log.transactionHash, logIndex: idx };
   };
-  // (txHash, logIndex) is the deposit's idempotency key. A deposit log without
-  // one (a pending log, a broken RPC answer) would become Number(null) = 0 and
-  // dedupe against the real index-0 log of the same transaction, and the
-  // cursor would move past it. The whole window is refused before anything is
-  // written, so a later answer reads it again.
   for (const [i, token] of tokens.entries()) {
     for (const log of logsByToken[i]) {
-      if (!isDeposit(log, token.token)) continue;
-      const idx = log.logIndex as unknown;
-      if (typeof idx !== "number" || !Number.isSafeInteger(idx) || idx < 0 || !log.transactionHash) {
-        throw new Error(`crypto-in: the RPC returned a deposit log without a transaction hash or log index (blocks ${fromBlock}..${toBlock}); the window is read again`);
+      if (classify(log, token.token).kind === "incomplete") {
+        throw new Error(`crypto-in: the RPC returned a Transfer log to a watched address without its amount, sender, transaction hash or log index (blocks ${fromBlock}..${toBlock}); the window is read again`);
       }
     }
   }
@@ -828,23 +848,10 @@ async function scanCryptoDeposits(head: bigint): Promise<{ found: number; more: 
     }
 
     for (const log of logs) {
-      // Not ours (the node filtered loosely), zero, or the swapper's EURe.
-      if (!isDeposit(log, token.token)) continue;
-      const to = String(log.args.to ?? "").toLowerCase();
-      const matches = byAddress.get(to)!;
-      const value = (log.args.value ?? 0n) as bigint;
-      const from = String(log.args.from ?? "").toLowerCase();
-      const txHash = log.transactionHash!;
-      const logIndex = log.logIndex as number; // checked above
+      const c = classify(log, token.token);
+      if (c.kind !== "deposit") continue; // incomplete refused the window above
+      const { match, to, from, value, txHash, logIndex } = c;
       if ((await store.findCryptoDeposit(CHAIN_ID, txHash, logIndex))) continue;
-
-      const pageMatch = matches.find((m) => m.source === "payment-page" && m.user.paymentPage?.autoConvert);
-      const match = token.token === "USDC" && pageMatch ? pageMatch : matches[0];
-      // The forwarder's second hop: page money already recorded when it
-      // arrived at the deposit address, now landing on the owner's Safe.
-      // Recording it again would double-count one payment.
-      const ownPage = match.user.paymentPage?.depositAddress?.toLowerCase();
-      if (match.source === "safe" && ownPage && ownPage !== to && from === ownPage) continue;
       const user = match.user;
       // A conversion's EURe output, or a failed transfer's reverse-swap
       // refund, is the user's money changing form, not money in
