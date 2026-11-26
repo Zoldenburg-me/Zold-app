@@ -141,7 +141,8 @@ export function deferToCommit(fn: () => void, dropped?: () => void): boolean {
   return true;
 }
 
-/** Inside an open transaction, run `fn` if it fails; true when registered. */
+/** Inside an open transaction, run `fn` if it fails; true when registered.
+ *  Dropped hooks run last first: each undoes what came after the one before. */
 export function onTxDropped(fn: () => void): boolean {
   const s = scope.getStore();
   if (!s?.open) return false;
@@ -149,11 +150,14 @@ export function onTxDropped(fn: () => void): boolean {
   return true;
 }
 
-/** Run each of `queue` in order. One that throws is logged and the rest
- *  still run: the transaction has ended either way, and its caller must not
- *  see a failure for a commit that happened. */
-function runEach(queue: (() => void)[], what: string): void {
-  for (const fn of queue.splice(0)) {
+/** Run each of `queue` in order (`reverse`: last first, as undo runs). One
+ *  that throws is logged and the rest still run: the transaction has ended
+ *  either way, and its caller must not see a failure for a commit that
+ *  happened. */
+function runEach(queue: (() => void)[], what: string, reverse = false): void {
+  const fns = queue.splice(0);
+  if (reverse) fns.reverse();
+  for (const fn of fns) {
     try {
       fn();
     } catch (err) {
@@ -172,7 +176,7 @@ export function endTx<T>(p: Promise<T>, hooks: TxHooks): Promise<T> {
     },
     (err) => {
       hooks.committed.length = 0;
-      runEach(hooks.dropped, "dropped-transaction");
+      runEach(hooks.dropped, "dropped-transaction", true);
       throw err;
     },
   );
@@ -214,7 +218,7 @@ export function nestedTx<T>(
       return out;
     } catch (err) {
       hooks.committed.length = 0;
-      runEach(hooks.dropped, "dropped-transaction");
+      runEach(hooks.dropped, "dropped-transaction", true);
       throw err;
     } finally {
       child.open = false;

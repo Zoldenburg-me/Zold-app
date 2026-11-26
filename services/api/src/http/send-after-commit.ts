@@ -35,11 +35,11 @@ export const sendAfterCommit: express.RequestHandler = (_req, res, next) => {
   const removeHeader = res.removeHeader.bind(res);
   const status = res.status.bind(res);
 
-  /** The transaction whose changes to this response are recorded, and the
-   *  state before its first change, to restore if it is dropped. */
+  /** The transaction whose changes to this response are being recorded, and
+   *  the headers as they were before its first change, restored (with the
+   *  status) if it is dropped. */
   let recording: object | undefined;
   let headersBefore = new Map<string, number | string | string[] | undefined>();
-  let statusBefore = res.statusCode;
   let held = false;
 
   /** Note the state before this transaction's first change to the response. */
@@ -48,14 +48,14 @@ export const sendAfterCommit: express.RequestHandler = (_req, res, next) => {
     if (!token) return;
     if (recording !== token) {
       recording = token;
-      headersBefore = new Map();
-      statusBefore = res.statusCode;
+      const before = (headersBefore = new Map());
+      const statusAtStart = res.statusCode;
       onTxDropped(() => {
-        for (const [name, value] of headersBefore) {
+        for (const [name, value] of before) {
           if (value === undefined) removeHeader(name);
           else setHeader(name, value);
         }
-        res.statusCode = statusBefore;
+        res.statusCode = statusAtStart;
         recording = undefined;
       });
     }

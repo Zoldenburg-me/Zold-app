@@ -56,6 +56,19 @@ function app(s: StoreBackend) {
       })
       .catch(next);
   });
+  a.post("/nested-then-throw", async (_req, res, next) => {
+    res.setHeader("X-Before", "kept");
+    await s
+      .tx(async () => {
+        await s.tx(async () => {
+          res.setHeader("X-Before", "inner");
+        });
+        res.setHeader("X-Before", "outer");
+        res.json({ ok: true });
+        throw new Error("after the answer");
+      })
+      .catch(next);
+  });
   a.post("/twice", async (_req, res, next) => {
     await s
       .tx(async () => {
@@ -94,6 +107,10 @@ async function serve(a: express.Express) {
     assert.equal(r.headers.get("location"), null);
     assert.equal(r.headers.get("x-before"), "kept", "a header set before the transaction is restored, not removed");
     console.log("ok - JSON: a send then a throw answers 500, without the headers set inside the transaction");
+
+    const nested = await fetch(`${url}/nested-then-throw`, { method: "POST" });
+    assert.equal(nested.status, 500);
+    assert.equal(nested.headers.get("x-before"), "kept", "undone last first, through a nested transaction");
 
     const twice = await fetch(`${url}/twice`, { method: "POST" });
     assert.equal(twice.status, 500, "a second send inside one transaction fails it at once");
