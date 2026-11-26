@@ -28,3 +28,7 @@ data/db*.json
 # Internal notes kept out of the public repo (decision history, partner docs)
 .private/
 
+
+# Scrolltide's Mobula sea engine: licensed for our sites, not for redistribution
+# while this repo is public. business/sea.js runs without it (no animation).
+services/api/public/business/vendor/

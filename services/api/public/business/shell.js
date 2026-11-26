@@ -14,6 +14,7 @@ import { META, RENDER, setExportMonth } from "./views.js";
 import { checkCustomerVatId, readInvoiceEditor, refreshInvoiceCheck } from "./invoice.js";
 import { ACTIONS } from "./actions.js";
 import { initSearch } from "./search.js";
+import { seaFor } from "./sea.js";
 
 // Elements whose action is still running. The element is also disabled, but
 // the set covers anything without a `disabled` property and a click that
@@ -127,6 +128,7 @@ export async function render({ focus = false } = {}) {
   } finally {
     if (mine === seq) box.setAttribute("aria-busy", "false");
   }
+  if (mine === seq) seaFor(view);
   if (focus && mine === seq) {
     window.scrollTo(0, 0);
     $("#view-title").setAttribute("tabindex", "-1");

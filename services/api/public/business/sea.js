@@ -1,0 +1,63 @@
+/* The narwhal sea behind Home: Scrolltide's Mobula engine (vendor/mobula-sea.js), drawn on two fixed
+ * canvases under the page. The engine file is git-ignored (licensed, not ours to publish), so where it
+ * is missing the script fails to load and Home simply has no sea. Only Home has it; any other view
+ * stops it. Reduced motion paints one still frame. */
+
+const SRC = "/business/vendor/mobula-sea.js";
+const calm = matchMedia("(prefers-reduced-motion: reduce)");
+let sea = null, loading = null, on = false;
+
+function load() {
+  loading ??= new Promise((ok) => {
+    const s = document.createElement("script");
+    s.src = SRC;
+    s.onload = () => ok(window.Mobula?.Sea ? window.Mobula : null);
+    s.onerror = () => ok(null);
+    document.head.append(s);
+  });
+  return loading;
+}
+
+function canvas(id) {
+  const c = document.createElement("canvas");
+  c.id = id;
+  c.className = "zb-sea";
+  c.setAttribute("aria-hidden", "true");
+  document.body.prepend(c);
+  return c;
+}
+
+/** Keep the narwhals out of the block they would swim across: the command section while it is there. */
+function fit() {
+  if (!sea) return;
+  sea.resize(innerWidth, innerHeight, Math.min(devicePixelRatio || 1, 2));
+  const q = document.querySelector(".zb-h-cmd")?.getBoundingClientRect();
+  if (q && q.width > 1) sea.setFocus((q.left + q.right) / 2 / innerWidth, (q.top + q.bottom) / 2 / innerHeight, q.width / 2 / innerWidth, q.height / 2 / innerHeight);
+  if (calm.matches) sea.frame();
+}
+
+function wire() {
+  addEventListener("resize", fit);
+  addEventListener("pointermove", (e) => on && sea.setPointer(e.clientX / innerWidth, e.clientY / innerHeight));
+  document.documentElement.addEventListener("pointerleave", () => sea.clearPointer());
+  document.addEventListener("input", (e) => on && e.target.id === "hm-q" && sea.nudge());
+  document.addEventListener("visibilitychange", () => on && !calm.matches && (document.hidden ? sea.stop() : sea.start()));
+}
+
+/** Called after every render: the sea swims on Home and nowhere else. */
+export async function seaFor(view) {
+  on = view === "overview";
+  document.documentElement.classList.toggle("has-sea", on && !!sea);
+  if (!on) { sea?.stop(); return; }
+  const M = await load();
+  if (!M || !on) return;
+  if (!sea) {
+    // canvas() prepends, so the blurred far layer made last sits underneath the near one.
+    const near = canvas("sea"), far = canvas("sea-far");
+    sea = new M.Sea(near, far, "app");
+    wire();
+  }
+  document.documentElement.classList.add("has-sea");
+  fit();
+  if (!calm.matches) sea.start();
+}

@@ -47,6 +47,13 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .zb .zb-side { display: flex; }
 .zb-main { position: relative; isolation: isolate; min-width: 0; padding: var(--z-space-7) var(--z-space-10) var(--z-space-12); }
 #app, #signed-out, #no-orgs { max-width: 1104px; }
+/* Home's narwhal sea (business/sea.js): two fixed canvases under the page, shown only while it swims. */
+.zb-sea { position: fixed; inset: 0; z-index: 0; width: 100%; height: 100%; pointer-events: none; display: none; }
+.has-sea .zb-sea { display: block; }
+#sea-far { filter: blur(3px); }
+.has-sea .zb { position: relative; z-index: 1; }
+/* a phone has no room to keep the middle clear, so the narwhals swim behind the text, dimmed */
+@media (max-width: 759px) { .zb-sea { opacity: .32; } }
 /* The sidebar's lower part. A plain part of the sidebar on a desktop; on a
    phone it is what Menu opens. */
 .zb-side__menu { display: contents; }
