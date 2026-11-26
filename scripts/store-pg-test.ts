@@ -475,8 +475,10 @@ try {
     const dir = mkdtempSync(path.join(tmpdir(), "zold-pg-import-"));
     const fixture = path.join(dir, "fixture.json");
     const cwd = new URL("..", import.meta.url).pathname;
-    const cli = (args: string[], url = urlFor(db)) => spawnSync(process.execPath, ["--import", "tsx", ...args], { cwd, encoding: "utf8", env: { ...process.env, DATABASE_URL: url } });
-    assert.equal(cli(["scripts/_import-fixture.ts", fixture]).status, 0);
+    // DATABASE_URL and nothing else of a deployment: no signing key, no chain.
+    const cli = (args: string[], url = urlFor(db)) =>
+      spawnSync(process.execPath, ["--import", "tsx", ...args], { cwd, encoding: "utf8", env: { PATH: process.env.PATH!, HOME: process.env.HOME!, USER: process.env.USER!, DATABASE_URL: url } });
+    assert.equal(spawnSync(process.execPath, ["--import", "tsx", "scripts/_import-fixture.ts", fixture], { cwd, encoding: "utf8" }).status, 0);
     const source = JSON.parse(readFileSync(fixture, "utf8"));
     await admin.query(`CREATE DATABASE ${db}`);
     const owner = openPool(urlFor(db), { realMoney: false });
@@ -538,6 +540,25 @@ try {
       assert.deepEqual(exported, source, "export → the imported db.json, rows in order");
       assert.deepEqual(digest(exported), digest(source));
       assert.equal(cli(["scripts/pg-export.ts", out]).status, 1, "an existing file is not overwritten");
+      assert.equal(cli(["scripts/pg-export.ts", "--verify", out]).status, 0, "the export verifies again later");
+
+      // A signup on Postgres (no organisation: only the JSON load makes one)
+      // and a session dead past retention, not yet pruned: the export
+      // verifies as written; as an import source it is refused.
+      await owner.query("INSERT INTO users (id, doc) VALUES ('u_signup', $1::json)", [JSON.stringify({ id: "u_signup", address: "0x5165", createdAt: new Date().toISOString() })]);
+      await owner.query("INSERT INTO sessions (id, doc) VALUES ('s_dead', $1::json)", [
+        JSON.stringify({ id: "s_dead", userId: "u_signup", tokenHash: "th-dead", createdAt: "2026-01-01T00:00:00.000Z", lastUsedAt: "2026-01-01T00:00:00.000Z", expiresAt: "2026-01-02T00:00:00.000Z" }),
+      ]);
+      const outSignup = path.join(dir, "exported-signup.json");
+      assert.equal(cli(["scripts/pg-export.ts", outSignup]).status, 0);
+      const again = cli(["scripts/pg-export.ts", "--verify", outSignup]);
+      assert.equal(again.status, 0, again.stderr);
+      assert.match(again.stdout, /as written, matches Postgres/);
+      const asSource = cli(["scripts/pg-import.ts", "verify", outSignup]);
+      assert.equal(asSource.status, 1);
+      assert.match(asSource.stderr, /no organisation yet/);
+      await owner.query("DELETE FROM sessions WHERE id = 's_dead'");
+      await owner.query("DELETE FROM users WHERE id = 'u_signup'");
 
       // The API's store serves the imported rows on its grants.
       const app = openPool(urlAs(db), { realMoney: false });
@@ -564,13 +585,14 @@ try {
       const stale = cli(["scripts/pg-import.ts", "verify", fixture]);
       assert.equal(stale.status, 1);
       assert.match(stale.stderr, /VERIFY FAILED: ledger differ/);
+      assert.equal(cli(["scripts/pg-export.ts", "--verify", out]).status, 1, "and neither does the older export");
     } finally {
       await lock.end().catch(() => {});
       await owner.close();
       await admin.query(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`);
     }
   }
-  console.log("ok - §6 on Postgres 17: import refused under the start lock and rolled back when its connection is killed; imported and verified, a second run changes nothing; export refused under the start lock, then equal to the source; the API's store serves the imported rows; ledger_history is never dropped or written in plain text");
+  console.log("ok - §6 on Postgres 17: import refused under the start lock and rolled back when its connection is killed; imported and verified, a second run changes nothing; export refused under the start lock, then equal to the source and verified again by --verify, also with a signup and a dead session in it; all with DATABASE_URL alone; the API's store serves the imported rows; ledger_history is never dropped or written in plain text");
 
   // The API's own store on Postgres (STORE_BACKEND=postgres): the §2
   // concurrency tests, and the suites that hold the S2 race tests, each in a

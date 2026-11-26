@@ -12,7 +12,7 @@
 import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { IS_PRODUCTION, ROOT } from "../config.js";
+import { IS_PRODUCTION, ROOT } from "../config/env.js";
 import { DEFAULT_CHART, DEFAULT_RULES } from "../domain/coa.js";
 import { defaultLabel, initialStatusFor } from "../domain/accounts.js";
 import { sessionDead } from "./rules.js";

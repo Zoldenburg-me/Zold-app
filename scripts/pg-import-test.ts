@@ -13,7 +13,7 @@
 import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PGlite } from "@electric-sql/pglite";
@@ -25,7 +25,7 @@ const ROOT = new URL("..", import.meta.url).pathname;
 const { emptyDb, loadMigratedSnapshot } = await import("../services/api/src/store/db.js");
 const { migrate } = await import("../services/api/src/store/pg/migrate.js");
 const { pgliteDatabase } = await import("../services/api/src/store/pg/sql.js");
-const { digest, exportDb, ImportRefused, importSnapshot, preImportReport, readLedgerHistory, REPORTED_UNIQUE_INDEXES, verifyAgainst } = await import("../services/api/src/store/pg/port.js");
+const { digest, exportDb, ImportRefused, importSnapshot, preImportReport, publishAll, readLedgerHistory, REPORTED_UNIQUE_INDEXES, verifyAgainst } = await import("../services/api/src/store/pg/port.js");
 const { TABLE } = await import("../services/api/src/store/pg/backend.js");
 type Db = ReturnType<typeof emptyDb>;
 
@@ -268,6 +268,30 @@ console.log(`ok - the pre-import report: ${cases.length} rules, each found with 
   console.log(`ok - the report mirrors every unique index of the migrations; ${checked} duplicate rules agree with the database on the hit and the near miss`);
 }
 
+// ── A collection of the wrong shape is a finding, and the report goes on ───
+{
+  for (const c of Object.keys(emptyDb())) {
+    for (const wrong of c === "cryptoDepositCursor" ? [[], "x", null] : [{}, "x", null, 7]) {
+      const db = dirty((d) => {
+        d.sessions.push({ ...d.sessions[0], id: "s2" });
+        d[c] = wrong;
+      });
+      const f = report(db);
+      assert.ok(f.some((x) => x.rule === "not-a-collection" && x.collection === c), `${c} = ${JSON.stringify(wrong)}: not-a-collection`);
+      if (c !== "sessions") assert.ok(f.some((x) => x.rule === "duplicate:sessions_token_hash"), `${c} = ${JSON.stringify(wrong)}: the other rules still run`);
+    }
+  }
+  const rows = report(dirty((d) => d.contacts.push(null, "x", { id: "ct1", orgId: "o1" })));
+  assert.deepEqual(
+    rows.filter((x) => x.collection === "contacts").map((x) => [x.rule, x.ids]),
+    [
+      ["not-a-row", ["#0", "#1"]],
+      ["bad-id", ["#0", "#1"]],
+    ],
+  );
+}
+console.log("ok - a collection of the wrong shape, or a row that is not an object, is a blocking finding and every other rule still runs");
+
 // ── The report CLI on a db.json alone: no database, no deployment env ──────
 {
   const clean = path.join(tmp, "clean.json");
@@ -300,6 +324,12 @@ console.log(`ok - the pre-import report: ${cases.length} rules, each found with 
   });
   assert.equal(imp.status, 1);
   assert.match(imp.stderr, /REFUSED: 1 user\(s\) have no organisation yet.*not a stable source/);
+  const shaped = path.join(tmp, "shape.json");
+  writeFileSync(shaped, JSON.stringify(dirty((db) => (db.contacts = {}))));
+  const sh = run(shaped);
+  assert.equal(sh.status, 1, sh.stderr);
+  assert.match(sh.stdout, /BLOCKS +not-a-collection {2}contacts/);
+  assert.match(sh.stdout, /summary: 1 blocking/);
   const no = run(bad);
   assert.equal(no.status, 1, "a blocking finding exits 1");
   assert.match(no.stdout, /BLOCKS +duplicate:sessions_token_hash {2}sessions {2}2 row\(s\): s1, s2/);
@@ -380,6 +410,73 @@ const rowsIn = async (q: { query: (t: string) => Promise<{ rows: any[] }> }) => 
   await pg.close();
 }
 console.log("ok - round trip import → export → verify on PGlite: every collection, rows in order, doc text unchanged; a second run changes nothing; a different source is refused; ledger_history exported on its own; payment_handles and operator_credentials verified; 0008 refuses an Infinity hold and a deposit without chain or hash");
+
+// ── What the export and verify read, and how an export is verified ─────────
+{
+  const pg = await pglite();
+  await migrate(pg);
+  await importSnapshot(pg, snapshot);
+  // One snapshot, read only: nothing in the export's transaction can write.
+  await exportDb(pg, async (_e, q) => {
+    assert.equal((await q.query<{ v: string }>("SELECT current_setting('transaction_isolation') AS v")).rows[0].v, "repeatable read");
+    assert.equal((await q.query<{ v: string }>("SELECT current_setting('transaction_read_only') AS v")).rows[0].v, "on");
+    await assert.rejects(q.query("INSERT INTO processed_monerium_orders (order_id) VALUES ('x')"), /read-only transaction/);
+  }).catch((e) => {
+    // The refused INSERT fails the transaction; the assertions above ran.
+    if (!/a statement in this transaction failed/.test(String(e?.message))) throw e;
+  });
+  // A signup on Postgres (a user with no organisation: only the JSON load
+  // gives one) and a session dead past retention, not yet pruned.
+  await pg.query("INSERT INTO users (id, doc) VALUES ('u_signup', $1::json)", [JSON.stringify({ id: "u_signup", address: "0x5165", createdAt: now })]);
+  await pg.query("INSERT INTO sessions (id, doc) VALUES ('s_dead', $1::json)", [
+    JSON.stringify({ id: "s_dead", userId: "u_signup", tokenHash: "th-dead", createdAt: "2026-01-01T00:00:00.000Z", lastUsedAt: "2026-01-01T00:00:00.000Z", expiresAt: "2026-01-02T00:00:00.000Z" }),
+  ]);
+  const written = JSON.parse(JSON.stringify((await exportDb(pg)).db));
+  // The export's own check (pg-export --verify): the file as written. Clean.
+  assert.deepEqual((await verifyAgainst(pg, written)).mismatches, []);
+  // pg-import verify loads it as an import source, and the load-time
+  // migrations change it: that mode is not for an export.
+  const file = path.join(tmp, "exported.json");
+  writeFileSync(file, JSON.stringify(written));
+  const asSource = loadMigratedSnapshot(file);
+  assert.equal(asSource.migratedUsers, 1, "the signup gets an organisation on the JSON load");
+  assert.ok(!asSource.db.sessions.some((x) => x.id === "s_dead"), "and the dead session is pruned");
+  await pg.close();
+}
+console.log("ok - export and verify read one REPEATABLE READ, READ ONLY snapshot; an export with a signup and a dead session verifies as written, and is no import source");
+
+// ── Publish both files or neither ───────────────────────────────────────────
+{
+  const [a, b, aTmp, bTmp] = ["out.json", "hist.age", "out.json.tmp", "hist.age.tmp"].map((f) => path.join(tmp, f));
+  writeFileSync(aTmp, "a");
+  writeFileSync(bTmp, "b");
+  writeFileSync(b, "someone else's");
+  assert.throws(() => publishAll([[aTmp, a], [bTmp, b]]), /EEXIST/);
+  assert.equal(existsSync(a), false, "the first name is taken back when the second fails");
+  assert.equal(readFileSync(b, "utf8"), "someone else's", "a name this call did not make is left alone");
+  publishAll([[aTmp, path.join(tmp, "out2.json")], [bTmp, path.join(tmp, "hist2.age")]]);
+  assert.equal(readFileSync(path.join(tmp, "out2.json"), "utf8") + readFileSync(path.join(tmp, "hist2.age"), "utf8"), "ab");
+}
+console.log("ok - the export publishes its files both or neither, and never removes a name it did not make");
+
+// ── Import, verify and export need no deployment environment ───────────────
+{
+  // Only DATABASE_URL, at a port nothing listens on: each gets as far as
+  // connecting, so none needs a signing key or a chain.
+  const bare = { PATH: process.env.PATH!, HOME: process.env.HOME!, DATABASE_URL: "postgresql://zold@127.0.0.1:1/none" };
+  for (const args of [
+    ["scripts/pg-import.ts", "import", fixture],
+    ["scripts/pg-import.ts", "verify", fixture],
+    ["scripts/pg-export.ts", path.join(tmp, "never.json")],
+    ["scripts/pg-export.ts", "--verify", fixture],
+  ]) {
+    const r = spawnSync(process.execPath, ["--import", "tsx", ...args], { cwd: ROOT, encoding: "utf8", env: bare });
+    assert.equal(r.status, 1, `${args.join(" ")}: ${r.stderr}`);
+    assert.match(r.stderr, /FAILED: .*ECONNREFUSED/, `${args.join(" ")} reached the database`);
+  }
+  assert.equal(existsSync(path.join(tmp, "never.json")), false);
+}
+console.log("ok - import, verify and export run with DATABASE_URL alone: no signing key, no chain");
 
 // ── Refusals: a dirty source, and a failure mid-import ─────────────────────
 {
