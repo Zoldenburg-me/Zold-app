@@ -7,8 +7,7 @@ needs; the rest goes in `docs/` behind a pointer. Over budget: replace, never
 append.
 
 Read when the task touches it:
-- `docs/status.md` — **what has never run** (mainnet: owner only, one swap, one SEPA
-  round: mints and Monerium's redeem burn on chain; no cash rail; no on-chain recovery). Read before claiming it works.
+- `docs/status.md` — **what has never run**. Read before claiming it works.
 - `docs/running-locally.md` — dev vs api, preflight, funding, KYC gate,
   tests, Postgres, production branch, lease changes, browser.
 - `docs/wallets.md` — every wallet and its key holder.
@@ -54,8 +53,7 @@ THREE RULES OVERRIDE CONVENIENCE:
 - **Custody**: `LIQUIDITY.PROVIDER` defaults to `best` over `lifi,dex`, both
   Safe-executable, so the default deployment is non-custodial. The fee always
   lands at the orchestrator and `transfer.custody` records it.
-- **No simulation**: no mock deposits or mock IBANs (`config.ts` refuses
-  the old env vars). The testnet faucet (`faucet.ts`, `FAUCET_KEY`) sends
+- **No simulation**: no mock deposits or mock IBANs. The testnet faucet (`faucet.ts`, `FAUCET_KEY`) sends
   real test-chain EURe and refuses a real-money chain. `/api/health` publishes `capabilities()`
   (capabilities.ts), and the UI renders a control only where the API would
   accept it.
@@ -69,9 +67,8 @@ THREE RULES OVERRIDE CONVENIENCE:
   HTTP layer under `http/`, and **`transfers/build.ts` is the ONE path that
   builds a transfer** — the business router is handed it, never rebuilds it.
 - `store.ts` holds the methods (rows: `store/types.ts`), the only code that
-  touches the database: `STORE_BACKEND=json` (default, `store/db.ts`) or
-  `postgres` (`store/pg/`, not on real money before the cut-over;
-  `docs/postgres-store-design.md`).
+  touches the database: `store/db.ts` (JSON, default) or `store/pg/`
+  (`STORE_BACKEND=postgres`, `docs/postgres-store-design.md`).
 - `liquidity.ts` is the seam; one file per venue in `liquidity/`.
   `liquidity/best.ts` takes its venue resolver as an argument (no cycle).
 - `public/app/*.js` are **classic scripts sharing one scope**: every file but
@@ -186,12 +183,11 @@ an installed dependency; nothing "for later". Finish what it breaks: callers,
 tests, the grep suites. Never cut validation, a fail-closed refusal,
 compensation or an invariant. Money, identity, a parser or a route gets a test.
 `shortcut: <limit>, <when to upgrade>` marks a known limit, never on a money
-path. Where a plugin disagrees with this file, this file wins.
+path.
 
 ## Running and testing
 
-- `npm run check` is OFFLINE and is the one to run; `npm run check:pg`
-  needs a Postgres 17 (`docs/running-locally.md`).
+- `npm run check` is OFFLINE and is the one to run.
 - `npm run dev` (local hardhat) **wipes `data/db.dev.json` every start** and
   cannot deploy a passkey Safe; never point it at `data/db.json`. `npm run
   api` keeps its db. `npm run preflight` before any mainnet deploy.
@@ -199,7 +195,7 @@ path. Where a plugin disagrees with this file, this file wins.
 ## Environment
 
 - Ports 3000 (API/UI), 8545 (chain); contract tests pick a free port.
-- `gh` is logged in; `origin` is SSH.
+- `gh` is logged in; no brew. `origin` is SSH.
 - Node lives in-project: `export PATH="$PWD/.toolchain/node-v22.23.4-darwin-arm64/bin:$PATH"`.
   arm64 only; on Intel see `docs/running-locally.md`.
 
