@@ -720,7 +720,12 @@ stopped and read-only, until the owner closes it (§6 step 8).
   retention rule of 14 days**. A systemd timer writes a daily `pg_dump`
   piped to `age` (to the owner's age key) into it, each as a new object: `pg_dumpall --globals-only` (the roles and their attributes; there are no
   passwords, §7) and `pg_dump -Fc` of each database in the cluster (on
-mainnet, Zold's and `hub`, §7.2), in one encrypted tar. The
+  mainnet, Zold's and `hub`, §7.2), in one encrypted tar. Each database's
+  dump carries its own check file: the timer opens a `REPEATABLE READ`
+  transaction, takes `pg_export_snapshot()`, computes the per-table row
+  counts and hashes of the importer's verify (§6) inside it, and runs
+  `pg_dump --snapshot=<id>` on the same snapshot, so the counts describe
+  exactly the rows in the dump. The
   host's credential for it has create and read only (no overwrite, no
   delete); a lifecycle rule deletes objects after 30 days. A compromised
   host can then wipe the PITR repositories but not the last 14 days of
@@ -745,7 +750,9 @@ mainnet, Zold's and `hub`, §7.2), in one encrypted tar. The
   mainnet API would run the sweeps against real partners, a second API
   process (§2). The drill restores from `repo1` and `repo2` in alternate
   months, and every third month from the latest dump instead (§7.1, both
-  repositories lost), so the logical path is tried too. It times the database part, from "instance requested" to "verify
+  repositories lost), so the logical path is tried too; that month it
+  compares against the dump's own check file, not an export from the live
+  database, which has taken writes since. It times the database part, from "instance requested" to "verify
   passed". The service part of the recovery target (API, tunnel, smoke) is
   timed on testnet: once before the cut-over and then quarterly, testnet is
   rebuilt for real onto a new instance (its old API stopped first), the
@@ -816,10 +823,17 @@ Rebuild, mainnet first, then testnet the same way:
 **Both repositories lost** (or both unreadable): steps 1-2, then fetch the
 latest dump from the dump bucket and decrypt it with the owner's age key,
 which is never on the host (the owner runs `age -d` or hands the key in for
-the restore only). Create the cluster's database from `initdb` defaults,
-load the globals (roles), `pg_restore` the database as the owner role, check
-the roles and grants as in step 3 and that `schema_migrations` is at the
-latest version. Then create a new pgBackRest stanza in each reachable
+the restore only). The cluster comes from `initdb`, so at first only its
+bootstrap superuser exists, and the `peer` mappings of step 2 point at roles
+that are not there yet. So the globals are loaded first, by the cluster's OS
+user as that bootstrap superuser over the socket; the one error expected is
+the dump's `CREATE ROLE` for the bootstrap role, which `initdb` already made,
+and any other error stops the restore. Then, for **every database in the
+dump** (on mainnet, Zold's and `hub`, §7.2): `CREATE DATABASE <db> OWNER
+<its owner role>`, `pg_restore` it as that owner role, and compare its row
+counts and hashes with the dump's check file (§7). Check the roles and
+grants as in step 3 (and, for `hub`, as in §7.2) and that each database's
+`schema_migrations` is at the latest version. Then create a new pgBackRest stanza in each reachable
 region and take a full backup before step 5. Everything after the dump's
 time is lost; the reconciler reports the drift and the owner is told the
 loss window.
@@ -869,9 +883,15 @@ on its functions through `PUBLIC`, whatever is revoked from its own role.
   - queries, per role with `ALTER ROLE hub_app SET`: `statement_timeout =
     '5s'`, `lock_timeout = '2s'`, `idle_in_transaction_session_timeout =
     '10s'`, `temp_file_limit = '256MB'`, `work_mem = '4MB'`;
-  - writes: the hub rate-limits writes per agent in its own code, since a
-    write flood fills the shared `pg_wal` and archive, and under the
-    fail-closed choice in §7 a full WAL volume stops mainnet money writes;
+  - writes: the hub rate-limits writes per agent **and in total** in its
+    own code, since a write flood fills the shared `pg_wal` and archive,
+    and under the fail-closed choice in §7 a full WAL volume stops mainnet
+    money writes. Postgres has no per-database disk quota, so a cap the
+    hub's code can miss is backed by one outside it: the per-minute alert
+    check also **stops the hub** when `hub` passes its hard size or the
+    shared volume drops under 15 % free, with `ALTER DATABASE hub
+    CONNECTION LIMIT 0` and `pg_terminate_backend` on its sessions. Zold
+    keeps writing; the owner lifts the stop by hand;
   - alerts: the §7 disk and archiver alerts name the database that is
     growing (`pg_database_size` per database, and the write counters of
     `pg_stat_database` per database against the cluster's WAL rate in
