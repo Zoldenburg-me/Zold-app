@@ -41,6 +41,7 @@ import { LINK_MESSAGE, MoneriumApiError, MoneriumClient } from "../../adapters/m
 import { redactedMessage } from "../../http/log-cause.js";
 import { SECRETS } from "../../stored-secrets.js";
 import { store } from "../../store.js";
+import { sameSecret } from "../../store/rules.js";
 import { normalizeIban } from "../../sepa.js";
 import { b64urlToBuf, verifyAssertionForChallenge } from "../../webauthn.js";
 import { orgSafeMessageSignature, safeMessageHash, webauthnOwnerFromJwk, type BrowserPasskeyAssertion } from "../../wallet/candide.js";
@@ -110,7 +111,7 @@ const paysIntoSafe = (i: { address?: unknown; chain?: unknown }, address: string
 
 /** The same stored keys: a write after a wait only lands on the keys it read. */
 const sameKeys = (a: Organisation["monerium"], b: NonNullable<Organisation["monerium"]>) =>
-  !!a && a.clientId === b.clientId && a.clientSecretEnc === b.clientSecretEnc;
+  !!a && a.clientId === b.clientId && sameSecret(a.clientSecretEnc, b.clientSecretEnc);
 
 /** Monerium's 304 for a profile that already has its one IBAN (fetch drops a
  *  304's body, so the status is the signal). */

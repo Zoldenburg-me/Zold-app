@@ -237,13 +237,14 @@ console.log("ok - store suite on the JSON backend");
 
   // A nested store.tx that fails and is caught undoes only itself (a
   // savepoint); the transaction goes on and commits the rest.
+  await pg.addUser({ id: "u_sp", address: `0x${"5b".repeat(20)}`, iban: "", createdAt: now } as any);
   await pg.tx(async (t) => {
     await t.updateTransfer("t_lis_rb", { reference: "outer" } as any);
     await assert.rejects(
       pg.tx(async (n) => {
         await n.updateTransfer("t_lis_rb", { reference: "inner" } as any);
-        await n.addSession({ id: "s_dup", userId: "u_a", tokenHash: "th_dup", createdAt: now, lastUsedAt: now, expiresAt: now });
-        await n.addSession({ id: "s_dup2", userId: "u_a", tokenHash: "th_dup", createdAt: now, lastUsedAt: now, expiresAt: now });
+        await n.addSession({ id: "s_dup", userId: "u_sp", tokenHash: "th_dup", createdAt: now, lastUsedAt: now, expiresAt: now });
+        await n.addSession({ id: "s_dup2", userId: "u_sp", tokenHash: "th_dup", createdAt: now, lastUsedAt: now, expiresAt: now });
       }),
       /duplicate key/,
     );
@@ -258,8 +259,8 @@ console.log("ok - store suite on the JSON backend");
   await assert.rejects(
     pg.tx(async (t) => {
       await t.updateTransfer("t_lis_rb", { reference: "lost" } as any);
-      await t.addSession({ id: "s_dup3", userId: "u_a", tokenHash: "th_dup3", createdAt: now, lastUsedAt: now, expiresAt: now });
-      await t.addSession({ id: "s_dup4", userId: "u_a", tokenHash: "th_dup3", createdAt: now, lastUsedAt: now, expiresAt: now }).catch(() => {});
+      await t.addSession({ id: "s_dup3", userId: "u_sp", tokenHash: "th_dup3", createdAt: now, lastUsedAt: now, expiresAt: now });
+      await t.addSession({ id: "s_dup4", userId: "u_sp", tokenHash: "th_dup3", createdAt: now, lastUsedAt: now, expiresAt: now }).catch(() => {});
     }),
     /a statement in this transaction failed/,
   );

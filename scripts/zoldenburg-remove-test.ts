@@ -114,7 +114,7 @@ async function guardedAccount() {
       recovery: { moduleAddress: MODULE, guardianAddress: GUARDIAN, threshold: 1, status: "active", enabledAt: now },
     },
   } as any);
-  return { id, token: await issueSession(id), key };
+  return { id, token: await issueSession({ id: id }), key };
 }
 const removeUrl = (id: string) => `/api/users/${id}/recovery/zoldenburg/remove`;
 

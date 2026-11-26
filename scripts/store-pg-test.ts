@@ -445,6 +445,7 @@ try {
     ["scripts/wallet-proof-test.ts"],
     ["scripts/outbox-test.ts"],
     ["scripts/checkout-service-test.ts"],
+    ["scripts/identity-race-test.ts"],
   ];
   const { spawn } = await import("node:child_process");
   const { freePort } = await import("./_free-port.js");

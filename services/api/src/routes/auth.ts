@@ -19,7 +19,7 @@ import { emailHeldBy, emailLockKey } from "../domain/email.js";
 import { accountBalances, shownBalances } from "../chain.js";
 import { store, type User } from "../store.js";
 import { rateLimit } from "../http/policy.js";
-import { requireSession, revokeOtherSessions, tokenHash } from "../http/sessions.js";
+import { requireSession, revokeOtherSessions, SessionEpochMoved, tokenHash } from "../http/sessions.js";
 import { requireCapability } from "../http/guards.js";
 import {
   pendingPasskeySafeDeployments,
@@ -249,12 +249,17 @@ export function createAuthRouter(deps: AuthDeps) {
           return undefined;
         }
         const plannedSafe = passkeySafePlan(now, reg.key);
-        return await store.updateUser(user.id, {
+        const swapped = await store.updateUser(user.id, {
           passkey: {
             ...passkey,
           },
           ...(plannedSafe ? { passkeySafe: plannedSafe } : {}),
         });
+        // A bearer copied before the swap would otherwise keep working under
+        // the new passkey until it expires; the epoch bump in the same
+        // transaction also refuses a login whose check ran before the swap.
+        if (replacing) await revokeOtherSessions(user.id, session.id);
+        return swapped;
       });
       if (!updated) {
         return res.status(409).json({
@@ -262,9 +267,6 @@ export function createAuthRouter(deps: AuthDeps) {
           code: "EMAIL_IN_USE",
         });
       }
-      // A bearer copied before the swap would otherwise keep working under the
-      // new passkey until it expires.
-      if (replacing) await revokeOtherSessions(user.id, session.id);
       res.status(201).json(await publicUser(updated));
     }),
   );
@@ -457,7 +459,9 @@ export function createAuthRouter(deps: AuthDeps) {
       // this session with the others).
       const session = await store.tx(async () => {
         const used = await store.recordPasskeyUse(user.id, credentialId, signCount);
-        return used ? await withSession(used) : undefined;
+        // `used` carries the session epoch read with the credential check; a
+        // recovery that bumped it since refuses the session.
+        return used ? await withSession(used).catch((e) => { if (e instanceof SessionEpochMoved) return undefined; throw e; }) : undefined;
       });
       if (!session) return res.status(401).json({ error: "this passkey is no longer the account's passkey" });
       const balances = await shownBalances(user.address);

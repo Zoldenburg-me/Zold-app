@@ -38,6 +38,10 @@ export interface User {
   /** Candide Safe smart-account address — the user's identity and balance
    *  account, and the address Monerium attaches the IBAN to. */
   address: `0x${string}`;
+  /** Bumped, with every other session revoked, by a passkey replacement, a
+   *  recovery and a Monerium credential change (store.revokeOtherSessions).
+   *  A session issued under a lower epoch does not authenticate. Absent is 0. */
+  sessionEpoch?: number;
   /** The device key allowed to authorize debits from this account. We
    *  store only its address — the private half stays in the user's browser. */
   authorizerAddress?: `0x${string}`;
@@ -1249,6 +1253,10 @@ export interface Session {
   lastUsedAt: string;
   expiresAt: string;
   revokedAt?: string;
+  /** The user's `sessionEpoch` when this session was issued, or moved to by
+   *  the change that kept it. Below the user's, it no longer authenticates.
+   *  Absent is 0. */
+  epoch?: number;
 }
 
 
