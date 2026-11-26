@@ -82,8 +82,8 @@ file named by `AGE_IDENTITY_FILE` (an `age-plugin-yubikey` stub).
   back into a directory you name, refusing one that exists. It also refuses an
   archive with an absolute or `..` name, a link pointing out of it (followed
   through the other links in it) or a hard-linked file. `seal` refuses a
-  directory holding such a link (absolute ones included, and one to a sibling
-  of the sealed directory), a hard-linked file or a special file, and refuses a
+  directory holding such a link (absolute ones included, and one to or through a
+  sibling of the sealed directory), a hard-linked file or a special file, and refuses a
   sealed directory that is itself a symlink, so every archive it writes
   unseals. A link back in through the directory's own name (`../.private/key`)
   is kept by both. A failed unseal leaves nothing behind.

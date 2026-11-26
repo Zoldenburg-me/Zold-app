@@ -11,7 +11,8 @@
  *
  * The real executor, redeemToIban and pollRedeemOrdersOnce on a temp store.
  * Stubbed: Monerium's POST /orders and GET /orders/:id (no network), and the
- * authorizer bytecode read (no chain). Fee 0, so no Safe UserOperation.
+ * authorizer bytecode read (no chain). Fee 0 but in one refusal, which stops
+ * before the fee, so no Safe UserOperation runs.
  * NOT PROVEN HERE: what Monerium or the payee's bank shows for the memo.
  *
  *   npm run sepa-memo:test
@@ -34,7 +35,7 @@ process.env.MONERIUM_CLIENT_SECRET = "sepa-memo-secret";
 const { initStore, store } = await import("../services/api/src/store.js");
 const { executeSepaTransfer } = await import("../services/api/src/orchestrator.js");
 const { MoneriumClient } = await import("../services/api/src/adapters/monerium-client.js");
-const { pollRedeemOrdersOnce } = await import("../services/api/src/adapters/monerium-sandbox.js");
+const { pollRedeemOrdersOnce, redeemToIban } = await import("../services/api/src/adapters/monerium-sandbox.js");
 const { MONERIUM } = await import("../services/api/src/config.js");
 const { moneriumRedeemMessage, paymentMemo } = await import("../services/api/src/sepa.js");
 const chain = await import("../services/api/src/chain.js");
@@ -86,7 +87,7 @@ let echo: (body: any) => string | undefined = (body) => body.memo;
 const deadline = () => Math.floor(Date.now() / 1000) + 120;
 
 /** A transfer as the builder left it, with `memo` as the memo it stored. */
-function built(id: string, reference: string | undefined, memo: string) {
+function built(id: string, reference: string | undefined, memo: string, sendEur = 40) {
   const d = deadline();
   store.addTransfer({
     id,
@@ -97,7 +98,7 @@ function built(id: string, reference: string | undefined, memo: string) {
     recipientIban: IBAN,
     ...(reference !== undefined ? { reference } : {}),
     state: "CREATED",
-    sendEur: 40,
+    sendEur,
     receiveEur: 40,
     receiveKes: 0,
     fundingSource: "safe",
@@ -105,7 +106,7 @@ function built(id: string, reference: string | undefined, memo: string) {
     moneriumRedeem: { ...moneriumRedeemMessage(40, IBAN, stamp), memo, signature: "0x1234" },
     auth: {
       to: TO,
-      amountWei: chain.eur.toWei(40).toString(),
+      amountWei: chain.eur.toWei(sendEur).toString(),
       destination: chain.destinationCommitment("sepa", { iban: IBAN, name: "Recipient Name" }),
       deadline: d,
       authorizedAt: stamp,
@@ -121,7 +122,7 @@ async function send(id: string, d: number) {
   const signature = await device.signTypedData(
     chain.paymentAuthorizationTypedData({
       account: SAFE,
-      amountWei: chain.eur.toWei(40),
+      amountWei: BigInt(t.auth!.amountWei),
       to: TO,
       transferId: chain.transferIdHash(id),
       destination: t.auth!.destination as `0x${string}`,
@@ -199,6 +200,41 @@ for (const [id, memo] of [
   assert.match(after.error ?? "", /no signed payment reference/);
   assert.ok(!after.txs.some((t) => t.step.startsWith("monerium.redeem")), "no redeem was attempted");
   ok(`a transfer that stored memo ${JSON.stringify(memo)} places no order and fails`);
+}
+
+// With a fee to take, a blank memo still refuses first: the transfer never
+// reaches DEBITED and records no fee step.
+{
+  const id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+  const d = built(id, "", "  ", 41.5);
+  const states: string[] = [];
+  const update = store.updateTransfer.bind(store);
+  (store as any).updateTransfer = (tid: string, patch: any) => {
+    if (tid === id && patch.state) states.push(patch.state);
+    return update(tid, patch);
+  };
+  const before = placed.size;
+  try {
+    const after = await send(id, d);
+    assert.equal(after.state, "FAILED", after.error);
+    assert.match(after.error ?? "", /no signed payment reference/);
+  } finally { (store as any).updateTransfer = update; }
+  assert.ok(!states.includes("DEBITED"), `reached ${states.join(" -> ")}`);
+  assert.ok(!store.findTransfer(id)!.txs.some((t) => /fee/.test(t.step)), "a fee step was recorded");
+  assert.equal(placed.size, before, "an order was placed");
+  ok("with a fee > 0, a blank stored memo fails before the fee debit: never DEBITED, no fee taken");
+}
+
+// redeemToIban refuses a memo that is not the one the authorization carries.
+{
+  const auth = { ...moneriumRedeemMessage(40, IBAN, new Date().toISOString()), memo: "Powered by Zold 12345678", signature: "0x1234" as const };
+  const before = placed.size;
+  await assert.rejects(
+    redeemToIban(store.findUser("u-memo")!, 40, { iban: IBAN, firstName: "R", lastName: "N", country: "DE" }, "Powered by Zold 87654321", auth),
+    /does not match this payout/,
+  );
+  assert.equal(placed.size, before, "an order was placed");
+  ok("redeemToIban refuses a memo that differs from the authorization's");
 }
 
 console.log(`\nSEPA STORED MEMO TEST PASSED — ${n} checks`);

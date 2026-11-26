@@ -32,7 +32,7 @@ try {
   // on a fresh checkout and not only after a suite that deployed.
   const dep = spawnSync(process.execPath, [path.resolve("node_modules/.bin/tsx"), "scripts/deploy.ts"], {
     stdio: "inherit",
-    env: { ...process.env, TRANSF_RPC_URL: rpcUrl, DEPLOY_EURUSD_RATE: process.env.DEPLOY_EURUSD_RATE || "1137900" },
+    env: { ...process.env, TRANSF_RPC_URL: rpcUrl, DEPLOY_EURUSD_RATE: process.env.DEPLOY_EURUSD_RATE ?? "1137900" },
   });
   assert.equal(dep.status, 0, "deploy failed");
   for (const bad of [{ LIQUIDITY_PROVIDER: "nope" }, { LIQUIDITY_PROVIDER: "best", LIQUIDITY_VENUES: "nope" }, { LIQUIDITY_PROVIDER: "best", LIQUIDITY_VENUES: "" }]) {
