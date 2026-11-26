@@ -246,9 +246,9 @@ still running returns at once. Not an advisory lock: one process per
 deployment is already enforced by the start lock, so a second process
 sweeping the same rows is refused there. The one window is the start lock's
 own loss: the process exits at once on its connection's `error` or `end`,
-but a connection that dies with no event is found by the next `SELECT 1`, so
-for up to 5 s a second process that took the freed lock can sweep next to
-this one. What holds in that window is that the sweeps' writes are
+but a connection that dies with no event is found by a `SELECT 1` (every 5 s)
+that fails or goes unanswered for 5 s, so for up to 10 s a second process
+that took the freed lock can sweep next to this one. What holds in that window is that the sweeps' writes are
 conditional (rule 3) and their partner calls sit behind reserves (rule 5).
 Test (`scripts/single-flight-test.ts`): a tick held open past its interval;
 the next tick does nothing; every interval in `server.ts` is single-flight.

@@ -9,8 +9,9 @@
  * (store/pg/start-lock.ts), so a second process sweeping the same rows is
  * already refused. The one window is the start lock's own loss: the process
  * exits at once on its connection's `error` or `end`, but a connection that
- * dies silently is found by the `SELECT 1` every 5 s, so for up to 5 s a
- * second process that took the freed lock can sweep next to this one. The
+ * dies silently is found by a `SELECT 1` (every 5 s) that fails or goes
+ * unanswered for 5 s, so for up to 10 s a second process that took the freed
+ * lock can sweep next to this one. The
  * sweeps' writes are conditional (rule 3) and their partner calls are behind
  * reserves (rule 5), which is what holds in that window.
  */

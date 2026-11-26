@@ -209,6 +209,9 @@ export function nestedTx<T>(
   const parent = scope.getStore();
   if (!parent?.open || parent.owner !== owner) return undefined;
   return parent.children.run(async () => {
+    // Queued behind a sibling: the parent may have ended meanwhile (a nested
+    // transaction it did not await), and then there is nothing to join.
+    if (!parent.open) throw new Error("a nested store.tx outlived the transaction it was started in");
     const hooks = newTxHooks();
     const child: Scope = { open: true, owner, t: parent.t, hooks, children: new Mutex() };
     try {

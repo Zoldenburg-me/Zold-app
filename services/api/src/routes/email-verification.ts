@@ -142,10 +142,10 @@ export function createEmailVerificationRouter(deps: EmailVerificationDeps) {
       // transaction, on the code that was compared: a new code sent since
       // voids this one.
       const updated = await store.tx(async () => {
-        // The address is held, not only the row: two accounts confirming one
+        // The row and then its address held: two accounts confirming one
         // address at once each lock only their own row.
-        if (user.email) await store.lockKey(emailLockKey(user.email));
         const now = await store.lockUser(user.id);
+        if (now?.email) await store.lockKey(emailLockKey(now.email));
         if (now?.emailCode?.hash !== c.hash) return "expired" as const;
         if ((await confirmedElsewhere(now))) return "in_use" as const;
         return await store.updateUser(user.id, { emailVerifiedAt: new Date().toISOString(), emailCode: undefined });

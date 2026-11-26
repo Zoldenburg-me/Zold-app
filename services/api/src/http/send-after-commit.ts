@@ -27,6 +27,7 @@
  */
 import type express from "express";
 import { deferToCommit, onTxDropped, openTxToken } from "../store/backend.js";
+import { describeCause } from "./log-cause.js";
 
 export const sendAfterCommit: express.RequestHandler = (_req, res, next) => {
   const send = res.send.bind(res);
@@ -71,7 +72,17 @@ export const sendAfterCommit: express.RequestHandler = (_req, res, next) => {
     deferToCommit(
       () => {
         held = false;
-        go();
+        try {
+          go();
+        } catch (err) {
+          // After the commit nobody else will answer: a send that fails here
+          // ends the response rather than leaving the request hanging.
+          console.error(`send-after-commit: a held response failed: ${describeCause(err)}`);
+          if (!res.headersSent) {
+            res.statusCode = 500;
+            end();
+          } else res.destroy();
+        }
       },
       () => {
         held = false;

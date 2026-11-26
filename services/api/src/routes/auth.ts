@@ -240,10 +240,10 @@ export function createAuthRouter(deps: AuthDeps) {
       // passkey is what makes a row claimable, so it is where the invariant
       // has to hold. The check and the write are one transaction.
       const updated = await store.tx(async () => {
-        // The address and the row held: two rows on one email registering
-        // their first passkey at once each lock only their own row.
-        if (user.email) await store.lockKey(emailLockKey(user.email));
+        // The row and then its address held: two rows on one email
+        // registering their first passkey at once each lock only their own row.
         const now = (await store.lockUser(user.id)) ?? user;
+        if (now.email) await store.lockKey(emailLockKey(now.email));
         if (!now.passkey?.publicKey && now.email &&
             emailHeldBy((await store.usersByEmail(now.email)).filter((u) => u.id !== now.id), EMAIL_VERIFICATION.enabled)) {
           return undefined;

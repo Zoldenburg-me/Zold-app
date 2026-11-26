@@ -12,9 +12,10 @@
  * events, and a `SELECT 1` every 5 s) and on losing it the process exits
  * non-zero at once, before another request or sweep tick runs; systemd
  * starts it again, and the new process takes the lock or refuses to start.
- * A connection that dies without an event is found by the next `SELECT 1`:
- * that is the up-to-5-s window in which a second process can hold the lock
- * next to this one (single-flight.ts says what holds then).
+ * A connection that dies without an event is found by a `SELECT 1` that fails
+ * or is not answered within the interval: that is the window, up to 10 s, in
+ * which a second process can hold the lock next to this one (single-flight.ts
+ * says what holds then).
  *
  * Not called by the API yet: config/env.ts refuses STORE_BACKEND=postgres
  * until the cut-over (§8 S8), which takes this lock before `listen`.
@@ -64,9 +65,22 @@ export async function takeStartLock(
     await client.end().catch(() => {});
     throw err;
   }
+  // Each ping must answer within the interval: a connection that died with
+  // no RST (a dropped NAT entry) leaves a query that never settles, and the
+  // lock is gone on the server all the same.
+  const every = opts.pingMs ?? START_LOCK_PING_MS;
+  let pinging = false;
   ping = setInterval(() => {
-    client.query("SELECT 1").catch(() => lose("ping failed"));
-  }, opts.pingMs ?? START_LOCK_PING_MS);
+    if (pinging) return lose("ping unanswered");
+    pinging = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    Promise.race([
+      client.query("SELECT 1"),
+      new Promise((_, reject) => (timer = setTimeout(() => reject(new Error("timeout")), every))),
+    ])
+      .then(() => (pinging = false), () => lose("ping failed"))
+      .finally(() => clearTimeout(timer));
+  }, every);
   ping.unref();
   return {
     async release() {
