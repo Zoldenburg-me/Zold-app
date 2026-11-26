@@ -166,33 +166,43 @@ export function clientKey(ip: string | undefined): string {
  * through fresh addresses (an IPv6 /48 holds 65,536 /64s) or fresh credential
  * ids opens one window per request, so without a cap the map grows with the
  * flood's rate until the sweep catches up.
+ *
+ * At the cap a new key is never refused: that would lock out every caller
+ * whose window had ended, passkey login and Shopify included, for as long as
+ * a flood of ~100k fresh keys a minute kept the map full. Instead the map is
+ * kept in last-use order and the least recently used window makes room. A
+ * window that has counted more than one request is moved to the back rather
+ * than evicted (up to EVICTION_SCAN of them per new key), so a limited key —
+ * a guessed credential, a hot partner caller, the flooder's own — keeps its
+ * count; a one-request window holds nothing worth keeping, since evicting it
+ * gives back at most the request the flood itself spends to re-open it.
+ * Bucketing IPv6 by a wider prefix was not chosen: it puts unrelated users
+ * of one provider in one bucket and does nothing for `c:<credential>` keys.
  */
 export const RATE_BUCKETS_MAX = 100_000;
+const EVICTION_SCAN = 8;
 
 const hits = new Map<string, { n: number; reset: number }>();
 
 export function rateLimit(key: string, perMin: number): boolean {
   const now = Date.now();
-  const h = hits.get(key);
-  if (!h || h.reset < now) {
-    // Re-inserted, so the map stays in window order, oldest first.
-    hits.delete(key);
-    // At the cap, expired windows go first (they sit at the front). A window
-    // still running is never evicted: that would hand its caller a fresh
-    // count, and the flood filling the map could reset a passkey or partner
-    // bucket at will. So a map full of running windows refuses the new key
-    // (fail closed): a flood of 100k fresh keys a minute locks out new
-    // callers until its oldest windows end, and callers already counted keep
-    // their counts.
-    while (hits.size >= RATE_BUCKETS_MAX) {
-      const [oldest, w] = hits.entries().next().value!;
-      if (w.reset >= now) return false;
-      hits.delete(oldest);
-    }
-    hits.set(key, { n: 1, reset: now + 60_000 });
-    return true;
+  let h = hits.get(key);
+  // Re-inserted below, so the map stays in last-use order, oldest first.
+  if (h) hits.delete(key);
+  else makeRoom(now);
+  // An ended window is renewed in place: a returning caller keeps its slot.
+  if (!h || h.reset < now) h = { n: 0, reset: now + 60_000 };
+  h.n++;
+  hits.set(key, h);
+  return h.n <= perMin;
+}
+
+function makeRoom(now: number): void {
+  for (let scanned = 0; hits.size >= RATE_BUCKETS_MAX; scanned++) {
+    const [oldest, w] = hits.entries().next().value!;
+    hits.delete(oldest);
+    if (w.reset >= now && w.n > 1 && scanned < EVICTION_SCAN) hits.set(oldest, w);
   }
-  return ++h.n <= perMin;
 }
 
 /**

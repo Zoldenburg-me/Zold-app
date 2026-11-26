@@ -375,20 +375,26 @@ try {
     sweepExpiredBuckets();
     assert.equal(bucketCounts().hits, 0);
   });
-  await check("a flood of distinct keys in one window stops at the cap and never resets a running window; at the cap a new key is refused", () => {
+  await check("a flood of fresh keys stops at the cap and locks out no one: a known caller past its window, a newcomer and a quote are served; limited keys stay limited", () => {
+    // A regular caller's window ends during the flood; it must still be served after.
+    for (let i = 0; i < 5; i++) rateLimit("g:regular", 300);
+    clock += 61_000;
     for (let i = 0; i < 21; i++) rateLimit("c:limited-before-flood", 20);
     assert.equal(rateLimit("c:limited-before-flood", 20), false);
-    for (let i = 0; i < RATE_BUCKETS_MAX + 20_000; i++) rateLimit(`g:flood-${i}`, 300);
-    assert.ok(bucketCounts().hits <= RATE_BUCKETS_MAX, String(bucketCounts().hits));
-    // The caller limited before the flood was not evicted, so it stays limited.
+    for (let i = 0; i < RATE_BUCKETS_MAX + 20_000; i++) {
+      rateLimit(`g:flood-${i}`, 300);
+      // One flooding key goes past its limit early in the flood.
+      if (i === 1000) for (let j = 0; j < 301; j++) rateLimit("g:flood-hot", 300);
+    }
+    assert.equal(bucketCounts().hits, RATE_BUCKETS_MAX);
+    // Limited keys are not reset by the flood, the flooder's own included.
     assert.equal(rateLimit("c:limited-before-flood", 20), false);
-    // A full map of running windows refuses a new key (fail closed)…
-    assert.equal(rateLimit("g:newcomer", 300), false);
-    // …while a caller already counted keeps its allowance.
-    assert.equal(rateLimit("g:flood-1", 300), true);
-    // Once the flood's windows end, they make room without waiting for the sweep.
-    clock += 61_000;
+    assert.equal(rateLimit("g:flood-hot", 300), false);
+    // Nobody is refused for want of a slot.
+    assert.equal(rateLimit("g:regular", 300), true);
     assert.equal(rateLimit("g:newcomer", 300), true);
+    assert.equal(rateLimit("p:newcomer", 30), true);
+    assert.equal(bucketCounts().hits, RATE_BUCKETS_MAX);
     clock += 61_000;
     sweepExpiredBuckets();
     assert.equal(bucketCounts().hits, 0);

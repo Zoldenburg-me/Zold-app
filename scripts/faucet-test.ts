@@ -13,7 +13,8 @@
  *    before the send, after the send and before the hash is written, a
  *    receipt-wait timeout, sends still queued) leaves at most one grant per
  *    Safe after a restart, and an uncertain send is never resent: the claim
- *    stays for a person to reconcile by the hash it was signed with;
+ *    stays for a person to reconcile by the signed hash, logged before the
+ *    broadcast;
  *  - a failure before the broadcast (gas estimate, no gas money) or a
  *    broadcast the node refuses releases the claim, and a retry pays once.
  *    A crash is a snapshot of db.json at that instant plus a call that never
@@ -217,12 +218,21 @@ try {
 
   const jule = addUser("Crash Jule");
   armed = crashOn(faucetWallet, "sendRawTransaction", true);
-  void f.faucetFundSafe(jule.id);
-  await armed;
+  const logged: string[] = [];
+  const realLog = console.log;
+  console.log = (...args: unknown[]) => { logged.push(args.join(" ")); realLog(...args); };
+  try {
+    void f.faucetFundSafe(jule.id);
+    await armed;
+  } finally { console.log = realLog; }
   f = await restart();
   const j2 = await f.faucetFundSafe(jule.id);
   check("crash after the send, before the hash is written: a retry is ALREADY_GRANTED and the Safe holds one grant",
     !j2.ok && j2.code === "ALREADY_GRANTED" && store.findUser(jule.id)?.faucet?.txHash === "" && (await balanceOf(jule.address)) === 50);
+  const julesHash = logged.find((l) => l.includes(jule.id))?.match(/0x[0-9a-f]{64}/)?.[0] as `0x${string}` | undefined;
+  const julesTx = julesHash ? await publicClient.getTransaction({ hash: julesHash }).catch(() => undefined) : undefined;
+  check("…the hash was logged before the broadcast, and it names the transfer that landed",
+    julesTx?.to?.toLowerCase() === addrs().eure.toLowerCase());
 
   const kai = addUser("Crash Kai");
   armed = crashOn(publicClient, "waitForTransactionReceipt");

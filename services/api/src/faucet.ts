@@ -24,7 +24,7 @@
  *    (writeDefinitelyRefused). Any other broadcast failure, or a failed
  *    receipt wait, keeps the claim — the transfer may still land, and
  *    releasing would pay twice. Such a claim is never resent: a person
- *    reconciles it by the hash in the log line;
+ *    reconciles it by the signed hash, logged before every broadcast;
  *  - sends are queued one at a time: parallel sends from one wallet would
  *    race for the same nonce;
  *  - a faucet problem never breaks onboarding.
@@ -87,11 +87,15 @@ async function sendToken(token: `0x${string}`, to: `0x${string}`, units: bigint,
     const prepared = await wallet.prepareTransactionRequest({ to: token, data });
     // Checked here, not left to the node: a refusal at broadcast is worded
     // per node, and one the classifier cannot name would keep the claim.
+    // It leaves out an OP-stack L1 data fee; a node refusing for that
+    // ("insufficient funds") is a definite refusal, so the claim is released.
     const gasCost = prepared.gas * (prepared.maxFeePerGas ?? prepared.gasPrice ?? 0n);
     const gasHeld = await publicClient.getBalance({ address: wallet.account.address });
     if (gasHeld < gasCost) throw new Error(`faucet wallet ${wallet.account.address} holds ${formatUnits(gasHeld, 18)} of the gas token, below this send's ${formatUnits(gasCost, 18)} — top it up`);
     const raw = await wallet.signTransaction(prepared as never); // the chain union is wider than this wallet's chain
     const txHash = keccak256(raw);
+    // Logged before the broadcast: a crash inside it leaves this line to reconcile by.
+    console.log(`faucet: ${label} signed as ${txHash}, broadcasting`);
     try {
       await wallet.sendRawTransaction({ serializedTransaction: raw });
     } catch (err) {
