@@ -148,13 +148,17 @@ export function createTurnkeyRecoveryRouter({
    *  ones are marked so and answered 410. */
   const requestFor = async (req: express.Request, res: express.Response): Promise<RecoveryRequest | undefined> => {
     return store.tx(async () => {
-      const r = await store.findRecoveryRequest(req.params.id);
-      if (!r || r.mode !== "turnkey" || !secretMatches(r, presentedSecret(req))) {
+      const found = await store.findRecoveryRequest(req.params.id);
+      if (!found || found.mode !== "turnkey" || !secretMatches(found, presentedSecret(req))) {
         res.status(404).json({ error: "recovery not found" });
         return undefined;
       }
+      // Read again under the user's row, the lock every writer of the request takes.
+      await store.lockUser(found.userId);
+      const r = (await store.findRecoveryRequest(found.id))!;
       if (["PASSKEY_PENDING", "REVIEW_PENDING"].includes(r.status) && Date.now() >= Date.parse(r.expiresAt)) {
-        res.status(410).json({ ...heldView(await store.updateRecoveryRequest(r.id, { status: "EXPIRED" })), error: "this recovery expired — start again" });
+        const expired = await store.updateRecoveryRequestFrom(r.id, ["PASSKEY_PENDING", "REVIEW_PENDING"], { status: "EXPIRED" });
+        res.status(410).json({ ...heldView(expired ?? r), error: "this recovery expired — start again" });
         return undefined;
       }
       return r;

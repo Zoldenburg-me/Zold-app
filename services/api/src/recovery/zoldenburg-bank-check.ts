@@ -85,6 +85,8 @@ export const canIssueRecoveryBankCode = (r: RecoveryRequest) =>
 export async function issueRecoveryBankCode(r: RecoveryRequest, now = new Date()): Promise<{ code: string; memo: string }> {
   return store.tx(async () => {
     const { code, hash } = newEnrolmentCode("recovery");
+    // The user's row is the lock every writer of their recovery takes.
+    await store.lockUser(r.userId);
     const fresh = (await store.findRecoveryRequest(r.id))!;
     const before = fresh.zoldenburg?.bankCheck;
     await store.updateRecoveryRequest(r.id, {
@@ -135,6 +137,7 @@ export async function checkRecoveryBankPayment(
   };
   const record = async (outcome: "waiting" | "mismatch" | "unreadable", reason: string, cause?: UnreadableCause) => {
     return store.tx(async () => {
+      await store.lockUser(user.id);
       const fresh = await stillOpen();
       if (!fresh) return outcome;
       await store.updateRecoveryRequest(requestId, {
@@ -154,6 +157,7 @@ export async function checkRecoveryBankPayment(
     // The throttle's clock, set before Monerium is asked.
     // On the stored row: a code issued since the read above keeps it.
     await store.tx(async () => {
+      await store.lockUser(user.id);
       const z = (await store.findRecoveryRequest(requestId))!.zoldenburg;
       await store.updateRecoveryRequest(requestId, { zoldenburg: { ...z, bankCheck: { ...z!.bankCheck, lastReadAt: now.toISOString() } } });
     });

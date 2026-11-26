@@ -160,6 +160,8 @@ export function createBookkeepingRoutes(deps: OrgRoutes): express.Router {
       if (!ctx) return;
       if (!requireCapability(ctx, res, "coa.rules")) return;
       if (!requirePermission(ctx, res, "ledger.categorise")) return;
+      // Every ledger writer of the org takes this lock before it reads the rows it changes.
+      await store.lockKey(`ledger:${ctx.org.id}`);
       const { changed, entries } = applyRules(await store.rulesOf(ctx.org.id), await store.ledgerOf(ctx.org.id));
       await store.replaceLedgerEntries(entries);
       res.json({
@@ -198,6 +200,7 @@ export function createBookkeepingRoutes(deps: OrgRoutes): express.Router {
       if (!ctx) return;
       if (!requireCapability(ctx, res, "ledger.transactions")) return;
       if (!requirePermission(ctx, res, "ledger.categorise")) return;
+      await store.lockKey(`ledger:${ctx.org.id}`);
       const entry = (await store.ledgerOf(ctx.org.id)).find((e) => e.id === String(req.params.entryId));
       if (!entry) return res.status(404).json({ error: "no such transaction" });
 
@@ -238,6 +241,7 @@ export function createBookkeepingRoutes(deps: OrgRoutes): express.Router {
       if (!ctx) return;
       if (!requireCapability(ctx, res, "ledger.transactions")) return;
       if (!requirePermission(ctx, res, "ledger.categorise")) return;
+      await store.lockKey(`ledger:${ctx.org.id}`);
       const entry = (await store.ledgerOf(ctx.org.id)).find((e) => e.id === String(req.params.entryId) && e.statement);
       if (!entry) return res.status(404).json({ error: "no such statement line" });
       const own = req.body?.own;

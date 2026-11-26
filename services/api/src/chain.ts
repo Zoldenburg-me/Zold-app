@@ -23,6 +23,7 @@ import {
 import type { PayoutRail } from "./store.js";
 import { urlForLog } from "./http/log-safe.js";
 import { describeCause, errorText } from "./http/log-cause.js";
+import { refuseInTx } from "./store/backend.js";
 
 /**
  * The viem chain we talk to, resolved from TRANSF_CHAIN_ID.
@@ -234,6 +235,7 @@ export async function writeAndWait(
   args: { address: `0x${string}`; abi: any[]; functionName: string; args: any[] },
   opts: WriteHooks = {},
 ) {
+  refuseInTx("writeAndWait");
   const { request } = await publicClient.simulateContract({
     account: client.account,
     ...args,

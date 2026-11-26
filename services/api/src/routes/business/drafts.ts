@@ -50,7 +50,6 @@ import { knownError } from "../../http/known-errors.js";
 import { redactedMessage } from "../../http/log-cause.js";
 import { wrap } from "../util.js";
 import { requireCapability as requireUserCapability } from "../../http/guards.js";
-import { pendingCryptoSends } from "../../http/pending.js";
 import { createCompanyCryptoSendPreparer, createCryptoSendPreparer, type CryptoSendInput } from "../crypto-sends.js";
 import { CHAIN_ID, cryptoSendEnabled } from "../../config.js";
 import type { User } from "../../store.js";
@@ -418,7 +417,7 @@ export function createDraftRoutes(
         if (op) await store.endPendingSafeOp(op.id, { state: "INVALIDATED", reason: why });
         else {
           await store.updateCryptoSendFrom(send.id, ["CREATED"], { state: "FAILED", error: why });
-          pendingCryptoSends.delete(send.id);
+          await store.dropPendingExecution("cryptoSend", send.id);
         }
       });
     };
@@ -546,12 +545,13 @@ export function createDraftRoutes(
     }
     const spendable = accountIsSpendable(account, ctx.org);
     if (!spendable.ok) return res.status(409).json({ error: spendable.reason });
-    // A company's IBAN is on its own Safe, which only its owners sign; a bank
-    // payout from it (a Monerium redeem signed by the Safe) is not built.
+    // A company's IBAN is on its own Safe, which only its owners sign. One
+    // bank payout at a time is built (org-monerium-payouts.ts); a run over
+    // several payees is not, and is refused by name.
     if (orgEntity(ctx.org) === "company") {
       return res.status(409).json({
-        code: "COMPANY_BANK_PAYOUT_NOT_BUILT",
-        error: "Paying a bank account from the company’s IBAN is not built yet. Nothing was sent. A payment to a crypto wallet is queued for the owners to sign.",
+        code: "COMPANY_BANK_RUN_NOT_BUILT",
+        error: "A company pays a bank account one payment at a time from Settings → Monerium, where an owner signs each with their passkey. A bank run over several payees is not built. Nothing was sent. A payment to a crypto wallet is queued for the owners to sign.",
       });
     }
     if (!account.backingUserId) {

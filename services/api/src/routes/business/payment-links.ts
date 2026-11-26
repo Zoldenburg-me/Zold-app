@@ -83,7 +83,9 @@ export function createPaymentLinkRoutes(deps: OrgRoutes): express.Router {
       if (link.invoiceId && !requireCapability(ctx, res, "invoices")) return;
       if (link.state !== "OPEN") return res.status(409).json({ error: `this link is ${effectiveState(link).toLowerCase()}` });
       if (link.payments.length) return res.status(409).json({ error: "a payment has already been recorded against this link — it cannot be cancelled" });
-      const done = await store.updatePaymentRequest(link.id, { state: "CANCELLED", cancelledAt: new Date().toISOString() });
+      // On the stored row: a payment recorded since the check keeps the link.
+      const done = await store.cancelUnpaidPaymentRequest(link.id, new Date(), true);
+      if (!done) return res.status(409).json({ error: "a payment has already been recorded against this link — it cannot be cancelled" });
       res.json(ownerPaymentRequest(done, baseUrlFor(req)));
     });
   });

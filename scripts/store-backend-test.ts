@@ -24,8 +24,12 @@ process.env.TRANSF_DB_PATH = path.join(tmp, "db.json");
 
 const { initStore, store } = await import("../services/api/src/store.js");
 const { createPgStore } = await import("../services/api/src/store/pg/backend.js");
-const { migrate, readMigrations } = await import("../services/api/src/store/pg/migrate.js");
+const { assertSchemaCurrent, migrate, readMigrations } = await import("../services/api/src/store/pg/migrate.js");
 const { pgliteDatabase, pgPoolConfig } = await import("../services/api/src/store/pg/sql.js");
+/** Every migration file, and the version and name prefix of the next one. */
+const ALL_MIGRATIONS = readMigrations().map((m) => m.version);
+const NEXT = ALL_MIGRATIONS.length + 1;
+const NEXT_NAME = String(NEXT).padStart(4, "0");
 
 const pglite = async () => pgliteDatabase((await PGlite.create()) as never);
 
@@ -156,6 +160,8 @@ console.log("ok - store suite on the JSON backend");
       server.close();
     }
   }
+  await assert.rejects(store.lockUser("u_x"), /lockUser outside a store\.tx holds nothing/);
+  await assert.rejects(store.lockKey("k"), /lockKey outside a store\.tx holds nothing/);
   console.log("ok - JSON backend: every call behind one mutex, store.tx holds it, rows are copies, a write is on disk when it resolves");
 }
 
@@ -163,43 +169,119 @@ console.log("ok - store suite on the JSON backend");
   const db = await pglite();
   const version = (await db.query<{ v: string }>("SELECT current_setting('server_version_num') AS v")).rows[0].v;
   assert.equal(version.slice(0, 2), "17", `PGlite runs Postgres 17, the production major (got ${version})`);
-  assert.deepEqual(await migrate(db), [1, 2]);
+  assert.deepEqual(await migrate(db), ALL_MIGRATIONS);
   const pg = createPgStore(db);
   await storeSuite(pg);
   await conditionalWriteSuite(pg);
+  // A state change inside a store.tx is announced after its COMMIT, and
+  // never for a transaction rolled back.
+  const now = new Date().toISOString();
+  for (const id of ["t_lis_ok", "t_lis_rb"]) {
+    await pg.addTransfer({ id, userId: "u_a", quoteId: `q_${id}`, state: "CREATED", txs: [], createdAt: now, updatedAt: now } as any);
+  }
+  const heard: string[] = [];
+  pg.onTransferStateChange((t) => void heard.push(`${t.id}:${t.state}`));
+  await pg.tx(async (t) => {
+    await t.updateTransfer("t_lis_ok", { state: "PAID" } as any);
+    assert.deepEqual(heard, [], "not announced before the commit");
+  });
+  assert.deepEqual(heard, ["t_lis_ok:PAID"]);
+  await assert.rejects(
+    pg.tx(async (t) => {
+      await t.updateTransfer("t_lis_rb", { state: "PAID" } as any);
+      throw new Error("roll back");
+    }),
+    /roll back/,
+  );
+  assert.deepEqual(heard, ["t_lis_ok:PAID"], "a rolled-back change is never announced");
+  assert.equal((await pg.findTransfer("t_lis_rb"))?.state, "CREATED");
+
+  // A nested store.tx that fails and is caught undoes only itself (a
+  // savepoint); the transaction goes on and commits the rest.
+  await pg.tx(async (t) => {
+    await t.updateTransfer("t_lis_rb", { reference: "outer" } as any);
+    await assert.rejects(
+      pg.tx(async (n) => {
+        await n.updateTransfer("t_lis_rb", { reference: "inner" } as any);
+        await n.addSession({ id: "s_dup", userId: "u_a", tokenHash: "th_dup", createdAt: now, lastUsedAt: now, expiresAt: now });
+        await n.addSession({ id: "s_dup2", userId: "u_a", tokenHash: "th_dup", createdAt: now, lastUsedAt: now, expiresAt: now });
+      }),
+      /duplicate key/,
+    );
+    await t.updateTransfer("t_lis_rb", { purpose: "after" } as any);
+  });
+  const rb = await pg.findTransfer("t_lis_rb");
+  assert.equal((rb as any)?.reference, "outer", "the nested part was undone, the outer write kept");
+  assert.equal((rb as any)?.purpose, "after", "the transaction went on after the caught failure");
+  assert.equal(await pg.findSessionByTokenHash("th_dup"), undefined);
+  // A failed statement caught without a savepoint: Postgres aborted the
+  // transaction, so it fails rather than COMMIT rolling back in silence.
+  await assert.rejects(
+    pg.tx(async (t) => {
+      await t.updateTransfer("t_lis_rb", { reference: "lost" } as any);
+      await t.addSession({ id: "s_dup3", userId: "u_a", tokenHash: "th_dup3", createdAt: now, lastUsedAt: now, expiresAt: now });
+      await t.addSession({ id: "s_dup4", userId: "u_a", tokenHash: "th_dup3", createdAt: now, lastUsedAt: now, expiresAt: now }).catch(() => {});
+    }),
+    /a statement in this transaction failed/,
+  );
+  assert.equal((await pg.findTransfer("t_lis_rb") as any)?.reference, "outer", "nothing of it committed");
+  // Nested transactions of one parent run one after another, so their
+  // savepoints nest even when started together.
+  const order: string[] = [];
+  await pg.tx(async () => {
+    await Promise.all(
+      ["a", "b"].map((k) =>
+        pg.tx(async (n) => {
+          order.push(`${k}+`);
+          await n.updateTransfer("t_lis_rb", { reference: k } as any);
+          order.push(`${k}-`);
+        }),
+      ),
+    );
+  });
+  assert.deepEqual(order, ["a+", "a-", "b+", "b-"]);
+  for (const s of [pg]) await assert.rejects(s.lockUser("u_a"), /lockUser outside a store\.tx holds nothing/);
   await db.close();
-  console.log(`ok - store suite on the Postgres backend (PGlite, server_version_num ${version})`);
+  console.log(`ok - store suite on the Postgres backend (PGlite, server_version_num ${version}); listeners after COMMIT only; nested tx savepoints; no silent COMMIT after a failed statement`);
 }
 
 // ── Migration runner ───────────────────────────────────────────────────────
 {
   const db = await pglite();
   const files = readMigrations();
-  assert.deepEqual(await migrate(db, files), [1, 2]);
+  assert.deepEqual(await migrate(db, files), ALL_MIGRATIONS);
   assert.deepEqual(await migrate(db, files), [], "an applied file is not run again");
   await assert.rejects(() => migrate(db, [{ ...files[0], sha256: "0".repeat(64) }]), /changed after it was applied/);
   await assert.rejects(() => migrate(db, []), /applied but its file is gone/);
   // A failing file leaves nothing behind, not even its first statement.
-  const bad = { version: 3, name: "0003_bad.sql", sql: "CREATE TABLE half_done (id text); SELECT 1/0;", sha256: "b".repeat(64) };
+  const bad = { version: NEXT, name: `${NEXT_NAME}_bad.sql`, sql: "CREATE TABLE half_done (id text); SELECT 1/0;", sha256: "b".repeat(64) };
   await assert.rejects(() => migrate(db, [...files, bad]), /division by zero/);
   assert.equal((await db.query("SELECT 1 FROM pg_tables WHERE tablename = 'half_done'")).rows.length, 0, "the failed file rolled back");
-  assert.deepEqual((await db.query<{ version: number }>("SELECT version FROM schema_migrations")).rows.map((r) => r.version), [1, 2]);
+  assert.deepEqual((await db.query<{ version: number }>("SELECT version FROM schema_migrations")).rows.map((r) => r.version), ALL_MIGRATIONS);
   // A file that ends our transaction early is refused before anything runs.
   for (const sql of ["CREATE TABLE a (id text);\nCOMMIT;\nCREATE TABLE b (id text);", "begin;\nSELECT 1;", "SELECT 1; ROLLBACK", "START TRANSACTION; SELECT 1;"]) {
-    const early = { version: 3, name: "0003_early.sql", sql, sha256: "c".repeat(64) };
-    await assert.rejects(() => migrate(db, [...files, early]), /0003_early.sql contains (COMMIT|BEGIN|ROLLBACK|START TRANSACTION)/);
+    const early = { version: NEXT, name: `${NEXT_NAME}_early.sql`, sql, sha256: "c".repeat(64) };
+    await assert.rejects(() => migrate(db, [...files, early]), new RegExp(`${NEXT_NAME}_early.sql contains (COMMIT|BEGIN|ROLLBACK|START TRANSACTION)`));
   }
   assert.equal((await db.query("SELECT 1 FROM pg_tables WHERE tablename = 'a'")).rows.length, 0, "nothing of a refused file ran");
   // BEGIN in a comment, a string or a function body is not transaction control,
   // and the file runs with its lock and statement timeouts set.
   const timed = {
-    version: 3,
-    name: "0003_timed.sql",
+    version: NEXT,
+    name: `${NEXT_NAME}_timed.sql`,
     sql: `-- begin;\nSELECT 'commit;';\nDO $$ BEGIN\n  IF current_setting('lock_timeout') <> '5s' OR current_setting('statement_timeout') <> '2min' THEN RAISE EXCEPTION 'timeouts not set'; END IF;\nEND $$;`,
     sha256: "d".repeat(64),
   };
-  assert.deepEqual(await migrate(db, [...files, timed]), [3]);
+  assert.deepEqual(await migrate(db, [...files, timed]), [NEXT]);
   assert.equal((await db.query<{ t: string }>("SELECT current_setting('lock_timeout') AS t")).rows[0].t, "0", "SET LOCAL: the timeouts end with the file's transaction");
+  // The API checks the schema and never migrates: behind, changed or ahead refuses.
+  await assert.rejects(() => assertSchemaCurrent(db, files), /this code does not know/, "a version the code has no file for");
+  assert.equal(await assertSchemaCurrent(db, [...files, timed]), NEXT);
+  await assert.rejects(() => assertSchemaCurrent(db, [...files, { ...timed, sha256: "e".repeat(64) }]), /differs from the one applied/);
+  await assert.rejects(() => assertSchemaCurrent(db, [...files, timed, { ...timed, version: NEXT + 1, name: "x" }]), new RegExp(`at version ${NEXT}, this code needs ${NEXT + 1}: run the migrations first`));
+  const empty = await pglite();
+  await assert.rejects(() => assertSchemaCurrent(empty, files), /at version 0/, "an empty database");
+  await empty.close();
   await db.close();
 
   const dir = mkdtempSync(path.join(tmp, "migrations-"));
@@ -207,7 +289,7 @@ console.log("ok - store suite on the JSON backend");
   assert.throws(() => readMigrations(dir), /out of sequence/);
   writeFileSync(path.join(dir, "0001_First.sql"), "SELECT 1;");
   assert.throws(() => readMigrations(dir), /not named NNNN_name.sql/);
-  console.log("ok - migrations: once each, a changed or missing file refused, a failed file rolled back, BEGIN/COMMIT/ROLLBACK refused, lock and statement timeouts set");
+  console.log("ok - migrations: once each, a changed or missing file refused, a failed file rolled back, BEGIN/COMMIT/ROLLBACK refused, lock and statement timeouts set; the API's schema check refuses a database behind, ahead of or changed from its files");
 }
 
 // ── Keys only Postgres enforces ────────────────────────────────────────────
@@ -254,8 +336,34 @@ console.log("ok - store suite on the JSON backend");
   await s.addInvoice(issued("inv_d2", "org_x"));
   await assert.rejects(async () => await s.updateInvoice("inv_d1", { issued: { number: "RE-1" } } as any), /duplicate key/);
   assert.equal((await s.updateInvoice("inv_d1", { issued: { number: "RE-2" } } as any)).issued?.number, "RE-2");
+  // 0003: one transfer per quote, whatever the code does.
+  const tr = (id: string, quoteId: string) => ({ id, userId: "u_1", quoteId, rail: "sepa", state: "CREATED", sendEur: 1, txs: [], createdAt: now, updatedAt: now }) as any;
+  await s.addTransfer(tr("t_q1", "q_one"));
+  await assert.rejects(async () => await s.addTransfer(tr("t_q2", "q_one")), /duplicate key/, "a second transfer for one quote");
+  // One account per company Safe, case-blind: the add answers null, not an error.
+  const acc = (id: string, orgId: string, address?: string, backingUserId?: string) =>
+    ({ id, orgId, currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, ...(address ? { address } : {}), ...(backingUserId ? { backingUserId } : {}), createdAt: now, updatedAt: now }) as any;
+  assert.ok(await s.addAccount(acc("acc_1", "org_x", `0x${"ab".repeat(20)}`)));
+  assert.equal(await s.addAccount(acc("acc_2", "org_y", `0x${"AB".repeat(20)}`)), null, "a second account at one company Safe");
+  assert.ok(await s.addAccount(acc("acc_3", "org_y")) && (await s.addAccount(acc("acc_4", "org_y"))), "accounts without an address do not collide");
+  await assert.rejects(async () => await s.updateAccount("acc_3", { address: `0x${"ab".repeat(20)}` } as any), /duplicate key/);
+  const personal = `0x${"cd".repeat(20)}`;
+  assert.ok(await s.addAccount(acc("acc_p1", "org_p", personal, "u_1")) && (await s.addAccount(acc("acc_p2", "org_st", personal, "u_1"))), "a person's Safe backs several accounts");
+  // One Zoldenburg grace period per user; other modes and statuses are not limited.
+  const rr = (id: string, status: string, mode = "zoldenburg") => ({ id, userId: "u_1", mode, status, requestedAt: now, expiresAt: now }) as any;
+  await s.addRecoveryRequest(rr("rr_1", "GRACE_PERIOD"));
+  await s.addRecoveryRequest(rr("rr_2", "REVIEW_PENDING"));
+  await s.addRecoveryRequest(rr("rr_3", "GRACE_PERIOD", "candide"));
+  await assert.rejects(async () => await s.updateRecoveryRequest("rr_2", { status: "GRACE_PERIOD" }), /duplicate key/);
+  await s.updateRecoveryRequest("rr_1", { status: "FINALIZED" });
+  assert.equal((await s.updateRecoveryRequest("rr_2", { status: "GRACE_PERIOD" })).status, "GRACE_PERIOD", "once the first has left it");
+  // The email key trims what String.prototype.trim() trims.
+  const spaced = "\u00a0\u2003\ufeff Zoe@Example.de\u3000\n";
+  await s.addUser({ id: "u_mail", address: `0x${"44".repeat(20)}`, iban: "", createdAt: now, email: spaced } as any);
+  assert.equal(spaced.trim().toLowerCase(), "zoe@example.de");
+  assert.deepEqual((await s.usersByEmail("zoe@example.de")).map((u) => u.id), ["u_mail"], "NBSP, em space, BOM and ideographic space are trimmed");
   await db.close();
-  console.log("ok - Postgres keys: one payment-handle namespace, unique credentials, one live share per transfer, one issued invoice number per org");
+  console.log("ok - Postgres keys: one payment-handle namespace, unique credentials, one live share per transfer, one issued invoice number per org, one transfer per quote, one account per company Safe, one Zoldenburg grace period per user, the email key trimmed as JavaScript trims");
 }
 
 // ── The PGlite features the design note relies on (§4) ─────────────────────
@@ -323,14 +431,25 @@ console.log("ok - store suite on the JSON backend");
 
 // ── STORE_BACKEND ──────────────────────────────────────────────────────────
 {
-  const run = (value: string | undefined) =>
+  const run = (env: Record<string, string | undefined>) =>
     spawnSync(process.execPath, ["--import", "tsx", "-e", "await import('./services/api/src/config/env.ts')"], {
-      env: { ...process.env, STORE_BACKEND: value },
+      env: { ...process.env, DATABASE_URL: undefined, TRANSF_CHAIN_ID: undefined, ...env },
       encoding: "utf8",
     });
-  const refused = run("postgres");
-  assert.notEqual(refused.status, 0);
-  assert.match(refused.stderr, /STORE_BACKEND must be json/);
-  assert.equal(run("json").status, 0, refused.stderr);
-  console.log("ok - STORE_BACKEND=postgres refuses to start until the cut-over");
+  const url = "postgresql:///zold?host=/tmp";
+  const typo = run({ STORE_BACKEND: "pg" });
+  assert.notEqual(typo.status, 0);
+  assert.match(typo.stderr, /STORE_BACKEND must be json or postgres/);
+  for (const chain of [undefined, "8453", "100"]) {
+    const real = run({ STORE_BACKEND: "postgres", DATABASE_URL: url, TRANSF_CHAIN_ID: chain });
+    assert.notEqual(real.status, 0, `chain ${chain ?? "default"}`);
+    assert.match(real.stderr, /refused on a real-money chain until the cut-over/);
+  }
+  const noUrl = run({ STORE_BACKEND: "postgres", TRANSF_CHAIN_ID: "84532" });
+  assert.notEqual(noUrl.status, 0);
+  assert.match(noUrl.stderr, /needs DATABASE_URL/);
+  const testnet = run({ STORE_BACKEND: "postgres", DATABASE_URL: url, TRANSF_CHAIN_ID: "84532" });
+  assert.equal(testnet.status, 0, testnet.stderr);
+  assert.equal(run({ STORE_BACKEND: "json" }).status, 0);
+  console.log("ok - STORE_BACKEND: json or postgres; postgres needs DATABASE_URL and is refused on a real-money chain until the cut-over");
 }

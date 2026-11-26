@@ -54,14 +54,14 @@ function rawToDer(raw: Buffer): Buffer {
 }
 
 export async function makeSoftwarePasskey(label: string, origin: string) {
-  const clientData = (type: string, challenge: string) => b64url(Buffer.from(JSON.stringify({ type, challenge, origin }), "utf8"));
+  const clientData = (type: string, challenge: string, from = origin) => b64url(Buffer.from(JSON.stringify({ type, challenge, origin: from }), "utf8"));
   const pair = await webcrypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
   const jwk = await webcrypto.subtle.exportKey("jwk", pair.publicKey);
   const cose = enc(new Map<number, any>([[1, 2], [3, -7], [-1, 1], [-2, unb64url(jwk.x!)], [-3, unb64url(jwk.y!)]]));
   const credId = Buffer.from(`${label}-${randomBytes(4).toString("hex")}`);
-  const authData = (flags: number, count: number, includeAttestation = false) => {
+  const authData = (flags: number, count: number, includeAttestation = false, rpId = "localhost") => {
     const base = Buffer.alloc(37);
-    sha256("localhost").copy(base, 0);
+    sha256(rpId).copy(base, 0);
     base[32] = flags;
     base.writeUInt32BE(count, 33);
     if (!includeAttestation) return base;
@@ -74,15 +74,16 @@ export async function makeSoftwarePasskey(label: string, origin: string) {
   return {
     credentialId: b64url(credId),
     jwk,
-    register: (challenge: string) => ({
+    /** `opts` forges the ceremony's origin or RP id, for the refusal cases. */
+    register: (challenge: string, opts: { origin?: string; rpId?: string } = {}) => ({
       credentialId: b64url(credId),
-      attestation: b64url(enc(new Map<string, any>([["fmt", "none"], ["attStmt", new Map()], ["authData", authData(0x45, 0, true)]]))),
-      clientDataJSON: clientData("webauthn.create", challenge),
+      attestation: b64url(enc(new Map<string, any>([["fmt", "none"], ["attStmt", new Map()], ["authData", authData(0x45, 0, true, opts.rpId)]]))),
+      clientDataJSON: clientData("webauthn.create", challenge, opts.origin),
     }),
-    assert: async (challenge: string) => {
+    assert: async (challenge: string, opts: { origin?: string; rpId?: string } = {}) => {
       count += 1;
-      const clientDataJSON = clientData("webauthn.get", challenge);
-      const authenticatorData = authData(0x05, count);
+      const clientDataJSON = clientData("webauthn.get", challenge, opts.origin);
+      const authenticatorData = authData(0x05, count, false, opts.rpId);
       const raw = Buffer.from(await webcrypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, pair.privateKey, Buffer.concat([authenticatorData, sha256(unb64url(clientDataJSON))])));
       return { credentialId: b64url(credId), authenticatorData: b64url(authenticatorData), clientDataJSON, signature: b64url(rawToDer(raw)) };
     },

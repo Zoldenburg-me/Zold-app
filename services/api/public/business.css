@@ -501,6 +501,26 @@ dialog .desc, dialog .zb-hint { font-size: 14.5px; color: var(--z-dim); }
 .zb-h-root { display: flex; flex-direction: column; gap: var(--z-space-5); }
 .zb-h-root > .zb-h-attention, .zb-h-root > .zb-h-section { margin: 0; }
 
+/* Home's command box: search and the slash commands, centred above the balance (design/agentic Desk-Command). */
+.zb-h-cmd { display: flex; flex-direction: column; align-items: center; gap: var(--z-space-5); padding: var(--z-space-10) 0 var(--z-space-6); }
+.zb-h-cmd > * { width: 100%; max-width: 600px; }
+.zb-h-cmd__line { margin: 0; min-height: 1.2em; text-align: center; font: 400 clamp(24px, 3vw, 34px)/1.2 var(--z-font); letter-spacing: -.035em; color: var(--z-heading); text-wrap: balance; }
+.zb-h-cmd__line span { color: var(--z-pink-soft); }
+.zb-h-cmd__label { margin-bottom: calc(-1 * var(--z-space-3)); font-size: 13.5px; color: var(--z-dim); }
+.zb-h-cmd__box { display: flex; align-items: center; gap: var(--z-space-2); padding: var(--z-space-2); padding-left: var(--z-space-4); border: 1px solid var(--z-line-strong); border-radius: var(--z-radius-card); background: var(--z-card); transition: border-color .2s var(--z-ease); }
+.zb-h-cmd__box:focus-within { border-color: var(--z-pink); }
+.zb-h-cmd__input { flex: 1; min-width: 0; height: var(--z-touch); padding: 0; border: 0; background: transparent; font: 400 16px/1.4 var(--z-font); color: var(--z-text); }
+.zb-h-cmd__input:focus, .zb-h-cmd__input:focus-visible { outline: none; box-shadow: none; }
+.zb-h-cmd__input::-webkit-search-cancel-button { display: none; }
+.zb-h-cmd__go { flex: none; width: var(--z-touch); height: var(--z-touch); display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: var(--z-radius-control); background: var(--z-pink); color: var(--z-bg); cursor: pointer; transition: background-color .15s var(--z-ease); }
+.zb-h-cmd__go:hover { background: var(--z-pink-hover); }
+.zb-h-cmd__hint { margin: 0; font-size: 13.5px; color: var(--z-amber); }
+.zb-h-cmd__hint:empty { display: none; }
+.zb-h-cmd__chips { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--z-space-2); }
+.zb-h-cmd__chip { display: inline-flex; align-items: center; min-height: 40px; padding: 0 var(--z-space-3); border: 1px solid var(--z-line); border-radius: var(--z-radius-pill); background: none; font: 400 12.5px/1 var(--z-mono); color: var(--z-dim); cursor: pointer; transition: color .15s var(--z-ease), border-color .15s var(--z-ease); }
+.zb-h-cmd__chip:hover { color: var(--z-text); border-color: var(--z-line-hover); }
+@media (max-width: 720px) { .zb-h-cmd { padding-top: var(--z-space-6); } .zb-h-cmd__chips { justify-content: flex-start; } .zb-h-cmd__chip { min-height: var(--z-touch); } }
+
 /* Balance card: the figure and its IBAN on the left, the round actions beside it. */
 .zb-h-bal__row { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--z-space-6); }
 .zb-h-bal__row > .zb-h-bal__head { flex: 1; min-width: 0; }

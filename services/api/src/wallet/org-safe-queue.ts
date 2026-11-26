@@ -101,7 +101,11 @@ export async function queueSafeOp(args: {
 }): Promise<PendingSafeOp> {
   return store.tx(async () => {
     assertQueueOpen();
-    const { org, member, prepared } = args;
+    const { prepared } = args;
+    // The org's row held and the member read under it: a role change or
+    // deactivation (which take the same lock) lands before or after, whole.
+    const org = (await store.lockOrganisation(args.org.id)) ?? args.org;
+    const member = (await store.findMember(args.member.id)) ?? args.member;
     if (org.type !== "business") throw new SafeOpRefusal(409, "NOT_A_BUSINESS", "Only a business organisation has a Safe with several owners.");
     if (member.orgId !== org.id || member.status !== "active" || !canQueueSafeOp(member.role)) {
       throw new SafeOpRefusal(403, "CANNOT_QUEUE", `Your role (${member.role}) cannot queue payments.`);

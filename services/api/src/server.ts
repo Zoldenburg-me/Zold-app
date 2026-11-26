@@ -1,6 +1,7 @@
 import express from "express";
-import { API_HOST, API_PORT, BRIDGE, CHAIN_ID, CRYPTO_IN, CUSTODY, IS_REAL_MONEY_CHAIN, LIQUIDITY, PAYMENT_REQUESTS, RECOVERY, moneriumSandboxEnabled, SECURITY, UNREAD_DEPLOYER_KEYS, WALLET_SYNC } from "./config.js";
-import { initStore } from "./store.js";
+import { API_HOST, API_PORT, BRIDGE, CHAIN_ID, CRYPTO_IN, CUSTODY, IS_REAL_MONEY_CHAIN, PAYMENT_REQUESTS, RECOVERY, moneriumSandboxEnabled, SECURITY, UNREAD_DEPLOYER_KEYS, WALLET_SYNC } from "./config.js";
+import { initStore, startLockConfig } from "./store.js";
+import { takeStartLock } from "./store/pg/start-lock.js";
 import {
   moneriumApiKeysAvailable,
   moneriumEnvironment,
@@ -18,6 +19,7 @@ import {
   startCryptoDepositPoller,
   } from "./adapters/crypto-deposits.js";
 import { buildTransferFromQuote } from "./transfers/build.js";
+import { custodyPosture } from "./liquidity.js";
 import { createAuthRouter } from "./routes/auth.js";
 import { createTransferRouter } from "./routes/transfers.js";
 import { createMoneriumWebhookRouter } from "./routes/monerium-webhook.js";
@@ -81,6 +83,7 @@ import {
 import { CANDIDE, SafeGasError, SafeThresholdError, SafeVerifierMissingError } from "./wallet/candide.js";
 import { routeAsyncRejections } from "./http/async-errors.js";
 import { sendAfterCommit } from "./http/send-after-commit.js";
+import { singleFlight } from "./single-flight.js";
 import { describeCause, describeError, redactedMessage } from "./http/log-cause.js";
 import { recordServerError } from "./http/error-log.js";
 import { knownError } from "./http/known-errors.js";
@@ -323,6 +326,10 @@ app.use(((err, req, res, next) => {
 // exit (http/async-errors.ts).
 routeAsyncRejections(app);
 
+// One API process per deployment (store/pg/start-lock.ts): on Postgres the
+// lock is taken before the store is read, a sweep runs or a port opens.
+const lockConfig = startLockConfig();
+if (lockConfig) await takeStartLock(lockConfig);
 await initStore();
 // Fail fast on a chain mismatch: signatures built for the wrong chain id are
 // rejected as "bad authorization", which reads like a signing bug.
@@ -335,13 +342,16 @@ assertChainMatches().catch((e) => {
 warnIfSmartAccountChainDiffers();
 // Compensate anything stranded by a crash or failed payout, then keep
 // sweeping in the background.
-sweepStrandedTransfers()
+const strandedSweep = singleFlight("stranded-transfers", sweepStrandedTransfers);
+strandedSweep()
   .then((n) => n && console.log(`Compensation sweep: compensated ${n} stranded transfer(s)`))
   .catch((e) => console.error(`Compensation sweep failed: ${describeCause(e)}`));
-setInterval(() => sweepStrandedTransfers().catch(() => {}), 5 * 60_000).unref();
-setInterval(() => settleUnconfirmedCryptoSends().catch(() => {}), 60_000).unref();
+setInterval(() => strandedSweep().catch(() => {}), 5 * 60_000).unref();
+const cryptoSendSweep = singleFlight("crypto-sends", settleUnconfirmedCryptoSends);
+setInterval(() => cryptoSendSweep().catch(() => {}), 60_000).unref();
 // A recovered Safe whose verifier never landed cannot sign anything until it does.
-const runVerifierSweep = () => sweepMissingVerifiers().catch((e) => console.error(`verifier sweep failed: ${describeCause(e)}`));
+const verifierSweep = singleFlight("missing-verifiers", sweepMissingVerifiers);
+const runVerifierSweep = () => verifierSweep().catch((e) => console.error(`verifier sweep failed: ${describeCause(e)}`));
 runVerifierSweep();
 setInterval(runVerifierSweep, 10 * 60_000).unref();
 // Tell the checkout service when one of its transfers moves (CHECKOUT_WEBHOOK_URL).
@@ -349,8 +359,9 @@ if (startCheckoutWebhook()) console.log("checkout webhook: on");
 // Zoldenburg recoveries: pick up a signature made in Safe Cover, expire
 // unanswered requests, and finalize once the grace period has run.
 if (zoldenburgRecoveryEnabled()) {
+  const sweep = singleFlight("zoldenburg-recoveries", sweepZoldenburgRecoveries);
   const runZoldenburgSweep = () =>
-    sweepZoldenburgRecoveries()
+    sweep()
       .then((n) => n && console.log(`recovery sweep: finalized ${n} Zoldenburg recover${n === 1 ? "y" : "ies"}`))
       .catch((e) => console.error(`recovery sweep failed: ${describeCause(e)}`));
   setTimeout(runZoldenburgSweep, 5_000).unref();
@@ -358,8 +369,9 @@ if (zoldenburgRecoveryEnabled()) {
 }
 // Turnkey-guardian recoveries: expire, pick up executions, finalize after the wait.
 if (turnkeyGuardiansEnabled()) {
+  const sweep = singleFlight("turnkey-recoveries", sweepTurnkeyRecoveries);
   const runTurnkeySweep = () =>
-    sweepTurnkeyRecoveries()
+    sweep()
       .then((n) => n && console.log(`recovery sweep: finalized ${n} Turnkey-guardian recover${n === 1 ? "y" : "ies"}`))
       .catch((e) => console.error(`recovery sweep failed: ${describeCause(e)}`));
   setTimeout(runTurnkeySweep, 5_000).unref();
@@ -367,12 +379,14 @@ if (turnkeyGuardiansEnabled()) {
 }
 // Open 1 € codes, at enrolment and at recovery: look for their payment at Monerium.
 if (zoldenburgRecoveryEnabled() && enrolmentAvailable()) {
+  const enrolments = singleFlight("enrolments", sweepEnrolments);
+  const bankChecks = singleFlight("recovery-bank-checks", sweepRecoveryBankChecks);
   const runEnrolments = () =>
-    sweepEnrolments()
+    enrolments()
       .then((n) => n && console.log(`enrolment sweep: armed ${n} account${n === 1 ? "" : "s"}`))
       .catch((e) => console.error(`enrolment sweep failed: ${describeCause(e)}`))
       // Its own catch: a failed enrolment sweep must not skip the recoveries.
-      .then(() => sweepRecoveryBankChecks())
+      .then(() => bankChecks())
       .then((n) => n && console.log(`recovery 1 € sweep: ${n} request${n === 1 ? "" : "s"} passed`))
       .catch((e) => console.error(`recovery 1 € sweep failed: ${describeCause(e)}`));
   setInterval(runEnrolments, ENROLMENT.pollMs).unref();
@@ -380,8 +394,9 @@ if (zoldenburgRecoveryEnabled() && enrolmentAvailable()) {
 // Candide recoveries finalize themselves once the grace period has run, so a
 // user who lost their phone on a Friday is not waiting for a click on Monday.
 if (candideRecoveryEnabled()) {
+  const sweep = singleFlight("candide-recoveries", sweepCandideRecoveries);
   const runRecoverySweep = () =>
-    sweepCandideRecoveries()
+    sweep()
       .then((n) => n && console.log(`recovery sweep: finalized ${n} recover${n === 1 ? "y" : "ies"}`))
       .catch((e) => console.error(`recovery sweep failed: ${describeCause(e)}`));
   setTimeout(runRecoverySweep, 5_000).unref();
@@ -391,8 +406,9 @@ if (candideRecoveryEnabled()) {
 // Recovery alerts: email the owner when someone asks to recover the account
 // and when a recovery enters its grace period (recovery/owner-alerts.ts).
 if (mailAvailable()) {
+  const sweep = singleFlight("owner-alerts", sweepOwnerAlerts);
   const runOwnerAlerts = () =>
-    sweepOwnerAlerts()
+    sweep()
       .then((n) => n && console.log(`recovery alerts: sent ${n}`))
       .catch((e) => console.error(`recovery alerts failed: ${describeCause(e)}`));
   setTimeout(runOwnerAlerts, 5_000).unref();
@@ -400,19 +416,21 @@ if (mailAvailable()) {
 }
 // Pay links: expire what is past its date, book our own SEPA payouts that
 // carry a code, retry telling a merchant about a paid checkout.
+const paymentRequestSweep = singleFlight("payment-requests", sweepPaymentRequests);
 setInterval(
   () =>
-    sweepPaymentRequests()
-      .then((r) => (r.expired || r.matched) && console.log(`pay-request sweep: ${r.expired} expired, ${r.matched} matched`))
+    paymentRequestSweep()
+      .then((r) => r && (r.expired || r.matched) && console.log(`pay-request sweep: ${r.expired} expired, ${r.matched} matched`))
       .catch((e) => console.error(`pay-request sweep failed: ${describeCause(e)}`)),
   PAYMENT_REQUESTS.sweepMs,
 ).unref();
-sweepAnchorPayouts()
+const anchorSweep = singleFlight("anchor-payouts", sweepAnchorPayouts);
+anchorSweep()
   .then((n) => n && console.log(`anchor sweep: refreshed ${n} payout(s)`))
   .catch((e) => console.error(`anchor sweep failed: ${describeCause(e)}`));
 setInterval(
   () =>
-    sweepAnchorPayouts()
+    anchorSweep()
       .then((n) => n && console.log(`anchor sweep: refreshed ${n} payout(s)`))
       .catch((e) => console.error(`anchor sweep failed: ${describeCause(e)}`)),
   30_000,
@@ -421,17 +439,18 @@ setInterval(
 // The ledger writer: one statement line per economic event, projected from
 // the store. Hooked where money changes state, and swept here so a REFUNDED
 // written by compensation, or an event a crash cut short, still gets its line.
-setTimeout(async () => {
-  try { await writeStatementLines(); } catch (e: any) { console.error(`bookkeeping: ${describeCause(e)}`); }
-}, 3_000).unref();
-setInterval(async () => {
-  try { await writeStatementLines(); } catch (e: any) { console.error(`bookkeeping: ${describeCause(e)}`); }
-}, 60_000).unref();
+const statementSweep = singleFlight("statement-lines", writeStatementLines);
+const runStatementSweep = async () => {
+  try { await statementSweep(); } catch (e: any) { console.error(`bookkeeping: ${describeCause(e)}`); }
+};
+setTimeout(runStatementSweep, 3_000).unref();
+setInterval(runStatementSweep, 60_000).unref();
 
 // Imported wallets: ERC-20 transfers on their own chains, read only.
+const walletSync = singleFlight("wallet-sync", pollWalletSyncOnce);
 setInterval(
   () =>
-    pollWalletSyncOnce()
+    walletSync()
       .then((n) => n && console.log(`wallet sync: booked ${n} transfer(s)`))
       .catch((e) => console.error(`wallet sync failed: ${describeCause(e)}`)),
   WALLET_SYNC.pollMs,
@@ -440,10 +459,11 @@ setInterval(
 // Reconciler: log-only, never repairs. Drift between Monerium's ledger and
 // local receipt state should be loud rather than discovered later by a user
 // missing money. `npm run reconcile` runs the same check on demand.
+const reconcileOnce = singleFlight("reconcile", reconcile);
 const runReconcile = () =>
-  reconcile()
+  reconcileOnce()
     .then((r) => {
-      if (!r.ok) console.warn(`LEDGER DRIFT\n${formatReport(r)}`);
+      if (r && !r.ok) console.warn(`LEDGER DRIFT\n${formatReport(r)}`);
     })
     .catch((e) => console.error(`reconcile failed: ${describeCause(e)}`));
 setTimeout(runReconcile, 10_000).unref();
@@ -483,25 +503,9 @@ app.listen(API_PORT, API_HOST, () => {
    * funds depends on the liquidity venue and whether Bridge is live, and
    * neither is visible otherwise.
    */
-  const safeExecutable = ["dex", "lifi", "rfq", "best"].includes(LIQUIDITY.PROVIDER);
-  if (!safeExecutable) {
-    console.warn(
-      `CUSTODY: LIQUIDITY_PROVIDER=${LIQUIDITY.PROVIDER} cannot be executed by a user's Safe, so ` +
-        "cash-rail transfers debit the full amount to the orchestrator and swap from there. " +
-        "The non-custodial path needs dex, lifi, rfq or best.",
-    );
-  } else if (!BRIDGE.live) {
-    console.warn(
-      "CUSTODY: the Safe-executed swap batch is available, but BRIDGE_LIVE is not set — with no " +
-        "external deposit address the batch delivers its output to the orchestrator. Cash-rail " +
-        "transfers are recorded as custodial until Bridge is live.",
-    );
-  } else {
-    console.log(
-      "CUSTODY: cash-rail transfers run non-custodially — the user's Safe signs one batch that " +
-        "delivers straight to Bridge. The SEPA rail moves only the fee.",
-    );
-  }
+  const posture = custodyPosture(BRIDGE.live);
+  if (posture.warn) console.warn(posture.message);
+  else console.log(posture.message);
   if (CUSTODY.requireNonCustodial) {
     console.log("CUSTODY: REQUIRE_NON_CUSTODIAL=1 — a transfer that would use the orchestrator is refused.");
   }

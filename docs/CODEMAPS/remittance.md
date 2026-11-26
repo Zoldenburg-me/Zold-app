@@ -19,7 +19,7 @@ transfers/build.ts buildTransferFromQuote   (the ONE builder)
   - destinationCommitment(rail): the chain enforces token, amount, destination
   - prepares the Safe userOp = the debit (fee only on sepa; fee+approve+swap batch on cash)
   - sepa: Monerium redeem terms (moneriumRedeem) to sign; cash: may create the Bridge transfer
-  - pending execution held in http/pending.ts            → transfer CREATED
+  - pending execution in the store (putPendingExecution) → transfer CREATED
   │ POST /api/transfers/:id/authorize {signature, executionAssertion, moneriumRedeem*}
   ▼
 routes/transfers.ts authorize: session · state CREATED · auth.deadline · KYC approved ·

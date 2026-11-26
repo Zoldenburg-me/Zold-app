@@ -24,6 +24,14 @@ import {
 import { IS_PRODUCTION, ROOT, STELLAR, STELLAR_TESTNET_PASSPHRASE } from "../config.js";
 import { partnerTimeout } from "../http.js";
 import { errorText, redactedMessage } from "../http/log-cause.js";
+import { refuseInTx } from "../store/backend.js";
+
+/** Horizon's client talks through axios, not `fetch`, so it refuses inside a
+ *  store.tx itself (store/backend.ts refuseInTx). */
+function horizon(): Horizon.Server {
+  refuseInTx("a Stellar Horizon call");
+  return new Horizon.Server(STELLAR.horizon);
+}
 
 // ---------------------------------------------------------------------------
 // Treasury account (auto-provisioned on testnet via friendbot)
@@ -489,7 +497,7 @@ export async function baseReserveXlm(): Promise<number> {
 /** Does `account` already trust `asset`, and can it hold more of it? */
 export async function hasTrustline(account: string, asset: Asset): Promise<boolean> {
   if (asset.isNative()) return true;
-  const server = new Horizon.Server(STELLAR.horizon);
+  const server = horizon();
   const loaded = await server.loadAccount(account);
   return loaded.balances.some(
     (b: any) =>
@@ -499,7 +507,7 @@ export async function hasTrustline(account: string, asset: Asset): Promise<boole
 
 /** What the account holds, and how much of it is locked as reserve. */
 export async function accountReserves(account: string): Promise<AccountReserves> {
-  const server = new Horizon.Server(STELLAR.horizon);
+  const server = horizon();
   const loaded = await server.loadAccount(account);
   const native = loaded.balances.find((b: any) => b.asset_type === "native") as any;
   const balanceXlm = Number(native?.balance ?? 0);
@@ -542,7 +550,7 @@ export async function ensureTrustline(
     );
   }
 
-  const server = new Horizon.Server(STELLAR.horizon);
+  const server = horizon();
   const account = await server.loadAccount(keypair.publicKey());
   const tx = new TransactionBuilder(account, {
     fee: BASE_FEE,
@@ -567,7 +575,7 @@ export async function ensureTrustline(
 export async function removeTrustline(keypair: Keypair, asset: Asset): Promise<boolean> {
   if (asset.isNative()) return false;
   if (!(await hasTrustline(keypair.publicKey(), asset))) return false;
-  const server = new Horizon.Server(STELLAR.horizon);
+  const server = horizon();
   const account = await server.loadAccount(keypair.publicKey());
   const tx = new TransactionBuilder(account, {
     fee: BASE_FEE,
@@ -740,7 +748,7 @@ export async function sendSep24WithdrawalPayment(
   if (!status.withdrawAnchorAccount) {
     throw new Error(`SEP-24 transaction ${id} has not provided a withdrawal account yet`);
   }
-  const server = new Horizon.Server(STELLAR.horizon);
+  const server = horizon();
   const account = await server.loadAccount(source.publicKey());
   const asset = await stellarAssetForAnchor(homeDomain, assetCode);
   // Never send more than the withdrawal we opened and validated against the

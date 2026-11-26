@@ -54,10 +54,18 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
   assert.equal((await s.recordPasskeyUse("u_a", "cred-a", 7))?.passkey?.signCount, 7);
   assert.equal(await s.recordPasskeyUse("u_a", "cred-old", 8), undefined, "a replaced credential records nothing");
   assert.equal((await s.findUser("u_a"))?.passkey?.signCount, 7);
+  assert.equal(await s.recordPasskeyUse("u_a", "cred-a", 7), undefined, "a count that does not advance records nothing");
+  assert.equal(await s.recordPasskeyUse("u_a", "cred-a", 3), undefined, "nor one that went back");
+  assert.equal((await s.recordPasskeyUse("u_a", "cred-a", 9))?.passkey?.signCount, 9);
+  assert.equal((await s.findUser("u_a"))?.passkey?.signCount, 9);
 
   await s.setSegment("u_a", { value: "consumer", reason: "test" } as any);
   await assert.rejects(async () => await s.setSegment("u_a", { value: "business" } as any), /already has segment/);
   assert.equal((await s.setSegment("u_a", { value: "business" } as any, "admin")).segment?.decidedBy, "admin");
+  // An UNDECIDED account is decided once, later, by the system; then it is set.
+  await s.setSegment("u_b", { value: "UNDECIDED", reasonCode: "residence_not_given" } as any);
+  assert.equal((await s.setSegment("u_b", { value: "EU_FULL", reasonCode: "test" } as any)).segment?.value, "EU_FULL");
+  await assert.rejects(async () => await s.setSegment("u_b", { value: "UNDECIDED" } as any), /already has segment/);
   await s.addConsent("u_a", { kind: "terms", at: now } as any);
   await s.addConsent("u_a", { kind: "privacy", at: now } as any);
   assert.equal((await s.findUser("u_a"))?.consents?.length, 2, "consents are appended");
@@ -90,6 +98,13 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
   // ── Accounts ─────────────────────────────────────────────────────────────
   assert.deepEqual((await s.accountsOf("org_a")).map((a) => a.id), ["acc_eur", "acc_gated"]);
   assert.deepEqual((await s.accountsAtAddress(`0x${"aa".repeat(20)}`)).map((a) => a.id), ["acc_gated"]);
+  const companySafe = `0x${"cC".repeat(20)}`;
+  const twin = (id: string, orgId: string, over: Record<string, unknown> = {}) =>
+    ({ id, orgId, currency: "EUR", label: "EUR", status: "gated", provider: "monerium", identifier: {}, address: companySafe, createdAt: now, updatedAt: now, ...over }) as any;
+  assert.ok(await s.addAccount(twin("acc_co", "org_b")));
+  assert.equal(await s.addAccount(twin("acc_twin", "org_c", { address: companySafe.toLowerCase() })), null, "a company Safe is one account");
+  assert.equal(await s.findAccount("acc_twin"), undefined);
+  assert.ok(await s.addAccount(twin("acc_aa_business", "org_b", { address: `0x${"aa".repeat(20)}`, backingUserId: "u_a" })), "a person's Safe backs their personal and their business account");
   const acc = await s.updateAccount("acc_eur", { label: "Main" });
   assert.equal(acc.label, "Main");
   assert.notEqual(acc.updatedAt, now, "updateAccount stamps updatedAt");
@@ -103,6 +118,12 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
   assert.equal(await s.consumeQuote("q_1"), true);
   assert.equal(await s.consumeQuote("q_1"), false, "a quote is consumed once");
   await assert.rejects(async () => await s.consumeQuote("nobody"), /unknown quote/);
+  await s.addQuote({ id: "q_late", userId: "u_a", status: "OPEN", expiresAt: iso(-1_000) } as any);
+  assert.equal(await s.consumeQuote("q_late"), false, "a quote past expiresAt but still OPEN is not consumed");
+  assert.equal(await s.expireQuote("q_late"), true);
+  assert.equal((await s.findQuote("q_late"))?.status, "EXPIRED");
+  assert.equal(await s.expireQuote("q_1"), false, "a consumed quote is never marked expired");
+  assert.equal((await s.findQuote("q_1"))?.status, "CONSUMED");
   assert.equal((await s.updateQuote("q_1", { rate: 2 } as any) as any).rate, 2);
 
   // ── Transfers ────────────────────────────────────────────────────────────
@@ -229,13 +250,14 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
   assert.equal((await s.findSafeOp("so_2"))?.reason, "owner");
 
   // ── Monerium ─────────────────────────────────────────────────────────────
-  await s.markOrderProcessed("ord-2");
-  await s.markOrderProcessed("ord-1");
-  await s.markOrderProcessed("ord-2");
+  assert.equal(await s.markOrderProcessed("ord-2"), true);
+  assert.equal(await s.markOrderProcessed("ord-1"), true);
+  assert.equal(await s.markOrderProcessed("ord-2"), false, "an order is claimed once");
   assert.deepEqual(await s.mirroredOrderIds(), ["ord-2", "ord-1"], "once each, in order");
   assert.equal(await s.isOrderProcessed("ord-1"), true);
   assert.equal(await s.isOrderProcessed("ord-3"), false);
-  await s.markWebhookProcessed("wh-1");
+  assert.equal(await s.markWebhookProcessed("wh-1"), true);
+  assert.equal(await s.markWebhookProcessed("wh-1"), false, "a delivery is marked once");
   assert.equal(await s.isWebhookProcessed("wh-1"), true);
   assert.equal(await s.isWebhookProcessed("wh-2"), false);
   const issue = { orderId: "ord-1", userId: "u_a", amountEur: 5, processedAt: now, recordedAt: now };
@@ -278,6 +300,7 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
   assert.equal(await s.findShopifyConnectionByShop("a.myshopify.com"), undefined);
   await s.recordShopifyDelivery({ id: "d_old", shop: "a.myshopify.com", at: iso(-73 * 3_600_000), handled: true });
   await s.recordShopifyDelivery({ id: "d_1", shop: "a.myshopify.com", at: now, handled: false });
+  assert.equal((await s.recordShopifyDelivery({ id: "d_1", shop: "b.myshopify.com", at: now, handled: false })).shop, "a.myshopify.com", "a second recording of one id returns the first, with its shop");
   assert.equal(await s.shopifyDelivery("d_old"), undefined, "deliveries past 72 hours are dropped");
   await s.markShopifyDeliveryHandled("d_1");
   assert.equal((await s.shopifyDelivery("d_1"))?.handled, true);
@@ -294,9 +317,11 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
   // ── Crypto deposits and sends ────────────────────────────────────────────
   const deposit = { id: "dep_1", userId: "u_a", chainId: 84532, token: "EURE", txHash: hash("Aa"), logIndex: 3, amountUnits: "1", holding: "none", txs: [], createdAt: now, updatedAt: now } as any;
   assert.equal((await s.addCryptoDeposit(deposit)).id, "dep_1");
-  assert.equal((await s.addCryptoDeposit({ ...deposit, id: "dep_dup", txHash: hash("aA") })).id, "dep_1", "one row per (txHash, logIndex)");
-  assert.equal((await s.findCryptoDeposit(hash("AA"), 3))?.id, "dep_1");
-  assert.equal(await s.findCryptoDeposit(hash("aa"), 4), undefined);
+  assert.equal((await s.addCryptoDeposit({ ...deposit, id: "dep_dup", txHash: hash("aA") })).id, "dep_1", "one row per (chainId, txHash, logIndex)");
+  assert.equal((await s.findCryptoDeposit(84532, hash("AA"), 3))?.id, "dep_1");
+  assert.equal(await s.findCryptoDeposit(84532, hash("aa"), 4), undefined);
+  assert.equal(await s.findCryptoDeposit(8453, hash("aa"), 3), undefined, "another chain's log is another deposit");
+  assert.equal((await s.addCryptoDeposit({ ...deposit, id: "dep_other_chain", chainId: 8453 })).id, "dep_other_chain", "the same hash and index on another chain is its own row");
   assert.equal((await s.updateCryptoDeposit("dep_1", { holding: "held" } as any)).holding, "held");
   assert.equal(await s.cryptoDepositCursor(84532), undefined);
   await s.setCryptoDepositCursor(84532, 12_345_678_901_234_567_890n);
@@ -376,7 +401,7 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
 
   // ── list() returns each collection as it was written ─────────────────────
   assert.deepEqual((await s.list("users")).map((u) => u.id), ["u_a", "u_b"]);
-  assert.deepEqual((await s.list("quotes")).map((x) => x.id), ["q_kept", "q_1"]);
+  assert.deepEqual((await s.list("quotes")).map((x) => x.id), ["q_kept", "q_1", "q_late"]);
   assert.deepEqual(await s.list("processedMoneriumOrders"), ["ord-2", "ord-1"]);
   assert.deepEqual(await s.list("processedMoneriumWebhooks"), ["wh-1"]);
   assert.deepEqual(await s.list("cryptoDepositCursor"), { "84532": "12345678901234567891" });
@@ -481,8 +506,12 @@ export async function conditionalWriteSuite(s: StoreBackend): Promise<void> {
   assert.equal(await s.findDraft("dr_pay2"), undefined, "and adds no draft");
   assert.equal(await s.updateInvoiceFrom("inv_s2", ["LINK_CREATED"], { state: "SUBMITTED" } as any), null);
 
-  assert.equal((await s.lockOrganisation("org_b"))?.id, "org_b");
-  assert.equal((await s.lockUser("u_a"))?.id, "u_a");
+  await s.tx(async (t) => {
+    assert.equal((await t.lockOrganisation("org_b"))?.id, "org_b");
+    assert.equal((await s.lockUser("u_a"))?.id, "u_a", "store.lock… inside a tx joins it");
+    await t.lockKey("ledger:org_b");
+  });
+  await assert.rejects(s.lockUser("u_a"), /lockUser outside a store\.tx holds nothing/);
 
   // A deposit is settled once.
   await s.addCryptoDeposit({ id: "dep_s2", userId: "u_a", chainId: 84532, token: "USDC", txHash: hash("5a"), logIndex: 1, amountUnits: "1", holding: "awaiting_approval", txs: [], createdAt: now, updatedAt: now } as any);
@@ -535,6 +564,32 @@ export async function conditionalWriteSuite(s: StoreBackend): Promise<void> {
   await s.updateUser("u_a", { emailCode: { hash: "h", email: "other@example.com", expiresAt: iso(DAY), attempts: 0, sentAt: [] } } as any);
   assert.equal(await s.countEmailCodeAttempt("u_a", 5), undefined, "nor one sent to another address");
   await s.updateUser("u_a", { emailCode: undefined } as any);
+
+  // A deposit changed from its stored value (§2 rules 2 and 5): the
+  // conversion intent is claimed once, and partials appended in parallel are
+  // both kept.
+  const intent = { at: now, amountUnits: "1", safeAddress: `0x${"ab".repeat(20)}`, quote: { provider: "dex", rate: "1", minOut: "1" } };
+  const claims = await Promise.all([1, 2].map(() => s.patchCryptoDeposit("dep_other_chain", (d) => (d.conversionIntent ? null : { conversionIntent: intent }))));
+  assert.equal(claims.filter(Boolean).length, 1, "two parallel claims of one deposit's conversion: one");
+  assert.deepEqual((await s.findCryptoDeposit(8453, hash("aa"), 3))?.conversionIntent, intent);
+  const partial = (eur: number) => ({ creditedEur: eur, provider: "dex", rate: 1, conversion: { amountInUnits: "1" } });
+  await Promise.all([1, 2].map((eur) => s.patchCryptoDeposit("dep_other_chain", (d) => ({ partials: [...(d.partials ?? []), partial(eur)] }))));
+  assert.deepEqual((await s.findCryptoDeposit(8453, hash("aa"), 3))?.partials?.map((p) => p.creditedEur).sort(), [1, 2], "both partials kept");
+  await assert.rejects(async () => await s.patchCryptoDeposit("dep_none", () => ({})), /unknown crypto deposit dep_none/);
+
+  // Approvals waiting for a passkey: the operation comes back with its
+  // bigints, an expired one is gone, a dropped one is gone.
+  const userOperation = { sender: `0x${"ab".repeat(20)}`, nonce: 2n ** 70n + 1n, callData: "0x1234", maxFeePerGas: 7n, paymaster: `0x${"cd".repeat(20)}` } as any;
+  const pendingRow = { userId: "u_a", expiresAt: Date.now() + 60_000, challenge: "ch", plan: { address: `0x${"ab".repeat(20)}`, status: "active" } as any, userOperation, batch: { recipient: `0x${"ef".repeat(20)}` as const, mode: "live" as const } };
+  await s.putPendingExecution("transfer", "t_pending", pendingRow);
+  const back = await s.findPendingExecution("transfer", "t_pending");
+  assert.equal(back?.userOperation.nonce, 2n ** 70n + 1n, "a bigint comes back a bigint");
+  assert.deepEqual(back, pendingRow, "the stored operation is the prepared one");
+  assert.equal(await s.findPendingExecution("cryptoSend", "t_pending"), undefined, "keyed by kind");
+  await s.putPendingExecution("cryptoSend", "cs_old", { ...pendingRow, expiresAt: Date.now() - 1 });
+  assert.equal(await s.findPendingExecution("cryptoSend", "cs_old"), undefined, "an expired one is not handed out");
+  await s.dropPendingExecution("transfer", "t_pending");
+  assert.equal(await s.findPendingExecution("transfer", "t_pending"), undefined, "dropped with its claim");
 
   // Rule 4 over an organisation: a write only while a check on it holds.
   assert.equal(await s.updateOrganisationIf("org_b", () => false, () => ({ name: "never" })), null);

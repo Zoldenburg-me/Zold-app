@@ -6,6 +6,7 @@
  * the bottom are what the crypto poller and the Monerium order poller call
  * when money shows up; they hold no network of their own.
  */
+import { deferToCommit } from "../store/backend.js";
 import { wrap } from "./util.js";
 import { usdToken } from "../usd-token.js";
 import express from "express";
@@ -590,11 +591,18 @@ async function record(r: PaymentRequest, payment: Parameters<typeof applyPayment
       (saved.state === "PAID" ? " — PAID" : ""),
   );
   if (saved.state === "PAID" && from !== "PAID") {
-    for (const hook of paidHooks) {
-      Promise.resolve()
-        .then(() => hook(saved))
-        .catch((e) => console.error(`pay-request: paid hook failed for ${saved.id}: ${describeCause(e)}`));
-    }
+    // After the commit of the transaction this records in (attribution runs
+    // in one): a hook calls the merchant's shop, which the fetch guard refuses
+    // inside a store.tx, and the payment must be stored before anyone is told.
+    // Never if that transaction is dropped. Outside one, now.
+    const fire = () => {
+      for (const hook of paidHooks) {
+        Promise.resolve()
+          .then(() => hook(saved))
+          .catch((e) => console.error(`pay-request: paid hook failed for ${saved.id}: ${describeCause(e)}`));
+      }
+    };
+    if (!deferToCommit(fire)) fire();
   }
   return saved;
 }
@@ -608,9 +616,10 @@ export async function attributeDepositToRequest(given: CryptoDeposit): Promise<P
   return store.tx(async () => {
     // The stored row, not the caller's copy: a link or an attribution made
     // since it was read decides what this one may write.
+    // The owner's row is the lock every writer of a deposit's money takes.
+    const user = await store.lockUser(given.userId);
     const deposit = (await store.list("cryptoDeposits")).find((d) => d.id === given.id) ?? given;
     if (deposit.paymentRequestId) return await store.findPaymentRequest(deposit.paymentRequestId);
-    const user = await store.findUser(deposit.userId);
     const page = user?.paymentPage;
     if (!user || !page?.depositAddress) return undefined;
     if ((deposit.paymentAddress ?? "").toLowerCase() !== page.depositAddress.toLowerCase()) return undefined;

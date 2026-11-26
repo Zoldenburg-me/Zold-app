@@ -69,6 +69,10 @@ const ownAccountName = (u = user) => {
   const connected = (u.monerium?.profiles || []).find((p) => p?.id && p.id === u.monerium?.profileId);
   return connected?.name || ownCompanyOrg?.legalName || ownCompanyOrg?.name || "Company account";
 };
+/* Signed up without saying where they live: the server has not decided what
+   the account may hold, so Home asks (POST /api/users/:id/residence). */
+const residenceAsked = (u) => u?.segment?.value === "UNDECIDED";
+
 /* A bank account (IBAN, SEPA) is on offer to this account: its segment has a
    fiat partner, and that partner has not refused it. Without one the account
    is a wallet (docs/wallet-tier.md), and nothing asks it to verify. An

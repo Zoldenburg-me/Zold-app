@@ -158,6 +158,9 @@ export function createServiceMerchantRouter() {
    */
   const refusePending = async (res: express.Response, caller: Caller, kind: AuditKind, pending: PendingLink): Promise<boolean> => {
     return store.tx(async () => {
+      // The org's row held: the installer's membership and role change only
+      // under the same lock, so the checks hold until the link is written.
+      await store.lockOrganisation(pending.orgId);
       const where = { orgId: pending.orgId, shop: pending.shop };
       const refused = await linkRefusal(pending.orgId, pending.shop, pending.installerId);
       if (refused) {

@@ -70,6 +70,8 @@ export function readMigrations(dir = MIGRATIONS_DIR): Migration[] {
 
 /** Lock, then the applied rows, refusing any whose file is gone or changed. */
 async function applied(q: Sql, migrations: Migration[]): Promise<Set<number>> {
+  // A runner waits for another one's whole file, not the application's lock timeout.
+  await q.query("SET LOCAL lock_timeout = 0");
   await q.query("SELECT pg_advisory_xact_lock(hashtext(current_database() || ':zold:migrations'))");
   await q.query(
     "CREATE TABLE IF NOT EXISTS schema_migrations (version integer PRIMARY KEY, name text NOT NULL, sha256 text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())",
@@ -108,4 +110,27 @@ export async function migrate(db: Database, migrations = readMigrations()): Prom
     if (ran) done.push(m.version);
   }
   return done;
+}
+
+/**
+ * Refuse to serve on a schema other than the one these files make: every
+ * file applied, unchanged, and nothing applied that has no file. The API runs
+ * as the application role, which has no DDL; the owner role migrates at
+ * deploy, before the API starts (§7), so the API only checks.
+ */
+export async function assertSchemaCurrent(db: Sql, migrations = readMigrations()): Promise<number> {
+  const has = await db.query<{ t: string | null }>("SELECT to_regclass('schema_migrations')::text AS t");
+  const { rows } = has.rows[0]?.t
+    ? await db.query<{ version: number; name: string; sha256: string }>("SELECT version, name, sha256 FROM schema_migrations ORDER BY version")
+    : { rows: [] };
+  const want = migrations.at(-1)?.version ?? 0;
+  for (const r of rows) {
+    const m = migrations.find((x) => x.version === r.version);
+    if (!m) throw new Error(`the database has migration ${r.name}, which this code does not know: refusing to start`);
+    if (m.sha256 !== r.sha256) throw new Error(`migration ${r.name} differs from the one applied: refusing to start`);
+  }
+  if (rows.length !== migrations.length) {
+    throw new Error(`the database schema is at version ${rows.at(-1)?.version ?? 0}, this code needs ${want}: run the migrations first`);
+  }
+  return want;
 }

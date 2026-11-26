@@ -161,7 +161,8 @@ await store.addCryptoDeposit({
   detectedAt: now, updatedAt: now,
 } as any);
 
-const app = express();
+const { sendAfterCommit } = await import("../services/api/src/http/send-after-commit.js");
+const app = express().use(sendAfterCommit);
 app.use(express.json());
 app.use("/api", createCryptoDepositRouter({ requireUserSession: async () => ({ id: "s" }) }));
 const server = app.listen(0, "127.0.0.1");

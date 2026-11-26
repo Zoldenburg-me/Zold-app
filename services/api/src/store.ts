@@ -13,8 +13,13 @@
  * ./store/db.ts; both are re-exported here.
  */
 import { randomUUID } from "node:crypto";
-import { beginWrites, db, endWrites, persist, pruneSessions, seedChartOfAccounts, type Db } from "./store/db.js";
-import { jsonBackend } from "./store/backend.js";
+import { mkdirSync } from "node:fs";
+import { beginWrites, DATA_DIR, db, endWrites, initStore as initJsonStore, persist, pruneSessions, seedChartOfAccounts, type Db } from "./store/db.js";
+import { jsonBackend, type StoreBackend } from "./store/backend.js";
+import { createPgStore } from "./store/pg/backend.js";
+import { assertSchemaCurrent } from "./store/pg/migrate.js";
+import { openPool, pgPoolConfig, type Database } from "./store/pg/sql.js";
+import { DATABASE_CA, DATABASE_URL, IS_REAL_MONEY_CHAIN, STORE_BACKEND } from "./config/env.js";
 import { auditEntry } from "./audit.js";
 import type {
   Account,
@@ -46,6 +51,7 @@ import {
   followIban,
     hashOnRecordIn,
   passkeyUsePatch,
+  quoteConsumable,
   emailCodeAttemptPatch,
   reviewRefundTx,
   sessionDead,
@@ -62,6 +68,8 @@ import type {
   OperatorCredential,
   OperatorSession,
   PaymentRequest,
+  PendingExecution,
+  PendingExecutionKind,
   PendingSafeOp,
   Quote,
   ReceiptShare,
@@ -78,12 +86,15 @@ import type {
 import { describeCause } from "./http/log-cause.js";
 
 export * from "./store/types.js";
-export { initStore } from "./store/db.js";
 
 export { REVIEW_EVIDENCE_MAX, REVIEW_NOTE_MAX, REVIEW_NOTE_MIN } from "./store/rules.js";
 
 /** Daily-cap holds for transfers being prepared — see store.holdDailyCap. */
 const capHolds = new Map<string, { userId: string; eur: number; day: string }>();
+
+/** Approvals waiting for a passkey, by `kind:id` — see store.putPendingExecution.
+ *  In memory on db.json: a restart drops them and the approval answers 410. */
+const pendingExecutions = new Map<string, PendingExecution>();
 
 /** Called after a transfer's state changed and was persisted. */
 type TransferStateListener = (t: Transfer, from: Transfer["state"]) => void | Promise<void>;
@@ -169,6 +180,12 @@ export const jsonCore = {
   lockUser(id: string) {
     return db.users.find((u) => u.id === id);
   },
+  /**
+   * Hold `key` until the transaction this runs in ends (Postgres: an
+   * advisory transaction lock; JSON: the mutex already holds everything).
+   * For a rule over rows no single row stands for, e.g. one org's ledger.
+   */
+  lockKey(_key: string) {},
   /** Change `passkeySafe` or `monerium` from the stored value (§2 rule 2), with `patch`. */
   patchUserSub<K extends "passkeySafe" | "monerium">(id: string, key: K, fn: (current: User[K]) => User[K], patch: Partial<User> = {}) {
     const u = db.users.find((x) => x.id === id);
@@ -251,7 +268,8 @@ export const jsonCore = {
   ) {
     const u = db.users.find((x) => x.id === id);
     if (!u) throw new Error(`unknown user ${id}`);
-    if (u.segment && by !== "admin") {
+    // An account that has not said where it lives is decided once, later.
+    if (u.segment && u.segment.value !== "UNDECIDED" && by !== "admin") {
       throw new Error(
         `user ${id} already has segment ${u.segment.value}; only an admin action may change it`,
       );
@@ -426,17 +444,23 @@ export const jsonCore = {
   isOrderProcessed(orderId: string) {
     return db.processedMoneriumOrders.includes(orderId);
   },
-  markOrderProcessed(orderId: string) {
-    if (db.processedMoneriumOrders.includes(orderId)) return;
+  /** Claim an order as recorded, once: false when it already was (§2,
+   *  Monerium order dedupe; Postgres: the order id's primary key). */
+  markOrderProcessed(orderId: string): boolean {
+    if (db.processedMoneriumOrders.includes(orderId)) return false;
     db.processedMoneriumOrders.push(orderId);
     persist();
+    return true;
   },
   isWebhookProcessed(webhookId: string) {
     return db.processedMoneriumWebhooks.includes(webhookId);
   },
-  markWebhookProcessed(webhookId: string) {
+  /** Mark a webhook delivery handled, once: false when it already was. */
+  markWebhookProcessed(webhookId: string): boolean {
+    if (db.processedMoneriumWebhooks.includes(webhookId)) return false;
     db.processedMoneriumWebhooks.push(webhookId);
     persist();
+    return true;
   },
   addQuote(q: Quote) {
     // A quote nobody took is worth nothing a day after it expired, and every
@@ -454,11 +478,24 @@ export const jsonCore = {
     persist();
     return q;
   },
-  consumeQuote(id: string) {
+  /**
+   * Consume an OPEN quote that has not expired, once (§2, quote → transfer).
+   * The expiry is checked here, on the stored row, not only by the caller:
+   * a quote read before an await can expire before it is consumed.
+   */
+  consumeQuote(id: string, now = Date.now()) {
     const q = db.quotes.find((x) => x.id === id);
     if (!q) throw new Error(`unknown quote ${id}`);
-    if ((q.status ?? "OPEN") !== "OPEN") return false;
+    if (!quoteConsumable(q, now)) return false;
     q.status = "CONSUMED";
+    persist();
+    return true;
+  },
+  /** Mark an OPEN quote EXPIRED; never a consumed one. False when it was not OPEN. */
+  expireQuote(id: string) {
+    const q = db.quotes.find((x) => x.id === id);
+    if (!q || (q.status ?? "OPEN") !== "OPEN") return false;
+    q.status = "EXPIRED";
     persist();
     return true;
   },
@@ -513,6 +550,25 @@ export const jsonCore = {
   /** Drop a hold whose transfer was refused or failed. A no-op once committed. */
   releaseCapHold(holdId: string) {
     capHolds.delete(holdId);
+  },
+  /**
+   * Keep a prepared UserOperation until its passkey approves it (§2,
+   * approvals waiting for a passkey). Expired entries go first. The claim
+   * that submits it drops it in the same transaction, so a replayed
+   * approval finds nothing to submit.
+   */
+  putPendingExecution(kind: PendingExecutionKind, id: string, entry: PendingExecution) {
+    const now = Date.now();
+    for (const [k, p] of pendingExecutions) if (p.expiresAt < now) pendingExecutions.delete(k);
+    pendingExecutions.set(`${kind}:${id}`, entry);
+  },
+  /** The prepared operation, unless its window closed. */
+  findPendingExecution(kind: PendingExecutionKind, id: string): PendingExecution | undefined {
+    const p = pendingExecutions.get(`${kind}:${id}`);
+    return p && p.expiresAt >= Date.now() ? p : undefined;
+  },
+  dropPendingExecution(kind: PendingExecutionKind, id: string) {
+    pendingExecutions.delete(`${kind}:${id}`);
   },
   /**
    * Claim the one and only authorization submission for a transfer.
@@ -590,7 +646,8 @@ export const jsonCore = {
    */
   findReceiptShareByTransfer(transferId: string) {
     const shares = db.receiptShares.filter((s) => s.transferId === transferId);
-    return shares.find((s) => !s.revokedAt) ?? shares.at(-1);
+    // A live share first; an expired one stays recorded beside its successor.
+    return shares.find((s) => !s.revokedAt && Date.parse(s.expiresAt) >= Date.now()) ?? shares.at(-1);
   },
   findReceiptShareBySlug(slug: string) {
     return db.receiptShares.find((s) => s.slug === slug);
@@ -712,10 +769,17 @@ export const jsonCore = {
   shopifyDelivery(id: string): ShopifyDelivery | undefined {
     return db.shopifyDeliveries.find((d) => d.id === id);
   },
-  /** Record a delivery the first time it arrives, dropping those past 72 hours. */
+  /** Record a delivery the first time it arrives, dropping those past 72
+   *  hours. Returns the stored row: `d`, or the one recorded first under
+   *  that id, whose shop the caller checks (§2, Shopify delivery dedupe). */
   recordShopifyDelivery(d: ShopifyDelivery) {
     const stale = Date.now() - 72 * 3_600_000;
     db.shopifyDeliveries = db.shopifyDeliveries.filter((x) => Date.parse(x.at) > stale);
+    const existing = db.shopifyDeliveries.find((x) => x.id === d.id);
+    if (existing) {
+      persist();
+      return existing;
+    }
     db.shopifyDeliveries.push(d);
     persist();
     return d;
@@ -826,6 +890,8 @@ export const jsonCore = {
   addOperatorCredential(operatorId: string, credential: OperatorCredential) {
     const o = db.operators.find((x) => x.id === operatorId);
     if (!o) throw new Error(`unknown operator ${operatorId}`);
+    // On the stored row: a disable that landed after the caller's check wins.
+    if (o.disabledAt) throw new Error("this operator is disabled");
     if (db.operators.some((x) => x.credentials.some((c) => c.credentialId === credential.credentialId))) {
       throw new Error("that passkey is already registered");
     }
@@ -938,15 +1004,16 @@ export const jsonCore = {
   },
 
   /** An ERC-20 transfer is identified by its tx and position in it. */
-  findCryptoDeposit(txHash: string, logIndex: number) {
+  /** The deposit of one Transfer log on one chain (§2, crypto deposits). */
+  findCryptoDeposit(chainId: number, txHash: string, logIndex: number) {
     return db.cryptoDeposits.find(
-      (d) => d.txHash.toLowerCase() === txHash.toLowerCase() && d.logIndex === logIndex,
+      (d) => d.chainId === chainId && d.txHash.toLowerCase() === txHash.toLowerCase() && d.logIndex === logIndex,
     );
   },
   /**
    * Record a deposit, once.
    *
-   * Idempotent on (txHash, logIndex) — the chain's own identity for a
+   * Idempotent on (chainId, txHash, logIndex) — the chain's own identity for a
    * transfer — because the poller's dedupe check and this write are separated
    * by an await (the receipt's rate lookup), and the poll runs on a bare
    * setInterval that does not wait for the previous tick. Two overlapping
@@ -955,9 +1022,7 @@ export const jsonCore = {
    * Returning the existing row makes the loser of that race a no-op.
    */
   addCryptoDeposit(d: CryptoDeposit) {
-    const existing = db.cryptoDeposits.find(
-      (x) => x.txHash.toLowerCase() === d.txHash.toLowerCase() && x.logIndex === d.logIndex,
-    );
+    const existing = jsonCore.findCryptoDeposit(d.chainId, d.txHash, d.logIndex);
     if (existing) return existing;
     db.cryptoDeposits.push(d);
     persist();
@@ -969,6 +1034,18 @@ export const jsonCore = {
     Object.assign(d, patch, { updatedAt: new Date().toISOString() });
     persist();
     return d;
+  },
+  /**
+   * Change a deposit from its stored value (§2 rules 2 and 5): `make` gets
+   * the stored row and returns the patch, or null to leave it. Null back when
+   * it was left. An array on the row (`partials`) is extended here, on the
+   * stored value, never written whole from a row read before an await.
+   */
+  patchCryptoDeposit(id: string, make: (d: CryptoDeposit) => Partial<CryptoDeposit> | null) {
+    const d = db.cryptoDeposits.find((x) => x.id === id);
+    if (!d) throw new Error(`unknown crypto deposit ${id}`);
+    const patch = make(structuredClone(d));
+    return patch ? jsonCore.updateCryptoDeposit(id, structuredClone(patch)) : null;
   },
   /** Settle a deposit once: `decide` runs on the stored row; null when it was settled already. */
   settleCryptoDeposit(id: string, decide: (d: CryptoDeposit) => Partial<CryptoDeposit>) {
@@ -1112,7 +1189,16 @@ export const jsonCore = {
     const patch = acceptInviteOnRow(m, tokenHash, userId, db.members.filter((x) => x.orgId === m.orgId), at);
     return patch ? jsonCore.updateMember(id, patch) : null;
   },
-  addAccount(a: Account) {
+  /**
+   * Add an account, or null when it is a company Safe's (no backing user)
+   * and another unbacked account is at that address: a company Safe is one
+   * account (§2, one Safe two accounts; Postgres: the partial unique key).
+   * A person's Safe may back several, their personal and their sole-trader
+   * business's; routes/orgs.ts keeps it to one business, under a lock.
+   */
+  addAccount(a: Account): Account | null {
+    const at = a.address?.toLowerCase();
+    if (at && !a.backingUserId && db.accounts.some((x) => !x.backingUserId && x.address?.toLowerCase() === at)) return null;
     db.accounts.push(a);
     persist();
     return a;
@@ -1383,5 +1469,31 @@ export const jsonCore = {
   },
 };
 
-/** The store (store/backend.ts): every method async, behind one mutex. */
-export const store = jsonBackend(jsonCore);
+/** The Postgres database when STORE_BACKEND=postgres (config/env.ts). */
+const pgDatabase: Database | undefined =
+  STORE_BACKEND === "postgres" ? openPool(DATABASE_URL, { ca: DATABASE_CA, realMoney: IS_REAL_MONEY_CHAIN }) : undefined;
+
+/**
+ * The store (store/backend.ts): every method async. JSON: behind one mutex,
+ * over db.json. Postgres: one transaction per write over DATABASE_URL.
+ */
+export const store: StoreBackend = pgDatabase ? createPgStore(pgDatabase) : jsonBackend(jsonCore);
+
+/**
+ * Open the store before anything reads it. JSON: load db.json and run its
+ * load-time migrations. Postgres: refuse a schema other than the migration
+ * files make (store/pg/migrate.ts); the API never migrates.
+ */
+export async function initStore(): Promise<void> {
+  if (pgDatabase) {
+    // The data dir holds more than db.json (operators/enrolment.ts's token file).
+    mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+    await assertSchemaCurrent(pgDatabase);
+  } else await initJsonStore();
+}
+
+/** The settings of the start lock's own connection (store/pg/start-lock.ts),
+ *  or undefined on JSON, which needs none. */
+export function startLockConfig() {
+  return pgDatabase ? pgPoolConfig(DATABASE_URL, { ca: DATABASE_CA, realMoney: IS_REAL_MONEY_CHAIN }) : undefined;
+}

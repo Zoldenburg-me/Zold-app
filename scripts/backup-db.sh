@@ -17,7 +17,15 @@ mkdir -p "$out_dir"
 chmod 700 "$out_dir"
 out="$out_dir/$(basename "$src" .json)-$(date -u +%Y%m%dT%H%M%SZ).json.age"
 
-# persist() replaces the file by rename, so this reads one whole version.
-"$AGE" -R "$AGE_RECIPIENTS" -o "$out.tmp" "$src"
-mv "$out.tmp" "$out"
+# persist() replaces the file by rename, so this reads one whole version. A
+# failed or half-written encryption is removed; ln refuses an existing name,
+# so a second backup in the same second never replaces the first.
+tmp="$out.$$.tmp"
+trap 'rm -f "$tmp"' EXIT
+"$AGE" -R "$AGE_RECIPIENTS" -o "$tmp" "$src"
+if ! err="$(ln "$tmp" "$out" 2>&1)"; then
+  if [[ -e "$out" ]]; then echo "refusing: $out exists (a backup made this second); run it again" >&2
+  else echo "could not write $out: $err" >&2; fi
+  exit 1
+fi
 echo "wrote $out"

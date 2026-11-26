@@ -191,9 +191,19 @@ function sameHex(a: string, b: string): boolean {
  *  encryption key is configured; `canSignPayLinks` says so first. */
 async function orderLinkSecret(c: ShopifyConnection): Promise<string> {
   if (c.orderLinkSecretEnc) return SECRETS.shopifyOrderLinkSecret.open(c.id, c.orderLinkSecretEnc);
-  const secret = randomBytes(32).toString("hex");
-  await store.updateShopifyConnection(c.id, { orderLinkSecretEnc: SECRETS.shopifyOrderLinkSecret.seal(c.id, secret) });
-  return secret;
+  // Created once: two first uses at once must not mint two keys, or the
+  // email template of the one that lost would sign links nobody accepts.
+  return store.tx(async () => {
+    await store.lockKey(`shopify-connection:${c.id}`);
+    const now = await store.findShopifyConnectionByShop(c.shop);
+    // The shop reconnected meanwhile (maybe to another org): its key is not
+    // this caller's to read.
+    if (!now || now.id !== c.id) throw new Error("this Shopify connection was replaced; reload");
+    if (now.orderLinkSecretEnc) return SECRETS.shopifyOrderLinkSecret.open(now.id, now.orderLinkSecretEnc);
+    const secret = randomBytes(32).toString("hex");
+    await store.updateShopifyConnection(c.id, { orderLinkSecretEnc: SECRETS.shopifyOrderLinkSecret.seal(c.id, secret) });
+    return secret;
+  });
 }
 
 /** A shop can be given a signed pay link when its key exists or can be made. */
@@ -477,6 +487,9 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       // The row id is part of the AAD, so it is fixed before sealing. The
       // shop is read, checked again and written in one transaction.
       const written = await store.tx(async () => {
+        // The org's row held: the installer's membership and role change only
+        // under the same lock, so installRefusal holds until the write.
+        await store.lockOrganisation(pending.orgId);
         const existing = await store.findShopifyConnectionByShop(shop);
         const connectionId = existing?.id ?? randomUUID();
         let enc: string;
@@ -671,12 +684,12 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       if (!c) return;
       const deliveryId = String(req.header("x-shopify-webhook-id") ?? "").trim();
       if (!deliveryId || deliveryId.length > 200) return res.status(400).json({ error: "X-Shopify-Webhook-Id is required" });
-      const seen = await store.shopifyDelivery(deliveryId);
-      if (seen && seen.shop !== c.shop) {
+      // The stored row: this delivery, or the one recorded first under its id.
+      const seen = await store.recordShopifyDelivery({ id: deliveryId, shop: c.shop, at: new Date().toISOString(), handled: false });
+      if (seen.shop !== c.shop) {
         return res.status(401).json({ error: "this delivery was signed for another store" });
       }
-      if (seen?.handled) return res.status(200).json({ ok: true, duplicate: true });
-      if (!seen) await store.recordShopifyDelivery({ id: deliveryId, shop: c.shop, at: new Date().toISOString(), handled: false });
+      if (seen.handled) return res.status(200).json({ ok: true, duplicate: true });
       // Handled once it has been answered without a server error; a failed one
       // is processed again on Shopify's retry.
       res.once("finish", () => {

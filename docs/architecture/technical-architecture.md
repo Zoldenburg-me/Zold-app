@@ -456,7 +456,7 @@ sequenceDiagram
   B->>A: POST /quotes {rail, sendEur}
   A-->>B: quote (10 min TTL; SEPA: 1:1, fee €0)
   B->>A: POST /transfers {quoteId, recipient, IBAN, reference}
-  Note over A: build.ts: KYC · balance · Safe active · device key bound<br/>holdDailyCap (sync) · consumeQuote (sync)<br/>auth terms {to, amountWei, destination, deadline+15m, SEPA +4m}<br/>prepare UserOp (fee transfer, or fee+approve+swap batch)<br/>pendingTransferExecutions[id] (memory)
+  Note over A: build.ts: KYC · balance · Safe active · device key bound<br/>holdDailyCap (sync) · consumeQuote (sync)<br/>auth terms {to, amountWei, destination, deadline+15m, SEPA +4m}<br/>prepare UserOp (fee transfer, or fee+approve+swap batch)<br/>pending execution (store: pending_executions on Postgres, memory on db.json)
   A-->>B: transfer + authorization {typedData, safeExecution.challenge, moneriumRedeem.challenge}
   B->>B: device key signs typedData
   B->>B: passkey signs safeExecution.challenge
@@ -576,9 +576,9 @@ router receives injected and never rebuilds.
 | **lifi** | `GET li.quest/v1/quote` | approve `approvalAddress` (what LI.FI names), send tx, measure | yes | `LIFI_CONTRACTS` allowlist (Diamond), `value == 0` |
 | **dex** (Uniswap v3) | deepest pool across fee tiers, QuoterV2 | `exactInputSingle` via SwapRouter02, measure | yes | router is config, pool pinned on quote |
 | **rfq** (Bebop PMM) | `/pmm/<chain>/v3/quote` | maker tx | yes | `BEBOP_CONTRACTS` (empty means execution refused) |
-| **cow** | `/api/v1/quote` | **throws, not wired** | no | quote only |
+| **cow** | `/api/v1/quote` | **throws, not wired** | no | quote only; a cash transfer on it (alone or behind best) is refused before the debit |
 | **fx-swapper** | on-chain `FxSwapper` | `swapExactIn` | no | hardhat only |
-| **best** | all venues in parallel, highest `expectedOut` wins, every venue's result recorded | dispatch to the winner | if any is | per venue |
+| **best** | all venues in parallel, highest `expectedOut` wins, every venue's result recorded | dispatch to the winner | if any of its venues is | per venue |
 
 `liquidity/contract.ts` shares the venue guards. `assertVenueTarget` covers
 the allowlist, the named spender and zero value. `applySurplus` decides who
@@ -1574,10 +1574,10 @@ Settings (`config/checkout-service.ts`; a bad webhook URL or secret refuses star
 | `POST /:orgId/bookkeeping/statement/rebuild` (C(ledger.transactions), ledger.categorise) | Re-run the ledger writer for the org's accounts. |
 | `PUT /:orgId/ledger/:entryId/own-transfer` (C(ledger.transactions), ledger.categorise) | `{own: true or false}` on a statement line: the person says this payment is between their own accounts. Sets or removes the `internal` tag: out of Revenue, Expenses and the category, while the stored code stays for undo. Refused on a fee, reversal, sweep, disposal or invoice payment. |
 | `GET /users/:id/books-line/:paymentId` (session) | The statement line behind one payment for /app's detail sheet: `{orgId, lineId, ownTransfer, belegStale?}` (`belegStale`: its Beleg no longer verifies and this person may replace it), or `null` where the sheet draws no action: no line, no books, no permission, a crypto send or a conversion in parts (both marked on the statement in /business), or a line that cannot be marked and is not. |
-| `POST /:orgId/bookkeeping/export/:month/prepare` (C(export.ledger), reports.run) | Issue the month's missing Belege. |
+| `POST /:orgId/bookkeeping/export/:month/prepare` (C(export.ledger), reports.run) | Issue the month's missing Belege. A line whose stored code names no live Beleg of its own is relinked to the one live Beleg it has, not given a second; with more than one, that line fails (`BelegAmbiguous`) and nothing is relinked or signed. |
 | `GET /:orgId/bookkeeping/export/:month/lexware.csv` (C(export.ledger)) | Lexware Office bank-import CSV. A line whose Beleg no longer verifies names no code and says `Beleg stimmt nicht mehr`. |
 | `GET /:orgId/bookkeeping/export/:month/belege.zip` (C(export.ledger)) | ZIP of the month's Belege. A Beleg that no longer verifies is left out; `MISSING-<month>.txt` lists its line and why. |
-| `POST /:orgId/bookkeeping/lines/:lineId/beleg` (C(export.ledger), reports.run) | Issue one line's Beleg. |
+| `POST /:orgId/bookkeeping/lines/:lineId/beleg` (C(export.ledger), reports.run) | Issue one line's Beleg, or relink the line to the one live Beleg of its own it already has (`issued: false`). The 409 applies only when the line's stored link is broken (it names no unrevoked Beleg of the line) and the line has more than one; nothing is relinked or signed. An intact link returns its Beleg (`issued: false`) whatever else exists. |
 | `POST /:orgId/bookkeeping/lines/:lineId/beleg/replace` (C(export.ledger), reports.run) | Revoke the line's Beleg that no longer verifies and issue a new one (owner, admin, accountant); the new one is signed and checked first, and revoke plus issue are one write. 409 if the old one still verifies, or if a new one would fail too (a payout Monerium rejected); nothing is revoked then. Audited as `document.reissued`, by document id. |
 | `GET /:orgId/integrations` (org.read) | Connector state; never a key. |
 | `POST/DELETE /:orgId/integrations/getmyinvoices` (C(integrations.accounting), org.update) | Verify and store, or remove, the org's GetMyInvoices key. |

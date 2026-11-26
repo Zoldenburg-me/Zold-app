@@ -14,7 +14,7 @@ import { ap, bk, contactPayments, ct, draftTag, draftTitle, draftTotal, invoiceD
 import { loadOrg, render } from "./shell.js";
 import { field, payerRuleDialog, payerRuleSection, runSummary } from "./receipts.js";
 import { approvalProgress, showProgress, signedLineOutcome, signedRunToast, signingWarning } from "./payment-model.js";
-import { ibanNotice, keyNotice } from "./org-monerium-model.js";
+import { ibanNotice, keyNotice, payoutNotice } from "./org-monerium-model.js";
 
 /** A file the API serves behind the bearer header, which a navigation
  *  cannot carry: fetch it, then hand the bytes to the browser as a download. */
@@ -466,6 +466,42 @@ export const ACTIONS = {
     const r = await api(`/api/orgs/${org.id}/monerium/iban/check`, { method: "POST" }).catch((e) => { render(); throw e; });
     toast(ibanNotice(r.monerium));
   },
+  /* A bank payout from the company's own IBAN: one Monerium redeem from the
+     company Safe, signed by this owner's passkey
+     (routes/business/org-monerium-payouts.ts). Nothing is retried here: a
+     payout Monerium did not confirm is said as unclear. */
+  "org-payout-new": () => dialog(`Pay a bank account from ${org.name}’s IBAN?`, `
+      <p class="desc">The euros leave the company’s Safe and Monerium sends a SEPA transfer to the recipient’s bank. Your ${Z.passkeyName()} signs exactly this amount and IBAN.</p>
+      <div><label for="op-name">Recipient name</label><input id="op-name" autocomplete="off" maxlength="140" placeholder="Müller Holzbau GmbH…" /></div>
+      <div><label for="op-iban">Recipient IBAN</label><input id="op-iban" autocomplete="off" spellcheck="false" placeholder="DE…" /></div>
+      <div><label for="op-amount">Amount in euros</label><input id="op-amount" inputmode="decimal" autocomplete="off" placeholder="250.00…" /></div>
+      <div><label for="op-ref">Reference <span class="desc">(optional; reaches the recipient’s statement)</span></label><input id="op-ref" autocomplete="off" maxlength="140" placeholder="Invoice 2026-014…" /></div>
+      <p class="zb-hint">Zold takes no fee; Monerium’s own fees apply. Nothing is retried automatically: if Monerium does not confirm, the payout is marked unclear and you check Monerium before sending it again.</p>`,
+    async () => {
+      const reference = $("#op-ref").value.trim();
+      const body = {
+        recipientName: $("#op-name").value.trim(),
+        recipientIban: $("#op-iban").value.trim(),
+        amountEur: $("#op-amount").value.trim(),
+        ...(reference ? { reference } : {}),
+      };
+      const start = await api(`/api/orgs/${org.id}/monerium/payouts/start`, { method: "POST", body });
+      let signed;
+      try {
+        signed = await (await deviceLib()).passkeyAssertion(start);
+      } catch (e) {
+        throw new Error(e.name === "NotAllowedError" ? Z.byDevice("Face ID was cancelled.", "The passkey prompt was cancelled.") : e.message);
+      }
+      try {
+        const r = await api(start.submitTo, { method: "POST", body: { requestId: start.requestId, ...signed } });
+        setTimeout(() => toast(payoutNotice(r.payout), r.payout?.state !== "sent" && r.payout?.state !== "pending"), 0);
+      } catch (e) {
+        // A payout row exists: the order may have reached Monerium. Close the
+        // dialog, draw the list with its new state, and say it there.
+        if (e.payout) { setTimeout(() => toast(payoutNotice(e.payout), true), 0); return; }
+        throw e;
+      }
+    }, { okLabel: "Sign and send" }),
 
   async "shopify-connect"() {
     const shop = shopAddress("#sh-shop");

@@ -15,7 +15,7 @@ import express from "express";
 import { wrap } from "./util.js";
 import { randomUUID } from "node:crypto";
 import { CHAIN_ID, EMAIL_VERIFICATION, HARNESS, SECURITY } from "../config.js";
-import { emailHeldBy } from "../domain/email.js";
+import { emailHeldBy, emailLockKey } from "../domain/email.js";
 import { accountBalances, shownBalances } from "../chain.js";
 import { store, type User } from "../store.js";
 import { rateLimit } from "../http/policy.js";
@@ -240,11 +240,15 @@ export function createAuthRouter(deps: AuthDeps) {
       // passkey is what makes a row claimable, so it is where the invariant
       // has to hold. The check and the write are one transaction.
       const updated = await store.tx(async () => {
-        if (!user.passkey?.publicKey && user.email &&
-            emailHeldBy((await store.usersByEmail(user.email)).filter((u) => u.id !== user.id), EMAIL_VERIFICATION.enabled)) {
+        // The row and then its address held: two rows on one email
+        // registering their first passkey at once each lock only their own row.
+        const now = (await store.lockUser(user.id)) ?? user;
+        if (now.email) await store.lockKey(emailLockKey(now.email));
+        if (!now.passkey?.publicKey && now.email &&
+            emailHeldBy((await store.usersByEmail(now.email)).filter((u) => u.id !== now.id), EMAIL_VERIFICATION.enabled)) {
           return undefined;
         }
-        const plannedSafe = passkeySafePlan(user, reg.key);
+        const plannedSafe = passkeySafePlan(now, reg.key);
         return await store.updateUser(user.id, {
           passkey: {
             ...passkey,
@@ -427,7 +431,7 @@ export function createAuthRouter(deps: AuthDeps) {
       }
       // Also limit per credential: the per-IP bucket does nothing against attempts
       // spread across many sources at one account.
-      if (!rateLimit(`c:${tokenHash(String(credentialId))}`, SECURITY.authRateLimitPerMin)) {
+      if (!rateLimit(`c:${tokenHash(String(credentialId))}`, SECURITY.authRateLimitPerMin, "credential")) {
         return res.status(429).json({ error: "rate limited — slow down" });
       }
       const user = await store.findUserByCredential(credentialId);

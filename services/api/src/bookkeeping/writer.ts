@@ -30,6 +30,7 @@ import {
   type User,
 } from "../store.js";
 import { safeBooksStart } from "../domain/safe-books.js";
+import { moneriumAmountEur } from "../domain/monerium-order.js";
 import type { MoneriumOrderLike } from "../documents.js";
 import { invoicePayments, mergeStatementLines, projectStatementLines, type InvoicePayments, type StatementInputs } from "./statement.js";
 import { describeCause } from "../http/log-cause.js";
@@ -233,6 +234,7 @@ export async function writeAccountStatementLines(account: Account, rows: Rows = 
       invoices: await rows.invoicesOf(account.orgId),
       paymentRequests: [],
       cryptoSends: await rows.cryptoSendsOfAccount(account),
+      companyPayouts: account.moneriumPayouts ?? [],
       swapsHaveExecuted: await rows.swapsHaveExecuted(),
     };
     return await writeProjected(inp, undefined, rows);
@@ -241,10 +243,16 @@ export async function writeAccountStatementLines(account: Account, rows: Rows = 
 
 async function writeProjected(inp: StatementInputs, since: string | undefined, rows: Rows): Promise<{ added: number; updated: number }> {
   return store.tx(async () => {
+    // Every ledger writer of the org takes this lock before it reads the rows it changes.
+    await store.lockKey(`ledger:${inp.orgId}`);
     // Nothing from before the Safe's books start: an imported Safe's earlier life is not the account's.
     const projected = projectStatementLines(inp).filter((e) => !since || e.at >= since);
-    const existing = await rows.ledgerOf(inp.orgId);
-    const { toAdd, toUpdate } = mergeStatementLines(existing, projected, await rows.invoicePayments());
+    // Merged against the sweep's snapshot first; with anything to write it is
+    // merged again against the ledger read under the lock, so a
+    // categorisation or a Beleg code committed since the snapshot is kept.
+    const paid = await rows.invoicePayments();
+    let { toAdd, toUpdate } = mergeStatementLines(await rows.ledgerOf(inp.orgId), projected, paid);
+    if (toAdd.length || toUpdate.length) ({ toAdd, toUpdate } = mergeStatementLines(await store.ledgerOf(inp.orgId), projected, paid));
     if (toAdd.length) {
       const { entries } = applyRules(await rows.rulesOf(inp.orgId), toAdd);
       await store.addLedgerEntries(entries);
@@ -279,7 +287,8 @@ export async function writeStatementLines(): Promise<{ added: number; updated: n
         }
       }
       for (const a of (await store.list("accounts"))) {
-        if (!a.address || (!(await rows.issueOrdersOfAccount(a.id)).length && !(await rows.cryptoSendsOfAccount(a)).length)) continue;
+        const paidOut = (a.moneriumPayouts ?? []).some((p) => p.state === "sent");
+        if (!a.address || (!(await rows.issueOrdersOfAccount(a.id)).length && !(await rows.cryptoSendsOfAccount(a)).length && !paidOut)) continue;
         try {
           const r = await writeAccountStatementLines(a, rows);
           added += r.added;
@@ -302,8 +311,8 @@ export async function writeStatementLines(): Promise<{ added: number; updated: n
  * table existed still gets its line on the next poll. Idempotent on the id.
  */
 export async function noteMoneriumIssue(order: MoneriumOrderLike, holder: MoneyInHolder): Promise<MoneriumIssueRecord | undefined> {
-  const amountEur = Number(order.amount);
-  if (!(amountEur > 0)) return undefined;
+  const amountEur = moneriumAmountEur(order.amount);
+  if (!amountEur) return undefined;
   const d = order.counterpart?.details ?? {};
   const name = d.name || d.companyName || [d.firstName, d.lastName].filter(Boolean).join(" ") || undefined;
   const processedAt = order.meta?.processedAt ?? order.meta?.placedAt ?? order.placedAt ?? order.createdAt ?? new Date().toISOString();

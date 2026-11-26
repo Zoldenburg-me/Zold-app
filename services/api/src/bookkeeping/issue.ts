@@ -39,7 +39,8 @@ export async function belegContextFor(entry: LedgerEntry): Promise<BelegContext 
   const sweep = s.event === "sweep" ? (await store.list("conversionSweeps")).find((x) => `sweep:${x.id}` === s.key) : undefined;
   const paymentRequest = s.links.paymentRequestId ? (await store.findPaymentRequest(s.links.paymentRequestId)) : undefined;
   const invoice = s.links.invoiceId ? (await store.findInvoice(s.links.invoiceId)) : undefined;
-  const invoicePayerName = invoice?.issued?.recipient?.name ?? invoice?.supplier?.orgName;
+  // Whoever the invoice is with: its recipient if we issued it, its supplier if we pay it.
+  const invoiceCounterpartyName = invoice?.issued?.recipient?.name ?? invoice?.supplier?.orgName;
   return {
     userId: user.id,
     holder: holderFor(user, account?.moneriumProfile),
@@ -48,7 +49,7 @@ export async function belegContextFor(entry: LedgerEntry): Promise<BelegContext 
     ...(issueOrder ? { issueOrder } : {}),
     ...(sweep ? { sweep } : {}),
     ...(paymentRequest ? { paymentRequest } : {}),
-    ...(invoicePayerName ? { invoicePayerName } : {}),
+    ...(invoiceCounterpartyName ? { invoiceCounterpartyName } : {}),
   };
 }
 
@@ -67,14 +68,36 @@ export async function belegRecordsAgree(s: BelegSnapshot, line?: LedgerEntry): P
 
 type BelegDoc = StoredDocument & { snapshot: BelegSnapshot };
 
-/** The line's Beleg as the books may hand it out. `live`: issued, a Beleg,
- *  not revoked, and its records still agree. `stale`: not revoked, but it no
- *  longer agrees, so it is replaced, never shipped. A revoked one is neither:
- *  the line has no Beleg until one is issued. */
-export async function belegOfLine(e: LedgerEntry): Promise<{ live: BelegDoc } | { stale: BelegDoc; detail: string } | undefined> {
+export type DocumentsByCode = ReadonlyMap<string, StoredDocument>;
+/** Every document by code, for a listing to build once: belegOfLine on each
+ *  line would otherwise scan every document. The first with a code wins, as
+ *  in findDocumentByCode. */
+export async function documentsByCode(): Promise<DocumentsByCode> {
+  const byCode = new Map<string, StoredDocument>();
+  for (const d of await store.list("documents")) if (!byCode.has(d.code)) byCode.set(d.code, d);
+  return byCode;
+}
+
+/** The document a line's code names is that line's Beleg only if it is a
+ *  Beleg of the line's org issued for this very line. A code is text on the
+ *  row: a stale or corrupt one naming another org's or another line's
+ *  document is no link at all, so the line has no Beleg and gets its own. */
+function isBelegOf(doc: StoredDocument | undefined, e: LedgerEntry): doc is BelegDoc {
+  return !!doc && doc.kind === "beleg" && doc.snapshot.kind === "beleg" && doc.orgId === e.orgId && doc.snapshot.line.lineId === e.id;
+}
+
+/** The line's Beleg as the books may hand it out. `live`: issued for this
+ *  line, not revoked, and its records still agree. `stale`: not revoked, but
+ *  it no longer agrees, so it is replaced, never shipped. A revoked one is
+ *  neither, nor is one that is not the line's own (isBelegOf): the line has
+ *  no Beleg until one is issued. */
+export async function belegOfLine(
+  e: LedgerEntry,
+  docs?: DocumentsByCode,
+): Promise<{ live: BelegDoc } | { stale: BelegDoc; detail: string } | undefined> {
   const code = e.statement?.documentCode;
-  const doc = code ? (await store.findDocumentByCode(code)) : undefined;
-  if (!doc || doc.snapshot.kind !== "beleg" || doc.revokedAt) return undefined;
+  const doc = code ? (docs ? docs.get(code) : await store.findDocumentByCode(code)) : undefined;
+  if (!isBelegOf(doc, e) || doc.revokedAt) return undefined;
   const d = { ...doc, snapshot: doc.snapshot };
   const agree = await belegRecordsAgree(d.snapshot, e);
   return agree.ok ? { live: d } : { stale: d, detail: agree.detail };
@@ -88,6 +111,11 @@ export class BelegStillVerifies extends Error {}
  *  the same check (a payout Monerium rejected, say), so the old one stays as
  *  it is and nothing is issued. */
 export class BelegWouldNotVerify extends Error {}
+
+/** Issue refused: the line's link is unusable and more than one live Beleg
+ *  of its own exists, so which one the line had is not known. Nothing is
+ *  relinked or signed; the store needs a look. */
+export class BelegAmbiguous extends Error {}
 
 /** One issue per line at a time: two sends at once must not both find no
  *  Beleg, sign two, and leave the line pointing at the second. */
@@ -106,7 +134,7 @@ export function issueBelegForLine(entry: LedgerEntry): Promise<{ doc: StoredDocu
  *  (BelegWouldNotVerify); with no live Beleg this just issues. */
 export function replaceBelegForLine(entry: LedgerEntry): Promise<{ doc: StoredDocument; issued: boolean; revoked?: StoredDocument }> {
   return queued(entry, async () => {
-    const now = (await store.ledgerOf(entry.orgId)).find((e) => e.id === entry.id) ?? entry;
+    const now = await restoreOwnLink((await store.ledgerOf(entry.orgId)).find((e) => e.id === entry.id) ?? entry);
     const current = await belegOfLine(now);
     if (!current) return issueOnce(now);
     if ("live" in current) throw new BelegStillVerifies("this Beleg still matches the books");
@@ -138,16 +166,38 @@ function queued<T extends { doc: StoredDocument; issued: boolean }>(entry: Ledge
 
 async function issueOnce(given: LedgerEntry): Promise<{ doc: StoredDocument; issued: boolean }> {
   // The row as it is now: the caller's copy may predate a Beleg just issued.
-  const entry = (await store.ledgerOf(given.orgId)).find((e) => e.id === given.id) ?? given;
+  const entry = await restoreOwnLink((await store.ledgerOf(given.orgId)).find((e) => e.id === given.id) ?? given);
   const s = entry.statement;
   if (!s) throw new Error("only a statement line has a Beleg");
   if (s.documentCode) {
     const existing = await store.findDocumentByCode(s.documentCode);
-    if (existing && !existing.revokedAt) return { doc: existing, issued: false };
+    if (isBelegOf(existing, entry) && !existing.revokedAt) return { doc: existing, issued: false };
   }
   const doc = await draft(entry);
   await commit(entry, doc);
   return { doc, issued: true };
+}
+
+/** A line whose code names no live Beleg of its own gets its link back to
+ *  the one it has, if it has exactly one: signing a second would leave two
+ *  that both verify for one bank line. Two or more is refused, not guessed.
+ *  Called inside the line's queue. Returns the row as it is now. */
+async function restoreOwnLink(given: LedgerEntry): Promise<LedgerEntry> {
+  return store.tx(async () => {
+    // Under the org's ledger lock, as commit writes: the row is read again
+    // here, so a writer's update in between is not overwritten.
+    await store.lockKey(`ledger:${given.orgId}`);
+    const entry = (await store.ledgerOf(given.orgId)).find((e) => e.id === given.id) ?? given;
+    const s = entry.statement;
+    if (!s) return entry;
+    const linked = s.documentCode ? await store.findDocumentByCode(s.documentCode) : undefined;
+    if (isBelegOf(linked, entry) && !linked.revokedAt) return entry;
+    const own = (await store.documentsForOrg(entry.orgId)).filter((d) => isBelegOf(d, entry) && !d.revokedAt);
+    if (own.length > 1) throw new BelegAmbiguous(`this line has ${own.length} live receipts, more than one, so none is relinked or issued`);
+    if (!own.length) return entry;
+    await store.updateLedgerEntry(entry.id, { statement: { ...s, documentCode: own[0].code } });
+    return (await store.ledgerOf(entry.orgId)).find((e) => e.id === entry.id) ?? entry;
+  });
 }
 
 /** The Beleg for the line as the books are now, signed, not yet stored. */
@@ -169,7 +219,9 @@ async function draft(entry: LedgerEntry): Promise<StoredDocument> {
 
 async function commit(entry: LedgerEntry, doc: StoredDocument): Promise<void> {
   return store.tx(async () => {
-    // Re-read after the signing await: the writer may have updated the row.
+    // Re-read after the signing await, under the org's ledger lock: the
+    // writer may have updated the row.
+    await store.lockKey(`ledger:${entry.orgId}`);
     const s = ((await store.ledgerOf(entry.orgId)).find((e) => e.id === entry.id) ?? entry).statement!;
     await store.addDocument(doc);
     await store.updateLedgerEntry(entry.id, { statement: { ...s, documentCode: doc.code } });
