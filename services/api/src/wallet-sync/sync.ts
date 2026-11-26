@@ -273,7 +273,15 @@ export async function syncWallet(
     if (readFrom !== undefined) {
       cursor = BigInt(readFrom);
       const booked = wallet.sync.cursorHash;
-      if (booked && (await blockHashOf(reader, cursor)) !== booked.toLowerCase()) throw replacedBlock(cursor);
+      if (booked) {
+        if ((await blockHashOf(reader, cursor)) !== booked.toLowerCase()) throw replacedBlock(cursor);
+      } else {
+        // A start whose hash read failed: read it now, so an idle chain (no
+        // window to book) does not leave the import in error.
+        const cursorHash = await blockHashOf(reader, cursor);
+        if (cursorMoved()) return { added, skipped };
+        patchSync(wallet.id, { cursorHash, ...(cursor >= safeHead ? { status: "synced", lastSyncedAt: now(), error: undefined } : {}) });
+      }
     } else if (wallet.sync.from) {
       cursor = (await firstBlockAtOrAfter(reader, `${wallet.sync.from}T00:00:00.000Z`, safeHead)) - 1n;
     } else {

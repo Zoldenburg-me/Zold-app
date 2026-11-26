@@ -194,15 +194,22 @@ const router = (venues: [string, bigint | null][]) =>
   // listen callback, where a throw reaches the uncaught-exception handler and
   // the process exits. It warns instead; the cash quote still refuses.
   const { LIQUIDITY } = await import("../services/api/src/config.js");
+  const { createQuote } = await import("../services/api/src/fx.js");
   const before = { PROVIDER: LIQUIDITY.PROVIDER, VENUES: LIQUIDITY.VENUES };
   try {
-    for (const bad of [{ PROVIDER: "nope", VENUES: ["lifi", "dex"] }, { PROVIDER: "best", VENUES: ["nope"] }, { PROVIDER: "best", VENUES: [] }]) {
+    for (const [bad, why] of [
+      [{ PROVIDER: "nope", VENUES: ["lifi", "dex"] }, /unknown liquidity provider "nope"/],
+      [{ PROVIDER: "best", VENUES: ["nope"] }, /unknown liquidity provider "nope"/],
+      [{ PROVIDER: "best", VENUES: [] }, /LIQUIDITY_VENUES is empty/],
+    ] as const) {
       Object.assign(LIQUIDITY, bad);
       const m = custodyPosture(true);
       assert.ok(m.warn, JSON.stringify(bad));
       assert.match(m.message, /venue configuration is invalid/);
       assert.match(m.message, /cash quote will fail/);
-      await assert.rejects(async () => liquidity.liquidityProvider().quote("EURE_TO_USDC", ONE_HUNDRED, "q", new Date(Date.now() + 60_000).toISOString()), JSON.stringify(bad));
+      // The path a user's cash quote takes: createQuote -> corridorRates -> indicativeRate.
+      await assert.rejects(createQuote("u_venue", { rail: "cash", sendEur: 100 }), why, JSON.stringify(bad));
+      await assert.rejects(async () => liquidity.liquidityProvider().quote("EURE_TO_USDC", ONE_HUNDRED, "q", new Date(Date.now() + 60_000).toISOString()), why, JSON.stringify(bad));
     }
   } finally {
     Object.assign(LIQUIDITY, before);

@@ -812,7 +812,8 @@ const halts = async (name: string, reader: (inbound: RawTransfer) => ChainReader
 await halts("an RPC on another chain", (inbound) => fakeReader({ chainId: 8453, head: 1000n, logs: [inbound] }), /reports chain 8453/);
 await halts("a block the node has no time for", (inbound) => fakeReader({ head: 1000n, logs: [{ ...inbound, blockTime: undefined }], blockTime: () => undefined as unknown as string }), /block 5 .*no time/);
 await halts("a block time that is not a time", (inbound) => fakeReader({ head: 1000n, logs: [{ ...inbound, blockTime: "soon" }] }), /block 5 .*no time/);
-await halts("a block the node has no hash for", (inbound) => fakeReader({ head: 1000n, logs: [inbound], blockHash: () => null as unknown as `0x${string}` }), /block 100 .*no hash/);
+// The start block (0) answers: its hash is read before the window.
+await halts("a block the node has no hash for", (inbound) => fakeReader({ head: 1000n, logs: [inbound], blockHash: (b) => (b === 0n ? H(0xb10c000) : (null as unknown as `0x${string}`)) }), /block 100 .*no hash/);
 await halts("a log from a block outside the window asked for", (inbound) => answering((q) => (q.direction === "in" ? [{ ...inbound, blockNumber: 999n }] : [])), /outside blocks 1-100/);
 await halts("a log for another wallet", (inbound) => answering((q) => (q.direction === "in" ? [{ ...inbound, to: STRANGER }] : [])), /not to this wallet/);
 await halts("the same log twice in one answer", (inbound) => answering((q) => (q.direction === "in" ? [inbound, { ...inbound }] : [])), /twice/);
@@ -836,6 +837,18 @@ await check("a first sync whose hash read fails keeps its starting block: the ne
   assert.deepEqual(rowsOf(w.id).map((e) => e.txHash), [H(0x950)]);
   assert.equal(current(w.id).sync.cursor, "1098");
   assert.equal(current(w.id).sync.cursorHash, H(0xb10c000 + 1098));
+});
+
+await check("a first sync whose hash read fails recovers on an idle chain: the next poll at the same head records the hash and is synced", async () => {
+  const w = freshWallet({ sync: { status: "pending" } });
+  await syncWallet(w, fakeReader({ head: 1000n, logs: [], blockHash: () => null as unknown as `0x${string}` }), loopOpts);
+  assert.equal(current(w.id).sync.status, "error");
+  await syncWallet(current(w.id), fakeReader({ head: 1000n, logs: [] }), loopOpts);
+  const s = current(w.id).sync;
+  assert.equal(s.status, "synced", s.error);
+  assert.equal(s.error, undefined);
+  assert.equal(s.cursor, "998");
+  assert.equal(s.cursorHash, H(0xb10c000 + 998));
 });
 
 await check("a reorg that replaces a window this run just booked stops the next window of the same run", async () => {
