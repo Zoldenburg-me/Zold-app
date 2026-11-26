@@ -1,0 +1,56 @@
+# The @zold/accept hosted hub (design §7.2), on mainnet's cluster as hub_app.
+# Installed and enabled by scripts/oracle-host/provision.sh; it starts once S9
+# has put the hub's code under /srv/zold-hub/app. A testnet hub, if one runs,
+# is a copy of this unit as zold-hub-testnet on the testnet cluster.
+[Unit]
+Description=Zold hosted hub
+After=network-online.target postgresql@17-mainnet.service
+Wants=network-online.target
+Requires=postgresql@17-mainnet.service
+ConditionPathExists=/etc/zold-hub/hub.env
+ConditionPathExists=/srv/zold-hub/app/package.json
+
+[Service]
+Type=simple
+User=zold-hub
+Group=zold-hub
+SupplementaryGroups=zold-mainnet-db
+WorkingDirectory=/srv/zold-hub/app
+EnvironmentFile=/etc/zold-hub/hub.env
+Environment=NODE_ENV=production PATH=/opt/node-v22.23.4-linux-arm64/bin:/usr/bin:/bin
+ExecStart=/opt/node-v22.23.4-linux-arm64/bin/npm start --silent
+Restart=on-failure
+RestartSec=5s
+StateDirectory=zold-hub
+StateDirectoryMode=0700
+UMask=0077
+# Untrusted agent traffic: bounded here as well as in Postgres (§7.2).
+MemoryMax=1G
+TasksMax=256
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+# Its own state directory only: never Zold's environment files, code,
+# pgBackRest configs or the host scripts' state.
+ReadWritePaths=/var/lib/zold-hub
+InaccessiblePaths=/etc/zold /etc/zold-host /etc/pgbackrest /srv/zold /srv/pg /var/lib/zold-mainnet /var/lib/zold-testnet /var/lib/zold-host -/run/postgresql-testnet
+
+[Install]
+WantedBy=multi-user.target

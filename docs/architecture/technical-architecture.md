@@ -1331,8 +1331,12 @@ and starts the API next to `cloudflared`.
   it on a real-money chain. The move off Akash to one Oracle Cloud ARM host
   (Postgres 17 on unix sockets, one cluster per deployment, pgBackRest to
   Object Storage in two regions, daily dumps the host cannot delete) and the
-  cut-over (`pg-import` in, `pg-export` as the rollback) are designed and not
-  done: the design note's §7 and §8 rows S7 and S8, waiting on the owner.
+  cut-over (`pg-import` in, `pg-export` as the rollback) are not done. The
+  host's provisioning script, systemd units, deploy pull loop (the
+  replacement for this lease's loop) and runbook are written
+  (`scripts/oracle-host/`, `docs/oracle-host.md`) and have run only against
+  a local Postgres 17: the design note's §8 rows S7b and S8, waiting on the
+  owner.
 - **Deploying sends the secrets, so the operator runs it.** The SDL is
   generated from `.env` on the operator's machine and never committed.
   Provider bids expire within minutes, so creating the deployment and

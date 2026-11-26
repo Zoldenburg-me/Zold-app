@@ -20,6 +20,7 @@ age_asset() {
     Darwin-arm64) echo "age-$AGE_VERSION-darwin-arm64.tar.gz e2020b073c44f692685a24d6abc378817eb81ffaaf49fd0531ef8565f767f2f5" ;;
     Darwin-x86_64) echo "age-$AGE_VERSION-darwin-amd64.tar.gz 1d1e4bc66e1427edad7739ae7616157de0e79db8b6d2a1497d7d9925fb06a539" ;;
     Linux-x86_64) echo "age-$AGE_VERSION-linux-amd64.tar.gz cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10" ;;
+    Linux-aarch64) echo "age-$AGE_VERSION-linux-arm64.tar.gz 6b8dc4333c53a5a57c9e5834e3a48f92605d7154014cd07269ff3327db5d37f4" ;;
     *) echo "no pinned age build for $(uname -s)-$(uname -m)" >&2; return 1 ;;
   esac
 }
