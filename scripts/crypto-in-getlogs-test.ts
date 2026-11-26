@@ -124,6 +124,26 @@ await check("a log without a log index refuses the window; it is read again and 
   assert.equal(await count(), 2, "index 0 and index 1 are two deposits");
 });
 
+await check("a log that is not a deposit does not hold the window, whatever its index", async () => {
+  const at = HEAD + 25n;
+  const tx = `0x${"ef".repeat(32)}`;
+  const count = async () => (await store.list("cryptoDeposits")).filter((d: any) => d.userId === userId && d.txHash === tx).length;
+  await store.setCryptoDepositCursor("31337:safe-funding-v1", HEAD + 20n);
+  client.getBlockNumber = async () => HEAD + 30n;
+  const swapper = addrs().swapper;
+  const noIndex = (l: any) => ({ ...l, logIndex: null, transactionHash: null });
+  client.getLogs = async (q: any) => (q.fromBlock <= at && q.toBlock >= at
+    ? [
+        { ...transfer(addrs().eure, at, 4n * 10n ** 18n, 0), transactionHash: tx },
+        noIndex(transfer(addrs().usdc, at, 0n, 1)),
+        ...(swapper ? [noIndex({ ...transfer(addrs().eure, at, 10n ** 18n, 2), args: { from: swapper, to: safe, value: 10n ** 18n } })] : []),
+      ]
+    : []);
+  await pollCryptoDepositsOnce();
+  assert.equal(await count(), 1, "the real deposit is recorded");
+  assert.ok((await store.cryptoDepositCursor("31337:safe-funding-v1"))! >= at, "the cursor moved past the window");
+});
+
 const { isLogRangeRefusal } = await import("../services/api/src/log-range.js");
 const ALCHEMY_RANGE = "Under the Free tier plan, you can make eth_getLogs requests with up to a 10 block range.";
 const ALCHEMY_CUPS = "Your app has exceeded its compute units per second capacity.";

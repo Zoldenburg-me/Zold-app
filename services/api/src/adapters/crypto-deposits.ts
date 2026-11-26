@@ -787,16 +787,28 @@ async function scanCryptoDeposits(head: bigint): Promise<{ found: number; more: 
     const key = item.address.toLowerCase();
     byAddress.set(key, [...(byAddress.get(key) ?? []), item]);
   }
-  // (txHash, logIndex) is the deposit's idempotency key. A log to a watched
-  // address without one (a pending log, a broken RPC answer) would become
-  // Number(null) = 0 and dedupe against the real index-0 log of the same
-  // transaction, and the cursor would move past it. The whole window is
-  // refused before anything is written, so a later answer reads it again.
-  for (const log of logs) {
-    if (!byAddress.has(String(log.args.to ?? "").toLowerCase())) continue;
-    const idx = log.logIndex as unknown;
-    if (typeof idx !== "number" || !Number.isSafeInteger(idx) || idx < 0 || !log.transactionHash) {
-      throw new Error(`crypto-in: the RPC returned a Transfer log to a watched address without a transaction hash or log index (blocks ${fromBlock}..${toBlock}); the window is read again`);
+  // What becomes a deposit: a positive transfer of a watched token to a
+  // watched address, not EURe coming back from the swapper. The validation
+  // below and the booking loop share it, so a log that would be skipped
+  // anyway cannot hold the cursor.
+  const isDeposit = (log: (typeof logs)[number], token: "EURE" | "USDC"): boolean => {
+    if (!byAddress.has(String(log.args.to ?? "").toLowerCase())) return false;
+    if (((log.args.value ?? 0n) as bigint) <= 0n) return false;
+    const from = String(log.args.from ?? "").toLowerCase();
+    return !(token === "EURE" && from === (addrs().swapper ?? "").toLowerCase());
+  };
+  // (txHash, logIndex) is the deposit's idempotency key. A deposit log without
+  // one (a pending log, a broken RPC answer) would become Number(null) = 0 and
+  // dedupe against the real index-0 log of the same transaction, and the
+  // cursor would move past it. The whole window is refused before anything is
+  // written, so a later answer reads it again.
+  for (const [i, token] of tokens.entries()) {
+    for (const log of logsByToken[i]) {
+      if (!isDeposit(log, token.token)) continue;
+      const idx = log.logIndex as unknown;
+      if (typeof idx !== "number" || !Number.isSafeInteger(idx) || idx < 0 || !log.transactionHash) {
+        throw new Error(`crypto-in: the RPC returned a deposit log without a transaction hash or log index (blocks ${fromBlock}..${toBlock}); the window is read again`);
+      }
     }
   }
   const fresh: CryptoDeposit[] = [];
@@ -816,13 +828,12 @@ async function scanCryptoDeposits(head: bigint): Promise<{ found: number; more: 
     }
 
     for (const log of logs) {
+      // Not ours (the node filtered loosely), zero, or the swapper's EURe.
+      if (!isDeposit(log, token.token)) continue;
       const to = String(log.args.to ?? "").toLowerCase();
-      const matches = byAddress.get(to) ?? [];
-      if (!matches.length) continue; // not ours; the node filtered loosely
+      const matches = byAddress.get(to)!;
       const value = (log.args.value ?? 0n) as bigint;
-      if (value <= 0n) continue;
       const from = String(log.args.from ?? "").toLowerCase();
-      if (token.token === "EURE" && from === (addrs().swapper ?? "").toLowerCase()) continue;
       const txHash = log.transactionHash!;
       const logIndex = log.logIndex as number; // checked above
       if ((await store.findCryptoDeposit(CHAIN_ID, txHash, logIndex))) continue;

@@ -191,6 +191,13 @@ function parseDatabaseUrl(url: string): { u: URL; local: boolean } {
   if (u.protocol !== "postgresql:" && u.protocol !== "postgres:") {
     throw new Error("DATABASE_URL must be a postgresql:// URL");
   }
+  // The driver applies parameters in order, so the last of a repeated one
+  // wins, while searchParams.get reads the first. `?host=localhost&host=db.x`
+  // would pass as local (no TLS on real money, test cleanup on db.x) and
+  // connect to db.x. A repeat is refused rather than resolved.
+  const names = [...u.searchParams.keys()];
+  const repeated = names.find((n, i) => names.indexOf(n) !== i);
+  if (repeated) throw new Error(`DATABASE_URL repeats the ${repeated} parameter`);
   const socketHost = u.searchParams.get("host");
   const host = u.hostname === EMPTY_HOST ? "" : decodeURIComponent(u.hostname);
   // A `host=` parameter overrides the authority, so it alone decides.
