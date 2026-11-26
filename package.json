@@ -55,6 +55,7 @@
     "org-monerium:test": "tsx scripts/org-monerium-test.ts",
     "org-monerium-iban:test": "tsx scripts/org-monerium-iban-test.ts",
     "org-monerium-payouts:test": "tsx scripts/org-monerium-payouts-test.ts",
+    "org-monerium-bank-runs:test": "tsx scripts/org-monerium-bank-runs-test.ts",
     "role-table:test": "tsx scripts/role-table-test.ts",
     "org-owner-changes:test": "tsx scripts/org-owner-changes-test.ts",
     "org-draft-queue:test": "tsx scripts/org-draft-queue-test.ts",

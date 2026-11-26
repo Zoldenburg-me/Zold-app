@@ -539,20 +539,22 @@ export function createDraftRoutes(
     }
     // A company's wallet run pays from its org Safe: it needs the Safe, not a
     // backer, an IBAN or a Monerium profile (createCompanyCryptoSendPreparer
-    // refuses an org Safe that is not set up). A company's bank run is not
-    // built yet and is refused below as before.
+    // refuses an org Safe that is not set up). A company's bank run is
+    // signed line by line by an owner (org-monerium-bank-runs.ts).
     if (orgEntity(ctx.org) === "company" && checked.lines.some((l) => l.destination.kind === "wallet")) {
       return walletRun(ctx, res, checked, { account });
     }
     const spendable = accountIsSpendable(account, ctx.org);
     if (!spendable.ok) return res.status(409).json({ error: spendable.reason });
-    // A company's IBAN is on its own Safe, which only its owners sign. One
-    // bank payout at a time is built (org-monerium-payouts.ts); a run over
-    // several payees is not, and is refused by name.
+    // A company's IBAN is on its own Safe, which only its owners sign: a bank
+    // run is one Monerium redeem per line, each signed by an owner's passkey
+    // (org-monerium-bank-runs.ts). Nothing is created here; the answer says
+    // where the owner starts it.
     if (orgEntity(ctx.org) === "company") {
       return res.status(409).json({
-        code: "COMPANY_BANK_RUN_NOT_BUILT",
-        error: "A company pays a bank account one payment at a time from Settings → Monerium, where an owner signs each with their passkey. A bank run over several payees is not built. Nothing was sent. A payment to a crypto wallet is queued for the owners to sign.",
+        code: "COMPANY_BANK_RUN_SIGN",
+        error: "A company’s bank payments are signed by an owner with their passkey, one signature per line. Nothing was sent.",
+        startTo: `/api/orgs/${ctx.org.id}/drafts/${checked.id}/bank-run/start`,
       });
     }
     if (!account.backingUserId) {

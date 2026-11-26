@@ -365,8 +365,48 @@ export interface CompanyBankPayout {
   processedAt?: string;
   /** A fixed explanation for `failed` or `unknown`; never Monerium's body. */
   error?: string;
+  /** The payment run and line this payout pays, when it is one line of a
+   *  company bank run (routes/business/org-monerium-bank-runs.ts). */
+  draftId?: string;
+  lineId?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/** One line of a company bank run. `signed`: the owner's passkey signed its
+ *  redeem message and no order was asked for yet. `sending`: its order is
+ *  being asked for and Monerium has not answered. `not_sent`: no order was
+ *  asked for and none ever will be (the run stopped first, or its approval
+ *  expired). The rest are the payout's own state (CompanyPayoutState). */
+export type BankRunLineState = "signed" | "sending" | "not_sent" | CompanyPayoutState;
+
+/**
+ * A company bank run: a draft paid from the company's own IBAN, one Monerium
+ * redeem order per line, each signed by the same owner's passkey. The lines
+ * are sent one at a time in this order, and the run stops at the first line
+ * Monerium does not accept.
+ */
+export interface CompanyBankRun {
+  accountId: string;
+  safeAddress: `0x${string}`;
+  signedByMemberId: string;
+  /** When the redeem messages were issued: a `signed` line past Monerium's
+   *  window can never be sent. */
+  issuedAt: string;
+  lines: {
+    lineId: string;
+    /** The CompanyBankPayout row's id, once one is written. */
+    payoutId: string;
+    amountEur: number;
+    recipientName: string;
+    recipientIban: string;
+    state: BankRunLineState;
+    orderId?: string;
+    /** Monerium's processing time, once `sent`. */
+    processedAt?: string;
+    /** A fixed explanation; never Monerium's body. */
+    error?: string;
+  }[];
 }
 
 export interface Account {
@@ -655,6 +695,8 @@ export interface DraftPayment {
   transferIds?: string[];
   /** Crypto sends created when executed: a run that pays a wallet. */
   cryptoSendIds?: string[];
+  /** A company's bank run from its own IBAN, once its owner signed it. */
+  bankRun?: CompanyBankRun;
   failureReason?: string;
   activity: DraftActivity[];
   createdAt: string;

@@ -14,7 +14,7 @@ import { ap, bk, contactPayments, ct, draftTag, draftTitle, draftTotal, invoiceD
 import { loadOrg, render } from "./shell.js";
 import { field, payerRuleDialog, payerRuleSection, runSummary } from "./receipts.js";
 import { approvalProgress, showProgress, signedLineOutcome, signedRunToast, signingWarning } from "./payment-model.js";
-import { ibanNotice, keyNotice, payoutNotice } from "./org-monerium-model.js";
+import { bankRunNotice, ibanNotice, keyNotice, payoutNotice } from "./org-monerium-model.js";
 
 /** A file the API serves behind the bearer header, which a navigation
  *  cannot carry: fetch it, then hand the bytes to the browser as a download. */
@@ -370,6 +370,41 @@ function openDocument(d) {
  * moves exactly that token and amount to exactly that address, then the API
  * checks the payee once more and submits it (routes/crypto-sends.ts).
  */
+/**
+ * A company bank run from its own IBAN (routes/business/org-monerium-bank-runs.ts):
+ * one passkey prompt per line, each over Monerium's message for that amount
+ * and IBAN. Nothing is sent until every line is signed; then the server sends
+ * them one at a time and stops at the first Monerium does not accept.
+ */
+function signCompanyBankRun(startTo) {
+  return dialog("Sign the bank payments", `
+      <p class="desc">Each payment leaves the company’s Safe as its own Monerium order, so your ${Z.passkeyName()} signs each one: amount and IBAN. Nothing is sent until you have signed them all.</p>
+      <p class="desc">They are then sent one at a time. If Monerium does not accept one, the run stops there: payments before it stay sent, later ones are not sent.</p>
+      <p class="desc" id="dlg-progress" role="status"></p>`,
+    async () => {
+      const start = await api(startTo, { method: "POST" });
+      const lib = await deviceLib();
+      const assertions = [];
+      for (const [i, l] of start.lines.entries()) {
+        showProgress(`Signing ${i + 1} of ${start.lines.length}: €${Number(l.amountEur).toFixed(2)} to ${l.recipientName}.`, $("#dlg"), $("#dlg-progress"), toast);
+        try {
+          assertions.push({ requestId: l.requestId, ...(await lib.passkeyAssertion({ credentialId: start.credentialId, challenge: l.challenge, rpId: start.rpId })) });
+        } catch (e) {
+          throw new Error(e.name === "NotAllowedError" ? `${Z.byDevice("Face ID was cancelled.", "The passkey prompt was cancelled.")} Nothing was sent.` : e.message);
+        }
+      }
+      try {
+        const r = await api(start.submitTo, { method: "POST", body: { runId: start.runId, assertions } });
+        const done = bankRunNotice(r.draft);
+        setTimeout(() => toast(done.text, done.error), 0);
+      } catch (e) {
+        // Lines may have reached Monerium: say what each did, from the draft.
+        if (e.draft) { const done = bankRunNotice(e.draft); setTimeout(() => toast(done.text, true), 0); return; }
+        throw e;
+      }
+    }, { okLabel: "Sign and send" });
+}
+
 async function signCryptoRun(sends) {
   const lib = await deviceLib();
   const out = [];
@@ -1251,7 +1286,14 @@ export const ACTIONS = {
    * expire without moving anything.
    */
   async "exec-draft"(el) {
-    const r = await api(`/api/orgs/${org.id}/drafts/${el.dataset.id}/execute`, { method: "POST" });
+    let r;
+    try {
+      r = await api(`/api/orgs/${org.id}/drafts/${el.dataset.id}/execute`, { method: "POST" });
+    } catch (e) {
+      // A company's bank run: the owner signs each line with their passkey.
+      if (e.code === "COMPANY_BANK_RUN_SIGN" && e.startTo) return signCompanyBankRun(e.startTo);
+      throw e;
+    }
 
     if (r.unsigned) {
       return dialog("Approve in your own wallet",

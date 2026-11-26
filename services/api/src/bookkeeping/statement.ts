@@ -285,7 +285,7 @@ function companyPayoutLines(inp: StatementInputs): LineDraft[] {
       reference: referenceFor([p.reference, p.memo], p.orderId),
       links: { orderId: p.orderId, txHashes: [] },
       txType: "payout",
-      tags: ["sepa"],
+      tags: ["sepa", ...(p.draftId ? ["business_run"] : [])],
     });
   }
   return out;

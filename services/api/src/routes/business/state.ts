@@ -11,6 +11,7 @@ import { store, type Transfer } from "../../store.js";
 import { activity, findDriftedLines } from "../../domain/drafts.js";
 import { expiredUnsigned } from "../../orchestrator.js";
 import { liveCryptoSend } from "../../wallet/org-debit.js";
+import { bankRunDraftState, bankRunLineState, bankRunReport, publicBankRun } from "../../domain/company-bank-run.js";
 import type { DraftPayment, DraftState, Invoice } from "../../domain/types.js";
 import { mapSeq } from "../../seq.js";
 
@@ -46,6 +47,18 @@ const lineReport = (transfers: Transfer[]) => {
  * Returns a view and writes nothing.
  */
 export const withExecutionState = async (draft: DraftPayment) => {
+  // A company bank run reads each line from the run on the draft, which
+  // follows its payout row (mirrorRunLine). A line signed but never sent
+  // whose approval expired reads as not sent.
+  if (draft.bankRun) {
+    const state: DraftState = draft.state === "EXECUTING" ? bankRunDraftState(draft.bankRun) : draft.state;
+    return {
+      ...draft,
+      state,
+      bankRun: publicBankRun(draft.bankRun),
+      ...(state === "FAILED" ? { failureReason: bankRunReport(draft.bankRun) } : {}),
+    };
+  }
   if (draft.state === "EXECUTING" && draft.cryptoSendIds?.length) {
     // A company send reads its state from its op.
     const sends = await mapSeq((await mapSeq(draft.cryptoSendIds, async (id) => await store.findCryptoSend(id))), async (x) => x && (await liveCryptoSend(x)));
@@ -137,6 +150,17 @@ export const syncInvoicePayment = async (invoice: Invoice): Promise<Invoice> => 
       return invoice;
     }
     const draft = invoice.payment?.draftId ? (await store.findDraft(invoice.payment.draftId)) : undefined;
+    // A company bank run: the invoice follows its own line, not the run. A
+    // run that stopped after this line was sent paid this invoice.
+    const runLine = draft?.bankRun && draft.lines.find((l) => l.invoiceId === invoice.id);
+    const paid = runLine && draft!.bankRun!.lines.find((l) => l.lineId === runLine.id);
+    if (paid) {
+      const state = bankRunLineState(draft!.bankRun!, paid);
+      if (state === "sent") return await move({ state: "PAID", payment: { ...invoice.payment, paidAt: paid.processedAt ?? new Date().toISOString() } });
+      if (state === "failed" || state === "not_sent") return await move({ state: "SUBMITTED", payment: { ...invoice.payment, draftId: undefined } });
+      // Signed, being sent, pending at Monerium, or unclear: it may still pay.
+      return invoice;
+    }
     if (!draft || draft.state === "FAILED" || draft.state === "REJECTED" || draft.state === "CANCELLED") {
       return await move({
         state: "SUBMITTED",

@@ -25,7 +25,8 @@
  * as failed and never as sent.
  *
  * Off unless MONERIUM_ORG_PAYOUTS=on (config/monerium.ts). A company bank run
- * (several payees from one draft) is still refused by name in drafts.ts.
+ * (several payees from one draft) is org-monerium-bank-runs.ts, on the same
+ * checks (payoutKit) and the same payout rows.
  */
 import express from "express";
 import { randomUUID } from "node:crypto";
@@ -37,6 +38,8 @@ import { ibanChecksumValid, normaliseIban } from "../../domain/contacts.js";
 import { orgEntity } from "../../domain/org-entity.js";
 import { companyEurAccount, companyIbanState } from "../../domain/org-monerium-iban.js";
 import { capPayouts, payoutStateOf, publicPayout, recentPayouts } from "../../domain/org-monerium-payout.js";
+import { bankRunDraftState, bankRunReport, withPayoutState } from "../../domain/company-bank-run.js";
+import { activity } from "../../domain/drafts.js";
 import { roleCan } from "../../domain/roles.js";
 import { OrgSafePlanRefusal, orgSafePlan } from "../../domain/org-safe-plan.js";
 import { assertReadableSafeState } from "../../domain/safe-op-queue.js";
@@ -59,7 +62,7 @@ type Hex = `0x${string}`;
 
 /** How long an owner has to approve one payout: the same window Monerium
  *  accepts a redeem message in, less the time the fee-less order takes. */
-const APPROVAL_WINDOW_MS = 4 * 60_000;
+export const APPROVAL_WINDOW_MS = 4 * 60_000;
 
 /** The calls on the company's keys, the chain read and the Safe signature,
  *  injectable so a suite runs offline. */
@@ -79,23 +82,23 @@ export const livePayoutIo: OrgPayoutIo = {
   balance: safeEurBalance,
 };
 
-class Refusal extends Error {
+export class Refusal extends Error {
   constructor(readonly status: number, readonly code: string, message: string) {
     super(message);
   }
 }
 
-const low = (a: string) => a.toLowerCase();
+export const low = (a: string) => a.toLowerCase();
 
 /** Monerium's processing time of an order, when it gives a valid one. */
-const processedAtOf = (order: any): string | undefined => {
+export const processedAtOf = (order: any): string | undefined => {
   const t = order?.meta?.processedAt;
   return typeof t === "string" && Number.isFinite(Date.parse(t)) ? new Date(t).toISOString() : undefined;
 };
 
 /** A Monerium failure as an answer: its response body stays out of the
  *  browser and the log, only the status is logged. */
-function moneriumFailure(what: string, err: unknown): Refusal {
+export function moneriumFailure(what: string, err: unknown): Refusal {
   const why = err instanceof MoneriumApiError ? `Monerium answered ${err.status}` : redactedMessage(err);
   console.warn(`org-monerium-payouts: ${what} failed: ${why}`);
   if (err instanceof MoneriumApiError && err.status >= 400 && err.status < 500) {
@@ -152,7 +155,7 @@ function inputOf(body: unknown): PayoutInput {
 
 /** Monerium's counterpart details. The country is the IBAN's, and the name is
  *  split as the personal rail does; a company name still reaches the payee. */
-function counterpartOf(recipientName: string, recipientIban: string) {
+export function counterpartOf(recipientName: string, recipientIban: string) {
   const words = recipientName.split(/\s+/).filter(Boolean);
   return {
     identifier: { standard: "iban" as const, iban: recipientIban },
@@ -165,7 +168,7 @@ function counterpartOf(recipientName: string, recipientIban: string) {
 }
 
 /** One approval waiting for its owner's passkey. */
-interface PendingPayout {
+export interface PendingPayout {
   requestId: string;
   orgId: string;
   memberId: string;
@@ -184,12 +187,17 @@ interface PendingPayout {
   expiresAt: number;
   /** Its submission has started: the hold stays until the payout row exists. */
   submitting?: boolean;
+  /** Set when this is one line of a company bank run: it is sent only with
+   *  the run's other lines (org-monerium-bank-runs.ts), never on its own. */
+  runId?: string;
+  draftId?: string;
+  lineId?: string;
 }
-const pendingPayouts = new Map<string, PendingPayout>();
+export const pendingPayouts = new Map<string, PendingPayout>();
 /** Which pending payouts the list re-reads next, per account, so an order
  *  Monerium keeps holding cannot starve the rest. */
 const reconcileCursor = new Map<string, number>();
-const prune = () => {
+export const prune = () => {
   for (const [k, v] of pendingPayouts) if (v.expiresAt < Date.now()) pendingPayouts.delete(k);
 };
 
@@ -200,41 +208,48 @@ export const clearPendingPayouts = () => pendingPayouts.clear();
 
 /** What the Safe holds less what payouts already claim: orders Monerium holds
  *  (`pending`) or may hold (`unknown`), and approvals in this process.
- *  `except` is the submission asking, whose own approval must not be counted
- *  twice (its row is written before it is released). */
+ *  `except` is the submission asking (a payout's request id, or a run's id),
+ *  whose own approvals must not be counted twice (each row is written before
+ *  its hold is released). */
 function availableEur(account: Account, orgId: string, balanceEur: number, except?: string): number {
   const claimed = (account.moneriumPayouts ?? [])
     .filter((p) => p.state === "pending" || p.state === "unknown")
     .reduce((sum, p) => sum + p.amountEur, 0);
   prune();
   const authorising = [...pendingPayouts.values()]
-    .filter((p) => p.orgId === orgId && p.requestId !== except)
+    .filter((p) => p.orgId === orgId && p.requestId !== except && (!p.runId || p.runId !== except))
     .reduce((sum, p) => sum + p.amountEur, 0);
   return Math.max(0, balanceEur - claimed - authorising);
 }
 
-export function createOrgMoneriumPayoutRoutes(
-  deps: { ctxOf: (req: express.Request, res: express.Response) => Promise<OrgContext | undefined> },
-  io: OrgPayoutIo = livePayoutIo,
-): express.Router {
-  const r = express.Router();
-
-  const gate = async (req: express.Request, res: express.Response, permission: "transfers.sign" | "accounts.open") => {
-    const ctx = await deps.ctxOf(req, res);
-    if (!ctx) return undefined;
-    if (!requirePermission(ctx, res, permission)) return undefined;
-    if (orgEntity(ctx.org) !== "company") {
-      res.status(409).json({ code: "NOT_A_COMPANY", error: "Only a company pays a bank account from its own IBAN." });
-      return undefined;
+/**
+ * A run's line written from its payout row, under the draft's lock. A run
+ * still sending moves to EXECUTED once Monerium processed every line, or to
+ * FAILED once any line cannot be (or may not have been) paid.
+ */
+export const mirrorRunLine = (draftId: string, payout: CompanyBankPayout) =>
+  store.tx(async () => {
+    await store.lockKey(`draft:${draftId}`);
+    const draft = await store.findDraft(draftId);
+    if (!draft?.bankRun || !draft.bankRun.lines.some((l) => l.payoutId === payout.id)) return;
+    const run = withPayoutState(draft.bankRun, payout);
+    const next = bankRunDraftState(run);
+    if (draft.state === "EXECUTING" && next !== "EXECUTING") {
+      await store.appendDraftActivity(draftId, activity("system", next === "EXECUTED" ? "executed" : "execution_failed", next === "EXECUTED" ? "Monerium processed every line." : bankRunReport(run)), {
+        bankRun: run,
+        state: next,
+        ...(next === "FAILED" ? { failureReason: bankRunReport(run) } : {}),
+      });
+      return;
     }
-    return ctx;
-  };
+    await store.updateDraft(draftId, { bankRun: run, ...(draft.state === "FAILED" ? { failureReason: bankRunReport(run) } : {}) });
+  });
 
-  const answer = (res: express.Response, err: unknown) => {
-    if (err instanceof Refusal) return res.status(err.status).json({ code: err.code, error: err.message });
-    throw err;
-  };
-
+/**
+ * The checks and writes a payout shares with a company bank run
+ * (org-monerium-bank-runs.ts), on one set of calls.
+ */
+export function payoutKit(io: OrgPayoutIo) {
   /**
    * What must hold before an owner signs, and again before the order is sent:
    * the payout switch, approved keys, the company Safe behind its EUR account,
@@ -340,19 +355,134 @@ export function createOrgMoneriumPayoutRoutes(
       const account = (await store.findAccount(accountId))!;
       await store.updateAccount(accountId, { moneriumPayouts: capPayouts(next(account.moneriumPayouts ?? [])) });
     });
-  const writePayout = (accountId: string, payout: CompanyBankPayout) => writePayouts(accountId, (rows) => [payout, ...rows]);
-  const patchPayout = (accountId: string, id: string, patch: Partial<CompanyBankPayout>) => {
-    const at = new Date().toISOString();
-    return writePayouts(accountId, (rows) => rows.map((p) => (p.id === id ? { ...p, ...patch, updatedAt: at } : p)));
-  };
   const payoutOf = async (accountId: string, id: string): Promise<CompanyBankPayout> =>
     (await store.findAccount(accountId))!.moneriumPayouts!.find((p) => p.id === id)!;
+  /** A run line follows its payout row: the run on the draft is written with
+   *  every payout write, so the draft's state never waits on the account's
+   *  payout history (which is capped). */
+  const mirror = async (accountId: string, id: string) => {
+    const row = (await store.findAccount(accountId))?.moneriumPayouts?.find((p) => p.id === id);
+    if (row?.draftId) await mirrorRunLine(row.draftId, row);
+  };
+  /** A new row. A run line's placeholder row (`unknown` until Monerium
+   *  answers) is not mirrored: its line reads `sending` until then. */
+  const writePayout = async (accountId: string, payout: CompanyBankPayout) => {
+    await writePayouts(accountId, (rows) => [payout, ...rows]);
+    if (!payout.draftId) await mirror(accountId, payout.id);
+  };
+  const patchPayout = async (accountId: string, id: string, patch: Partial<CompanyBankPayout>) => {
+    const at = new Date().toISOString();
+    await writePayouts(accountId, (rows) => rows.map((p) => (p.id === id ? { ...p, ...patch, updatedAt: at } : p)));
+    await mirror(accountId, id);
+  };
   /** The account's payouts as stored now, read after the balance: a row
    *  another submission wrote while this one awaited is counted. */
   const availableNow = async (accountId: string, orgId: string, planAddress: string, except?: string) => {
     const balance = await safeBalance(planAddress);
     return availableEur((await store.findAccount(accountId))!, orgId, balance, except);
   };
+
+  /**
+   * The redeem order for a payout row already written as `unknown`, and its
+   * outcome written to the row: `sent`/`pending`/`failed` as Monerium says,
+   * `failed` on an access refusal or a 401/403 (no order exists), and
+   * `unknown` on anything that may have placed one. Nothing is retried.
+   * Monerium's response body is never returned or logged.
+   */
+  async function placePayout(orgNow: Organisation, userId: string, accountId: string, payout: CompanyBankPayout, signature: Hex): Promise<{ status: number; body: { code?: string; error?: string } }> {
+    const audit = async (kind: "org_payout.placed" | "org_payout.sent" | "org_payout.refused" | "org_payout.unknown", extra: Record<string, unknown>) =>
+      await store.audit(auditEntry(kind, { orgId: orgNow.id, accountId: accountId, payoutId: payout.id, amountEur: payout.amountEur, safeAddress: payout.safeAddress, ...extra }, userId));
+    try {
+      const order = await io.monerium(orgNow).placeOrder({
+        address: payout.safeAddress,
+        chain: MONERIUM.chain,
+        kind: "redeem",
+        amount: moneriumAmountString(payout.amountEur),
+        currency: "eur",
+        counterpart: counterpartOf(payout.recipientName, payout.recipientIban),
+        message: payout.message,
+        signature,
+        memo: payout.memo,
+      });
+      const orderId = typeof order?.id === "string" && isMoneriumOrderId(order.id) ? order.id : undefined;
+      const providerState = typeof order?.meta?.state === "string" ? order.meta.state : typeof order?.state === "string" ? order.state : undefined;
+      if (!orderId) {
+        // Accepted, but nothing can follow it: never shown as sent.
+        await patchPayout(accountId, payout.id, {
+          state: "unknown",
+          ...(providerState ? { providerState } : {}),
+          error: "Monerium accepted the payout but returned no order id, so Zold cannot follow it. Check Monerium before sending it again.",
+        });
+        await audit("org_payout.unknown", { reason: "no-order-id" });
+        return { status: 202, body: {} };
+      }
+      const state = payoutStateOf(providerState);
+      const processedAt = state === "sent" ? processedAtOf(order) : undefined;
+      await patchPayout(accountId, payout.id, {
+        orderId,
+        ...(providerState ? { providerState } : {}),
+        ...(processedAt ? { processedAt } : {}),
+        state,
+        error: state === "failed" ? "Monerium rejected the payout order. Nothing was sent." : undefined,
+      });
+      await audit(state === "failed" ? "org_payout.refused" : state === "sent" ? "org_payout.sent" : "org_payout.placed", { orderId, ...(providerState ? { providerState } : {}) });
+      return { status: 200, body: {} };
+    } catch (err) {
+      if (err instanceof MoneriumAccessError) {
+        // The token grant failed, before POST /orders: no order exists.
+        console.warn(`org-monerium-payouts: Monerium access failed: ${err.partnerStatus ?? "no status"}`);
+        await patchPayout(accountId, payout.id, {
+          state: "failed",
+          error: "Monerium refused Zold’s access to the company account, so no payout was sent. Check the keys in Settings → Monerium, then send it again.",
+        });
+        await audit("org_payout.refused", { reason: "access" });
+        return { status: 503, body: { code: "MONERIUM_NOT_CONNECTED", error: "Monerium refused Zold’s access to the company account, so no payout was sent." } };
+      }
+      if (err instanceof MoneriumApiError && (err.status === 401 || err.status === 403)) {
+        // "May not place it", so no order (the same reading as the personal rail).
+        console.warn(`org-monerium-payouts: placing a payout was refused: Monerium answered ${err.status}`);
+        await patchPayout(accountId, payout.id, { state: "failed", error: "Monerium refused the payout. Nothing was sent." });
+        await audit("org_payout.refused", { status: err.status });
+        return { status: 400, body: { code: "MONERIUM_REFUSED", error: "Monerium refused the payout. Nothing was sent." } };
+      }
+      // A 400/409/422, a timeout, a 5xx or a reset may have placed an order.
+      const why = err instanceof MoneriumApiError ? `Monerium answered ${err.status}` : redactedMessage(err);
+      console.warn(`org-monerium-payouts: payout outcome unknown: ${why}`);
+      await patchPayout(accountId, payout.id, {
+        state: "unknown",
+        error: "Monerium did not confirm the payout. It may have accepted it, so check Monerium before sending it again. Nothing is retried automatically.",
+      });
+      await audit("org_payout.unknown", err instanceof MoneriumApiError ? { status: err.status } : {});
+      return { status: 502, body: { code: "MONERIUM_UNSURE", error: "Monerium did not confirm the payout. It may have been accepted, so check before sending it again." } };
+    }
+  }
+
+  return { payoutable, safeBalance, writePayout, patchPayout, payoutOf, availableNow, placePayout };
+}
+
+export function createOrgMoneriumPayoutRoutes(
+  deps: { ctxOf: (req: express.Request, res: express.Response) => Promise<OrgContext | undefined> },
+  io: OrgPayoutIo = livePayoutIo,
+): express.Router {
+  const r = express.Router();
+
+  const gate = async (req: express.Request, res: express.Response, permission: "transfers.sign" | "accounts.open") => {
+    const ctx = await deps.ctxOf(req, res);
+    if (!ctx) return undefined;
+    if (!requirePermission(ctx, res, permission)) return undefined;
+    if (orgEntity(ctx.org) !== "company") {
+      res.status(409).json({ code: "NOT_A_COMPANY", error: "Only a company pays a bank account from its own IBAN." });
+      return undefined;
+    }
+    return ctx;
+  };
+
+  const answer = (res: express.Response, err: unknown) => {
+    if (err instanceof Refusal) return res.status(err.status).json({ code: err.code, error: err.message });
+    throw err;
+  };
+
+  const { payoutable, writePayout, patchPayout, payoutOf, availableNow, placePayout } = payoutKit(io);
 
   r.post("/:orgId/monerium/payouts/start", wrap(async (req, res) => {
     const ctx = await gate(req, res, "transfers.sign");
@@ -368,7 +498,7 @@ export function createOrgMoneriumPayoutRoutes(
     // passkey (a cancelled prompt, say): they would otherwise hold the same
     // euros until they expire. One being submitted keeps its hold.
     for (const [k, v] of pendingPayouts) {
-      if (v.orgId === ctx.org.id && v.memberId === ctx.member.id && !v.submitting) pendingPayouts.delete(k);
+      if (v.orgId === ctx.org.id && v.memberId === ctx.member.id && !v.submitting && !v.runId) pendingPayouts.delete(k);
     }
     let available;
     try {
@@ -430,7 +560,8 @@ export function createOrgMoneriumPayoutRoutes(
     if (!ctx) return;
     const requestId = typeof req.body?.requestId === "string" ? req.body.requestId : "";
     const pending = pendingPayouts.get(requestId);
-    if (!pending || pending.orgId !== ctx.org.id || pending.userId !== ctx.userId || pending.memberId !== ctx.member.id) {
+    // A run's line is sent only with its run, never on its own.
+    if (!pending || pending.runId || pending.orgId !== ctx.org.id || pending.userId !== ctx.userId || pending.memberId !== ctx.member.id) {
       return res.status(409).json({ code: "PAYOUT_NOT_STARTED", error: "Start again: approve the payout with your passkey when asked." });
     }
     if (pending.submitting) {
@@ -527,71 +658,8 @@ export function createOrgMoneriumPayoutRoutes(
       // The row holds the euros now: the approval's own hold is let go, so a
       // second payout is not refused for money counted twice.
       pendingPayouts.delete(requestId);
-      const audit = async (kind: "org_payout.placed" | "org_payout.sent" | "org_payout.refused" | "org_payout.unknown", extra: Record<string, unknown>) =>
-        await store.audit(auditEntry(kind, { orgId: ctx.org.id, accountId: s.account.id, payoutId: payout.id, amountEur: payout.amountEur, safeAddress: payout.safeAddress, ...extra }, ctx.userId));
-      try {
-        const order = await io.monerium(orgNow).placeOrder({
-          address: pending.safeAddress,
-          chain: MONERIUM.chain,
-          kind: "redeem",
-          amount: moneriumAmountString(pending.amountEur),
-          currency: "eur",
-          counterpart: counterpartOf(pending.recipientName, pending.recipientIban),
-          message: pending.message,
-          signature: safeSignature,
-          memo: pending.memo,
-        });
-        const orderId = typeof order?.id === "string" && isMoneriumOrderId(order.id) ? order.id : undefined;
-        const providerState = typeof order?.meta?.state === "string" ? order.meta.state : typeof order?.state === "string" ? order.state : undefined;
-        if (!orderId) {
-          // Accepted, but nothing can follow it: never shown as sent.
-          await patchPayout(s.account.id, payout.id, {
-            state: "unknown",
-            ...(providerState ? { providerState } : {}),
-            error: "Monerium accepted the payout but returned no order id, so Zold cannot follow it. Check Monerium before sending it again.",
-          });
-          await audit("org_payout.unknown", { reason: "no-order-id" });
-          return res.status(202).json({ payout: publicPayout(await payoutOf(s.account.id, payout.id)) });
-        }
-        const state = payoutStateOf(providerState);
-        const processedAt = state === "sent" ? processedAtOf(order) : undefined;
-        await patchPayout(s.account.id, payout.id, {
-          orderId,
-          ...(providerState ? { providerState } : {}),
-          ...(processedAt ? { processedAt } : {}),
-          state,
-          error: state === "failed" ? "Monerium rejected the payout order. Nothing was sent." : undefined,
-        });
-        await audit(state === "failed" ? "org_payout.refused" : state === "sent" ? "org_payout.sent" : "org_payout.placed", { orderId, ...(providerState ? { providerState } : {}) });
-        return res.json({ payout: publicPayout(await payoutOf(s.account.id, payout.id)) });
-      } catch (err) {
-        if (err instanceof MoneriumAccessError) {
-          // The token grant failed, before POST /orders: no order exists.
-          console.warn(`org-monerium-payouts: Monerium access failed: ${err.partnerStatus ?? "no status"}`);
-          await patchPayout(s.account.id, payout.id, {
-            state: "failed",
-            error: "Monerium refused Zold’s access to the company account, so no payout was sent. Check the keys in Settings → Monerium, then send it again.",
-          });
-          await audit("org_payout.refused", { reason: "access" });
-          return res.status(503).json({ code: "MONERIUM_NOT_CONNECTED", error: "Monerium refused Zold’s access to the company account, so no payout was sent.", payout: publicPayout(await payoutOf(s.account.id, payout.id)) });
-        }
-        if (err instanceof MoneriumApiError && (err.status === 401 || err.status === 403)) {
-          // "May not place it", so no order (the same reading as the personal rail).
-          console.warn(`org-monerium-payouts: placing a payout was refused: Monerium answered ${err.status}`);
-          await patchPayout(s.account.id, payout.id, { state: "failed", error: "Monerium refused the payout. Nothing was sent." });
-          await audit("org_payout.refused", { status: err.status });
-          return res.status(400).json({ code: "MONERIUM_REFUSED", error: "Monerium refused the payout. Nothing was sent.", payout: publicPayout(await payoutOf(s.account.id, payout.id)) });
-        }
-        // A 400/409/422, a timeout, a 5xx or a reset may have placed an order.
-        const why = err instanceof MoneriumApiError ? `Monerium answered ${err.status}` : redactedMessage(err);
-        console.warn(`org-monerium-payouts: payout outcome unknown: ${why}`);
-        await patchPayout(s.account.id, payout.id, {
-          state: "unknown",
-          error: "Monerium did not confirm the payout. It may have accepted it, so check Monerium before sending it again. Nothing is retried automatically.",
-        });
-        await audit("org_payout.unknown", err instanceof MoneriumApiError ? { status: err.status } : {});
-        return res.status(502).json({ code: "MONERIUM_UNSURE", error: "Monerium did not confirm the payout. It may have been accepted, so check before sending it again.", payout: publicPayout(await payoutOf(s.account.id, payout.id)) });
-      }
+      const sent = await placePayout(orgNow, ctx.userId, s.account.id, payout, safeSignature);
+      return res.status(sent.status).json({ ...sent.body, payout: publicPayout(await payoutOf(s.account.id, payout.id)) });
     } finally {
       pendingPayouts.delete(requestId);
     }

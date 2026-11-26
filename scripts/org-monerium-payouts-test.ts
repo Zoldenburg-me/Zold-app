@@ -594,7 +594,7 @@ try {
     assert.equal(row.state, "Unclear: check Monerium");
     assert.equal(row.bad, true);
     assert.match(model.ibanPanel({ companyIban: { state: "issued", iban: IBAN } }, true, true).text, /pay a bank account from it below/);
-    assert.match(model.ibanPanel({ companyIban: { state: "issued", iban: IBAN } }, true).text, /not built yet/);
+    assert.match(model.ibanPanel({ companyIban: { state: "issued", iban: IBAN } }, true).text, /switched off on this deployment/);
   });
 } finally {
   server.close();
