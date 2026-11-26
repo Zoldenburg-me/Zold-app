@@ -17,7 +17,7 @@
  * used here because local dev has no public URL.
  */
 import { MONERIUM, moneriumSandboxEnabled } from "../config.js";
-import { store, type User } from "../store.js";
+import { store, type Transfer, type User } from "../store.js";
 import { isMoneriumOrderId, MoneriumApiError, MoneriumClient, moneriumFailureReason, type MoneriumOrder } from "./monerium-client.js";
 import { hasOwnMoneriumCredentials, moneriumAppClient, moneriumClientFor, usersWithOwnCredentials } from "./monerium-connection.js";
 import { auditEntry } from "../audit.js";
@@ -28,7 +28,7 @@ import { moneriumAmountString, moneriumRedeemMessage, normalizeIban } from "../s
 import { attributeMoneriumOrder, attributeMoneriumOrderToInvoice } from "../routes/payment-requests.js";
 import { noteMoneriumIssue, writeStatementLines } from "../bookkeeping/writer.js";
 import { bookHolderLabel, moneyInHolder, type MoneyInHolder } from "../bookkeeping/money-in.js";
-import { moneriumOrderProcessed } from "../domain/monerium-order.js";
+import { moneriumAmountEur, moneriumOrderProcessed, redeemMemoDiffers, redeemOrderDiffers } from "../domain/monerium-order.js";
 import { can } from "../domain/segments.js";
 
 /**
@@ -443,11 +443,6 @@ export function readOrder(orderId: string, user?: User): Promise<MoneriumOrder> 
   return (user ? moneriumClientFor(user) : getClient()).getOrder(orderId);
 }
 
-export async function getOrderState(orderId: string, user?: User): Promise<string> {
-  const order = await readOrder(orderId, user);
-  return order.meta?.state ?? order.state ?? "unknown";
-}
-
 function orderList(res: Awaited<ReturnType<MoneriumClient["orders"]>>): MoneriumOrder[] {
   return Array.isArray(res) ? res : (res?.orders ?? []);
 }
@@ -497,8 +492,8 @@ async function mirrorOrder(order: MoneriumOrder): Promise<MirrorOutcome> {
   if (recording.has(order.id)) return "unavailable";
   const holder = bookableHolder(order);
   if (!holder) return "ignored";
-  const amount = Number(order.amount);
-  if (!(amount > 0)) return "ignored";
+  const amount = moneriumAmountEur(order.amount);
+  if (!amount) return "ignored";
   recording.add(order.id);
   try {
     // Monerium minted the EURe into the user's Safe on the app chain; there is
@@ -544,6 +539,20 @@ async function mintLocalTestEure(to: `0x${string}`, amountEur: number, ref: stri
   return keccak256(toHex(ref));
 }
 
+/** Order reads by id that have not answered: a second delivery of one id
+ *  waits for the first read instead of asking Monerium again. */
+const reading = new Map<string, Promise<MirrorOutcome>>();
+/** Ids Monerium answered 404 for, and until when that answer stands, oldest
+ *  first: an id anyone can name costs one read per window, not one per
+ *  delivery, and the memory of them is capped. */
+const unknownOrders = new Map<string, number>();
+const UNKNOWN_ORDER_MS = 10 * 60_000;
+const UNKNOWN_ORDERS_MAX = 1000;
+/** Order reads in flight at once. Past it a delivery is `unavailable` (503,
+ *  which Monerium retries), so a flood of made-up ids cannot fill the read
+ *  queue the poller shares (monerium-limit.ts). */
+const READS_MAX = 16;
+
 /**
  * Mirror an order named only by id, re-reading it from Monerium first.
  *
@@ -551,12 +560,24 @@ async function mintLocalTestEure(to: `0x${string}`, amountEur: number, ref: stri
  * state its amount, its address, or whether it settled — those come from
  * Monerium over an authenticated client-credentials connection. The worst a
  * forged payload achieves is asking us to re-check a real order, which is
- * idempotent.
+ * idempotent, or one read of an id Monerium does not know.
  */
-export async function mirrorOrderById(orderId: string): Promise<MirrorOutcome> {
-  if (store.isOrderProcessed(orderId)) return "duplicate";
-  if (recording.has(orderId)) return "unavailable";
-  if (!isMoneriumOrderId(orderId)) return "ignored";
+export function mirrorOrderById(orderId: string): Promise<MirrorOutcome> {
+  if (store.isOrderProcessed(orderId)) return Promise.resolve("duplicate");
+  if (recording.has(orderId)) return Promise.resolve("unavailable");
+  if (!isMoneriumOrderId(orderId)) return Promise.resolve("ignored");
+  const unknownUntil = unknownOrders.get(orderId);
+  if (unknownUntil !== undefined && Date.now() < unknownUntil) return Promise.resolve("ignored");
+  unknownOrders.delete(orderId);
+  const inFlight = reading.get(orderId);
+  if (inFlight) return inFlight.then((o) => (o === "recorded" ? "duplicate" : o));
+  if (reading.size >= READS_MAX) return Promise.resolve("unavailable");
+  const read = readAndMirror(orderId).finally(() => reading.delete(orderId));
+  reading.set(orderId, read);
+  return read;
+}
+
+async function readAndMirror(orderId: string): Promise<MirrorOutcome> {
   let order: MoneriumOrder;
   try {
     order = await getClient().getOrder(orderId);
@@ -571,12 +592,19 @@ export async function mirrorOrderById(orderId: string): Promise<MirrorOutcome> {
     const reason = moneriumFailureReason(err);
     if (status === 404) {
       console.warn(`monerium: refusing unknown order ${orderId}: ${reason}`);
+      unknownOrders.set(orderId, Date.now() + UNKNOWN_ORDER_MS);
+      if (unknownOrders.size > UNKNOWN_ORDERS_MAX) unknownOrders.delete(unknownOrders.keys().next().value!);
       return "ignored";
     }
     console.warn(`monerium: could not read order ${orderId}, will retry: ${reason}`);
     return "unavailable";
   }
-  if (order.id !== orderId) return "ignored";
+  // An answer that is not this order (an empty body, another id) is no
+  // answer from Monerium about it: the delivery stays unresolved.
+  if (order?.id !== orderId) {
+    console.warn(`monerium: the read of order ${orderId} answered another order or none, will retry`);
+    return "unavailable";
+  }
   return mirrorOrder(order);
 }
 
@@ -645,6 +673,8 @@ export async function pollDepositsOnce(): Promise<number> {
     }
     for (const order of list) {
       if ((await mirrorOrder(order)) === "recorded") credited++;
+      // An amount the mirror refuses (not a euro decimal) settles nothing.
+      if (moneriumAmountEur(order.amount) === undefined) continue;
       // A payer who wrote a pay-link code on their transfer: the order's memo
       // carries it. Idempotent, so re-seeing an order records nothing twice.
       attributeMoneriumOrder(order);
@@ -672,6 +702,7 @@ export async function pollDepositsOnce(): Promise<number> {
       }
       for (const order of list) {
         if ((await mirrorOrder(order)) === "recorded") credited++;
+        if (moneriumAmountEur(order.amount) === undefined) continue;
         attributeMoneriumOrder(order);
         attributeMoneriumOrderToInvoice(order);
         keepIssueFacts(order);
@@ -693,7 +724,27 @@ function ownProfilesOf(u: User): (string | undefined)[] {
  * Advance transfers whose SEPA redeem order is still in flight. A transfer in
  * unresolved review keeps its order state current and nothing else: that
  * state is what lets an operator cite the order as paid (review-evidence.ts).
+ *
+ * The order read must be the redeem this transfer signed: an answer naming
+ * another order (or none) is no read, and a processed or rejected one whose
+ * amount, IBAN, kind, currency or Safe differs goes to review, never PAID or
+ * FAILED.
  */
+/** The stored order state of a redeem that is not the one the transfer
+ *  signed. Not `processed`, so payoutEvidence refuses the order. */
+const REDEEM_MISMATCH = "mismatch";
+
+/** Why a processed, rejected or failed `order` is not the redeem `t` signed:
+ *  the fields redeemOrderDiffers checks, plus chain and memo, as an operator's
+ *  attach-redeem-order requires. */
+function terminalRedeemMismatch(t: Transfer, order: MoneriumOrder, user: User | undefined): string | undefined {
+  if (!t.moneriumRedeem) return "no signed redeem";
+  const differs = redeemOrderDiffers(order, t.moneriumRedeem, user?.address ?? "");
+  if (differs) return differs;
+  if (order.chain !== MONERIUM.chain) return "chain";
+  return redeemMemoDiffers(order, t.moneriumRedeem.memo);
+}
+
 export async function pollRedeemOrdersOnce(): Promise<void> {
   const waiting = store.transfers.filter(
     (t) =>
@@ -704,7 +755,32 @@ export async function pollRedeemOrdersOnce(): Promise<void> {
   for (const t of waiting) {
     try {
       // The order was placed on this user's client, so it is read on it too.
-      const state = await getOrderState(t.sepa!.orderId!, store.findUser(t.userId));
+      const user = store.findUser(t.userId);
+      const order = await readOrder(t.sepa!.orderId!, user);
+      if (order?.id !== t.sepa!.orderId) {
+        console.warn(`monerium: the read of redeem order ${t.sepa!.orderId} answered another order or none (transfer ${t.id})`);
+        continue;
+      }
+      // Another pass may have settled it while this read was in flight.
+      if (t.state !== "PAYOUT_SUBMITTED" && !(t.state === "MANUAL_REVIEW" && !t.reviewResolution)) continue;
+      const state = order.meta?.state ?? order.state ?? "unknown";
+      // PAID and FAILED are decided on an order that is the signed redeem.
+      if (moneriumOrderProcessed(state) || state === "rejected" || state === "failed") {
+        const differs = terminalRedeemMismatch(t, order, user);
+        if (differs) {
+          // The stored state can already read processed (Monerium's first
+          // answer): overwrite it, so review evidence cannot cite this order.
+          if (t.state !== "MANUAL_REVIEW" || t.sepa!.state !== REDEEM_MISMATCH) {
+            store.updateTransfer(t.id, {
+              ...(t.state === "MANUAL_REVIEW"
+                ? {}
+                : { state: "MANUAL_REVIEW", error: `Monerium's redeem order does not match this transfer (${differs}); not marked paid or failed` }),
+              sepa: { ...t.sepa!, state: REDEEM_MISMATCH, detail: `the order does not match the signed redeem (${differs})` },
+            });
+          }
+          continue;
+        }
+      }
       if (t.state === "MANUAL_REVIEW") {
         if (state !== t.sepa!.state) store.updateTransfer(t.id, { sepa: { ...t.sepa!, state } });
       } else if (moneriumOrderProcessed(state)) {
