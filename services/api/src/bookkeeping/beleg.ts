@@ -18,12 +18,12 @@
 import { CHAIN_ID } from "../config.js";
 import { bookedCode, isOwnTransfer } from "../domain/ledger.js";
 import type { LedgerEntry, StatementFacts } from "../domain/types.js";
-import type { HolderBlock } from "../documents.js";
+import { normaliseCode, type HolderBlock } from "../documents.js";
 import type { ConversionSweep, CryptoDeposit, MoneriumIssueRecord, Transfer } from "../store/types.js";
 import type { PaymentRequest } from "../payment-requests.js";
 import { usd } from "../chain.js";
 import type { PdfLine } from "./pdf.js";
-import { textPdf } from "./pdf.js";
+import { fitCell, TEXT_WIDTH, textPdf, textWidth } from "./pdf.js";
 
 export interface BelegSnapshot {
   kind: "beleg";
@@ -303,7 +303,10 @@ const shortAddr = (a: string) => `${a.slice(0, 8)}…${a.slice(-6)}`;
 const CHAIN_NAME: Record<number, string> = { 8453: "Base", 84532: "Base Sepolia", 31337: "local hardhat" };
 /** Room for a value right of its label, in Helvetica points at 9pt. */
 const VALUE_ROOM = 300;
-const fits = (t: string, size = 9) => t.length * 0.55 * size <= VALUE_ROOM;
+const fits = (t: string, size = 9) => textWidth(t, size) <= VALUE_ROOM;
+/** Whether a clipped statement-row cell at `from` (a fraction of the text
+ *  width) fits uncut before `to` points; textPdf cuts it there otherwise. */
+const rowFits = (t: string, size: number, from: number, to: number) => fitCell(t, size, to - from * TEXT_WIDTH - 4) === t;
 
 /**
  * The document as the PDF draws it, laid out like the page at /v/<code>:
@@ -357,20 +360,25 @@ export function belegLines(snap: BelegSnapshot, code: string, issuedAt: string):
   const name = line.counterparty.name ?? bank?.counterpartyName ?? "—";
   const account = line.counterparty.iban ?? bank?.counterpartyIban ?? (line.counterparty.address ? shortAddr(line.counterparty.address) : "");
   const memo = bank?.memo && bank.memo !== line.reference ? bank.memo : "";
-  const memoInRow = memo && memo.length <= 46;
+  const amount = `${out ? "-" : "+"}${eur(Math.abs(line.amountCents) / 100)}`;
+  const memoInRow = memo && memo.length <= 46 && rowFits(memo, 8.5, 0.52, TEXT_WIDTH);
   cellsLine([
     { text: "DATE", at: 0 }, { text: out ? "TO" : "FROM", at: 0.2 }, { text: "REFERENCE", at: 0.52 }, { text: "AMOUNT", at: 1, align: "right" },
   ], { size: 8, bold: true, muted: true, gap: 20, rule: "strong" });
   cellsLine([
-    { text: longDay(line.valueDate), at: 0 }, { text: name, at: 0.2 }, { text: line.reference || "—", at: 0.52 },
-    { text: `${out ? "-" : "+"}${eur(Math.abs(line.amountCents) / 100)}`, at: 1, align: "right", bold: true },
+    { text: longDay(line.valueDate), at: 0 }, { text: name, at: 0.2, clip: true }, { text: line.reference || "—", at: 0.52, clip: true },
+    { text: amount, at: 1, align: "right", bold: true },
   ], { size: 10 });
   cellsLine([
     { text: line.bookingDate !== line.valueDate ? `booked ${longDay(line.bookingDate)}` : "", at: 0 },
-    { text: account, at: 0.2 }, { text: memoInRow ? memo : "", at: 0.52 },
+    { text: account, at: 0.2, clip: true }, { text: memoInRow ? memo : "", at: 0.52, clip: true },
   ], { size: 8.5, muted: true, rule: "thin" });
 
   heading("Booked against");
+  // The row cuts what does not fit its column; the whole text is here.
+  if (!rowFits(name, 10, 0.2, 0.52 * TEXT_WIDTH)) kv("Counterparty", name);
+  if (!rowFits(line.reference || "—", 10, 0.52, TEXT_WIDTH - textWidth(amount, 10, true))) kv("Reference", line.reference);
+  if (!rowFits(account, 8.5, 0.2, memoInRow ? 0.52 * TEXT_WIDTH : TEXT_WIDTH)) kv("Counterparty account", account);
   const invoiceParty = snap.invoice?.counterparty ?? snap.invoice?.payer;
   if (snap.invoice) kv("Invoice", `${snap.invoice.number}${invoiceParty ? ` · ${invoiceParty}` : ""}${snap.invoice.source === "external" ? " (issued outside Zold)" : ""}`);
   kv("Account code", line.accountCode);
@@ -446,8 +454,11 @@ export function belegPdf(snap: BelegSnapshot, code: string, issuedAt: string): B
   });
 }
 
-/** A file name that maps the document to its line in the CSV. */
+/** A file name that maps the document to its line in the CSV: one plain
+ *  path component (it lands in a ZIP and a Content-Disposition header),
+ *  whatever the stored date, code and reference say. */
 export function belegFileName(snap: BelegSnapshot, code: string): string {
-  const ref = snap.line.reference.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40);
-  return `${snap.line.valueDate}_${code}${ref ? `_${ref}` : ""}.pdf`;
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(String(snap.line.valueDate)) ? snap.line.valueDate : "undated";
+  const ref = String(snap.line.reference ?? "").replace(/[^A-Za-z0-9._-]+/g, "_").replace(/\.{2,}/g, ".").replace(/^[_.]+|[_.]+$/g, "").slice(0, 40);
+  return `${day}_${normaliseCode(String(code)) || "nocode"}${ref ? `_${ref}` : ""}.pdf`;
 }
