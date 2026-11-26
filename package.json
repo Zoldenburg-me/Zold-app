@@ -83,6 +83,7 @@
     "gas:test": "tsx scripts/safe-gas-test.ts",
     "faucet:test": "tsx scripts/faucet-test.ts",
     "preflight": "tsx scripts/mainnet-preflight.ts",
+    "preflight:stub:test": "tsx scripts/preflight-stub-test.ts",
     "webhook:test": "tsx scripts/webhook-test.ts",
     "checkout-service:test": "tsx scripts/checkout-service-test.ts",
     "merchant-links:test": "tsx scripts/merchant-links-test.ts",

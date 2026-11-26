@@ -12,7 +12,8 @@
 // Must be first: pins chain, keys and a throwaway database.
 import "./_local-chain.js";
 import assert from "node:assert/strict";
-import { chmodSync, closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { gzipSync } from "node:zlib";
 import { spawnSync } from "node:child_process";
 import http from "node:http";
 import { randomBytes } from "node:crypto";
@@ -874,6 +875,333 @@ if (!existsSync(path.join(AGE_DIR, "age"))) {
     }
   });
 }
+
+console.log("backup-db.sh and secrets.sh against fake age and tar (a throwaway copy of scripts/)");
+// The scripts find age under their own ROOT/.toolchain, so each case runs a
+// copy of them in a temp dir whose .toolchain holds a fake age: "ciphertext"
+// is a header plus base64, so a plaintext marker never appears in it, and
+// FAKE_AGE_ENC / FAKE_AGE_DEC break it on purpose. Real tar unless a case puts
+// a fake one first on PATH.
+const FAKE_AGE = `#!/usr/bin/env bash
+set -u
+dec=0; out=""; in=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in -d) dec=1 ;; -R|-i) shift ;; -o) out="$2"; shift ;; *) in="$1" ;; esac
+  shift
+done
+src() { if [[ -n "$in" ]]; then cat "$in"; else cat; fi; }
+emit() { if [[ -n "$out" ]]; then cat >"$out"; else cat; fi; }
+if [[ $dec = 1 ]]; then
+  data="$(src | base64)"
+  plain="$(printf '%s' "$data" | base64 -d | tail -n +2)"
+  [[ "$(printf '%s' "$data" | base64 -d | head -n 1)" == "FAKE-AGE" ]] || { echo "age: error: no identity matched any of the recipients" >&2; exit 1; }
+  case "\${FAKE_AGE_DEC:-}" in
+    truncated) printf '%s' "$plain" | base64 -d | head -c "\${FAKE_AGE_KEEP:-200}" | emit; echo "age: error: stream damaged" >&2; exit 1 ;;
+  esac
+  printf '%s' "$plain" | base64 -d | emit
+else
+  case "\${FAKE_AGE_ENC:-}" in
+    fail) echo "age: error: malformed recipient" >&2; exit 1 ;;
+    enospc) { echo FAKE-AGE; src | base64 | head -c 8; } | emit; echo "age: error: write: no space left on device" >&2; exit 1 ;;
+    plaintext-enospc) src | head -c 64 | emit; echo "age: error: write: no space left on device" >&2; exit 1 ;;
+  esac
+  { echo FAKE-AGE; src | base64; } | emit
+fi
+`;
+const FAKE_TAR = `#!/usr/bin/env bash
+# Lists with the real tar; writes a plaintext file where it is told to
+# extract, or some bytes when it is told to create; then fails.
+[[ "$1" == "-tzf" ]] && exec "$REAL_TAR" "$@"
+dir=""
+while [[ $# -gt 0 ]]; do [[ "$1" == "-C" ]] && dir="$2"; shift; done
+if [[ -n "$dir" && -d "$dir" && "$dir" == *.unseal.* ]]; then printf 'PLAINTEXT-MARKER-tar\\n' >"$dir/partial"; else printf 'half an archive'; fi
+echo "tar: Error exit delayed from previous errors." >&2
+exit 2
+`;
+const MARK = "PLAINTEXT-MARKER";
+const REAL_TAR = spawnSync("sh", ["-c", "command -v tar"], { encoding: "utf8" }).stdout.trim();
+function operatorCopy() {
+  const root = mkdtempSync(path.join(os.tmpdir(), "zold-operator-"));
+  const scripts = path.join(root, "scripts");
+  mkdirSync(scripts);
+  for (const f of ["_age.sh", "backup-db.sh", "secrets.sh", "with-env-fd.mjs", "env-set.mjs", "unseal-check.mjs"]) copyFileSync(new URL(`./${f}`, import.meta.url), path.join(scripts, f));
+  const ageDir = path.join(root, ".toolchain", "age-v1.3.2", "age");
+  mkdirSync(ageDir, { recursive: true });
+  writeFileSync(path.join(ageDir, "age"), FAKE_AGE, { mode: 0o755 });
+  const bin = path.join(root, "fake-bin");
+  mkdirSync(bin);
+  writeFileSync(path.join(root, ".age-recipients"), "age1fakerecipient\n");
+  writeFileSync(path.join(root, "identity"), "AGE-SECRET-KEY-FAKE\n");
+  const run = (script: string, args: string[], env: NodeJS.ProcessEnv = {}, input?: string) =>
+    spawnSync("bash", [path.join(scripts, script), ...args], {
+      encoding: "utf8", input,
+      env: { PATH: `${bin}:${process.env.PATH}`, HOME: root, REAL_TAR, AGE_IDENTITY_FILE: path.join(root, "identity"), ...env },
+    });
+  const fake = (name: string, body: string) => writeFileSync(path.join(bin, name), body, { mode: 0o755 });
+  /** Every file under root (bar the fake tools) that holds `text`. */
+  const holding = (text: string, under = root): string[] => readdirSync(under).flatMap((f) => {
+    const p = path.join(under, f);
+    if (p === bin || p === path.join(root, ".toolchain")) return [];
+    const st = lstatSync(p); // never through a symlink: a hostile archive may leave one pointing out
+    if (st.isDirectory()) return holding(text, p);
+    return st.isFile() && readFileSync(p, "utf8").includes(text) ? [p] : [];
+  });
+  const ls = (dir: string) => (existsSync(dir) ? readdirSync(dir).sort() : []);
+  return { root, run, fake, holding, ls, done: () => rmSync(root, { recursive: true, force: true }) };
+}
+/** "Ciphertext" the fake age reads back as `plain`. */
+const fakeSealed = (plain: Buffer) => `FAKE-AGE\n${plain.toString("base64")}\n`;
+/** A gzipped ustar archive built by hand, so a case can hold any name, link or type. */
+function tarball(entries: { name: string; type?: "0" | "1" | "2" | "5"; link?: string; body?: string; mode?: number }[]) {
+  const blocks: Buffer[] = [];
+  const field = (h: Buffer, at: number, len: number, value: string) => h.write(value.slice(0, len), at, len, "latin1");
+  const octal = (n: number, len: number) => `${n.toString(8).padStart(len - 1, "0")}\0`;
+  for (const e of entries) {
+    const body = Buffer.from(e.body ?? "");
+    const h = Buffer.alloc(512);
+    field(h, 0, 100, e.name);
+    field(h, 100, 8, octal(e.mode ?? (e.type === "5" ? 0o755 : 0o644), 8));
+    field(h, 108, 8, octal(0, 8));
+    field(h, 116, 8, octal(0, 8));
+    field(h, 124, 12, octal(e.type === "0" || !e.type ? body.length : 0, 12));
+    field(h, 136, 12, octal(1_700_000_000, 12));
+    field(h, 148, 8, "        ");
+    field(h, 156, 1, e.type ?? "0");
+    field(h, 157, 100, e.link ?? "");
+    field(h, 257, 8, "ustar\u000000");
+    let sum = 0;
+    for (const b of h) sum += b;
+    field(h, 148, 8, `${sum.toString(8).padStart(6, "0")}\0 `);
+    blocks.push(h);
+    if (!e.type || e.type === "0") blocks.push(body, Buffer.alloc((512 - (body.length % 512)) % 512));
+  }
+  blocks.push(Buffer.alloc(1024));
+  return gzipSync(Buffer.concat(blocks));
+}
+
+await check("backup-db.sh writes one owner-only encrypted file into an owner-only dir, whatever the caller's umask", () => {
+  const t = operatorCopy();
+  try {
+    const store = path.join(t.root, "data", "db.json");
+    mkdirSync(path.dirname(store));
+    writeFileSync(store, `{"users":[{"name":"${MARK}"}]}`);
+    mkdirSync(path.join(t.root, ".local-backups"), { mode: 0o755 });
+    chmodSync(path.join(t.root, ".local-backups"), 0o755);
+    const r = spawnSync("bash", ["-c", `umask 000; exec bash "$0"`, path.join(t.root, "scripts", "backup-db.sh")], {
+      encoding: "utf8", env: { PATH: process.env.PATH, HOME: t.root },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    const files = t.ls(path.join(t.root, ".local-backups"));
+    assert.equal(files.length, 1, files.join(","));
+    assert.match(files[0], /^db-\d{8}T\d{6}Z\.json\.age$/);
+    assert.equal(statSync(path.join(t.root, ".local-backups")).mode & 0o777, 0o700);
+    assert.equal(statSync(path.join(t.root, ".local-backups", files[0])).mode & 0o777, 0o600);
+    assert.deepEqual(t.holding(MARK), [store], "the plaintext is anywhere but the store");
+  } finally { t.done(); }
+});
+await check("backup-db.sh: a failing or full-disk age leaves no backup, no .tmp and no plaintext", () => {
+  for (const mode of ["fail", "enospc", "plaintext-enospc"]) {
+    const t = operatorCopy();
+    try {
+      const store = path.join(t.root, "db.json");
+      writeFileSync(store, `{"users":[{"name":"${MARK}"}]}`);
+      const r = t.run("backup-db.sh", [], { TRANSF_DB_PATH: store, FAKE_AGE_ENC: mode });
+      assert.notEqual(r.status, 0, `${mode}: ${r.stdout}`);
+      assert.doesNotMatch(r.stdout, /wrote/, mode);
+      assert.deepEqual(t.ls(path.join(t.root, ".local-backups")), [], `${mode} left a file behind`);
+      assert.deepEqual(t.holding(MARK), [store], `${mode} left plaintext behind`);
+    } finally { t.done(); }
+  }
+});
+await check("backup-db.sh twice in the same second refuses the second and keeps the first", () => {
+  const t = operatorCopy();
+  try {
+    t.fake("date", "#!/bin/sh\necho 20261126T120000Z\n");
+    const store = path.join(t.root, "db.json");
+    writeFileSync(store, '{"users":[{"name":"first"}]}');
+    assert.equal(t.run("backup-db.sh", [], { TRANSF_DB_PATH: store }).status, 0);
+    const out = path.join(t.root, ".local-backups", "db-20261126T120000Z.json.age");
+    const first = readFileSync(out, "utf8");
+    writeFileSync(store, '{"users":[{"name":"second"}]}');
+    const r = t.run("backup-db.sh", [], { TRANSF_DB_PATH: store });
+    assert.notEqual(r.status, 0, r.stdout);
+    assert.match(r.stderr, /exists/);
+    assert.equal(readFileSync(out, "utf8"), first, "the first backup was replaced");
+    assert.deepEqual(t.ls(path.join(t.root, ".local-backups")), ["db-20261126T120000Z.json.age"]);
+  } finally { t.done(); }
+});
+await check("backup-db.sh: an ln failure that is not a same-second clash prints the real error, and leaves no backup or .tmp", () => {
+  const t = operatorCopy();
+  try {
+    t.fake("ln", "#!/bin/sh\necho \"ln: $2: Operation not supported\" >&2\nexit 1\n");
+    const store = path.join(t.root, "db.json");
+    writeFileSync(store, '{"users":[]}');
+    const r = t.run("backup-db.sh", [], { TRANSF_DB_PATH: store });
+    assert.notEqual(r.status, 0, r.stdout);
+    assert.match(r.stderr, /Operation not supported/);
+    assert.doesNotMatch(r.stderr, /this second|run it again/);
+    assert.deepEqual(t.ls(path.join(t.root, ".local-backups")), []);
+  } finally { t.done(); }
+});
+await check("backup-db.sh refuses with no store, no recipients or no age, and writes nothing", () => {
+  const t = operatorCopy();
+  try {
+    assert.match(t.run("backup-db.sh", [], { TRANSF_DB_PATH: path.join(t.root, "missing.json") }).stderr, /no database/);
+    writeFileSync(path.join(t.root, "db.json"), "{}");
+    assert.match(t.run("backup-db.sh", [], { TRANSF_DB_PATH: path.join(t.root, "db.json"), AGE_RECIPIENTS_FILE: path.join(t.root, "none") }).stderr, /no recipients/);
+    rmSync(path.join(t.root, ".toolchain"), { recursive: true });
+    assert.match(t.run("backup-db.sh", [], { TRANSF_DB_PATH: path.join(t.root, "db.json") }).stderr, /age is not installed/);
+    assert.deepEqual(t.ls(path.join(t.root, ".local-backups")), []);
+  } finally { t.done(); }
+});
+await check("secrets.sh encrypt and seal: a failing age or tar leaves no .tmp, no output file and no plaintext copy", () => {
+  for (const [what, env, fakeTar] of [["encrypt/enospc", { FAKE_AGE_ENC: "enospc" }, false], ["encrypt/plaintext-enospc", { FAKE_AGE_ENC: "plaintext-enospc" }, false],
+    ["seal/enospc", { FAKE_AGE_ENC: "enospc" }, false], ["seal/tar fails", {}, true]] as const) {
+    const t = operatorCopy();
+    try {
+      if (fakeTar) t.fake("tar", FAKE_TAR);
+      const dotenv = path.join(t.root, "dotenv");
+      writeFileSync(dotenv, `A=${MARK}\n`);
+      const priv = path.join(t.root, "private");
+      mkdirSync(priv);
+      writeFileSync(path.join(priv, "key"), MARK);
+      const r = what.startsWith("encrypt") ? t.run("secrets.sh", ["encrypt", dotenv], env) : t.run("secrets.sh", ["seal", priv], env);
+      assert.notEqual(r.status, 0, `${what}: ${r.stdout}`);
+      assert.deepEqual(t.ls(t.root).filter((f) => /\.age$|\.tmp/.test(f)), [], `${what} left a file behind`);
+      assert.deepEqual(t.holding(MARK).sort(), [dotenv, path.join(priv, "key")].sort(), `${what} left plaintext behind`);
+    } finally { t.done(); }
+  }
+});
+await check("secrets.sh set: a re-encryption that fails on a full disk leaves the old file in place and no temp file", () => {
+  const t = operatorCopy();
+  try {
+    const enc = path.join(t.root, "dotenv.age");
+    writeFileSync(enc, fakeSealed(Buffer.from("A=one\n")));
+    const before = readFileSync(enc, "utf8");
+    const r = t.run("secrets.sh", ["set", "NEW_NAME"], { SECRETS_ENV_FILE: enc, FAKE_AGE_ENC: "enospc" }, "fake-value-5\n");
+    assert.notEqual(r.status, 0, r.stdout);
+    assert.ok(!`${r.stdout}${r.stderr}`.includes("fake-value-5"));
+    assert.equal(readFileSync(enc, "utf8"), before);
+    assert.deepEqual(t.ls(t.root).filter((f) => f.startsWith("dotenv")), ["dotenv.age"]);
+  } finally { t.done(); }
+});
+await check("secrets.sh run: a file that fails to decrypt part-way never starts the command", () => {
+  const t = operatorCopy();
+  try {
+    const enc = path.join(t.root, "dotenv.age");
+    writeFileSync(enc, fakeSealed(Buffer.from(`A=one\n${"B=two\n".repeat(100)}`)));
+    const r = t.run("secrets.sh", ["run", "--", "sh", "-c", "echo started"], { SECRETS_ENV_FILE: enc, FAKE_AGE_DEC: "truncated", FAKE_AGE_KEEP: "20" });
+    assert.notEqual(r.status, 0);
+    assert.equal(r.stdout, "");
+    assert.match(r.stderr, /could not decrypt/);
+  } finally { t.done(); }
+});
+await check("secrets.sh unseal: a decrypt or tar failure part-way moves nothing into place and leaves no staging dir", () => {
+  for (const what of ["truncated", "tar fails"]) {
+    const t = operatorCopy();
+    try {
+      if (what === "tar fails") t.fake("tar", FAKE_TAR);
+      const sealed = path.join(t.root, "private.tar.age");
+      writeFileSync(sealed, fakeSealed(tarball([
+        { name: "private/", type: "5" },
+        { name: "private/first", body: `${MARK}-first\n` },
+        { name: "private/second", body: `${MARK}-second\n`.repeat(4000) },
+      ])));
+      const dest = path.join(t.root, "out", "private");
+      const r = t.run("secrets.sh", ["unseal", sealed, dest], what === "truncated" ? { FAKE_AGE_DEC: "truncated", FAKE_AGE_KEEP: "700" } : {});
+      assert.notEqual(r.status, 0, `${what}: ${r.stdout}`);
+      assert.doesNotMatch(r.stdout, /unsealed/);
+      assert.equal(existsSync(dest), false, `${what}: a failed unseal was moved into place`);
+      assert.deepEqual(t.ls(path.join(t.root, "out")), [], `${what} left the staging dir`);
+      assert.deepEqual(t.holding(MARK), [], `${what} left plaintext behind`);
+    } finally { t.done(); }
+  }
+});
+await check("secrets.sh unseal: a good archive lands owner-only at DEST, and an existing DEST is refused", () => {
+  const t = operatorCopy();
+  try {
+    const sealed = path.join(t.root, "private.tar.age");
+    writeFileSync(sealed, fakeSealed(tarball([{ name: "private/", type: "5" }, { name: "private/key", body: "k\n", mode: 0o644 }])));
+    const dest = path.join(t.root, "out");
+    const r = t.run("secrets.sh", ["unseal", sealed, dest]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(readFileSync(path.join(dest, "private", "key"), "utf8"), "k\n");
+    assert.equal(statSync(dest).mode & 0o777, 0o700);
+    assert.equal(statSync(path.join(dest, "private", "key")).mode & 0o077, 0, "an unsealed secret is group or world readable");
+    const again = t.run("secrets.sh", ["unseal", sealed, dest]);
+    assert.notEqual(again.status, 0);
+    assert.match(again.stderr, /refusing: .* exists/);
+    assert.deepEqual(t.ls(t.root).filter((f) => f.startsWith(".unseal")), []);
+  } finally { t.done(); }
+});
+await check("secrets.sh unseal: links that stay inside the tree, through other links or dangling, are kept", () => {
+  const t = operatorCopy();
+  try {
+    const sealed = path.join(t.root, "private.tar.age");
+    writeFileSync(sealed, fakeSealed(tarball([{ name: "private/", type: "5" }, { name: "private/key", body: "k\n" }, { name: "private/sub/", type: "5" },
+      { name: "private/current", type: "2", link: "key" }, { name: "private/sub/up", type: "2", link: "../current" },
+      { name: "private/sub/self", type: "2", link: "." }, { name: "private/via", type: "2", link: "sub/self/../key" },
+      { name: "private/later", type: "2", link: "not-yet" }])));
+    const dest = path.join(t.root, "out");
+    const r = t.run("secrets.sh", ["unseal", sealed, dest]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(readFileSync(path.join(dest, "private", "via"), "utf8"), "k\n");
+    assert.equal(readFileSync(path.join(dest, "private", "sub", "up"), "utf8"), "k\n");
+  } finally { t.done(); }
+});
+await check("secrets.sh seal refuses a tree unseal would refuse (an absolute link, a link out, a link chain out) and writes no archive", () => {
+  for (const [what, make] of [
+    ["absolute link to a file inside", (priv: string) => symlinkSync(path.join(priv, "key"), path.join(priv, "current"))],
+    ["../ link out", (priv: string) => symlinkSync("../..", path.join(priv, "up"))],
+    ["chain out", (priv: string) => { symlinkSync(".", path.join(priv, "x")); symlinkSync("x/..", path.join(priv, "d")); }],
+    ["a fifo", (priv: string) => spawnSync("mkfifo", [path.join(priv, "pipe")])],
+  ] as [string, (priv: string) => void][]) {
+    const t = operatorCopy();
+    try {
+      const priv = path.join(t.root, "private");
+      mkdirSync(priv);
+      writeFileSync(path.join(priv, "key"), MARK);
+      make(priv);
+      const r = t.run("secrets.sh", ["seal", priv]);
+      assert.notEqual(r.status, 0, `${what}: sealed (${r.stdout.trim()})`);
+      assert.match(r.stderr, /refusing to seal/, what);
+      assert.deepEqual(t.ls(t.root).filter((f) => /\.age$|\.tmp/.test(f)), [], `${what}: wrote an archive`);
+    } finally { t.done(); }
+  }
+});
+await check("secrets.sh unseal of a hostile archive (absolute, ../, symlink, hardlink entries) writes nothing outside and moves nothing into place", () => {
+  const outside = mkdtempSync(path.join(os.tmpdir(), "zold-unseal-outside-"));
+  try {
+    const victim = path.join(outside, "victim");
+    for (const [what, entries] of [
+      ["absolute", [{ name: `${outside}/abs` }]],
+      ["../", [{ name: "private/" , type: "5" }, { name: "private/../../escape" }]],
+      ["symlink out, then a file through it", [{ name: "link", type: "2", link: outside }, { name: "link/through" }]],
+      ["symlink out, left in place", [{ name: "private/", type: "5" }, { name: "private/env", type: "2", link: victim }]],
+      ["symlink with ../ target", [{ name: "private/", type: "5" }, { name: "private/up", type: "2", link: "../../../" }]],
+      ["symlink chain: x -> . and d -> x/.. (lexically inside, on disk the parent)", [{ name: "x", type: "2", link: "." }, { name: "d", type: "2", link: "x/.." }]],
+      ["symlink chain two levels up: x -> . and f -> x/x/../..", [{ name: "x", type: "2", link: "." }, { name: "f", type: "2", link: "x/x/../.." }]],
+      ["symlink chain through a nested link: private/s -> .. and private/u -> s/..", [{ name: "private/", type: "5" }, { name: "private/s", type: "2", link: ".." }, { name: "private/u", type: "2", link: "s/.." }]],
+      ["hardlink to an outside file, then a write to it", [{ name: "hl", type: "1", link: victim }, { name: "hl", body: "overwritten" }]],
+      ["hardlink with ../ target", [{ name: "private/", type: "5" }, { name: "private/hl", type: "1", link: `private/../../${path.relative(os.tmpdir(), victim)}` }]],
+    ] as [string, Parameters<typeof tarball>[0]][]) {
+      writeFileSync(victim, "untouched");
+      const t = operatorCopy();
+      try {
+        const sealed = path.join(t.root, "private.tar.age");
+        writeFileSync(sealed, fakeSealed(tarball(entries.map((e) => ({ body: `${MARK}\n`, ...e })))));
+        const dest = path.join(t.root, "work", "dest");
+        const r = t.run("secrets.sh", ["unseal", sealed, dest]);
+        assert.notEqual(r.status, 0, `${what}: unsealed (${r.stdout.trim()})`);
+        assert.equal(existsSync(dest), false, `${what}: moved into place`);
+        assert.deepEqual(t.ls(path.join(t.root, "work")), [], `${what}: left the staging dir`);
+        assert.deepEqual(readdirSync(outside).sort(), ["victim"], `${what}: wrote outside`);
+        assert.equal(readFileSync(victim, "utf8"), "untouched", `${what}: changed a file outside`);
+        assert.deepEqual(t.ls(t.root).filter((f) => !["scripts", ".toolchain", "fake-bin", ".age-recipients", "identity", "private.tar.age", "work"].includes(f)), [], `${what}: wrote beside the staging dir`);
+      } finally { t.done(); }
+    }
+  } finally { rmSync(outside, { recursive: true, force: true }); }
+});
 
 console.log("log lines");
 await check("a URL in a log line keeps scheme and host only: keys in the path or query never print", async () => {

@@ -131,6 +131,7 @@ const scripts = [
   "deposit-invoice-link:test",
   "security:test",
   "crypto:test",
+  "preflight:stub:test",
   "crypto-deposit:test",
   "crypto-in-getlogs:test",
   "org-migration:test",
