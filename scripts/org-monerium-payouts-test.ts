@@ -582,6 +582,20 @@ try {
     assert.equal(r.status, 201, `60 held once leaves 40: ${r.text}`);
   });
 
+  await check("an old pending payout that turns sent behind 50 newer finished rows is booked, not dropped", async () => {
+    await reset();
+    const at = (i: number) => new Date(Date.UTC(2026, 0, 1, 0, i)).toISOString();
+    const base = { amountEur: 1, recipientName: "Bob GmbH", recipientIban: OTHER_IBAN, memo: "m", message: "x", safeAddress: SAFE, profileId: PROFILE, signedByMemberId: "m_anna" };
+    const old = { ...base, id: "old-one", orderId: "ord_old_one", state: "pending", issuedAt: at(0), createdAt: at(0), updatedAt: at(0) };
+    const newer = Array.from({ length: 50 }, (_, i) => ({ ...base, id: `fin${i}`, orderId: `ord_fin${i}`, state: "failed", issuedAt: at(100 + i), createdAt: at(100 + i), updatedAt: at(100 + i) }));
+    await store.updateAccount("acc_co", { moneriumPayouts: [...newer, old] } as any);
+    mon.orders = { ord_old_one: { id: "ord_old_one", meta: { state: "processed", processedAt: at(5) } } };
+    assert.equal((await call("GET", "/org_co/monerium/payouts", "u_adam")).status, 200);
+    const line = (await store.ledgerOf("org_co")).find((e) => e.statement?.key === "org-payout:old-one");
+    assert.ok(line, "the payout Monerium carried out has its statement line before the history cap drops its row");
+    assert.equal(line!.statement!.amountCents, -100);
+  });
+
   await check("Settings words: pending is not sent, unclear says to check, the IBAN is masked", () => {
     assert.match(model.payoutNotice({ state: "pending" }), /not sent until Monerium processes/);
     assert.match(model.payoutNotice({ state: "unknown" }), /Check Monerium before sending it again/);

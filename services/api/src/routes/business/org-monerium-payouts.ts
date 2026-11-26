@@ -31,6 +31,7 @@ import express from "express";
 import { randomUUID } from "node:crypto";
 import type { WebauthnPublicKey } from "abstractionkit";
 import { auditEntry } from "../../audit.js";
+import { writeCompanyPayoutLines } from "../../bookkeeping/writer.js";
 import { MONERIUM, SECURITY, orgPayoutsEnabled } from "../../config.js";
 import { safeEurBalance } from "../../chain.js";
 import { ibanChecksumValid, normaliseIban } from "../../domain/contacts.js";
@@ -333,12 +334,17 @@ export function createOrgMoneriumPayoutRoutes(
 
   /** One payout row, written against the account as it is now: read under
    *  the account's lock, so two writes of its payouts never merge into a
-   *  stale copy. */
+   *  stale copy. A sent payout the history cap would drop is booked first:
+   *  the statement sweep reads only the rows kept. */
   const writePayouts = (accountId: string, next: (rows: CompanyBankPayout[]) => CompanyBankPayout[]) =>
     store.tx(async () => {
       await store.lockKey(`account:${accountId}`);
       const account = (await store.findAccount(accountId))!;
-      await store.updateAccount(accountId, { moneriumPayouts: capPayouts(next(account.moneriumPayouts ?? [])) });
+      const rows = next(account.moneriumPayouts ?? []);
+      const kept = capPayouts(rows);
+      const dropped = rows.filter((p) => p.state === "sent" && !kept.includes(p));
+      if (dropped.length) await writeCompanyPayoutLines(account, dropped);
+      await store.updateAccount(accountId, { moneriumPayouts: kept });
     });
   const writePayout = (accountId: string, payout: CompanyBankPayout) => writePayouts(accountId, (rows) => [payout, ...rows]);
   const patchPayout = (accountId: string, id: string, patch: Partial<CompanyBankPayout>) => {

@@ -36,7 +36,7 @@ import { invoicePayments, mergeStatementLines, projectStatementLines, type Invoi
 import { describeCause } from "../http/log-cause.js";
 import { withoutConversionOutputs } from "../transfers/activity.js";
 import type { MoneyInHolder } from "./money-in.js";
-import type { Account } from "../domain/types.js";
+import type { Account, CompanyBankPayout } from "../domain/types.js";
 import { liveCryptoSend } from "../wallet/org-debit.js";
 import { filterSeq, findSeq, mapSeq } from "../seq.js";
 
@@ -238,6 +238,33 @@ export async function writeAccountStatementLines(account: Account, rows: Rows = 
       swapsHaveExecuted: await rows.swapsHaveExecuted(),
     };
     return await writeProjected(inp, undefined, rows);
+  });
+}
+
+/**
+ * The statement lines of these company payouts alone, now. For a payout row
+ * about to leave the account's capped history: once its row is gone the
+ * sweep cannot book it, so a payout Monerium carried out is booked first.
+ * Lines are matched by key, so booking one the sweep already wrote is a no-op.
+ */
+export async function writeCompanyPayoutLines(account: Account, payouts: CompanyBankPayout[]): Promise<{ added: number; updated: number }> {
+  return store.tx(async () => {
+    const inp: StatementInputs = {
+      orgId: account.orgId,
+      accountId: account.id,
+      safeAddress: account.address!,
+      timeZone: await zoneOf(account.orgId),
+      transfers: [],
+      deposits: [],
+      issueOrders: [],
+      sweeps: [],
+      invoices: [],
+      paymentRequests: [],
+      cryptoSends: [],
+      companyPayouts: payouts,
+      swapsHaveExecuted: false,
+    };
+    return await writeProjected(inp, undefined, storeRows);
   });
 }
 
