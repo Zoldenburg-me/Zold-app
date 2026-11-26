@@ -211,7 +211,7 @@ type Counter = {
   /** 0: one request; 1: more, not limited; 2: limited. Evicted in that order. */
   tiers: List[];
   /** Every window, the soonest to end first: a window is appended when it
-   *  starts and every window lasts 60 s, so appending keeps the order. An
+   *  starts and ends no sooner than the one before it (endFrom). An
    *  ended window is evicted before any live one, whatever its tier, without
    *  waiting for the sweep. */
   byEnd: List;
@@ -250,6 +250,10 @@ function appendEnd(t: List, w: Window): void {
   t.tail = w;
 }
 
+/** A window ends 60 s from now, and never before the last one started: after
+ *  the wall clock steps back it lasts longer, so appending keeps the order. */
+const endFrom = (c: Counter, now: number) => Math.max(now + 60_000, c.byEnd.tail?.reset ?? 0);
+
 function drop(c: Counter, w: Window): void {
   unlink(c.tiers[w.tier], w);
   unlinkEnd(c.byEnd, w);
@@ -266,15 +270,15 @@ export function rateLimit(key: string, perMin: number, counter: RateCounter = "i
       const ended = c.byEnd.head!;
       drop(c, ended.reset < now ? ended : (c.tiers[0].head ?? c.tiers[1].head ?? c.tiers[2].head)!);
     }
-    w = { key, n: 0, reset: now + 60_000, tier: 0, prev: null, next: null, rprev: null, rnext: null };
+    w = { key, n: 0, reset: endFrom(c, now), tier: 0, prev: null, next: null, rprev: null, rnext: null };
     c.hits.set(key, w);
     appendEnd(c.byEnd, w);
   }
   // An ended window is renewed in place: a returning caller keeps its slot.
   if (w.reset < now) {
     w.n = 0;
-    w.reset = now + 60_000;
     unlinkEnd(c.byEnd, w);
+    w.reset = endFrom(c, now);
     appendEnd(c.byEnd, w);
   }
   w.n++;
@@ -327,9 +331,10 @@ export function sweepExpiredBuckets(now = Date.now()): void {
 }
 setInterval(() => sweepExpiredBuckets(), 10_000).unref();
 
-/** How many windows each map holds, for the bounds test. */
-export const bucketCounts = () => ({
+/** How many windows each map holds, and how many of them have ended, for the bounds test. */
+export const bucketCounts = (now = Date.now()) => ({
   hits: Object.values(counters).reduce((n, c) => n + c.hits.size, 0),
+  ended: Object.values(counters).reduce((n, c) => n + [...c.hits.values()].filter((w) => w.reset < now).length, 0),
   failures: failures.size,
 });
 

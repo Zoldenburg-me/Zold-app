@@ -80,10 +80,13 @@ file named by `AGE_IDENTITY_FILE` (an `age-plugin-yubikey` stub).
   `.toolchain/` or `.env.age`.
 - `npm run secrets -- seal .private` writes `.private.tar.age`; `unseal` puts it
   back into a directory you name, refusing one that exists. It also refuses an
-  archive with an absolute or `..` name or a link pointing out of it, followed
-  through the other links in it. `seal` refuses a directory holding such a link
-  (absolute ones included) or a special file, so every archive it writes
-  unseals. A failed unseal leaves nothing behind.
+  archive with an absolute or `..` name, a link pointing out of it (followed
+  through the other links in it) or a hard-linked file. `seal` refuses a
+  directory holding such a link (absolute ones included, and one to a sibling
+  of the sealed directory), a hard-linked file or a special file, and refuses a
+  sealed directory that is itself a symlink, so every archive it writes
+  unseals. A link back in through the directory's own name (`../.private/key`)
+  is kept by both. A failed unseal leaves nothing behind.
 - `npm run backup:db` is the only way to copy the database: an `age`-encrypted
   file in `.local-backups/`, one per second: a second run in the same second
   is refused. The store writes `data/db*.json` mode 600.

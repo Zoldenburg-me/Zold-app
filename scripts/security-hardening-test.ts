@@ -12,7 +12,7 @@
 // Must be first: pins chain, keys and a throwaway database.
 import "./_local-chain.js";
 import assert from "node:assert/strict";
-import { chmodSync, closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { spawnSync } from "node:child_process";
 import http from "node:http";
@@ -474,6 +474,17 @@ try {
     // A Map walked from its oldest entry took 30-120x the fill per 100k here.
     assert.ok(past / 3 < 5 * fill + 50, `fill ${fill.toFixed(0)} ms per 100k, past the cap ${(past / 3).toFixed(0)} ms per 100k`);
     clock += 61_000;
+    sweepExpiredBuckets();
+    assert.equal(bucketCounts().hits, 0);
+  });
+  await check("after the wall clock steps back, the sweep still drops every ended window", () => {
+    rateLimit("g:before-step", 300);
+    clock -= 30 * 60_000;
+    for (let i = 0; i < 10; i++) rateLimit(`g:after-step-${i}`, 300);
+    clock += 61_000;
+    sweepExpiredBuckets();
+    assert.equal(bucketCounts().ended, 0, "ended windows held behind a live one");
+    clock += 30 * 60_000;
     sweepExpiredBuckets();
     assert.equal(bucketCounts().hits, 0);
   });
@@ -1211,6 +1222,58 @@ await check("secrets.sh seal refuses a tree unseal would refuse (an absolute lin
       assert.deepEqual(t.ls(t.root).filter((f) => /\.age$|\.tmp/.test(f)), [], `${what}: wrote an archive`);
     } finally { t.done(); }
   }
+});
+await check("secrets.sh seal accepts what unseal accepts: a link back in through the sealed dir's own name round-trips", () => {
+  const t = operatorCopy();
+  try {
+    const priv = path.join(t.root, "private");
+    mkdirSync(path.join(priv, "sub"), { recursive: true });
+    writeFileSync(path.join(priv, "key"), "k\n");
+    symlinkSync("../private/key", path.join(priv, "current"));
+    symlinkSync("../../private/current", path.join(priv, "sub", "up"));
+    const r = t.run("secrets.sh", ["seal", priv]);
+    assert.equal(r.status, 0, r.stderr);
+    const dest = path.join(t.root, "out");
+    const u = t.run("secrets.sh", ["unseal", `${priv}.tar.age`, dest]);
+    assert.equal(u.status, 0, u.stderr);
+    assert.equal(readFileSync(path.join(dest, "private", "current"), "utf8"), "k\n");
+    assert.equal(readFileSync(path.join(dest, "private", "sub", "up"), "utf8"), "k\n");
+  } finally { t.done(); }
+});
+await check("secrets.sh seal refuses a link to a sibling of the sealed dir, a symlinked dir and a hardlinked file, and writes no archive", () => {
+  for (const [what, make] of [
+    ["link to a sibling the archive does not hold", (priv: string) => { writeFileSync(path.join(path.dirname(priv), "other"), MARK); symlinkSync("../other", path.join(priv, "o")); }],
+    ["link through a sibling link", (priv: string) => { symlinkSync("private", path.join(path.dirname(priv), "alias")); symlinkSync("../alias/key", path.join(priv, "a")); }],
+    ["the sealed dir is a symlink", (priv: string) => { renameSync(priv, `${priv}.real`); symlinkSync(`${priv}.real`, priv); }],
+    ["a hardlinked file", (priv: string) => linkSync(path.join(priv, "key"), path.join(priv, "key2"))],
+    ["a file hardlinked from outside", (priv: string) => linkSync(path.join(priv, "key"), path.join(path.dirname(priv), "copy"))],
+  ] as [string, (priv: string) => void][]) {
+    const t = operatorCopy();
+    try {
+      const priv = path.join(t.root, "private");
+      mkdirSync(priv);
+      writeFileSync(path.join(priv, "key"), MARK);
+      make(priv);
+      const r = t.run("secrets.sh", ["seal", priv]);
+      assert.notEqual(r.status, 0, `${what}: sealed (${r.stdout.trim()})`);
+      assert.match(r.stderr, /refusing to seal/, what);
+      assert.deepEqual(t.ls(t.root).filter((f) => /\.age$|\.tmp/.test(f)), [], `${what}: wrote an archive`);
+    } finally { t.done(); }
+  }
+});
+await check("secrets.sh unseal refuses an archive whose files are hardlinked to each other inside the tree", () => {
+  const t = operatorCopy();
+  try {
+    const sealed = path.join(t.root, "private.tar.age");
+    writeFileSync(sealed, fakeSealed(tarball([{ name: "private/", type: "5" }, { name: "private/key", body: "k\n" },
+      { name: "private/key2", type: "1", link: "private/key" }])));
+    const dest = path.join(t.root, "work", "dest");
+    const r = t.run("secrets.sh", ["unseal", sealed, dest]);
+    assert.notEqual(r.status, 0, `unsealed (${r.stdout.trim()})`);
+    assert.match(r.stderr, /refusing to unseal: private\/key.* hard link/);
+    assert.equal(existsSync(dest), false, "moved into place");
+    assert.deepEqual(t.ls(path.join(t.root, "work")), [], "left the staging dir");
+  } finally { t.done(); }
 });
 await check("secrets.sh unseal of a hostile archive (absolute, ../, symlink, hardlink entries) writes nothing outside and moves nothing into place", () => {
   const outside = mkdtempSync(path.join(os.tmpdir(), "zold-unseal-outside-"));

@@ -7,7 +7,8 @@
  *
  * Boots the real API against a fresh hardhat node with the local contracts
  * deployed, once per bad config. Offline: the operator's Monerium app
- * credentials are blanked in the child, so the boot never calls Monerium.
+ * credentials are blanked in the child, so the boot never calls Monerium, and
+ * the deploy's EUR/USD seed is pinned, so it never fetches a live rate.
  *
  * Run: npm run venue-boot:test
  */
@@ -19,6 +20,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+// deploy.ts reads the contract artifacts: compile (a no-op when they are
+// current), so a standalone run works on a fresh checkout too.
+const compile = spawnSync(process.execPath, [path.resolve("node_modules/.bin/hardhat"), "compile"], { stdio: "inherit" });
+if (compile.status !== 0) throw new Error("hardhat compile failed: the deploy needs the contract artifacts");
+
 let n = 0;
 const { child: chain, url: rpcUrl } = await hardhatNode(process.cwd());
 try {
@@ -26,7 +32,7 @@ try {
   // on a fresh checkout and not only after a suite that deployed.
   const dep = spawnSync(process.execPath, [path.resolve("node_modules/.bin/tsx"), "scripts/deploy.ts"], {
     stdio: "inherit",
-    env: { ...process.env, TRANSF_RPC_URL: rpcUrl },
+    env: { ...process.env, TRANSF_RPC_URL: rpcUrl, DEPLOY_EURUSD_RATE: process.env.DEPLOY_EURUSD_RATE || "1137900" },
   });
   assert.equal(dep.status, 0, "deploy failed");
   for (const bad of [{ LIQUIDITY_PROVIDER: "nope" }, { LIQUIDITY_PROVIDER: "best", LIQUIDITY_VENUES: "nope" }, { LIQUIDITY_PROVIDER: "best", LIQUIDITY_VENUES: "" }]) {
