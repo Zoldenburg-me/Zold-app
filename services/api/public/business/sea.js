@@ -1,10 +1,7 @@
-/* The narwhal sea behind Home: Scrolltide's Mobula engine (vendor/mobula-sea.js), drawn on two fixed
- * canvases under the page. The engine file is git-ignored (licensed, not ours to publish), so where it
- * is missing the script fails to load and Home simply has no sea. Only Home has it; any other view
- * stops it. Reduced motion paints one still frame.
- *
- * shortcut: no sea on any deployment built from git (production included), and each page load there
- * logs the engine's 404 once (load() is memoised); commit vendor/mobula-sea.js once the repo is private. */
+/* The narwhal sea behind Home: Scrolltide's Mobula engine (vendor/mobula-sea.js, a built bundle;
+ * its sources are not in the repo), drawn on two fixed canvases under the page. If the script fails
+ * to load or cannot run, Home simply has no sea. Only Home has it; any other view stops it. Reduced
+ * motion paints one still frame. */
 
 // Vendor paths keep the long default cache (routes/pages.ts): bump v whenever the engine file changes.
 const SRC = "/business/vendor/mobula-sea.js?v=1";
