@@ -8,8 +8,9 @@ The store moves from `db.json` straight to Postgres, with no SQLite step.
 The API and Postgres run together on one Oracle Cloud ARM host (Ampere,
 aarch64), Postgres on its unix socket only with no database port open, and
 everything moves off Akash (§7). This note does not reopen either choice.
-The hub's own database (`hub.db` in Agentic-payment-protocol) is out of
-scope.
+The `@zold/accept` hosted hub's database (`hub.db` in
+Agentic-payment-protocol) moves into the same Postgres server, in its own
+`hub` schema and role (§7.2, slice S9).
 
 **What this note decides:** one table per collection, typed key columns
 generated from a JSONB document, uniqueness enforced by the database, an
@@ -20,10 +21,11 @@ webhooks, a ledger whose rows cannot be deleted and whose every change is kept,
 one API process per deployment, enforced at start, two Postgres clusters (one
 per deployment) on unix sockets with peer authentication on the Oracle host,
 pgBackRest PITR to OCI Object Storage in two regions plus daily dumps the host
-cannot delete, a rebuild path for losing the host, and eight slices. **What it leaves to the owner:** whether the hub stays
-separate, the OCI region, processing agreement and account type, the
-recovery-time target, whether to lock the dump bucket's retention rule, and
-when to cut over (§9).
+cannot delete, a rebuild path for losing the host, the hub in its own
+schema on the same server, and nine slices. It assumes the owner provides
+the OCI account (§7). **What it leaves to the owner:** the recovery-time
+target, whether to lock the dump bucket's retention rule, and when to cut
+over (§9).
 
 ## 0. What exists today
 
@@ -604,24 +606,14 @@ and listens on its unix socket only; no database port is open on the host or
 in OCI. Everything moves off Akash, both deployments. The Akash lease is kept,
 stopped and read-only, until the owner closes it (§6 step 8).
 
-- **Region:** an EU region. Recommended: Frankfurt (`eu-frankfurt-1`). The
-  owner confirms (§9).
-- **Account type: Pay As You Go, not Always Free.** Oracle's Always Free
-  page (<https://docs.oracle.com/en-us/iaas/Content/FreeTier/resourceref.htm>,
-  read 2026-11-25) says "Idle Always Free compute instances may be reclaimed
-  by Oracle", and counts an instance idle when, over 7 days, 95th-percentile
-  CPU, network and (A1 shapes only) memory utilisation are all under 20%. A
-  quiet API and Postgres on an A1 shape can meet that. Reclaimed, this host
-  takes down the API, Postgres and both deployments at once. The page does
-  not say whether a Pay As You Go account's instances are exempt; it does say
-  an upgraded account is not charged for usage within the Always Free
-  limits. So: the owner confirms the account type, an Always Free account is
-  converted to Pay As You Go before S7, and S7 checks in the console that
-  the instance carries no idle-reclamation notice. §7.1 covers the host
-  being lost anyway.
-- **Processing agreement:** Oracle's Data Processing Agreement for Oracle
-  Cloud Services covers OCI. AGENTS.md needs one before user data lands, so
-  the owner confirms that the account is covered (§9).
+- **The account is the owner's.** The owner provides the OCI account: its
+  type, its EU region and second backup region, and Oracle's Data
+  Processing Agreement for it (AGENTS.md needs one before user data lands).
+  This note assumes that account exists. S7 checks in the console that the
+  instance carries no idle-reclamation notice (Oracle's Always Free page,
+  <https://docs.oracle.com/en-us/iaas/Content/FreeTier/resourceref.htm>,
+  read 2026-11-25: "Idle Always Free compute instances may be reclaimed by
+  Oracle"); §7.1 covers the host being lost anyway.
 - **Postgres 17** from the PostgreSQL project's own packages (PGDG), which
   build for aarch64. A major upgrade is a planned task, not automatic; minor
   versions follow the distribution's security updates.
@@ -840,6 +832,31 @@ The limit #166 names ("the API still sees the data in memory and holds the
 database credentials") holds on the Oracle host too: Oracle, as the host,
 can reach the disk and memory, under its processing agreement.
 
+### 7.2 The hub on the same server
+
+The `@zold/accept` hosted hub (Agentic-payment-protocol, `packages/hosted`,
+today SQLite `hub.db`) moves into the mainnet cluster, in a `hub` schema of
+its own. The hub takes untrusted agent traffic and its code is public, so it
+is kept apart by roles, not by trust in its code:
+
+- **Its own roles.** `hub_owner` owns the `hub` schema and runs its
+  migrations; `hub_app` is what the hub process runs as, with DML on `hub`
+  only and no DDL. Neither has any grant on a Zold schema, and `USAGE` on
+  `public` is revoked from them. No Zold role has `INSERT`, `UPDATE`,
+  `DELETE` or `TRUNCATE` on `hub`; the Zold application role has no grant on
+  it at all.
+- **Its own OS user.** The hub process runs on the host as `zold-hub`, mapped
+  by `pg_ident.conf` to `hub_app` only, with `peer` on the socket as in §7.
+  No TCP port is opened for it.
+- **Shared recovery.** Being in the mainnet cluster, the hub is in the same
+  pgBackRest stanza, daily dumps, restore drill (its tables are in the
+  verify) and recovery target (§7.1). Restoring mainnet to a time T restores
+  the hub to T too.
+- **No bridge yet.** Settlements stay in the hub. A later hub→Zold-ledger
+  bridge, if it is built, is narrow and audited: one store method behind its
+  own role, writing only through the ledger's append path (§5), each call in
+  the audit trail. Not part of #166.
+
 ## 8. Slices
 
 Each slice is one PR, mergeable on its own with main green. The JSON backend
@@ -854,25 +871,20 @@ stays the default until the cut-over.
 | S4 | Outbox and its worker (checkout hints, PAID hooks); audit and no-delete triggers; `ledger_history`; the application role's grants. Identity and recovery: `session_epoch`, the ceremony-challenge audit of the 9 callers, the Candide, Turnkey and Zoldenburg-finalize reserve statuses, the Monerium token compare in the store; their tests on JSON and Postgres 17 | — |
 | S5 | Importer, export, verify (§6), run against a copy of the testnet `db.json` on the local Postgres 17. Constraint findings reported to the lead | — |
 | S6 | Docs: AGENTS.md (where the code lives, secrets and storage), `docs/running-locally.md` (local Postgres, `check:pg`), technical-architecture §18.1, `docs/roadmap.md`, `docs/status.md` | — |
-| S7 | The Oracle host (§7): Postgres 17 and roles, two clusters with peer authentication, pgBackRest to Object Storage in two regions, the dump bucket with its retention rule, the archiver and disk alerts, the one-repository-down test, systemd units, the deploy pipeline in place of the Akash leg, the aarch64 toolchain check, the cut-over runbook, the host-loss runbook and provisioning script (§7.1), and the first restore drill onto a new instance and the first testnet rebuild, both timed | region, DPA and Pay As You Go account confirmed; recovery-time target accepted; host access |
+| S7 | The Oracle host (§7): Postgres 17 and roles, two clusters with peer authentication, pgBackRest to Object Storage in two regions, the dump bucket with its retention rule, the archiver and disk alerts, the one-repository-down test, systemd units, the deploy pipeline in place of the Akash leg, the aarch64 toolchain check, the cut-over runbook, the host-loss runbook and provisioning script (§7.1), and the first restore drill onto a new instance and the first testnet rebuild, both timed | recovery-time target accepted; host access |
 | S8 | Cut-over (§6): testnet, then app.zoldhq.com. `STORE_BACKEND=postgres` becomes the default; the JSON backend stays one release as the rollback path, then goes | the owner picks the time |
+| S9 | Hub on Postgres (§7.2), in Agentic-payment-protocol: `packages/hosted` ported from SQLite to the `hub` schema and role, an import of the existing `hub.db` with a verify (row counts and hashes per table, as §6), the hub in the shared backups and restore drill. Needs S7 | — |
 
 S2 is the largest (about 1,250 call sites and 2,000 in tests) and can be cut
 by directory if one PR is too big to review. S7 can run alongside S2-S5.
+S9 is a PR on Agentic-payment-protocol, not on this repository; the hub code stays there for now.
 
 ## 9. Owner questions
 
-1. **Hub database:** does `hub.db` (Agentic-payment-protocol, `packages/hosted`)
-   stay a separate store, as #166 assumes? This note assumes yes.
-2. **Region, DPA and account type:** is `eu-frankfurt-1` the region; is the
-   OCI account one that Oracle's Data Processing Agreement covers; and is it
-   Pay As You Go? If it is Always Free, convert it to Pay As You Go before S7
-   starts (§7: an idle Always Free instance may be reclaimed). Which second
-   EU region holds `repo2`?
-3. **Recovery target:** accept or change the proposed 4 hours to restore
+1. **Recovery target:** accept or change the proposed 4 hours to restore
    service and one minute of lost writes after losing the host (§7.1).
    And: lock the dump bucket's retention rule once S7 has run it for a
    while? Locked, not even Oracle can shorten it; unlocked, an OCI
    administrator account can delete the rule (§7).
-4. **Cut-over:** the owner's call, once S7 is done (§6). Nothing to answer
+2. **Cut-over:** the owner's call, once S7 is done (§6). Nothing to answer
    now.
