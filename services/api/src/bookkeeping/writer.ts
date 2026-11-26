@@ -91,7 +91,10 @@ interface Rows {
   /** What every org's invoices pay: a mark on a line one of them pays is dropped. */
   invoicePayments(): InvoicePayments | Promise<InvoicePayments>;
   rulesOf(orgId: string): AccountRule[] | Promise<AccountRule[]>;
+  ledgerOf(orgId: string): LedgerEntry[] | Promise<LedgerEntry[]>;
   swapsHaveExecuted(): boolean | Promise<boolean>;
+  /** Lines just written, so the next user booked under the same org sees them. */
+  added(orgId: string, entries: LedgerEntry[]): void;
 }
 
 const storeRows: Rows = {
@@ -107,7 +110,9 @@ const storeRows: Rows = {
   invoicesOf: async (orgId) => await store.invoicesOf(orgId),
   invoicePayments: async () => invoicePayments(await store.list("invoices")),
   rulesOf: async (orgId) => await store.rulesOf(orgId),
+  ledgerOf: async (orgId) => await store.ledgerOf(orgId),
   swapsHaveExecuted,
+  added: () => {},
 };
 
 function groupBy<T>(rows: readonly T[], key: (row: T) => string | undefined): Map<string, T[]> {
@@ -142,6 +147,7 @@ async function groupedRows(): Promise<Rows> {
   const invoices = groupBy(await store.list("invoices"), (i) => i.orgId);
   const paid = invoicePayments(await store.list("invoices"));
   const rules = groupBy(await store.list("accountRules"), (r) => r.orgId);
+  const ledger = groupBy(await store.list("ledger"), (e) => e.orgId);
   const swaps = await swapsHaveExecuted();
   return {
     transfersOf: (id) => transfers.get(id) ?? [],
@@ -155,7 +161,13 @@ async function groupedRows(): Promise<Rows> {
     invoicesOf: (orgId) => invoices.get(orgId) ?? [],
     invoicePayments: () => paid,
     rulesOf: (orgId) => rules.get(orgId) ?? [],
+    ledgerOf: (orgId) => ledger.get(orgId) ?? [],
     swapsHaveExecuted: () => swaps,
+    added: (orgId, entries) => {
+      const group = ledger.get(orgId);
+      if (group) group.push(...entries);
+      else ledger.set(orgId, [...entries]);
+    },
   };
 }
 
@@ -233,13 +245,16 @@ async function writeProjected(inp: StatementInputs, since: string | undefined, r
     await store.lockKey(`ledger:${inp.orgId}`);
     // Nothing from before the Safe's books start: an imported Safe's earlier life is not the account's.
     const projected = projectStatementLines(inp).filter((e) => !since || e.at >= since);
-    // Read under the lock, never from the sweep's snapshot: a categorisation
-    // or a Beleg code committed since then is kept.
-    const existing = await store.ledgerOf(inp.orgId);
-    const { toAdd, toUpdate } = mergeStatementLines(existing, projected, await rows.invoicePayments());
+    // Merged against the sweep's snapshot first; with anything to write it is
+    // merged again against the ledger read under the lock, so a
+    // categorisation or a Beleg code committed since the snapshot is kept.
+    const paid = await rows.invoicePayments();
+    let { toAdd, toUpdate } = mergeStatementLines(await rows.ledgerOf(inp.orgId), projected, paid);
+    if (toAdd.length || toUpdate.length) ({ toAdd, toUpdate } = mergeStatementLines(await store.ledgerOf(inp.orgId), projected, paid));
     if (toAdd.length) {
       const { entries } = applyRules(await rows.rulesOf(inp.orgId), toAdd);
       await store.addLedgerEntries(entries);
+      rows.added(inp.orgId, entries);
     }
     for (const u of toUpdate) await store.updateLedgerEntry(u.id, u.patch);
     return { added: toAdd.length, updated: toUpdate.length };

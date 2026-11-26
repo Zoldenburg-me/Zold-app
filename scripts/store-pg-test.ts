@@ -258,13 +258,25 @@ try {
     try {
       await third.listening();
       const [stuck] = await lockHolder();
-      process.kill(stuck, "SIGSTOP");
+      // Needs the server on this machine, run as this OS user (Homebrew's
+      // postgresql@17 is); otherwise this case is skipped, said so.
+      let signalable = true;
       try {
-        assert.equal(await third.exited, 1, "an unanswered ping exits the API");
-        assert.match(third.output().err, /lost its start lock \(ping (failed|unanswered)\)/);
-      } finally {
-        process.kill(stuck, "SIGCONT");
-        await admin.query("SELECT pg_terminate_backend($1)", [stuck]);
+        process.kill(stuck, 0);
+      } catch {
+        signalable = false;
+        console.log("skip - unanswered ping: the server's backend cannot be signalled from here");
+      }
+      if (signalable) {
+        process.kill(stuck, "SIGSTOP");
+        try {
+          const exit = await Promise.race([third.exited, new Promise<"hung">((r) => setTimeout(() => r("hung"), 15_000))]);
+          assert.equal(exit, 1, "an unanswered ping exits the API");
+          assert.match(third.output().err, /lost its start lock \(ping (failed|unanswered)\)/);
+        } finally {
+          process.kill(stuck, "SIGCONT");
+          await admin.query("SELECT pg_terminate_backend($1)", [stuck]);
+        }
       }
     } finally {
       third.child.kill();
