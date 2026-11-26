@@ -29,6 +29,10 @@ const relayChain = () => ({
   rpcUrls: { default: { http: [CANDIDE.rpcUrl] } },
 });
 
+/** Each relay RPC request: 10 s, retried once (viem's default retries three
+ *  times). This bounds a relay send; see `RELAY_TIMEOUT_MS`. */
+const relayTransport = () => http(CANDIDE.rpcUrl, { timeout: 10_000, retryCount: 1 });
+
 /** The relay key (`RELAY_KEY`), on the smart-account chain. It pays gas for
  *  calls anyone may make (a verifier deployment, a signed recovery, a
  *  finalisation); it holds no authority over any contract or Safe. */
@@ -36,12 +40,12 @@ export function relayWallet() {
   return createWalletClient({
     account: privateKeyToAccount(KEYS.relay),
     chain: relayChain(),
-    transport: http(CANDIDE.rpcUrl),
+    transport: relayTransport(),
   });
 }
 
 export function relayReader() {
-  return createPublicClient({ chain: relayChain(), transport: http(CANDIDE.rpcUrl) });
+  return createPublicClient({ chain: relayChain(), transport: relayTransport() });
 }
 
 /**

@@ -14,6 +14,9 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import net from "node:net";
+import { readFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 if (process.env.STORE_BACKEND !== "postgres" || !process.env.DATABASE_URL) {
   console.error("pg-concurrency-test runs on Postgres: npm run check:pg starts it with STORE_BACKEND=postgres and DATABASE_URL");
@@ -408,6 +411,27 @@ await check("ledger: a revalue, a hand categorisation and a rule run in parallel
 });
 
 /**
+ * The password libpq would use for this URL: the URL's own, then PGPASSWORD,
+ * then the first matching `.pgpass` line (a socket host matches `localhost`).
+ * The proxy changes host and port, so a password-auth server needs it passed.
+ */
+function passwordFor(u: URL, host: string, port: number): string | undefined {
+  if (u.password) return decodeURIComponent(u.password);
+  if (process.env.PGPASSWORD) return process.env.PGPASSWORD;
+  const user = decodeURIComponent(u.username) || process.env.PGUSER || os.userInfo().username;
+  const db = decodeURIComponent(u.pathname.slice(1)) || user;
+  let text: string;
+  try { text = readFileSync(process.env.PGPASSFILE ?? path.join(os.homedir(), ".pgpass"), "utf8"); } catch { return undefined; }
+  const want = [host.startsWith("/") ? "localhost" : host, String(port), db, user];
+  for (const line of text.split(/\r?\n/)) {
+    if (!line || line.startsWith("#")) continue;
+    const f = line.split(/(?<!\\):/).map((x) => x.replace(/\\(.)/g, "$1"));
+    if (f.length >= 5 && want.every((w, i) => f[i] === "*" || f[i] === w)) return f.slice(4).join(":");
+  }
+  return undefined;
+}
+
+/**
  * A proxy in front of the test database that cuts the connection at the next
  * `COMMIT`: before the server has it (the transaction rolls back), or right
  * after (it committed, and the client never hears so). Frontend messages are
@@ -458,7 +482,10 @@ async function commitCutter(databaseUrl: string) {
     }
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-  const proxied = `postgresql://${u.username ? `${u.username}@` : ""}127.0.0.1:${(server.address() as net.AddressInfo).port}${u.pathname}`;
+  const password = passwordFor(u, host, port);
+  const user = decodeURIComponent(u.username) || process.env.PGUSER || os.userInfo().username;
+  const auth = password !== undefined ? `${encodeURIComponent(user)}:${encodeURIComponent(password)}@` : u.username ? `${u.username}@` : "";
+  const proxied = `postgresql://${auth}127.0.0.1:${(server.address() as net.AddressInfo).port}${u.pathname}`;
   return { url: proxied, arm: (m: "before" | "after") => (mode = m), close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
@@ -471,7 +498,10 @@ await check("outbound intents: the connection lost during the intent's COMMIT: t
     for (const when of ["before", "after"] as const) {
       const u = await user();
       const t = transferRow(u, { state: "DEBITED" });
-      await store.addTransfer(t);
+      // The baseline: a write through the unarmed proxy lands. A login or
+      // connect failure fails here, so it cannot pass as a cut "before".
+      await viaProxy.addTransfer(t);
+      assert.ok(await store.findTransfer(t.id), `baseline write through the proxy (${when})`);
       const intent = { step: "monerium.redeem.intent", hash: hex(32) };
       let partnerCalled = false;
       proxy.arm(when);

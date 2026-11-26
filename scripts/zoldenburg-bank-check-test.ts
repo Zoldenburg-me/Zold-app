@@ -1154,6 +1154,40 @@ await t("two finalisers at once: one relays and binds, the other finds it claime
   assert.equal(relays, 1);
 });
 
+await t("the owner's veto confirmed on chain while a finaliser holds RELAYING: the request ends CANCELED, and the finaliser's release leaves it so", async () => {
+  const safe = `0x${"8".repeat(40)}` as `0x${string}`;
+  await store.addUser({ ...structuredClone(await user()), passkey: { ...structuredClone((await user()).passkey!), credentialId: "cred-u-veto" }, id: "u-veto", email: "veto@example.com", address: safe, passkeySafe: { ...structuredClone((await user()).passkeySafe!), address: safe } } as any);
+  await store.addRecoveryRequest({
+    id: "fin-veto", userId: "u-veto", safeAddress: safe, mode: "zoldenburg", status: "GRACE_PERIOD", requestedAt: at(1).toISOString(),
+    expiresAt: new Date(Date.now() + 14 * 24 * 3600_000).toISOString(), recoveryDelayHours: 72,
+    guardianAddress: process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS as `0x${string}`, recoveryModuleAddress: `0x${"4".repeat(40)}`,
+    factors: { kyc: "pending", otp: "pending", liveness: "pending", manualReview: "pending" },
+    zoldenburg: {
+      accessHash: "00", reference: "FIN00-00010", newOwners: [`0x${"e".repeat(40)}`], newThreshold: 1, finalizeAfter: at(0).toISOString(),
+      newPasskey: { credentialId: "cred-veto", publicKey: { alg: "ES256", jwk: {} } as any, signCount: 0, rpId: "localhost", attestation: "x", createdAt: at(1).toISOString() },
+    },
+  } as any);
+  const { cancelRecoveriesOnChainVeto } = await import("../services/api/src/routes/recovery-candide.js");
+  const { relayFinalize } = zoldenburgChain;
+  let seenDuring = "";
+  // The owner's cancel lands first: the finalise reverts and the owners stay as they were.
+  zoldenburgChain.relayFinalize = async () => {
+    seenDuring = (await req("fin-veto")).status;
+    await cancelRecoveriesOnChainVeto("u-veto");
+    throw new Error("execution reverted: no pending recovery");
+  };
+  try {
+    await finalizeZoldenburgRecovery(await req("fin-veto"));
+  } finally {
+    zoldenburgChain.relayFinalize = relayFinalize;
+  }
+  assert.equal(seenDuring, "RELAYING");
+  const r = await req("fin-veto");
+  assert.equal(r.status, "CANCELED", "the veto stands; GRACE_PERIOD is not restored");
+  assert.equal(r.cancelReason, "cancelled on chain by the account owner");
+  assert.equal(r.relaying, undefined);
+});
+
 if (failed) { console.error(`ZOLDENBURG RECOVERY 1 € TEST FAILED — ${failed}`); process.exit(1); }
 console.log("ZOLDENBURG RECOVERY 1 € TEST PASSED");
 process.exit(0);
