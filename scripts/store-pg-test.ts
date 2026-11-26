@@ -43,7 +43,7 @@ const urlFor = (db: string) => {
 // before its drop. One still in use, or of the old unnamed form, is left.
 for (const { datname } of (
   await admin.query<{ datname: string }>(
-    "SELECT datname FROM pg_database d WHERE datname ~ '^zold_test_[0-9]+_[0-9a-f]+$' AND NOT EXISTS (SELECT 1 FROM pg_stat_activity a WHERE a.datname = d.datname)",
+    "SELECT datname FROM pg_database d WHERE datname ~ '^zold_test_[0-9]+_[0-9a-f]+(_s[0-9a-f]+)?$' AND NOT EXISTS (SELECT 1 FROM pg_stat_activity a WHERE a.datname = d.datname)",
   )
 ).rows) {
   const born = Number(datname.split("_")[2]);

@@ -13,7 +13,8 @@
  * ./store/db.ts; both are re-exported here.
  */
 import { randomUUID } from "node:crypto";
-import { beginWrites, db, endWrites, initStore as initJsonStore, persist, pruneSessions, seedChartOfAccounts, type Db } from "./store/db.js";
+import { mkdirSync } from "node:fs";
+import { beginWrites, DATA_DIR, db, endWrites, initStore as initJsonStore, persist, pruneSessions, seedChartOfAccounts, type Db } from "./store/db.js";
 import { jsonBackend, type StoreBackend } from "./store/backend.js";
 import { createPgStore } from "./store/pg/backend.js";
 import { assertSchemaCurrent } from "./store/pg/migrate.js";
@@ -1445,8 +1446,11 @@ export const store: StoreBackend = pgDatabase ? createPgStore(pgDatabase) : json
  * files make (store/pg/migrate.ts); the API never migrates.
  */
 export async function initStore(): Promise<void> {
-  if (pgDatabase) await assertSchemaCurrent(pgDatabase);
-  else await initJsonStore();
+  if (pgDatabase) {
+    // The data dir holds more than db.json (operators/enrolment.ts's token file).
+    mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+    await assertSchemaCurrent(pgDatabase);
+  } else await initJsonStore();
 }
 
 /** The settings of the start lock's own connection (store/pg/start-lock.ts),

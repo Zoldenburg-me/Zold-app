@@ -944,21 +944,31 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       return res.status(checked.status).json({ error: checked.error, code: checked.code });
     }
     // The Monerium read is an await: another adoption may have landed in it.
-    if ((await store.findAccount(account.id))?.backingUserId) {
-      return res.status(409).json({ error: "This account was funded by another request while we checked with Monerium." });
-    }
-    const lateTaken = await safeTakenBy(caller, ctx.org.id);
-    if (lateTaken) return res.status(409).json({ error: safeTakenError(lateTaken), code: "SAFE_IN_OTHER_ORG" });
-
-    const funded = await store.updateAccount(account.id, {
-      status: "active",
-      identifier: { iban: caller.iban },
-      address: caller.address,
-      backingUserId: caller.id,
-      backedSince: safeBooksStart(caller),
-      moneriumProfile: checked.record,
-      gate: undefined,
+    // Checked again and written in one transaction holding the org's row and
+    // the Safe, the key POST .../accounts takes too, so one Safe cannot back
+    // two businesses by the two routes in parallel (§2, one Safe two accounts).
+    const done = await store.tx(async () => {
+      await store.lockOrganisation(ctx.org.id);
+      await store.lockKey(`safe:${caller.address.toLowerCase()}`);
+      if ((await store.findAccount(account.id))?.backingUserId) {
+        return { refused: { status: 409, body: { error: "This account was funded by another request while we checked with Monerium." } } };
+      }
+      const lateTaken = await safeTakenBy(caller, ctx.org.id);
+      if (lateTaken) return { refused: { status: 409, body: { error: safeTakenError(lateTaken), code: "SAFE_IN_OTHER_ORG" } } };
+      return {
+        funded: await store.updateAccount(account.id, {
+          status: "active",
+          identifier: { iban: caller.iban },
+          address: caller.address,
+          backingUserId: caller.id,
+          backedSince: safeBooksStart(caller),
+          moneriumProfile: checked.record,
+          gate: undefined,
+        }),
+      };
     });
+    if (done.refused) return res.status(done.refused.status).json(done.refused.body);
+    const funded = done.funded!;
     res.json({
       account: await accountView(ctx.org, funded),
       note:

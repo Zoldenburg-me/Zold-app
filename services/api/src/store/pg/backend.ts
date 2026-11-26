@@ -150,6 +150,19 @@ async function prune<T extends { id: string }>(q: Sql, table: Table, where: stri
  * and an organisation's pages share one namespace (§1.2). Run in the
  * transaction that writes the owner's row.
  */
+/**
+ * Delete a cap hold holding its cap's lock, as holdDailyCap counts under it:
+ * a cap sum reads the holds and then the rows in two statements, so a hold
+ * replaced between them would be counted twice (a false refusal). False when
+ * there is no such hold.
+ */
+async function releaseUnderCapLock(t: Sql, holdId: string): Promise<boolean> {
+  const key = (await t.query<{ cap_key: string }>("SELECT cap_key FROM cap_holds WHERE id = $1", [holdId])).rows[0]?.cap_key;
+  if (key === undefined) return false;
+  await t.query("SELECT pg_advisory_xact_lock(hashtext(current_database() || ':' || $1))", [`cap:${key}`]);
+  return (await t.query("DELETE FROM cap_holds WHERE id = $1 RETURNING id", [holdId])).rows.length > 0;
+}
+
 async function syncHandle(q: Sql, kind: "user" | "organisation", ownerId: string, handle: string | undefined) {
   const lc = handle ? handle.toLowerCase() : null;
   await q.query("DELETE FROM payment_handles WHERE owner_kind = $1 AND owner_id = $2 AND handle_lc IS DISTINCT FROM $3", [kind, ownerId, lc]);
@@ -598,8 +611,7 @@ export function createPgStore(database: Database): StoreBackend {
       tx(async (t) => {
         // The row and the release are one transaction: the amount is counted
         // as the hold or as the transfer, never both and never neither.
-        const held = await t.query("DELETE FROM cap_holds WHERE id = $1 RETURNING id", [holdId]);
-        if (!held.rows.length) throw new Error(`no cap hold ${holdId} — the transfer was not reserved`);
+        if (!(await releaseUnderCapLock(t, holdId))) throw new Error(`no cap hold ${holdId} — the transfer was not reserved`);
         await insert(t, TABLE.transfers, row);
       }),
     async releaseCapHold(holdId) {
@@ -851,8 +863,7 @@ export function createPgStore(database: Database): StoreBackend {
     findCryptoSend: (id) => first<CryptoSend>(q, TABLE.cryptoSends, "id = $1", [id]),
     addCryptoSendUnderHold: (row: CryptoSend, holdId) =>
       tx(async (t) => {
-        const held = await t.query("DELETE FROM cap_holds WHERE id = $1 RETURNING id", [holdId]);
-        if (!held.rows.length) throw new Error(`no cap hold ${holdId} — the send was not reserved`);
+        if (!(await releaseUnderCapLock(t, holdId))) throw new Error(`no cap hold ${holdId} — the send was not reserved`);
         await insert(t, TABLE.cryptoSends, row);
       }),
     claimCryptoSend: async (id) =>

@@ -258,6 +258,43 @@ await check("two companies opening an account on one Safe in parallel: one opens
   for (const x of active) await store.updateAccount(x.id, { status: "gated" });
 }));
 
+await check("one company funding its account while another opens one on the same Safe, in parallel: one gets the Safe", () => withSafeFree("u_corp", async () => {
+  await addOrg("org_biz_race_f", "business", "u_corp", "Acme Technik GmbH");
+  await addGatedEur("acc_biz_race_f", "org_biz_race_f");
+  await addOrg("org_biz_race_o", "business", "u_corp", "Acme Technik GmbH");
+  // Both past every check before either writes: the fund's updateAccount and
+  // the open's addAccount wait for each other (as scripts/_interleave.ts does
+  // for one method), unless check and write are one transaction.
+  const { updateAccount, addAccount } = store;
+  let waiting: (() => void)[] | undefined = [];
+  const barrier = () =>
+    waiting
+      ? new Promise<void>((go) => {
+          waiting!.push(go);
+          const release = () => { const all = waiting ?? []; waiting = undefined; all.forEach((r) => r()); };
+          if (waiting!.length >= 2) release();
+          else setTimeout(release, 300);
+        })
+      : Promise.resolve();
+  Object.assign(store, {
+    updateAccount: async (...a: Parameters<typeof updateAccount>) => (a[1].backingUserId ? await barrier() : undefined, updateAccount(...a)),
+    addAccount: async (...a: Parameters<typeof addAccount>) => (await barrier(), addAccount(...a)),
+  });
+  const restore = () => Object.assign(store, { updateAccount, addAccount });
+  try {
+    const [fund, open] = await Promise.all([
+      call("POST", "/api/orgs/org_biz_race_f/accounts/acc_biz_race_f/fund", "u_corp"),
+      call("POST", "/api/orgs/org_biz_race_o/accounts", "u_corp", { currency: "EUR", useMyAccount: true }),
+    ]);
+    assert.deepEqual([fund.status === 200 ? "ok" : fund.status, open.status === 201 ? "ok" : open.status].sort(), [409, "ok"].sort() as any, JSON.stringify([fund.data, open.data]));
+  } finally {
+    restore();
+  }
+  const active = (await store.list("accounts")).filter((x) => x.backingUserId === "u_corp" && x.status === "active" && x.orgId.startsWith("org_biz_race_"));
+  assert.equal(active.length, 1, "one company holds the Safe");
+  for (const x of active) await store.updateAccount(x.id, { status: "gated" });
+}));
+
 await check("an admin cannot back a business with their own account, so the owner is never locked out", () => withSafeFree("u_corp", async () => {
   await addOrg("org_biz_admin", "business", "u_pending", "Acme Technik GmbH");
   await store.addMember({ id: "m_org_biz_admin_u_corp", orgId: "org_biz_admin", userId: "u_corp", email: "", role: "admin", status: "active", invitedAt: now, acceptedAt: now });
