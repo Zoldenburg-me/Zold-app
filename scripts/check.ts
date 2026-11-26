@@ -23,6 +23,7 @@ const scripts = [
   "webauthn:selftest",
   "authorize:test",
   "redeem-window:test",
+  "sepa-memo:test",
   "country:policy:test",
   "env:number:test",
   "log-pii:test",

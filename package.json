@@ -131,6 +131,7 @@
     "jit:test": "tsx scripts/jit-liquidity-test.ts",
     "eur:proof": "tsx scripts/eur-proof.ts",
     "sepa:test": "tsx scripts/sepa-reference-test.ts",
+    "sepa-memo:test": "tsx scripts/sepa-stored-memo-test.ts",
     "dex:test": "tsx scripts/dex-test.ts",
     "lifi:test": "tsx scripts/lifi-test.ts",
     "venue-receipt:test": "tsx scripts/venue-receipt-test.ts",

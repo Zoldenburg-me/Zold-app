@@ -1257,7 +1257,10 @@ export async function executeSepaTransfer(
           user,
           payoutEur,
           counterpart,
-          paymentMemo(transfer.id, transfer.reference),
+          // The memo stored when the transfer was built, never a recomputed
+          // one: paymentMemo's format can change between build and send, and
+          // the poller matches Monerium's echo against the stored memo.
+          transfer.moneriumRedeem?.memo ?? paymentMemo(transfer.id, transfer.reference),
           transfer.moneriumRedeem?.signature
             ? { ...transfer.moneriumRedeem, signature: transfer.moneriumRedeem.signature }
             : undefined,
