@@ -12,10 +12,10 @@ import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const rootB64 = () => randomBytes(32).toString("base64url");
 const K1 = rootB64();
@@ -286,10 +286,10 @@ store.addOrganisation({ id: "org_1", name: "Test GmbH", createdAt: now, updatedA
 const JOB = path.join(path.dirname(fileURLToPath(import.meta.url)), "reencrypt-fields.ts");
 const TSX = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "node_modules", "tsx", "dist", "cli.mjs");
 const PLAINTEXTS = ["shpat_one", "link_one", "shpat_two", "gmi_one", "mon_access", "mon_refresh", "mon_secret"];
-function job(args: string[], keys: string) {
+function job(args: string[], keys: string, extraEnv: NodeJS.ProcessEnv = {}) {
   const r = spawnSync(process.execPath, [TSX, JOB, ...args], {
     encoding: "utf8",
-    env: { ...process.env, DATA_ENCRYPTION_KEYS: keys },
+    env: { ...process.env, DATA_ENCRYPTION_KEYS: keys, ...extraEnv },
   });
   const out = `${r.stdout}${r.stderr}`;
   for (const p of PLAINTEXTS) assert.ok(!out.includes(p), `the job printed a plaintext value`);
@@ -297,6 +297,8 @@ function job(args: string[], keys: string) {
   return { status: r.status, out };
 }
 const onDisk = () => JSON.parse(readFileSync(DB_PATH, "utf8"));
+// The store as seeded, before any job ran: the failure cases below start from it.
+const SEED = readFileSync(DB_PATH, "utf8");
 
 await check("a dry run (the default) reports v1 rows and old keys, and writes nothing", () => {
   const before = readFileSync(DB_PATH, "utf8");
@@ -374,6 +376,100 @@ await check("a row that does not decrypt is reported and left as it was, and the
   assert.match(r.out, /shopifyConnections\.accessToken conn-2: does not decrypt/);
   assert.equal(onDisk().shopifyConnections.find((c: any) => c.id === "conn-2").accessTokenEnc, c1.accessTokenEnc);
 });
+
+console.log("re-encrypt job under injected faults (scripts/fixtures/store-faults.mjs)");
+const FAULTS = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "store-faults.mjs");
+const KEYS21 = `k2:${K2},k1:${K1}`;
+/** The seeded store plus a user named canary-A, which a fault's "other writer" renames to canary-B. */
+function reseed() {
+  const db = JSON.parse(SEED);
+  db.users.push({ id: "user-canary", name: "canary-A", country: "DE", kycStatus: "pending", createdAt: now });
+  writeFileSync(DB_PATH, JSON.stringify(db));
+  // The fixture's pinned mtime, before the job starts: a later change then
+  // keeps size AND mtime, so only a content check can see it.
+  utimesSync(DB_PATH, 1_700_000_000, 1_700_000_000);
+  rmSync(`${DB_PATH}.tmp`, { force: true });
+  return readFileSync(DB_PATH, "utf8");
+}
+const faultJob = (args: string[], fault: string) =>
+  job(args, KEYS21, { ZOLD_STORE_FAULT: fault, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import ${pathToFileURL(FAULTS).href}`.trim() });
+/** How many of the seven secret fields are under each key, read from the file. */
+function keysOnDisk() {
+  const db = onDisk();
+  const c = (id: string) => db.shopifyConnections.find((x: any) => x.id === id);
+  const m = db.users.find((u: any) => u.id === "user-1").monerium;
+  const values = [c("conn-1").accessTokenEnc, c("conn-1").orderLinkSecretEnc, c("conn-2").accessTokenEnc,
+    db.organisations.find((o: any) => o.id === "org_1").integrations.getmyinvoices.apiKeyEnc,
+    m.accessTokenEnc, m.refreshTokenEnc, m.apiKeys.clientSecretEnc];
+  const n: Record<string, number> = {};
+  for (const v of values) n[fieldKeyId(v)] = (n[fieldKeyId(v)] ?? 0) + 1;
+  return n;
+}
+const canary = () => onDisk().users.find((u: any) => u.id === "user-canary").name;
+
+await check("a write by another process right after the job read the store: refused, nothing written, that write kept", () => {
+  reseed();
+  const r = faultJob(["--apply"], "mutate-after-read");
+  assert.notEqual(r.status, 0, r.out);
+  assert.match(r.out, /the store changed while the job ran.*nothing written/);
+  assert.equal(canary(), "canary-B", "the other writer's change was overwritten");
+  assert.deepEqual(keysOnDisk(), { v1: 6, k1: 1 });
+});
+await check("a change with the same size and mtime while the job decrypts: refused, nothing written, that change kept", () => {
+  reseed();
+  const r = faultJob(["--apply"], "mutate-on-decrypt");
+  assert.notEqual(r.status, 0, r.out);
+  assert.match(r.out, /the store changed while the job ran.*nothing written/);
+  assert.doesNotMatch(r.out, /moved \d+ row/);
+  assert.equal(canary(), "canary-B", "the other writer's change was overwritten");
+  assert.deepEqual(keysOnDisk(), { v1: 6, k1: 1 });
+});
+await check("a row that fails to re-encrypt part-way: the rows before it are written, the report says so, and a rerun finishes", () => {
+  reseed();
+  const r = faultJob(["--apply"], "seal-fails-at:3");
+  assert.notEqual(r.status, 0, r.out);
+  assert.match(r.out, /moved 2 of 7 row\(s\), then stopped/);
+  assert.doesNotMatch(r.out, /^moved \d+ row\(s\)$/m, "a partial run reported a complete one");
+  assert.deepEqual(keysOnDisk(), { k2: 2, k1: 1, v1: 4 }, "exactly the reported rows moved");
+  const dry = job([], KEYS21);
+  assert.match(dry.out, /5 to move/);
+  assert.match(dry.out, /v1: 4 row\(s\) still need/);
+  assert.match(dry.out, /k1: 1 row\(s\) still use it/, "k1 was reported free while a row still used it");
+  const again = job(["--apply"], KEYS21);
+  assert.equal(again.status, 0, again.out);
+  assert.match(again.out, /moved 5 row\(s\)/);
+  assert.deepEqual(keysOnDisk(), { k2: 7 });
+  assert.equal(canary(), "canary-A");
+});
+await check("the store write fails (full disk): the file is as it was, no copy is left, and the job never says it moved anything", () => {
+  const before = reseed();
+  const r = faultJob(["--apply"], "rename-enospc");
+  assert.notEqual(r.status, 0, r.out);
+  assert.doesNotMatch(r.out, /moved \d+ row/);
+  assert.match(r.out, /ENOSPC/);
+  assert.match(r.out, /dry run/i, "the failure does not say how to see what moved");
+  assert.equal(readFileSync(DB_PATH, "utf8"), before);
+  assert.equal(existsSync(`${DB_PATH}.tmp`), false, "a second copy of the store was left behind");
+  assert.equal(job(["--apply"], KEYS21).status, 0, "the rerun failed");
+  assert.deepEqual(keysOnDisk(), { k2: 7 });
+});
+await check("the job dies half-way through the write: the store is the old one whole, and a rerun moves every row", () => {
+  const before = reseed();
+  const r = faultJob(["--apply"], "kill-in-write");
+  assert.notEqual(r.status, 0, r.out);
+  assert.doesNotMatch(r.out, /moved \d+ row/);
+  assert.equal(readFileSync(DB_PATH, "utf8"), before);
+  // A crash leaves the half-written .tmp; it is owner-only and the next write replaces it.
+  if (existsSync(`${DB_PATH}.tmp`)) assert.equal(statSync(`${DB_PATH}.tmp`).mode & 0o777, 0o600);
+  const again = job(["--apply"], KEYS21);
+  assert.equal(again.status, 0, again.out);
+  assert.deepEqual(keysOnDisk(), { k2: 7 });
+  assert.equal(existsSync(`${DB_PATH}.tmp`), false);
+});
+// shortcut: no lock is shared with the API, so a write that lands between the
+// job's last check and its rename is still lost; needs the single-writer
+// decision (#107 owner Q1). The job's own comment says to stop the API.
+console.log("  TODO a write between the job's last check and its rename is not detected (no store lock; owner Q1)");
 
 rmSync(DB_PATH, { force: true });
 if (failed) {

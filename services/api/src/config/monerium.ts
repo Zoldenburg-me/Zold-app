@@ -42,6 +42,14 @@ export const MONERIUM = {
 export const moneriumSandboxEnabled = () =>
   Boolean(MONERIUM.clientId && MONERIUM.clientSecret);
 
+/**
+ * May a company pay a bank account from its own IBAN (a Monerium redeem
+ * signed by an owner's passkey)? OFF unless MONERIUM_ORG_PAYOUTS=on: it is a
+ * new money-out path on the company's own euros, so a deployment turns it on
+ * deliberately (sandbox testing does). Nothing else in the app is gated on it.
+ */
+export const orgPayoutsEnabled = () => process.env.MONERIUM_ORG_PAYOUTS === "on";
+
 // MONERIUM_OAUTH=off stops new OAuth connects (the app then offers only the
 // user's own API keys); accounts already connected by OAuth keep refreshing.
 export const moneriumOAuthEnabled = () =>

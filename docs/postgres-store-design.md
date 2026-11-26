@@ -665,10 +665,27 @@ stopped and read-only, until the owner closes it (§6 step 8).
 - **No network port.** `listen_addresses = ''`: each cluster listens on its
   unix socket only. The OCI security list opens no database port.
 - **Peer authentication, no database password.** Each cluster's `pg_hba.conf`
-  has `local` lines only, one per database, with `peer` and a `pg_ident.conf`
-  map from that deployment's OS users to its roles (`zold-mainnet` → the
-  application role, the deploy user → the owner role), and a final `local all
-  all reject`. `REVOKE CONNECT ON DATABASE <db> FROM PUBLIC`, then `GRANT
+  has `local` lines only. Postgres uses the **first** line that matches the
+  connection type, database and user, and if that line's peer check or map
+  fails it tries no later line. So the bootstrap superuser's line, with no
+  map, comes first, and each database's line names that database's two
+  roles in the user column, never `all`. On mainnet:
+
+  ```
+  local  all          pg-mainnet               peer
+  local  <zold db>    <app role>,<owner role>  peer map=zold-mainnet
+  local  hub          hub_app,hub_owner        peer map=hub
+  local  all          all                      reject
+  ```
+
+  (`pg-testnet` on testnet, without the `hub` line; `pg_createcluster -u`
+  names the superuser role after the cluster's OS user.) Each map is a
+  `pg_ident.conf` map from that deployment's OS users to its roles
+  (`zold-mainnet` → the application role, the deploy user → the owner role;
+  `zold-hub` → `hub_app`, §7.2). Only the cluster's OS user connects as
+  superuser, to every database: the provisioning script, the restore and
+  its hash checks (§7.1), the daily dump (below) and the hub write stop
+  (§7.2) run as it. `REVOKE CONNECT ON DATABASE <db> FROM PUBLIC`, then `GRANT
   CONNECT` to the two roles of that database. A testnet process cannot open
   mainnet's socket (directory permissions), would not be mapped if it could
   (`pg_ident`), and has no `CONNECT` grant on the database. `DATABASE_URL` is
@@ -753,10 +770,24 @@ stopped and read-only, until the owner closes it (§6 step 8).
   passwords, §7) and `pg_dump -Fc` of each database in the cluster (on
   mainnet, Zold's and `hub`, §7.2), in one encrypted tar. Each database's
   dump carries its own check file: the timer opens a `REPEATABLE READ`
-  transaction, takes `pg_export_snapshot()`, computes the per-table row
-  counts and hashes of the importer's verify (§6) inside it, and runs
+  transaction, takes `pg_export_snapshot()`, computes per-table row counts
+  and hashes inside it, and runs
   `pg_dump --snapshot=<id>` on the same snapshot, so the counts describe
-  exactly the rows in the dump. The
+  exactly the rows in the dump. This is **the table check**, the one
+  every drill and restore in this note uses. It is generic, not §6's
+  `doc`-by-id one, so it fits every table: per table, the row count and a
+  SHA-256 over each row as `to_jsonb(row)::text` (every column, keys in a
+  fixed order), the rows sorted by that text `COLLATE "C"`, which needs no
+  primary key (`ledger_history`) and no btree order on a `json` column.
+  The session first runs `SET TimeZone = 'UTC'`, `SET DateStyle = 'ISO,
+  YMD'`, `SET IntervalStyle = 'postgres'`, `SET extra_float_digits = 1`
+  and `SET bytea_output = 'hex'`, so the text form does not depend on the
+  host's time zone, settings or collation library: the same rows hash the
+  same on the live host, a drill instance and a fresh `initdb`. For a document table that is `id` and `doc`; for
+  `payment_handles`, `schema_migrations`, `outbox`, `ledger_history`,
+  `cap_holds`, `pending_executions` and the hub's tables it is their own
+  columns. The drill compares the restored database against the same
+  query. The
   host's credential for it has create and read only (no overwrite, no
   delete); a lifecycle rule deletes objects after 30 days. A compromised
   host can then wipe the PITR repositories but not the last 14 days of
@@ -776,8 +807,9 @@ stopped and read-only, until the owner closes it (§6 step 8).
   `pgbackrest stop` runs on the drill instance before Postgres starts, which
   blocks `archive-push`, `backup` and `expire` there. It follows the rebuild
   below up to the restore, restores to a time T, starts Postgres, and
-  compares per-table row counts and hashes (the importer's verify, §6)
-  against an export taken at T. It does not start the API: a restored
+  runs the table check (above) on every table of every database in the
+  cluster, against the same check run on the live host at T (one
+  `REPEATABLE READ` snapshot per database). It does not start the API: a restored
   mainnet API would run the sweeps against real partners, a second API
   process (§2). The drill restores from `repo1` and `repo2` in alternate
   months, and every third month from the latest dump instead (§7.1, both
@@ -856,15 +888,26 @@ latest dump from the dump bucket and decrypt it with the owner's age key,
 which is never on the host (the owner runs `age -d` or hands the key in for
 the restore only). The cluster comes from `initdb`, so at first only its
 bootstrap superuser exists, and the `peer` mappings of step 2 point at roles
-that are not there yet. So the globals are loaded first, by the cluster's OS
-user as that bootstrap superuser over the socket; the one error expected is
-the dump's `CREATE ROLE` for the bootstrap role, which `initdb` already made,
-and any other error stops the restore. Then, for **every database in the
-dump** (on mainnet, Zold's and `hub`, §7.2): `CREATE DATABASE <db> OWNER
-<its owner role>`, `pg_restore` it as that owner role, and compare its row
-counts and hashes with the dump's check file (§7). Check the roles and
-grants as in step 3 (and, for `hub`, as in §7.2) and that each database's
-`schema_migrations` is at the latest version. Then create a new pgBackRest stanza in each reachable
+that are not there yet. Every step below runs as the cluster's OS user
+(`pg-mainnet`) over the socket, through its own `pg_hba.conf` line (§7).
+The globals are loaded first: the dump's `CREATE ROLE "pg-mainnet";` line,
+which `initdb` already made, is filtered out (`grep -vx`), and the rest
+runs with `psql -v ON_ERROR_STOP=1`, so any error stops the restore. Then,
+for **every database in the dump** (on mainnet, Zold's and `hub`, §7.2):
+`CREATE DATABASE <db> OWNER <its owner role>`, `pg_restore --role=<its
+owner role>` into it, and run the table check (§7) on it against the dump's
+check file. `pg_restore` without `--create` does not carry the
+database-level settings (since PG 11 they are in neither the globals nor
+the restored contents), so the provisioning script's database step is run
+next: `REVOKE CONNECT … FROM PUBLIC` and the `GRANT CONNECT`s on each
+database, `CONNECTION LIMIT 25` on `hub`, and any `ALTER DATABASE … SET`.
+Only then the step-3 check, which here also checks that `CONNECT` is
+revoked from `PUBLIC` on each database, granted only to that database's two
+roles, and that `hub` has `datconnlimit = 25` (and, for `hub`, the checks of
+§7.2); and that each database's `schema_migrations` is at the latest
+version. Before S9 ports the hub, `hub` is provisioned but empty, with no
+tables and no `schema_migrations`: the check then expects exactly that, and
+any table in it fails. Then create a new pgBackRest stanza in each reachable
 region and take a full backup before step 5. Everything after the dump's
 time is lost; the reconciler reports the drift and the owner is told the
 loss window.
@@ -921,8 +964,13 @@ on its functions through `PUBLIC`, whatever is revoked from its own role.
     hub's code can miss is backed by one outside it: the per-minute alert
     check also **stops the hub** when `hub` passes its hard size or the
     shared volume drops under 15 % free, with `ALTER DATABASE hub
-    CONNECTION LIMIT 0` and `pg_terminate_backend` on its sessions. Zold
-    keeps writing; the owner lifts the stop by hand;
+    CONNECTION LIMIT 0` and `pg_terminate_backend` on its sessions. The
+    check runs as the cluster's OS user and bootstrap superuser
+    (`pg-mainnet`, §7), the one role that may do both. Zold keeps writing;
+    the owner lifts the stop by hand, as that same user, with `ALTER
+    DATABASE hub CONNECTION LIMIT 25` (the provisioned value, not `-1`). The
+    provisioning script leaves a limit of 0 on `hub` as it is and says so,
+    so a re-run never lifts a stop;
   - alerts: the §7 disk and archiver alerts name the database that is
     growing (`pg_database_size` per database, and the write counters of
     `pg_stat_database` per database against the cluster's WAL rate in
@@ -947,7 +995,11 @@ on its functions through `PUBLIC`, whatever is revoked from its own role.
   logical restore of the `hub` database alone: `pg_restore` of the last
   daily dump into a fresh `hub` database, or a PITR to the chosen time onto
   a scratch instance (the drill's read-only path) and a `pg_dump` of `hub`
-  from there restored into the host. A Zold PITR rewinds the hub with it,
+  from there restored into the host, each followed by the table check, the
+  provisioning script's database step and checks as in §7.1. The restore
+  does not lift a stop: before it, the owner records the live `hub`'s
+  `datconnlimit`; if it was 0, the database step sets 0 again, not 25, and
+  the check expects 0. The stop is then lifted by hand, as above. A Zold PITR rewinds the hub with it,
   and the hub's agents are told which window they lost.
 - **Testnet.** The mainnet cluster holds only the mainnet hub. A testnet
   hub, if one runs, is a `hub` database in the testnet cluster with the same

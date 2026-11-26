@@ -134,7 +134,7 @@ function render(doc) {
       <td>${esc(l.reference || "—")}${memo ? `<div class="sub">${esc(memo)}</div>` : ""}</td>
       <td class="num ${out ? "neg" : "pos"}">${out ? "−" : "+"}${esc(eur(Math.abs(l.amountCents) / 100))}</td></tr></tbody></table>`;
     const booking = block("Booked against", [
-      row("Invoice", s.invoice ? `${s.invoice.number}${s.invoice.payer ? ` · ${s.invoice.payer}` : ""}${s.invoice.source === "external" ? " (issued outside Zold)" : ""}` : ""),
+      row("Invoice", s.invoice ? `${s.invoice.number}${(s.invoice.counterparty ?? s.invoice.payer) ? ` · ${s.invoice.counterparty ?? s.invoice.payer}` : ""}${s.invoice.source === "external" ? " (issued outside Zold)" : ""}` : ""),
       row("Account code", l.accountCode),
       row("Booked as", l.ownTransfer ? "Between the holder’s own accounts, not income or an expense" : ""),
       row("Zold fee", b.feeEur !== undefined ? eur(b.feeEur) : ""),

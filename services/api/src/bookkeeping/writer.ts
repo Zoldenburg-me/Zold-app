@@ -30,6 +30,7 @@ import {
   type User,
 } from "../store.js";
 import { safeBooksStart } from "../domain/safe-books.js";
+import { moneriumAmountEur } from "../domain/monerium-order.js";
 import type { MoneriumOrderLike } from "../documents.js";
 import { invoicePayments, mergeStatementLines, projectStatementLines, type InvoicePayments, type StatementInputs } from "./statement.js";
 import { describeCause } from "../http/log-cause.js";
@@ -231,6 +232,7 @@ export function writeAccountStatementLines(account: Account, rows: Rows = storeR
     invoices: rows.invoicesOf(account.orgId),
     paymentRequests: [],
     cryptoSends: rows.cryptoSendsOfAccount(account),
+    companyPayouts: account.moneriumPayouts ?? [],
     swapsHaveExecuted: rows.swapsHaveExecuted(),
   };
   return writeProjected(inp, undefined, rows);
@@ -274,7 +276,8 @@ export function writeStatementLines(): { added: number; updated: number } {
         }
       }
       for (const a of store.accounts) {
-        if (!a.address || (!rows.issueOrdersOfAccount(a.id).length && !rows.cryptoSendsOfAccount(a).length)) continue;
+        const paidOut = (a.moneriumPayouts ?? []).some((p) => p.state === "sent");
+        if (!a.address || (!rows.issueOrdersOfAccount(a.id).length && !rows.cryptoSendsOfAccount(a).length && !paidOut)) continue;
         try {
           const r = writeAccountStatementLines(a, rows);
           added += r.added;
@@ -297,8 +300,8 @@ export function writeStatementLines(): { added: number; updated: number } {
  * table existed still gets its line on the next poll. Idempotent on the id.
  */
 export function noteMoneriumIssue(order: MoneriumOrderLike, holder: MoneyInHolder): MoneriumIssueRecord | undefined {
-  const amountEur = Number(order.amount);
-  if (!(amountEur > 0)) return undefined;
+  const amountEur = moneriumAmountEur(order.amount);
+  if (!amountEur) return undefined;
   const d = order.counterpart?.details ?? {};
   const name = d.name || d.companyName || [d.firstName, d.lastName].filter(Boolean).join(" ") || undefined;
   const processedAt = order.meta?.processedAt ?? order.meta?.placedAt ?? order.placedAt ?? order.createdAt ?? new Date().toISOString();

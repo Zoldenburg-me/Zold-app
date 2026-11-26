@@ -353,7 +353,12 @@ async function stubPartners(logSend: (what: string) => void) {
       return new Response("{}", { status: 500 });
     }
     if (url.hostname === "bridge.test") {
-      return json({ id: "bridge-1", state: "awaiting_funds", source_deposit_instructions: { to_address: DEPOSIT } });
+      // Bridge answers with the order it was sent (bridge-harness-test covers the rest).
+      const b = JSON.parse(String(init.body));
+      return json({
+        id: "bridge-1", state: "awaiting_funds", on_behalf_of: b.on_behalf_of, amount: b.amount, source: b.source, destination: b.destination,
+        source_deposit_instructions: { payment_rail: b.source.payment_rail, currency: b.source.currency, amount: b.amount, to_address: DEPOSIT },
+      });
     }
     if (url.hostname === "anchor.test") {
       if (url.pathname.endsWith("stellar.toml")) {

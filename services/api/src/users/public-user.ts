@@ -29,7 +29,7 @@ function pick<T extends object, K extends keyof T>(obj: T | undefined, keys: rea
  *  projected below or not sent at all. */
 const TOP_LEVEL = [
   "id", "name", "email", "country", "kycStatus", "iban", "ibanSince", "emailVerifiedAt", "address",
-  "authorizerAddress", "citizenships", "accountType", "companyIncorporationCountry", "handle",
+  "authorizerAddress", "citizenships", "accountType", "companyIncorporationCountry", "companyName", "handle",
   "payDisplayName", "autoConvert", "createdAt",
 ] as const satisfies readonly (keyof User)[];
 

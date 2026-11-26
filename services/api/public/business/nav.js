@@ -65,8 +65,17 @@ export function setMenu(open, { viaHistory = true } = {}) {
   if (!open && was && (!document.activeElement || document.activeElement === document.body || $("#side-menu").contains(document.activeElement))) btn.focus();
   return !open && was && Boolean(history.state?.zbMenu);
 }
+// The desktop icon rail opens while focus is in it: Escape closes it by
+// taking focus back to the page.
+const RAIL = matchMedia("(min-width: 1024px) and (hover: hover) and (pointer: fine)");
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && document.querySelector(".zb.is-menu")) setMenu(false);
+  if (e.key !== "Escape") return;
+  if (document.querySelector(".zb.is-menu")) setMenu(false);
+  else if (RAIL.matches && $("#side")?.contains(document.activeElement)) {
+    const t = $("#view-title");
+    t?.setAttribute("tabindex", "-1");
+    t?.focus();
+  }
 });
 // Search opens its own dialog over the page; the panel gets out of its way.
 document.addEventListener("click", (e) => { if (e.target.closest?.("#search-btn")) setMenu(false); });
@@ -143,6 +152,45 @@ function accountRight(a) {
   return iban ? `•••• ${String(iban).replace(/\s+/g, "").slice(-4)}` : "";
 }
 
+/* The balance Home's card has just read: { label, eur }, or null. Only Home
+   sets it, after its own read; any other view clears it, so the chip never
+   shows a figure older than the screen it sits on. */
+let topBalance = null;
+// Only the top bar is redrawn: a whole renderNav would take focus off a sidebar link or tab.
+export function setTopBalance(b) {
+  topBalance = b;
+  if (!org) return;
+  paint($("#top-info"), topInfo(waitingForMe(side.drafts).length));
+  bindViewLinks("#top-info a[data-view]");
+}
+
+/* A real link, so a modifier-click or middle-click opens the view in a new
+   tab (boot reads ?view=). A plain click stays in the page. */
+function bindViewLinks(sel) {
+  document.querySelectorAll(sel).forEach((a) => {
+    a.onclick = (e) => {
+      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      e.preventDefault();
+      // The screen already shown: only the Menu closes, and its entry goes.
+      if (a.dataset.view === view && document.querySelector(".zb.is-menu")) { setMenu(false); return; }
+      setView(a.dataset.view, { replace: setMenu(false, { viaHistory: false }) });
+      render({ focus: true });
+    };
+  });
+}
+
+/* From 1024px, top right beside the account chip: on Home, the balance its
+   card shows, named as the card names it; Approvals with what waits for this
+   person; and the test-mode label, which the icon rail has no room for. */
+function topInfo(waiting) {
+  const fig = view === "overview" && topBalance;
+  const pay = { id: "payments", capability: "transfers.drafts" };
+  const approvals = shown(pay) && cap(pay.capability).allowed
+    ? `<a class="zb-topchip" href="?view=payments" data-view="payments"${view === "payments" ? ' aria-current="page"' : ""}>${Z.icon("inbox")}<span>${reviewOn() ? "Approvals" : "Payments"}</span>${waiting ? `<span class="z-side__badge"><span class="z-sr">, </span>${waiting}<span class="z-sr"> waiting for you</span></span>` : ""}</a>`
+    : "";
+  return `${testMode !== undefined ? Z.testModePill(testMode) : ""}${fig ? `<span class="zb-topchip zb-topchip--bal"><small>${esc(fig.label)}</small><b class="z-fig">${esc(eur(fig.eur))}</b></span>` : ""}${approvals}`;
+}
+
 /* Only a changed trigger is redrawn, so an open menu keeps the button that
    focus returns to and its aria-expanded. */
 function paint(el, html) {
@@ -192,6 +240,8 @@ export function renderNav() {
   paint($("#acct"), `<button type="button" class="zb-chip-acct" id="acct-btn" aria-haspopup="dialog" aria-expanded="false" aria-label="Account and organisations. Current: ${esc(org.name)}"><span class="zb-chip-acct__main"><span class="zb-chip-acct__kind">${org.type === "personal" ? "Personal" : "Business"}</span><span class="zb-chip-acct__name">${esc(org.name)}</span></span>${Z.icon("expand_more")}</button>`);
 
   const accts = side.accounts;
+  if (view !== "overview") topBalance = null;
+  paint($("#top-info"), topInfo(waiting));
   $("#side-accounts").innerHTML = accts && accts.length
     ? `<section class="zb-accts" aria-labelledby="side-acc-h"><h2 class="z-eyebrow" id="side-acc-h">Accounts</h2>${accts.map((a) =>
       `<a class="zb-acct" href="?view=accounts" data-view="accounts"${view === "accounts" ? ' aria-current="page"' : ""}>${Z.icon("account_balance_wallet")}<span>${esc(a.label || a.currency)}</span><span class="zb-acct__right">${esc(accountRight(a))}</span></a>`).join("")}</section>`
@@ -203,18 +253,7 @@ export function renderNav() {
     <button type="button" class="z-side__link zb-signout" id="side-signout">${Z.icon("logout")}<span>Sign out</span></button>`;
   if (testMode !== undefined) $("#side-test").innerHTML = Z.testModePill(testMode);
 
-  // A real link, so a modifier-click or middle-click opens the view in a new
-  // tab (boot reads ?view=). A plain click stays in the page.
-  document.querySelectorAll("#side a[data-view], #tabs a[data-view]").forEach((a) => {
-    a.onclick = (e) => {
-      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-      e.preventDefault();
-      // The screen already shown: only the Menu closes, and its entry goes.
-      if (a.dataset.view === view && document.querySelector(".zb.is-menu")) { setMenu(false); return; }
-      setView(a.dataset.view, { replace: setMenu(false, { viaHistory: false }) });
-      render({ focus: true });
-    };
-  });
+  bindViewLinks("#side a[data-view], #tabs a[data-view], #top-info a[data-view]");
   $("#org-btn").onclick = () => { setMenu(false); accountSheet($("#org-btn")); };
   // #app, which holds the chip, leaves the page when start-up ends on an error screen.
   const chip = $("#acct-btn");

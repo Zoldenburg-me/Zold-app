@@ -336,6 +336,39 @@ export interface AccountIdentifier {
   bankCode?: string;
 }
 
+/** A bank payout from a company's own IBAN: one Monerium redeem order, signed
+ *  by an owner's passkey (routes/business/org-monerium-payouts.ts). `pending`
+ *  means Monerium holds the order; only `sent` means it processed it. */
+export type CompanyPayoutState = "pending" | "sent" | "failed" | "unknown";
+
+export interface CompanyBankPayout {
+  id: string;
+  amountEur: number;
+  recipientName: string;
+  recipientIban: string;
+  reference?: string;
+  /** The remittance line sent to Monerium. */
+  memo: string;
+  /** The exact redeem message the owner's passkey signed. */
+  message: string;
+  issuedAt: string;
+  safeAddress: `0x${string}`;
+  profileId: string;
+  /** The owner member whose passkey signed it. */
+  signedByMemberId: string;
+  state: CompanyPayoutState;
+  orderId?: string;
+  /** Monerium's own order state, as last read. */
+  providerState?: string;
+  /** When Monerium processed it (its `meta.processedAt`), once `sent`: the
+   *  statement's value date, not the day Zold first read it. */
+  processedAt?: string;
+  /** A fixed explanation for `failed` or `unknown`; never Monerium's body. */
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Account {
   id: string;
   orgId: string;
@@ -397,6 +430,22 @@ export interface Account {
   };
   /** Provider-side provisioning detail, for support. */
   detail?: string;
+  /**
+   * A company's own IBAN, as Monerium last reported it for this account. On
+   * the account rather than the Monerium key record: removing and
+   * reconnecting keys must not lose the fact that Monerium moved the IBAN
+   * elsewhere (routes/business/org-monerium-iban.ts). `movedAwayAt` is read
+   * only while the current profile and Safe still match, and cleared when
+   * Monerium attributes the IBAN to the Safe again.
+   */
+  moneriumIban?: {
+    safeAddress: `0x${string}`;
+    profileId: string;
+    movedAwayAt?: string;
+  };
+  /** Bank payouts sent from this account's IBAN, newest first (the last 50
+   *  are kept). Empty on every other account. */
+  moneriumPayouts?: CompanyBankPayout[];
   createdAt: string;
   updatedAt: string;
 }
@@ -423,6 +472,9 @@ export interface ImportedWallet {
     lastSyncedAt?: string;
     /** Last block scanned, as a string — JSON has no bigint. */
     cursor?: string;
+    /** That block's hash when it was scanned: another hash there later means
+     *  a booked block was replaced (wallet-sync/sync.ts). */
+    cursorHash?: `0x${string}`;
     error?: string;
     /** First day to book, YYYY-MM-DD. Absent: book from the import onwards.
      *  Earlier history is the `ledger.historicalSync` capability. */

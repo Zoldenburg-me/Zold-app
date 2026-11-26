@@ -818,6 +818,9 @@
   .m-shprev .r.off { color: var(--m-faint); }
   .m-shprev .r.off .material-symbols-rounded { color: var(--m-faint); }
   .m-shprev .r .v { margin-left: auto; font: 400 11.5px var(--m-mono); color: var(--m-dim); text-align: right; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .m-shout { margin-top: 16px; }
+  .m-shnote { margin: 0 0 8px; font-size: 13px; line-height: 1.5; color: var(--m-dim); }
+  .m-shurl { border: 1px solid var(--m-line-strong); border-radius: 12px; background: var(--m-surface); padding: 12px 14px; font: 400 13px var(--m-mono); color: var(--m-text); word-break: break-all; user-select: all; }
   .m-shlink { text-align: center; font: 400 10.5px var(--m-mono); color: var(--m-faint); margin-top: 10px; word-break: break-all; }
 
   /* ---------- transaction detail ---------- */

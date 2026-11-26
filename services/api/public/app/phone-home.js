@@ -48,6 +48,10 @@ function phChecklist(u) {
       ? [{ title: "Confirm your email", sub: u.emailVerifiedAt ? "Confirmed." : "A 6-digit code to your email.",
           done: !!u.emailVerifiedAt, action: { id: "ph-ck-email", label: "Confirm" } }]
       : []),
+    // Decides what the account may hold: until then it has its key and nothing else.
+    ...(residenceAsked(u)
+      ? [{ title: "Where you live", sub: "Two questions. Needed before money comes in.", done: false, action: { id: "ph-ck-residence", label: "Answer" } }]
+      : []),
     // A wallet account has no bank step: the checklist ends at the account.
     ...(bankOffered(u) ? [
     { title: "Verify your identity", sub: approved || connected ? "Connected." : ibanUnderReview(u) ? "Under review at Monerium." : "ID check, a few minutes.",
@@ -275,7 +279,7 @@ PH.home = {
   title: "Home",
   tab: "home",
   live: () => JSON.stringify([user?.balanceEur, user?.iban, user?.moneriumIbanElsewhere?.iban, user?.kycStatus, user?.monerium?.connectedAt, user?.passkeySafe?.status,
-    user?.passkeySafe?.recovery?.status, user?.passkeySafe?.candideRecovery?.guardianStatus, user?.passkeySafe?.recoveryChoice?.choice, user?.zoldenburgArmed, caps.zoldenburgEnrolment, user?.emailVerifiedAt, caps.emailVerification, user?.segment?.gate, caps.emailSmsRecovery, caps.zoldenburgRecovery, realMoney, phHistSig(),
+    user?.passkeySafe?.recovery?.status, user?.passkeySafe?.candideRecovery?.guardianStatus, user?.passkeySafe?.recoveryChoice?.choice, user?.zoldenburgArmed, caps.zoldenburgEnrolment, user?.emailVerifiedAt, caps.emailVerification, user?.segment?.gate, user?.segment?.value, caps.emailSmsRecovery, caps.zoldenburgRecovery, realMoney, phHistSig(),
     user?.ensName, phCache.signers?.owners?.length, signersState?.owners?.length, phCache.invoices?.error, phCache.invoices?.list && JSON.stringify(phOpenInvoices(phCache.invoices.list)), phSendLinksSig()]),
   html() {
     const u = user || {};
@@ -285,7 +289,7 @@ PH.home = {
     const inflight = hist.find(phInFlight);
     const ibanRight = u.iban && kycApproved(u)
       ? `<span class="z-mono z-dim" translate="no">•••• ${esc(String(u.iban).replace(/\s+/g, "").slice(-4))}</span>`
-      : `<span class="z-dim">${ibanMovedAway(u) ? "IBAN moved away" : bankOffered(u) ? "IBAN after verification" : "Wallet"}</span>`;
+      : `<span class="z-dim">${ibanMovedAway(u) ? "IBAN moved away" : bankOffered(u) ? "IBAN after verification" : residenceAsked(u) ? "After set-up" : "Wallet"}</span>`;
     // A partner refused the bank account; the wallet stays. Said once, plainly.
     const refused = u.kycStatus === "rejected" ? Z.note({ tone: "a", text: kycCopy("rejected", u)[2] }) : "";
     return `<h1 class="z-sr">Home</h1><header class="z-apphead">
@@ -300,11 +304,11 @@ PH.home = {
         ${phBalance(knownBalance(u), "Balance")}
         <a class="z-card z-acctrow" href="#account-details">${Z.icon("account_balance", "z-acctrow__ic")}<span class="z-acctrow__label">Account details</span>${ibanRight}${Z.icon("chevron_right", "z-row__chev")}</a>
         ${phNameRow(u) ? `<div class="z-card">${phNameRow(u)}</div>` : ""}
-        <div class="z-actions">
+        ${residenceAsked(u) ? "" : `<div class="z-actions">
           ${Z.button({ variant: "primary", icon: "arrow_outward", label: "Send", href: "#send" })}
           ${Z.button({ icon: "add", label: "Add money", href: "#add" })}
           ${Z.button({ icon: "south_west", label: "Request", href: "#get-paid" })}
-        </div>
+        </div>`}
         ${inflight ? `<a class="z-inflight" href="${phHref("send/progress", inflight.id)}">
             <span class="z-inflight__dot" aria-hidden="true"></span>
             <span class="z-row__main"><span class="z-row__title">${esc(phEur(inflight.sendEur))} to ${esc(inflight.recipientName || "")}</span>
@@ -333,6 +337,8 @@ PH.home = {
       if (b) b.onclick = () => enterKycReview(user?.name || "Account");
     }
     phBindIbanBack(root);
+    const resBtn = root.querySelector("#ph-ck-residence");
+    if (resBtn) resBtn.onclick = () => enterResidence();
     const emailBtn = root.querySelector("#ph-ck-email");
     if (emailBtn) emailBtn.onclick = () => enterEmailConfirm();
     const recX = root.querySelector("#ph-rec-x");
