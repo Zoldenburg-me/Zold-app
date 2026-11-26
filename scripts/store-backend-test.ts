@@ -340,12 +340,15 @@ console.log("ok - store suite on the JSON backend");
   const tr = (id: string, quoteId: string) => ({ id, userId: "u_1", quoteId, rail: "sepa", state: "CREATED", sendEur: 1, txs: [], createdAt: now, updatedAt: now }) as any;
   await s.addTransfer(tr("t_q1", "q_one"));
   await assert.rejects(async () => await s.addTransfer(tr("t_q2", "q_one")), /duplicate key/, "a second transfer for one quote");
-  // One account per address, case-blind: the add answers null, not an error.
-  const acc = (id: string, orgId: string, address?: string) => ({ id, orgId, currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, ...(address ? { address } : {}), createdAt: now, updatedAt: now }) as any;
+  // One account per company Safe, case-blind: the add answers null, not an error.
+  const acc = (id: string, orgId: string, address?: string, backingUserId?: string) =>
+    ({ id, orgId, currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, ...(address ? { address } : {}), ...(backingUserId ? { backingUserId } : {}), createdAt: now, updatedAt: now }) as any;
   assert.ok(await s.addAccount(acc("acc_1", "org_x", `0x${"ab".repeat(20)}`)));
-  assert.equal(await s.addAccount(acc("acc_2", "org_y", `0x${"AB".repeat(20)}`)), null, "a second account at one Safe");
+  assert.equal(await s.addAccount(acc("acc_2", "org_y", `0x${"AB".repeat(20)}`)), null, "a second account at one company Safe");
   assert.ok(await s.addAccount(acc("acc_3", "org_y")) && (await s.addAccount(acc("acc_4", "org_y"))), "accounts without an address do not collide");
   await assert.rejects(async () => await s.updateAccount("acc_3", { address: `0x${"ab".repeat(20)}` } as any), /duplicate key/);
+  const personal = `0x${"cd".repeat(20)}`;
+  assert.ok(await s.addAccount(acc("acc_p1", "org_p", personal, "u_1")) && (await s.addAccount(acc("acc_p2", "org_st", personal, "u_1"))), "a person's Safe backs several accounts");
   // One Zoldenburg grace period per user; other modes and statuses are not limited.
   const rr = (id: string, status: string, mode = "zoldenburg") => ({ id, userId: "u_1", mode, status, requestedAt: now, expiresAt: now }) as any;
   await s.addRecoveryRequest(rr("rr_1", "GRACE_PERIOD"));
@@ -360,7 +363,7 @@ console.log("ok - store suite on the JSON backend");
   assert.equal(spaced.trim().toLowerCase(), "zoe@example.de");
   assert.deepEqual((await s.usersByEmail("zoe@example.de")).map((u) => u.id), ["u_mail"], "NBSP, em space, BOM and ideographic space are trimmed");
   await db.close();
-  console.log("ok - Postgres keys: one payment-handle namespace, unique credentials, one live share per transfer, one issued invoice number per org, one transfer per quote, one account per address, one Zoldenburg grace period per user, the email key trimmed as JavaScript trims");
+  console.log("ok - Postgres keys: one payment-handle namespace, unique credentials, one live share per transfer, one issued invoice number per org, one transfer per quote, one account per company Safe, one Zoldenburg grace period per user, the email key trimmed as JavaScript trims");
 }
 
 // ── The PGlite features the design note relies on (§4) ─────────────────────

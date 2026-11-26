@@ -94,12 +94,13 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
   // ── Accounts ─────────────────────────────────────────────────────────────
   assert.deepEqual((await s.accountsOf("org_a")).map((a) => a.id), ["acc_eur", "acc_gated"]);
   assert.deepEqual((await s.accountsAtAddress(`0x${"aa".repeat(20)}`)).map((a) => a.id), ["acc_gated"]);
-  assert.equal(
-    await s.addAccount({ id: "acc_twin", orgId: "org_b", currency: "EUR", label: "EUR", status: "gated", provider: "monerium", identifier: {}, address: `0x${"aA".repeat(20)}`, createdAt: now, updatedAt: now } as any),
-    null,
-    "one account per address",
-  );
+  const companySafe = `0x${"cC".repeat(20)}`;
+  const twin = (id: string, orgId: string, over: Record<string, unknown> = {}) =>
+    ({ id, orgId, currency: "EUR", label: "EUR", status: "gated", provider: "monerium", identifier: {}, address: companySafe, createdAt: now, updatedAt: now, ...over }) as any;
+  assert.ok(await s.addAccount(twin("acc_co", "org_b")));
+  assert.equal(await s.addAccount(twin("acc_twin", "org_c", { address: companySafe.toLowerCase() })), null, "a company Safe is one account");
   assert.equal(await s.findAccount("acc_twin"), undefined);
+  assert.ok(await s.addAccount(twin("acc_aa_business", "org_b", { address: `0x${"aa".repeat(20)}`, backingUserId: "u_a" })), "a person's Safe backs their personal and their business account");
   const acc = await s.updateAccount("acc_eur", { label: "Main" });
   assert.equal(acc.label, "Main");
   assert.notEqual(acc.updatedAt, now, "updateAccount stamps updatedAt");

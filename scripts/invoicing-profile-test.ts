@@ -61,7 +61,8 @@ async function addOrg(id: string, country: string, over: Record<string, unknown>
   }
 }
 
-const app = express();
+const { sendAfterCommit } = await import("../services/api/src/http/send-after-commit.js");
+const app = express().use(sendAfterCommit);
 app.use(express.json());
 const requireSession = async (req: any, res: any) => {
   const id = req.header("x-user");

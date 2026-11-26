@@ -1006,8 +1006,11 @@ export function createPgStore(database: Database): StoreBackend {
       }),
 
     async addAccount(a: Account) {
-      // The id is minted fresh, so the one key this can meet is the address's.
-      const r = await q.query("INSERT INTO accounts (id, doc) VALUES ($1, $2::json) ON CONFLICT (address_lc) DO NOTHING RETURNING id", [a.id, JSON.stringify(a)]);
+      // The id is minted fresh, so the one key this can meet is a company Safe's.
+      const r = await q.query(
+        "INSERT INTO accounts (id, doc) VALUES ($1, $2::json) ON CONFLICT (address_lc) WHERE backing_user_id IS NULL DO NOTHING RETURNING id",
+        [a.id, JSON.stringify(a)],
+      );
       return r.rows.length ? a : null;
     },
     findAccount: (id) => first<Account>(q, TABLE.accounts, "id = $1", [id]),

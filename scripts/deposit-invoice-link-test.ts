@@ -64,7 +64,8 @@ const deposit = async (userId: string) => {
   return id;
 };
 
-const app = express();
+const { sendAfterCommit } = await import("../services/api/src/http/send-after-commit.js");
+const app = express().use(sendAfterCommit);
 app.use(express.json());
 app.use("/api", createCryptoDepositRouter({
   requireUserSession: async (req, res, userId) => {

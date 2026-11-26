@@ -18,10 +18,12 @@ CREATE INDEX cap_holds_expires_at ON cap_holds (expires_at);
 DROP INDEX transfers_quote_id;
 CREATE UNIQUE INDEX transfers_quote_id ON transfers (quote_id);
 
--- One account per address: two accounts at one Safe would book its money
--- twice (bookkeeping/money-in.ts reports them as unbookable).
-DROP INDEX accounts_address_lc;
-CREATE UNIQUE INDEX accounts_address_lc ON accounts (address_lc);
+-- One account per company Safe (no backing user): two would book its money
+-- twice (bookkeeping/money-in.ts reports them as unbookable). A person's Safe
+-- may back several accounts, their personal one and their sole-trader
+-- business's, so those are not in the key; routes/orgs.ts keeps a person's
+-- Safe to one business under a lock.
+CREATE UNIQUE INDEX accounts_address_unbacked ON accounts (address_lc) WHERE backing_user_id IS NULL;
 
 -- One Zoldenburg recovery in its grace period per user.
 CREATE UNIQUE INDEX recovery_requests_one_grace ON recovery_requests (user_id) WHERE mode = 'zoldenburg' AND status = 'GRACE_PERIOD';

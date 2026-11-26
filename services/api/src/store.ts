@@ -1149,11 +1149,16 @@ export const jsonCore = {
     const patch = acceptInviteOnRow(m, tokenHash, userId, db.members.filter((x) => x.orgId === m.orgId), at);
     return patch ? jsonCore.updateMember(id, patch) : null;
   },
-  /** Add an account, or null when another account is at its address: one
-   *  account per Safe (§2, one Safe two accounts; Postgres: the unique key). */
+  /**
+   * Add an account, or null when it is a company Safe's (no backing user)
+   * and another unbacked account is at that address: a company Safe is one
+   * account (§2, one Safe two accounts; Postgres: the partial unique key).
+   * A person's Safe may back several, their personal and their sole-trader
+   * business's; routes/orgs.ts keeps it to one business, under a lock.
+   */
   addAccount(a: Account): Account | null {
     const at = a.address?.toLowerCase();
-    if (at && db.accounts.some((x) => x.address?.toLowerCase() === at)) return null;
+    if (at && !a.backingUserId && db.accounts.some((x) => !x.backingUserId && x.address?.toLowerCase() === at)) return null;
     db.accounts.push(a);
     persist();
     return a;

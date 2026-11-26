@@ -34,7 +34,8 @@ for (const [orgId, userId, role] of [["org_b", "u_owner", "owner"], ["org_b", "u
   await store.addMember({ id: `m_${orgId}_${userId}`, orgId, userId, email: "", role: role as any, status: "active", invitedAt: now, acceptedAt: now });
 }
 
-const app = express();
+const { sendAfterCommit } = await import("../services/api/src/http/send-after-commit.js");
+const app = express().use(sendAfterCommit);
 app.use(express.json());
 const requireSession = async (req: any, res: any) => {
   const id = req.header("x-user");

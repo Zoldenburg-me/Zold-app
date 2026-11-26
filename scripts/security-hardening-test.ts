@@ -84,7 +84,8 @@ await check("IPv6 is keyed on its /64; mapped IPv4 as IPv4", () => {
 });
 
 // ── HTTP ─────────────────────────────────────────────────────────────────────
-const app = express();
+const { sendAfterCommit } = await import("../services/api/src/http/send-after-commit.js");
+const app = express().use(sendAfterCommit);
 app.use(express.json());
 app.use(securityHeaders);
 app.use("/api", apiRateLimit);
@@ -160,7 +161,7 @@ await check("every response carries a same-origin CSP and refuses to be framed",
 });
 await check("production pins HTTPS on every subdomain (five minutes while subdomains are confirmed); local dev does not", async () => {
   const headersFrom = async (production: boolean) => {
-    const one = express();
+    const one = express().use(sendAfterCommit);
     one.use(securityHeadersFor(production));
     one.get("/", (_req, res) => res.end());
     const s = one.listen(0);
@@ -359,7 +360,7 @@ console.log("a passkey replaced by recovery while an approval is being verified"
 
   await check("a login by the old passkey that finishes after recovery gets no session", async () => {
     await reset();
-    const app = express().use(express.json()).use("/api", createAuthRouter({ requireUserSession: async () => undefined }));
+    const app = express().use(sendAfterCommit).use(express.json()).use("/api", createAuthRouter({ requireUserSession: async () => undefined }));
     const server = app.listen(0);
     try {
       const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/passkey/login`;
@@ -377,7 +378,7 @@ console.log("a passkey replaced by recovery while an approval is being verified"
 
   await check("a recovery that lands after the login's passkey check and before its session is minted leaves no session of the old device", async () => {
     await reset();
-    const app = express().use(express.json()).use("/api", createAuthRouter({ requireUserSession: async () => undefined }));
+    const app = express().use(sendAfterCommit).use(express.json()).use("/api", createAuthRouter({ requireUserSession: async () => undefined }));
     const server = app.listen(0);
     const s = store as any;
     const realUse = s.recordPasskeyUse;
@@ -410,7 +411,7 @@ console.log("a passkey replaced by recovery while an approval is being verified"
   await check("sign-out revokes the session on the server: the old token is refused, other sessions live", async () => {
     await reset();
     const { issueSession } = await import("../services/api/src/http/sessions.js");
-    const app = express().use(express.json()).use("/api", createAuthRouter({ requireUserSession: async () => undefined }));
+    const app = express().use(sendAfterCommit).use(express.json()).use("/api", createAuthRouter({ requireUserSession: async () => undefined }));
     const server = app.listen(0);
     try {
       const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/session`;
@@ -841,7 +842,7 @@ await check("POST /users/:id/privacy-bundle refuses while the capability is off,
   const { createUserRouter } = await import("../services/api/src/routes/users.js");
   const uid = "u_bundle";
   await store.addUser({ id: uid, name: "Bundle", country: "DE", kycStatus: "approved", address: "0x0", createdAt: new Date().toISOString() } as any);
-  const app = express().use(express.json()).use("/api", createUserRouter({ requireUserSession: async () => true }));
+  const app = express().use(sendAfterCommit).use(express.json()).use("/api", createUserRouter({ requireUserSession: async () => true }));
   const server = app.listen(0);
   try {
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;

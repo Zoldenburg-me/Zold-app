@@ -77,7 +77,8 @@ const { apiRateLimit } = await import("../services/api/src/http/policy.js");
 await initStore();
 startCheckoutWebhook();
 
-const app = express();
+const { sendAfterCommit } = await import("../services/api/src/http/send-after-commit.js");
+const app = express().use(sendAfterCommit);
 app.use(express.json({ verify: (req, _res, buf) => { (req as any).rawBody = buf; } }));
 app.use("/api", apiRateLimit);
 const session = async (req: express.Request, res: express.Response) => {
@@ -333,7 +334,8 @@ await check("a fresh code exchanges once: {linkId, shop, orgName, payeeHandle, l
 });
 await check("the link secret is sealed at rest, never in the db file in the clear", async () => {
   const { readFileSync } = await import("node:fs");
-  const raw = readFileSync(process.env.TRANSF_DB_PATH!, "utf8");
+  // The file on db.json; on Postgres (npm run check:pg) the rows as stored.
+  const raw = process.env.STORE_BACKEND === "postgres" ? JSON.stringify(await store.list("merchantLinks")) : readFileSync(process.env.TRANSF_DB_PATH!, "utf8");
   assert.ok(!raw.includes(link.linkSecret));
   assert.ok((await store.findMerchantLink(link.linkId))!.linkSecretEnc);
 });

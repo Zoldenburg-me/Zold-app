@@ -79,11 +79,17 @@ async function org(id: string, type: "personal" | "business", entity?: "company"
   await store.addOrganisation({ id, type, ...(entity ? { entity } : {}), name: id, reporting, verifications: {}, createdAt: now, updatedAt: now } as any);
 }
 async function account(id: string, orgId: string, address: `0x${string}`, backingUserId?: string) {
-  await store.addAccount({
+  const row = {
     id, orgId, currency: "EUR", label: "EUR account", status: backingUserId ? "active" : "gated", provider: "monerium" as any,
     identifier: {}, address, ...(backingUserId ? { backingUserId, backedSince: "2026-01-01T00:00:00.000Z" } : {}), createdAt: now, updatedAt: now,
-  } as any);
+  } as any;
+  if (await store.addAccount(row)) return;
+  // A second company account at one Safe is refused now; a store from before
+  // that rule can still hold one. On db.json the fixture writes it as such a
+  // store would have; Postgres's key cannot hold it at all.
+  if (process.env.STORE_BACKEND !== "postgres") (await import("../services/api/src/store/db.js")).db.accounts.push(row);
 }
+const twinsPossible = process.env.STORE_BACKEND !== "postgres";
 async function user(id: string, address: `0x${string}`) {
   await store.addUser({ id, name: id, country: "DE", kycStatus: "approved", createdAt: "2026-01-01T00:00:00.000Z", address, iban: "" } as any);
 }
@@ -202,6 +208,10 @@ await check("a user's Safe that is also another org's account books nothing, and
 });
 
 await check("two accounts at one address book nothing, by the webhook or the poller", async () => {
+  if (!twinsPossible) {
+    assert.equal((await store.accountsAtAddress(addr("e"))).length, 1, "Postgres refused the second company account at one Safe");
+    return;
+  }
   const id = issue(addr("e"));
   assert.equal(await mirrorOrderById(id), "ignored");
   await pollDepositsOnce();

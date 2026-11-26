@@ -344,7 +344,8 @@ try {
   };
   await store.addUser(miriam);
 
-  const app = express();
+  const { sendAfterCommit } = await import("../services/api/src/http/send-after-commit.js");
+  const app = express().use(sendAfterCommit);
   app.use(express.json());
   app.use("/api", routes.createPaymentRequestRouter(async (req, res, userId) => {
     if (req.header("x-user") === userId) return { userId };
@@ -850,7 +851,7 @@ try {
   {
     // A share target that glued the message onto the link.
     const { createPageRouter } = await import("../services/api/src/routes/pages.js");
-    const pages = express().use(createPageRouter());
+    const pages = express().use(sendAfterCommit).use(createPageRouter());
     const ps = pages.listen(0);
     const port = (ps.address() as any).port;
     const get = (p: string) => fetch(`http://127.0.0.1:${port}${p}`, { redirect: "manual" });

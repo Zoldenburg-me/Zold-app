@@ -365,7 +365,8 @@ await t("an enrolment removed during the reads is not passed against", async () 
 
 // ---- routes ----------------------------------------------------------------
 
-const app = express();
+const { sendAfterCommit } = await import("../services/api/src/http/send-after-commit.js");
+const app = express().use(sendAfterCommit);
 app.use(express.json());
 app.use("/api/admin", createOperatorGate());
 app.use("/api", createOperatorAuthRouter());

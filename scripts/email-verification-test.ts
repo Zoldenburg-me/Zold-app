@@ -75,7 +75,8 @@ const { emailHeldBy } = await import("../services/api/src/domain/email.js");
 const { publicUser } = await import("../services/api/src/users/public-user.js");
 const { capabilities } = await import("../services/api/src/capabilities.js");
 
-const app = express().use(express.json()).use(
+const { sendAfterCommit } = await import("../services/api/src/http/send-after-commit.js");
+const app = express().use(sendAfterCommit).use(express.json()).use(
   "/api",
   createEmailVerificationRouter({
     // The session is the x-user header: who is calling is not under test here.

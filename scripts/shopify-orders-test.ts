@@ -106,7 +106,8 @@ const org: any = { id: randomUUID(), type: "business", name: "Keycard Demo GmbH"
 await store.addOrganisation(org, false);
 await store.addMember({ id: randomUUID(), orgId: org.id, userId: merchant.id, email: "shop@example.com", role: "owner", status: "active", invitedAt: now, acceptedAt: now } as any);
 
-const app = express();
+const { sendAfterCommit } = await import("../services/api/src/http/send-after-commit.js");
+const app = express().use(sendAfterCommit);
 app.use(express.json({ verify: (req, _res, buf) => { (req as any).rawBody = buf; } }));
 app.use("/api", createShopifyRouter(async (req, res) => {
   const u = req.header("x-user");
@@ -563,7 +564,7 @@ await check("after a restart, a delivery replayed under another store's name is 
   // A restart: the store reloads from its file, the router module starts fresh.
   await initStore();
   const fresh: typeof import("../services/api/src/routes/shopify.js") = await import(`../services/api/src/routes/shopify.js?restart=${randomUUID()}` as string);
-  const app2 = express();
+  const app2 = express().use(sendAfterCommit);
   app2.use(express.json({ verify: (req, _res, buf) => { (req as any).rawBody = buf; } }));
   app2.use("/api", fresh.createShopifyRouter(async () => undefined));
   const server2 = app2.listen(0, "127.0.0.1");
