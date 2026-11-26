@@ -24,6 +24,7 @@ const scripts = [
   "authorize:test",
   "redeem-window:test",
   "sepa-memo:test",
+  "eur-proof-core:test",
   "country:policy:test",
   "env:number:test",
   "log-pii:test",
@@ -206,7 +207,7 @@ const env = {
   ...process.env,
   // Offline FX: a pinned swapper seed for deploy.ts, and both rate feeds on a
   // closed port, so a suite gets "no rate" (fail closed), never the network.
-  DEPLOY_EURUSD_RATE: process.env.DEPLOY_EURUSD_RATE ?? "1137900",
+  DEPLOY_EURUSD_RATE: process.env.DEPLOY_EURUSD_RATE || "1137900",
   TRANSF_RATES_URL: "http://127.0.0.1:9/latest/EUR",
   TRANSF_ECB_RATES_URL: "http://127.0.0.1:9/v1",
   TRANSF_API_PORT: apiPort,
