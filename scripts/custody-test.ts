@@ -98,7 +98,7 @@ for (const id of ["fx-swapper", "cow"]) {
     assert.equal(
       typeof (providerById as any)(id).safeSwapPlan,
       "undefined",
-      `${id} appears Safe-executable; if that is real, add it to SAFE_EXECUTABLE here and in server.ts`,
+      `${id} appears Safe-executable; if that is real, add it to SAFE_EXECUTABLE here`,
     );
   });
 }

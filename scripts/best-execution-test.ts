@@ -173,6 +173,21 @@ const router = (venues: [string, bigint | null][]) =>
   assert.equal(venueSettles(best([["dex", dex], ["fx-swapper", fx]])), true);
   assert.equal(venueSettles(fx), true);
   ok("a quote-only venue (CoW), alone or behind best, does not settle");
+
+  // The startup log decided by provider name and told the operator that CoW,
+  // or best over CoW, could swap cash; the builder refuses both.
+  const { custodyPosture } = liquidity as any;
+  for (const p of [cow, best([["dex", dex], ["cow", cow]]), best([["fx-swapper", fx], ["cow", cow]])]) {
+    const m = custodyPosture(true, p);
+    assert.ok(m.warn);
+    assert.match(m.message, /VENUE_CANNOT_SETTLE/);
+    assert.doesNotMatch(m.message, /orchestrator and swap|batch is available|non-custodially/);
+  }
+  assert.match(custodyPosture(true, fx).message, /debit the full amount to the orchestrator/);
+  assert.match(custodyPosture(true, best([["fx-swapper", fx]])).message, /debit the full amount to the orchestrator/);
+  assert.match(custodyPosture(false, dex).message, /BRIDGE_LIVE is not set/);
+  assert.equal(custodyPosture(true, dex).warn, false);
+  ok("the startup custody log reports a venue that cannot settle as refusing cash, not swapping it");
 }
 console.log(`\nBEST EXECUTION TEST PASSED — ${n}/${n}: the better price wins, losers are recorded, surplus is measured and attributed`);
 console.log("NOT covered here: a real multi-venue race. LI.FI has no testnet, so that can only be observed on a mainnet.");

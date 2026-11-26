@@ -250,6 +250,8 @@ export interface User {
       active: boolean;
       expiresAt?: string;
       activatedAt: string;
+      /** Absent on activations stored before it existed. */
+      activationId?: string;
     };
     /** What a payer may send to depositAddress, as the forwarder's routes
      *  said at the last activation (adapters/candide-forwarder.ts). */

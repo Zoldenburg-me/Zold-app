@@ -76,11 +76,15 @@ const renewing = new Map<string, Promise<boolean>>();
  *  page (moved the address, or Candide said not active) whatever the old
  *  activation says, and which activation it judged. Saving the page writes a
  *  new activation, which no earlier backoff speaks for. */
-const renewFailed = new Map<string, { until: number; closed: boolean; activatedAt: string }>();
+type Activation = { activatedAt: string; activationId?: string };
+const renewFailed = new Map<string, { until: number; closed: boolean; activation: Activation }>();
 /** The activation a renewal started from is still the one stored. A save that
  *  landed meanwhile wrote a new one, and an answer about the old one must not
- *  overwrite it. */
-const sameActivation = (a: { activatedAt: string } | undefined, b: { activatedAt: string }) => a?.activatedAt === b.activatedAt;
+ *  overwrite it. Compared by activation id, since a save and a renewal can
+ *  stamp the same millisecond; by timestamp only when neither has an id (an
+ *  activation stored before ids existed). */
+const sameActivation = (a: Activation | undefined, b: Activation) =>
+  !!a && (a.activationId || b.activationId ? a.activationId === b.activationId : a.activatedAt === b.activatedAt);
 
 /**
  * May this page's deposit address be shown to a payer right now? A Candide
@@ -116,7 +120,7 @@ export async function livePaymentPage(user: User): Promise<boolean> {
   const expires = f.expiresAt ? Date.parse(f.expiresAt) : Number.POSITIVE_INFINITY;
   if (listed && expires - Date.now() > RENEW_BEFORE_MS) return true;
   const failed = renewFailed.get(user.id);
-  if (failed && failed.until > Date.now() && failed.activatedAt === f.activatedAt) return !failed.closed && listed && expires > Date.now();
+  if (failed && failed.until > Date.now() && sameActivation(failed.activation, f)) return !failed.closed && listed && expires > Date.now();
   let run = renewing.get(user.id);
   if (!run) {
     run = (async () => {
@@ -124,7 +128,7 @@ export async function livePaymentPage(user: User): Promise<boolean> {
         const next = await activatePaymentForwarder({ userId: user.id, handle: page.handle, recipient: f.recipient, token: addrs().usdc });
         if (next.address.toLowerCase() !== page.depositAddress.toLowerCase()) {
           console.error(`payment page: renewal for ${user.id} gave ${next.address}, page shows ${page.depositAddress}`);
-          renewFailed.set(user.id, { until: Date.now() + RENEW_RETRY_MS, closed: true, activatedAt: f.activatedAt });
+          renewFailed.set(user.id, { until: Date.now() + RENEW_RETRY_MS, closed: true, activation: f });
           return false;
         }
         renewFailed.delete(user.id);
@@ -138,7 +142,7 @@ export async function livePaymentPage(user: User): Promise<boolean> {
       } catch (err: any) {
         console.error(`payment page: renewing forwarder for ${user.id} failed: ${describeCause(err)}`);
         if (err instanceof ForwarderInactiveError) {
-          renewFailed.set(user.id, { until: Date.now() + RENEW_RETRY_MS, closed: true, activatedAt: f.activatedAt });
+          renewFailed.set(user.id, { until: Date.now() + RENEW_RETRY_MS, closed: true, activation: f });
           const fresh = store.findUser(user.id);
           const shown = fresh?.paymentPage;
           if (shown?.handle === page.handle && shown.forwarder && sameActivation(shown.forwarder, f) && shown.depositAddress.toLowerCase() === err.address.toLowerCase()) {
@@ -148,7 +152,7 @@ export async function livePaymentPage(user: User): Promise<boolean> {
           }
           return false;
         }
-        renewFailed.set(user.id, { until: Date.now() + RENEW_RETRY_MS, closed: false, activatedAt: f.activatedAt });
+        renewFailed.set(user.id, { until: Date.now() + RENEW_RETRY_MS, closed: false, activation: f });
         return listed && expires > Date.now();
       } finally {
         renewing.delete(user.id);

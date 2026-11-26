@@ -119,6 +119,46 @@ export function venueSettles(provider: LiquidityProvider = liquidityProvider()):
   return provider instanceof BestExecutionProvider ? provider.settles() : true;
 }
 
+/** The custody posture the startup log reports, decided by the same checks
+ *  the transfer builder uses, so the log cannot describe a path it refuses. */
+export function custodyPosture(
+  bridgeLive: boolean,
+  provider: LiquidityProvider = liquidityProvider(),
+): { warn: boolean; message: string } {
+  if (!venueSettles(provider)) {
+    return {
+      warn: true,
+      message:
+        `CUSTODY: LIQUIDITY_PROVIDER=${LIQUIDITY.PROVIDER} includes a venue that prices but cannot settle a swap, so ` +
+        "every cash-rail transfer is refused (VENUE_CANNOT_SETTLE) before any debit.",
+    };
+  }
+  if (!venueServesSafe(provider)) {
+    return {
+      warn: true,
+      message:
+        `CUSTODY: LIQUIDITY_PROVIDER=${LIQUIDITY.PROVIDER} cannot be executed by a user's Safe, so ` +
+        "cash-rail transfers debit the full amount to the orchestrator and swap from there. " +
+        "The non-custodial path needs dex, lifi, rfq or best over one of them.",
+    };
+  }
+  if (!bridgeLive) {
+    return {
+      warn: true,
+      message:
+        "CUSTODY: the Safe-executed swap batch is available, but BRIDGE_LIVE is not set — with no " +
+        "external deposit address the batch delivers its output to the orchestrator. Cash-rail " +
+        "transfers are recorded as custodial until Bridge is live.",
+    };
+  }
+  return {
+    warn: false,
+    message:
+      "CUSTODY: cash-rail transfers run non-custodially — the user's Safe signs one batch that " +
+      "delivers straight to Bridge. The SEPA rail moves only the fee.",
+  };
+}
+
 /**
  * The Safe-executed swap for one transfer, prepared at CREATION time — its
  * calldata rides inside the UserOperation the user signs, so unlike the

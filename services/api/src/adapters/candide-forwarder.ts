@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { CHAIN_ID, FORWARDING, IS_PRODUCTION } from "../config.js";
 import { usdIsStaging, usdToken } from "../usd-token.js";
 import { partnerTimeout } from "../http.js";
@@ -34,6 +34,8 @@ export interface PaymentForwarderActivation {
     active: boolean;
     expiresAt?: string;
     activatedAt: string;
+    /** Tells two activations apart when they share a millisecond. */
+    activationId: string;
   };
 }
 
@@ -173,6 +175,7 @@ export async function activatePaymentForwarder(params: {
         salt,
         active: true,
         activatedAt: now,
+        activationId: randomUUID(),
       },
     };
   }
@@ -223,6 +226,7 @@ export async function activatePaymentForwarder(params: {
       active: true,
       ...(activation.expiresAt ? { expiresAt: new Date(activation.expiresAt * 1000).toISOString() } : {}),
       activatedAt: now,
+      activationId: randomUUID(),
     },
   };
 }
