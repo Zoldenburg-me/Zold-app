@@ -198,9 +198,10 @@ numbering, pay-to submit, Shopify cancel); S2 makes their reads awaited, so
 each such window opens unless the check moves into the write.
 
 **One API process per deployment** is a hard invariant, enforced at start:
-the Postgres backend takes `pg_try_advisory_lock(hashtext('api:'||<deployment>))`
-on a dedicated connection before it serves anything, and the process refuses
-to start if the lock is held. The lock lives as long as that connection, so
+the Postgres backend takes `pg_try_advisory_lock(hashtext('api:' || current_database()))`
+(each deployment has its own database) on a dedicated connection before it
+serves anything, and the process refuses to start if the lock is held
+(`store/pg/start-lock.ts`; the API takes it once it can run on Postgres). The lock lives as long as that connection, so
 a crashed process releases it. So does a database restart or a dropped
 connection while the process lives on, and the pool would reconnect without
 it; so the process watches that connection (its `error` and `end` events
@@ -236,15 +237,21 @@ lease_until IS NULL OR lease_until < now() RETURNING`) is the work a second
 process would need first; it is not in #166. The restore drill and a
 returning old host must not start an API for a deployment for the same
 reason (§7, §7.1). 
-**Sweeps are single-flight.** The sweeps in `server.ts:334-396` are bare
-`setInterval`s, and a tick can outlast its interval today: the Zoldenburg
-sweep runs every 60 s (`config/security.ts:51`) and waits up to 90 s for a
-receipt (`recovery/zoldenburg-guardian.ts:260`). Every tick runs inside
-`pg_try_advisory_lock(hashtext('job:'||<deployment>||':'||<job>))` and
-returns at once if the lock is held; the JSON backend uses an in-memory flag
-per job. Only the verifier sweep has one today (`sweeping`,
-`recovery/recovered-passkey.ts:125`). Test: a tick held open past its
-interval; the next tick does nothing.
+**Sweeps are single-flight.** A tick can outlast its interval: the
+Zoldenburg sweep runs every 60 s (`config/security.ts:51`) and waits up to
+90 s for a receipt (`recovery/zoldenburg-guardian.ts:260`). Every interval in
+`server.ts` runs its job through `singleFlight` (`single-flight.ts`), an
+in-memory flag per job on both backends: a tick that finds the last one
+still running returns at once. Not an advisory lock: one process per
+deployment is already enforced by the start lock, so a second process
+sweeping the same rows is refused there. The one window is the start lock's
+own loss: the process exits at once on its connection's `error` or `end`,
+but a connection that dies with no event is found by the next `SELECT 1`, so
+for up to 5 s a second process that took the freed lock can sweep next to
+this one. What holds in that window is that the sweeps' writes are
+conditional (rule 3) and their partner calls sit behind reserves (rule 5).
+Test (`scripts/single-flight-test.ts`): a tick held open past its interval;
+the next tick does nothing; every interval in `server.ts` is single-flight.
 
 Five rules cover most of it:
 
@@ -399,9 +406,22 @@ t.lockUser(id) / t.lockKey(key)                      // FOR UPDATE / advisory lo
 ```
 
 - `store.tx` replaces `batched`. Inside it, `await` is allowed; partner and
-  chain calls are not (a lint grep in `scripts/check.ts` refuses `fetch`,
-  `writeAndWait` and the adapters inside a `store.tx` callback, the same way
-  the grep suites work today). A transaction does not span I/O we do not own.
+  chain calls are not, and refuse at run time: `fetch` (which the adapters
+  and viem's HTTP transport use), `writeAndWait` and the Horizon client throw
+  while a transaction is open (`refuseInTx`, `store/backend.ts`), whatever
+  helper reaches them. A transaction does not span I/O we do not own.
+- A `store.tx` inside another joins it as one unit: on Postgres a
+  `SAVEPOINT`, so a failure the caller catches undoes only that unit and the
+  transaction goes on. Siblings run one after another, so their savepoints
+  nest. A failed statement that no savepoint undid fails the transaction
+  instead of letting `COMMIT` roll it back in silence.
+- Lock methods (`lockUser`, `lockOrganisation`, `lockKey`) refuse outside a
+  transaction: they would hold nothing. `lockKey` is an advisory
+  transaction lock per database (`hashtext(current_database() || ':' || key)`).
+  The parent locks in use: the organisation row for anything an org route
+  decides (`resolveOrg` takes it inside a transaction), the user row for a
+  user's recovery requests, deposits and Monerium connection,
+  `ledger:<org>` for every ledger read-then-write.
 - Each getter that returns a whole collection (`store.users`,
   `store.transfers`, …) becomes `await store.list("users")` in S2, and a real
   query in S3 where it is on a request path. Scans on sweeps
@@ -884,7 +904,8 @@ stays the default until the cut-over.
 | S0 | This note | approval |
 | S1 | `pg` dependency, PGlite dev dependency, migration runner, `0001_init.sql` (§1), the Postgres backend behind the interface with the same method bodies, store suites run on JSON and PGlite. No caller switched | — |
 | S2 | Async store API and the mechanical conversion (§3), on the JSON backend. `store.tx` replaces `batched`. Rows are clones. Caller check-then-writes in §2 moved into store methods first: the sub-object methods and the spread/push grep gate (rule 2), conditional state writes (rule 3), and the §2 rows marked S2 with their tests on JSON | — |
-| S3 | Money-path transactions and locks on Postgres: the one-process start lock and the sweep locks, `cap_holds`, recovery-start lock, `recordPaymentRequestPayment`, `settleInvoice`, the dedupe keys, monotonic sign count, the §2 rows marked S3. `npm run check:pg` with the concurrency tests of §2's first table, the executor ‖ compensator append, and the S2 rows run in parallel | — |
+| S3a | The one-process start lock and single-flight sweeps; partner and chain I/O refused inside a transaction at run time; responses held to the commit with their headers; nested transactions as savepoints; row locks for every transaction that reads then writes. `check:pg`: the start lock, the locks serialising parallel read-then-writes | — |
+| S3b | `cap_holds`, `pending_executions`, the quote consume and `UNIQUE(transfers.quote_id)`, the dedupe keys, monotonic sign count, `UNIQUE(lower(address))` on accounts, the deposit `CONVERTING` reserve, the recovery `RELAYING` status, the §2 rows marked S3, the API runnable on Postgres for the suites. `npm run check:pg` with the concurrency tests of §2's first table, the executor ‖ compensator append, and the S2 race tests run in parallel | — |
 | S4 | Outbox and its worker (checkout hints, PAID hooks); audit and no-delete triggers; `ledger_history`; the application role's grants. Identity and recovery: `session_epoch`, the ceremony-challenge audit of the 9 callers, the Candide, Turnkey and Zoldenburg-finalize reserve statuses, the Monerium token compare in the store; their tests on JSON and Postgres 17 | — |
 | S5 | Importer, export, verify (§6), run against a copy of the testnet `db.json` on the local Postgres 17. Constraint findings reported to the lead | — |
 | S6 | Docs: AGENTS.md (where the code lives, secrets and storage), `docs/running-locally.md` (local Postgres, `check:pg`), technical-architecture §18.1, `docs/roadmap.md`, `docs/status.md` | — |

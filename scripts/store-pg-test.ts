@@ -120,6 +120,69 @@ try {
   assert.ok(results.some((r) => !r.ok && r.code === "EVIDENCE_ON_RECORD"));
   console.log("ok - parallel: one authorization claim, every Safe op signature, one deposit row, one refund tx per transfer");
 
+  // Read-then-write in parallel transactions: without a lock the updates are
+  // lost (the baseline), with lockUser, lockOrganisation or lockKey each
+  // transaction waits for the last one's commit and reads what it wrote.
+  {
+    await s.addOrganisation({ id: "org_lk", type: "business", name: "0", createdAt: now, updatedAt: now } as any, false);
+    const bump = (lock?: (t: any) => Promise<unknown>) =>
+      Promise.all(
+        Array.from({ length: 8 }, () =>
+          s.tx(async (t) => {
+            if (lock) await lock(t);
+            const n = Number((await t.findOrganisation("org_lk"))!.name);
+            await new Promise((r) => setTimeout(r, 15));
+            await t.updateOrganisation("org_lk", { name: String(n + 1) });
+          }),
+        ),
+      );
+    const value = async () => Number((await s.findOrganisation("org_lk"))!.name);
+    await bump();
+    assert.ok((await value()) < 8, "the baseline: a plain read in a transaction locks nothing, updates are lost");
+    for (const [label, lock] of [
+      ["lockOrganisation", (t: any) => t.lockOrganisation("org_lk")],
+      ["lockKey", (t: any) => t.lockKey("org_lk")],
+    ] as const) {
+      await s.updateOrganisation("org_lk", { name: "0" });
+      await bump(lock);
+      assert.equal(await value(), 8, `${label}: eight transactions, eight increments`);
+    }
+    await s.updateUser("u_race", { name: "0" } as any);
+    await Promise.all(
+      Array.from({ length: 8 }, () =>
+        s.tx(async (t) => {
+          const n = Number((await t.lockUser("u_race"))!.name);
+          await new Promise((r) => setTimeout(r, 15));
+          await t.updateUser("u_race", { name: String(n + 1) } as any);
+        }),
+      ),
+    );
+    assert.equal((await s.findUser("u_race"))?.name, "8", "lockUser: eight transactions, eight increments");
+    // A caught failure in a nested transaction undoes only itself.
+    await s.tx(async (t) => {
+      await t.updateOrganisation("org_lk", { name: "outer" });
+      await assert.rejects(
+        s.tx(async (n) => {
+          await n.updateOrganisation("org_lk", { name: "inner" });
+          await n.addSession({ id: "s_pg1", userId: "u_race", tokenHash: "th_pg", createdAt: now, lastUsedAt: now, expiresAt: now });
+          await n.addSession({ id: "s_pg2", userId: "u_race", tokenHash: "th_pg", createdAt: now, lastUsedAt: now, expiresAt: now });
+        }),
+        /duplicate key/,
+      );
+    });
+    assert.equal((await s.findOrganisation("org_lk"))?.name, "outer");
+    await assert.rejects(
+      s.tx(async (t) => {
+        await t.updateOrganisation("org_lk", { name: "lost" });
+        await t.addSession({ id: "s_pg3", userId: "u_race", tokenHash: "th_pg3", createdAt: now, lastUsedAt: now, expiresAt: now });
+        await t.addSession({ id: "s_pg4", userId: "u_race", tokenHash: "th_pg3", createdAt: now, lastUsedAt: now, expiresAt: now }).catch(() => {});
+      }),
+      /a statement in this transaction failed/,
+    );
+    assert.equal((await s.findOrganisation("org_lk"))?.name, "outer", "an aborted transaction never commits in silence");
+  }
+  console.log("ok - parallel read-then-write: lost without a lock; lockUser, lockOrganisation, lockKey serialise it; nested savepoints; no silent COMMIT after a failed statement");
+
   // A session-level advisory lock is held against every other connection:
   // the start lock of §2 (S3) rests on this.
   const lockKey = `api:${name}`;
