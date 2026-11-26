@@ -14,11 +14,15 @@
  *   2. A deposit arrives and mints EURe on the sandbox chain  (Monerium + chain)
  *   3. The chain balance matches what Monerium says it issued (chain)
  *   4. Our local receipt state records the same amount        (local store)
- *   5. A redeem burns EURe and is accepted for SEPA payout    (Monerium + chain)
+ *   5. A redeem is processed for SEPA payout, carrying the    (Monerium + local store)
+ *      payment reference we signed
  *
  * Step 2 needs a human: Monerium's sandbox has no API to originate an inbound
  * SEPA transfer, so someone has to do it at sandbox.monerium.dev/receive,
- * which is a logged-in page rather than an endpoint. The script is
+ * which is a logged-in page rather than an endpoint. Step 5 needs one too: a
+ * redeem is valid only with the passkey's signature, so it is sent from the
+ * app's SEPA send, the path that checks the memo against the signed record.
+ * The script is
  * resumable and idempotent — run it, do the manual step, run it again. It
  * reports where you are rather than starting over.
  *
@@ -29,7 +33,6 @@ import { createPublicClient, http, formatUnits, getAddress } from "viem";
 import { MONERIUM, RPC_URL, moneriumSandboxEnabled } from "../services/api/src/config.js";
 import { MoneriumClient } from "../services/api/src/adapters/monerium-client.js";
 import { initStore, store, type User } from "../services/api/src/store.js";
-import { redeemToIban } from "../services/api/src/adapters/monerium-sandbox.js";
 import { urlForLog } from "../services/api/src/http/log-safe.js";
 
 // The configured chain, never a hardcoded testnet: reading balances elsewhere
@@ -56,10 +59,10 @@ if (!moneriumSandboxEnabled()) {
   console.error("No Monerium credentials — set MONERIUM_CLIENT_ID / MONERIUM_CLIENT_SECRET in .env.");
   process.exit(1);
 }
-// A real redeem is placed below. Against production that is real money to
-// Monerium's sample IBAN, so the proof runs against the sandbox only.
+// The redeem asked for below goes to Monerium's sample IBAN. Against
+// production that is real money, so the proof runs against the sandbox only.
 if (!/monerium\.dev/.test(MONERIUM.baseUrl)) {
-  console.error(`REFUSING: MONERIUM_BASE_URL is ${urlForLog(MONERIUM.baseUrl)}; this proof places a redeem and runs only against api.monerium.dev.`);
+  console.error(`REFUSING: MONERIUM_BASE_URL is ${urlForLog(MONERIUM.baseUrl)}; this proof asks for a redeem and runs only against api.monerium.dev.`);
   process.exit(1);
 }
 
@@ -215,69 +218,41 @@ const redeems = mine.filter((o) => o.kind === "redeem");
 const done = redeems.filter((o) => stateOf(o) === "processed");
 if (done.length) {
   ok(`${done.length} redeem(s) already processed — the SEPA exit is proven for this account`);
+  // Compare the memo on Monerium's order with the one stored beside the
+  // passkey's signature. The executor sends the stored memo and redeemToIban
+  // refuses any other, so a difference is an order this database did not place.
+  let compared = 0;
   for (const o of done.slice(-3)) {
     console.log(`       ${o.id}  ${eur(Number(o.amount))}  -> ${o.counterpart?.identifier?.iban ?? "?"}`);
+    const signed = store.transfers.find((t) => t.sepa?.orderId === o.id)?.moneriumRedeem?.memo;
+    if (signed === undefined) continue;
+    compared++;
+    if ((o.memo ?? "") === signed) ok(`${o.id} carries the signed payment reference "${signed}"`);
+    else no(`${o.id} carries memo "${o.memo ?? ""}", but the signed one is "${signed}"`);
+  }
+  if (!compared) {
+    no("none of these redeems is a transfer in this database, so the payment reference is not proven");
+    todo(`send ${eur(REDEEM_EUR)} to ${PAYOUT_IBAN} from the app's SEPA send, then run this again`);
   }
   if (failures) {
-  console.log(
-    `\nNOT PROVEN — ${failures} leg(s) failed above. The redeem worked, but a corridor ` +
-      `is only proven when every leg does.\n`,
-  );
-  process.exit(1);
-}
-console.log("\nEUR CORRIDOR PROVEN — deposit minted, mirrored, and redeemed for real.\n");
+    console.log(`\nNOT PROVEN: ${failures} leg(s) failed above. A corridor is only proven when every leg is.\n`);
+    process.exit(1);
+  }
+  console.log("\nEUR CORRIDOR PROVEN: deposit minted, mirrored, and redeemed with the signed payment reference.\n");
   process.exit(0);
 }
 
+const open = redeems.filter((o) => stateOf(o) !== "rejected");
+if (open.length) {
+  todo(`${open.length} redeem(s) not processed yet (${open.map(stateOf).join(", ")}); run this again in a minute`);
+  process.exit(2);
+}
 if (balance < REDEEM_EUR) {
   no(`only ${eur(balance)} in the Safe; need at least ${eur(REDEEM_EUR)} to test a redeem`);
   todo("deposit more, or lower EUR_PROOF_REDEEM_EUR");
   process.exit(2);
 }
-
-console.log(`   placing a real redeem of ${eur(REDEEM_EUR)} to ${PAYOUT_IBAN}…`);
-let order: any;
-try {
-  order = await redeemToIban(
-    user,
-    REDEEM_EUR,
-    { iban: PAYOUT_IBAN, firstName: "Zold", lastName: "Proof", country: "DK" },
-    "Zold EUR corridor proof",
-  );
-} catch (e: any) {
-  no(`redeem refused: ${e?.message ?? e}`);
-  process.exit(1);
-}
-ok(`order ${order.id} placed, state ${stateOf(order)}`);
-
-// Monerium settles sandbox redeems in seconds, but not synchronously.
-const deadline = Date.now() + 120_000;
-let final = stateOf(order);
-while (Date.now() < deadline && final !== "processed" && final !== "rejected") {
-  await new Promise((r) => setTimeout(r, 4000));
-  final = stateOf(await api.getOrder(order.id));
-  process.stdout.write(`   …${final}\r`);
-}
-console.log();
-
-if (final !== "processed") {
-  no(`redeem ended in "${final}" — not proven`);
-  process.exit(1);
-}
-ok("redeem processed by Monerium");
-
-const after = await onChainEure(address, token);
-ok(`on-chain EURe ${eur(balance)} -> ${eur(after)} (burned ${eur(balance - after)})`);
-if (after >= balance) {
-  no("balance did not fall — the burn did not happen on chain");
-  process.exit(1);
-}
-
-if (failures) {
-  console.log(
-    `\nNOT PROVEN — ${failures} leg(s) failed above. The redeem worked, but a corridor ` +
-      `is only proven when every leg does.\n`,
-  );
-  process.exit(1);
-}
-console.log("\nEUR CORRIDOR PROVEN — deposit minted, mirrored, redeemed, and burned.\n");
+// No redeem is placed from here: Monerium takes one only with the Safe's
+// signature, and the passkey is in the user's browser.
+todo(`send ${eur(REDEEM_EUR)} to ${PAYOUT_IBAN} (Zold Proof, DK) from the app's SEPA send, then run this again`);
+process.exit(2);

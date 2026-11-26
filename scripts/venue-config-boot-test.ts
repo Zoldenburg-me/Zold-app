@@ -32,7 +32,15 @@ try {
   // on a fresh checkout and not only after a suite that deployed.
   const dep = spawnSync(process.execPath, [path.resolve("node_modules/.bin/tsx"), "scripts/deploy.ts"], {
     stdio: "inherit",
-    env: { ...process.env, TRANSF_RPC_URL: rpcUrl, DEPLOY_EURUSD_RATE: process.env.DEPLOY_EURUSD_RATE ?? "1137900" },
+    // An empty DEPLOY_EURUSD_RATE is unset to deploy.ts, so it takes the seed
+    // too; the rate feeds are closed, so a seedless deploy fails, never fetches.
+    env: {
+      ...process.env,
+      TRANSF_RPC_URL: rpcUrl,
+      DEPLOY_EURUSD_RATE: process.env.DEPLOY_EURUSD_RATE || "1137900",
+      TRANSF_RATES_URL: "http://127.0.0.1:9/latest/EUR",
+      TRANSF_ECB_RATES_URL: "http://127.0.0.1:9/v1",
+    },
   });
   assert.equal(dep.status, 0, "deploy failed");
   for (const bad of [{ LIQUIDITY_PROVIDER: "nope" }, { LIQUIDITY_PROVIDER: "best", LIQUIDITY_VENUES: "nope" }, { LIQUIDITY_PROVIDER: "best", LIQUIDITY_VENUES: "" }]) {

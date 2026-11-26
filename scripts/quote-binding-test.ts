@@ -25,7 +25,7 @@ import { initStore, store, type Quote, type Transfer } from "../services/api/src
 
 // Pin the swapper seed. Unpinned, deploy.ts seeds at the live EUR/USD mid,
 // which makes this OFFLINE suite depend on the network and on the day's rate.
-process.env.DEPLOY_EURUSD_RATE ??= "1137900";
+process.env.DEPLOY_EURUSD_RATE ||= "1137900";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const RPC = process.env.TRANSF_RPC_URL ?? "http://127.0.0.1:8545";
