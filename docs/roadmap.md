@@ -53,6 +53,10 @@ Owner:
 
 Build:
 - [ ] Database encrypted at rest; data export and account closure routes.
+- [ ] The store on Postgres on the owner's Oracle host, testnet first, then
+      app.zoldhq.com (`docs/postgres-store-design.md` §8). The backend,
+      migrations, importer and export are on main; the host (S7) and the
+      cut-over (S8) are not started and wait on the owner's §9 answers.
 - [ ] `RECOVERY_IBAN_HMAC_KEY` set; one 1 € enrolment arms an account; one
       Zoldenburg recovery runs on chain against a test Safe.
 - [ ] Wallet tier: gas policy for accounts without fiat.

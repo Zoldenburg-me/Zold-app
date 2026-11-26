@@ -218,9 +218,12 @@ export function createOrgSafeDeploymentRoutes(requireSession: SessionResolver, c
       return res.status(409).json({ error: "The company's Safe changed since this was prepared. Start again.", code: "ORG_SAFE_CHANGED" });
     }
     if (submitting.has(ctx.org.id)) return res.status(409).json({ error: "The company's Safe is being set up already.", code: "ORG_SAFE_DEPLOYING" });
-    // Claimed BEFORE the await: two parallel submits of one signature must
-    // not both send the deployment.
-    pendingOrgSafeDeployments.delete(req.params.requestId);
+    // Claimed BEFORE the assertion's await, and only by the request that
+    // still finds it after the reads above: two parallel submits of one
+    // signature must not both send the deployment.
+    if (!pendingOrgSafeDeployments.delete(req.params.requestId)) {
+      return res.status(404).json({ error: "This Safe set-up request was not found or has expired. Start again." });
+    }
     submitting.add(ctx.org.id);
     try {
       if (!(await checkOpAssertion(user!, req.body, pending.challenge, res))) return;

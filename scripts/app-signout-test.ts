@@ -91,7 +91,7 @@ async function signIn() {
   n += 1;
   const id = `u_signout_${n}`;
   await store.addUser({ id, name: `Person ${n}`, email: `s${n}@example.com`, country: "DE", kycStatus: "pending", createdAt: now, address: `0x${String(n).padStart(40, "b")}`, iban: "" } as any);
-  const token = await issueSession(id);
+  const token = await issueSession({ id: id });
   ctx.localStorage.setItem("zold-session", token);
   ctx.localStorage.setItem("zoll-session", token);
   ctx.localStorage.setItem("zoll-contacts", JSON.stringify([{ id: "c1", name: "A", destination: "DE00" }]));

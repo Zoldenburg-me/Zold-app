@@ -54,6 +54,7 @@ import {
   emailCodeAttemptPatch,
   reviewRefundTx,
   sessionDead,
+  moneriumTokensPatch,
   announceOutbox,
   newOutboxRow,
   outboxDraftsFor,
@@ -88,7 +89,7 @@ import type {
 import type { Database, Sql, TxSql } from "./sql.js";
 
 /** The SQL table of each collection that is a list of rows with an `id`. */
-const TABLE = {
+export const TABLE = {
   users: "users",
   quotes: "quotes",
   transfers: "transfers",
@@ -281,6 +282,32 @@ async function insertOutbox(t: Sql, d: OutboxDraft): Promise<OutboxRow | null> {
   return r.rows[0] ? outboxRow(r.rows[0]) : null;
 }
 
+/** A collection in the `Db` shape, rows in stored order: what `store.list`
+ *  returns, and what the export (store/pg/port.ts) writes back to db.json. */
+export async function listCollection<K extends Collection>(q: Sql, name: K): Promise<Db[K]> {
+  if (name === "processedMoneriumOrders") {
+    const r = await q.query<{ id: string }>("SELECT order_id AS id FROM processed_monerium_orders ORDER BY seq");
+    return r.rows.map((x) => x.id) as Db[K];
+  }
+  if (name === "processedMoneriumWebhooks") {
+    const r = await q.query<{ id: string }>("SELECT webhook_id AS id FROM processed_monerium_webhooks ORDER BY seq");
+    return r.rows.map((x) => x.id) as Db[K];
+  }
+  if (name === "cryptoDepositCursor") {
+    const r = await q.query<{ k: string; b: string }>("SELECT chain_key AS k, block::text AS b FROM crypto_deposit_cursor");
+    return Object.fromEntries(r.rows.map((x) => [x.k, x.b])) as Db[K];
+  }
+  if (name === "outbox") {
+    const r = await q.query<OutboxSqlRow>(`SELECT ${OUTBOX_COLUMNS} FROM outbox ORDER BY seq`);
+    return r.rows.map(outboxRow) as Db[K];
+  }
+  if (name === "moneriumIssueOrders") {
+    const r = await q.query<{ doc: MoneriumIssueRecord }>("SELECT doc FROM monerium_issue_orders ORDER BY seq");
+    return r.rows.map((x) => x.doc) as Db[K];
+  }
+  return (await rows(q, TABLE[name as keyof typeof TABLE])) as Db[K];
+}
+
 export function createPgStore(database: Database): StoreBackend {
   const transferStateListeners: StateListener<Transfer>[] = [];
   const paymentRequestStateListeners: StateListener<PaymentRequest>[] = [];
@@ -400,29 +427,7 @@ export function createPgStore(database: Database): StoreBackend {
   }
 
   const backend: StoreMethods = {
-    async list<K extends Collection>(name: K): Promise<Db[K]> {
-      if (name === "processedMoneriumOrders") {
-        const r = await q.query<{ id: string }>("SELECT order_id AS id FROM processed_monerium_orders ORDER BY seq");
-        return r.rows.map((x) => x.id) as Db[K];
-      }
-      if (name === "processedMoneriumWebhooks") {
-        const r = await q.query<{ id: string }>("SELECT webhook_id AS id FROM processed_monerium_webhooks ORDER BY seq");
-        return r.rows.map((x) => x.id) as Db[K];
-      }
-      if (name === "cryptoDepositCursor") {
-        const r = await q.query<{ k: string; b: string }>("SELECT chain_key AS k, block::text AS b FROM crypto_deposit_cursor");
-        return Object.fromEntries(r.rows.map((x) => [x.k, x.b])) as Db[K];
-      }
-      if (name === "outbox") {
-        const r = await q.query<OutboxSqlRow>(`SELECT ${OUTBOX_COLUMNS} FROM outbox ORDER BY seq`);
-        return r.rows.map(outboxRow) as Db[K];
-      }
-      if (name === "moneriumIssueOrders") {
-        const r = await q.query<{ doc: MoneriumIssueRecord }>("SELECT doc FROM monerium_issue_orders ORDER BY seq");
-        return r.rows.map((x) => x.doc) as Db[K];
-      }
-      return (await rows(q, TABLE[name as keyof typeof TABLE])) as Db[K];
-    },
+    list: (name) => listCollection(q, name),
 
     async addUser(u: User) {
       await tx((t) => insertUser(t, u));
@@ -442,6 +447,11 @@ export function createPgStore(database: Database): StoreBackend {
     recordPasskeyUse: (id, credentialId, signCount) =>
       tx(async (t) => {
         const patch = passkeyUsePatch(await locked<User>(t, TABLE.users, id), credentialId, signCount);
+        return patch ? updateUserIn(t, id, patch) : undefined;
+      }),
+    storeMoneriumTokens: (id, expectedRefreshEnc, next) =>
+      tx(async (t) => {
+        const patch = moneriumTokensPatch(await locked<User>(t, TABLE.users, id), expectedRefreshEnc, next);
         return patch ? updateUserIn(t, id, patch) : undefined;
       }),
     countEmailCodeAttempt: (id, max, now = Date.now()) =>
@@ -515,6 +525,10 @@ export function createPgStore(database: Database): StoreBackend {
     updateRecoveryRequestFrom: (id, from, patch) =>
       change<RecoveryRequest>(TABLE.recoveryRequests, id, `unknown recovery request ${id}`, (row) =>
         from.includes(row.status) ? Object.assign(row, patch) : null,
+      ),
+    updateRecoveryRelay: (id, token, patch) =>
+      change<RecoveryRequest>(TABLE.recoveryRequests, id, `unknown recovery request ${id}`, (row) =>
+        row.status === "RELAYING" && (row.relaying?.token ?? "") === token ? Object.assign(row, patch) : null,
       ),
     async countRecoveryOtpAttempt(id, max) {
       let out: { attempts: number; over: boolean } | undefined;
@@ -867,11 +881,34 @@ export function createPgStore(database: Database): StoreBackend {
         s.updatedAt = s.revokedAt;
         return s;
       }))!,
+    // The user row is locked before the session rows, as in
+    // revokeOtherSessions, so the two never wait on each other in a cycle.
     addSession: (s: Session) =>
       tx(async (t) => {
-        await prune<Session>(t, TABLE.sessions, "TRUE", [], (x) => sessionDead(x, DAY_MS));
+        const u = await locked<User>(t, TABLE.users, s.userId);
+        if (!u || (u.sessionEpoch ?? 0) !== (s.epoch ?? 0)) return false;
         await insert(t, TABLE.sessions, s);
+        return true;
       }),
+    revokeOtherSessions: (userId, keepId) =>
+      tx(async (t) => {
+        const u = await locked<User>(t, TABLE.users, userId);
+        if (!u) throw new Error(`unknown user ${userId}`);
+        const epoch = (u.sessionEpoch ?? 0) + 1;
+        u.sessionEpoch = epoch;
+        await saveUser(t, u, pageHandle(u));
+        const now = new Date().toISOString();
+        for (const s of await rows<Session>(t, TABLE.sessions, "user_id = $1", [userId], "FOR UPDATE")) {
+          if (s.id === keepId && !s.revokedAt) s.epoch = epoch;
+          else if (!s.revokedAt) s.revokedAt = now;
+          else continue;
+          await save(t, TABLE.sessions, s);
+        }
+        return epoch;
+      }),
+    // Periodic (server.ts), not part of addSession: a prune there would scan
+    // and lock the whole table on every login.
+    pruneSessions: () => tx((t) => prune<Session>(t, TABLE.sessions, "TRUE", [], (x) => sessionDead(x, DAY_MS))),
     findSessionByTokenHash: (tokenHash) => first<Session>(q, TABLE.sessions, "token_hash = $1", [tokenHash]),
     revokeSession: async (id) =>
       (await change<Session>(TABLE.sessions, id, `unknown session ${id}`, (s) => {

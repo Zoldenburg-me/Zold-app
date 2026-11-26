@@ -709,6 +709,8 @@ await check("a viewer may not revoke (403); another org's link id is 404", async
 if (process.env.STORE_BACKEND === "postgres") await check("a revoke whose audit write, or whose hint, fails is undone whole: the link stays open and no hint is kept or sent", async () => {
   deliveries.length = 0;
   const hintsBefore = (await store.list("outbox")).filter((r) => r.payload.linkId === link.linkId).length;
+  const revokedAudits = async () => (await store.list("audit")).filter((e) => e.kind === "merchant_link.revoked" && JSON.stringify(e).includes(link.linkId)).length;
+  const auditsBefore = await revokedAudits();
   const audit = store.audit;
   const enqueue = store.enqueueOutbox;
   try {
@@ -730,6 +732,7 @@ if (process.env.STORE_BACKEND === "postgres") await check("a revoke whose audit 
   }
   assert.equal((await store.findMerchantLink(link.linkId))?.revokedAt, undefined, "not revoked");
   assert.equal((await store.list("outbox")).filter((r) => r.payload.linkId === link.linkId).length, hintsBefore, "no hint kept");
+  assert.equal(await revokedAudits(), auditsBefore, "the audit entry written before the failure rolled back with it");
   await sleep(100);
   assert.deepEqual(deliveries, [], "none sent");
 });

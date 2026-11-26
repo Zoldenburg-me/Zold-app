@@ -731,8 +731,8 @@ console.log("a passkey replaced by recovery while an approval is being verified"
     const server = app.listen(0);
     try {
       const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/session`;
-      const signedOut = await issueSession(uid);
-      const other = await issueSession(uid);
+      const signedOut = await issueSession((await store.findUser(uid))!);
+      const other = await issueSession((await store.findUser(uid))!);
       const auth = (t: string) => ({ authorization: `Bearer ${t}` });
       assert.equal((await fetch(url, { method: "DELETE", headers: auth(signedOut) })).status, 204);
       assert.equal((await fetch(url, { headers: auth(signedOut) })).status, 401);

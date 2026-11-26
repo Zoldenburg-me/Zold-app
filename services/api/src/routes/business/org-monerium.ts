@@ -42,6 +42,7 @@ import { MoneriumKeysRefusedError, moneriumEnvironment, validateApiKeyInput, ver
 import { redactedMessage } from "../../http/log-cause.js";
 import { SECRETS } from "../../stored-secrets.js";
 import { store } from "../../store.js";
+import { sameSecret } from "../../store/rules.js";
 import { requirePermission, type OrgContext } from "../org-context.js";
 import { verifyPasskeyStepUp } from "../auth.js";
 import { wrap } from "../util.js";
@@ -155,7 +156,7 @@ function storedProfile(profiles: unknown[], id: string): Profile | undefined {
 
 /** The same stored keys: a re-check writes only over the keys it checked. */
 const sameKeys = (a: Organisation["monerium"], b: NonNullable<Organisation["monerium"]>) =>
-  !!a && a.clientId === b.clientId && a.clientSecretEnc === b.clientSecretEnc;
+  !!a && a.clientId === b.clientId && sameSecret(a.clientSecretEnc, b.clientSecretEnc);
 
 /** The Monerium profile the company's issued IBAN belongs to, if one is. */
 export async function issuedProfileId(orgId: string): Promise<string | undefined> {

@@ -12,7 +12,7 @@
  * database to connect to as a role that may CREATE DATABASE and CREATE ROLE.
  * Each run creates a uniquely named database and application role and drops
  * both at the end, pass or fail. The API suites run as that role, as the API
- * does (§7), with the grants of zold_grant_app (migrations/0006).
+ * does (§7), with the grants of zold_grant_app (migrations/0006, 0007).
  */
 // Must be first: pins chain, keys and a throwaway database.
 import "./_local-chain.js";
@@ -418,7 +418,181 @@ try {
       await admin.query(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`);
     }
   }
-  console.log("ok - the application role: the store suite runs on its grants; no DELETE or TRUNCATE on kept rows, no UPDATE on audit, no write to history or schema_migrations, no DDL, no TEMP; a shadowing temporary ledger_history does not take the history row");
+  // zold_grant_app in a schema whose name needs quotes, owned by a role that
+  // does not own the database: run by the database's owner it grants; run by
+  // the schema's owner, whose REVOKE TEMPORARY is only a warning, it refuses.
+  {
+    const db = `${name}_s${Math.random().toString(16).slice(2, 10)}`;
+    // Named like the application role, so a killed run's is swept the same way.
+    const schemaOwner = `zold_test_app_${Math.floor(Date.now() / 1000)}_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    const pw = randomUUID();
+    await admin.query(`CREATE DATABASE ${db}`);
+    await admin.query(`CREATE ROLE ${schemaOwner} LOGIN PASSWORD '${pw}'`);
+    try {
+      const dbOwner = openPool(urlFor(db), { realMoney: false });
+      try {
+        await dbOwner.query(`CREATE SCHEMA "Zold Q" AUTHORIZATION ${schemaOwner}`);
+        await admin.query(`ALTER DATABASE ${db} SET search_path = "Zold Q"`);
+        const asSchemaOwner = (() => {
+          const u = urlFor(db).replace(/^(postgres(?:ql)?:\/\/)[^@/]*@/, "$1");
+          return `${u}${u.includes("?") ? "&" : "?"}user=${schemaOwner}&password=${pw}`;
+        })();
+        const so = openPool(asSchemaOwner, { realMoney: false });
+        try {
+          await migrate(so);
+          await assert.rejects(() => so.query("SELECT zold_grant_app($1)", [appRole]), /can still create temporary tables/, "run by a role that cannot revoke TEMP, the grant fails loudly");
+        } finally {
+          await so.close();
+        }
+        const fresh = openPool(urlFor(db), { realMoney: false });
+        try {
+          await fresh.query("SELECT zold_grant_app($1)", [appRole]);
+          const can = await fresh.query<{ ok: boolean; temp: boolean }>(
+            `SELECT has_table_privilege($1, '"Zold Q".ledger', 'UPDATE') AS ok, has_database_privilege($1, current_database(), 'TEMPORARY') AS temp`,
+            [appRole],
+          );
+          assert.deepEqual(can.rows[0], { ok: true, temp: false }, "run by the database owner: granted on the quoted schema's tables, no TEMP");
+        } finally {
+          await fresh.close();
+        }
+      } finally {
+        await dbOwner.close();
+      }
+    } finally {
+      await admin.query(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`);
+      await admin.query(`DROP ROLE IF EXISTS ${schemaOwner}`);
+    }
+  }
+  console.log("ok - the application role: the store suite runs on its grants; no DELETE or TRUNCATE on kept rows, no UPDATE on audit, no write to history or schema_migrations, no DDL, no TEMP; a shadowing temporary ledger_history does not take the history row; granted in a schema whose name needs quotes; a grant run by a role that cannot revoke TEMP fails");
+
+  // §6: the importer and the export through their CLIs, on a database of its
+  // own migrated as a deploy would, over a store the store's code wrote.
+  {
+    const { spawnSync } = await import("node:child_process");
+    const { existsSync, readFileSync } = await import("node:fs");
+    const { digest, importSnapshot } = await import("../services/api/src/store/pg/port.js");
+    const db = `${name}_s${Math.random().toString(16).slice(2, 10)}`;
+    const dir = mkdtempSync(path.join(tmpdir(), "zold-pg-import-"));
+    const fixture = path.join(dir, "fixture.json");
+    const cwd = new URL("..", import.meta.url).pathname;
+    // DATABASE_URL and nothing else of a deployment: no signing key, no chain.
+    const cli = (args: string[], url = urlFor(db)) =>
+      spawnSync(process.execPath, ["--import", "tsx", ...args], { cwd, encoding: "utf8", env: { PATH: process.env.PATH!, HOME: process.env.HOME!, USER: process.env.USER!, DATABASE_URL: url } });
+    assert.equal(spawnSync(process.execPath, ["--import", "tsx", "scripts/_import-fixture.ts", fixture], { cwd, encoding: "utf8" }).status, 0);
+    const source = JSON.parse(readFileSync(fixture, "utf8"));
+    await admin.query(`CREATE DATABASE ${db}`);
+    const owner = openPool(urlFor(db), { realMoney: false });
+    const lock = new pg.Client({ connectionString: urlFor(db) });
+    const count = async () =>
+      Number(
+        (
+          await owner.query<{ n: string }>(
+            "SELECT (SELECT count(*) FROM users) + (SELECT count(*) FROM ledger) + (SELECT count(*) FROM outbox) + (SELECT count(*) FROM payment_handles) AS n",
+          )
+        ).rows[0].n,
+      );
+    try {
+      await migrateAndGrant(db);
+      // An API holding the start lock: the import refuses, writing nothing.
+      await lock.connect();
+      await lock.query("SELECT pg_advisory_lock(hashtext('api:' || current_database()))");
+      const locked = cli(["scripts/pg-import.ts", "import", fixture]);
+      assert.equal(locked.status, 1);
+      assert.match(locked.stderr, /an API holds this deployment's start lock/);
+      assert.equal(await count(), 0);
+      await lock.query("SELECT pg_advisory_unlock_all()");
+
+      // The importer's connection killed mid-import: nothing committed.
+      await assert.rejects(
+        importSnapshot(owner, structuredClone(source), {
+          async beforeRow(c, i) {
+            if (c !== "ledger" || i !== 1) return;
+            const { rows } = await admin.query<{ pid: number }>("SELECT pid FROM pg_stat_activity WHERE datname = $1 AND state LIKE 'idle in transaction%'", [db]);
+            assert.equal(rows.length, 1, "the importer is between two inserts");
+            await admin.query("SELECT pg_terminate_backend($1)", [rows[0].pid]);
+          },
+        }),
+      );
+      assert.equal(await count(), 0, "a connection killed mid-import leaves the target empty");
+
+      const first = cli(["scripts/pg-import.ts", "import", fixture]);
+      assert.equal(first.status, 0, first.stderr);
+      assert.match(first.stdout, /imported, read back and verified before the commit/);
+      assert.match(first.stdout, /verify: every collection's count and hash match/);
+      assert.ok(!first.stdout.includes("Lindner"), "the import prints no row");
+      const second = cli(["scripts/pg-import.ts", "import", fixture]);
+      assert.equal(second.status, 0, second.stderr);
+      assert.match(second.stdout, /already holds this snapshot; nothing changed/);
+      assert.equal(cli(["scripts/pg-import.ts", "verify", fixture]).status, 0);
+
+      // Export, the rollback path: the snapshot again, and refused under the start lock.
+      const out = path.join(dir, "exported.json");
+      await lock.query("SELECT pg_advisory_lock(hashtext('api:' || current_database()))");
+      const refused = cli(["scripts/pg-export.ts", out]);
+      assert.equal(refused.status, 1);
+      assert.match(refused.stderr, /start lock/);
+      assert.equal(existsSync(out), false);
+      await lock.query("SELECT pg_advisory_unlock_all()");
+      const exp = cli(["scripts/pg-export.ts", out]);
+      assert.equal(exp.status, 0, exp.stderr);
+      assert.match(exp.stdout, /verify: every collection's count and hash match Postgres/);
+      const exported = JSON.parse(readFileSync(out, "utf8"));
+      assert.deepEqual(exported, source, "export → the imported db.json, rows in order");
+      assert.deepEqual(digest(exported), digest(source));
+      assert.equal(cli(["scripts/pg-export.ts", out]).status, 1, "an existing file is not overwritten");
+      assert.equal(cli(["scripts/pg-export.ts", "--verify", out]).status, 0, "the export verifies again later");
+
+      // A signup on Postgres (no organisation: only the JSON load makes one)
+      // and a session dead past retention, not yet pruned: the export
+      // verifies as written; as an import source it is refused.
+      await owner.query("INSERT INTO users (id, doc) VALUES ('u_signup', $1::json)", [JSON.stringify({ id: "u_signup", address: "0x5165", createdAt: new Date().toISOString() })]);
+      await owner.query("INSERT INTO sessions (id, doc) VALUES ('s_dead', $1::json)", [
+        JSON.stringify({ id: "s_dead", userId: "u_signup", tokenHash: "th-dead", createdAt: "2026-01-01T00:00:00.000Z", lastUsedAt: "2026-01-01T00:00:00.000Z", expiresAt: "2026-01-02T00:00:00.000Z" }),
+      ]);
+      const outSignup = path.join(dir, "exported-signup.json");
+      assert.equal(cli(["scripts/pg-export.ts", outSignup]).status, 0);
+      const again = cli(["scripts/pg-export.ts", "--verify", outSignup]);
+      assert.equal(again.status, 0, again.stderr);
+      assert.match(again.stdout, /as written, matches Postgres/);
+      const asSource = cli(["scripts/pg-import.ts", "verify", outSignup]);
+      assert.equal(asSource.status, 1);
+      assert.match(asSource.stderr, /no organisation yet/);
+      await owner.query("DELETE FROM sessions WHERE id = 's_dead'");
+      await owner.query("DELETE FROM users WHERE id = 'u_signup'");
+
+      // The API's store serves the imported rows on its grants.
+      const app = openPool(urlAs(db), { realMoney: false });
+      try {
+        const as = createPgStore(app);
+        const u = source.users[0];
+        assert.deepEqual(await as.findUser(u.id), u);
+        const le = source.ledger[0];
+        await as.updateLedgerEntry(le.id, { note: "categorised after import" } as any);
+        assert.equal((await as.list("ledger")).find((x) => x.id === le.id)?.note, "categorised after import");
+      } finally {
+        await app.close();
+      }
+      // That change left ledger_history, which db.json has no place for: the
+      // export refuses to drop it, and writes it only through age.
+      const out2 = path.join(dir, "exported-2.json");
+      const noHistory = cli(["scripts/pg-export.ts", out2]);
+      assert.equal(noHistory.status, 1);
+      assert.match(noHistory.stderr, /ledger_history has 1 row\(s\)/);
+      assert.equal(existsSync(out2), false);
+      const noAge = cli(["scripts/pg-export.ts", out2, "--ledger-history", path.join(dir, "history.jsonl.age")], urlFor(db));
+      if (noAge.status !== 0) assert.match(noAge.stderr, /age is not installed|no recipients/);
+      // A changed target no longer verifies against the source.
+      const stale = cli(["scripts/pg-import.ts", "verify", fixture]);
+      assert.equal(stale.status, 1);
+      assert.match(stale.stderr, /VERIFY FAILED: ledger differ/);
+      assert.equal(cli(["scripts/pg-export.ts", "--verify", out]).status, 1, "and neither does the older export");
+    } finally {
+      await lock.end().catch(() => {});
+      await owner.close();
+      await admin.query(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`);
+    }
+  }
+  console.log("ok - §6 on Postgres 17: import refused under the start lock and rolled back when its connection is killed; imported and verified, a second run changes nothing; export refused under the start lock, then equal to the source and verified again by --verify, also with a signup and a dead session in it; all with DATABASE_URL alone; the API's store serves the imported rows; ledger_history is never dropped or written in plain text");
 
   // The API's own store on Postgres (STORE_BACKEND=postgres): the §2
   // concurrency tests, and the suites that hold the S2 race tests, each in a
@@ -445,6 +619,7 @@ try {
     ["scripts/wallet-proof-test.ts"],
     ["scripts/outbox-test.ts"],
     ["scripts/checkout-service-test.ts"],
+    ["scripts/identity-race-test.ts"],
   ];
   const { spawn } = await import("node:child_process");
   const { freePort } = await import("./_free-port.js");

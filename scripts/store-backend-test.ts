@@ -237,13 +237,14 @@ console.log("ok - store suite on the JSON backend");
 
   // A nested store.tx that fails and is caught undoes only itself (a
   // savepoint); the transaction goes on and commits the rest.
+  await pg.addUser({ id: "u_sp", address: `0x${"5b".repeat(20)}`, iban: "", createdAt: now } as any);
   await pg.tx(async (t) => {
     await t.updateTransfer("t_lis_rb", { reference: "outer" } as any);
     await assert.rejects(
       pg.tx(async (n) => {
         await n.updateTransfer("t_lis_rb", { reference: "inner" } as any);
-        await n.addSession({ id: "s_dup", userId: "u_a", tokenHash: "th_dup", createdAt: now, lastUsedAt: now, expiresAt: now });
-        await n.addSession({ id: "s_dup2", userId: "u_a", tokenHash: "th_dup", createdAt: now, lastUsedAt: now, expiresAt: now });
+        await n.addSession({ id: "s_dup", userId: "u_sp", tokenHash: "th_dup", createdAt: now, lastUsedAt: now, expiresAt: now });
+        await n.addSession({ id: "s_dup2", userId: "u_sp", tokenHash: "th_dup", createdAt: now, lastUsedAt: now, expiresAt: now });
       }),
       /duplicate key/,
     );
@@ -258,8 +259,8 @@ console.log("ok - store suite on the JSON backend");
   await assert.rejects(
     pg.tx(async (t) => {
       await t.updateTransfer("t_lis_rb", { reference: "lost" } as any);
-      await t.addSession({ id: "s_dup3", userId: "u_a", tokenHash: "th_dup3", createdAt: now, lastUsedAt: now, expiresAt: now });
-      await t.addSession({ id: "s_dup4", userId: "u_a", tokenHash: "th_dup3", createdAt: now, lastUsedAt: now, expiresAt: now }).catch(() => {});
+      await t.addSession({ id: "s_dup3", userId: "u_sp", tokenHash: "th_dup3", createdAt: now, lastUsedAt: now, expiresAt: now });
+      await t.addSession({ id: "s_dup4", userId: "u_sp", tokenHash: "th_dup3", createdAt: now, lastUsedAt: now, expiresAt: now }).catch(() => {});
     }),
     /a statement in this transaction failed/,
   );
@@ -476,6 +477,10 @@ console.log("ok - store suite on the JSON backend");
     [`postgresql://u:${secret}@db.example.com/zold?host=db.example.com`, real, /sslmode=verify-full/],
     [`mysql://u:${secret}@localhost/zold`, real, /postgresql:\/\//],
     [`not a url ${secret}`, real, /not a valid URL/],
+    // The driver connects to the last host; the first must not decide.
+    [`postgresql://u:${secret}@/zold?host=localhost&host=db.example.com`, real, /repeats the host parameter/],
+    [`postgresql://u:${secret}@db.example.com/zold?host=localhost&host=`, real, /repeats the host parameter/],
+    [`postgresql://u:${secret}@db.example.com/zold?sslmode=verify-full&sslmode=disable`, { ca, realMoney: true }, /repeats the sslmode parameter/],
   ];
   for (const [url, opts, why] of refusals) {
     assert.throws(() => pgPoolConfig(url, opts as never), (e: Error) => why.test(e.message) && !e.message.includes(secret), url.replace(secret, "…"));
@@ -486,6 +491,9 @@ console.log("ok - store suite on the JSON backend");
   assert.equal(databaseUrlIsLocal("postgresql://u@[::1]/zold"), true);
   assert.equal(databaseUrlIsLocal("postgresql://u@db.example.com/zold"), false);
   assert.equal(databaseUrlIsLocal("postgresql://u@localhost/zold?host=db.example.com"), false);
+  assert.equal(databaseUrlIsLocal("postgresql://u@db.example.com/zold?host=127.0.0.1"), true);
+  assert.equal(databaseUrlIsLocal("postgresql://u@/zold?host=localhost"), true);
+  assert.throws(() => databaseUrlIsLocal("postgresql://u@/zold?host=127.0.0.1&host=db.example.com"), /repeats the host parameter/, "check:pg's remote opt-in reads the host the driver will use");
   assert.deepEqual(tls.ssl, { ca: "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n", rejectUnauthorized: true });
   assert.equal(tls.connectionString, "postgresql://u@db.example.com/zold", "our CA object is not replaced by the driver's sslmode parsing");
   assert.equal(

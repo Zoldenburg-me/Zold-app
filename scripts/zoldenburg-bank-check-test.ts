@@ -922,7 +922,7 @@ console.log("RELAYING (§2, managed recovery start)");
 await t("a request whose relay is in flight past its expiresAt still blocks a new start; the sweep leaves it until the relay timeout", async () => {
   await closeOpen();
   await newRequest("rl-exp");
-  await store.updateRecoveryRequest("rl-exp", { status: "RELAYING", relaying: { from: "REVIEW_PENDING", at: new Date().toISOString() }, expiresAt: new Date(Date.now() - 1000).toISOString() });
+  await store.updateRecoveryRequest("rl-exp", { status: "RELAYING", relaying: { from: "REVIEW_PENDING", at: new Date().toISOString(), token: "t-exp" }, expiresAt: new Date(Date.now() - 1000).toISOString() });
   const started = await call("/recovery/zoldenburg", { email: "anna@example.com" });
   assert.equal(started.status, 409, started.text);
   assert.equal(started.data.code, "RECOVERY_IN_PROGRESS");
@@ -934,7 +934,7 @@ await t("a request whose relay is in flight past its expiresAt still blocks a ne
 
 await t("a process stopped after RELAYING was written: on chain, the sweep moves it to its grace period; not on chain, it goes back and relays once", async () => {
   await closeOpen();
-  const stale = { from: "REVIEW_PENDING" as const, at: new Date(Date.now() - 11 * 60_000).toISOString() };
+  const stale = { from: "REVIEW_PENDING" as const, at: new Date(Date.now() - 11 * 60_000).toISOString(), token: "t-stale" };
   const paid = async (id: string) => {
     await newRequest(id);
     await store.updateRecoveryRequest(id, { zoldenburg: { ...(await req(id)).zoldenburg, bankCheck: { codesIssued: 1, passedAt: at(1).toISOString(), orderId: `o-${id}`, enrolledAt: (await user()).zoldenburgEnrolment!.enrolledAt } } });

@@ -172,7 +172,7 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
   assert.ok(await s.findTransfer("t_held"));
   assert.equal(await s.heldEurToday("u_a"), 0, "the hold became the transfer");
   // NaN passes `used + eur > cap`; a stored NaN hold would open the cap all day.
-  for (const [eur, used, cap] of [[Number.NaN, 0, 100], [-1, 0, 100], [Infinity, 0, 100], [1, Number.NaN, 100], [1, 0, Number.NaN]]) {
+  for (const [eur, used, cap] of [[Number.NaN, 0, 100], [-1, 0, 100], [Infinity, 0, 100], [1, Number.NaN, 100], [1, 0, Number.NaN], [1, -50, 100], [1, 0, -1]]) {
     await assert.rejects(async () => await s.holdDailyCap("u_nan", eur, cap, () => used), /daily cap/, `refused: ${eur} ${used} ${cap}`);
   }
   assert.equal(await s.heldEurToday("u_nan"), 0, "a refused amount holds nothing");
@@ -184,13 +184,30 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
   // ── Sessions ─────────────────────────────────────────────────────────────
   await s.addSession({ id: "s_dead", userId: "u_a", tokenHash: "th-dead", createdAt: iso(-3 * DAY), lastUsedAt: iso(-3 * DAY), expiresAt: iso(-2 * DAY) });
   await s.addSession({ id: "s_1", userId: "u_a", tokenHash: "th-1", createdAt: now, lastUsedAt: now, expiresAt: iso(DAY) });
-  assert.equal(await s.findSessionByTokenHash("th-dead"), undefined, "a session dead for a day is pruned on the next add");
+  await s.pruneSessions();
+  assert.equal(await s.findSessionByTokenHash("th-dead"), undefined, "a session dead for a day is pruned");
+  assert.ok(await s.findSessionByTokenHash("th-1"), "a live one is kept");
   assert.equal((await s.touchSession("s_1")).lastUsedAt, now, "touched within a minute: unchanged");
   await s.addSession({ id: "s_2", userId: "u_a", tokenHash: "th-2", createdAt: now, lastUsedAt: iso(-120_000), expiresAt: iso(DAY) });
   await s.touchSession("s_2");
   assert.ok(Date.parse((await s.findSessionByTokenHash("th-2"))!.lastUsedAt) > Date.now() - 60_000, "an idle session's touch is written");
   assert.ok((await s.revokeSession("s_1")).revokedAt);
   await assert.rejects(async () => await s.touchSession("nobody"), /unknown session/);
+  // Session epoch: a credential change bumps it, revokes the others and moves
+  // the one it keeps; a session issued under the old epoch is not stored.
+  assert.equal(await s.addSession({ id: "s_ghost", userId: "nobody", tokenHash: "th-ghost", createdAt: now, lastUsedAt: now, expiresAt: iso(DAY) }), false, "no user, no session");
+  assert.equal(await s.addSession({ id: "s_e1", userId: "u_a", tokenHash: "th-e1", createdAt: now, lastUsedAt: now, expiresAt: iso(DAY), epoch: 0 }), true);
+  assert.equal(await s.addSession({ id: "s_e2", userId: "u_a", tokenHash: "th-e2", createdAt: now, lastUsedAt: now, expiresAt: iso(DAY) }), true);
+  assert.equal(await s.revokeOtherSessions("u_a", "s_e1"), 1, "the epoch moves to 1");
+  assert.equal((await s.findUser("u_a"))?.sessionEpoch, 1);
+  const kept = (await s.findSessionByTokenHash("th-e1"))!;
+  assert.equal(kept.revokedAt, undefined, "the kept session stays live");
+  assert.equal(kept.epoch, 1, "and moves to the new epoch");
+  assert.ok((await s.findSessionByTokenHash("th-e2"))?.revokedAt, "every other session is revoked");
+  assert.equal(await s.addSession({ id: "s_e3", userId: "u_a", tokenHash: "th-e3", createdAt: now, lastUsedAt: now, expiresAt: iso(DAY), epoch: 0 }), false, "issued under the old epoch: refused");
+  assert.equal(await s.findSessionByTokenHash("th-e3"), undefined);
+  assert.equal(await s.addSession({ id: "s_e4", userId: "u_a", tokenHash: "th-e4", createdAt: now, lastUsedAt: now, expiresAt: iso(DAY), epoch: 1 }), true, "under the current one: stored");
+  await assert.rejects(async () => await s.revokeOtherSessions("nobody"), /unknown user nobody/);
 
   // ── Operators ────────────────────────────────────────────────────────────
   const op = await s.addOperator({ id: "op_1", email: " Op@Zold.test ", name: "Op", credentials: [{ credentialId: "oc-1", publicKey: "pk", signCount: 0 }], createdAt: now } as any);
@@ -443,6 +460,23 @@ export async function conditionalWriteSuite(s: StoreBackend): Promise<void> {
   assert.equal(stale.passkeySafe?.recoveredAt, undefined, "a row handed out earlier is a copy");
   await assert.rejects(async () => await s.patchUserSub("nobody", "monerium", (m) => m), /unknown user nobody/);
 
+  // A Monerium refresh stores its tokens only on the connection whose refresh
+  // token it spent (constant-time compare on the stored row).
+  await s.updateUser("u_b", { monerium: { connectedAt: now, method: "oauth", accessTokenEnc: "a0", refreshTokenEnc: "r0", expiresAt: now } } as any);
+  assert.equal(await s.storeMoneriumTokens("u_b", "r-other", { accessTokenEnc: "a1", refreshTokenEnc: "r1" }), undefined, "another refresh token: nothing written");
+  assert.equal(await s.storeMoneriumTokens("u_b", "r", { accessTokenEnc: "a1" }), undefined, "a prefix is not a match");
+  const exp = iso(DAY);
+  const refreshed = (await s.storeMoneriumTokens("u_b", "r0", { accessTokenEnc: "a1", refreshTokenEnc: "r1", expiresAt: exp }))!;
+  assert.deepEqual([refreshed.monerium?.accessTokenEnc, refreshed.monerium?.refreshTokenEnc, refreshed.monerium?.expiresAt], ["a1", "r1", exp]);
+  assert.equal(await s.storeMoneriumTokens("u_b", "r0", { accessTokenEnc: "a2" }), undefined, "a spent refresh token stores nothing");
+  const kept = (await s.storeMoneriumTokens("u_b", "r1", { accessTokenEnc: "a2" }))!;
+  assert.deepEqual([kept.monerium?.refreshTokenEnc, kept.monerium?.expiresAt, kept.monerium?.connectedAt], ["r1", exp, now], "no rotation: the stored token, expiry and the rest kept");
+  await s.updateUser("u_b", { monerium: { connectedAt: now, method: "api_keys", refreshTokenEnc: "r1" } } as any);
+  assert.equal(await s.storeMoneriumTokens("u_b", "r1", { accessTokenEnc: "a3" }), undefined, "connected again by API keys: nothing written");
+  await s.updateUser("u_b", { monerium: undefined } as any);
+  assert.equal(await s.storeMoneriumTokens("u_b", "r1", { accessTokenEnc: "a3" }), undefined, "disconnected: nothing written");
+  assert.equal(await s.storeMoneriumTokens("nobody", "r1", { accessTokenEnc: "a3" }), undefined);
+
   await s.patchOrgSub("org_b", "invoicing", (cur) => ({ ...cur, vatId: "DE123456789" }));
   const org = await s.patchOrgSub("org_b", "invoicing", (cur) => ({ ...cur, taxNumber: "12/345/67890" }), { name: "B 2" } as any);
   assert.deepEqual([org.invoicing?.vatId, org.invoicing?.taxNumber, org.name], ["DE123456789", "12/345/67890", "B 2"]);
@@ -562,6 +596,18 @@ export async function conditionalWriteSuite(s: StoreBackend): Promise<void> {
   assert.equal(moves.filter(Boolean).length, 1, "one of two parallel moves from REVIEW_PENDING lands");
   assert.equal(await s.updateRecoveryRequestFrom("rr_from", ["PASSKEY_PENDING", "REVIEW_PENDING"], { status: "EXPIRED" }), null, "the sweep's EXPIRED never lands on a moved row");
   await assert.rejects(async () => await s.updateRecoveryRequestFrom("rr_none", ["REVIEW_PENDING"], { status: "EXPIRED" }), /unknown recovery request rr_none/);
+
+  // A relay's release and outcome write only over its own reserve's token.
+  await s.addRecoveryRequest({ id: "rr_relay", userId: "u_a", mode: "candide", status: "RELAYING", relaying: { from: "GRACE_PERIOD", at: now, token: "tok-b" }, requestedAt: now } as any);
+  assert.equal(await s.updateRecoveryRelay("rr_relay", "tok-a", { status: "GRACE_PERIOD", relaying: undefined }), null, "an older reserve's release leaves the newer one");
+  assert.equal((await s.findRecoveryRequest("rr_relay"))?.relaying?.token, "tok-b");
+  const ends = await Promise.all([
+    s.updateRecoveryRelay("rr_relay", "tok-b", { status: "FINALIZED", relaying: undefined }),
+    s.updateRecoveryRelay("rr_relay", "tok-b", { status: "GRACE_PERIOD", relaying: undefined }),
+  ]);
+  assert.equal(ends.filter(Boolean).length, 1, "of an outcome and a release at once, one lands");
+  assert.equal(await s.updateRecoveryRelay("rr_relay", "tok-b", { status: "GRACE_PERIOD" }), null, "nothing once the reserve ended");
+  await assert.rejects(async () => await s.updateRecoveryRelay("rr_none", "tok-b", {}), /unknown recovery request rr_none/);
 
   // Email code: each guess counted on the stored row, parallel ones too.
   await s.updateUser("u_a", { emailCode: { hash: "h", email: "ada@example.com", expiresAt: iso(DAY), attempts: 0, sentAt: [] } } as any);
