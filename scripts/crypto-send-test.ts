@@ -447,6 +447,33 @@ try {
     assert.equal((await store.findCryptoSend(reverts))!.state, "FAILED");
   });
 
+  await t("the connection lost while the confirmed outcome is written: the send is never FAILED; committed it stays SENT, rolled back it stays SUBMITTED with its hash and the sweep settles it", async () => {
+    const updateCryptoSend = store.updateCryptoSend;
+    try {
+      for (const cut of ["before", "after"] as const) {
+        const c = await create({ to: ALICE, confirmedAddress: ALICE, amount: "1" });
+        assert.equal(c.status, 201);
+        store.updateCryptoSend = (async (id, patch) => {
+          if (id !== c.data.id || patch.state !== "SENT") return updateCryptoSend(id, patch);
+          store.updateCryptoSend = updateCryptoSend;
+          if (cut === "after") await updateCryptoSend(id, patch);
+          throw new Error("Connection terminated unexpectedly");
+        }) as typeof updateCryptoSend;
+        const r = await post(`/crypto-sends/${c.data.id}/authorize`, { executionAssertion: await passkey.assert(c.data.safeExecution.challenge) });
+        assert.equal(r.status, 500, `${cut}: ${JSON.stringify(r.data)}`);
+        const s = (await store.findCryptoSend(c.data.id))!;
+        assert.equal(s.state, cut === "after" ? "SENT" : "SUBMITTED", cut);
+        assert.ok(s.userOpHash, `${cut}: the operation hash is kept`);
+        if (cut === "before") {
+          await settleUnconfirmedCryptoSends(async (h) => (h === s.userOpHash ? { success: true, txHash: "0xdef" } : null));
+          assert.equal((await store.findCryptoSend(c.data.id))!.state, "SENT", "the sweep settles it from the receipt");
+        }
+      }
+    } finally {
+      store.updateCryptoSend = updateCryptoSend;
+    }
+  });
+
   await t("KYC is not the gate: a pending account sends, a segment without a balance does not", async () => {
     const u = (await store.findUser("u-cs"))!;
     await store.updateUser(u.id, { kycStatus: "pending" });

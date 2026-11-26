@@ -263,6 +263,25 @@ const toAssertion = (body: any) => ({
  * confirmed. An operation sent but not confirmed, or included and reverted,
  * answers 502 here and the caller records nothing as done.
  */
+/**
+ * The owner's cancel, confirmed on chain, ends the account's live requests.
+ * The module holds one recovery per Safe, whoever's guardian started it, so
+ * it ends a Zoldenburg or Turnkey one too. A relay holding RELAYING ends as
+ * well: its outcome and its release write only from RELAYING, so they leave
+ * the CANCELED row as it is.
+ */
+export async function cancelRecoveriesOnChainVeto(userId: string, now = new Date().toISOString()): Promise<void> {
+  const LIVE = ["OTP_PENDING", "REVIEW_PENDING", "GRACE_PERIOD", "RELAYING"] as const;
+  await store.tx(async () => {
+    await store.lockUser(userId);
+    for (const r of (await store.recoveryRequestsForUser(userId))) {
+      if (r.mode === "candide" || r.mode === "zoldenburg" || r.mode === "turnkey") {
+        await store.updateRecoveryRequestFrom(r.id, LIVE, { status: "CANCELED", canceledAt: now, cancelReason: "cancelled on chain by the account owner", relaying: undefined });
+      }
+    }
+  });
+}
+
 async function submitConfirmed(
   plan: PasskeySafeDeploymentPlan,
   userOperation: any,
@@ -782,14 +801,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       const op = await submitConfirmed(plan, pending.userOperation, req.body, res);
       if (!op) return;
       const opHash = op.userOpHash;
-      const now = new Date().toISOString();
-      for (const r of (await store.recoveryRequestsForUser(user.id))) {
-        // The module holds one recovery per Safe, whoever's guardian started
-        // it, so the owner's cancel ends a Zoldenburg or Turnkey one too.
-        if ((r.mode === "candide" || r.mode === "zoldenburg" || r.mode === "turnkey") && ["OTP_PENDING", "REVIEW_PENDING", "GRACE_PERIOD"].includes(r.status)) {
-          await store.updateRecoveryRequest(r.id, { status: "CANCELED", canceledAt: now, cancelReason: "cancelled on chain by the account owner" });
-        }
-      }
+      await cancelRecoveriesOnChainVeto(user.id);
       res.json({ canceled: true, opHash });
     }),
   );

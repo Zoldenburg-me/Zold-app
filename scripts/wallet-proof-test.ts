@@ -75,12 +75,15 @@ process.env.WALLET_SYNC_RPC_7 = `http://127.0.0.1:${(stubServer.address() as any
 
 // VIES, stubbed: issuing a draft whose recipient has a VAT ID waits on it,
 // which is the window in which `duringVies` changes what the draft bills.
-let duringVies: (() => void) | undefined;
+// The answer waits for the change to commit, so the issue's re-check after
+// VIES reads it on any backend.
+let duringVies: (() => void | Promise<void>) | undefined;
 const vies = express();
 vies.use(express.json());
-vies.post("/", (_req, res) => {
-  duringVies?.();
+vies.post("/", async (_req, res) => {
+  const during = duringVies;
   duringVies = undefined;
+  await during?.();
   res.json({ valid: true, name: "Example DAO Foundation", address: "Vienna", requestDate: new Date().toISOString() });
 });
 const viesServer = vies.listen(0, "127.0.0.1");

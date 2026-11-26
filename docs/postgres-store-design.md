@@ -364,9 +364,7 @@ in parallel on Postgres 17 in `check:pg`.
 
 **Approvals waiting for a passkey are in the store.** Preparing a
 transfer's or a crypto send's UserOperation and approving it are separate
-requests; held in memory, the prepared operation was lost to a restart, or
-to a second process, and the approval answered 410 (`routes/crypto-sends.ts`).
-On Postgres both are rows of `pending_executions(kind, id, user_id, expires_at, doc)` (`0004`):
+requests. On Postgres the prepared operations are rows of `pending_executions(kind, id, user_id, expires_at, doc)` (`0004`):
 the plan, the unsigned UserOperation, its challenge and the batch recipient,
 none of them a secret. A UserOperation is mostly `bigint`s, which JSON cannot
 hold, so `doc` stores it through `encodeUserOperation` /
@@ -375,8 +373,11 @@ queue does, and a round-trip test compares the decoded operation with the
 original (`scripts/_store-suite.ts`). The approval reads it
 (`findPendingExecution`), deletes it in the same transaction as the claim
 (`claimAuthorization`, `claimCryptoSend`), and expired rows are pruned when
-the next is written. On db.json the same store methods keep it in memory, as
-before: a restart answers the approval 410. The other pending maps in `http/pending.ts` (Safe deployments,
+the next is written. On db.json the same store methods keep it in memory,
+so after a restart there is nothing to approve: a crypto send answers 410
+(`routes/crypto-sends.ts`), and a transfer's debit leg refuses for want of
+a passkey-approved execution (`orchestrator.ts` `submitSafeExecution`), so the
+transfer fails with nothing debited. The other pending maps in `http/pending.ts` (Safe deployments,
 Monerium link signatures) stay in memory: a restart asks the user to repeat a
 setup step and moves no money. The checkout-webhook retry timers stay until
 S4 replaces them. `capHolds` (`store.ts`) and `relaying` are in the
