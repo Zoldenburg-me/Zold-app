@@ -10,7 +10,7 @@ Read when the task touches it:
 - `docs/status.md` — **what has never run** (mainnet: owner only, one swap, one SEPA
   round: mints and Monerium's redeem burn on chain; no cash rail; no on-chain recovery). Read before claiming it works.
 - `docs/running-locally.md` — dev vs api, preflight, funding, KYC gate,
-  tests, production branch, lease changes, browser.
+  tests, Postgres, production branch, lease changes, browser.
 - `docs/wallets.md` — every wallet and its key holder.
 - `docs/recovery-and-signers.md` — second owner, Zoldenburg guardian, recovery.
 - `docs/roadmap.md` — current milestone, agreed priority, parked ideas.
@@ -68,8 +68,10 @@ THREE RULES OVERRIDE CONVENIENCE:
 - `server.ts` is wiring only: routers under `routes/`, the shared
   HTTP layer under `http/`, and **`transfers/build.ts` is the ONE path that
   builds a transfer** — the business router is handed it, never rebuilds it.
-- `store.ts` holds the methods; row shapes in `store/types.ts`, the file-backed
-  db in `store/db.ts`. Still the only thing that touches the database object.
+- `store.ts` holds the methods (rows: `store/types.ts`), the only code that
+  touches the database: `STORE_BACKEND=json` (default, `store/db.ts`) or
+  `postgres` (`store/pg/`, not on real money before the cut-over;
+  `docs/postgres-store-design.md`).
 - `liquidity.ts` is the seam; one file per venue in `liquidity/`.
   `liquidity/best.ts` takes its venue resolver as an argument (no cycle).
 - `public/app/*.js` are **classic scripts sharing one scope**: every file but
@@ -168,15 +170,14 @@ Each of these was a bug once.
 - **No secret in source, commits, PRs, logs, errors or fixtures.**
 - **Stored credentials go through `stored-secrets.ts`** (v2, a purpose per
   kind, row-bound), never a plaintext fallback.
-- **No unencrypted copy of the database.** No real money or user data on a
-  host without a processing agreement. Staging is never under the passkey
-  domain.
+- **No unencrypted copy of the database** (a `pg-export` db.json too). No
+  real money or user data on a host without a processing agreement. Staging
+  is never under the passkey domain.
 
 **Keep the "zoll" spelling in two places**: `PRF_SALT = "zoll/device-key/v1"`
-is a key-derivation input (renaming it changes every PRF-derived device key
-and makes every wrapped one undecryptable), and the `zoll-device-key` /
-`zoll-session` localStorage slots are read once and migrated forward. The
-passkey re-creates or replaces the device key; the old key need not exist.
+(a key-derivation input: renamed, every wrapped device key is undecryptable)
+and the `zoll-device-key` / `zoll-session` localStorage slots (read once,
+migrated forward).
 
 ## Change size
 
@@ -189,16 +190,16 @@ path. Where a plugin disagrees with this file, this file wins.
 
 ## Running and testing
 
-- `npm run check` is OFFLINE and is the one to run.
-- `npm run dev` runs local hardhat and **wipes `data/db.dev.json` every start**;
-  it cannot deploy a passkey Safe (no bundler). Never point it at the live
-  accounts in `data/db.json`. `npm run api` uses `TRANSF_CHAIN_ID` and keeps
-  its db. Run `npm run preflight` before any mainnet deploy.
+- `npm run check` is OFFLINE and is the one to run; `npm run check:pg`
+  needs a Postgres 17 (`docs/running-locally.md`).
+- `npm run dev` (local hardhat) **wipes `data/db.dev.json` every start** and
+  cannot deploy a passkey Safe; never point it at `data/db.json`. `npm run
+  api` keeps its db. `npm run preflight` before any mainnet deploy.
 
 ## Environment
 
 - Ports 3000 (API/UI), 8545 (chain); contract tests pick a free port.
-- `gh` is logged in; no brew. `origin` is SSH.
+- `gh` is logged in; `origin` is SSH.
 - Node lives in-project: `export PATH="$PWD/.toolchain/node-v22.23.4-darwin-arm64/bin:$PATH"`.
   arm64 only; on Intel see `docs/running-locally.md`.
 
