@@ -44,7 +44,8 @@ export interface User {
   wallet?: { type: "candide-safe"; deployed: boolean; deployOpHash?: string };
   /** Testnet faucet grant, so one account is funded exactly once. txHash is
    *  empty while the transfer is in flight (the synchronous claim that stops a
-   *  second call from paying twice). */
+   *  second call from paying twice), and stays empty when a crash or a lost
+   *  node answer left the send uncertain: never resent, reconciled by hand. */
   faucet?: { grantedEur: number; txHash: string; at: string };
   /**
    * The 1 € check that arms Zoldenburg as guardian

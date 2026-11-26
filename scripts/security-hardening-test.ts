@@ -1,5 +1,9 @@
 /**
  * Login rate limits, invoice-link passwords, and what never carries a user IP.
+ * Pre-auth bounds: the body cap runs before the rate limit, a blocked partner
+ * sees no more calls than its bucket allows, the bucket map stays bounded
+ * under a flood of distinct keys and a steady inflow, and the trusted-proxy
+ * setting never turns a spoofed X-Forwarded-For into a fresh bucket.
  *
  * Offline: an in-process express app on an ephemeral port and a throwaway db.
  *
@@ -10,6 +14,7 @@ import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { chmodSync, closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import http from "node:http";
 import { randomBytes } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -28,7 +33,8 @@ const express = (await import("express")).default;
 const { initStore, store } = await import("../services/api/src/store.js");
 const { passwordProblem, hashPassword, passwordMatches } = await import("../services/api/src/domain/passwords.js");
 const { hashToken, ownerInvoiceView } = await import("../services/api/src/domain/invoices.js");
-const { apiRateLimit, clientKey, securityHeaders, securityHeadersFor } = await import("../services/api/src/http/policy.js");
+const { apiRateLimit, bucketCounts, clientKey, rateLimit, RATE_BUCKETS_MAX, securityHeaders, securityHeadersFor, sweepExpiredBuckets } = await import("../services/api/src/http/policy.js");
+const { SECURITY } = await import("../services/api/src/config.js");
 const { createInvoiceLinkRouter } = await import("../services/api/src/routes/business/invoice-links.js");
 const { publicUser } = await import("../services/api/src/users/public-user.js");
 const { persist } = await import("../services/api/src/store/db.js");
@@ -209,6 +215,234 @@ await check("guesses sent all at once still stop at ten, though checking is asyn
   assert.equal(statuses.filter((x) => x === 429).length, 20);
 });
 server.close();
+
+console.log("pre-auth bounds");
+// server.ts's order, rebuilt: headers, the capped body parser, then the
+// limiter. The first check pins that the real file still has it.
+const pre = express();
+pre.use(securityHeaders);
+pre.use(express.json({ limit: SECURITY.jsonBodyLimit }));
+pre.set("trust proxy", 1);
+pre.use("/api", apiRateLimit);
+let challenges = 0;
+pre.post("/api/webauthn/challenge", (_req, res) => {
+  challenges++;
+  res.json({ challenge: "x" });
+});
+let upstreamCalls = 0;
+const releaseUpstream: Array<() => void> = [];
+// A partner that never answers until the test lets it.
+pre.post("/api/quotes", async (_req, res) => {
+  upstreamCalls++;
+  await new Promise<void>((r) => releaseUpstream.push(r));
+  res.json({});
+});
+const preServer = http.createServer({ requestTimeout: 400, connectionsCheckingInterval: 50 }, pre).listen(0, "127.0.0.1");
+await new Promise((r) => preServer.once("listening", r));
+const prePort = (preServer.address() as AddressInfo).port;
+const preBase = `http://127.0.0.1:${prePort}`;
+const from = (ip: string) => ({ "content-type": "application/json", "x-forwarded-for": ip });
+const big = JSON.stringify({ pad: "x".repeat(64 * 1024) });
+/** A raw request: headers now, the body chunk by chunk, the answer when it comes. */
+function rawPost(path: string, headers: Record<string, string>) {
+  const req = http.request({ host: "127.0.0.1", port: prePort, path, method: "POST", headers });
+  const answer = new Promise<{ status: number; at: number }>((resolve, reject) => {
+    req.on("response", (r) => { r.resume(); resolve({ status: r.statusCode!, at: Date.now() }); });
+    req.on("error", reject);
+  });
+  answer.catch(() => {});
+  return { req, answer };
+}
+
+await check("server.ts parses the capped body before the /api rate limit, and leaves Node's request timeouts on", () => {
+  const src = readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), "../services/api/src/server.ts"), "utf8");
+  const headers = src.indexOf("app.use(securityHeaders);");
+  const body = src.indexOf("app.use(express.json({");
+  const limiter = src.indexOf('app.use("/api", apiRateLimit);');
+  assert.ok(headers >= 0 && headers < body && body < limiter, `order: ${headers} ${body} ${limiter}`);
+  assert.match(src.slice(body, limiter), /limit: SECURITY\.jsonBodyLimit/);
+  assert.equal(SECURITY.jsonBodyLimit, "64kb");
+  assert.doesNotMatch(src, /requestTimeout|headersTimeout|setTimeout\(0\)/);
+  const plain = http.createServer();
+  assert.ok(plain.requestTimeout > 0 && plain.headersTimeout > 0, `${plain.requestTimeout} ${plain.headersTimeout}`);
+});
+await check("a body over 64 KiB is a 413 before the limiter counts it, even for a caller already limited", async () => {
+  for (let i = 0; i < 25; i++) {
+    const r = await fetch(`${preBase}/api/webauthn/challenge`, { method: "POST", headers: from("198.18.0.1"), body: big });
+    assert.equal(r.status, 413);
+    assert.equal(r.headers.get("x-zold-answer"), "1");
+  }
+  const statuses = [];
+  for (let i = 0; i < 21; i++) statuses.push((await fetch(`${preBase}/api/webauthn/challenge`, { method: "POST", headers: from("198.18.0.1"), body: "{}" })).status);
+  assert.equal(statuses.filter((x) => x === 200).length, 20, statuses.join(","));
+  assert.equal(statuses[20], 429);
+  assert.equal((await fetch(`${preBase}/api/webauthn/challenge`, { method: "POST", headers: from("198.18.0.1"), body: big })).status, 413);
+});
+// body-parser answers an oversized body only once the request has ended (it
+// discards the rest, holding none of it), so the socket's lifetime is bounded
+// by Node's request timeout, not by the cap.
+await check("a declared Content-Length over the cap never reaches a handler; unsent, it ends at the request timeout", async () => {
+  const before = challenges;
+  const { req, answer } = rawPost("/api/webauthn/challenge", { ...from("198.18.0.2"), "content-length": String(10 * 1024 * 1024) });
+  req.flushHeaders();
+  const started = Date.now();
+  const r = await answer.catch(() => ({ status: 0, at: Date.now() }));
+  req.destroy();
+  assert.ok(r.status === 408 || r.status === 0, String(r.status));
+  assert.ok(r.at - started < 3000, `${r.at - started} ms`);
+  assert.equal(challenges, before);
+});
+await check("a slow chunked body past the cap is discarded and answered 413 when it ends, never handled", async () => {
+  const before = challenges;
+  const { req, answer } = rawPost("/api/webauthn/challenge", { ...from("198.18.0.3"), "transfer-encoding": "chunked" });
+  req.write("{\"pad\":\"");
+  for (let i = 0; i < 100; i++) {
+    req.write("x".repeat(1024));
+    await new Promise((r) => setTimeout(r, 1));
+  }
+  req.end("\"}");
+  const r = await answer;
+  assert.equal(r.status, 413);
+  assert.equal(challenges, before);
+});
+await check("a stalled body holds its socket only until the request timeout", async () => {
+  const { req, answer } = rawPost("/api/webauthn/challenge", { ...from("198.18.0.4"), "content-length": "100" });
+  req.write("{\"pad\":");
+  const started = Date.now();
+  const r = await answer.catch(() => ({ status: 0, at: Date.now() }));
+  req.destroy();
+  assert.ok(r.status === 408 || r.status === 0, String(r.status));
+  assert.ok(r.at - started < 3000, `${r.at - started} ms`);
+});
+await check("a blocked partner sees no more calls than the partner bucket allows; the rest are refused at once", async () => {
+  const limit = SECURITY.partnerRateLimitPerMin;
+  const calls = Array.from({ length: limit + 15 }, () =>
+    fetch(`${preBase}/api/quotes`, { method: "POST", headers: from("198.18.0.5"), body: "{}" }).then((r) => r.status));
+  // Whichever requests the limiter takes first, the refused ones answer at
+  // once and the admitted ones hang on the partner: count, don't index.
+  const answered: number[] = [];
+  for (const c of calls) void c.then((s) => answered.push(s));
+  const deadline = Date.now() + 3000;
+  while (answered.length < 15 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+  await new Promise((r) => setTimeout(r, 100));
+  assert.deepEqual(answered, Array(15).fill(429));
+  assert.equal(upstreamCalls, limit);
+  for (const release of releaseUpstream.splice(0)) release();
+  const all = await Promise.all(calls);
+  assert.equal(all.filter((s) => s === 200).length, limit);
+  assert.equal(all.filter((s) => s === 429).length, 15);
+  assert.equal(upstreamCalls, limit);
+});
+await check("one trusted hop keys on the address the proxy appended; a spoofed left part mints no bucket", async () => {
+  const statuses = [];
+  for (let i = 0; i < 21; i++) {
+    statuses.push((await fetch(`${preBase}/api/webauthn/challenge`, { method: "POST", headers: from(`203.0.113.${i + 1}, 198.18.0.6`), body: "{}" })).status);
+  }
+  assert.equal(statuses[19], 200);
+  assert.equal(statuses[20], 429);
+  // The proxy's own address is not the key: another client is not locked out.
+  assert.equal((await fetch(`${preBase}/api/webauthn/challenge`, { method: "POST", headers: from("198.18.0.7"), body: "{}" })).status, 200);
+});
+const realNow = Date.now;
+// A later clock: every bucket so far has expired, so the socket peer's
+// windows start fresh for the no-proxy check and the sweep starts empty.
+let clock = realNow() + 10 * 60_000;
+Date.now = () => clock;
+try {
+  await check("with no trusted hop (the default) the socket peer is the key; X-Forwarded-For is ignored", async () => {
+    pre.set("trust proxy", 0);
+    const statuses = [];
+    for (let i = 0; i < 21; i++) {
+      statuses.push((await fetch(`${preBase}/api/webauthn/challenge`, { method: "POST", headers: from(`203.0.114.${i + 1}`), body: "{}" })).status);
+    }
+    pre.set("trust proxy", 1);
+    assert.equal(statuses[19], 200, statuses.join(","));
+    assert.equal(statuses[20], 429);
+  });
+  await check("under a steady inflow of new keys the sweep holds the map to one window of them", () => {
+    sweepExpiredBuckets();
+    const base0 = bucketCounts().hits;
+    let peak = 0;
+    // Five simulated minutes, 200 new client keys a second, swept every 10 s as the timer does.
+    for (let sec = 0; sec < 300; sec++) {
+      for (let i = 0; i < 200; i++) rateLimit(`g:steady-${sec}-${i}`, 300);
+      clock += 1000;
+      if (sec % 10 === 9) sweepExpiredBuckets();
+      peak = Math.max(peak, bucketCounts().hits - base0);
+    }
+    assert.ok(peak <= 200 * 71, `peak ${peak}`);
+    clock += 61_000;
+    sweepExpiredBuckets();
+    assert.equal(bucketCounts().hits, 0);
+  });
+  await check("a flood of fresh keys stops at the cap and locks out no one: a known caller past its window, a newcomer and a quote are served; limited keys stay limited", () => {
+    // A regular caller's window ends during the flood; it must still be served after.
+    for (let i = 0; i < 5; i++) rateLimit("g:regular", 300);
+    clock += 61_000;
+    for (let i = 0; i < 21; i++) rateLimit("c:limited-before-flood", 20);
+    assert.equal(rateLimit("c:limited-before-flood", 20), false);
+    for (let i = 0; i < RATE_BUCKETS_MAX + 20_000; i++) {
+      rateLimit(`g:flood-${i}`, 300);
+      // One flooding key goes past its limit early in the flood.
+      if (i === 1000) for (let j = 0; j < 301; j++) rateLimit("g:flood-hot", 300);
+    }
+    assert.equal(bucketCounts().hits, RATE_BUCKETS_MAX);
+    // Limited keys are not reset by the flood, the flooder's own included.
+    assert.equal(rateLimit("c:limited-before-flood", 20), false);
+    assert.equal(rateLimit("g:flood-hot", 300), false);
+    // Nobody is refused for want of a slot.
+    assert.equal(rateLimit("g:regular", 300), true);
+    assert.equal(rateLimit("g:newcomer", 300), true);
+    assert.equal(rateLimit("p:newcomer", 30), true);
+    assert.equal(bucketCounts().hits, RATE_BUCKETS_MAX);
+    clock += 61_000;
+    sweepExpiredBuckets();
+    assert.equal(bucketCounts().hits, 0);
+  });
+  await check("a flood of two-request keys does not reset a limited key: limited windows are evicted last", () => {
+    // A thousand limited credential keys, then idle while the flood runs.
+    for (let k = 0; k < 1000; k++) for (let i = 0; i < 21; i++) rateLimit(`c:limited-idle-${k}`, 20);
+    for (let i = 0; i < RATE_BUCKETS_MAX + 20_000; i++) {
+      rateLimit(`g:pair-${i}`, 300);
+      rateLimit(`g:pair-${i}`, 300);
+    }
+    assert.equal(bucketCounts().hits, RATE_BUCKETS_MAX);
+    let reset = 0;
+    for (let k = 0; k < 1000; k++) if (rateLimit(`c:limited-idle-${k}`, 20)) reset++;
+    assert.equal(reset, 0, `${reset} limited keys reset by the flood`);
+    clock += 61_000;
+    sweepExpiredBuckets();
+    assert.equal(bucketCounts().hits, 0);
+  });
+  await check("at the cap a new key costs what it costs below the cap (300k keys past it)", () => {
+    const timeKeys = (prefix: string, count: number) => {
+      const t0 = performance.now();
+      for (let i = 0; i < count; i++) rateLimit(`${prefix}-${i}`, 300);
+      return performance.now() - t0;
+    };
+    clock += 61_000;
+    sweepExpiredBuckets();
+    assert.equal(bucketCounts().hits, 0);
+    // Below the cap, as the baseline: the same work less the eviction.
+    const fill = timeKeys("g:fill", RATE_BUCKETS_MAX);
+    assert.equal(bucketCounts().hits, RATE_BUCKETS_MAX);
+    const past = timeKeys("g:past", 3 * RATE_BUCKETS_MAX);
+    // A Map walked from its oldest entry took 30-120x the fill per 100k here.
+    assert.ok(past / 3 < 5 * fill + 50, `fill ${fill.toFixed(0)} ms per 100k, past the cap ${(past / 3).toFixed(0)} ms per 100k`);
+    clock += 61_000;
+    sweepExpiredBuckets();
+    assert.equal(bucketCounts().hits, 0);
+  });
+} finally {
+  Date.now = realNow;
+}
+// todo (owner decision, #107 8/8 Q1): the failure counters (operator login
+// per IP, invoice-link passwords per link) are swept but not capped. Capping
+// means evicting a lock early (a bypass) or refusing new keys when full (a
+// lock for every new caller); that choice is not made here.
+console.log("  todo failure-counter map: swept, not capped — evict or refuse at a cap is an owner decision");
+for (const release of releaseUpstream.splice(0)) release();
+preServer.close();
 
 console.log("no hashes, no IPs");
 await check("the owner view drops both link hashes", () => {
