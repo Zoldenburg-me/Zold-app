@@ -5,7 +5,7 @@
  *   npm run eur-proof-core:test
  */
 import assert from "node:assert/strict";
-import { ledgerGap, memoChecks } from "./eur-proof-core.js";
+import { ledgerGap, memoChecks, ordersOn, proofExit } from "./eur-proof-core.js";
 
 let failed = 0;
 function check(name: string, fn: () => void) {
@@ -57,6 +57,35 @@ check("an empty stored memo with no memo on the order is a mismatch, as in the p
   const r = memoChecks([redeem("r5", "1")], lookup);
   assert.equal(r.matched.length, 1);
   assert.ok(r.matched[0].differs);
+});
+
+const SAFE = "0x1111111111111111111111111111111111111111";
+const on = (o: any, chain: string, address = SAFE) => ({ ...o, chain, address });
+
+check("only this Safe's orders on the configured chain are counted", () => {
+  const orders = [
+    on(issue("i1", "10"), "base"),
+    on(redeem("r1", "1"), "base"),
+    on(redeem("r2", "4"), "gnosis"), // same Safe address, same profile, another chain
+    on(issue("i2", "5"), "base", "0x2222222222222222222222222222222222222222"),
+    { ...issue("i3", "7"), address: SAFE }, // names no chain
+  ];
+  const mine = ordersOn(orders, SAFE, "base");
+  assert.deepEqual(mine.map((o) => o.id), ["i1", "r1"]);
+  const done = mine.filter((o) => o.kind === "redeem");
+  // EUR 10 in, EUR 1 out on base leaves 9; the gnosis redeem no longer fails it.
+  assert.equal(ledgerGap(mine.filter((o) => o.kind === "issue"), done, 9), undefined);
+  assert.match(ledgerGap([orders[0]], orders.filter((o) => o.kind === "redeem"), 9)!, /more/);
+});
+
+check("a failed leg exits 1 even with no redeem yet; only not-done-yet exits 2", () => {
+  // A processed EUR 10 deposit, an empty Safe, no redeems: the mint did not land.
+  const gap = ledgerGap([issue("i1", "10")], [], 0);
+  assert.match(gap!, /did not land/);
+  assert.equal(proofExit(gap ? 1 : 0, 0), 1);
+  assert.equal(proofExit(1, 2), 1);
+  assert.equal(proofExit(0, 0), 2);
+  assert.equal(proofExit(0, 1), 0);
 });
 
 if (failed) { console.log(`\n${failed} check(s) failed`); process.exit(1); }

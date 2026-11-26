@@ -35,7 +35,7 @@ import { MONERIUM, RPC_URL, moneriumSandboxEnabled } from "../services/api/src/c
 import { MoneriumClient } from "../services/api/src/adapters/monerium-client.js";
 import { initStore, store, type User } from "../services/api/src/store.js";
 import { urlForLog } from "../services/api/src/http/log-safe.js";
-import { ledgerGap, memoChecks } from "./eur-proof-core.js";
+import { ledgerGap, memoChecks, ordersOn, proofExit } from "./eur-proof-core.js";
 
 // The configured chain, never a hardcoded testnet: reading balances elsewhere
 // reports "the mint did not land" against the wrong ledger.
@@ -170,7 +170,7 @@ console.log("\n2. Inbound deposit");
 // app's DEFAULT profile and would report "no deposit yet" for an account
 // whose euros are already on chain.
 const orders = orderList(await api.orders(record.profile)) as any[];
-const mine = orders.filter((o) => o.address && getAddress(o.address) === address);
+const mine = ordersOn(orders, address, MONERIUM.chain);
 const issues = mine.filter((o) => o.kind === "issue" && stateOf(o) === "processed");
 const issuedEur = issues.reduce((s, o) => s + Number(o.amount), 0);
 const balance = await onChainEure(address, token);
@@ -241,10 +241,16 @@ if (done.length) {
     no("no processed redeem is a transfer in this database, so the payment reference is not proven");
     todo(`send ${eur(REDEEM_EUR)} to ${PAYOUT_IBAN} from the app's SEPA send, then run this again`);
   }
-  if (failures) {
-    console.log(`\nNOT PROVEN: ${failures} leg(s) failed above. A corridor is only proven when every leg is.\n`);
-    process.exit(1);
-  }
+}
+
+// A failed leg exits 1 before any "not done yet" prompt: an empty Safe after a
+// processed deposit is a missing mint, not a reason to deposit more.
+const status = proofExit(failures, done.length);
+if (status === 1) {
+  console.log(`\nNOT PROVEN: ${failures} leg(s) failed above. A corridor is only proven when every leg is.\n`);
+  process.exit(1);
+}
+if (status === 0) {
   console.log("\nEUR CORRIDOR PROVEN: deposit minted, mirrored, and redeemed with the signed payment reference.\n");
   process.exit(0);
 }
@@ -255,8 +261,7 @@ if (open.length) {
   process.exit(2);
 }
 if (balance < REDEEM_EUR) {
-  no(`only ${eur(balance)} in the Safe; need at least ${eur(REDEEM_EUR)} to test a redeem`);
-  todo("deposit more, or lower EUR_PROOF_REDEEM_EUR");
+  todo(`only ${eur(balance)} in the Safe; need at least ${eur(REDEEM_EUR)} to test a redeem: deposit more, or lower EUR_PROOF_REDEEM_EUR`);
   process.exit(2);
 }
 // No redeem is placed from here: Monerium takes one only with the Safe's

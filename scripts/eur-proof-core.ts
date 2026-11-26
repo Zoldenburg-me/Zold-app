@@ -5,6 +5,23 @@
  */
 import { moneriumAmountEur, redeemMemoDiffers } from "../services/api/src/domain/monerium-order.js";
 
+/** This Safe's orders on the configured chain. A Safe has the same address on
+ *  every EVM chain and one Monerium profile spans them, so matching on the
+ *  address alone would count another chain's mint or burn against this
+ *  chain's balance. An order that names no chain is not counted. */
+export function ordersOn(orders: any[], address: string, chain: string): any[] {
+  const a = address.toLowerCase();
+  return orders.filter((o) => typeof o?.address === "string" && o.address.toLowerCase() === a && o.chain === chain);
+}
+
+/** The proof's exit status: 1 when any leg failed, whatever else is still
+ *  pending; 0 when nothing failed and a processed redeem was compared; 2
+ *  (not done yet: a manual step or a wait) otherwise. */
+export function proofExit(failures: number, processedRedeems: number): 0 | 1 | 2 {
+  if (failures) return 1;
+  return processedRedeems ? 0 : 2;
+}
+
 /** Half a cent: Monerium amounts have two decimals, balances have 18. */
 export const EUR_TOLERANCE = 0.005;
 
