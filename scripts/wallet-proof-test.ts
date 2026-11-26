@@ -138,7 +138,9 @@ await member("m_owner", "org_1", "u_owner", "owner");
 await member("m_viewer", "org_1", "u_viewer", "viewer");
 await member("m_other", "org_2", "u_other", "owner");
 
-const app = express();
+// As server.ts: a response sent inside a store.tx waits for its COMMIT.
+const { sendAfterCommit } = await import("../services/api/src/http/send-after-commit.js");
+const app = express().use(sendAfterCommit);
 app.use(express.json());
 const requireSession = (req: any, res: any) => {
   const id = req.header("x-user") as string | undefined;
