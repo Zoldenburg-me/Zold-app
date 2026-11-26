@@ -628,19 +628,13 @@ export function createCryptoSendsRouter({ requireUserSession, ...deps }: CryptoS
         return "claimed" as const;
       });
       if (claim !== "claimed") return;
+      let op: Awaited<ReturnType<typeof submitPasskeySafeOperationWithReceipt>>;
       try {
-        const op = await submitPasskeySafeOperationWithReceipt(pending.plan, pending.userOperation, {
+        op = await submitPasskeySafeOperationWithReceipt(pending.plan, pending.userOperation, {
           authenticatorData: b64urlToBuf(a.authenticatorData),
           clientDataJSON: b64urlToBuf(a.clientDataJSON),
           signature: b64urlToBuf(a.signature),
         });
-        const done = await store.updateCryptoSend(send.id, {
-          state: op.success === false ? "FAILED" : "SENT",
-          ...(op.userOpHash ? { userOpHash: op.userOpHash } : {}),
-          ...(op.txHash ? { txHash: op.txHash } : {}),
-          ...(op.success === false ? { error: "included but reverted — nothing left your Safe except gas" } : {}),
-        });
-        return res.status(op.success === false ? 502 : 200).json(await publicSend(done));
       } catch (err) {
         // Sent but unconfirmed stays SUBMITTED and keeps counting: it may land.
         const uncertain = err instanceof SafeOperationUncertainError;
@@ -649,6 +643,26 @@ export function createCryptoSendsRouter({ requireUserSession, ...deps }: CryptoS
         });
         console.error(`crypto send ${send.id}: submission ${uncertain ? "unconfirmed" : "failed"}: ${describeCause(err)}`);
         return res.status(uncertain ? 202 : 502).json(await publicSend(done));
+      }
+      // The chain has answered. A store error from here on is not a failed
+      // submission: the send is never marked FAILED for it. The outcome write
+      // may have committed (it stands) or not (the row stays SUBMITTED and
+      // keeps counting, and gets the hash so the receipt sweep settles it).
+      try {
+        const done = await store.updateCryptoSend(send.id, {
+          state: op.success === false ? "FAILED" : "SENT",
+          ...(op.userOpHash ? { userOpHash: op.userOpHash } : {}),
+          ...(op.txHash ? { txHash: op.txHash } : {}),
+          ...(op.success === false ? { error: "included but reverted — nothing left your Safe except gas" } : {}),
+        });
+        return res.status(op.success === false ? 502 : 200).json(await publicSend(done));
+      } catch (err) {
+        console.error(`crypto send ${send.id}: outcome (userOp ${op.userOpHash}, tx ${op.txHash}) not recorded: ${describeCause(err)}`);
+        if (op.userOpHash) {
+          await store.updateCryptoSendFrom(send.id, ["SUBMITTED"], { userOpHash: op.userOpHash, error: "sent, not yet confirmed" })
+            .catch((e) => console.error(`crypto send ${send.id}: hash not recorded either: ${describeCause(e)}`));
+        }
+        throw err;
       }
     }),
   );

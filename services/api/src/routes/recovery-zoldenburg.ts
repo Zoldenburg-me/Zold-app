@@ -98,9 +98,13 @@ const OPEN = ["PASSKEY_PENDING", "REVIEW_PENDING", "GRACE_PERIOD", "RELAYING"] a
 const CANCELLABLE = ["PASSKEY_PENDING", "REVIEW_PENDING"] as const;
 
 /**
- * How long a relay may hold RELAYING before the sweep asks the chain. A relay
- * waits up to 90 s for its receipt (recovery/zoldenburg-guardian.ts), so one
- * still RELAYING after this was cut off (a restart, a crash).
+ * How long a relay may hold RELAYING before the sweep asks the chain. The
+ * relay call is bounded at about 3.5 minutes: viem's send makes six RPC
+ * requests (chain id, block, priority fee, nonce, gas estimate, the raw
+ * send), each at most 10 s with one retry (recovered-passkey.ts), and the
+ * receipt wait is 90 s (recovery/zoldenburg-guardian.ts). Once the receipt is
+ * in, the chain shows the relay and the sweep moves the row on, not back. So
+ * a row still RELAYING after this was cut off (a restart, a crash).
  */
 export const RELAY_TIMEOUT_MS = 10 * 60_000;
 
@@ -341,6 +345,8 @@ export async function finalizeZoldenburgRecovery(request: RecoveryRequest, now =
     return await store.updateRecoveryRequestFrom(request.id, ["GRACE_PERIOD"], relayFrom("GRACE_PERIOD"));
   });
   if (!claimed) return (await store.findRecoveryRequest(request.id)) ?? request;
+  // Released once: a second release could clear a newer finaliser's claim.
+  let released = false;
   try {
     let finalizeError: string | undefined;
     let txHash: `0x${string}` | undefined;
@@ -361,12 +367,13 @@ export async function finalizeZoldenburgRecovery(request: RecoveryRequest, now =
       const back = await releaseRelay(request.id, "GRACE_PERIOD", {
         zoldenburg: { ...(await zoldenburgNow(request.id)), finalizeAttempts: ((await zoldenburgNow(request.id)).finalizeAttempts ?? 0) + 1, finalizeError: finalizeError ?? "the Safe's owners do not show the recovered set yet" },
       });
+      released = true;
       return back ?? (await store.findRecoveryRequest(request.id)) ?? request;
     }
     return await bindAndFinish(request, user, now, txHash);
   } finally {
     // A throw: nothing recorded; the sweep or an operator finalises again.
-    await releaseRelay(request.id, "GRACE_PERIOD");
+    if (!released) await releaseRelay(request.id, "GRACE_PERIOD");
   }
 }
 
