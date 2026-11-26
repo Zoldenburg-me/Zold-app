@@ -476,6 +476,10 @@ console.log("ok - store suite on the JSON backend");
     [`postgresql://u:${secret}@db.example.com/zold?host=db.example.com`, real, /sslmode=verify-full/],
     [`mysql://u:${secret}@localhost/zold`, real, /postgresql:\/\//],
     [`not a url ${secret}`, real, /not a valid URL/],
+    // The driver connects to the last host; the first must not decide.
+    [`postgresql://u:${secret}@/zold?host=localhost&host=db.example.com`, real, /repeats the host parameter/],
+    [`postgresql://u:${secret}@db.example.com/zold?host=localhost&host=`, real, /repeats the host parameter/],
+    [`postgresql://u:${secret}@db.example.com/zold?sslmode=verify-full&sslmode=disable`, { ca, realMoney: true }, /repeats the sslmode parameter/],
   ];
   for (const [url, opts, why] of refusals) {
     assert.throws(() => pgPoolConfig(url, opts as never), (e: Error) => why.test(e.message) && !e.message.includes(secret), url.replace(secret, "…"));
@@ -486,6 +490,9 @@ console.log("ok - store suite on the JSON backend");
   assert.equal(databaseUrlIsLocal("postgresql://u@[::1]/zold"), true);
   assert.equal(databaseUrlIsLocal("postgresql://u@db.example.com/zold"), false);
   assert.equal(databaseUrlIsLocal("postgresql://u@localhost/zold?host=db.example.com"), false);
+  assert.equal(databaseUrlIsLocal("postgresql://u@db.example.com/zold?host=127.0.0.1"), true);
+  assert.equal(databaseUrlIsLocal("postgresql://u@/zold?host=localhost"), true);
+  assert.throws(() => databaseUrlIsLocal("postgresql://u@/zold?host=127.0.0.1&host=db.example.com"), /repeats the host parameter/, "check:pg's remote opt-in reads the host the driver will use");
   assert.deepEqual(tls.ssl, { ca: "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n", rejectUnauthorized: true });
   assert.equal(tls.connectionString, "postgresql://u@db.example.com/zold", "our CA object is not replaced by the driver's sslmode parsing");
   assert.equal(
