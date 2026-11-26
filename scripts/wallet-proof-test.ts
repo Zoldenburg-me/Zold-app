@@ -618,6 +618,18 @@ await check("a receipt whose value changes while the issue waits on VIES issues 
   assert.equal((await store.findInvoice(d.id))!.state, "DRAFT");
 });
 
+await check("two proofs of one challenge at once: one is recorded, the other is refused (409)", async () => {
+  const c = (await challenge(W.eoa)).body.challenge;
+  const signature = await EOA.signMessage({ message: c.message });
+  // Both pass the chain's check before either writes; the write re-reads the
+  // challenge under the org row, so the second finds it spent.
+  const out = await Promise.all([1, 2].map(() => prove(W.eoa, { challengeId: c.id, signature })));
+  assert.deepEqual(out.map((r) => r.status).sort(), [200, 409], JSON.stringify(out.map((r) => r.body)));
+  const w = (await store.findImportedWallet(W.eoa))!;
+  assert.equal(w.ownership?.message, c.message);
+  assert.equal(w.ownershipChallenge, undefined, "the challenge is spent once");
+});
+
 server.close();
 viesServer.closeAllConnections();
 viesServer.close();

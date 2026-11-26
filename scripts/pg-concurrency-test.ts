@@ -13,6 +13,7 @@ import "./_test-env.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
+import net from "node:net";
 
 if (process.env.STORE_BACKEND !== "postgres" || !process.env.DATABASE_URL) {
   console.error("pg-concurrency-test runs on Postgres: npm run check:pg starts it with STORE_BACKEND=postgres and DATABASE_URL");
@@ -341,6 +342,160 @@ await check("one Zoldenburg grace period per user: two requests moved into it in
   const out = await Promise.all(ids.map((id) => store.updateRecoveryRequestFrom(id, ["REVIEW_PENDING"], { status: "GRACE_PERIOD" }).then(() => "ok", (e: Error) => e.message)));
   assert.equal(out.filter((x) => x === "ok").length, 1, out.join(" | "));
   assert.equal((await store.recoveryRequestsForUser(u)).filter((r) => r.status === "GRACE_PERIOD").length, 1);
+});
+
+await check("approvals waiting for a passkey: a prepared operation outlives the process that prepared it; 10 parallel claims, one takes it", async () => {
+  const u = await user();
+  const t = transferRow(u, { auth: { deadline: Math.floor(Date.now() / 1000) + 600 } });
+  await store.addTransfer(t);
+  const userOperation = { sender: hex(20), nonce: 2n ** 80n + 5n, callData: "0xabcd", callGasLimit: 100_000n, signature: "0x" } as any;
+  await store.putPendingExecution("transfer", t.id, { userId: u, expiresAt: Date.now() + 600_000, challenge: "ch", plan: { address: hex(20), status: "active" } as any, userOperation });
+  // Another process on the same database: what a restart would read.
+  const { createPgStore } = await import("../services/api/src/store/pg/backend.js");
+  const { openPool } = await import("../services/api/src/store/pg/sql.js");
+  const other = createPgStore(openPool(process.env.DATABASE_URL!, { realMoney: false }));
+  try {
+    const seen = await other.findPendingExecution("transfer", t.id);
+    assert.equal(seen?.userOperation.nonce, 2n ** 80n + 5n, "the operation's bigints survive the database");
+    assert.deepEqual(seen?.userOperation, userOperation);
+  } finally {
+    await other.close();
+  }
+  // routes/transfers.ts: the claim and the delete in one transaction.
+  const claim = () =>
+    store.tx(async () => {
+      if (!(await store.claimAuthorization(t.id))) return false;
+      await store.dropPendingExecution("transfer", t.id);
+      return true;
+    });
+  assert.equal((await n(10, claim)).filter(Boolean).length, 1);
+  assert.equal(await store.findPendingExecution("transfer", t.id), undefined, "gone with the claim");
+});
+
+await check("ledger: a revalue, a hand categorisation and a rule run in parallel, ×5: the value and the hand category both survive", async () => {
+  const { revalueEntry } = await import("../services/api/src/wallet-sync/revalue.js");
+  const { applyRules } = await import("../services/api/src/domain/coa.js");
+  const orgId = `org_${randomUUID()}`;
+  await store.addOrganisation({ id: orgId, type: "business", name: "L", createdAt: now(), updatedAt: now() } as any);
+  await store.addAccountRule({ id: `rule_${randomUUID()}`, orgId, scope: "wallet", match: { walletId: "w_l" }, direction: "in", accountCode: "4000", createdAt: now() });
+  for (let i = 0; i < 5; i++) {
+    const id = `le_${randomUUID()}`;
+    await store.addLedgerEntries([{
+      id, orgId, source: { kind: "wallet", walletId: "w_l" }, chainId: 31337, token: hex(20), direction: "in", asset: "TKN@31337", amount: "2",
+      tags: ["needs-valuation"], note: "Not valued: no price", accountCode: "1000", accountCodeAuto: true, at: now(), createdAt: now(),
+    } as any]);
+    const value = async () => {
+      await new Promise((r) => setTimeout(r, 5));
+      return { ok: true as const, valuation: { symbol: "TKN", eurValue: 3, eurPerUnit: 1.5, source: "test feed", asOf: now().slice(0, 10) } as any };
+    };
+    const categorise = () =>
+      store.tx(async () => {
+        await store.lockKey(`ledger:${orgId}`);
+        await store.updateLedgerEntry(id, { accountCode: "4400", accountCodeAuto: false });
+      });
+    // routes/business/bookkeeping.ts, POST .../account-rules/apply.
+    const ruleRun = () =>
+      store.tx(async () => {
+        await store.lockKey(`ledger:${orgId}`);
+        await store.replaceLedgerEntries(applyRules(await store.rulesOf(orgId), await store.ledgerOf(orgId)).entries);
+      });
+    const [revalued] = await Promise.all([revalueEntry(orgId, id, { value }), categorise(), ruleRun()]);
+    assert.equal(revalued?.status, "valued", JSON.stringify(revalued));
+    const e = (await store.ledgerOf(orgId)).find((x) => x.id === id)!;
+    assert.equal(e.fiatValue, "3.00", `round ${i}: the revalued value survives`);
+    assert.deepEqual([e.accountCode, e.accountCodeAuto], ["4400", false], `round ${i}: the hand category survives`);
+  }
+});
+
+/**
+ * A proxy in front of the test database that cuts the connection at the next
+ * `COMMIT`: before the server has it (the transaction rolls back), or right
+ * after (it committed, and the client never hears so). Frontend messages are
+ * type byte + length; the startup (and an SSL request) has no type byte.
+ */
+async function commitCutter(databaseUrl: string) {
+  const u = new URL(databaseUrl);
+  const host = u.searchParams.get("host") ?? (u.hostname || "/tmp");
+  const port = Number(u.searchParams.get("port") ?? (u.port || 5432));
+  const target: net.NetConnectOpts = host.startsWith("/") ? { path: `${host}/.s.PGSQL.${port}` } : { host, port };
+  let mode: "pass" | "before" | "after" = "pass";
+  const server = net.createServer((client) => {
+    const upstream = net.connect(target);
+    let buf = Buffer.alloc(0);
+    let started = false;
+    let cutOnReply = false;
+    const cut = () => {
+      client.destroy();
+      upstream.destroy();
+    };
+    upstream.on("data", (d) => (cutOnReply ? cut() : client.write(d)));
+    client.on("data", (d) => {
+      buf = Buffer.concat([buf, d]);
+      for (;;) {
+        if (!started) {
+          if (buf.length < 8 || buf.length < buf.readInt32BE(0)) return;
+          const msg = buf.subarray(0, buf.readInt32BE(0));
+          buf = buf.subarray(msg.length);
+          if (msg.readInt32BE(4) !== 80877103) started = true;
+          upstream.write(msg);
+          continue;
+        }
+        if (buf.length < 5 || buf.length < buf.readInt32BE(1) + 1) return;
+        const msg = buf.subarray(0, buf.readInt32BE(1) + 1);
+        buf = buf.subarray(msg.length);
+        if (msg[0] === 0x51 && msg.subarray(5, msg.length - 1).toString() === "COMMIT" && mode !== "pass") {
+          const was = mode;
+          mode = "pass";
+          if (was === "before") return cut();
+          cutOnReply = true;
+        }
+        upstream.write(msg);
+      }
+    });
+    for (const sock of [client, upstream]) {
+      sock.on("error", () => {});
+      sock.on("close", cut);
+    }
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const proxied = `postgresql://${u.username ? `${u.username}@` : ""}127.0.0.1:${(server.address() as net.AddressInfo).port}${u.pathname}`;
+  return { url: proxied, arm: (m: "before" | "after") => (mode = m), close: () => new Promise<void>((r) => server.close(() => r())) };
+}
+
+await check("outbound intents: the connection lost during the intent's COMMIT: the write throws, so no partner call follows; the transfer is untouched, or carries the intent", async () => {
+  const { createPgStore } = await import("../services/api/src/store/pg/backend.js");
+  const { openPool } = await import("../services/api/src/store/pg/sql.js");
+  const proxy = await commitCutter(process.env.DATABASE_URL!);
+  const viaProxy = createPgStore(openPool(proxy.url, { realMoney: false }));
+  try {
+    for (const when of ["before", "after"] as const) {
+      const u = await user();
+      const t = transferRow(u, { state: "DEBITED" });
+      await store.addTransfer(t);
+      const intent = { step: "monerium.redeem.intent", hash: hex(32) };
+      let partnerCalled = false;
+      proxy.arm(when);
+      // orchestrator.ts: the intent is written and committed, then the call goes out.
+      await assert.rejects(async () => {
+        await viaProxy.appendTransferStep(t.id, intent);
+        partnerCalled = true;
+      }, `cut ${when} the server has the COMMIT`);
+      assert.equal(partnerCalled, false, `cut ${when}: no partner call`);
+      const row = (await store.findTransfer(t.id))!;
+      // Before: rolled back, the transfer is as it was. After: committed, and
+      // the sweep reads an intent with no outcome, which goes to review.
+      assert.equal(row.txs.some((x) => x.hash === intent.hash), when === "after", `cut ${when}`);
+      assert.equal(row.state, "DEBITED");
+    }
+    // The pool recovers: the next write on a new connection lands.
+    const u = await user();
+    const t = transferRow(u);
+    await viaProxy.addTransfer(t);
+    assert.ok(await store.findTransfer(t.id));
+  } finally {
+    await viaProxy.close();
+    await proxy.close();
+  }
 });
 
 await check("lock_timeout: a transaction waiting past it for a row fails instead of queueing behind it", async () => {

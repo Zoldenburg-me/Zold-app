@@ -808,7 +808,7 @@ await t("a recovery finishing while another is being relayed leaves the relayed 
 // ---- races the async store opens (each held at one await) ----------------
 
 const closeOpen = async () => {
-  for (const r of (await store.recoveryRequestsForUser("u1"))) if (["PASSKEY_PENDING", "REVIEW_PENDING", "GRACE_PERIOD"].includes(r.status)) await store.updateRecoveryRequest(r.id, { status: "FINALIZED" });
+  for (const r of (await store.recoveryRequestsForUser("u1"))) if (["PASSKEY_PENDING", "REVIEW_PENDING", "GRACE_PERIOD", "RELAYING"].includes(r.status)) await store.updateRecoveryRequest(r.id, { status: "FINALIZED", relaying: undefined });
 };
 
 await t("race: a reject and an execute at once — one of them wins, never a relay under a CANCELED row", async () => {
@@ -914,6 +914,66 @@ await t("race: the sweep never writes EXPIRED over a row that moved after it rea
     (store as any).list = realList;
   }
   assert.equal((await req("sw-moved")).status, "GRACE_PERIOD");
+  await closeOpen();
+});
+
+console.log("RELAYING (§2, managed recovery start)");
+
+await t("a request whose relay is in flight past its expiresAt still blocks a new start; the sweep leaves it until the relay timeout", async () => {
+  await closeOpen();
+  await newRequest("rl-exp");
+  await store.updateRecoveryRequest("rl-exp", { status: "RELAYING", relaying: { from: "REVIEW_PENDING", at: new Date().toISOString() }, expiresAt: new Date(Date.now() - 1000).toISOString() });
+  const started = await call("/recovery/zoldenburg", { email: "anna@example.com" });
+  assert.equal(started.status, 409, started.text);
+  assert.equal(started.data.code, "RECOVERY_IN_PROGRESS");
+  await sweepZoldenburgRecoveries(new Date(), (async () => { throw new Error("the sweep must not ask the chain for a relay in flight"); }) as any);
+  assert.equal((await req("rl-exp")).status, "RELAYING", "neither expired nor reconciled while the relay may still run");
+  assert.equal(publicRecoveryRequest(await req("rl-exp")).status, "REVIEW_PENDING", "shown as the status it came from");
+  await closeOpen();
+});
+
+await t("a process stopped after RELAYING was written: on chain, the sweep moves it to its grace period; not on chain, it goes back and relays once", async () => {
+  await closeOpen();
+  const stale = { from: "REVIEW_PENDING" as const, at: new Date(Date.now() - 11 * 60_000).toISOString() };
+  const paid = async (id: string) => {
+    await newRequest(id);
+    await store.updateRecoveryRequest(id, { zoldenburg: { ...(await req(id)).zoldenburg, bankCheck: { codesIssued: 1, passedAt: at(1).toISOString(), orderId: `o-${id}`, enrolledAt: (await user()).zoldenburgEnrolment!.enrolledAt } } });
+  };
+  await paid("rl-on");
+  await paid("rl-off");
+  for (const id of ["rl-on", "rl-off"]) await store.updateRecoveryRequest(id, { status: "RELAYING", relaying: stale });
+  const asked: string[] = [];
+  // What the chain shows: rl-on's recovery is pending in the module, rl-off's is not.
+  const sync = async (r: any) => {
+    asked.push(`${r.id}:${r.status}`);
+    return r.id === "rl-on" ? (await store.updateRecoveryRequestFrom(r.id, ["REVIEW_PENDING", "RELAYING"], { status: "GRACE_PERIOD", relaying: undefined }))! : r;
+  };
+  await sweepZoldenburgRecoveries(new Date(), sync as any);
+  assert.deepEqual(asked.sort(), ["rl-off:REVIEW_PENDING", "rl-on:REVIEW_PENDING"], "each asked as the status it came from");
+  assert.equal((await req("rl-on")).status, "GRACE_PERIOD");
+  assert.equal((await req("rl-off")).status, "REVIEW_PENDING", "nothing on chain: back where it was");
+  assert.equal((await req("rl-off")).relaying, undefined);
+  await store.updateRecoveryRequest("rl-on", { status: "FINALIZED" });
+  // rl-off is signed again, and relayed once.
+  const sr = await opCall("/admin/recoveries/rl-off/sign-request", {});
+  assert.equal(sr.status, 200, sr.text);
+  const { EIP712Domain: _d, ...types } = sr.data.typedData.types;
+  const m = sr.data.typedData.message;
+  const signature = await guardianWallet.signTypedData({ ...sr.data.typedData, types, message: { ...m, newThreshold: BigInt(m.newThreshold), nonce: BigInt(m.nonce) } });
+  const { relayRecovery } = zoldenburgChain;
+  let relays = 0;
+  zoldenburgChain.relayRecovery = async (...a) => {
+    relays++;
+    return relayRecovery(...a);
+  };
+  try {
+    const [x, y] = await Promise.all([1, 2].map(() => opCall("/admin/recoveries/rl-off/execute", { signature, reviewNote: "Video call, matched Monerium profile" })));
+    assert.deepEqual([x.status, y.status].sort(), [200, 409], `${x.text} ${y.text}`);
+  } finally {
+    zoldenburgChain.relayRecovery = relayRecovery;
+  }
+  assert.equal(relays, 1, "two operators executing at once: one relay");
+  assert.equal((await req("rl-off")).status, "GRACE_PERIOD");
   await closeOpen();
 });
 
@@ -1054,6 +1114,44 @@ await t("a recovery that finishes closes the account's other requests, so none i
     assert.equal((await req(id)).status, "CANCELED", id);
     assert.equal((await req(id)).cancelReason, "another recovery for this account was signed");
   }
+});
+
+await t("two finalisers at once: one relays and binds, the other finds it claimed", async () => {
+  const safe = `0x${"9".repeat(40)}` as `0x${string}`;
+  await store.addUser({ ...structuredClone(await user()), passkey: { ...structuredClone((await user()).passkey!), credentialId: "cred-u-fin2" }, id: "u-fin2", email: "fin2@example.com", address: safe, passkeySafe: { ...structuredClone((await user()).passkeySafe!), address: safe } } as any);
+  const { generateKeyPairSync } = await import("node:crypto");
+  const jwk = generateKeyPairSync("ec", { namedCurve: "P-256" }).publicKey.export({ format: "jwk" });
+  await store.addRecoveryRequest({
+    id: "fin-twice", userId: "u-fin2", safeAddress: safe, mode: "zoldenburg", status: "GRACE_PERIOD", requestedAt: at(1).toISOString(),
+    expiresAt: new Date(Date.now() + 14 * 24 * 3600_000).toISOString(), recoveryDelayHours: 72,
+    guardianAddress: process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS as `0x${string}`, recoveryModuleAddress: `0x${"4".repeat(40)}`,
+    factors: { kyc: "pending", otp: "pending", liveness: "pending", manualReview: "pending" },
+    zoldenburg: {
+      accessHash: "00", reference: "FIN00-00009", newOwners: [`0x${"e".repeat(40)}`], newThreshold: 1, finalizeAfter: at(0).toISOString(),
+      newPasskey: { credentialId: "cred-fin2", publicKey: { alg: "ES256", jwk } as any, signCount: 0, rpId: "localhost", attestation: "x", createdAt: at(1).toISOString() },
+    },
+  } as any);
+  const { relayFinalize } = zoldenburgChain;
+  let relays = 0;
+  let seenDuring = "";
+  zoldenburgChain.relayFinalize = async () => {
+    relays++;
+    seenDuring = (await req("fin-twice")).status;
+    return { txHash: `0x${"3".repeat(64)}` as `0x${string}` };
+  };
+  try {
+    const out = await Promise.all([1, 2].map(async () => (await finalizeZoldenburgRecovery(await req("fin-twice"))).status));
+    assert.ok(out.includes("FINALIZED"), out.join(","));
+  } finally {
+    zoldenburgChain.relayFinalize = relayFinalize;
+  }
+  assert.equal(relays, 1, "one relay");
+  assert.equal(seenDuring, "RELAYING", "the relay holds its reserve while the chain call runs");
+  assert.equal((await req("fin-twice")).status, "FINALIZED");
+  assert.equal((await store.findUser("u-fin2"))?.passkey?.credentialId, "cred-fin2", "the recovered passkey is bound");
+  // A finaliser arriving afterwards binds nothing again.
+  assert.equal((await finalizeZoldenburgRecovery({ ...(await req("fin-twice")), status: "GRACE_PERIOD" })).status, "FINALIZED");
+  assert.equal(relays, 1);
 });
 
 if (failed) { console.error(`ZOLDENBURG RECOVERY 1 € TEST FAILED — ${failed}`); process.exit(1); }
