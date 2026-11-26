@@ -45,10 +45,14 @@ await store.addReceiptShare({
   expiresAt: new Date(Date.now() - 10 * day).toISOString(),
 });
 
+/** Set by a race check: holds each POST until both have arrived. */
+let barrier: undefined | (() => Promise<void>);
+
 const app = express();
 app.use(express.json());
 app.use("/api", createReceiptShareRouter({
   requireUserSession: async (req, res, userId) => {
+    if (barrier && req.method === "POST") await barrier();
     if (req.header("x-user") === userId) return { id: "s" };
     res.status(403).json({ error: "forbidden" });
     return undefined;
@@ -118,6 +122,28 @@ await check("a settings edit never creates a link: after expiry or revoke it is 
   const rv = await call("POST", "/transfers/t1/share", { ...DEFAULT_SHARE_FIELDS, edit: true });
   assert.equal(rv.status, 409, "an edit after revoke does not resurrect it either");
   assert.equal((await store.findReceiptShareBySlug(c.body.slug))?.revokedAt !== undefined, true);
+});
+
+await check("two replacements of an expired share at once leave one live link, and both get it", async () => {
+  await store.addTransfer({ ...(await store.findTransfer("t1"))!, id: "t2" } as any);
+  await store.addReceiptShare({
+    id: "rs_t2", slug: "t2old-t2old-t2old", transferId: "t2", userId: "u1", fields: { ...DEFAULT_SHARE_FIELDS },
+    createdAt: new Date(Date.now() - 40 * day).toISOString(), updatedAt: now, expiresAt: new Date(Date.now() - 10 * day).toISOString(),
+  });
+  let arrived = 0;
+  let release!: () => void;
+  const both = new Promise<void>((r) => (release = r));
+  barrier = async () => { if (++arrived === 2) release(); await both; };
+  let a, b;
+  try {
+    [a, b] = await Promise.all([call("POST", "/transfers/t2/share", { ...DEFAULT_SHARE_FIELDS }), call("POST", "/transfers/t2/share", { ...DEFAULT_SHARE_FIELDS })]);
+  } finally { barrier = undefined; }
+  assert.deepEqual([a.status, b.status].sort(), [200, 201], `one creates, the other is answered with it: ${JSON.stringify([a.body, b.body])}`);
+  assert.equal(a.body.slug, b.body.slug, "both callers hold the same link");
+  const live = (await store.list("receiptShares")).filter((s: any) => s.transferId === "t2" && !s.revokedAt);
+  assert.equal(live.length, 1, "one unrevoked share per transfer");
+  assert.equal((await call("DELETE", "/transfers/t2/share")).status, 200);
+  assert.equal((await call("GET", `/r/${a.body.slug}`)).status, 410, "DELETE revokes the only live link");
 });
 
 server.close();

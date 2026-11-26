@@ -117,11 +117,18 @@ export function createReceiptShareRouter(deps: ReceiptShareDeps) {
       // slug stays recorded, so a later visitor gets 410 rather than a typo-like
       // 404 while the new share gets a fresh unguessable slug. An expired one
       // is revoked in the same step: one unrevoked share per transfer
-      // (Postgres's receipt_shares_live index refuses a second).
-      await store.tx(async () => {
-        if (existing && !existing.revokedAt) await store.revokeReceiptShare(existing.id);
+      // (Postgres's receipt_shares_live index refuses a second). The share is
+      // read again under the transfer's lock: a replacement that committed
+      // since the read above is the link, and this caller is given it.
+      const made = await store.tx(async () => {
+        await store.lockKey(`receipt-share:${transfer.id}`);
+        const current = await store.findReceiptShareByTransfer(transfer.id);
+        if (current && isLive(current)) return current;
+        if (current && !current.revokedAt) await store.revokeReceiptShare(current.id);
         await store.addReceiptShare(share);
+        return undefined;
       });
+      if (made) return res.json(shareResponse(req, made));
       res.status(201).json(shareResponse(req, share));
     }),
   );
