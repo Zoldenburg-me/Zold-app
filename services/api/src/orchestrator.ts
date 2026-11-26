@@ -27,7 +27,7 @@ import { AnchorPaymentUncertainError, isTransientAnchorError } from "./stellar/a
 import { store, type Transfer, type TransferState, type User } from "./store.js";
 import { redeemToIban } from "./adapters/monerium-sandbox.js";
 import { isMoneriumOrderId, MoneriumAccessError, MoneriumApiError } from "./adapters/monerium-client.js";
-import { paymentMemo, redeemMessageStale } from "./sepa.js";
+import { redeemMessageStale } from "./sepa.js";
 import { bridgeRequestHash, createBridgeTransfer, BridgeTransferError, type BridgeTransferPlan } from "./bridge/bridgexyz.js";
 import {
   executeTransferLiquidity,
@@ -1242,11 +1242,19 @@ export async function executeSepaTransfer(
     if (!moneriumLiveFor(user)) {
       throw new Error(MONERIUM_NOT_CONNECTED.error);
     }
+    // The redeem the passkey signed, with the memo stored when the transfer was
+    // built: the order sends that memo and the poller matches Monerium's echo
+    // against it, so a blank one would pay with no reference. Without both no
+    // order can be placed, so refuse here, before the fee debit.
+    const redeem = transfer.moneriumRedeem;
+    if (!redeem?.signature || !redeem.memo?.trim()) {
+      throw new Error("This bank payment has no signed payment reference on record, so no payment was sent. Create it again.");
+    }
 
     await debitSafeFundedSepaFee(transfer, user, auth, payoutEur, txs, execution);
     // A slow fee debit can outlast the signed redeem's window. No order has
     // been sent yet, so this throws to the outer catch, which returns the fee.
-    if (transfer.moneriumRedeem && redeemMessageStale(transfer.moneriumRedeem.issuedAt)) {
+    if (redeemMessageStale(redeem.issuedAt)) {
       throw new Error("The approval for this bank payment expired before it could go to Monerium, so no payment was sent. Send it again.");
     }
 
@@ -1257,10 +1265,10 @@ export async function executeSepaTransfer(
           user,
           payoutEur,
           counterpart,
-          paymentMemo(transfer.id, transfer.reference),
-          transfer.moneriumRedeem?.signature
-            ? { ...transfer.moneriumRedeem, signature: transfer.moneriumRedeem.signature }
-            : undefined,
+          // Never a recomputed memo: paymentMemo's format can change between
+          // build and send.
+          redeem.memo,
+          { ...redeem, signature: redeem.signature },
         );
         // A 202 (pending multisig confirmation) carries no order id. Without
         // one nothing can follow the order, and an id getOrder refuses to read
