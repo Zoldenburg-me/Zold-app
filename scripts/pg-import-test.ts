@@ -25,7 +25,8 @@ const ROOT = new URL("..", import.meta.url).pathname;
 const { emptyDb, loadMigratedSnapshot } = await import("../services/api/src/store/db.js");
 const { migrate } = await import("../services/api/src/store/pg/migrate.js");
 const { pgliteDatabase } = await import("../services/api/src/store/pg/sql.js");
-const { digest, exportDb, ImportRefused, importSnapshot, preImportReport, readLedgerHistory, verifyAgainst } = await import("../services/api/src/store/pg/port.js");
+const { digest, exportDb, ImportRefused, importSnapshot, preImportReport, readLedgerHistory, REPORTED_UNIQUE_INDEXES, verifyAgainst } = await import("../services/api/src/store/pg/port.js");
+const { TABLE } = await import("../services/api/src/store/pg/backend.js");
 type Db = ReturnType<typeof emptyDb>;
 
 const pglite = async () => pgliteDatabase((await PGlite.create()) as never);
@@ -192,6 +193,18 @@ const cases: { rule: string; collection: string; ids: string[]; blocks: boolean;
   { rule: "cap-amount:not-finite", collection: "transfers", ids: ["t1"], blocks: true, hit: (db) => (db.transfers[0].sendEur = null), miss: (db) => (db.transfers[0].sendEur = 0) },
   { rule: "cap-amount:not-finite", collection: "cryptoSends", ids: ["c1"], blocks: true, hit: (db) => (db.cryptoSends[0].capEur = "Infinity"), miss: (db) => (db.cryptoSends[0].capEur = 0.01) },
   { rule: "cursor-block-not-numeric", collection: "cryptoDepositCursor", ids: ["84532"], blocks: true, hit: (db) => (db.cryptoDepositCursor["84532"] = "12e3"), miss: (db) => (db.cryptoDepositCursor["84532"] = "12000") },
+  {
+    rule: "duplicate:primary-key",
+    collection: "outbox",
+    ids: ["ob1", "ob1"],
+    blocks: true,
+    hit: (db) => db.outbox.push({ ...db.outbox[0] }),
+    miss: (db) => db.outbox.push({ ...db.outbox[0], id: "ob2" }),
+  },
+  // A string "3" casts, but the store writes a number; "01" and 1 would be one key in the index.
+  { rule: "deposit-key:logIndex-not-integer", collection: "cryptoDeposits", ids: ["d1"], blocks: true, hit: (db) => (db.cryptoDeposits[0].logIndex = "01"), miss: (db) => (db.cryptoDeposits[0].logIndex = 1) },
+  // block::text reads "7" back for "007".
+  { rule: "cursor-block-not-numeric", collection: "cryptoDepositCursor", ids: ["84532"], blocks: true, hit: (db) => (db.cryptoDepositCursor["84532"] = "007"), miss: (db) => (db.cryptoDepositCursor["84532"] = "0") },
   { rule: "outbox-row-shape", collection: "outbox", ids: ["ob1"], blocks: true, hit: (db) => (db.outbox[0].attempts = -1), miss: (db) => (db.outbox[0].deliveredAt = now) },
   { rule: "unknown-collection", collection: "capHolds", ids: ["capHolds"], blocks: true, hit: (db) => (db.capHolds = []), miss: () => {} },
   { rule: "orphan:userId->users", collection: "transfers", ids: ["t1"], blocks: false, hit: (db) => (db.transfers[0].userId = "u_gone"), miss: (db) => (db.transfers[0].userId = "u2") },
@@ -207,6 +220,53 @@ for (const c of cases) {
   assert.equal(find(dirty(c.miss), c.rule, c.collection), undefined, `${c.rule} (${c.collection}): the near miss is not a finding`);
 }
 console.log(`ok - the pre-import report: ${cases.length} rules, each found with its row ids and not on a near miss; orphans do not block`);
+
+// The report against the database: every unique index of the migrations is
+// one the report mirrors (or a primary key it checks), and each duplicate
+// case above is refused by that index while its near miss inserts.
+{
+  const pg = await pglite();
+  await migrate(pg);
+  const indexes = (
+    await pg.query<{ index: string; table: string }>(
+      "SELECT i.relname AS index, t.relname AS table FROM pg_index x JOIN pg_class i ON i.oid = x.indexrelid JOIN pg_class t ON t.oid = x.indrelid JOIN pg_namespace n ON n.oid = t.relnamespace WHERE x.indisunique AND n.nspname = current_schema()",
+    )
+  ).rows;
+  const tableOf = TABLE as Record<string, string>;
+  const mirrored = new Set(REPORTED_UNIQUE_INDEXES.map((u) => u.index));
+  // Keys checked by their own rules, and tables the import does not write.
+  const own = new Set(["outbox_pkey", "payment_handles_pkey", "operator_credentials_pkey", "processed_monerium_orders_pkey", "processed_monerium_webhooks_pkey", "crypto_deposit_cursor_pkey"]);
+  const notImported = new Set(["schema_migrations", "cap_holds", "pending_executions", "ledger_history"]);
+  for (const { index, table } of indexes) {
+    if (notImported.has(table) || own.has(index) || mirrored.has(index)) continue;
+    assert.ok(index === `${table}_pkey` && Object.values(tableOf).includes(table), `unique index ${index} on ${table} is in the report`);
+  }
+  for (const u of REPORTED_UNIQUE_INDEXES) assert.ok(indexes.some((i) => i.index === u.index), `${u.index} exists in the schema`);
+  /** Insert `rows` of a collection as the importer does, in a transaction rolled back. */
+  const insert = async (collection: string, rows: any[]) => {
+    const undo = new Error("undo");
+    try {
+      await pg.tx(async (q) => {
+        for (const r of rows) await q.query(`INSERT INTO ${tableOf[collection]} (id, doc) VALUES ($1, $2::json)`, [r.id, JSON.stringify(r)]);
+        throw undo;
+      });
+    } catch (err) {
+      if (err !== undo) return err as Error;
+    }
+    return undefined;
+  };
+  let checked = 0;
+  for (const c of cases.filter((x) => x.rule.startsWith("duplicate:") && tableOf[x.collection] && x.rule !== "duplicate:primary-key" && x.rule !== "duplicate:operator_credentials")) {
+    const index = c.rule.slice("duplicate:".length);
+    const hit = await insert(c.collection, (dirty(c.hit) as any)[c.collection]);
+    assert.match(String(hit?.message), new RegExp(`unique constraint "${index}"`), `${c.rule}: the database refuses what the report finds`);
+    assert.equal(await insert(c.collection, (dirty(c.miss) as any)[c.collection]), undefined, `${c.rule}: and takes the near miss`);
+    checked++;
+  }
+  assert.equal(checked, 8);
+  await pg.close();
+  console.log(`ok - the report mirrors every unique index of the migrations; ${checked} duplicate rules agree with the database on the hit and the near miss`);
+}
 
 // ── The report CLI on a db.json alone: no database, no deployment env ──────
 {
@@ -228,6 +288,18 @@ console.log(`ok - the pre-import report: ${cases.length} rules, each found with 
   const ok = run(clean);
   assert.equal(ok.status, 0, ok.stderr);
   assert.match(ok.stdout, /summary: 0 blocking, 0 other/);
+  // u2 has no organisation: the load-time migration gives it one under
+  // random ids, so the file is no stable source. The report says so; import
+  // and verify refuse before they connect.
+  assert.match(ok.stdout, /note: 1 user\(s\) have no organisation yet/);
+  const imp = spawnSync(process.execPath, ["--import", "tsx", "scripts/pg-import.ts", "import", clean], {
+    cwd: ROOT,
+    encoding: "utf8",
+    // Import runs with a deployment's environment; here the local chain's, and no database at all.
+    env: { PATH: process.env.PATH!, HOME: process.env.HOME!, TRANSF_CHAIN_ID: "31337", TRANSF_RPC_URL: "http://127.0.0.1:8545" },
+  });
+  assert.equal(imp.status, 1);
+  assert.match(imp.stderr, /REFUSED: 1 user\(s\) have no organisation yet.*not a stable source/);
   const no = run(bad);
   assert.equal(no.status, 1, "a blocking finding exits 1");
   assert.match(no.stdout, /BLOCKS +duplicate:sessions_token_hash {2}sessions {2}2 row\(s\): s1, s2/);
@@ -242,7 +314,9 @@ const fixture = path.join(tmp, "fixture.json");
   const r = spawnSync(process.execPath, ["--import", "tsx", "scripts/_import-fixture.ts", fixture], { cwd: ROOT, encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);
 }
-const snapshot = loadMigratedSnapshot(fixture);
+const loaded = loadMigratedSnapshot(fixture);
+assert.equal(loaded.migratedUsers, 0, "the fixture is a stable source");
+const snapshot = loaded.db;
 for (const [c, d] of Object.entries(digest(snapshot))) assert.ok(d.rows > 0, `the fixture has rows in ${c}`);
 assert.equal(report(snapshot).filter((f) => f.blocks).length, 0, "the fixture has no blocking finding");
 /** Rows in every table of the store's schema. */
@@ -279,11 +353,11 @@ const rowsIn = async (q: { query: (t: string) => Promise<{ rows: any[] }> }) => 
 
   // A second run on the same file changes nothing and says so.
   const before = await rowsIn(pg);
-  const again = await importSnapshot(pg, loadMigratedSnapshot(fixture));
+  const again = await importSnapshot(pg, loadMigratedSnapshot(fixture).db);
   assert.equal(again.imported, false);
   assert.equal(await rowsIn(pg), before, "nothing written");
   // A different source on a non-empty target is refused.
-  const changed = loadMigratedSnapshot(fixture);
+  const changed = loadMigratedSnapshot(fixture).db;
   (changed.ledger[0] as any).note = "edited";
   await assert.rejects(importSnapshot(pg, changed), (e: Error) => e instanceof ImportRefused && /not empty and differs from the source in: ledger/.test(e.message));
   // ledger_history is Postgres's own: the export reads it for its own file.
@@ -299,15 +373,19 @@ const rowsIn = async (q: { query: (t: string) => Promise<{ rows: any[] }> }) => 
   await assert.rejects(pg.query("INSERT INTO cap_holds (id, cap_key, day, eur, expires_at) VALUES ('h', 'k', '2026-11-26', 'Infinity', now())"), /cap_holds_eur_not_infinite/);
   await assert.rejects(pg.query("INSERT INTO crypto_deposits (id, doc) VALUES ('dx', '{\"txHash\":\"0x1\",\"logIndex\":0}')"), /chain_id/);
   await assert.rejects(pg.query("INSERT INTO crypto_deposits (id, doc) VALUES ('dx', '{\"chainId\":1,\"logIndex\":0}')"), /tx_hash_lc/);
+  // The key tables filled beside the rows are verified too.
+  await pg.query("UPDATE payment_handles SET owner_id = 'someone_else' WHERE handle_lc = (SELECT min(handle_lc) FROM payment_handles)");
+  await pg.query("DELETE FROM operator_credentials WHERE credential_id = (SELECT min(credential_id) FROM operator_credentials)");
+  assert.deepEqual((await verifyAgainst(pg, snapshot)).mismatches, ["ledger", "payment_handles", "operator_credentials"]);
   await pg.close();
 }
-console.log("ok - round trip import → export → verify on PGlite: every collection, rows in order, doc text unchanged; a second run changes nothing; a different source is refused; ledger_history exported on its own; 0008 refuses an Infinity hold and a deposit without chain or hash");
+console.log("ok - round trip import → export → verify on PGlite: every collection, rows in order, doc text unchanged; a second run changes nothing; a different source is refused; ledger_history exported on its own; payment_handles and operator_credentials verified; 0008 refuses an Infinity hold and a deposit without chain or hash");
 
 // ── Refusals: a dirty source, and a failure mid-import ─────────────────────
 {
   const pg = await pglite();
   await migrate(pg);
-  const bad = loadMigratedSnapshot(fixture);
+  const bad = loadMigratedSnapshot(fixture).db;
   bad.transfers.push({ ...bad.transfers[0], id: "t_dup" });
   await assert.rejects(importSnapshot(pg, bad), (e: Error) => e instanceof ImportRefused && e.findings.some((f) => f.rule === "duplicate:transfers_quote_id" && f.ids.includes("t_dup")));
   assert.equal(await rowsIn(pg), 0, "a dirty source writes nothing");

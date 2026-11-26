@@ -671,14 +671,21 @@ only: quote and session pruning, Shopify delivery pruning,
 - Reads `db.json` with `loadMigratedSnapshot` (`store/db.ts`): the file as
   `initStore` would serve it, the load-time migrations run in memory and
   nothing written back. The raw file's SHA-256 is printed to name the input,
-  not compared.
+  not compared. A file with a user who has no organisation yet is no stable
+  source (the migration gives them one under random ids, so every load is
+  another snapshot): the report says so, and import and verify refuse it
+  until the file has been loaded once by the JSON store. Session pruning
+  depends on the clock, so a verify run long after the import can find
+  `sessions` changed; the import verifies in the same run.
 - `report <db.json>` needs no database and no deployment environment. It
   lists what would break the import, each with the ids of the rows involved:
   a duplicate for each unique key of the migrations (among them
   `transfers.quote_id`, the unbacked account address and one Zoldenburg grace
   period per user of `0003`, the issued invoice number of `0002`, and the
-  `payment_handles` namespace across users and organisations); a missing or
-  duplicate id; a deposit without `logIndex`, `chainId` or `txHash` or with
+  `payment_handles` namespace across users and organisations;
+  `pg-import-test` checks that every unique index of the migrations is
+  mirrored, and that the database refuses each duplicate the report finds);
+  a missing or duplicate id; a deposit without `logIndex`, `chainId` or `txHash` or with
   a `logIndex` that is not an integer (`0005`, `0008`); a daily-cap amount
   (`transfers.sendEur`, `cryptoSends.capEur`) that is not a finite number
   (JSON writes NaN and Infinity as `null`); a cursor block or an outbox row
@@ -701,14 +708,17 @@ only: quote and session pruning, Shopify delivery pruning,
   stored order (the JSON array's, `seq` on Postgres; the cursor map sorted by
   chain), each in canonical JSON (sorted keys), so a reordered row fails as a
   changed one does. The source side is the migrated snapshot, so both sides
-  hash the same data.
+  hash the same data. `payment_handles` and `operator_credentials`, filled
+  from the rows, are compared with what the rows say. Verify holds the start
+  lock too, so it refuses while an API writes.
 - Never prints a row. Output is collection names, counts, hashes and row ids.
 
 **Export** (`scripts/pg-export.ts`): every collection in the `Db` shape,
 read as the Postgres store reads it (`listCollection`), in one transaction
-that holds the start lock, so it refuses while an API runs. It writes the
-file owner-only, refuses to overwrite one, reads it back and verifies it
-against Postgres. It is the rollback path and the test of the importer. The
+that holds the start lock, so it refuses while an API runs. Still under the
+lock it writes the file owner-only, reads it back and verifies it against
+Postgres, and only then links it under its name: it refuses to overwrite a
+file and leaves none behind when it fails. It is the rollback path and the test of the importer. The
 `Db` shape has `outbox` (the JSON backend keeps one) but no place for
 `ledger_history`, `cap_holds` or `pending_executions`; every `outbox` row goes
 into `db.json`'s `outbox` (the dead ones are listed), and `ledger_history`

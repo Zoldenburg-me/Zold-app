@@ -125,8 +125,11 @@ const UNIQUE_KEYS: UniqueKey[] = [
     key: (r) => (text(r.mode) === "zoldenburg" && text(r.status) === "GRACE_PERIOD" ? [text(r.userId)] : null),
   },
   { index: "monerium_issue_orders_pkey", collection: "moneriumIssueOrders", key: col("orderId") },
-  { index: "outbox_key", collection: "outbox", key: col("key") },
+  { index: "outbox_key_key", collection: "outbox", key: col("key") },
 ];
+/** The unique indexes the report mirrors, besides each table's primary key
+ *  (pg-import-test.ts checks this against the migrated schema). */
+export const REPORTED_UNIQUE_INDEXES = UNIQUE_KEYS.map((u) => ({ index: u.index, collection: u.collection }));
 
 /** The foreign keys §1.2 names. None is in the schema yet: an orphan is a
  *  finding for the lead, and decides whether the key can go in. */
@@ -175,7 +178,7 @@ export function preImportReport(db: Db): Finding[] {
     for (const [k, id] of keyed) by.set(k, [...(by.get(k) ?? []), id]);
     for (const ids of by.values()) if (ids.length > 1) add(rule, collection, true, ids);
   };
-  for (const c of ID_COLLECTIONS) {
+  for (const c of [...ID_COLLECTIONS, "outbox" as const]) {
     const rows = list(c);
     add("bad-id", c, true, rows.flatMap((r, i) => (typeof r?.id === "string" && r.id ? [] : [`#${i}`])));
     dupes("duplicate:primary-key", c, rows.filter((r) => typeof r?.id === "string").map((r) => [r.id as string, r.id as string]));
@@ -217,11 +220,12 @@ export function preImportReport(db: Db): Finding[] {
   }
   dupes("duplicate:operator_credentials", "operators", creds);
 
-  // The deposit key's columns are NOT NULL (0005, 0008); log_index is an integer.
+  // The deposit key's columns are NOT NULL (0005, 0008); log_index is an
+  // integer column, and the store writes a number (assertDepositKey).
   for (const d of list("cryptoDeposits")) {
     const li = d.logIndex;
     if (li === undefined || li === null) add("deposit-key:logIndex-missing", "cryptoDeposits", true, [idOf(d)]);
-    else if (!Number.isSafeInteger(Number(text(li))) || Number(text(li)) < 0 || Number(text(li)) > 2147483647) add("deposit-key:logIndex-not-integer", "cryptoDeposits", true, [idOf(d)]);
+    else if (typeof li !== "number" || !Number.isSafeInteger(li) || li < 0 || li > 2147483647) add("deposit-key:logIndex-not-integer", "cryptoDeposits", true, [idOf(d)]);
     if (text(d.chainId) === null) add("deposit-key:chainId-missing", "cryptoDeposits", true, [idOf(d)]);
     if (!text(d.txHash)) add("deposit-key:txHash-missing", "cryptoDeposits", true, [idOf(d)]);
   }
@@ -230,9 +234,10 @@ export function preImportReport(db: Db): Finding[] {
   add("cap-amount:not-finite", "transfers", true, list("transfers").filter((t) => !isFiniteNumber(t.sendEur)).map(idOf));
   add("cap-amount:not-finite", "cryptoSends", true, list("cryptoSends").filter((c) => !isFiniteNumber(c.capEur)).map(idOf));
 
-  // crypto_deposit_cursor.block is numeric.
+  // crypto_deposit_cursor.block is numeric and reads back as `block::text`:
+  // only a string in that canonical form comes back as it went in.
   const cursor = (db.cryptoDepositCursor ?? {}) as Record<string, unknown>;
-  add("cursor-block-not-numeric", "cryptoDepositCursor", true, Object.keys(cursor).filter((k) => !/^\d+$/.test(String(cursor[k]))));
+  add("cursor-block-not-numeric", "cryptoDepositCursor", true, Object.keys(cursor).filter((k) => typeof cursor[k] !== "string" || !/^(0|[1-9]\d*)$/.test(cursor[k] as string)));
   // outbox rows go into typed columns.
   add(
     "outbox-row-shape",
@@ -281,6 +286,28 @@ export async function readDb(q: Sql): Promise<Db> {
   return db;
 }
 
+/**
+ * The two key tables filled from the rows (payment_handles from users' and
+ * organisations' handles, operator_credentials from operators'
+ * credentials), compared with what `db` says they must hold. The names of
+ * those that differ; the digest covers only the collections.
+ */
+export async function derivedMismatches(q: Sql, db: Db): Promise<string[]> {
+  const sorted = (xs: string[]) => [...xs].sort();
+  const handles = sorted(
+    [...db.users.map((r) => ["user", r] as const), ...db.organisations.map((r) => ["organisation", r] as const)].flatMap(([kind, r]) => {
+      const h = text(at(r as unknown as Row, "paymentPage.handle"));
+      return h ? [`${h.toLowerCase()}|${kind}|${r.id}`] : [];
+    }),
+  );
+  const creds = sorted(db.operators.flatMap((o) => (o.credentials ?? []).map((c) => `${c.credentialId}|${o.id}`)));
+  const got = async (sql: string) => sorted((await q.query<{ k: string }>(sql)).rows.map((r) => r.k));
+  const out: string[] = [];
+  if (JSON.stringify(await got("SELECT handle_lc || '|' || owner_kind || '|' || owner_id AS k FROM payment_handles")) !== JSON.stringify(handles)) out.push("payment_handles");
+  if (JSON.stringify(await got("SELECT credential_id || '|' || operator_id AS k FROM operator_credentials")) !== JSON.stringify(creds)) out.push("operator_credentials");
+  return out;
+}
+
 /** Tables Postgres has and db.json has no place for (§6, export). */
 export async function postgresOnlyCounts(q: Sql): Promise<Record<string, number>> {
   const out: Record<string, number> = {};
@@ -308,12 +335,23 @@ async function holdStartLock(q: Sql): Promise<void> {
   if (!r.rows[0]?.ok) throw new Error("an API holds this deployment's start lock: stop it first");
 }
 
-/** The export (§6): the whole store in the `Db` shape, read under the start lock. */
-export async function exportDb(database: Database): Promise<{ db: Db; ledgerHistory: string; postgresOnly: Record<string, number> }> {
+export interface Export {
+  db: Db;
+  ledgerHistory: string;
+  postgresOnly: Record<string, number>;
+}
+
+/**
+ * The export (§6): the whole store in the `Db` shape, read under the start
+ * lock. `during` runs before the lock is let go (the CLI writes and checks
+ * its files there), so no API starts between the read and the file.
+ */
+export async function exportDb<T = Export>(database: Database, during?: (e: Export, q: Sql) => Promise<T>): Promise<T> {
   await assertSchemaCurrent(database);
   return database.tx(async (q) => {
     await holdStartLock(q);
-    return { db: await readDb(q), ledgerHistory: await readLedgerHistory(q), postgresOnly: await postgresOnlyCounts(q) };
+    const e: Export = { db: await readDb(q), ledgerHistory: await readLedgerHistory(q), postgresOnly: await postgresOnlyCounts(q) };
+    return during ? during(e, q) : (e as T);
   });
 }
 
@@ -440,23 +478,40 @@ export async function importSnapshot(database: Database, db: Db, hooks: ImportHo
   return database.tx(async (q) => {
     await holdStartLock(q);
     if ((await targetRows(q)) > 0) {
-      const bad = digestMismatches(want, digest(await readDb(q)));
+      const bad = [...digestMismatches(want, digest(await readDb(q))), ...(await derivedMismatches(q, db))];
       if (bad.length) throw new ImportRefused(`the target is not empty and differs from the source in: ${bad.join(", ")}; nothing was imported`);
       return { imported: false, digest: want };
     }
     await insertAll(q, db, hooks);
-    const bad = digestMismatches(want, digest(await readDb(q)));
+    const bad = [...digestMismatches(want, digest(await readDb(q))), ...(await derivedMismatches(q, db))];
     if (bad.length) throw new ImportRefused(`read back, the import differs from the source in: ${bad.join(", ")}; rolled back, the target is empty`);
     return { imported: true, digest: want };
   });
 }
 
-/** Verify (§6): the snapshot against what Postgres holds now. Mismatching collections, empty when equal. */
-export async function verifyAgainst(database: Database, db: Db): Promise<{ mismatches: string[]; source: Digest; target: Digest; postgresOnly: Record<string, number> }> {
+export interface Verified {
+  mismatches: string[];
+  source: Digest;
+  target: Digest;
+  postgresOnly: Record<string, number>;
+}
+
+/** Verify on `q` (inside a transaction that holds the start lock). */
+export async function verifyOn(q: Sql, db: Db): Promise<Verified> {
+  const target = digest(await readDb(q));
+  const source = digest(db);
+  return { mismatches: [...digestMismatches(source, target), ...(await derivedMismatches(q, db))], source, target, postgresOnly: await postgresOnlyCounts(q) };
+}
+
+/**
+ * Verify (§6): the snapshot against what Postgres holds now, under the start
+ * lock, so a running API is refused rather than read mid-write. The
+ * collections and key tables that differ; empty when equal.
+ */
+export async function verifyAgainst(database: Database, db: Db): Promise<Verified> {
   await assertSchemaCurrent(database);
   return database.tx(async (q) => {
-    const target = digest(await readDb(q));
-    const source = digest(db);
-    return { mismatches: digestMismatches(source, target), source, target, postgresOnly: await postgresOnlyCounts(q) };
+    await holdStartLock(q);
+    return verifyOn(q, db);
   });
 }

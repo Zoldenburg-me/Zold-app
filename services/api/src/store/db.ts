@@ -193,8 +193,9 @@ export async function initStore() {
 
 /** Fill the collections an older file lacks and run the load-time
  *  migrations on `db`, in memory. initStore writes the result back; the
- *  Postgres importer (scripts/pg-import.ts) imports it. */
-function migrateLoaded() {
+ *  Postgres importer (scripts/pg-import.ts) imports it. Returns how many
+ *  users were moved into a personal organisation: rows with random ids. */
+function migrateLoaded(): number {
   db.sessions ??= [];
   db.operators ??= [];
   db.operatorSessions ??= [];
@@ -235,12 +236,13 @@ function migrateLoaded() {
       );
     }
   }
-  migrateUsersToOrganisations();
+  const migratedUsers = migrateUsersToOrganisations();
   stripSenderProfiles();
   migrateCryptoDepositHolding(db.cryptoDeposits, db.users);
   for (const q of db.quotes) q.status ??= "OPEN";
   for (const s of db.sessions) s.expiresAt ??= new Date(Date.parse(s.createdAt) + 24 * 60 * 60 * 1000).toISOString();
   pruneSessions();
+  return migratedUsers;
 }
 
 /**
@@ -248,11 +250,13 @@ function migrateLoaded() {
  * migrations run, sessions pruned, nothing written. What the Postgres
  * importer imports and verifies against (docs/postgres-store-design.md §6).
  * It replaces this process's `db`: for a process that only reads it.
+ * `migratedUsers` > 0: the file has users without an organisation, which the
+ * migration gives one under random ids, so every load gives another snapshot.
  */
-export function loadMigratedSnapshot(file: string): Db {
+export function loadMigratedSnapshot(file: string): { db: Db; migratedUsers: number } {
   db = JSON.parse(readFileSync(file, "utf8"));
-  migrateLoaded();
-  return db;
+  const migratedUsers = migrateLoaded();
+  return { db, migratedUsers };
 }
 
 /** Load the store only to read it, for a report: no migration, no write, and
@@ -348,7 +352,7 @@ function stripSenderProfiles() {
   if (stripped) console.log(`[store] removed stored sender profiles from ${stripped} user row(s)`);
 }
 
-function migrateUsersToOrganisations() {
+function migrateUsersToOrganisations(): number {
   let migrated = 0;
   for (const user of db.users) {
     if (db.members.some((m) => m.userId === user.id)) continue;
@@ -435,6 +439,7 @@ function migrateUsersToOrganisations() {
         "(existing IBANs and addresses carried forward, not re-issued)",
     );
   }
+  return migrated;
 }
 
 /** The default chart and rules, so smart categorisation works on day one. */

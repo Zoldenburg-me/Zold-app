@@ -40,7 +40,7 @@ const { digest, formatReport, ImportRefused, importSnapshot, preImportReport, ve
 
 const raw = readFileSync(file);
 console.log(`source ${file}: sha256 ${createHash("sha256").update(raw).digest("hex")} (the file as read; not compared)`);
-const snapshot = (() => {
+const { db: snapshot, migratedUsers } = (() => {
   try {
     return loadMigratedSnapshot(file);
   } catch (err) {
@@ -54,13 +54,25 @@ const printDigest = (label: string, d: Record<string, { rows: number; sha256: st
   for (const [c, { rows, sha256 }] of Object.entries(d)) console.log(`  ${c.padEnd(28)} ${String(rows).padStart(8)}  ${sha256}`);
 };
 
+// The migration that gives a user without one a personal organisation mints
+// random ids, so each load of such a file is another snapshot: a verify or a
+// second import would never match the first.
+const unstable = migratedUsers
+  ? `${migratedUsers} user(s) have no organisation yet; the load-time migration gives them one under random ids, so this file is not a stable source. Load it through the JSON store once (start the API on it, stopped again before the import), then import that file`
+  : undefined;
+
 if (mode === "report") {
+  if (unstable) console.log(`note: ${unstable}`);
   const findings = preImportReport(snapshot);
   printDigest("snapshot (after the load-time migrations):", digest(snapshot));
   for (const line of formatReport(findings)) console.log(line);
   process.exit(findings.some((f) => f.blocks) ? 1 : 0);
 }
 
+if (unstable) {
+  console.error(`REFUSED: ${unstable}`);
+  process.exit(1);
+}
 const url = process.env.DATABASE_URL;
 if (!url) {
   console.error("DATABASE_URL is not set");
@@ -88,9 +100,9 @@ try {
     console.error(`REFUSED: ${err.message}`);
     for (const line of formatReport(err.findings)) console.error(line);
   } else {
-    // A driver error's message or detail can quote a value: the code only.
-    const e = err as { code?: string; name?: string; message?: string };
-    console.error(`FAILED: ${e.code ? `error code ${e.code}` : (e.message ?? e.name)}`);
+    // A driver error's message or detail can quote a value: its code only.
+    const e = err as { code?: string; severity?: string; message?: string };
+    console.error(`FAILED: ${e.severity ? `SQLSTATE ${e.code}` : e.message}`);
   }
   code = 1;
 } finally {
