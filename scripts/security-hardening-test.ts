@@ -399,6 +399,40 @@ try {
     sweepExpiredBuckets();
     assert.equal(bucketCounts().hits, 0);
   });
+  await check("a flood of two-request keys does not reset a limited key: limited windows are evicted last", () => {
+    // A thousand limited credential keys, then idle while the flood runs.
+    for (let k = 0; k < 1000; k++) for (let i = 0; i < 21; i++) rateLimit(`c:limited-idle-${k}`, 20);
+    for (let i = 0; i < RATE_BUCKETS_MAX + 20_000; i++) {
+      rateLimit(`g:pair-${i}`, 300);
+      rateLimit(`g:pair-${i}`, 300);
+    }
+    assert.equal(bucketCounts().hits, RATE_BUCKETS_MAX);
+    let reset = 0;
+    for (let k = 0; k < 1000; k++) if (rateLimit(`c:limited-idle-${k}`, 20)) reset++;
+    assert.equal(reset, 0, `${reset} limited keys reset by the flood`);
+    clock += 61_000;
+    sweepExpiredBuckets();
+    assert.equal(bucketCounts().hits, 0);
+  });
+  await check("at the cap a new key costs what it costs below the cap (300k keys past it)", () => {
+    const timeKeys = (prefix: string, count: number) => {
+      const t0 = performance.now();
+      for (let i = 0; i < count; i++) rateLimit(`${prefix}-${i}`, 300);
+      return performance.now() - t0;
+    };
+    clock += 61_000;
+    sweepExpiredBuckets();
+    assert.equal(bucketCounts().hits, 0);
+    // Below the cap, as the baseline: the same work less the eviction.
+    const fill = timeKeys("g:fill", RATE_BUCKETS_MAX);
+    assert.equal(bucketCounts().hits, RATE_BUCKETS_MAX);
+    const past = timeKeys("g:past", 3 * RATE_BUCKETS_MAX);
+    // A Map walked from its oldest entry took 30-120x the fill per 100k here.
+    assert.ok(past / 3 < 5 * fill + 50, `fill ${fill.toFixed(0)} ms per 100k, past the cap ${(past / 3).toFixed(0)} ms per 100k`);
+    clock += 61_000;
+    sweepExpiredBuckets();
+    assert.equal(bucketCounts().hits, 0);
+  });
 } finally {
   Date.now = realNow;
 }
