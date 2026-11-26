@@ -22,7 +22,7 @@ import { META, RENDER, linkBtn, moneriumLink } from "./views.js";
 import { submittedInvoices, waitingForMe } from "./nav.js";
 import { draftTag, draftTitle, draftTotal, invAmount, invWho, loadMembers, memberName } from "./screens.js";
 import { APP_LINKS, isOwnCompanyOrg, loadAccess } from "./access-model.js";
-import { companyBalance, countedLines, hasIban, lastMonth, monthIn, monthSummary, noIbanStep, owedInvoices, pendingRuns, securityRows, setupOpen, setupSteps, submitFor, topBy } from "./home-model.js";
+import { companyBalance, countedLines, hasIban, lastMonth, localDay, monthIn, monthSummary, noIbanStep, owedInvoices, pendingRuns, securityRows, setupOpen, setupSteps, submitFor, topBy, unreadOf } from "./home-model.js";
 import { runLink } from "./payment.js";
 import { openSearch } from "./search.js";
 import { companyKeysHere, companySteps } from "./org-monerium-model.js";
@@ -115,7 +115,7 @@ function commands() {
     drafts && roleCan(org.role, "propose") && { cmd: "/make a payment", view: "send" },
     inv && roleCan(org.role, "invoices") && { cmd: "/send an invoice", act: "issue-invoice" },
     (inv || drafts) && { cmd: "/what is due", answer: "due" },
-    cap("ledger.transactions").allowed && { cmd: `/where did ${MONTH_WORD(lastMonth())} go`, answer: "month", match: /^\/where did .+ go$/ },
+    cap("ledger.transactions").allowed && { cmd: `/where did ${MONTH_WORD(lastMonth(localDay()))} go`, answer: "month", match: /^\/where did .+ go$/ },
     inv && { cmd: "/see invoices", view: "invoices" },
     drafts && { cmd: "/see payments", view: "payments" },
   ].filter(Boolean);
@@ -130,9 +130,9 @@ function commandBox(cmds) {
   return `<section class="zb-h-cmd" aria-label="Ask and search">
     <p class="zb-h-cmd__hello"><i aria-hidden="true"></i>${esc(hello())}</p>
     <p class="zb-h-cmd__line" id="hm-line" aria-hidden="true"></p>
-    <label class="zb-h-cmd__label z-sr" for="hm-q">Ask Zold, search, or type a command</label>
+    <label class="zb-h-cmd__label z-sr" for="hm-q">Search, or type a command</label>
     <form class="zb-h-cmd__box" id="hm-ask" role="search">
-      <input id="hm-q" class="zb-h-cmd__input" type="search" name="q" autocomplete="off" spellcheck="false" placeholder="Ask Zold, or search…">
+      <input id="hm-q" class="zb-h-cmd__input" type="search" name="q" autocomplete="off" spellcheck="false" placeholder="Search, or ask what is due…">
       <button type="submit" class="zb-h-cmd__go" aria-label="Go">${Z.icon("arrow_upward")}</button>
     </form>
     <p class="zb-h-cmd__hint" id="hm-hint" role="status"></p>
@@ -146,8 +146,9 @@ function commandBox(cmds) {
  *  and stops for good when Home is redrawn. */
 function rotateLine(box, cmds, late) {
   const line = box.querySelector("#hm-line");
-  // "chase what is overdue" only while an invoice is.
-  const words = [...(late ? ["chase what is overdue"] : []), ...(cmds.length ? cmds.map((c) => c.cmd.slice(1)) : ["search your account"])];
+  // While an invoice is overdue, "what is due" comes first.
+  const order = late ? [...cmds.filter((c) => c.answer === "due"), ...cmds.filter((c) => c.answer !== "due")] : cmds;
+  const words = order.length ? order.map((c) => c.cmd.slice(1)) : ["search your account"];
   let i = 0;
   const say = () => {
     const w = words[i++ % words.length].split(" ");
@@ -173,15 +174,20 @@ const ansRows = (rows) => `<ul class="zb-h-ans__rows">${rows.join("")}</ul>`;
 const ansCard = (asked, body) => `<section class="z-card zb-h-ans" tabindex="-1" aria-labelledby="hm-ans-q">
     <p class="zb-h-ans__q" id="hm-ans-q">${esc(asked)}</p>${body}<p class="zb-h-ans__src">Answered from your own records in Zold.</p></section>`;
 
-/** "What is due": what customers owe you, and what waits on you to pay. */
+/** "What is due": what customers owe you, and what waits on you to pay.
+ *  `invoices` / `runs`: the list, null when its read failed, false when this
+ *  person has no such list. A failed read is said, never answered as nothing. */
 function dueAnswer({ invoices, runs }) {
   const parts = [];
+  const unread = unreadOf({ invoices, payments: runs });
+  if (unread.length) parts.push(`<h3>Zold can’t say all of it</h3><p>Your ${unread.join(" and ")} could not be read just now, so they are not in this answer. Reload to try again.</p>`);
   if (invoices) {
     const owed = owedInvoices(invoices);
     const late = owed.filter((i) => i.overdue);
     const inEur = owed.filter((i) => invAmount(i).currency === "EUR").reduce((n, i) => n + invAmount(i).value, 0);
+    const other = owed.some((i) => invAmount(i).currency !== "EUR");
     parts.push(owed.length
-      ? `<h3>Owed to you: ${esc(eur(inEur))}${owed.some((i) => invAmount(i).currency !== "EUR") ? " and more in other currencies" : ""}</h3>
+      ? `<h3>${inEur || !other ? `Owed to you: ${esc(eur(inEur))}${other ? " and more in other currencies" : ""}` : "Owed to you, in other currencies"}</h3>
         <p>${owed.length} open invoice${owed.length > 1 ? "s" : ""}${late.length ? `, <b class="is-late">${late.length} overdue</b>` : ""}.</p>
         ${ansRows(owed.slice(0, 5).map((i) => { const a = invAmount(i); return `<li><span>${esc(invWho(i))}</span><span class="z-dim">${i.dueDate ? `due ${esc(day(ymd(i.dueDate)))}` : "no due date"}</span>${i.overdue ? Z.tag("OVERDUE") : ""}<b>${esc(Z.formatMoney(a.value, a.currency))}</b></li>`; }))}
         <p>${ansLink("All invoices", "invoices")}</p>`
@@ -189,7 +195,7 @@ function dueAnswer({ invoices, runs }) {
     const toPay = submittedInvoices(invoices);
     if (toPay.length) parts.push(`<h3>${toPay.length} supplier invoice${toPay.length > 1 ? "s" : ""} to pay</h3><p>${ansLink("See them", "invoices")}</p>`);
   }
-  const waiting = waitingForMe(runs || []);
+  const waiting = runs ? waitingForMe(runs) : [];
   if (waiting.length) parts.push(`<h3>${waiting.length} payment${waiting.length > 1 ? "s" : ""} wait for your approval: ${esc(eur(waiting.reduce((n, d) => n + sumEur(d), 0)))}</h3><p>${ansLink("Approve or decline", "payments")}</p>`);
   return parts.join("") || "<h3>Nothing is due</h3>";
 }
@@ -510,20 +516,29 @@ RENDER.overview = async () => {
   return {
     html,
     bind(box) {
-      rotateLine(box, cmds, invoices?.some((i) => i.direction === "outgoing" && i.overdue && !["PAID", "RECONCILED", "DRAFT", "DELETED"].includes(i.state)));
+      rotateLine(box, cmds, owedInvoices(invoices).some((i) => i.overdue));
       const q = box.querySelector("#hm-q");
       const answer = (cmd, typed) => {
-        const ym = cmd.answer === "month" ? monthIn(typed) || lastMonth() : null;
+        const named = cmd.answer === "month" ? monthIn(typed, localDay()) : null;
+        // "/where did marketing go" names no month: say so, never answer for last month.
+        if (cmd.answer === "month" && !named && cmd.match.test(typed.trim().toLowerCase().replace(/[\s?.!]+$/, ""))) {
+          box.querySelector("#hm-hint").textContent = "Name a month, such as /where did October go.";
+          return false;
+        }
+        const ym = cmd.answer === "month" ? named || lastMonth(localDay()) : null;
         const asked = ym ? `where did ${MONTH_WORD(ym)} go` : cmd.cmd.slice(1);
         const el = box.querySelector("#hm-answer");
-        el.innerHTML = ansCard(asked, ym ? monthAnswer(summed, ym) : dueAnswer({ invoices, runs: dr.status === "fulfilled" ? runs : null }));
+        el.innerHTML = ansCard(asked, ym ? monthAnswer(summed, ym) : dueAnswer({
+          invoices: cap("invoices").allowed && invoices,
+          runs: cap("transfers.drafts").allowed && (dr.status === "fulfilled" ? runs : null),
+        }));
         el.firstElementChild.focus();
       };
       box.querySelector("#hm-ask").addEventListener("submit", (ev) => {
         ev.preventDefault();
         const todo = submitFor(q.value, cmds), hint = box.querySelector("#hm-hint");
         hint.textContent = todo?.unknown ? "No such command. Pick one below, or search without the slash." : "";
-        if (todo?.cmd?.answer) { answer(todo.cmd, q.value); q.value = ""; }
+        if (todo?.cmd?.answer) { if (answer(todo.cmd, q.value) !== false) q.value = ""; }
         else if (todo?.cmd) box.querySelector(`[data-cmd="${cmds.indexOf(todo.cmd)}"]`).click();
         else if (todo?.search) { q.value = ""; openSearch(todo.search, q); }
       });

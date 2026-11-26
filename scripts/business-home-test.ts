@@ -170,6 +170,8 @@ assert.deepEqual(
   assert.equal(m.commandFor("/where", cmds), month, "a start of the question picks it");
   assert.equal(m.commandFor("/where did march go", cmds), month, "any month fills the blank");
   assert.equal(m.commandFor("/where did march", cmds), null, "half a question is not the question");
+  assert.equal(m.commandFor("/where did October go?", cmds), month, "a question mark is part of asking");
+  assert.equal(m.commandFor("/what is due.", cmds), cmds[0]);
 
   const now = new Date("2026-11-26T10:00:00Z");
   assert.equal(m.monthIn("/where did October go", now), "2026-10");
@@ -178,6 +180,16 @@ assert.deepEqual(
   assert.equal(m.monthIn("/where did march 2025 go", now), "2025-03");
   assert.equal(m.monthIn("/where did 2026-02 go", now), "2026-02");
   assert.equal(m.monthIn("/where did it go", now), null);
+  assert.equal(m.monthIn("/where did marketing go", now), null, "a word starting like a month is not one");
+  assert.equal(m.monthIn("/where did maybe go", now), null);
+  assert.equal(m.monthIn("/where did the decorators go", now), null);
+  assert.equal(m.monthIn("/where did sept go", now), "2026-09");
+  assert.equal(m.monthIn("/where did june go", now), "2026-06");
+  const berlin = m.localDay(new Date(2026, 10, 1, 0, 30));
+  assert.equal(m.lastMonth(berlin), "2026-10", "the local date picks the month");
+  assert.deepEqual(m.unreadOf({ invoices: null, payments: [] }), ["invoices"], "a failed read is named");
+  assert.deepEqual(m.unreadOf({ invoices: false, payments: null }), ["payments"], "a list this person lacks is not a failed read");
+  assert.deepEqual(m.unreadOf({ invoices: [], payments: false }), []);
   assert.equal(m.lastMonth(now), "2026-10");
   assert.equal(m.lastMonth(new Date("2026-01-05T00:00:00Z")), "2025-12", "across the new year");
 

@@ -89,7 +89,8 @@ export function setupSteps(me, accounts, access) {
 /** The command a typed line means: the first one it is the start of, case
  *  aside. Null for anything that is not a slash line, which is a search. */
 export function commandFor(text, cmds) {
-  const q = String(text || "").trim().toLowerCase();
+  // A question mark or full stop at the end is part of asking, not of the command.
+  const q = String(text || "").trim().toLowerCase().replace(/[\s?.!]+$/, "");
   if (q.length < 2 || !q.startsWith("/")) return null;
   // A question with a blank (`match`, such as which month) is that question whatever fills it.
   return cmds.find((c) => c.cmd.toLowerCase().startsWith(q)) ?? cmds.find((c) => c.match?.test(q)) ?? null;
@@ -103,12 +104,22 @@ export function monthIn(text, now = new Date()) {
   const q = String(text || "").toLowerCase();
   const iso = q.match(/\b(20\d\d)-(0[1-9]|1[0-2])\b/);
   if (iso) return `${iso[1]}-${iso[2]}`;
-  const m = q.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*(?:\s+(20\d\d))?\b/);
+  // Whole month names or their short forms only: "marketing" is not March.
+  const m = q.match(/\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s+(20\d\d))?\b/);
   if (!m) return null;
-  const mi = MONTH_KEYS.indexOf(m[1]);
+  const mi = MONTH_KEYS.indexOf(m[1].slice(0, 3));
   const y = m[2] ? Number(m[2]) : now.getUTCFullYear() - (mi > now.getUTCMonth() ? 1 : 0);
   return `${y}-${String(mi + 1).padStart(2, "0")}`;
 }
+
+/** Today by the browser's own calendar, as a UTC midnight, so the month
+ *  helpers above read the local date: just after midnight on the 1st in
+ *  Berlin is already the new month. */
+export const localDay = (d = new Date()) => new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+
+/** The reads an answer depends on that failed: null is a failed read, false
+ *  one this person does not have. An answer says "nothing" only when this is empty. */
+export const unreadOf = (reads) => Object.keys(reads).filter((k) => reads[k] === null);
 
 /** The calendar month before `now`'s, as "YYYY-MM". */
 export function lastMonth(now = new Date()) {
