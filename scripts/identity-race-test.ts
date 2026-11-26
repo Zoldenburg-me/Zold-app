@@ -117,10 +117,15 @@ async function authStatus(token: string): Promise<number> {
   });
   let reads = 0;
   let finalizes = 0;
+  // The first caller's chain call is held until the other four have answered,
+  // so all five overlap however slow the store is.
+  let refused = 0;
+  let open: () => void = () => {};
+  let gate = new Promise<void>((r) => (open = r));
+  const answered = <T>(p: Promise<T>) => p.catch((e) => { if (++refused === 4) open(); throw e; });
   const chain: any = {
-    // Each call waits a tick, so the racers overlap.
-    readState: async () => { reads++; await new Promise((r) => setTimeout(r, 20)); throw new Error("module read failed"); },
-    relayFinalize: async () => { finalizes++; await new Promise((r) => setTimeout(r, 20)); return { txHash: `0x${"7e".repeat(32)}` }; },
+    readState: async () => { reads++; await gate; throw new Error("module read failed"); },
+    relayFinalize: async () => { finalizes++; await gate; return { txHash: `0x${"7e".repeat(32)}` }; },
     safeOwners: async () => [newOwner],
   };
   const key = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign"]);
@@ -131,14 +136,16 @@ async function authStatus(token: string): Promise<number> {
   // gives the request back.
   await store.addRecoveryRequest(request("tk-sign", "REVIEW_PENDING", { newOwners: [newOwner], newPasskey: np }) as any);
   const signed = await Promise.allSettled(Array.from({ length: 5 }, () =>
-    acceptTurnkeySignature(request("tk-sign", "REVIEW_PENDING", {}) as any, { r: "0x0", s: "0x0", v: "0x1b" }, chain, { ownerAlerted: () => true })));
+    answered(acceptTurnkeySignature(request("tk-sign", "REVIEW_PENDING", {}) as any, { r: "0x0", s: "0x0", v: "0x1b" }, chain, { ownerAlerted: () => true }))));
   assert.equal(reads, 1, `the module is read by one signer: ${signed.map((o) => (o.status === "rejected" ? String(o.reason) : o.value.status)).join(" | ")}`);
   assert.equal(signed.filter((o) => o.status === "rejected" && /already being approved/.test(String(o.reason))).length, 4, "the others are refused");
   assert.deepEqual([(await store.findRecoveryRequest("tk-sign"))!.status, (await store.findRecoveryRequest("tk-sign"))!.relaying], ["REVIEW_PENDING", undefined], "given back");
 
   // Five finalisers at once: finalizeRecovery is relayed once, the passkey bound once.
   await store.addRecoveryRequest(request("tk-fin", "GRACE_PERIOD", { newOwners: [newOwner], newPasskey: np, finalizeAfter: new Date(Date.now() - 1000).toISOString() }) as any);
-  const fin = await Promise.allSettled(Array.from({ length: 5 }, async () => finalizeTurnkeyRecovery((await store.findRecoveryRequest("tk-fin"))!, chain)));
+  refused = 0;
+  gate = new Promise<void>((r) => (open = r));
+  const fin = await Promise.allSettled(Array.from({ length: 5 }, async () => answered(finalizeTurnkeyRecovery((await store.findRecoveryRequest("tk-fin"))!, chain))));
   assert.equal(finalizes, 1, "finalizeRecovery relayed once");
   assert.equal(fin.filter((o) => o.status === "fulfilled" && o.value.status === "FINALIZED").length, 1, fin.map((o) => (o.status === "rejected" ? String(o.reason) : o.value.status)).join(" | "));
   assert.equal(fin.filter((o) => o.status === "rejected" && /being finished/.test(String(o.reason))).length, 4);

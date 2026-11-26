@@ -13,6 +13,8 @@
  */
 import "./_test-env.js";
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -22,8 +24,16 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-candide-sweep-")), "db.json");
 process.env.TRANSF_CHAIN_ID = "31337";
 process.env.TRANSF_RPC_URL ??= "http://127.0.0.1:18545";
-// Enabled, but nothing here reaches it: no row is past its grace period.
-process.env.RECOVERY_SERVICE_URL = "http://127.0.0.1:9";
+// A recovery service that holds each request until the test lets it go,
+// then refuses it: a finaliser's call stays in flight while another tries.
+const held: (() => void)[] = [];
+let serviceCalls = 0;
+const service = createServer((_req, res) => {
+  serviceCalls++;
+  held.push(() => res.writeHead(500, { "content-type": "application/json" }).end(JSON.stringify({ error: "not yet" })));
+});
+await new Promise<void>((r) => service.listen(0, "127.0.0.1", () => r()));
+process.env.RECOVERY_SERVICE_URL = `http://127.0.0.1:${(service.address() as AddressInfo).port}`;
 
 const { initStore, store } = await import("../services/api/src/store.js");
 const { finalizeCandideRecovery, sweepCandideRecoveries } = await import("../services/api/src/routes/recovery-candide.js");
@@ -93,15 +103,23 @@ await check("two finalisers of one recovery: one holds the reserve and asks the 
     candide: { recoveryRequestId: "svc-1", newOwners: [`0x${"7".repeat(40)}`], newPasskey: { credentialId: "np" }, finalizeAfter: new Date(Date.now() - 1000).toISOString() },
   } as any);
   await store.addUser({ id: "u_c", name: "c", country: "DE", kycStatus: "approved", iban: "", address: `0x${"c".repeat(40)}`, passkeySafe: { address: `0x${"c".repeat(40)}`, status: "active" }, createdAt: now } as any);
-  const out = await Promise.allSettled([finalizeCandideRecovery((await store.findRecoveryRequest("c-fin"))!), finalizeCandideRecovery((await store.findRecoveryRequest("c-fin"))!)]);
-  const busy = out.filter((o) => o.status === "rejected" && /being finalized/.test(String((o as PromiseRejectedResult).reason)));
-  assert.equal(busy.length, 1, `one finaliser is refused: ${out.map((o) => (o.status === "rejected" ? String(o.reason) : o.value.status)).join(" | ")}`);
+  // Both read the row in its grace period, as the route and the sweep would.
+  const snap = (await store.findRecoveryRequest("c-fin"))!;
+  const first = finalizeCandideRecovery(snap);
+  // The first holds the reserve while its call to the service is in flight.
+  for (let i = 0; i < 200 && serviceCalls === 0; i++) await new Promise((r) => setTimeout(r, 10));
+  assert.equal(serviceCalls, 1, "the first finaliser is asking the service");
+  assert.equal((await store.findRecoveryRequest("c-fin"))!.status, "RELAYING");
+  await assert.rejects(finalizeCandideRecovery(snap), /being finalized/, "the second is refused");
+  for (const release of held.splice(0)) release();
+  await first;
   const after = (await store.findRecoveryRequest("c-fin"))!;
   assert.equal(after.status, "GRACE_PERIOD", "nothing recovered on chain: back to its grace period");
   assert.equal(after.relaying, undefined);
   assert.equal(after.candide?.finalizeAttempts, 1, "the service was asked once");
 });
 
+service.close();
 if (failed) { console.error(`CANDIDE SWEEP RACE TEST FAILED — ${failed}`); process.exit(1); }
 console.log("CANDIDE SWEEP RACE TEST PASSED");
 process.exit(0);
