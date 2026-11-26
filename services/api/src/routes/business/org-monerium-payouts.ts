@@ -22,7 +22,10 @@
  * over what the Safe holds, a Safe needing 2+ signatures, a stale approval.
  * Monerium's own response text never reaches the browser or the log: only the
  * status. A failure that may have placed an order is stored as `unknown`, not
- * as failed and never as sent.
+ * as failed and never as sent; one before POST /orders (the token grant) is
+ * `failed`. An owner may clear an `unknown` row without an order id after
+ * checking Monerium (POST /:payoutId/clear, audited); nothing clears one
+ * automatically.
  *
  * Off unless MONERIUM_ORG_PAYOUTS=on (config/monerium.ts). A company bank run
  * (several payees from one draft) is still refused by name in drafts.ts.
@@ -43,7 +46,7 @@ import { OrgSafePlanRefusal, orgSafePlan } from "../../domain/org-safe-plan.js";
 import { assertReadableSafeState } from "../../domain/safe-op-queue.js";
 import { moneriumIbanList } from "../../domain/monerium-profile.js";
 import type { Account, CompanyBankPayout, Organisation } from "../../domain/types.js";
-import { MoneriumAccessError, MoneriumApiError, isMoneriumOrderId } from "../../adapters/monerium-client.js";
+import { MoneriumAccessError, MoneriumApiError, MoneriumTokenError, isMoneriumOrderId } from "../../adapters/monerium-client.js";
 import { redactedMessage } from "../../http/log-cause.js";
 import { SEPA_REMITTANCE_MAX, moneriumAmountString, moneriumRedeemMessage, paymentMemo, redeemMessageStale } from "../../sepa.js";
 import { store } from "../../store.js";
@@ -535,8 +538,24 @@ export function createOrgMoneriumPayoutRoutes(
       pendingPayouts.delete(requestId);
       const audit = async (kind: "org_payout.placed" | "org_payout.sent" | "org_payout.refused" | "org_payout.unknown", extra: Record<string, unknown>) =>
         await store.audit(auditEntry(kind, { orgId: ctx.org.id, accountId: s.account.id, payoutId: payout.id, amountEur: payout.amountEur, safeAddress: payout.safeAddress, ...extra }, ctx.userId));
+      /** Failed before POST /orders: no order exists, so the row holds nothing. */
+      const notSent = async (reason: string) => {
+        await patchPayout(s.account.id, payout.id, {
+          state: "failed",
+          error: "Monerium could not be reached before the payout was placed, so no payout was sent. Send it again in a minute.",
+        });
+        await audit("org_payout.refused", { reason });
+        return res.status(503).json({ code: "MONERIUM_UNREACHABLE", error: "Monerium could not be reached, so no payout was sent. Try again in a minute.", payout: publicPayout(await payoutOf(s.account.id, payout.id)) });
+      };
+      let api: CompanyMonerium;
       try {
-        const order = await io.monerium(orgNow).placeOrder({
+        api = io.monerium(orgNow);
+      } catch (err) {
+        console.warn(`org-monerium-payouts: opening the company's Monerium keys failed: ${redactedMessage(err)}`);
+        return await notSent("keys-unreadable");
+      }
+      try {
+        const order = await api.placeOrder({
           address: pending.safeAddress,
           chain: MONERIUM.chain,
           kind: "redeem",
@@ -581,6 +600,11 @@ export function createOrgMoneriumPayoutRoutes(
           await audit("org_payout.refused", { reason: "access" });
           return res.status(503).json({ code: "MONERIUM_NOT_CONNECTED", error: "Monerium refused Zold’s access to the company account, so no payout was sent.", payout: publicPayout(await payoutOf(s.account.id, payout.id)) });
         }
+        if (err instanceof MoneriumTokenError) {
+          // The token grant failed (a 5xx, a timeout): POST /orders was never sent.
+          console.warn(`org-monerium-payouts: Monerium token grant failed: ${err.partnerStatus ?? "no status"}`);
+          return await notSent("token");
+        }
         if (err instanceof MoneriumApiError && (err.status === 401 || err.status === 403)) {
           // "May not place it", so no order (the same reading as the personal rail).
           console.warn(`org-monerium-payouts: placing a payout was refused: Monerium answered ${err.status}`);
@@ -601,6 +625,45 @@ export function createOrgMoneriumPayoutRoutes(
     } finally {
       pendingPayouts.delete(requestId);
     }
+  }));
+
+  /**
+   * An owner clears an `unknown` payout that has no order id, after checking
+   * Monerium has no such order: the row becomes `failed` and holds nothing.
+   * Never automatic, never for a row with an order id (the list re-reads
+   * that one from Monerium), and audited with who cleared it.
+   */
+  r.post("/:orgId/monerium/payouts/:payoutId/clear", wrap(async (req, res) => {
+    const ctx = await gate(req, res, "transfers.sign");
+    if (!ctx) return;
+    if (req.body?.checkedMonerium !== true) {
+      return res.status(400).json({ code: "CHECK_MONERIUM_FIRST", error: "Check in Monerium that it holds no order for this payout, then confirm that you did." });
+    }
+    const account = companyEurAccount(await store.accountsOf(ctx.org.id));
+    const id = String(req.params.payoutId);
+    if (!account || !(account.moneriumPayouts ?? []).some((p) => p.id === id)) return res.status(404).json({ error: "no such payout" });
+    const at = new Date().toISOString();
+    try {
+      await writePayouts(account.id, (rows) => rows.map((p) => {
+        if (p.id !== id) return p;
+        if (p.state !== "unknown" || p.orderId) {
+          throw new Refusal(409, "PAYOUT_NOT_UNCLEAR", "Only an unclear payout without a Monerium order can be cleared. Nothing was changed.");
+        }
+        return {
+          ...p,
+          state: "failed" as const,
+          error: "An owner cleared this payout after checking Monerium held no order for it. Nothing was sent.",
+          clearedByMemberId: ctx.member.id,
+          clearedAt: at,
+          updatedAt: at,
+        };
+      }));
+    } catch (err) {
+      return answer(res, err);
+    }
+    const cleared = await payoutOf(account.id, id);
+    await store.audit(auditEntry("org_payout.cleared", { orgId: ctx.org.id, accountId: account.id, payoutId: id, amountEur: cleared.amountEur, memberId: ctx.member.id }, ctx.userId));
+    res.json({ payout: publicPayout(cleared) });
   }));
 
   r.get("/:orgId/monerium/payouts", wrap(async (req, res) => {

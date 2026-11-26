@@ -596,6 +596,60 @@ try {
     assert.equal(line!.statement!.amountCents, -100);
   });
 
+  await check("a token-grant 5xx is before POST /orders: failed, no hold, nothing placed", async () => {
+    await reset();
+    bal = 300;
+    const { companyMoneriumClient } = await import("../services/api/src/routes/business/org-monerium-iban.js");
+    const realFetch = globalThis.fetch;
+    let orders = 0;
+    globalThis.fetch = (async (url: any, init?: any) => {
+      const u = String(url);
+      if (u.startsWith("http://127.0.0.1")) return realFetch(url, init);
+      if (u.endsWith("/auth/token")) return new Response(`upstream ${PROVIDER_BODY}`, { status: 503 });
+      if (u.endsWith("/orders")) orders++;
+      return new Response("{}", { status: 500 });
+    }) as typeof fetch;
+    const stubbed = io.monerium;
+    // Only placeOrder goes to the real client: the IBAN checks stay stubbed.
+    io.monerium = (org: any) => ({ ...client, placeOrder: (b: any) => companyMoneriumClient(org).placeOrder(b) }) as any;
+    let r;
+    try { r = await pay({ amountEur: 300 }); } finally { globalThis.fetch = realFetch; io.monerium = stubbed; }
+    assert.equal(orders, 0, "POST /orders was never sent");
+    assert.equal((await payouts())[0].state, "failed", "no order was placed, so it is not unknown");
+    assert.ok(!r!.text.includes(PROVIDER_BODY));
+    assert.equal((await call("POST", "/org_co/monerium/payouts/start", "u_anna", input({ amountEur: 300 }))).status, 201, "the failed payout holds nothing");
+  });
+
+  await check("an owner clears an unknown payout without an order id after checking Monerium, audited; nothing else is cleared", async () => {
+    await reset();
+    bal = 300;
+    mon.placeAnswer = { meta: { state: "placed" } };
+    assert.equal((await pay({ amountEur: 300 })).status, 202);
+    const id = (await payouts())[0].id;
+    assert.equal((await call("POST", "/org_co/monerium/payouts/start", "u_anna", input({ amountEur: 1 }))).data.code, "AMOUNT_OVER_BALANCE", "the unknown row holds the euros");
+    clearPendingPayouts();
+    assert.equal((await call("POST", `/org_co/monerium/payouts/${id}/clear`, "u_adam", { checkedMonerium: true })).status, 403, "an admin cannot");
+    const unconfirmed = await call("POST", `/org_co/monerium/payouts/${id}/clear`, "u_anna", {});
+    assert.equal(unconfirmed.status, 400, unconfirmed.text);
+    assert.equal((await payouts())[0].state, "unknown");
+    const r = await call("POST", `/org_co/monerium/payouts/${id}/clear`, "u_anna", { checkedMonerium: true });
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.data.payout.state, "failed");
+    assert.match(r.data.payout.error, /owner/i);
+    assert.match(model.payoutNotice(r.data.payout), /owner cleared/, "the toast says why, not that Monerium refused");
+    const audit = (await store.list("audit")).filter((a: any) => a.kind === "org_payout.cleared");
+    assert.equal(audit.length, 1);
+    assert.equal((audit[0] as any).userId, "u_anna");
+    assert.equal((await call("POST", "/org_co/monerium/payouts/start", "u_anna", input({ amountEur: 300 }))).status, 201, "the hold is released");
+    clearPendingPayouts();
+    assert.equal((await call("POST", `/org_co/monerium/payouts/${id}/clear`, "u_anna", { checkedMonerium: true })).status, 409, "a failed row is not cleared again");
+    // A pending order Monerium holds is never cleared by hand.
+    mon.placeAnswer = { id: "ord_hold", meta: { state: "pending" } };
+    assert.equal((await pay({ amountEur: 10 })).status, 200);
+    const held = (await payouts()).find((p) => p.orderId === "ord_hold")!;
+    assert.equal((await call("POST", `/org_co/monerium/payouts/${held.id}/clear`, "u_anna", { checkedMonerium: true })).status, 409);
+  });
+
   await check("Settings words: pending is not sent, unclear says to check, the IBAN is masked", () => {
     assert.match(model.payoutNotice({ state: "pending" }), /not sent until Monerium processes/);
     assert.match(model.payoutNotice({ state: "unknown" }), /Check Monerium before sending it again/);
@@ -607,6 +661,8 @@ try {
     assert.ok(!row.sub.includes(OTHER_IBAN), "only the last four digits");
     assert.equal(row.state, "Unclear: check Monerium");
     assert.equal(row.bad, true);
+    assert.equal(row.clearable, true, "unclear with no order: an owner may clear it");
+    assert.equal(model.payoutRows([{ id: "p2", amountEur: 1, recipientName: "B", recipientIban: OTHER_IBAN, state: "unknown", orderId: "ord_x", createdAt: now }])[0].clearable, false, "an order to follow is never cleared by hand");
     assert.match(model.ibanPanel({ companyIban: { state: "issued", iban: IBAN } }, true, true).text, /pay a bank account from it below/);
     assert.match(model.ibanPanel({ companyIban: { state: "issued", iban: IBAN } }, true).text, /not built yet/);
   });

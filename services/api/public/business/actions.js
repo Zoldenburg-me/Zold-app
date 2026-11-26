@@ -502,6 +502,14 @@ export const ACTIONS = {
         throw e;
       }
     }, { okLabel: "Sign and send" }),
+  /* An unclear payout with no Monerium order holds its euros until an owner
+     says Monerium has no such order. Never automatic; the API records who. */
+  "org-payout-clear": (el) => dialog("Clear this unclear payout?", `
+      <p class="desc">Do this only after checking in Monerium that it holds no order for this payout. The payout is then marked not sent, and its euros are free for other payouts. Zold records that you cleared it.</p>`,
+    async () => {
+      const r = await api(`/api/orgs/${org.id}/monerium/payouts/${encodeURIComponent(el.dataset.id)}/clear`, { method: "POST", body: { checkedMonerium: true } });
+      setTimeout(() => toast(payoutNotice(r.payout)), 0);
+    }, { okLabel: "I checked: clear it" }),
 
   async "shopify-connect"() {
     const shop = shopAddress("#sh-shop");

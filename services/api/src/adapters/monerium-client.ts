@@ -40,13 +40,25 @@ export class MoneriumAccessError extends Error {
   }
 }
 
+/**
+ * The token grant failed for another reason than a refusal (a 5xx, a timeout,
+ * an unreadable answer): no API request was sent on it. A caller placing an
+ * order reads this as "no order exists", not as an unknown outcome.
+ */
+export class MoneriumTokenError extends Error {
+  constructor(message: string, readonly partnerStatus?: number) {
+    super(message);
+    this.name = "MoneriumTokenError";
+  }
+}
+
 /** Monerium's own refusal of a token request is an access error; its 5xx
- *  (or a proxy's) is a transient and stays a plain Error. Both carry the
- *  status as `partnerStatus`, so a log line can name it without the body. */
+ *  (or a proxy's) is a transient MoneriumTokenError. Both carry the status
+ *  as `partnerStatus`, so a log line can name it without the body. */
 const tokenError = (what: string, status: number, body: string) =>
   status >= 400 && status < 500
     ? new MoneriumAccessError(`${what} (${status}): ${body}`, status)
-    : Object.assign(new Error(`${what} (${status}): ${body}`), { partnerStatus: status });
+    : new MoneriumTokenError(`${what} (${status}): ${body}`, status);
 
 /** The largest body read from Monerium. An order list is the big answer; a
  *  body past this is not one, and is not read into memory to find out. */
@@ -180,7 +192,14 @@ export class MoneriumClient {
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const token = await this.accessToken();
+    let token: string;
+    try {
+      token = await this.accessToken();
+    } catch (err) {
+      // Nothing was sent to `path`: whatever failed, failed before it.
+      if (err instanceof MoneriumAccessError || err instanceof MoneriumTokenError) throw err;
+      throw new MoneriumTokenError(`Monerium auth failed before ${method} ${path}: ${describeCause(err)}`);
+    }
     const res = await moneriumFetch(`${this.cfg.baseUrl}${path}`, {
       signal: partnerTimeout(),
       method,

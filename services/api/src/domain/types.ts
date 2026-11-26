@@ -365,6 +365,9 @@ export interface CompanyBankPayout {
   processedAt?: string;
   /** A fixed explanation for `failed` or `unknown`; never Monerium's body. */
   error?: string;
+  /** The owner member who cleared an `unknown` row after checking Monerium. */
+  clearedByMemberId?: string;
+  clearedAt?: string;
   createdAt: string;
   updatedAt: string;
 }

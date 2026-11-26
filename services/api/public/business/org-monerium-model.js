@@ -107,7 +107,8 @@ export function payoutNotice(p) {
   const st = p?.state;
   if (st === "sent") return "Sent: Monerium processed the payout.";
   if (st === "pending") return "Monerium has the payout. It is not sent until Monerium processes it.";
-  if (st === "failed") return "Not sent. Monerium refused the payout.";
+  // The stored reason is a fixed text: a refusal, Monerium unreachable, or an owner's clear.
+  if (st === "failed") return p.error || "Not sent. Monerium refused the payout.";
   if (st === "unknown") return "Unclear: Monerium did not confirm the payout. Check Monerium before sending it again.";
   return "Payout started.";
 }
@@ -123,6 +124,8 @@ export function payoutRows(payouts) {
     state: PAYOUT_STATE_WORD[p.state] || p.state,
     bad: p.state === "failed" || p.state === "unknown",
     note: p.error || "",
+    // Unclear with no Monerium order to follow: only an owner who checked Monerium clears it.
+    clearable: p.state === "unknown" && !p.orderId,
   }));
 }
 
