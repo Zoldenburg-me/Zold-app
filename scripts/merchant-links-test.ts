@@ -512,7 +512,7 @@ await check("the installer whose own page the store pays into has left: create i
   }
 });
 await check("the org gained a EUR account backed by someone else after linking: create is 409 NO_PAYMENT_PAGE", async () => {
-  const account = await store.addAccount({ id: randomUUID(), orgId: org2.id, currency: "EUR", label: "EUR account", status: "active", provider: null, identifier: {} as any, backingUserId: treasurer.id } as any);
+  const account = (await store.addAccount({ id: randomUUID(), orgId: org2.id, currency: "EUR", label: "EUR account", status: "active", provider: null, identifier: {} as any, backingUserId: treasurer.id } as any))!;
   try {
     const r = await create(link2.linkId, { amountEur: 10, order: { gid: ORDER(9002) } });
     assert.equal(r.status, 409);

@@ -832,6 +832,8 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       createdAt: now,
       updatedAt: now,
     });
+    // A parallel open of the same Safe for another organisation landed first.
+    if (!account) return res.status(409).json({ error: "This Safe already backs another account.", code: "SAFE_IN_OTHER_ORG" });
 
     let note: string | undefined;
     if (account.status === "gated") {

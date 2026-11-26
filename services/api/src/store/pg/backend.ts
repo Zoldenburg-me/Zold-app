@@ -10,9 +10,9 @@
  * Listeners run after the commit (inside a `store.tx`, after its COMMIT, and
  * never for a transaction rolled back), as they run after `persist()` today.
  *
- * Not used by the API yet (S2 moves the callers, S8 switches the default).
- * The cap holds stay in memory as in store.ts until S3 moves them to
- * `cap_holds`. Rows come back as copies, never live objects.
+ * The API runs on it with STORE_BACKEND=postgres (config/env.ts). Cap holds
+ * are rows of `cap_holds` (migrations/0003). Rows come back as copies, never
+ * live objects.
  */
 import { randomUUID } from "node:crypto";
 import { auditEntry, type AuditEntry } from "../../audit.js";
@@ -47,6 +47,7 @@ import {
   followIban,
   hashOnRecordIn,
   passkeyUsePatch,
+  quoteConsumable,
   emailCodeAttemptPatch,
   reviewRefundTx,
   sessionDead,
@@ -111,6 +112,13 @@ const TABLE = {
 type Table = (typeof TABLE)[keyof typeof TABLE];
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+/**
+ * How long a cap hold counts. A hold lives from the cap check to the row that
+ * replaces it (a transfer's build, a send's prepare: seconds, bounded by the
+ * partners' timeouts). In memory a restart dropped the holds; in the database
+ * one left by a process that died counts until it expires, then is ignored.
+ */
+export const CAP_HOLD_TTL_MS = 15 * 60_000;
 
 async function rows<T>(q: Sql, table: Table, where = "TRUE", params: unknown[] = [], tail = ""): Promise<T[]> {
   const r = await q.query<{ doc: T }>(`SELECT doc FROM ${table} WHERE ${where} ORDER BY seq ${tail}`, params);
@@ -211,7 +219,6 @@ type PaymentRequestStateListener = (r: PaymentRequest, from: PaymentRequest["sta
 type TxFn = <T>(fn: (q: Sql) => Promise<T>) => Promise<T>;
 
 export function createPgStore(database: Database): StoreBackend {
-  const capHolds = new Map<string, { userId: string; eur: number; day: string }>();
   const transferStateListeners: TransferStateListener[] = [];
   const paymentRequestStateListeners: PaymentRequestStateListener[] = [];
 
@@ -527,13 +534,15 @@ export function createPgStore(database: Database): StoreBackend {
       return (await q.query("SELECT 1 FROM processed_monerium_orders WHERE order_id = $1", [orderId])).rows.length > 0;
     },
     async markOrderProcessed(orderId) {
-      await q.query("INSERT INTO processed_monerium_orders (order_id) VALUES ($1) ON CONFLICT DO NOTHING", [orderId]);
+      const r = await q.query("INSERT INTO processed_monerium_orders (order_id) VALUES ($1) ON CONFLICT DO NOTHING RETURNING order_id", [orderId]);
+      return r.rows.length > 0;
     },
     async isWebhookProcessed(webhookId) {
       return (await q.query("SELECT 1 FROM processed_monerium_webhooks WHERE webhook_id = $1", [webhookId])).rows.length > 0;
     },
     async markWebhookProcessed(webhookId) {
-      await q.query("INSERT INTO processed_monerium_webhooks (webhook_id) VALUES ($1) ON CONFLICT DO NOTHING", [webhookId]);
+      const r = await q.query("INSERT INTO processed_monerium_webhooks (webhook_id) VALUES ($1) ON CONFLICT DO NOTHING RETURNING webhook_id", [webhookId]);
+      return r.rows.length > 0;
     },
     addQuote: (qt: Quote) =>
       tx(async (t) => {
@@ -544,36 +553,57 @@ export function createPgStore(database: Database): StoreBackend {
         await insert(t, TABLE.quotes, qt);
       }),
     updateQuote: (id, patch) => patchRow<Quote>(TABLE.quotes, id, "quote", patch, false),
-    consumeQuote: async (id) =>
+    consumeQuote: async (id, now = Date.now()) =>
       (await change<Quote, boolean>(TABLE.quotes, id, `unknown quote ${id}`, (x) => {
-        if ((x.status ?? "OPEN") !== "OPEN") return null;
+        if (!quoteConsumable(x, now)) return null;
         x.status = "CONSUMED";
+        return true;
+      })) ?? false,
+    expireQuote: async (id) =>
+      (await change<Quote, boolean>(TABLE.quotes, id, null, (x) => {
+        if ((x.status ?? "OPEN") !== "OPEN") return null;
+        x.status = "EXPIRED";
         return true;
       })) ?? false,
     async addTransfer(t: Transfer) {
       await insert(q, TABLE.transfers, t);
     },
-    async holdDailyCap(userId, eur, capEur, used) {
-      const usedEur = await used();
-      if (usedEur + eur > capEur) return { ok: false, usedEur, capEur };
-      const holdId = randomUUID();
-      capHolds.set(holdId, { userId, eur, day: new Date().toISOString().slice(0, 10) });
-      return { ok: true, holdId };
+    /**
+     * The cap's advisory lock, then `used` recomputed inside it (it reads
+     * `heldEurToday` and the rows of the day, in this transaction), then the
+     * hold, with an expiry (§2, quote → transfer). Two holders of one cap key
+     * take turns; the second sees the first's hold or the row that replaced it.
+     */
+    holdDailyCap: (capKey, eur, capEur, used) =>
+      tx(async (t) => {
+        await t.query("SELECT pg_advisory_xact_lock(hashtext(current_database() || ':' || $1))", [`cap:${capKey}`]);
+        await t.query("DELETE FROM cap_holds WHERE expires_at < now() - interval '1 day'");
+        const usedEur = await used();
+        if (usedEur + eur > capEur) return { ok: false as const, usedEur, capEur };
+        const holdId = randomUUID();
+        await t.query("INSERT INTO cap_holds (id, cap_key, day, eur, expires_at) VALUES ($1, $2, $3, $4, now() + $5 * interval '1 millisecond')", [
+          holdId,
+          capKey,
+          new Date().toISOString().slice(0, 10),
+          eur,
+          CAP_HOLD_TTL_MS,
+        ]);
+        return { ok: true as const, holdId };
+      }),
+    async heldEurToday(capKey, day = new Date().toISOString().slice(0, 10)) {
+      const r = await q.query<{ sum: string }>("SELECT coalesce(sum(eur), 0)::text AS sum FROM cap_holds WHERE cap_key = $1 AND day = $2 AND expires_at > now()", [capKey, day]);
+      return Number(r.rows[0].sum);
     },
-    async heldEurToday(userId, day = new Date().toISOString().slice(0, 10)) {
-      let sum = 0;
-      for (const h of capHolds.values()) if (h.userId === userId && h.day === day) sum += h.eur;
-      return sum;
-    },
-    async addTransferUnderHold(t: Transfer, holdId) {
-      if (!capHolds.has(holdId)) throw new Error(`no cap hold ${holdId} — the transfer was not reserved`);
-      // The hold is released after the row commits: in between the amount is
-      // counted twice, never not at all.
-      await insert(q, TABLE.transfers, t);
-      capHolds.delete(holdId);
-    },
+    addTransferUnderHold: (row: Transfer, holdId) =>
+      tx(async (t) => {
+        // The row and the release are one transaction: the amount is counted
+        // as the hold or as the transfer, never both and never neither.
+        const held = await t.query("DELETE FROM cap_holds WHERE id = $1 RETURNING id", [holdId]);
+        if (!held.rows.length) throw new Error(`no cap hold ${holdId} — the transfer was not reserved`);
+        await insert(t, TABLE.transfers, row);
+      }),
     async releaseCapHold(holdId) {
-      capHolds.delete(holdId);
+      await q.query("DELETE FROM cap_holds WHERE id = $1", [holdId]);
     },
     claimAuthorization: async (id) =>
       (await change<Transfer, boolean>(TABLE.transfers, id, null, (t) => {
@@ -677,8 +707,12 @@ export function createPgStore(database: Database): StoreBackend {
       tx(async (t) => {
         const stale = Date.now() - 72 * 3_600_000;
         await prune<ShopifyDelivery>(t, TABLE.shopifyDeliveries, "TRUE", [], (x) => !(Date.parse(x.at) > stale));
-        await insert(t, TABLE.shopifyDeliveries, d);
-        return d;
+        // A parallel first delivery of the same id waits on the key, then reads its row.
+        const ins = await t.query("INSERT INTO shopify_deliveries (id, doc) VALUES ($1, $2::json) ON CONFLICT (id) DO NOTHING RETURNING id", [d.id, JSON.stringify(d)]);
+        if (ins.rows.length) return d;
+        const existing = await first<ShopifyDelivery>(t, TABLE.shopifyDeliveries, "id = $1", [d.id]);
+        if (!existing) throw new Error(`Shopify delivery ${d.id} collides with a row that is gone`);
+        return existing;
       }),
     async markShopifyDeliveryHandled(id) {
       await change<ShopifyDelivery>(TABLE.shopifyDeliveries, id, null, (d) => {
@@ -815,11 +849,12 @@ export function createPgStore(database: Database): StoreBackend {
     findTransfer: (id) => first<Transfer>(q, TABLE.transfers, "id = $1", [id]),
 
     findCryptoSend: (id) => first<CryptoSend>(q, TABLE.cryptoSends, "id = $1", [id]),
-    async addCryptoSendUnderHold(s: CryptoSend, holdId) {
-      if (!capHolds.has(holdId)) throw new Error(`no cap hold ${holdId} — the send was not reserved`);
-      await insert(q, TABLE.cryptoSends, s);
-      capHolds.delete(holdId);
-    },
+    addCryptoSendUnderHold: (row: CryptoSend, holdId) =>
+      tx(async (t) => {
+        const held = await t.query("DELETE FROM cap_holds WHERE id = $1 RETURNING id", [holdId]);
+        if (!held.rows.length) throw new Error(`no cap hold ${holdId} — the send was not reserved`);
+        await insert(t, TABLE.cryptoSends, row);
+      }),
     claimCryptoSend: async (id) =>
       (await change<CryptoSend, boolean>(TABLE.cryptoSends, id, null, (s) => {
         // Past its deadline the link it pays may already read it as never sent.
@@ -834,14 +869,14 @@ export function createPgStore(database: Database): StoreBackend {
         from.includes(row.state) ? Object.assign(row, patch, { updatedAt: new Date().toISOString() }) : null,
       ),
 
-    findCryptoDeposit: (txHash, logIndex) =>
-      first<CryptoDeposit>(q, TABLE.cryptoDeposits, "tx_hash_lc = $1 AND log_index = $2", [txHash.toLowerCase(), logIndex]),
+    findCryptoDeposit: (chainId, txHash, logIndex) =>
+      first<CryptoDeposit>(q, TABLE.cryptoDeposits, "chain_id = $1 AND tx_hash_lc = $2 AND log_index = $3", [String(chainId), txHash.toLowerCase(), logIndex]),
     addCryptoDeposit: (d: CryptoDeposit) =>
       tx(async (t) => {
-        // Idempotent on (txHash, logIndex), as store.ts. A parallel insert of
-        // the same transfer waits on the unique key and then finds this row.
-        const key = "tx_hash_lc = $1 AND log_index = $2";
-        const params = [d.txHash.toLowerCase(), d.logIndex];
+        // Idempotent on (chainId, txHash, logIndex), as store.ts. A parallel
+        // insert of the same transfer waits on the unique key and then finds this row.
+        const key = "chain_id = $1 AND tx_hash_lc = $2 AND log_index = $3";
+        const params = [String(d.chainId), d.txHash.toLowerCase(), d.logIndex];
         const existing = await first<CryptoDeposit>(t, TABLE.cryptoDeposits, key, params);
         if (existing) return existing;
         const ins = await t.query("INSERT INTO crypto_deposits (id, doc) VALUES ($1, $2::json) ON CONFLICT DO NOTHING RETURNING id", [d.id, JSON.stringify(d)]);
@@ -971,8 +1006,9 @@ export function createPgStore(database: Database): StoreBackend {
       }),
 
     async addAccount(a: Account) {
-      await insert(q, TABLE.accounts, a);
-      return a;
+      // The id is minted fresh, so the one key this can meet is the address's.
+      const r = await q.query("INSERT INTO accounts (id, doc) VALUES ($1, $2::json) ON CONFLICT (address_lc) DO NOTHING RETURNING id", [a.id, JSON.stringify(a)]);
+      return r.rows.length ? a : null;
     },
     findAccount: (id) => first<Account>(q, TABLE.accounts, "id = $1", [id]),
     accountsOf: (orgId) => rows<Account>(q, TABLE.accounts, "org_id = $1", [orgId]),
@@ -1121,6 +1157,10 @@ export function createPgStore(database: Database): StoreBackend {
   }
   const store: StoreBackend = {
     ...(routed as StoreMethods),
+    // `used` reads the store: in a transaction of its own, so those reads run
+    // on the connection that holds the cap's lock, not on another one from
+    // the pool (which parallel holders waiting on the lock could exhaust).
+    holdDailyCap: (capKey, eur, capEur, used) => store.tx((t) => t.holdDailyCap(capKey, eur, capEur, used)),
     tx<T>(fn: (t: StoreMethods) => Promise<T> | T): Promise<T> {
       const open = currentTx(owner);
       if (open) return nestedTx(owner, fn, (f) => clients.get(open)!.savepoint(f))!;

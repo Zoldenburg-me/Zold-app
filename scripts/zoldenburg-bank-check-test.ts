@@ -673,6 +673,8 @@ await t("execute: while the relay is in flight nothing closes the request; after
 });
 
 await t("sweep: the chain is read before an expired request is closed", async () => {
+  // One grace period per account: an earlier test left u1 in one.
+  for (const r of (await store.recoveryRequestsForUser("u1"))) if (r.status === "GRACE_PERIOD") await store.updateRecoveryRequest(r.id, { status: "FINALIZED" });
   await newRequest("r20");
   await newRequest("r21");
   const later = new Date(Date.parse((await req("r20")).expiresAt) + 1000);
@@ -1024,7 +1026,7 @@ await t("the chain paths the harness skips close the account's other requests", 
 await t("a recovery that finishes closes the account's other requests, so none is left signable", async () => {
   // Its own account: binding the recovered passkey changes the owner.
   const safe = `0x${"d".repeat(40)}` as `0x${string}`;
-  await store.addUser({ ...structuredClone(await user()), id: "u-fin", email: "fin@example.com", address: safe, passkeySafe: { ...structuredClone((await user()).passkeySafe!), address: safe } } as any);
+  await store.addUser({ ...structuredClone(await user()), passkey: { ...structuredClone((await user()).passkey!), credentialId: "cred-u-fin" }, id: "u-fin", email: "fin@example.com", address: safe, passkeySafe: { ...structuredClone((await user()).passkeySafe!), address: safe } } as any);
   const { generateKeyPairSync } = await import("node:crypto");
   const jwk = generateKeyPairSync("ec", { namedCurve: "P-256" }).publicKey.export({ format: "jwk" });
   const base = {

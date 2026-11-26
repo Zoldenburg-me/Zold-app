@@ -54,6 +54,10 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
   assert.equal((await s.recordPasskeyUse("u_a", "cred-a", 7))?.passkey?.signCount, 7);
   assert.equal(await s.recordPasskeyUse("u_a", "cred-old", 8), undefined, "a replaced credential records nothing");
   assert.equal((await s.findUser("u_a"))?.passkey?.signCount, 7);
+  assert.equal(await s.recordPasskeyUse("u_a", "cred-a", 7), undefined, "a count that does not advance records nothing");
+  assert.equal(await s.recordPasskeyUse("u_a", "cred-a", 3), undefined, "nor one that went back");
+  assert.equal((await s.recordPasskeyUse("u_a", "cred-a", 9))?.passkey?.signCount, 9);
+  assert.equal((await s.findUser("u_a"))?.passkey?.signCount, 9);
 
   await s.setSegment("u_a", { value: "consumer", reason: "test" } as any);
   await assert.rejects(async () => await s.setSegment("u_a", { value: "business" } as any), /already has segment/);
@@ -90,6 +94,12 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
   // ── Accounts ─────────────────────────────────────────────────────────────
   assert.deepEqual((await s.accountsOf("org_a")).map((a) => a.id), ["acc_eur", "acc_gated"]);
   assert.deepEqual((await s.accountsAtAddress(`0x${"aa".repeat(20)}`)).map((a) => a.id), ["acc_gated"]);
+  assert.equal(
+    await s.addAccount({ id: "acc_twin", orgId: "org_b", currency: "EUR", label: "EUR", status: "gated", provider: "monerium", identifier: {}, address: `0x${"aA".repeat(20)}`, createdAt: now, updatedAt: now } as any),
+    null,
+    "one account per address",
+  );
+  assert.equal(await s.findAccount("acc_twin"), undefined);
   const acc = await s.updateAccount("acc_eur", { label: "Main" });
   assert.equal(acc.label, "Main");
   assert.notEqual(acc.updatedAt, now, "updateAccount stamps updatedAt");
@@ -103,6 +113,12 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
   assert.equal(await s.consumeQuote("q_1"), true);
   assert.equal(await s.consumeQuote("q_1"), false, "a quote is consumed once");
   await assert.rejects(async () => await s.consumeQuote("nobody"), /unknown quote/);
+  await s.addQuote({ id: "q_late", userId: "u_a", status: "OPEN", expiresAt: iso(-1_000) } as any);
+  assert.equal(await s.consumeQuote("q_late"), false, "a quote past expiresAt but still OPEN is not consumed");
+  assert.equal(await s.expireQuote("q_late"), true);
+  assert.equal((await s.findQuote("q_late"))?.status, "EXPIRED");
+  assert.equal(await s.expireQuote("q_1"), false, "a consumed quote is never marked expired");
+  assert.equal((await s.findQuote("q_1"))?.status, "CONSUMED");
   assert.equal((await s.updateQuote("q_1", { rate: 2 } as any) as any).rate, 2);
 
   // ── Transfers ────────────────────────────────────────────────────────────
@@ -229,13 +245,14 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
   assert.equal((await s.findSafeOp("so_2"))?.reason, "owner");
 
   // ── Monerium ─────────────────────────────────────────────────────────────
-  await s.markOrderProcessed("ord-2");
-  await s.markOrderProcessed("ord-1");
-  await s.markOrderProcessed("ord-2");
+  assert.equal(await s.markOrderProcessed("ord-2"), true);
+  assert.equal(await s.markOrderProcessed("ord-1"), true);
+  assert.equal(await s.markOrderProcessed("ord-2"), false, "an order is claimed once");
   assert.deepEqual(await s.mirroredOrderIds(), ["ord-2", "ord-1"], "once each, in order");
   assert.equal(await s.isOrderProcessed("ord-1"), true);
   assert.equal(await s.isOrderProcessed("ord-3"), false);
-  await s.markWebhookProcessed("wh-1");
+  assert.equal(await s.markWebhookProcessed("wh-1"), true);
+  assert.equal(await s.markWebhookProcessed("wh-1"), false, "a delivery is marked once");
   assert.equal(await s.isWebhookProcessed("wh-1"), true);
   assert.equal(await s.isWebhookProcessed("wh-2"), false);
   const issue = { orderId: "ord-1", userId: "u_a", amountEur: 5, processedAt: now, recordedAt: now };
@@ -278,6 +295,7 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
   assert.equal(await s.findShopifyConnectionByShop("a.myshopify.com"), undefined);
   await s.recordShopifyDelivery({ id: "d_old", shop: "a.myshopify.com", at: iso(-73 * 3_600_000), handled: true });
   await s.recordShopifyDelivery({ id: "d_1", shop: "a.myshopify.com", at: now, handled: false });
+  assert.equal((await s.recordShopifyDelivery({ id: "d_1", shop: "b.myshopify.com", at: now, handled: false })).shop, "a.myshopify.com", "a second recording of one id returns the first, with its shop");
   assert.equal(await s.shopifyDelivery("d_old"), undefined, "deliveries past 72 hours are dropped");
   await s.markShopifyDeliveryHandled("d_1");
   assert.equal((await s.shopifyDelivery("d_1"))?.handled, true);
@@ -294,9 +312,11 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
   // ── Crypto deposits and sends ────────────────────────────────────────────
   const deposit = { id: "dep_1", userId: "u_a", chainId: 84532, token: "EURE", txHash: hash("Aa"), logIndex: 3, amountUnits: "1", holding: "none", txs: [], createdAt: now, updatedAt: now } as any;
   assert.equal((await s.addCryptoDeposit(deposit)).id, "dep_1");
-  assert.equal((await s.addCryptoDeposit({ ...deposit, id: "dep_dup", txHash: hash("aA") })).id, "dep_1", "one row per (txHash, logIndex)");
-  assert.equal((await s.findCryptoDeposit(hash("AA"), 3))?.id, "dep_1");
-  assert.equal(await s.findCryptoDeposit(hash("aa"), 4), undefined);
+  assert.equal((await s.addCryptoDeposit({ ...deposit, id: "dep_dup", txHash: hash("aA") })).id, "dep_1", "one row per (chainId, txHash, logIndex)");
+  assert.equal((await s.findCryptoDeposit(84532, hash("AA"), 3))?.id, "dep_1");
+  assert.equal(await s.findCryptoDeposit(84532, hash("aa"), 4), undefined);
+  assert.equal(await s.findCryptoDeposit(8453, hash("aa"), 3), undefined, "another chain's log is another deposit");
+  assert.equal((await s.addCryptoDeposit({ ...deposit, id: "dep_other_chain", chainId: 8453 })).id, "dep_other_chain", "the same hash and index on another chain is its own row");
   assert.equal((await s.updateCryptoDeposit("dep_1", { holding: "held" } as any)).holding, "held");
   assert.equal(await s.cryptoDepositCursor(84532), undefined);
   await s.setCryptoDepositCursor(84532, 12_345_678_901_234_567_890n);
@@ -376,7 +396,7 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
 
   // ── list() returns each collection as it was written ─────────────────────
   assert.deepEqual((await s.list("users")).map((u) => u.id), ["u_a", "u_b"]);
-  assert.deepEqual((await s.list("quotes")).map((x) => x.id), ["q_kept", "q_1"]);
+  assert.deepEqual((await s.list("quotes")).map((x) => x.id), ["q_kept", "q_1", "q_late"]);
   assert.deepEqual(await s.list("processedMoneriumOrders"), ["ord-2", "ord-1"]);
   assert.deepEqual(await s.list("processedMoneriumWebhooks"), ["wh-1"]);
   assert.deepEqual(await s.list("cryptoDepositCursor"), { "84532": "12345678901234567891" });

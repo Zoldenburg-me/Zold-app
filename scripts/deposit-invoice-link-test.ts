@@ -49,7 +49,7 @@ const invoice = async (over: Record<string, unknown> = {}) => {
     id, orgId: ORG, direction: "outgoing", state: "SUBMITTED", linkTokenHash: randomBytes(16).toString("hex"),
     lines: [{ description: "Work", quantity: "1", unitPrice: "100.00", amount: "100.00" }],
     currency: "EUR", total: "100.00", createdByMemberId: "m_u_owner", createdAt: now, updatedAt: now,
-    issued: { number: "RE-1", issueDate: now.slice(0, 10), netCents: 10000, vatCents: 0, grossCents: 10000, currency: "EUR" },
+    issued: { number: `RE-${id}`, issueDate: now.slice(0, 10), netCents: 10000, vatCents: 0, grossCents: 10000, currency: "EUR" },
     ...over,
   } as any);
   return id;

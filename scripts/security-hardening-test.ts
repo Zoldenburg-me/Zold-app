@@ -40,6 +40,11 @@ async function check(name: string, fn: () => void | Promise<void>) {
   try { await fn(); console.log(`  ok  ${name}`); }
   catch (err) { failed++; console.error(`  FAIL ${name}\n       ${(err as Error).message}`); }
 }
+/** A check of the JSON file itself; npm run check:pg runs this suite on Postgres too. */
+async function checkJsonFile(name: string, fn: () => void | Promise<void>) {
+  if (process.env.STORE_BACKEND === "postgres") return console.log(`  skip ${name} (the JSON file; this run is on Postgres)`);
+  await check(name, fn);
+}
 
 console.log("password policy");
 await check("too short, common, low-variety, sequential and contextual passwords are refused", () => {
@@ -235,7 +240,7 @@ await check("the email check answers a hostile 60,000-character address at once"
   assert.equal(emailLooksValid("a@b" + ".c".repeat(30_000) + "@"), false);
   assert.ok(Date.now() - t < 50, `took ${Date.now() - t} ms`);
 });
-await check("writes inside store.tx reach the file once, at its end", async () => {
+await checkJsonFile("writes inside store.tx reach the file once, at its end", async () => {
   const { readFileSync } = await import("node:fs");
   const onDisk = () => readFileSync(process.env.TRANSF_DB_PATH!, "utf8");
   await store.tx(async () => {
@@ -433,7 +438,7 @@ console.log("a passkey replaced by recovery while an approval is being verified"
 }
 
 console.log("database file");
-await check("the database file is readable by its owner only, even over a stale world-readable .tmp", () => {
+await checkJsonFile("the database file is readable by its owner only, even over a stale world-readable .tmp", () => {
   const dbPath = process.env.TRANSF_DB_PATH!;
   rmSync(dbPath, { force: true });
   writeFileSync(dbPath + ".tmp", "{}", { mode: 0o644 });
@@ -441,7 +446,7 @@ await check("the database file is readable by its owner only, even over a stale 
   persist();
   assert.equal(statSync(dbPath).mode & 0o777, 0o600);
 });
-await check("a store write under umask 022 replaces the database file at mode 600, and a new store dir is 700", async () => {
+await checkJsonFile("a store write under umask 022 replaces the database file at mode 600, and a new store dir is 700", async () => {
   const dbPath = process.env.TRANSF_DB_PATH!;
   const { auditEntry } = await import("../services/api/src/audit.js");
   const oldUmask = process.umask(0o022);

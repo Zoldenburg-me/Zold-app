@@ -167,7 +167,7 @@ async function prepareTransferFromQuote(
     }
     hold.id = held.holdId;
     if (!(await store.consumeQuote(quote.id))) {
-      return res.status(409).json({ error: "quote already consumed" });
+      return res.status(409).json({ error: "quote already consumed or expired" });
     }
     // Fix the exact terms the device is asked to sign. Nothing moves until a
     // matching signature comes back to /authorize. The destination commitment

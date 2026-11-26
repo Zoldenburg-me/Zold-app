@@ -22,7 +22,7 @@ import { conditionalWriteSuite, storeSuite } from "./_store-suite.js";
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-store-pg-")), "db.json");
 
 const { createPgStore } = await import("../services/api/src/store/pg/backend.js");
-const { migrate } = await import("../services/api/src/store/pg/migrate.js");
+const { migrate, readMigrations } = await import("../services/api/src/store/pg/migrate.js");
 const { openPool } = await import("../services/api/src/store/pg/sql.js");
 
 const adminUrl = process.env.TEST_DATABASE_URL || "postgresql:///postgres?host=/tmp";
@@ -66,7 +66,7 @@ try {
   const b = open();
   const [ra, rb] = await Promise.all([migrate(a), migrate(b)]);
   // Each runner takes the lock per file, so the two may share the files out.
-  assert.deepEqual([...ra, ...rb].sort((x, y) => x - y), [1, 2], "each file applied once, by one runner");
+  assert.deepEqual([...ra, ...rb].sort((x, y) => x - y), readMigrations().map((m) => m.version), "each file applied once, by one runner");
   console.log(`ok - two parallel migration runners apply each file once (server_version_num ${version})`);
 
   const s = createPgStore(a);

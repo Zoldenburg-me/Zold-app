@@ -112,7 +112,8 @@ export function createTransferRouter(deps: TransferDeps) {
         return res.status(409).json({ error: `quote already ${quote.status.toLowerCase()}` });
       }
       if (isExpired(quote)) {
-        await store.updateQuote(quote.id, { status: "EXPIRED" });
+        // Only from OPEN: a parallel request may have consumed it meanwhile.
+        await store.expireQuote(quote.id);
         return res.status(410).json({ error: "quote expired, request a new one" });
       }
       if (typeof recipientName !== "string" || !recipientName.trim() || recipientName.length > 140) {

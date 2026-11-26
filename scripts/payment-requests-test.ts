@@ -388,12 +388,12 @@ try {
     const pageFor = (handle: string, address: `0x${string}`) => ({ ...miriam.paymentPage, handle, depositAddress: address, recipientAddress: address });
     const aAddr = `0x${randomBytes(20).toString("hex")}` as `0x${string}`;
     const bAddr = `0x${randomBytes(20).toString("hex")}` as `0x${string}`;
-    const amira: any = { ...miriam, id: randomUUID(), name: "Amira A", email: "amira@example.com", address: aAddr, passkeySafe: { status: "active", address: aAddr }, paymentPage: pageFor("acme-test", aAddr) };
+    const amira: any = { ...miriam, passkey: { ...miriam.passkey, credentialId: "cred-a" }, id: randomUUID(), name: "Amira A", email: "amira@example.com", address: aAddr, passkeySafe: { status: "active", address: aAddr }, paymentPage: pageFor("acme-test", aAddr) };
     await store.addUser(amira);
     const minted = await call("POST", `/api/users/${amira.id}/payment-requests`, { amountEur: 40 }, amira.id);
     await store.updateUser(amira.id, { paymentPage: pageFor("a-other", aAddr) });
     check("a link minted under a handle its payee gave up still opens while nobody holds it", (await call("GET", `/api/pay/acme-test/${minted.body.code}`)).status === 200);
-    const bruno: any = { ...miriam, id: randomUUID(), name: "Bruno B", email: "bruno@example.com", address: bAddr, passkeySafe: { status: "active", address: bAddr }, paymentPage: pageFor("acme-test", bAddr) };
+    const bruno: any = { ...miriam, passkey: { ...miriam.passkey, credentialId: "cred-b" }, id: randomUUID(), name: "Bruno B", email: "bruno@example.com", address: bAddr, passkeySafe: { status: "active", address: bAddr }, paymentPage: pageFor("acme-test", bAddr) };
     await store.addUser(bruno);
     const squatted = await call("GET", `/api/pay/acme-test/${minted.body.code}`);
     check("once another user claims that handle, the old payee's link under it is a 404", squatted.status === 404, `${squatted.status} ${JSON.stringify(squatted.body).slice(0, 200)}`);
@@ -447,8 +447,10 @@ try {
     provider: "monerium", identifier: {}, address: owner, backingUserId: miriam.id,
     createdAt: nowIso, updatedAt: nowIso,
   } as any);
+  // One issued number per invoice: the store refuses a second (invoices_org_number).
+  let issuedSeq = 0;
   const issuedSnapshot = (grossCents: number, over: any = {}) => ({
-    number: "RE-2026-0001", issueDate: nowIso.slice(0, 10),
+    number: `RE-2026-${String(++issuedSeq).padStart(4, "0")}`, issueDate: nowIso.slice(0, 10),
     issuer: { name: "Miriam Zoldenburg" }, recipient: { name: "A Customer" },
     vatTreatment: { kind: "exempt", reason: "kleinunternehmer" },
     netCents: grossCents, vatCents: 0, grossCents,
@@ -768,11 +770,24 @@ try {
   check("the owner's list carries every link, newest first, with what the payee can offer — and nothing a refusal created", list.body.requests.length === 9 && list.body.methods.length === 2 && Date.parse(list.body.requests[0].createdAt) >= Date.parse(list.body.requests[1].createdAt), `${list.body.requests.length}`);
   {
     // §2: the sweep reads the open requests, then awaits; a payment recorded
-    // in between keeps the request PAID. The store runs calls in the order
-    // made, so the payment lands between the sweep's read and its write.
+    // in between keeps the request PAID. The payment is made to land after
+    // the sweep's read and before its write, on either backend.
     const late = await call("POST", `/api/users/${miriam.id}/payment-requests`, { amountEur: 6, methods: ["bank"], expiresAt: new Date(Date.now() + 90_000).toISOString() }, miriam.id);
     await store.updatePaymentRequest(late.body.id, { expiresAt: new Date(Date.now() - 1000).toISOString() });
-    const [swept3] = await Promise.all([routes.sweepPaymentRequests(), store.updatePaymentRequest(late.body.id, { state: "PAID", paidAt: nowIso })]);
+    const { updatePaymentRequestFrom } = store;
+    let paid: Promise<unknown> | undefined;
+    Object.assign(store, {
+      updatePaymentRequestFrom: async (...a: Parameters<typeof updatePaymentRequestFrom>) => {
+        await (paid ??= store.updatePaymentRequest(late.body.id, { state: "PAID", paidAt: nowIso }));
+        return updatePaymentRequestFrom(...a);
+      },
+    });
+    let swept3: Awaited<ReturnType<typeof routes.sweepPaymentRequests>>;
+    try {
+      swept3 = await routes.sweepPaymentRequests();
+    } finally {
+      Object.assign(store, { updatePaymentRequestFrom });
+    }
     check("a payment recorded while the expiry sweep runs keeps the request PAID", swept3.expired === 0 && (await store.findPaymentRequest(late.body.id))!.state === "PAID", JSON.stringify(swept3));
   }
 
@@ -785,7 +800,7 @@ try {
     candide.usdc = addrs().usdc;
     const safe = `0x${randomBytes(20).toString("hex")}` as `0x${string}`;
     const ravi: any = {
-      ...miriam, id: randomUUID(), email: "ravi@example.com", address: safe, passkeySafe: { status: "active", address: safe },
+      ...miriam, passkey: { ...miriam.passkey, credentialId: "cred-r" }, id: randomUUID(), email: "ravi@example.com", address: safe, passkeySafe: { status: "active", address: safe },
       paymentPage: {
         handle: "ravi", depositAddress: FORWARDER, recipientAddress: safe,
         forwarder: { provider: "candide", recipient: safe, destinationChainId: 31337, sourceChainIds: [31337], custodialWithdrawer: `0x${"ee".repeat(20)}`, active: true, expiresAt: new Date(Date.now() + 10 * 86_400_000).toISOString(), activatedAt: nowIso },

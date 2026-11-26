@@ -13,8 +13,12 @@
  * ./store/db.ts; both are re-exported here.
  */
 import { randomUUID } from "node:crypto";
-import { beginWrites, db, endWrites, persist, pruneSessions, seedChartOfAccounts, type Db } from "./store/db.js";
-import { jsonBackend } from "./store/backend.js";
+import { beginWrites, db, endWrites, initStore as initJsonStore, persist, pruneSessions, seedChartOfAccounts, type Db } from "./store/db.js";
+import { jsonBackend, type StoreBackend } from "./store/backend.js";
+import { createPgStore } from "./store/pg/backend.js";
+import { assertSchemaCurrent } from "./store/pg/migrate.js";
+import { openPool, pgPoolConfig, type Database } from "./store/pg/sql.js";
+import { DATABASE_CA, DATABASE_URL, IS_REAL_MONEY_CHAIN, STORE_BACKEND } from "./config/env.js";
 import { auditEntry } from "./audit.js";
 import type {
   Account,
@@ -46,6 +50,7 @@ import {
   followIban,
     hashOnRecordIn,
   passkeyUsePatch,
+  quoteConsumable,
   emailCodeAttemptPatch,
   reviewRefundTx,
   sessionDead,
@@ -78,7 +83,6 @@ import type {
 import { describeCause } from "./http/log-cause.js";
 
 export * from "./store/types.js";
-export { initStore } from "./store/db.js";
 
 export { REVIEW_EVIDENCE_MAX, REVIEW_NOTE_MAX, REVIEW_NOTE_MIN } from "./store/rules.js";
 
@@ -432,17 +436,23 @@ export const jsonCore = {
   isOrderProcessed(orderId: string) {
     return db.processedMoneriumOrders.includes(orderId);
   },
-  markOrderProcessed(orderId: string) {
-    if (db.processedMoneriumOrders.includes(orderId)) return;
+  /** Claim an order as recorded, once: false when it already was (§2,
+   *  Monerium order dedupe; Postgres: the order id's primary key). */
+  markOrderProcessed(orderId: string): boolean {
+    if (db.processedMoneriumOrders.includes(orderId)) return false;
     db.processedMoneriumOrders.push(orderId);
     persist();
+    return true;
   },
   isWebhookProcessed(webhookId: string) {
     return db.processedMoneriumWebhooks.includes(webhookId);
   },
-  markWebhookProcessed(webhookId: string) {
+  /** Mark a webhook delivery handled, once: false when it already was. */
+  markWebhookProcessed(webhookId: string): boolean {
+    if (db.processedMoneriumWebhooks.includes(webhookId)) return false;
     db.processedMoneriumWebhooks.push(webhookId);
     persist();
+    return true;
   },
   addQuote(q: Quote) {
     // A quote nobody took is worth nothing a day after it expired, and every
@@ -460,11 +470,24 @@ export const jsonCore = {
     persist();
     return q;
   },
-  consumeQuote(id: string) {
+  /**
+   * Consume an OPEN quote that has not expired, once (§2, quote → transfer).
+   * The expiry is checked here, on the stored row, not only by the caller:
+   * a quote read before an await can expire before it is consumed.
+   */
+  consumeQuote(id: string, now = Date.now()) {
     const q = db.quotes.find((x) => x.id === id);
     if (!q) throw new Error(`unknown quote ${id}`);
-    if ((q.status ?? "OPEN") !== "OPEN") return false;
+    if (!quoteConsumable(q, now)) return false;
     q.status = "CONSUMED";
+    persist();
+    return true;
+  },
+  /** Mark an OPEN quote EXPIRED; never a consumed one. False when it was not OPEN. */
+  expireQuote(id: string) {
+    const q = db.quotes.find((x) => x.id === id);
+    if (!q || (q.status ?? "OPEN") !== "OPEN") return false;
+    q.status = "EXPIRED";
     persist();
     return true;
   },
@@ -718,10 +741,17 @@ export const jsonCore = {
   shopifyDelivery(id: string): ShopifyDelivery | undefined {
     return db.shopifyDeliveries.find((d) => d.id === id);
   },
-  /** Record a delivery the first time it arrives, dropping those past 72 hours. */
+  /** Record a delivery the first time it arrives, dropping those past 72
+   *  hours. Returns the stored row: `d`, or the one recorded first under
+   *  that id, whose shop the caller checks (§2, Shopify delivery dedupe). */
   recordShopifyDelivery(d: ShopifyDelivery) {
     const stale = Date.now() - 72 * 3_600_000;
     db.shopifyDeliveries = db.shopifyDeliveries.filter((x) => Date.parse(x.at) > stale);
+    const existing = db.shopifyDeliveries.find((x) => x.id === d.id);
+    if (existing) {
+      persist();
+      return existing;
+    }
     db.shopifyDeliveries.push(d);
     persist();
     return d;
@@ -946,15 +976,16 @@ export const jsonCore = {
   },
 
   /** An ERC-20 transfer is identified by its tx and position in it. */
-  findCryptoDeposit(txHash: string, logIndex: number) {
+  /** The deposit of one Transfer log on one chain (§2, crypto deposits). */
+  findCryptoDeposit(chainId: number, txHash: string, logIndex: number) {
     return db.cryptoDeposits.find(
-      (d) => d.txHash.toLowerCase() === txHash.toLowerCase() && d.logIndex === logIndex,
+      (d) => d.chainId === chainId && d.txHash.toLowerCase() === txHash.toLowerCase() && d.logIndex === logIndex,
     );
   },
   /**
    * Record a deposit, once.
    *
-   * Idempotent on (txHash, logIndex) — the chain's own identity for a
+   * Idempotent on (chainId, txHash, logIndex) — the chain's own identity for a
    * transfer — because the poller's dedupe check and this write are separated
    * by an await (the receipt's rate lookup), and the poll runs on a bare
    * setInterval that does not wait for the previous tick. Two overlapping
@@ -963,9 +994,7 @@ export const jsonCore = {
    * Returning the existing row makes the loser of that race a no-op.
    */
   addCryptoDeposit(d: CryptoDeposit) {
-    const existing = db.cryptoDeposits.find(
-      (x) => x.txHash.toLowerCase() === d.txHash.toLowerCase() && x.logIndex === d.logIndex,
-    );
+    const existing = jsonCore.findCryptoDeposit(d.chainId, d.txHash, d.logIndex);
     if (existing) return existing;
     db.cryptoDeposits.push(d);
     persist();
@@ -1120,7 +1149,11 @@ export const jsonCore = {
     const patch = acceptInviteOnRow(m, tokenHash, userId, db.members.filter((x) => x.orgId === m.orgId), at);
     return patch ? jsonCore.updateMember(id, patch) : null;
   },
-  addAccount(a: Account) {
+  /** Add an account, or null when another account is at its address: one
+   *  account per Safe (§2, one Safe two accounts; Postgres: the unique key). */
+  addAccount(a: Account): Account | null {
+    const at = a.address?.toLowerCase();
+    if (at && db.accounts.some((x) => x.address?.toLowerCase() === at)) return null;
     db.accounts.push(a);
     persist();
     return a;
@@ -1391,5 +1424,28 @@ export const jsonCore = {
   },
 };
 
-/** The store (store/backend.ts): every method async, behind one mutex. */
-export const store = jsonBackend(jsonCore);
+/** The Postgres database when STORE_BACKEND=postgres (config/env.ts). */
+const pgDatabase: Database | undefined =
+  STORE_BACKEND === "postgres" ? openPool(DATABASE_URL, { ca: DATABASE_CA, realMoney: IS_REAL_MONEY_CHAIN }) : undefined;
+
+/**
+ * The store (store/backend.ts): every method async. JSON: behind one mutex,
+ * over db.json. Postgres: one transaction per write over DATABASE_URL.
+ */
+export const store: StoreBackend = pgDatabase ? createPgStore(pgDatabase) : jsonBackend(jsonCore);
+
+/**
+ * Open the store before anything reads it. JSON: load db.json and run its
+ * load-time migrations. Postgres: refuse a schema other than the migration
+ * files make (store/pg/migrate.ts); the API never migrates.
+ */
+export async function initStore(): Promise<void> {
+  if (pgDatabase) await assertSchemaCurrent(pgDatabase);
+  else await initJsonStore();
+}
+
+/** The settings of the start lock's own connection (store/pg/start-lock.ts),
+ *  or undefined on JSON, which needs none. */
+export function startLockConfig() {
+  return pgDatabase ? pgPoolConfig(DATABASE_URL, { ca: DATABASE_CA, realMoney: IS_REAL_MONEY_CHAIN }) : undefined;
+}

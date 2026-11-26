@@ -147,7 +147,10 @@ await check("one invitation accepted twice in parallel: spent once", async () =>
     invite: { tokenHash: createHash("sha256").update(token).digest("hex"), expiresAt: new Date(Date.now() + 86_400_000).toISOString() },
   } as any);
   const answers = await Promise.all([1, 2].map(() => call("POST", "/api/orgs/invites/accept", "u_invitee", { token })));
-  assert.deepEqual(answers.map((r) => r.status).sort(), [200, 404], JSON.stringify(answers.map((r) => r.data)));
+  // The loser finds the invite spent (404) or, on Postgres where both read it
+  // before either committed, loses the claim (409); either way it is refused.
+  const [won, lost] = answers.map((r) => r.status).sort();
+  assert.ok(won === 200 && [404, 409].includes(lost), JSON.stringify(answers.map((r) => r.data)));
   assert.equal((await store.membersOf("org_b")).filter((m) => m.userId === "u_invitee").length, 1);
 });
 

@@ -1,6 +1,7 @@
 import express from "express";
 import { API_HOST, API_PORT, BRIDGE, CHAIN_ID, CRYPTO_IN, CUSTODY, IS_REAL_MONEY_CHAIN, LIQUIDITY, PAYMENT_REQUESTS, RECOVERY, moneriumSandboxEnabled, SECURITY, UNREAD_DEPLOYER_KEYS, WALLET_SYNC } from "./config.js";
-import { initStore } from "./store.js";
+import { initStore, startLockConfig } from "./store.js";
+import { takeStartLock } from "./store/pg/start-lock.js";
 import {
   moneriumApiKeysAvailable,
   moneriumEnvironment,
@@ -324,6 +325,10 @@ app.use(((err, req, res, next) => {
 // exit (http/async-errors.ts).
 routeAsyncRejections(app);
 
+// One API process per deployment (store/pg/start-lock.ts): on Postgres the
+// lock is taken before the store is read, a sweep runs or a port opens.
+const lockConfig = startLockConfig();
+if (lockConfig) await takeStartLock(lockConfig);
 await initStore();
 // Fail fast on a chain mismatch: signatures built for the wrong chain id are
 // rejected as "bad authorization", which reads like a signing bug.

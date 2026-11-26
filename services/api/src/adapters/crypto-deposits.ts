@@ -390,7 +390,7 @@ export async function settleConvertedDeposit(
   // The scanner read this transaction before the conversion was recorded and
   // booked its output as money in. Crediting it as well would book it twice;
   // the scanner's row stays the one record of that EURe until reviewed.
-  if ((await someSeq(output.logIndexes, async (i) => await store.findCryptoDeposit(swapTx, i)))) {
+  if ((await someSeq(output.logIndexes, async (i) => await store.findCryptoDeposit(CHAIN_ID, swapTx, i)))) {
     return await store.updateCryptoDeposit(deposit.id, {
       holding: "refused",
       reason: "what the swap delivered was already recorded as a deposit — left for review rather than credited twice",
@@ -567,7 +567,7 @@ export async function settleUnconfirmedConversions(outcome = userOperationOutcom
     }
     if (!output) continue;
     // Output the scanner booked first stays its record, as settling would leave it.
-    const booked = await someSeq(output.logIndexes, async (i) => await store.findCryptoDeposit(op.txHash, i));
+    const booked = await someSeq(output.logIndexes, async (i) => await store.findCryptoDeposit(CHAIN_ID, op.txHash, i));
     const txs = [
       ...rest,
       { step: "safe.swap(usdc->eure)", hash: op.txHash, outputLogIndexes: booked ? [] : output.logIndexes },
@@ -805,7 +805,7 @@ async function scanCryptoDeposits(head: bigint): Promise<{ found: number; more: 
       if (token.token === "EURE" && from === (addrs().swapper ?? "").toLowerCase()) continue;
       const txHash = log.transactionHash!;
       const logIndex = Number(log.logIndex);
-      if ((await store.findCryptoDeposit(txHash, logIndex))) continue;
+      if ((await store.findCryptoDeposit(CHAIN_ID, txHash, logIndex))) continue;
 
       const pageMatch = matches.find((m) => m.source === "payment-page" && m.user.paymentPage?.autoConvert);
       const match = token.token === "USDC" && pageMatch ? pageMatch : matches[0];

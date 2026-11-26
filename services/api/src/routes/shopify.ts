@@ -684,12 +684,12 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       if (!c) return;
       const deliveryId = String(req.header("x-shopify-webhook-id") ?? "").trim();
       if (!deliveryId || deliveryId.length > 200) return res.status(400).json({ error: "X-Shopify-Webhook-Id is required" });
-      const seen = await store.shopifyDelivery(deliveryId);
-      if (seen && seen.shop !== c.shop) {
+      // The stored row: this delivery, or the one recorded first under its id.
+      const seen = await store.recordShopifyDelivery({ id: deliveryId, shop: c.shop, at: new Date().toISOString(), handled: false });
+      if (seen.shop !== c.shop) {
         return res.status(401).json({ error: "this delivery was signed for another store" });
       }
-      if (seen?.handled) return res.status(200).json({ ok: true, duplicate: true });
-      if (!seen) await store.recordShopifyDelivery({ id: deliveryId, shop: c.shop, at: new Date().toISOString(), handled: false });
+      if (seen.handled) return res.status(200).json({ ok: true, duplicate: true });
       // Handled once it has been answered without a server error; a failed one
       // is processed again on Shopify's retry.
       res.once("finish", () => {

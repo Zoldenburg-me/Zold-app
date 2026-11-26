@@ -253,7 +253,8 @@ await check("nor change the payee name, BIC or bank printed beside the IBAN, tho
   // Settings sends holder, IBAN and BIC on every save and never the bank name.
   const ok = await call("PATCH", "/api/orgs/org_ga/invoicing/profile", "u_payer", { bank: { holder: "Ada Mba SARL", iban: "", bic: "ugab gali" }, paymentTermsNote: "Net 30" });
   assert.equal(ok.status, 200, JSON.stringify(ok.data));
-  assert.deepEqual((await store.findOrganisation("org_ga"))!.invoicing!.bank, { holder: "Ada Mba SARL", iban: undefined, bic: "UGABGALI", bankName: "UGB" });
+  // As stored: an undefined key is no key once written (Postgres keeps JSON).
+  assert.deepEqual(JSON.parse(JSON.stringify((await store.findOrganisation("org_ga"))!.invoicing!.bank)), { holder: "Ada Mba SARL", bic: "UGABGALI", bankName: "UGB" });
 });
 
 await check("registration text is one bounded line", async () => {

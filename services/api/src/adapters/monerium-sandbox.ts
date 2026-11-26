@@ -539,8 +539,15 @@ async function mirrorOrder(order: MoneriumOrder): Promise<MirrorOutcome> {
         return "ignored";
       }
     }
-    await store.markOrderProcessed(order.id);
-    await noteMoneriumIssue(order, holder);
+    // The claim and the issue record are one transaction: the order id's key
+    // refuses a second recording whatever reached here (a second process, or
+    // a caller that got past `recording`), and a crash keeps both or neither.
+    const recorded = await store.tx(async () => {
+      if (!(await store.markOrderProcessed(order.id))) return false;
+      await noteMoneriumIssue(order, holder);
+      return true;
+    });
+    if (!recorded) return "duplicate";
     console.log(`monerium: recorded issue order ${order.id} (€${amount}) for ${bookHolderLabel(holder)}`);
     return "recorded";
   } finally {

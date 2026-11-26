@@ -17,8 +17,8 @@
  * which a second process can hold the lock next to this one (single-flight.ts
  * says what holds then).
  *
- * Not called by the API yet: config/env.ts refuses STORE_BACKEND=postgres
- * until the cut-over (§8 S8), which takes this lock before `listen`.
+ * server.ts takes it on STORE_BACKEND=postgres, before it reads the store,
+ * starts a sweep or listens.
  */
 import pg from "pg";
 
