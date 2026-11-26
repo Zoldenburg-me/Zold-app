@@ -12,7 +12,9 @@ import type { Account, DraftActivity, DraftPayment, Invoice, LedgerEntry, Member
 import { auditEntry, type AuditEntry } from "../audit.js";
 import { matchesPayoutEvidence } from "../transfers/review-evidence.js";
 import { OPERATOR_REFUND_STEP, REVIEW_RESOLUTION_STATES } from "./types.js";
-import type { ConversionSweep, CryptoDeposit, PaymentRequest, Quote, ReviewResolutionState, Transfer, User } from "./types.js";
+import type { ConversionSweep, CryptoDeposit, OutboxDraft, OutboxOutcome, OutboxRow, PaymentRequest, Quote, ReviewResolutionState, Transfer, User } from "./types.js";
+import { randomUUID } from "node:crypto";
+import { describeCause } from "../http/log-cause.js";
 
 /** Bounds of an operator's review-resolution note. */
 export const REVIEW_NOTE_MIN = 20;
@@ -399,4 +401,78 @@ export function acceptInviteOnRow(m: Member, tokenHash: string, userId: string, 
 export function settlementOnRow(i: Invoice, ref: string, update: (i: Invoice) => Partial<Invoice>, replace = false): Partial<Invoice> | null {
   if (!replace && (i.settlements ?? []).some((s) => settlementRef(s) === ref)) return null;
   return update(i);
+}
+
+// ── Outbox (docs/postgres-store-design.md §5) ─────────────────────────────
+
+/**
+ * A state listener runs inside the write that moved the state, on a copy of
+ * the row, and returns what to put in the outbox in that same write. It must
+ * not do I/O: what it would tell somebody goes out from the outbox after the
+ * commit (outbox.ts).
+ */
+export type StateListener<R extends { state: string }> = (row: R, from: R["state"]) => OutboxDraft | undefined | void;
+
+/** The drafts the listeners return for one state change. A listener that
+ *  throws is logged and skipped: it must not fail the write that moved the
+ *  state, nor stop the next listener. */
+export function outboxDraftsFor<R extends { id: string; state: string }>(listeners: StateListener<R>[], row: R, from: R["state"], what: string): OutboxDraft[] {
+  const out: OutboxDraft[] = [];
+  for (const listener of listeners) {
+    try {
+      const d = listener(structuredClone(row), from);
+      if (d) out.push(structuredClone(d));
+    } catch (err) {
+      console.error(`store: state listener failed for ${what}: ${describeCause(err)}`);
+    }
+  }
+  return out;
+}
+
+/** Tell each listener that outbox rows were written. Logged, never thrown:
+ *  the write has committed. */
+export function announceOutbox(listeners: (() => void)[]): void {
+  for (const fn of listeners) {
+    try {
+      fn();
+    } catch (err) {
+      console.error(`store: outbox listener failed: ${describeCause(err)}`);
+    }
+  }
+}
+
+export function newOutboxRow(d: OutboxDraft, now = new Date()): OutboxRow {
+  const at = now.toISOString();
+  return { id: `msg_${randomUUID()}`, kind: d.kind, payload: d.payload, ...(d.key !== undefined ? { key: d.key } : {}), createdAt: at, attempts: 0, nextAttemptAt: at };
+}
+
+const outboxDue = (r: OutboxRow, at: string) => !r.deliveredAt && !r.deadAt && r.nextAttemptAt <= at && (!r.claimedUntil || r.claimedUntil <= at);
+
+/** The JSON backend's claim: the due rows of `kinds`, oldest due first, up
+ *  to `limit`, each claimed until `now + leaseMs` with its attempt counted. */
+export function claimOutboxOn(rows: OutboxRow[], limit: number, leaseMs: number, now: Date, kinds: readonly string[]): OutboxRow[] {
+  const at = now.toISOString();
+  const due = rows.filter((r) => kinds.includes(r.kind) && outboxDue(r, at)).sort((a, b) => (a.nextAttemptAt < b.nextAttemptAt ? -1 : a.nextAttemptAt > b.nextAttemptAt ? 1 : 0));
+  const until = new Date(now.getTime() + leaseMs).toISOString();
+  return due.slice(0, limit).map((r) => {
+    r.attempts += 1;
+    r.claimedUntil = until;
+    return r;
+  });
+}
+
+/** End a claimed attempt on the row; false when it is not claimed (or done). */
+export function settleOutboxOn(r: OutboxRow, outcome: OutboxOutcome, now: Date): boolean {
+  if (!r.claimedUntil || r.deliveredAt || r.deadAt) return false;
+  delete r.claimedUntil;
+  if (outcome.ok) {
+    r.deliveredAt = now.toISOString();
+  } else if ("dead" in outcome) {
+    r.deadAt = now.toISOString();
+    r.lastError = outcome.error;
+  } else {
+    r.nextAttemptAt = new Date(now.getTime() + outcome.retryInMs).toISOString();
+    r.lastError = outcome.error;
+  }
+  return true;
 }

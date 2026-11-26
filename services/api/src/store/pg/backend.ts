@@ -54,6 +54,10 @@ import {
   emailCodeAttemptPatch,
   reviewRefundTx,
   sessionDead,
+  announceOutbox,
+  newOutboxRow,
+  outboxDraftsFor,
+  type StateListener,
 } from "../rules.js";
 import type {
   ConversionSweep,
@@ -64,6 +68,8 @@ import type {
   Operator,
   OperatorCredential,
   OperatorSession,
+  OutboxDraft,
+  OutboxRow,
   PaymentRequest,
   PendingExecution,
   PendingSafeOp,
@@ -230,48 +236,78 @@ async function hashOnRecord(q: Sql, hash: string, userId: string): Promise<strin
   );
 }
 
-type TransferStateListener = (t: Transfer, from: Transfer["state"]) => void | Promise<void>;
-type PaymentRequestStateListener = (r: PaymentRequest, from: PaymentRequest["state"]) => void | Promise<void>;
-
 type TxFn = <T>(fn: (q: Sql) => Promise<T>) => Promise<T>;
 
+type OutboxSqlRow = {
+  id: string;
+  kind: string;
+  key: string | null;
+  payload: Record<string, unknown>;
+  created_at: Date | string;
+  attempts: number;
+  next_attempt_at: Date | string;
+  claimed_until: Date | string | null;
+  delivered_at: Date | string | null;
+  dead_at: Date | string | null;
+  last_error: string | null;
+};
+const iso = (v: Date | string) => new Date(v).toISOString();
+/** An `outbox` row in the shape the JSON backend keeps (OutboxRow). */
+function outboxRow(r: OutboxSqlRow): OutboxRow {
+  return {
+    id: r.id,
+    kind: r.kind,
+    payload: r.payload,
+    ...(r.key !== null ? { key: r.key } : {}),
+    createdAt: iso(r.created_at),
+    attempts: r.attempts,
+    nextAttemptAt: iso(r.next_attempt_at),
+    ...(r.claimed_until ? { claimedUntil: iso(r.claimed_until) } : {}),
+    ...(r.delivered_at ? { deliveredAt: iso(r.delivered_at) } : {}),
+    ...(r.dead_at ? { deadAt: iso(r.dead_at) } : {}),
+    ...(r.last_error !== null ? { lastError: r.last_error } : {}),
+  };
+}
+const OUTBOX_COLUMNS = "id, kind, key, payload, created_at, attempts, next_attempt_at, claimed_until, delivered_at, dead_at, last_error";
+
+/** Insert one outbox row in `t`'s transaction; null when its key is taken.
+ *  Due at once: `now()` is the transaction's start, before its commit. */
+async function insertOutbox(t: Sql, d: OutboxDraft): Promise<OutboxRow | null> {
+  const row = newOutboxRow(d);
+  const r = await t.query<OutboxSqlRow>(
+    `INSERT INTO outbox (id, kind, key, payload) VALUES ($1, $2, $3, $4::json) ON CONFLICT DO NOTHING RETURNING ${OUTBOX_COLUMNS}`,
+    [row.id, row.kind, row.key ?? null, JSON.stringify(row.payload)],
+  );
+  return r.rows[0] ? outboxRow(r.rows[0]) : null;
+}
+
 export function createPgStore(database: Database): StoreBackend {
-  const transferStateListeners: TransferStateListener[] = [];
-  const paymentRequestStateListeners: PaymentRequestStateListener[] = [];
+  const transferStateListeners: StateListener<Transfer>[] = [];
+  const paymentRequestStateListeners: StateListener<PaymentRequest>[] = [];
+  const outboxListeners: (() => void)[] = [];
 
   /** Run `fire` once the write has committed: at once outside a transaction,
    *  after its COMMIT inside one, and never if it rolls back. */
   const afterCommit = (fire: () => void) => {
     if (!deferToCommit(fire)) fire();
   };
-  /** Logged, never thrown into the write: it has committed. */
-  function announceStateChange(t: Transfer, from: Transfer["state"]) {
-    if (t.state === from) return;
-    afterCommit(() => {
-      for (const listener of transferStateListeners) {
-        try {
-          Promise.resolve(listener(t, from)).catch((err) =>
-            console.error(`store: transfer state listener failed for ${t.id}: ${describeCause(err)}`),
-          );
-        } catch (err) {
-          console.error(`store: transfer state listener failed for ${t.id}: ${describeCause(err)}`);
-        }
-      }
-    });
+  /** Put the drafts in the outbox in `t`'s transaction, and tell the outbox's
+   *  listeners once it has committed. */
+  async function enqueueIn(t: Sql, drafts: OutboxDraft[]): Promise<OutboxRow[]> {
+    const written: OutboxRow[] = [];
+    for (const d of drafts) {
+      const row = await insertOutbox(t, d);
+      if (row) written.push(row);
+    }
+    if (written.length) afterCommit(() => announceOutbox(outboxListeners));
+    return written;
   }
-  function announcePaymentRequestState(r: PaymentRequest, from: PaymentRequest["state"]) {
-    if (r.state === from) return;
-    afterCommit(() => {
-      for (const listener of paymentRequestStateListeners) {
-        try {
-          Promise.resolve(listener(r, from)).catch((err) =>
-            console.error(`store: payment request state listener failed for ${r.id}: ${describeCause(err)}`),
-          );
-        } catch (err) {
-          console.error(`store: payment request state listener failed for ${r.id}: ${describeCause(err)}`);
-        }
-      }
-    });
+  /** What the listeners return for a state change, written in `t`'s transaction. */
+  async function announceStateChange(t: Sql, row: Transfer, from: Transfer["state"]) {
+    if (row.state !== from) await enqueueIn(t, outboxDraftsFor(transferStateListeners, row, from, `transfer ${row.id}`));
+  }
+  async function announcePaymentRequestState(t: Sql, r: PaymentRequest, from: PaymentRequest["state"]) {
+    if (r.state !== from) await enqueueIn(t, outboxDraftsFor(paymentRequestStateListeners, r, from, `payment request ${r.id}`));
   }
 
   /** The store's methods over `q`; `tx` runs a block as one transaction (on
@@ -317,32 +353,30 @@ export function createPgStore(database: Database): StoreBackend {
   }
   /** updateTransfer with a patch computed from the locked row. */
   async function patchTransfer(id: string, make: (row: Transfer) => Partial<Transfer>): Promise<Transfer> {
-    let from: Transfer["state"] = "CREATED";
-    const t = (await change<Transfer>(TABLE.transfers, id, `unknown transfer ${id}`, (row) => {
+    return tx(async (t) => {
+      const row = await locked<Transfer>(t, TABLE.transfers, id);
+      if (!row) throw new Error(`unknown transfer ${id}`);
       const p = transferPatchOnRow(row, make(structuredClone(row)));
-      from = row.state;
-      return Object.assign(row, p, { updatedAt: new Date().toISOString() });
-    }))!;
-    announceStateChange(t, from);
-    return t;
+      const from = row.state;
+      Object.assign(row, p, { updatedAt: new Date().toISOString() });
+      await save(t, TABLE.transfers, row);
+      await announceStateChange(t, row, from);
+      return row;
+    });
   }
   /** updatePaymentRequest with a patch computed from the locked row, or none. */
   async function patchPaymentRequest(id: string, make: (row: PaymentRequest) => Partial<PaymentRequest> | null) {
-    let from: PaymentRequest["state"] = "OPEN";
-    let written = false;
-    const r = (await tx(async (t) => {
+    return tx(async (t) => {
       const row = await locked<PaymentRequest>(t, TABLE.paymentRequests, id);
       if (!row) throw new Error(`unknown payment request ${id}`);
-      from = row.state;
+      const from = row.state;
       const p = make(structuredClone(row));
-      if (!p) return row;
-      written = true;
+      if (!p) return { request: row, from, written: false };
       Object.assign(row, p, { updatedAt: new Date().toISOString() });
       await save(t, TABLE.paymentRequests, row);
-      return row;
-    }))!;
-    if (written) announcePaymentRequestState(r, from);
-    return { request: r, from, written };
+      await announcePaymentRequestState(t, row, from);
+      return { request: row, from, written: true };
+    });
   }
   async function removeRow(table: Table, id: string): Promise<boolean> {
     const r = await q.query(`DELETE FROM ${table} WHERE id = $1 RETURNING id`, [id]);
@@ -362,6 +396,10 @@ export function createPgStore(database: Database): StoreBackend {
       if (name === "cryptoDepositCursor") {
         const r = await q.query<{ k: string; b: string }>("SELECT chain_key AS k, block::text AS b FROM crypto_deposit_cursor");
         return Object.fromEntries(r.rows.map((x) => [x.k, x.b])) as Db[K];
+      }
+      if (name === "outbox") {
+        const r = await q.query<OutboxSqlRow>(`SELECT ${OUTBOX_COLUMNS} FROM outbox ORDER BY seq`);
+        return r.rows.map(outboxRow) as Db[K];
       }
       if (name === "moneriumIssueOrders") {
         const r = await q.query<{ doc: MoneriumIssueRecord }>("SELECT doc FROM monerium_issue_orders ORDER BY seq");
@@ -652,16 +690,7 @@ export function createPgStore(database: Database): StoreBackend {
         t.updatedAt = now;
         return true;
       })) ?? false,
-    async updateTransfer(id, patch) {
-      let from: Transfer["state"] = "CREATED";
-      const t = (await change<Transfer>(TABLE.transfers, id, `unknown transfer ${id}`, (row) => {
-        const p = transferPatchOnRow(row, patch);
-        from = row.state;
-        return Object.assign(row, p, { updatedAt: new Date().toISOString() });
-      }))!;
-      announceStateChange(t, from);
-      return t;
-    },
+    updateTransfer: (id, patch) => patchTransfer(id, () => patch),
     appendTransferStep: (id, step, patch = {}) => patchTransfer(id, (row) => ({ ...patch, txs: [...row.txs, step] })),
     patchTransferSub: (id, key, fn, patch = {}) => patchTransfer(id, (row) => ({ ...patch, [key]: fn(row[key]) })),
     onTransferStateChange(listener) {
@@ -669,7 +698,7 @@ export function createPgStore(database: Database): StoreBackend {
     },
     async resolveTransferReview(id, r) {
       checkReviewResolution(r);
-      const { result, audit } = await tx(async (t) => {
+      const { result } = await tx(async (t) => {
         const row = await locked<Transfer>(t, TABLE.transfers, id);
         const refundTx = reviewRefundTx(r);
         // Two reviews of different transfers citing one refund tx lock
@@ -680,10 +709,10 @@ export function createPgStore(database: Database): StoreBackend {
         if (out.audit) {
           await save(t, TABLE.transfers, row!);
           await insert(t, TABLE.audit, out.audit);
+          if (out.result.ok) await announceStateChange(t, out.result.transfer, "MANUAL_REVIEW");
         }
         return out;
       });
-      if (audit && result.ok) announceStateChange(result.transfer, "MANUAL_REVIEW");
       return result;
     },
     async findReceiptShareByTransfer(transferId) {
@@ -703,15 +732,7 @@ export function createPgStore(database: Database): StoreBackend {
       await insert(q, TABLE.paymentRequests, r);
       return r;
     },
-    async updatePaymentRequest(id, patch) {
-      let from: PaymentRequest["state"] = "OPEN";
-      const r = (await change<PaymentRequest>(TABLE.paymentRequests, id, `unknown payment request ${id}`, (row) => {
-        from = row.state;
-        return Object.assign(row, patch, { updatedAt: new Date().toISOString() });
-      }))!;
-      announcePaymentRequestState(r, from);
-      return r;
-    },
+    updatePaymentRequest: async (id, patch) => (await patchPaymentRequest(id, () => patch)).request,
     updatePaymentRequestFrom: async (id, from, patch) => {
       const r = await patchPaymentRequest(id, (row) => (from.includes(row.state) ? patch : null));
       return r.written ? r.request : null;
@@ -723,6 +744,53 @@ export function createPgStore(database: Database): StoreBackend {
     recordPaymentRequestPayment: (id, apply) => patchPaymentRequest(id, apply),
     onPaymentRequestStateChange(listener) {
       paymentRequestStateListeners.push(listener);
+    },
+
+    enqueueOutbox: async (draft) => (await tx((t) => enqueueIn(t, [draft])))[0] ?? null,
+    claimOutbox: (limit, leaseMs, kinds) =>
+      tx(async (t) => {
+        // SKIP LOCKED: a row another claimer holds is passed over, not waited for.
+        const r = await t.query<OutboxSqlRow>(
+          `UPDATE outbox SET attempts = attempts + 1, claimed_until = now() + make_interval(secs => $2::double precision / 1000)
+           WHERE id IN (
+             SELECT id FROM outbox
+             WHERE delivered_at IS NULL AND dead_at IS NULL AND next_attempt_at <= now() AND (claimed_until IS NULL OR claimed_until <= now())
+               AND kind = ANY($3::text[])
+             ORDER BY next_attempt_at, seq LIMIT $1 FOR UPDATE SKIP LOCKED
+           )
+           RETURNING ${OUTBOX_COLUMNS}`,
+          [limit, leaseMs, kinds],
+        );
+        return r.rows.map(outboxRow).sort((a, b) => (a.nextAttemptAt < b.nextAttemptAt ? -1 : a.nextAttemptAt > b.nextAttemptAt ? 1 : 0));
+      }),
+    async settleOutbox(id, outcome) {
+      const open = "id = $1 AND claimed_until IS NOT NULL AND delivered_at IS NULL AND dead_at IS NULL";
+      const r = outcome.ok
+        ? await q.query(`UPDATE outbox SET claimed_until = NULL, delivered_at = now() WHERE ${open} RETURNING id`, [id])
+        : "dead" in outcome
+          ? await q.query(`UPDATE outbox SET claimed_until = NULL, dead_at = now(), last_error = $2 WHERE ${open} RETURNING id`, [id, outcome.error])
+          : await q.query(
+              `UPDATE outbox SET claimed_until = NULL, last_error = $2, next_attempt_at = now() + make_interval(secs => $3::double precision / 1000) WHERE ${open} RETURNING id`,
+              [id, outcome.error, outcome.retryInMs],
+            );
+      return r.rows.length > 0;
+    },
+    async pruneOutbox(before) {
+      const r = await q.query("DELETE FROM outbox WHERE delivered_at < $1::timestamptz RETURNING id", [before]);
+      return r.rows.length;
+    },
+    async outboxCounts() {
+      const r = await q.query<{ pending: string; dead: string }>(
+        "SELECT count(*) FILTER (WHERE delivered_at IS NULL AND dead_at IS NULL) AS pending, count(*) FILTER (WHERE dead_at IS NOT NULL) AS dead FROM outbox",
+      );
+      return { pending: Number(r.rows[0]!.pending), dead: Number(r.rows[0]!.dead) };
+    },
+    async findOutboxRow(id) {
+      const r = await q.query<OutboxSqlRow>(`SELECT ${OUTBOX_COLUMNS} FROM outbox WHERE id = $1`, [id]);
+      return r.rows[0] ? outboxRow(r.rows[0]) : undefined;
+    },
+    onOutboxWritten(listener) {
+      outboxListeners.push(listener);
     },
     findPaymentRequest: (id) => first<PaymentRequest>(q, TABLE.paymentRequests, "id = $1", [id]),
     findPaymentRequestByCode: (code) =>
@@ -1194,7 +1262,7 @@ export function createPgStore(database: Database): StoreBackend {
   const routed: Record<string, unknown> = {};
   for (const [name, f] of Object.entries(base)) {
     routed[name] =
-      typeof f !== "function" || name === "onTransferStateChange" || name === "onPaymentRequestStateChange"
+      typeof f !== "function" || name === "onTransferStateChange" || name === "onPaymentRequestStateChange" || name === "onOutboxWritten"
         ? f
         : (...args: unknown[]) => {
             const open = currentTx(owner);

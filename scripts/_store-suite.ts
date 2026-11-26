@@ -9,6 +9,7 @@
  */
 import assert from "node:assert/strict";
 import type { StoreBackend } from "../services/api/src/store/backend.js";
+import type { Sql } from "../services/api/src/store/pg/sql.js";
 import { DEFAULT_CHART, DEFAULT_RULES } from "../services/api/src/domain/coa.js";
 import { auditEntry } from "../services/api/src/audit.js";
 
@@ -599,4 +600,106 @@ export async function conditionalWriteSuite(s: StoreBackend): Promise<void> {
   // Rule 4 over an organisation: a write only while a check on it holds.
   assert.equal(await s.updateOrganisationIf("org_b", () => false, () => ({ name: "never" })), null);
   assert.equal((await s.updateOrganisationIf("org_b", (o) => o.name === "B 2", (o) => ({ name: `${o.name}!` })))?.name, "B 2!");
+}
+
+/**
+ * The outbox (outbox.ts, docs/postgres-store-design.md §5): rows written with
+ * the change they report, claimed once until their lease ends, settled
+ * delivered, due again or dead, deduped on their key.
+ */
+export async function outboxSuite(s: StoreBackend): Promise<void> {
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const KINDS = ["suite.a", "suite.k", "suite.l"];
+  const before = await s.outboxCounts();
+  const a = (await s.enqueueOutbox({ kind: "suite.a", payload: { n: 1 } }))!;
+  assert.match(a.id, /^msg_[0-9a-f-]{36}$/, "the row id is the receiver's idempotency key");
+  assert.equal(a.attempts, 0);
+  const k = (await s.enqueueOutbox({ kind: "suite.k", payload: { n: 2 }, key: "suite:k" }))!;
+  assert.equal(await s.enqueueOutbox({ kind: "suite.k", payload: { n: 3 }, key: "suite:k" }), null, "a second row with one key is not written");
+  assert.deepEqual(await s.outboxCounts(), { pending: before.pending + 2, dead: before.dead });
+
+  const claimed = (await s.claimOutbox(10, 60_000, KINDS)).filter((r) => r.kind.startsWith("suite."));
+  assert.deepEqual(claimed.map((r) => r.id).sort(), [a.id, k.id].sort(), "both due rows claimed");
+  assert.ok(claimed.every((r) => r.attempts === 1 && r.claimedUntil), "the attempt is counted at the claim");
+  assert.deepEqual((await s.claimOutbox(10, 60_000, KINDS)).filter((r) => r.kind.startsWith("suite.")), [], "a claimed row is not claimed again");
+
+  assert.equal(await s.settleOutbox(a.id, { ok: true }), true);
+  assert.equal(await s.settleOutbox(a.id, { ok: true }), false, "settled once");
+  assert.ok((await s.findOutboxRow(a.id))?.deliveredAt);
+  assert.equal(await s.settleOutbox(k.id, { ok: false, error: "HTTP 503", retryInMs: 0 }), true);
+  const again = (await s.claimOutbox(10, 60_000, KINDS)).filter((r) => r.kind.startsWith("suite."));
+  assert.deepEqual(again.map((r) => [r.id, r.attempts, r.lastError]), [[k.id, 2, "HTTP 503"]], "due again after its backoff, the attempt counted");
+  assert.equal(await s.settleOutbox(k.id, { ok: false, error: "HTTP 503", retryInMs: 3_600_000 }), true);
+  assert.deepEqual((await s.claimOutbox(10, 60_000, KINDS)).filter((r) => r.kind.startsWith("suite.")), [], "not before its backoff ends");
+
+  // Only the kinds asked for: a row whose kind has no handler is left alone.
+  const other = (await s.enqueueOutbox({ kind: "suite.unhandled", payload: {} }))!;
+  assert.deepEqual((await s.claimOutbox(10, 60_000, ["suite.a"])).map((r) => r.id), []);
+  assert.equal((await s.findOutboxRow(other.id))?.attempts, 0, "not claimed, no attempt counted");
+
+  // A claim whose lease ran out (a process that died delivering) is due again.
+  const l = (await s.enqueueOutbox({ kind: "suite.l", payload: {} }))!;
+  assert.equal((await s.claimOutbox(10, 1, KINDS)).filter((r) => r.id === l.id).length, 1);
+  await wait(20);
+  const reclaimed = (await s.claimOutbox(10, 60_000, KINDS)).find((r) => r.id === l.id);
+  assert.equal(reclaimed?.attempts, 2, "a lapsed claim is claimed again");
+  assert.equal(await s.settleOutbox(l.id, { ok: false, error: "gave up", dead: true }), true);
+  assert.equal((await s.findOutboxRow(l.id))?.lastError, "gave up");
+  assert.ok((await s.findOutboxRow(l.id))?.deadAt);
+  assert.deepEqual(await s.outboxCounts(), { pending: before.pending + 2, dead: before.dead + 1 });
+
+  // Pruning drops delivered rows only.
+  assert.ok((await s.pruneOutbox(new Date(Date.now() + 60_000).toISOString())) >= 1);
+  assert.equal(await s.findOutboxRow(a.id), undefined, "a delivered row is pruned");
+  assert.ok(await s.findOutboxRow(k.id), "a pending row stays");
+  assert.ok(await s.findOutboxRow(l.id), "a dead row stays");
+
+  // A state listener's draft is written with the state change; one that
+  // throws fails neither the write nor the next listener.
+  const now = iso(0);
+  await s.addTransfer({ id: "t_ob", userId: "u_a", quoteId: "q-t_ob", rail: "sepa", state: "CREATED", txs: [], createdAt: now, updatedAt: now } as any);
+  s.onTransferStateChange((t) => {
+    if (t.id === "t_ob") throw new Error("listener blew up");
+  });
+  s.onTransferStateChange((t, from) => (t.id === "t_ob" ? { kind: "suite.state", payload: { id: t.id, from, to: t.state } } : undefined));
+  await s.updateTransfer("t_ob", { state: "DEBITED" });
+  await s.updateTransfer("t_ob", { reference: "no state change" } as any);
+  const states = (await s.list("outbox")).filter((r) => r.kind === "suite.state").map((r) => r.payload);
+  assert.deepEqual(states, [{ id: "t_ob", from: "CREATED", to: "DEBITED" }], "one row per state change, none for another write");
+  assert.equal((await s.findTransfer("t_ob"))?.state, "DEBITED");
+  // A row enqueued inside a transaction is part of it.
+  const inTx = await s.tx(async (t) => (await t.enqueueOutbox({ kind: "suite.tx", payload: {} }))!);
+  assert.ok(await s.findOutboxRow(inTx.id));
+}
+
+/** Tables whose rows the database keeps (migrations/0006, §5). */
+export const KEPT_TABLES = ["ledger", "organisations", "accounts", "invoices", "documents", "transfers", "audit", "ledger_history"] as const;
+
+/**
+ * Postgres only, after storeSuite: every change of a ledger row keeps the row
+ * as it was in `ledger_history`, and no role deletes or truncates the kept
+ * tables, or changes an audit or history row.
+ */
+export async function keptRowsSuite(s: StoreBackend, sql: Sql): Promise<void> {
+  const now = iso(0);
+  const history = async (id: string) => (await sql.query<{ doc: any }>("SELECT doc FROM ledger_history WHERE entry_id = $1 ORDER BY seq", [id])).rows.map((r) => r.doc);
+  const entry = { id: "le_hist", orgId: "org_h", source: { kind: "wallet", walletId: "w_h" }, direction: "in", asset: "EURe", amount: "5", accountCode: "1000", accountCodeAuto: true, at: now, createdAt: now } as any;
+  await s.addLedgerEntries([entry]);
+  assert.deepEqual(await history("le_hist"), [], "an insert is not a change");
+  await s.updateLedgerEntry("le_hist", { fiatValue: "5.00" } as any);
+  await s.updateLedgerEntry("le_hist", { accountCode: "4400", accountCodeAuto: false } as any);
+  await s.replaceLedgerEntries([(await s.ledgerOf("org_h"))[0]!]);
+  const h = await history("le_hist");
+  assert.deepEqual(h.map((d) => [d.fiatValue, d.accountCode]), [[undefined, "1000"], ["5.00", "1000"]], "each change keeps the row as it was; a save of the same row is not a change");
+  const cur = (await s.ledgerOf("org_h"))[0] as any;
+  assert.deepEqual([cur.fiatValue, cur.accountCode], ["5.00", "4400"]);
+
+  for (const t of KEPT_TABLES) {
+    const n = Number((await sql.query<{ n: string }>(`SELECT count(*) AS n FROM ${t}`)).rows[0]!.n);
+    assert.ok(n > 0, `${t} has a row to refuse deleting`);
+    await assert.rejects(() => sql.query(`DELETE FROM ${t}`), /DELETE on \w+ is refused/, `no DELETE on ${t}`);
+    await assert.rejects(() => sql.query(`TRUNCATE ${t} CASCADE`), /TRUNCATE on \w+ is refused/, `no TRUNCATE on ${t}`);
+  }
+  await assert.rejects(() => sql.query("UPDATE audit SET doc = doc"), /UPDATE on audit is refused/, "audit is append-only");
+  await assert.rejects(() => sql.query("UPDATE ledger_history SET doc = doc"), /UPDATE on ledger_history is refused/, "history is append-only");
 }

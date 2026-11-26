@@ -17,7 +17,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PGlite } from "@electric-sql/pglite";
-import { conditionalWriteSuite, storeSuite } from "./_store-suite.js";
+import { conditionalWriteSuite, keptRowsSuite, outboxSuite, storeSuite } from "./_store-suite.js";
 
 const tmp = mkdtempSync(path.join(tmpdir(), "zold-store-backend-"));
 process.env.TRANSF_DB_PATH = path.join(tmp, "db.json");
@@ -37,6 +37,7 @@ const pglite = async () => pgliteDatabase((await PGlite.create()) as never);
 await initStore();
 await storeSuite(store);
 await conditionalWriteSuite(store);
+await outboxSuite(store);
 console.log("ok - store suite on the JSON backend");
 
 // ── The JSON backend's mutex, transactions and copies (§3) ─────────────────
@@ -92,17 +93,19 @@ console.log("ok - store suite on the JSON backend");
   assert.deepEqual(order, [1, 2, 3]);
   assert.equal((await store.findOrganisation("org_mx"))?.name, "N3");
 
-  // A state-change listener runs only once its write is on disk: a call that
-  // releases the mutex to a transaction never fires that transaction's
-  // announcements before the transaction persisted.
+  // A state-change listener runs inside the write and its outbox row goes to
+  // disk with the state; the outbox's listeners run only once that write is
+  // on disk: a call that releases the mutex to a transaction never fires that
+  // transaction's announcement before the transaction persisted.
   {
     await store.addTransfer({ id: "t_ann_a", userId: "u", quoteId: "q_ann_a", state: "CREATED", txs: [], createdAt: now, updatedAt: now } as any);
     await store.addTransfer({ id: "t_ann_b", userId: "u", quoteId: "q_ann_b", state: "CREATED", txs: [], createdAt: now, updatedAt: now } as any);
+    store.onTransferStateChange((t) => (t.id.startsWith("t_ann_") ? { kind: "test.ann", payload: { transferId: t.id, state: t.state } } : undefined));
     const heard: string[] = [];
-    store.onTransferStateChange((t) => {
-      if (!t.id.startsWith("t_ann_")) return;
-      const stored = onDisk().transfers.find((x: any) => x.id === t.id)?.state;
-      heard.push(`${t.id}:${t.state}:${stored === t.state ? "on disk" : `disk says ${stored}`}`);
+    store.onOutboxWritten(() => {
+      const disk = onDisk();
+      const rows = disk.outbox.filter((r: any) => r.kind === "test.ann");
+      heard.push(rows.map((r: any) => `${r.payload.transferId}:${disk.transfers.find((x: any) => x.id === r.payload.transferId)?.state}`).join(","));
     });
     let letGo!: () => void;
     const gate = new Promise<void>((r) => (letGo = r));
@@ -113,11 +116,11 @@ console.log("ok - store suite on the JSON backend");
     });
     await a;
     await new Promise((r) => setTimeout(r, 20));
-    assert.deepEqual(heard, ["t_ann_a:DEBITED:on disk"], "the transaction's change is not announced while it is open");
+    assert.deepEqual(heard, ["t_ann_a:DEBITED"], "the transaction's row is not announced while it is open");
     letGo();
     await b;
     await new Promise((r) => setTimeout(r, 0));
-    assert.deepEqual(heard, ["t_ann_a:DEBITED:on disk", "t_ann_b:DEBITED:on disk"]);
+    assert.deepEqual(heard, ["t_ann_a:DEBITED", "t_ann_a:DEBITED,t_ann_b:DEBITED"], "each row on disk with its state change when announced");
   }
 
   // A response sent inside a transaction goes out after the file write; one
@@ -173,19 +176,25 @@ console.log("ok - store suite on the JSON backend");
   const pg = createPgStore(db);
   await storeSuite(pg);
   await conditionalWriteSuite(pg);
+  await outboxSuite(pg);
+  await keptRowsSuite(pg, db);
   // A state change inside a store.tx is announced after its COMMIT, and
   // never for a transaction rolled back.
   const now = new Date().toISOString();
   for (const id of ["t_lis_ok", "t_lis_rb"]) {
     await pg.addTransfer({ id, userId: "u_a", quoteId: `q_${id}`, state: "CREATED", txs: [], createdAt: now, updatedAt: now } as any);
   }
-  const heard: string[] = [];
-  pg.onTransferStateChange((t) => void heard.push(`${t.id}:${t.state}`));
+  pg.onTransferStateChange((t) => (t.id.startsWith("t_lis_") ? { kind: "test.lis", payload: { transferId: t.id } } : undefined));
+  let announced = 0;
+  pg.onOutboxWritten(() => void announced++);
+  const lisRows = async () => (await pg.list("outbox")).filter((r) => r.kind === "test.lis").map((r) => r.payload.transferId);
   await pg.tx(async (t) => {
     await t.updateTransfer("t_lis_ok", { state: "PAID" } as any);
-    assert.deepEqual(heard, [], "not announced before the commit");
+    assert.deepEqual(await t.list("outbox").then((o) => o.filter((r) => r.kind === "test.lis").length), 1, "the row is written in the transaction");
+    assert.equal(announced, 0, "not announced before the commit");
   });
-  assert.deepEqual(heard, ["t_lis_ok:PAID"]);
+  assert.equal(announced, 1);
+  assert.deepEqual(await lisRows(), ["t_lis_ok"]);
   await assert.rejects(
     pg.tx(async (t) => {
       await t.updateTransfer("t_lis_rb", { state: "PAID" } as any);
@@ -193,7 +202,8 @@ console.log("ok - store suite on the JSON backend");
     }),
     /roll back/,
   );
-  assert.deepEqual(heard, ["t_lis_ok:PAID"], "a rolled-back change is never announced");
+  assert.equal(announced, 1, "a rolled-back change is never announced");
+  assert.deepEqual(await lisRows(), ["t_lis_ok"], "and its outbox row is rolled back with it");
   assert.equal((await pg.findTransfer("t_lis_rb"))?.state, "CREATED");
 
   // A nested store.tx that fails and is caught undoes only itself (a
@@ -242,7 +252,7 @@ console.log("ok - store suite on the JSON backend");
   assert.deepEqual(order, ["a+", "a-", "b+", "b-"]);
   for (const s of [pg]) await assert.rejects(s.lockUser("u_a"), /lockUser outside a store\.tx holds nothing/);
   await db.close();
-  console.log(`ok - store suite on the Postgres backend (PGlite, server_version_num ${version}); listeners after COMMIT only; nested tx savepoints; no silent COMMIT after a failed statement`);
+  console.log(`ok - store suite on the Postgres backend (PGlite, server_version_num ${version}); outbox rows commit and roll back with their change; ledger history and kept rows (§5); nested tx savepoints; no silent COMMIT after a failed statement`);
 }
 
 // ── Migration runner ───────────────────────────────────────────────────────

@@ -20,7 +20,8 @@
  *
  * Rows are copies on both backends: what goes in is cloned and what comes
  * out is cloned, so a caller that changes a row it read changes nothing
- * stored. State-change listeners run after the write, outside the mutex.
+ * stored. State-change listeners run inside the write and return outbox rows
+ * (outbox.ts); the outbox's listeners run after the write, outside the mutex.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { describeCause } from "../http/log-cause.js";
@@ -30,7 +31,7 @@ import type { Organisation } from "../domain/types.js";
 import type { Transfer, User } from "./types.js";
 
 type Core = typeof jsonCore;
-type Listener = "onTransferStateChange" | "onPaymentRequestStateChange";
+type Listener = "onTransferStateChange" | "onPaymentRequestStateChange" | "onOutboxWritten";
 type Special = Listener | Generic | "list" | "holdDailyCap" | "beginTx" | "endTx" | "takeAnnouncements";
 /** Generic methods: a mapped type would lose their type parameter. */
 type Generic = "patchUserSub" | "patchOrgSub" | "patchTransferSub";
@@ -277,6 +278,7 @@ export function jsonBackend(core: Core): StoreBackend {
       }),
     onTransferStateChange: core.onTransferStateChange,
     onPaymentRequestStateChange: core.onPaymentRequestStateChange,
+    onOutboxWritten: core.onOutboxWritten,
   };
   for (const [name, d] of Object.entries(Object.getOwnPropertyDescriptors(core))) {
     if (name in methods || typeof d.value !== "function") continue;

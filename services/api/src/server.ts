@@ -26,6 +26,7 @@ import { createCheckoutServiceRouter } from "./routes/service-checkout.js";
 import { createServiceMerchantRouter } from "./routes/service-merchant.js";
 import { createMerchantLinkRouter } from "./routes/merchant-links.js";
 import { startCheckoutWebhook } from "./checkout-webhook.js";
+import { startOutboxWorker } from "./outbox.js";
 import { createMoneriumRouter } from "./routes/monerium.js";
 import { createAdminRouter } from "./routes/admin.js";
 import { createPageRouter, notFound } from "./routes/pages.js";
@@ -355,6 +356,9 @@ runVerifierSweep();
 setInterval(runVerifierSweep, 10 * 60_000).unref();
 // Tell the checkout service when one of its transfers moves (CHECKOUT_WEBHOOK_URL).
 if (startCheckoutWebhook()) console.log("checkout webhook: on");
+// Deliver what the outbox holds: checkout hints and PAID hooks, written with
+// the change they report (outbox.ts). After the subscriptions above.
+startOutboxWorker();
 // Zoldenburg recoveries: pick up a signature made in Safe Cover, expire
 // unanswered requests, and finalize once the grace period has run.
 if (zoldenburgRecoveryEnabled()) {

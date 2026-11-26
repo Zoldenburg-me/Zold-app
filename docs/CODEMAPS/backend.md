@@ -44,7 +44,7 @@ rates.ts independent mid · fx.ts · chain.ts (viem) · sepa.ts · reconcile.ts 
 ens.ts (CCIP-Read encoding, signer) · usd-token.ts (the dollar token: USDC, or zUSD on staging) ·
 log-range.ts (eth_getLogs window halves on RPC range refusals) · users/display-name.ts ·
 payment-requests.ts (707) · pay.ts · documents.ts · receipt.ts · audit.ts ·
-checkout-service.ts (checkout scope, allowlist, hashed credential) · checkout-webhook.ts (signed state-change hint) ·
+checkout-service.ts (checkout scope, allowlist, hashed credential) · checkout-webhook.ts (signed state-change hint, delivered from the outbox) · outbox.ts (outbox worker: claim, backoff, dead letter) ·
 merchant-links.ts (link codes, availability, re-checks, service view) ·
 http/standard-webhooks.ts (sign and verify, both directions) ·
 wallet/signature-check.ts (the one signed-message verifier: EIP-1271, ECDSA, ERC-6492) ·
