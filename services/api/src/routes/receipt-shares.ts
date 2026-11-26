@@ -7,8 +7,8 @@
  * Unlike /pay/<handle>, this link is the credential, so the slug is 15
  * Crockford characters and /api/r/ sits on the tight rate bucket.
  *
- * One share per transfer. Re-posting edits it, so narrowing a selection
- * narrows the live link. An edit does not extend the 30-day window.
+ * One live share per transfer. A link once sent never changes: sharing again
+ * makes a new link with the chosen fields and turns the previous one off.
  */
 import express from "express";
 import { wrap } from "./util.js";
@@ -50,20 +50,16 @@ function shareResponse(req: express.Request, share: ReceiptShare) {
   };
 }
 
-/** Live: not revoked and inside its window. Only a live share is edited or
- *  handed to the composer; an expired one keeps its slug and its 410. */
+/** Live: not revoked and inside its window. Only a live share is handed to
+ *  the composer; an expired one keeps its slug and its 410. */
 const isLive = (share: ReceiptShare): boolean =>
   !share.revokedAt && Date.parse(share.expiresAt) >= Date.now();
 
 /**
- * Create or re-scope the share for a transfer.
- *
- * Re-posting edits the existing share and keeps its slug, so narrowing a
- * selection narrows what is public and links already sent keep working.
- *
- * An edit does not extend the expiry: a share is a 30-day window opened once.
- * Once it has passed, a post opens a new window under a fresh slug, unless
- * it says it is an edit, which is refused.
+ * Create the share for a transfer: a new slug and a new 30-day window with
+ * the chosen fields. The previous unrevoked share, live or expired, is
+ * revoked in the same step, so a visitor with its slug gets 410 and what a
+ * sent link shows never changes. There is no edit: `edit: true` is refused.
  */
 /** Kill the link. The slug stays recorded so a later visitor is told it was
  *  revoked rather than getting the same 404 as a typo. */
@@ -92,16 +88,13 @@ export function createReceiptShareRouter(deps: ReceiptShareDeps) {
       if (transfer.state === "CREATED") {
         return res.status(409).json({ error: "this transfer has not been authorised yet — nothing to share" });
       }
-      const existing = await store.findReceiptShareByTransfer(transfer.id);
-      const fields = parseShareFields(req.body, existing?.fields ?? DEFAULT_SHARE_FIELDS);
-      if (existing && isLive(existing)) {
-        return res.json(shareResponse(req, await store.updateReceiptShare(existing.id, { fields })));
-      }
-      // A settings change is an edit (`edit: true`). Sent as the link ran out
-      // or was revoked, it must not publish a new one: only Create link does.
+      // A composer from before links stopped changing sends its choice
+      // changes as edits: refused, so a link already sent keeps what it shows.
       if (req.body?.edit === true) {
-        return res.status(409).json({ error: "this link has expired or was revoked — create a new one", expired: true, fields });
+        return res.status(409).json({ code: "LINK_NOT_EDITABLE", error: "a link once sent does not change — create a new link with these choices; it replaces the old one" });
       }
+      // Choices left out of the body are the last link's.
+      const fields = parseShareFields(req.body, (await store.findReceiptShareByTransfer(transfer.id))?.fields ?? DEFAULT_SHARE_FIELDS);
       const now = new Date();
       const share: ReceiptShare = {
         id: randomUUID(),
@@ -113,22 +106,17 @@ export function createReceiptShareRouter(deps: ReceiptShareDeps) {
         updatedAt: now.toISOString(),
         expiresAt: new Date(now.getTime() + SHARE_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString(),
       };
-      // A revoked or expired share is replaced rather than resurrected: the old
-      // slug stays recorded, so a later visitor gets 410 rather than a typo-like
-      // 404 while the new share gets a fresh unguessable slug. An expired one
-      // is revoked in the same step: one unrevoked share per transfer
-      // (Postgres's receipt_shares_live index refuses a second). The share is
-      // read again under the transfer's lock: a replacement that committed
-      // since the read above is the link, and this caller is given it.
-      const made = await store.tx(async () => {
+      // The old slug stays recorded, so a later visitor gets 410 rather than a
+      // typo-like 404. Read and replaced under the transfer's lock: two posts
+      // at once run one after the other, and the second turns off the first's
+      // link, so there is one unrevoked share per transfer (Postgres's
+      // receipt_shares_live index refuses a second).
+      await store.tx(async () => {
         await store.lockKey(`receipt-share:${transfer.id}`);
         const current = await store.findReceiptShareByTransfer(transfer.id);
-        if (current && isLive(current)) return current;
         if (current && !current.revokedAt) await store.revokeReceiptShare(current.id);
         await store.addReceiptShare(share);
-        return undefined;
       });
-      if (made) return res.json(shareResponse(req, made));
       res.status(201).json(shareResponse(req, share));
     }),
   );

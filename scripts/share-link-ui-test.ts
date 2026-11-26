@@ -7,6 +7,9 @@
  * Share buttons, and its own address must not read as a share link: an old
  * `#share/<id>` still opens it and the address bar is rewritten.
  *
+ * A link once sent never changes: a choice changed while a link is live
+ * offers "Make new link", which makes a new link and turns the old one off.
+ *
  * Runs the real classic scripts in load order with a stub DOM. What this
  * cannot show: the screen in a browser, the OS share sheet, or the public
  * /r/ page (share-receipt tests cover the API). Offline.
@@ -301,17 +304,6 @@ await t("a failed load keeps Create link disabled and says so", async () => {
   assert.deepEqual([...run("__posts")], []);
 });
 
-await t("a settings change on a live link is an edit: it never asks for a new link, and an edit refused as expired leaves none", async () => {
-  run(`mShare = { transferId: "t1", fields: { ...SHARE_DEFAULTS }, link: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, expired: false, busy: false, loaded: true };
-    __bodies = []; api = async (p, body) => { __bodies.push(body); throw Object.assign(new Error("this link has expired"), { status: 409, body: { expired: true, fields: body } }); };`);
-  await run(`setShare("route", true)`);
-  assert.equal(run("__bodies[0].edit"), true, "the autosave says it is an edit");
-  assert.equal(run("mShare.link"), null, "the dead link is dropped");
-  assert.equal(run("mShare.expired"), true);
-  assert.equal(el("m-share-copy").textContent, "Create link");
-  assert.ok(hidden("m-share-out"));
-});
-
 await t("Copy and Share check expiry at the tap, even if the screen has not redrawn", async () => {
   const shared: any[] = [];
   const copied: string[] = [];
@@ -333,235 +325,128 @@ await t("Copy and Share check expiry at the tap, even if the screen has not redr
 });
 
 const URL_B = "https://zold.test/r/receiptB999";
-/* Receipt A's live link has a gated autosave in flight; the sender goes Back
-   and opens receipt B, whose live link withholds the recipient. */
-const openAThenB = async (answerA: string) => {
-  // The real openShare and navigation, not a test's stub: B must get a fresh
-  // composer object and the share screen, as a tap on its receipt does.
-  run(`openShare = __realOpenShare; __navs = []; mobileNav = (v) => { __navs.push(v); };`);
-  run(`__bodies = []; __gateA = new Promise((r) => { __releaseA = r; });
+const URL_NEW = "https://zold.test/r/newlink777";
+const live = (over = "") => run(`announce = (m) => { __said = m; }; __said = ""; __posts = []; __bodies = []; __dels = 0;
+    mShare = { transferId: "t1", fields: { ...SHARE_DEFAULTS }, published: { ...SHARE_DEFAULTS }, link: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, expired: false, busy: false, loaded: true, revokes: 0 ${over} };
+    hist.length = 0; hist.push({ id: "t1", rail: "sepa", recipientName: "Max Mustermann" }); paintShare();`);
+
+await t("a change on a live link sends nothing: the link keeps what it shows and the button offers a new link", async () => {
+  ctx.navigator.share = async () => {};
+  live();
+  run(`api = async (p, body, method) => { __posts.push({ p, body, method }); return {}; };`);
+  await run(`setShare("route", true)`);
+  assert.deepEqual([...run("__posts")], [], "a sent link is never edited");
+  assert.equal(el("m-share-copy").textContent, "Make new link");
+  assert.ok(hidden("m-share-out"), "the old URL is not offered beside choices it does not carry");
+  assert.ok(hidden("m-share-native"));
+  assert.match(el("m-share-foot").textContent, /earlier choices[\s\S]*stops working/);
+  assert.ok(!hidden("m-share-revoke"), "the live link can still be turned off");
+  await run(`setShare("route", false)`);
+  assert.equal(el("m-share-copy").textContent, "Copy link", "back to the live link's choices: it is offered again");
+  assert.ok(!hidden("m-share-out"));
+  delete ctx.navigator.share;
+});
+
+await t("Make new link publishes the screen's choices as a new link, with no edit flag, and says the old one stops", async () => {
+  live();
+  run(`api = async (p, body) => { __bodies.push({ ...body }); return { url: ${JSON.stringify(URL_NEW)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: body }; };`);
+  await run(`setShare("recipient", "hidden")`);
+  await el("m-share-copy").onclick();
+  assert.equal(run("__bodies.length"), 1);
+  assert.equal(run("__bodies[0].edit"), undefined, "a create, never an edit");
+  assert.equal(run("__bodies[0].recipient"), "hidden");
+  assert.equal(run("mShare.link"), URL_NEW);
+  assert.equal(el("m-share-url").textContent, URL_NEW);
+  assert.equal(el("m-share-copy").textContent, "Copy link");
+  assert.match(run("__said"), /old link no longer works/);
+  assert.doesNotMatch(readFileSync(path.join(PUB, "app/transactions.js"), "utf8"), /edit: true/, "the composer never sends an edit");
+});
+
+await t("a new link Zold refuses leaves the live link as it was and says so", async () => {
+  live();
+  el("m-share-err").classList.add("hidden");
+  run(`api = async () => { throw Object.assign(new Error("that choice is not allowed"), { status: 422, fromZold: true }); };`);
+  await run(`setShare("route", true)`);
+  await el("m-share-copy").onclick();
+  assert.equal(run("mShare.link"), URL_R, "the live link is unchanged");
+  assert.equal(run("mShare.published.route"), false);
+  assert.equal(run("mShare.loaded"), true);
+  assert.ok(!hidden("m-share-err"));
+  assert.match(el("m-share-err").textContent, /that choice is not allowed/);
+  assert.equal(el("m-share-copy").textContent, "Make new link", "the choices stay for another try");
+});
+
+/* The route writes before it replies, so an answer that never arrived (or a
+   gateway's 5xx) says nothing about which link is live. */
+await t("a new link whose reply is lost re-reads which link is live and shows it", async () => {
+  live();
+  el("m-share-err").classList.add("hidden");
+  run(`__gets = 0; api = async (p, body, method) => {
+      if (method === "GET") { __gets++; return { url: ${JSON.stringify(URL_NEW)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: { ...SHARE_DEFAULTS, route: true } }; }
+      throw Object.assign(new Error("bad gateway"), { status: 502, fromZold: false }); };`);
+  await run(`setShare("route", true)`);
+  await el("m-share-copy").onclick();
+  assert.equal(run("__gets"), 1);
+  assert.equal(run("mShare.loaded"), true);
+  assert.equal(run("mShare.link"), URL_NEW, "the new link the server made is the one offered");
+  assert.equal(run("mShare.fields.route"), true);
+  assert.equal(el("m-share-copy").textContent, "Copy link");
+  assert.match(el("m-share-err").textContent, /link that is live/);
+});
+
+await t("a lost reply whose re-read fails keeps the composer locked and offers no link", async () => {
+  ctx.navigator.share = async () => {};
+  live();
+  run(`api = async () => { throw Object.assign(new Error("offline"), { offline: true }); };`);
+  await run(`setShare("route", true)`);
+  await el("m-share-copy").onclick();
+  assert.equal(run("mShare.loaded"), false);
+  assert.match(el("m-share-err").textContent, /could not confirm which link is live/i);
+  assert.ok(hidden("m-share-out"));
+  assert.equal(el("m-share-url").textContent, "");
+  assert.ok(hidden("m-share-native"));
+  assert.equal(el("m-share-copy").disabled, true);
+  for (const c of el("m-share-groups").innerHTML.match(/<input type="radio"[^>]*>/g) || []) assert.match(c, / disabled[ >/]/);
+  assert.match(el("m-share-foot").textContent, /not confirmed/i);
+  assert.doesNotMatch(el("m-share-foot").textContent, /^Live/);
+  delete ctx.navigator.share;
+});
+
+await t("Turn this link off is refused while a new link is being made", async () => {
+  live();
+  run(`__gate = new Promise((r) => { __release = r; });
+    api = async (p, body, method) => { if (method === "DELETE") { __dels++; return {}; } await __gate; return { url: ${JSON.stringify(URL_NEW)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: body }; };`);
+  await run(`setShare("route", true)`);
+  const making = el("m-share-copy").onclick();
+  assert.equal(el("m-share-revoke").disabled, true);
+  await el("m-share-revoke").onclick();
+  assert.equal(run("__dels"), 0, "no turn-off that could land before the new link");
+  run("__release()");
+  await making;
+  assert.equal(run("mShare.link"), URL_NEW);
+  assert.equal(el("m-share-revoke").disabled, false);
+});
+
+await t("a new link for receipt A that lands after receipt B opened leaves B's link and choices alone", async () => {
+  run(`openShare = __realOpenShare; mobileNav = () => {};`);
+  live(`, transferId: "tA"`);
+  run(`__gateA = new Promise((r) => { __releaseA = r; });
     api = async (p, body, method) => {
       if (method === "GET") return { url: ${JSON.stringify(URL_B)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: { recipient: "hidden" } };
-      __bodies.push({ p, body }); await __gateA; ${answerA} };
-    mShare = { transferId: "tA", fields: { ...SHARE_DEFAULTS, recipient: "full" }, link: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, expired: false, busy: false, loaded: true };`);
-  const saving = run(`setShare("route", true)`);
-  const a = run("mShare");
+      await __gateA; return { url: ${JSON.stringify(URL_NEW)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: body }; };`);
+  await run(`setShare("route", true)`);
+  const making = el("m-share-copy").onclick();
   run(`openShare("tB")`);
-  assert.notEqual(run("mShare"), a, "B gets a fresh composer");
-  assert.equal(run("mShare.loaded"), false, "B's controls wait for B's saved choices");
-  assert.deepEqual([...run("__navs")], ["share"], "the share screen is opened");
   await run("renderShareScreen()");
-  assert.equal(run("mShare.link"), URL_B);
   run("__releaseA()");
-  await saving;
-};
-
-await t("a save for receipt A that lands after receipt B opened leaves B's link and choices alone", async () => {
-  await openAThenB(`return { url: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: body };`);
+  await making;
   assert.equal(run("mShare.transferId"), "tB");
   assert.equal(run("mShare.link"), URL_B, "B still offers its own link");
-  assert.equal(el("m-share-url").textContent, URL_B, "and Send this link shows it");
+  assert.equal(el("m-share-url").textContent, URL_B);
   assert.equal(run("mShare.fields.recipient"), "hidden", "B's choices are not A's");
   assert.equal(run("mShare.fields.route"), false);
-  // The next change on B goes to B, with B's choices.
-  run(`__releaseA = () => {}; __gateA = Promise.resolve();`);
-  await run(`setShare("showRate", false)`);
-  const last = run("__bodies[__bodies.length - 1]");
-  assert.equal(last.p, "/api/transfers/tB/share");
-  assert.equal(last.body.recipient, "hidden", "B's live link is not widened");
 });
 
-await t("an expired answer for receipt A does not drop receipt B's live link", async () => {
-  await openAThenB(`throw Object.assign(new Error("this link has expired"), { status: 409, body: { expired: true, fields: body } });`);
-  assert.equal(run("mShare.link"), URL_B);
-  assert.equal(run("mShare.expired"), false);
-  assert.ok(!hidden("m-share-out"));
-});
-
-await t("a load error is cleared once a later load succeeds", async () => {
-  run(`openShare("t1"); api = async () => { throw Object.assign(new Error("offline"), { status: 0 }); };`);
-  el("m-share-err").classList.add("hidden");
-  await run("renderShareScreen()");
-  assert.ok(!hidden("m-share-err"));
-  run(`openShare("t1"); api = async () => ({ url: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: {} });`);
-  await run("renderShareScreen()");
-  assert.ok(hidden("m-share-err"), "the old warning is gone above working controls");
-});
-
-await t("every radio and switch renders disabled until the saved choices load, and enabled after", async () => {
-  run(`openShare("t1"); __gate = new Promise((r) => { __releaseGet = r; });
-    api = async () => { await __gate; return { url: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: {} }; };`);
-  const pending = run("renderShareScreen()");
-  const radios = () => el("m-share-groups").innerHTML.match(/<input type="radio"[^>]*>/g) || [];
-  const switches = () => el("m-share-toggles").innerHTML.match(/<button [^>]*role="switch"[^>]*>/g) || [];
-  assert.equal(radios().length, run("SHARE_GROUPS.reduce((n, g) => n + g.options.length, 0)"));
-  assert.equal(switches().length, run("SHARE_TOGGLES.length"));
-  for (const c of [...radios(), ...switches()]) assert.match(c, / disabled[ >/]/, `${c} is disabled before load`);
-  run("__releaseGet()");
-  await pending;
-  for (const c of [...radios(), ...switches()]) assert.doesNotMatch(c, / disabled[ >/]/, `${c} is enabled after load`);
-});
-
-await t("a second change made while the first save is in flight is kept on screen and saved after it", async () => {
-  run(`__bodies = []; __gates = []; api = async (p, body) => { __bodies.push({ ...body }); await new Promise((r) => __gates.push(r));
-      return { url: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: body }; };
-    mShare = { transferId: "t1", fields: { ...SHARE_DEFAULTS }, link: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, expired: false, busy: false, loaded: true };`);
-  const first = run(`setShare("route", true)`);
-  await run(`setShare("showRate", false)`);
-  assert.equal(run("__bodies.length"), 1, "one save at a time");
-  run("__gates[0]()");
-  await new Promise((r) => setTimeout(r, 0));
-  assert.equal(run("mShare.fields.showRate"), false, "the second tap does not revert when the first save lands");
-  assert.equal(run("__bodies.length"), 2, "the second change is saved next");
-  assert.equal(run("__bodies[1].showRate"), false);
-  assert.equal(run("__bodies[1].route"), true);
-  assert.equal(run("__bodies[1].edit"), true);
-  run("__gates[1]()");
-  await first;
-  await new Promise((r) => setTimeout(r, 0));
-  assert.equal(run("mShare.busy"), false);
-  assert.equal(run("mShare.fields.showRate"), false);
-  assert.equal(run("mShare.fields.route"), true);
-});
-
-await t("an edit Zold refuses shows what the live link still carries, says so, and drops the queued change", async () => {
-  run(`mobileNav = __realMobileNav; __bodies = []; __gates = [];
-    api = async (p, body) => { __bodies.push({ ...body }); if (__bodies.length === 1) await new Promise((r) => __gates.push(r)); throw Object.assign(new Error("that choice is not allowed"), { status: 422, fromZold: true }); };
-    mShare = { transferId: "t1", fields: { ...SHARE_DEFAULTS, recipient: "full" }, published: { ...SHARE_DEFAULTS, recipient: "full" }, link: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, expired: false, busy: false, loaded: true };
-    hist.length = 0; hist.push({ id: "t1", rail: "sepa", recipientName: "Max Mustermann" });`);
-  el("m-share-err").classList.add("hidden");
-  const first = run(`setShare("route", true)`);
-  // Queued while the first save is in flight: hide the recipient.
-  await run(`setShare("recipient", "hidden")`);
-  assert.match(el("m-share-preview").innerHTML, /Recipient<\/span><span class="v">withheld/, "the tap is drawn at once");
-  run("__gates[0]()");
-  await first;
-  await new Promise((r) => setTimeout(r, 0));
-  assert.equal(run("__bodies.length"), 1, "the queued change is not sent after a failure");
-  assert.equal(run("mShare.again"), false);
-  assert.equal(run("mShare.fields.recipient"), "full", "the screen shows what the live link still carries");
-  assert.equal(run("mShare.fields.route"), false);
-  assert.match(el("m-share-preview").innerHTML, /Recipient<\/span><span class="v">Max Mustermann/, "the preview names the recipient the link still shows");
-  assert.ok(!hidden("m-share-err"), "the failure is shown, not swallowed");
-  assert.match(el("m-share-err").textContent, /not saved/i);
-  assert.match(el("m-share-err").textContent, /that choice is not allowed/);
-  assert.equal(run("mShare.link"), URL_R, "the link itself is still live");
-  run("hist.length = 0;");
-});
-
-await t("after a save lands, a later refused edit reverts to that save, not to the load", async () => {
-  run(`__n = 0; api = async (p, body) => { if (__n++ === 0) return { url: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: body }; throw Object.assign(new Error("bad field"), { status: 400, fromZold: true }); };
-    mShare = { transferId: "t1", fields: { ...SHARE_DEFAULTS }, published: { ...SHARE_DEFAULTS }, link: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, expired: false, busy: false, loaded: true };`);
-  await run(`setShare("recipient", "hidden")`);
-  await run(`setShare("route", true)`);
-  assert.equal(run("mShare.fields.recipient"), "hidden", "the saved narrowing stays");
-  assert.equal(run("mShare.fields.route"), false, "the failed change is undone");
-});
-
-/* The edit route writes before it replies, so an answer that never arrived
-   (or a gateway's 5xx) says nothing about the live link. The screen must ask
-   the server, not guess either way. */
-const lostReply = (getAnswer: string) => run(`__bodies = []; __gets = 0; __saved = { ...SHARE_DEFAULTS, recipient: "full" };
-    api = async (p, body, method) => {
-      if (method === "GET") { __gets++; ${getAnswer} }
-      __bodies.push({ ...body }); __saved = { ...SHARE_DEFAULTS, ...body }; delete __saved.edit;
-      throw Object.assign(new Error("Zold’s answer didn’t arrive. Check before you try it again."), { offline: true }); };
-    mShare = { transferId: "t1", fields: { ...SHARE_DEFAULTS, recipient: "hidden" }, published: { ...SHARE_DEFAULTS, recipient: "hidden" }, link: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, expired: false, busy: false, loaded: true };
-    hist.length = 0; hist.push({ id: "t1", rail: "sepa", recipientName: "Max Mustermann" });`);
-
-await t("an edit whose reply is lost re-reads the link and shows what the server saved", async () => {
-  lostReply(`return { url: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: __saved };`);
-  el("m-share-err").classList.add("hidden");
-  await run(`setShare("recipient", "full")`);
-  assert.equal(run("__bodies.length"), 1);
-  assert.equal(run("__gets"), 1, "the share is read back from the server");
-  assert.equal(run("mShare.fields.recipient"), "full", "the screen shows the saved change, not the old value");
-  assert.equal(run("mShare.published.recipient"), "full");
-  assert.match(el("m-share-preview").innerHTML, /Recipient<\/span><span class="v">Max Mustermann/, "the preview names the recipient the link now shows");
-  assert.equal(run("mShare.loaded"), true, "confirmed, so the controls work again");
-  assert.equal(run("mShare.link"), URL_R);
-  assert.doesNotMatch(el("m-share-err").textContent, /not saved/i, "nothing claims the change was not saved");
-  assert.ok(!hidden("m-share-err"), "the sender is told the screen was re-read");
-  // The next edit carries the server's fields, so it cannot undo the saved one.
-  run(`api = async (p, body) => { __bodies.push({ ...body }); return { url: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: body }; };`);
-  await run(`setShare("route", true)`);
-  assert.equal(run("__bodies[1].recipient"), "full");
-  run("hist.length = 0;");
-});
-
-await t("a 502 from a gateway (not Zold) is uncertain too: the link is re-read, not reverted", async () => {
-  run(`__bodies = []; __gets = 0;
-    api = async (p, body, method) => {
-      if (method === "GET") { __gets++; return { url: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: { ...SHARE_DEFAULTS, route: true } }; }
-      __bodies.push({ ...body }); throw Object.assign(new Error("bad gateway"), { status: 502, fromZold: false }); };
-    mShare = { transferId: "t1", fields: { ...SHARE_DEFAULTS }, published: { ...SHARE_DEFAULTS }, link: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, expired: false, busy: false, loaded: true };`);
-  await run(`setShare("route", true)`);
-  assert.equal(run("__gets"), 1);
-  assert.equal(run("mShare.fields.route"), true);
-});
-
-await t("an edit whose reply is lost and whose re-read fails keeps the composer locked and says so", async () => {
-  lostReply(`throw Object.assign(new Error("you appear to be offline. Zold could not be reached"), { offline: true });`);
-  el("m-share-err").classList.add("hidden");
-  await run(`setShare("recipient", "full")`);
-  assert.equal(run("__gets"), 1);
-  assert.equal(run("mShare.loaded"), false, "no edits until what the link shows is confirmed");
-  assert.match(el("m-share-err").textContent, /could not confirm what the link shows/i);
-  assert.doesNotMatch(el("m-share-err").textContent, /not saved/i);
-  for (const c of el("m-share-groups").innerHTML.match(/<input type="radio"[^>]*>/g) || []) assert.match(c, / disabled[ >/]/);
-  assert.equal(el("m-share-copy").disabled, true, "Copy waits too");
-  // A tap while locked sends nothing.
-  await run(`setShare("route", true)`);
-  assert.equal(run("__bodies.length"), 1);
-  run("hist.length = 0;");
-});
-
-await t("an unconfirmed link is not offered to send: no URL, no Copy, no Share, until a read-back confirms it", async () => {
-  ctx.navigator.share = async () => {};
-  lostReply(`throw Object.assign(new Error("you appear to be offline. Zold could not be reached"), { offline: true });`);
-  await run(`setShare("recipient", "full")`);
-  assert.equal(run("mShare.loaded"), false);
-  assert.ok(hidden("m-share-out"), "'Send this link' is hidden while the preview may not match the link");
-  assert.equal(el("m-share-url").textContent, "", "no URL text to select and copy");
-  assert.equal(el("m-share-copy").disabled, true);
-  assert.ok(hidden("m-share-native"));
-  assert.match(el("m-share-err").textContent, /could not confirm what the link shows/i);
-  // Reopening reads the share back; once it answers, the link is offered again.
-  run(`api = async (p, body, method) => ({ url: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: __saved });`);
-  await run("renderShareScreen()");
-  assert.equal(run("mShare.loaded"), true);
-  assert.ok(!hidden("m-share-out"));
-  assert.equal(el("m-share-url").textContent, URL_R);
-  assert.equal(el("m-share-copy").disabled, false);
-  assert.ok(!hidden("m-share-native"));
-  delete ctx.navigator.share;
-  run("hist.length = 0;");
-});
-
-await t("turning an unconfirmed link off leaves a known state: no link, and Create link works without reopening", async () => {
-  lostReply(`throw Object.assign(new Error("you appear to be offline. Zold could not be reached"), { offline: true });`);
-  await run(`setShare("recipient", "full")`);
-  assert.equal(run("mShare.loaded"), false);
-  run(`__posts = []; api = async (p, body, method) => { if (method === "DELETE") return {}; __posts.push(p); return { url: "https://zold.test/r/fresh-slug-xyz", expiresAt: ${JSON.stringify(EXPIRES)}, fields: body }; };`);
-  await el("m-share-revoke").onclick();
-  assert.equal(run("mShare.link"), null);
-  assert.equal(run("mShare.loaded"), true, "no link is a known state");
-  assert.equal(run("mShare.published"), null);
-  assert.ok(hidden("m-share-err"));
-  assert.equal(el("m-share-copy").textContent, "Create link");
-  assert.equal(el("m-share-copy").disabled, false);
-  for (const c of el("m-share-groups").innerHTML.match(/<input type="radio"[^>]*>/g) || []) assert.doesNotMatch(c, / disabled[ >/]/);
-  run("announce = () => {};");
-  await el("m-share-copy").onclick();
-  assert.deepEqual([...run("__posts")], ["/api/transfers/t1/share"]);
-  assert.equal(el("m-share-url").textContent, "https://zold.test/r/fresh-slug-xyz");
-  run("hist.length = 0;");
-});
-
-/* Receipt A's Turn this link off is in flight when the sender opens receipt
-   B, whose live link withholds the recipient. A's reply must not unlock B
-   before B's saved choices load, or Create link would send the defaults and
-   the route would widen B's live link with them. */
 await t("turning receipt A's link off leaves receipt B locked until B's own choices load", async () => {
   run(`openShare = __realOpenShare; mobileNav = () => {}; __posts = [];
     __delA = new Promise((r) => { __releaseDel = r; }); __getB = new Promise((r) => { __releaseGetB = r; });
@@ -569,7 +454,7 @@ await t("turning receipt A's link off leaves receipt B locked until B's own choi
       if (method === "DELETE") { await __delA; return {}; }
       if (method === "GET") { await __getB; return { url: ${JSON.stringify(URL_B)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: { recipient: "hidden" } }; }
       __posts.push({ p, body }); return { url: ${JSON.stringify(URL_B)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: body }; };
-    mShare = { transferId: "tA", fields: { ...SHARE_DEFAULTS }, published: { ...SHARE_DEFAULTS }, link: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, expired: false, busy: false, again: false, loaded: true };`);
+    mShare = { transferId: "tA", fields: { ...SHARE_DEFAULTS }, published: { ...SHARE_DEFAULTS }, link: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, expired: false, busy: false, loaded: true, revokes: 0 };`);
   const revoking = el("m-share-revoke").onclick();
   run(`openShare("tB")`);
   const loadingB = run("renderShareScreen()");
@@ -588,85 +473,30 @@ await t("turning receipt A's link off leaves receipt B locked until B's own choi
   assert.equal(run("mShare.fields.recipient"), "hidden", "with B's choices");
 });
 
-/* A settings change on a live link is still saving when the sender turns the
-   link off. Whichever order the server ran them in, the link ends up off, so
-   the save's late reply must not draw it again. */
-await t("a save that lands after Turn this link off does not bring the link back", async () => {
-  run(`__saveGate = new Promise((r) => { __releaseSave = r; });
-    api = async (p, body, method) => {
-      if (method === "DELETE") return {};
-      await __saveGate; return { url: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: body }; };
-    mShare = { transferId: "t1", fields: { ...SHARE_DEFAULTS }, published: { ...SHARE_DEFAULTS }, link: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, expired: false, busy: false, again: false, loaded: true };`);
-  const saving = run(`setShare("route", true)`);
-  await el("m-share-revoke").onclick();
-  assert.equal(run("mShare.link"), null);
-  run("__releaseSave()");
-  await saving;
-  assert.equal(run("mShare.link"), null, "the revoked link stays off");
-  assert.ok(hidden("m-share-out"));
-  assert.equal(el("m-share-copy").textContent, "Create link");
-  assert.equal(run("mShare.busy"), false, "and Create link is not blocked");
-});
-
-await t("the footer does not call an unconfirmed link live", async () => {
-  lostReply(`throw Object.assign(new Error("you appear to be offline. Zold could not be reached"), { offline: true });`);
-  await run(`setShare("recipient", "full")`);
-  assert.equal(run("mShare.loaded"), false);
-  assert.doesNotMatch(el("m-share-foot").textContent, /^Live/);
-  assert.match(el("m-share-foot").textContent, /not confirmed/i);
-  run("hist.length = 0;");
-});
-
-/* An edit's reply is lost, so the composer re-reads the share. The sender
-   turns the link off before that read answers. The read started while the
-   link was on: its URL is the revoked one and must not be offered. */
+/* A new link's reply is lost, so the composer re-reads which link is live.
+   The sender turns the link off before that read answers: the read started
+   while a link was on, so its URL is a revoked one and must not be offered. */
 await t("a confirmation read that lands after Turn this link off does not offer the revoked link", async () => {
+  live();
   run(`__getGate = new Promise((r) => { __releaseGet = r; }); __gets = 0;
     api = async (p, body, method) => {
       if (method === "DELETE") return {};
-      if (method === "GET") { __gets++; await __getGate; return { url: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: { ...SHARE_DEFAULTS } }; }
-      throw Object.assign(new Error("Zold’s answer didn’t arrive."), { offline: true }); };
-    mShare = { transferId: "t1", fields: { ...SHARE_DEFAULTS }, published: { ...SHARE_DEFAULTS }, link: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, expired: false, busy: false, again: false, loaded: true, revokes: 0 };`);
+      if (method === "GET") { __gets++; await __getGate; return { url: ${JSON.stringify(URL_NEW)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: { ...SHARE_DEFAULTS } }; }
+      throw Object.assign(new Error("Zold’s answer didn’t arrive."), { offline: true }); };`);
   el("m-share-err").classList.add("hidden");
-  const saving = run(`setShare("route", true)`);
+  await run(`setShare("route", true)`);
+  const making = el("m-share-copy").onclick();
   for (let i = 0; i < 20 && run("__gets") === 0; i++) await new Promise((r) => setTimeout(r, 0));
   assert.equal(run("__gets"), 1, "(the confirmation read is waiting)");
   await el("m-share-revoke").onclick();
   run("__releaseGet()");
-  await saving;
+  await making;
   assert.equal(run("mShare.link"), null, "the revoked link is not brought back");
   assert.ok(hidden("m-share-out"));
   assert.equal(el("m-share-url").textContent, "");
   assert.equal(el("m-share-copy").textContent, "Create link");
-  assert.doesNotMatch(el("m-share-err").textContent, /shows what the live link carries/, "nothing claims a live link");
-});
-
-/* Turn this link off lands while an edit is still on its way. That edit could
-   reach the server after a new create and write its older choices onto the
-   new link, so Create link waits for it, and says so by being disabled
-   rather than by ignoring the tap. */
-await t("Create link right after Turn this link off is disabled while the old edit is in flight, then works", async () => {
-  run(`__saveGate = new Promise((r) => { __releaseSave = r; }); __posts = [];
-    api = async (p, body, method) => {
-      if (method === "DELETE") return {};
-      __posts.push({ ...body });
-      if (body.edit) await __saveGate;
-      return { url: "https://zold.test/r/fresh-slug-xyz", expiresAt: ${JSON.stringify(EXPIRES)}, fields: body }; };
-    announce = () => {};
-    mShare = { transferId: "t1", fields: { ...SHARE_DEFAULTS }, published: { ...SHARE_DEFAULTS }, link: ${JSON.stringify(URL_R)}, expiresAt: ${JSON.stringify(EXPIRES)}, expired: false, busy: false, again: false, loaded: true, revokes: 0 };`);
-  const saving = run(`setShare("route", true)`);
-  await el("m-share-revoke").onclick();
-  assert.equal(el("m-share-copy").textContent, "Create link");
-  assert.equal(el("m-share-copy").disabled, true, "Create link waits for the edit still in flight");
-  await el("m-share-copy").onclick();
-  assert.equal(run("__posts.length"), 1, "nothing is created yet");
-  run("__releaseSave()");
-  await saving;
-  assert.equal(el("m-share-copy").disabled, false, "once the edit has answered, Create link works");
-  await el("m-share-copy").onclick();
-  assert.equal(run("__posts.length"), 2);
-  assert.equal(run("__posts[1].edit"), undefined, "a create, not an edit");
-  assert.equal(el("m-share-url").textContent, "https://zold.test/r/fresh-slug-xyz");
+  assert.doesNotMatch(el("m-share-err").textContent, /link that is live/, "nothing claims a live link");
+  run("hist.length = 0;");
 });
 
 /* A change tapped while Create link is in flight would be undone by the
@@ -676,7 +506,7 @@ await t("while Create link is in flight the choices are locked, and the link car
   run(`__createGate = new Promise((r) => { __releaseCreate = r; }); __posts = [];
     api = async (p, body) => { __posts.push({ ...body }); await __createGate; return { url: "https://zold.test/r/fresh-slug-xyz", expiresAt: ${JSON.stringify(EXPIRES)}, fields: body }; };
     announce = () => {};
-    mShare = { transferId: "t1", fields: { ...SHARE_DEFAULTS }, published: null, link: null, expiresAt: null, expired: false, busy: false, again: false, loaded: true, revokes: 0 };
+    mShare = { transferId: "t1", fields: { ...SHARE_DEFAULTS }, published: null, link: null, expiresAt: null, expired: false, busy: false, loaded: true, revokes: 0 };
     paintShare();`);
   const creating = el("m-share-copy").onclick();
   for (const c of el("m-share-groups").innerHTML.match(/<input type="radio"[^>]*>/g) || []) assert.match(c, / disabled[ >/]/, `${c} is locked while creating`);

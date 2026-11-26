@@ -1,5 +1,6 @@
 /**
- * The receipt-share routes and expiry (board #129).
+ * The receipt-share routes and expiry (board #129). Sharing again always
+ * makes a new link and turns the previous one off; a link never changes.
  *
  * A share is a 30-day window. Once it has passed, the composer must not be
  * handed the dead URL as if it were live (it would copy or share a link the
@@ -95,36 +96,41 @@ await check("the old slug stays expired and the new one opens", async () => {
   assert.equal(now.status, 200);
 });
 
-await check("the composer now reads the fresh link, and editing it keeps that slug", async () => {
+await check("sharing again makes a new link: the first answers 410, the second shows only its own fields", async () => {
   const g = await call("GET", "/transfers/t1/share");
   assert.equal(g.status, 200);
   assert.equal(g.body.slug, fresh);
-  const e = await call("POST", "/transfers/t1/share", { ...DEFAULT_SHARE_FIELDS, sender: "hidden" });
-  assert.equal(e.status, 200);
-  assert.equal(e.body.slug, fresh);
-  assert.equal((await store.findReceiptShareBySlug("oldxx-oldxx-oldxx"))?.fields.sender, "full", "the expired share is not edited");
+  const again = await call("POST", "/transfers/t1/share", { ...DEFAULT_SHARE_FIELDS, sender: "hidden", route: false });
+  assert.equal(again.status, 201);
+  assert.notEqual(again.body.slug, fresh, "a new slug, not the old link edited");
+  assert.equal((await store.findReceiptShareBySlug(fresh))?.fields.sender, "full", "the first link's fields never changed");
+  const first = await call("GET", `/r/${fresh}`);
+  assert.equal(first.status, 410, "the replaced link is off");
+  const second = await call("GET", `/r/${again.body.slug}`);
+  assert.equal(second.status, 200);
+  const sender = JSON.stringify(second.body).includes("Erika");
+  assert.equal(sender, false, "the new link withholds the sender, as chosen for it");
+  assert.equal((await store.list("receiptShares")).filter((s: any) => s.transferId === "t1" && !s.revokedAt).length, 1, "one live share");
+  fresh = again.body.slug;
 });
 
-await check("a settings edit never creates a link: after expiry or revoke it is refused and nothing new is public", async () => {
-  const live = (await store.findReceiptShareBySlug(fresh))!;
-  await store.updateReceiptShare(live.id, { expiresAt: new Date(Date.now() - 1000).toISOString() } as any);
-  const before = (await store.findReceiptShareByTransfer("t1"))?.slug;
-  const r = await call("POST", "/transfers/t1/share", { ...DEFAULT_SHARE_FIELDS, route: false, edit: true });
+await check("an edit cannot change a link: a stale composer's edit is refused and the newer link keeps its fields", async () => {
+  const before = (await store.findReceiptShareBySlug(fresh))!;
+  const r = await call("POST", "/transfers/t1/share", { ...DEFAULT_SHARE_FIELDS, sender: "full", route: true, edit: true });
   assert.equal(r.status, 409);
-  assert.equal(r.body.expired, true);
+  assert.equal(r.body.code, "LINK_NOT_EDITABLE");
   assert.equal(r.body.url, undefined);
-  assert.equal((await store.findReceiptShareByTransfer("t1"))?.slug, before, "no new share was minted");
-  assert.equal((await store.findReceiptShareBySlug(fresh))?.fields.sender, "hidden", "the expired share is not edited");
-  // Create link (no edit flag) still opens a new window.
-  const c = await call("POST", "/transfers/t1/share", { ...DEFAULT_SHARE_FIELDS });
-  assert.equal(c.status, 201);
+  const after = (await store.findReceiptShareBySlug(fresh))!;
+  assert.deepEqual(after.fields, before.fields, "the newer link shows what it showed");
+  assert.equal(after.revokedAt, undefined, "and stays live");
+  assert.equal((await call("GET", "/transfers/t1/share")).body.slug, fresh, "no other link was made");
+  // Turned off, a new link is only made by Create link (no edit flag).
   await call("DELETE", "/transfers/t1/share");
-  const rv = await call("POST", "/transfers/t1/share", { ...DEFAULT_SHARE_FIELDS, edit: true });
-  assert.equal(rv.status, 409, "an edit after revoke does not resurrect it either");
-  assert.equal((await store.findReceiptShareBySlug(c.body.slug))?.revokedAt !== undefined, true);
+  assert.equal((await call("POST", "/transfers/t1/share", { ...DEFAULT_SHARE_FIELDS, edit: true })).status, 409, "an edit after revoke makes nothing either");
+  assert.equal((await call("POST", "/transfers/t1/share", { ...DEFAULT_SHARE_FIELDS })).status, 201);
 });
 
-await check("two replacements of an expired share at once leave one live link, and both get it", async () => {
+await check("two shares at once leave one live link, and DELETE turns it off", async () => {
   await store.addTransfer({ ...(await store.findTransfer("t1"))!, id: "t2" } as any);
   await store.addReceiptShare({
     id: "rs_t2", slug: "t2old-t2old-t2old", transferId: "t2", userId: "u1", fields: { ...DEFAULT_SHARE_FIELDS },
@@ -138,12 +144,12 @@ await check("two replacements of an expired share at once leave one live link, a
   try {
     [a, b] = await Promise.all([call("POST", "/transfers/t2/share", { ...DEFAULT_SHARE_FIELDS }), call("POST", "/transfers/t2/share", { ...DEFAULT_SHARE_FIELDS })]);
   } finally { barrier = undefined; }
-  assert.deepEqual([a.status, b.status].sort(), [200, 201], `one creates, the other is answered with it: ${JSON.stringify([a.body, b.body])}`);
-  assert.equal(a.body.slug, b.body.slug, "both callers hold the same link");
+  assert.deepEqual([a.status, b.status], [201, 201], `both make a link: ${JSON.stringify([a.body, b.body])}`);
   const live = (await store.list("receiptShares")).filter((s: any) => s.transferId === "t2" && !s.revokedAt);
-  assert.equal(live.length, 1, "one unrevoked share per transfer");
+  assert.equal(live.length, 1, "one unrevoked share per transfer: the later one turned the earlier off");
+  assert.ok([a.body.slug, b.body.slug].includes(live[0].slug));
   assert.equal((await call("DELETE", "/transfers/t2/share")).status, 200);
-  assert.equal((await call("GET", `/r/${a.body.slug}`)).status, 410, "DELETE revokes the only live link");
+  for (const slug of [a.body.slug, b.body.slug]) assert.equal((await call("GET", `/r/${slug}`)).status, 410, "after DELETE neither link opens");
 });
 
 server.close();
