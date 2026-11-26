@@ -254,8 +254,9 @@ function appendEnd(t: List, w: Window): void {
  *  (NTP, a VM resume) neither stretches nor cuts one, and a window that starts
  *  later ends later, so appending at start keeps byEnd ordered. Tests inject
  *  their own; with no argument it is put back. */
-let clock: () => number = () => performance.now();
-export function setRateClock(c: () => number = () => performance.now()): void {
+const monotonic = (): number => performance.now();
+let clock: () => number = monotonic;
+export function setRateClock(c: () => number = monotonic): void {
   clock = c;
 }
 

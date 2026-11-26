@@ -34,7 +34,7 @@ const express = (await import("express")).default;
 const { initStore, store } = await import("../services/api/src/store.js");
 const { passwordProblem, hashPassword, passwordMatches } = await import("../services/api/src/domain/passwords.js");
 const { hashToken, ownerInvoiceView } = await import("../services/api/src/domain/invoices.js");
-const { apiRateLimit, bucketCounts, clientKey, rateLimit, RATE_BUCKETS_MAX, securityHeaders, securityHeadersFor, setRateClock, sweepExpiredBuckets } = await import("../services/api/src/http/policy.js");
+const { apiRateLimit, bucketCounts, clientKey, rateLimit, RATE_BUCKETS_MAX, recordFailure, securityHeaders, securityHeadersFor, setRateClock, sweepExpiredBuckets, tooManyFailures } = await import("../services/api/src/http/policy.js");
 const { SECURITY } = await import("../services/api/src/config.js");
 const { createInvoiceLinkRouter } = await import("../services/api/src/routes/business/invoice-links.js");
 const { publicUser } = await import("../services/api/src/users/public-user.js");
@@ -344,6 +344,7 @@ await check("one trusted hop keys on the address the proxy appended; a spoofed l
   // The proxy's own address is not the key: another client is not locked out.
   assert.equal((await fetch(`${preBase}/api/webauthn/challenge`, { method: "POST", headers: from("198.18.0.7"), body: "{}" })).status, 200);
 });
+await wallJumpOnDefaultClock("startup");
 // An injected rate clock, ten minutes on: every bucket so far has expired, so
 // the socket peer's windows start fresh for the no-proxy check and the sweep
 // starts empty.
@@ -496,6 +497,27 @@ try {
 } finally {
   setRateClock();
 }
+// The default clock, with only the wall clock moved: were it Date.now, the
+// 30-minute step would end both windows at once. Run on the clock the module
+// starts with and again on the one setRateClock() puts back.
+async function wallJumpOnDefaultClock(which: string) {
+  await check(`on the ${which} clock a wall-clock jump ends neither a rate window nor a failure count`, () => {
+    const realNow = Date.now;
+    const k = `default-clock-${which}`;
+    try {
+      for (let i = 0; i < 3; i++) rateLimit(`c:${k}`, 2);
+      recordFailure(`f:${k}`, 60_000);
+      recordFailure(`f:${k}`, 60_000);
+      assert.equal(tooManyFailures(`f:${k}`, 2), true);
+      Date.now = () => realNow() + 30 * 60_000;
+      assert.equal(rateLimit(`c:${k}`, 2), false, "a wall-clock jump cut a rate window");
+      assert.equal(tooManyFailures(`f:${k}`, 2), true, "a wall-clock jump cut a failure count");
+      recordFailure(`f:${k}`, 60_000);
+      assert.equal(tooManyFailures(`f:${k}`, 3), true, "a wall-clock jump restarted a failure count");
+    } finally { Date.now = realNow; }
+  });
+}
+await wallJumpOnDefaultClock("restored");
 // todo (owner decision, #107 8/8 Q1): the failure counters (operator login
 // per IP, invoice-link passwords per link) are swept but not capped. Capping
 // means evicting a lock early (a bypass) or refusing new keys when full (a
