@@ -161,16 +161,78 @@ export function clientKey(ip: string | undefined): string {
   return `${groups.slice(0, 4).map((g) => (parseInt(g, 16) || 0).toString(16)).join(":")}::/64`;
 }
 
-const hits = new Map<string, { n: number; reset: number }>();
+/**
+ * Most rate-limit windows held at once (about 36 MB with 64-character keys).
+ * A caller rotating through fresh addresses (an IPv6 /48 holds 65,536 /64s)
+ * or fresh credential ids opens one window per request, so without a cap the
+ * map grows with the flood's rate until the sweep catches up.
+ *
+ * At the cap a new key is never refused: that would lock out every caller
+ * whose window had ended, passkey login and Shopify included, for as long as
+ * a flood of ~100k fresh keys a minute kept the map full. Instead a window
+ * makes room, chosen in this order: the least recently used one-request
+ * window (it holds nothing worth keeping: evicting it gives back at most the
+ * request the flood spends to re-open it), then the least recently used
+ * window that counted more but is not limited, and only when every window
+ * held is limited, the least recently used limited one. So a limited key (a
+ * guessed credential, a hot partner caller, the flooder's own) keeps its
+ * count unless a flood holds 100k limited windows at once, which costs it
+ * 100k x (limit + 1) requests in one window (2.1M at the auth limit).
+ *
+ * Each tier is a doubly linked list in last-use order, so a hit and an
+ * eviction are O(1). Not a JS Map in insertion order: V8 leaves a slot for
+ * every delete until it rehashes, and a fresh iterator for the oldest entry
+ * steps over all of them, about 50-90 us per new key once the map is full.
+ * Bucketing IPv6 by a wider prefix was not chosen: it puts unrelated users
+ * of one provider in one bucket and does nothing for `c:<credential>` keys.
+ */
+export const RATE_BUCKETS_MAX = 100_000;
+
+type Window = { key: string; n: number; reset: number; tier: number; prev: Window | null; next: Window | null };
+/** 0: one request; 1: more, not limited; 2: limited. Evicted in that order. */
+const tiers: { head: Window | null; tail: Window | null }[] = [0, 1, 2].map(() => ({ head: null, tail: null }));
+const hits = new Map<string, Window>();
+
+function unlink(w: Window): void {
+  const t = tiers[w.tier];
+  if (w.prev) w.prev.next = w.next;
+  else t.head = w.next;
+  if (w.next) w.next.prev = w.prev;
+  else t.tail = w.prev;
+  w.prev = w.next = null;
+}
+
+function append(w: Window): void {
+  const t = tiers[w.tier];
+  w.prev = t.tail;
+  if (t.tail) t.tail.next = w;
+  else t.head = w;
+  t.tail = w;
+}
+
+function drop(w: Window): void {
+  unlink(w);
+  hits.delete(w.key);
+}
 
 export function rateLimit(key: string, perMin: number): boolean {
   const now = Date.now();
-  const h = hits.get(key);
-  if (!h || h.reset < now) {
-    hits.set(key, { n: 1, reset: now + 60_000 });
-    return true;
+  let w = hits.get(key);
+  if (w) unlink(w);
+  else {
+    if (hits.size >= RATE_BUCKETS_MAX) drop((tiers[0].head ?? tiers[1].head ?? tiers[2].head)!);
+    w = { key, n: 0, reset: now + 60_000, tier: 0, prev: null, next: null };
+    hits.set(key, w);
   }
-  return ++h.n <= perMin;
+  // An ended window is renewed in place: a returning caller keeps its slot.
+  if (w.reset < now) {
+    w.n = 0;
+    w.reset = now + 60_000;
+  }
+  w.n++;
+  w.tier = w.n > perMin ? 2 : w.n > 1 ? 1 : 0;
+  append(w);
+  return w.n <= perMin;
 }
 
 /**
@@ -209,11 +271,14 @@ export function recordFailure(key: string, windowMs: number): void {
 /* Expired buckets are dropped on a timer, not by a request: a scan on the
  * request path would run on every request once a caller rotating through
  * fresh IPv6 /64s keeps the map large. */
-setInterval(() => {
-  const now = Date.now();
-  for (const [k, v] of hits) if (v.reset < now) hits.delete(k);
+export function sweepExpiredBuckets(now = Date.now()): void {
+  for (const w of hits.values()) if (w.reset < now) drop(w);
   for (const [k, v] of failures) if (v.reset < now) failures.delete(k);
-}, 10_000).unref();
+}
+setInterval(() => sweepExpiredBuckets(), 10_000).unref();
+
+/** How many windows each map holds, for the bounds test. */
+export const bucketCounts = () => ({ hits: hits.size, failures: failures.size });
 
 /**
  * Which paths sit on the tight bucket: everything where a request is a GUESS
