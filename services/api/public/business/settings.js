@@ -31,7 +31,7 @@ function menu(accounts) {
     ["Account", [here("monerium", "Monerium"), own
       ? `<a class="zb-set-menu__item" href="/app?from=business#page-settings">Payment page${Z.icon("open_in_new", "zb-set-menu__out")}<span class="z-sr"> (the app)</span></a>`
       : `<a class="zb-set-menu__item" href="/app?from=business#security">Your sign-in and recovery${Z.icon("open_in_new", "zb-set-menu__out")}<span class="z-sr"> (the app)</span></a>`]],
-    ["Connected", [away("apps", "Apps"), away("integrations", "Accounting connections")]],
+    ["Connected", [away("apps", "Apps"), away("integrations", "Accounting connections"), here("ai", "AI assistant")]],
   ];
   return `<nav class="zb-set-menu" aria-label="Settings">${groups.map(([title, items]) =>
     `<h2 class="z-eyebrow">${title}</h2>${items.join("")}`).join("")}</nav>`;
@@ -44,6 +44,14 @@ function section(title, sub, body, action = "") {
   return `<section class="z-card zb-pad zb-stack" style="gap:14px" aria-labelledby="set-h">
     <div class="zb-side-card__head"><h2 id="set-h">${esc(title)}</h2>${action}</div>
     ${sub ? `<p class="desc">${esc(sub)}</p>` : ""}${body}</section>`;
+}
+
+/* Home's ask box answers set questions from Zold's own records. Asking in
+   your own words needs a language model; NEAR AI is the first one Zold will
+   connect. Nothing connects yet, so the card says so and offers no button. */
+function aiSection() {
+  return section("AI assistant", "Home answers set questions from your own records today: what is due, and where a month’s money went. Connecting an AI model will let you ask in your own words.",
+    `<ul class="z-list z-card"><li>${Z.row({ lead: Z.iconTile({ icon: "smart_toy" }), title: "NEAR AI", sub: "The first AI model Zold will connect. It will prepare payments and answers; nothing moves without your approval.", soon: true })}</li></ul>`);
 }
 
 function orgSection() {
@@ -167,7 +175,7 @@ RENDER.settings = async () => {
   const accounts = acc.status === "fulfilled" ? acc.value.accounts : null;
   const keys = ks.status === "fulfilled" ? ks.value?.monerium ?? null : null;
   // A company's account is its own Safe: its Monerium is its own keys, never a login's connection.
-  const SECTIONS = { org: orgSection, monerium: () => (org.entity === "company" ? companyMoneriumSection(keys, deposits, payouts, payoutsOn) : moneriumSection(accounts)) };
+  const SECTIONS = { org: orgSection, ai: aiSection, monerium: () => (org.entity === "company" ? companyMoneriumSection(keys, deposits, payouts, payoutsOn) : moneriumSection(accounts)) };
   return {
     html: `<div class="zb-set" id="set-root">${menu(accounts)}<div id="set-body">${SECTIONS[ss.sec]()}</div></div>`,
     bind(box) {
@@ -186,6 +194,8 @@ RENDER.settings = async () => {
         const b = ev.target.closest("[data-ss]");
         if (!b) return;
         ss.sec = b.dataset.ss;
+        // The address names the section, so reload and a shared link open it.
+        history.replaceState(history.state, "", `?view=settings&sec=${ss.sec}`);
         root.querySelector(".zb-set-menu").outerHTML = menu(accounts);
         root.querySelector("#set-body").innerHTML = SECTIONS[ss.sec]();
         root.querySelector(`[data-ss="${ss.sec}"]`)?.focus();
