@@ -128,8 +128,11 @@ async function accountView(org: Organisation, a: Account) {
   const backer = a.backingUserId
     ? (await store.membersOf(org.id)).find((m) => m.userId === a.backingUserId && m.status === "active")
     : undefined;
+  // Bank payouts carry recipients' IBANs and references: they are read only
+  // through GET .../monerium/payouts, under its own permission.
+  const { moneriumPayouts: _payouts, ...rest } = a;
   return {
-    ...a, gate: gateOf(org, a), profile: accountProfileStanding(org, a),
+    ...rest, gate: gateOf(org, a), profile: accountProfileStanding(org, a),
     // As Members shows them: the name, else the email.
     ...(backer?.name || backer?.email ? { backingMemberName: backer.name || backer.email } : {}),
   };
@@ -191,6 +194,11 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       // user's orgs: the user's row held, two creates are taken in turn.
       await store.lockUser(session.userId);
 
+      // An organisation opens accounts, pages and partner keys of its own, none
+      // of which ask the member's segment: so not before that is decided.
+      if ((await store.findUser(session.userId))?.segment?.value === "UNDECIDED") {
+        return res.status(403).json({ code: "RESIDENCE_NEEDED", error: "Say where you live first. It is the first step on your Home." });
+      }
       const { name, type, country, legalName, taxId, email, timeZone, entity } = req.body ?? {};
       const orgType: OrgType = type === "business" ? "business" : "personal";
       // Company or sole trader decides who will own the org's money, so a

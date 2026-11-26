@@ -128,7 +128,6 @@ await check("b-passkey's button stops after the passkey for an eligible company:
   run("obScreen = 'b-passkey'");
   await run("obCreateAccount(document.createElement('button'))");
   assert.equal(screen(), "b-safe-choice");
-  assert.ok(calls.some((c) => c.path === "/api/orgs"), "obCreateAccount ran past its early returns");
   assert.ok(!deployed(), JSON.stringify(calls));
 });
 await check("with an import in progress nothing deploys, even where the capability is off", async () => {
@@ -319,7 +318,7 @@ await check("a segment without a Safe (India collections) never asks to deploy o
 const js = (code: string) => JSON.parse(JSON.stringify(run(code)));
 await check("signup: type, about you, the Google/Apple login where offered, the passkey", () => {
   setUser(null);
-  run(`Object.assign(obDraft, { type: "individual", given: "Mira", family: "Z", email: "m@example.test", country: "DE", usPerson: false, terms: true, social: null }); obSocial = null`);
+  run(`Object.assign(obDraft, { type: "individual", given: "Mira Z", family: "", email: "m@example.test", social: null }); obSocial = null`);
   setCaps({ turnkeyGuardians: false, turnkeyLogins: null });
   assert.deepEqual(js("obSignupSteps()"), ["account-type", "p-about", "p-passkey"]);
   assert.equal(run('obGuard("p-passkey")'), "p-passkey");
@@ -330,7 +329,7 @@ await check("signup: type, about you, the Google/Apple login where offered, the 
   assert.equal(run('obGuard("p-passkey")'), "p-passkey");
   run('obDraft.social = null; obSocial = { provider: "google", idToken: "t", publicKey: "k" }');
   assert.equal(run('obGuard("p-passkey")'), "p-passkey");
-  run("obDraft.terms = false");
+  run('obDraft.email = ""');
   assert.equal(run('obGuard("p-passkey")'), "p-about", "unanswered: back to the one screen about you");
   run("obSocial = null; obClearDraft()");
 });
@@ -366,9 +365,7 @@ await check("signup: skipping after a login then using the passkey adds no guard
   setCaps({ turnkeyGuardians: true, turnkeyLogins: { google: "client-id" } });
   setUser(null);
   run(`Object.assign(obDraft, {
-    type: "company", given: "Mira", family: "Z", email: "m@example.test", country: "DE",
-    usPerson: false, companyUsNexus: false, legalName: "Example", entity: "company", incorp: "DE",
-    terms: true, authorised: true, social: null,
+    type: "company", given: "Mira Z", family: "", email: "m@example.test", legalName: "Example", social: null,
   }); obSocial = { provider: "google", idToken: "tok", publicKey: "pk" }`);
   const skip: any = {};
   run("OB['b-social'].bind")({ querySelector: (sel: string) => sel === "#btn-social-skip" ? skip : null });

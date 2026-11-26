@@ -405,6 +405,7 @@ await check("the set-up link names its Settings section in the URL, so a new tab
   assert.equal(settingsModel.settingsSecFrom("?view=settings&sec=monerium"), "monerium");
   assert.equal(settingsModel.settingsSecFrom("?view=settings&sec=org"), "org");
   assert.equal(settingsModel.settingsSecFrom("?view=settings"), null);
+  assert.equal(settingsModel.settingsSecFrom("?view=settings&sec=ai"), "ai");
   assert.equal(settingsModel.settingsSecFrom("?view=settings&sec=members"), null, "unknown sections are ignored");
   const home = readFileSync(path.join(ROOT, "services/api/public/business/home.js"), "utf8");
   assert.match(home, /href="\?view=\$\{esc\(view\)\}&amp;sec=\$\{esc\(sec\)\}"/, "Home's Open link carries sec in its href");

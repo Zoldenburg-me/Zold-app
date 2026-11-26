@@ -28,6 +28,7 @@ import {
   activity,
   assertOneLinePerInvoice,
   assertTransition,
+  currentFingerprint,
   importCsv,
   isCancellable,
   isEditable,
@@ -545,12 +546,13 @@ export function createDraftRoutes(
     }
     const spendable = accountIsSpendable(account, ctx.org);
     if (!spendable.ok) return res.status(409).json({ error: spendable.reason });
-    // A company's IBAN is on its own Safe, which only its owners sign; a bank
-    // payout from it (a Monerium redeem signed by the Safe) is not built.
+    // A company's IBAN is on its own Safe, which only its owners sign. One
+    // bank payout at a time is built (org-monerium-payouts.ts); a run over
+    // several payees is not, and is refused by name.
     if (orgEntity(ctx.org) === "company") {
       return res.status(409).json({
-        code: "COMPANY_BANK_PAYOUT_NOT_BUILT",
-        error: "Paying a bank account from the company’s IBAN is not built yet. Nothing was sent. A payment to a crypto wallet is queued for the owners to sign.",
+        code: "COMPANY_BANK_RUN_NOT_BUILT",
+        error: "A company pays a bank account one payment at a time from Settings → Monerium, where an owner signs each with their passkey. A bank run over several payees is not built. Nothing was sent. A payment to a crypto wallet is queued for the owners to sign.",
       });
     }
     if (!account.backingUserId) {
@@ -603,9 +605,10 @@ export function createDraftRoutes(
     // for, so every line is checked first and the whole draft is refused if any
     // one of them cannot be paid.
     //
-    // The address book is checked here, with nothing awaited between this
-    // check and the bank details read below, so every IBAN and name planned
-    // is the one that was approved; later awaits use these copies.
+    // The address book is checked here, and each bank account read below is
+    // checked again against the line's fingerprint: an edit that lands between
+    // the two (every await is a gap on Postgres) must not plan an IBAN nobody
+    // approved. Later awaits use the copies planned here.
     checked = await reconcileDrift((await store.findDraft(checked.id)) ?? checked);
     if (checked.state === "INVALID_DATA") return heldForDrift();
     // The row is live and written in place, so this is copied now: the claim
@@ -632,6 +635,10 @@ export function createDraftRoutes(
       const bank = contact?.bankAccounts.find((b) => b.id === d.bankAccountId);
       if (!bank) {
         problems.push({ lineId: line.id, reason: "The saved bank account is gone." });
+        continue;
+      }
+      if (d.fingerprint && currentFingerprint(line, contact!) !== d.fingerprint) {
+        problems.push({ lineId: line.id, reason: "This recipient changed after the draft was approved." });
         continue;
       }
       if (bank.currency !== "EUR" || !bank.iban) {

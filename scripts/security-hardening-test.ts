@@ -1,5 +1,9 @@
 /**
  * Login rate limits, invoice-link passwords, and what never carries a user IP.
+ * Pre-auth bounds: the body cap runs before the rate limit, a blocked partner
+ * sees no more calls than its bucket allows, the bucket map stays bounded
+ * under a flood of distinct keys and a steady inflow, and the trusted-proxy
+ * setting never turns a spoofed X-Forwarded-For into a fresh bucket.
  *
  * Offline: an in-process express app on an ephemeral port and a throwaway db.
  *
@@ -8,8 +12,10 @@
 // Must be first: pins chain, keys and a throwaway database.
 import "./_local-chain.js";
 import assert from "node:assert/strict";
-import { chmodSync, closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { gzipSync } from "node:zlib";
 import { spawnSync } from "node:child_process";
+import http from "node:http";
 import { randomBytes } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -28,7 +34,8 @@ const express = (await import("express")).default;
 const { initStore, store } = await import("../services/api/src/store.js");
 const { passwordProblem, hashPassword, passwordMatches } = await import("../services/api/src/domain/passwords.js");
 const { hashToken, ownerInvoiceView } = await import("../services/api/src/domain/invoices.js");
-const { apiRateLimit, clientKey, securityHeaders, securityHeadersFor } = await import("../services/api/src/http/policy.js");
+const { apiRateLimit, bucketCounts, clientKey, rateLimit, RATE_BUCKETS_MAX, recordFailure, securityHeaders, securityHeadersFor, setRateClock, sweepExpiredBuckets, tooManyFailures } = await import("../services/api/src/http/policy.js");
+const { SECURITY } = await import("../services/api/src/config.js");
 const { createInvoiceLinkRouter } = await import("../services/api/src/routes/business/invoice-links.js");
 const { publicUser } = await import("../services/api/src/users/public-user.js");
 const { persist } = await import("../services/api/src/store/db.js");
@@ -215,6 +222,315 @@ await check("guesses sent all at once still stop at ten, though checking is asyn
   assert.equal(statuses.filter((x) => x === 429).length, 20);
 });
 server.close();
+
+console.log("pre-auth bounds");
+// server.ts's order, rebuilt: headers, the capped body parser, then the
+// limiter. The first check pins that the real file still has it.
+const pre = express();
+pre.use(securityHeaders);
+pre.use(express.json({ limit: SECURITY.jsonBodyLimit }));
+pre.set("trust proxy", 1);
+pre.use("/api", apiRateLimit);
+let challenges = 0;
+pre.post("/api/webauthn/challenge", (_req, res) => {
+  challenges++;
+  res.json({ challenge: "x" });
+});
+let upstreamCalls = 0;
+const releaseUpstream: Array<() => void> = [];
+// A partner that never answers until the test lets it.
+pre.post("/api/quotes", async (_req, res) => {
+  upstreamCalls++;
+  await new Promise<void>((r) => releaseUpstream.push(r));
+  res.json({});
+});
+const preServer = http.createServer({ requestTimeout: 400, connectionsCheckingInterval: 50 }, pre).listen(0, "127.0.0.1");
+await new Promise((r) => preServer.once("listening", r));
+const prePort = (preServer.address() as AddressInfo).port;
+const preBase = `http://127.0.0.1:${prePort}`;
+const from = (ip: string) => ({ "content-type": "application/json", "x-forwarded-for": ip });
+const big = JSON.stringify({ pad: "x".repeat(64 * 1024) });
+/** A raw request: headers now, the body chunk by chunk, the answer when it comes. */
+function rawPost(path: string, headers: Record<string, string>) {
+  const req = http.request({ host: "127.0.0.1", port: prePort, path, method: "POST", headers });
+  const answer = new Promise<{ status: number; at: number }>((resolve, reject) => {
+    req.on("response", (r) => { r.resume(); resolve({ status: r.statusCode!, at: Date.now() }); });
+    req.on("error", reject);
+  });
+  answer.catch(() => {});
+  return { req, answer };
+}
+
+await check("server.ts parses the capped body before the /api rate limit, and leaves Node's request timeouts on", () => {
+  const src = readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), "../services/api/src/server.ts"), "utf8");
+  const headers = src.indexOf("app.use(securityHeaders);");
+  const body = src.indexOf("app.use(express.json({");
+  const limiter = src.indexOf('app.use("/api", apiRateLimit);');
+  assert.ok(headers >= 0 && headers < body && body < limiter, `order: ${headers} ${body} ${limiter}`);
+  assert.match(src.slice(body, limiter), /limit: SECURITY\.jsonBodyLimit/);
+  assert.equal(SECURITY.jsonBodyLimit, "64kb");
+  assert.doesNotMatch(src, /requestTimeout|headersTimeout|setTimeout\(0\)/);
+  const plain = http.createServer();
+  assert.ok(plain.requestTimeout > 0 && plain.headersTimeout > 0, `${plain.requestTimeout} ${plain.headersTimeout}`);
+});
+await check("a body over 64 KiB is a 413 before the limiter counts it, even for a caller already limited", async () => {
+  for (let i = 0; i < 25; i++) {
+    const r = await fetch(`${preBase}/api/webauthn/challenge`, { method: "POST", headers: from("198.18.0.1"), body: big });
+    assert.equal(r.status, 413);
+    assert.equal(r.headers.get("x-zold-answer"), "1");
+  }
+  const statuses = [];
+  for (let i = 0; i < 21; i++) statuses.push((await fetch(`${preBase}/api/webauthn/challenge`, { method: "POST", headers: from("198.18.0.1"), body: "{}" })).status);
+  assert.equal(statuses.filter((x) => x === 200).length, 20, statuses.join(","));
+  assert.equal(statuses[20], 429);
+  assert.equal((await fetch(`${preBase}/api/webauthn/challenge`, { method: "POST", headers: from("198.18.0.1"), body: big })).status, 413);
+});
+// body-parser answers an oversized body only once the request has ended (it
+// discards the rest, holding none of it), so the socket's lifetime is bounded
+// by Node's request timeout, not by the cap.
+await check("a declared Content-Length over the cap never reaches a handler; unsent, it ends at the request timeout", async () => {
+  const before = challenges;
+  const { req, answer } = rawPost("/api/webauthn/challenge", { ...from("198.18.0.2"), "content-length": String(10 * 1024 * 1024) });
+  req.flushHeaders();
+  const started = Date.now();
+  const r = await answer.catch(() => ({ status: 0, at: Date.now() }));
+  req.destroy();
+  assert.ok(r.status === 408 || r.status === 0, String(r.status));
+  assert.ok(r.at - started < 3000, `${r.at - started} ms`);
+  assert.equal(challenges, before);
+});
+await check("a slow chunked body past the cap is discarded and answered 413 when it ends, never handled", async () => {
+  const before = challenges;
+  const { req, answer } = rawPost("/api/webauthn/challenge", { ...from("198.18.0.3"), "transfer-encoding": "chunked" });
+  req.write("{\"pad\":\"");
+  for (let i = 0; i < 100; i++) {
+    req.write("x".repeat(1024));
+    await new Promise((r) => setTimeout(r, 1));
+  }
+  req.end("\"}");
+  const r = await answer;
+  assert.equal(r.status, 413);
+  assert.equal(challenges, before);
+});
+await check("a stalled body holds its socket only until the request timeout", async () => {
+  const { req, answer } = rawPost("/api/webauthn/challenge", { ...from("198.18.0.4"), "content-length": "100" });
+  req.write("{\"pad\":");
+  const started = Date.now();
+  const r = await answer.catch(() => ({ status: 0, at: Date.now() }));
+  req.destroy();
+  assert.ok(r.status === 408 || r.status === 0, String(r.status));
+  assert.ok(r.at - started < 3000, `${r.at - started} ms`);
+});
+await check("a blocked partner sees no more calls than the partner bucket allows; the rest are refused at once", async () => {
+  const limit = SECURITY.partnerRateLimitPerMin;
+  const calls = Array.from({ length: limit + 15 }, () =>
+    fetch(`${preBase}/api/quotes`, { method: "POST", headers: from("198.18.0.5"), body: "{}" }).then((r) => r.status));
+  // Whichever requests the limiter takes first, the refused ones answer at
+  // once and the admitted ones hang on the partner: count, don't index.
+  const answered: number[] = [];
+  for (const c of calls) void c.then((s) => answered.push(s));
+  const deadline = Date.now() + 3000;
+  while (answered.length < 15 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+  await new Promise((r) => setTimeout(r, 100));
+  assert.deepEqual(answered, Array(15).fill(429));
+  assert.equal(upstreamCalls, limit);
+  for (const release of releaseUpstream.splice(0)) release();
+  const all = await Promise.all(calls);
+  assert.equal(all.filter((s) => s === 200).length, limit);
+  assert.equal(all.filter((s) => s === 429).length, 15);
+  assert.equal(upstreamCalls, limit);
+});
+await check("one trusted hop keys on the address the proxy appended; a spoofed left part mints no bucket", async () => {
+  const statuses = [];
+  for (let i = 0; i < 21; i++) {
+    statuses.push((await fetch(`${preBase}/api/webauthn/challenge`, { method: "POST", headers: from(`203.0.113.${i + 1}, 198.18.0.6`), body: "{}" })).status);
+  }
+  assert.equal(statuses[19], 200);
+  assert.equal(statuses[20], 429);
+  // The proxy's own address is not the key: another client is not locked out.
+  assert.equal((await fetch(`${preBase}/api/webauthn/challenge`, { method: "POST", headers: from("198.18.0.7"), body: "{}" })).status, 200);
+});
+await wallJumpOnDefaultClock("startup");
+// An injected rate clock, ten minutes on: every bucket so far has expired, so
+// the socket peer's windows start fresh for the no-proxy check and the sweep
+// starts empty.
+let clock = performance.now() + 10 * 60_000;
+setRateClock(() => clock);
+try {
+  await check("with no trusted hop (the default) the socket peer is the key; X-Forwarded-For is ignored", async () => {
+    pre.set("trust proxy", 0);
+    const statuses = [];
+    for (let i = 0; i < 21; i++) {
+      statuses.push((await fetch(`${preBase}/api/webauthn/challenge`, { method: "POST", headers: from(`203.0.114.${i + 1}`), body: "{}" })).status);
+    }
+    pre.set("trust proxy", 1);
+    assert.equal(statuses[19], 200, statuses.join(","));
+    assert.equal(statuses[20], 429);
+  });
+  await check("under a steady inflow of new keys the sweep holds the map to one window of them", () => {
+    sweepExpiredBuckets();
+    const base0 = bucketCounts().hits;
+    let peak = 0;
+    // Five simulated minutes, 200 new client keys a second, swept every 10 s as the timer does.
+    for (let sec = 0; sec < 300; sec++) {
+      for (let i = 0; i < 200; i++) rateLimit(`g:steady-${sec}-${i}`, 300);
+      clock += 1000;
+      if (sec % 10 === 9) sweepExpiredBuckets();
+      peak = Math.max(peak, bucketCounts().hits - base0);
+    }
+    assert.ok(peak <= 200 * 71, `peak ${peak}`);
+    clock += 61_000;
+    sweepExpiredBuckets();
+    assert.equal(bucketCounts().hits, 0);
+  });
+  await check("a flood of fresh keys stops at the cap and locks out no one: a known caller past its window, a newcomer and a quote are served; limited keys stay limited", () => {
+    // A regular caller's window ends during the flood; it must still be served after.
+    for (let i = 0; i < 5; i++) rateLimit("g:regular", 300);
+    clock += 61_000;
+    for (let i = 0; i < 21; i++) rateLimit("c:limited-before-flood", 20);
+    assert.equal(rateLimit("c:limited-before-flood", 20), false);
+    for (let i = 0; i < RATE_BUCKETS_MAX + 20_000; i++) {
+      rateLimit(`g:flood-${i}`, 300);
+      // One flooding key goes past its limit early in the flood.
+      if (i === 1000) for (let j = 0; j < 301; j++) rateLimit("g:flood-hot", 300);
+    }
+    assert.equal(bucketCounts().hits, RATE_BUCKETS_MAX);
+    // Limited keys are not reset by the flood, the flooder's own included.
+    assert.equal(rateLimit("c:limited-before-flood", 20), false);
+    assert.equal(rateLimit("g:flood-hot", 300), false);
+    // Nobody is refused for want of a slot.
+    assert.equal(rateLimit("g:regular", 300), true);
+    assert.equal(rateLimit("g:newcomer", 300), true);
+    assert.equal(rateLimit("p:newcomer", 30, "partner"), true);
+    assert.equal(bucketCounts().hits, RATE_BUCKETS_MAX + 1);
+    clock += 61_000;
+    sweepExpiredBuckets();
+    assert.equal(bucketCounts().hits, 0);
+  });
+  await check("a flood of two-request keys does not reset a limited key: limited windows are evicted last", () => {
+    // A thousand limited credential keys, then idle while the flood runs.
+    for (let k = 0; k < 1000; k++) for (let i = 0; i < 21; i++) rateLimit(`c:limited-idle-${k}`, 20);
+    for (let i = 0; i < RATE_BUCKETS_MAX + 20_000; i++) {
+      rateLimit(`g:pair-${i}`, 300);
+      rateLimit(`g:pair-${i}`, 300);
+    }
+    assert.equal(bucketCounts().hits, RATE_BUCKETS_MAX);
+    let reset = 0;
+    for (let k = 0; k < 1000; k++) if (rateLimit(`c:limited-idle-${k}`, 20)) reset++;
+    assert.equal(reset, 0, `${reset} limited keys reset by the flood`);
+    clock += 61_000;
+    sweepExpiredBuckets();
+    assert.equal(bucketCounts().hits, 0);
+  });
+  await check("at the cap the per-IP and partner counters of one quote request do not evict each other: the partner limit still builds", () => {
+    // Every other window counted two requests, so a new one-request window is
+    // the first to go; a shared cap made g: and p: evict each other.
+    for (let i = 0; i < RATE_BUCKETS_MAX - 1; i++) {
+      rateLimit(`g:pair-full-${i}`, 300);
+      rateLimit(`g:pair-full-${i}`, 300);
+    }
+    let partnerPassed = 0;
+    for (let i = 0; i < 40; i++) {
+      assert.equal(rateLimit("g:quoter", 300), true);
+      if (rateLimit("p:quoter", 30, "partner")) partnerPassed++;
+    }
+    assert.equal(partnerPassed, 30);
+    // A login counts the per-IP bucket, then the credential: same rule.
+    let credentialPassed = 0;
+    for (let i = 0; i < 25; i++) {
+      rateLimit("a:login", 300);
+      if (rateLimit("c:guessed", 20, "credential")) credentialPassed++;
+    }
+    assert.equal(credentialPassed, 20);
+    clock += 61_000;
+    sweepExpiredBuckets();
+    assert.equal(bucketCounts().hits, 0);
+  });
+  await check("at the cap ended windows go before live ones, whatever their tier: live counted and limited windows keep their counts", () => {
+    // Half the cap: limited windows, then ended (not yet swept).
+    for (let k = 0; k < RATE_BUCKETS_MAX / 2; k++) for (let i = 0; i < 3; i++) rateLimit(`c:ended-${k}`, 2);
+    clock += 61_000;
+    // The other half: live, a thousand limited, the rest at two requests.
+    for (let k = 0; k < 1000; k++) for (let i = 0; i < 3; i++) rateLimit(`c:live-limited-${k}`, 2);
+    for (let k = 0; k < RATE_BUCKETS_MAX / 2 - 1000; k++) for (let i = 0; i < 2; i++) rateLimit(`c:live-${k}`, 2);
+    assert.equal(bucketCounts().hits, RATE_BUCKETS_MAX);
+    // A pair flood of 30k fresh keys: each takes the slot of an ended window.
+    for (let i = 0; i < 30_000; i++) for (let j = 0; j < 2; j++) rateLimit(`c:mixed-flood-${i}`, 2);
+    assert.equal(bucketCounts().hits, RATE_BUCKETS_MAX);
+    let reset = 0;
+    for (let k = 0; k < 1000; k++) if (rateLimit(`c:live-limited-${k}`, 2)) reset++;
+    for (let k = 0; k < RATE_BUCKETS_MAX / 2 - 1000; k++) if (rateLimit(`c:live-${k}`, 2)) reset++;
+    assert.equal(reset, 0, `${reset} live windows evicted while ended ones waited`);
+    clock += 61_000;
+    sweepExpiredBuckets();
+    assert.equal(bucketCounts().hits, 0);
+  });
+  await check("at the cap a new key costs what it costs below the cap (300k keys past it)", () => {
+    const timeKeys = (prefix: string, count: number) => {
+      const t0 = performance.now();
+      for (let i = 0; i < count; i++) rateLimit(`${prefix}-${i}`, 300);
+      return performance.now() - t0;
+    };
+    clock += 61_000;
+    sweepExpiredBuckets();
+    assert.equal(bucketCounts().hits, 0);
+    // Below the cap, as the baseline: the same work less the eviction.
+    const fill = timeKeys("g:fill", RATE_BUCKETS_MAX);
+    assert.equal(bucketCounts().hits, RATE_BUCKETS_MAX);
+    const past = timeKeys("g:past", 3 * RATE_BUCKETS_MAX);
+    // A Map walked from its oldest entry took 30-120x the fill per 100k here.
+    assert.ok(past / 3 < 5 * fill + 50, `fill ${fill.toFixed(0)} ms per 100k, past the cap ${(past / 3).toFixed(0)} ms per 100k`);
+    clock += 61_000;
+    sweepExpiredBuckets();
+    assert.equal(bucketCounts().hits, 0);
+  });
+  await check("a wall-clock jump forward and its correction neither stretch nor cut a window", () => {
+    const realNow = Date.now;
+    try {
+      Date.now = () => realNow() + 30 * 60_000;
+      for (let i = 0; i < 3; i++) rateLimit("c:wall-jump", 2);
+      assert.equal(rateLimit("c:wall-jump", 2), false);
+      Date.now = realNow;
+      for (let i = 0; i < 10; i++) rateLimit(`g:after-jump-${i}`, 300);
+      clock += 61_000;
+      sweepExpiredBuckets();
+      assert.equal(bucketCounts().hits, 0, "a window outlived its 60 s");
+      assert.equal(rateLimit("c:wall-jump", 2), true);
+    } finally { Date.now = realNow; }
+    clock += 61_000;
+    sweepExpiredBuckets();
+  });
+} finally {
+  setRateClock();
+}
+// The default clock, with only the wall clock moved: were it Date.now, the
+// 30-minute step would end both windows at once. Run on the clock the module
+// starts with and again on the one setRateClock() puts back.
+async function wallJumpOnDefaultClock(which: string) {
+  await check(`on the ${which} clock a wall-clock jump ends neither a rate window nor a failure count`, () => {
+    const realNow = Date.now;
+    const k = `default-clock-${which}`;
+    try {
+      for (let i = 0; i < 3; i++) rateLimit(`c:${k}`, 2);
+      recordFailure(`f:${k}`, 60_000);
+      recordFailure(`f:${k}`, 60_000);
+      assert.equal(tooManyFailures(`f:${k}`, 2), true);
+      Date.now = () => realNow() + 30 * 60_000;
+      assert.equal(rateLimit(`c:${k}`, 2), false, "a wall-clock jump cut a rate window");
+      assert.equal(tooManyFailures(`f:${k}`, 2), true, "a wall-clock jump cut a failure count");
+      recordFailure(`f:${k}`, 60_000);
+      assert.equal(tooManyFailures(`f:${k}`, 3), true, "a wall-clock jump restarted a failure count");
+    } finally { Date.now = realNow; }
+  });
+}
+await wallJumpOnDefaultClock("restored");
+// todo (owner decision, #107 8/8 Q1): the failure counters (operator login
+// per IP, invoice-link passwords per link) are swept but not capped. Capping
+// means evicting a lock early (a bypass) or refusing new keys when full (a
+// lock for every new caller); that choice is not made here.
+console.log("  todo failure-counter map: swept, not capped — evict or refuse at a cap is an owner decision");
+for (const release of releaseUpstream.splice(0)) release();
+preServer.close();
 
 console.log("no hashes, no IPs");
 await check("the owner view drops both link hashes", async () => {
@@ -678,6 +994,387 @@ if (!existsSync(path.join(AGE_DIR, "age"))) {
     }
   });
 }
+
+console.log("backup-db.sh and secrets.sh against fake age and tar (a throwaway copy of scripts/)");
+// The scripts find age under their own ROOT/.toolchain, so each case runs a
+// copy of them in a temp dir whose .toolchain holds a fake age: "ciphertext"
+// is a header plus base64, so a plaintext marker never appears in it, and
+// FAKE_AGE_ENC / FAKE_AGE_DEC break it on purpose. Real tar unless a case puts
+// a fake one first on PATH.
+const FAKE_AGE = `#!/usr/bin/env bash
+set -u
+dec=0; out=""; in=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in -d) dec=1 ;; -R|-i) shift ;; -o) out="$2"; shift ;; *) in="$1" ;; esac
+  shift
+done
+src() { if [[ -n "$in" ]]; then cat "$in"; else cat; fi; }
+emit() { if [[ -n "$out" ]]; then cat >"$out"; else cat; fi; }
+if [[ $dec = 1 ]]; then
+  data="$(src | base64)"
+  plain="$(printf '%s' "$data" | base64 -d | tail -n +2)"
+  [[ "$(printf '%s' "$data" | base64 -d | head -n 1)" == "FAKE-AGE" ]] || { echo "age: error: no identity matched any of the recipients" >&2; exit 1; }
+  case "\${FAKE_AGE_DEC:-}" in
+    truncated) printf '%s' "$plain" | base64 -d | head -c "\${FAKE_AGE_KEEP:-200}" | emit; echo "age: error: stream damaged" >&2; exit 1 ;;
+  esac
+  printf '%s' "$plain" | base64 -d | emit
+else
+  case "\${FAKE_AGE_ENC:-}" in
+    fail) echo "age: error: malformed recipient" >&2; exit 1 ;;
+    enospc) { echo FAKE-AGE; src | base64 | head -c 8; } | emit; echo "age: error: write: no space left on device" >&2; exit 1 ;;
+    plaintext-enospc) src | head -c 64 | emit; echo "age: error: write: no space left on device" >&2; exit 1 ;;
+  esac
+  { echo FAKE-AGE; src | base64; } | emit
+fi
+`;
+const FAKE_TAR = `#!/usr/bin/env bash
+# Lists with the real tar; writes a plaintext file where it is told to
+# extract, or some bytes when it is told to create; then fails.
+[[ "$1" == "-tzf" ]] && exec "$REAL_TAR" "$@"
+dir=""
+while [[ $# -gt 0 ]]; do [[ "$1" == "-C" ]] && dir="$2"; shift; done
+if [[ -n "$dir" && -d "$dir" && "$dir" == *.unseal.* ]]; then printf 'PLAINTEXT-MARKER-tar\\n' >"$dir/partial"; else printf 'half an archive'; fi
+echo "tar: Error exit delayed from previous errors." >&2
+exit 2
+`;
+const MARK = "PLAINTEXT-MARKER";
+const REAL_TAR = spawnSync("sh", ["-c", "command -v tar"], { encoding: "utf8" }).stdout.trim();
+function operatorCopy() {
+  const root = mkdtempSync(path.join(os.tmpdir(), "zold-operator-"));
+  const scripts = path.join(root, "scripts");
+  mkdirSync(scripts);
+  for (const f of ["_age.sh", "backup-db.sh", "secrets.sh", "with-env-fd.mjs", "env-set.mjs", "unseal-check.mjs"]) copyFileSync(new URL(`./${f}`, import.meta.url), path.join(scripts, f));
+  const ageDir = path.join(root, ".toolchain", "age-v1.3.2", "age");
+  mkdirSync(ageDir, { recursive: true });
+  writeFileSync(path.join(ageDir, "age"), FAKE_AGE, { mode: 0o755 });
+  const bin = path.join(root, "fake-bin");
+  mkdirSync(bin);
+  writeFileSync(path.join(root, ".age-recipients"), "age1fakerecipient\n");
+  writeFileSync(path.join(root, "identity"), "AGE-SECRET-KEY-FAKE\n");
+  const run = (script: string, args: string[], env: NodeJS.ProcessEnv = {}, input?: string) =>
+    spawnSync("bash", [path.join(scripts, script), ...args], {
+      encoding: "utf8", input,
+      env: { PATH: `${bin}:${process.env.PATH}`, HOME: root, REAL_TAR, AGE_IDENTITY_FILE: path.join(root, "identity"), ...env },
+    });
+  const fake = (name: string, body: string) => writeFileSync(path.join(bin, name), body, { mode: 0o755 });
+  /** Every file under root (bar the fake tools) that holds `text`. */
+  const holding = (text: string, under = root): string[] => readdirSync(under).flatMap((f) => {
+    const p = path.join(under, f);
+    if (p === bin || p === path.join(root, ".toolchain")) return [];
+    const st = lstatSync(p); // never through a symlink: a hostile archive may leave one pointing out
+    if (st.isDirectory()) return holding(text, p);
+    return st.isFile() && readFileSync(p, "utf8").includes(text) ? [p] : [];
+  });
+  const ls = (dir: string) => (existsSync(dir) ? readdirSync(dir).sort() : []);
+  return { root, run, fake, holding, ls, done: () => rmSync(root, { recursive: true, force: true }) };
+}
+/** "Ciphertext" the fake age reads back as `plain`. */
+const fakeSealed = (plain: Buffer) => `FAKE-AGE\n${plain.toString("base64")}\n`;
+/** A gzipped ustar archive built by hand, so a case can hold any name, link or type. */
+function tarball(entries: { name: string; type?: "0" | "1" | "2" | "5"; link?: string; body?: string; mode?: number }[]) {
+  const blocks: Buffer[] = [];
+  const field = (h: Buffer, at: number, len: number, value: string) => h.write(value.slice(0, len), at, len, "latin1");
+  const octal = (n: number, len: number) => `${n.toString(8).padStart(len - 1, "0")}\0`;
+  for (const e of entries) {
+    const body = Buffer.from(e.body ?? "");
+    const h = Buffer.alloc(512);
+    field(h, 0, 100, e.name);
+    field(h, 100, 8, octal(e.mode ?? (e.type === "5" ? 0o755 : 0o644), 8));
+    field(h, 108, 8, octal(0, 8));
+    field(h, 116, 8, octal(0, 8));
+    field(h, 124, 12, octal(e.type === "0" || !e.type ? body.length : 0, 12));
+    field(h, 136, 12, octal(1_700_000_000, 12));
+    field(h, 148, 8, "        ");
+    field(h, 156, 1, e.type ?? "0");
+    field(h, 157, 100, e.link ?? "");
+    field(h, 257, 8, "ustar\u000000");
+    let sum = 0;
+    for (const b of h) sum += b;
+    field(h, 148, 8, `${sum.toString(8).padStart(6, "0")}\0 `);
+    blocks.push(h);
+    if (!e.type || e.type === "0") blocks.push(body, Buffer.alloc((512 - (body.length % 512)) % 512));
+  }
+  blocks.push(Buffer.alloc(1024));
+  return gzipSync(Buffer.concat(blocks));
+}
+
+await check("backup-db.sh writes one owner-only encrypted file into an owner-only dir, whatever the caller's umask", () => {
+  const t = operatorCopy();
+  try {
+    const store = path.join(t.root, "data", "db.json");
+    mkdirSync(path.dirname(store));
+    writeFileSync(store, `{"users":[{"name":"${MARK}"}]}`);
+    mkdirSync(path.join(t.root, ".local-backups"), { mode: 0o755 });
+    chmodSync(path.join(t.root, ".local-backups"), 0o755);
+    const r = spawnSync("bash", ["-c", `umask 000; exec bash "$0"`, path.join(t.root, "scripts", "backup-db.sh")], {
+      encoding: "utf8", env: { PATH: process.env.PATH, HOME: t.root },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    const files = t.ls(path.join(t.root, ".local-backups"));
+    assert.equal(files.length, 1, files.join(","));
+    assert.match(files[0], /^db-\d{8}T\d{6}Z\.json\.age$/);
+    assert.equal(statSync(path.join(t.root, ".local-backups")).mode & 0o777, 0o700);
+    assert.equal(statSync(path.join(t.root, ".local-backups", files[0])).mode & 0o777, 0o600);
+    assert.deepEqual(t.holding(MARK), [store], "the plaintext is anywhere but the store");
+  } finally { t.done(); }
+});
+await check("backup-db.sh: a failing or full-disk age leaves no backup, no .tmp and no plaintext", () => {
+  for (const mode of ["fail", "enospc", "plaintext-enospc"]) {
+    const t = operatorCopy();
+    try {
+      const store = path.join(t.root, "db.json");
+      writeFileSync(store, `{"users":[{"name":"${MARK}"}]}`);
+      const r = t.run("backup-db.sh", [], { TRANSF_DB_PATH: store, FAKE_AGE_ENC: mode });
+      assert.notEqual(r.status, 0, `${mode}: ${r.stdout}`);
+      assert.doesNotMatch(r.stdout, /wrote/, mode);
+      assert.deepEqual(t.ls(path.join(t.root, ".local-backups")), [], `${mode} left a file behind`);
+      assert.deepEqual(t.holding(MARK), [store], `${mode} left plaintext behind`);
+    } finally { t.done(); }
+  }
+});
+await check("backup-db.sh twice in the same second refuses the second and keeps the first", () => {
+  const t = operatorCopy();
+  try {
+    t.fake("date", "#!/bin/sh\necho 20261126T120000Z\n");
+    const store = path.join(t.root, "db.json");
+    writeFileSync(store, '{"users":[{"name":"first"}]}');
+    assert.equal(t.run("backup-db.sh", [], { TRANSF_DB_PATH: store }).status, 0);
+    const out = path.join(t.root, ".local-backups", "db-20261126T120000Z.json.age");
+    const first = readFileSync(out, "utf8");
+    writeFileSync(store, '{"users":[{"name":"second"}]}');
+    const r = t.run("backup-db.sh", [], { TRANSF_DB_PATH: store });
+    assert.notEqual(r.status, 0, r.stdout);
+    assert.match(r.stderr, /exists/);
+    assert.equal(readFileSync(out, "utf8"), first, "the first backup was replaced");
+    assert.deepEqual(t.ls(path.join(t.root, ".local-backups")), ["db-20261126T120000Z.json.age"]);
+  } finally { t.done(); }
+});
+await check("backup-db.sh: an ln failure that is not a same-second clash prints the real error, and leaves no backup or .tmp", () => {
+  const t = operatorCopy();
+  try {
+    t.fake("ln", "#!/bin/sh\necho \"ln: $2: Operation not supported\" >&2\nexit 1\n");
+    const store = path.join(t.root, "db.json");
+    writeFileSync(store, '{"users":[]}');
+    const r = t.run("backup-db.sh", [], { TRANSF_DB_PATH: store });
+    assert.notEqual(r.status, 0, r.stdout);
+    assert.match(r.stderr, /Operation not supported/);
+    assert.doesNotMatch(r.stderr, /this second|run it again/);
+    assert.deepEqual(t.ls(path.join(t.root, ".local-backups")), []);
+  } finally { t.done(); }
+});
+await check("backup-db.sh refuses with no store, no recipients or no age, and writes nothing", () => {
+  const t = operatorCopy();
+  try {
+    assert.match(t.run("backup-db.sh", [], { TRANSF_DB_PATH: path.join(t.root, "missing.json") }).stderr, /no database/);
+    writeFileSync(path.join(t.root, "db.json"), "{}");
+    assert.match(t.run("backup-db.sh", [], { TRANSF_DB_PATH: path.join(t.root, "db.json"), AGE_RECIPIENTS_FILE: path.join(t.root, "none") }).stderr, /no recipients/);
+    rmSync(path.join(t.root, ".toolchain"), { recursive: true });
+    assert.match(t.run("backup-db.sh", [], { TRANSF_DB_PATH: path.join(t.root, "db.json") }).stderr, /age is not installed/);
+    assert.deepEqual(t.ls(path.join(t.root, ".local-backups")), []);
+  } finally { t.done(); }
+});
+await check("secrets.sh encrypt and seal: a failing age or tar leaves no .tmp, no output file and no plaintext copy", () => {
+  for (const [what, env, fakeTar] of [["encrypt/enospc", { FAKE_AGE_ENC: "enospc" }, false], ["encrypt/plaintext-enospc", { FAKE_AGE_ENC: "plaintext-enospc" }, false],
+    ["seal/enospc", { FAKE_AGE_ENC: "enospc" }, false], ["seal/tar fails", {}, true]] as const) {
+    const t = operatorCopy();
+    try {
+      if (fakeTar) t.fake("tar", FAKE_TAR);
+      const dotenv = path.join(t.root, "dotenv");
+      writeFileSync(dotenv, `A=${MARK}\n`);
+      const priv = path.join(t.root, "private");
+      mkdirSync(priv);
+      writeFileSync(path.join(priv, "key"), MARK);
+      const r = what.startsWith("encrypt") ? t.run("secrets.sh", ["encrypt", dotenv], env) : t.run("secrets.sh", ["seal", priv], env);
+      assert.notEqual(r.status, 0, `${what}: ${r.stdout}`);
+      assert.deepEqual(t.ls(t.root).filter((f) => /\.age$|\.tmp/.test(f)), [], `${what} left a file behind`);
+      assert.deepEqual(t.holding(MARK).sort(), [dotenv, path.join(priv, "key")].sort(), `${what} left plaintext behind`);
+    } finally { t.done(); }
+  }
+});
+await check("secrets.sh set: a re-encryption that fails on a full disk leaves the old file in place and no temp file", () => {
+  const t = operatorCopy();
+  try {
+    const enc = path.join(t.root, "dotenv.age");
+    writeFileSync(enc, fakeSealed(Buffer.from("A=one\n")));
+    const before = readFileSync(enc, "utf8");
+    const r = t.run("secrets.sh", ["set", "NEW_NAME"], { SECRETS_ENV_FILE: enc, FAKE_AGE_ENC: "enospc" }, "fake-value-5\n");
+    assert.notEqual(r.status, 0, r.stdout);
+    assert.ok(!`${r.stdout}${r.stderr}`.includes("fake-value-5"));
+    assert.equal(readFileSync(enc, "utf8"), before);
+    assert.deepEqual(t.ls(t.root).filter((f) => f.startsWith("dotenv")), ["dotenv.age"]);
+  } finally { t.done(); }
+});
+await check("secrets.sh run: a file that fails to decrypt part-way never starts the command", () => {
+  const t = operatorCopy();
+  try {
+    const enc = path.join(t.root, "dotenv.age");
+    writeFileSync(enc, fakeSealed(Buffer.from(`A=one\n${"B=two\n".repeat(100)}`)));
+    const r = t.run("secrets.sh", ["run", "--", "sh", "-c", "echo started"], { SECRETS_ENV_FILE: enc, FAKE_AGE_DEC: "truncated", FAKE_AGE_KEEP: "20" });
+    assert.notEqual(r.status, 0);
+    assert.equal(r.stdout, "");
+    assert.match(r.stderr, /could not decrypt/);
+  } finally { t.done(); }
+});
+await check("secrets.sh unseal: a decrypt or tar failure part-way moves nothing into place and leaves no staging dir", () => {
+  for (const what of ["truncated", "tar fails"]) {
+    const t = operatorCopy();
+    try {
+      if (what === "tar fails") t.fake("tar", FAKE_TAR);
+      const sealed = path.join(t.root, "private.tar.age");
+      writeFileSync(sealed, fakeSealed(tarball([
+        { name: "private/", type: "5" },
+        { name: "private/first", body: `${MARK}-first\n` },
+        { name: "private/second", body: `${MARK}-second\n`.repeat(4000) },
+      ])));
+      const dest = path.join(t.root, "out", "private");
+      const r = t.run("secrets.sh", ["unseal", sealed, dest], what === "truncated" ? { FAKE_AGE_DEC: "truncated", FAKE_AGE_KEEP: "700" } : {});
+      assert.notEqual(r.status, 0, `${what}: ${r.stdout}`);
+      assert.doesNotMatch(r.stdout, /unsealed/);
+      assert.equal(existsSync(dest), false, `${what}: a failed unseal was moved into place`);
+      assert.deepEqual(t.ls(path.join(t.root, "out")), [], `${what} left the staging dir`);
+      assert.deepEqual(t.holding(MARK), [], `${what} left plaintext behind`);
+    } finally { t.done(); }
+  }
+});
+await check("secrets.sh unseal: a good archive lands owner-only at DEST, and an existing DEST is refused", () => {
+  const t = operatorCopy();
+  try {
+    const sealed = path.join(t.root, "private.tar.age");
+    writeFileSync(sealed, fakeSealed(tarball([{ name: "private/", type: "5" }, { name: "private/key", body: "k\n", mode: 0o644 }])));
+    const dest = path.join(t.root, "out");
+    const r = t.run("secrets.sh", ["unseal", sealed, dest]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(readFileSync(path.join(dest, "private", "key"), "utf8"), "k\n");
+    assert.equal(statSync(dest).mode & 0o777, 0o700);
+    assert.equal(statSync(path.join(dest, "private", "key")).mode & 0o077, 0, "an unsealed secret is group or world readable");
+    const again = t.run("secrets.sh", ["unseal", sealed, dest]);
+    assert.notEqual(again.status, 0);
+    assert.match(again.stderr, /refusing: .* exists/);
+    assert.deepEqual(t.ls(t.root).filter((f) => f.startsWith(".unseal")), []);
+  } finally { t.done(); }
+});
+await check("secrets.sh unseal: links that stay inside the tree, through other links or dangling, are kept", () => {
+  const t = operatorCopy();
+  try {
+    const sealed = path.join(t.root, "private.tar.age");
+    writeFileSync(sealed, fakeSealed(tarball([{ name: "private/", type: "5" }, { name: "private/key", body: "k\n" }, { name: "private/sub/", type: "5" },
+      { name: "private/current", type: "2", link: "key" }, { name: "private/sub/up", type: "2", link: "../current" },
+      { name: "private/sub/self", type: "2", link: "." }, { name: "private/via", type: "2", link: "sub/self/../key" },
+      { name: "private/later", type: "2", link: "not-yet" }])));
+    const dest = path.join(t.root, "out");
+    const r = t.run("secrets.sh", ["unseal", sealed, dest]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(readFileSync(path.join(dest, "private", "via"), "utf8"), "k\n");
+    assert.equal(readFileSync(path.join(dest, "private", "sub", "up"), "utf8"), "k\n");
+  } finally { t.done(); }
+});
+await check("secrets.sh seal refuses a tree unseal would refuse (an absolute link, a link out, a link chain out) and writes no archive", () => {
+  for (const [what, make] of [
+    ["absolute link to a file inside", (priv: string) => symlinkSync(path.join(priv, "key"), path.join(priv, "current"))],
+    ["../ link out", (priv: string) => symlinkSync("../..", path.join(priv, "up"))],
+    ["chain out", (priv: string) => { symlinkSync(".", path.join(priv, "x")); symlinkSync("x/..", path.join(priv, "d")); }],
+    ["a fifo", (priv: string) => spawnSync("mkfifo", [path.join(priv, "pipe")])],
+  ] as [string, (priv: string) => void][]) {
+    const t = operatorCopy();
+    try {
+      const priv = path.join(t.root, "private");
+      mkdirSync(priv);
+      writeFileSync(path.join(priv, "key"), MARK);
+      make(priv);
+      const r = t.run("secrets.sh", ["seal", priv]);
+      assert.notEqual(r.status, 0, `${what}: sealed (${r.stdout.trim()})`);
+      assert.match(r.stderr, /refusing to seal/, what);
+      assert.deepEqual(t.ls(t.root).filter((f) => /\.age$|\.tmp/.test(f)), [], `${what}: wrote an archive`);
+    } finally { t.done(); }
+  }
+});
+await check("secrets.sh seal accepts what unseal accepts: a link back in through the sealed dir's own name round-trips", () => {
+  const t = operatorCopy();
+  try {
+    const priv = path.join(t.root, "private");
+    mkdirSync(path.join(priv, "sub"), { recursive: true });
+    writeFileSync(path.join(priv, "key"), "k\n");
+    symlinkSync("../private/key", path.join(priv, "current"));
+    symlinkSync("../../private/current", path.join(priv, "sub", "up"));
+    const r = t.run("secrets.sh", ["seal", priv]);
+    assert.equal(r.status, 0, r.stderr);
+    const dest = path.join(t.root, "out");
+    const u = t.run("secrets.sh", ["unseal", `${priv}.tar.age`, dest]);
+    assert.equal(u.status, 0, u.stderr);
+    assert.equal(readFileSync(path.join(dest, "private", "current"), "utf8"), "k\n");
+    assert.equal(readFileSync(path.join(dest, "private", "sub", "up"), "utf8"), "k\n");
+  } finally { t.done(); }
+});
+await check("secrets.sh seal refuses a link to a sibling of the sealed dir, a symlinked dir and a hardlinked file, and writes no archive", () => {
+  for (const [what, make] of [
+    ["link to a sibling the archive does not hold", (priv: string) => { writeFileSync(path.join(path.dirname(priv), "other"), MARK); symlinkSync("../other", path.join(priv, "o")); }],
+    ["link hopping through a sibling and back", (priv: string) => { mkdirSync(path.join(path.dirname(priv), "other")); symlinkSync("../other/../private/key", path.join(priv, "h")); }],
+    ["link hopping through a sibling the tree does not hold", (priv: string) => symlinkSync("../gone/../private/key", path.join(priv, "g"))],
+    ["link through a sibling link", (priv: string) => { symlinkSync("private", path.join(path.dirname(priv), "alias")); symlinkSync("../alias/key", path.join(priv, "a")); }],
+    ["the sealed dir is a symlink", (priv: string) => { renameSync(priv, `${priv}.real`); symlinkSync(`${priv}.real`, priv); }],
+    ["a hardlinked file", (priv: string) => linkSync(path.join(priv, "key"), path.join(priv, "key2"))],
+    ["a file hardlinked from outside", (priv: string) => linkSync(path.join(priv, "key"), path.join(path.dirname(priv), "copy"))],
+  ] as [string, (priv: string) => void][]) {
+    const t = operatorCopy();
+    try {
+      const priv = path.join(t.root, "private");
+      mkdirSync(priv);
+      writeFileSync(path.join(priv, "key"), MARK);
+      make(priv);
+      const r = t.run("secrets.sh", ["seal", priv]);
+      assert.notEqual(r.status, 0, `${what}: sealed (${r.stdout.trim()})`);
+      assert.match(r.stderr, /refusing to seal/, what);
+      assert.deepEqual(t.ls(t.root).filter((f) => /\.age$|\.tmp/.test(f)), [], `${what}: wrote an archive`);
+    } finally { t.done(); }
+  }
+});
+await check("secrets.sh unseal refuses an archive whose files are hardlinked to each other inside the tree", () => {
+  const t = operatorCopy();
+  try {
+    const sealed = path.join(t.root, "private.tar.age");
+    writeFileSync(sealed, fakeSealed(tarball([{ name: "private/", type: "5" }, { name: "private/key", body: "k\n" },
+      { name: "private/key2", type: "1", link: "private/key" }])));
+    const dest = path.join(t.root, "work", "dest");
+    const r = t.run("secrets.sh", ["unseal", sealed, dest]);
+    assert.notEqual(r.status, 0, `unsealed (${r.stdout.trim()})`);
+    assert.match(r.stderr, /refusing to unseal: private\/key.* hard link/);
+    assert.equal(existsSync(dest), false, "moved into place");
+    assert.deepEqual(t.ls(path.join(t.root, "work")), [], "left the staging dir");
+  } finally { t.done(); }
+});
+await check("secrets.sh unseal of a hostile archive (absolute, ../, symlink, hardlink entries) writes nothing outside and moves nothing into place", () => {
+  const outside = mkdtempSync(path.join(os.tmpdir(), "zold-unseal-outside-"));
+  try {
+    const victim = path.join(outside, "victim");
+    for (const [what, entries] of [
+      ["absolute", [{ name: `${outside}/abs` }]],
+      ["../", [{ name: "private/" , type: "5" }, { name: "private/../../escape" }]],
+      ["symlink out, then a file through it", [{ name: "link", type: "2", link: outside }, { name: "link/through" }]],
+      ["symlink out, left in place", [{ name: "private/", type: "5" }, { name: "private/env", type: "2", link: victim }]],
+      ["symlink with ../ target", [{ name: "private/", type: "5" }, { name: "private/up", type: "2", link: "../../../" }]],
+      ["symlink chain: x -> . and d -> x/.. (lexically inside, on disk the parent)", [{ name: "x", type: "2", link: "." }, { name: "d", type: "2", link: "x/.." }]],
+      ["symlink chain two levels up: x -> . and f -> x/x/../..", [{ name: "x", type: "2", link: "." }, { name: "f", type: "2", link: "x/x/../.." }]],
+      ["symlink chain through a nested link: private/s -> .. and private/u -> s/..", [{ name: "private/", type: "5" }, { name: "private/s", type: "2", link: ".." }, { name: "private/u", type: "2", link: "s/.." }]],
+      ["hardlink to an outside file, then a write to it", [{ name: "hl", type: "1", link: victim }, { name: "hl", body: "overwritten" }]],
+      ["hardlink with ../ target", [{ name: "private/", type: "5" }, { name: "private/hl", type: "1", link: `private/../../${path.relative(os.tmpdir(), victim)}` }]],
+    ] as [string, Parameters<typeof tarball>[0]][]) {
+      writeFileSync(victim, "untouched");
+      const t = operatorCopy();
+      try {
+        const sealed = path.join(t.root, "private.tar.age");
+        writeFileSync(sealed, fakeSealed(tarball(entries.map((e) => ({ body: `${MARK}\n`, ...e })))));
+        const dest = path.join(t.root, "work", "dest");
+        const r = t.run("secrets.sh", ["unseal", sealed, dest]);
+        assert.notEqual(r.status, 0, `${what}: unsealed (${r.stdout.trim()})`);
+        assert.equal(existsSync(dest), false, `${what}: moved into place`);
+        assert.deepEqual(t.ls(path.join(t.root, "work")), [], `${what}: left the staging dir`);
+        assert.deepEqual(readdirSync(outside).sort(), ["victim"], `${what}: wrote outside`);
+        assert.equal(readFileSync(victim, "utf8"), "untouched", `${what}: changed a file outside`);
+        assert.deepEqual(t.ls(t.root).filter((f) => !["scripts", ".toolchain", "fake-bin", ".age-recipients", "identity", "private.tar.age", "work"].includes(f)), [], `${what}: wrote beside the staging dir`);
+      } finally { t.done(); }
+    }
+  } finally { rmSync(outside, { recursive: true, force: true }); }
+});
 
 console.log("log lines");
 await check("a URL in a log line keeps scheme and host only: keys in the path or query never print", async () => {

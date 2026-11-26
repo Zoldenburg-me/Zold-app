@@ -87,7 +87,11 @@ export async function submitPasskey(storage, email, request, { create, read, sub
       if (e.status !== 409) saveFor(storage, SUBMIT_KEY, email, "");
       // Refused before it was stored (a stale tab's 409 among them): the ticket
       // another submit was accepted with stays the one the codes are checked against.
-      if (body.otpTicket) saveFor(storage, TICKET_KEY, email, keptTicket);
+      // Only while the slot still holds this attempt's ticket: another tab may
+      // have saved its accepted one since, and the snapshot would delete it.
+      if (body.otpTicket && savedFor(storage, TICKET_KEY, email) === body.otpTicket) {
+        saveFor(storage, TICKET_KEY, email, keptTicket);
+      }
     }
     throw e;
   }
