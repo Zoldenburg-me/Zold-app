@@ -112,11 +112,12 @@ await check("two finalisers of one recovery: one holds the reserve and asks the 
   assert.equal((await store.findRecoveryRequest("c-fin"))!.status, "RELAYING");
   await assert.rejects(finalizeCandideRecovery(snap), /being finalized/, "the second is refused");
   for (const release of held.splice(0)) release();
-  await first;
+  // Its owner read may fail where no chain answers; the reserve goes back either way.
+  await first.catch(() => {});
   const after = (await store.findRecoveryRequest("c-fin"))!;
   assert.equal(after.status, "GRACE_PERIOD", "nothing recovered on chain: back to its grace period");
   assert.equal(after.relaying, undefined);
-  assert.equal(after.candide?.finalizeAttempts, 1, "the service was asked once");
+  assert.equal(serviceCalls, 1, "the service was asked once");
 });
 
 service.close();
