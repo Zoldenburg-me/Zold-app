@@ -13,7 +13,9 @@
  *    before the send, after the send and before the hash is written, a
  *    receipt-wait timeout, sends still queued) leaves at most one grant per
  *    Safe after a restart, and an uncertain send is never resent: the claim
- *    stays for a person to reconcile against the faucet wallet's history.
+ *    stays for a person to reconcile by the hash it was signed with;
+ *  - a failure before the broadcast (gas estimate, no gas money) or a
+ *    broadcast the node refuses releases the claim, and a retry pays once.
  *    A crash is a snapshot of db.json at that instant plus a call that never
  *    resumes; a restart reloads that file and imports a fresh faucet module.
  *
@@ -160,7 +162,7 @@ try {
   console.log("4c/6 crash and restart at every persistence boundary…");
   const { DB_PATH } = await import("../services/api/src/store/db.js");
   const { linesFromFaucet } = await import("../services/api/src/documents.js");
-  const { HttpRequestError } = await import("viem");
+  const { HttpRequestError, RpcRequestError } = await import("viem");
   await mintToFaucet(1000);
   type FaucetModule = typeof import("../services/api/src/faucet.js");
   let snapshot: Buffer | undefined;
@@ -171,13 +173,18 @@ try {
     crashed();
     return new Promise<never>(() => {});
   };
-  /** Crash on the next call of `obj[method]`, once; `before` runs the real call first. */
-  const crashOn = (obj: any, method: string, before = false) => new Promise<void>((resolve) => {
-    crashed = resolve;
+  /** Crash on the next call of `obj[method]`, once; `before` runs the real call first.
+   *  If the real call throws, or the crash point is never reached, the test fails
+   *  instead of hanging with the hardhat child alive. */
+  const crashOn = (obj: any, method: string, before = false) => new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`crash point ${method} not reached in 30 s`)), 30_000);
+    crashed = () => { clearTimeout(timer); resolve(); };
     const real = obj[method];
     obj[method] = async (...args: unknown[]) => {
       obj[method] = real;
-      if (before) await real.apply(obj, args);
+      if (before) {
+        try { await real.apply(obj, args); } catch (err) { clearTimeout(timer); reject(err); throw err; }
+      }
       return crash();
     };
   });
@@ -209,7 +216,7 @@ try {
   check("…and the statement shows no faucet credit for it", linesFromFaucet(ivanClaim).length === 0);
 
   const jule = addUser("Crash Jule");
-  armed = crashOn(faucetWallet, "writeContract", true);
+  armed = crashOn(faucetWallet, "sendRawTransaction", true);
   void f.faucetFundSafe(jule.id);
   await armed;
   f = await restart();
@@ -249,13 +256,17 @@ try {
   const p1 = await f.faucetFundSafe(pia.id);
   check("…and the fresh queue still funds a new Safe", p1.ok && (await balanceOf(pia.address)) === 50);
 
-  const quinn = addUser("Lost-answer Quinn");
-  const realWrite = faucetWallet.writeContract;
-  (faucetWallet as any).writeContract = async (...args: unknown[]) => {
-    (faucetWallet as any).writeContract = realWrite;
-    await (realWrite as any).apply(faucetWallet, args);
-    throw lostAnswer();
+  // The broadcast itself: the node takes the raw transaction, its answer is lost.
+  const realBroadcast = faucetWallet.sendRawTransaction;
+  const loseNextAnswer = () => {
+    (faucetWallet as any).sendRawTransaction = async (...args: unknown[]) => {
+      (faucetWallet as any).sendRawTransaction = realBroadcast;
+      await (realBroadcast as any).apply(faucetWallet, args);
+      throw lostAnswer();
+    };
   };
+  const quinn = addUser("Lost-answer Quinn");
+  loseNextAnswer();
   const q1 = await f.faucetFundSafe(quinn.id);
   check("a send whose answer is lost is FAUCET_FAILED and keeps the claim: the transfer may be out",
     !q1.ok && q1.code === "FAUCET_FAILED" && store.findUser(quinn.id)?.faucet?.txHash === "", JSON.stringify(q1));
@@ -269,6 +280,37 @@ try {
   check("a send refused before it went out releases the claim", !r1.ok && r1.code === "FAUCET_FAILED" && store.findUser(rosa.id)?.faucet === undefined);
   const r2 = await f.faucetFundSafe(rosa.id);
   check("…so a retry funds the Safe, once", r2.ok && (await balanceOf(rosa.address)) === 50);
+
+  // Failures before the hand-over release the claim, whatever their kind: a
+  // node that times out on the gas estimate has been sent nothing.
+  const sami = addUser("Estimate-fails Sami");
+  const realPrepare = faucetWallet.prepareTransactionRequest;
+  (faucetWallet as any).prepareTransactionRequest = async () => { (faucetWallet as any).prepareTransactionRequest = realPrepare; throw lostAnswer(); };
+  const s1 = await f.faucetFundSafe(sami.id);
+  check("a gas estimate (nonce, fee) read that times out before the send releases the claim", !s1.ok && s1.code === "FAUCET_FAILED" && store.findUser(sami.id)?.faucet === undefined, JSON.stringify(s1));
+  const s2 = await f.faucetFundSafe(sami.id);
+  check("…so a retry funds the Safe, once", s2.ok && (await balanceOf(sami.address)) === 50, JSON.stringify(s2));
+
+  const tara = addUser("No-gas Tara");
+  const rpc = (method: string, params: unknown[]) => fetch(RPC, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) }).then((r) => r.json());
+  const gasHeld = (await rpc("eth_getBalance", [faucetAddress, "latest"])).result;
+  await rpc("hardhat_setBalance", [faucetAddress, "0x0"]);
+  let t1: Awaited<ReturnType<FaucetModule["faucetFundSafe"]>>;
+  try { t1 = await f.faucetFundSafe(tara.id); } finally { await rpc("hardhat_setBalance", [faucetAddress, gasHeld]); }
+  check("a faucet wallet without gas money releases the claim: nothing was sent", !t1.ok && t1.code === "FAUCET_FAILED" && store.findUser(tara.id)?.faucet === undefined && (await balanceOf(tara.address)) === 0, JSON.stringify(t1));
+  const t2 = await f.faucetFundSafe(tara.id);
+  check("…after the top-up a retry funds the Safe, once", t2.ok && (await balanceOf(tara.address)) === 50, JSON.stringify(t2));
+
+  // The node answers the broadcast and refuses it: definitely not sent.
+  const uma = addUser("Broadcast-refused Uma");
+  (faucetWallet as any).sendRawTransaction = async () => {
+    (faucetWallet as any).sendRawTransaction = realBroadcast;
+    throw new RpcRequestError({ body: {}, url: RPC, error: { code: -32000, message: "insufficient funds for gas * price + value" } });
+  };
+  const u1 = await f.faucetFundSafe(uma.id);
+  check("a broadcast the node refuses (insufficient funds) releases the claim", !u1.ok && u1.code === "FAUCET_FAILED" && store.findUser(uma.id)?.faucet === undefined, JSON.stringify(u1));
+  const u2 = await f.faucetFundSafe(uma.id);
+  check("…so a retry funds the Safe, once", u2.ok && (await balanceOf(uma.address)) === 50, JSON.stringify(u2));
 
   console.log("5/6 accounts without a Safe are refused…");
   const noSafe = addUser("No-Safe Nia", { deployed: false });
@@ -311,11 +353,7 @@ try {
   check("one IP gets FAUCET_DRIPS_PER_IP drips, then IP_LIMIT", ipRuns.slice(0, 4).every((r) => r.ok) && !ipRuns[4].ok && ipRuns[4].code === "IP_LIMIT");
 
   const lostTo = `0x${randomBytes(20).toString("hex")}` as `0x${string}`;
-  (faucetWallet as any).writeContract = async (...args: unknown[]) => {
-    (faucetWallet as any).writeContract = realWrite;
-    await (realWrite as any).apply(faucetWallet, args);
-    throw lostAnswer();
-  };
+  loseNextAnswer();
   const lostDrip = await drip(lostTo, "EURe", "10.7.0.1");
   const lostAgain = await drip(lostTo, "EURe", "10.7.0.2");
   check("a drip whose answer is lost keeps its slot: the next one is COOLDOWN, the address got one drip",

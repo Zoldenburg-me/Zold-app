@@ -177,9 +177,18 @@ export function rateLimit(key: string, perMin: number): boolean {
   if (!h || h.reset < now) {
     // Re-inserted, so the map stays in window order, oldest first.
     hits.delete(key);
-    // At the cap the oldest window goes and that one caller counts afresh.
-    // Refusing new keys instead would let a flood lock out every new caller.
-    if (hits.size >= RATE_BUCKETS_MAX) hits.delete(hits.keys().next().value!);
+    // At the cap, expired windows go first (they sit at the front). A window
+    // still running is never evicted: that would hand its caller a fresh
+    // count, and the flood filling the map could reset a passkey or partner
+    // bucket at will. So a map full of running windows refuses the new key
+    // (fail closed): a flood of 100k fresh keys a minute locks out new
+    // callers until its oldest windows end, and callers already counted keep
+    // their counts.
+    while (hits.size >= RATE_BUCKETS_MAX) {
+      const [oldest, w] = hits.entries().next().value!;
+      if (w.reset >= now) return false;
+      hits.delete(oldest);
+    }
     hits.set(key, { n: 1, reset: now + 60_000 });
     return true;
   }

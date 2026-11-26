@@ -318,14 +318,19 @@ await check("a blocked partner sees no more calls than the partner bucket allows
   const limit = SECURITY.partnerRateLimitPerMin;
   const calls = Array.from({ length: limit + 15 }, () =>
     fetch(`${preBase}/api/quotes`, { method: "POST", headers: from("198.18.0.5"), body: "{}" }).then((r) => r.status));
-  const early = await Promise.race([
-    Promise.all(calls.slice(limit)),
-    new Promise<"hung">((r) => setTimeout(() => r("hung"), 3000)),
-  ]);
-  assert.deepEqual(early, Array(15).fill(429));
+  // Whichever requests the limiter takes first, the refused ones answer at
+  // once and the admitted ones hang on the partner: count, don't index.
+  const answered: number[] = [];
+  for (const c of calls) void c.then((s) => answered.push(s));
+  const deadline = Date.now() + 3000;
+  while (answered.length < 15 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+  await new Promise((r) => setTimeout(r, 100));
+  assert.deepEqual(answered, Array(15).fill(429));
   assert.equal(upstreamCalls, limit);
   for (const release of releaseUpstream.splice(0)) release();
-  assert.deepEqual(await Promise.all(calls.slice(0, limit)), Array(limit).fill(200));
+  const all = await Promise.all(calls);
+  assert.equal(all.filter((s) => s === 200).length, limit);
+  assert.equal(all.filter((s) => s === 429).length, 15);
   assert.equal(upstreamCalls, limit);
 });
 await check("one trusted hop keys on the address the proxy appended; a spoofed left part mints no bucket", async () => {
@@ -370,14 +375,20 @@ try {
     sweepExpiredBuckets();
     assert.equal(bucketCounts().hits, 0);
   });
-  await check("a flood of distinct keys in one window stops at the cap, and never refuses a newcomer", () => {
+  await check("a flood of distinct keys in one window stops at the cap and never resets a running window; at the cap a new key is refused", () => {
+    for (let i = 0; i < 21; i++) rateLimit("c:limited-before-flood", 20);
+    assert.equal(rateLimit("c:limited-before-flood", 20), false);
     for (let i = 0; i < RATE_BUCKETS_MAX + 20_000; i++) rateLimit(`g:flood-${i}`, 300);
     assert.ok(bucketCounts().hits <= RATE_BUCKETS_MAX, String(bucketCounts().hits));
+    // The caller limited before the flood was not evicted, so it stays limited.
+    assert.equal(rateLimit("c:limited-before-flood", 20), false);
+    // A full map of running windows refuses a new key (fail closed)…
+    assert.equal(rateLimit("g:newcomer", 300), false);
+    // …while a caller already counted keeps its allowance.
+    assert.equal(rateLimit("g:flood-1", 300), true);
+    // Once the flood's windows end, they make room without waiting for the sweep.
+    clock += 61_000;
     assert.equal(rateLimit("g:newcomer", 300), true);
-    // The oldest windows went first; a caller limited after the flood stays limited.
-    for (let i = 0; i < 20; i++) rateLimit("a:after-flood", 20);
-    for (let i = 0; i < 1000; i++) rateLimit(`g:flood-tail-${i}`, 300);
-    assert.equal(rateLimit("a:after-flood", 20), false);
     clock += 61_000;
     sweepExpiredBuckets();
     assert.equal(bucketCounts().hits, 0);
