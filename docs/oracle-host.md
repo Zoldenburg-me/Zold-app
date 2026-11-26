@@ -31,11 +31,12 @@ Names (all from `lib.sh`), for `<dep>` = `mainnet` | `testnet`:
 | socket directory, port | `/run/postgresql-mainnet`, 5432 | `/run/postgresql-testnet`, 5433 |
 | data directory (own block volume) | `/srv/pg/mainnet/data` | `/srv/pg/testnet/data` |
 | API OS user → role | `zold-mainnet` → `zold_app` | `zold-testnet` → `zold_app` |
-| deploy OS user → role | `zold-deploy-mainnet` → `zold_owner`, `hub_owner` | `zold-deploy-testnet` → `zold_owner` |
+| deploy OS user → role | `zold-deploy-mainnet` → `zold_owner` | `zold-deploy-testnet` → `zold_owner` |
 | hub OS user → role | `zold-hub` → `hub_app` | `zold-hub-testnet`, only with `HUB_TESTNET=1` |
 | socket group | `zold-mainnet-db` | `zold-testnet-db` |
 | pgBackRest | `/etc/pgbackrest/mainnet.conf`, stanza `zold-mainnet` | `…/testnet.conf`, `zold-testnet` |
 | API environment, port | `/etc/zold/mainnet.env`, 3000 | `/etc/zold/testnet.env`, 3001 |
+| chain addresses | `/etc/zold/mainnet.deployments.json` | `/etc/zold/testnet.deployments.json` |
 
 ## Owner input
 
@@ -50,9 +51,14 @@ the host:
   the dump bucket in the second region with a 14-day time-bound retention
   rule (unlocked) and a 30-day lifecycle delete, and a key that may create
   and read objects there, not overwrite or delete.
-- `OCI_NAMESPACE`, `OWNER_AGE_RECIPIENT` (public key), `ALERT_URL`.
+- `OCI_NAMESPACE`, `OWNER_AGE_RECIPIENT` (public key), `ALERT_URL`
+  (`https://` only; provision refuses another scheme).
 - `/etc/zold/<dep>.env`: the lease's environment, plus `DATABASE_URL`,
-  `TRANSF_DB_PATH`, `TRANSF_API_PORT` (`host.env.example` lists them).
+  `TRANSF_DB_PATH`, `TRANSF_API_PORT` (`host.env.example` lists them). No
+  `export` lines in it or in `host.env`.
+- `/etc/zold/<dep>.deployments.json` (root, 600): the `deployments.json` the
+  lease writes from its environment variable. `production` carries none, and
+  `/api/health` needs it, so the deploy copies it into every release.
 - The Cloudflare tunnel token for `cloudflared service install`.
 - For drills: an OCI user with a read-only credential (read and list) on the
   pgBackRest and dump buckets.
@@ -91,13 +97,23 @@ A re-run changes only what differs. It never lifts a hub write stop.
 
 ## Deploys
 
-`zold-deploy@<dep>.timer` runs `deploy.sh` every two minutes. On a new
-commit on the public `production` branch it makes a release directory, runs
-`npm ci --omit=dev`, stops the API, runs `npm run db:migrate -- apply` as
+`zold-deploy@<dep>.timer` runs `deploy.sh` every two minutes. While
+`/etc/zold/<dep>.env` or `/etc/zold/<dep>.deployments.json` is missing it
+stages nothing; the first run after both are in place deploys and starts
+the API. On a new commit on the public `production` branch it makes a
+release directory, copies in `deployments.json`, runs `npm ci --omit=dev`,
+stops the API, runs `npm run db:migrate -- apply` as
 `zold_owner` (then `zold_grant_app('zold_app')`), points `app` at the
 release, starts the API and waits three minutes for `/api/health`. Nothing
 on GitHub holds a credential for the host. `production` only moves forward;
 a commit that does not descend from the running one is refused.
+
+Every write under `/srv/zold/<dep>` (the release, `deployments.json`, the
+`app` link, pruning) runs as the deploy user, never as root, and root
+refuses a `releases` that is not a directory or an `app` that is not a link
+to `releases/<commit>`. Any failure alerts, including a failed fetch or
+`npm ci`. The health probe uses the API env file's last `TRANSF_API_PORT`,
+else its last `PORT`, else 3000.
 
 **Fix forward after a migration.** A release that fails its health check is
 rolled back, and skipped, only if its deploy applied no migration. Once a
@@ -110,8 +126,9 @@ never a redeploy of an older build or a hand-edited schema.
 
 The steps of design §6, testnet first, then mainnet:
 
-1. Preconditions on the host: `check:pg` against the target cluster's
-   server, `npm run preflight` with the deployment's environment, one restore
+1. Preconditions: `check:pg` on the release's commit against a scratch
+   Postgres 17 (the host's `pg_hba` rejects its temporary roles and
+   databases, by design), `npm run preflight` with the deployment's environment, one restore
    drill passed (below), the S5 report run on a copy of that deployment's
    `db.json` with no blocking finding.
 2. Drain (§6 step 2), then stop the API on the lease.
@@ -142,7 +159,10 @@ while archiving keeps up. Mainnet first, testnet the same way after.
 3. `sudo scripts/oracle-host/provision.sh <dep> --rebuild`: everything up to
    the cluster and the pgBackRest config, then the cluster is left stopped and
    no stanza is created (a fresh `initdb` has another system id).
-4. `sudo -u pg-<dep> pgbackrest --config=/etc/pgbackrest/<dep>.conf --stanza=zold-<dep> --delta restore [--repo=<n>] [--type=time --target="<T>"]`.
+4. `sudo -u pg-<dep> pgbackrest --config=/etc/pgbackrest/<dep>.conf --stanza=zold-<dep> --delta restore [--repo=<n>] [--type=time --target="<T>" --target-action=promote]`.
+   A timed restore without `--target-action=promote` pauses at the target,
+   and step 5's `stanza-create` and `check` then fail on a cluster still in
+   recovery.
 5. `sudo scripts/oracle-host/provision.sh <dep>`: starts the cluster,
    `stanza-create` and `check` (archiving from the new host before it takes
    a write), the database step and `check.sql` (roles, attributes,
@@ -150,8 +170,9 @@ while archiving keeps up. Mainnet first, testnet the same way after.
    role's grants equal `zold_grant_app`'s). A repository left out in step 2
    is added back with a new stanza in a reachable region and a full backup
    (`pgops.sh <dep>-backup`) before it counts.
-6. Restore `/etc/zold/<dep>.env`; `cloudflared service install <token>`;
-   the deploy timer checks out `production` and starts the API. `npm run
+6. Restore `/etc/zold/<dep>.env` and `/etc/zold/<dep>.deployments.json`;
+   `cloudflared service install <token>`; the deploy timer's next run checks
+   out `production` and starts the API. `npm run
    preflight`. Smoke.
 
 **Both repositories lost:** steps 1-3, then start the cluster

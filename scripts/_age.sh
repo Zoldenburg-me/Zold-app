@@ -1,3 +1,4 @@
+# shellcheck shell=bash disable=SC2034 # sourced: its names are used by the scripts that source it
 # Shared by secrets.sh, backup-db.sh and fetch-age.sh. Source it; do not run it.
 #
 # age is vendored under .toolchain/ like node: a pinned release whose SHA-256

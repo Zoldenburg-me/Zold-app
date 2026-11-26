@@ -25,7 +25,7 @@
 import assert from "node:assert/strict";
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
 import { tmpdir, userInfo } from "node:os";
 import path from "node:path";
@@ -75,7 +75,7 @@ const lines = (s: string) => s.split("\n").filter((l) => l.trim() && !l.startsWi
   check("pg_hba: no TCP line accepts", hba.filter((l) => l[0] !== "local").every((l) => l.at(-1) === "reject"));
   const ident = lines(m["pg_ident.conf"]).map((l) => l.join(" "));
   check("pg_ident: API → app role, deploy user → owner role", ident.includes("zold-mainnet zold-mainnet zold_app") && ident.includes("zold-mainnet zold-deploy-mainnet zold_owner"));
-  check("pg_ident: zold-hub → hub_app, deploy user → hub_owner", ident.includes("hub zold-hub hub_app") && ident.includes("hub zold-deploy-mainnet hub_owner"));
+  check("pg_ident: zold-hub → hub_app, and no OS user → hub_owner", ident.includes("hub zold-hub hub_app") && !ident.some((l) => l.endsWith(" hub_owner")));
   const conf = m["conf.d/zold.conf"];
   check("postgresql: no TCP listener", /^listen_addresses = ''$/m.test(conf));
   check("postgresql: the socket file belongs to the clients' group", /^unix_socket_group = 'zold-mainnet-db'$/m.test(conf) && /^unix_socket_permissions = 0770$/m.test(conf));
@@ -109,6 +109,182 @@ const lines = (s: string) => s.split("\n").filter((l) => l.trim() && !l.startsWi
   check("host.env.example: every credential is CHANGE_ME", secrets.length >= 13 && secrets.every((m) => m[3] === "CHANGE_ME"), secrets.map((m) => m[1]).join(" "));
   const age = sh("bash", ["-c", `uname() { [[ "$1" == -s ]] && echo Linux || echo aarch64; }; source scripts/_age.sh; age_asset`]);
   check("_age.sh pins linux-arm64", age.stdout.trim() === "age-v1.3.2-linux-arm64.tar.gz 6b8dc4333c53a5a57c9e5834e3a48f92605d7154014cd07269ff3327db5d37f4", age.stdout + age.stderr);
+}
+
+// --- deploy.sh and pgops.sh on a fake host layout ----------------------------------
+// ZH_ROOT prefixes every host path (lib.sh; refused under a real root). Shims
+// stand in for root's tools (runuser logs its user, command and environment;
+// systemctl, psql, df, flock, logger), and the deploy user's PATH gets npm (a
+// fake migration CLI) and node. git is real, on a local `production` branch.
+// The alert endpoint is a dead https:// address, so every alert fails to send.
+function fakeHost() {
+  const R = mkdtempSync(path.join(tmpdir(), "zold-host-"));
+  const shims = path.join(R, "shims");
+  const nodeBin = path.join(R, "opt/node-v22.23.4-linux-arm64/bin");
+  for (const d of [shims, nodeBin, "srv/zold/mainnet/releases", "srv/zold/testnet/releases", "srv/pg/mainnet", "srv/pg/testnet", "etc/zold", "etc/zold-host", "run", "var/lib/zold-host"]) {
+    mkdirSync(path.isAbsolute(d) ? d : path.join(R, d), { recursive: true });
+  }
+  const realCurl = sh("bash", ["-c", "command -v curl"]).stdout.trim();
+  const shim = (dir: string, name: string, body: string) => {
+    writeFileSync(path.join(dir, name), `#!/usr/bin/env bash\n${body}\n`);
+    chmodSync(path.join(dir, name), 0o755);
+  };
+  shim(shims, "id", `[[ "$1" == -u ]] && { echo 0; exit 0; }; exec /usr/bin/id "$@"`);
+  shim(shims, "runuser", `n=$(ls "${R}"/runuser.env.* 2>/dev/null | wc -l | tr -d ' ')\nenv >"${R}/runuser.env.$n"\necho "$2 :: \${*:4}" >>"${R}/runuser.log"\nshift 3\nexec "$@"`);
+  shim(shims, "systemctl", `echo "$*" >>"${R}/systemctl.log"\ncase "$1" in start) touch "${R}/api-running" ;; stop) rm -f "${R}/api-running" ;; esac`);
+  shim(shims, "flock", "exit 0");
+  shim(shims, "sleep", "exit 0");
+  shim(shims, "logger", `echo "$*" >>"${R}/journal"`);
+  shim(shims, "sha256sum", `[[ -x /usr/bin/sha256sum ]] && exec /usr/bin/sha256sum "$@"; exec shasum -a 256 "$@"`);
+  shim(shims, "df", `echo Use%; echo " $(cat "${R}/df-used" 2>/dev/null || echo 50)%"`);
+  shim(shims, "pgbackrest", "exit 0");
+  // /api/health answers only on the port the API would bind, and only with
+  // the release's deployments.json in place (what the real endpoint needs).
+  shim(shims, "curl", `if [[ "$*" == */api/health* ]]; then
+  [[ -f "${R}/api-running" && -f "${R}/srv/zold/mainnet/app/deployments.json" && "$*" == *127.0.0.1:$(cat "${R}/api-port")/* ]]; exit
+fi
+exec ${realCurl} "$@"`);
+  shim(shims, "psql", `while [[ $# -gt 0 && "$1" != -c ]]; do shift; done; sql="$2"
+case "$sql" in
+  *pg_stat_archiver*) echo 0 ;;
+  *pg_ls_archive_statusdir*) echo "0|0" ;;
+  *pg_stat_wal*) echo 0 ;;
+  *pg_stat_database*) echo "zold|8 MB|10" ;;
+  *"CONNECTION LIMIT 0"*) touch "${R}/hub-stopped" ;;
+  *pg_terminate_backend*) echo 0 ;;
+  *datconnlimit*) if [[ -f "${R}/hub-stopped" ]]; then echo 0; else echo 25; fi ;;
+  *pg_database_size*) echo 100 ;;
+  *"SELECT 1 FROM pg_database"*) echo 1 ;;
+  *) echo "psql shim: unexpected $sql" >&2; exit 1 ;;
+esac`);
+  symlinkSync(process.execPath, path.join(nodeBin, "node"));
+  // GNU mv -T on macOS too.
+  shim(nodeBin, "mv", `if [[ "$1" == -T ]]; then exec perl -e 'rename($ARGV[0], $ARGV[1]) or die "mv: $!\\n"' "$2" "$3"; fi\nexec /bin/mv "$@"`);
+  shim(nodeBin, "npm", `S="${R}/schema"
+case "$*" in
+  ci*) exit 0 ;;
+  *"db:migrate -- status"*) echo "$(cat "$S" 2>/dev/null || echo 0) 3" ;;
+  *"db:migrate -- apply"*) if [[ "$(cat "$S" 2>/dev/null || echo 0)" == 3 ]]; then echo "applied none"; else echo 3 >"$S"; echo "applied 0001 0002 0003"; fi ;;
+  *) echo "npm shim: $*" >&2; exit 1 ;;
+esac`);
+  const origin = path.join(R, "origin");
+  const git = (...a: string[]) => {
+    const r = sh("git", ["-C", origin, "-c", "user.name=t", "-c", "user.email=t@example.invalid", ...a]);
+    assert.equal(r.status, 0, r.stderr);
+    return r.stdout.trim();
+  };
+  mkdirSync(origin);
+  git("init", "-q", "-b", "production");
+  const commit = (n: number) => {
+    writeFileSync(path.join(origin, "package.json"), JSON.stringify({ name: "zold", n }));
+    git("add", "package.json");
+    git("commit", "-q", "-m", `release ${n}`);
+    return git("rev-parse", "HEAD");
+  };
+  writeFileSync(path.join(R, "etc/zold-host/host.env"),
+    `ALERT_URL=https://127.0.0.1:9/zold-test\nREPO_URL=${origin}\nMAINNET_S3_SECRET=mainnet-sentinel-s3\nMAINNET_CIPHER_PASS=mainnet-sentinel-pass\nTESTNET_S3_SECRET=testnet-sentinel-s3\nTESTNET_DUMP_SECRET=testnet-sentinel-dump\n`);
+  writeFileSync(path.join(R, "api-port"), "3001");
+  const run = (script: string, arg: string) =>
+    sh("bash", [path.join(DIR, script), arg], { ZH_ROOT: R, PATH: `${shims}:/usr/bin:/bin:/usr/sbin:/sbin` });
+  const read = (f: string) => (existsSync(path.join(R, f)) ? readFileSync(path.join(R, f), "utf8") : "");
+  return { R, commit, run, read, origin };
+}
+{
+  const h = fakeHost();
+  try {
+    const base = path.join(h.R, "srv/zold/mainnet");
+    const sha1 = h.commit(1);
+    let r = h.run("deploy.sh", "mainnet");
+    check("deploy: without the API's env file, nothing is staged", r.status === 0 && !existsSync(path.join(base, "app")) && !existsSync(path.join(base, "releases", sha1)) && h.read("schema") === "", r.stdout + r.stderr);
+    writeFileSync(path.join(h.R, "etc/zold/mainnet.env"), `PORT=9999\nTRANSF_API_PORT=3000\nTRANSF_API_PORT="3001"\n`);
+    r = h.run("deploy.sh", "mainnet");
+    check("deploy: without deployments.json, nothing is built or migrated", r.status === 0 && /deployments\.json is missing/.test(r.stdout) && h.read("schema") === "" && !existsSync(path.join(base, "app")), r.stdout + r.stderr);
+    const deployments = JSON.stringify({ 8453: { eure: "0x0000000000000000000000000000000000000001" } });
+    writeFileSync(path.join(h.R, "etc/zold/mainnet.deployments.json"), deployments);
+    r = h.run("deploy.sh", "mainnet");
+    check("deploy: a first deploy on a fresh host migrates, starts the API and passes health (TRANSF_API_PORT, last and unquoted)",
+      r.status === 0 && /deployed/.test(r.stdout) && h.read("schema") === "3\n" && existsSync(path.join(h.R, "api-running")), r.stdout + r.stderr + h.read("journal"));
+    check("deploy: app links to the release, which holds the owner's deployments.json",
+      readlinkSync(path.join(base, "app")) === `releases/${sha1}` && readFileSync(path.join(base, "app/deployments.json"), "utf8") === deployments);
+    const users = new Set(h.read("runuser.log").trim().split("\n").map((l) => l.split(" :: ")[0]));
+    check("deploy: every command in /srv/zold runs as the deploy user", users.size === 1 && users.has("zold-deploy-mainnet"), [...users].join(","));
+    const src = readFileSync(path.join(DIR, "deploy.sh"), "utf8").split("\n").filter((l) => !l.trim().startsWith("#"));
+    const rootWrites = src.filter((l) => /\b(rm -r|ln -s|mv -|cat >|xargs)/.test(l) && !/as_deploy/.test(l));
+    check("deploy.sh: no rm, ln, mv or write in the deploy user's tree outside as_deploy", rootWrites.length === 0, rootWrites.join("\n"));
+
+    for (let n = 2; n <= 4; n++) {
+      const s = h.commit(n);
+      r = h.run("deploy.sh", "mainnet");
+      assert.equal(r.status, 0, r.stdout + r.stderr);
+      assert.equal(readlinkSync(path.join(base, "app")), `releases/${s}`);
+    }
+    check("deploy: keeps the running release and the two before it", readdirSync(path.join(base, "releases")).length === 3, readdirSync(path.join(base, "releases")).join(" "));
+
+    // A planted symlink: releases -> a directory root must not touch.
+    const victim = path.join(h.R, "victim");
+    mkdirSync(path.join(victim, "keep"), { recursive: true });
+    renameSync(path.join(base, "releases"), path.join(base, "releases.real"));
+    symlinkSync(victim, path.join(base, "releases"));
+    h.commit(5);
+    r = h.run("deploy.sh", "mainnet");
+    check("deploy: refuses a releases symlink and touches nothing behind it", r.status === 1 && existsSync(path.join(victim, "keep")) && readdirSync(victim).length === 1 && /releases is not a directory/.test(h.read("journal")), r.stdout + r.stderr);
+    rmSync(path.join(base, "releases"));
+    renameSync(path.join(base, "releases.real"), path.join(base, "releases"));
+    const app = readlinkSync(path.join(base, "app"));
+    rmSync(path.join(base, "app"));
+    symlinkSync("../../../victim", path.join(base, "app"));
+    r = h.run("deploy.sh", "mainnet");
+    check("deploy: refuses an app link that is not releases/<commit>", r.status === 1 && /app points at/.test(h.read("journal")), r.stdout + r.stderr);
+    rmSync(path.join(base, "app"));
+    symlinkSync(app, path.join(base, "app"));
+
+    // A failed step with no alert of its own still alerts (the send fails here).
+    renameSync(h.origin, `${h.origin}.gone`);
+    r = h.run("deploy.sh", "mainnet");
+    check("deploy: a failed fetch alerts", r.status !== 0 && /deploy failed \(exit/.test(h.read("journal")), h.read("journal"));
+  } finally {
+    rmSync(h.R, { recursive: true, force: true });
+  }
+}
+{
+  const h = fakeHost();
+  try {
+    writeFileSync(path.join(h.R, "df-used"), "90"); // 10 % free
+    const r = h.run("pgops.sh", "mainnet-alerts");
+    check("alerts: with the alert endpoint dead, the hub write stop still runs, and the job fails",
+      existsSync(path.join(h.R, "hub-stopped")) && r.status === 1 && /alert not sent: mainnet: Postgres volume under 15 % free/.test(r.stderr), r.stdout + r.stderr);
+    const envs = () => readdirSync(h.R).filter((f) => f.startsWith("runuser.env.")).map((f) => h.read(f)).join("\n");
+    check("alerts: mainnet's runuser commands see no host.env secret", !/sentinel/.test(envs()));
+    for (const f of readdirSync(h.R).filter((f) => f.startsWith("runuser."))) rmSync(path.join(h.R, f));
+    writeFileSync(path.join(h.R, "df-used"), "50");
+    const t = h.run("pgops.sh", "testnet-alerts");
+    const tenv = envs();
+    check("alerts: testnet jobs (as pg-testnet) never see mainnet's or testnet's secrets", t.status === 0 && tenv.length > 0 && !/sentinel/.test(tenv) && /pg-testnet/.test(h.read("runuser.log")), t.stdout + t.stderr);
+    appendFileSync(path.join(h.R, "etc/zold-host/host.env"), "export MAINNET_DUMP_KEY=x\n");
+    check("host.env with an export line is refused", h.run("pgops.sh", "testnet-alerts").status !== 0);
+  } finally {
+    rmSync(h.R, { recursive: true, force: true });
+  }
+}
+{
+  // The PGDG key check reads primary keys only, and a second one fails it.
+  const dir = mkdtempSync(path.join(tmpdir(), "zold-gpg-"));
+  try {
+    writeFileSync(path.join(dir, "gpg"), `#!/usr/bin/env bash\ncat "$3"\n`);
+    chmodSync(path.join(dir, "gpg"), 0o755);
+    const one = "pub:-:4096:1:7FCC7D46ACCC4CF8:::::::scSC::::::23::0:\nfpr:::::::::B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8:\nuid:-::::::::PostgreSQL Debian Repository::::::::::0:\n";
+    const sub = "sub:-:4096:1:1111111111111111:::::::e::::::23:\nfpr:::::::::1111111111111111111111111111111111111111:\n";
+    const extra = "pub:-:4096:1:2222222222222222:::::::scSC::::::23::0:\nfpr:::::::::2222222222222222222222222222222222222222:\n";
+    const prim = (listing: string) => {
+      writeFileSync(path.join(dir, "k"), listing);
+      return sh("bash", ["-c", `source "${DIR}/lib.sh"; key_primaries "${dir}/k"`], { PATH: `${dir}:/usr/bin:/bin` }).stdout.trim();
+    };
+    check("PGDG key: one primary with a subkey passes", prim(one + sub) === "B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8");
+    check("PGDG key: an appended second key does not", prim(one + sub + extra) !== "B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  check("provision: ALERT_URL must be https", readFileSync(path.join(DIR, "provision.sh"), "utf8").includes('[[ "$ALERT_URL" == https://* ]] || die'));
 }
 
 if (!process.argv.includes("--pg")) {
@@ -312,7 +488,8 @@ try {
     check("zold_app reaches zold (peer, map zold-mainnet)", can("zold", "zold_app").stdout.trim() === "1");
     check("zold_owner reaches zold", can("zold", "zold_owner").stdout.trim() === "1");
     check("hub_app reaches hub (peer, map hub)", can("hub", "hub_app").stdout.trim() === "1");
-    check("hub_owner reaches hub (the deploy user's map entry)", can("hub", "hub_owner").stdout.trim() === "1");
+    r = can("hub", "hub_owner");
+    check("hub_owner does not reach hub: no OS user maps to it", r.status !== 0 && /authentication failed/.test(r.stderr), r.stderr);
     for (const [db, user] of [["zold", "hub_app"], ["zold", "hub_owner"], ["hub", "zold_app"], ["hub", "zold_owner"], ["postgres", "zold_app"], ["postgres", "hub_app"]]) {
       r = can(db, user);
       check(`pg_hba rejects ${user} on ${db}`, r.status !== 0 && /pg_hba\.conf rejects/.test(r.stderr), r.stderr);

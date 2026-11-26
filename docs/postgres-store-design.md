@@ -850,8 +850,7 @@ stopped and read-only, until the owner closes it (§6 step 8).
   names the superuser role after the cluster's OS user.) Each map is a
   `pg_ident.conf` map from that deployment's OS users to its roles
   (`zold-mainnet` → the application role, the deploy user → the owner role;
-  `zold-hub` → `hub_app` and the deploy user → `hub_owner`, at migration
-  time, §7.2). Only the cluster's OS user connects as
+  `zold-hub` → `hub_app`; no OS user maps to `hub_owner`, §7.2). Only the cluster's OS user connects as
   superuser, to every database: the provisioning script, the restore and
   its hash checks (§7.1), the daily dump (below) and the hub write stop
   (§7.2) run as it. `REVOKE CONNECT ON DATABASE <db> FROM PUBLIC`, then `GRANT
@@ -1134,10 +1133,11 @@ on its functions through `PUBLIC`, whatever is revoked from its own role.
   query without `dblink` or `postgres_fdw`, so neither extension is
   installed in either database, and the provisioning script checks it.
 - **Its own roles.** `hub_owner` owns the `hub` database and runs its
-  migrations; it is `NOSUPERUSER NOCREATEROLE NOCREATEDB`, and the deploy
-  user is mapped to it (`pg_ident.conf` map `hub`: the deploy user →
-  `hub_owner`) and uses it only at migration time, as for Zold's owner
-  role (§7). `hub_app` is what the hub process runs as, with DML on the hub's
+  migrations; it is `NOSUPERUSER NOCREATEROLE NOCREATEDB`. No OS user is
+  mapped to it until S9: Zold's deploy user runs Zold's release code
+  (`npm ci`, `db:migrate`), which must not own the hub, so S9 adds the hub's
+  own deploy user and maps that one to `hub_owner`, at migration time only,
+  as for Zold's owner role (§7). `hub_app` is what the hub process runs as, with DML on the hub's
   tables only and no DDL. No Zold role has `CONNECT` on `hub`.
 - **Limits for untrusted traffic.** Connections, WAL and disk belong to the
   cluster, so a hub flood must not reach Zold:

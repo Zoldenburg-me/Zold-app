@@ -35,7 +35,7 @@ source "$HERE/lib.sh"
 render() {
   local dir="$1"
   local pg_user="${ZH_PG_USER:-$PG_USER}" api_user="${ZH_API_USER:-$API_USER}"
-  local deploy_user="${ZH_DEPLOY_USER:-$DEPLOY_USER}" hub_user="${ZH_HUB_USER:-$HUB_USER}"
+  local hub_user="${ZH_HUB_USER:-$HUB_USER}"
   local socket="${ZH_PG_SOCKET:-$PG_SOCKET}" clients="${ZH_PG_CLIENTS:-$PG_CLIENTS}"
   mkdir -p "$dir/conf.d"
   cat >"$dir/conf.d/zold.conf" <<EOF
@@ -81,18 +81,18 @@ EOF
     echo "# Written by scripts/oracle-host/provision.sh; edit there."
     echo "# MAP          OS user              role"
     echo "zold-$DEP     $api_user          $ZOLD_APP"
-    echo "zold-$DEP     $deploy_user   $ZOLD_OWNER"
+    echo "zold-$DEP     ${ZH_DEPLOY_USER:-$DEPLOY_USER}   $ZOLD_OWNER"
     if [[ "$WITH_HUB" == 1 ]]; then
+      # No OS user maps to hub_owner: Zold's deploy user runs Zold's release
+      # code, which must not own the hub. S9 adds the hub's own deploy user.
       echo "hub          $hub_user             $HUB_APP"
-      # The hub's migrations (S9) run as hub_owner from the deploy user.
-      echo "hub          $deploy_user   $HUB_OWNER"
     fi
   } >"$dir/pg_ident.conf"
 }
 
 if [[ "${1:-}" == render ]]; then
   [[ $# -eq 3 ]] || die "usage: provision.sh render <mainnet|testnet> <dir>"
-  [[ -f "$HOST_ENV" ]] && { set -a; source "$HOST_ENV"; set +a; }
+  if [[ -f "$HOST_ENV" ]]; then load_host_env; fi
   deployment "$2"
   render "$3"
   exit 0
@@ -106,7 +106,7 @@ REBUILD=0
 [[ "$(uname -m)" == aarch64 ]] || die "this host is $(uname -m); the Oracle host is aarch64"
 [[ -f "$HOST_ENV" ]] || die "$HOST_ENV is missing: copy host.env.example, fill it, chmod 600"
 [[ "$(stat -c %a "$HOST_ENV")" == 600 && "$(stat -c %U "$HOST_ENV")" == root ]] || die "$HOST_ENV must be root-owned, mode 600"
-set -a; source "$HOST_ENV"; set +a
+load_host_env
 deployment "$1"
 
 # Owner input, per deployment: refuse before anything is made (§7). The
@@ -122,6 +122,8 @@ done
 for v in OCI_NAMESPACE OWNER_AGE_RECIPIENT ALERT_URL; do
   [[ -n "${!v:-}" && "${!v}" != *CHANGE_ME* ]] || die "$HOST_ENV: $v is not set"
 done
+# The alert URL can be a credential (an ntfy topic): never in clear.
+[[ "$ALERT_URL" == https://* ]] || die "$HOST_ENV: ALERT_URL must be https://"
 mountpoint -q "/srv/pg/$DEP" || die "/srv/pg/$DEP is not a mount point: attach and mount the cluster's own block volume (§7)"
 
 # --- packages -----------------------------------------------------------------
@@ -134,8 +136,10 @@ if [[ ! -f /etc/apt/sources.list.d/pgdg.list ]]; then
   apt-get install -y -q ca-certificates curl gnupg xz-utils git postgresql-common
   install -d /usr/share/postgresql-common/pgdg
   curl -fsSL -o "$PGDG_KEY.tmp" https://www.postgresql.org/media/keys/ACCC4CF8.asc
-  got="$(gpg --show-keys --with-colons "$PGDG_KEY.tmp" | awk -F: '$1=="fpr"{print $10; exit}')"
-  [[ "$got" == "$PGDG_FPR" ]] || { rm -f "$PGDG_KEY.tmp"; die "PGDG key fingerprint is $got, expected $PGDG_FPR"; }
+  # Exactly one primary key, and it is PGDG's: signed-by= trusts every key
+  # in the file, so an appended second key must not pass.
+  got="$(key_primaries "$PGDG_KEY.tmp")"
+  [[ "$got" == "$PGDG_FPR" ]] || { rm -f "$PGDG_KEY.tmp"; die "PGDG key file holds $(printf %s "$got" | tr '\n' ' '), expected only $PGDG_FPR"; }
   mv "$PGDG_KEY.tmp" "$PGDG_KEY"
   . /etc/os-release
   echo "deb [signed-by=$PGDG_KEY] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" >/etc/apt/sources.list.d/pgdg.list
@@ -301,7 +305,9 @@ install -m 644 "$HERE"/systemd/* "$HOST_DIR/systemd/"
 install -m 644 "$HERE/../_age.sh" "$HOST_DIR/_age.sh"
 install -m 644 "$HERE"/systemd/* /etc/systemd/system/
 install -d -m 750 /etc/zold
-[[ -f "$API_ENV" ]] || echo "note: $API_ENV is missing; zold-api@$DEP will not start until the owner restores it (§7.1 step 5)"
+for f in "$API_ENV" "$DEPLOYMENTS_JSON"; do
+  [[ -f "$f" ]] || echo "note: $f is missing; the deploy timer stages no release and zold-api@$DEP does not start until the owner puts it in place (§7.1 step 5)"
+done
 install -d -o "$DEPLOY_USER" -g "$DEPLOY_USER" -m 750 "/srv/zold/$DEP/releases"
 systemctl daemon-reload
 systemctl enable "zold-api@$DEP.service" >/dev/null

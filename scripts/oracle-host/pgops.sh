@@ -19,8 +19,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
 source "$HERE/lib.sh"
 [[ $# -eq 1 && "$1" == *-* ]] || die "usage: pgops.sh <mainnet|testnet>-<alerts|watchdog|dump|backup>"
-[[ -f "$HOST_ENV" ]] || die "$HOST_ENV is missing"
-set -a; source "$HOST_ENV"; set +a
+load_host_env
 deployment "${1%%-*}"
 JOB="${1#*-}"
 P="$(printf %s "$DEP" | tr a-z A-Z)"
@@ -31,8 +30,25 @@ alerts() {
   # Archiving (§7): a rise in failed_count, or WAL waiting to be archived for
   # over 5 minutes. An idle cluster switches no segment, so an old
   # last_archived_time alone is not a backlog; a .ready file is.
-  local state=/var/lib/zold-host/$DEP
+  local state="$R/var/lib/zold-host/$DEP"
   install -d -m 700 "$state"
+
+  # The hub's write stop (§7.2) comes first, before this run sends any alert:
+  # at the hub's hard size or under 15 % free on the cluster's own volume.
+  # Zold keeps writing; the owner lifts the stop by hand (ALTER DATABASE hub
+  # CONNECTION LIMIT 25, as $PG_USER).
+  local free hub_mb="" limit
+  free="$(df --output=pcent "$R/srv/pg/$DEP" | tail -1 | tr -dc 0-9)"
+  free=$((100 - free))
+  if [[ "$WITH_HUB" == 1 ]] && [[ -n "$(q "SELECT 1 FROM pg_database WHERE datname = '$HUB_DB'")" ]]; then
+    hub_mb="$(q "SELECT pg_database_size('$HUB_DB') / 1048576")"
+    limit="$(q "SELECT datconnlimit FROM pg_database WHERE datname = '$HUB_DB'")"
+    if [[ "$limit" != 0 ]] && (( hub_mb > ${HUB_SIZE_STOP_MB:-2048} || free < 15 )); then
+      hub_stop
+      alert "hub STOPPED (CONNECTION LIMIT 0); lift by hand once fixed" "(${hub_mb} MB, volume $free % free)"
+    fi
+  fi
+
   local failed prev ready oldest
   failed="$(q "SELECT failed_count FROM pg_stat_archiver")" || { alert "cannot query the cluster" "(pg_stat_archiver)"; return 1; }
   prev="$(cat "$state/archiver-failed" 2>/dev/null || echo "$failed")"
@@ -46,9 +62,7 @@ alerts() {
   fi
 
   # Disk: the cluster's own volume, at 30 % and 15 % free.
-  local free sizes
-  free="$(df --output=pcent "/srv/pg/$DEP" | tail -1 | tr -dc 0-9)"
-  free=$((100 - free))
+  local sizes
   # Which database is growing: its size and its rows written since the last
   # run, against the cluster's WAL written since then (§7.2).
   local wal prev_wal db size writes before
@@ -69,19 +83,8 @@ alerts() {
     alert "Postgres volume under 30 % free" "($free %); databases: $sizes"
   fi
 
-  # The hub (§7.2): an extra alert at its size threshold, and a write stop at
-  # its hard size or under 15 % free. Zold keeps writing; the owner lifts the
-  # stop by hand (ALTER DATABASE hub CONNECTION LIMIT 25, as $PG_USER).
-  if [[ "$WITH_HUB" == 1 ]] && [[ -n "$(q "SELECT 1 FROM pg_database WHERE datname = '$HUB_DB'")" ]]; then
-    local hub_mb limit
-    hub_mb="$(q "SELECT pg_database_size('$HUB_DB') / 1048576")"
-    limit="$(q "SELECT datconnlimit FROM pg_database WHERE datname = '$HUB_DB'")"
-    if (( hub_mb > ${HUB_SIZE_ALERT_MB:-1024} )); then alert "hub passed ${HUB_SIZE_ALERT_MB:-1024} MB" "(${hub_mb} MB)"; fi
-    if [[ "$limit" != 0 ]] && (( hub_mb > ${HUB_SIZE_STOP_MB:-2048} || free < 15 )); then
-      hub_stop
-      alert "hub STOPPED (CONNECTION LIMIT 0); lift by hand once fixed" "(${hub_mb} MB, volume $free % free)"
-    fi
-  fi
+  # The hub's own size alert (§7.2).
+  if [[ -n "$hub_mb" ]] && (( hub_mb > ${HUB_SIZE_ALERT_MB:-1024} )); then alert "hub passed ${HUB_SIZE_ALERT_MB:-1024} MB" "(${hub_mb} MB)"; fi
 
   # pgBackRest's own check, every 10th minute: it forces a WAL switch.
   if (( 10#$(date -u +%M) % 10 == 0 )); then
@@ -117,14 +120,15 @@ put_object() { # file name
 }
 
 dump() {
-  local stamp spool age=/opt/age/age
+  local stamp spool age="$R/opt/age/age"
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
   # On the cluster's volume, not /tmp; only ciphertext is ever written.
-  spool="/srv/pg/$DEP/dump-spool/$stamp"
+  spool="$R/srv/pg/$DEP/dump-spool/$stamp"
   # A failed night's leftovers (ciphertext only) go first: they share the
-  # volume WAL needs.
-  rm -rf "/srv/pg/$DEP/dump-spool" /run/zold-dump-"$DEP".*
-  install -d -o "$PG_USER" -g "$PG_USER" -m 700 "/srv/pg/$DEP/dump-spool" "$spool"
+  # volume WAL needs. Only this job writes the spool (one dump unit per
+  # deployment).
+  rm -rf "$R/srv/pg/$DEP/dump-spool"
+  install -d -o "$PG_USER" -g "$PG_USER" -m 700 "$R/srv/pg/$DEP/dump-spool" "$spool"
   enc() { "$age" -r "$OWNER_AGE_RECIPIENT" -o "$1"; }
   runuser -u "$PG_USER" -- pg_dumpall -h "$PG_SOCKET" -p "$PG_PORT" --globals-only | enc "$spool/globals.sql.age"
   local dbs=("$ZOLD_DB")
@@ -132,8 +136,11 @@ dump() {
   for db in "${dbs[@]}"; do
     # One REPEATABLE READ snapshot: the table check runs in it and pg_dump
     # dumps exactly it, so the check file describes the rows in the dump.
-    local fifo pid
-    fifo="$(mktemp -d "/run/zold-dump-$DEP.XXXXXX")"
+    local pid fifo
+    # This job's own directory: on_exit removes it and nothing else, so no
+    # other job of the deployment can unlink these FIFOs.
+    fifo="$(mktemp -d "$R/run/zold-dump-$DEP.XXXXXX")"
+    DUMP_TMP="$fifo"
     mkfifo -m 600 "$fifo/in" "$fifo/out"
     runuser -u "$PG_USER" -- psql -X -q -At -v ON_ERROR_STOP=1 -h "$PG_SOCKET" -p "$PG_PORT" -d "$db" <"$fifo/in" >"$fifo/out" &
     pid=$!
@@ -153,10 +160,11 @@ dump() {
     wait "$pid"
     exec 3>&- 4<&-
     rm -rf "$fifo"
+    DUMP_TMP=""
   done
   tar -C "$spool" -cf "$spool.tar" .
   put_object "$spool.tar" "$DEP/$stamp.tar" || { alert "daily dump failed" "(upload, $stamp)"; return 1; }
-  rm -rf "/srv/pg/$DEP/dump-spool"
+  rm -rf "$R/srv/pg/$DEP/dump-spool"
   logger -t zold-host -- "$DEP: dump $stamp uploaded to $(v DUMP_BUCKET)"
 }
 
@@ -171,11 +179,12 @@ backup() {
 
 # Any job that ends non-zero says so (a dump that stops for weeks is not
 # silent), and a background psql of the dump does not outlive it.
+DUMP_TMP=""
 on_exit() {
   local rc=$?
   jobs -p | xargs -r kill 2>/dev/null || true
-  rm -rf /run/zold-dump-"$DEP".*
-  if [[ $rc != 0 && "$ALERT_FAILED" == 0 ]]; then alert "job $JOB failed" "(exit $rc)" || true; fi
+  if [[ -n "$DUMP_TMP" ]]; then rm -rf "$DUMP_TMP"; fi
+  if [[ $rc != 0 && "$ALERT_FAILED" == 0 ]]; then alert "job $JOB failed" "(exit $rc)"; fi
   [[ $rc != 0 || "$ALERT_FAILED" == 0 ]] || rc=1
   exit "$rc"
 }
