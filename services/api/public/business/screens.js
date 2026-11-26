@@ -16,6 +16,7 @@ import {
 } from "./core.js";
 import { META, RENDER, invoiceActions, linkBtn, primary, secondary, settlementRows, shortTx, staleBeleg, table } from "./views.js";
 import { runLink } from "./payment.js";
+import { ownerSendsWithoutReview } from "./payment-model.js";
 
 const note = (text, icon = "info", tone = "") => `<div class="zb-note${tone ? ` zb-note--${tone}` : ""}">${Z.icon(icon)}<span>${text}</span></div>`;
 const empty = (text) => `<div class="z-card"><p class="empty">${text}</p></div>`;
@@ -98,6 +99,10 @@ function apRow(d) {
     act = reviewOn()
       ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="submit-draft" data-id="${esc(d.id)}">Submit<span class="z-sr">: ${esc(draftTitle(d))}</span></button>`
       : roleCan(org.role, "sign") ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="exec-draft" data-id="${esc(d.id)}">Send<span class="z-sr">: ${esc(draftTitle(d))}</span></button>` : "";
+  }
+  // A company's bank run: the owner's signature is the approval (Q8).
+  if (ownerSendsWithoutReview(org?.entity, d)) {
+    act = roleCan(org.role, "sign") ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="exec-draft" data-id="${esc(d.id)}">Send<span class="z-sr">: ${esc(draftTitle(d))}</span></button>` : "";
   }
   const cap1 = (s) => s.charAt(0).toUpperCase() + s.slice(1);
   return `<tr>

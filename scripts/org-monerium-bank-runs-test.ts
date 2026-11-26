@@ -8,9 +8,10 @@
  *   - the switch, and everything a single payout refuses: keys missing, IBAN
  *     moved, a Safe needing 2+ signatures (ORG_SAFE_NEEDS_MORE_SIGNATURES),
  *     an expired approval; nothing is signed or sent;
- *   - roles and four eyes: payers and admins prepare but do not sign; an owner
- *     whose passkey is not on the Safe is refused; a run waiting for review is
- *     not sent; a drafter cannot review their own run;
+ *   - roles: payers and admins prepare but do not sign; an owner whose passkey
+ *     is not on the Safe is refused; no review step (Q8): the owner's
+ *     signature is the approval, whatever the org's review setting, and a
+ *     rejected draft is still never sent;
  *   - the balance across lines: lines that each fit but together do not are
  *     refused, and payouts pending or unclear at Monerium, and approvals still
  *     waiting, count against it;
@@ -66,6 +67,7 @@ const { projectStatementLines } = await import("../services/api/src/bookkeeping/
 const { bankRunDraftState, bankRunLineState } = await import("../services/api/src/domain/company-bank-run.js");
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const model: any = await import(pathToFileURL(path.join(ROOT, "services/api/public/business/org-monerium-model.js")).href);
+const paymentModel: any = await import(pathToFileURL(path.join(ROOT, "services/api/public/business/payment-model.js")).href);
 await initStore();
 
 let passed = 0;
@@ -286,17 +288,27 @@ try {
     await nothingSent();
   });
 
-  await check("four eyes: a run waiting for review is not sent, and a drafter cannot review their own run", async () => {
+  await check("no review step: the owner's signature is the approval, whatever the org's review setting", async () => {
     await reset();
-    const id = await draftOf(["10"], { review: false });
-    const r = await start(id);
+    // The business plan turns review on for this org; a company run ignores it.
+    const { paymentReviewRequired } = await import("../services/api/src/domain/payment-review.js");
+    assert.equal(paymentReviewRequired((await store.findOrganisation("org_co"))!), true);
+    const draftOnly = await draftOf(["10"], { review: false });
+    assert.equal((await draft(draftOnly)).state, "DRAFT");
+    assert.equal((await run(draftOnly)).status, 201);
+    await reset();
+    const waiting = await draftOf(["10"], { review: false });
+    assert.equal((await call("POST", `/org_co/drafts/${waiting}/submit`, "u_pia")).status, 200);
+    assert.equal((await run(waiting)).status, 201);
+    assert.equal(mon.placed.length, 1);
+    // A rejected or cancelled draft is still never sent.
+    await reset();
+    const rejected = await draftOf(["10"], { review: false });
+    assert.equal((await call("POST", `/org_co/drafts/${rejected}/submit`, "u_pia")).status, 200);
+    assert.equal((await call("POST", `/org_co/drafts/${rejected}/review`, "u_adam", { approve: false, reason: "no" })).status, 200);
+    const r = await start(rejected);
     assert.equal(r.status, 409, r.text);
     assert.equal(r.data.code, "NOT_SENDABLE");
-    assert.match(r.data.error, /second person to review/);
-    assert.equal((await call("POST", `/org_co/drafts/${id}/submit`, "u_pia")).status, 200);
-    const own = await call("POST", `/org_co/drafts/${id}/review`, "u_pia", { approve: true });
-    assert.equal(own.status, 403, own.text);
-    assert.equal((await start(id)).data.code, "NOT_SENDABLE");
     await nothingSent();
   });
 
@@ -558,6 +570,20 @@ try {
     const sending = { ...runRow, lines: [{ ...runRow.lines[1], state: "sending" }] };
     assert.equal(bankRunLineState(sending, sending.lines[0]), "unknown");
     assert.equal(bankRunLineState({ ...sending, issuedAt: new Date().toISOString() }, sending.lines[0]), "sending");
+  });
+
+  await check("the screens offer an owner Send on a company bank run in any open state, never a Submit for review", () => {
+    const bank = { destination: { kind: "bank" } };
+    const wallet = { destination: { kind: "wallet" } };
+    for (const state of ["DRAFT", "PENDING_REVIEW", "REVIEWED"]) {
+      assert.equal(paymentModel.ownerSendsWithoutReview("company", { state, lines: [bank, bank] }), true, state);
+    }
+    for (const state of ["REJECTED", "CANCELLED", "EXECUTING", "EXECUTED", "FAILED", "INVALID_DATA"]) {
+      assert.equal(paymentModel.ownerSendsWithoutReview("company", { state, lines: [bank] }), false, state);
+    }
+    assert.equal(paymentModel.ownerSendsWithoutReview("sole_trader", { state: "DRAFT", lines: [bank] }), false);
+    assert.equal(paymentModel.ownerSendsWithoutReview("company", { state: "DRAFT", lines: [wallet] }), false, "a wallet run keeps its own path");
+    assert.equal(paymentModel.ownerSendsWithoutReview("company", { state: "DRAFT", lines: [] }), false);
   });
 
   await check("the words after signing: placed is not sent; a stopped run says what each line did", () => {

@@ -11,7 +11,7 @@
 import { Z, api, cap, esc, eur, gateHtml, maskIban, org, reviewOn, roleCan, view, when } from "./core.js";
 import { META, RENDER } from "./views.js";
 import { draftTag, draftTitle, draftTotal, loadMembers, mayReview, memberName } from "./screens.js";
-import { approvals, bankReference, nextStep, payee, runIdFrom } from "./payment-model.js";
+import { approvals, bankReference, nextStep, ownerSendsWithoutReview, payee, runIdFrom } from "./payment-model.js";
 
 /* Read now: boot drops every query parameter but ?view= before the first render. */
 const pd = { id: runIdFrom(location.search, null) };
@@ -58,7 +58,8 @@ function linesHtml(run, contacts, invoices) {
 }
 
 function approvalsCard(run) {
-  const a = approvals(run, reviewOn());
+  const ownerSends = ownerSendsWithoutReview(org?.entity, run);
+  const a = approvals(run, reviewOn() && !ownerSends);
   const step = (s) => {
     const who = s.memberId ? upper(memberName(s.memberId)) : "An owner or admin";
     const sub = s.at ? esc(when(s.at)) : "Waiting";
@@ -68,7 +69,9 @@ function approvalsCard(run) {
   const may = mayReview(run);
   // The same actions, on the same conditions, as the run's row in Approvals (screens.js apRow).
   const btn = (act, label) => `<button type="button" class="z-btn z-btn--primary" data-act="${act}" data-id="${esc(run.id)}">${label}</button>`;
-  const act = run.state === "PENDING_REVIEW" && may.allowed ? btn("draft-detail", "Review")
+  const act = ownerSends && roleCan(org.role, "sign") ? btn("exec-draft", "Send")
+    : ownerSends ? `<p class="zb-hint">An owner sends this with their passkey. No second approval is needed.</p>`
+    : run.state === "PENDING_REVIEW" && may.allowed ? btn("draft-detail", "Review")
     : run.state === "REVIEWED" && roleCan(org.role, "sign") ? btn("exec-draft", "Send")
     : run.state === "DRAFT" && roleCan(org.role, "propose") ? (reviewOn() ? btn("submit-draft", "Submit") : roleCan(org.role, "sign") ? btn("exec-draft", "Send") : "")
     : run.state === "PENDING_REVIEW" ? `<p class="zb-hint">${esc(may.reason)}</p>` : "";

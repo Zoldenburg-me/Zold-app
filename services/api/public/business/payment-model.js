@@ -154,6 +154,17 @@ export function showProgress(msg, dlg, statusEl, toast) {
  * the first deadline come from the authorizations the server returned. A
  * line already past its deadline is skipped without a prompt.
  */
+/** A company's run of bank payees has no review step: the owner's passkey
+ *  signature is the approval (design note Q8,
+ *  routes/business/org-monerium-bank-runs.ts). An owner may send it from
+ *  Draft, Waiting for review or Reviewed, whatever the review setting. */
+export function ownerSendsWithoutReview(entity, run) {
+  return entity === "company"
+    && Array.isArray(run?.lines) && run.lines.length > 0
+    && run.lines.every((l) => l?.destination?.kind === "bank")
+    && ["DRAFT", "PENDING_REVIEW", "REVIEWED"].includes(run.state);
+}
+
 export function signingWarning(authorizations, nowSec) {
   const live = authorizations.filter((a) => Number(a.authorization.typedData.message.deadline) >= nowSec);
   if (authorizations.length < 2 || !live.length) return null;

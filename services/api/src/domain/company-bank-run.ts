@@ -6,7 +6,7 @@
  * that: each line is its own Monerium redeem order, and a SEPA order Monerium
  * accepted cannot be called back by Zold. The rule is therefore:
  *  - everything is checked for every line before any order is asked for
- *    (keys, IBAN, Safe and threshold, role, review, payees and their
+ *    (keys, IBAN, Safe and threshold, the signer's role, payees and their
  *    fingerprints, the balance across all lines), and the owner's passkey
  *    signs every line before the first one is sent;
  *  - the lines are sent one at a time, in order, and the run stops at the

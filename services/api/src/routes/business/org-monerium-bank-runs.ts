@@ -8,6 +8,10 @@
  * becomes the Safe's EIP-1271 signature (threshold 1 only). Zold holds no
  * key. One passkey prompt per line, because each line's message is different.
  *
+ * The owner's signature is the approval: the org's review setting does not
+ * apply to a company run (design note Q8), and payers and admins prepare a
+ * run but never sign it.
+ *
  *  - POST /start → every check, then one challenge per line for this owner's
  *    passkey. Nothing is written to the draft and nothing is sent.
  *  - POST { runId, assertions: [{ requestId, authenticatorData,
@@ -33,7 +37,6 @@ import { ibanChecksumValid, normaliseIban } from "../../domain/contacts.js";
 import { orgEntity } from "../../domain/org-entity.js";
 import { activity, currentFingerprint } from "../../domain/drafts.js";
 import { paymentReference } from "../../domain/invoices.js";
-import { paymentReviewRequired } from "../../domain/payment-review.js";
 import { roleCan } from "../../domain/roles.js";
 import { publicPayout } from "../../domain/org-monerium-payout.js";
 import {
@@ -75,9 +78,12 @@ function eurOf(raw: string): number | null {
   return cents / 100;
 }
 
-/** The states a run may be sent from: the org's review policy decides, as for
- *  every other draft (drafts.ts). */
-const claimableOf = (ctx: OrgContext): DraftState[] => (paymentReviewRequired(ctx.org) ? ["REVIEWED"] : ["DRAFT", "REVIEWED"]);
+/** The states a company run may be sent from. The owner's passkey signature
+ *  is the approval (design note Q8: no off-chain review step on an org Safe),
+ *  so the org's review setting does not apply: a draft is sent from DRAFT,
+ *  from waiting for review, or reviewed. Whoever drafted it, only an owner
+ *  signs it. */
+const COMPANY_RUN_CLAIMABLE: DraftState[] = ["DRAFT", "PENDING_REVIEW", "REVIEWED"];
 
 /**
  * Every line, checked against the address book as it is now, or the reasons
@@ -188,16 +194,9 @@ export function createOrgMoneriumBankRunRoutes(
       res.status(409).json({ code: "INVALID_DATA", error: "Some recipients changed since this draft was approved. It has been held. Nothing was sent.", draft: checked });
       return undefined;
     }
-    const claimable = claimableOf(ctx);
+    const claimable = COMPANY_RUN_CLAIMABLE;
     if (!claimable.includes(checked.state)) {
-      res.status(409).json({
-        code: "NOT_SENDABLE",
-        error: paymentReviewRequired(ctx.org)
-          ? `This draft is ${checked.state}. This organisation requires a second person to review a payment before it can be sent.`
-          : checked.state === "PENDING_REVIEW"
-            ? "This draft is waiting for review. It was submitted while review applied, so it is sent once someone reviews it."
-            : `This draft is ${checked.state} and cannot be sent from that state.`,
-      });
+      res.status(409).json({ code: "NOT_SENDABLE", error: `This draft is ${checked.state} and cannot be sent from that state.` });
       return undefined;
     }
     if (checked.source.kind !== "account" || checked.source.accountId !== accountId) {
