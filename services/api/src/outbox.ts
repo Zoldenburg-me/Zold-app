@@ -11,7 +11,9 @@
  * error, and is logged.
  *
  * A claim lasts LEASE_MS. A process that dies mid-delivery leaves the row
- * claimed; once the lease runs out it is due again, so a delivery can repeat.
+ * claimed; once the lease runs out it is due again, so a delivery can repeat,
+ * but never past the kind's last attempt. A settle names its attempt, so a
+ * claim that lapsed cannot settle the one that took the row over.
  * Every receiver dedupes on the row id (the checkout webhook's `webhook-id`)
  * or is idempotent (the PAID hooks).
  *
@@ -69,24 +71,51 @@ export function backoffMs(h: Pick<OutboxHandler, "retryBaseMs">, n: number): num
   return Math.min(h.retryBaseMs * BACKOFF_FACTOR ** (n - 1), MAX_BACKOFF_MS);
 }
 
+/** Tries at saving a delivery the receiver acknowledged, a second apart. */
+const SAVE_DELIVERED_TRIES = 3;
+
 async function deliverOne(row: OutboxRow, h: OutboxHandler): Promise<void> {
+  // The claim counts the attempt before the send, so a claim past the limit
+  // means the last attempt's lease ran out unsettled (a crash, or a save that
+  // failed): its outcome is unknown, and the row ends there, not sent again.
+  if (row.attempts > h.maxAttempts) {
+    const reason = `attempt ${row.attempts - 1} was not settled before its lease ran out; outcome unknown`;
+    if (await store.settleOutbox(row.id, row.attempts, { ok: false, error: reason, dead: true })) {
+      outboxMetrics.dead++;
+      console.error(`outbox: ${row.kind} ${row.id} dead: ${reason}`);
+    }
+    return;
+  }
   let reason: string;
   try {
     await h.deliver(row);
-    await store.settleOutbox(row.id, { ok: true });
-    outboxMetrics.delivered++;
-    return;
   } catch (err) {
     reason = describeCause(err);
+    await settleFailed(row, h, reason);
+    return;
   }
+  // Acknowledged: a failed save is not a failed send. It is tried again; if
+  // it never lands, the lease runs out and the row is claimed again (sent
+  // again, receivers dedupe on the id), or, past the limit, ends as above.
+  for (let i = 1; ; i++) {
+    try {
+      if (await store.settleOutbox(row.id, row.attempts, { ok: true })) outboxMetrics.delivered++;
+      return;
+    } catch (err) {
+      if (i >= SAVE_DELIVERED_TRIES) throw err;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+}
+
+async function settleFailed(row: OutboxRow, h: OutboxHandler, reason: string): Promise<void> {
   if (row.attempts >= h.maxAttempts) {
-    await store.settleOutbox(row.id, { ok: false, error: reason, dead: true });
-    outboxMetrics.dead++;
+    if (await store.settleOutbox(row.id, row.attempts, { ok: false, error: reason, dead: true })) outboxMetrics.dead++;
     console.error(`outbox: ${row.kind} ${row.id} dead after ${row.attempts} attempts: ${reason}`);
     return;
   }
   const wait = backoffMs(h, row.attempts);
-  await store.settleOutbox(row.id, { ok: false, error: reason, retryInMs: wait });
+  if (!(await store.settleOutbox(row.id, row.attempts, { ok: false, error: reason, retryInMs: wait }))) return;
   outboxMetrics.retried++;
   console.error(`outbox: ${row.kind} ${row.id} attempt ${row.attempts} failed (${reason}); retrying in ${Math.round(wait / 1000)} s`);
   setTimeout(kickOutbox, wait + 5).unref();

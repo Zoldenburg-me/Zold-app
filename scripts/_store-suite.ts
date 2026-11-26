@@ -623,13 +623,13 @@ export async function outboxSuite(s: StoreBackend): Promise<void> {
   assert.ok(claimed.every((r) => r.attempts === 1 && r.claimedUntil), "the attempt is counted at the claim");
   assert.deepEqual((await s.claimOutbox(10, 60_000, KINDS)).filter((r) => r.kind.startsWith("suite.")), [], "a claimed row is not claimed again");
 
-  assert.equal(await s.settleOutbox(a.id, { ok: true }), true);
-  assert.equal(await s.settleOutbox(a.id, { ok: true }), false, "settled once");
+  assert.equal(await s.settleOutbox(a.id, 1, { ok: true }), true);
+  assert.equal(await s.settleOutbox(a.id, 1, { ok: true }), false, "settled once");
   assert.ok((await s.findOutboxRow(a.id))?.deliveredAt);
-  assert.equal(await s.settleOutbox(k.id, { ok: false, error: "HTTP 503", retryInMs: 0 }), true);
+  assert.equal(await s.settleOutbox(k.id, 1, { ok: false, error: "HTTP 503", retryInMs: 0 }), true);
   const again = (await s.claimOutbox(10, 60_000, KINDS)).filter((r) => r.kind.startsWith("suite."));
   assert.deepEqual(again.map((r) => [r.id, r.attempts, r.lastError]), [[k.id, 2, "HTTP 503"]], "due again after its backoff, the attempt counted");
-  assert.equal(await s.settleOutbox(k.id, { ok: false, error: "HTTP 503", retryInMs: 3_600_000 }), true);
+  assert.equal(await s.settleOutbox(k.id, 2, { ok: false, error: "HTTP 503", retryInMs: 3_600_000 }), true);
   assert.deepEqual((await s.claimOutbox(10, 60_000, KINDS)).filter((r) => r.kind.startsWith("suite.")), [], "not before its backoff ends");
 
   // Only the kinds asked for: a row whose kind has no handler is left alone.
@@ -643,7 +643,8 @@ export async function outboxSuite(s: StoreBackend): Promise<void> {
   await wait(20);
   const reclaimed = (await s.claimOutbox(10, 60_000, KINDS)).find((r) => r.id === l.id);
   assert.equal(reclaimed?.attempts, 2, "a lapsed claim is claimed again");
-  assert.equal(await s.settleOutbox(l.id, { ok: false, error: "gave up", dead: true }), true);
+  assert.equal(await s.settleOutbox(l.id, 1, { ok: true }), false, "the lapsed claim's settle does not touch the new claim");
+  assert.equal(await s.settleOutbox(l.id, 2, { ok: false, error: "gave up", dead: true }), true);
   assert.equal((await s.findOutboxRow(l.id))?.lastError, "gave up");
   assert.ok((await s.findOutboxRow(l.id))?.deadAt);
   assert.deepEqual(await s.outboxCounts(), { pending: before.pending + 2, dead: before.dead + 1 });

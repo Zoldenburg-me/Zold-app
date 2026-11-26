@@ -779,15 +779,16 @@ export function createPgStore(database: Database): StoreBackend {
         );
         return r.rows.map(outboxRow).sort((a, b) => (a.nextAttemptAt < b.nextAttemptAt ? -1 : a.nextAttemptAt > b.nextAttemptAt ? 1 : 0));
       }),
-    async settleOutbox(id, outcome) {
-      const open = "id = $1 AND claimed_until IS NOT NULL AND delivered_at IS NULL AND dead_at IS NULL";
+    async settleOutbox(id, attempt, outcome) {
+      // attempts = the claim's: a claim that lapsed and was taken again is not this caller's to settle.
+      const open = "id = $1 AND attempts = $2 AND claimed_until IS NOT NULL AND delivered_at IS NULL AND dead_at IS NULL";
       const r = outcome.ok
-        ? await q.query(`UPDATE outbox SET claimed_until = NULL, delivered_at = now() WHERE ${open} RETURNING id`, [id])
+        ? await q.query(`UPDATE outbox SET claimed_until = NULL, delivered_at = now() WHERE ${open} RETURNING id`, [id, attempt])
         : "dead" in outcome
-          ? await q.query(`UPDATE outbox SET claimed_until = NULL, dead_at = now(), last_error = $2 WHERE ${open} RETURNING id`, [id, outcome.error])
+          ? await q.query(`UPDATE outbox SET claimed_until = NULL, dead_at = now(), last_error = $3 WHERE ${open} RETURNING id`, [id, attempt, outcome.error])
           : await q.query(
-              `UPDATE outbox SET claimed_until = NULL, last_error = $2, next_attempt_at = now() + make_interval(secs => $3::double precision / 1000) WHERE ${open} RETURNING id`,
-              [id, outcome.error, outcome.retryInMs],
+              `UPDATE outbox SET claimed_until = NULL, last_error = $3, next_attempt_at = now() + make_interval(secs => $4::double precision / 1000) WHERE ${open} RETURNING id`,
+              [id, attempt, outcome.error, outcome.retryInMs],
             );
       return r.rows.length > 0;
     },

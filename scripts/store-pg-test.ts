@@ -397,13 +397,28 @@ try {
       await as.addLedgerEntries([{ id: "le_app", orgId: "org_app", direction: "in", asset: "EURe", amount: "1", at: new Date().toISOString(), createdAt: new Date().toISOString() } as any]);
       await as.updateLedgerEntry("le_app", { note: "categorised" } as any);
       assert.equal((await app.query("SELECT 1 FROM ledger_history WHERE entry_id = 'le_app'")).rows.length, 1, "the app role's update leaves history");
+      // A temporary table named ledger_history does not take the history row.
+      // The role has no TEMP; granted back here, the trigger still writes the
+      // real table.
+      await assert.rejects(() => app.query("CREATE TEMP TABLE shadow (x int)"), denied, "no temporary tables");
+      await owner.query(`GRANT TEMPORARY ON DATABASE ${db} TO ${appRole}`);
+      const c = new pg.Client({ connectionString: urlAs(db) });
+      await c.connect();
+      try {
+        await c.query("CREATE TEMP TABLE ledger_history (entry_id text, org_id text, doc json)");
+        await c.query(`UPDATE ledger SET doc = json_build_object('id', 'le_app', 'note', 'shadowed') WHERE id = 'le_app'`);
+        assert.equal((await c.query("SELECT 1 FROM pg_temp.ledger_history")).rows.length, 0, "the temporary table got nothing");
+      } finally {
+        await c.end();
+      }
+      assert.equal((await app.query("SELECT 1 FROM ledger_history WHERE entry_id = 'le_app'")).rows.length, 2, "the real table got the row");
     } finally {
       await app.close();
       await owner.close();
       await admin.query(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`);
     }
   }
-  console.log("ok - the application role: the store suite runs on its grants; no DELETE or TRUNCATE on kept rows, no UPDATE on audit, no write to history or schema_migrations, no DDL");
+  console.log("ok - the application role: the store suite runs on its grants; no DELETE or TRUNCATE on kept rows, no UPDATE on audit, no write to history or schema_migrations, no DDL, no TEMP; a shadowing temporary ledger_history does not take the history row");
 
   // The API's own store on Postgres (STORE_BACKEND=postgres): the §2
   // concurrency tests, and the suites that hold the S2 race tests, each in a

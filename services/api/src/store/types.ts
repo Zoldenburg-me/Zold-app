@@ -527,14 +527,6 @@ export interface CryptoSend {
 }
 
 /**
- * A transfer's or a crypto send's UserOperation awaiting its passkey: the plan,
- * the unsigned operation, the challenge the passkey signs and, for a full
- * fee+approve+swap batch, where the swap output is delivered. None of it is a
- * secret. Keyed by kind and the transfer's or send's id; it dies with its
- * approval window, and the claim that submits it deletes it
- * (docs/postgres-store-design.md §2, approvals waiting for a passkey).
- */
-/**
  * A notification to send once the write that caused it has committed
  * (docs/postgres-store-design.md §5): written in the same transaction as the
  * state change, so a crash keeps both or neither. `key`, when given, is
@@ -567,6 +559,14 @@ export interface OutboxRow extends OutboxDraft {
 export type OutboxOutcome = { ok: true } | { ok: false; error: string; retryInMs: number } | { ok: false; error: string; dead: true };
 
 export type PendingExecutionKind = "transfer" | "cryptoSend";
+/**
+ * A transfer's or a crypto send's UserOperation awaiting its passkey: the plan,
+ * the unsigned operation, the challenge the passkey signs and, for a full
+ * fee+approve+swap batch, where the swap output is delivered. None of it is a
+ * secret. Keyed by kind and the transfer's or send's id; it dies with its
+ * approval window, and the claim that submits it deletes it
+ * (docs/postgres-store-design.md §2, approvals waiting for a passkey).
+ */
 export interface PendingExecution {
   userId: string;
   /** Unix milliseconds. */

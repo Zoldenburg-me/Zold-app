@@ -735,10 +735,11 @@ export const jsonCore = {
     if (claimed.length) persist();
     return claimed;
   },
-  /** End a claimed attempt; false when the row is not claimed. */
-  settleOutbox(id: string, outcome: OutboxOutcome) {
+  /** End claimed attempt `attempt`; false when the row is not claimed, or
+   *  another claim has taken it since. */
+  settleOutbox(id: string, attempt: number, outcome: OutboxOutcome) {
     const row = db.outbox.find((r) => r.id === id);
-    if (!row || !settleOutboxOn(row, outcome, new Date())) return false;
+    if (!row || !settleOutboxOn(row, attempt, outcome, new Date())) return false;
     persist();
     return true;
   },

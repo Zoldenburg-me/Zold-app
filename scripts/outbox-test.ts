@@ -6,7 +6,9 @@
  * Covered: a row written with its state change is delivered once, after the
  * commit, never for a dropped transaction; a failure is retried after its
  * backoff with the same row id; the kind's last attempt makes it dead
- * (logged, kept); a row with no handler waits, unclaimed; a row written before a
+ * (logged, kept); a claim whose lease ran out on the last attempt ends dead
+ * without another send; a failed save after an acknowledged send is saved
+ * again, not counted as a failed send; a row with no handler waits, unclaimed; a row written before a
  * restart is delivered after it; the PAID hooks run once per request, and a
  * hook that fails is not retried by the outbox (the sweep owns that).
  *
@@ -101,6 +103,46 @@ await check("a failure is retried after its backoff with the same row id; the la
   assert.equal(ids.length, 3, "a dead row is not tried again");
   assert.equal(backoffMs({ retryBaseMs: 5_000 }, 1), 5_000);
   assert.equal(backoffMs({ retryBaseMs: 5_000 }, 10), 3_600_000, "capped at an hour");
+});
+
+await check("the last attempt's lease ran out unsettled (a crash): the row ends dead, outcome unknown, and is not sent again", async () => {
+  const kind = `test.crash.${randomUUID().slice(0, 8)}`;
+  const row = (await store.enqueueOutbox({ kind, payload: {} }))!;
+  // The process that died: it claimed attempt 1 of 1, sent, and never settled.
+  assert.equal((await store.claimOutbox(10, 1, [kind])).length, 1);
+  await wait(20);
+  let sends = 0;
+  registerOutboxKind(kind, { deliver: async () => void sends++, maxAttempts: 1, retryBaseMs: 10 });
+  await drainOutbox();
+  assert.equal(sends, 0, "past the limit: not sent again");
+  const dead = (await store.findOutboxRow(row.id))!;
+  assert.ok(dead.deadAt && !dead.deliveredAt);
+  assert.match(dead.lastError ?? "", /attempt 1 was not settled.*outcome unknown/);
+});
+
+await check("an acknowledged send whose save fails once is saved again: delivered, not a failed attempt, not dead", async () => {
+  const kind = `test.save.${randomUUID().slice(0, 8)}`;
+  let sends = 0;
+  const settle = store.settleOutbox;
+  let failNext = true;
+  (store as any).settleOutbox = async (...args: Parameters<typeof settle>) => {
+    if (failNext && args[2].ok) {
+      failNext = false;
+      throw new Error("connection lost");
+    }
+    return settle(...args);
+  };
+  try {
+    registerOutboxKind(kind, { deliver: async () => void sends++, maxAttempts: 1, retryBaseMs: 10 });
+    const row = (await store.enqueueOutbox({ kind, payload: {} }))!;
+    await drainOutbox();
+    assert.equal(sends, 1, "sent once");
+    const done = (await store.findOutboxRow(row.id))!;
+    assert.ok(done.deliveredAt && !done.deadAt, JSON.stringify(done));
+    assert.equal(done.lastError, undefined);
+  } finally {
+    (store as any).settleOutbox = settle;
+  }
 });
 
 await check("a row written before a restart is delivered after it, by the handler registered then", async () => {

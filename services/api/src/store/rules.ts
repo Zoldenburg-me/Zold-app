@@ -461,9 +461,10 @@ export function claimOutboxOn(rows: OutboxRow[], limit: number, leaseMs: number,
   });
 }
 
-/** End a claimed attempt on the row; false when it is not claimed (or done). */
-export function settleOutboxOn(r: OutboxRow, outcome: OutboxOutcome, now: Date): boolean {
-  if (!r.claimedUntil || r.deliveredAt || r.deadAt) return false;
+/** End claimed attempt `attempt` on the row; false when the row is not
+ *  claimed, is done, or was claimed again since (its lease ran out). */
+export function settleOutboxOn(r: OutboxRow, attempt: number, outcome: OutboxOutcome, now: Date): boolean {
+  if (!r.claimedUntil || r.deliveredAt || r.deadAt || r.attempts !== attempt) return false;
   delete r.claimedUntil;
   if (outcome.ok) {
     r.deliveredAt = now.toISOString();
