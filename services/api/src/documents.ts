@@ -315,7 +315,9 @@ export function linesFromChainCredits(credits: ChainCreditLike[]): StatementLine
 
 /** The onboarding faucet grant (faucet.ts, test chains only): test EURe sent
  *  straight to the Safe, which no other source records. A claim with no
- *  txHash is one whose send never went out. */
+ *  txHash has no line: the send is in flight, or a crash or a lost node
+ *  answer left it uncertain, so the grant may have landed. Test money only;
+ *  the line appears once a person reconciles the claim. */
 export function linesFromFaucet(grant: { grantedEur: number; txHash: string; at: string } | undefined): StatementLine[] {
   if (!grant?.txHash || !(grant.grantedEur > 0)) return [];
   return [{
