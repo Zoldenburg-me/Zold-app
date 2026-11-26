@@ -58,8 +58,9 @@ flowchart TB
   as written: classic scripts for `/app`, ES modules for `/business`, and
   vendored `@noble` crypto.
 - **Few dependencies.** `express`, `viem`, `abstractionkit` (Candide Safe /
-  ERC-4337), `safe-recovery-service-sdk` and `@stellar/stellar-sdk`. There is
-  no DB driver, no helmet/cors/rate-limit package, no WebAuthn library (the
+  ERC-4337), `safe-recovery-service-sdk` and `@stellar/stellar-sdk`; `pg` is
+  the Postgres store's driver, which no deployment runs yet (§18.1). There is
+  no helmet/cors/rate-limit package, no WebAuthn library (the
   verifier and CBOR decoder in `webauthn.ts` are hand-written) and no test
   framework (`node:assert` plus scripts).
 
@@ -1329,6 +1330,14 @@ and starts the API next to `cloudflared`.
 - **The database lives and dies with the lease.** Closing it deletes every
   account, and passkeys and Safes created there cannot be moved. A deploy
   keeps the lease and its `/data` volume.
+- **The database is the JSON store** (`/data/db.json`) on both leases. The
+  Postgres store (`STORE_BACKEND=postgres`, `docs/postgres-store-design.md`)
+  is built and runs only in the suites (`npm run check:pg`); config refuses
+  it on a real-money chain. The move off Akash to one Oracle Cloud ARM host
+  (Postgres 17 on unix sockets, one cluster per deployment, pgBackRest to
+  Object Storage in two regions, daily dumps the host cannot delete) and the
+  cut-over (`pg-import` in, `pg-export` as the rollback) are designed and not
+  done: the design note's §7 and §8 rows S7 and S8, waiting on the owner.
 - **Deploying sends the secrets, so the operator runs it.** The SDL is
   generated from `.env` on the operator's machine and never committed.
   Provider bids expire within minutes, so creating the deployment and

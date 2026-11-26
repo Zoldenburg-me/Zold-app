@@ -12,6 +12,7 @@
  * collections, rules and row ids only.
  */
 import { createHash } from "node:crypto";
+import { linkSync, rmSync } from "node:fs";
 import { emptyDb, type Db } from "../db.js";
 import type { Collection } from "../backend.js";
 import type { OutboxRow } from "../types.js";
@@ -161,7 +162,14 @@ const isFiniteNumber = (v: unknown) => typeof v === "number" && Number.isFinite(
 export function preImportReport(db: Db): Finding[] {
   const out: Finding[] = [];
   const add = (rule: string, collection: string, blocks: boolean, ids: string[]) => ids.length && out.push({ rule, collection, blocks, ids });
-  const list = (c: Collection) => ((db[c] as unknown[] | undefined) ?? []) as Row[];
+  // A collection of the wrong shape is a finding (below), and its rows are
+  // not read: the other rules run on the rest, so the report still prints
+  // everything it found.
+  const raw = (c: Collection): unknown[] => {
+    const v = (db as unknown as Row)[c];
+    return Array.isArray(v) ? v : [];
+  };
+  const list = (c: Collection) => raw(c).filter((r): r is Row => r !== null && typeof r === "object" && !Array.isArray(r));
   const known = new Set<string>(COLLECTIONS);
 
   // A collection the import has no table for would be dropped in silence.
@@ -170,6 +178,10 @@ export function preImportReport(db: Db): Finding[] {
     const v = (db as unknown as Row)[c];
     const shape = c === "cryptoDepositCursor" ? v !== null && typeof v === "object" && !Array.isArray(v) : Array.isArray(v);
     if (!shape) add("not-a-collection", c, true, [c]);
+    // processed* are lists of ids; every other array holds rows.
+    else if (Array.isArray(v) && c !== "processedMoneriumOrders" && c !== "processedMoneriumWebhooks") {
+      add("not-a-row", c, true, v.flatMap((r, i) => (r !== null && typeof r === "object" && !Array.isArray(r) ? [] : [`#${i}`])));
+    }
   }
 
   // Primary keys: present, text, once.
@@ -179,16 +191,16 @@ export function preImportReport(db: Db): Finding[] {
     for (const ids of by.values()) if (ids.length > 1) add(rule, collection, true, ids);
   };
   for (const c of [...ID_COLLECTIONS, "outbox" as const]) {
-    const rows = list(c);
+    const rows = raw(c) as (Row | null)[];
     add("bad-id", c, true, rows.flatMap((r, i) => (typeof r?.id === "string" && r.id ? [] : [`#${i}`])));
-    dupes("duplicate:primary-key", c, rows.filter((r) => typeof r?.id === "string").map((r) => [r.id as string, r.id as string]));
+    dupes("duplicate:primary-key", c, list(c).filter((r) => typeof r.id === "string").map((r) => [r.id as string, r.id as string]));
   }
   for (const c of ["processedMoneriumOrders", "processedMoneriumWebhooks"] as const) {
-    const ids = list(c) as unknown[];
+    const ids = raw(c);
     add("bad-id", c, true, ids.flatMap((v, i) => (typeof v === "string" && v ? [] : [`#${i}`])));
     dupes("duplicate:primary-key", c, ids.filter((v): v is string => typeof v === "string").map((v) => [v, v]));
   }
-  add("bad-id", "moneriumIssueOrders", true, list("moneriumIssueOrders").flatMap((r, i) => (typeof r?.orderId === "string" && r.orderId ? [] : [`#${i}`])));
+  add("bad-id", "moneriumIssueOrders", true, (raw("moneriumIssueOrders") as (Row | null)[]).flatMap((r, i) => (typeof r?.orderId === "string" && r.orderId ? [] : [`#${i}`])));
 
   for (const u of UNIQUE_KEYS) {
     const keyed: [string, string][] = [];
@@ -236,7 +248,8 @@ export function preImportReport(db: Db): Finding[] {
 
   // crypto_deposit_cursor.block is numeric and reads back as `block::text`:
   // only a string in that canonical form comes back as it went in.
-  const cursor = (db.cryptoDepositCursor ?? {}) as Record<string, unknown>;
+  const cv = db.cryptoDepositCursor as unknown;
+  const cursor = (cv !== null && typeof cv === "object" && !Array.isArray(cv) ? cv : {}) as Record<string, unknown>;
   add("cursor-block-not-numeric", "cryptoDepositCursor", true, Object.keys(cursor).filter((k) => typeof cursor[k] !== "string" || !/^(0|[1-9]\d*)$/.test(cursor[k] as string)));
   // outbox rows go into typed columns.
   add(
@@ -261,7 +274,7 @@ export function preImportReport(db: Db): Finding[] {
   );
 
   for (const ref of REFERENCES) {
-    const have = new Set(list(ref.to).map((r) => r?.id));
+    const have = new Set(list(ref.to).map((r) => r.id));
     add(`orphan:${ref.field}->${ref.to}`, ref.collection, false, list(ref.collection).filter((r) => text(r[ref.field]) !== null && !have.has(r[ref.field])).map(idOf));
   }
   return out;
@@ -335,6 +348,16 @@ async function holdStartLock(q: Sql): Promise<void> {
   if (!r.rows[0]?.ok) throw new Error("an API holds this deployment's start lock: stop it first");
 }
 
+/**
+ * Make `q`'s transaction one read-only snapshot: every table the export or
+ * verify reads is read as of one moment, and nothing in it can write. The
+ * start lock already keeps an API out; this does not rest on it. Must be the
+ * transaction's first statement after BEGIN.
+ */
+async function readOnlySnapshot(q: Sql): Promise<void> {
+  await q.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY");
+}
+
 export interface Export {
   db: Db;
   ledgerHistory: string;
@@ -349,10 +372,30 @@ export interface Export {
 export async function exportDb<T = Export>(database: Database, during?: (e: Export, q: Sql) => Promise<T>): Promise<T> {
   await assertSchemaCurrent(database);
   return database.tx(async (q) => {
+    await readOnlySnapshot(q);
     await holdStartLock(q);
     const e: Export = { db: await readDb(q), ledgerHistory: await readLedgerHistory(q), postgresOnly: await postgresOnlyCounts(q) };
     return during ? during(e, q) : (e as T);
   });
+}
+
+/**
+ * Put each `[tmp, name]` under its name, all or none: a link refuses a name
+ * that exists, and when one fails the names this call already made are
+ * removed again, so an export is never published without its history file.
+ * Only names this call created are removed.
+ */
+export function publishAll(files: [tmp: string, name: string][]): void {
+  const done: string[] = [];
+  try {
+    for (const [tmp, name] of files) {
+      linkSync(tmp, name);
+      done.push(name);
+    }
+  } catch (err) {
+    for (const name of done) rmSync(name, { force: true });
+    throw err;
+  }
 }
 
 // ── Import ─────────────────────────────────────────────────────────────────
@@ -511,6 +554,7 @@ export async function verifyOn(q: Sql, db: Db): Promise<Verified> {
 export async function verifyAgainst(database: Database, db: Db): Promise<Verified> {
   await assertSchemaCurrent(database);
   return database.tx(async (q) => {
+    await readOnlySnapshot(q);
     await holdStartLock(q);
     return verifyOn(q, db);
   });

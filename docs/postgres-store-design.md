@@ -678,7 +678,13 @@ only: quote and session pruning, Shopify delivery pruning,
   another snapshot): the report says so, and import and verify refuse it
   until the file has been loaded once by the JSON store. Session pruning
   depends on the clock, so a verify run long after the import can find
-  `sessions` changed; the import verifies in the same run.
+  `sessions` changed; the import verifies in the same run. For the same
+  reason a second import of one file is "nothing changed" only while no
+  session in it has died since the first; after that it is refused as
+  differing in `sessions`, and the first import stands. Import, verify and
+  export need `DATABASE_URL` (and `DATABASE_CA`) and no other deployment
+  setting: `store/db.ts` reads `config/env.ts`, not the config that loads the
+  signing keys.
 - `report <db.json>` needs no database and no deployment environment. It
   lists what would break the import, each with the ids of the rows involved:
   a duplicate for each unique key of the migrations (among them
@@ -691,7 +697,11 @@ only: quote and session pruning, Shopify delivery pruning,
   a `logIndex` that is not an integer (`0005`, `0008`); a daily-cap amount
   (`transfers.sendEur`, `cryptoSends.capEur`) that is not a finite number
   (JSON writes NaN and Infinity as `null`); a cursor block or an outbox row
-  the typed columns refuse; a collection the schema has no table for. Those
+  the typed columns refuse (the outbox check is the shape: an `attempts` past
+  the `integer` range or a date that does not exist passes it, and the insert
+  refuses the row, rolling back); a collection the schema has no table for,
+  or of the wrong shape, and a row that is not an object (the other rules
+  still run, so the report prints everything it found). Those
   block the import. The orphans of each foreign key in §1.2 are listed too,
   and do not block. Exit 1 when anything blocks.
 - `import <db.json>` runs the report and refuses on any blocking finding,
@@ -709,23 +719,37 @@ only: quote and session pruning, Shopify delivery pruning,
   export): per collection, the row count and a SHA-256 over the rows in
   stored order (the JSON array's, `seq` on Postgres; the cursor map sorted by
   chain), each in canonical JSON (sorted keys), so a reordered row fails as a
-  changed one does. The source side is the migrated snapshot, so both sides
+  changed one does. Reordered keys inside a row do not: the import keeps
+  them by storing the text `JSON.stringify` wrote (`json`, §1.1;
+  `pg-import-test` compares `doc::text`), not the verify. The source side is the migrated snapshot, so both sides
   hash the same data. `payment_handles` and `operator_credentials`, filled
   from the rows, are compared with what the rows say. Verify holds the start
-  lock too, so it refuses while an API writes.
+  lock too, so it refuses while an API writes, and reads in one
+  `REPEATABLE READ, READ ONLY` transaction. `verify` is for an import source:
+  an export is checked as written by `pg-export.ts --verify`, the export's
+  own check run again. Through the load-time migrations an export would not
+  come back unchanged: a signup on Postgres has no organisation yet (only the
+  JSON load makes one), so `verify` refuses it as unstable, and a dead
+  session not yet pruned mismatches `sessions`.
 - Never prints a row. Output is collection names, counts, hashes and row ids.
 
 **Export** (`scripts/pg-export.ts`): every collection in the `Db` shape,
-read as the Postgres store reads it (`listCollection`), in one transaction
-that holds the start lock, so it refuses while an API runs. Still under the
+read as the Postgres store reads it (`listCollection`), in one
+`REPEATABLE READ, READ ONLY` transaction that holds the start lock, so it
+refuses while an API runs. Still under the
 lock it writes the file owner-only, reads it back and verifies it against
-Postgres, and only then links it under its name: it refuses to overwrite a
-file and leaves none behind when it fails. It is the rollback path and the test of the importer. The
+Postgres, and only then links it and the history file under their names,
+both or neither: it refuses to overwrite a file and leaves none behind when
+it fails. The db.json is plain, as the JSON backend serves it: it is written
+only to the data directory it is served from, or encrypted at once with
+`scripts/backup-db.sh` (AGENTS.md: no unencrypted copy). It is the rollback path and the test of the importer. The
 `Db` shape has `outbox` (the JSON backend keeps one) but no place for
 `ledger_history`, `cap_holds` or `pending_executions`; every `outbox` row goes
 into `db.json`'s `outbox` (the dead ones are listed), and `ledger_history`
 goes to its own age-encrypted file (`--ledger-history`, to the recipients of
 `scripts/_age.sh`). With history rows and no such file, the export refuses.
+`scripts/_age.sh` pins no linux-arm64 `age` build; S7 adds one for the
+Oracle host, and until then an export with history refuses there.
 
 **Cut-over** (the runbook is written in S7; the owner picks the time). The
 API and the data move together, from the Akash lease to the Oracle host
@@ -766,7 +790,8 @@ writes:
    it recorded is lost.
 4. `cap_holds` and `pending_executions` are dropped: holds expire anyway, and
    an approval in flight answers 410 and the user starts it again.
-5. Export, verify the export against Postgres (counts and hashes), then start
+5. Export (it verifies the file against Postgres, counts and hashes, before
+   it names it; `pg-export.ts --verify` runs that check again), then start
    the lease on that `db.json` and point the tunnel back.
 
 The encrypted `db.json` copies are kept until the owner deletes them.

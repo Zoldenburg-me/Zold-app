@@ -2,13 +2,27 @@
  * Postgres → db.json, the rollback path (docs/postgres-store-design.md §6).
  *
  *   DATABASE_URL=… npx tsx scripts/pg-export.ts <out/db.json> [--ledger-history <out.jsonl.age>]
+ *   DATABASE_URL=… npx tsx scripts/pg-export.ts --verify <db.json>
+ *
+ * Needs DATABASE_URL (and DATABASE_CA for TLS) and nothing else of a
+ * deployment's environment: no signing key, no chain.
  *
  * Reads every collection in the `Db` shape inside one transaction that holds
  * the deployment's start lock (so it refuses while an API runs, and no API
  * starts until it is done). Still under the lock it writes `<out>`
  * owner-only, reads the file back and checks every collection's count and
- * hash against Postgres; only then is the file put under its name. Refuses to
- * overwrite a file, and leaves none behind when it fails.
+ * hash against Postgres; only then are the files put under their names, both
+ * or neither. Refuses to overwrite a file, and leaves none behind when it
+ * fails. The export is read in one REPEATABLE READ, READ ONLY transaction.
+ *
+ * `--verify <db.json>` is that same check run again later: the file as
+ * written against Postgres, under the start lock. Use it for an export, not
+ * `pg-import.ts verify`, which runs the load-time migrations on the file
+ * first (an export can hold a user with no organisation yet, which they
+ * would give one).
+ *
+ * db.json is plain JSON, as the JSON backend serves it: write it only where
+ * the lease's own db.json lives, or straight into scripts/backup-db.sh.
  *
  * `ledger_history` has no place in db.json. When it has rows the export
  * refuses unless `--ledger-history` names a file for them, which is written
@@ -21,18 +35,19 @@
  * Prints collection names, counts, hashes and row ids, never a row.
  */
 import { spawnSync } from "node:child_process";
-import { closeSync, existsSync, fsyncSync, linkSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const args = process.argv.slice(2);
-const out = args[0];
+const verifyOnly = args[0] === "--verify";
+const out = verifyOnly ? args[1] : args[0];
 const hi = args.indexOf("--ledger-history");
 const historyOut = hi >= 0 ? args[hi + 1] : undefined;
-if (!out || out.startsWith("--") || (hi >= 0 && !historyOut)) {
-  console.error("usage: pg-export.ts <out/db.json> [--ledger-history <out.jsonl.age>]");
+if (!out || out.startsWith("--") || (hi >= 0 && (!historyOut || verifyOnly))) {
+  console.error("usage: pg-export.ts <out/db.json> [--ledger-history <out.jsonl.age>] | --verify <db.json>");
   process.exit(2);
 }
-for (const f of [out, historyOut]) {
+for (const f of verifyOnly ? [] : [out, historyOut]) {
   if (f && existsSync(f)) {
     console.error(`${f} exists: refusing to overwrite it`);
     process.exit(1);
@@ -45,7 +60,7 @@ if (!url) {
 }
 
 const { openPool } = await import("../services/api/src/store/pg/sql.js");
-const { digest, digestMismatches, exportDb, verifyOn } = await import("../services/api/src/store/pg/port.js");
+const { digest, digestMismatches, exportDb, publishAll, verifyAgainst, verifyOn } = await import("../services/api/src/store/pg/port.js");
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 
 /** age, as scripts/_age.sh pins it, to its recipients, into `to`. Throws when either is missing. */
@@ -82,7 +97,12 @@ const tmpFor = (f: string) => {
 const database = openPool(url, { ca: process.env.DATABASE_CA, realMoney: true });
 let code = 0;
 try {
-  await exportDb(database, async ({ db, ledgerHistory, postgresOnly }, q) => {
+  if (verifyOnly) {
+    const v = await verifyAgainst(database, JSON.parse(readFileSync(out, "utf8")));
+    for (const [c, { rows, sha256 }] of Object.entries(v.target)) console.log(`  ${c.padEnd(28)} ${String(rows).padStart(8)}  ${sha256}`);
+    if (v.mismatches.length) throw new Error(`VERIFY FAILED: ${v.mismatches.join(", ")} differ between ${out} and Postgres`);
+    console.log(`verify: ${out}, as written, matches Postgres in every collection's count and hash`);
+  } else await exportDb(database, async ({ db, ledgerHistory, postgresOnly }, q) => {
     if (postgresOnly.ledger_history > 0 && !historyOut) {
       throw new Error(`ledger_history has ${postgresOnly.ledger_history} row(s) and db.json has no place for them: pass --ledger-history <file>`);
     }
@@ -102,8 +122,7 @@ try {
     const pending = db.outbox.filter((o) => !o.deadAt && !o.deliveredAt).length;
     console.log(`outbox: ${pending} undelivered (the JSON backend's worker delivers them), ${dead.length} dead${dead.length ? `: ${dead.join(", ")}` : ""}`);
     if (bad.length) throw new Error(`VERIFY FAILED: ${bad.join(", ")}; no file written`);
-    linkSync(dbTmp, out);
-    if (histTmp && historyOut) linkSync(histTmp, historyOut);
+    publishAll(histTmp && historyOut ? [[dbTmp, out], [histTmp, historyOut]] : [[dbTmp, out]]);
     console.log(`wrote ${out}; verify: every collection's count and hash match Postgres`);
   });
 } catch (err) {
@@ -115,4 +134,6 @@ try {
   for (const t of made) rmSync(t, { force: true });
   await database.close();
 }
-process.exit(code);
+// Not process.exit(): piped stdout is written asynchronously, and exit()
+// would drop what is still queued.
+process.exitCode = code;
