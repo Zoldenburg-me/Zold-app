@@ -154,7 +154,10 @@ server.close();
 console.log("  ok  a claimed transfer past its deadline is not told it was not sent");
 
 // The race the invoice release relies on: past the route's check, then over the deadline, then claimed.
-const raced = transfer("t-raced", nowSec() - 1);
+// Signed as the route stores it before it hands the transfer to the executor.
+const raced = transfer("t-raced", nowSec() - 1, {}, {
+  moneriumRedeem: { amount: "40.00", iban: IBAN, issuedAt: stamp, message: "m", memo: "m", signature: "0x1234" },
+});
 assert.ok(store.claimAuthorization(raced.id));
 const racedAfter = await executeSepaTransfer(store.findTransfer(raced.id)!, store.findUser("u-window")!, {
   deadline: raced.auth!.deadline,

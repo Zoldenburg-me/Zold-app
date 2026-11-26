@@ -16,13 +16,16 @@
  *
  *   npm run sepa-memo:test
  */
-// Must be first: pins chain, keys and a throwaway database.
+// Must be first: pins chain and keys.
 import "./_local-chain.js";
 import assert from "node:assert/strict";
-import { rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 
-rmSync(process.env.TRANSF_DB_PATH!, { force: true });
+// A database this run created, whatever TRANSF_DB_PATH the shell exports.
+process.env.TRANSF_DB_PATH = join(mkdtempSync(join(tmpdir(), "zold-sepa-memo-")), "db.json");
 process.env.SEPA_FEE_EUR = "0";
 // A live deployment: without it the executor refuses before the fee debit.
 process.env.MONERIUM_CLIENT_ID = "sepa-memo-client";
@@ -180,15 +183,23 @@ for (const [label, wrong] of [
   ok(`Monerium echoing ${label} holds the transfer in review, never PAID`);
 }
 
-// A row with no stored memo still refuses before any order, as before.
-const NONE = "77777777-8888-4999-8aaa-bbbbbbbbbbbb";
-const dNone = built(NONE, "", "");
-store.updateTransfer(NONE, { moneriumRedeem: { ...store.findTransfer(NONE)!.moneriumRedeem!, memo: undefined } as any });
-const before = placed.size;
-const none = await send(NONE, dNone);
-assert.equal(placed.size, before, "no order without a stored memo");
-assert.equal(none.state, "MANUAL_REVIEW");
-ok("a transfer that stored no memo places no order");
+// No stored memo, or a blank one, refuses before the fee debit and any order:
+// FAILED, so the daily cap is released.
+for (const [id, memo] of [
+  ["77777777-8888-4999-8aaa-bbbbbbbbbbbb", undefined],
+  ["88888888-9999-4aaa-8bbb-cccccccccccc", ""],
+  ["99999999-aaaa-4bbb-8ccc-dddddddddddd", "  "],
+] as const) {
+  const d = built(id, "", "");
+  store.updateTransfer(id, { moneriumRedeem: { ...store.findTransfer(id)!.moneriumRedeem!, memo } as any });
+  const before = placed.size;
+  const after = await send(id, d);
+  assert.equal(placed.size, before, "no order without a stored memo");
+  assert.equal(after.state, "FAILED", after.error);
+  assert.match(after.error ?? "", /no signed payment reference/);
+  assert.ok(!after.txs.some((t) => t.step.startsWith("monerium.redeem")), "no redeem was attempted");
+  ok(`a transfer that stored memo ${JSON.stringify(memo)} places no order and fails`);
+}
 
 console.log(`\nSEPA STORED MEMO TEST PASSED — ${n} checks`);
 process.exit(0);

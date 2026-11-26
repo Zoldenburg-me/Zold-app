@@ -601,7 +601,9 @@ is recorded.
   built once, stored on `moneriumRedeem.memo`, and that stored memo is what
   the order carries and what Monerium's echo is matched against: a transfer
   built under an older memo format still sends and settles.
-- It is refused **before the fee debit** if `!moneriumLiveFor(user)`.
+- It is refused **before the fee debit** if `!moneriumLiveFor(user)`, or if
+  the transfer has no signed redeem or its stored memo is blank: FAILED, which
+  releases the daily cap.
 - The redeem message is stamped at creation and Monerium's docs allow 5 minutes,
   so the approval deadline is 4 minutes, not 15. A later approval answers 410.
   An expired unsigned line fails its payment run and releases its invoice. The
