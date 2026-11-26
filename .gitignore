@@ -31,4 +31,6 @@ data/db*.json
 
 # Scrolltide's Mobula sea engine: licensed for our sites, not for redistribution
 # while this repo is public. business/sea.js runs without it (no animation).
+# Only the built bundle goes under public/; its sources stay out of the web root.
 services/api/public/business/vendor/
+design/agentic/vendor/

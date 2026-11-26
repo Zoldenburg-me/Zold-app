@@ -1,11 +1,15 @@
 /* The narwhal sea behind Home: Scrolltide's Mobula engine (vendor/mobula-sea.js), drawn on two fixed
  * canvases under the page. The engine file is git-ignored (licensed, not ours to publish), so where it
  * is missing the script fails to load and Home simply has no sea. Only Home has it; any other view
- * stops it. Reduced motion paints one still frame. */
+ * stops it. Reduced motion paints one still frame.
+ *
+ * shortcut: no sea on any deployment built from git (production included), and each Home visit there
+ * logs the engine's 404; commit vendor/mobula-sea.js once the repo is private. */
 
-const SRC = "/business/vendor/mobula-sea.js";
+// Vendor paths keep the long default cache (routes/pages.ts): bump v whenever the engine file changes.
+const SRC = "/business/vendor/mobula-sea.js?v=1";
 const calm = matchMedia("(prefers-reduced-motion: reduce)");
-let sea = null, loading = null, on = false;
+let sea = null, loading = null, on = false, broken = false;
 
 function load() {
   loading ??= new Promise((ok) => {
@@ -38,6 +42,8 @@ function fit() {
 
 function wire() {
   addEventListener("resize", fit);
+  // The canvases are fixed and the page scrolls: the command section's place on screen moves with it.
+  addEventListener("scroll", () => on && fit(), { passive: true });
   addEventListener("pointermove", (e) => on && sea.setPointer(e.clientX / innerWidth, e.clientY / innerHeight));
   document.documentElement.addEventListener("pointerleave", () => sea.clearPointer());
   document.addEventListener("input", (e) => on && e.target.id === "hm-q" && sea.nudge());
@@ -50,14 +56,21 @@ export async function seaFor(view) {
   document.documentElement.classList.toggle("has-sea", on && !!sea);
   if (!on) { sea?.stop(); return; }
   const M = await load();
-  if (!M || !on) return;
-  if (!sea) {
-    // canvas() prepends, so the blurred far layer made last sits underneath the near one.
-    const near = canvas("sea"), far = canvas("sea-far");
-    sea = new M.Sea(near, far, "app");
-    wire();
+  if (!M || !on || broken) return;
+  try {
+    if (!sea) {
+      // canvas() prepends, so the blurred far layer made last sits underneath the near one.
+      const near = canvas("sea"), far = canvas("sea-far");
+      try { sea = new M.Sea(near, far, "app"); } catch (e) { near.remove(); far.remove(); throw e; }
+      wire();
+    }
+    document.documentElement.classList.add("has-sea");
+    fit();
+    if (!calm.matches) sea.start();
+  } catch {
+    // An engine that cannot run here (no 2D canvas, a different API) is the same as no engine.
+    broken = true;
+    sea?.stop();
+    document.documentElement.classList.remove("has-sea");
   }
-  document.documentElement.classList.add("has-sea");
-  fit();
-  if (!calm.matches) sea.start();
 }

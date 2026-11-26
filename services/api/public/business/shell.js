@@ -128,12 +128,13 @@ export async function render({ focus = false } = {}) {
   } finally {
     if (mine === seq) box.setAttribute("aria-busy", "false");
   }
-  if (mine === seq) seaFor(view);
   if (focus && mine === seq) {
     window.scrollTo(0, 0);
     $("#view-title").setAttribute("tabindex", "-1");
     $("#view-title").focus({ preventScroll: true });
   }
+  // After the scroll reset, so the sea measures the command section where it now is.
+  if (mine === seq) seaFor(view);
 }
 
 export async function loadOrg(id) {
