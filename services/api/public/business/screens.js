@@ -237,7 +237,7 @@ export const iv = { filter: "open", side: "issued", invoices: [] };
 
 /* Who an invoice is to or from. A draft made from receipts has no recipient
    yet: it is named after the contact whose payments it collects. */
-const invWho = (i) => {
+export const invWho = (i) => {
   if (i.direction !== "outgoing") return i.supplier?.orgName || "Waiting for your supplier";
   return i.issued?.recipient?.name || i.fromReceipts?.payerName || "Customer";
 };

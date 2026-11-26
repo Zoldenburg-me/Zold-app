@@ -1,6 +1,6 @@
 /**
- * Home of the business console, top to bottom: the command box (search and
- * slash commands), the balance with the IBAN and
+ * Home of the business console, top to bottom: the command box (search,
+ * slash commands, and two questions it answers from your own records), the balance with the IBAN and
  * four round actions, what needs you, the accounts, invoices and payments at a
  * glance, the latest statement lines, then money in and out and who paid and
  * who got paid.
@@ -17,12 +17,12 @@
  * - Security and the set-up list speak only for the company login in its own
  *   company, from what Access reads (access-model.js).
  */
-import { $, Z, api, cap, ensureMe, esc, eur, gateHtml, maskIban, me, org, ownSafe, refreshMe, roleCan, safeAddressHtml, view, when, ymd } from "./core.js";
+import { $, Z, api, cap, day, ensureMe, esc, eur, gateHtml, maskIban, me, org, ownSafe, refreshMe, roleCan, safeAddressHtml, view, when, ymd } from "./core.js";
 import { META, RENDER, linkBtn, moneriumLink } from "./views.js";
 import { submittedInvoices, waitingForMe } from "./nav.js";
-import { draftTag, draftTitle, draftTotal, invAmount, loadMembers, memberName } from "./screens.js";
+import { draftTag, draftTitle, draftTotal, invAmount, invWho, loadMembers, memberName } from "./screens.js";
 import { APP_LINKS, isOwnCompanyOrg, loadAccess } from "./access-model.js";
-import { companyBalance, countedLines, hasIban, noIbanStep, pendingRuns, securityRows, setupOpen, setupSteps, submitFor } from "./home-model.js";
+import { companyBalance, countedLines, hasIban, lastMonth, monthIn, monthSummary, noIbanStep, owedInvoices, pendingRuns, securityRows, setupOpen, setupSteps, submitFor, topBy } from "./home-model.js";
 import { runLink } from "./payment.js";
 import { openSearch } from "./search.js";
 import { companyKeysHere, companySteps } from "./org-monerium-model.js";
@@ -100,33 +100,43 @@ const bigEur = (v) => {
   return m ? `${esc(m[1])}<span class="zb-h-cents">${esc(m[2])}</span>` : esc(t);
 };
 
-/** What the command box offers. No model reads the box: a slash line opens
- *  the screen it names, under the same capability and role checks as that
- *  screen, and anything else is searched (search.js). */
+/* The month "/where did … go" asks about when nothing else is named: last month. */
+const MONTH_NAME = (ym) => new Intl.DateTimeFormat("en-GB", { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${ym}-15T12:00:00Z`));
+const MONTH_WORD = (ym) => new Intl.DateTimeFormat("en-GB", { month: "long", timeZone: "UTC" }).format(new Date(`${ym}-15T12:00:00Z`));
+
+/** What the command box offers. No language model reads the box: a slash
+ *  line opens the screen it names, under the same capability and role checks
+ *  as that screen; two questions are answered here from the API's own
+ *  records (answerHtml); anything else is searched (search.js). */
 function commands() {
   const drafts = cap("transfers.drafts").allowed;
   const inv = cap("invoices").allowed;
   return [
     drafts && roleCan(org.role, "propose") && { cmd: "/make a payment", view: "send" },
     inv && roleCan(org.role, "invoices") && { cmd: "/send an invoice", act: "issue-invoice" },
+    (inv || drafts) && { cmd: "/what is due", answer: "due" },
+    cap("ledger.transactions").allowed && { cmd: `/where did ${MONTH_WORD(lastMonth())} go`, answer: "month", match: /^\/where did .+ go$/ },
     inv && { cmd: "/see invoices", view: "invoices" },
     drafts && { cmd: "/see payments", view: "payments" },
-    cap("ledger.transactions").allowed && { cmd: "/where the money went", view: "books-overview" },
   ].filter(Boolean);
 }
 
 function commandBox(cmds) {
   const chip = (c, i) => (c.view
     ? `<a class="zb-h-cmd__chip" href="?view=${c.view}" data-view-link="${c.view}" data-cmd="${i}">${esc(c.cmd)}</a>`
-    : `<button type="button" class="zb-h-cmd__chip" data-act="${c.act}" data-cmd="${i}">${esc(c.cmd)}</button>`);
-  return `<section class="zb-h-cmd" aria-label="Search and commands">
+    : c.answer
+      ? `<button type="button" class="zb-h-cmd__chip" data-answer="${i}" data-cmd="${i}">${esc(c.cmd)}</button>`
+      : `<button type="button" class="zb-h-cmd__chip" data-act="${c.act}" data-cmd="${i}">${esc(c.cmd)}</button>`);
+  return `<section class="zb-h-cmd" aria-label="Ask and search">
+    <p class="zb-h-cmd__hello"><i aria-hidden="true"></i>${esc(hello())}</p>
     <p class="zb-h-cmd__line" id="hm-line" aria-hidden="true"></p>
-    <label class="zb-h-cmd__label" for="hm-q">Search, or type a command</label>
+    <label class="zb-h-cmd__label z-sr" for="hm-q">Ask Zold, search, or type a command</label>
     <form class="zb-h-cmd__box" id="hm-ask" role="search">
-      <input id="hm-q" class="zb-h-cmd__input" type="search" name="q" autocomplete="off" spellcheck="false" placeholder="A name, or / for a command…">
+      <input id="hm-q" class="zb-h-cmd__input" type="search" name="q" autocomplete="off" spellcheck="false" placeholder="Ask Zold, or search…">
       <button type="submit" class="zb-h-cmd__go" aria-label="Go">${Z.icon("arrow_upward")}</button>
     </form>
     <p class="zb-h-cmd__hint" id="hm-hint" role="status"></p>
+    <div id="hm-answer"></div>
     ${cmds.length ? `<nav class="zb-h-cmd__chips" aria-label="Commands">${cmds.map(chip).join("")}</nav>` : ""}
   </section>`;
 }
@@ -134,9 +144,10 @@ function commandBox(cmds) {
 /** The line above the box names one command at a time, its last word in pink.
  *  Decoration: it stands still under reduced motion, once the box has focus,
  *  and stops for good when Home is redrawn. */
-function rotateLine(box, cmds) {
+function rotateLine(box, cmds, late) {
   const line = box.querySelector("#hm-line");
-  const words = cmds.length ? cmds.map((c) => c.cmd.slice(1)) : ["search your account"];
+  // "chase what is overdue" only while an invoice is.
+  const words = [...(late ? ["chase what is overdue"] : []), ...(cmds.length ? cmds.map((c) => c.cmd.slice(1)) : ["search your account"])];
   let i = 0;
   const say = () => {
     const w = words[i++ % words.length].split(" ");
@@ -148,6 +159,52 @@ function rotateLine(box, cmds) {
     if (!line.isConnected) clearInterval(t);
     else if (!box.querySelector("#hm-ask").contains(document.activeElement)) say();
   }, 3800);
+}
+
+/** "Good morning, Miriam": by the browser's clock, the first name if there is one. */
+function hello() {
+  const h = new Date().getHours();
+  const part = h < 5 ? "Good evening" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
+  return me?.name ? `${part}, ${me.name.trim().split(/\s+/)[0]}` : part;
+}
+
+const ansLink = (label, v) => `<a href="?view=${v}" data-view-link="${v}">${esc(label)}</a>`;
+const ansRows = (rows) => `<ul class="zb-h-ans__rows">${rows.join("")}</ul>`;
+const ansCard = (asked, body) => `<section class="z-card zb-h-ans" tabindex="-1" aria-labelledby="hm-ans-q">
+    <p class="zb-h-ans__q" id="hm-ans-q">${esc(asked)}</p>${body}<p class="zb-h-ans__src">Answered from your own records in Zold.</p></section>`;
+
+/** "What is due": what customers owe you, and what waits on you to pay. */
+function dueAnswer({ invoices, runs }) {
+  const parts = [];
+  if (invoices) {
+    const owed = owedInvoices(invoices);
+    const late = owed.filter((i) => i.overdue);
+    const inEur = owed.filter((i) => invAmount(i).currency === "EUR").reduce((n, i) => n + invAmount(i).value, 0);
+    parts.push(owed.length
+      ? `<h3>Owed to you: ${esc(eur(inEur))}${owed.some((i) => invAmount(i).currency !== "EUR") ? " and more in other currencies" : ""}</h3>
+        <p>${owed.length} open invoice${owed.length > 1 ? "s" : ""}${late.length ? `, <b class="is-late">${late.length} overdue</b>` : ""}.</p>
+        ${ansRows(owed.slice(0, 5).map((i) => { const a = invAmount(i); return `<li><span>${esc(invWho(i))}</span><span class="z-dim">${i.dueDate ? `due ${esc(day(ymd(i.dueDate)))}` : "no due date"}</span>${i.overdue ? Z.tag("OVERDUE") : ""}<b>${esc(Z.formatMoney(a.value, a.currency))}</b></li>`; }))}
+        <p>${ansLink("All invoices", "invoices")}</p>`
+      : "<h3>Nothing is owed to you</h3><p>No invoice you issued is open.</p>");
+    const toPay = submittedInvoices(invoices);
+    if (toPay.length) parts.push(`<h3>${toPay.length} supplier invoice${toPay.length > 1 ? "s" : ""} to pay</h3><p>${ansLink("See them", "invoices")}</p>`);
+  }
+  const waiting = waitingForMe(runs || []);
+  if (waiting.length) parts.push(`<h3>${waiting.length} payment${waiting.length > 1 ? "s" : ""} wait for your approval: ${esc(eur(waiting.reduce((n, d) => n + sumEur(d), 0)))}</h3><p>${ansLink("Approve or decline", "payments")}</p>`);
+  return parts.join("") || "<h3>Nothing is due</h3>";
+}
+
+/** "Where did <month> go": that month's money in and out, from the lines Books counts. */
+function monthAnswer(lines, ym) {
+  if (!lines) return "<h3>Zold can’t say</h3><p>The statement could not be read just now. Reload to try again.</p>";
+  const s = monthSummary(lines, ym);
+  if (!s.count) return `<h3>No money moved in ${esc(MONTH_NAME(ym))}</h3>`;
+  const list = (rows) => ansRows(rows.map(([who, c]) => `<li><span>${esc(who)}</span><b>${esc(eur(c / 100))}</b></li>`));
+  return `<h3>${esc(MONTH_NAME(ym))}: ${esc(eur(s.inCents / 100))} in, ${esc(eur(s.outCents / 100))} out</h3>
+    <p>${s.count} movement${s.count > 1 ? "s" : ""} on the statement.</p>
+    ${s.payees.length ? `<h4>Sent most to</h4>${list(s.payees)}` : ""}
+    ${s.payers.length ? `<h4>Received most from</h4>${list(s.payers)}` : ""}
+    <p>${ansLink("See Books", "books-overview")}</p>`;
 }
 
 /** A round action: an icon in a circle with its label under it. */
@@ -201,16 +258,7 @@ const flowSection = (lines) => `<section class="z-card zb-side-card" aria-labell
 
 /* ── Money movement and activity ──────────────────────────────────────────── */
 
-function top(lines, dir) {
-  const by = new Map();
-  for (const l of lines) {
-    const v = dir === "in" ? l.amountCents : -l.amountCents;
-    if (v <= 0) continue;
-    const who = l.counterparty?.name || (dir === "in" ? "Money in" : "Payment");
-    by.set(who, (by.get(who) || 0) + v);
-  }
-  return [...by].sort((a, b) => b[1] - a[1]).slice(0, TOP_N);
-}
+const top = (lines, dir) => topBy(lines, dir, TOP_N);
 
 function movement(all, months) {
   if (!hs.month || !months.includes(hs.month)) hs.month = months[0];
@@ -462,15 +510,24 @@ RENDER.overview = async () => {
   return {
     html,
     bind(box) {
-      rotateLine(box, cmds);
+      rotateLine(box, cmds, invoices?.some((i) => i.direction === "outgoing" && i.overdue && !["PAID", "RECONCILED", "DRAFT", "DELETED"].includes(i.state)));
       const q = box.querySelector("#hm-q");
+      const answer = (cmd, typed) => {
+        const ym = cmd.answer === "month" ? monthIn(typed) || lastMonth() : null;
+        const asked = ym ? `where did ${MONTH_WORD(ym)} go` : cmd.cmd.slice(1);
+        const el = box.querySelector("#hm-answer");
+        el.innerHTML = ansCard(asked, ym ? monthAnswer(summed, ym) : dueAnswer({ invoices, runs: dr.status === "fulfilled" ? runs : null }));
+        el.firstElementChild.focus();
+      };
       box.querySelector("#hm-ask").addEventListener("submit", (ev) => {
         ev.preventDefault();
         const todo = submitFor(q.value, cmds), hint = box.querySelector("#hm-hint");
         hint.textContent = todo?.unknown ? "No such command. Pick one below, or search without the slash." : "";
-        if (todo?.cmd) box.querySelector(`[data-cmd="${cmds.indexOf(todo.cmd)}"]`).click();
+        if (todo?.cmd?.answer) { answer(todo.cmd, q.value); q.value = ""; }
+        else if (todo?.cmd) box.querySelector(`[data-cmd="${cmds.indexOf(todo.cmd)}"]`).click();
         else if (todo?.search) { q.value = ""; openSearch(todo.search, q); }
       });
+      box.querySelectorAll("[data-answer]").forEach((b) => { b.onclick = () => answer(cmds[Number(b.dataset.answer)], ""); });
       // On #hm-root, which each render replaces: #view itself outlives renders.
       box.querySelector("#hm-root").addEventListener("click", (ev) => {
         const b = ev.target.closest("[data-hp],[data-ht],[data-hm]");

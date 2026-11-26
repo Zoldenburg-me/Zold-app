@@ -161,4 +161,50 @@ assert.deepEqual(
   assert.equal(m.commandFor("/pay", []), null, "a command this person may not use is not offered, so not matched");
 }
 
+// ── Questions Home answers itself ────────────────────────────────────────────
+
+{
+  const month = { cmd: "/where did October go", answer: "month", match: /^\/where did .+ go$/ };
+  const cmds = [{ cmd: "/what is due", answer: "due" }, month];
+  assert.equal(m.commandFor("/what is due", cmds), cmds[0]);
+  assert.equal(m.commandFor("/where", cmds), month, "a start of the question picks it");
+  assert.equal(m.commandFor("/where did march go", cmds), month, "any month fills the blank");
+  assert.equal(m.commandFor("/where did march", cmds), null, "half a question is not the question");
+
+  const now = new Date("2026-11-26T10:00:00Z");
+  assert.equal(m.monthIn("/where did October go", now), "2026-10");
+  assert.equal(m.monthIn("/where did dec go", now), "2025-12", "a month still to come this year is last year's");
+  assert.equal(m.monthIn("/where did nov go", now), "2026-11", "this month is this year's");
+  assert.equal(m.monthIn("/where did march 2025 go", now), "2025-03");
+  assert.equal(m.monthIn("/where did 2026-02 go", now), "2026-02");
+  assert.equal(m.monthIn("/where did it go", now), null);
+  assert.equal(m.lastMonth(now), "2026-10");
+  assert.equal(m.lastMonth(new Date("2026-01-05T00:00:00Z")), "2025-12", "across the new year");
+
+  const lines = [
+    { valueDate: "2026-10-03", amountCents: 120000, counterparty: { name: "Café Ostwind" } },
+    { valueDate: "2026-10-09", amountCents: -50000, counterparty: { name: "Holzhandel Maier" } },
+    { valueDate: "2026-10-20", amountCents: -20000, counterparty: { name: "Holzhandel Maier" } },
+    { valueDate: "2026-10-21", amountCents: -9000 },
+    { valueDate: "2026-09-30", amountCents: -99900, counterparty: { name: "September" } },
+  ];
+  assert.deepEqual(m.monthSummary(lines, "2026-10"), {
+    count: 4, inCents: 120000, outCents: 79000,
+    payers: [["Café Ostwind", 120000]], payees: [["Holzhandel Maier", 70000], ["Payment", 9000]],
+  }, "one month only, payees summed by name, an unnamed one as Payment");
+  assert.deepEqual(m.monthSummary(lines, "2026-08"), { count: 0, inCents: 0, outCents: 0, payers: [], payees: [] });
+
+  const inv = (id: string, extra: object) => ({ id, direction: "outgoing", state: "ISSUED", ...extra });
+  const owed = m.owedInvoices([
+    inv("late", { overdue: true, dueDate: "2026-11-01" }),
+    inv("soon", { dueDate: "2026-11-30" }),
+    inv("sooner", { dueDate: "2026-11-27" }),
+    inv("undated", {}),
+    inv("paid", { state: "PAID" }), inv("draft", { state: "DRAFT" }), inv("gone", { state: "DELETED" }),
+    { id: "supplier", direction: "incoming", state: "SUBMITTED" },
+  ]).map((i: any) => i.id);
+  assert.deepEqual(owed, ["late", "sooner", "soon", "undated"], "overdue first, then by due date; nothing paid, drafted, deleted or from a supplier");
+  assert.deepEqual(m.owedInvoices(null), []);
+}
+
 console.log("business home: ok");

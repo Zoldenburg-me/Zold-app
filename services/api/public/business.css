@@ -502,7 +502,25 @@ dialog .desc, dialog .zb-hint { font-size: 14.5px; color: var(--z-dim); }
 .zb-h-root > .zb-h-attention, .zb-h-root > .zb-h-section { margin: 0; }
 
 /* Home's command box: search and the slash commands, centred above the balance (design/agentic Desk-Command). */
-.zb-h-cmd { display: flex; flex-direction: column; align-items: center; gap: var(--z-space-5); padding: var(--z-space-10) 0 var(--z-space-6); }
+/* Home opens on the ask box, centred in the first screen; the rest of Home is below it. */
+.zb-h-cmd { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--z-space-5); min-height: calc(100dvh - 180px); padding: var(--z-space-10) 0 var(--z-space-6); }
+#app:has(#hm-root) .zb-head { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.zb-h-cmd__hello { display: flex; align-items: center; justify-content: center; gap: 9px; margin: 0; font: 400 12.5px/1.4 var(--z-mono); color: var(--z-dim); }
+.zb-h-cmd__hello i { width: 6px; height: 6px; border-radius: var(--z-radius-pill); background: var(--z-mint); }
+.zb-h-ans { display: flex; flex-direction: column; gap: var(--z-space-2); padding: var(--z-space-5); }
+.zb-h-ans:focus { outline: none; }
+.zb-h-ans:focus-visible { outline: 2px solid var(--z-pink); outline-offset: 2px; }
+.zb-h-ans__q { margin: 0; font: 400 12.5px/1.4 var(--z-mono); color: var(--z-dim); }
+.zb-h-ans__q::before { content: "> "; }
+.zb-h-ans h3 { margin: var(--z-space-2) 0 0; font-size: 17px; letter-spacing: -.015em; color: var(--z-heading); }
+.zb-h-ans h4 { margin: var(--z-space-2) 0 0; font-size: 13.5px; font-weight: 500; color: var(--z-dim); }
+.zb-h-ans p { margin: 0; font-size: 14px; }
+.zb-h-ans .is-late { color: var(--z-amber); font-weight: 600; }
+.zb-h-ans__rows { list-style: none; margin: 0; padding: 0; }
+.zb-h-ans__rows li { display: flex; align-items: center; gap: var(--z-space-3); min-height: 40px; border-top: 1px solid var(--z-line); font-size: 14px; }
+.zb-h-ans__rows li > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.zb-h-ans__rows b { font-weight: 500; font-variant-numeric: tabular-nums; color: var(--z-heading); }
+.zb-h-ans__src { padding-top: var(--z-space-2); font-size: 12.5px; color: var(--z-dim); }
 .zb-h-cmd > * { width: 100%; max-width: 600px; }
 .zb-h-cmd__line { margin: 0; min-height: 1.2em; text-align: center; font: 400 clamp(24px, 3vw, 34px)/1.2 var(--z-font); letter-spacing: -.035em; color: var(--z-heading); text-wrap: balance; }
 .zb-h-cmd__line span { color: var(--z-pink-soft); }

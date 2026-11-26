@@ -91,7 +91,57 @@ export function setupSteps(me, accounts, access) {
 export function commandFor(text, cmds) {
   const q = String(text || "").trim().toLowerCase();
   if (q.length < 2 || !q.startsWith("/")) return null;
-  return cmds.find((c) => c.cmd.startsWith(q)) ?? null;
+  // A question with a blank (`match`, such as which month) is that question whatever fills it.
+  return cmds.find((c) => c.cmd.toLowerCase().startsWith(q)) ?? cmds.find((c) => c.match?.test(q)) ?? null;
+}
+
+const MONTH_KEYS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+
+/** The month a question names, as "YYYY-MM": "2026-10", "October", "oct 2025".
+ *  A month without a year is the latest one not after `now`. Null for none. */
+export function monthIn(text, now = new Date()) {
+  const q = String(text || "").toLowerCase();
+  const iso = q.match(/\b(20\d\d)-(0[1-9]|1[0-2])\b/);
+  if (iso) return `${iso[1]}-${iso[2]}`;
+  const m = q.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*(?:\s+(20\d\d))?\b/);
+  if (!m) return null;
+  const mi = MONTH_KEYS.indexOf(m[1]);
+  const y = m[2] ? Number(m[2]) : now.getUTCFullYear() - (mi > now.getUTCMonth() ? 1 : 0);
+  return `${y}-${String(mi + 1).padStart(2, "0")}`;
+}
+
+/** The calendar month before `now`'s, as "YYYY-MM". */
+export function lastMonth(now = new Date()) {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)).toISOString().slice(0, 7);
+}
+
+/** The biggest names on one side of some statement lines, in cents: [[name, cents], ...]. */
+export function topBy(lines, dir, n = 4) {
+  const by = new Map();
+  for (const l of lines) {
+    const v = dir === "in" ? l.amountCents : -l.amountCents;
+    if (v <= 0) continue;
+    const who = l.counterparty?.name || (dir === "in" ? "Money in" : "Payment");
+    by.set(who, (by.get(who) || 0) + v);
+  }
+  return [...by].sort((a, b) => b[1] - a[1]).slice(0, n);
+}
+
+/** Where one month's money went, from the lines Books counts: totals in
+ *  and out in cents, the biggest payers and payees, and how many lines. */
+export function monthSummary(lines, ym) {
+  const month = lines.filter((l) => String(l.valueDate || "").slice(0, 7) === ym);
+  const sum = (dir) => month.reduce((n, l) => n + (dir === "in" ? Math.max(l.amountCents, 0) : Math.max(-l.amountCents, 0)), 0);
+  return { count: month.length, inCents: sum("in"), outCents: sum("out"), payers: topBy(month, "in"), payees: topBy(month, "out") };
+}
+
+/** Invoices you issued that are still owed to you: the overdue ones first,
+ *  then by due date, the undated last. Drafts, paid and deleted ones are out. */
+export function owedInvoices(invoices) {
+  const due = (i) => (i.dueDate ? Date.parse(i.dueDate) : Infinity);
+  return (invoices || [])
+    .filter((i) => i.direction === "outgoing" && !["PAID", "RECONCILED", "DRAFT", "DELETED"].includes(i.state))
+    .sort((a, b) => (b.overdue ? 1 : 0) - (a.overdue ? 1 : 0) || due(a) - due(b));
 }
 
 /** What a submitted line does: run a command, say there is no such command, search, or nothing. */
