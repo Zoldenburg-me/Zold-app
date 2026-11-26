@@ -6,7 +6,9 @@
  * to or from any testnet. So activation asks `forwarding_getRoutes` first,
  * lists only the tokens whose route delivers the app's USDC on the app chain
  * (with each one's lowest bridge minimum), and refuses, before computing or
- * activating anything, when there is none.
+ * activating anything, when there is none. An activation at another address
+ * than the computed one, or not reported active, is refused; activating again
+ * (after a crash) asks for the same address, and reads routes and minimums anew.
  *
  * Runs against a stub shaped like the live responses from
  * forward-api-alpha.candidelabs.com. No chain needed.
@@ -39,6 +41,9 @@ let routes: Record<number, { destinationChainId: number; tokens: { destinationAd
 /** Bridge minimums answered by forwarding_getMinimumAmount; null answers none. */
 let minimums: Record<string, { minAmount: string }> | null = { across: { minAmount: "1000000" }, oft: { minAmount: "500000" } };
 let calls: string[] = [];
+/** What account_activateForwardingAddress answers, and the params it was asked with. */
+let activation: { address: string; active: unknown } = { address: FORWARDER, active: true };
+let activations: unknown[] = [];
 
 function route(destinationChainId: number, ...destinationAddresses: string[]) {
   return {
@@ -54,6 +59,7 @@ const server: Server = createServer((req, res) => {
     const { id, method, params } = JSON.parse(raw);
     calls.push(method);
     const p = params[0];
+    if (method === "account_activateForwardingAddress") activations.push(p);
     const result =
       method === "forwarding_getRoutes"
         ? { routes: (routes[p.sourceChainId] ?? []).map((r) => ({ sourceChainId: p.sourceChainId, ...r })) }
@@ -61,7 +67,7 @@ const server: Server = createServer((req, res) => {
           ? { bridges: minimums ?? {} }
         : method === "forwarding_getAddress"
           ? { address: FORWARDER }
-          : { address: FORWARDER, active: true, expiresAt: 2_000_000_000 };
+          : { ...activation, expiresAt: 2_000_000_000 };
     res.setHeader("content-type", "application/json");
     res.end(JSON.stringify({ jsonrpc: "2.0", id, result }));
   });
@@ -130,6 +136,45 @@ await check("refuses rather than list a token without its minimum", async () => 
   await assert.rejects(activate, /no minimum/);
   assert.ok(!calls.includes("account_activateForwardingAddress"));
   minimums = { across: { minAmount: "1000000" } };
+});
+
+await check("an activated address other than the computed one is refused, never returned as the page's", async () => {
+  routes = { 8453: [route(APP_CHAIN, USDC)] };
+  activation = { address: "0x4444444444444444444444444444444444444444", active: true };
+  await assert.rejects(activate, /Candide activated 0x4444.* but computed 0x3333/);
+  activation = { address: FORWARDER, active: true };
+});
+
+await check("an activation Candide reports as not active is refused: that address would not forward", async () => {
+  routes = { 8453: [route(APP_CHAIN, USDC)] };
+  for (const active of [false, undefined, "true"]) {
+    activation = { address: FORWARDER, active };
+    await assert.rejects(activate, /not active/, `active: ${JSON.stringify(active)}`);
+  }
+  activation = { address: FORWARDER, active: true };
+});
+
+await check("a crash after activation: activating again asks for the same address with the same parameters", async () => {
+  routes = { 8453: [route(APP_CHAIN, USDC)] };
+  activations = [];
+  const first = await activate();
+  const again = await activate();
+  assert.equal(again.address, first.address);
+  assert.deepEqual(activations[1], activations[0], "same recipient, withdrawer, chain, salt and sources");
+});
+
+await check("a changed route or minimum is read again on every activation, never kept from the last one", async () => {
+  minimums = { across: { minAmount: "1000000" } };
+  routes = { 8453: [route(APP_CHAIN, USDC)], 42161: [route(APP_CHAIN, USDC)] };
+  const before = await activate();
+  assert.deepEqual(before.accepts.map((t) => [t.chainId, t.minAmount]), [[8453, undefined], [42161, "1000000"]]);
+  minimums = { across: { minAmount: "3000000" } };
+  const raised = await activate();
+  assert.deepEqual(raised.accepts.map((t) => [t.chainId, t.minAmount]), [[8453, undefined], [42161, "3000000"]]);
+  routes = { 8453: [route(APP_CHAIN, USDC)], 42161: [route(1, USDC)] };
+  const dropped = await activate();
+  assert.deepEqual(dropped.accepts.map((t) => t.chainId), [8453], "a source whose route went away is no longer listed");
+  assert.deepEqual(dropped.forwarder.sourceChainIds, [8453], "nor monitored");
 });
 
 server.close();

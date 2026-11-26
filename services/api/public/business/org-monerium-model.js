@@ -67,12 +67,21 @@ export function companySteps(m) {
 export const ibanState = (m) => (m ? m.companyIban?.state || "keys_needed" : null);
 
 /** What the IBAN part of Settings → Monerium says, and which button it offers:
- *  `issue` for an owner who can sign, `check` while Monerium works on it. */
-export function ibanPanel(m, maySign) {
+ *  `issue` for an owner who can sign, `check` while Monerium works on it.
+ *  `payoutsOn` is capabilities().orgBankPayouts: a deployment may switch the
+ *  company bank payout off, and then the IBAN says so instead of pointing at
+ *  a form that is not drawn. */
+export function ibanPanel(m, maySign, payoutsOn = false) {
   const st = ibanState(m);
   if (st === null) return { text: "The IBAN status couldn’t be read. Open Settings again to retry." };
   // Checking an issued IBAN reads Monerium on the company's keys: offered only while they are connected.
-  if (st === "issued") return { text: "Bank transfers to this IBAN arrive on the company’s Safe as euros (EURe). Paying a bank account from it is not built yet.", iban: m.companyIban.iban, ...(m.status !== "not_connected" ? { action: "check" } : {}) };
+  if (st === "issued") return {
+    text: payoutsOn
+      ? "Bank transfers to this IBAN arrive on the company’s Safe as euros (EURe). An owner can pay a bank account from it below."
+      : "Bank transfers to this IBAN arrive on the company’s Safe as euros (EURe). Paying a bank account from it is not built yet.",
+    iban: m.companyIban.iban,
+    ...(m.status !== "not_connected" ? { action: "check" } : {}),
+  };
   if (st === "moved") return { text: "Monerium now lists the company’s IBAN on another address or network, so Zold no longer offers it for the Safe. Write to support@zoldhq.com.", action: "check" };
   if (st === "keys_needed") return { text: "Next: once Monerium has approved the company profile, an owner issues the company’s IBAN onto its own Safe." };
   if (st === "safe_needed") return { text: "Next: set up the company’s Safe (Home), then issue its IBAN here." };
@@ -81,6 +90,40 @@ export function ibanPanel(m, maySign) {
   return maySign
     ? { text: "Your passkey signs Monerium’s declaration that the company owns its Safe. Monerium then issues the company’s IBAN onto the Safe.", action: "issue" }
     : { text: "An owner of the company signs Monerium’s declaration with their passkey to issue the IBAN." };
+}
+
+/** What a payout's stored state says (routes/business/org-monerium-payouts.ts).
+ *  `pending` is Monerium holding the order, not money gone; `unknown` must
+ *  never read as sent. */
+export const PAYOUT_STATE_WORD = {
+  pending: "Pending at Monerium",
+  sent: "Sent",
+  failed: "Not sent",
+  unknown: "Unclear: check Monerium",
+};
+
+/** The toast after a payout is started or submitted. */
+export function payoutNotice(p) {
+  const st = p?.state;
+  if (st === "sent") return "Sent: Monerium processed the payout.";
+  if (st === "pending") return "Monerium has the payout. It is not sent until Monerium processes it.";
+  if (st === "failed") return "Not sent. Monerium refused the payout.";
+  if (st === "unknown") return "Unclear: Monerium did not confirm the payout. Check Monerium before sending it again.";
+  return "Payout started.";
+}
+
+/** The payouts Settings lists, newest first: a line each, with the state in
+ *  words and, when there is one, the fixed reason. The recipient IBAN is shown
+ *  masked to its last four characters. */
+export function payoutRows(payouts) {
+  return (payouts || []).map((p) => ({
+    id: p.id,
+    title: `€${Number(p.amountEur).toFixed(2)} to ${p.recipientName}`,
+    sub: `•••• ${String(p.recipientIban || "").replace(/\s+/g, "").slice(-4)}${p.reference ? ` · ${p.reference}` : ""} · ${String(p.createdAt || "").slice(0, 10)}`,
+    state: PAYOUT_STATE_WORD[p.state] || p.state,
+    bad: p.state === "failed" || p.state === "unknown",
+    note: p.error || "",
+  }));
 }
 
 /** The toast after issuing or checking: where the IBAN has got. */

@@ -35,6 +35,43 @@ import { recordServerError } from "../http/error-log.js";
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 
 /**
+ * Sign-ins started and not yet finished, by nonce: the account that started
+ * one, the exact message it was given and the cookie its nonce is bound to.
+ * Verify spends the entry before anything is awaited, so a start finishes
+ * once, on the account that made it, within SIWE_TTL_MS. Gnosis Pay's own
+ * nonce check is theirs; this one is what stops a Zold session finishing a
+ * sign-in another session started.
+ *
+ * Per process, like the WebAuthn challenges: a sign-in started on one
+ * instance cannot be finished on another, nor after a restart.
+ */
+const pendingSignIns = new Map<string, { userId: string; message: string; cookie: string; exp: number }>();
+const SIWE_TTL_MS = 5 * 60_000;
+/** Starts need a session, but one account can still ask for many. Past the
+ *  cap the oldest is dropped (a Map iterates in insertion order). */
+const MAX_PENDING_SIGN_INS = 10_000;
+
+function prunePendingSignIns(now = Date.now()) {
+  for (const [k, v] of pendingSignIns) {
+    if (v.exp >= now) break;
+    pendingSignIns.delete(k);
+  }
+}
+
+const NOT_THIS_SIGN_IN = {
+  error: "This wallet sign-in is no longer valid for this account. Start it again.",
+  code: "SIWE_NOT_PENDING",
+};
+
+const sameAddress = (a: unknown, b: string) => typeof a === "string" && a.toLowerCase() === b.toLowerCase();
+
+/** The profile lists the wallet that signed as one of its sign-in wallets. */
+function signedInWith(profile: Awaited<ReturnType<typeof getUser>>, signer: string): boolean {
+  return Array.isArray(profile.signInWallets) &&
+    profile.signInWallets.some((w) => sameAddress(typeof w === "string" ? w : w?.address, signer));
+}
+
+/**
  * Permissionless mode has no webhooks and no partner attribution. Every
  * response says so, so a card balance is not read as Zold's figure for a
  * Zold card.
@@ -56,8 +93,11 @@ function fail(req: express.Request, res: express.Response, err: unknown) {
     // the user's session with THEM expired, not that our session is invalid,
     // and returning 401 here would make the browser log the user out of Zold.
     const status = err.status === 401 || err.status === 403 ? 409 : err.status;
+    // Their text is passed on, but never the token: an error that quotes the
+    // request would hand the bearer back in an error body.
+    const jwt = req.header("x-gnosis-pay-token")?.trim();
     return res.status(status >= 400 && status < 600 ? status : 502).json({
-      error: err.message,
+      error: jwt ? err.message.split(jwt).join("[token]") : err.message,
       ...(err.status === 401 || err.status === 403 ? { reauth: true } : {}),
     });
   }
@@ -144,6 +184,9 @@ export function createGnosisPayRouter(requireSession: SessionResolver): express.
         domain: new URL(origin).host,
         uri: origin,
       });
+      prunePendingSignIns();
+      while (pendingSignIns.size >= MAX_PENDING_SIGN_INS) pendingSignIns.delete(pendingSignIns.keys().next().value!);
+      pendingSignIns.set(nonce, { userId: session.userId, message, cookie, exp: Date.now() + SIWE_TTL_MS });
       res.json({ message, cookie, chainId: GNOSIS_PAY.siweChainId });
     } catch (err) {
       return fail(req, res, err);
@@ -162,11 +205,24 @@ export function createGnosisPayRouter(requireSession: SessionResolver): express.
     if (!message || !signature || !cookie) {
       return res.status(400).json({ error: "message, signature and cookie are all required" });
     }
+    // Spent here, before any await: the start this session made, its exact
+    // message and cookie, once, in time. Anything else never reaches Gnosis Pay.
+    const nonce = /^Nonce: (\S+)$/m.exec(message)?.[1] ?? "";
+    const pending = pendingSignIns.get(nonce);
+    pendingSignIns.delete(nonce);
+    if (!pending || pending.exp < Date.now() || pending.userId !== user.id ||
+        pending.message !== message || pending.cookie !== cookie) {
+      return res.status(409).json(NOT_THIS_SIGN_IN);
+    }
     try {
       // Take the address from the message we built rather than trusting the
       // profile to echo it back — line 2 of a SIWE message IS the address,
       // and it is the one thing here we know for certain.
       const signedBy = message.split("\n")[1]?.trim() ?? "";
+      // Two sign-ins finishing at once on one account each save their own
+      // connection and the last save wins; the other tab's next /account read
+      // is refused (another account's token) and asks it to sign in again.
+      // Serializing them would not change which one wins.
       const { token } = await verifyAndProfile(message, signature, cookie, user.id, signedBy);
       res.json({ token, ...PROVENANCE, connected: (await store.findUser(user.id))?.gnosisPay ?? null });
     } catch (err) {
@@ -183,6 +239,13 @@ export function createGnosisPayRouter(requireSession: SessionResolver): express.
     if (!jwt) return;
     try {
       const profile = await getUser(jwt);
+      // The token is the browser's, so it may be any Gnosis Pay account's. Only
+      // the profile this account signed in to refreshes the stored status; any
+      // other is refused, never shown or recorded as this account's.
+      const connected = (await store.findUser(session.userId))?.gnosisPay;
+      if (connected && (!profile?.id || profile.id !== connected.userId)) {
+        throw new GnosisPayError("This Gnosis Pay session is for a different account than the one connected. Sign in again with your wallet.", 401);
+      }
       // Cards and balances are fetched together but must fail independently:
       // a user with no Safe yet has no balance, and that is a state to render,
       // not an error that hides their profile.
@@ -191,7 +254,7 @@ export function createGnosisPayRouter(requireSession: SessionResolver): express.
         getAccountBalances(jwt).catch(() => null),
       ]);
       const asOf = new Date().toISOString();
-      await recordStatus(session.userId, profile, cards?.length, asOf);
+      if (connected) await recordStatus(session.userId, profile, cards?.length, asOf, connected.connectedAddress, { refresh: true });
       res.json({
         ...PROVENANCE,
         asOf,
@@ -241,7 +304,9 @@ export function createGnosisPayRouter(requireSession: SessionResolver): express.
 }
 
 /** Verify the signature, then read the profile once so the stored status is
- *  never ahead of what Gnosis Pay actually says. */
+ *  never ahead of what Gnosis Pay actually says. A profile that cannot be
+ *  read, has no id or does not list the wallet that signed is refused, and
+ *  nothing connected. */
 async function verifyAndProfile(
   message: string,
   signature: string,
@@ -250,37 +315,35 @@ async function verifyAndProfile(
   signedBy: string,
 ): Promise<{ token: string }> {
   const { token } = await verifySiwe(message, signature, cookie);
-  try {
-    const profile = await getUser(token);
-    const cards = await listCards(token).catch(() => undefined);
-    await recordStatus(userId, profile, cards?.length, new Date().toISOString(), signedBy);
-  } catch {
-    // A profile read that fails right after a successful sign-in is worth not
-    // failing the sign-in over: the token is valid, and /account will report
-    // the real reason on the next call.
+  // No profile, no sign-in: a token handed back without a connection would
+  // show cards that a reload forgets, and /account never connects a bare token.
+  const profile = await getUser(token).catch(() => undefined);
+  if (!profile || typeof profile !== "object") {
+    throw new GnosisPayError("Gnosis Pay accepted the signature but its profile could not be read, so nothing was connected. Sign in again.", 502);
   }
+  if (!profile.id || !ADDRESS.test(signedBy) || !signedInWith(profile, signedBy)) {
+    throw new GnosisPayError("This Gnosis Pay account does not list the wallet that signed in, so it was not connected.", 409);
+  }
+  const cards = await listCards(token).catch(() => undefined);
+  await recordStatus(userId, profile, cards?.length, new Date().toISOString(), signedBy as `0x${string}`);
   return { token };
 }
 
+/** The connected address is the verified signer at sign-in, and the stored
+ *  one on a refresh: never read from the profile. */
 async function recordStatus(
   userId: string,
   profile: Awaited<ReturnType<typeof getUser>>,
   cardCount: number | undefined,
   asOf: string,
-  signedBy?: string,
+  connectedAddress: `0x${string}`,
+  opts: { refresh?: boolean } = {},
 ): Promise<void> {
-  return store.tx(async () => {
-    const signer = Array.isArray(profile.signInWallets)
-      ? profile.signInWallets
-          .map((w) => (typeof w === "string" ? w : w?.address))
-          .find((a) => typeof a === "string" && ADDRESS.test(a))
-      : undefined;
+  await store.tx(async () => {
     const existing = (await store.lockUser(userId))?.gnosisPay;
-    const fromMessage = signedBy && ADDRESS.test(signedBy) ? signedBy : undefined;
-    const connectedAddress = (fromMessage ?? signer ?? existing?.connectedAddress) as
-      | `0x${string}`
-      | undefined;
-    if (!connectedAddress) return;
+    // A refresh read the connection before its Gnosis Pay calls: one removed
+    // or replaced since then is not written back.
+    if (opts.refresh && (!existing || existing.connectedAddress !== connectedAddress || existing.userId !== profile.id)) return;
     await store.updateUser(userId, {
       gnosisPay: {
         connectedAddress,

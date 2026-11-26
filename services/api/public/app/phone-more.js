@@ -236,7 +236,7 @@ PH.more = {
       ? Z.row({ lead: Z.iconTile({ icon: "storefront" }), title: company ? "Company dashboard" : "Zold Business",
         sub: company ? "Payments, approvals, members and books" : companies.length ? `Invoices and books; ${companies.map((o) => o.name).join(", ")}` : "Invoices, books and apps",
         right: Z.icon("open_in_new", "z-row__chev"), href: "/business" })
-      : `<button type="button" class="z-row z-row--btn" id="ph-biz-create">${Z.iconTile({ icon: "storefront" })}<span class="z-row__main"><span class="z-row__title">Set up your personal space</span><span class="z-row__sub">Your own invoices and books, in Zold Business</span></span>${Z.icon("chevron_right", "z-row__chev")}</button>`;
+      : `<button type="button" class="z-row z-row--btn" id="ph-biz-create">${Z.iconTile({ icon: "storefront" })}<span class="z-row__main"><span class="z-row__title">Set up your personal space</span><span class="z-row__sub">${residenceAsked(user) ? "First, say where you live" : "Your own invoices and books, in Zold Business"}</span></span>${Z.icon("chevron_right", "z-row__chev")}</button>`;
     const other = [
       ...(HAS("gnosis_pay") ? [Z.row({ lead: Z.iconTile({ icon: "credit_card" }), title: "Gnosis Pay card", sub: "A card you already have, connected", right: Z.tag("Beta"), href: "#card" })] : []),
       Z.row({ lead: Z.iconTile({ icon: "hourglass_top" }), title: "Coming soon", sub: "What this account can’t do yet, and why", href: "#soon" }),
@@ -255,7 +255,8 @@ PH.more = {
     const nm = root.querySelector("#ph-name-btn");
     if (nm) nm.onclick = () => phNameSheet(nm);
     const biz = root.querySelector("#ph-biz-create");
-    if (biz) biz.onclick = () => phPersonalSheet(biz);
+    // The server makes no space for an account that has not said where it lives.
+    if (biz) biz.onclick = () => (residenceAsked(user) ? enterResidence("more") : phPersonalSheet(biz));
     const body = root.querySelector("#ph-pay-body");
     phBindPayBody(body);
     root.querySelectorAll('input[name="ph-pay-via"]').forEach((r) => {

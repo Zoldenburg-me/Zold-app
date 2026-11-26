@@ -23,8 +23,8 @@
  * The IBAN opens the account only when Monerium attributes it to this Safe
  * under the company profile (address-matched, as for a person). A profile
  * whose one IBAN pays another address is refused: moving it is not built.
- * Paying out from the company's IBAN is not built either (drafts.ts refuses a
- * company bank run by name).
+ * Paying out from the company's IBAN is ./org-monerium-payouts.ts (one redeem
+ * signed by an owner); a company bank run stays refused by name in drafts.ts.
  */
 import express from "express";
 import { randomUUID } from "node:crypto";
@@ -37,7 +37,7 @@ import { assertReadableSafeState } from "../../domain/safe-op-queue.js";
 import { companyEurAccount, companyIbanState } from "../../domain/org-monerium-iban.js";
 import { moneriumIbanList } from "../../domain/monerium-profile.js";
 import type { Organisation } from "../../domain/types.js";
-import { LINK_MESSAGE, MoneriumApiError, MoneriumClient } from "../../adapters/monerium-client.js";
+import { LINK_MESSAGE, MoneriumApiError, MoneriumClient, type MoneriumOrder, type MoneriumRedeemOrder } from "../../adapters/monerium-client.js";
 import { redactedMessage } from "../../http/log-cause.js";
 import { SECRETS } from "../../stored-secrets.js";
 import { store } from "../../store.js";
@@ -60,6 +60,9 @@ export interface CompanyMonerium {
   requestIban(address: string, chain: string): Promise<unknown>;
   ibans(): Promise<unknown>;
   orders(profileId: string): Promise<unknown>;
+  /** A redeem from the company's Safe: the SEPA payout (org-monerium-payouts.ts). */
+  placeOrder(body: MoneriumRedeemOrder): Promise<MoneriumOrder>;
+  getOrder(orderId: string): Promise<MoneriumOrder>;
 }
 
 export interface OrgMoneriumIbanIo {
@@ -70,7 +73,7 @@ export interface OrgMoneriumIbanIo {
 }
 
 /** A client on the company's own keys, opened for this call only. */
-function companyClient(org: Organisation): CompanyMonerium {
+export function companyMoneriumClient(org: Organisation): CompanyMonerium {
   const m = org.monerium;
   if (!m) throw new Error("no Monerium keys are connected");
   const client = new MoneriumClient({ baseUrl: MONERIUM.baseUrl, clientId: m.clientId, clientSecret: SECRETS.orgMoneriumApiSecret.open(org.id, m.clientSecretEnc) });
@@ -89,10 +92,12 @@ function companyClient(org: Organisation): CompanyMonerium {
     requestIban: (address, chain) => client.requestIban(address, chain),
     ibans: () => client.ibans(),
     orders: (profileId) => client.orders(profileId),
+    placeOrder: (body) => client.placeOrder(body),
+    getOrder: (orderId) => client.getOrder(orderId),
   };
 }
 
-export const liveIbanIo: OrgMoneriumIbanIo = { monerium: companyClient, safe: liveOrgSafeReader, sign: orgSafeMessageSignature };
+export const liveIbanIo: OrgMoneriumIbanIo = { monerium: companyMoneriumClient, safe: liveOrgSafeReader, sign: orgSafeMessageSignature };
 
 class Refusal extends Error {
   constructor(readonly status: number, readonly code: string, message: string) {
@@ -295,6 +300,9 @@ export function createOrgMoneriumIbanRoutes(deps: { ctxOf: (req: express.Request
         gate: undefined,
         detail: undefined,
         moneriumProfile: { id: m.profile.id, kind: "corporate", ...(m.profile.name ? { name: m.profile.name } : {}), checkedAt: at },
+        // Monerium has the IBAN on this Safe again: a move it reported before
+        // no longer stands, whichever key record is current.
+        moneriumIban: { safeAddress: link.address, profileId: m.profile.id },
       });
       const after = (await store.findOrganisation(orgId))!.monerium!;
       if (after.safe?.movedAwayAt) await store.updateOrganisation(orgId, { monerium: { ...after, safe: { ...after.safe, movedAwayAt: undefined } } });
@@ -330,8 +338,53 @@ export function createOrgMoneriumIbanRoutes(deps: { ctxOf: (req: express.Request
         status: "gated",
         identifier: { ...account.identifier, iban: undefined },
         detail: "Monerium now lists the company's IBAN on another address or network, so it is no longer offered for this Safe.",
+        // On the account, not the key record: Remove keys deletes that record,
+        // and reconnecting the same profile must not offer a fresh issue while
+        // Monerium still pays the IBAN elsewhere.
+        moneriumIban: { safeAddress: account.address!, profileId: m.profile.id, movedAwayAt: new Date().toISOString() },
       });
       await store.audit(auditEntry("org_iban.moved_away", { orgId, accountId: account.id, safeAddress: account.address }, userId));
+    });
+  }
+
+  /**
+   * An IBAN Monerium moved, read again after the keys were removed and
+   * reconnected (the key record and its link are gone then). An approved
+   * IBAN on the current profile paying into the company Safe on our chain
+   * reopens the account and clears the move; anything else keeps it moved.
+   */
+  async function recheckMoved(orgId: string, userId: string): Promise<void> {
+    const org = (await store.findOrganisation(orgId))!;
+    const m = org.monerium!;
+    const account0 = companyEurAccount(await store.accountsOf(orgId))!;
+    const plan = orgSafePlan(org);
+    let list;
+    try {
+      list = moneriumIbanList(await io.monerium(org).ibans());
+    } catch (err) {
+      throw moneriumFailure("reading the company’s IBANs", err);
+    }
+    const ours = list.find((i) => i.profile === m.profile.id && i.state === "approved" && paysIntoSafe(i, plan.address));
+    // Written only against the account and keys as they are now.
+    await store.tx(async () => {
+      const cur = await stillKeys(orgId, m);
+      const account = (await store.findAccount(account0.id))!;
+      if (!ours) {
+        const movedAt = cur.safe?.movedAwayAt ?? account.moneriumIban?.movedAwayAt ?? new Date().toISOString();
+        await store.updateAccount(account.id, { moneriumIban: { safeAddress: plan.address as Hex, profileId: m.profile.id, movedAwayAt: movedAt } });
+        return;
+      }
+      const at = new Date().toISOString();
+      await store.updateAccount(account.id, {
+        status: "active",
+        provider: "monerium",
+        identifier: { ...account.identifier, iban: normalizeIban(ours.iban) },
+        gate: undefined,
+        detail: undefined,
+        moneriumProfile: { id: m.profile.id, kind: "corporate", ...(m.profile.name ? { name: m.profile.name } : {}), checkedAt: at },
+        moneriumIban: { safeAddress: plan.address as Hex, profileId: m.profile.id },
+      });
+      await store.audit(auditEntry("org_iban.issued", { orgId, accountId: account.id, safeAddress: plan.address, profileId: m.profile.id }, userId));
     });
   }
 
@@ -431,7 +484,7 @@ export function createOrgMoneriumIbanRoutes(deps: { ctxOf: (req: express.Request
       return res.status(409).json({ code: "MONERIUM_NOT_CONNECTED", error: "The company’s Monerium keys need attention first: open Settings → Monerium." });
     }
     try {
-      await (state === "issued" ? recheckIssued : advance)(ctx.org.id, ctx.userId);
+      await (state === "issued" ? recheckIssued : state === "moved" ? recheckMoved : advance)(ctx.org.id, ctx.userId);
     } catch (err) {
       if (err instanceof Refusal) return res.status(err.status).json({ code: err.code, error: err.message, ...(await view(ctx.org.id)) });
       throw err;

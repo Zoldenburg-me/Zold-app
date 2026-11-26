@@ -51,6 +51,10 @@
     <div id="no-orgs" class="hidden">
       <div class="zb-head"><div><h1>Create an organisation</h1>
         <p class="zb-sub">An organisation holds the accounts. A personal one is fine; you can add a business later.</p></div></div>
+      <div class="z-card zb-pad hidden" id="no-orgs-residence" style="max-width:480px">
+        <p><strong>First: where you live.</strong> Two questions. They decide which accounts Zold can open for you.</p>
+        <div class="zb-actions"><a class="z-btn z-btn--primary" href="/app?from=business#residence">Answer</a></div>
+      </div>
       <form class="z-card zb-pad zb-form" id="new-org" style="max-width:480px" novalidate>
         <label for="new-org-name">Name</label><input id="new-org-name" name="organization" autocomplete="organization" placeholder="Lindner Holzbau GmbH…" />
         <label for="new-org-type">Type</label>

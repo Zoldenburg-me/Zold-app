@@ -50,6 +50,11 @@ function shareResponse(req: express.Request, share: ReceiptShare) {
   };
 }
 
+/** Live: not revoked and inside its window. Only a live share is edited or
+ *  handed to the composer; an expired one keeps its slug and its 410. */
+const isLive = (share: ReceiptShare): boolean =>
+  !share.revokedAt && Date.parse(share.expiresAt) >= Date.now();
+
 /**
  * Create or re-scope the share for a transfer.
  *
@@ -57,6 +62,8 @@ function shareResponse(req: express.Request, share: ReceiptShare) {
  * selection narrows what is public and links already sent keep working.
  *
  * An edit does not extend the expiry: a share is a 30-day window opened once.
+ * Once it has passed, a post opens a new window under a fresh slug, unless
+ * it says it is an edit, which is refused.
  */
 /** Kill the link. The slug stays recorded so a later visitor is told it was
  *  revoked rather than getting the same 404 as a typo. */
@@ -87,8 +94,13 @@ export function createReceiptShareRouter(deps: ReceiptShareDeps) {
       }
       const existing = await store.findReceiptShareByTransfer(transfer.id);
       const fields = parseShareFields(req.body, existing?.fields ?? DEFAULT_SHARE_FIELDS);
-      if (existing && !existing.revokedAt) {
+      if (existing && isLive(existing)) {
         return res.json(shareResponse(req, await store.updateReceiptShare(existing.id, { fields })));
+      }
+      // A settings change is an edit (`edit: true`). Sent as the link ran out
+      // or was revoked, it must not publish a new one: only Create link does.
+      if (req.body?.edit === true) {
+        return res.status(409).json({ error: "this link has expired or was revoked — create a new one", expired: true, fields });
       }
       const now = new Date();
       const share: ReceiptShare = {
@@ -101,8 +113,8 @@ export function createReceiptShareRouter(deps: ReceiptShareDeps) {
         updatedAt: now.toISOString(),
         expiresAt: new Date(now.getTime() + SHARE_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString(),
       };
-      // A revoked share is replaced rather than resurrected: the old slug stays
-      // recorded as revoked, so a later visitor gets 410 rather than a typo-like
+      // A revoked or expired share is replaced rather than resurrected: the old
+      // slug stays recorded, so a later visitor gets 410 rather than a typo-like
       // 404 while the new share gets a fresh unguessable slug.
       await store.addReceiptShare(share);
       res.status(201).json(shareResponse(req, share));
@@ -117,6 +129,11 @@ export function createReceiptShareRouter(deps: ReceiptShareDeps) {
       if (!(await requireUserSession(req, res, transfer.userId))) return;
       const share = await store.findReceiptShareByTransfer(transfer.id);
       if (!share || share.revokedAt) return res.status(404).json({ error: "no live share for this transfer" });
+      // The dead URL is not sent: the composer would offer it as the link to
+      // send. The choices are, so a new link starts from them.
+      if (!isLive(share)) {
+        return res.status(404).json({ error: "the link for this payment has expired", expired: true, fields: share.fields });
+      }
       res.json(shareResponse(req, share));
     }),
   );
