@@ -23,6 +23,7 @@
  * stored. State-change listeners run after the write, outside the mutex.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
+import { describeCause } from "../http/log-cause.js";
 import type { Db } from "./db.js";
 import type { jsonCore } from "../store.js";
 import type { Organisation } from "../domain/types.js";
@@ -80,8 +81,13 @@ class Mutex {
 }
 
 /** The transaction a call is made in, while it lasts, and whose it is, and
- *  what waits for it to commit. */
-type Scope = { open: boolean; owner: object; t: StoreMethods; afterCommit: (() => void)[] };
+ *  what runs once it has committed or once it has been dropped. */
+type Scope = { open: boolean; owner: object; t: StoreMethods; hooks: TxHooks };
+/** What a transaction runs when it ends: `committed` after the commit (JSON:
+ *  the file write), `dropped` when it failed (Postgres rolled it back; JSON
+ *  wrote what the callback had done before it threw). */
+export type TxHooks = { committed: (() => void)[]; dropped: (() => void)[] };
+export const newTxHooks = (): TxHooks => ({ committed: [], dropped: [] });
 const scope = new AsyncLocalStorage<Scope>();
 
 /** The open transaction of the backend `owner` this call runs in, if any. */
@@ -90,26 +96,91 @@ export function currentTx(owner: object): StoreMethods | undefined {
   return s?.open && s.owner === owner ? s.t : undefined;
 }
 
+/** The open transaction this call runs in, of any backend: an identity only. */
+export function openTxToken(): object | undefined {
+  const s = scope.getStore();
+  return s?.open ? s : undefined;
+}
+
 /**
- * Inside an open transaction, hold `fn` until it has committed (and drop it if
- * the transaction fails); true when held. A response sent from a `store.tx`
- * callback goes out after the write is on disk (http/send-after-commit.ts).
+ * Refuse partner and chain I/O inside a `store.tx` (§3): a transaction does
+ * not span I/O we do not own. On JSON the mutex would hold every other store
+ * call behind a partner's latency; on Postgres the row locks would. `fetch`
+ * (which the adapters and viem's HTTP transport use) is guarded below, and
+ * `writeAndWait` (chain.ts) calls this itself.
  */
-export function deferToCommit(fn: () => void): boolean {
+export function refuseInTx(what: string): void {
+  if (scope.getStore()?.open) throw new Error(`${what} inside a store.tx: a transaction does not span I/O we do not own`);
+}
+
+/** `fetch` refuses inside a transaction. Installed once, when the store loads. */
+const FETCH_GUARD = Symbol.for("zold.store.fetch-guard");
+function guardFetch() {
+  const g = globalThis as typeof globalThis & { [FETCH_GUARD]?: true };
+  if (g[FETCH_GUARD] || typeof g.fetch !== "function") return;
+  const fetch = g.fetch.bind(g);
+  g.fetch = ((...args: Parameters<typeof fetch>) => {
+    refuseInTx("fetch");
+    return fetch(...args);
+  }) as typeof fetch;
+  g[FETCH_GUARD] = true;
+}
+guardFetch();
+
+/**
+ * Inside an open transaction, hold `fn` until it has committed, and run
+ * `dropped` instead if the transaction fails; true when held. A response sent
+ * from a `store.tx` callback goes out after the write is on disk
+ * (http/send-after-commit.ts).
+ */
+export function deferToCommit(fn: () => void, dropped?: () => void): boolean {
   const s = scope.getStore();
   if (!s?.open) return false;
-  s.afterCommit.push(fn);
+  s.hooks.committed.push(fn);
+  if (dropped) s.hooks.dropped.push(dropped);
   return true;
 }
 
-/** Run what a committed transaction held back, in order. */
-export function runAfterCommit(queue: (() => void)[]): void {
-  for (const fn of queue.splice(0)) fn();
+/** Inside an open transaction, run `fn` if it fails; true when registered. */
+export function onTxDropped(fn: () => void): boolean {
+  const s = scope.getStore();
+  if (!s?.open) return false;
+  s.hooks.dropped.push(fn);
+  return true;
+}
+
+/** Run each of `queue` in order. One that throws is logged and the rest
+ *  still run: the transaction has ended either way, and its caller must not
+ *  see a failure for a commit that happened. */
+function runEach(queue: (() => void)[], what: string): void {
+  for (const fn of queue.splice(0)) {
+    try {
+      fn();
+    } catch (err) {
+      console.error(`store: ${what} hook failed: ${describeCause(err)}`);
+    }
+  }
+}
+
+/** Settle a transaction's hooks on its outcome, and pass the outcome on. */
+export function endTx<T>(p: Promise<T>, hooks: TxHooks): Promise<T> {
+  return p.then(
+    (out) => {
+      hooks.dropped.length = 0;
+      runEach(hooks.committed, "after-commit");
+      return out;
+    },
+    (err) => {
+      hooks.committed.length = 0;
+      runEach(hooks.dropped, "dropped-transaction");
+      throw err;
+    },
+  );
 }
 
 /** Run `fn` as `owner`'s transaction `t`: calls made from it join `t`. */
-export async function inScope<T>(owner: object, t: StoreMethods, fn: (t: StoreMethods) => Promise<T> | T, afterCommit: (() => void)[] = []): Promise<T> {
-  const s: Scope = { open: true, owner, t, afterCommit };
+export async function inScope<T>(owner: object, t: StoreMethods, fn: (t: StoreMethods) => Promise<T> | T, hooks: TxHooks = newTxHooks()): Promise<T> {
+  const s: Scope = { open: true, owner, t, hooks };
   try {
     return await scope.run(s, () => fn(t));
   } finally {
@@ -174,18 +245,18 @@ export function jsonBackend(core: Core): StoreBackend {
     tx<T>(fn: (t: StoreMethods) => Promise<T> | T): Promise<T> {
       const open = currentTx(owner);
       if (open) return Promise.resolve().then(() => fn(open));
-      const after: (() => void)[] = [];
-      return held(async () => {
-        core.beginTx();
-        try {
-          return await inScope(owner, t, fn, after);
-        } finally {
-          core.endTx();
-        }
-      }).then((out) => {
-        runAfterCommit(after);
-        return out;
-      });
+      const hooks = newTxHooks();
+      return endTx(
+        held(async () => {
+          core.beginTx();
+          try {
+            return await inScope(owner, t, fn, hooks);
+          } finally {
+            core.endTx();
+          }
+        }),
+        hooks,
+      );
     },
     close: async () => {},
   };

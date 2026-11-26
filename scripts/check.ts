@@ -57,6 +57,8 @@ const scripts = [
   "persist-failure:test",
   "store-backend:test",
   "store-gates:test",
+  "send-after-commit:test",
+  "single-flight:test",
   "send-record-crash:test",
   "safe-op-uncertain:test",
   "verifier-sweep:test",

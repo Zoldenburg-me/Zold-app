@@ -28,13 +28,28 @@ const { openPool } = await import("../services/api/src/store/pg/sql.js");
 const adminUrl = process.env.TEST_DATABASE_URL || "postgresql:///postgres?host=/tmp";
 const admin = new pg.Pool({ connectionString: adminUrl, max: 1 });
 admin.on("error", () => {}); // an idle admin client cut by the server: the pool drops it
-const name = `zold_test_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
+// The creation time is in the name, so a later run can tell a database a
+// killed run left behind (SIGKILL skips the drop below) from a live one.
+const name = `zold_test_${Math.floor(Date.now() / 1000)}_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
 const urlFor = (db: string) => {
   // Swap the database name only; the socket, role and parameters stay.
   const [base, query = ""] = adminUrl.split("?");
   return `${base.replace(/\/[^/]*$/, `/${db}`)}${query ? `?${query}` : ""}`;
 };
 
+// Sweep test databases over an hour old with nobody connected: a run killed
+// before its drop. One still in use, or of the old unnamed form, is left.
+for (const { datname } of (
+  await admin.query<{ datname: string }>(
+    "SELECT datname FROM pg_database d WHERE datname ~ '^zold_test_[0-9]+_[0-9a-f]+$' AND NOT EXISTS (SELECT 1 FROM pg_stat_activity a WHERE a.datname = d.datname)",
+  )
+).rows) {
+  const born = Number(datname.split("_")[2]);
+  if (Date.now() / 1000 - born > 3600) {
+    await admin.query(`DROP DATABASE IF EXISTS ${datname}`);
+    console.log(`swept a stale test database (${datname})`);
+  }
+}
 await admin.query(`CREATE DATABASE ${name}`);
 const opened: { close(): Promise<void> }[] = [];
 const open = () => {
@@ -123,6 +138,65 @@ try {
     await c1.end().catch(() => {});
   }
   console.log("ok - an advisory lock is held against other connections and released with its own");
+
+  // The one-process start lock (§2): a second API on one database exits
+  // before it listens, and the first exits once its lock connection is cut.
+  {
+    const { spawn } = await import("node:child_process");
+    const startApi = (pingMs = 5000) => {
+      const child = spawn(process.execPath, ["--import", "tsx", "scripts/_start-lock-child.ts"], {
+        cwd: new URL("..", import.meta.url).pathname,
+        env: { ...process.env, START_LOCK_URL: urlFor(name), START_LOCK_PING_MS: String(pingMs) },
+      });
+      let out = "";
+      let err = "";
+      child.stdout.on("data", (d) => (out += d));
+      child.stderr.on("data", (d) => (err += d));
+      const exited = new Promise<number | null>((r) => child.once("exit", (code) => r(code)));
+      const listening = async () => {
+        for (let i = 0; i < 400 && !out.includes("listening"); i++) {
+          if (child.exitCode !== null) throw new Error(`exited ${child.exitCode}: ${err}`);
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        assert.match(out, /listening/);
+      };
+      return { child, exited, listening, output: () => ({ out, err }) };
+    };
+    const lockHolder = async () =>
+      (
+        await admin.query<{ pid: number }>(
+          "SELECT l.pid FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid WHERE l.locktype = 'advisory' AND l.granted AND a.datname = $1 AND l.objid = (hashtext('api:' || $1)::bigint & 4294967295)",
+          [name],
+        )
+      ).rows.map((r) => r.pid);
+
+    const first = startApi();
+    try {
+      await first.listening();
+      assert.equal((await lockHolder()).length, 1, "the first API holds the start lock");
+      const second = startApi();
+      assert.equal(await second.exited, 1, "the second API exits non-zero");
+      assert.doesNotMatch(second.output().out, /listening/, "before it listens");
+      assert.match(second.output().err, /holds this deployment's start lock/);
+
+      const [pid] = await lockHolder();
+      await admin.query("SELECT pg_terminate_backend($1)", [pid]);
+      assert.equal(await first.exited, 1, "the first API exits once its lock connection is cut");
+      assert.match(first.output().err, /lost its start lock/);
+    } finally {
+      first.child.kill();
+    }
+    // A database restart or a silent loss is the same to the process: its
+    // lock connection is gone. Once it has exited, a new process starts.
+    const third = startApi(200);
+    try {
+      await third.listening();
+    } finally {
+      third.child.kill();
+      await third.exited;
+    }
+  }
+  console.log("ok - start lock: a second API exits before it listens; a cut lock connection exits the first; a new one then starts");
 
   // An idle pooled connection killed by the server (a restart, an OOM-killed
   // backend): the pool logs it without the URL, the process lives on, and the

@@ -153,6 +153,8 @@
     "store-backend:test": "tsx scripts/store-backend-test.ts",
     "check:pg": "tsx scripts/store-pg-test.ts",
     "store-gates:test": "tsx scripts/store-gates-test.ts",
+    "send-after-commit:test": "tsx scripts/send-after-commit-test.ts",
+    "single-flight:test": "tsx scripts/single-flight-test.ts",
     "send-record-crash:test": "tsx scripts/send-record-crash-test.ts",
     "reencrypt": "tsx scripts/reencrypt-fields.ts",
     "age:fetch": "bash scripts/fetch-age.sh",

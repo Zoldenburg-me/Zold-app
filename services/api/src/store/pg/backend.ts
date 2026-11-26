@@ -7,7 +7,8 @@
  * array would give. A write is one transaction: it reads the rows it changes
  * `FOR UPDATE`, applies the method's JavaScript (shared through
  * store/rules.ts where it decides anything), and writes the docs back.
- * Listeners run after the commit, as they run after `persist()` today.
+ * Listeners run after the commit (inside a `store.tx`, after its COMMIT, and
+ * never for a transaction rolled back), as they run after `persist()` today.
  *
  * Not used by the API yet (S2 moves the callers, S8 switches the default).
  * The cap holds stay in memory as in store.ts until S3 moves them to
@@ -29,7 +30,7 @@ import type {
   OrgSafePlan,
 } from "../../domain/types.js";
 import { describeCause } from "../../http/log-cause.js";
-import { currentTx, inScope, runAfterCommit, type Collection, type StoreBackend, type StoreMethods } from "../backend.js";
+import { currentTx, deferToCommit, endTx, inScope, newTxHooks, type Collection, type StoreBackend, type StoreMethods } from "../backend.js";
 import { defaultChartRows, type Db } from "../db.js";
 import {
   applyOrgSafePlan,
@@ -214,30 +215,39 @@ export function createPgStore(database: Database): StoreBackend {
   const transferStateListeners: TransferStateListener[] = [];
   const paymentRequestStateListeners: PaymentRequestStateListener[] = [];
 
+  /** Run `fire` once the write has committed: at once outside a transaction,
+   *  after its COMMIT inside one, and never if it rolls back. */
+  const afterCommit = (fire: () => void) => {
+    if (!deferToCommit(fire)) fire();
+  };
   /** Logged, never thrown into the write: it has committed. */
   function announceStateChange(t: Transfer, from: Transfer["state"]) {
     if (t.state === from) return;
-    for (const listener of transferStateListeners) {
-      try {
-        Promise.resolve(listener(t, from)).catch((err) =>
-          console.error(`store: transfer state listener failed for ${t.id}: ${describeCause(err)}`),
-        );
-      } catch (err) {
-        console.error(`store: transfer state listener failed for ${t.id}: ${describeCause(err)}`);
+    afterCommit(() => {
+      for (const listener of transferStateListeners) {
+        try {
+          Promise.resolve(listener(t, from)).catch((err) =>
+            console.error(`store: transfer state listener failed for ${t.id}: ${describeCause(err)}`),
+          );
+        } catch (err) {
+          console.error(`store: transfer state listener failed for ${t.id}: ${describeCause(err)}`);
+        }
       }
-    }
+    });
   }
   function announcePaymentRequestState(r: PaymentRequest, from: PaymentRequest["state"]) {
     if (r.state === from) return;
-    for (const listener of paymentRequestStateListeners) {
-      try {
-        Promise.resolve(listener(r, from)).catch((err) =>
-          console.error(`store: payment request state listener failed for ${r.id}: ${describeCause(err)}`),
-        );
-      } catch (err) {
-        console.error(`store: payment request state listener failed for ${r.id}: ${describeCause(err)}`);
+    afterCommit(() => {
+      for (const listener of paymentRequestStateListeners) {
+        try {
+          Promise.resolve(listener(r, from)).catch((err) =>
+            console.error(`store: payment request state listener failed for ${r.id}: ${describeCause(err)}`),
+          );
+        } catch (err) {
+          console.error(`store: payment request state listener failed for ${r.id}: ${describeCause(err)}`);
+        }
       }
-    }
+    });
   }
 
   /** The store's methods over `q`; `tx` runs a block as one transaction (on
@@ -1103,13 +1113,11 @@ export function createPgStore(database: Database): StoreBackend {
     tx<T>(fn: (t: StoreMethods) => Promise<T> | T): Promise<T> {
       const open = currentTx(owner);
       if (open) return Promise.resolve().then(() => fn(open));
-      const after: (() => void)[] = [];
-      return database
-        .tx((client) => inScope(owner, build(client, (f) => f(client)), fn, after))
-        .then((out) => {
-          runAfterCommit(after);
-          return out;
-        });
+      const hooks = newTxHooks();
+      return endTx(
+        database.tx((client) => inScope(owner, build(client, (f) => f(client)), fn, hooks)),
+        hooks,
+      );
     },
     close: () => database.close(),
   };

@@ -167,8 +167,30 @@ console.log("ok - store suite on the JSON backend");
   const pg = createPgStore(db);
   await storeSuite(pg);
   await conditionalWriteSuite(pg);
+  // A state change inside a store.tx is announced after its COMMIT, and
+  // never for a transaction rolled back.
+  const now = new Date().toISOString();
+  for (const id of ["t_lis_ok", "t_lis_rb"]) {
+    await pg.addTransfer({ id, userId: "u_a", quoteId: `q_${id}`, state: "CREATED", txs: [], createdAt: now, updatedAt: now } as any);
+  }
+  const heard: string[] = [];
+  pg.onTransferStateChange((t) => void heard.push(`${t.id}:${t.state}`));
+  await pg.tx(async (t) => {
+    await t.updateTransfer("t_lis_ok", { state: "PAID" } as any);
+    assert.deepEqual(heard, [], "not announced before the commit");
+  });
+  assert.deepEqual(heard, ["t_lis_ok:PAID"]);
+  await assert.rejects(
+    pg.tx(async (t) => {
+      await t.updateTransfer("t_lis_rb", { state: "PAID" } as any);
+      throw new Error("roll back");
+    }),
+    /roll back/,
+  );
+  assert.deepEqual(heard, ["t_lis_ok:PAID"], "a rolled-back change is never announced");
+  assert.equal((await pg.findTransfer("t_lis_rb"))?.state, "CREATED");
   await db.close();
-  console.log(`ok - store suite on the Postgres backend (PGlite, server_version_num ${version})`);
+  console.log(`ok - store suite on the Postgres backend (PGlite, server_version_num ${version}); listeners after COMMIT only`);
 }
 
 // ── Migration runner ───────────────────────────────────────────────────────
