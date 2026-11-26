@@ -593,6 +593,18 @@ export async function conditionalWriteSuite(s: StoreBackend): Promise<void> {
   assert.equal(await s.updateRecoveryRequestFrom("rr_from", ["PASSKEY_PENDING", "REVIEW_PENDING"], { status: "EXPIRED" }), null, "the sweep's EXPIRED never lands on a moved row");
   await assert.rejects(async () => await s.updateRecoveryRequestFrom("rr_none", ["REVIEW_PENDING"], { status: "EXPIRED" }), /unknown recovery request rr_none/);
 
+  // A relay's release and outcome write only over its own reserve's token.
+  await s.addRecoveryRequest({ id: "rr_relay", userId: "u_a", mode: "candide", status: "RELAYING", relaying: { from: "GRACE_PERIOD", at: now, token: "tok-b" }, requestedAt: now } as any);
+  assert.equal(await s.updateRecoveryRelay("rr_relay", "tok-a", { status: "GRACE_PERIOD", relaying: undefined }), null, "an older reserve's release leaves the newer one");
+  assert.equal((await s.findRecoveryRequest("rr_relay"))?.relaying?.token, "tok-b");
+  const ends = await Promise.all([
+    s.updateRecoveryRelay("rr_relay", "tok-b", { status: "FINALIZED", relaying: undefined }),
+    s.updateRecoveryRelay("rr_relay", "tok-b", { status: "GRACE_PERIOD", relaying: undefined }),
+  ]);
+  assert.equal(ends.filter(Boolean).length, 1, "of an outcome and a release at once, one lands");
+  assert.equal(await s.updateRecoveryRelay("rr_relay", "tok-b", { status: "GRACE_PERIOD" }), null, "nothing once the reserve ended");
+  await assert.rejects(async () => await s.updateRecoveryRelay("rr_none", "tok-b", {}), /unknown recovery request rr_none/);
+
   // Email code: each guess counted on the stored row, parallel ones too.
   await s.updateUser("u_a", { emailCode: { hash: "h", email: "ada@example.com", expiresAt: iso(DAY), attempts: 0, sentAt: [] } } as any);
   const guesses = await Promise.all(Array.from({ length: 8 }, () => s.countEmailCodeAttempt("u_a", 5)));

@@ -91,7 +91,7 @@ await check("the execute holds a RELAYING reserve from OTP_PENDING: a second exe
   assert.equal(held.status, "RELAYING", "the expiry leaves it, past its expiresAt");
   assert.equal((publicRecoveryRequest(held) as any).status, "OTP_PENDING", "and it shows as the status it came from");
   // A process cut off holding it: past the relay timeout the sweep gives it back.
-  await store.updateRecoveryRequest("c-exec", { relaying: { from: "OTP_PENDING", at: new Date(Date.now() - RELAY_TIMEOUT_MS - 1000).toISOString() } });
+  await store.updateRecoveryRequest("c-exec", { relaying: { from: "OTP_PENDING", at: new Date(Date.now() - RELAY_TIMEOUT_MS - 1000).toISOString(), token: "t-cut" } });
   await sweepCandideRecoveries(new Date());
   const back = (await store.findRecoveryRequest("c-exec"))!;
   assert.deepEqual([back.status, back.relaying], ["OTP_PENDING", undefined]);
@@ -118,6 +118,40 @@ await check("two finalisers of one recovery: one holds the reserve and asks the 
   assert.equal(after.status, "GRACE_PERIOD", "nothing recovered on chain: back to its grace period");
   assert.equal(after.relaying, undefined);
   assert.equal(serviceCalls, 1, "the service was asked once");
+});
+
+await check("a finaliser that ends late gives back only its own reserve: one the sweep cut off and a second finaliser took stays held", async () => {
+  await store.addRecoveryRequest({
+    ...row("c-late", "GRACE_PERIOD"),
+    candide: { recoveryRequestId: "svc-2", newOwners: [`0x${"7".repeat(40)}`], newPasskey: { credentialId: "np" }, finalizeAfter: new Date(Date.now() - 1000).toISOString() },
+  } as any);
+  // The sweep below sees only this row in its grace period.
+  await store.updateRecoveryRequest("c-fin", { status: "CANCELED" });
+  const snap = (await store.findRecoveryRequest("c-late"))!;
+  const calls = serviceCalls;
+  const waitCalls = async (n: number) => { for (let i = 0; i < 200 && serviceCalls < n; i++) await new Promise((r) => setTimeout(r, 10)); };
+  // A claims and asks the service; its call hangs past the relay timeout.
+  const a = finalizeCandideRecovery(snap);
+  await waitCalls(calls + 1);
+  const aHeld = (await store.findRecoveryRequest("c-late"))!.relaying!;
+  await store.updateRecoveryRequest("c-late", { relaying: { ...aHeld, at: new Date(Date.now() - RELAY_TIMEOUT_MS - 1000).toISOString() } });
+  await sweepCandideRecoveries(new Date());
+  assert.equal((await store.findRecoveryRequest("c-late"))!.status, "GRACE_PERIOD", "the sweep gave the cut-off reserve back");
+  // B claims and asks the service.
+  const b = finalizeCandideRecovery(snap);
+  await waitCalls(calls + 2);
+  const bHeld = (await store.findRecoveryRequest("c-late"))!.relaying!;
+  assert.notEqual(bHeld.token, aHeld.token);
+  // A's call ends now; its release and its finally must leave B's reserve.
+  held.shift()!();
+  await a.catch(() => {});
+  const mid = (await store.findRecoveryRequest("c-late"))!;
+  assert.deepEqual([mid.status, mid.relaying?.token], ["RELAYING", bHeld.token], "B still holds its reserve");
+  await assert.rejects(finalizeCandideRecovery(snap), /being finalized/, "a third finaliser is refused while B runs");
+  assert.equal(serviceCalls, calls + 2, "the service was asked by A and B only");
+  for (const release of held.splice(0)) release();
+  await b.catch(() => {});
+  assert.deepEqual([(await store.findRecoveryRequest("c-late"))!.status, (await store.findRecoveryRequest("c-late"))!.relaying], ["GRACE_PERIOD", undefined], "B gives its own back");
 });
 
 service.close();

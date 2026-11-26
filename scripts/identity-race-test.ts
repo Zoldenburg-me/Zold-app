@@ -153,6 +153,40 @@ async function authStatus(token: string): Promise<number> {
   assert.deepEqual([done.status, done.relaying], ["FINALIZED", undefined]);
   assert.equal((await store.findUser(u.id))!.passkey?.credentialId, "tk-new", "the new passkey is bound");
   console.log("ok - Turnkey: five signatures at once, one reads the module; five finalisers, one relay and one bind");
+
+  // A finaliser that ends late (its reserve cut off by the stale sweep and
+  // taken by a second finaliser) gives back only its own reserve: a third
+  // finaliser is refused while the second relays.
+  await store.addRecoveryRequest(request("tk-late", "GRACE_PERIOD", { newOwners: [newOwner], newPasskey: { ...np, credentialId: "tk-late" }, finalizeAfter: new Date(Date.now() - 1000).toISOString() }) as any);
+  await store.updateUser(u.id, { passkey: { ...np, credentialId: "tk-old" } } as any);
+  const gates: Array<() => void> = [];
+  let relays = 0;
+  const lateChain: any = {
+    relayFinalize: async () => { relays++; await new Promise<void>((r) => gates.push(r)); return { txHash: `0x${"7f".repeat(32)}` }; },
+    // The first relay finds the old owners; the second, the recovered set.
+    safeOwners: async () => (relays > 1 && gates.length === 0 ? [newOwner] : []),
+  };
+  const relaying = async (n: number) => { for (let i = 0; i < 500 && gates.length < n; i++) await new Promise((r) => setTimeout(r, 5)); };
+  const snap = (await store.findRecoveryRequest("tk-late"))!;
+  const a = finalizeTurnkeyRecovery(snap, lateChain);
+  await relaying(1);
+  const aHeld = (await store.findRecoveryRequest("tk-late"))!.relaying!;
+  // What the sweep does with a reserve past the relay timeout.
+  const { releaseRelay } = await import("../services/api/src/recovery.js");
+  assert.ok(await releaseRelay("tk-late", aHeld), "the sweep gives the cut-off reserve back");
+  const b = finalizeTurnkeyRecovery(snap, lateChain);
+  await relaying(2);
+  const bHeld = (await store.findRecoveryRequest("tk-late"))!.relaying!;
+  gates.shift()!();
+  await a;
+  const mid = (await store.findRecoveryRequest("tk-late"))!;
+  assert.deepEqual([mid.status, mid.relaying?.token], ["RELAYING", bHeld.token], "the late finaliser left the second one's reserve");
+  await assert.rejects(finalizeTurnkeyRecovery(snap, lateChain), /being finished/, "a third finaliser is refused");
+  assert.equal(relays, 2, "finalizeRecovery relayed by the first and second only");
+  gates.shift()!();
+  assert.equal((await b).status, "FINALIZED");
+  assert.equal((await store.findUser(u.id))!.passkey?.credentialId, "tk-late", "bound by the second");
+  console.log("ok - Turnkey: a finaliser cut off by the sweep gives back only its own reserve; a third is refused while the second relays");
 }
 
 await store.close();

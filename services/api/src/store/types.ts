@@ -1001,8 +1001,9 @@ export interface RecoveryRequest {
    *  there means waiting for that signature). `managed` only on legacy rows. */
   mode?: "managed" | "candide" | "zoldenburg" | "turnkey";
   status: RecoveryRequestStatus;
-  /** Set with RELAYING: the status the relay left and when it started. */
-  relaying?: { from: "OTP_PENDING" | "REVIEW_PENDING" | "GRACE_PERIOD"; at: string };
+  /** Set with RELAYING: the status the relay left, when it started, and the
+   *  claim's own token (its release and outcome write only over it). */
+  relaying?: { from: "OTP_PENDING" | "REVIEW_PENDING" | "GRACE_PERIOD"; at: string; token: string };
   requestedAt: string;
   expiresAt: string;
   recoveryDelayHours: number;

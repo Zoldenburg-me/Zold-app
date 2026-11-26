@@ -70,7 +70,7 @@ import {
   verifyRegistration as verifyChannelOtp,
 } from "../recovery/candide-guardian.js";
 import { b64urlToBuf, bufToB64url, issueChallenge, verifyAssertionForChallenge, verifyRegistration } from "../webauthn.js";
-import { claimRelay, endRelay, publicRecoveryRequest, relayStale, releaseRelay, starterRecoveryRequest } from "../recovery.js";
+import { claimRelay, endRelay, publicRecoveryRequest, relayStale, releaseRelay, starterRecoveryRequest, type Relay } from "../recovery.js";
 import { hostedGuardianBlocked, ONE_GUARDIAN_MESSAGE } from "../recovery/one-guardian.js";
 import { bindRecoveredPasskey, deployVerifierForOwner } from "../recovery/recovered-passkey.js";
 import { ADDRESS_RE } from "../domain/contacts.js";
@@ -341,19 +341,22 @@ export async function finalizeCandideRecovery(
   if (!user?.passkeySafe) throw new CandideGuardianError("the account behind this recovery no longer exists", 410, "GONE");
   // The reserve (§2 rule 5), committed before the service is asked: a second
   // finaliser (the route, the sweep) finds it and refuses.
-  if (!(await claimRelay(request.id, "GRACE_PERIOD"))) {
+  const held = await claimRelay(request.id, "GRACE_PERIOD");
+  if (!held) {
     throw new CandideGuardianError("this recovery is being finalized — check again in a minute", 409, "BUSY");
   }
   try {
-    return await finalizeClaimed(request, c, np, recoveryRequestId, user, now);
+    return await finalizeClaimed(request, held, c, np, recoveryRequestId, user, now);
   } finally {
-    // A no-op once the outcome moved it on.
-    await releaseRelay(request.id, "GRACE_PERIOD");
+    // Its own reserve only: a no-op once the outcome or a release ended it,
+    // and never a reserve the sweep or the route took after that.
+    await releaseRelay(request.id, held);
   }
 }
 
 async function finalizeClaimed(
   request: RecoveryRequest,
+  held: Relay,
   c: NonNullable<RecoveryRequest["candide"]>,
   np: NonNullable<NonNullable<RecoveryRequest["candide"]>["newPasskey"]>,
   recoveryRequestId: string,
@@ -390,7 +393,7 @@ async function finalizeClaimed(
   const recovered = sameOwnerSet(owners, newOwners);
   const current = async () => (await store.findRecoveryRequest(request.id)) ?? request;
   if (!recovered) {
-    return (await releaseRelay(request.id, "GRACE_PERIOD", {
+    return (await releaseRelay(request.id, held, {
       candide: {
         ...c,
         finalizeAttempts: attempts,
@@ -404,7 +407,7 @@ async function finalizeClaimed(
   return await store.tx(async () => {
     await bindRecoveredPasskey(user, np, now);
     console.log(`RECOVERY: ${request.id} finalized — ${user.id}'s Safe ${request.safeAddress} now owned by the new passkey`);
-    return (await endRelay(request.id, {
+    return (await endRelay(request.id, held, {
       status: "FINALIZED",
       finalizedAt: now.toISOString(),
       factors: { ...request.factors, otp: "passed" },
@@ -448,7 +451,7 @@ export async function sweepCandideRecoveries(now = new Date()): Promise<number> 
       // existed. From GRACE_PERIOD the next sweep finalizes from the chain's
       // owners. From OTP_PENDING the execute may have reached the service.
       console.error(`RECOVERY: ${r.id} held its ${r.relaying.from} reserve past the relay timeout; back to ${r.relaying.from}${r.relaying.from === "OTP_PENDING" ? " — check the module for a pending recovery of this Safe" : ""}`);
-      await releaseRelay(r.id, r.relaying.from);
+      await releaseRelay(r.id, r.relaying);
     }
   }
   return n;
@@ -1070,6 +1073,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       // `c` is the copy from before it.
       const stored = (await store.findRecoveryRequest(request.id))?.candide;
       let patch: Partial<RecoveryRequest> = { candide: { ...c, ...stored, auths } };
+      let held: Relay | null = null;
 
       if (result.guardianSignature && result.guardianAddress) {
         // Every channel is verified: Candide has signed. Execute now — the
@@ -1077,12 +1081,13 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
         // The reserve is claimed first, one conditional write from
         // OTP_PENDING (§2 rule 5): a reject or the expiry either landed
         // before (and the claim fails) or comes after (and refuses RELAYING).
-        if (!(await claimRelay(request.id, "OTP_PENDING"))) return res.status(409).json({ error: "this recovery is no longer waiting for codes" });
+        held = await claimRelay(request.id, "OTP_PENDING");
+        if (!held) return res.status(409).json({ error: "this recovery is no longer waiting for codes" });
         let executed: Awaited<ReturnType<typeof executeRecovery>>;
         try {
           executed = await executeRecovery(request.safeAddress, c.newOwners, c.newThreshold ?? 1, result.guardianAddress, result.guardianSignature);
         } catch (err) {
-          await releaseRelay(request.id, "OTP_PENDING");
+          await releaseRelay(request.id, held);
           throw err;
         }
         // Harness-only: a test cannot wait for even the 3-minute module.
@@ -1120,8 +1125,8 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       }
       // Executed: on chain now, so the write is what happened. It goes over
       // the reserve; one that an on-chain cancel ended meanwhile stays ended.
-      const updated = patch.status === "GRACE_PERIOD"
-        ? (await endRelay(request.id, patch)) ?? (await store.findRecoveryRequest(request.id))!
+      const updated = held
+        ? (await endRelay(request.id, held, patch)) ?? (await store.findRecoveryRequest(request.id))!
         : await store.updateRecoveryRequest(request.id, patch);
       res.json({
         ...publicRequest(updated),

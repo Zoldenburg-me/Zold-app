@@ -521,6 +521,10 @@ export function createPgStore(database: Database): StoreBackend {
       change<RecoveryRequest>(TABLE.recoveryRequests, id, `unknown recovery request ${id}`, (row) =>
         from.includes(row.status) ? Object.assign(row, patch) : null,
       ),
+    updateRecoveryRelay: (id, token, patch) =>
+      change<RecoveryRequest>(TABLE.recoveryRequests, id, `unknown recovery request ${id}`, (row) =>
+        row.status === "RELAYING" && (row.relaying?.token ?? "") === token ? Object.assign(row, patch) : null,
+      ),
     async countRecoveryOtpAttempt(id, max) {
       let out: { attempts: number; over: boolean } | undefined;
       const r = await change<RecoveryRequest>(TABLE.recoveryRequests, id, null, (row) => {

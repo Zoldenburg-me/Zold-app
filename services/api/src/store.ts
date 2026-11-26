@@ -318,6 +318,15 @@ export const jsonCore = {
     if (!from.includes(r.status)) return null;
     return jsonCore.updateRecoveryRequest(id, patch);
   },
+  /** Write a request only over the RELAYING reserve with this token (one
+   *  compare-and-write); null when that reserve is gone. A reserve stored
+   *  without a token matches "". */
+  updateRecoveryRelay(id: string, token: string, patch: Partial<RecoveryRequest>) {
+    const r = db.recoveryRequests.find((x) => x.id === id);
+    if (!r) throw new Error(`unknown recovery request ${id}`);
+    if (r.status !== "RELAYING" || (r.relaying?.token ?? "") !== token) return null;
+    return jsonCore.updateRecoveryRequest(id, patch);
+  },
   /**
    * Count one OTP guess on the stored row, while it is OTP_PENDING. Past
    * `max` the request is canceled instead. Null when it is not OTP_PENDING.

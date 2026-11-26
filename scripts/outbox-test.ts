@@ -124,14 +124,32 @@ await check("a row retried under a higher limit, claimed after the limit is lowe
   const kind = `test.lowered.${randomUUID().slice(0, 8)}`;
   const row = (await store.enqueueOutbox({ kind, payload: {} }))!;
   assert.equal((await store.claimOutbox(10, 1, [kind])).length, 1);
-  assert.ok(await store.settleOutbox(row.id, 1, { ok: false, error: "HTTP 503", retryInMs: 0 }));
+  assert.ok(await store.settleOutbox(row.id, 1, { ok: false, error: "attempt 1: HTTP 503", retryInMs: 0 }));
   let sends = 0;
   registerOutboxKind(kind, { deliver: async () => void sends++, maxAttempts: 1, retryBaseMs: 10 });
   await drainOutbox();
   assert.equal(sends, 0, "past the lowered limit: not sent again");
   const dead = (await store.findOutboxRow(row.id))!;
   assert.ok(dead.deadAt);
-  assert.match(dead.lastError ?? "", /^HTTP 503 \(attempt 2 is past the limit of 1/);
+  assert.match(dead.lastError ?? "", /^attempt 1: HTTP 503 \(attempt 2 is past the limit of 1/);
+});
+
+await check("a retry failed, then the last attempt's lease ran out unsettled: dead, outcome unknown, not the earlier retry's error", async () => {
+  const kind = `test.lost.${randomUUID().slice(0, 8)}`;
+  const row = (await store.enqueueOutbox({ kind, payload: {} }))!;
+  // Attempt 1 failed and was settled for a retry; attempt 2 was claimed by a
+  // process that died before settling it.
+  assert.equal((await store.claimOutbox(10, 1, [kind])).length, 1);
+  assert.ok(await store.settleOutbox(row.id, 1, { ok: false, error: "attempt 1: HTTP 503", retryInMs: 0 }));
+  assert.equal((await store.claimOutbox(10, 1, [kind])).length, 1);
+  await wait(20);
+  let sends = 0;
+  registerOutboxKind(kind, { deliver: async () => void sends++, maxAttempts: 2, retryBaseMs: 10 });
+  await drainOutbox();
+  assert.equal(sends, 0, "past the limit: not sent again");
+  const dead = (await store.findOutboxRow(row.id))!;
+  assert.ok(dead.deadAt);
+  assert.match(dead.lastError ?? "", /^attempt 2 was not settled.*outcome unknown/);
 });
 
 await check("an acknowledged send whose save fails once is saved again: delivered, not a failed attempt, not dead", async () => {

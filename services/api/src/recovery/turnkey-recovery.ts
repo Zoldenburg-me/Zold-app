@@ -23,7 +23,7 @@ import type { Hex } from "viem";
 import { HARNESS } from "../config.js";
 import { store, type RecoveryRequest, type User } from "../store.js";
 import { describeCause, redactedMessage } from "../http/log-cause.js";
-import { claimRelay, endRelay, relayStale, releaseRelay } from "../recovery.js";
+import { claimRelay, endRelay, relayStale, releaseRelay, type Relay } from "../recovery.js";
 import { mailAvailable } from "../adapters/mailer.js";
 import {
   readRecoveryState,
@@ -161,23 +161,24 @@ export async function acceptTurnkeySignature(
     }
     const held = await claimRelay(request.id, "REVIEW_PENDING");
     if (!held) throw new TurnkeyGuardianError("this recovery is already being approved", 409, "BUSY");
-    return held;
+    return { ...current, status: "RELAYING" as const, relaying: held };
   });
+  const held = claimed.relaying!;
   try {
-    return await relayApproved(claimed, sig, chain, now);
+    return await relayApproved(claimed, held, sig, chain, now);
   } finally {
-    // A relay that recorded nothing gives it back; a no-op once it moved on.
-    await releaseRelay(request.id, "REVIEW_PENDING");
+    // A relay that recorded nothing gives its own reserve back; a no-op once it moved on.
+    await releaseRelay(request.id, held);
   }
 }
 
-async function relayApproved(request: RecoveryRequest, sig: { r: string; s: string; v: string }, chain: TurnkeyRecoveryChain, now: Date): Promise<RecoveryRequest> {
+async function relayApproved(request: RecoveryRequest, held: Relay, sig: { r: string; s: string; v: string }, chain: TurnkeyRecoveryChain, now: Date): Promise<RecoveryRequest> {
   const t = request.turnkey!;
   const { plan } = await planOf(request);
   const state = await chain.readState(plan);
   if (state.pending) {
     if (sameSet(state.pending.newOwners, t.newOwners ?? [])) {
-      const back = await releaseRelay(request.id, "REVIEW_PENDING");
+      const back = await releaseRelay(request.id, held);
       return back ? syncTurnkeyFromChain(back, chain, now) : (await store.findRecoveryRequest(request.id)) ?? request;
     }
     throw new TurnkeyGuardianError("another recovery is already pending on this account", 409, "RECOVERY_PENDING");
@@ -194,9 +195,9 @@ async function relayApproved(request: RecoveryRequest, sig: { r: string; s: stri
   if (signer.toLowerCase() !== request.guardianAddress.toLowerCase()) {
     throw new TurnkeyGuardianError("this signature is not from the guardian on the account — log in with the Google or Apple account you added", 400, "WRONG_SIGNER");
   }
-  // Still ours: an owner's on-chain cancel ends a reserve too.
-  const current = (await store.findRecoveryRequest(request.id))?.status;
-  if (current !== "RELAYING") throw new TurnkeyGuardianError(`recovery is ${current}`, 409, "NOT_WAITING");
+  // Still our reserve: an owner's on-chain cancel or the stale sweep ends one too.
+  const current = await store.findRecoveryRequest(request.id);
+  if (current?.status !== "RELAYING" || current.relaying?.token !== held.token) throw new TurnkeyGuardianError(`recovery is ${current?.status}`, 409, "NOT_WAITING");
   const { txHash } = await chain.relayRecovery(td, request.guardianAddress, signature);
   const after = await chain.readState(plan);
   if (!after.pending || !sameSet(after.pending.newOwners, t.newOwners!)) {
@@ -219,7 +220,7 @@ async function relayApproved(request: RecoveryRequest, sig: { r: string; s: stri
   }
   // On chain now: written over the reserve, or the row as it stands if an
   // on-chain cancel ended the reserve meanwhile.
-  return (await endRelay(request.id, {
+  return (await endRelay(request.id, held, {
     status: "GRACE_PERIOD",
     factors: { ...request.factors, manualReview: "passed" },
     turnkey: {
@@ -242,10 +243,13 @@ export async function syncTurnkeyFromChain(request: RecoveryRequest, chain: Turn
   if (request.status === "REVIEW_PENDING") {
     const state = await chain.readState(plan);
     if (state.pending && sameSet(state.pending.newOwners, t.newOwners)) {
-      return await store.updateRecoveryRequest(request.id, {
+      // Only from the status it was read in: a signer that claimed it since
+      // holds RELAYING, and its outcome (tx hash, verifier) is the one to keep.
+      const moved = await store.updateRecoveryRequestFrom(request.id, ["REVIEW_PENDING"], {
         status: "GRACE_PERIOD",
         turnkey: { ...t, executedAt: t.executedAt ?? now.toISOString(), finalizeAfter: new Date(state.pending.executeAfter * 1000).toISOString() },
       });
+      return moved ?? (await store.findRecoveryRequest(request.id)) ?? request;
     }
   }
   if (sameSet(await chain.safeOwners(request.safeAddress), t.newOwners)) return await bindAndFinish(request, now, undefined);
@@ -281,17 +285,19 @@ export async function finalizeTurnkeyRecovery(request: RecoveryRequest, chain: T
   }
   // The reserve, committed before the relay: the route, the status read and
   // the sweep would each relay finalizeRecovery and bind the passkey.
-  if (!(await claimRelay(request.id, "GRACE_PERIOD"))) {
+  const held = await claimRelay(request.id, "GRACE_PERIOD");
+  if (!held) {
     throw new TurnkeyGuardianError("this recovery is being finished — check again in a minute", 409, "BUSY");
   }
   try {
-    return await relayFinalize(request, t, chain, now);
+    return await relayFinalize(request, held, t, chain, now);
   } finally {
-    await releaseRelay(request.id, "GRACE_PERIOD");
+    // Its own reserve only: a no-op once the outcome or the release below ended it.
+    await releaseRelay(request.id, held);
   }
 }
 
-async function relayFinalize(request: RecoveryRequest, t: NonNullable<RecoveryRequest["turnkey"]>, chain: TurnkeyRecoveryChain, now: Date): Promise<RecoveryRequest> {
+async function relayFinalize(request: RecoveryRequest, held: Relay, t: NonNullable<RecoveryRequest["turnkey"]>, chain: TurnkeyRecoveryChain, now: Date): Promise<RecoveryRequest> {
   let finalizeError: string | undefined;
   let txHash: `0x${string}` | undefined;
   try {
@@ -307,7 +313,7 @@ async function relayFinalize(request: RecoveryRequest, t: NonNullable<RecoveryRe
     finalizeError = `${finalizeError ? `${finalizeError}; ` : ""}could not read Safe owners: ${redactedMessage(err).slice(0, 120)}`;
   }
   if (!sameSet(owners, t.newOwners ?? [])) {
-    return (await releaseRelay(request.id, "GRACE_PERIOD", {
+    return (await releaseRelay(request.id, held, {
       turnkey: { ...t, finalizeAttempts: (t.finalizeAttempts ?? 0) + 1, finalizeError: finalizeError ?? "the Safe's owners do not show the recovered set yet" },
     })) ?? (await store.findRecoveryRequest(request.id)) ?? request;
   }
@@ -330,7 +336,7 @@ export async function sweepTurnkeyRecoveries(now = new Date(), chain: TurnkeyRec
       if (r.status === "RELAYING") {
         if (r.relaying && relayStale(r)) {
           console.warn(`RECOVERY: ${r.id} held its ${r.relaying.from} reserve past the relay timeout; back to ${r.relaying.from}`);
-          await releaseRelay(r.id, r.relaying.from);
+          await releaseRelay(r.id, r.relaying);
         }
         continue;
       }

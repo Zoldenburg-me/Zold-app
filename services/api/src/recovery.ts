@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { store, type RecoveryRequest } from "./store.js";
 
 /** The statuses a relay reserve can come from: an execute (Candide's OTP,
@@ -16,23 +17,33 @@ export type RelayFrom = NonNullable<RecoveryRequest["relaying"]>["from"];
  */
 export const RELAY_TIMEOUT_MS = 10 * 60_000;
 
-/** The reserve a relay claims before its chain call (§2 rule 5). */
-export const relayFrom = (from: RelayFrom) => ({ status: "RELAYING" as const, relaying: { from, at: new Date().toISOString() } });
+/** The reserve a relay claims before its chain call (§2 rule 5). The token
+ *  is this claim's own: its outcome and its release write only over it, so a
+ *  caller that ends late cannot clear a reserve the sweep or another caller
+ *  took after its own was given back. */
+export const relayFrom = (from: RelayFrom) => ({ status: "RELAYING" as const, relaying: { from, at: new Date().toISOString(), token: randomUUID() } });
+
+/** The reserve a caller holds: what its release and outcome write over. */
+export type Relay = NonNullable<RecoveryRequest["relaying"]>;
 
 /** A relay that ended with nothing on chain gives the request back to the
- *  status it came from. A no-op once the relay's outcome moved it on. */
-export async function releaseRelay(id: string, from: RelayFrom, patch: Partial<RecoveryRequest> = {}) {
-  return store.updateRecoveryRequestFrom(id, ["RELAYING"], { ...patch, status: from, relaying: undefined });
+ *  status it came from. A no-op once its own reserve is gone (the outcome
+ *  moved it on, or it was released and someone else claimed it). */
+export async function releaseRelay(id: string, held: Relay, patch: Partial<RecoveryRequest> = {}) {
+  return store.updateRecoveryRelay(id, held.token ?? "", { ...patch, status: held.from, relaying: undefined });
 }
 
 /** Claim the reserve from `from` (one conditional write, committed before
- *  the call); null when the request is no longer there. */
-export const claimRelay = (id: string, from: RelayFrom) => store.updateRecoveryRequestFrom(id, [from], relayFrom(from));
+ *  the call); the reserve held, or null when the request is no longer there. */
+export async function claimRelay(id: string, from: RelayFrom): Promise<Relay | null> {
+  const claimed = await store.updateRecoveryRequestFrom(id, [from], relayFrom(from));
+  return claimed?.relaying ?? null;
+}
 
 /** The call's outcome, written only over the reserve it holds. Null when
- *  the reserve was ended meanwhile (an on-chain cancel, a stale-relay reconcile). */
-export const endRelay = (id: string, patch: Partial<RecoveryRequest>) =>
-  store.updateRecoveryRequestFrom(id, ["RELAYING"], { ...patch, relaying: undefined });
+ *  that reserve was ended meanwhile (an on-chain cancel, a stale-relay reconcile). */
+export const endRelay = (id: string, held: Relay, patch: Partial<RecoveryRequest>) =>
+  store.updateRecoveryRelay(id, held.token ?? "", { ...patch, relaying: undefined });
 
 /** A reserve older than RELAY_TIMEOUT_MS (wall clock) was cut off. */
 export const relayStale = (r: RecoveryRequest) => Date.now() - Date.parse(r.relaying?.at ?? r.requestedAt) >= RELAY_TIMEOUT_MS;
