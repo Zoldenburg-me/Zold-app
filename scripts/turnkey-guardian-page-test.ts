@@ -888,6 +888,26 @@ await check("a stale tab's refused passkey submit leaves the accepted OTP ticket
   assert.notEqual(flow.savedFor(st, flow.TICKET_KEY, "a@b.c"), "t1");
 });
 
+await check("a refused submit puts its snapshot back only if the slot still holds its own ticket", async () => {
+  const st = memoryStorage();
+  // Tabs A and B both run the ceremony before either submit; B's is accepted
+  // and B saves its ticket. A's 409 then lands: putting A's snapshot ("") back
+  // would delete the ticket B's codes are checked against.
+  let tabB = "";
+  const io = {
+    create: async () => ({ credentialId: "c", attestation: "a", clientDataJSON: "c" }),
+    read: async () => ({ id: "rc1", status: "OTP_PENDING" }),
+    submit: async () => {
+      tabB = "tB";
+      flow.saveFor(st, flow.TICKET_KEY, "a@b.c", tabB);
+      throw Object.assign(new Error("recovery is OTP_PENDING"), { status: 409 });
+    },
+  };
+  const request = { id: "rc1", mode: "candide", status: "PASSKEY_PENDING", submitTo: "/x" };
+  await assert.rejects(flow.submitPasskey(st, "a@b.c", request, io), /OTP_PENDING/);
+  assert.equal(flow.savedFor(st, flow.TICKET_KEY, "a@b.c"), "tB", "the winning tab's ticket was deleted");
+});
+
 await check("a passkey submit whose answer was lost is re-read before any retry: no second passkey over the accepted one", async () => {
   // A fake server: the submit is accepted, then its answer is lost on the way back.
   const server = (opts: { lose?: boolean; refuse?: number } = {}) => {

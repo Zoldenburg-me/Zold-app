@@ -47,6 +47,14 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .zb .zb-side { display: flex; }
 .zb-main { position: relative; isolation: isolate; min-width: 0; padding: var(--z-space-7) var(--z-space-10) var(--z-space-12); }
 #app, #signed-out, #no-orgs { max-width: 1104px; }
+/* Home's narwhal sea (business/sea.js): two fixed canvases under the page, shown only while it swims. */
+.zb-sea { position: fixed; inset: 0; z-index: 0; width: 100%; height: 100%; pointer-events: none; display: none; }
+.has-sea .zb-sea { display: block; }
+#sea-far { filter: blur(3px); }
+.has-sea .zb { position: relative; z-index: 1; }
+/* a phone has no room to keep the middle clear, so the narwhals swim behind the text, dimmed */
+@media (max-width: 759px) { .zb-sea { opacity: .32; } }
+@media print { .zb-sea { display: none !important; } }
 /* The sidebar's lower part. A plain part of the sidebar on a desktop; on a
    phone it is what Menu opens. */
 .zb-side__menu { display: contents; }
@@ -55,12 +63,38 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .z-bnav__btn:hover { color: var(--z-text); }
 .z-bnav__btn[aria-current="page"] { color: var(--z-pink); }
 #tabs .zb-tabs__lock { position: absolute; top: 10px; left: calc(50% + 6px); font-size: 14px; color: var(--z-dim); }
-@media (min-width: 1024px) { #tabs, .zb #side-org, button.zb-signout { display: none; } }
+@media (min-width: 1024px) { #tabs, .zb #side-org, button.zb-signout, .zb #side-test { display: none; } }
 
 /* The account menu's chip: from 1024px, top right above every screen, in a
    row of its own so it never covers the title or the header's buttons. */
 .zb-acctbar { display: none; }
-@media (min-width: 1024px) { .zb-acctbar { display: flex; justify-content: flex-end; margin: calc(var(--z-space-4) * -1) 0 var(--z-space-3); } }
+@media (min-width: 1024px) { .zb-acctbar { display: flex; justify-content: flex-end; align-items: center; gap: var(--z-space-2); margin: calc(var(--z-space-4) * -1) 0 var(--z-space-3); } }
+/* Beside the account chip: the balance, Approvals and the test-mode label (nav.js topInfo). */
+.zb-topinfo { display: flex; align-items: center; gap: var(--z-space-2); }
+.zb-topinfo .z-testmode { padding: 0; }
+.zb-topchip { display: inline-flex; align-items: center; gap: var(--z-space-2); min-height: var(--z-touch); padding: 0 var(--z-space-3); border-radius: var(--z-radius-control); border: 1px solid var(--z-line); background: var(--z-surface); font-size: 14px; color: var(--z-text); transition: border-color var(--z-ease); }
+a.zb-topchip:hover { border-color: var(--z-line-hover); color: var(--z-text); }
+a.zb-topchip[aria-current="page"] { border-color: var(--z-pink-border); }
+.zb-topchip .z-ic { font-size: 20px; color: var(--z-dim); }
+.zb-topchip small { font-family: var(--z-mono); font-size: 11.5px; color: var(--z-dim); }
+.zb-topchip b { font-weight: 600; color: var(--z-heading); }
+
+/* From 1024px, with a mouse, the sidebar is a 64px icon rail. Hovering it, or
+   tabbing into it, opens the whole sidebar over the page, so nothing in it is
+   lost. A touch screen keeps the whole sidebar: a tap there would only open
+   the rail, and the link would need a second tap. */
+@media (min-width: 1024px) and (hover: hover) and (pointer: fine) {
+  .zb { grid-template-columns: 64px minmax(0, 1fr); }
+  .zb .zb-side { z-index: 40; width: 64px; padding: var(--z-space-5) 10px; overflow-x: hidden; transition: width var(--z-ease), box-shadow var(--z-ease); }
+  .zb .zb-side:is(:hover, :focus-within) { width: 256px; padding-inline: var(--z-space-4); box-shadow: var(--z-shadow-dialog); }
+  .zb .zb-side:not(:hover):not(:focus-within) :is(.z-side__link, .z-side__search, .zb-newpay, .z-side__brand) { justify-content: center; width: 44px; min-width: 0; padding: 0; }
+  .zb .zb-side:not(:hover):not(:focus-within) .z-side__brand { align-self: flex-start; font-size: 0; }
+  .zb .zb-side .z-brand-tri { font-size: 17px; }
+  .zb .zb-side:not(:hover):not(:focus-within) :is(.z-side__link, .z-side__search, .zb-newpay) > span:not(.z-ic):not(.z-side__badge) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .zb .zb-side:not(:hover):not(:focus-within) :is(.z-side__out, .z-kbd, .zb-newpay .z-ic + .z-ic, .zb-side__sub, #side-accounts) { display: none; }
+  .zb .zb-side:not(:hover):not(:focus-within) .z-side__link { position: relative; }
+  .zb .zb-side:not(:hover):not(:focus-within) .z-side__badge { position: absolute; top: 3px; right: 1px; min-width: 16px; height: 16px; padding: 0 4px; font-size: 10px; line-height: 16px; }
+}
 @media print { .zb-acctbar { display: none; } }
 .zb-chip-acct { display: inline-flex; align-items: center; gap: var(--z-space-2); max-width: 320px; min-height: var(--z-touch); padding: 4px 10px 4px 14px; border-radius: var(--z-radius-control); border: 1px solid var(--z-line-strong); background: var(--z-card); color: var(--z-text); text-align: left; transition: border-color var(--z-ease); }
 .zb-chip-acct:hover { border-color: var(--z-line-hover); }
@@ -500,6 +534,44 @@ dialog .desc, dialog .zb-hint { font-size: 14.5px; color: var(--z-dim); }
 /* Home's blocks, one gap between each. */
 .zb-h-root { display: flex; flex-direction: column; gap: var(--z-space-5); }
 .zb-h-root > .zb-h-attention, .zb-h-root > .zb-h-section { margin: 0; }
+
+/* Home's command box: search and the slash commands, centred above the balance (design/agentic Desk-Command). */
+/* Home opens on the ask box, centred in the first screen; the rest of Home is below it. */
+.zb-h-cmd { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--z-space-5); min-height: calc(100dvh - 180px); padding: var(--z-space-10) 0 var(--z-space-6); }
+#app:has(#hm-root) .zb-head { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.zb-h-cmd__hello { display: flex; align-items: center; justify-content: center; gap: 9px; margin: 0; font: 400 12.5px/1.4 var(--z-mono); color: var(--z-dim); }
+.zb-h-cmd__hello i { width: 6px; height: 6px; border-radius: var(--z-radius-pill); background: var(--z-mint); }
+.zb-h-ans { display: flex; flex-direction: column; gap: var(--z-space-2); padding: var(--z-space-5); }
+.zb-h-ans:focus { outline: none; }
+.zb-h-ans:focus-visible { outline: 2px solid var(--z-pink); outline-offset: 2px; }
+.zb-h-ans__q { margin: 0; font: 400 12.5px/1.4 var(--z-mono); color: var(--z-dim); }
+.zb-h-ans__q::before { content: "> "; }
+.zb-h-ans h3 { margin: var(--z-space-2) 0 0; font-size: 17px; letter-spacing: -.015em; color: var(--z-heading); }
+.zb-h-ans h4 { margin: var(--z-space-2) 0 0; font-size: 13.5px; font-weight: 500; color: var(--z-dim); }
+.zb-h-ans p { margin: 0; font-size: 14px; }
+.zb-h-ans .is-late { color: var(--z-amber); font-weight: 600; }
+.zb-h-ans__rows { list-style: none; margin: 0; padding: 0; }
+.zb-h-ans__rows li { display: flex; align-items: center; gap: var(--z-space-3); min-height: 40px; border-top: 1px solid var(--z-line); font-size: 14px; }
+.zb-h-ans__rows li > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.zb-h-ans__rows b { font-weight: 500; font-variant-numeric: tabular-nums; color: var(--z-heading); }
+.zb-h-ans__src { padding-top: var(--z-space-2); font-size: 12.5px; color: var(--z-dim); }
+.zb-h-cmd > * { width: 100%; max-width: 600px; }
+.zb-h-cmd__line { margin: 0; min-height: 1.2em; text-align: center; font: 400 clamp(24px, 3vw, 34px)/1.2 var(--z-font); letter-spacing: -.035em; color: var(--z-heading); text-wrap: balance; }
+.zb-h-cmd__line span { color: var(--z-pink-soft); }
+.zb-h-cmd__label { margin-bottom: calc(-1 * var(--z-space-3)); font-size: 13.5px; color: var(--z-dim); }
+.zb-h-cmd__box { display: flex; align-items: center; gap: var(--z-space-2); padding: var(--z-space-2); padding-left: var(--z-space-4); border: 1px solid var(--z-line-strong); border-radius: var(--z-radius-card); background: var(--z-card); transition: border-color .2s var(--z-ease); }
+.zb-h-cmd__box:focus-within { border-color: var(--z-pink); }
+.zb-h-cmd__input { flex: 1; min-width: 0; height: var(--z-touch); padding: 0; border: 0; background: transparent; font: 400 16px/1.4 var(--z-font); color: var(--z-text); }
+.zb-h-cmd__input:focus, .zb-h-cmd__input:focus-visible { outline: none; box-shadow: none; }
+.zb-h-cmd__input::-webkit-search-cancel-button { display: none; }
+.zb-h-cmd__go { flex: none; width: var(--z-touch); height: var(--z-touch); display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: var(--z-radius-control); background: var(--z-pink); color: var(--z-bg); cursor: pointer; transition: background-color .15s var(--z-ease); }
+.zb-h-cmd__go:hover { background: var(--z-pink-hover); }
+.zb-h-cmd__hint { margin: 0; font-size: 13.5px; color: var(--z-amber); }
+.zb-h-cmd__hint:empty { display: none; }
+.zb-h-cmd__chips { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--z-space-2); }
+.zb-h-cmd__chip { display: inline-flex; align-items: center; min-height: 40px; padding: 0 var(--z-space-3); border: 1px solid var(--z-line); border-radius: var(--z-radius-pill); background: none; font: 400 12.5px/1 var(--z-mono); color: var(--z-dim); cursor: pointer; transition: color .15s var(--z-ease), border-color .15s var(--z-ease); }
+.zb-h-cmd__chip:hover { color: var(--z-text); border-color: var(--z-line-hover); }
+@media (max-width: 720px) { .zb-h-cmd { padding-top: var(--z-space-6); } .zb-h-cmd__chips { justify-content: flex-start; } .zb-h-cmd__chip { min-height: var(--z-touch); } }
 
 /* Balance card: the figure and its IBAN on the left, the round actions beside it. */
 .zb-h-bal__row { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--z-space-6); }

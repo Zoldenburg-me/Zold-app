@@ -7,7 +7,7 @@ import { Z, api, cap, ensureMe, esc, issuerFieldNames, issuerIds, me, org, plain
 import { META, RENDER, moneriumLink } from "./views.js";
 import { isOwnCompanyOrg } from "./access-model.js";
 import { mayChangeEntity, settingsSecFrom } from "./settings-model.js";
-import { companyKeysHere, ibanPanel, keyHint, keyRows } from "./org-monerium-model.js";
+import { companyKeysHere, ibanPanel, keyHint, keyRows, payoutRows } from "./org-monerium-model.js";
 import { shown } from "./nav.js";
 
 const ss = { sec: "org" };
@@ -31,7 +31,7 @@ function menu(accounts) {
     ["Account", [here("monerium", "Monerium"), own
       ? `<a class="zb-set-menu__item" href="/app?from=business#page-settings">Payment page${Z.icon("open_in_new", "zb-set-menu__out")}<span class="z-sr"> (the app)</span></a>`
       : `<a class="zb-set-menu__item" href="/app?from=business#security">Your sign-in and recovery${Z.icon("open_in_new", "zb-set-menu__out")}<span class="z-sr"> (the app)</span></a>`]],
-    ["Connected", [away("apps", "Apps"), away("integrations", "Accounting connections")]],
+    ["Connected", [away("apps", "Apps"), away("integrations", "Accounting connections"), here("ai", "AI assistant")]],
   ];
   return `<nav class="zb-set-menu" aria-label="Settings">${groups.map(([title, items]) =>
     `<h2 class="z-eyebrow">${title}</h2>${items.join("")}`).join("")}</nav>`;
@@ -44,6 +44,14 @@ function section(title, sub, body, action = "") {
   return `<section class="z-card zb-pad zb-stack" style="gap:14px" aria-labelledby="set-h">
     <div class="zb-side-card__head"><h2 id="set-h">${esc(title)}</h2>${action}</div>
     ${sub ? `<p class="desc">${esc(sub)}</p>` : ""}${body}</section>`;
+}
+
+/* Home's ask box answers set questions from Zold's own records. Asking in
+   your own words needs a language model; NEAR AI is the first one Zold will
+   connect. Nothing connects yet, so the card says so and offers no button. */
+function aiSection() {
+  return section("AI assistant", "Home answers set questions from your own records today: what is due, and where a month’s money went. Connecting an AI model will let you ask in your own words.",
+    `<ul class="z-list z-card"><li>${Z.row({ lead: Z.iconTile({ icon: "smart_toy" }), title: "NEAR AI", sub: "The first AI model Zold will connect. It will prepare payments and answers; nothing moves without your approval.", soon: true })}</li></ul>`);
 }
 
 function orgSection() {
@@ -67,12 +75,35 @@ function orgSection() {
 
 /** The company's IBAN on its Safe, and its latest deposits once issued
  *  (routes/business/org-monerium-iban.ts). */
-function companyIbanPart(keys, deposits) {
-  const p = ibanPanel(keys, roleCan(org.role, "sign"));
+function companyIbanPart(keys, deposits, payoutsOn) {
+  const p = ibanPanel(keys, roleCan(org.role, "sign"), payoutsOn);
   const btn = p.action === "issue"
     ? `<div class="zb-actions"><button type="button" class="z-btn z-btn--primary z-btn--sm" data-act="org-iban-issue">Issue the company’s IBAN</button></div>`
     : p.action === "check" ? `<div class="zb-actions"><button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="org-iban-check">Check again</button></div>` : "";
   return (p.iban ? rows([["Company IBAN", Z.groupIban(p.iban), true]]) : "") + `<p class="zb-hint">${esc(p.text)}</p>` + btn + (p.iban ? depositsHtml(deposits) : "");
+}
+
+/** Bank payouts from the company's IBAN (routes/business/org-monerium-payouts.ts).
+ *  `payouts` is undefined while loading, null when unread, [] none. The form is
+ *  drawn only where the deployment has switched payouts on and this member is
+ *  an owner who can sign; the history stays readable either way. */
+function payoutsHtml(payouts, on, keysOk) {
+  const add = on && keysOk && roleCan(org.role, "sign")
+    ? `<div class="zb-actions"><button type="button" class="z-btn z-btn--primary z-btn--sm" data-act="org-payout-new">Pay a bank account</button></div>`
+    : "";
+  const off = !on ? `<p class="zb-hint">Bank payouts from the company’s IBAN are switched off on this deployment.</p>`
+    : !keysOk ? `<p class="zb-hint">Connect the company’s Monerium keys again to send a payout. The history below stays readable.</p>` : "";
+  const body = payouts === undefined
+    ? `<p class="zb-hint">Loading payouts…</p>`
+    : payouts === null
+      ? `<p class="zb-hint">Payouts couldn’t be read just now.</p>`
+      : payoutRows(payouts).length
+        ? `<div class="z-list z-card">${payoutRows(payouts).map((p) => `<div class="z-row" style="display:block">
+            <div style="display:flex;justify-content:space-between;gap:12px"><span class="z-row__title">${esc(p.title)}</span><b>${esc(p.state)}</b></div>
+            <span class="z-row__sub z-mono">${esc(p.sub)}</span>
+            ${p.note ? `<span class="z-row__sub">${esc(p.note)}</span>` : ""}</div>`).join("")}</div>`
+        : `<p class="zb-hint">No payouts yet.</p>`;
+  return `<div id="om-payouts"><p class="zb-hint">Bank payouts from the company’s IBAN, newest first. Only “Sent” means Monerium carried it out.</p>${off}${add}${body}</div>`;
 }
 
 /** The latest deposits: undefined while loading, null when unread, [] none. */
@@ -89,7 +120,7 @@ function depositsHtml(deposits) {
 
 /** A company's own Monerium keys (routes/business/org-monerium.ts). `keys`
  *  is GET .../monerium, null when it could not be read. */
-function companyMoneriumSection(keys, deposits) {
+function companyMoneriumSection(keys, deposits, payouts, payoutsOn) {
   if (!roleCan(org.role, "accounts")) {
     return section("Monerium", "The company connects its own Monerium account with API keys. An owner or admin does this.", "");
   }
@@ -98,9 +129,11 @@ function companyMoneriumSection(keys, deposits) {
   const actions = !keys ? "" : connected
     ? `<div class="zb-actions"><button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="org-monerium-check">Check keys again</button><button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="org-monerium-drawer" data-replace="1">Replace keys</button><button type="button" class="z-btn z-btn--secondary z-btn--sm zb-danger" data-act="org-monerium-remove">Remove keys</button></div>`
     : keys.available ? `<div class="zb-actions"><button type="button" class="z-btn z-btn--primary z-btn--sm" data-act="org-monerium-drawer">Add Monerium keys</button></div>` : "";
+  const issued = keys?.companyIban?.state === "issued";
   return section("Monerium", "The company’s own Monerium account, connected with API keys from its Monerium developer section. Monerium issues the IBANs and the euros; Zold is the software you use them with.",
     rows(keyRows(keys)) + (hint ? `<p class="zb-hint">${esc(plain(hint))}</p>` : "")
-    + actions + companyIbanPart(keys, deposits));
+    + actions + companyIbanPart(keys, deposits, payoutsOn)
+    + (issued ? payoutsHtml(payouts, payoutsOn, keys?.status === "connected") : ""));
 }
 
 function moneriumSection(accounts) {
@@ -126,18 +159,23 @@ RENDER.settings = async () => {
   // The menu offers Access only to the company login in its own company, so
   // it waits for who that is and reads whose account backs this one.
   const company = companyKeysHere(org, roleCan(org.role, "accounts"));
-  const [acc, , ks] = await Promise.allSettled([api(`/api/orgs/${org.id}/accounts`), ensureMe(),
-    company ? api(`/api/orgs/${org.id}/monerium`) : Promise.resolve(null)]);
+  const [acc, , ks, hs] = await Promise.allSettled([api(`/api/orgs/${org.id}/accounts`), ensureMe(),
+    company ? api(`/api/orgs/${org.id}/monerium`) : Promise.resolve(null),
+    api("/api/health").catch(() => null)]);
   // The company's deposits, read live from Monerium once its IBAN is issued.
   // Not awaited: the screen draws first and the list fills in, whichever
   // section is open (switching sections reuses it).
   const issued = ks.status === "fulfilled" && ks.value?.monerium?.companyIban?.state === "issued";
   let deposits = issued ? undefined : [];
   const depositsLoad = issued ? api(`/api/orgs/${org.id}/monerium/deposits`).then((r) => r.deposits, () => null) : null;
+  // The company's bank payouts: stored rows, so they show even after the keys go.
+  const payoutsOn = hs.status === "fulfilled" && hs.value?.capabilities?.orgBankPayouts === true;
+  let payouts = issued && company ? undefined : [];
+  const payoutsLoad = issued && company ? api(`/api/orgs/${org.id}/monerium/payouts`).then((r) => r.payouts, () => null) : null;
   const accounts = acc.status === "fulfilled" ? acc.value.accounts : null;
   const keys = ks.status === "fulfilled" ? ks.value?.monerium ?? null : null;
   // A company's account is its own Safe: its Monerium is its own keys, never a login's connection.
-  const SECTIONS = { org: orgSection, monerium: () => (org.entity === "company" ? companyMoneriumSection(keys, deposits) : moneriumSection(accounts)) };
+  const SECTIONS = { org: orgSection, ai: aiSection, monerium: () => (org.entity === "company" ? companyMoneriumSection(keys, deposits, payouts, payoutsOn) : moneriumSection(accounts)) };
   return {
     html: `<div class="zb-set" id="set-root">${menu(accounts)}<div id="set-body">${SECTIONS[ss.sec]()}</div></div>`,
     bind(box) {
@@ -147,10 +185,17 @@ RENDER.settings = async () => {
         const el = root.querySelector("#om-deposits");
         if (el) el.outerHTML = depositsHtml(d);
       });
+      payoutsLoad?.then((p) => {
+        payouts = p;
+        const el = root.querySelector("#om-payouts");
+        if (el) el.outerHTML = payoutsHtml(p, payoutsOn, keys?.status === "connected");
+      });
       root.addEventListener("click", (ev) => {
         const b = ev.target.closest("[data-ss]");
         if (!b) return;
         ss.sec = b.dataset.ss;
+        // The address names the section, so reload and a shared link open it.
+        history.replaceState(history.state, "", `?view=settings&sec=${ss.sec}`);
         root.querySelector(".zb-set-menu").outerHTML = menu(accounts);
         root.querySelector("#set-body").innerHTML = SECTIONS[ss.sec]();
         root.querySelector(`[data-ss="${ss.sec}"]`)?.focus();

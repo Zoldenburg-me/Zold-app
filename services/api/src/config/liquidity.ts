@@ -34,8 +34,9 @@ export const LIQUIDITY = {
    * Only venues that implement `safeSwapPlan` can be executed by the user's
    * Safe: one batch approves the venue and delivers the output straight to the
    * payout destination, so the orchestrator never holds the input. FxSwapper
-   * cannot (its inventory is `onlyTrader`) and CoW refuses, so on either the
-   * full amount is debited to the orchestrator, which swaps from there.
+   * cannot (its inventory is `onlyTrader`), so on it the full amount is
+   * debited to the orchestrator, which swaps from there. CoW quotes but never
+   * settles, so a cash transfer on it (or on best over it) is refused.
    *
    * `best` over LIQUIDITY_VENUES (default lifi,dex, both Safe-executable) is
    * the default, so the non-custodial path runs unless someone opts out.

@@ -144,12 +144,15 @@ const INCLUSION_POLL_S = 2;
  */
 /**
  * A JSON-RPC error the bundler sent back: it read the op and refused it.
- * -32603 is excluded because abstractionkit also uses it for a reply it could
- * not parse, which says nothing about whether the op was taken.
+ * abstractionkit copies any thrown error's numeric `code` to `errno`, and a
+ * fetch aborted by the partner timeout carries a DOMException code (20, 23),
+ * so only the JSON-RPC range counts. -32603 is excluded because abstractionkit
+ * also uses it for a reply it could not parse, which says nothing about
+ * whether the op was taken.
  */
 function bundlerRefused(err: unknown): boolean {
   const errno = (err as { errno?: unknown })?.errno;
-  return typeof errno === "number" && errno !== -32603;
+  return typeof errno === "number" && errno <= -32000 && errno >= -32768 && errno !== -32603;
 }
 
 /** The bundler's own JSON-RPC refusal: the op was not taken. abstractionkit
@@ -805,6 +808,8 @@ async function sendSignedOperation(
   userOperation: UserOperationV9,
   gasPaidBy: SubmittedOperation["gasPaidBy"],
 ): Promise<SubmittedOperation> {
+  // The hash the op lands under, whatever the bundler answers.
+  const userOpHash = createUserOperationHash(userOperation, account.entrypointAddress, BigInt(CANDIDE.chainId));
   let response: Awaited<ReturnType<typeof account.sendUserOperation>>;
   try {
     response = await account.sendUserOperation(userOperation, bundler());
@@ -812,23 +817,23 @@ async function sendSignedOperation(
     // Only the bundler's own JSON-RPC refusal proves the op was not taken. A
     // dropped connection, an abort or an unreadable reply may follow an
     // accepted op, so that is uncertain, named by the hash it would land under.
-    if (!bundlerRefused(err)) {
-      throw new SafeOperationUncertainError(
-        createUserOperationHash(userOperation, account.entrypointAddress, BigInt(CANDIDE.chainId)),
-        err,
-      );
-    }
+    if (!bundlerRefused(err)) throw new SafeOperationUncertainError(userOpHash, err);
     throw new BundlerRefusedError(err);
+  }
+  // A bundler naming another hash took something, maybe ours: polling its
+  // hash would report another op's receipt as this one's.
+  if (typeof response.userOperationHash !== "string" || response.userOperationHash.toLowerCase() !== userOpHash.toLowerCase()) {
+    throw new SafeOperationUncertainError(userOpHash, `the bundler answered hash ${String(response.userOperationHash)}`);
   }
   let receipt: Awaited<ReturnType<typeof response.included>>;
   try {
     receipt = await response.included(INCLUSION_TIMEOUT_S, INCLUSION_POLL_S);
   } catch (err) {
-    throw new SafeOperationUncertainError(response.userOperationHash, err);
+    throw new SafeOperationUncertainError(userOpHash, err);
   }
-  if (!receipt) throw new SafeOperationUncertainError(response.userOperationHash, "no receipt");
+  if (!receipt) throw new SafeOperationUncertainError(userOpHash, "no receipt");
   return {
-    userOpHash: response.userOperationHash,
+    userOpHash,
     ...(receipt
       ? {
           txHash: receipt.receipt.transactionHash,

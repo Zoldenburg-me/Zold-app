@@ -47,6 +47,7 @@ import type {
   ShopifyDelivery,
   StoredDocument,
   Transfer,
+  OutboxRow,
   User,
 } from "./types.js";
 
@@ -118,6 +119,8 @@ export interface Db {
   chartAccounts: ChartAccount[];
   accountRules: AccountRule[];
   ledger: LedgerEntry[];
+  /** Notifications written with the change that caused them (outbox.ts). */
+  outbox: OutboxRow[];
 }
 
 /**
@@ -167,6 +170,7 @@ export let db: Db = {
   chartAccounts: [],
   accountRules: [],
   ledger: [],
+  outbox: [],
 };
 
 /** Load the store, run the load-time migrations, write it back. */
@@ -205,6 +209,7 @@ export async function initStore() {
     db.chartAccounts ??= [];
     db.accountRules ??= [];
     db.ledger ??= [];
+    db.outbox ??= [];
     if (IS_PRODUCTION) {
       const custodial = db.users.filter((u) => (u.paymentPage as any)?.depositPrivateKey);
       if (custodial.length) {
@@ -226,11 +231,14 @@ export async function initStore() {
   }
 }
 
-/** Load the store only to read it, for a report: no migration, no write, and
- *  no directory or file created. Throws when there is no store at DB_PATH. */
-export function loadStoreReadOnly() {
+/** Load the store without migrating or writing it, and create no directory
+ *  or file. Returns the text it parsed, so a job can tell whether the file
+ *  changed before it writes. Throws when there is no store at DB_PATH. */
+export function loadStoreReadOnly(): string {
   if (!existsSync(DB_PATH)) throw new Error(`no store at ${DB_PATH}`);
-  db = { ...db, ...JSON.parse(readFileSync(DB_PATH, "utf8")) };
+  const text = readFileSync(DB_PATH, "utf8");
+  db = { ...db, ...JSON.parse(text) };
+  return text;
 }
 
 /**

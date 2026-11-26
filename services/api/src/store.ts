@@ -48,6 +48,12 @@ import {
   settlementOnRow,
   transferPatchOnRow,
   type DraftCondition,
+  announceOutbox,
+  claimOutboxOn,
+  newOutboxRow,
+  outboxDraftsFor,
+  settleOutboxOn,
+  type StateListener,
   assertCapAmounts,
   assertDepositKey,
   followIban,
@@ -63,6 +69,9 @@ import {
 import type {
   ConversionSweep,
   CryptoDeposit,
+  OutboxDraft,
+  OutboxOutcome,
+  OutboxRow,
   CryptoSend,
   MerchantLink,
   MoneriumIssueRecord,
@@ -98,50 +107,39 @@ const capHolds = new Map<string, { userId: string; eur: number; day: string }>()
  *  In memory on db.json: a restart drops them and the approval answers 410. */
 const pendingExecutions = new Map<string, PendingExecution>();
 
-/** Called after a transfer's state changed and was persisted. */
-type TransferStateListener = (t: Transfer, from: Transfer["state"]) => void | Promise<void>;
+/**
+ * Called inside the write that moved a transfer's state, on a copy of the
+ * row: what it returns goes into the outbox in the same write (outbox.ts).
+ */
+type TransferStateListener = StateListener<Transfer>;
 const transferStateListeners: TransferStateListener[] = [];
+type PaymentRequestStateListener = StateListener<PaymentRequest>;
+const paymentRequestStateListeners: PaymentRequestStateListener[] = [];
+/** Told once an outbox row is on disk and the store is free again. */
+const outboxListeners: (() => void)[] = [];
 
-/** State changes written but not yet announced: listeners run once the
+/** Announcements of written outbox rows not yet made: they run once the
  *  write is on disk and the store is free again (store/backend.ts). */
 const announcements: (() => void)[] = [];
 
-/** A listener's failure is logged, never thrown into the write that moved the
- *  state: the change is already on disk. */
-function announceStateChange(t: Transfer, from: Transfer["state"]) {
-  if (t.state === from) return;
-  const row = structuredClone(t);
-  announcements.push(() => {
-    for (const listener of transferStateListeners) {
-      try {
-        Promise.resolve(listener(row, from)).catch((err) =>
-          console.error(`store: transfer state listener failed for ${row.id}: ${describeCause(err)}`),
-        );
-      } catch (err) {
-        console.error(`store: transfer state listener failed for ${row.id}: ${describeCause(err)}`);
-      }
-    }
-  });
+/** Put each draft in the outbox, in the write in progress, and announce it
+ *  once that write is on disk. */
+function enqueueAll(drafts: OutboxDraft[]): OutboxRow[] {
+  const written: OutboxRow[] = [];
+  for (const d of drafts) {
+    if (d.key !== undefined && db.outbox.some((r) => r.key === d.key)) continue;
+    const row = newOutboxRow(d);
+    db.outbox.push(row);
+    written.push(row);
+  }
+  if (written.length) announcements.push(() => announceOutbox(outboxListeners));
+  return written;
 }
-
-type PaymentRequestStateListener = (r: PaymentRequest, from: PaymentRequest["state"]) => void | Promise<void>;
-const paymentRequestStateListeners: PaymentRequestStateListener[] = [];
-
-/** As for transfers: logged, never thrown into the write. */
+function announceStateChange(t: Transfer, from: Transfer["state"]) {
+  if (t.state !== from) enqueueAll(outboxDraftsFor(transferStateListeners, t, from, `transfer ${t.id}`));
+}
 function announcePaymentRequestState(r: PaymentRequest, from: PaymentRequest["state"]) {
-  if (r.state === from) return;
-  const row = structuredClone(r);
-  announcements.push(() => {
-    for (const listener of paymentRequestStateListeners) {
-      try {
-        Promise.resolve(listener(row, from)).catch((err) =>
-          console.error(`store: payment request state listener failed for ${row.id}: ${describeCause(err)}`),
-        );
-      } catch (err) {
-        console.error(`store: payment request state listener failed for ${row.id}: ${describeCause(err)}`);
-      }
-    }
-  });
+  if (r.state !== from) enqueueAll(outboxDraftsFor(paymentRequestStateListeners, r, from, `payment request ${r.id}`));
 }
 
 /** Which record already holds `hash` (store/rules.ts hashOnRecordIn). */
@@ -270,7 +268,8 @@ export const jsonCore = {
   ) {
     const u = db.users.find((x) => x.id === id);
     if (!u) throw new Error(`unknown user ${id}`);
-    if (u.segment && by !== "admin") {
+    // An account that has not said where it lives is decided once, later.
+    if (u.segment && u.segment.value !== "UNDECIDED" && by !== "admin") {
       throw new Error(
         `user ${id} already has segment ${u.segment.value}; only an admin action may change it`,
       );
@@ -599,8 +598,8 @@ export const jsonCore = {
     patch = transferPatchOnRow(t, patch);
     const from = t.state;
     Object.assign(t, patch, { updatedAt: new Date().toISOString() });
-    persist();
     announceStateChange(t, from);
+    persist();
     return t;
   },
   /** Append one step to a transfer's log on the stored row, with `patch`. */
@@ -634,8 +633,8 @@ export const jsonCore = {
     const { result, audit } = applyReviewResolution(t, r, t && refundTx ? hashOnRecord(refundTx, t.userId) : undefined);
     if (!audit) return result;
     db.audit.push(audit);
-    persist();
     announceStateChange(t!, "MANUAL_REVIEW");
+    persist();
     return result;
   },
   /**
@@ -648,7 +647,8 @@ export const jsonCore = {
    */
   findReceiptShareByTransfer(transferId: string) {
     const shares = db.receiptShares.filter((s) => s.transferId === transferId);
-    return shares.find((s) => !s.revokedAt) ?? shares.at(-1);
+    // A live share first; an expired one stays recorded beside its successor.
+    return shares.find((s) => !s.revokedAt && Date.parse(s.expiresAt) >= Date.now()) ?? shares.at(-1);
   },
   findReceiptShareBySlug(slug: string) {
     return db.receiptShares.find((s) => s.slug === slug);
@@ -687,8 +687,8 @@ export const jsonCore = {
     if (!r) throw new Error(`unknown payment request ${id}`);
     const from = r.state;
     Object.assign(r, patch, { updatedAt: new Date().toISOString() });
-    persist();
     announcePaymentRequestState(r, from);
+    persist();
     return r;
   },
   /** Write a request only from the states it may leave; null when it moved on. */
@@ -718,9 +718,56 @@ export const jsonCore = {
     const patch = structuredClone(apply(structuredClone(r)));
     return { request: patch ? jsonCore.updatePaymentRequest(id, patch) : r, from, written: !!patch };
   },
-  /** Subscribe to payment request state changes (checkout-webhook.ts). */
+  /** Subscribe to payment request state changes (checkout-webhook.ts, the PAID hooks of routes/payment-requests.ts). */
   onPaymentRequestStateChange(listener: PaymentRequestStateListener) {
     paymentRequestStateListeners.push(listener);
+  },
+
+  // ── Outbox (outbox.ts; docs/postgres-store-design.md §5) ────────────────
+  /** Put one row in the outbox, in the write in progress if there is one;
+   *  null when a row with its key is there already. */
+  enqueueOutbox(draft: OutboxDraft) {
+    const [row] = enqueueAll([draft]);
+    if (row) persist();
+    return row ?? null;
+  },
+  /** Claim up to `limit` due rows of `kinds` for `leaseMs`, each attempt counted. */
+  claimOutbox(limit: number, leaseMs: number, kinds: readonly string[]) {
+    const claimed = claimOutboxOn(db.outbox, limit, leaseMs, new Date(), kinds);
+    if (claimed.length) persist();
+    return claimed;
+  },
+  /** End claimed attempt `attempt`; false when the row is not claimed, or
+   *  another claim has taken it since. */
+  settleOutbox(id: string, attempt: number, outcome: OutboxOutcome) {
+    const row = db.outbox.find((r) => r.id === id);
+    if (!row || !settleOutboxOn(row, attempt, outcome, new Date())) return false;
+    persist();
+    return true;
+  },
+  /** Drop rows delivered before `before` (ISO); dead rows stay. */
+  pruneOutbox(before: string) {
+    const kept = db.outbox.filter((r) => !r.deliveredAt || r.deliveredAt >= before);
+    const n = db.outbox.length - kept.length;
+    if (n) {
+      db.outbox = kept;
+      persist();
+    }
+    return n;
+  },
+  /** Rows not yet delivered, and rows given up on. */
+  outboxCounts() {
+    return {
+      pending: db.outbox.filter((r) => !r.deliveredAt && !r.deadAt).length,
+      dead: db.outbox.filter((r) => r.deadAt).length,
+    };
+  },
+  findOutboxRow(id: string) {
+    return db.outbox.find((r) => r.id === id);
+  },
+  /** Called once a written outbox row is on disk (outbox.ts kicks its worker). */
+  onOutboxWritten(listener: () => void) {
+    outboxListeners.push(listener);
   },
   findPaymentRequest(id: string) {
     return db.paymentRequests.find((r) => r.id === id);

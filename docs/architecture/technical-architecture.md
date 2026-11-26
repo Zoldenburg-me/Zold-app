@@ -576,9 +576,9 @@ router receives injected and never rebuilds.
 | **lifi** | `GET li.quest/v1/quote` | approve `approvalAddress` (what LI.FI names), send tx, measure | yes | `LIFI_CONTRACTS` allowlist (Diamond), `value == 0` |
 | **dex** (Uniswap v3) | deepest pool across fee tiers, QuoterV2 | `exactInputSingle` via SwapRouter02, measure | yes | router is config, pool pinned on quote |
 | **rfq** (Bebop PMM) | `/pmm/<chain>/v3/quote` | maker tx | yes | `BEBOP_CONTRACTS` (empty means execution refused) |
-| **cow** | `/api/v1/quote` | **throws, not wired** | no | quote only |
+| **cow** | `/api/v1/quote` | **throws, not wired** | no | quote only; a cash transfer on it (alone or behind best) is refused before the debit |
 | **fx-swapper** | on-chain `FxSwapper` | `swapExactIn` | no | hardhat only |
-| **best** | all venues in parallel, highest `expectedOut` wins, every venue's result recorded | dispatch to the winner | if any is | per venue |
+| **best** | all venues in parallel, highest `expectedOut` wins, every venue's result recorded | dispatch to the winner | if any of its venues is | per venue |
 
 `liquidity/contract.ts` shares the venue guards. `assertVenueTarget` covers
 the allowlist, the named spender and zero value. `applySurplus` decides who
@@ -597,8 +597,13 @@ is recorded.
   mismatch. It then calls `POST /orders {kind: redeem}` on **the user's own
   Monerium client**. The counterpart name is split on whitespace.
 - The memo is `<SEPA-Latin folded reference> Powered by Zold <8 hex>`, at most
-  140 characters. With no reference it is `Powered by Zold <8 hex>`.
-- It is refused **before the fee debit** if `!moneriumLiveFor(user)`.
+  140 characters. With no reference it is `Powered by Zold <8 hex>`. It is
+  built once, stored on `moneriumRedeem.memo`, and that stored memo is what
+  the order carries and what Monerium's echo is matched against: a transfer
+  built under an older memo format still sends and settles.
+- It is refused **before the fee debit** if `!moneriumLiveFor(user)`, or if
+  the transfer has no signed redeem or its stored memo is blank: FAILED, which
+  releases the daily cap.
 - The redeem message is stamped at creation and Monerium's docs allow 5 minutes,
   so the approval deadline is 4 minutes, not 15. A later approval answers 410.
   An expired unsigned line fails its payment run and releases its invoice. The
@@ -1450,7 +1455,7 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 |---|---|
 | `GET /service/checkout/transfers/:id` (checkout credential) | The pay-with-zold checkout service reads one transfer. Served only for a SEPA transfer whose reference carries `ZP` + 12 hex standing alone; any other id, existing or not, is the same 404. The body is the allowlist `{id, state, rail, receiveEur, recipientIban, reference, updatedAt}`, `no-store`; `recipientIban` is only its last four characters (`…3000`). Every authenticated read writes a `service.checkout_transfer_read` audit row (credential id, transfer id, served or not_found). 503 until a credential is issued, 401 for a wrong one. A valid credential has its own rate bucket (`SERVICE_RATE_LIMIT_PER_MIN`, 120); a wrong one counts on the auth bucket. |
 | `POST /admin/service-credentials/checkout/rotate` (operator, A) | Issue a `zsc_` token, returned once; the store keeps its SHA-256 only. Every earlier checkout credential stops `CHECKOUT_SERVICE_ROTATION_OVERLAP_SEC` (24 h) later, never later than a past rotation set; `{"revokePrevious": true}` (JSON only; a form body is 415, a non-boolean 400) ends them at once, for a leaked one. Audited as `service.credential_rotated` with `revokedPrevious`. |
-| Webhook out (optional) | With `CHECKOUT_WEBHOOK_URL` and `CHECKOUT_WEBHOOK_SECRET` (`whsec_`, ≥24 bytes; https outside localhost), a state change on a checkout transfer POSTs `{transferId}` signed with Standard Webhooks. One `webhook-id` per delivery across retries (the receiver dedupes on it), a fresh unix-seconds timestamp per attempt (the receiver applies its replay window), backoff ×4 from `CHECKOUT_WEBHOOK_RETRY_BASE_MS` up to `CHECKOUT_WEBHOOK_MAX_ATTEMPTS`. Retries live in memory; the service re-reads through the GET and must not depend on the webhook. |
+| Webhook out (optional) | With `CHECKOUT_WEBHOOK_URL` and `CHECKOUT_WEBHOOK_SECRET` (`whsec_`, ≥24 bytes; https outside localhost), a state change on a checkout transfer POSTs `{transferId}` signed with Standard Webhooks. One `webhook-id` per delivery across retries (the receiver dedupes on it), a fresh unix-seconds timestamp per attempt (the receiver applies its replay window), backoff ×4 from `CHECKOUT_WEBHOOK_RETRY_BASE_MS` up to `CHECKOUT_WEBHOOK_MAX_ATTEMPTS`. Each delivery is an outbox row written with the state change (`outbox.ts`), so a pending retry survives a restart; a send can repeat after a crash, never past the last attempt. The service re-reads through the GET and must not depend on the webhook. |
 
 Settings (`config/checkout-service.ts`; a bad webhook URL or secret refuses startup):
 
@@ -1574,10 +1579,10 @@ Settings (`config/checkout-service.ts`; a bad webhook URL or secret refuses star
 | `POST /:orgId/bookkeeping/statement/rebuild` (C(ledger.transactions), ledger.categorise) | Re-run the ledger writer for the org's accounts. |
 | `PUT /:orgId/ledger/:entryId/own-transfer` (C(ledger.transactions), ledger.categorise) | `{own: true or false}` on a statement line: the person says this payment is between their own accounts. Sets or removes the `internal` tag: out of Revenue, Expenses and the category, while the stored code stays for undo. Refused on a fee, reversal, sweep, disposal or invoice payment. |
 | `GET /users/:id/books-line/:paymentId` (session) | The statement line behind one payment for /app's detail sheet: `{orgId, lineId, ownTransfer, belegStale?}` (`belegStale`: its Beleg no longer verifies and this person may replace it), or `null` where the sheet draws no action: no line, no books, no permission, a crypto send or a conversion in parts (both marked on the statement in /business), or a line that cannot be marked and is not. |
-| `POST /:orgId/bookkeeping/export/:month/prepare` (C(export.ledger), reports.run) | Issue the month's missing Belege. |
+| `POST /:orgId/bookkeeping/export/:month/prepare` (C(export.ledger), reports.run) | Issue the month's missing Belege. A line whose stored code names no live Beleg of its own is relinked to the one live Beleg it has, not given a second; with more than one, that line fails (`BelegAmbiguous`) and nothing is relinked or signed. |
 | `GET /:orgId/bookkeeping/export/:month/lexware.csv` (C(export.ledger)) | Lexware Office bank-import CSV. A line whose Beleg no longer verifies names no code and says `Beleg stimmt nicht mehr`. |
 | `GET /:orgId/bookkeeping/export/:month/belege.zip` (C(export.ledger)) | ZIP of the month's Belege. A Beleg that no longer verifies is left out; `MISSING-<month>.txt` lists its line and why. |
-| `POST /:orgId/bookkeeping/lines/:lineId/beleg` (C(export.ledger), reports.run) | Issue one line's Beleg. |
+| `POST /:orgId/bookkeeping/lines/:lineId/beleg` (C(export.ledger), reports.run) | Issue one line's Beleg, or relink the line to the one live Beleg of its own it already has (`issued: false`). The 409 applies only when the line's stored link is broken (it names no unrevoked Beleg of the line) and the line has more than one; nothing is relinked or signed. An intact link returns its Beleg (`issued: false`) whatever else exists. |
 | `POST /:orgId/bookkeeping/lines/:lineId/beleg/replace` (C(export.ledger), reports.run) | Revoke the line's Beleg that no longer verifies and issue a new one (owner, admin, accountant); the new one is signed and checked first, and revoke plus issue are one write. 409 if the old one still verifies, or if a new one would fail too (a payout Monerium rejected); nothing is revoked then. Audited as `document.reissued`, by document id. |
 | `GET /:orgId/integrations` (org.read) | Connector state; never a key. |
 | `POST/DELETE /:orgId/integrations/getmyinvoices` (C(integrations.accounting), org.update) | Verify and store, or remove, the org's GetMyInvoices key. |

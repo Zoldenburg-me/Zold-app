@@ -53,6 +53,17 @@ export class BestExecutionProvider implements LiquidityProvider {
     return ids.map((id) => ({ id, provider: this.resolve(id) }));
   }
 
+  /** Every venue can settle what it prices. Any quote-only one could win a
+   *  price and then refuse the swap, so one is enough to say no. */
+  settles(): boolean {
+    return this.venues().every((v) => !v.provider.quoteOnly);
+  }
+
+  /** At least one venue can build a Safe-executed swap. */
+  servesSafe(): boolean {
+    return this.venues().some((v) => Boolean(v.provider.safeSwapPlan));
+  }
+
   async quote(side: LiquiditySide, amountIn: bigint, quoteId: string, expiresAt: string): Promise<LiquidityQuote> {
     const venues = this.venues();
     const settled = await Promise.allSettled(

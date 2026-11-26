@@ -99,9 +99,13 @@ export function createMerchantLinkRouter(requireSession: SessionResolver): expre
       // A code issued before the revoke must not relink the store after it.
       voidLinkCodes(ctx.org.id, link.shop);
       if (link.revokedAt) return res.json({ link: await publicLink(link) });
-      const revoked = await store.updateMerchantLink(link.id, { revokedAt: new Date().toISOString(), revokedBy: ctx.userId });
-      await store.audit(auditEntry("merchant_link.revoked", { orgId: ctx.org.id, linkId: link.id, shop: link.shop }, ctx.userId));
-      announceMerchantLinkRevoked(link.id);
+      // The revoke, its audit entry and the checkout service's hint commit together.
+      const revoked = await store.tx(async () => {
+        const row = await store.updateMerchantLink(link.id, { revokedAt: new Date().toISOString(), revokedBy: ctx.userId });
+        await store.audit(auditEntry("merchant_link.revoked", { orgId: ctx.org.id, linkId: link.id, shop: link.shop }, ctx.userId));
+        await announceMerchantLinkRevoked(link.id);
+        return row;
+      });
       res.json({ link: await publicLink(revoked) });
     }),
   );
