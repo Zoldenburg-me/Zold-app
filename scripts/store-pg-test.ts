@@ -280,6 +280,10 @@ try {
       }
     } finally {
       third.child.kill();
+      await third.exited;
+      // Its lock is released with its connection, which the server may close
+      // a moment after the process exits.
+      for (let i = 0; i < 100 && (await lockHolder()).length; i++) await new Promise((r) => setTimeout(r, 50));
     }
     const fourth = startApi(200);
     try {
