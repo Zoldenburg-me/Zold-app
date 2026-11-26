@@ -167,7 +167,11 @@ Rules for the table above:
   address as unbookable, `bookkeeping/money-in.ts:42`), and `(org_id, number)`
   on invoices (S2).
 - Foreign keys are `ON DELETE RESTRICT`. The same rule: added only where the
-  importer finds no orphan, so none is in 0001; they come with S5.
+  importer finds no orphan, so none is in the schema yet. The pre-import
+  report (§6) lists the orphans of every key in the FK column; a key goes in
+  by its own migration once the reports on the testnet and mainnet copies
+  show none for it. `transfers.quote_id → quotes` cannot be one while quotes
+  are pruned (:429-430): a transfer outlives its quote by design.
 - **The `table` in a sealed field's AAD stays the collection name**
   (`shopifyConnections`, not `shopify_connections`), and `rowId` stays the
   row's `id`. Changing either makes every sealed value unopenable. The SQL
@@ -664,33 +668,64 @@ only: quote and session pruning, Shopify delivery pruning,
 
 ## 6. Data migration and cut-over
 
-**Importer** (`scripts/pg-import.ts`, S5):
+**Importer** (`scripts/pg-import.ts`, S5; the code is `store/pg/port.ts`):
 
-- Reads `db.json` with `loadStoreReadOnly` (`db.ts:229-232`), runs the
-  load-time migrations in memory, and writes every row in one transaction.
-- Idempotent: `INSERT … ON CONFLICT (id) DO NOTHING`, then compares. A
-  second run on the same file changes nothing and says so. A row present with
-  a different `doc` stops the run.
-- Before inserting, it reports what would break a constraint: duplicates for
-  each unique key and orphans for each foreign key (§1.2). Those are findings,
-  not repairs.
-- **Verify both ways:** per table, the row count and a SHA-256 over the rows
-  sorted by id, each in canonical JSON (sorted keys). The source side is the
-  snapshot after the load-time migrations ran in memory (they fill missing
-  fields and prune sessions, `db.ts:215-220`), not the raw file, so both
-  sides hash the same data. Computed from that snapshot and from
-  `SELECT doc` on Postgres; they must match. Then the export (below) is
-  checksummed against the same migrated snapshot. The raw file's SHA-256 is
-  recorded too, to name the input, not compared.
-- Never prints a row. Output is table names, counts and hashes.
+- Reads `db.json` with `loadMigratedSnapshot` (`store/db.ts`): the file as
+  `initStore` would serve it, the load-time migrations run in memory and
+  nothing written back. The raw file's SHA-256 is printed to name the input,
+  not compared. A file with a user who has no organisation yet is no stable
+  source (the migration gives them one under random ids, so every load is
+  another snapshot): the report says so, and import and verify refuse it
+  until the file has been loaded once by the JSON store. Session pruning
+  depends on the clock, so a verify run long after the import can find
+  `sessions` changed; the import verifies in the same run.
+- `report <db.json>` needs no database and no deployment environment. It
+  lists what would break the import, each with the ids of the rows involved:
+  a duplicate for each unique key of the migrations (among them
+  `transfers.quote_id`, the unbacked account address and one Zoldenburg grace
+  period per user of `0003`, the issued invoice number of `0002`, and the
+  `payment_handles` namespace across users and organisations;
+  `pg-import-test` checks that every unique index of the migrations is
+  mirrored, and that the database refuses each duplicate the report finds);
+  a missing or duplicate id; a deposit without `logIndex`, `chainId` or `txHash` or with
+  a `logIndex` that is not an integer (`0005`, `0008`); a daily-cap amount
+  (`transfers.sendEur`, `cryptoSends.capEur`) that is not a finite number
+  (JSON writes NaN and Infinity as `null`); a cursor block or an outbox row
+  the typed columns refuse; a collection the schema has no table for. Those
+  block the import. The orphans of each foreign key in §1.2 are listed too,
+  and do not block. Exit 1 when anything blocks.
+- `import <db.json>` runs the report and refuses on any blocking finding,
+  then refuses a schema that is not current and a target where an API holds
+  the start lock (it holds that lock until it is done, so no API starts
+  meanwhile). It writes every row in one transaction, in stored order, plus
+  `payment_handles` and `operator_credentials`, then reads everything back in
+  the same transaction and compares counts and hashes before the `COMMIT`. A
+  failed insert names the collection, the row id and the constraint or
+  SQLSTATE, never the driver's message (it quotes the value), and rolls back:
+  the target stays empty. Idempotent: a target that already holds exactly
+  this snapshot is left as it is and the run says so; any other non-empty
+  target is refused.
+- **Verify both ways** (`verify <db.json>`, and inside every import and
+  export): per collection, the row count and a SHA-256 over the rows in
+  stored order (the JSON array's, `seq` on Postgres; the cursor map sorted by
+  chain), each in canonical JSON (sorted keys), so a reordered row fails as a
+  changed one does. The source side is the migrated snapshot, so both sides
+  hash the same data. `payment_handles` and `operator_credentials`, filled
+  from the rows, are compared with what the rows say. Verify holds the start
+  lock too, so it refuses while an API writes.
+- Never prints a row. Output is collection names, counts, hashes and row ids.
 
-**Export** (`scripts/pg-export.ts`): `SELECT doc` per table into the
-`Db` shape, so `db.json` can be rebuilt from Postgres. It is the rollback
-path and the test of the importer. The `Db` shape has `outbox` (the JSON
-backend keeps one) but no place for `ledger_history`, `cap_holds` or
-`pending_executions`; the export writes undelivered `outbox` rows into
-`db.json`'s `outbox`, and `ledger_history` to its own age-encrypted file next
-to the `db.json`.
+**Export** (`scripts/pg-export.ts`): every collection in the `Db` shape,
+read as the Postgres store reads it (`listCollection`), in one transaction
+that holds the start lock, so it refuses while an API runs. Still under the
+lock it writes the file owner-only, reads it back and verifies it against
+Postgres, and only then links it under its name: it refuses to overwrite a
+file and leaves none behind when it fails. It is the rollback path and the test of the importer. The
+`Db` shape has `outbox` (the JSON backend keeps one) but no place for
+`ledger_history`, `cap_holds` or `pending_executions`; every `outbox` row goes
+into `db.json`'s `outbox` (the dead ones are listed), and `ledger_history`
+goes to its own age-encrypted file (`--ledger-history`, to the recipients of
+`scripts/_age.sh`). With history rows and no such file, the export refuses.
 
 **Cut-over** (the runbook is written in S7; the owner picks the time). The
 API and the data move together, from the Akash lease to the Oracle host
@@ -1139,7 +1174,7 @@ stays the default until the cut-over.
 | S3b2 | `pending_executions` (`0004`), the deposit `CONVERTING` reserve with partials under rule 2, the Zoldenburg `RELAYING` status for the relay and the finalisation, and their §2 tests; the outbound-intent cut connection, the imported-wallet proof, the ledger writers and two owners connecting one account, in parallel on Postgres 17 | — |
 | S4a | Migration `0006`: the outbox and its worker (checkout hints, the merchant-link revoke hint, PAID hooks), on both backends; audit and no-delete triggers; `ledger_history`; the application role's grants (`zold_grant_app`), with the store suite and the API suites run as that role in `check:pg` | — |
 | S4b | Identity and recovery: `session_epoch`, the ceremony-challenge audit of the 9 callers, the Candide and Turnkey reserve statuses, the Monerium token compare in the store; their tests on JSON and Postgres 17 | — |
-| S5 | Importer, export, verify (§6), run against a copy of the testnet `db.json` on the local Postgres 17. Constraint findings reported to the lead. Before S8: run the duplicate report for `transfers.quote_id`, the unbacked account address, one Zoldenburg grace period per user (`0003`) and the issued invoice number (`0002`) against copies of the testnet and the mainnet `db.json`, and record the result on the board: a duplicate there fails the import at the insert | — |
+| S5 | Importer, export, verify and the pre-import report (§6); migration `0008`: `cap_holds` refuses `'Infinity'`, the deposit key's `chain_id` and `tx_hash_lc` are `NOT NULL`. Tests on PGlite in `check` and on Postgres 17 in `check:pg`. Before S8: run the report against copies of the testnet and the mainnet `db.json` (`npm run pg-import -- report <copy>`) and record the counts per rule on the board: a blocking finding there refuses the import, and an orphan decides whether its foreign key goes in (§1.2) | — |
 | S6 | Docs: AGENTS.md (where the code lives, secrets and storage), `docs/running-locally.md` (local Postgres, `check:pg`), technical-architecture §18.1, `docs/roadmap.md`, `docs/status.md` | — |
 | S7 | The Oracle host (§7): Postgres 17 and roles, two clusters with peer authentication, pgBackRest to Object Storage in two regions, the dump bucket with its retention rule, the archiver and disk alerts, the one-repository-down test, systemd units, the deploy pipeline in place of the Akash leg, the aarch64 toolchain check, the cut-over runbook, the host-loss runbook and provisioning script (§7.1) including the `hub` database, its roles, grants and limits (§7.2), and the first restore drill onto a new instance and the first testnet rebuild, both timed. Each cluster is made with `pg_createcluster --encoding=UTF8` and a UTF-8 locale (the email key's `\u` escapes and `lower()` depend on them, `0003`). The runbook says: after a migration, a bad deploy is fixed forward, never by redeploying an older build (`assertSchemaCurrent` refuses a schema ahead of the code) | recovery-time target accepted; host access |
 | S8 | Cut-over (§6): testnet, then app.zoldhq.com. `STORE_BACKEND=postgres` becomes the default; the JSON backend stays one release as the rollback path, then goes | the owner picks the time |

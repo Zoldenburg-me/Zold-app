@@ -59,6 +59,7 @@ const scripts = [
   "convert:crash:test",
   "persist-failure:test",
   "store-backend:test",
+  "pg-import:test",
   "store-gates:test",
   "send-after-commit:test",
   "single-flight:test",

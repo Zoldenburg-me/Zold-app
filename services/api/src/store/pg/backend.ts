@@ -89,7 +89,7 @@ import type {
 import type { Database, Sql, TxSql } from "./sql.js";
 
 /** The SQL table of each collection that is a list of rows with an `id`. */
-const TABLE = {
+export const TABLE = {
   users: "users",
   quotes: "quotes",
   transfers: "transfers",
@@ -282,6 +282,32 @@ async function insertOutbox(t: Sql, d: OutboxDraft): Promise<OutboxRow | null> {
   return r.rows[0] ? outboxRow(r.rows[0]) : null;
 }
 
+/** A collection in the `Db` shape, rows in stored order: what `store.list`
+ *  returns, and what the export (store/pg/port.ts) writes back to db.json. */
+export async function listCollection<K extends Collection>(q: Sql, name: K): Promise<Db[K]> {
+  if (name === "processedMoneriumOrders") {
+    const r = await q.query<{ id: string }>("SELECT order_id AS id FROM processed_monerium_orders ORDER BY seq");
+    return r.rows.map((x) => x.id) as Db[K];
+  }
+  if (name === "processedMoneriumWebhooks") {
+    const r = await q.query<{ id: string }>("SELECT webhook_id AS id FROM processed_monerium_webhooks ORDER BY seq");
+    return r.rows.map((x) => x.id) as Db[K];
+  }
+  if (name === "cryptoDepositCursor") {
+    const r = await q.query<{ k: string; b: string }>("SELECT chain_key AS k, block::text AS b FROM crypto_deposit_cursor");
+    return Object.fromEntries(r.rows.map((x) => [x.k, x.b])) as Db[K];
+  }
+  if (name === "outbox") {
+    const r = await q.query<OutboxSqlRow>(`SELECT ${OUTBOX_COLUMNS} FROM outbox ORDER BY seq`);
+    return r.rows.map(outboxRow) as Db[K];
+  }
+  if (name === "moneriumIssueOrders") {
+    const r = await q.query<{ doc: MoneriumIssueRecord }>("SELECT doc FROM monerium_issue_orders ORDER BY seq");
+    return r.rows.map((x) => x.doc) as Db[K];
+  }
+  return (await rows(q, TABLE[name as keyof typeof TABLE])) as Db[K];
+}
+
 export function createPgStore(database: Database): StoreBackend {
   const transferStateListeners: StateListener<Transfer>[] = [];
   const paymentRequestStateListeners: StateListener<PaymentRequest>[] = [];
@@ -401,29 +427,7 @@ export function createPgStore(database: Database): StoreBackend {
   }
 
   const backend: StoreMethods = {
-    async list<K extends Collection>(name: K): Promise<Db[K]> {
-      if (name === "processedMoneriumOrders") {
-        const r = await q.query<{ id: string }>("SELECT order_id AS id FROM processed_monerium_orders ORDER BY seq");
-        return r.rows.map((x) => x.id) as Db[K];
-      }
-      if (name === "processedMoneriumWebhooks") {
-        const r = await q.query<{ id: string }>("SELECT webhook_id AS id FROM processed_monerium_webhooks ORDER BY seq");
-        return r.rows.map((x) => x.id) as Db[K];
-      }
-      if (name === "cryptoDepositCursor") {
-        const r = await q.query<{ k: string; b: string }>("SELECT chain_key AS k, block::text AS b FROM crypto_deposit_cursor");
-        return Object.fromEntries(r.rows.map((x) => [x.k, x.b])) as Db[K];
-      }
-      if (name === "outbox") {
-        const r = await q.query<OutboxSqlRow>(`SELECT ${OUTBOX_COLUMNS} FROM outbox ORDER BY seq`);
-        return r.rows.map(outboxRow) as Db[K];
-      }
-      if (name === "moneriumIssueOrders") {
-        const r = await q.query<{ doc: MoneriumIssueRecord }>("SELECT doc FROM monerium_issue_orders ORDER BY seq");
-        return r.rows.map((x) => x.doc) as Db[K];
-      }
-      return (await rows(q, TABLE[name as keyof typeof TABLE])) as Db[K];
-    },
+    list: (name) => listCollection(q, name),
 
     async addUser(u: User) {
       await tx((t) => insertUser(t, u));
