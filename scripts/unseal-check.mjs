@@ -15,7 +15,8 @@
  *
  * seal checks the tree as unseal will see it: the archive holds DIR's own name,
  * so links resolve from DIR's parent and `../DIR/key` stays inside. Only DIR is
- * read there (a sibling is not in the archive), and a link must end inside DIR.
+ * read there (a sibling is not in the archive), and a link must stay inside DIR
+ * at every step: `../other/../DIR/key` is refused.
  * DIR itself must be a real directory: tar would archive a symlink as the link.
  *
  * Exits 1 with the first offending name (a path in the tree, never its content).
@@ -62,7 +63,8 @@ if (mode === "names") {
         continue;
       }
       stack.push(c);
-      if (!inArchive(stack)) continue;
+      // A step through a sibling is a broken link once unsealed: the sibling is not in the archive.
+      if (!inArchive(stack)) return true;
       let st;
       try { st = lstatSync(path.join(root, ...stack)); } catch { continue; }
       if (!st.isSymbolicLink()) continue;
