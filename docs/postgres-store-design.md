@@ -423,6 +423,10 @@ t.lockUser(id) / t.lockKey(key)                      // FOR UPDATE / advisory lo
   a 500) instead of queueing every later one behind it. The migration runner
   sets its own: no limit on its advisory lock (a runner waits for another
   one's whole file), 5 s for the file's locks.
+- A connection lost while a transaction holds it fails that transaction: the
+  statement in flight rejects, the client is released as broken, and the
+  process lives on (`store/pg/sql.ts` listens for the checked-out client's
+  `error`). A lost `COMMIT` is the outbound-intent case of §2.
 - Lock methods (`lockUser`, `lockOrganisation`, `lockKey`) refuse outside a
   transaction: they would hold nothing. `lockKey` is an advisory
   transaction lock per database (`hashtext(current_database() || ':' || key)`).
