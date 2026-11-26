@@ -163,6 +163,24 @@ await check("a watched log whose amount did not decode refuses the window; it is
   assert.equal(await count(), 1, "the re-read log is recorded");
 });
 
+await check("viem keeps a watched log whose amount did not decode, recipient intact (what the stub above stands for)", async () => {
+  // getLogs names the recipient as an indexed topic, so the node returns only
+  // logs whose topic matches; viem then decodes and re-applies the filter.
+  // A data field that does not decode leaves `to` (a topic) decoded and
+  // `value` missing, and the log passes the filter: the scanner sees it.
+  const { parseEventLogs, encodeEventTopics } = await import("viem");
+  const { TRANSFER_EVENT } = await import("../services/api/src/liquidity.js");
+  const topics = encodeEventTopics({ abi: [TRANSFER_EVENT], args: { from: `0x${"11".repeat(20)}`, to: safe } });
+  const raw = {
+    address: addrs().usdc, topics, data: "0x01", blockNumber: "0x1", blockHash: `0x${"00".repeat(32)}`,
+    logIndex: "0x0", transactionHash: `0x${"b2".repeat(32)}`, transactionIndex: "0x0", removed: false,
+  } as any;
+  const [log] = parseEventLogs({ abi: [TRANSFER_EVENT], logs: [raw], args: { to: [safe] } as any, strict: false }) as any[];
+  assert.ok(log, "the log survives viem's recipient filter");
+  assert.equal(String(log.args.to).toLowerCase(), safe.toLowerCase(), "the recipient decoded from its topic");
+  assert.notEqual(typeof log.args.value, "bigint", "the amount did not decode");
+});
+
 await check("a forwarder's second hop without a log index does not hold the window", async () => {
   const at = HEAD + 45n;
   const page = `0x${"5a".repeat(20)}` as `0x${string}`;
