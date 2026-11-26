@@ -25,7 +25,7 @@ process.env.TRANSF_DB_PATH = path.join(tmp, "db.json");
 const { initStore, store } = await import("../services/api/src/store.js");
 const { createPgStore } = await import("../services/api/src/store/pg/backend.js");
 const { assertSchemaCurrent, migrate, readMigrations } = await import("../services/api/src/store/pg/migrate.js");
-const { pgliteDatabase, pgPoolConfig } = await import("../services/api/src/store/pg/sql.js");
+const { databaseUrlIsLocal, pgliteDatabase, pgPoolConfig } = await import("../services/api/src/store/pg/sql.js");
 /** Every migration file, and the version and name prefix of the next one. */
 const ALL_MIGRATIONS = readMigrations().map((m) => m.version);
 const NEXT = ALL_MIGRATIONS.length + 1;
@@ -362,8 +362,19 @@ console.log("ok - store suite on the JSON backend");
   await s.addUser({ id: "u_mail", address: `0x${"44".repeat(20)}`, iban: "", createdAt: now, email: spaced } as any);
   assert.equal(spaced.trim().toLowerCase(), "zoe@example.de");
   assert.deepEqual((await s.usersByEmail("zoe@example.de")).map((u) => u.id), ["u_mail"], "NBSP, em space, BOM and ideographic space are trimmed");
+  // 0005: the table refuses what the store's guards refuse, whatever the code does.
+  await assert.rejects(
+    async () => await db.query("INSERT INTO cap_holds (id, cap_key, day, eur, expires_at) VALUES ('h_nan', 'k', '2026-01-01', 'NaN', now())"),
+    /cap_holds_eur_finite/,
+    "a NaN hold",
+  );
+  await assert.rejects(
+    async () => await db.query(`INSERT INTO crypto_deposits (id, doc) VALUES ('dep_null', '{"chainId":1,"txHash":"0xab","userId":"u_1"}')`),
+    /null value in column "log_index"/,
+    "a deposit with no logIndex",
+  );
   await db.close();
-  console.log("ok - Postgres keys: one payment-handle namespace, unique credentials, one live share per transfer, one issued invoice number per org, one transfer per quote, one account per company Safe, one Zoldenburg grace period per user, the email key trimmed as JavaScript trims");
+  console.log("ok - Postgres keys: one payment-handle namespace, unique credentials, one live share per transfer, one issued invoice number per org, one transfer per quote, one account per company Safe, one Zoldenburg grace period per user, the email key trimmed as JavaScript trims, no NaN cap hold, no deposit without a logIndex");
 }
 
 // ── The PGlite features the design note relies on (§4) ─────────────────────
@@ -399,6 +410,9 @@ console.log("ok - store suite on the JSON backend");
   const real = { realMoney: true };
   // The Oracle host: a unix socket, peer authentication, no password (§7).
   assert.deepEqual(pgPoolConfig("postgresql://zold_app@/zold?host=/run/postgresql-mainnet&port=5432", real), {
+    statement_timeout: 30_000,
+    idle_in_transaction_session_timeout: 30_000,
+    connectionTimeoutMillis: 10_000,
     connectionString: "postgresql://zold_app@/zold?host=/run/postgresql-mainnet&port=5432",
   });
   assert.ok(pgPoolConfig("postgresql:///zold?host=/tmp", real));
@@ -419,6 +433,11 @@ console.log("ok - store suite on the JSON backend");
     assert.throws(() => pgPoolConfig(url, opts as never), (e: Error) => why.test(e.message) && !e.message.includes(secret), url.replace(secret, "…"));
   }
   const tls = pgPoolConfig("postgresql://u@db.example.com/zold?sslmode=verify-full", { ca, realMoney: true });
+  assert.equal(tls.idle_in_transaction_session_timeout, 30_000, "the TLS branch keeps the bounds");
+  assert.equal(databaseUrlIsLocal("postgresql:///postgres?host=/tmp"), true);
+  assert.equal(databaseUrlIsLocal("postgresql://u@[::1]/zold"), true);
+  assert.equal(databaseUrlIsLocal("postgresql://u@db.example.com/zold"), false);
+  assert.equal(databaseUrlIsLocal("postgresql://u@localhost/zold?host=db.example.com"), false);
   assert.deepEqual(tls.ssl, { ca: "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n", rejectUnauthorized: true });
   assert.equal(tls.connectionString, "postgresql://u@db.example.com/zold", "our CA object is not replaced by the driver's sslmode parsing");
   assert.equal(
@@ -426,7 +445,7 @@ console.log("ok - store suite on the JSON backend");
     "postgresql://u@/zold?host=%2Frun%2Fpg",
     "the empty host survives",
   );
-  console.log("ok - DATABASE_URL: socket and loopback plain; another host on real money needs verify-full and a CA; no URL echoed");
+  console.log("ok - DATABASE_URL: statement, idle-in-transaction and connect timeouts on every pool; socket and loopback plain; another host on real money needs verify-full and a CA; no URL echoed");
 }
 
 // ── STORE_BACKEND ──────────────────────────────────────────────────────────

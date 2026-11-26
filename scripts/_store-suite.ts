@@ -166,6 +166,11 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
   await s.addTransferUnderHold(transfer("t_held", "CREATED"), hold.holdId);
   assert.ok(await s.findTransfer("t_held"));
   assert.equal(await s.heldEurToday("u_a"), 0, "the hold became the transfer");
+  // NaN passes `used + eur > cap`; a stored NaN hold would open the cap all day.
+  for (const [eur, used, cap] of [[Number.NaN, 0, 100], [-1, 0, 100], [Infinity, 0, 100], [1, Number.NaN, 100], [1, 0, Number.NaN]]) {
+    await assert.rejects(async () => await s.holdDailyCap("u_nan", eur, cap, () => used), /daily cap/, `refused: ${eur} ${used} ${cap}`);
+  }
+  assert.equal(await s.heldEurToday("u_nan"), 0, "a refused amount holds nothing");
   const hold2 = await s.holdDailyCap("u_a", 5, 100, () => 0);
   assert.ok(hold2.ok);
   await s.releaseCapHold(hold2.holdId);
@@ -314,6 +319,10 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
   const deposit = { id: "dep_1", userId: "u_a", chainId: 84532, token: "EURE", txHash: hash("Aa"), logIndex: 3, amountUnits: "1", holding: "none", txs: [], createdAt: now, updatedAt: now } as any;
   assert.equal((await s.addCryptoDeposit(deposit)).id, "dep_1");
   assert.equal((await s.addCryptoDeposit({ ...deposit, id: "dep_dup", txHash: hash("aA") })).id, "dep_1", "one row per (chainId, txHash, logIndex)");
+  for (const logIndex of [undefined, Number.NaN, 1.5, -1]) {
+    await assert.rejects(async () => await s.addCryptoDeposit({ ...deposit, id: "dep_bad_index", txHash: hash("bb"), logIndex }), /logIndex/, `refused logIndex ${logIndex}`);
+  }
+  assert.equal(await s.findCryptoDeposit(84532, hash("bb"), 3), undefined);
   assert.equal((await s.findCryptoDeposit(84532, hash("AA"), 3))?.id, "dep_1");
   assert.equal(await s.findCryptoDeposit(84532, hash("aa"), 4), undefined);
   assert.equal(await s.findCryptoDeposit(8453, hash("aa"), 3), undefined, "another chain's log is another deposit");

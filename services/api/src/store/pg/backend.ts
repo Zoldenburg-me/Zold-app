@@ -45,6 +45,8 @@ import {
   refuseActivityPatch,
   settlementOnRow,
   transferPatchOnRow,
+  assertCapAmounts,
+  assertDepositKey,
   followIban,
   hashOnRecordIn,
   passkeyUsePatch,
@@ -594,6 +596,7 @@ export function createPgStore(database: Database): StoreBackend {
         await t.query("SELECT pg_advisory_xact_lock(hashtext(current_database() || ':' || $1))", [`cap:${capKey}`]);
         await t.query("DELETE FROM cap_holds WHERE expires_at < now() - interval '1 day'");
         const usedEur = await used();
+        assertCapAmounts(eur, usedEur, capEur);
         if (usedEur + eur > capEur) return { ok: false as const, usedEur, capEur };
         const holdId = randomUUID();
         await t.query("INSERT INTO cap_holds (id, cap_key, day, eur, expires_at) VALUES ($1, $2, $3, $4, now() + $5 * interval '1 millisecond')", [
@@ -910,6 +913,7 @@ export function createPgStore(database: Database): StoreBackend {
       tx(async (t) => {
         // Idempotent on (chainId, txHash, logIndex), as store.ts. A parallel
         // insert of the same transfer waits on the unique key and then finds this row.
+        assertDepositKey(d);
         const key = "chain_id = $1 AND tx_hash_lc = $2 AND log_index = $3";
         const params = [String(d.chainId), d.txHash.toLowerCase(), d.logIndex];
         const existing = await first<CryptoDeposit>(t, TABLE.cryptoDeposits, key, params);

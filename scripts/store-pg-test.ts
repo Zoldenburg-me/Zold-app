@@ -25,9 +25,15 @@ process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-sto
 
 const { createPgStore } = await import("../services/api/src/store/pg/backend.js");
 const { migrate, readMigrations } = await import("../services/api/src/store/pg/migrate.js");
-const { openPool } = await import("../services/api/src/store/pg/sql.js");
+const { databaseUrlIsLocal, openPool } = await import("../services/api/src/store/pg/sql.js");
 
 const adminUrl = process.env.TEST_DATABASE_URL || "postgresql:///postgres?host=/tmp";
+// The sweep below drops databases on this server. Only a server on this
+// machine, unless the operator says the remote one is disposable.
+if (!databaseUrlIsLocal(adminUrl) && process.env.ZOLD_TEST_DB_REMOTE_OK !== "1") {
+  console.error("TEST_DATABASE_URL is not a local socket or loopback; set ZOLD_TEST_DB_REMOTE_OK=1 if that server is disposable");
+  process.exit(1);
+}
 const admin = new pg.Pool({ connectionString: adminUrl, max: 1 });
 admin.on("error", () => {}); // an idle admin client cut by the server: the pool drops it
 // The creation time is in the name, so a later run can tell a database a

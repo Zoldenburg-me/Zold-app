@@ -67,7 +67,7 @@ const SWEEP_CONVERSION_TX = `0x${"e2".repeat(32)}`;
 const OTHER_TRANSFER_TX = `0x${"f1".repeat(32)}`;
 const FRESH_TX = `0x${"c0".repeat(32)}`;
 await store.addCryptoDeposit({
-  id: "dep_other", userId: "u_someone_else", token: "EURE", txHash: DEPOSIT_TX, logIndex: 0, amountEur: 5,
+  id: "dep_other", userId: "u_someone_else", chainId: 31337, token: "EURE", txHash: DEPOSIT_TX, logIndex: 0, amountEur: 5,
   from: `0x${"33".repeat(20)}`, holding: "none", settledAt: now, detectedAt: now,
   conversion: { txHash: DEPOSIT_CONVERSION_TX }, txs: [{ step: "swap", hash: DEPOSIT_STEP_TX }],
 } as any);
@@ -83,7 +83,7 @@ for (const id of ["t_ref_1", "t_ref_2"]) await row(id, "MANUAL_REVIEW");
 const ARRIVED_REFUND_TX = `0x${"a7".repeat(32)}`;
 await row("t_ref_3", "MANUAL_REVIEW");
 await store.addCryptoDeposit({
-  id: "dep_refund", userId: "u_review", token: "EURE", txHash: ARRIVED_REFUND_TX, logIndex: 0, amountEur: 1,
+  id: "dep_refund", userId: "u_review", chainId: 31337, token: "EURE", txHash: ARRIVED_REFUND_TX, logIndex: 0, amountEur: 1,
   from: `0x${"44".repeat(20)}`, holding: "none", settledAt: now, detectedAt: now, txs: [],
 } as any);
 const DEST_TX = `0x${"de".repeat(32)}`;

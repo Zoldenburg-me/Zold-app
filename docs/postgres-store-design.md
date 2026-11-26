@@ -424,6 +424,13 @@ t.lockUser(id) / t.lockKey(key)                      // FOR UPDATE / advisory lo
   a 500) instead of queueing every later one behind it. The migration runner
   sets its own: no limit on its advisory lock (a runner waits for another
   one's whole file), 5 s for the file's locks.
+- Every pooled connection (and the start lock's) carries
+  `statement_timeout = 30s`, `idle_in_transaction_session_timeout = 30s` and
+  a 10 s wait for a pooled client (`pgPoolConfig`, `store/pg/sql.ts`). A
+  transaction whose code awaits something that never settles is ended by
+  the server and its row locks go; a drained pool fails the request instead
+  of queueing it forever. The migration runner's own `statement_timeout`
+  replaces the pool's for its file.
 - A connection lost while a transaction holds it fails that transaction: the
   statement in flight rejects, the client is released as broken, and the
   process lives on (`store/pg/sql.ts` listens for the checked-out client's

@@ -48,6 +48,8 @@ import {
   settlementOnRow,
   transferPatchOnRow,
   type DraftCondition,
+  assertCapAmounts,
+  assertDepositKey,
   followIban,
     hashOnRecordIn,
   passkeyUsePatch,
@@ -526,6 +528,7 @@ export const jsonCore = {
     used: () => number,
   ): { ok: true; holdId: string } | { ok: false; usedEur: number; capEur: number } {
     const usedEur = used();
+    assertCapAmounts(eur, usedEur, capEur);
     if (usedEur + eur > capEur) return { ok: false, usedEur, capEur };
     const holdId = randomUUID();
     capHolds.set(holdId, { userId, eur, day: new Date().toISOString().slice(0, 10) });
@@ -1020,6 +1023,7 @@ export const jsonCore = {
    * Returning the existing row makes the loser of that race a no-op.
    */
   addCryptoDeposit(d: CryptoDeposit) {
+    assertDepositKey(d);
     const existing = jsonCore.findCryptoDeposit(d.chainId, d.txHash, d.logIndex);
     if (existing) return existing;
     db.cryptoDeposits.push(d);
