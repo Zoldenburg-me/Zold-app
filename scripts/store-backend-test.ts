@@ -24,7 +24,7 @@ process.env.TRANSF_DB_PATH = path.join(tmp, "db.json");
 
 const { initStore, store } = await import("../services/api/src/store.js");
 const { createPgStore } = await import("../services/api/src/store/pg/backend.js");
-const { assertSchemaCurrent, migrate, readMigrations } = await import("../services/api/src/store/pg/migrate.js");
+const { assertSchemaCurrent, migrate, readMigrations, transactionControl } = await import("../services/api/src/store/pg/migrate.js");
 const { pgliteDatabase, pgPoolConfig } = await import("../services/api/src/store/pg/sql.js");
 /** Every migration file, and the version and name prefix of the next one. */
 const ALL_MIGRATIONS = readMigrations().map((m) => m.version);
@@ -259,11 +259,20 @@ console.log("ok - store suite on the JSON backend");
   assert.equal((await db.query("SELECT 1 FROM pg_tables WHERE tablename = 'half_done'")).rows.length, 0, "the failed file rolled back");
   assert.deepEqual((await db.query<{ version: number }>("SELECT version FROM schema_migrations")).rows.map((r) => r.version), ALL_MIGRATIONS);
   // A file that ends our transaction early is refused before anything runs.
-  for (const sql of ["CREATE TABLE a (id text);\nCOMMIT;\nCREATE TABLE b (id text);", "begin;\nSELECT 1;", "SELECT 1; ROLLBACK", "START TRANSACTION; SELECT 1;"]) {
+  for (const sql of ["CREATE TABLE a (id text);\nCOMMIT;\nCREATE TABLE b (id text);", "begin;\nSELECT 1;", "SELECT 1; ROLLBACK", "START TRANSACTION; SELECT 1;", "/* a /* nested */ still a comment */ ROLLBACK;", "SELECT '/*'; ROLLBACK; -- */", "SELECT E'\\''; COMMIT;", "SELECT $1; ROLLBACK;"]) {
     const early = { version: NEXT, name: `${NEXT_NAME}_early.sql`, sql, sha256: "c".repeat(64) };
     await assert.rejects(() => migrate(db, [...files, early]), new RegExp(`${NEXT_NAME}_early.sql contains (COMMIT|BEGIN|ROLLBACK|START TRANSACTION)`));
   }
   assert.equal((await db.query("SELECT 1 FROM pg_tables WHERE tablename = 'a'")).rows.length, 0, "nothing of a refused file ran");
+  // Markers inside strings, names, bodies and comments open or close nothing else.
+  for (const sql of [
+    "SELECT '/*'; -- */\nSELECT '; COMMIT;';",
+    "SELECT E'\\'; COMMIT; --';",
+    'CREATE TABLE "commit" (id text); SELECT \'it\'\'s; rollback;\';',
+    "CREATE FUNCTION f() RETURNS int LANGUAGE plpgsql AS $fn$ BEGIN RETURN 1; END $fn$;",
+    "/* a /* b */ COMMIT; */ SELECT 1;",
+    "SELECT a$b$ FROM (SELECT 1 AS a$b$) t; -- $b$ commit;",
+  ]) assert.equal(transactionControl(sql), undefined, sql);
   // BEGIN in a comment, a string or a function body is not transaction control,
   // and the file runs with its lock and statement timeouts set.
   const timed = {

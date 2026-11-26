@@ -419,6 +419,7 @@ export async function redeemToIban(
       authorization.amount !== amount ||
       authorization.iban !== iban ||
       authorization.message !== expected.message ||
+      // The executor passes both from the stored record; kept for any caller that does not.
       (authorization.memo ?? "") !== (memo ?? "")
     ) {
       throw new Error("Monerium redeem authorization does not match this payout");
@@ -801,12 +802,14 @@ export async function pollRedeemOrdersOnce(): Promise<void> {
             // The stored state can already read processed (Monerium's first
             // answer): overwrite it, so review evidence cannot cite this order.
             if (cur.state !== "MANUAL_REVIEW" || cur.sepa!.state !== REDEEM_MISMATCH) {
-              await store.updateTransfer(cur.id, {
-                ...(cur.state === "MANUAL_REVIEW"
+              await store.patchTransferSub(
+                cur.id,
+                "sepa",
+                (sepa) => ({ ...sepa!, state: REDEEM_MISMATCH, detail: `the order does not match the signed redeem (${differs})` }),
+                cur.state === "MANUAL_REVIEW"
                   ? {}
-                  : { state: "MANUAL_REVIEW", error: `Monerium's redeem order does not match this transfer (${differs}); not marked paid or failed` }),
-                sepa: { ...cur.sepa!, state: REDEEM_MISMATCH, detail: `the order does not match the signed redeem (${differs})` },
-              });
+                  : { state: "MANUAL_REVIEW", error: `Monerium's redeem order does not match this transfer (${differs}); not marked paid or failed` },
+              );
             }
             return false;
           }

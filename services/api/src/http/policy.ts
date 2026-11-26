@@ -211,7 +211,7 @@ type Counter = {
   /** 0: one request; 1: more, not limited; 2: limited. Evicted in that order. */
   tiers: List[];
   /** Every window, the soonest to end first: a window is appended when it
-   *  starts and every window lasts 60 s, so appending keeps the order. An
+   *  starts and ends no sooner than the one before it (the clock). An
    *  ended window is evicted before any live one, whatever its tier, without
    *  waiting for the sweep. */
   byEnd: List;
@@ -250,6 +250,15 @@ function appendEnd(t: List, w: Window): void {
   t.tail = w;
 }
 
+/** Windows (rate and failure) run on a monotonic clock: a wall-clock step
+ *  (NTP, a VM resume) neither stretches nor cuts one, and a window that starts
+ *  later ends later, so appending at start keeps byEnd ordered. Tests inject
+ *  their own; with no argument it is put back. */
+let clock: () => number = () => performance.now();
+export function setRateClock(c: () => number = () => performance.now()): void {
+  clock = c;
+}
+
 function drop(c: Counter, w: Window): void {
   unlink(c.tiers[w.tier], w);
   unlinkEnd(c.byEnd, w);
@@ -258,7 +267,7 @@ function drop(c: Counter, w: Window): void {
 
 export function rateLimit(key: string, perMin: number, counter: RateCounter = "ip"): boolean {
   const c = counters[counter];
-  const now = Date.now();
+  const now = clock();
   let w = c.hits.get(key);
   if (w) unlink(c.tiers[w.tier], w);
   else {
@@ -273,8 +282,8 @@ export function rateLimit(key: string, perMin: number, counter: RateCounter = "i
   // An ended window is renewed in place: a returning caller keeps its slot.
   if (w.reset < now) {
     w.n = 0;
-    w.reset = now + 60_000;
     unlinkEnd(c.byEnd, w);
+    w.reset = now + 60_000;
     appendEnd(c.byEnd, w);
   }
   w.n++;
@@ -295,7 +304,7 @@ const failures = new Map<string, { n: number; reset: number }>();
 
 export function tooManyFailures(key: string, max: number): boolean {
   const f = failures.get(key);
-  return !!f && f.reset >= Date.now() && f.n >= max;
+  return !!f && f.reset >= clock() && f.n >= max;
 }
 
 /** Take back one recorded failure: a guess is counted before an async check
@@ -307,7 +316,7 @@ export function forgetFailure(key: string): void {
 }
 
 export function recordFailure(key: string, windowMs: number): void {
-  const now = Date.now();
+  const now = clock();
   const f = failures.get(key);
   if (!f || f.reset < now) {
     failures.set(key, { n: 1, reset: now + windowMs });
@@ -319,7 +328,7 @@ export function recordFailure(key: string, windowMs: number): void {
 /* Expired buckets are dropped on a timer, not by a request: a scan on the
  * request path would run on every request once a caller rotating through
  * fresh IPv6 /64s keeps the map large. */
-export function sweepExpiredBuckets(now = Date.now()): void {
+export function sweepExpiredBuckets(now = clock()): void {
   for (const c of Object.values(counters)) {
     while (c.byEnd.head && c.byEnd.head.reset < now) drop(c, c.byEnd.head);
   }
@@ -327,9 +336,10 @@ export function sweepExpiredBuckets(now = Date.now()): void {
 }
 setInterval(() => sweepExpiredBuckets(), 10_000).unref();
 
-/** How many windows each map holds, for the bounds test. */
-export const bucketCounts = () => ({
+/** How many windows each map holds, and how many of them have ended, for the bounds test. */
+export const bucketCounts = (now = clock()) => ({
   hits: Object.values(counters).reduce((n, c) => n + c.hits.size, 0),
+  ended: Object.values(counters).reduce((n, c) => n + [...c.hits.values()].filter((w) => w.reset < now).length, 0),
   failures: failures.size,
 });
 

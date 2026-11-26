@@ -12,7 +12,7 @@
 // Must be first: pins chain, keys and a throwaway database.
 import "./_local-chain.js";
 import assert from "node:assert/strict";
-import { chmodSync, closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { spawnSync } from "node:child_process";
 import http from "node:http";
@@ -34,7 +34,7 @@ const express = (await import("express")).default;
 const { initStore, store } = await import("../services/api/src/store.js");
 const { passwordProblem, hashPassword, passwordMatches } = await import("../services/api/src/domain/passwords.js");
 const { hashToken, ownerInvoiceView } = await import("../services/api/src/domain/invoices.js");
-const { apiRateLimit, bucketCounts, clientKey, rateLimit, RATE_BUCKETS_MAX, securityHeaders, securityHeadersFor, sweepExpiredBuckets } = await import("../services/api/src/http/policy.js");
+const { apiRateLimit, bucketCounts, clientKey, rateLimit, RATE_BUCKETS_MAX, securityHeaders, securityHeadersFor, setRateClock, sweepExpiredBuckets } = await import("../services/api/src/http/policy.js");
 const { SECURITY } = await import("../services/api/src/config.js");
 const { createInvoiceLinkRouter } = await import("../services/api/src/routes/business/invoice-links.js");
 const { publicUser } = await import("../services/api/src/users/public-user.js");
@@ -350,11 +350,11 @@ await check("one trusted hop keys on the address the proxy appended; a spoofed l
   // The proxy's own address is not the key: another client is not locked out.
   assert.equal((await fetch(`${preBase}/api/webauthn/challenge`, { method: "POST", headers: from("198.18.0.7"), body: "{}" })).status, 200);
 });
-const realNow = Date.now;
-// A later clock: every bucket so far has expired, so the socket peer's
-// windows start fresh for the no-proxy check and the sweep starts empty.
-let clock = realNow() + 10 * 60_000;
-Date.now = () => clock;
+// An injected rate clock, ten minutes on: every bucket so far has expired, so
+// the socket peer's windows start fresh for the no-proxy check and the sweep
+// starts empty.
+let clock = performance.now() + 10 * 60_000;
+setRateClock(() => clock);
 try {
   await check("with no trusted hop (the default) the socket peer is the key; X-Forwarded-For is ignored", async () => {
     pre.set("trust proxy", 0);
@@ -483,8 +483,24 @@ try {
     sweepExpiredBuckets();
     assert.equal(bucketCounts().hits, 0);
   });
+  await check("a wall-clock jump forward and its correction neither stretch nor cut a window", () => {
+    const realNow = Date.now;
+    try {
+      Date.now = () => realNow() + 30 * 60_000;
+      for (let i = 0; i < 3; i++) rateLimit("c:wall-jump", 2);
+      assert.equal(rateLimit("c:wall-jump", 2), false);
+      Date.now = realNow;
+      for (let i = 0; i < 10; i++) rateLimit(`g:after-jump-${i}`, 300);
+      clock += 61_000;
+      sweepExpiredBuckets();
+      assert.equal(bucketCounts().hits, 0, "a window outlived its 60 s");
+      assert.equal(rateLimit("c:wall-jump", 2), true);
+    } finally { Date.now = realNow; }
+    clock += 61_000;
+    sweepExpiredBuckets();
+  });
 } finally {
-  Date.now = realNow;
+  setRateClock();
 }
 // todo (owner decision, #107 8/8 Q1): the failure counters (operator login
 // per IP, invoice-link passwords per link) are swept but not capped. Capping
@@ -1249,6 +1265,60 @@ await check("secrets.sh seal refuses a tree unseal would refuse (an absolute lin
       assert.deepEqual(t.ls(t.root).filter((f) => /\.age$|\.tmp/.test(f)), [], `${what}: wrote an archive`);
     } finally { t.done(); }
   }
+});
+await check("secrets.sh seal accepts what unseal accepts: a link back in through the sealed dir's own name round-trips", () => {
+  const t = operatorCopy();
+  try {
+    const priv = path.join(t.root, "private");
+    mkdirSync(path.join(priv, "sub"), { recursive: true });
+    writeFileSync(path.join(priv, "key"), "k\n");
+    symlinkSync("../private/key", path.join(priv, "current"));
+    symlinkSync("../../private/current", path.join(priv, "sub", "up"));
+    const r = t.run("secrets.sh", ["seal", priv]);
+    assert.equal(r.status, 0, r.stderr);
+    const dest = path.join(t.root, "out");
+    const u = t.run("secrets.sh", ["unseal", `${priv}.tar.age`, dest]);
+    assert.equal(u.status, 0, u.stderr);
+    assert.equal(readFileSync(path.join(dest, "private", "current"), "utf8"), "k\n");
+    assert.equal(readFileSync(path.join(dest, "private", "sub", "up"), "utf8"), "k\n");
+  } finally { t.done(); }
+});
+await check("secrets.sh seal refuses a link to a sibling of the sealed dir, a symlinked dir and a hardlinked file, and writes no archive", () => {
+  for (const [what, make] of [
+    ["link to a sibling the archive does not hold", (priv: string) => { writeFileSync(path.join(path.dirname(priv), "other"), MARK); symlinkSync("../other", path.join(priv, "o")); }],
+    ["link hopping through a sibling and back", (priv: string) => { mkdirSync(path.join(path.dirname(priv), "other")); symlinkSync("../other/../private/key", path.join(priv, "h")); }],
+    ["link hopping through a sibling the tree does not hold", (priv: string) => symlinkSync("../gone/../private/key", path.join(priv, "g"))],
+    ["link through a sibling link", (priv: string) => { symlinkSync("private", path.join(path.dirname(priv), "alias")); symlinkSync("../alias/key", path.join(priv, "a")); }],
+    ["the sealed dir is a symlink", (priv: string) => { renameSync(priv, `${priv}.real`); symlinkSync(`${priv}.real`, priv); }],
+    ["a hardlinked file", (priv: string) => linkSync(path.join(priv, "key"), path.join(priv, "key2"))],
+    ["a file hardlinked from outside", (priv: string) => linkSync(path.join(priv, "key"), path.join(path.dirname(priv), "copy"))],
+  ] as [string, (priv: string) => void][]) {
+    const t = operatorCopy();
+    try {
+      const priv = path.join(t.root, "private");
+      mkdirSync(priv);
+      writeFileSync(path.join(priv, "key"), MARK);
+      make(priv);
+      const r = t.run("secrets.sh", ["seal", priv]);
+      assert.notEqual(r.status, 0, `${what}: sealed (${r.stdout.trim()})`);
+      assert.match(r.stderr, /refusing to seal/, what);
+      assert.deepEqual(t.ls(t.root).filter((f) => /\.age$|\.tmp/.test(f)), [], `${what}: wrote an archive`);
+    } finally { t.done(); }
+  }
+});
+await check("secrets.sh unseal refuses an archive whose files are hardlinked to each other inside the tree", () => {
+  const t = operatorCopy();
+  try {
+    const sealed = path.join(t.root, "private.tar.age");
+    writeFileSync(sealed, fakeSealed(tarball([{ name: "private/", type: "5" }, { name: "private/key", body: "k\n" },
+      { name: "private/key2", type: "1", link: "private/key" }])));
+    const dest = path.join(t.root, "work", "dest");
+    const r = t.run("secrets.sh", ["unseal", sealed, dest]);
+    assert.notEqual(r.status, 0, `unsealed (${r.stdout.trim()})`);
+    assert.match(r.stderr, /refusing to unseal: private\/key.* hard link/);
+    assert.equal(existsSync(dest), false, "moved into place");
+    assert.deepEqual(t.ls(path.join(t.root, "work")), [], "left the staging dir");
+  } finally { t.done(); }
 });
 await check("secrets.sh unseal of a hostile archive (absolute, ../, symlink, hardlink entries) writes nothing outside and moves nothing into place", () => {
   const outside = mkdtempSync(path.join(os.tmpdir(), "zold-unseal-outside-"));
