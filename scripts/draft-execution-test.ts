@@ -430,11 +430,13 @@ try {
       payTo: { kind: "bank", bank: { holderName: "Supplier Ltd", iban: "DE89 3704 0044 0532 0130 00", bic: "cobadeffxxx" } },
     },
   });
-  check("the supplier's bank details are normalised and stored on the invoice", () => {
+  const stored = (await ok("GET", `/api/orgs/${org.id}/invoices`, { token: ownerToken })).invoices.find((i: any) => i.id === submitted.invoice.id);
+  check("the supplier's bank details are normalised and stored on the invoice, and the link answers with them masked", () => {
     assert.equal(submitted.invoice.state, "SUBMITTED");
-    assert.equal(submitted.invoice.payTo.kind, "bank");
-    assert.equal(submitted.invoice.payTo.bank.iban, "DE89370400440532013000");
-    assert.equal(submitted.invoice.payTo.bank.bic, "COBADEFFXXX");
+    assert.equal(submitted.invoice.payTo.bank.iban, "DE89••••3000");
+    assert.equal(stored.payTo.kind, "bank");
+    assert.equal(stored.payTo.bank.iban, "DE89370400440532013000");
+    assert.equal(stored.payTo.bank.bic, "COBADEFFXXX");
     assert.equal(submitted.invoice.total, "150.00");
   });
 
@@ -469,7 +471,7 @@ try {
     assert.equal(row.payment.draftId, paid.draft.id);
   });
 
-  // A wallet-only invoice: recorded, but "Pay" says what is missing.
+  // A wallet-only invoice is paid to that wallet, in the invoice's token.
   const link2 = await ok("POST", `/api/orgs/${org.id}/invoices`, { token: ownerToken, body: { currency: "EUR" } });
   const walletOnly = await ok("POST", `/api/invoice-links/${link2.linkToken}/submit`, {
     body: {
@@ -478,10 +480,39 @@ try {
       payTo: { kind: "wallet", address: "0x2222222222222222222222222222222222222222", chainId: 31337 },
     },
   });
-  const noIban = await call("POST", `/api/orgs/${org.id}/invoices/${walletOnly.invoice.id}/pay`, { token: ownerToken, body: {} });
-  check("a wallet-only invoice cannot be paid from the account and says to ask for an IBAN", () => {
-    assert.equal(noIban.status, 409);
-    assert.match(noIban.data.error, /IBAN/);
+  const toWallet = await ok("POST", `/api/orgs/${org.id}/invoices/${walletOnly.invoice.id}/pay`, { token: ownerToken, body: {} });
+  check("a wallet-only euro invoice becomes one EURe line to the supplier's wallet, saved as a new contact", () => {
+    const line = toWallet.draft.lines[0];
+    assert.equal(toWallet.invoice.state, "PAYING");
+    assert.equal(line.asset, "EURE");
+    assert.equal(line.amount, "40.00");
+    assert.equal(line.invoiceId, walletOnly.invoice.id);
+    assert.deepEqual([line.destination.kind, line.destination.chainId, line.destination.address], ["wallet", 31337, "0x2222222222222222222222222222222222222222"]);
+    assert.equal(toWallet.contact.name, "Chain Vendor");
+    assert.equal(toWallet.contact.wallets[0].address, "0x2222222222222222222222222222222222222222");
+    assert.equal(line.contactId, toWallet.contact.id);
+  });
+  const usdLink = await ok("POST", `/api/orgs/${org.id}/invoices`, { token: ownerToken, body: { currency: "USD" } });
+  const usdBody = (payTo: unknown) => ({ supplier: { orgName: "Chain Vendor Inc", email: "ops@vendor.example", invoiceNumber: "CV-10" }, lines: [{ description: "Audit", quantity: "1", unitPrice: "25.00" }], payTo });
+  const usdBank = await call("POST", `/api/invoice-links/${usdLink.linkToken}/submit`, { body: usdBody({ kind: "bank", bank: { holderName: "Chain Vendor Inc", iban: "DE89370400440532013000" } }) });
+  const usdNone = await call("POST", `/api/invoice-links/${usdLink.linkToken}/submit`, { body: usdBody(undefined) });
+  const usd = await ok("POST", `/api/invoice-links/${usdLink.linkToken}/submit`, { body: usdBody({ kind: "wallet", address: "0x2222222222222222222222222222222222222222", chainId: 31337 }) });
+  const usdPaid = await ok("POST", `/api/orgs/${org.id}/invoices/${usd.invoice.id}/pay`, { token: ownerToken, body: {} });
+  const gbp = await call("POST", `/api/orgs/${org.id}/invoices`, { token: ownerToken, body: { currency: "GBP" } });
+  check("a dollar invoice takes only a wallet, is paid in USDC, and reuses the contact that has that wallet", () => {
+    assert.equal(usdBank.status, 400, JSON.stringify(usdBank.data));
+    assert.equal(usdNone.status, 400, "an invoice nobody could pay is not locked in");
+    assert.equal(usdPaid.draft.lines[0].asset, "USDC");
+    assert.equal(usdPaid.draft.lines[0].amount, "25.00");
+    assert.equal(usdPaid.contact.id, toWallet.contact.id);
+    assert.equal(usdPaid.draft.lines[0].destination.displayName, "Chain Vendor", "the address book's name, not the supplier's claim");
+    assert.equal(gbp.status, 400, "only EUR and USD can be requested");
+  });
+  const linkAgain = await ok("GET", `/api/orgs/${org.id}/invoices/${usd.invoice.id}/link`, { token: ownerToken });
+  check("the invoice's link can be read again, and is the one that was made", () => {
+    assert.equal(linkAgain.linkPath, usdLink.linkPath);
+    assert.equal(usdPaid.invoice.linkKept, true);
+    assert.equal(JSON.stringify(usdPaid).includes("linkTokenEnc"), false);
   });
 
   // A new supplier with an unknown IBAN becomes a contact of their own.

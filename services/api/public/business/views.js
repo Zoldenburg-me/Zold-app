@@ -648,8 +648,7 @@ RENDER["invoicing-settings"] = async () => {
 
 /* What can be done with an invoice, by state. An issued one still open gets a
    payment link where the API would make one (`payLink` from GET invoices). For an incoming one, "Pay" only appears
-   when the supplier gave an IBAN: a wallet-only invoice says so instead of
-   offering a button that the API would refuse. */
+   when the supplier gave an IBAN or a wallet address. */
 export function invoiceActions(i, payLink) {
   if (i.state === "DRAFT") {
     // Issue only where the API would accept it: receipts on the draft, and a
@@ -666,11 +665,11 @@ export function invoiceActions(i, payLink) {
   // A member who may not act on it sees no button the API would refuse.
   if (["SUBMITTED", "PAID"].includes(i.state) && !mayActOnInvoice(i)) return "";
   if (i.state === "SUBMITTED") {
-    if (i.payTo?.kind === "bank" && i.payTo.bank?.iban) return `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="pay-invoice" data-id="${esc(i.id)}">Pay</button>`;
-    return `<span class="desc">${i.payTo?.kind === "wallet" ? "Wallet only: ask for an IBAN" : "No bank details given"}</span>
+    if (i.payTo?.bank?.iban || i.payTo?.address) return `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="pay-invoice" data-id="${esc(i.id)}">Pay</button>`;
+    return `<span class="desc">No payment details given</span>
       <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="reconcile-invoice" data-id="${esc(i.id)}">Mark paid</button>`;
   }
-  if (i.state === "PAYING") return `<span class="desc">${i.payment?.transferId ? "Sent, waiting for the bank" : "In Approvals"}</span>`;
+  if (i.state === "PAYING") return `<span class="desc">${i.payment?.transferId ? "Sent, waiting for the bank" : i.payment?.cryptoSendId ? "Waiting for a signature" : "In Approvals"}</span>`;
   if (i.state === "PAID") return `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="reconcile-invoice" data-id="${esc(i.id)}">Reconcile</button>`;
   return "";
 }

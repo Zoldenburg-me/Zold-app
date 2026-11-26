@@ -215,8 +215,9 @@ export function deviceLib() {
 }
 
 /** May this member act on a supplier invoice: Pay (a draft, `propose`) when
- *  it has an IBAN, else Mark paid or Reconcile (invoices.manage, `invoices`). */
-export const mayActOnInvoice = (i) => roleCan(org?.role, i.state === "SUBMITTED" && i.payTo?.kind === "bank" && i.payTo.bank?.iban ? "propose" : "invoices");
+ *  it has an IBAN or a wallet address, else Mark paid or Reconcile
+ *  (invoices.manage, `invoices`). */
+export const mayActOnInvoice = (i) => roleCan(org?.role, i.state === "SUBMITTED" && (i.payTo?.bank?.iban || i.payTo?.address) ? "propose" : "invoices");
 
 /** Server text for people: the API's words for a few chain and passkey
  *  errors, said plainly. A passkey is named for this device (Z.onPhone). */

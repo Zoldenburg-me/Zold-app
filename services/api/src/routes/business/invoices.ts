@@ -21,6 +21,8 @@ import {
   InvoiceError,
   assertDeletable,
   assertPayable,
+  badDueDate,
+  INVOICE_CURRENCIES,
   assertTransition as assertInvoiceTransition,
   centsOf,
   ownerInvoiceView,
@@ -30,6 +32,7 @@ import {
 } from "../../domain/invoices.js";
 import { hashPassword, passwordProblem } from "../../domain/passwords.js";
 import { normaliseIban, validateBankAccount } from "../../domain/contacts.js";
+import type { Contact, Invoice } from "../../domain/types.js";
 import { requireCapability, requirePermission, type OrgContext } from "../org-context.js";
 import { paymentReviewRequired } from "../../domain/payment-review.js";
 import {
@@ -37,8 +40,9 @@ import {
 import {
   syncInvoicePayment, } from "./state.js";
 import { CEILINGS, ceilingRefusal } from "../../domain/ceilings.js";
-import { linkInvoiceView } from "./invoice-links.js";
-import { payLinkOffer } from "./invoice-pay-link.js";
+import { linkInvoiceView, payoutChains } from "./invoice-links.js";
+import { openLinkFor, payLinkOffer } from "./invoice-pay-link.js";
+import { SECRETS, sealInvoiceLink } from "../../stored-secrets.js";
 import { liveCryptoSend } from "../../wallet/org-debit.js";
 
 /** Resolving the org and the caller's role for a request — injected so this
@@ -46,6 +50,8 @@ import { liveCryptoSend } from "../../wallet/org-debit.js";
 export interface OrgRoutes {
   ctxOf: (req: express.Request, res: express.Response) => Promise<OrgContext | undefined>;
 }
+
+const linkPathOf = (invoice: Pick<Invoice, "sendLink">, token: string) => (invoice.sendLink ? `/send/${token}` : `/invoice/${token}`);
 
 export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
   const { ctxOf } = deps;
@@ -57,7 +63,7 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
     if (!requireCapability(ctx, res, "invoices")) return;
     if (!requirePermission(ctx, res, "invoices.read")) return;
     res.json({
-      invoices: (await mapSeq((await store.invoicesOf(ctx.org.id)).filter((i) => i.state !== "DELETED"), syncInvoicePayment))
+      invoices: (await mapSeq((await store.invoicesOf(ctx.org.id)).filter((i) => i.state !== "DELETED"), async (i) => (i.state === "PAYING" ? syncInvoicePayment(i) : i)))
         .map((i) => ({ ...ownerInvoiceView(i), overdue: isOverdue(i) })),
       // Whether "Payment link" on an issued invoice would pass for this
       // caller, so the UI offers it only where the API would accept it.
@@ -66,8 +72,8 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
   });
 
   /** An issued invoice as its customer sees it, for the owner to read and
-   *  print again: the link token is stored only as a hash, so the owner
-   *  reaches the same projection with their session instead. Read only. */
+   *  print again: the same projection the link gives, reached with their
+   *  session. Read only. */
   r.get("/:orgId/invoices/:invoiceId/document", async (req, res) => {
     const ctx = await ctxOf(req, res);
     if (!ctx) return;
@@ -83,7 +89,30 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
     res.json({ invoice: document });
   });
 
-  /** Create the one-time "Invoice-Me" link. The token is shown once. */
+  /**
+   * The invoice's link again, opened from its sealed copy. A link is a
+   * credential: whoever may make one may read it, and a send link only its
+   * maker, as only they can pay it.
+   */
+  r.get("/:orgId/invoices/:invoiceId/link", async (req, res) => {
+    const ctx = await ctxOf(req, res);
+    if (!ctx) return;
+    if (!requireCapability(ctx, res, "invoices")) return;
+    if (!requirePermission(ctx, res, "invoices.manage")) return;
+    const invoice = await store.findInvoice(String(req.params.invoiceId));
+    if (!invoice || invoice.orgId !== ctx.org.id || invoice.state === "DELETED" || invoice.state === "DRAFT") {
+      return res.status(404).json({ error: "no such invoice" });
+    }
+    if (invoice.sendLink && invoice.createdByMemberId !== ctx.member.id) {
+      return res.status(403).json({ error: "Only the person who made this link can read it." });
+    }
+    if (!invoice.linkTokenEnc) {
+      return res.status(409).json({ error: "No copy of this link was kept. It was shown when it was made.", code: "NO_LINK_COPY" });
+    }
+    res.json({ linkPath: linkPathOf(invoice, SECRETS.invoiceLinkToken.open(invoice.id, invoice.linkTokenEnc)) });
+  });
+
+  /** Create the "Invoice-Me" link. */
   r.post("/:orgId/invoices", async (req, res) => {
     const ctx = await ctxOf(req, res);
     if (!ctx) return;
@@ -110,31 +139,40 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
       if (err instanceof InvoiceError) return res.status(400).json({ error: err.message });
       throw err;
     }
+    // A send link is paid from a euro balance, whatever the org reports in.
+    const currency = sendLink ? "EUR" : String(req.body?.currency ?? ctx.org.reporting.currency).toUpperCase();
+    if (!(INVOICE_CURRENCIES as readonly string[]).includes(currency)) {
+      return res.status(400).json({ error: `An invoice can be requested in ${INVOICE_CURRENCIES.join(" or ")}.` });
+    }
+    const dueDate = req.body?.dueDate;
+    if (badDueDate(dueDate)) {
+      return res.status(400).json({ error: "The due date must be a date, YYYY-MM-DD." });
+    }
     const passwordHash = password ? await hashPassword(password) : undefined;
     const { token, hash } = newLinkToken();
     const now = new Date().toISOString();
+    const id = `inv_${randomUUID()}`;
     const invoice = await store.addInvoice({
-      id: `inv_${randomUUID()}`,
+      id,
       orgId: ctx.org.id,
       linkTokenHash: hash,
+      linkTokenEnc: sealInvoiceLink(id, token),
       linkPasswordHash: passwordHash,
       state: "LINK_CREATED",
       lines: [],
-      // A send link is paid from a euro balance, whatever the org reports in.
-      currency: sendLink ? "EUR" : String(req.body?.currency ?? ctx.org.reporting.currency).toUpperCase(),
+      currency,
       total: "0.00",
       ...(sendLink ? { sendLink } : {}),
-      dueDate: typeof req.body?.dueDate === "string" ? req.body.dueDate : undefined,
+      dueDate: dueDate || undefined,
       createdByMemberId: ctx.member.id,
       createdAt: now,
       updatedAt: now,
     });
     res.status(201).json({
       invoice: ownerInvoiceView(invoice),
-      // Returned once. We store only the hash, so this cannot be recovered.
       linkToken: token,
-      linkPath: sendLink ? `/send/${token}` : `/invoice/${token}`,
-      note: "Send this link to your supplier. It is shown once — we store only its hash.",
+      linkPath: linkPathOf(invoice, token),
+      note: "Send this link to your supplier.",
     });
   });
 
@@ -164,8 +202,9 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
 
   /**
    * Pay an incoming invoice: one draft, one line, built from what the supplier
-   * gave. The supplier lands in the address book (or is matched to an existing
-   * contact by IBAN) so the line carries a fingerprint and the
+   * gave: a SEPA transfer to their IBAN, or EURe or USDC to their wallet. The
+   * supplier lands in the address book (or is matched to an existing contact
+   * by that destination) so the line carries a fingerprint and the
    * four-eyes review applies exactly as to any other payment. The invoice
    * moves to PAYING and follows its transfer from there.
    */
@@ -178,62 +217,76 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
       const invoice = await store.findInvoice(String(req.params.invoiceId));
       if (!invoice || invoice.orgId !== ctx.org.id) return res.status(404).json({ error: "no such invoice" });
 
-      let bank: ReturnType<typeof assertPayable>;
+      let payee: ReturnType<typeof assertPayable>;
       try {
-        bank = assertPayable(await syncInvoicePayment(invoice));
+        payee = assertPayable(await syncInvoicePayment(invoice));
       } catch (err) {
         if (err instanceof InvoiceError) return res.status(409).json({ error: err.message });
         throw err;
       }
+      if (payee.kind === "wallet" && !payoutChains().some((c) => c.chainId === payee.chainId)) {
+        return res.status(409).json({ error: `The supplier's wallet is on another network; this account pays on ${payoutChains().map((c) => c.name).join(" or ")}.` });
+      }
 
+      // A wallet is paid from the Safe behind the account, in the invoice's
+      // token: the euro account stands for it when no account is in dollars.
       const accountId = typeof req.body?.accountId === "string" ? req.body.accountId : undefined;
+      const accounts = await store.accountsOf(ctx.org.id);
       const account = accountId
         ? (await store.findAccount(accountId))
-        : (await store.accountsOf(ctx.org.id)).find((a) => a.currency === invoice.currency);
+        : accounts.find((a) => a.currency === invoice.currency) ?? (payee.kind === "wallet" ? accounts.find((a) => a.currency === "EUR") : undefined);
       if (!account || account.orgId !== ctx.org.id) {
         return res.status(400).json({ error: `This organisation has no ${invoice.currency} account to pay from.` });
       }
 
-      // The supplier as a contact. Match on IBAN only: the same account under a
-      // renamed company is the same payee. Don't match by name: the name is the
-      // supplier's own claim, and attaching their IBAN to a trusted contact of
-      // that name is classic invoice fraud. An unknown IBAN gets a new contact,
+      // The supplier as a contact. Match on the IBAN or the wallet address
+      // only: the same destination under a renamed company is the same payee.
+      // Don't match by name: the name is the supplier's own claim, and
+      // attaching their destination to a trusted contact of that name is
+      // classic invoice fraud. An unknown destination gets a new contact,
       // which the reviewer sees as new.
-      const iban = normaliseIban(bank.iban);
       const contacts = await store.contactsOf(ctx.org.id);
-      let contact = contacts.find((c) => c.bankAccounts.some((b) => b.iban && normaliseIban(b.iban) === iban));
-      let bankAccountId = contact?.bankAccounts.find((b) => b.iban && normaliseIban(b.iban) === iban)?.id;
-      const supplierName = invoice.supplier?.orgName?.trim() || bank.holderName;
+      const supplierName = invoice.supplier?.orgName?.trim() || (payee.kind === "bank" ? payee.holderName : "");
       const now = new Date().toISOString();
-      if (!bankAccountId) {
-        const bankAccount = {
-          id: `cb_${randomUUID()}`,
-          ...validateBankAccount({
-            currency: invoice.currency,
-            country: iban.slice(0, 2),
-            holderName: bank.holderName,
-            iban,
-            bic: bank.bic,
-          }),
-        };
-        bankAccountId = bankAccount.id;
-        {
-          contact = await store.addContact({
-            id: `con_${randomUUID()}`,
-            orgId: ctx.org.id,
-            name: supplierName,
-            email: invoice.supplier?.email,
-            wallets: [],
-            bankAccounts: [bankAccount],
-            notes: `Added from invoice ${invoice.supplier?.invoiceNumber ?? invoice.id}`,
-            createdAt: now,
-            updatedAt: now,
-          });
-        }
-      }
-
-      if (!contact || !bankAccountId) {
-        return res.status(500).json({ error: "could not resolve the supplier's bank account" });
+      const newContact = (dest: { wallets: Contact["wallets"]; bankAccounts: Contact["bankAccounts"] }) => store.addContact({
+        id: `con_${randomUUID()}`,
+        orgId: ctx.org.id,
+        name: supplierName,
+        email: invoice.supplier?.email,
+        ...dest,
+        notes: `Added from invoice ${invoice.supplier?.invoiceNumber ?? invoice.id}`,
+        createdAt: now,
+        updatedAt: now,
+      });
+      let contact: Contact;
+      let destination: Record<string, unknown>;
+      if (payee.kind === "wallet") {
+        const same = (w: Contact["wallets"][number]) => w.chainId === payee.chainId && w.address.toLowerCase() === payee.address.toLowerCase();
+        const known = contacts.find((c) => c.wallets.some(same));
+        contact = known ?? (await newContact({ wallets: [{ id: `cw_${randomUUID()}`, chainId: payee.chainId, address: payee.address, label: "invoice" }], bankAccounts: [] }));
+        // The name the address book has: on a matched contact the supplier's own is only their claim.
+        destination = { kind: "wallet", chainId: payee.chainId, address: payee.address, displayName: known?.name ?? supplierName };
+      } else {
+        const iban = normaliseIban(payee.iban);
+        const has = (b: Contact["bankAccounts"][number]) => !!b.iban && normaliseIban(b.iban) === iban;
+        const known = contacts.find((c) => c.bankAccounts.some(has));
+        let bankAccount = known?.bankAccounts.find(has);
+        if (!known || !bankAccount) {
+          bankAccount = {
+            id: `cb_${randomUUID()}`,
+            ...validateBankAccount({
+              currency: invoice.currency,
+              country: iban.slice(0, 2),
+              holderName: payee.holderName,
+              iban,
+              bic: payee.bic,
+            }),
+          };
+          contact = await newContact({ wallets: [], bankAccounts: [bankAccount] });
+        } else contact = known;
+        // The holder the address book has for this account: on a matched
+        // contact the supplier's own spelling is only their claim.
+        destination = { kind: "bank", bankAccountId: bankAccount.id, displayName: bankAccount.holderName ?? payee.holderName };
       }
       let line;
       try {
@@ -243,10 +296,8 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
             {
               contactId: contact.id,
               invoiceId: invoice.id,
-              // The holder the address book has for this account: on a matched
-              // contact the supplier's own spelling is only their claim.
-              destination: { kind: "bank", bankAccountId, displayName: contact.bankAccounts.find((b) => b.id === bankAccountId)?.holderName ?? bank.holderName },
-              asset: invoice.currency,
+              destination,
+              asset: payee.kind === "wallet" ? payee.asset : invoice.currency,
               amount: invoice.total,
               note: `Invoice ${invoice.supplier?.invoiceNumber ?? ""} · ${supplierName}`.trim(),
               tags: [],
@@ -379,6 +430,9 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
           },
         });
         if (!reconciled) return res.status(409).json({ error: "This invoice changed meanwhile. Reload it." });
+        // Settled elsewhere: its payment link must not take the money a second time.
+        const link = await openLinkFor(reconciled);
+        if (link) await store.cancelUnpaidPaymentRequest(link.id, new Date(), true);
         res.json({ invoice: ownerInvoiceView(reconciled) });
       } catch (err) {
         if (err instanceof InvoiceError) return res.status(409).json({ error: err.message });

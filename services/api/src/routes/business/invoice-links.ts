@@ -1,14 +1,14 @@
 /**
  * The supplier's half of the invoice flow: no account, no wallet, no session.
  *
- * Mounted at /api/invoice-links and reached only with the one-time token. Every
+ * Mounted at /api/invoice-links and reached only with the link's token. Every
  * response goes through supplierView(), which is an ALLOWLIST — a field added
  * to Invoice later must be chosen into it rather than leaking by default.
  *
- * The token and its optional password are bearer secrets, so both compare in
- * constant time and this router sits on the tight rate bucket. The password is
- * human-chosen, so its wrong guesses are also counted per link, across every
- * source address.
+ * The token and its optional password are bearer secrets, so this router sits
+ * on the tight rate bucket. The token is 32 random bytes, looked up by its
+ * hash; the password is compared in constant time and, being human-chosen,
+ * its wrong guesses are also counted per link, across every source address.
  */
 import express from "express";
 import { store } from "../../store.js";
@@ -18,6 +18,8 @@ import { mailAvailable, sendInvoiceSubmitted, sendSendLinkFilled } from "../../a
 import {
   InvoiceError,
   assertTransition as assertInvoiceTransition,
+  badDueDate,
+  payToProblem,
   hashToken,
   supplierView,
   validateLines,
@@ -37,7 +39,6 @@ const PASSWORD_FAILURES_MAX = 10;
 const PASSWORD_FAILURE_WINDOW_MS = 15 * 60_000;
 const SEND_LIMIT_MISSES_MAX = 5;
 const SEND_LIMIT_MISS_WINDOW_MS = 24 * 60 * 60_000;
-const DUE_DATE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 
 const payorName = async (invoice: Invoice) =>
   (await store.findOrganisation(invoice.orgId))?.name ?? "";
@@ -245,10 +246,13 @@ export function createInvoiceLinkRouter(): express.Router {
         }
       }
       const dueDate = req.body?.dueDate;
-      if (dueDate !== undefined && dueDate !== null && dueDate !== "" && !(typeof dueDate === "string" && DUE_DATE.test(dueDate))) {
+      if (badDueDate(dueDate)) {
         return res.status(400).json({ error: "The due date must be a date, YYYY-MM-DD." });
       }
       const payTo = parsePayTo(req.body?.payTo, invoice.currency);
+      // Submitting locks the invoice: one nobody could pay is refused now.
+      const unpayable = payToProblem(invoice.currency, payTo);
+      if (unpayable) return res.status(400).json({ error: unpayable });
       if (payTo?.kind === "wallet" && !payoutChains().some((c) => c.chainId === payTo.chainId)) {
         return res.status(400).json({ error: `A wallet must be on ${payoutChains().map((c) => c.name).join(" or ")}.` });
       }

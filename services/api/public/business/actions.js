@@ -54,7 +54,7 @@ function monthChosen() {
   return v;
 }
 
-/* A link handed over once: no mail goes out, so the person copies it. */
+/* A link to hand over: no mail goes out, so the person copies it. */
 function linkDialog(title, text, url) {
   dialog(title, `<p class="desc">${esc(text)}</p><ul class="z-list z-card" style="margin-top:16px"><li>${Z.copyRow({ label: "Link", value: url, mono: true })}</li></ul>`, null, { closeOnly: true });
 }
@@ -822,7 +822,7 @@ export const ACTIONS = {
       const how = pay?.ok
         ? `It opens the invoice with a Pay button${typeof pay.amountEur === "number" ? ` for ${eur(pay.amountEur)}` : ""}, and the invoice is marked paid when the money arrives.`
         : `It opens the invoice with your bank details. There’s no Pay button on it: ${plain(pay?.reason || "no payment link could be made.")}`;
-      setTimeout(() => linkDialog(`Invoice ${r.invoice.issued.number} is ready`, `Send your customer this link. ${how} It’s shown once: copy it now.`, location.origin + r.linkPath), 0);
+      setTimeout(() => linkDialog(`Invoice ${r.invoice.issued.number} is ready`, `Send your customer this link. ${how}`, location.origin + r.linkPath), 0);
     };
     const tryIssue = async (acceptWarnings) => {
       try {
@@ -929,9 +929,9 @@ export const ACTIONS = {
     const issue = async (acceptWarnings) => {
       const r = await api(`/api/orgs/${org.id}/income-invoices/${id}/issue`, { method: "POST", body: acceptWarnings ? { acceptWarnings: true } : {} });
       Z.closeOverlay("inv-drawer");
-      // The link is shown once: it is queued whether or not the redraw
-      // works, and after it, so a dialog that led here has closed by then.
-      const showLink = () => setTimeout(() => linkDialog(`Invoice ${r.invoice.issued.number} is issued`, "It is marked paid by the receipts it bills. This link shows the invoice. It’s shown once: copy it now.", location.origin + r.linkPath), 0);
+      // Queued whether or not the redraw works, and after it, so a dialog
+      // that led here has closed by then.
+      const showLink = () => setTimeout(() => linkDialog(`Invoice ${r.invoice.issued.number} is issued`, "It is marked paid by the receipts it bills. This link shows the invoice.", location.origin + r.linkPath), 0);
       try { await render(); } finally { showLink(); }
     };
     try {
@@ -963,6 +963,11 @@ export const ACTIONS = {
       }, { okLabel: "Discard" });
     return "keep";
   },
+  "invoice-link": async (el) => {
+    const r = await api(`/api/orgs/${org.id}/invoices/${el.dataset.id}/link`);
+    setTimeout(() => linkDialog("Copy the invoice link", "Anyone with this link can open the invoice.", location.origin + r.linkPath), 0);
+    return "keep";
+  },
   "pay-invoice": async (el) => {
     const r = await api(`/api/orgs/${org.id}/invoices/${el.dataset.id}/pay`, { method: "POST", body: {} });
     toast(plain(r.note) || "Payment run drafted. It’s in Approvals.");
@@ -974,8 +979,10 @@ export const ACTIONS = {
       toast("Marked as paid.");
     }, { okLabel: "Mark as paid" }),
   "new-invoice": () => dialog("Request an invoice",
-    `<p class="desc">Your supplier fills in a one-time link, with no account and no wallet.</p>
-     ${field("d-cur", "Currency", `value="${esc(org.reporting.currency)}" maxlength="3"`)}
+    `<p class="desc">Your supplier fills in a link, with no account. You pay it by bank transfer, or to their wallet.</p>
+     <label for="d-cur">Currency</label><select id="d-cur" name="currency">
+       <option value="EUR">Euro: bank transfer, or EURe to a wallet</option>
+       <option value="USD"${org.reporting.currency === "USD" ? " selected" : ""}>US dollar: USDC to a wallet</option></select>
      ${field("d-due", 'Due <span class="desc">(optional)</span>', 'type="date"')}
      ${field("d-pw", 'Password <span class="desc">(optional, 12 characters or more)</span>', 'type="password" autocomplete="new-password" minlength="12" placeholder="Send it separately from the link…"')}`,
     async () => {

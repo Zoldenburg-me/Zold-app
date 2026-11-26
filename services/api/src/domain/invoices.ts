@@ -6,8 +6,8 @@
  * what usually stalls payment, so the link skips it.
  *
  * That makes the link a bearer credential, so:
- *  - we store only its hash, so a leaked database does not hand over open
- *    invoices;
+ *  - it is looked up by its hash and kept only sealed (stored-secrets.ts), so
+ *    a leaked database does not hand over open invoices;
  *  - the supplier-facing view is filtered to what a supplier may see;
  *  - an optional password adds a second factor for a link sent over email.
  */
@@ -64,23 +64,46 @@ export function paymentReference(invoice: Pick<Invoice, "supplier">, payerName: 
   return (number ? `Invoice ${number} ${payerName}` : payerName).trim().slice(0, 140);
 }
 
-/** The draft that pays an invoice may be created only from SUBMITTED, and
- *  only when the supplier gave a bank account the SEPA rail can reach. */
-export function assertPayable(invoice: Invoice): { iban: string; holderName: string; bic?: string } {
+/** What an invoice may be written in, and what pays each: euro by SEPA or as
+ *  EURe to a wallet, dollars as USDC to a wallet. */
+export const INVOICE_CURRENCIES = ["EUR", "USD"] as const;
+const WALLET_ASSET: Record<string, "EURE" | "USDC"> = { EUR: "EURE", USD: "USDC" };
+
+const DUE_DATE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+/** A due date that is given and is not YYYY-MM-DD. */
+export const badDueDate = (v: unknown): boolean =>
+  v !== undefined && v !== null && v !== "" && !(typeof v === "string" && DUE_DATE.test(v));
+
+/** Why this destination cannot take this currency, or undefined. Asked at
+ *  submit, so a supplier is not locked into an invoice nobody can pay, and
+ *  again at pay. */
+export function payToProblem(currency: string, payTo: Invoice["payTo"]): string | undefined {
+  if (!WALLET_ASSET[currency]) return `An invoice is paid in ${INVOICE_CURRENCIES.join(" or ")}; this one is in ${currency}.`;
+  if (payTo?.kind === "bank" && payTo.bank?.iban) {
+    return currency === "EUR" ? undefined : "A dollar invoice is paid in USDC to a wallet address, not to a bank account.";
+  }
+  if (payTo?.kind === "wallet" && payTo.address && payTo.chainId) return undefined;
+  return currency === "EUR" ? "Say where to pay: an IBAN or a wallet address." : "Say where to pay: a wallet address.";
+}
+
+export type InvoicePayee =
+  | { kind: "bank"; iban: string; holderName: string; bic?: string }
+  | { kind: "wallet"; address: `0x${string}`; chainId: number; asset: "EURE" | "USDC" };
+
+/** The draft that pays an invoice may be created only from SUBMITTED, to the
+ *  destination the supplier gave: a bank account by SEPA, or a wallet in the
+ *  token of the invoice's currency. */
+export function assertPayable(invoice: Invoice): InvoicePayee {
   if (invoice.direction === "outgoing") throw new InvoiceError("This invoice was issued by you; there is nothing to pay.");
   if (invoice.state === "PAYING") throw new InvoiceError("A payment for this invoice is already under way.");
   if (invoice.state === "PAID" || invoice.state === "RECONCILED") throw new InvoiceError("This invoice is already paid.");
   if (invoice.state !== "SUBMITTED") throw new InvoiceError(`An invoice in ${invoice.state} cannot be paid — the supplier has not submitted it.`);
-  if (invoice.currency !== "EUR") throw new InvoiceError(`Only EUR invoices can be paid today; this one is in ${invoice.currency}.`);
-  const bank = invoice.payTo?.kind === "bank" ? invoice.payTo.bank : undefined;
-  if (!bank?.iban) {
-    throw new InvoiceError(
-      invoice.payTo?.kind === "wallet"
-        ? "The supplier gave only a wallet address. Paying a wallet from an issued account is not wired; ask them for an IBAN."
-        : "The supplier gave no bank account. Ask them for an IBAN.",
-    );
-  }
-  return { iban: bank.iban, holderName: bank.holderName, bic: bank.bic };
+  const problem = payToProblem(invoice.currency, invoice.payTo);
+  if (problem) throw new InvoiceError(`${problem} Ask the supplier, then reconcile this invoice or request a new one.`);
+  const p = invoice.payTo!;
+  return p.kind === "wallet"
+    ? { kind: "wallet", address: p.address!, chainId: p.chainId!, asset: WALLET_ASSET[invoice.currency] }
+    : { kind: "bank", iban: p.bank!.iban!, holderName: p.bank!.holderName, bic: p.bank!.bic };
 }
 
 export function newLinkToken(): { token: string; hash: string } {
@@ -93,12 +116,14 @@ export function hashToken(token: string): string {
 }
 
 /**
- * The invoice as its own org sees it. Neither hash leaves the server: the link
- * token hash is a lookup key, and a password hash — even a salted one — is
- * something to brute-force offline.
+ * The invoice as its own org sees it. Neither hash leaves the server, nor the
+ * sealed token: the link token hash is a lookup key, and a password hash —
+ * even a salted one — is something to brute-force offline.
  */
-export function ownerInvoiceView<T extends Invoice>(i: T): Omit<T, "linkTokenHash" | "linkPasswordHash"> {
-  const { linkTokenHash: _t, linkPasswordHash: _p, ...rest } = i;
+export function ownerInvoiceView<T extends Invoice>(i: T): Omit<T, "linkTokenHash" | "linkTokenEnc" | "linkPasswordHash"> {
+  const { linkTokenHash: _t, linkTokenEnc: enc, linkPasswordHash: _p, ...kept } = i;
+  // Whether the link can be read again (GET .../link), never the copy itself.
+  const rest = { ...kept, linkKept: !!enc };
   // The supplier picked a chain by name; the org reads it by the same name.
   return rest.payTo?.kind === "wallet" && rest.payTo.chainId
     ? { ...rest, payTo: { ...rest.payTo, chainName: chainName(rest.payTo.chainId) } }
@@ -192,6 +217,7 @@ export function validateLines(input: unknown): { lines: InvoiceLine[]; total: st
     totalCents += cents;
     return { description, quantity, unitPrice, amount: (cents / 100).toFixed(2) };
   });
+  if (totalCents <= 0) throw new InvoiceError("An invoice needs a total above zero.");
   return { lines, total: (totalCents / 100).toFixed(2) };
 }
 
@@ -277,8 +303,8 @@ export function supplierView(
     currency: invoice.currency,
     total: invoice.total,
     dueDate: invoice.dueDate,
-    // A filled-in send link answers anyone holding its URL: the destination goes out masked.
-    payTo: invoice.sendLink && invoice.state !== "LINK_CREATED" ? maskedPayTo(invoice.payTo) : invoice.payTo,
+    // A filled-in link answers anyone holding its URL: the destination goes out masked.
+    payTo: invoice.state !== "LINK_CREATED" ? maskedPayTo(invoice.payTo) : invoice.payTo,
     // The payee never sees the limit: it would read as the amount to ask for.
     ...(invoice.sendLink ? { sendLink: { note: invoice.sendLink.note } } : {}),
     submittedAt: invoice.submittedAt,
