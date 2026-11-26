@@ -86,12 +86,13 @@ async function rpc(url: string, method: string, params: unknown[] = []): Promise
   });
   const body: any = await res.json().catch(() => null);
   if (!res.ok || !body || body.error) {
-    throw new Error(`${method} → ${res.status} ${JSON.stringify(body?.error ?? body ?? "").slice(0, 200)}`);
+    throw new Error(`${method} → ${res.status} ${redact(JSON.stringify(body?.error ?? body ?? "")).slice(0, 200)}`);
   }
   return body.result;
 }
 const hexChain = `0x${CANDIDE.chainId.toString(16)}`;
-const errMsg = (e: any) => String(e?.cause?.message ? `${e.message} (${e.cause.message})` : e?.message ?? e).slice(0, 300);
+// Redacted before the cut: a URL cut short no longer matches, and would print part of its key.
+const errMsg = (e: any) => redact(String(e?.cause?.message ? `${e.message} (${e.cause.message})` : e?.message ?? e)).slice(0, 300);
 
 console.log(`Candide preflight — chain ${CANDIDE.chainId}, gas ${CANDIDE.gas.mode}${CANDIDE.gas.mode === "token" ? ` (${CANDIDE.gas.token})` : ""}`);
 console.log(`  rpc       ${urlForLog(CANDIDE.rpcUrl)}`);

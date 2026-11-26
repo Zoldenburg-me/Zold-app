@@ -32,6 +32,8 @@ const rpcError = (text) => ({ __error: { code: -32000, message: text } });
 function answer(who, method, params) {
   const fault = S.faults?.[`${who}.${method}`];
   if (fault === "echo-url") return rpcError(`unauthorized request to ${URLS[who]}`);
+  // Padded so the script's 200-character cut of the error body falls 6 characters before the URL ends: inside the key.
+  if (fault === "echo-url-at-cut") return rpcError(`unauthorized request to ${"x".repeat(200 - 51 - URLS[who].length + 6)}${URLS[who]}`);
   if (fault === "error") return rpcError("stub refused");
   switch (method) {
     case "eth_chainId": return hex(who === "rpc" ? S.rpcChain : S.bundlerChain);
@@ -65,7 +67,7 @@ function answer(who, method, params) {
 
 globalThis.fetch = async (input, init = {}) => {
   const url = String(input instanceof Request ? input.url : input);
-  if (S.throwWithUrl && url.startsWith(URLS[S.throwWithUrl])) throw new TypeError(`Failed to parse URL from ${url}`);
+  if (S.throwWithUrl && url.startsWith(URLS[S.throwWithUrl])) throw new TypeError(`${S.throwPrefix ?? ""}Failed to parse URL from ${url}`);
   if (URLS.recovery && url.startsWith(`${URLS.recovery}/`)) {
     calls.push({ who: "recovery", url });
     return Response.json({ moduleAddress: S.recoveryServiceModule ?? S.recoveryModule });

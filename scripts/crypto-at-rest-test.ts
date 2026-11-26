@@ -12,7 +12,7 @@ import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -385,6 +385,9 @@ function reseed() {
   const db = JSON.parse(SEED);
   db.users.push({ id: "user-canary", name: "canary-A", country: "DE", kycStatus: "pending", createdAt: now });
   writeFileSync(DB_PATH, JSON.stringify(db));
+  // The fixture's pinned mtime, before the job starts: a later change then
+  // keeps size AND mtime, so only a content check can see it.
+  utimesSync(DB_PATH, 1_700_000_000, 1_700_000_000);
   rmSync(`${DB_PATH}.tmp`, { force: true });
   return readFileSync(DB_PATH, "utf8");
 }

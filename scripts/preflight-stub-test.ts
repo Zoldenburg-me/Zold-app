@@ -43,7 +43,7 @@ async function check(name: string, fn: () => void | Promise<void>) {
 interface Stub {
   rpcChain?: number; bundlerChain?: number; paymasterChain?: number; entryPointCode?: boolean;
   bundlerEntryPoints?: string[]; paymasterEntryPoints?: string[]; sponsor?: boolean;
-  recoveryServiceModule?: string; faults?: Record<string, string>; throwWithUrl?: keyof typeof KEYS;
+  recoveryServiceModule?: string; faults?: Record<string, string>; throwWithUrl?: keyof typeof KEYS; throwPrefix?: string;
 }
 function preflight(stub: Stub = {}, env: Record<string, string> = {}) {
   const log = path.join(TMP, `calls-${Math.random().toString(36).slice(2)}.json`);
@@ -148,6 +148,18 @@ await check("an error that carries an endpoint's URL prints scheme and host only
   const echo = preflight({ faults: { "rpc.eth_chainId": "echo-url", "bundler.eth_chainId": "echo-url", "paymaster.pm_chainId": "echo-url" } });
   assert.equal(echo.status, 1);
   assert.equal(lines(echo.out, "FAIL").split("\n").length >= 3, true, echo.out);
+});
+await check("an error cut short inside an endpoint's key prints no part of the key", () => {
+  // Whatever follows the host is the path holding the key; redacted, a URL ends at the host.
+  const leak = /stub\.invalid\/(v2|api|fake)/;
+  const body = preflight({ faults: { "rpc.eth_chainId": "echo-url-at-cut" } });
+  assert.equal(body.status, 1);
+  assert.match(lines(body.out, "FAIL"), /RPC unreachable/);
+  assert.doesNotMatch(body.out, leak, body.out);
+  // errMsg cuts at 300: a prefix puts that cut 6 characters before the rpc URL ends.
+  const thrown = preflight({ throwWithUrl: "rpc", throwPrefix: "x".repeat(300 - "Failed to parse URL from ".length - URLS.rpcUrl.length + 6) });
+  assert.equal(thrown.status, 1);
+  assert.doesNotMatch(thrown.out, leak, thrown.out);
 });
 
 rmSync(TMP, { recursive: true, force: true });

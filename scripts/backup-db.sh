@@ -23,5 +23,9 @@ out="$out_dir/$(basename "$src" .json)-$(date -u +%Y%m%dT%H%M%SZ).json.age"
 tmp="$out.$$.tmp"
 trap 'rm -f "$tmp"' EXIT
 "$AGE" -R "$AGE_RECIPIENTS" -o "$tmp" "$src"
-ln "$tmp" "$out" 2>/dev/null || { echo "refusing: $out exists (a backup made this second); run it again" >&2; exit 1; }
+if ! err="$(ln "$tmp" "$out" 2>&1)"; then
+  if [[ -e "$out" ]]; then echo "refusing: $out exists (a backup made this second); run it again" >&2
+  else echo "could not write $out: $err" >&2; fi
+  exit 1
+fi
 echo "wrote $out"

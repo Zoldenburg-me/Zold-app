@@ -101,6 +101,8 @@ case "$cmd" in
     require_age; require_recipients
     dir="${1:?usage: secrets.sh seal DIR}"
     dir="${dir%/}"
+    # The tree check unseal runs, so an archive that would not unseal is never written.
+    node "$ROOT/scripts/unseal-check.mjs" seal "$dir"
     trap 'rm -f "$dir.tar.age.tmp"' EXIT
     tar -C "$(dirname "$dir")" -czf - "$(basename "$dir")" | "$AGE" -R "$AGE_RECIPIENTS" -o "$dir.tar.age.tmp"
     mv "$dir.tar.age.tmp" "$dir.tar.age"
@@ -118,8 +120,8 @@ case "$cmd" in
     staging="$(mktemp -d "$(dirname "$dest")/.unseal.XXXXXX")"
     trap 'rm -rf "$staging"' EXIT
     # Decrypted in full first (a damaged file fails before tar sees it), into
-    # the owner-only staging dir. seal writes relative names and no link that
-    # leaves the tree; tar itself strips a leading / and keeps links pointing
+    # the owner-only staging dir. seal writes relative names and refuses a link
+    # that leaves the tree; tar itself strips a leading / and keeps links pointing
     # out, so unseal-check.mjs refuses both, before and after unpacking.
     "$AGE" -d -i <(age_identity) -o "$staging/archive" "$src"
     tar -tzf "$staging/archive" | node "$ROOT/scripts/unseal-check.mjs" names

@@ -12,7 +12,7 @@
 // Must be first: pins chain, keys and a throwaway database.
 import "./_local-chain.js";
 import assert from "node:assert/strict";
-import { chmodSync, closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { spawnSync } from "node:child_process";
 import http from "node:http";
@@ -1030,6 +1030,19 @@ await check("backup-db.sh twice in the same second refuses the second and keeps 
     assert.deepEqual(t.ls(path.join(t.root, ".local-backups")), ["db-20261126T120000Z.json.age"]);
   } finally { t.done(); }
 });
+await check("backup-db.sh: an ln failure that is not a same-second clash prints the real error, and leaves no backup or .tmp", () => {
+  const t = operatorCopy();
+  try {
+    t.fake("ln", "#!/bin/sh\necho \"ln: $2: Operation not supported\" >&2\nexit 1\n");
+    const store = path.join(t.root, "db.json");
+    writeFileSync(store, '{"users":[]}');
+    const r = t.run("backup-db.sh", [], { TRANSF_DB_PATH: store });
+    assert.notEqual(r.status, 0, r.stdout);
+    assert.match(r.stderr, /Operation not supported/);
+    assert.doesNotMatch(r.stderr, /this second|run it again/);
+    assert.deepEqual(t.ls(path.join(t.root, ".local-backups")), []);
+  } finally { t.done(); }
+});
 await check("backup-db.sh refuses with no store, no recipients or no age, and writes nothing", () => {
   const t = operatorCopy();
   try {
@@ -1121,6 +1134,41 @@ await check("secrets.sh unseal: a good archive lands owner-only at DEST, and an 
     assert.deepEqual(t.ls(t.root).filter((f) => f.startsWith(".unseal")), []);
   } finally { t.done(); }
 });
+await check("secrets.sh unseal: links that stay inside the tree, through other links or dangling, are kept", () => {
+  const t = operatorCopy();
+  try {
+    const sealed = path.join(t.root, "private.tar.age");
+    writeFileSync(sealed, fakeSealed(tarball([{ name: "private/", type: "5" }, { name: "private/key", body: "k\n" }, { name: "private/sub/", type: "5" },
+      { name: "private/current", type: "2", link: "key" }, { name: "private/sub/up", type: "2", link: "../current" },
+      { name: "private/sub/self", type: "2", link: "." }, { name: "private/via", type: "2", link: "sub/self/../key" },
+      { name: "private/later", type: "2", link: "not-yet" }])));
+    const dest = path.join(t.root, "out");
+    const r = t.run("secrets.sh", ["unseal", sealed, dest]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(readFileSync(path.join(dest, "private", "via"), "utf8"), "k\n");
+    assert.equal(readFileSync(path.join(dest, "private", "sub", "up"), "utf8"), "k\n");
+  } finally { t.done(); }
+});
+await check("secrets.sh seal refuses a tree unseal would refuse (an absolute link, a link out, a link chain out) and writes no archive", () => {
+  for (const [what, make] of [
+    ["absolute link to a file inside", (priv: string) => symlinkSync(path.join(priv, "key"), path.join(priv, "current"))],
+    ["../ link out", (priv: string) => symlinkSync("../..", path.join(priv, "up"))],
+    ["chain out", (priv: string) => { symlinkSync(".", path.join(priv, "x")); symlinkSync("x/..", path.join(priv, "d")); }],
+    ["a fifo", (priv: string) => spawnSync("mkfifo", [path.join(priv, "pipe")])],
+  ] as [string, (priv: string) => void][]) {
+    const t = operatorCopy();
+    try {
+      const priv = path.join(t.root, "private");
+      mkdirSync(priv);
+      writeFileSync(path.join(priv, "key"), MARK);
+      make(priv);
+      const r = t.run("secrets.sh", ["seal", priv]);
+      assert.notEqual(r.status, 0, `${what}: sealed (${r.stdout.trim()})`);
+      assert.match(r.stderr, /refusing to seal/, what);
+      assert.deepEqual(t.ls(t.root).filter((f) => /\.age$|\.tmp/.test(f)), [], `${what}: wrote an archive`);
+    } finally { t.done(); }
+  }
+});
 await check("secrets.sh unseal of a hostile archive (absolute, ../, symlink, hardlink entries) writes nothing outside and moves nothing into place", () => {
   const outside = mkdtempSync(path.join(os.tmpdir(), "zold-unseal-outside-"));
   try {
@@ -1131,6 +1179,9 @@ await check("secrets.sh unseal of a hostile archive (absolute, ../, symlink, har
       ["symlink out, then a file through it", [{ name: "link", type: "2", link: outside }, { name: "link/through" }]],
       ["symlink out, left in place", [{ name: "private/", type: "5" }, { name: "private/env", type: "2", link: victim }]],
       ["symlink with ../ target", [{ name: "private/", type: "5" }, { name: "private/up", type: "2", link: "../../../" }]],
+      ["symlink chain: x -> . and d -> x/.. (lexically inside, on disk the parent)", [{ name: "x", type: "2", link: "." }, { name: "d", type: "2", link: "x/.." }]],
+      ["symlink chain two levels up: x -> . and f -> x/x/../..", [{ name: "x", type: "2", link: "." }, { name: "f", type: "2", link: "x/x/../.." }]],
+      ["symlink chain through a nested link: private/s -> .. and private/u -> s/..", [{ name: "private/", type: "5" }, { name: "private/s", type: "2", link: ".." }, { name: "private/u", type: "2", link: "s/.." }]],
       ["hardlink to an outside file, then a write to it", [{ name: "hl", type: "1", link: victim }, { name: "hl", body: "overwritten" }]],
       ["hardlink with ../ target", [{ name: "private/", type: "5" }, { name: "private/hl", type: "1", link: `private/../../${path.relative(os.tmpdir(), victim)}` }]],
     ] as [string, Parameters<typeof tarball>[0]][]) {
