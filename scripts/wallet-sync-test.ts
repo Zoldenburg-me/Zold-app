@@ -30,7 +30,7 @@ process.env.WALLET_SYNC_PRICE_URL = "http://prices.test";
 
 const { toWalletEntry, walletEntryKey, walletEntryId } = await import("../services/api/src/domain/wallet-transfers.js");
 const { valueTransfer, USD_STABLECOINS, clearPriceCache } = await import("../services/api/src/wallet-sync/valuation.js");
-const { syncWallet, firstBlockAtOrAfter } = await import("../services/api/src/wallet-sync/sync.js");
+const { syncWallet, firstBlockAtOrAfter, viemReader } = await import("../services/api/src/wallet-sync/sync.js");
 const { classifyToken, EMONEY_TOKENS } = await import("../services/api/src/wallet-sync/token-class.js");
 const { loadTokenLists, clearTokenLists } = await import("../services/api/src/wallet-sync/token-lists.js");
 /** Every token is listed, for loop tests about other things. */
@@ -824,6 +824,66 @@ await check("a self-transfer, which both answers carry, is one log and does not 
   await syncWallet(w, fakeReader({ head: 1000n, logs: [self] }), loopOpts);
   assert.notEqual(current(w.id).sync.status, "error", current(w.id).sync.error);
   assert.equal(current(w.id).sync.cursor, "300");
+});
+
+await check("a first sync whose hash read fails keeps its starting block: the next poll, at a higher head, scans the blocks in between", async () => {
+  const w = freshWallet({ sync: { status: "pending" } });
+  await syncWallet(w, fakeReader({ head: 1000n, logs: [], blockHash: () => null as unknown as `0x${string}` }), loopOpts);
+  assert.equal(current(w.id).sync.status, "error");
+  assert.equal(current(w.id).sync.cursor, "998", "the start is the head first seen, not the next one");
+  const between = transfer({ blockNumber: 1001n, txHash: H(0x950), logIndex: 0 });
+  await syncWallet(current(w.id), fakeReader({ head: 1100n, logs: [between] }), loopOpts);
+  assert.deepEqual(rowsOf(w.id).map((e) => e.txHash), [H(0x950)]);
+  assert.equal(current(w.id).sync.cursor, "1098");
+  assert.equal(current(w.id).sync.cursorHash, H(0xb10c000 + 1098));
+});
+
+await check("a reorg that replaces a window this run just booked stops the next window of the same run", async () => {
+  const w = freshWallet({ sync: { status: "pending", cursor: "0" } });
+  let forked = false;
+  const hashOf = (b: bigint) => H(0xb10c000 + Number(b) + (forked && b >= 50n ? 0x100000 : 0));
+  const realUpdate = store.updateImportedWallet;
+  store.updateImportedWallet = (id, patch) => {
+    const r = realUpdate.call(store, id, patch);
+    if (id === w.id && patch.sync?.cursor === "100") forked = true; // after window 1 commits, before window 2 reads
+    return r;
+  };
+  try {
+    const logs = [transfer({ blockNumber: 50n, txHash: H(0x951), logIndex: 0 }), transfer({ blockNumber: 150n, txHash: H(0x952), logIndex: 0 })];
+    const r = await syncWallet(w, fakeReader({ head: 1000n, logs, blockHash: hashOf }), loopOpts);
+    assert.equal(r.added, 1);
+  } finally {
+    store.updateImportedWallet = realUpdate;
+  }
+  const s = current(w.id).sync;
+  assert.equal(s.status, "error");
+  assert.match(s.error ?? "", /block 100 .*changed.*review/i);
+  assert.equal(s.cursor, "100");
+  assert.equal(s.cursorHash, H(0xb10c000 + 100), "the checkpoint the next run checks is the old chain's");
+  assert.deepEqual(rowsOf(w.id).map((e) => e.txHash), [H(0x951)], "nothing from the new chain is booked");
+});
+
+await check("the live reader refuses a block of another height than the one it asked for", async () => {
+  const http = await import("node:http");
+  const rpc = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      const { id } = JSON.parse(body);
+      const block = { number: "0x7", hash: `0x${"ab".repeat(32)}`, parentHash: `0x${"00".repeat(32)}`, timestamp: "0x6553f100", transactions: [], logsBloom: null, nonce: null };
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ jsonrpc: "2.0", id, result: block }));
+    });
+  });
+  await new Promise<void>((r) => rpc.listen(0, "127.0.0.1", () => r()));
+  try {
+    const live = viemReader(1, `http://127.0.0.1:${(rpc.address() as any).port}`);
+    assert.equal(await live.getBlockHash(7n), `0x${"ab".repeat(32)}`);
+    await assert.rejects(live.getBlockHash(8n), /did not return the requested block 8/);
+    await assert.rejects(live.getBlockTime(8n), /did not return the requested block 8/);
+  } finally {
+    rpc.close();
+  }
 });
 
 console.log("\nImport route");

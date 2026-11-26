@@ -224,6 +224,9 @@ async function readWindow(reader: ChainReader, wallet: ImportedWallet, fromBlock
   }
 }
 
+const replacedBlock = (block: bigint) =>
+  new SyncRefusal(`block ${block} changed after it was booked: the chain reorganised deeper than ${WALLET_SYNC.confirmations} confirmations. Syncing stopped; this wallet's rows need review.`);
+
 async function blockHashOf(reader: ChainReader, blockNumber: bigint): Promise<`0x${string}`> {
   const hash = await reader.getBlockHash(blockNumber);
   if (typeof hash !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(hash)) throw new SyncRefusal(`block ${blockNumber} has no hash on the RPC`);
@@ -270,21 +273,28 @@ export async function syncWallet(
     if (readFrom !== undefined) {
       cursor = BigInt(readFrom);
       const booked = wallet.sync.cursorHash;
-      if (booked && (await blockHashOf(reader, cursor)) !== booked.toLowerCase()) {
-        throw new SyncRefusal(`block ${cursor} changed after it was booked: the chain reorganised deeper than ${WALLET_SYNC.confirmations} confirmations. Syncing stopped; this wallet's rows need review.`);
-      }
+      if (booked && (await blockHashOf(reader, cursor)) !== booked.toLowerCase()) throw replacedBlock(cursor);
     } else if (wallet.sync.from) {
       cursor = (await firstBlockAtOrAfter(reader, `${wallet.sync.from}T00:00:00.000Z`, safeHead)) - 1n;
     } else {
+      // The start is fixed before its hash is read: a failed read must not
+      // let the next poll start from a later head and skip the blocks between.
+      if (cursorMoved()) return { added, skipped };
+      patchSync(wallet.id, { cursor: safeHead.toString() });
+      readFrom = safeHead.toString();
       const cursorHash = await blockHashOf(reader, safeHead);
-      if (!cursorMoved()) patchSync(wallet.id, { cursor: safeHead.toString(), cursorHash, status: "synced", lastSyncedAt: now(), error: undefined });
+      if (!cursorMoved()) patchSync(wallet.id, { cursorHash, status: "synced", lastSyncedAt: now(), error: undefined });
       return { added, skipped };
     }
 
+    // The checkpoint each window builds on: a window booked earlier in this
+    // run is re-checked before the next one replaces its hash.
+    let committedHash: string | undefined;
     const known = new Set(store.ledgerOf(wallet.orgId).map((e) => e.id));
     const blockTimes = new Map<bigint, string>();
     const tokens = new Map<string, TokenInfo>();
     for (let w = 0; w < WALLET_SYNC.windowsPerTick && cursor < safeHead; w++) {
+      if (committedHash && (await blockHashOf(reader, cursor)) !== committedHash) throw replacedBlock(cursor);
       const fromBlock = cursor + 1n;
       const { toBlock, transfers, gap } = await readWindow(reader, wallet, fromBlock, safeHead);
 
@@ -374,6 +384,7 @@ export async function syncWallet(
       skipped += windowSkipped;
       cursor = toBlock;
       readFrom = toBlock.toString();
+      committedHash = cursorHash;
     }
     return { added, skipped };
   } catch (e) {
@@ -433,17 +444,21 @@ export function viemReader(chainId: number, rpcUrl: string): ChainReader {
       throw e;
     }
   };
+  const blockAt = async (blockNumber: bigint) => {
+    const block = await client.getBlock({ blockNumber });
+    if (block.number !== blockNumber) throw new SyncRefusal(`the RPC did not return the requested block ${blockNumber}`);
+    return block;
+  };
   // A chain id never changes under one URL; asking every tick is RPC quota.
   let chainIdOnce: Promise<number> | undefined;
   return {
     getChainId: () => (chainIdOnce ??= client.getChainId().catch((e) => { chainIdOnce = undefined; throw e; })),
     getBlockNumber: () => client.getBlockNumber({ cacheTime: 0 }),
     async getBlockTime(blockNumber) {
-      const b = await client.getBlock({ blockNumber });
-      return new Date(Number(b.timestamp) * 1000).toISOString();
+      return new Date(Number((await blockAt(blockNumber)).timestamp) * 1000).toISOString();
     },
     async getBlockHash(blockNumber) {
-      return (await client.getBlock({ blockNumber })).hash;
+      return (await blockAt(blockNumber)).hash;
     },
     async getTransferLogs({ address, direction, fromBlock, toBlock }) {
       // strict: an NFT's Transfer has the same topic with three indexed
