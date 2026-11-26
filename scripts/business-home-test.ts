@@ -184,6 +184,16 @@ assert.deepEqual(
   assert.equal(m.monthIn("/where did maybe go", now), null);
   assert.equal(m.monthIn("/where did the decorators go", now), null);
   assert.equal(m.monthIn("/where did sept go", now), "2026-09");
+  assert.equal(m.monthIn("/where did this month go", now), "2026-11");
+  assert.equal(m.monthIn("/where did last month go", now), "2026-10");
+  assert.equal(m.monthIn("/where did oct. 2025 go", now), "2025-10", "a full stop after the month keeps the year");
+  assert.deepEqual(m.assetTotals([{ totals: { EUR: "120.50", USDC: "40" } }, { totals: { EURE: "10", EUR: "1" } }, {}]),
+    { EUR: 121.5, USDC: 40, EURE: 10 }, "each asset summed on its own");
+  assert.deepEqual(m.payingInvoices([
+    { id: "a", direction: "incoming", state: "PAYING" },
+    { id: "b", direction: "incoming", state: "PAYING", payment: { transferId: "t" } },
+    { id: "c", direction: "incoming", state: "SUBMITTED" },
+  ]).map((i: any) => i.id), ["a"], "a prepared payment not yet sent is still due");
   assert.equal(m.monthIn("/where did june go", now), "2026-06");
   const berlin = m.localDay(new Date(2026, 10, 1, 0, 30));
   assert.equal(m.lastMonth(berlin), "2026-10", "the local date picks the month");

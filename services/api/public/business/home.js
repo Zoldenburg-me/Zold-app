@@ -22,7 +22,7 @@ import { META, RENDER, linkBtn, moneriumLink } from "./views.js";
 import { submittedInvoices, waitingForMe } from "./nav.js";
 import { draftTag, draftTitle, draftTotal, invAmount, invWho, loadMembers, memberName } from "./screens.js";
 import { APP_LINKS, isOwnCompanyOrg, loadAccess } from "./access-model.js";
-import { companyBalance, countedLines, hasIban, lastMonth, localDay, monthIn, monthSummary, noIbanStep, owedInvoices, pendingRuns, securityRows, setupOpen, setupSteps, submitFor, topBy, unreadOf } from "./home-model.js";
+import { companyBalance, countedLines, hasIban, assetTotals, lastMonth, localDay, monthIn, monthSummary, noIbanStep, owedInvoices, payingInvoices, pendingRuns, securityRows, setupOpen, setupSteps, submitFor, topBy, unreadOf } from "./home-model.js";
 import { runLink } from "./payment.js";
 import { openSearch } from "./search.js";
 import { companyKeysHere, companySteps } from "./org-monerium-model.js";
@@ -130,9 +130,9 @@ function commandBox(cmds) {
   return `<section class="zb-h-cmd" aria-label="Ask and search">
     <p class="zb-h-cmd__hello"><i aria-hidden="true"></i>${esc(hello())}</p>
     <p class="zb-h-cmd__line" id="hm-line" aria-hidden="true"></p>
-    <label class="zb-h-cmd__label z-sr" for="hm-q">Search, or type a command</label>
+    <label class="zb-h-cmd__label" for="hm-q">Ask or search</label>
     <form class="zb-h-cmd__box" id="hm-ask" role="search">
-      <input id="hm-q" class="zb-h-cmd__input" type="search" name="q" autocomplete="off" spellcheck="false" placeholder="Search, or ask what is due…">
+      <input id="hm-q" class="zb-h-cmd__input" type="search" name="q" autocomplete="off" spellcheck="false" placeholder="/what is due, or a name…">
       <button type="submit" class="zb-h-cmd__go" aria-label="Go">${Z.icon("arrow_upward")}</button>
     </form>
     <p class="zb-h-cmd__hint" id="hm-hint" role="status"></p>
@@ -172,7 +172,7 @@ function hello() {
 const ansLink = (label, v) => `<a href="?view=${v}" data-view-link="${v}">${esc(label)}</a>`;
 const ansRows = (rows) => `<ul class="zb-h-ans__rows">${rows.join("")}</ul>`;
 const ansCard = (asked, body) => `<section class="z-card zb-h-ans" tabindex="-1" aria-labelledby="hm-ans-q">
-    <p class="zb-h-ans__q" id="hm-ans-q">${esc(asked)}</p>${body}<p class="zb-h-ans__src">Answered from your own records in Zold.</p></section>`;
+    <h2 class="zb-h-ans__q" id="hm-ans-q">${esc(asked)}</h2>${body}<p class="zb-h-ans__src">Answered from your own records in Zold.</p></section>`;
 
 /** "What is due": what customers owe you, and what waits on you to pay.
  *  `invoices` / `runs`: the list, null when its read failed, false when this
@@ -194,9 +194,17 @@ function dueAnswer({ invoices, runs }) {
       : "<h3>Nothing is owed to you</h3><p>No invoice you issued is open.</p>");
     const toPay = submittedInvoices(invoices);
     if (toPay.length) parts.push(`<h3>${toPay.length} supplier invoice${toPay.length > 1 ? "s" : ""} to pay</h3><p>${ansLink("See them", "invoices")}</p>`);
+    // Pay made a payment run for these; nothing is sent until it is approved and sent.
+    const paying = payingInvoices(invoices);
+    if (paying.length) parts.push(`<h3>${paying.length} supplier invoice${paying.length > 1 ? "s" : ""} not paid yet</h3><p>A payment is prepared and waits in Approvals. ${ansLink("See them", "invoices")}</p>`);
   }
   const waiting = runs ? waitingForMe(runs) : [];
-  if (waiting.length) parts.push(`<h3>${waiting.length} payment${waiting.length > 1 ? "s" : ""} wait for your approval: ${esc(eur(waiting.reduce((n, d) => n + sumEur(d), 0)))}</h3><p>${ansLink("Approve or decline", "payments")}</p>`);
+  if (waiting.length) {
+    // Each asset on its own: a wallet payment in EURe or USDC is not euros in a bank account.
+    const sums = Object.entries(assetTotals(waiting)).filter(([, v]) => v > 0)
+      .map(([a, v]) => (a === "EUR" ? eur(v) : `${Number(v.toFixed(6))} ${a === "EURE" ? "EURe" : a}`));
+    parts.push(`<h3>${waiting.length} payment${waiting.length > 1 ? "s" : ""} wait for your approval${sums.length ? `: ${esc(sums.join(" and "))}` : ""}</h3><p>${ansLink("Approve or decline", "payments")}</p>`);
+  }
   return parts.join("") || "<h3>Nothing is due</h3>";
 }
 
@@ -519,6 +527,7 @@ RENDER.overview = async () => {
       rotateLine(box, cmds, owedInvoices(invoices).some((i) => i.overdue));
       const q = box.querySelector("#hm-q");
       const answer = (cmd, typed) => {
+        box.querySelector("#hm-hint").textContent = "";
         const named = cmd.answer === "month" ? monthIn(typed, localDay()) : null;
         // "/where did marketing go" names no month: say so, never answer for last month.
         if (cmd.answer === "month" && !named && cmd.match.test(typed.trim().toLowerCase().replace(/[\s?.!]+$/, ""))) {

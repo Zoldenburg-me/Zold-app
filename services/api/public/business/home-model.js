@@ -104,8 +104,10 @@ export function monthIn(text, now = new Date()) {
   const q = String(text || "").toLowerCase();
   const iso = q.match(/\b(20\d\d)-(0[1-9]|1[0-2])\b/);
   if (iso) return `${iso[1]}-${iso[2]}`;
+  if (/\bthis month\b/.test(q)) return now.toISOString().slice(0, 7);
+  if (/\blast month\b/.test(q)) return lastMonth(now);
   // Whole month names or their short forms only: "marketing" is not March.
-  const m = q.match(/\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s+(20\d\d))?\b/);
+  const m = q.match(/\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\.?\s+(20\d\d))?\b/);
   if (!m) return null;
   const mi = MONTH_KEYS.indexOf(m[1].slice(0, 3));
   const y = m[2] ? Number(m[2]) : now.getUTCFullYear() - (mi > now.getUTCMonth() ? 1 : 0);
@@ -120,6 +122,19 @@ export const localDay = (d = new Date()) => new Date(Date.UTC(d.getFullYear(), d
 /** The reads an answer depends on that failed: null is a failed read, false
  *  one this person does not have. An answer says "nothing" only when this is empty. */
 export const unreadOf = (reads) => Object.keys(reads).filter((k) => reads[k] === null);
+
+/** What some payment runs add up to, per asset, as numbers: { EUR: 120, USDC: 40 }.
+ *  The drafts API keeps each asset apart (totalsByAsset); so does this. */
+export function assetTotals(runs) {
+  const out = {};
+  for (const r of runs || []) for (const [asset, v] of Object.entries(r.totals || {})) out[asset] = (out[asset] || 0) + Number(v || 0);
+  return out;
+}
+
+/** Supplier invoices Pay has turned into a payment run that is not sent
+ *  yet: still unpaid, so still due. */
+export const payingInvoices = (invoices) => (invoices || [])
+  .filter((i) => i.direction !== "outgoing" && i.state === "PAYING" && !i.payment?.transferId);
 
 /** The calendar month before `now`'s, as "YYYY-MM". */
 export function lastMonth(now = new Date()) {

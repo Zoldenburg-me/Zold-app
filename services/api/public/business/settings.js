@@ -194,6 +194,8 @@ RENDER.settings = async () => {
         const b = ev.target.closest("[data-ss]");
         if (!b) return;
         ss.sec = b.dataset.ss;
+        // The address names the section, so reload and a shared link open it.
+        history.replaceState(history.state, "", `?view=settings&sec=${ss.sec}`);
         root.querySelector(".zb-set-menu").outerHTML = menu(accounts);
         root.querySelector("#set-body").innerHTML = SECTIONS[ss.sec]();
         root.querySelector(`[data-ss="${ss.sec}"]`)?.focus();
