@@ -5,14 +5,16 @@
  * and bookkeeping would go with it. The API boots, warns, and serves; the
  * cash quote still refuses (covered in best-execution-test).
  *
- * Boots the real API against a bare hardhat node, once per bad config.
+ * Boots the real API against a fresh hardhat node with the local contracts
+ * deployed, once per bad config. Offline: the operator's Monerium app
+ * credentials are blanked in the child, so the boot never calls Monerium.
  *
  * Run: npm run venue-boot:test
  */
-import "./_test-env.js";
+import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { freePort, hardhatNode } from "./_free-port.js";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -20,6 +22,13 @@ import path from "node:path";
 let n = 0;
 const { child: chain, url: rpcUrl } = await hardhatNode(process.cwd());
 try {
+  // The API reads the dollar token at boot: deploy, so the suite runs alone
+  // on a fresh checkout and not only after a suite that deployed.
+  const dep = spawnSync(process.execPath, [path.resolve("node_modules/.bin/tsx"), "scripts/deploy.ts"], {
+    stdio: "inherit",
+    env: { ...process.env, TRANSF_RPC_URL: rpcUrl },
+  });
+  assert.equal(dep.status, 0, "deploy failed");
   for (const bad of [{ LIQUIDITY_PROVIDER: "nope" }, { LIQUIDITY_PROVIDER: "best", LIQUIDITY_VENUES: "nope" }, { LIQUIDITY_PROVIDER: "best", LIQUIDITY_VENUES: "" }]) {
     const dataDir = mkdtempSync(path.join(os.tmpdir(), "venue-boot-"));
     const apiPort = await freePort();
@@ -35,6 +44,13 @@ try {
         LOCAL_HARNESS: "1",
         TRANSF_DB_PATH: path.join(dataDir, "db.json"),
         TRANSF_RPC_URL: rpcUrl,
+        // Set, not deleted: the API loads .env, which fills anything unset.
+        // With app credentials it checks its Monerium connection at boot.
+        MONERIUM_CLIENT_ID: "",
+        MONERIUM_CLIENT_SECRET: "",
+        MONERIUM_OAUTH_CLIENT_ID: "",
+        MONERIUM_BASE_URL: "http://127.0.0.1:9",
+        MONERIUM_AUTH_URL: "http://127.0.0.1:9",
         ...bad,
       },
     });
@@ -52,6 +68,7 @@ try {
       assert.equal(exited, null, `API exited with ${JSON.stringify(bad)}:\n${out}`);
       assert.match(out, /venue configuration is invalid/);
       assert.match(out, /cash quote will fail/);
+      assert.match(out, /monerium: no app credentials/);
       const res = await fetch(`http://127.0.0.1:${apiPort}/api/health`);
       assert.equal(res.status, 200, await res.text());
       console.log(`${++n}. ${JSON.stringify(bad)}: the API boots, warns, and /api/health answers`);

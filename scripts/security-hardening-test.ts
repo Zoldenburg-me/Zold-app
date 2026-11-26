@@ -394,8 +394,8 @@ try {
     // Nobody is refused for want of a slot.
     assert.equal(rateLimit("g:regular", 300), true);
     assert.equal(rateLimit("g:newcomer", 300), true);
-    assert.equal(rateLimit("p:newcomer", 30), true);
-    assert.equal(bucketCounts().hits, RATE_BUCKETS_MAX);
+    assert.equal(rateLimit("p:newcomer", 30, "partner"), true);
+    assert.equal(bucketCounts().hits, RATE_BUCKETS_MAX + 1);
     clock += 61_000;
     sweepExpiredBuckets();
     assert.equal(bucketCounts().hits, 0);
@@ -411,6 +411,49 @@ try {
     let reset = 0;
     for (let k = 0; k < 1000; k++) if (rateLimit(`c:limited-idle-${k}`, 20)) reset++;
     assert.equal(reset, 0, `${reset} limited keys reset by the flood`);
+    clock += 61_000;
+    sweepExpiredBuckets();
+    assert.equal(bucketCounts().hits, 0);
+  });
+  await check("at the cap the per-IP and partner counters of one quote request do not evict each other: the partner limit still builds", () => {
+    // Every other window counted two requests, so a new one-request window is
+    // the first to go; a shared cap made g: and p: evict each other.
+    for (let i = 0; i < RATE_BUCKETS_MAX - 1; i++) {
+      rateLimit(`g:pair-full-${i}`, 300);
+      rateLimit(`g:pair-full-${i}`, 300);
+    }
+    let partnerPassed = 0;
+    for (let i = 0; i < 40; i++) {
+      assert.equal(rateLimit("g:quoter", 300), true);
+      if (rateLimit("p:quoter", 30, "partner")) partnerPassed++;
+    }
+    assert.equal(partnerPassed, 30);
+    // A login counts the per-IP bucket, then the credential: same rule.
+    let credentialPassed = 0;
+    for (let i = 0; i < 25; i++) {
+      rateLimit("a:login", 300);
+      if (rateLimit("c:guessed", 20, "credential")) credentialPassed++;
+    }
+    assert.equal(credentialPassed, 20);
+    clock += 61_000;
+    sweepExpiredBuckets();
+    assert.equal(bucketCounts().hits, 0);
+  });
+  await check("at the cap ended windows go before live ones, whatever their tier: live counted and limited windows keep their counts", () => {
+    // Half the cap: limited windows, then ended (not yet swept).
+    for (let k = 0; k < RATE_BUCKETS_MAX / 2; k++) for (let i = 0; i < 3; i++) rateLimit(`c:ended-${k}`, 2);
+    clock += 61_000;
+    // The other half: live, a thousand limited, the rest at two requests.
+    for (let k = 0; k < 1000; k++) for (let i = 0; i < 3; i++) rateLimit(`c:live-limited-${k}`, 2);
+    for (let k = 0; k < RATE_BUCKETS_MAX / 2 - 1000; k++) for (let i = 0; i < 2; i++) rateLimit(`c:live-${k}`, 2);
+    assert.equal(bucketCounts().hits, RATE_BUCKETS_MAX);
+    // A pair flood of 30k fresh keys: each takes the slot of an ended window.
+    for (let i = 0; i < 30_000; i++) for (let j = 0; j < 2; j++) rateLimit(`c:mixed-flood-${i}`, 2);
+    assert.equal(bucketCounts().hits, RATE_BUCKETS_MAX);
+    let reset = 0;
+    for (let k = 0; k < 1000; k++) if (rateLimit(`c:live-limited-${k}`, 2)) reset++;
+    for (let k = 0; k < RATE_BUCKETS_MAX / 2 - 1000; k++) if (rateLimit(`c:live-${k}`, 2)) reset++;
+    assert.equal(reset, 0, `${reset} live windows evicted while ended ones waited`);
     clock += 61_000;
     sweepExpiredBuckets();
     assert.equal(bucketCounts().hits, 0);
