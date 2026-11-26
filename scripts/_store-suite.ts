@@ -481,8 +481,12 @@ export async function conditionalWriteSuite(s: StoreBackend): Promise<void> {
   assert.equal(await s.findDraft("dr_pay2"), undefined, "and adds no draft");
   assert.equal(await s.updateInvoiceFrom("inv_s2", ["LINK_CREATED"], { state: "SUBMITTED" } as any), null);
 
-  assert.equal((await s.lockOrganisation("org_b"))?.id, "org_b");
-  assert.equal((await s.lockUser("u_a"))?.id, "u_a");
+  await s.tx(async (t) => {
+    assert.equal((await t.lockOrganisation("org_b"))?.id, "org_b");
+    assert.equal((await s.lockUser("u_a"))?.id, "u_a", "store.lock… inside a tx joins it");
+    await t.lockKey("ledger:org_b");
+  });
+  await assert.rejects(s.lockUser("u_a"), /lockUser outside a store\.tx holds nothing/);
 
   // A deposit is settled once.
   await s.addCryptoDeposit({ id: "dep_s2", userId: "u_a", chainId: 84532, token: "USDC", txHash: hash("5a"), logIndex: 1, amountUnits: "1", holding: "awaiting_approval", txs: [], createdAt: now, updatedAt: now } as any);

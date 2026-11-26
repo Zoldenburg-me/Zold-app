@@ -169,6 +169,12 @@ export const jsonCore = {
   lockUser(id: string) {
     return db.users.find((u) => u.id === id);
   },
+  /**
+   * Hold `key` until the transaction this runs in ends (Postgres: an
+   * advisory transaction lock; JSON: the mutex already holds everything).
+   * For a rule over rows no single row stands for, e.g. one org's ledger.
+   */
+  lockKey(_key: string) {},
   /** Change `passkeySafe` or `monerium` from the stored value (§2 rule 2), with `patch`. */
   patchUserSub<K extends "passkeySafe" | "monerium">(id: string, key: K, fn: (current: User[K]) => User[K], patch: Partial<User> = {}) {
     const u = db.users.find((x) => x.id === id);

@@ -141,7 +141,7 @@ async function serve(a: express.Express) {
   let failCommit = false;
   const failing = {
     ...db,
-    async tx<T>(fn: (q: import("../services/api/src/store/pg/sql.js").Sql) => Promise<T>): Promise<T> {
+    async tx<T>(fn: (q: import("../services/api/src/store/pg/sql.js").TxSql) => Promise<T>): Promise<T> {
       // PGlite rolls back when the callback throws: the throw after it ran
       // stands for a COMMIT the server refused.
       return db.tx(async (q) => {

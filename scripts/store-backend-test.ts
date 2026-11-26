@@ -156,6 +156,8 @@ console.log("ok - store suite on the JSON backend");
       server.close();
     }
   }
+  await assert.rejects(store.lockUser("u_x"), /lockUser outside a store\.tx holds nothing/);
+  await assert.rejects(store.lockKey("k"), /lockKey outside a store\.tx holds nothing/);
   console.log("ok - JSON backend: every call behind one mutex, store.tx holds it, rows are copies, a write is on disk when it resolves");
 }
 
@@ -189,8 +191,54 @@ console.log("ok - store suite on the JSON backend");
   );
   assert.deepEqual(heard, ["t_lis_ok:PAID"], "a rolled-back change is never announced");
   assert.equal((await pg.findTransfer("t_lis_rb"))?.state, "CREATED");
+
+  // A nested store.tx that fails and is caught undoes only itself (a
+  // savepoint); the transaction goes on and commits the rest.
+  await pg.tx(async (t) => {
+    await t.updateTransfer("t_lis_rb", { reference: "outer" } as any);
+    await assert.rejects(
+      pg.tx(async (n) => {
+        await n.updateTransfer("t_lis_rb", { reference: "inner" } as any);
+        await n.addSession({ id: "s_dup", userId: "u_a", tokenHash: "th_dup", createdAt: now, lastUsedAt: now, expiresAt: now });
+        await n.addSession({ id: "s_dup2", userId: "u_a", tokenHash: "th_dup", createdAt: now, lastUsedAt: now, expiresAt: now });
+      }),
+      /duplicate key/,
+    );
+    await t.updateTransfer("t_lis_rb", { purpose: "after" } as any);
+  });
+  const rb = await pg.findTransfer("t_lis_rb");
+  assert.equal((rb as any)?.reference, "outer", "the nested part was undone, the outer write kept");
+  assert.equal((rb as any)?.purpose, "after", "the transaction went on after the caught failure");
+  assert.equal(await pg.findSessionByTokenHash("th_dup"), undefined);
+  // A failed statement caught without a savepoint: Postgres aborted the
+  // transaction, so it fails rather than COMMIT rolling back in silence.
+  await assert.rejects(
+    pg.tx(async (t) => {
+      await t.updateTransfer("t_lis_rb", { reference: "lost" } as any);
+      await t.addSession({ id: "s_dup3", userId: "u_a", tokenHash: "th_dup3", createdAt: now, lastUsedAt: now, expiresAt: now });
+      await t.addSession({ id: "s_dup4", userId: "u_a", tokenHash: "th_dup3", createdAt: now, lastUsedAt: now, expiresAt: now }).catch(() => {});
+    }),
+    /a statement in this transaction failed/,
+  );
+  assert.equal((await pg.findTransfer("t_lis_rb") as any)?.reference, "outer", "nothing of it committed");
+  // Nested transactions of one parent run one after another, so their
+  // savepoints nest even when started together.
+  const order: string[] = [];
+  await pg.tx(async () => {
+    await Promise.all(
+      ["a", "b"].map((k) =>
+        pg.tx(async (n) => {
+          order.push(`${k}+`);
+          await n.updateTransfer("t_lis_rb", { reference: k } as any);
+          order.push(`${k}-`);
+        }),
+      ),
+    );
+  });
+  assert.deepEqual(order, ["a+", "a-", "b+", "b-"]);
+  for (const s of [pg]) await assert.rejects(s.lockUser("u_a"), /lockUser outside a store\.tx holds nothing/);
   await db.close();
-  console.log(`ok - store suite on the Postgres backend (PGlite, server_version_num ${version}); listeners after COMMIT only`);
+  console.log(`ok - store suite on the Postgres backend (PGlite, server_version_num ${version}); listeners after COMMIT only; nested tx savepoints; no silent COMMIT after a failed statement`);
 }
 
 // ── Migration runner ───────────────────────────────────────────────────────

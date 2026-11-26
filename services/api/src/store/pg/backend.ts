@@ -30,7 +30,7 @@ import type {
   OrgSafePlan,
 } from "../../domain/types.js";
 import { describeCause } from "../../http/log-cause.js";
-import { currentTx, deferToCommit, endTx, inScope, newTxHooks, type Collection, type StoreBackend, type StoreMethods } from "../backend.js";
+import { currentTx, deferToCommit, endTx, inScope, isLock, lockOutsideTx, nestedTx, newTxHooks, type Collection, type StoreBackend, type StoreMethods } from "../backend.js";
 import { defaultChartRows, type Db } from "../db.js";
 import {
   applyOrgSafePlan,
@@ -74,7 +74,7 @@ import type {
   Transfer,
   User,
 } from "../types.js";
-import type { Database, Sql } from "./sql.js";
+import type { Database, Sql, TxSql } from "./sql.js";
 
 /** The SQL table of each collection that is a list of rows with an `id`. */
 const TABLE = {
@@ -351,6 +351,10 @@ export function createPgStore(database: Database): StoreBackend {
     },
     updateUser: (id, patch) => tx((t) => updateUserIn(t, id, patch)),
     lockUser: (id) => tx((t) => locked<User>(t, TABLE.users, id)),
+    async lockKey(key) {
+      // Per database: advisory locks are cluster-wide.
+      await q.query("SELECT pg_advisory_xact_lock(hashtext(current_database() || ':' || $1))", [key]);
+    },
     patchUserSub: (id, key, fn, patch = {}) =>
       tx(async (t) => {
         const u = await locked<User>(t, TABLE.users, id);
@@ -1099,6 +1103,8 @@ export function createPgStore(database: Database): StoreBackend {
   }
 
   const owner = {};
+  /** The connection of each open transaction, for its savepoints. */
+  const clients = new WeakMap<StoreMethods, TxSql>();
   const base = build(database, (fn) => database.tx(fn));
   // A call made inside a transaction runs on its client, through `t` or `store`.
   const routed: Record<string, unknown> = {};
@@ -1106,16 +1112,24 @@ export function createPgStore(database: Database): StoreBackend {
     routed[name] =
       typeof f !== "function" || name === "onTransferStateChange" || name === "onPaymentRequestStateChange"
         ? f
-        : (...args: unknown[]) => ((currentTx(owner) ?? base) as unknown as Record<string, (...a: unknown[]) => unknown>)[name](...args);
+        : (...args: unknown[]) => {
+            const open = currentTx(owner);
+            if (!open && isLock(name)) return Promise.reject(lockOutsideTx(name));
+            return ((open ?? base) as unknown as Record<string, (...a: unknown[]) => unknown>)[name](...args);
+          };
   }
   const store: StoreBackend = {
     ...(routed as StoreMethods),
     tx<T>(fn: (t: StoreMethods) => Promise<T> | T): Promise<T> {
       const open = currentTx(owner);
-      if (open) return Promise.resolve().then(() => fn(open));
+      if (open) return nestedTx(owner, fn, (f) => clients.get(open)!.savepoint(f))!;
       const hooks = newTxHooks();
       return endTx(
-        database.tx((client) => inScope(owner, build(client, (f) => f(client)), fn, hooks)),
+        database.tx((client) => {
+          const t = build(client, (f) => f(client));
+          clients.set(t, client);
+          return inScope(owner, t, fn, hooks);
+        }),
         hooks,
       );
     },

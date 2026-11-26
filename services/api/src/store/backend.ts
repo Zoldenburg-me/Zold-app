@@ -82,7 +82,7 @@ class Mutex {
 
 /** The transaction a call is made in, while it lasts, and whose it is, and
  *  what runs once it has committed or once it has been dropped. */
-type Scope = { open: boolean; owner: object; t: StoreMethods; hooks: TxHooks };
+type Scope = { open: boolean; owner: object; t: StoreMethods; hooks: TxHooks; children: Mutex };
 /** What a transaction runs when it ends: `committed` after the commit (JSON:
  *  the file write), `dropped` when it failed (Postgres rolled it back; JSON
  *  wrote what the callback had done before it threw). */
@@ -180,13 +180,52 @@ export function endTx<T>(p: Promise<T>, hooks: TxHooks): Promise<T> {
 
 /** Run `fn` as `owner`'s transaction `t`: calls made from it join `t`. */
 export async function inScope<T>(owner: object, t: StoreMethods, fn: (t: StoreMethods) => Promise<T> | T, hooks: TxHooks = newTxHooks()): Promise<T> {
-  const s: Scope = { open: true, owner, t, hooks };
+  const s: Scope = { open: true, owner, t, hooks, children: new Mutex() };
   try {
     return await scope.run(s, () => fn(t));
   } finally {
     s.open = false;
   }
 }
+
+/**
+ * A `store.tx` called inside `owner`'s open transaction, or undefined when
+ * there is none. It joins the transaction, as one unit of it: the nested
+ * transactions of one parent run one after another, each inside `savepoint`
+ * (Postgres: a SAVEPOINT, so a failure the caller catches undoes only the
+ * nested part and the transaction goes on; JSON: none, it has no rollback).
+ * What it held for the commit goes on to the parent's commit if it succeeds,
+ * and is dropped if it fails.
+ */
+export function nestedTx<T>(
+  owner: object,
+  fn: (t: StoreMethods) => Promise<T> | T,
+  savepoint: <R>(fn: () => Promise<R>) => Promise<R> = (f) => f(),
+): Promise<T> | undefined {
+  const parent = scope.getStore();
+  if (!parent?.open || parent.owner !== owner) return undefined;
+  return parent.children.run(async () => {
+    const hooks = newTxHooks();
+    const child: Scope = { open: true, owner, t: parent.t, hooks, children: new Mutex() };
+    try {
+      const out = await savepoint(() => scope.run(child, async () => await fn(parent.t)));
+      parent.hooks.committed.push(...hooks.committed);
+      parent.hooks.dropped.push(...hooks.dropped);
+      return out;
+    } catch (err) {
+      hooks.committed.length = 0;
+      runEach(hooks.dropped, "dropped-transaction");
+      throw err;
+    } finally {
+      child.open = false;
+    }
+  });
+}
+
+/** The lock methods (lockUser, lockOrganisation, lockKey): a lock is held until
+ *  its transaction ends, so outside one it would hold nothing. */
+export const isLock = (name: string) => /^lock[A-Z]/.test(name);
+export const lockOutsideTx = (name: string) => new Error(`${name} outside a store.tx holds nothing`);
 
 const copy = <T>(v: T): T => (v === undefined || v === null || typeof v !== "object" ? v : structuredClone(v));
 const copyArgs = (args: unknown[]) => args.map((a) => (typeof a === "function" ? a : copy(a)));
@@ -236,15 +275,18 @@ export function jsonBackend(core: Core): StoreBackend {
     if (name in methods || typeof d.value !== "function") continue;
     if (name === "beginTx" || name === "endTx" || name === "takeAnnouncements") continue;
     const fn = d.value as (...args: unknown[]) => unknown;
-    methods[name] = (...args: unknown[]) => call(() => fn.apply(core, copyArgs(args)));
+    methods[name] = (...args: unknown[]) => {
+      if (isLock(name) && !currentTx(owner)) return Promise.reject(lockOutsideTx(name));
+      return call(() => fn.apply(core, copyArgs(args)));
+    };
   }
   const t = methods as StoreMethods;
 
   const backend: StoreBackend = {
     ...t,
     tx<T>(fn: (t: StoreMethods) => Promise<T> | T): Promise<T> {
-      const open = currentTx(owner);
-      if (open) return Promise.resolve().then(() => fn(open));
+      const nested = nestedTx(owner, fn);
+      if (nested) return nested;
       const hooks = newTxHooks();
       return endTx(
         held(async () => {
