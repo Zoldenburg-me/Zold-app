@@ -48,6 +48,29 @@ const tokenError = (what: string, status: number, body: string) =>
     ? new MoneriumAccessError(`${what} (${status}): ${body}`, status)
     : Object.assign(new Error(`${what} (${status}): ${body}`), { partnerStatus: status });
 
+/** The largest body read from Monerium. An order list is the big answer; a
+ *  body past this is not one, and is not read into memory to find out. */
+const MAX_BODY_BYTES = 8 * 1024 * 1024;
+
+/** The body as text, up to MAX_BODY_BYTES, under the request's own timeout. */
+export async function moneriumText(res: Response): Promise<string> {
+  if (!res.body) return "";
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > MAX_BODY_BYTES) {
+      await reader.cancel().catch(() => {});
+      throw new Error(`Monerium answered with a body larger than ${MAX_BODY_BYTES} bytes (HTTP ${res.status})`);
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 /** Monerium's body, parsed. A body that is not JSON (a proxy's HTML page)
  *  throws a fixed message: Node's own parse error quotes the body's start. */
 export function moneriumJson<T>(text: string, what: string, status: number): T {
@@ -145,9 +168,9 @@ export class MoneriumClient {
       }),
     });
     if (!res.ok) {
-      throw tokenError("Monerium auth failed", res.status, await res.text());
+      throw tokenError("Monerium auth failed", res.status, await moneriumText(res));
     }
-    const data = moneriumToken<{ access_token: string; expires_in: number }>(await res.text(), "Monerium auth", res.status);
+    const data = moneriumToken<{ access_token: string; expires_in: number }>(await moneriumText(res), "Monerium auth", res.status);
     this.token = { value: data.access_token, expiresAt: Date.now() + data.expires_in * 1000 };
     return this.token.value;
   }
@@ -164,7 +187,7 @@ export class MoneriumClient {
       },
       body: body ? JSON.stringify(body) : undefined,
     });
-    const text = await res.text();
+    const text = await moneriumText(res);
     if (!res.ok) {
       throw new MoneriumApiError(
         `Monerium ${method} ${path} failed (${res.status}): ${text}`,
@@ -307,9 +330,9 @@ export async function exchangeAuthorizationCode(cfg: MoneriumConfig, params: {
     }),
   });
   if (!res.ok) {
-    throw tokenError("Monerium OAuth code exchange failed", res.status, await res.text());
+    throw tokenError("Monerium OAuth code exchange failed", res.status, await moneriumText(res));
   }
-  return moneriumToken<MoneriumTokenResponse>(await res.text(), "Monerium OAuth token", res.status);
+  return moneriumToken<MoneriumTokenResponse>(await moneriumText(res), "Monerium OAuth token", res.status);
 }
 
 export async function refreshAuthorizationToken(
@@ -328,9 +351,9 @@ export async function refreshAuthorizationToken(
     }),
   });
   if (!res.ok) {
-    throw tokenError("Monerium OAuth refresh failed", res.status, await res.text());
+    throw tokenError("Monerium OAuth refresh failed", res.status, await moneriumText(res));
   }
-  return moneriumToken<MoneriumTokenResponse>(await res.text(), "Monerium OAuth token", res.status);
+  return moneriumToken<MoneriumTokenResponse>(await moneriumText(res), "Monerium OAuth token", res.status);
 }
 
 
@@ -351,7 +374,7 @@ export async function moneriumBearerRequest<T>(
     },
     body: body ? JSON.stringify(body) : undefined,
   });
-  const text = await res.text();
+  const text = await moneriumText(res);
   if (!res.ok) {
     throw new MoneriumApiError(
       `Monerium ${method} ${path} failed (${res.status}): ${text}`,

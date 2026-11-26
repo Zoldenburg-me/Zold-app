@@ -15,8 +15,8 @@ import { MONERIUM } from "../config.js";
 import { store, type Transfer, type User } from "../store.js";
 import { isMoneriumOrderId, MoneriumAccessError, MoneriumApiError, moneriumFailureReason, type MoneriumOrder } from "../adapters/monerium-client.js";
 import { readOrder } from "../adapters/monerium-sandbox.js";
-import { moneriumOrderProcessed } from "../domain/monerium-order.js";
-import { normalizeIban, paymentMemo } from "../sepa.js";
+import { moneriumOrderProcessed, redeemOrderDiffers } from "../domain/monerium-order.js";
+import { paymentMemo } from "../sepa.js";
 
 export type AttachOutcome =
   | { ok: true }
@@ -31,11 +31,6 @@ export type AttachOutcome =
   | { ok: false; code: "READ_REFUSED" }
   /** Monerium could not be read; nothing changed, the operator may retry. */
   | { ok: false; code: "UNAVAILABLE" };
-
-const cents = (amount: unknown) => {
-  const n = Number(amount);
-  return typeof amount === "string" && amount.trim() !== "" && Number.isFinite(n) ? Math.round(n * 100) : NaN;
-};
 
 /** Whether `t` may have an order attached at all: a SEPA transfer in
  *  unresolved review that signed a redeem and recorded no order. */
@@ -60,15 +55,10 @@ export function redeemOrderMismatch(t: Transfer, user: User, orderId: string, or
   const signed = t.moneriumRedeem;
   if (!signed) return "the transfer signed no redeem";
   if (order?.id !== orderId) return "order id";
-  if (order.kind !== "redeem") return "kind";
-  if (String(order.currency ?? "").toLowerCase() !== "eur") return "currency";
+  const differs = redeemOrderDiffers(order, signed, user.address);
+  if (differs) return differs;
   if (!moneriumOrderProcessed(order.meta?.state ?? order.state)) return "state (not processed)";
-  const amount = cents(order.amount);
-  if (!Number.isFinite(amount) || amount !== cents(signed.amount)) return "amount";
-  if (String(order.address ?? "").toLowerCase() !== user.address.toLowerCase()) return "Safe address";
   if (order.chain !== MONERIUM.chain) return "chain";
-  const iban = order.counterpart?.identifier?.iban;
-  if (typeof iban !== "string" || normalizeIban(iban) !== normalizeIban(signed.iban)) return "recipient IBAN";
   if (order.memo !== paymentMemo(t.id, t.reference)) return "payment memo";
   return undefined;
 }

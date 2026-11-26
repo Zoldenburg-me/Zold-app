@@ -48,7 +48,10 @@ export function createMoneriumWebhookRouter() {
       if (!verifyWebhookSignature(req)) {
         return res.status(401).json({ error: "invalid webhook signature" });
       }
-      const webhookId = req.header("webhook-id");
+      // Without a secret the delivery id is the sender's word: deduping on it
+      // would let anyone spend an id, and make every forged one a store write.
+      // The order id dedupes either way (store.isOrderProcessed).
+      const webhookId = SECURITY.moneriumWebhookSecret ? req.header("webhook-id") : undefined;
       if (webhookId && store.isWebhookProcessed(webhookId)) {
         return res.json({ handled: false, duplicate: true });
       }
