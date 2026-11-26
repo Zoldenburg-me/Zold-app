@@ -125,11 +125,13 @@ check("no payment request's payments and no invoice's settlements are written wh
   );
 });
 check("updateTransfer merges a txs patch into the stored log, on both backends", () => {
-  for (const file of ["services/api/src/store.ts", "services/api/src/store/pg/backend.ts"]) {
+  // Postgres: updateTransfer is patchTransfer, which writes on the locked row.
+  for (const [file, start] of [["services/api/src/store.ts", "updateTransfer("], ["services/api/src/store/pg/backend.ts", "async function patchTransfer("]]) {
     const text = readFileSync(path.join(ROOT, file), "utf8");
-    const body = text.slice(text.indexOf("updateTransfer("), text.indexOf("updateTransfer(") + 600);
+    const body = text.slice(text.indexOf(start), text.indexOf(start) + 600);
     assert.match(body, /transferPatchOnRow\(/, file);
   }
+  assert.match(readFileSync(path.join(SRC, "store/pg/backend.ts"), "utf8"), /updateTransfer: \(id, patch\) => patchTransfer\(/);
   assert.match(readFileSync(path.join(SRC, "store/rules.ts"), "utf8"), /export function transferPatchOnRow[\s\S]{0,300}mergeTransferSteps\(/);
 });
 
