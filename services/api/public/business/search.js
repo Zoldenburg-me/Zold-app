@@ -119,7 +119,7 @@ function pick(i) {
   render({ focus: true });
 }
 
-function open(trigger) {
+function open(trigger, q) {
   if (!org) return;
   if (!$("#zb-search")) {
     document.body.insertAdjacentHTML("beforeend", `<div class="z-scrim z-scrim--dialog z-scrim--top" id="zb-search" hidden>
@@ -151,6 +151,9 @@ function open(trigger) {
     };
   }
   if (st.orgId !== org.id) { st.data = null; st.q = ""; }
+  // A query handed in from Home is for that one opening; the next plain opening starts empty.
+  if (q != null) st.q = q; else if (st.given) st.q = "";
+  st.given = q != null;
   $("#zb-search-org").textContent = org.legalName || org.name;
   const input = $("#zb-q");
   input.value = st.q;
@@ -162,6 +165,9 @@ function open(trigger) {
   // Read fresh on every open: a run approved a minute ago should show so.
   load().then(() => { if (!$("#zb-search").hidden) { st.results = results(input.value); draw(); } }).catch(() => { /* searched what it had */ });
 }
+
+/** Search opened on a query typed somewhere else (Home's command box). */
+export const openSearch = (q, trigger) => open(trigger, q);
 
 export function initSearch() {
   const btn = $("#search-btn");

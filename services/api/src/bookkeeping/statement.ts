@@ -17,7 +17,7 @@
  * never a line at a guessed rate.
  */
 import { createHash } from "node:crypto";
-import type { Invoice, LedgerEntry, StatementEvent, StatementFacts } from "../domain/types.js";
+import type { CompanyBankPayout, Invoice, LedgerEntry, StatementEvent, StatementFacts } from "../domain/types.js";
 import type {
   ConversionSweep,
   CryptoDeposit,
@@ -50,6 +50,9 @@ export interface StatementInputs {
   invoices: Invoice[];
   paymentRequests: PaymentRequest[];
   cryptoSends?: CryptoSend[];
+  /** A company account's bank payouts from its own IBAN
+   *  (routes/business/org-monerium-payouts.ts). */
+  companyPayouts?: CompanyBankPayout[];
   /** Rule 2: no swap has moved real money, so every conversion figure is
    *  labelled as coming from an unexecuted path until one has. */
   swapsHaveExecuted: boolean;
@@ -258,6 +261,32 @@ function sepaOutLines(inp: StatementInputs): LineDraft[] {
         note: `Refund of a failed payout (${t.refund.recoveredFrom}). ${t.refund.deductions}`.slice(0, 240),
       });
     }
+  }
+  return out;
+}
+
+/**
+ * A company's bank payouts from its own IBAN. Only an order Monerium carried
+ * out is a line (it burns the euros when it processes the order): a pending
+ * one could still be rejected, and a line is never taken back; a refused one
+ * moved nothing; an unknown one is not booked until Monerium says so.
+ */
+function companyPayoutLines(inp: StatementInputs): LineDraft[] {
+  const out: LineDraft[] = [];
+  for (const p of inp.companyPayouts ?? []) {
+    if (!p.orderId || p.state !== "sent" || !(p.amountEur > 0)) continue;
+    out.push({
+      event: "sepa_out",
+      key: `org-payout:${p.id}`,
+      bookingAt: p.createdAt,
+      valueAt: p.processedAt ?? p.updatedAt,
+      amountCents: -cents(p.amountEur),
+      counterparty: { name: p.recipientName, iban: p.recipientIban },
+      reference: referenceFor([p.reference, p.memo], p.orderId),
+      links: { orderId: p.orderId, txHashes: [] },
+      txType: "payout",
+      tags: ["sepa"],
+    });
   }
   return out;
 }
@@ -523,7 +552,7 @@ function sweepLines(inp: StatementInputs): LineDraft[] {
 
 /** Every line the inputs support, sorted by value date. */
 export function projectStatementLines(inp: StatementInputs, now = new Date().toISOString()): LedgerEntry[] {
-  const drafts = [...sepaInLines(inp), ...sepaOutLines(inp), ...cryptoLines(inp), ...eureInLines(inp), ...sweepLines(inp), ...cryptoOutLines(inp)];
+  const drafts = [...sepaInLines(inp), ...sepaOutLines(inp), ...companyPayoutLines(inp), ...cryptoLines(inp), ...eureInLines(inp), ...sweepLines(inp), ...cryptoOutLines(inp)];
   const seen = new Set<string>();
   const out: LedgerEntry[] = [];
   for (const d of drafts) {
