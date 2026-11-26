@@ -4,12 +4,15 @@
  * claims on one row, a second holder of an advisory lock. Then the API's own
  * store on Postgres: the §2 concurrency tests (pg-concurrency-test.ts) and
  * the suites that hold the S2 race tests, each in a database of its own.
+ * Between them, the application role's grants (§5).
  *
  * Not part of the offline `npm run check`. Needs a server:
  *   TEST_DATABASE_URL=postgresql:///postgres?host=/tmp npm run check:pg
  * (the default; Homebrew's postgresql@17 listens there). The URL names a
- * database to connect to as a role that may CREATE DATABASE. Each run creates
- * a uniquely named database and drops it at the end, pass or fail.
+ * database to connect to as a role that may CREATE DATABASE and CREATE ROLE.
+ * Each run creates a uniquely named database and application role and drops
+ * both at the end, pass or fail. The API suites run as that role, as the API
+ * does (§7), with the grants of zold_grant_app (migrations/0006).
  */
 // Must be first: pins chain, keys and a throwaway database.
 import "./_local-chain.js";
@@ -19,15 +22,21 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import pg from "pg";
-import { conditionalWriteSuite, storeSuite } from "./_store-suite.js";
+import { conditionalWriteSuite, keptRowsSuite, outboxSuite, storeSuite } from "./_store-suite.js";
 
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-store-pg-")), "db.json");
 
 const { createPgStore } = await import("../services/api/src/store/pg/backend.js");
-const { migrate, readMigrations } = await import("../services/api/src/store/pg/migrate.js");
-const { openPool } = await import("../services/api/src/store/pg/sql.js");
+const { assertSchemaCurrent, migrate, readMigrations } = await import("../services/api/src/store/pg/migrate.js");
+const { databaseUrlIsLocal, openPool } = await import("../services/api/src/store/pg/sql.js");
 
 const adminUrl = process.env.TEST_DATABASE_URL || "postgresql:///postgres?host=/tmp";
+// The sweep below drops databases on this server. Only a server on this
+// machine, unless the operator says the remote one is disposable.
+if (!databaseUrlIsLocal(adminUrl) && process.env.ZOLD_TEST_DB_REMOTE_OK !== "1") {
+  console.error("TEST_DATABASE_URL is not a local socket or loopback; set ZOLD_TEST_DB_REMOTE_OK=1 if that server is disposable");
+  process.exit(1);
+}
 const admin = new pg.Pool({ connectionString: adminUrl, max: 1 });
 admin.on("error", () => {}); // an idle admin client cut by the server: the pool drops it
 // The creation time is in the name, so a later run can tell a database a
@@ -52,7 +61,38 @@ for (const { datname } of (
     console.log(`swept a stale test database (${datname})`);
   }
 }
+// Roles are cluster-wide, not per database: the application role of this run
+// has a name of its own, is dropped in the finally below, and one a killed
+// run left behind (over an hour old, its databases swept above) goes here.
+for (const { rolname } of (await admin.query<{ rolname: string }>("SELECT rolname FROM pg_roles WHERE rolname ~ '^zold_test_app_[0-9]+_[0-9a-f]+$'")).rows) {
+  if (Date.now() / 1000 - Number(rolname.split("_")[3]) > 3600) {
+    await admin.query(`DROP ROLE IF EXISTS ${rolname}`).then(
+      () => console.log(`swept a stale test role (${rolname})`),
+      () => {},
+    );
+  }
+}
 await admin.query(`CREATE DATABASE ${name}`);
+const appRole = `zold_test_app_${Math.floor(Date.now() / 1000)}_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+const appPassword = randomUUID();
+await admin.query(`CREATE ROLE ${appRole} LOGIN PASSWORD '${appPassword}'`);
+/** `db` as the application role: what the API connects as (§7). The role
+ *  goes in the query, which node-postgres reads, so a socket URL stays one
+ *  that WHATWG's URL parses (the commit-cut proxy reads it). */
+const urlAs = (db: string) => {
+  const u = urlFor(db).replace(/^(postgres(?:ql)?:\/\/)[^@/]*@/, "$1");
+  return `${u}${u.includes("?") ? "&" : "?"}user=${appRole}&password=${appPassword}`;
+};
+/** Migrate `db` as the owner (this run's admin role), then grant the application role. */
+const migrateAndGrant = async (db: string) => {
+  const target = openPool(urlFor(db), { realMoney: false });
+  try {
+    await migrate(target);
+    await target.query("SELECT zold_grant_app($1)", [appRole]);
+  } finally {
+    await target.close();
+  }
+};
 const opened: { close(): Promise<void> }[] = [];
 const open = () => {
   const db = openPool(urlFor(name), { realMoney: false });
@@ -74,6 +114,8 @@ try {
   const s = createPgStore(a);
   await storeSuite(s);
   await conditionalWriteSuite(s);
+  await outboxSuite(s);
+  await keptRowsSuite(s, a);
   console.log("ok - store suite on the Postgres backend (Postgres 17)");
 
   // Parallel calls on one row, each on its own connection from the pool.
@@ -321,6 +363,63 @@ try {
   assert.notEqual(next, pid, "the next query runs on a new connection");
   console.log("ok - an idle pooled connection terminated by the server is logged and replaced; the process survives");
 
+  // §5, §7: the application role. Least privilege, checked as that role on a
+  // database of its own: the whole store suite works with its grants, and
+  // what it must not do is refused.
+  {
+    const db = `${name}_s${Math.random().toString(16).slice(2, 10)}`;
+    await admin.query(`CREATE DATABASE ${db}`);
+    const owner = openPool(urlFor(db), { realMoney: false });
+    const app = openPool(urlAs(db), { realMoney: false });
+    try {
+      await migrate(owner);
+      await owner.query("SELECT zold_grant_app($1)", [appRole]);
+      assert.equal((await app.query<{ u: string }>("SELECT current_user AS u")).rows[0].u, appRole);
+      await assertSchemaCurrent(app);
+      const as = createPgStore(app);
+      await storeSuite(as);
+      await conditionalWriteSuite(as);
+      await outboxSuite(as);
+      const denied = /permission denied/;
+      await assert.rejects(() => app.query("DELETE FROM ledger"), denied, "no DELETE grant on ledger");
+      await assert.rejects(() => app.query("DELETE FROM transfers"), denied, "nor on transfers");
+      await assert.rejects(() => app.query("UPDATE audit SET doc = doc"), denied, "audit: no UPDATE grant");
+      await assert.rejects(() => app.query("INSERT INTO ledger_history (entry_id, doc) VALUES ('x', '{}')"), denied, "history is written by the trigger only");
+      await assert.rejects(() => app.query("DELETE FROM schema_migrations"), denied, "schema_migrations is read-only");
+      await assert.rejects(() => app.query("TRUNCATE sessions"), denied, "no TRUNCATE anywhere");
+      await assert.rejects(() => app.query("CREATE TABLE app_made (x int)"), denied, "no DDL: nothing created in the schema");
+      await assert.rejects(() => app.query("DROP TABLE contacts"), /must be owner/, "nor dropped");
+      await assert.rejects(() => app.query("ALTER TABLE ledger DISABLE TRIGGER ledger_no_delete"), /must be owner/, "nor a trigger turned off");
+      await assert.rejects(() => app.query("SELECT zold_grant_app($1)", [appRole]), denied, "the role cannot grant itself more");
+      // What it may do: delete where a store method deletes, and its ledger
+      // writes leave history through the trigger.
+      assert.ok((await app.query("DELETE FROM contacts WHERE FALSE")).rows);
+      await as.addLedgerEntries([{ id: "le_app", orgId: "org_app", direction: "in", asset: "EURe", amount: "1", at: new Date().toISOString(), createdAt: new Date().toISOString() } as any]);
+      await as.updateLedgerEntry("le_app", { note: "categorised" } as any);
+      assert.equal((await app.query("SELECT 1 FROM ledger_history WHERE entry_id = 'le_app'")).rows.length, 1, "the app role's update leaves history");
+      // A temporary table named ledger_history does not take the history row.
+      // The role has no TEMP; granted back here, the trigger still writes the
+      // real table.
+      await assert.rejects(() => app.query("CREATE TEMP TABLE shadow (x int)"), denied, "no temporary tables");
+      await owner.query(`GRANT TEMPORARY ON DATABASE ${db} TO ${appRole}`);
+      const c = new pg.Client({ connectionString: urlAs(db) });
+      await c.connect();
+      try {
+        await c.query("CREATE TEMP TABLE ledger_history (entry_id text, org_id text, doc json)");
+        await c.query(`UPDATE ledger SET doc = json_build_object('id', 'le_app', 'note', 'shadowed') WHERE id = 'le_app'`);
+        assert.equal((await c.query("SELECT 1 FROM pg_temp.ledger_history")).rows.length, 0, "the temporary table got nothing");
+      } finally {
+        await c.end();
+      }
+      assert.equal((await app.query("SELECT 1 FROM ledger_history WHERE entry_id = 'le_app'")).rows.length, 2, "the real table got the row");
+    } finally {
+      await app.close();
+      await owner.close();
+      await admin.query(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`);
+    }
+  }
+  console.log("ok - the application role: the store suite runs on its grants; no DELETE or TRUNCATE on kept rows, no UPDATE on audit, no write to history or schema_migrations, no DDL, no TEMP; a shadowing temporary ledger_history does not take the history row");
+
   // The API's own store on Postgres (STORE_BACKEND=postgres): the §2
   // concurrency tests, and the suites that hold the S2 race tests, each in a
   // database of its own, migrated as a deploy would, with real parallel
@@ -344,6 +443,8 @@ try {
     ["scripts/webhook-test.ts"],
     ["scripts/crypto-deposit-test.ts"],
     ["scripts/wallet-proof-test.ts"],
+    ["scripts/outbox-test.ts"],
+    ["scripts/checkout-service-test.ts"],
   ];
   const { spawn } = await import("node:child_process");
   const { freePort } = await import("./_free-port.js");
@@ -351,18 +452,14 @@ try {
     const db = `${name}_s${Math.random().toString(16).slice(2, 10)}`;
     await admin.query(`CREATE DATABASE ${db}`);
     try {
-      const target = openPool(urlFor(db), { realMoney: false });
-      try {
-        await migrate(target);
-      } finally {
-        await target.close();
-      }
+      await migrateAndGrant(db);
       const child = spawn(process.execPath, ["--import", "tsx", file], {
         cwd: new URL("..", import.meta.url).pathname,
         env: {
           ...process.env,
           STORE_BACKEND: "postgres",
-          DATABASE_URL: urlFor(db),
+          // As the API runs: the application role, not the owner.
+          DATABASE_URL: urlAs(db),
           // As npm run check sets it: a local RPC nothing listens on.
           TRANSF_RPC_URL: process.env.TRANSF_RPC_URL ?? `http://127.0.0.1:${await freePort()}`,
           ...env,
@@ -397,5 +494,7 @@ try {
     (await admin.query<{ n: number }>("SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = $1", [name])).rows[0].n;
   for (let i = 0; i < 100 && (await left()) > 0; i++) await new Promise((r) => setTimeout(r, 50));
   await admin.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
+  // After every database it has grants in is gone.
+  await admin.query(`DROP ROLE IF EXISTS ${appRole}`);
   await admin.end();
 }

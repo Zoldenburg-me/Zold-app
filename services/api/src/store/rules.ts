@@ -12,7 +12,9 @@ import type { Account, DraftActivity, DraftPayment, Invoice, LedgerEntry, Member
 import { auditEntry, type AuditEntry } from "../audit.js";
 import { matchesPayoutEvidence } from "../transfers/review-evidence.js";
 import { OPERATOR_REFUND_STEP, REVIEW_RESOLUTION_STATES } from "./types.js";
-import type { ConversionSweep, CryptoDeposit, PaymentRequest, Quote, ReviewResolutionState, Transfer, User } from "./types.js";
+import type { ConversionSweep, CryptoDeposit, OutboxDraft, OutboxOutcome, OutboxRow, PaymentRequest, Quote, ReviewResolutionState, Transfer, User } from "./types.js";
+import { randomUUID } from "node:crypto";
+import { describeCause } from "../http/log-cause.js";
 
 /** Bounds of an operator's review-resolution note. */
 export const REVIEW_NOTE_MIN = 20;
@@ -63,6 +65,31 @@ export function followIban(a: Account, userId: string, userIban: string | undefi
 /** An OPEN quote whose `expiresAt` is still ahead: the one a transfer may consume. */
 export function quoteConsumable(q: Quote, now: number): boolean {
   return (q.status ?? "OPEN") === "OPEN" && Date.parse(q.expiresAt) > now;
+}
+
+/**
+ * A daily-cap check only means something on finite numbers: `NaN + x > cap` is
+ * false, so a NaN amount or a NaN `used` would pass the check, and a stored NaN
+ * hold makes every later sum NaN, opening the cap for the rest of the day.
+ * Refused, not clamped (fail closed).
+ */
+export function assertCapAmounts(eur: number, usedEur: number, capEur: number): void {
+  if (!Number.isFinite(eur) || eur < 0) throw new Error("daily cap: the amount to hold is not a finite, non-negative number");
+  // A negative used total would raise what is left of the cap.
+  if (!Number.isFinite(usedEur) || usedEur < 0 || !Number.isFinite(capEur) || capEur < 0) {
+    throw new Error("daily cap: the used or cap amount is not a finite, non-negative number");
+  }
+}
+
+/**
+ * `(chainId, txHash, logIndex)` is what makes a crypto deposit idempotent. A
+ * missing or non-integer logIndex would never match an existing row and would
+ * give the unique index a NULL, which Postgres treats as distinct: the same
+ * on-chain transfer could be credited twice.
+ */
+export function assertDepositKey(d: CryptoDeposit): void {
+  if (!Number.isSafeInteger(d.logIndex) || d.logIndex < 0) throw new Error(`crypto deposit ${d.id}: logIndex is not a non-negative integer`);
+  if (!Number.isSafeInteger(d.chainId) || typeof d.txHash !== "string" || !d.txHash) throw new Error(`crypto deposit ${d.id}: chainId or txHash is missing`);
 }
 
 /**
@@ -377,4 +404,79 @@ export function acceptInviteOnRow(m: Member, tokenHash: string, userId: string, 
 export function settlementOnRow(i: Invoice, ref: string, update: (i: Invoice) => Partial<Invoice>, replace = false): Partial<Invoice> | null {
   if (!replace && (i.settlements ?? []).some((s) => settlementRef(s) === ref)) return null;
   return update(i);
+}
+
+// ── Outbox (docs/postgres-store-design.md §5) ─────────────────────────────
+
+/**
+ * A state listener runs inside the write that moved the state, on a copy of
+ * the row, and returns what to put in the outbox in that same write. It must
+ * not do I/O: what it would tell somebody goes out from the outbox after the
+ * commit (outbox.ts).
+ */
+export type StateListener<R extends { state: string }> = (row: R, from: R["state"]) => OutboxDraft | undefined | void;
+
+/** The drafts the listeners return for one state change. A listener that
+ *  throws is logged and skipped: it must not fail the write that moved the
+ *  state, nor stop the next listener. */
+export function outboxDraftsFor<R extends { id: string; state: string }>(listeners: StateListener<R>[], row: R, from: R["state"], what: string): OutboxDraft[] {
+  const out: OutboxDraft[] = [];
+  for (const listener of listeners) {
+    try {
+      const d = listener(structuredClone(row), from);
+      if (d) out.push(structuredClone(d));
+    } catch (err) {
+      console.error(`store: state listener failed for ${what}: ${describeCause(err)}`);
+    }
+  }
+  return out;
+}
+
+/** Tell each listener that outbox rows were written. Logged, never thrown:
+ *  the write has committed. */
+export function announceOutbox(listeners: (() => void)[]): void {
+  for (const fn of listeners) {
+    try {
+      fn();
+    } catch (err) {
+      console.error(`store: outbox listener failed: ${describeCause(err)}`);
+    }
+  }
+}
+
+export function newOutboxRow(d: OutboxDraft, now = new Date()): OutboxRow {
+  const at = now.toISOString();
+  return { id: `msg_${randomUUID()}`, kind: d.kind, payload: d.payload, ...(d.key !== undefined ? { key: d.key } : {}), createdAt: at, attempts: 0, nextAttemptAt: at };
+}
+
+const outboxDue = (r: OutboxRow, at: string) => !r.deliveredAt && !r.deadAt && r.nextAttemptAt <= at && (!r.claimedUntil || r.claimedUntil <= at);
+
+/** The JSON backend's claim: the due rows of `kinds`, oldest due first, up
+ *  to `limit`, each claimed until `now + leaseMs` with its attempt counted. */
+export function claimOutboxOn(rows: OutboxRow[], limit: number, leaseMs: number, now: Date, kinds: readonly string[]): OutboxRow[] {
+  const at = now.toISOString();
+  const due = rows.filter((r) => kinds.includes(r.kind) && outboxDue(r, at)).sort((a, b) => (a.nextAttemptAt < b.nextAttemptAt ? -1 : a.nextAttemptAt > b.nextAttemptAt ? 1 : 0));
+  const until = new Date(now.getTime() + leaseMs).toISOString();
+  return due.slice(0, limit).map((r) => {
+    r.attempts += 1;
+    r.claimedUntil = until;
+    return r;
+  });
+}
+
+/** End claimed attempt `attempt` on the row; false when the row is not
+ *  claimed, is done, or was claimed again since (its lease ran out). */
+export function settleOutboxOn(r: OutboxRow, attempt: number, outcome: OutboxOutcome, now: Date): boolean {
+  if (!r.claimedUntil || r.deliveredAt || r.deadAt || r.attempts !== attempt) return false;
+  delete r.claimedUntil;
+  if (outcome.ok) {
+    r.deliveredAt = now.toISOString();
+  } else if ("dead" in outcome) {
+    r.deadAt = now.toISOString();
+    r.lastError = outcome.error;
+  } else {
+    r.nextAttemptAt = new Date(now.getTime() + outcome.retryInMs).toISOString();
+    r.lastError = outcome.error;
+  }
+  return true;
 }

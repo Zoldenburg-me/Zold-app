@@ -98,6 +98,25 @@ export function pgliteDatabase(db: PgliteLike): Database {
 /** How long an application transaction waits for a row or advisory lock (§3). */
 export const LOCK_TIMEOUT = "10s";
 
+/**
+ * Bounds on every pooled connection. A transaction spans no partner I/O (§3),
+ * so one idle inside a transaction past IDLE_IN_TX_TIMEOUT_MS is stuck: the
+ * server ends it and its row and advisory locks go, so other connections are
+ * not blocked behind it. The pool slot comes back only when the callback
+ * settles (its next statement fails on the closed connection); a callback that
+ * awaits something that never settles still holds its slot. A statement past STATEMENT_TIMEOUT_MS is cancelled (a migration sets
+ * its own, longer one). A request waits CONNECT_TIMEOUT_MS for a pooled
+ * client, then fails, instead of queueing forever behind a drained pool.
+ */
+export const STATEMENT_TIMEOUT_MS = 30_000;
+export const IDLE_IN_TX_TIMEOUT_MS = 30_000;
+export const CONNECT_TIMEOUT_MS = 10_000;
+const BOUNDS = {
+  statement_timeout: STATEMENT_TIMEOUT_MS,
+  idle_in_transaction_session_timeout: IDLE_IN_TX_TIMEOUT_MS,
+  connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
+} satisfies pg.PoolConfig;
+
 export function poolDatabase(pool: pg.Pool): Database {
   // An idle client's error (a restart, pg_terminate_backend, a socket reset)
   // is re-emitted by the pool; with no listener node throws and the process
@@ -158,16 +177,7 @@ export function poolDatabase(pool: pg.Pool): Database {
 const EMPTY_HOST = "empty-host.invalid";
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 
-/**
- * The pool settings for `DATABASE_URL`, or a refusal (§4, §7).
- *
- * A unix socket (a `host=/path` parameter, or a host that is a path) and
- * loopback need no TLS. On a real-money chain any other host must ask for
- * `sslmode=verify-full` and come with `DATABASE_CA`, so the server's
- * certificate is checked against a CA we chose. Refusals never echo the URL:
- * it can carry a password.
- */
-export function pgPoolConfig(url: string, opts: { ca?: string; realMoney: boolean }): pg.PoolConfig {
+function parseDatabaseUrl(url: string): { u: URL; local: boolean } {
   // `postgresql://role@/db?host=/run/…` (§7) has an empty host, which the
   // WHATWG parser refuses; node-postgres reads it as the default socket or
   // loopback. Parsed with a stand-in host, which never reaches the driver.
@@ -181,10 +191,36 @@ export function pgPoolConfig(url: string, opts: { ca?: string; realMoney: boolea
   if (u.protocol !== "postgresql:" && u.protocol !== "postgres:") {
     throw new Error("DATABASE_URL must be a postgresql:// URL");
   }
+  // The driver applies parameters in order, so the last of a repeated one
+  // wins, while searchParams.get reads the first. `?host=localhost&host=db.x`
+  // would pass as local (no TLS on real money, test cleanup on db.x) and
+  // connect to db.x. A repeat is refused rather than resolved.
+  const names = [...u.searchParams.keys()];
+  const repeated = names.find((n, i) => names.indexOf(n) !== i);
+  if (repeated) throw new Error(`DATABASE_URL repeats the ${repeated} parameter`);
   const socketHost = u.searchParams.get("host");
   const host = u.hostname === EMPTY_HOST ? "" : decodeURIComponent(u.hostname);
-  const onSocket = (socketHost ?? "").startsWith("/") || (!socketHost && host.startsWith("/"));
-  const local = onSocket || (!socketHost && (host === "" || LOOPBACK.has(host)));
+  // A `host=` parameter overrides the authority, so it alone decides.
+  if (socketHost) return { u, local: socketHost.startsWith("/") || LOOPBACK.has(socketHost) };
+  return { u, local: host.startsWith("/") || host === "" || LOOPBACK.has(host) };
+}
+
+/** A unix socket or loopback: the server is on this machine. */
+export function databaseUrlIsLocal(url: string): boolean {
+  return parseDatabaseUrl(url).local;
+}
+
+/**
+ * The pool settings for `DATABASE_URL`, or a refusal (§4, §7).
+ *
+ * A unix socket (a `host=/path` parameter, or a host that is a path) and
+ * loopback need no TLS. On a real-money chain any other host must ask for
+ * `sslmode=verify-full` and come with `DATABASE_CA`, so the server's
+ * certificate is checked against a CA we chose. Refusals never echo the URL:
+ * it can carry a password.
+ */
+export function pgPoolConfig(url: string, opts: { ca?: string; realMoney: boolean }): pg.PoolConfig {
+  const { u, local } = parseDatabaseUrl(url);
   const sslmode = u.searchParams.get("sslmode");
   if (!local && opts.realMoney) {
     if (sslmode !== "verify-full") {
@@ -197,11 +233,12 @@ export function pgPoolConfig(url: string, opts: { ca?: string; realMoney: boolea
     // object, so the parameter is taken off the string it parses.
     u.searchParams.delete("sslmode");
     return {
+      ...BOUNDS,
       connectionString: u.toString().replace(`@${EMPTY_HOST}/`, "@/").replace(`//${EMPTY_HOST}/`, "///"),
       ssl: { ca: readFileSync(opts.ca, "utf8"), rejectUnauthorized: true },
     };
   }
-  return { connectionString: url };
+  return { ...BOUNDS, connectionString: url };
 }
 
 export function openPool(url: string, opts: { ca?: string; realMoney: boolean }): Database {

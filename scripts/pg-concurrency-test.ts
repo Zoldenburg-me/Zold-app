@@ -56,6 +56,7 @@ const { FX } = await import("../services/api/src/config.js");
 const { safeFundedEurToday } = await import("../services/api/src/orchestrator.js");
 const { handleWebhookEvent, pollDepositsOnce } = await import("../services/api/src/adapters/monerium-sandbox.js");
 const routes = await import("../services/api/src/routes/payment-requests.js");
+const { drainOutbox } = await import("../services/api/src/outbox.js");
 const { applyPayment } = await import("../services/api/src/payment-requests.js");
 const pg = (await import("pg")).default;
 
@@ -233,8 +234,11 @@ await check("payment request paid: one Monerium order recorded by two pollers in
   });
   const order = { id: `ord-${randomUUID()}`, kind: "issue", amount: "40", address, memo: `${code} thanks`, meta: { state: "processed", processedAt: now() } };
   await n(4, () => routes.attributeMoneriumOrder(order));
-  await new Promise((res) => setTimeout(res, 50)); // hooks run after the commit
+  await drainOutbox(); // the hook goes out from the outbox, after the commit
   const after = (await store.findPaymentRequest(r.id))!;
+  const paidRows = (await rowsOf.query("SELECT delivered_at FROM outbox WHERE key = $1", [`paid:${r.id}`])).rows;
+  assert.equal(paidRows.length, 1, "one PAID outbox row");
+  assert.ok(paidRows[0].delivered_at, "delivered");
   assert.equal(after.state, "PAID");
   assert.equal(after.payments.length, 1, JSON.stringify(after.payments));
   assert.equal(fired, 1, "the PAID hook fires once");
@@ -375,7 +379,7 @@ await check("approvals waiting for a passkey: a prepared operation outlives the 
   assert.equal(await store.findPendingExecution("transfer", t.id), undefined, "gone with the claim");
 });
 
-await check("ledger: a revalue, a hand categorisation and a rule run in parallel, ×5: the value and the hand category both survive", async () => {
+await check("ledger: a revalue, a hand categorisation and a rule run in parallel, ×5: the value and the hand category both survive, each a step in ledger_history", async () => {
   const { revalueEntry } = await import("../services/api/src/wallet-sync/revalue.js");
   const { applyRules } = await import("../services/api/src/domain/coa.js");
   const orgId = `org_${randomUUID()}`;
@@ -407,6 +411,14 @@ await check("ledger: a revalue, a hand categorisation and a rule run in parallel
     const e = (await store.ledgerOf(orgId)).find((x) => x.id === id)!;
     assert.equal(e.fiatValue, "3.00", `round ${i}: the revalued value survives`);
     assert.deepEqual([e.accountCode, e.accountCodeAuto], ["4400", false], `round ${i}: the hand category survives`);
+    // §5: every change keeps the row as it was, so each step is in the history.
+    const history = (await rowsOf.query<{ doc: any }>("SELECT doc FROM ledger_history WHERE entry_id = $1 ORDER BY seq", [id])).rows.map((r) => r.doc);
+    const steps = [...history, e];
+    const introduced = (has: (x: any) => boolean) => steps.some((x, j) => j > 0 && has(x) && !has(steps[j - 1]));
+    assert.equal(history[0]?.fiatValue, undefined, `round ${i}: the history starts with the row as added`);
+    assert.ok(introduced((x) => x.fiatValue === "3.00"), `round ${i}: the revalue is a step in the history`);
+    assert.ok(introduced((x) => x.accountCode === "4400" && x.accountCodeAuto === false), `round ${i}: the categorisation is a step in the history`);
+    for (let j = 1; j < steps.length; j++) assert.notDeepEqual(steps[j], steps[j - 1], `round ${i}: a history row is a change, not a rewrite of the same row`);
   }
 });
 
@@ -417,8 +429,9 @@ await check("ledger: a revalue, a hand categorisation and a rule run in parallel
  */
 function passwordFor(u: URL, host: string, port: number): string | undefined {
   if (u.password) return decodeURIComponent(u.password);
+  if (u.searchParams.get("password")) return u.searchParams.get("password")!;
   if (process.env.PGPASSWORD) return process.env.PGPASSWORD;
-  const user = decodeURIComponent(u.username) || process.env.PGUSER || os.userInfo().username;
+  const user = decodeURIComponent(u.username) || u.searchParams.get("user") || process.env.PGUSER || os.userInfo().username;
   const db = decodeURIComponent(u.pathname.slice(1)) || user;
   let text: string;
   try { text = readFileSync(process.env.PGPASSFILE ?? path.join(os.homedir(), ".pgpass"), "utf8"); } catch { return undefined; }
@@ -483,8 +496,8 @@ async function commitCutter(databaseUrl: string) {
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const password = passwordFor(u, host, port);
-  const user = decodeURIComponent(u.username) || process.env.PGUSER || os.userInfo().username;
-  const auth = password !== undefined ? `${encodeURIComponent(user)}:${encodeURIComponent(password)}@` : u.username ? `${u.username}@` : "";
+  const user = decodeURIComponent(u.username) || u.searchParams.get("user") || process.env.PGUSER || os.userInfo().username;
+  const auth = password !== undefined ? `${encodeURIComponent(user)}:${encodeURIComponent(password)}@` : `${encodeURIComponent(user)}@`;
   const proxied = `postgresql://${auth}127.0.0.1:${(server.address() as net.AddressInfo).port}${u.pathname}`;
   return { url: proxied, arm: (m: "before" | "after") => (mode = m), close: () => new Promise<void>((r) => server.close(() => r())) };
 }

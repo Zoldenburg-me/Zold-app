@@ -705,6 +705,34 @@ await check("a viewer may not revoke (403); another org's link id is 404", async
   assert.equal((await call("DELETE", `/api/orgs/${org.id}/merchant-links/${link.linkId}`, { user: viewer.id })).status, 403);
   assert.equal((await call("DELETE", `/api/orgs/${org2.id}/merchant-links/${link.linkId}`, { user: owner2.id })).status, 404);
 });
+// Postgres only: the JSON backend has no rollback (store/backend.ts).
+if (process.env.STORE_BACKEND === "postgres") await check("a revoke whose audit write, or whose hint, fails is undone whole: the link stays open and no hint is kept or sent", async () => {
+  deliveries.length = 0;
+  const hintsBefore = (await store.list("outbox")).filter((r) => r.payload.linkId === link.linkId).length;
+  const audit = store.audit;
+  const enqueue = store.enqueueOutbox;
+  try {
+    (store as any).audit = async (e: any) => {
+      if (e.kind === "merchant_link.revoked") throw new Error("audit write failed");
+      return audit(e);
+    };
+    assert.equal((await call("DELETE", `/api/orgs/${org.id}/merchant-links/${link.linkId}`, { user: owner.id })).status, 500);
+    (store as any).audit = audit;
+    // The hint is written, then the transaction fails.
+    (store as any).enqueueOutbox = async (d: any) => {
+      await enqueue(d);
+      throw new Error("after the hint");
+    };
+    assert.equal((await call("DELETE", `/api/orgs/${org.id}/merchant-links/${link.linkId}`, { user: owner.id })).status, 500);
+  } finally {
+    (store as any).audit = audit;
+    (store as any).enqueueOutbox = enqueue;
+  }
+  assert.equal((await store.findMerchantLink(link.linkId))?.revokedAt, undefined, "not revoked");
+  assert.equal((await store.list("outbox")).filter((r) => r.payload.linkId === link.linkId).length, hintsBefore, "no hint kept");
+  await sleep(100);
+  assert.deepEqual(deliveries, [], "none sent");
+});
 let preRevokeCode = "";
 await check("an owner revokes: revokedAt and revokedBy set, {linkId} announced, the second call idempotent and silent", async () => {
   preRevokeCode = codeOf((await issue(org, owner)).body.installUrl);

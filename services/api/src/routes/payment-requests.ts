@@ -6,13 +6,13 @@
  * the bottom are what the crypto poller and the Monerium order poller call
  * when money shows up; they hold no network of their own.
  */
-import { deferToCommit } from "../store/backend.js";
+import { registerOutboxKind } from "../outbox.js";
 import { wrap } from "./util.js";
 import { usdToken } from "../usd-token.js";
 import express from "express";
 import { randomUUID } from "node:crypto";
 import { CHAIN_ID, IS_PRODUCTION, MONERIUM, PAYMENT_REQUESTS, PUBLIC_URL, RESOLVE_MAX_ATTEMPTS } from "../config.js";
-import { store, type CryptoDeposit, type User } from "../store.js";
+import { store, type CryptoDeposit, type OutboxRow, type User } from "../store.js";
 import {
   buildBankSettlement,
   orderNamesInvoice,
@@ -562,17 +562,47 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
 type PaidHook = (request: PaymentRequest) => Promise<void> | void;
 const paidHooks: PaidHook[] = [];
 
-/** Called with a request the moment it becomes PAID. Merchant integrations
- *  register here; errors are theirs to record and the sweep retries. */
+export const PAYMENT_REQUEST_PAID = "payment-request.paid";
+
+/**
+ * Called with a request once it has become PAID. Merchant integrations
+ * register here; errors are theirs to record and the sweep retries.
+ *
+ * The first call goes out from the outbox (outbox.ts): the write that makes
+ * a request PAID writes the row in the same transaction, so a hook calls the
+ * merchant's shop only once the payment is stored, never for a transaction
+ * that was dropped, and still after a restart. A hook that fails has recorded
+ * its error, and the sweep below retries it within its own limit
+ * (RESOLVE_MAX_ATTEMPTS), so the row is delivered once the hooks have run.
+ */
 export function onPaymentRequestPaid(hook: PaidHook) {
   paidHooks.push(hook);
+  if (paidHooks.length > 1) return;
+  registerOutboxKind(PAYMENT_REQUEST_PAID, { deliver: deliverPaid, maxAttempts: 6, retryBaseMs: 30_000 });
+  store.onPaymentRequestStateChange((r, from) =>
+    r.state === "PAID" && from !== "PAID" ? { kind: PAYMENT_REQUEST_PAID, payload: { paymentRequestId: r.id }, key: `paid:${r.id}` } : undefined,
+  );
+}
+
+/** Run every PAID hook on the request as stored now. A store read that fails
+ *  fails the attempt; a hook's own failure is logged, and the sweep's. */
+async function deliverPaid(row: OutboxRow): Promise<void> {
+  const r = await store.findPaymentRequest(String(row.payload.paymentRequestId));
+  if (!r || r.state !== "PAID") return;
+  for (const hook of paidHooks) {
+    try {
+      await hook(r);
+    } catch (e) {
+      console.error(`pay-request: paid hook failed for ${r.id}: ${describeCause(e)}`);
+    }
+  }
 }
 
 async function record(r: PaymentRequest, payment: Parameters<typeof applyPayment>[1]): Promise<PaymentRequest> {
   // applyPayment runs on the request as stored, not on `r`, which was read
   // before the caller's awaits.
   let added = false;
-  const { request: saved, from } = await store.recordPaymentRequestPayment(r.id, (row) => {
+  const { request: saved } = await store.recordPaymentRequestPayment(r.id, (row) => {
     const applied = applyPayment(row, payment);
     added = applied.added;
     if (!applied.added) {
@@ -590,20 +620,6 @@ async function record(r: PaymentRequest, payment: Parameters<typeof applyPayment
     `pay-request: ${saved.id} received €${payment.amountEur} by ${payment.method} (${payment.kind})` +
       (saved.state === "PAID" ? " — PAID" : ""),
   );
-  if (saved.state === "PAID" && from !== "PAID") {
-    // After the commit of the transaction this records in (attribution runs
-    // in one): a hook calls the merchant's shop, which the fetch guard refuses
-    // inside a store.tx, and the payment must be stored before anyone is told.
-    // Never if that transaction is dropped. Outside one, now.
-    const fire = () => {
-      for (const hook of paidHooks) {
-        Promise.resolve()
-          .then(() => hook(saved))
-          .catch((e) => console.error(`pay-request: paid hook failed for ${saved.id}: ${describeCause(e)}`));
-      }
-    };
-    if (!deferToCommit(fire)) fire();
-  }
   return saved;
 }
 
