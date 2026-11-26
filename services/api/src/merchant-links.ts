@@ -160,6 +160,7 @@ export function linkSecretOf(l: MerchantLink): string {
  */
 export async function establishLink(p: PendingLink): Promise<{ link: MerchantLink; previousPayeeUserId?: string }> {
   return store.tx(async () => {
+    await store.lockOrganisation(p.orgId);
     const existing = await store.activeMerchantLinkForShop(p.shop);
     if (existing && existing.orgId === p.orgId) {
       if (existing.payeeUserId === p.payeeUserId && existing.createdBy === p.installerId) return { link: existing };

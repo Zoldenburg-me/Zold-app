@@ -169,7 +169,9 @@ async function draft(entry: LedgerEntry): Promise<StoredDocument> {
 
 async function commit(entry: LedgerEntry, doc: StoredDocument): Promise<void> {
   return store.tx(async () => {
-    // Re-read after the signing await: the writer may have updated the row.
+    // Re-read after the signing await, under the org's ledger lock: the
+    // writer may have updated the row.
+    await store.lockKey(`ledger:${entry.orgId}`);
     const s = ((await store.ledgerOf(entry.orgId)).find((e) => e.id === entry.id) ?? entry).statement!;
     await store.addDocument(doc);
     await store.updateLedgerEntry(entry.id, { statement: { ...s, documentCode: doc.code } });

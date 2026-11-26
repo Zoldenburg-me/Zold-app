@@ -595,6 +595,11 @@ export function createCryptoSendsRouter({ requireUserSession, ...deps }: CryptoS
         // whose Safe backs the account. Checked in one transaction with the
         // claim, so an address-book edit cannot land in between.
         if (send.draftId) {
+          // The org's row held: its members, contacts and feature change
+          // under the same lock (routes/org-context.ts), so the checks below
+          // hold until the claim commits.
+          const orgId = (await store.findDraft(send.draftId))?.orgId;
+          if (orgId) await store.lockOrganisation(orgId);
           const draft = await store.findDraft(send.draftId);
           const account = draft?.source.kind === "account" ? (await store.findAccount(draft.source.accountId)) : undefined;
           const member = draft && (await store.membersOf(draft.orgId)).find((m) => m.userId === send.userId && m.status === "active");

@@ -754,6 +754,7 @@ export function createPgStore(database: Database): StoreBackend {
       tx(async (t) => {
         const o = await locked<Operator>(t, TABLE.operators, operatorId);
         if (!o) throw new Error(`unknown operator ${operatorId}`);
+        if (o.disabledAt) throw new Error("this operator is disabled");
         if ((await t.query("SELECT 1 FROM operator_credentials WHERE credential_id = $1", [credential.credentialId])).rows.length) {
           throw new Error("that passkey is already registered");
         }

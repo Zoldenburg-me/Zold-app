@@ -96,7 +96,7 @@ export async function faucetFundSafe(userId: string): Promise<FaucetResult> {
   // Checked and claimed in one transaction, before the send: a concurrent
   // second call sees the claim and returns.
   const claimed = await store.tx(async (): Promise<FaucetResult | { user: NonNullable<Awaited<ReturnType<typeof store.findUser>>> }> => {
-    const user = await store.findUser(userId);
+    const user = await store.lockUser(userId);
     if (!user?.wallet?.deployed) return { ok: false, code: "NO_SAFE", error: "deploy your smart wallet first" };
     if (!ADDRESS_RE.test(user.address) || /^0x0{40}$/.test(user.address)) return { ok: false, code: "NO_SAFE", error: "deploy your smart wallet first" };
     if (user.faucet) return { ok: false, code: "ALREADY_GRANTED", error: "this account already received its test EURe" };

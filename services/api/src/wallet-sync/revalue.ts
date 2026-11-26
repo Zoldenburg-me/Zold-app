@@ -80,6 +80,8 @@ export async function revalueEntry(orgId: string, entryId: string, opts: Revalue
   const now = (opts.now ?? (() => new Date().toISOString()))();
   // Nothing awaited from here: the row is read and written as one.
   return await store.tx(async (): Promise<RevalueOutcome> => {
+    // Every ledger writer of the org takes this lock before it reads the rows it changes.
+    await store.lockKey(`ledger:${orgId}`);
     const current = (await store.ledgerOf(orgId)).find((e) => e.id === entryId);
     const again = current ? (await revalueRefusal(current)) : "The row is gone.";
     if (!current || again) return { status: "refused", reason: again ?? "The row is gone." };

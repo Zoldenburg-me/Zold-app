@@ -84,6 +84,8 @@ export function createOperatorAuthRouter() {
       } catch (err) {
         return res.status(400).json({ error: redactedMessage(err, { keepHosts: true }), code: "REGISTRATION_INVALID" });
       }
+      // Held per operator: the passkey cap and the disabled check hold until the write.
+      await store.lockKey(`operator:${e.email.trim().toLowerCase()}`);
       const existing = await store.findOperatorByEmail(e.email);
       if (existing?.disabledAt) return res.status(403).json({ error: "this operator is disabled", code: "OPERATOR_DISABLED" });
       if (existing && existing.credentials.length >= OPERATOR.maxPasskeys) {
@@ -180,8 +182,11 @@ export function createOperatorAuthRouter() {
   router.post("/admin/auth/passkeys", async (req, res) => {
     return store.tx(async () => {
       const who = operatorOf(req);
-      const operator = who ? (await store.findOperator(who.id)) : undefined;
-      if (!operator) return res.status(401).json({ error: "operator sign-in required", code: "OPERATOR_SIGN_IN" });
+      const found = who ? (await store.findOperator(who.id)) : undefined;
+      if (!found) return res.status(401).json({ error: "operator sign-in required", code: "OPERATOR_SIGN_IN" });
+      // Held per operator, and read again: the passkey cap holds until the write.
+      await store.lockKey(`operator:${found.email.trim().toLowerCase()}`);
+      const operator = (await store.findOperator(found.id))!;
       if (operator.credentials.length >= OPERATOR.maxPasskeys) {
         return res.status(409).json({ error: `an operator holds at most ${OPERATOR.maxPasskeys} passkeys`, code: "PASSKEY_LIMIT" });
       }

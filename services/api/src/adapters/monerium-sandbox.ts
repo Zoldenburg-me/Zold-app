@@ -124,8 +124,10 @@ const ibanList = (res: any): any[] => (Array.isArray(res) ? res : (res?.ibans ??
  * no verdict and changes nothing. Only an active account with an IBAN is
  * checked.
  */
-export async function applyIbanBinding(user: User, ibans: any[]): Promise<User> {
+export async function applyIbanBinding(user0: User, ibans: any[]): Promise<User> {
   return store.tx(async () => {
+    // The row as stored, held: the caller's copy was read before Monerium answered.
+    const user = (await store.lockUser(user0.id)) ?? user0;
     if (user.funding?.status !== "active" || !user.iban) return user;
     const target = normalizeIban(user.iban);
     const hits = ibans.filter((i: any) => typeof i?.iban === "string" && normalizeIban(i.iban) === target);
@@ -206,8 +208,11 @@ export async function findIbanBic(user: User): Promise<string | undefined> {
 export async function releaseIbanFromOtherUsers(iban: string, keepUserId: string): Promise<void> {
   return store.tx(async () => {
     const target = normalizeIban(iban);
-    for (const other of (await store.list("users"))) {
-      if (other.id === keepUserId || !other.iban || normalizeIban(other.iban) !== target) continue;
+    for (const listed of (await store.list("users"))) {
+      if (listed.id === keepUserId || !listed.iban || normalizeIban(listed.iban) !== target) continue;
+      // Read again, held: the list is a snapshot.
+      const other = await store.lockUser(listed.id);
+      if (!other?.iban || normalizeIban(other.iban) !== target) continue;
       await store.updateUser(other.id, {
         iban: "",
         funding: {

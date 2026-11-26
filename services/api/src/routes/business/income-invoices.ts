@@ -197,6 +197,9 @@ async function assertWritable(draft: Invoice): Promise<void> {
  *  before the first is written, so a refusal leaves none half done. */
 async function writeDrafts(drafts: Invoice[]): Promise<Invoice[]> {
   return store.tx(async () => {
+    // The org's row held (as the income run holds it): a draft checked
+    // writable here is still a draft when it is replaced.
+    for (const orgId of new Set(drafts.map((d) => d.orgId))) await store.lockOrganisation(orgId);
     await forEachSeq(drafts, assertWritable);
     return await mapSeq(drafts, async (draft) => ((await store.findInvoice(draft.id)) ? (await store.updateInvoice(draft.id, draft)) : (await store.addInvoice(draft))));
   });

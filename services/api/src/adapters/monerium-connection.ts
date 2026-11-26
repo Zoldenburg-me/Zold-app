@@ -270,7 +270,7 @@ async function refreshOnce(user: User): Promise<string> {
   // whose refresh token was spent takes the new tokens: read, compared and
   // written in one transaction.
   const next = await store.tx(async () => {
-    const now = (await store.findUser(user.id))?.monerium;
+    const now = (await store.lockUser(user.id))?.monerium;
     if (!now || now.method !== current.method || now.refreshTokenEnc !== current.refreshTokenEnc) {
       throw new MoneriumAccessError("the Monerium connection changed while its token was refreshed; nothing was written");
     }

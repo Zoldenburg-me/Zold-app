@@ -146,7 +146,10 @@ export async function acceptTurnkeySignature(
 ): Promise<RecoveryRequest> {
   // The re-read, the checks and the claim are one transaction: the expiry
   // sweep either lands before it (seen here) or after it (and sees `signing`).
+  // The user's row is the lock every writer of their recovery takes, so on
+  // Postgres the sweep's check of `signing` and its write wait for this.
   await store.tx(async () => {
+    await store.lockUser(request.userId);
     const current = (await store.findRecoveryRequest(request.id)) ?? request;
     if (current.status !== "REVIEW_PENDING") throw new TurnkeyGuardianError(`recovery is ${current.status}`, 409, "NOT_WAITING");
     if (!ownerAlerted(current)) {
@@ -244,10 +247,10 @@ export async function syncTurnkeyFromChain(request: RecoveryRequest, chain: Turn
 
 async function bindAndFinish(request: RecoveryRequest, now: Date, txHash: `0x${string}` | undefined): Promise<RecoveryRequest> {
   return store.tx(async () => {
-    // Read both again: an await sat between the caller's read and here.
+    // Read both again, held: an await sat between the caller's read and here.
+    const user = await store.lockUser(request.userId);
     const current = (await store.findRecoveryRequest(request.id)) ?? request;
     if (current.status === "FINALIZED") return current;
-    const user = await store.findUser(request.userId);
     if (!user?.passkeySafe) throw new TurnkeyGuardianError("the account behind this recovery no longer exists", 410, "GONE");
     const t = current.turnkey!;
     await bindRecoveredPasskey(user, t.newPasskey!, now);
@@ -316,6 +319,7 @@ export async function sweepTurnkeyRecoveries(now = new Date(), chain: TurnkeyRec
       if (["PASSKEY_PENDING", "REVIEW_PENDING"].includes(cur.status) && now >= new Date(cur.expiresAt)) {
         // Only from the status it was read in, and not once a signer has claimed it.
         await store.tx(async () => {
+          await store.lockUser(r.userId);
           if (!finishing.has(r.id) && !signing.has(r.id)) await store.updateRecoveryRequestFrom(r.id, ["PASSKEY_PENDING", "REVIEW_PENDING"], { status: "EXPIRED" });
         });
         continue;

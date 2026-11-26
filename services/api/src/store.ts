@@ -832,6 +832,8 @@ export const jsonCore = {
   addOperatorCredential(operatorId: string, credential: OperatorCredential) {
     const o = db.operators.find((x) => x.id === operatorId);
     if (!o) throw new Error(`unknown operator ${operatorId}`);
+    // On the stored row: a disable that landed after the caller's check wins.
+    if (o.disabledAt) throw new Error("this operator is disabled");
     if (db.operators.some((x) => x.credentials.some((c) => c.credentialId === credential.credentialId))) {
       throw new Error("that passkey is already registered");
     }

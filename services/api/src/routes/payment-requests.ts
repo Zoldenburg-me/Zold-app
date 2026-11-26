@@ -608,9 +608,10 @@ export async function attributeDepositToRequest(given: CryptoDeposit): Promise<P
   return store.tx(async () => {
     // The stored row, not the caller's copy: a link or an attribution made
     // since it was read decides what this one may write.
+    // The owner's row is the lock every writer of a deposit's money takes.
+    const user = await store.lockUser(given.userId);
     const deposit = (await store.list("cryptoDeposits")).find((d) => d.id === given.id) ?? given;
     if (deposit.paymentRequestId) return await store.findPaymentRequest(deposit.paymentRequestId);
-    const user = await store.findUser(deposit.userId);
     const page = user?.paymentPage;
     if (!user || !page?.depositAddress) return undefined;
     if ((deposit.paymentAddress ?? "").toLowerCase() !== page.depositAddress.toLowerCase()) return undefined;

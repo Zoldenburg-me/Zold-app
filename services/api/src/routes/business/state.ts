@@ -90,19 +90,26 @@ export const withExecutionState = async (draft: DraftPayment) => {
  */
 export const syncInvoicePayment = async (invoice: Invoice): Promise<Invoice> => {
   return store.tx(async () => {
+    // The row as stored, not the caller's copy; each move is from PAYING, so
+    // a second sync racing this one finds it moved and returns the row.
+    const stored0 = await store.findInvoice(invoice.id);
+    if (!stored0) return invoice;
+    invoice = stored0;
     if (invoice.state !== "PAYING") return invoice;
+    const move = async (patch: Partial<Invoice>) =>
+      (await store.updateInvoiceFrom(invoice.id, ["PAYING"], patch)) ?? (await store.findInvoice(invoice.id))!;
     const stored = invoice.payment?.cryptoSendId ? (await store.findCryptoSend(invoice.payment.cryptoSendId)) : undefined;
     const send = stored && (await liveCryptoSend(stored));
     if (send) {
       if (send.state === "SENT") {
-        return await store.updateInvoice(invoice.id, {
+        return await move({
           state: "PAID",
           payment: { ...invoice.payment, paidAt: send.updatedAt, txHash: send.txHash },
         });
       }
       // An unsigned send past its deadline can never be submitted.
       if (send.state === "FAILED" || (send.state === "CREATED" && send.deadline * 1000 < Date.now())) {
-        return await store.updateInvoice(invoice.id, {
+        return await move({
           state: "SUBMITTED",
           payment: { ...invoice.payment, cryptoSendId: undefined, draftId: undefined },
         });
@@ -111,18 +118,18 @@ export const syncInvoicePayment = async (invoice: Invoice): Promise<Invoice> => 
     }
     // A send that no longer exists can never pay the link: it is to pay again.
     if (invoice.payment?.cryptoSendId) {
-      return await store.updateInvoice(invoice.id, { state: "SUBMITTED", payment: { ...invoice.payment, cryptoSendId: undefined, draftId: undefined } });
+      return await move({ state: "SUBMITTED", payment: { ...invoice.payment, cryptoSendId: undefined, draftId: undefined } });
     }
     const transfer = invoice.payment?.transferId ? (await store.findTransfer(invoice.payment.transferId)) : undefined;
     if (transfer) {
       if (transfer.state === "PAID") {
-        return await store.updateInvoice(invoice.id, {
+        return await move({
           state: "PAID",
           payment: { ...invoice.payment, paidAt: transfer.updatedAt },
         });
       }
       if (transfer.state === "FAILED" || transfer.state === "REFUNDED" || expiredUnsigned(transfer)) {
-        return await store.updateInvoice(invoice.id, {
+        return await move({
           state: "SUBMITTED",
           payment: { ...invoice.payment, draftId: undefined, transferId: undefined },
         });
@@ -131,7 +138,7 @@ export const syncInvoicePayment = async (invoice: Invoice): Promise<Invoice> => 
     }
     const draft = invoice.payment?.draftId ? (await store.findDraft(invoice.payment.draftId)) : undefined;
     if (!draft || draft.state === "FAILED" || draft.state === "REJECTED" || draft.state === "CANCELLED") {
-      return await store.updateInvoice(invoice.id, {
+      return await move({
         state: "SUBMITTED",
         payment: { ...invoice.payment, draftId: undefined },
       });
@@ -144,7 +151,7 @@ export const releaseInvoicesOf = async (draftId: string) => {
   return store.tx(async () => {
     for (const inv of (await store.list("invoices"))) {
       if (inv.state === "PAYING" && inv.payment?.draftId === draftId && !inv.payment.transferId) {
-        await store.updateInvoice(inv.id, { state: "SUBMITTED", payment: { ...inv.payment, draftId: undefined } });
+        await store.updateInvoiceFrom(inv.id, ["PAYING"], { state: "SUBMITTED", payment: { ...inv.payment, draftId: undefined } });
       }
     }
   });

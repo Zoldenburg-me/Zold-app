@@ -275,7 +275,7 @@ async function recordStatus(
           .map((w) => (typeof w === "string" ? w : w?.address))
           .find((a) => typeof a === "string" && ADDRESS.test(a))
       : undefined;
-    const existing = (await store.findUser(userId))?.gnosisPay;
+    const existing = (await store.lockUser(userId))?.gnosisPay;
     const fromMessage = signedBy && ADDRESS.test(signedBy) ? signedBy : undefined;
     const connectedAddress = (fromMessage ?? signer ?? existing?.connectedAddress) as
       | `0x${string}`

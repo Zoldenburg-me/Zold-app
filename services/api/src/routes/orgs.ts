@@ -187,6 +187,9 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     return store.tx(async () => {
       const session = await requireSession(req, res);
       if (!session) return;
+      // One personal space and the ceiling on companies are counts over the
+      // user's orgs: the user's row held, two creates are taken in turn.
+      await store.lockUser(session.userId);
 
       const { name, type, country, legalName, taxId, email, timeZone, entity } = req.body ?? {};
       const orgType: OrgType = type === "business" ? "business" : "personal";
@@ -1180,6 +1183,8 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
         // address's rows exactly when their id is this address's row id, and
         // they follow the new wallet, its sync and its proof.
         const live = new Set((await store.importedWalletsOf(ctx.org.id)).map((w) => w.id));
+        // Every ledger writer of the org takes this lock before it reads the rows it changes.
+        await store.lockKey(`ledger:${ctx.org.id}`);
         const orphans = (await store.ledgerOf(ctx.org.id)).flatMap((e) =>
           e.source.kind === "wallet" && !live.has(e.source.walletId) && e.chainId === chainId && e.txHash && e.logIndex !== undefined &&
           e.id === walletEntryId(ctx.org.id, added.address, chainId, e.txHash, e.logIndex)
@@ -1265,6 +1270,8 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     }
     const answer = await store.tx(async () => {
       // Another request may have spent or replaced the challenge meanwhile.
+      // The org's row is the lock every writer of its wallets takes.
+      await store.lockOrganisation(ctx.org.id);
       const current = await store.findImportedWallet(wallet.id);
       if (!current || current.orgId !== ctx.org.id || current.ownershipChallenge?.id !== pending.id) return undefined;
       const at = new Date().toISOString();
@@ -1301,6 +1308,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       return res.status(503).json({ error: `Not checked: ${result.reason}. The proof stays as it was.`, wallet: publicWallet(wallet) });
     }
     const updated = await store.tx(async () => {
+      await store.lockOrganisation(ctx.org.id);
       const current = await store.findImportedWallet(wallet.id);
       // Proven again meanwhile with another signature: this answer is about the old one.
       if (!current?.ownership || current.ownership.signature !== proof.signature || current.ownership.message !== proof.message) return undefined;

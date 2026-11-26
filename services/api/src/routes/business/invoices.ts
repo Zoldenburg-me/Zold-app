@@ -150,7 +150,10 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
       }
       try {
         assertDeletable(invoice);
-        await store.updateInvoice(invoice.id, { state: "DELETED" });
+        // From the state checked: a payment or settlement landing meanwhile wins.
+        if (!(await store.updateInvoiceFrom(invoice.id, [invoice.state], { state: "DELETED" }))) {
+          return res.status(409).json({ error: "This invoice changed meanwhile. Reload it." });
+        }
         res.json({ deleted: true });
       } catch (err) {
         if (err instanceof InvoiceError) return res.status(409).json({ error: err.message });
@@ -305,6 +308,9 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
       const transferId = typeof req.body?.transferId === "string" ? req.body.transferId : undefined;
       const cryptoSendId = typeof req.body?.cryptoSendId === "string" ? req.body.cryptoSendId : undefined;
       if (!transferId === !cryptoSendId) return res.status(400).json({ error: "Name one payment: transferId or cryptoSendId." });
+      // The payment is the caller's: their row held, two links cannot both
+      // find it free (a link in another org is not under this org's lock).
+      await store.lockUser(ctx.userId);
       const taken = (await store.list("invoices")).some((i) => i.id !== invoice.id && ((transferId && i.payment?.transferId === transferId) || (cryptoSendId && i.payment?.cryptoSendId === cryptoSendId)));
       if (taken) return res.status(409).json({ error: "That payment already pays another link." });
       const owed = centsOf(invoice.total);
@@ -338,10 +344,11 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
         }
         if (s.createdAt < invoice.submittedAt!) return res.status(409).json({ error: "That payment was made before the link was filled in." });
       }
-      const updated = await store.updateInvoice(invoice.id, {
+      const updated = await store.updateInvoiceFrom(invoice.id, ["SUBMITTED"], {
         state: "PAYING",
         payment: { ...invoice.payment, ...(transferId ? { transferId } : { cryptoSendId }) },
       });
+      if (!updated) return res.status(409).json({ error: "This link is already being paid or is paid." });
       res.json({ invoice: ownerInvoiceView(await syncInvoicePayment(updated)) });
     });
   });
@@ -359,19 +366,20 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
       }
       try {
         assertInvoiceTransition(invoice.state, "RECONCILED");
-        res.json({
-          invoice: ownerInvoiceView(await store.updateInvoice(invoice.id, {
-            state: "RECONCILED",
-            payment: {
-              ...invoice.payment,
-              manual: {
-                byMemberId: ctx.member.id,
-                at: new Date().toISOString(),
-                note: typeof req.body?.note === "string" ? req.body.note : undefined,
-              },
+        // From the state checked: a payment or settlement landing meanwhile wins.
+        const reconciled = await store.updateInvoiceFrom(invoice.id, [invoice.state], {
+          state: "RECONCILED",
+          payment: {
+            ...invoice.payment,
+            manual: {
+              byMemberId: ctx.member.id,
+              at: new Date().toISOString(),
+              note: typeof req.body?.note === "string" ? req.body.note : undefined,
             },
-          })),
+          },
         });
+        if (!reconciled) return res.status(409).json({ error: "This invoice changed meanwhile. Reload it." });
+        res.json({ invoice: ownerInvoiceView(reconciled) });
       } catch (err) {
         if (err instanceof InvoiceError) return res.status(409).json({ error: err.message });
         throw err;

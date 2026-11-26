@@ -284,6 +284,8 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
         // Written only when it changes: each write persists the whole store.
         const hold = async (patch: NonNullable<NonNullable<typeof doc.sentTo>["getmyinvoices"]>) => {
           return store.tx(async () => {
+            // Held: two pushes of one Beleg never merge into a stale copy.
+            await store.lockKey(`document:${doc.id}`);
             const was = (await store.findDocumentByCode(doc.code))?.sentTo?.getmyinvoices ?? {};
             if (Object.entries(patch).some(([k, v]) => (was as Record<string, unknown>)[k] !== v)) await store.updateDocument(doc.id, { sentTo: { getmyinvoices: { ...was, ...patch } } });
           });

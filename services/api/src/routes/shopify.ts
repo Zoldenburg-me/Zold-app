@@ -191,9 +191,16 @@ function sameHex(a: string, b: string): boolean {
  *  encryption key is configured; `canSignPayLinks` says so first. */
 async function orderLinkSecret(c: ShopifyConnection): Promise<string> {
   if (c.orderLinkSecretEnc) return SECRETS.shopifyOrderLinkSecret.open(c.id, c.orderLinkSecretEnc);
-  const secret = randomBytes(32).toString("hex");
-  await store.updateShopifyConnection(c.id, { orderLinkSecretEnc: SECRETS.shopifyOrderLinkSecret.seal(c.id, secret) });
-  return secret;
+  // Created once: two first uses at once must not mint two keys, or the
+  // email template of the one that lost would sign links nobody accepts.
+  return store.tx(async () => {
+    await store.lockKey(`shopify-connection:${c.id}`);
+    const now = (await store.findShopifyConnectionByShop(c.shop)) ?? c;
+    if (now.orderLinkSecretEnc) return SECRETS.shopifyOrderLinkSecret.open(now.id, now.orderLinkSecretEnc);
+    const secret = randomBytes(32).toString("hex");
+    await store.updateShopifyConnection(c.id, { orderLinkSecretEnc: SECRETS.shopifyOrderLinkSecret.seal(c.id, secret) });
+    return secret;
+  });
 }
 
 /** A shop can be given a signed pay link when its key exists or can be made. */
@@ -477,6 +484,9 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       // The row id is part of the AAD, so it is fixed before sealing. The
       // shop is read, checked again and written in one transaction.
       const written = await store.tx(async () => {
+        // The org's row held: the installer's membership and role change only
+        // under the same lock, so installRefusal holds until the write.
+        await store.lockOrganisation(pending.orgId);
         const existing = await store.findShopifyConnectionByShop(shop);
         const connectionId = existing?.id ?? randomUUID();
         let enc: string;

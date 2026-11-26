@@ -89,7 +89,8 @@ async function openSetupOp(orgId: string, safeAddress: string, now: number): Pro
 async function noteExecuted(org: Organisation, safeAddress: string, guardian: Address, onChain: boolean): Promise<Organisation["recovery"]> {
   return store.tx(async () => {
     if (!onChain) return undefined;
-    if (org.recovery && low(org.recovery.guardianAddress) === low(guardian)) return org.recovery;
+    const now = (await store.lockOrganisation(org.id)) ?? org;
+    if (now.recovery && low(now.recovery.guardianAddress) === low(guardian)) return now.recovery;
     const done = (await store.safeOpsOf(org.id))
       .filter((op) => op.kind === GUARDIAN_OP_KIND && op.state === "EXECUTED" && low(op.safeAddress) === low(safeAddress))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];

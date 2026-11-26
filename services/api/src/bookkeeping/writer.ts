@@ -241,6 +241,8 @@ export async function writeAccountStatementLines(account: Account, rows: Rows = 
 
 async function writeProjected(inp: StatementInputs, since: string | undefined, rows: Rows): Promise<{ added: number; updated: number }> {
   return store.tx(async () => {
+    // Every ledger writer of the org takes this lock before it reads the rows it changes.
+    await store.lockKey(`ledger:${inp.orgId}`);
     // Nothing from before the Safe's books start: an imported Safe's earlier life is not the account's.
     const projected = projectStatementLines(inp).filter((e) => !since || e.at >= since);
     const existing = await rows.ledgerOf(inp.orgId);

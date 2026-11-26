@@ -138,6 +138,8 @@ async function pauseAtCeiling(walletId: string, ceiling: number): Promise<void> 
 
 async function patchSync(walletId: string, sync: Partial<ImportedWallet["sync"]>): Promise<boolean> {
   return store.tx(async () => {
+    // Held: two writers of one wallet's sync state never merge into a stale copy.
+    await store.lockKey(`imported-wallet:${walletId}`);
     const current = await store.findImportedWallet(walletId);
     if (!current) return false;
     await store.updateImportedWallet(walletId, { sync: { ...current.sync, ...sync } });
@@ -306,7 +308,13 @@ export async function syncWallet(
         return { added, skipped };
       }
       await store.tx(async () => {
-        if (fresh.length) await store.addLedgerEntries(applyRules(await store.rulesOf(wallet.orgId), fresh).entries);
+        // Every ledger writer of the org takes this lock before it reads the
+        // rows it changes; a row booked since `known` was read is not added twice.
+        await store.lockKey(`ledger:${wallet.orgId}`);
+        const booked = new Set((await store.ledgerOf(wallet.orgId)).map((e) => e.id));
+        const toBook = fresh.filter((e) => !booked.has(e.id));
+        if (toBook.length) await store.addLedgerEntries(applyRules(await store.rulesOf(wallet.orgId), toBook).entries);
+        await store.lockKey(`imported-wallet:${wallet.id}`);
         const prior = (await store.findImportedWallet(wallet.id))?.sync.skipped ?? 0;
         await patchSync(wallet.id, {
           cursor: toBlock.toString(),

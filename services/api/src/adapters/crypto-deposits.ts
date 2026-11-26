@@ -279,7 +279,9 @@ function holdingOnArrival(user: User, deposit: CryptoDeposit): Pick<CryptoDeposi
 export async function settleOnArrival(deposit: CryptoDeposit): Promise<CryptoDeposit> {
   return store.tx(async () => {
     if (deposit.settledAt) return deposit;
-    const user = await store.findUser(deposit.userId);
+    // The owner's row is the lock every writer of a deposit's money takes:
+    // a link made while this settles is seen here, or sees this.
+    const user = await store.lockUser(deposit.userId);
     if (!user) throw new Error(`unknown user for crypto deposit ${deposit.id}`);
     // `settledAt` is set once, on the stored row: a second settle finds it set.
     const settled = await store.settleCryptoDeposit(deposit.id, (row) => ({

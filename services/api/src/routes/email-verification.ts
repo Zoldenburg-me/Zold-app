@@ -17,6 +17,7 @@ import { EMAIL_VERIFICATION } from "../config.js";
 import { store, type User } from "../store.js";
 import { sendVerificationCode } from "../adapters/mailer.js";
 import { publicUser } from "../users/public-user.js";
+import { emailLockKey } from "../domain/email.js";
 
 export interface EmailVerificationDeps {
   requireUserSession: (req: express.Request, res: express.Response, userId: string) => Promise<unknown>;
@@ -141,7 +142,10 @@ export function createEmailVerificationRouter(deps: EmailVerificationDeps) {
       // transaction, on the code that was compared: a new code sent since
       // voids this one.
       const updated = await store.tx(async () => {
-        const now = await store.findUser(user.id);
+        // The address is held, not only the row: two accounts confirming one
+        // address at once each lock only their own row.
+        if (user.email) await store.lockKey(emailLockKey(user.email));
+        const now = await store.lockUser(user.id);
         if (now?.emailCode?.hash !== c.hash) return "expired" as const;
         if ((await confirmedElsewhere(now))) return "in_use" as const;
         return await store.updateUser(user.id, { emailVerifiedAt: new Date().toISOString(), emailCode: undefined });

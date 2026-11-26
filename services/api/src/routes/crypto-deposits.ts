@@ -72,6 +72,10 @@ const convertingDeposits = new Set<string>();
 /** A failure write that never moves a converted deposit backwards. */
 async function parkDeposit(id: string, patch: Partial<CryptoDeposit>): Promise<void> {
   return store.tx(async () => {
+    const seen = (await store.list("cryptoDeposits")).find((d) => d.id === id);
+    if (!seen) return;
+    // The owner's row is the lock every writer of a deposit's money takes.
+    await store.lockUser(seen.userId);
     const now = (await store.list("cryptoDeposits")).find((d) => d.id === id);
     if (!now || now.holding === "converted") return;
     await store.updateCryptoDeposit(id, patch);
@@ -161,6 +165,9 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
       // rows read inside it: two links of one deposit, or a link and its
       // arrival, otherwise both pass the check and settle two invoices.
       const out = await store.tx(async (t) => {
+        // The owner's row is the lock every writer of a deposit's money takes:
+        // its arrival, its attribution to a request and this link.
+        await t.lockUser(deposit.userId);
         // A deposit pays one invoice once. After its payment is on an invoice,
         // moving or dropping the link would leave that payment where it is and
         // let the same money settle a second invoice.

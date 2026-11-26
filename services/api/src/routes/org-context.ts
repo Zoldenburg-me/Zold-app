@@ -13,6 +13,7 @@
 
 import type express from "express";
 import { store } from "../store.js";
+import { openTxToken } from "../store/backend.js";
 import { LIMITS, can, capabilityMatrix, type CapabilityId } from "../domain/plans.js";
 import { roleCan, type Permission } from "../domain/roles.js";
 import { paymentReviewRequired } from "../domain/payment-review.js";
@@ -47,7 +48,11 @@ export async function resolveOrg(
   if (!session) return undefined;
 
   const orgId = String(req.params.orgId ?? "");
-  const org = await store.findOrganisation(orgId);
+  // Inside a store.tx the organisation row is locked before it is read
+  // (Postgres FOR UPDATE; §2 rule 4): the member, role and capability checks,
+  // and whatever the handler decides from the org's rows, hold until it
+  // commits. Every change to an org's members takes the same lock.
+  const org = openTxToken() ? await store.lockOrganisation(orgId) : await store.findOrganisation(orgId);
   const member = org ? (await store.memberFor(org.id, session.userId)) : undefined;
 
   if (!org || !member || member.status !== "active") {

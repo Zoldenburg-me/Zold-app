@@ -398,6 +398,7 @@ export async function sweepCandideRecoveries(now = new Date()): Promise<number> 
     } else if (["PASSKEY_PENDING", "OTP_PENDING"].includes(r.status) && now >= new Date(r.expiresAt)) {
       // Only from the status it was read in, and not while the OTP route executes it.
       await store.tx(async () => {
+        await store.lockUser(r.userId);
         if (!executing.has(r.id)) await store.updateRecoveryRequestFrom(r.id, ["PASSKEY_PENDING", "OTP_PENDING"], { status: "EXPIRED" });
       });
     }
@@ -807,15 +808,18 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
 
   const requestFor = async (req: express.Request, res: express.Response): Promise<RecoveryRequest | undefined> => {
     return store.tx(async () => {
-      const r = await store.findRecoveryRequest(req.params.id);
+      const found = await store.findRecoveryRequest(req.params.id);
       // A wrong or missing secret reads exactly like an unknown id: no oracle
       // for which ids exist.
-      if (!r || r.mode !== "candide" || !secretMatches(r, presentedSecret(req))) {
+      if (!found || found.mode !== "candide" || !secretMatches(found, presentedSecret(req))) {
         res.status(404).json({ error: "recovery not found" });
         return undefined;
       }
+      // Read again under the user's row, the lock every writer of the request takes.
+      await store.lockUser(found.userId);
+      const r = (await store.findRecoveryRequest(found.id))!;
       if (["PASSKEY_PENDING", "OTP_PENDING"].includes(r.status) && Date.now() >= Date.parse(r.expiresAt)) {
-        const expired = await store.updateRecoveryRequest(r.id, { status: "EXPIRED" });
+        const expired = (await store.updateRecoveryRequestFrom(r.id, ["PASSKEY_PENDING", "OTP_PENDING"], { status: "EXPIRED" })) ?? r;
         res.status(410).json({ ...publicRequest(expired), error: "this recovery expired — start again" });
         return undefined;
       }
@@ -932,9 +936,10 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
         // in one transaction, so the status checked is the one written over.
         const otpTicket = typeof offeredTicket === "string" ? offeredTicket : randomBytes(32).toString("base64url");
         const written = await store.tx(async () => {
+          await store.lockUser(request.userId);
           const current = await store.findRecoveryRequest(request.id);
           if (current?.status !== "PASSKEY_PENDING") return { current };
-          return { updated: await store.updateRecoveryRequest(request.id, {
+          return { updated: await store.updateRecoveryRequestFrom(request.id, ["PASSKEY_PENDING"], {
             status: "OTP_PENDING",
             candide: {
               ...(current.candide ?? {}),
@@ -1015,6 +1020,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
         // Claimed first, in one transaction with the re-read: a reject either
         // landed before (seen here) or comes after (and sees `executing`).
         const claimed = await store.tx(async () => {
+          await store.lockUser(request.userId);
           const now = await store.findRecoveryRequest(request.id);
           if (now?.status !== "OTP_PENDING" || executing.has(request.id)) return false;
           executing.add(request.id);
@@ -1133,8 +1139,11 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       // The status, the execute test and the write are one transaction, as
       // the OTP route's claim is: one of the two sees the other.
       const out = await store.tx(async () => {
-        const r = await store.findRecoveryRequest(req.params.id);
-        if (!r || r.mode !== "candide") return { status: 404, body: { error: "recovery not found" } };
+        const found = await store.findRecoveryRequest(req.params.id);
+        if (!found || found.mode !== "candide") return { status: 404, body: { error: "recovery not found" } };
+        // Read again under the user's row, which the OTP route's claim also takes.
+        await store.lockUser(found.userId);
+        const r = (await store.findRecoveryRequest(found.id))!;
         const from = ["PASSKEY_PENDING", "OTP_PENDING"] as const;
         if (!(from as readonly string[]).includes(r.status) || executing.has(r.id)) {
           return { status: 409, body: { error: `recovery is ${executing.has(r.id) ? "being executed" : r.status} — once executed only the owner's passkey can cancel it` } };

@@ -56,7 +56,8 @@ export interface StoredSecret {
 /** Rewrite one field of a user's Monerium connection, keeping the rest. */
 async function writeMonerium(userId: string, patch: (m: NonNullable<User["monerium"]>) => Partial<NonNullable<User["monerium"]>>) {
   return store.tx(async () => {
-    const m = (await store.findUser(userId))?.monerium;
+    // Held until the write: a token refresh landing in between is not undone.
+    const m = (await store.lockUser(userId))?.monerium;
     if (!m) throw new Error(`user ${userId} has no Monerium connection`);
     await store.updateUser(userId, { monerium: { ...m, ...patch(m) } });
   });
@@ -115,7 +116,7 @@ export const STORED_SECRETS: StoredSecret[] = [
     rows: async () => (await store.list("organisations")).flatMap((o) => (o.monerium?.clientSecretEnc ? [{ rowId: o.id, stored: o.monerium.clientSecretEnc }] : [])),
     write: async (id, stored) => {
       return store.tx(async () => {
-        const m = (await store.findOrganisation(id))?.monerium;
+        const m = (await store.lockOrganisation(id))?.monerium;
         if (!m) throw new Error(`organisation ${id} has no Monerium API keys`);
         await store.updateOrganisation(id, { monerium: { ...m, clientSecretEnc: stored } });
       });

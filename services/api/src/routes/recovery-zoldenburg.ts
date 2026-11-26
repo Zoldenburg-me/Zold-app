@@ -229,10 +229,16 @@ const sparedWhileRelaying = new Set<string>();
 async function settleSpared(id: string): Promise<void> {
   return store.tx(async () => {
     if (!sparedWhileRelaying.delete(id)) return;
-    const r = await store.findRecoveryRequest(id);
-    if (!r || !["PASSKEY_PENDING", "REVIEW_PENDING"].includes(r.status)) return;
-    console.warn(`RECOVERY: ${id} closed after its relay did not reach the chain (another recovery did)`);
-    await store.updateRecoveryRequest(id, { status: "CANCELED", canceledAt: new Date().toISOString(), cancelReason: "another recovery for this account was signed" });
+    const found = await store.findRecoveryRequest(id);
+    if (!found) return;
+    // The user's row is the lock every writer of their recovery takes.
+    await store.lockUser(found.userId);
+    const r = await store.updateRecoveryRequestFrom(id, ["PASSKEY_PENDING", "REVIEW_PENDING"], {
+      status: "CANCELED",
+      canceledAt: new Date().toISOString(),
+      cancelReason: "another recovery for this account was signed",
+    });
+    if (r) console.warn(`RECOVERY: ${id} closed after its relay did not reach the chain (another recovery did)`);
   });
 }
 
@@ -240,6 +246,7 @@ async function settleSpared(id: string): Promise<void> {
  *  module holds one pending recovery, so none of them could be signed. */
 async function closeOtherRequests(signed: RecoveryRequest, now: Date): Promise<void> {
   return store.tx(async () => {
+    await store.lockUser(signed.userId);
     for (const r of (await store.recoveryRequestsForUser(signed.userId))) {
       if (r.id === signed.id || r.mode !== "zoldenburg" || !["PASSKEY_PENDING", "REVIEW_PENDING"].includes(r.status)) continue;
       // Its signature is being relayed: closing it would hide what lands on chain.
@@ -248,7 +255,7 @@ async function closeOtherRequests(signed: RecoveryRequest, now: Date): Promise<v
         sparedWhileRelaying.add(r.id);
         continue;
       }
-      await store.updateRecoveryRequest(r.id, { status: "CANCELED", canceledAt: now.toISOString(), cancelReason: "another recovery for this account was signed" });
+      await store.updateRecoveryRequestFrom(r.id, ["PASSKEY_PENDING", "REVIEW_PENDING"], { status: "CANCELED", canceledAt: now.toISOString(), cancelReason: "another recovery for this account was signed" });
     }
   });
 }
@@ -280,7 +287,7 @@ export async function syncZoldenburgFromChain(request: RecoveryRequest, now = ne
 async function bindAndFinish(request: RecoveryRequest, user: User, now: Date, txHash: `0x${string}` | undefined): Promise<RecoveryRequest> {
   return store.tx(async () => {
     const z = request.zoldenburg!;
-    await bindRecoveredPasskey(user, z.newPasskey!, now);
+    await bindRecoveredPasskey((await store.lockUser(request.userId)) ?? user, z.newPasskey!, now);
     // Also reached without a grace period seen here (finalised in Safe Cover).
     await closeOtherRequests(request, now);
     console.log(`RECOVERY: ${request.id} finalized — ${user.id}'s Safe ${request.safeAddress} now owned by the new passkey`);
@@ -346,6 +353,7 @@ export async function sweepZoldenburgRecoveries(now = new Date(), sync = syncZol
       if (["PASSKEY_PENDING", "REVIEW_PENDING"].includes(cur.status) && now >= new Date(cur.expiresAt)) {
         // Only from the status it was read in, and not once a relay has claimed it.
         await store.tx(async () => {
+          await store.lockUser(r.userId);
           if (!relaying.has(r.id)) await store.updateRecoveryRequestFrom(r.id, CANCELLABLE, { status: "EXPIRED" });
         });
         continue;
@@ -584,6 +592,8 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       // The status, the relay test and the write are one transaction, as the
       // relay's own claim is: one of the two sees the other.
       const refused = await store.tx(async () => {
+        // The user's row is the lock the relay's claim and the start take too.
+        await store.lockUser(user.id);
         const r = await store.findRecoveryRequest(req.params.rid);
         if (!r || r.userId !== user.id || r.mode !== "zoldenburg") return { status: 404, body: { error: "recovery not found" } };
         if (!(CANCELLABLE as readonly string[]).includes(r.status)) {
@@ -1068,6 +1078,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       // a reject either lands before it (seen here) or after it (and sees
       // `relaying`).
       const claim = await store.tx(async () => {
+        await store.lockUser(r.userId);
         const current = (await store.findRecoveryRequest(r.id))!;
         if (current.status !== "REVIEW_PENDING") return { error: `recovery is ${current.status}` };
         const refusalNow = await refusalFor(current);
@@ -1185,6 +1196,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       // The status, the relay test and the write are one transaction, as the
       // relay's own claim is: one of the two sees the other.
       const out = await store.tx(async () => {
+        await store.lockUser(r0.userId);
         const r = (await store.findRecoveryRequest(r0.id))!;
         if (!(CANCELLABLE as readonly string[]).includes(r.status)) {
           return { status: 409, body: { error: `recovery is ${r.status} — once executed only the owner's passkey can cancel it` } };

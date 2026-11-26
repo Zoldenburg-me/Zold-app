@@ -202,7 +202,7 @@ export async function checkEnrolment(userId: string, reads: EnrolmentReads = mon
   inFlight.add(userId);
   const record = async (outcome: "waiting" | "mismatch" | "unreadable", reason: string) => {
     return store.tx(async () => {
-      const fresh = (await store.findUser(userId))!;
+      const fresh = (await store.lockUser(userId))!;
       // A newer code issued while this check ran owns the row now.
       if (fresh.zoldenburgEnrolment?.code?.hash !== code.hash) return outcome;
       await store.updateUser(userId, { zoldenburgEnrolment: { ...fresh.zoldenburgEnrolment, lastCheck: { at: now.toISOString(), outcome, reason } } });
@@ -293,7 +293,7 @@ export function enrolmentView(user: User, now = new Date()) {
 export async function issueEnrolmentCode(user: User, now = new Date()): Promise<{ code: string; memo: string }> {
   return store.tx(async () => {
     const { code, hash } = newEnrolmentCode();
-    const { lastCheck: _drop, ...rest } = (await store.findUser(user.id))!.zoldenburgEnrolment ?? {};
+    const { lastCheck: _drop, ...rest } = (await store.lockUser(user.id))!.zoldenburgEnrolment ?? {};
     await store.updateUser(user.id, {
       zoldenburgEnrolment: {
         ...rest,

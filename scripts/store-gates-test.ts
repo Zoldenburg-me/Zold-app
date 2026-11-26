@@ -199,6 +199,23 @@ check("nothing is awaited after a response is sent in a store.tx callback", () =
   assert.deepEqual(found, []);
 });
 
+check("every ledger write outside the store is in a function that took the org's ledger lock first", () => {
+  // §2 ledger row: statement writer, sync, revalue, rule run, categorise and
+  // Beleg all take lockKey(`ledger:<org>`) before they read the rows they change.
+  const found: string[] = [];
+  for (const p of outsideStore) {
+    const text = readFileSync(p, "utf8");
+    for (const m of text.matchAll(/\bstore\.(?:addLedgerEntries|updateLedgerEntry|replaceLedgerEntries)\(/g)) {
+      // The innermost store.tx callback around the call, up to the call.
+      const start = "store.tx".length;
+      const inner = txBodies(text).filter(({ at, body }) => at < m.index! && at + start + body.length > m.index!).at(-1);
+      const before = inner ? inner.body.slice(0, m.index! - inner.at - start) : "";
+      if (!/lockKey\(`ledger:\$\{/.test(before)) found.push(`${rel(p)}:${lineOf(text, m.index!)}: ${m[0]}`);
+    }
+  }
+  assert.deepEqual(found, []);
+});
+
 // ── 3. batched and the sync persist are gone ───────────────────────────────
 check("no caller uses batched() or the sync persist()", () => {
   const callers = [...outsideStore, ...files(path.join(ROOT, "scripts")).filter((x) => !x.endsWith("store-gates-test.ts"))];

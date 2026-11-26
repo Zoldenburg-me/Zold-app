@@ -218,7 +218,9 @@ export function createOrgMoneriumIbanRoutes(deps: { ctxOf: (req: express.Request
    * written back.
    */
   const stillKeys = async (orgId: string, m: NonNullable<Organisation["monerium"]>) => {
-    const cur = (await store.findOrganisation(orgId))?.monerium;
+    // Locked (inside the store.tx every caller runs it in): the keys stay
+    // the ones compared until the write commits.
+    const cur = (await store.lockOrganisation(orgId))?.monerium;
     if (!sameKeys(cur, m)) throw new Refusal(409, "MONERIUM_KEYS_CHANGED", "The company’s Monerium keys were replaced or removed meanwhile. Open Settings → Monerium again.");
     return cur!;
   };
@@ -309,7 +311,7 @@ export function createOrgMoneriumIbanRoutes(deps: { ctxOf: (req: express.Request
   async function recheckIssued(orgId: string, userId: string): Promise<void> {
     const org = (await store.findOrganisation(orgId))!;
     const m = org.monerium!;
-    const account = companyEurAccount(await store.accountsOf(orgId))!;
+    const account0 = companyEurAccount(await store.accountsOf(orgId))!;
     let list;
     try {
       list = moneriumIbanList(await io.monerium(org).ibans());
@@ -318,7 +320,9 @@ export function createOrgMoneriumIbanRoutes(deps: { ctxOf: (req: express.Request
     }
     await store.tx(async () => {
       const cur = await stillKeys(orgId, m);
-      const iban = normalizeIban(account.identifier.iban!);
+      const account = (await store.findAccount(account0.id))!;
+      if (!account.identifier.iban) return; // gated by a recheck that landed first
+      const iban = normalizeIban(account.identifier.iban);
       const entry = list.find((i) => normalizeIban(i.iban) === iban);
       if (!entry || typeof entry.address !== "string" || paysIntoSafe(entry, account.address!)) return;
       if (cur.safe) await store.updateOrganisation(orgId, { monerium: { ...cur, safe: { ...cur.safe, movedAwayAt: new Date().toISOString() } } });

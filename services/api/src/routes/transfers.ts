@@ -283,7 +283,10 @@ export function createTransferRouter(deps: TransferDeps) {
         return res.status(401).json({ error: "sign a fresh binding challenge with the device key being bound", code: "AUTHORIZER_PROOF" });
       }
       // The re-check and the write are one transaction.
-      const updated = await store.tx(async () => ((await answeredBound()) ? undefined : await store.updateUser(user.id, { authorizerAddress: address })));
+      const updated = await store.tx(async () => {
+        await store.lockUser(user.id);
+        return (await answeredBound()) ? undefined : await store.updateUser(user.id, { authorizerAddress: address });
+      });
       if (!updated) return;
       await store.audit(auditEntry("user.authorizer_bound", { from: before ?? null, to: address.toLowerCase() }, user.id));
       res.status(201).json(await publicUser(updated));
