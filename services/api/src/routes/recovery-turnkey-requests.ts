@@ -70,7 +70,7 @@ const MAX_OPEN = 5;
  *  frees a slot a stranger filled. The waiting period starts after. */
 export const TURNKEY_REQUEST_TTL_MS = 3600_000;
 
-const OPEN = ["PASSKEY_PENDING", "REVIEW_PENDING", "GRACE_PERIOD"];
+const OPEN = ["PASSKEY_PENDING", "REVIEW_PENDING", "GRACE_PERIOD", "RELAYING"];
 const hashSecret = (s: string) => createHash("sha256").update(s).digest("hex");
 const presentedSecret = (req: express.Request): string => {
   const h = req.get("x-recovery-secret");
@@ -94,7 +94,8 @@ function heldView(r: RecoveryRequest) {
   return {
     id: r.id,
     mode: r.mode,
-    status: r.status,
+    // A relay runs for seconds; it shows as the status it came from.
+    status: r.status === "RELAYING" && r.relaying ? r.relaying.from : r.status,
     requestedAt: r.requestedAt,
     expiresAt: r.expiresAt,
     recoveryDelayHours: r.recoveryDelayHours,
@@ -127,7 +128,7 @@ const FINALIZE_PENDING = "finishing didn’t go through yet — it is tried agai
 const liveTurnkeyRequests = async (userId: string) =>
   (await store
     .recoveryRequestsForUser(userId))
-    .filter((r) => r.mode === "turnkey" && OPEN.includes(r.status) && (r.status === "GRACE_PERIOD" || Date.now() < Date.parse(r.expiresAt)));
+    .filter((r) => r.mode === "turnkey" && OPEN.includes(r.status) && (r.status === "GRACE_PERIOD" || r.status === "RELAYING" || Date.now() < Date.parse(r.expiresAt)));
 
 export function createTurnkeyRecoveryRouter({
   requireUserSession,
@@ -175,7 +176,8 @@ export function createTurnkeyRecoveryRouter({
       const mine = await liveTurnkeyRequests(user.id);
       // The starting browser resumes its own request by the secret.
       const open = mine.find((r) => secretMatches(r, presentedSecret(req)));
-      if (!open && mine.some((r) => r.status === "GRACE_PERIOD")) {
+      // Under way: in its waiting period, or its relay running (RELAYING).
+      if (!open && mine.some((r) => r.status === "GRACE_PERIOD" || r.status === "RELAYING")) {
         return res.status(409).json({
           error: "a recovery of this account is already under way — continue it in the browser that started it",
           code: "RECOVERY_IN_PROGRESS",
@@ -194,7 +196,7 @@ export function createTurnkeyRecoveryRouter({
       if (!request) {
         // Read again after the await: a start racing this one is counted.
         const waiting = (await liveTurnkeyRequests(user.id))
-          .filter((r) => r.status !== "GRACE_PERIOD")
+          .filter((r) => r.status !== "GRACE_PERIOD" && r.status !== "RELAYING")
           .sort((a, b) => a.requestedAt.localeCompare(b.requestedAt));
         if (waiting.length >= MAX_OPEN) {
           const spare = waiting.find((r) => r.status === "PASSKEY_PENDING");
@@ -337,6 +339,9 @@ export function createTurnkeyRecoveryRouter({
       const request = await requestFor(req, res);
       if (!request) return;
       if (request.status === "FINALIZED") return res.json(heldView(request));
+      if (request.status === "RELAYING") {
+        return res.status(409).json({ ...heldView(request), error: "this recovery is being finished — check again in a minute", code: "BUSY" });
+      }
       if (request.status !== "GRACE_PERIOD") return res.status(409).json({ ...heldView(request), error: `recovery is ${request.status}` });
       try {
         const updated = await finalizeTurnkeyRecovery(request, chain);
@@ -392,15 +397,30 @@ export function createTurnkeyRecoveryRouter({
       if (!user) return;
       const r = await store.findRecoveryRequest(req.params.rid);
       if (!r || r.userId !== user.id || r.mode !== "turnkey") return res.status(404).json({ error: "recovery not found" });
+      // Its signature is being relayed now: the result would overwrite the
+      // cancel. Once on chain, the passkey cancels it.
+      const busy = () => res.status(409).json({ error: "this recovery is being approved right now — cancel it with your passkey in a moment", code: "BEING_SIGNED" });
+      if (isBeingSigned(r)) return busy();
       if (!["PASSKEY_PENDING", "REVIEW_PENDING"].includes(r.status)) {
         return res.status(409).json({ error: `recovery is ${r.status} — a recovery on chain is cancelled with your passkey`, code: "NOT_CANCELABLE" });
       }
-      // Its signature is being relayed now: the result would overwrite the
-      // cancel. Once on chain, the passkey cancels it.
-      if (isBeingSigned(r.id)) {
-        return res.status(409).json({ error: "this recovery is being approved right now — cancel it with your passkey in a moment", code: "BEING_SIGNED" });
+      // A relay that landed but was never recorded leaves the recovery on chain
+      // with the row still waiting: a local cancel would hide one that still
+      // executes. Ask the module first; no answer, no cancel.
+      if (r.status === "REVIEW_PENDING" && r.turnkey?.newOwners?.length) {
+        let synced: RecoveryRequest;
+        try {
+          synced = await syncTurnkeyFromChain(r, chain);
+        } catch (err) {
+          return fail(res, err);
+        }
+        if (synced.status !== "REVIEW_PENDING") {
+          return res.status(409).json({ error: `recovery is ${synced.status} — a recovery on chain is cancelled with your passkey`, code: "NOT_CANCELABLE" });
+        }
       }
-      const updated = await store.updateRecoveryRequest(r.id, { status: "CANCELED", canceledAt: new Date().toISOString(), cancelReason: "cancelled by the account owner" });
+      // Only from the status read: a signer that claimed it since holds RELAYING.
+      const updated = await store.updateRecoveryRequestFrom(r.id, ["PASSKEY_PENDING", "REVIEW_PENDING"], { status: "CANCELED", canceledAt: new Date().toISOString(), cancelReason: "cancelled by the account owner" });
+      if (!updated) return busy();
       console.log(`RECOVERY: ${r.id} cancelled by its owner before the guardian signed`);
       res.json(publicRecoveryRequest(updated));
     }),

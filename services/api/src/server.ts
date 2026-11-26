@@ -355,6 +355,10 @@ const verifierSweep = singleFlight("missing-verifiers", sweepMissingVerifiers);
 const runVerifierSweep = () => verifierSweep().catch((e) => console.error(`verifier sweep failed: ${describeCause(e)}`));
 runVerifierSweep();
 setInterval(runVerifierSweep, 10 * 60_000).unref();
+// Dead sessions (revoked or expired a day ago) go hourly; on db.json a login
+// also prunes them.
+const sessionPrune = singleFlight("session-prune", () => store.pruneSessions());
+setInterval(() => sessionPrune().catch((e) => console.error(`session prune failed: ${describeCause(e)}`)), 60 * 60_000).unref();
 // Tell the checkout service when one of its transfers moves (CHECKOUT_WEBHOOK_URL).
 if (startCheckoutWebhook()) console.log("checkout webhook: on");
 // Deliver what the outbox holds: checkout hints and PAID hooks, written with
