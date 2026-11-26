@@ -15,6 +15,7 @@
  */
 import { FX, LIQUIDITY, railFeeEur } from "./config.js";
 import { eur } from "./chain.js";
+import { describeCause } from "./http/log-cause.js";
 import type { Transfer } from "./store.js";
 import { store } from "./store.js";
 import { FxSwapperLiquidityProvider } from "./liquidity/fx-swapper.js";
@@ -120,12 +121,30 @@ export function venueSettles(provider: LiquidityProvider = liquidityProvider()):
 }
 
 /** The custody posture the startup log reports, decided by the same checks
- *  the transfer builder uses, so the log cannot describe a path it refuses. */
+ *  the transfer builder uses, so the log cannot describe a path it refuses.
+ *  Never throws: it runs in the listen callback, where a throw exits the whole
+ *  API. A venue config that does not resolve is reported; the quote that
+ *  resolves it at request time still refuses. */
 export function custodyPosture(
   bridgeLive: boolean,
-  provider: LiquidityProvider = liquidityProvider(),
+  provider?: LiquidityProvider,
 ): { warn: boolean; message: string } {
-  if (!venueSettles(provider)) {
+  let settles: boolean;
+  let servesSafe: boolean;
+  try {
+    provider ??= liquidityProvider();
+    settles = venueSettles(provider);
+    servesSafe = venueServesSafe(provider);
+  } catch (err) {
+    return {
+      warn: true,
+      message:
+        `CUSTODY: the liquidity venue configuration is invalid (LIQUIDITY_PROVIDER=${LIQUIDITY.PROVIDER}, ` +
+        `LIQUIDITY_VENUES=${LIQUIDITY.VENUES.join(",") || "(empty)"}): ${describeCause(err)}. ` +
+        "Every cash quote will fail until it is fixed; the rest of the API runs.",
+    };
+  }
+  if (!settles) {
     return {
       warn: true,
       message:
@@ -133,7 +152,7 @@ export function custodyPosture(
         "every cash-rail transfer is refused (VENUE_CANNOT_SETTLE) before any debit.",
     };
   }
-  if (!venueServesSafe(provider)) {
+  if (!servesSafe) {
     return {
       warn: true,
       message:
