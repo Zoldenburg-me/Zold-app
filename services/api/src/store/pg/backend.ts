@@ -286,10 +286,26 @@ export function createPgStore(database: Database): StoreBackend {
   const paymentRequestStateListeners: StateListener<PaymentRequest>[] = [];
   const outboxListeners: (() => void)[] = [];
 
-  /** Run `fire` once the write has committed: at once outside a transaction,
-   *  after its COMMIT inside one, and never if it rolls back. */
-  const afterCommit = (fire: () => void) => {
-    if (!deferToCommit(fire)) fire();
+  /** What runs after the COMMIT of a method's own transaction (one not inside
+   *  a `store.tx`), by the client that transaction runs on. */
+  const ownCommit = new WeakMap<Sql, (() => void)[]>();
+  /** A method's own transaction: `after` hooks run once it has committed. */
+  const ownTx: TxFn = async (fn) => {
+    const after: (() => void)[] = [];
+    const out = await database.tx((q) => {
+      ownCommit.set(q, after);
+      return fn(q);
+    });
+    for (const fire of after) fire();
+    return out;
+  };
+  /** Run `fire` once `t`'s transaction has committed: after the COMMIT of the
+   *  `store.tx` it is in, or of the method's own, and never if it rolls back. */
+  const afterCommit = (t: Sql, fire: () => void) => {
+    if (deferToCommit(fire)) return;
+    const own = ownCommit.get(t);
+    if (own) own.push(fire);
+    else fire();
   };
   /** Put the drafts in the outbox in `t`'s transaction, and tell the outbox's
    *  listeners once it has committed. */
@@ -299,7 +315,7 @@ export function createPgStore(database: Database): StoreBackend {
       const row = await insertOutbox(t, d);
       if (row) written.push(row);
     }
-    if (written.length) afterCommit(() => announceOutbox(outboxListeners));
+    if (written.length) afterCommit(t, () => announceOutbox(outboxListeners));
     return written;
   }
   /** What the listeners return for a state change, written in `t`'s transaction. */
@@ -1257,7 +1273,7 @@ export function createPgStore(database: Database): StoreBackend {
   const owner = {};
   /** The connection of each open transaction, for its savepoints. */
   const clients = new WeakMap<StoreMethods, TxSql>();
-  const base = build(database, (fn) => database.tx(fn));
+  const base = build(database, ownTx);
   // A call made inside a transaction runs on its client, through `t` or `store`.
   const routed: Record<string, unknown> = {};
   for (const [name, f] of Object.entries(base)) {

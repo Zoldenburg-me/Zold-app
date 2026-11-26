@@ -206,6 +206,35 @@ console.log("ok - store suite on the JSON backend");
   assert.deepEqual(await lisRows(), ["t_lis_ok"], "and its outbox row is rolled back with it");
   assert.equal((await pg.findTransfer("t_lis_rb"))?.state, "CREATED");
 
+  // Outside a store.tx too, the outbox's listeners run after the COMMIT of
+  // the method's own transaction: each COMMIT is held a moment and counted.
+  {
+    let commits = 0;
+    const slow = {
+      query: db.query.bind(db),
+      exec: db.exec.bind(db),
+      close: db.close.bind(db),
+      tx: async <T,>(fn: (q: any) => Promise<T>) => {
+        const out = await db.tx(async (q) => {
+          const r = await fn(q);
+          await new Promise((res) => setTimeout(res, 20));
+          return r;
+        });
+        commits++;
+        return out;
+      },
+    };
+    const sp = createPgStore(slow as any);
+    sp.onTransferStateChange((t) => (t.id === "t_own" ? { kind: "test.own", payload: {} } : undefined));
+    const at: number[] = [];
+    sp.onOutboxWritten(() => void at.push(commits));
+    await sp.addTransfer({ id: "t_own", userId: "u_a", quoteId: "q_t_own", state: "CREATED", txs: [], createdAt: now, updatedAt: now } as any);
+    const before = commits;
+    await sp.updateTransfer("t_own", { state: "DEBITED" } as any);
+    await sp.enqueueOutbox({ kind: "test.own", payload: { n: 2 } });
+    assert.deepEqual(at, [before + 1, before + 2], "each announced after its own COMMIT");
+  }
+
   // A nested store.tx that fails and is caught undoes only itself (a
   // savepoint); the transaction goes on and commits the rest.
   await pg.tx(async (t) => {
