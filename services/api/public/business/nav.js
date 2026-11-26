@@ -65,8 +65,17 @@ export function setMenu(open, { viaHistory = true } = {}) {
   if (!open && was && (!document.activeElement || document.activeElement === document.body || $("#side-menu").contains(document.activeElement))) btn.focus();
   return !open && was && Boolean(history.state?.zbMenu);
 }
+// The desktop icon rail opens while focus is in it: Escape closes it by
+// taking focus back to the page.
+const RAIL = matchMedia("(min-width: 1024px) and (hover: hover) and (pointer: fine)");
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && document.querySelector(".zb.is-menu")) setMenu(false);
+  if (e.key !== "Escape") return;
+  if (document.querySelector(".zb.is-menu")) setMenu(false);
+  else if (RAIL.matches && $("#side")?.contains(document.activeElement)) {
+    const t = $("#view-title");
+    t?.setAttribute("tabindex", "-1");
+    t?.focus();
+  }
 });
 // Search opens its own dialog over the page; the panel gets out of its way.
 document.addEventListener("click", (e) => { if (e.target.closest?.("#search-btn")) setMenu(false); });
@@ -147,7 +156,8 @@ function accountRight(a) {
    sets it, after its own read; any other view clears it, so the chip never
    shows a figure older than the screen it sits on. */
 let topBalance = null;
-export function setTopBalance(b) { topBalance = b; renderNav(); }
+// Only the top bar is redrawn: a whole renderNav would take focus off a sidebar link or tab.
+export function setTopBalance(b) { topBalance = b; if (org) paint($("#top-info"), topInfo(waitingForMe(side.drafts).length)); }
 
 /* From 1024px, top right beside the account chip: on Home, the balance its
    card shows, named as the card names it; Approvals with what waits for this
@@ -156,7 +166,7 @@ function topInfo(waiting) {
   const fig = view === "overview" && topBalance;
   const pay = { id: "payments", capability: "transfers.drafts" };
   const approvals = shown(pay) && cap(pay.capability).allowed
-    ? `<a class="zb-topchip" href="?view=payments" data-view="payments">${Z.icon("inbox")}<span>${reviewOn() ? "Approvals" : "Payments"}</span>${waiting ? `<span class="z-side__badge"><span class="z-sr">, </span>${waiting}<span class="z-sr"> waiting for you</span></span>` : ""}</a>`
+    ? `<a class="zb-topchip" href="?view=payments" data-view="payments"${view === "payments" ? ' aria-current="page"' : ""}>${Z.icon("inbox")}<span>${reviewOn() ? "Approvals" : "Payments"}</span>${waiting ? `<span class="z-side__badge"><span class="z-sr">, </span>${waiting}<span class="z-sr"> waiting for you</span></span>` : ""}</a>`
     : "";
   return `${testMode !== undefined ? Z.testModePill(testMode) : ""}${fig ? `<span class="zb-topchip zb-topchip--bal"><small>${esc(fig.label)}</small><b class="z-fig">${esc(eur(fig.eur))}</b></span>` : ""}${approvals}`;
 }
