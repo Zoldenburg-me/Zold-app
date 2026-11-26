@@ -24,6 +24,7 @@ const scripts = [
   "authorize:test",
   "redeem-window:test",
   "sepa-memo:test",
+  "eur-proof-core:test",
   "country:policy:test",
   "env:number:test",
   "log-pii:test",
