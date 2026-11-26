@@ -18,6 +18,20 @@
  * - A window the RPC refuses as too large is halved until it answers.
  * - A token with no `decimals()` is counted in `sync.skipped`, not booked at
  *   a guessed scale. A token with no price is booked unvalued.
+ * - An RPC answer that is not for the question asked (another chain, a log
+ *   from another block or wallet, one log twice, a block with no time or
+ *   hash) stops the wallet with nothing in the window booked.
+ *
+ * The cursor carries the hash of its block. A block's hash commits to every
+ * block before it, so a later run that reads another hash there knows a
+ * booked block was replaced, deeper than the confirmations. That wallet then
+ * stops, every booked row kept, until its rows are reviewed: nothing here
+ * corrects the books after a reorg.
+ *
+ * Each window's rows and cursor are one store write, and the write happens
+ * only if the cursor is still the one the window was read from: a second run
+ * on the same wallet (in this process; the deployment is single-instance)
+ * stops rather than book the window again or move the cursor back.
  *
  * The first run starts at the head unless the wallet carries a start day
  * (`sync.from`, the `ledger.historicalSync` capability), in which case it
@@ -63,6 +77,7 @@ export interface ChainReader {
   getChainId(): Promise<number>;
   getBlockNumber(): Promise<bigint>;
   getBlockTime(blockNumber: bigint): Promise<string>;
+  getBlockHash(blockNumber: bigint): Promise<`0x${string}`>;
   getTransferLogs(q: {
     address: `0x${string}`;
     direction: "in" | "out";
@@ -155,14 +170,40 @@ function ownAddressesOf(wallet: ImportedWallet) {
   ];
 }
 
-/** One window's transfers, in and out, each log once, in chain order. */
+const sameTransfer = (a: RawTransfer, b: RawTransfer) =>
+  a.token.toLowerCase() === b.token.toLowerCase() &&
+  a.from.toLowerCase() === b.from.toLowerCase() &&
+  a.to.toLowerCase() === b.to.toLowerCase() &&
+  a.valueUnits === b.valueUnits &&
+  a.blockNumber === b.blockNumber;
+
+/** One window's transfers, in and out, each log once, in chain order. A
+ *  self-transfer is in both answers; anything else an answer was not asked
+ *  for is refused, not filtered: that RPC is not reading the chain we asked. */
 async function windowTransfers(reader: ChainReader, wallet: ImportedWallet, fromBlock: bigint, toBlock: bigint) {
   const [inbound, outbound] = await Promise.all([
     reader.getTransferLogs({ address: wallet.address, direction: "in", fromBlock, toBlock }),
     reader.getTransferLogs({ address: wallet.address, direction: "out", fromBlock, toBlock }),
   ]);
+  const me = wallet.address.toLowerCase();
   const seen = new Map<string, RawTransfer>();
-  for (const t of [...inbound, ...outbound]) seen.set(`${t.txHash.toLowerCase()}:${t.logIndex}`, t);
+  for (const [direction, answer] of [["in", inbound], ["out", outbound]] as const) {
+    const once = new Set<string>();
+    for (const t of answer) {
+      const key = `${t.txHash.toLowerCase()}:${t.logIndex}`;
+      if (t.blockNumber < fromBlock || t.blockNumber > toBlock) {
+        throw new SyncRefusal(`the RPC answered with a transfer from block ${t.blockNumber}, outside blocks ${fromBlock}-${toBlock}`);
+      }
+      if ((direction === "in" ? t.to : t.from).toLowerCase() !== me) {
+        throw new SyncRefusal(`the RPC answered with a transfer ${direction === "in" ? "not to" : "not from"} this wallet (${key})`);
+      }
+      if (once.has(key)) throw new SyncRefusal(`the RPC answered with one transfer twice (${key})`);
+      once.add(key);
+      const other = seen.get(key);
+      if (other && !sameTransfer(other, t)) throw new SyncRefusal(`the RPC's two answers disagree on transfer ${key}`);
+      seen.set(key, t);
+    }
+  }
   return [...seen.values()].sort((a, b) =>
     a.blockNumber === b.blockNumber ? a.logIndex - b.logIndex : a.blockNumber < b.blockNumber ? -1 : 1,
   );
@@ -181,6 +222,12 @@ async function readWindow(reader: ChainReader, wallet: ImportedWallet, fromBlock
     if (!isLogResultCapRefusal(e)) throw e;
     return { toBlock: fromBlock, transfers: [], gap: `block ${fromBlock}: more logs for this wallet than the RPC returns` };
   }
+}
+
+async function blockHashOf(reader: ChainReader, blockNumber: bigint): Promise<`0x${string}`> {
+  const hash = await reader.getBlockHash(blockNumber);
+  if (typeof hash !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(hash)) throw new SyncRefusal(`block ${blockNumber} has no hash on the RPC`);
+  return hash.toLowerCase() as `0x${string}`;
 }
 
 export async function syncWallet(
@@ -215,13 +262,22 @@ export async function syncWallet(
     const safeHead = head - BigInt(WALLET_SYNC.confirmations);
     if (safeHead < 0n) return { added, skipped };
 
+    // The cursor this run reads from. A window is written only while the
+    // stored cursor still equals it.
+    let readFrom = wallet.sync.cursor;
+    const cursorMoved = () => store.findImportedWallet(wallet.id)?.sync.cursor !== readFrom;
     let cursor: bigint;
-    if (wallet.sync.cursor !== undefined) {
-      cursor = BigInt(wallet.sync.cursor);
+    if (readFrom !== undefined) {
+      cursor = BigInt(readFrom);
+      const booked = wallet.sync.cursorHash;
+      if (booked && (await blockHashOf(reader, cursor)) !== booked.toLowerCase()) {
+        throw new SyncRefusal(`block ${cursor} changed after it was booked: the chain reorganised deeper than ${WALLET_SYNC.confirmations} confirmations. Syncing stopped; this wallet's rows need review.`);
+      }
     } else if (wallet.sync.from) {
       cursor = (await firstBlockAtOrAfter(reader, `${wallet.sync.from}T00:00:00.000Z`, safeHead)) - 1n;
     } else {
-      patchSync(wallet.id, { cursor: safeHead.toString(), status: "synced", lastSyncedAt: now(), error: undefined });
+      const cursorHash = await blockHashOf(reader, safeHead);
+      if (!cursorMoved()) patchSync(wallet.id, { cursor: safeHead.toString(), cursorHash, status: "synced", lastSyncedAt: now(), error: undefined });
       return { added, skipped };
     }
 
@@ -239,6 +295,9 @@ export async function syncWallet(
       for (const t of transfers) {
         if (known.has(walletEntryId(wallet.orgId, wallet.address, wallet.chainId, t.txHash, t.logIndex))) continue;
         const blockTime = t.blockTime ?? blockTimes.get(t.blockNumber) ?? (await reader.getBlockTime(t.blockNumber));
+        if (typeof blockTime !== "string" || Number.isNaN(Date.parse(blockTime))) {
+          throw new SyncRefusal(`block ${t.blockNumber} has no time on the RPC`);
+        }
         blockTimes.set(t.blockNumber, blockTime);
         const tokenKey = t.token.toLowerCase();
         const token = tokens.get(tokenKey) ?? (await reader.tokenInfo(t.token));
@@ -288,8 +347,10 @@ export async function syncWallet(
         fresh.push(r.entry);
       }
 
-      // Removed while we read the chain: book nothing for it.
-      if (!store.findImportedWallet(wallet.id)) return { added, skipped };
+      const cursorHash = await blockHashOf(reader, toBlock);
+      // Removed while we read the chain: book nothing for it. Another run
+      // wrote this window first: it is booked, and that run carries on.
+      if (!store.findImportedWallet(wallet.id) || cursorMoved()) return { added, skipped };
       // At the ceiling the wallet pauses here: nothing in this window is
       // booked or skipped and the cursor stays, so a raised ceiling picks up
       // where it stopped.
@@ -302,6 +363,7 @@ export async function syncWallet(
         const prior = store.findImportedWallet(wallet.id)?.sync.skipped ?? 0;
         patchSync(wallet.id, {
           cursor: toBlock.toString(),
+          cursorHash,
           status: toBlock >= safeHead ? "synced" : "syncing",
           lastSyncedAt: now(),
           error: undefined,
@@ -311,6 +373,7 @@ export async function syncWallet(
       added += fresh.length;
       skipped += windowSkipped;
       cursor = toBlock;
+      readFrom = toBlock.toString();
     }
     return { added, skipped };
   } catch (e) {
@@ -378,6 +441,9 @@ export function viemReader(chainId: number, rpcUrl: string): ChainReader {
     async getBlockTime(blockNumber) {
       const b = await client.getBlock({ blockNumber });
       return new Date(Number(b.timestamp) * 1000).toISOString();
+    },
+    async getBlockHash(blockNumber) {
+      return (await client.getBlock({ blockNumber })).hash;
     },
     async getTransferLogs({ address, direction, fromBlock, toBlock }) {
       // strict: an NFT's Transfer has the same topic with three indexed

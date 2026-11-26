@@ -472,6 +472,9 @@ export interface ImportedWallet {
     lastSyncedAt?: string;
     /** Last block scanned, as a string — JSON has no bigint. */
     cursor?: string;
+    /** That block's hash when it was scanned: another hash there later means
+     *  a booked block was replaced (wallet-sync/sync.ts). */
+    cursorHash?: `0x${string}`;
     error?: string;
     /** First day to book, YYYY-MM-DD. Absent: book from the import onwards.
      *  Earlier history is the `ledger.historicalSync` capability. */

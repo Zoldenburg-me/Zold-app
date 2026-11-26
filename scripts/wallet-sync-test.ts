@@ -6,7 +6,9 @@
  * valuation (a known stablecoin at the ECB rate, a governance token through
  * the price feed, and every way a price is refused), and the sync loop over a
  * fake chain reader (cursor, windows, idempotent re-runs, backfill start,
- * wrong chain, a token with no decimals).
+ * wrong chain, a token with no decimals), and that loop across a crash and
+ * restart, two runs on one wallet, a booked block replaced past the
+ * confirmations, and RPC answers that are not for the question asked.
  *
  * Run: npm run wallet-sync:test
  */
@@ -360,7 +362,7 @@ globalThis.fetch = realFetch;
 
 console.log("\nSync loop");
 
-function fakeReader(opts: { chainId?: number; head: bigint; logs: RawTransfer[]; noDecimals?: string[]; blockTime?: (n: bigint) => string; maxSpan?: bigint; tokenError?: Error; logsError?: Error; onLogs?: () => void }): ChainReader & { calls: string[] } {
+function fakeReader(opts: { chainId?: number; head: bigint; logs: RawTransfer[]; noDecimals?: string[]; blockTime?: (n: bigint) => string; blockHash?: (n: bigint) => `0x${string}`; maxSpan?: bigint; tokenError?: Error; logsError?: Error; onLogs?: () => void | Promise<void> }): ChainReader & { calls: string[] } {
   const calls: string[] = [];
   const time = opts.blockTime ?? ((n: bigint) => new Date(Date.parse("2026-09-01T00:00:00.000Z") + Number(n) * 12_000).toISOString());
   return {
@@ -368,9 +370,10 @@ function fakeReader(opts: { chainId?: number; head: bigint; logs: RawTransfer[];
     async getChainId() { return opts.chainId ?? 1; },
     async getBlockNumber() { return opts.head; },
     async getBlockTime(n) { calls.push(`time:${n}`); return time(n); },
+    async getBlockHash(n) { calls.push(`hash:${n}`); return (opts.blockHash ?? ((b: bigint) => H(0xb10c000 + Number(b))))(n); },
     async getTransferLogs({ address, direction, fromBlock, toBlock }) {
       calls.push(`logs:${direction}:${fromBlock}-${toBlock}`);
-      opts.onLogs?.();
+      await opts.onLogs?.();
       if (opts.logsError) throw opts.logsError;
       if (opts.maxSpan !== undefined && toBlock - fromBlock + 1n > opts.maxSpan) throw new Error("query returned more than 10000 results");
       const a = address.toLowerCase();
@@ -688,6 +691,139 @@ await check("the start date resolves to the first block at or after midnight UTC
   assert.equal(n, 7200n);
   const before = await firstBlockAtOrAfter(reader, "2026-08-01T00:00:00.000Z", 10_000n);
   assert.equal(before, 0n);
+});
+
+console.log("\nRestart, two runs at once, a replaced block, a hostile RPC");
+
+const rowsOf = (id: string) => store.ledgerOf("org_1").filter((e) => e.source.kind === "wallet" && e.source.walletId === id);
+const loopOpts = { value: fixedValue, lists: listedAll, now: () => NOW };
+const { initStore: reloadStore } = await import("../services/api/src/store.js");
+type SyncModule = typeof import("../services/api/src/wallet-sync/sync.js");
+let restarts = 0;
+/** A restart: the store re-read from its file, and a fresh copy of the sync
+ *  module (no reader, token or list state carried over). */
+const restart = async (): Promise<SyncModule> => {
+  reloadStore();
+  return import(`../services/api/src/wallet-sync/sync.js?restart=${++restarts}`);
+};
+const current = (id: string) => store.findImportedWallet(id)!;
+
+await check("a crash after a window's rows are written and before its cursor is: the restart books nothing twice and skips nothing", async () => {
+  const w = freshWallet({ sync: { status: "pending", cursor: "0" } });
+  const logs = [5n, 150n, 250n].map((b, i) => transfer({ blockNumber: b, txHash: H(0x901 + i), logIndex: 0 }));
+  const realUpdate = store.updateImportedWallet;
+  let crashed = false;
+  store.updateImportedWallet = (id, patch) => {
+    if (!crashed && id === w.id && patch.sync?.cursor === "100") { crashed = true; throw new Error("process killed"); }
+    return realUpdate.call(store, id, patch);
+  };
+  try {
+    await syncWallet(w, fakeReader({ head: 1000n, logs }), loopOpts);
+  } finally {
+    store.updateImportedWallet = realUpdate;
+  }
+  assert.ok(crashed);
+  const sync = await restart();
+  // What the file holds: the first window's row, the cursor before it.
+  assert.deepEqual(rowsOf(w.id).map((e) => e.txHash), [H(0x901)]);
+  assert.equal(current(w.id).sync.cursor, "0");
+  const r = await sync.syncWallet(current(w.id), fakeReader({ head: 1000n, logs }), loopOpts);
+  assert.equal(r.added, 2, "the re-read window adds only what it lacked");
+  assert.deepEqual(rowsOf(w.id).map((e) => e.txHash).sort(), logs.map((l) => l.txHash).sort());
+  assert.equal(current(w.id).sync.cursor, "300");
+  assert.equal(current(w.id).sync.status, "syncing");
+});
+
+await check("two sync runs on one wallet at once: each row once, the cursor only moves forward, no window skipped", async () => {
+  const w = freshWallet({ sync: { status: "pending", cursor: "0" } });
+  const logs = [10n, 150n, 250n, 350n, 450n].map((b, i) => transfer({ blockNumber: b, txHash: H(0x910 + i), logIndex: 0 }));
+  const cursors: string[] = [];
+  const realUpdate = store.updateImportedWallet;
+  store.updateImportedWallet = (id, patch) => {
+    if (id === w.id && patch.sync?.cursor) cursors.push(patch.sync.cursor);
+    return realUpdate.call(store, id, patch);
+  };
+  try {
+    // The second run's RPC is slower: its windows land on a cursor the first already moved.
+    const slow = fakeReader({ head: 1000n, logs, onLogs: () => new Promise((r) => setTimeout(r, 5)) });
+    await Promise.all([syncWallet(w, fakeReader({ head: 1000n, logs }), loopOpts), syncWallet(w, slow, loopOpts)]);
+  } finally {
+    store.updateImportedWallet = realUpdate;
+  }
+  const ids = rowsOf(w.id).map((e) => e.id);
+  assert.equal(new Set(ids).size, ids.length, `a row booked twice: ${ids}`);
+  for (let i = 1; i < cursors.length; i++) assert.ok(BigInt(cursors[i]) >= BigInt(cursors[i - 1]), `the cursor went back: ${cursors}`);
+  assert.notEqual(current(w.id).sync.status, "error", current(w.id).sync.error);
+  for (let i = 0; i < 10 && current(w.id).sync.cursor !== "998"; i++) await syncWallet(current(w.id), fakeReader({ head: 1000n, logs }), loopOpts);
+  assert.deepEqual(rowsOf(w.id).map((e) => e.txHash).sort(), logs.map((l) => l.txHash).sort(), "every transfer booked once");
+});
+
+await check("a booked block later replaced by other logs: after a restart the sync stops for review, books nothing, keeps the cursor and the old row", async () => {
+  const w = freshWallet({ sync: { status: "pending", cursor: "0" } });
+  let forked = false;
+  // A block's hash commits to every block before it: replacing 150 changes every hash from 150 on.
+  const hashOf = (b: bigint) => H(0xb10c000 + Number(b) + (forked && b >= 150n ? 0x100000 : 0));
+  await syncWallet(w, fakeReader({ head: 1000n, logs: [transfer({ blockNumber: 150n, txHash: H(0x920), logIndex: 0 })], blockHash: hashOf }), loopOpts);
+  assert.equal(current(w.id).sync.cursor, "300");
+  assert.deepEqual(rowsOf(w.id).map((e) => e.txHash), [H(0x920)]);
+
+  forked = true; // deeper than WALLET_SYNC_CONFIRMATIONS
+  const replaced = [transfer({ blockNumber: 150n, txHash: H(0x921), logIndex: 0, valueUnits: 7_000_000n }), transfer({ blockNumber: 350n, txHash: H(0x922), logIndex: 0 })];
+  const sync = await restart();
+  for (let run = 0; run < 2; run++) {
+    const r = await sync.syncWallet(current(w.id), fakeReader({ head: 1000n, logs: replaced, blockHash: hashOf }), loopOpts);
+    assert.equal(r.added, 0);
+    const s = current(w.id).sync;
+    assert.equal(s.status, "error");
+    assert.match(s.error ?? "", /block 300 .*changed.*review/i);
+    assert.equal(s.cursor, "300");
+    assert.deepEqual(rowsOf(w.id).map((e) => e.txHash), [H(0x920)], "the booked row is left for review, not corrected or doubled");
+  }
+});
+
+await check("a wallet whose cursor carries no block hash yet resumes and records one", async () => {
+  const w = freshWallet({ sync: { status: "pending", cursor: "990" } });
+  await syncWallet(w, fakeReader({ head: 1000n, logs: [] }), loopOpts);
+  assert.equal(current(w.id).sync.cursor, "998");
+  assert.equal(current(w.id).sync.cursorHash, H(0xb10c000 + 998));
+});
+
+/** The fake chain, answering eth_getLogs with whatever `answer` returns. */
+const answering = (answer: (q: { direction: "in" | "out"; fromBlock: bigint; toBlock: bigint }) => RawTransfer[], over: Parameters<typeof fakeReader>[0] = { head: 1000n, logs: [] }) => ({
+  ...fakeReader(over),
+  async getTransferLogs(q: { direction: "in" | "out"; fromBlock: bigint; toBlock: bigint }) { return answer(q); },
+});
+// One log id per case: the row id is the org, address and log, not the wallet.
+let hostileTx = 0x930;
+const inboundLog = () => transfer({ blockNumber: 5n, txHash: H(++hostileTx), logIndex: 0 });
+const halts = async (name: string, reader: (inbound: RawTransfer) => ChainReader, why: RegExp) => {
+  await check(`${name}: the window halts, nothing is booked, the cursor stays`, async () => {
+    const w = freshWallet({ sync: { status: "pending", cursor: "0" } });
+    const r = await syncWallet(w, reader(inboundLog()), loopOpts);
+    assert.equal(r.added, 0);
+    assert.deepEqual(rowsOf(w.id), []);
+    const s = current(w.id).sync;
+    assert.equal(s.status, "error");
+    assert.equal(s.cursor, "0");
+    assert.match(s.error ?? "", why);
+  });
+};
+
+await halts("an RPC on another chain", (inbound) => fakeReader({ chainId: 8453, head: 1000n, logs: [inbound] }), /reports chain 8453/);
+await halts("a block the node has no time for", (inbound) => fakeReader({ head: 1000n, logs: [{ ...inbound, blockTime: undefined }], blockTime: () => undefined as unknown as string }), /block 5 .*no time/);
+await halts("a block time that is not a time", (inbound) => fakeReader({ head: 1000n, logs: [{ ...inbound, blockTime: "soon" }] }), /block 5 .*no time/);
+await halts("a block the node has no hash for", (inbound) => fakeReader({ head: 1000n, logs: [inbound], blockHash: () => null as unknown as `0x${string}` }), /block 100 .*no hash/);
+await halts("a log from a block outside the window asked for", (inbound) => answering((q) => (q.direction === "in" ? [{ ...inbound, blockNumber: 999n }] : [])), /outside blocks 1-100/);
+await halts("a log for another wallet", (inbound) => answering((q) => (q.direction === "in" ? [{ ...inbound, to: STRANGER }] : [])), /not to this wallet/);
+await halts("the same log twice in one answer", (inbound) => answering((q) => (q.direction === "in" ? [inbound, { ...inbound }] : [])), /twice/);
+await halts("one log id that the in and out answers disagree on", (inbound) => answering((q) => (q.direction === "in" ? [inbound] : [{ ...inbound, from: SAFE, to: STRANGER }])), /disagree/);
+
+await check("a self-transfer, which both answers carry, is one log and does not halt", async () => {
+  const w = freshWallet({ sync: { status: "pending", cursor: "0" } });
+  const self = transfer({ blockNumber: 5n, txHash: H(0x940), logIndex: 0, from: SAFE, to: SAFE });
+  await syncWallet(w, fakeReader({ head: 1000n, logs: [self] }), loopOpts);
+  assert.notEqual(current(w.id).sync.status, "error", current(w.id).sync.error);
+  assert.equal(current(w.id).sync.cursor, "300");
 });
 
 console.log("\nImport route");
