@@ -19,7 +19,7 @@
  */
 import { $, Z, api, cap, day, ensureMe, esc, eur, gateHtml, maskIban, me, org, ownSafe, refreshMe, roleCan, safeAddressHtml, view, when, ymd } from "./core.js";
 import { META, RENDER, linkBtn, moneriumLink } from "./views.js";
-import { submittedInvoices, waitingForMe } from "./nav.js";
+import { setTopBalance, submittedInvoices, waitingForMe } from "./nav.js";
 import { draftTag, draftTitle, draftTotal, invAmount, invWho, loadMembers, memberName } from "./screens.js";
 import { APP_LINKS, isOwnCompanyOrg, loadAccess } from "./access-model.js";
 import { companyBalance, countedLines, hasIban, assetTotals, lastMonth, localDay, monthIn, monthSummary, noIbanStep, owedInvoices, payingInvoices, pendingRuns, securityRows, setupOpen, setupSteps, submitFor, topBy, unreadOf } from "./home-model.js";
@@ -242,6 +242,9 @@ function roundActions() {
  *  figure: that account's IBAN, or the state that keeps it from having one.
  *  A company's account is its own Safe: no figure; its IBAN once live, else
  *  what it is waiting for, or that the read failed (companyBalance). */
+// The figure this render's balance card shows, for the top bar (nav.js setTopBalance).
+let cardFig = null;
+
 function balanceCard(accounts, read) {
   const mine = accounts.find((a) => a.status === "active" && a.backingUserId && me && a.backingUserId === me.id);
   const safe = read ? ownSafe(accounts) : null;
@@ -250,6 +253,7 @@ function balanceCard(accounts, read) {
   const other = !mine && org.entity !== "company" && accounts.find((a) => a.backingUserId);
   const company = companyBalance(org, read ? accounts : null);
   const label = mine ? `${mine.label || mine.currency} balance` : safe?.company ? "Company Zold account" : "Your Zold account";
+  cardFig = fig ? { label, eur: me.balanceEur } : null;
   const head = fig
     ? `<span class="zb-h-bal__label">${esc(label)}</span><span class="zb-h-bal__fig">${bigEur(me.balanceEur)}</span>`
     : mine || safe
@@ -458,6 +462,8 @@ const greeting = () => (me?.name ? `Welcome, ${me.name.trim().split(/\s+/)[0]}` 
 META.overview = () => ({ title: greeting(), sub: "", actions: "" });
 
 RENDER.overview = async () => {
+  // Until this render's own read lands, the top bar shows no figure at all.
+  setTopBalance(null);
   const books = cap("ledger.transactions").allowed;
   // The greeting and the balance need the session, read again for a balance that moved.
   const companyKeys = companyKeysHere(org, roleCan(org.role, "accounts"));
@@ -524,6 +530,7 @@ RENDER.overview = async () => {
   return {
     html,
     bind(box) {
+      setTopBalance(cardFig);
       rotateLine(box, cmds, owedInvoices(invoices).some((i) => i.overdue));
       const q = box.querySelector("#hm-q");
       const answer = (cmd, typed) => {
