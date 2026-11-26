@@ -62,6 +62,10 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
   await s.setSegment("u_a", { value: "consumer", reason: "test" } as any);
   await assert.rejects(async () => await s.setSegment("u_a", { value: "business" } as any), /already has segment/);
   assert.equal((await s.setSegment("u_a", { value: "business" } as any, "admin")).segment?.decidedBy, "admin");
+  // An UNDECIDED account is decided once, later, by the system; then it is set.
+  await s.setSegment("u_b", { value: "UNDECIDED", reasonCode: "residence_not_given" } as any);
+  assert.equal((await s.setSegment("u_b", { value: "EU_FULL", reasonCode: "test" } as any)).segment?.value, "EU_FULL");
+  await assert.rejects(async () => await s.setSegment("u_b", { value: "UNDECIDED" } as any), /already has segment/);
   await s.addConsent("u_a", { kind: "terms", at: now } as any);
   await s.addConsent("u_a", { kind: "privacy", at: now } as any);
   assert.equal((await s.findUser("u_a"))?.consents?.length, 2, "consents are appended");
@@ -560,6 +564,32 @@ export async function conditionalWriteSuite(s: StoreBackend): Promise<void> {
   await s.updateUser("u_a", { emailCode: { hash: "h", email: "other@example.com", expiresAt: iso(DAY), attempts: 0, sentAt: [] } } as any);
   assert.equal(await s.countEmailCodeAttempt("u_a", 5), undefined, "nor one sent to another address");
   await s.updateUser("u_a", { emailCode: undefined } as any);
+
+  // A deposit changed from its stored value (§2 rules 2 and 5): the
+  // conversion intent is claimed once, and partials appended in parallel are
+  // both kept.
+  const intent = { at: now, amountUnits: "1", safeAddress: `0x${"ab".repeat(20)}`, quote: { provider: "dex", rate: "1", minOut: "1" } };
+  const claims = await Promise.all([1, 2].map(() => s.patchCryptoDeposit("dep_other_chain", (d) => (d.conversionIntent ? null : { conversionIntent: intent }))));
+  assert.equal(claims.filter(Boolean).length, 1, "two parallel claims of one deposit's conversion: one");
+  assert.deepEqual((await s.findCryptoDeposit(8453, hash("aa"), 3))?.conversionIntent, intent);
+  const partial = (eur: number) => ({ creditedEur: eur, provider: "dex", rate: 1, conversion: { amountInUnits: "1" } });
+  await Promise.all([1, 2].map((eur) => s.patchCryptoDeposit("dep_other_chain", (d) => ({ partials: [...(d.partials ?? []), partial(eur)] }))));
+  assert.deepEqual((await s.findCryptoDeposit(8453, hash("aa"), 3))?.partials?.map((p) => p.creditedEur).sort(), [1, 2], "both partials kept");
+  await assert.rejects(async () => await s.patchCryptoDeposit("dep_none", () => ({})), /unknown crypto deposit dep_none/);
+
+  // Approvals waiting for a passkey: the operation comes back with its
+  // bigints, an expired one is gone, a dropped one is gone.
+  const userOperation = { sender: `0x${"ab".repeat(20)}`, nonce: 2n ** 70n + 1n, callData: "0x1234", maxFeePerGas: 7n, paymaster: `0x${"cd".repeat(20)}` } as any;
+  const pendingRow = { userId: "u_a", expiresAt: Date.now() + 60_000, challenge: "ch", plan: { address: `0x${"ab".repeat(20)}`, status: "active" } as any, userOperation, batch: { recipient: `0x${"ef".repeat(20)}` as const, mode: "live" as const } };
+  await s.putPendingExecution("transfer", "t_pending", pendingRow);
+  const back = await s.findPendingExecution("transfer", "t_pending");
+  assert.equal(back?.userOperation.nonce, 2n ** 70n + 1n, "a bigint comes back a bigint");
+  assert.deepEqual(back, pendingRow, "the stored operation is the prepared one");
+  assert.equal(await s.findPendingExecution("cryptoSend", "t_pending"), undefined, "keyed by kind");
+  await s.putPendingExecution("cryptoSend", "cs_old", { ...pendingRow, expiresAt: Date.now() - 1 });
+  assert.equal(await s.findPendingExecution("cryptoSend", "cs_old"), undefined, "an expired one is not handed out");
+  await s.dropPendingExecution("transfer", "t_pending");
+  assert.equal(await s.findPendingExecution("transfer", "t_pending"), undefined, "dropped with its claim");
 
   // Rule 4 over an organisation: a write only while a check on it holds.
   assert.equal(await s.updateOrganisationIf("org_b", () => false, () => ({ name: "never" })), null);

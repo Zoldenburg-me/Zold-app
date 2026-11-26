@@ -30,6 +30,7 @@ import type {
   OrgSafePlan,
 } from "../../domain/types.js";
 import { describeCause } from "../../http/log-cause.js";
+import { decodeUserOperation, encodeUserOperation } from "../../domain/safe-op-queue.js";
 import { currentTx, deferToCommit, endTx, inScope, isLock, lockOutsideTx, nestedTx, newTxHooks, type Collection, type StoreBackend, type StoreMethods } from "../backend.js";
 import { defaultChartRows, type Db } from "../db.js";
 import {
@@ -62,6 +63,7 @@ import type {
   OperatorCredential,
   OperatorSession,
   PaymentRequest,
+  PendingExecution,
   PendingSafeOp,
   Quote,
   ReceiptShare,
@@ -433,7 +435,8 @@ export function createPgStore(database: Database): StoreBackend {
     },
     setSegment: (id, segment, by = "system") =>
       change<User>(TABLE.users, id, `unknown user ${id}`, (u) => {
-        if (u.segment && by !== "admin") {
+        // An account that has not said where it lives is decided once, later.
+        if (u.segment && u.segment.value !== "UNDECIDED" && by !== "admin") {
           throw new Error(`user ${id} already has segment ${u.segment.value}; only an admin action may change it`);
         }
         u.segment = { ...segment, decidedBy: by };
@@ -617,6 +620,28 @@ export function createPgStore(database: Database): StoreBackend {
     async releaseCapHold(holdId) {
       await q.query("DELETE FROM cap_holds WHERE id = $1", [holdId]);
     },
+    /** A row of `pending_executions` (migrations/0004); the operation's
+     *  bigints go through the Safe op queue's encoding. */
+    putPendingExecution: (kind, id, entry) =>
+      tx(async (t) => {
+        await t.query("DELETE FROM pending_executions WHERE expires_at < $1", [new Date()]);
+        await t.query(
+          `INSERT INTO pending_executions (kind, id, user_id, expires_at, doc) VALUES ($1, $2, $3, $4, $5::json)
+           ON CONFLICT (kind, id) DO UPDATE SET user_id = EXCLUDED.user_id, expires_at = EXCLUDED.expires_at, doc = EXCLUDED.doc`,
+          [kind, id, entry.userId, new Date(entry.expiresAt), encodeUserOperation(entry)],
+        );
+      }),
+    async findPendingExecution(kind, id) {
+      const r = await q.query<{ doc: string }>("SELECT doc::text AS doc FROM pending_executions WHERE kind = $1 AND id = $2 AND expires_at >= $3", [
+        kind,
+        id,
+        new Date(),
+      ]);
+      return r.rows[0] ? decodeUserOperation<PendingExecution>(r.rows[0].doc) : undefined;
+    },
+    async dropPendingExecution(kind, id) {
+      await q.query("DELETE FROM pending_executions WHERE kind = $1 AND id = $2", [kind, id]);
+    },
     claimAuthorization: async (id) =>
       (await change<Transfer, boolean>(TABLE.transfers, id, null, (t) => {
         if (t.state !== "CREATED" || !t.auth || t.auth.authorizedAt) return null;
@@ -661,7 +686,8 @@ export function createPgStore(database: Database): StoreBackend {
     },
     async findReceiptShareByTransfer(transferId) {
       const shares = await rows<ReceiptShare>(q, TABLE.receiptShares, "transfer_id = $1", [transferId]);
-      return shares.find((s) => !s.revokedAt) ?? shares.at(-1);
+      // A live share first; an expired one stays recorded beside its successor.
+      return shares.find((s) => !s.revokedAt && Date.parse(s.expiresAt) >= Date.now()) ?? shares.at(-1);
     },
     findReceiptShareBySlug: (slug) => first<ReceiptShare>(q, TABLE.receiptShares, "slug = $1", [slug]),
     async addDocument(d: StoredDocument) {
@@ -897,6 +923,11 @@ export function createPgStore(database: Database): StoreBackend {
         return winner;
       }),
     updateCryptoDeposit: (id, patch) => patchRow<CryptoDeposit>(TABLE.cryptoDeposits, id, "crypto deposit", patch, true),
+    patchCryptoDeposit: (id, make) =>
+      change<CryptoDeposit>(TABLE.cryptoDeposits, id, `unknown crypto deposit ${id}`, (row) => {
+        const patch = make(structuredClone(row));
+        return patch ? Object.assign(row, patch, { updatedAt: new Date().toISOString() }) : null;
+      }),
     settleCryptoDeposit: (id, decide) =>
       change<CryptoDeposit>(TABLE.cryptoDeposits, id, `unknown crypto deposit ${id}`, (row) => {
         if (row.settledAt) return null;

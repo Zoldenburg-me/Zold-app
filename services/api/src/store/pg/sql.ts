@@ -112,6 +112,13 @@ export function poolDatabase(pool: pg.Pool): Database {
     async tx(fn) {
       const client = await pool.connect();
       let broken: Error | undefined;
+      // The connection lost while this transaction holds it: the statement in
+      // flight rejects and the transaction fails. Without a listener the
+      // client's own 'error' event would end the process.
+      const lost = (err: Error) => {
+        broken ??= err;
+      };
+      client.on("error", lost);
       try {
         // Named, not inherited: a role or database default of REPEATABLE READ
         // would keep one snapshot for the whole transaction, and a write that
@@ -140,6 +147,7 @@ export function poolDatabase(pool: pg.Pool): Database {
         });
         throw err;
       } finally {
+        client.off("error", lost);
         client.release(broken);
       }
     },

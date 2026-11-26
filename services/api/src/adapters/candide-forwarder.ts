@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { CHAIN_ID, FORWARDING, IS_PRODUCTION } from "../config.js";
 import { usdIsStaging, usdToken } from "../usd-token.js";
 import { partnerTimeout } from "../http.js";
@@ -34,6 +34,8 @@ export interface PaymentForwarderActivation {
     active: boolean;
     expiresAt?: string;
     activatedAt: string;
+    /** Tells two activations apart when they share a millisecond. */
+    activationId: string;
   };
 }
 
@@ -127,6 +129,15 @@ async function acceptedTokens(sourceChainIds: number[], token: `0x${string}`): P
   return accepts;
 }
 
+/** Candide answered, and said this address is not active: a definite answer
+ *  (a deposit there is not forwarded), unlike a transport or upstream error. */
+export class ForwarderInactiveError extends Error {
+  constructor(readonly address: string) {
+    super(`Candide reports forwarding address ${address} as not active`);
+    this.name = "ForwarderInactiveError";
+  }
+}
+
 /**
  * Activate the public receive address for a payment page.
  *
@@ -164,6 +175,7 @@ export async function activatePaymentForwarder(params: {
         salt,
         active: true,
         activatedAt: now,
+        activationId: randomUUID(),
       },
     };
   }
@@ -195,6 +207,11 @@ export async function activatePaymentForwarder(params: {
   if (activatedAddress.toLowerCase() !== address.toLowerCase()) {
     throw new Error(`Candide activated ${activatedAddress}, but computed ${address}`);
   }
+  // An address Candide does not report active is not forwarded: a deposit to
+  // it stays in the forwarder, so it is never shown as the page's.
+  if (activation.active !== true) {
+    throw new ForwarderInactiveError(address);
+  }
 
   return {
     address,
@@ -206,9 +223,10 @@ export async function activatePaymentForwarder(params: {
       sourceChainIds,
       custodialWithdrawer,
       salt,
-      active: !!activation.active,
+      active: true,
       ...(activation.expiresAt ? { expiresAt: new Date(activation.expiresAt * 1000).toISOString() } : {}),
       activatedAt: now,
+      activationId: randomUUID(),
     },
   };
 }

@@ -69,16 +69,17 @@ const pendingDepositConversions = new Map<string, {
  */
 const convertingDeposits = new Set<string>();
 
-/** A failure write that never moves a converted deposit backwards. */
-async function parkDeposit(id: string, patch: Partial<CryptoDeposit>): Promise<void> {
+/**
+ * A failure write that never moves a converted deposit backwards. `step` is
+ * appended to the stored row's txs, not to a copy read before the submit.
+ */
+async function parkDeposit(id: string, patch: Partial<CryptoDeposit>, step?: CryptoDeposit["txs"][number]): Promise<void> {
   return store.tx(async () => {
     const seen = (await store.list("cryptoDeposits")).find((d) => d.id === id);
     if (!seen) return;
     // The owner's row is the lock every writer of a deposit's money takes.
     await store.lockUser(seen.userId);
-    const now = (await store.list("cryptoDeposits")).find((d) => d.id === id);
-    if (!now || now.holding === "converted") return;
-    await store.updateCryptoDeposit(id, patch);
+    await store.patchCryptoDeposit(id, (d) => (d.holding === "converted" ? null : { ...patch, ...(step ? { txs: [...d.txs, step] } : {}) }));
   });
 }
 
@@ -357,7 +358,10 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
         // On disk BEFORE the swap is submitted: if a later write is refused
         // (the process exits), the restart finds this and does not offer the
         // deposit again. Refused here, the process exits with nothing sent.
-        await store.updateCryptoDeposit(deposit.id, {
+        // The intent is the CONVERTING reserve (§2 rule 5): written only on
+        // the stored row while it is still convertible, with no other
+        // conversion's intent on it and the same USDC left as was read above.
+        const claimed = await store.patchCryptoDeposit(deposit.id, (d) => depositConversionBlocker(user, d) || unconvertedUnits(d) !== unconvertedUnits(current) ? null : {
           conversionIntent: {
             at: new Date().toISOString(),
             amountUnits: unconvertedUnits(current).toString(),
@@ -367,6 +371,7 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
             quote: pending.quote,
           },
         });
+        if (!claimed) return res.status(409).json({ error: "a conversion of this deposit is already running, or it changed — reload" });
         let submitted: SubmittedOperation;
         try {
           // The browser sends base64url; the Safe signature needs the bytes,
@@ -383,11 +388,11 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
           // for someone to check the operation on chain.
           if (err instanceof SafeOperationUncertainError) {
             console.error(`convert: Safe operation ${err.userOpHash} unconfirmed:`, describeCause(err.cause));
-            await parkDeposit(deposit.id, {
-              holding: "unconfirmed",
-              reason: `${reason} — check the operation before converting again`,
-              txs: [...current.txs, { step: "safe.swap(usdc->eure).unconfirmed", hash: err.userOpHash }],
-            });
+            await parkDeposit(
+              deposit.id,
+              { holding: "unconfirmed", reason: `${reason} — check the operation before converting again` },
+              { step: "safe.swap(usdc->eure).unconfirmed", hash: err.userOpHash },
+            );
             return res.status(502).json({ error: reason, code: "SAFE_OP_UNCONFIRMED", userOpHash: err.userOpHash });
           }
           await parkDeposit(deposit.id, { holding: "refused", reason, conversionIntent: undefined });
@@ -397,30 +402,29 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
         // nothing is settled.
         if (submitted.success !== true) {
           const reason = `the swap ${submitted.userOpHash ?? ""} was included but reverted — nothing was converted`;
-          await parkDeposit(deposit.id, {
-            holding: "refused",
-            reason,
-            conversionIntent: undefined,
-            txs: [...current.txs, { step: "safe.swap(usdc->eure).reverted", hash: submitted.txHash ?? submitted.userOpHash ?? "0x" }],
-          });
+          await parkDeposit(
+            deposit.id,
+            { holding: "refused", reason, conversionIntent: undefined },
+            { step: "safe.swap(usdc->eure).reverted", hash: submitted.txHash ?? submitted.userOpHash ?? "0x" },
+          );
           return res.status(502).json({ error: reason });
         }
 
         // The chain's transaction hash is what an auditor resolves; the userOp
         // hash is kept beside it because it is what the bundler answers for.
-        const txs = [
-          ...current.txs,
+        const steps = [
           { step: "safe.swap(usdc->eure)", hash: submitted.txHash ?? submitted.userOpHash ?? "0x" },
           ...(submitted.txHash && submitted.userOpHash ? [{ step: "userOperation", hash: submitted.userOpHash }] : []),
         ];
         // The swap executed. Record that now, before anything below can fail,
         // so the deposit is never offered again on a stale holding; settling
         // then moves it on (converted, or held after a partial fill).
-        const executed = await store.updateCryptoDeposit(deposit.id, {
+        const executed = (await store.patchCryptoDeposit(deposit.id, (d) => ({
           holding: "unconfirmed",
           reason: "the swap went through; recording what arrived",
-          txs,
-        });
+          txs: [...d.txs, ...steps],
+        })))!;
+        const txs = executed.txs;
         let settled: CryptoDeposit;
         try {
           // What the swap took, measured from its own logs. Less than was asked

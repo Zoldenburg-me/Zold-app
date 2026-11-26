@@ -840,6 +840,30 @@ await check("one wallet connected to two businesses in parallel: one gets it, th
   await store.updateAccount(held.id, { backingUserId: held.backingUserId, address: held.address });
 });
 
+await check("two owners connecting their own wallets to one account in parallel: one is connected, the other refused", async () => {
+  const over = { country: "IN", kycStatus: "pending", segment: { value: "IN_COLLECTIONS", reasonCode: "collections_only_residence", decidedAt: now, decidedBy: "system" } };
+  const safes = [await personWithSpace("u_in_b", "priyab", over), await personWithSpace("u_in_c", "priyac", over)];
+  await walletBusiness("org_inbiz5");
+  for (const u of ["u_in_b", "u_in_c"]) {
+    await store.addMember({ id: `m_inbiz5_${u}`, orgId: "org_inbiz5", userId: u, email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now });
+  }
+  // Both past the route's first checks before either opens its transaction:
+  // the account is then claimed by whichever commits first, and the other
+  // must see it under the org row's lock.
+  const restore = holdUntil(store, "tx", 2);
+  let out: { status: number; data: any }[];
+  try {
+    out = await Promise.all(["u_in_b", "u_in_c"].map((u) => call("POST", "/api/orgs/org_inbiz5/accounts/acc_org_inbiz5/fund", u)));
+  } finally {
+    restore();
+  }
+  assert.deepEqual(out.map((r) => r.status).sort(), [200, 409], JSON.stringify(out.map((r) => r.data)));
+  const a = (await store.findAccount("acc_org_inbiz5"))!;
+  const winner = ["u_in_b", "u_in_c"][out.findIndex((r) => r.status === 200)];
+  assert.equal(a.backingUserId, winner, "the account is backed by the one that was connected");
+  assert.equal(a.address, safes[["u_in_b", "u_in_c"].indexOf(winner)], "and holds that owner's Safe, not the other's");
+});
+
 await check("an account that can still get an IBAN does not connect as a wallet: it goes through Monerium", async () => {
   await personWithSpace("u_de_wallet", "dewallet", { country: "DE", kycStatus: "pending", segment: { value: "EU_FULL", reasonCode: "t", decidedAt: now, decidedBy: "system" } });
   await store.addMember({ id: "m_inbiz2_de", orgId: "org_inbiz2", userId: "u_de_wallet", email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now });

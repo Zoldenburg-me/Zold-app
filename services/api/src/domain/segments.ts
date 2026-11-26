@@ -45,7 +45,11 @@ export type Segment =
   | "EU_FULL"
   | "IN_COLLECTIONS"
   | "ONCHAIN_NO_CARD"
-  | "WALLET_ONLY";
+  | "WALLET_ONLY"
+  /** Signed up without saying where they live: the account has its own Safe
+   *  and nothing else until POST /users/:id/residence decides. Never returned
+   *  by resolveSegment. */
+  | "UNDECIDED";
 
 /** Every partner call sits behind one of these. Derived from the segment and
  *  never set directly, so a capability cannot drift from the path. */
@@ -127,6 +131,7 @@ const CAPABILITIES: Record<Segment, Capability[]> = {
   // The wallet needs no partner. Collections stay gated (IN_COLLECTIONS_GATE).
   IN_COLLECTIONS: ["xflow_collections", "safe", "onchain_balance"],
   WALLET_ONLY: ["safe", "onchain_balance"],
+  UNDECIDED: ["safe"],
   BLOCKED_US: [],
   BLOCKED_SANCTIONED: [],
   BLOCKED_UNSUPPORTED: [],

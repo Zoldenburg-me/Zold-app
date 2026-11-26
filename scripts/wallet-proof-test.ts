@@ -75,12 +75,15 @@ process.env.WALLET_SYNC_RPC_7 = `http://127.0.0.1:${(stubServer.address() as any
 
 // VIES, stubbed: issuing a draft whose recipient has a VAT ID waits on it,
 // which is the window in which `duringVies` changes what the draft bills.
-let duringVies: (() => void) | undefined;
+// The answer waits for the change to commit, so the issue's re-check after
+// VIES reads it on any backend.
+let duringVies: (() => void | Promise<void>) | undefined;
 const vies = express();
 vies.use(express.json());
-vies.post("/", (_req, res) => {
-  duringVies?.();
+vies.post("/", async (_req, res) => {
+  const during = duringVies;
   duringVies = undefined;
+  await during?.();
   res.json({ valid: true, name: "Example DAO Foundation", address: "Vienna", requestDate: new Date().toISOString() });
 });
 const viesServer = vies.listen(0, "127.0.0.1");
@@ -138,7 +141,9 @@ await member("m_owner", "org_1", "u_owner", "owner");
 await member("m_viewer", "org_1", "u_viewer", "viewer");
 await member("m_other", "org_2", "u_other", "owner");
 
-const app = express();
+// As server.ts: a response sent inside a store.tx waits for its COMMIT.
+const { sendAfterCommit } = await import("../services/api/src/http/send-after-commit.js");
+const app = express().use(sendAfterCommit);
 app.use(express.json());
 const requireSession = (req: any, res: any) => {
   const id = req.header("x-user") as string | undefined;
@@ -616,6 +621,18 @@ await check("a receipt whose value changes while the issue waits on VIES issues 
   assert.equal(r.status, 409, JSON.stringify(r.body));
   assert.match(r.body.error, /receipt on this draft changed/);
   assert.equal((await store.findInvoice(d.id))!.state, "DRAFT");
+});
+
+await check("two proofs of one challenge at once: one is recorded, the other is refused (409)", async () => {
+  const c = (await challenge(W.eoa)).body.challenge;
+  const signature = await EOA.signMessage({ message: c.message });
+  // Both pass the chain's check before either writes; the write re-reads the
+  // challenge under the org row, so the second finds it spent.
+  const out = await Promise.all([1, 2].map(() => prove(W.eoa, { challengeId: c.id, signature })));
+  assert.deepEqual(out.map((r) => r.status).sort(), [200, 409], JSON.stringify(out.map((r) => r.body)));
+  const w = (await store.findImportedWallet(W.eoa))!;
+  assert.equal(w.ownership?.message, c.message);
+  assert.equal(w.ownershipChallenge, undefined, "the challenge is spent once");
 });
 
 server.close();

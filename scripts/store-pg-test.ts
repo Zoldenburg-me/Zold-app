@@ -261,12 +261,15 @@ try {
       await third.listening();
       const [stuck] = await lockHolder();
       // Needs the server on this machine, run as this OS user (Homebrew's
-      // postgresql@17 is); otherwise this case is skipped, said so.
+      // postgresql@17 is); otherwise this case is skipped, said so. On macOS
+      // the cluster is Homebrew's, so there a skip is a failure: this is the
+      // one place the case runs.
       let signalable = true;
       try {
         process.kill(stuck, 0);
       } catch {
         signalable = false;
+        if (process.platform === "darwin") throw new Error("unanswered ping: the server's backend cannot be signalled, so this case would be skipped on the Mac that runs it");
         console.log("skip - unanswered ping: the server's backend cannot be signalled from here");
       }
       if (signalable) {
@@ -340,6 +343,7 @@ try {
     ["scripts/shopify-orders-test.ts"],
     ["scripts/webhook-test.ts"],
     ["scripts/crypto-deposit-test.ts"],
+    ["scripts/wallet-proof-test.ts"],
   ];
   const { spawn } = await import("node:child_process");
   const { freePort } = await import("./_free-port.js");

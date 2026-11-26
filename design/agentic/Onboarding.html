@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Open an account. Onboarding concept</title>
+<!-- Concept, companion to Desk-Command.html and Landing.html. Signup asks four things in one
+     conversation: name, email, company (and its name) or personal, passkey. Everything else is a
+     to-do on Home: email confirmation, KYC (which carries the US-person check), IBAN, a first agent
+     allocation, recovery. Nothing here calls the API; names are fiction. -->
+<link rel="stylesheet" href="../ui-v2/assets/fonts/inter.css">
+<link rel="stylesheet" href="../ui-v2/assets/fonts/material-symbols.css">
+<link rel="stylesheet" href="../ui-v2/tokens/tokens.css">
+<style>
+:root{--out:cubic-bezier(.16,1,.3,1)}
+*{box-sizing:border-box}
+body{margin:0;min-height:100dvh;background:var(--z-bg);color:var(--z-text);font-family:var(--z-font);font-size:16px;line-height:1.55}
+.ms{font-family:'Material Symbols Rounded';font-weight:300;font-style:normal;line-height:1;display:inline-block;font-feature-settings:'liga';font-size:20px}
+.top{position:sticky;top:0;z-index:3;display:flex;align-items:center;gap:12px;height:64px;padding:0 18px;background:var(--z-bg);border-bottom:1px solid var(--z-line)}
+.signet{width:30px;height:30px;border-radius:999px;border:1px solid var(--z-pink);color:var(--z-pink);display:inline-flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;flex:none}
+.top b{font-weight:600}
+.top .step{margin-left:auto;font-family:var(--z-mono);font-size:12px;color:var(--z-dim)}
+.back{height:var(--z-touch);padding:0 var(--z-space-3);border-radius:var(--z-radius-control);border:1px solid var(--z-line);background:transparent;color:var(--z-dim);font:inherit;font-size:13.5px;cursor:pointer}
+.back:hover{color:var(--z-text);border-color:var(--z-line-hover)}
+.back[hidden]{display:none}
+.meter{position:sticky;top:64px;z-index:3;height:2px;background:var(--z-line)}
+.meter i{display:block;height:100%;width:0;background:var(--z-pink);transition:width .6s var(--out)}
+
+main{max-width:600px;margin:0 auto;padding:36px 18px 160px;display:flex;flex-direction:column;gap:18px}
+.z{display:flex;gap:12px;align-items:flex-start;animation:rise .5s var(--out) both}
+.z p{margin:0;min-width:0;overflow-wrap:anywhere;font-size:18px;line-height:1.45;letter-spacing:-.015em;color:var(--z-heading)}
+.z p small{display:block;margin-top:6px;font-size:14.5px;line-height:1.5;color:var(--z-dim);letter-spacing:0}
+.me{align-self:flex-end;max-width:80%;overflow-wrap:anywhere;margin:0;padding:9px 14px;border-radius:12px;border:1px solid var(--z-line);background:var(--z-surface);font-size:15px;animation:rise .35s var(--out) both}
+@keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+
+/* the answer area */
+.dock{position:fixed;left:0;right:0;bottom:0;z-index:3;padding:14px 18px 22px;background:linear-gradient(transparent,var(--z-bg) 22%)}
+.dock>div{max-width:600px;margin:0 auto}
+.box{display:flex;gap:8px;padding:8px;border-radius:14px;border:1px solid var(--z-line-strong);background:var(--z-surface)}
+.box:focus-within{border-color:var(--z-pink)}
+.box input,.box select{flex:1;min-width:0;height:44px;padding:0 10px;border:0;background:transparent;color:var(--z-text);font:inherit;font-size:16px}
+.box input:focus-visible,.box select:focus-visible{outline:none}
+.box select option{background:var(--z-surface)}
+.send{width:44px;height:44px;flex:none;display:inline-flex;align-items:center;justify-content:center;border-radius:9px;border:0;background:var(--z-pink);color:var(--z-bg);cursor:pointer}
+.send:disabled{background:var(--z-line);color:var(--z-dim);cursor:default}
+.chips{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}
+.chip{height:46px;padding:0 16px;display:inline-flex;align-items:center;gap:8px;border-radius:999px;border:1px solid var(--z-line-strong);background:var(--z-surface);color:var(--z-text);font:inherit;font-size:15px;cursor:pointer;transition:border-color .15s,transform .2s var(--out)}
+.chip:hover{border-color:var(--z-line-hover);transform:translateY(-1px)}
+.chip.quiet{border-color:transparent;background:transparent;color:var(--z-dim)}
+.err{margin:8px 4px 0;font-size:13.5px;color:var(--z-amber)}
+.err:empty{display:none}
+
+/* cards inside the thread */
+.card{margin-left:42px;overflow-wrap:anywhere;padding:20px;border-radius:14px;border:1px solid var(--z-line-strong);background:var(--z-surface);animation:rise .5s var(--out) both}
+.card h3{margin:0 0 6px;font-size:17px;font-weight:600;letter-spacing:-.02em}
+.card p{margin:0 0 14px;font-size:14.5px;color:var(--z-dim)}
+.check{display:flex;gap:12px;align-items:flex-start;font-size:15px;cursor:pointer}
+.check input{width:20px;height:20px;margin:2px 0 0;accent-color:var(--z-pink)}
+.check a{color:var(--z-pink-link)}
+.btn{height:52px;width:100%;padding:0 18px;display:inline-flex;align-items:center;justify-content:center;gap:10px;border-radius:8px;border:1px solid var(--z-pink);background:var(--z-pink);color:var(--z-bg);font:inherit;font-size:15.5px;font-weight:700;cursor:pointer}
+.btn:disabled{background:transparent;border-color:var(--z-line-strong);color:var(--z-dim);cursor:default}
+.btn.ghost{background:transparent;border-color:var(--z-line-strong);color:var(--z-text);font-weight:600}
+.key{display:flex;justify-content:center;margin:4px 0 18px}
+.key .ms{font-size:64px;color:var(--z-pink-soft);font-variation-settings:'wght' 200}
+.trace{list-style:none;margin:16px 0 0;padding:0}
+.trace li{display:flex;align-items:center;gap:12px;min-height:30px;font-family:var(--z-mono);font-size:12.5px;color:var(--z-dim);animation:rise .35s var(--out) both}
+.trace .ms{font-size:18px;color:var(--z-mint)}
+.ring{width:18px;height:18px;flex:none;border-radius:999px;border:1.5px solid var(--z-pink);border-right-color:transparent;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* home: first tasks */
+.tasks{list-style:none;margin:0 0 0 42px;padding:0;display:flex;flex-direction:column;gap:10px}
+.task{display:flex;gap:14px;align-items:center;padding:16px;border-radius:14px;border:1px solid var(--z-line-strong);background:var(--z-surface);animation:rise .5s var(--out) both}
+.task .ms{font-size:22px;color:var(--z-dim)}
+.task div{flex:1;min-width:0;overflow-wrap:anywhere}
+.task b{display:block;font-weight:500;font-size:15.5px}
+.task span.sub{font-size:13.5px;color:var(--z-dim)}
+.task .go{height:40px;width:auto;padding:0 14px;font-size:14px}
+.task.wait{opacity:.6}
+.task.done .ms{color:var(--z-mint)}
+.ask{margin-left:42px;margin-top:10px;display:flex;flex-wrap:wrap;gap:8px}
+.ask span{height:32px;padding:0 12px;display:inline-flex;align-items:center;border-radius:999px;border:1px solid var(--z-line);font-family:var(--z-mono);font-size:12px;color:var(--z-dim)}
+.legal{margin:0 4px;text-align:center;font-size:12.5px;color:var(--z-dim)}
+.legal a{display:inline-block;padding:var(--z-space-4) var(--z-space-1)}
+.concept{margin:0;padding:var(--z-space-2) var(--z-space-4);text-align:center;font-size:12.5px;color:var(--z-amber);border-bottom:1px solid var(--z-line)}
+.z-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<header class="top">
+  <span class="signet" aria-hidden="true">Z</span><b>Open an account</b>
+  <span class="step" id="step"></span>
+  <button type="button" class="back" id="back" hidden>Back</button>
+</header>
+<div class="meter" aria-hidden="true"><i id="meter"></i></div>
+<p class="concept">Design concept. No account is made, no key is created and no email is sent.</p>
+<main id="thread" aria-live="polite"></main>
+<div class="dock"><div id="dock"></div></div>
+
+<script>
+// Concept only. Each step says something, then puts one way to answer in the dock.
+const $ = (h) => { const t = document.createElement('template'); t.innerHTML = h.trim(); return t.content.firstElementChild; };
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+const thread = document.getElementById('thread'), dock = document.getElementById('dock');
+const me = {};
+const marks = [];
+const SIG = '<span class="signet" aria-hidden="true">Z</span>';
+
+function zsay(text, small) { thread.append($(`<div class="z">${SIG}<p>${text}${small ? `<small>${small}</small>` : ''}</p></div>`)); }
+function said(text) { thread.append($(`<p class="me">${esc(text)}</p>`)); }
+function scroll() { requestAnimationFrame(() => scrollTo({ top: document.body.scrollHeight, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })); }
+
+function field({ type = 'text', label, placeholder = '', check, done, auto, value = '' }) {
+  dock.innerHTML = '';
+  const f = $(`<form novalidate><div class="box"><label class="z-sr" for="f">${label}</label><input id="f" type="${type}" placeholder="${placeholder}" autocomplete="${auto || 'off'}" maxlength="${type === 'email' ? 254 : 120}" value="${esc(value)}" aria-describedby="err" required><button class="send" aria-label="Continue"><span class="ms">arrow_upward</span></button></div><p class="err" id="err" role="alert"></p></form>`);
+  const input = f.querySelector('input'), err = f.querySelector('#err');
+  input.addEventListener('input', () => { err.textContent = ''; input.removeAttribute('aria-invalid'); });
+  f.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const v = input.value.trim(), bad = v ? check && check(v) : 'Type an answer to continue.';
+    if (bad) { err.textContent = bad; input.setAttribute('aria-invalid', 'true'); input.focus(); return; }
+    said(v); done(v);
+  });
+  dock.append(f); input.focus();
+}
+function chips(list) {
+  dock.innerHTML = '';
+  const c = $('<div class="chips"></div>');
+  list.forEach(([text, fn, quiet]) => {
+    const b = $(`<button type="button" class="chip${quiet ? ' quiet' : ''}">${text}</button>`);
+    b.addEventListener('click', () => { said(b.textContent.trim()); fn(); });
+    c.append(b);
+  });
+  dock.append(c); c.querySelector('button').focus();
+}
+
+// The steps: name, email, who it is for, the key. Everything else is a to-do on Home.
+const STEPS = [
+  function name() {
+    zsay('Hi, I’m Zold. Your agents pay and get paid here, inside rules you set. What should I call you?');
+    field({ label: 'Your name', placeholder: 'Your full name', auto: 'name', value: me.name, done: (v) => { me.name = v; next(); } });
+  },
+  function email() {
+    zsay(`Nice to meet you, ${esc(me.name.split(' ')[0])}. Which email should I write to?`, 'Receipts, and anything an agent needs your yes for.');
+    field({ type: 'email', label: 'Email', placeholder: 'you@example.com', auto: 'email', value: me.email,
+      check: (v) => /^[^@\s]+@[^@\s.]+(\.[^@\s.]+)+$/.test(v) ? '' : 'That doesn’t look like an email address.',
+      done: (v) => { me.email = v; next(); } });
+  },
+  function kind() {
+    zsay('Is this account for a company, or just for you?');
+    chips([['A company', () => {
+      me.kind = 'company'; sub = true;
+      zsay('What is the company called?');
+      field({ label: 'Company name', placeholder: 'Company name', auto: 'organization', value: me.company, done: (v) => { me.company = v; next(); } });
+      scroll();
+    }], ['Just me', () => { me.kind = 'personal'; next(); }]]);
+  },
+  function passkey() {
+    zsay('Last step: your key.', 'Your Face ID or fingerprint becomes the only key to your account. Agents never get it; they get an allocation you can take back.');
+    dock.innerHTML = '';
+    const card = $('<div class="card"><div class="key"><span class="ms">fingerprint</span></div><ol class="trace" id="tr"></ol></div>');
+    thread.append(card);
+    const go = $('<div><button type="button" class="btn">Use Face ID or fingerprint</button><p class="legal">By creating your key you accept the <a href="/legal">Terms</a> and the <a href="/privacy">Privacy notice</a>.</p></div>');
+    const btn = go.querySelector('button');
+    btn.addEventListener('click', async () => {
+      btn.disabled = true; btn.textContent = 'Opening your account…';
+      document.getElementById('back').hidden = true; // nothing to go back to once the key is being made
+      const tr = card.querySelector('#tr');
+      const steps = ['key made on this device', 'account opened, your key its only owner'];
+      if (me.kind === 'company') steps.push(`${me.company} set up, you as its owner`);
+      for (const s of steps) {
+        const li = $(`<li><span class="ring"></span>${esc(s)}</li>`); tr.append(li); scroll();
+        await new Promise((r) => setTimeout(r, 700));
+        li.firstElementChild.outerHTML = '<span class="ms">check_circle</span>';
+      }
+      next();
+    });
+    dock.append(go); btn.focus({ preventScroll: true });
+  },
+  function home() {
+    document.getElementById('back').hidden = true;
+    zsay(`Your account is open, ${esc(me.name.split(' ')[0])}.`, 'Here is your to-do list. Do them in any order, whenever you like.');
+    const t = (icon, title, sub, btn, cls = '') => `<li class="task ${cls}"><span class="ms">${icon}</span><div><b>${title}</b><span class="sub">${sub}</span></div>${btn ? `<button class="btn ${btn[1]} go" type="button">${btn[0]}</button>` : ''}</li>`;
+    thread.append($(`<ul class="tasks">
+      ${t('mail', 'Confirm your email', `I sent a link to ${esc(me.email)}`, ['Resend', 'ghost'])}
+      ${t('badge', me.kind === 'company' ? 'Verify yourself and the company' : 'Verify your identity', 'A few minutes with your ID. Needed before money comes in.', ['Start', ''])}
+      ${t('account_balance', 'Get your IBAN', 'Ready once you’re verified', null, 'wait')}
+      ${t('smart_toy', 'Give an agent its first allocation', 'A budget, a cap per payment, and who it may pay', ['Set up', 'ghost'])}
+      ${t('shield', 'Add a way back in', 'Your Google or Apple login, in case you lose this device', ['Add', 'ghost'])}
+    </ul>`));
+    zsay('Or just tell me what you need.');
+    thread.append($('<div class="ask"><span>/connect an agent</span><span>/pay an invoice</span><span>/get paid by agents</span></div>'));
+    dock.innerHTML = '';
+    dock.append($('<div class="box"><label class="z-sr" for="q">Ask Zold</label><input id="q" placeholder="Ask Zold anything…" disabled><button class="send" disabled aria-label="Ask"><span class="ms">arrow_upward</span></button></div>'));
+    thread.querySelector('.tasks button').focus({ preventScroll: true });
+  },
+];
+
+let at = -1, sub = false; // sub: the company-name question, asked inside the "who is it for" step
+function next() { show(at + 1); }
+function show(i) {
+  at = i; sub = false; marks.push(thread.childElementCount);
+  const counted = Math.min(i + 1, STEPS.length - 1);
+  document.getElementById('step').textContent = i < STEPS.length - 1 ? `${counted} of ${STEPS.length - 1}` : '';
+  document.getElementById('meter').style.width = (100 * i / (STEPS.length - 1)) + '%';
+  document.getElementById('back').hidden = i === 0 || i === STEPS.length - 1;
+  STEPS[i](); scroll();
+}
+// Back drops everything since the previous step began, then asks it again.
+document.getElementById('back').addEventListener('click', () => {
+  if (at < 1) return;
+  const to = sub ? at : at - 1;
+  marks.length = to + 1; const keep = marks.pop();
+  while (thread.childElementCount > keep) thread.lastElementChild.remove();
+  show(to);
+});
+show(0);
+</script>
+</body>
+</html>

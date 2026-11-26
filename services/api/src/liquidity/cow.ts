@@ -29,6 +29,7 @@ import {
   } from "./contract.js";
 
 export class CowLiquidityProvider implements LiquidityProvider {
+  readonly quoteOnly = true;
   private indicative = new Map<LiquiditySide, { at: number; rate: number; raw: bigint }>();
 
   private tokens(side: LiquiditySide) {

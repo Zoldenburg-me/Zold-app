@@ -77,7 +77,7 @@ const NO_US = { usCitizen: false, usGreenCard: false, usTaxResident: false };
 const signup = (body: any) => call("POST", "/api/users", { body });
 
 let passed = 0;
-const check = (name: string, fn: () => void) => { fn(); passed++; console.log(`  ok  ${name}`); };
+const check = async (name: string, fn: () => void | Promise<void>) => { await fn(); passed++; console.log(`  ok  ${name}`); };
 
 for (const [name, url] of [[`api :${API_PORT}`, `${API}/api/health`], [`chain :${RPC_PORT}`, RPC_URL]] as const) {
   const busy = await fetch(url, { signal: AbortSignal.timeout(1500) }).then(() => true).catch(() => false);
@@ -107,11 +107,11 @@ try {
     citizenships: ["DE"], accountType: "individual",
     usAnswers: { ...NO_US, usCitizen: true },
   });
-  check("a US citizen resident in Germany is refused at signup", () => {
+  await check("a US citizen resident in Germany is refused at signup", () => {
     assert.equal(usPerson.status, 403);
     assert.equal(usPerson.data.code, "BLOCKED_US");
   });
-  check("the refusal says what Zold cannot offer, not which rule fired", () => {
+  await check("the refusal says what Zold cannot offer, not which rule fired", () => {
     assert.equal(usPerson.data.error, "Zold is not available to US persons.");
     const body = JSON.stringify(usPerson.data);
     for (const leak of ["reasonCode", "us_answer_citizen", "Monerium", "citizenship"]) {
@@ -122,7 +122,7 @@ try {
   const sanctioned = await signup({
     name: "S", email: "s@example.com", country: "DE", citizenships: ["RU"], accountType: "individual", usAnswers: NO_US,
   });
-  check("a sanctioned citizenship is refused with the country wording", () => {
+  await check("a sanctioned citizenship is refused with the country wording", () => {
     assert.equal(sanctioned.status, 403);
     assert.equal(sanctioned.data.code, "BLOCKED_SANCTIONED");
   });
@@ -130,7 +130,7 @@ try {
   const denied = await signup({
     name: "D", email: "d@example.com", country: "MM", citizenships: ["MM"], accountType: "individual", usAnswers: NO_US,
   });
-  check("a residence on the wallet deny list is UNSUPPORTED and is never called sanctioned", () => {
+  await check("a residence on the wallet deny list is UNSUPPORTED and is never called sanctioned", () => {
     assert.equal(denied.status, 403);
     assert.equal(denied.data.code, "BLOCKED_UNSUPPORTED");
     assert.ok(!/sanction/i.test(JSON.stringify(denied.data)), "must not imply a sanction");
@@ -146,12 +146,12 @@ try {
     citizenships: ["DE", "IN"], accountType: "individual", usAnswers: NO_US,
     consents: [{ kind: "zold_terms" }, { kind: "partner_share", partner: "Monerium + Gnosis Pay" }],
   });
-  check("an Indian citizen resident in Germany gets the full path", () => {
+  await check("an Indian citizen resident in Germany gets the full path", () => {
     assert.equal(de.status, 201);
     assert.equal(de.data.segment.value, "EU_FULL");
     assert.ok(de.data.segment.capabilities.includes("card"));
   });
-  check("the client is given capabilities but NOT the rule that produced them", () => {
+  await check("the client is given capabilities but NOT the rule that produced them", () => {
     assert.equal(de.data.segment.reasonCode, undefined);
     assert.equal(de.data.usPersonAnswers, undefined, "raw US answers must not be echoed back");
   });
@@ -160,7 +160,7 @@ try {
     name: "Ravi", country: "IN", email: "ravi@example.com",
     citizenships: ["IN"], accountType: "individual", usAnswers: NO_US,
   });
-  check("an Indian resident is IN_COLLECTIONS and is told the path is gated", () => {
+  await check("an Indian resident is IN_COLLECTIONS and is told the path is gated", () => {
     assert.equal(inUser.status, 201);
     assert.equal(inUser.data.segment.value, "IN_COLLECTIONS");
     assert.deepEqual([...inUser.data.segment.capabilities].sort(), ["onchain_balance", "safe", "xflow_collections"]);
@@ -170,7 +170,7 @@ try {
   const nigerian = await signup({
     name: "N", email: "n@example.com", country: "NG", citizenships: ["NG"], accountType: "individual", usAnswers: NO_US,
   });
-  check("a Nigerian resident gets a wallet-only account", () => {
+  await check("a Nigerian resident gets a wallet-only account", () => {
     assert.equal(nigerian.status, 201, JSON.stringify(nigerian.data));
     assert.equal(nigerian.data.segment.value, "WALLET_ONLY");
     assert.deepEqual([...nigerian.data.segment.capabilities].sort(), ["onchain_balance", "safe"]);
@@ -179,7 +179,7 @@ try {
   const br = await signup({
     name: "Ana", email: "ana@example.com", country: "BR", citizenships: ["BR"], accountType: "individual", usAnswers: NO_US,
   });
-  check("a Brazilian resident gets an account with no card", () => {
+  await check("a Brazilian resident gets an account with no card", () => {
     assert.equal(br.data.segment.value, "ONCHAIN_NO_CARD");
     assert.ok(!br.data.segment.capabilities.includes("card"));
   });
@@ -187,11 +187,11 @@ try {
   const noCit = await signup({
     name: "Lea", email: "lea@example.com", country: "FR", accountType: "individual", usAnswers: NO_US,
   });
-  check("a signup that declares no citizenship is screened on residence", () => {
+  await check("a signup that declares no citizenship is screened on residence", () => {
     assert.equal(noCit.status, 201);
     assert.equal(noCit.data.segment.value, "EU_FULL");
   });
-  check("an undeclared citizenship is not recorded as the residence", () => {
+  await check("an undeclared citizenship is not recorded as the residence", () => {
     const row = JSON.parse(readFileSync(process.env.TRANSF_DB_PATH!, "utf8"))
       .users.find((u: any) => u.id === noCit.data.id);
     assert.ok(row, "user row written");
@@ -204,14 +204,14 @@ try {
   const padded = await signup({
     name: "P", email: "padded@example.com", country: "DE", citizenships: Array(2000).fill("DE"), accountType: "individual", usAnswers: NO_US,
   });
-  check("a padded citizenships list keeps one entry per country", () => {
+  await check("a padded citizenships list keeps one entry per country", () => {
     assert.equal(padded.status, 201, JSON.stringify(padded.data));
     assert.deepEqual(dbNow().users.find((u: any) => u.id === padded.data.id)?.citizenships, ["DE"]);
   });
   const paddedBlocked = await signup({
     name: "Q", email: "padded-ru@example.com", country: "DE", citizenships: [...Array(2000).fill("DE"), "RU"], accountType: "individual", usAnswers: NO_US,
   });
-  check("padding does not hide a sanctioned citizenship, and the refusal's audit row is not padded", () => {
+  await check("padding does not hide a sanctioned citizenship, and the refusal's audit row is not padded", () => {
     assert.equal(paddedBlocked.status, 403);
     assert.equal(paddedBlocked.data.code, "BLOCKED_SANCTIONED");
     const last = dbNow().audit.filter((a: any) => a.kind === "segment.decided").at(-1);
@@ -222,7 +222,7 @@ try {
     name: "M", email: "many@example.com", country: "DE", accountType: "individual", usAnswers: NO_US,
     citizenships: ["AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "GR", "HU", "IE", "IT", "LV"],
   });
-  check("more distinct citizenships than anyone holds is refused, and nothing is kept", () => {
+  await check("more distinct citizenships than anyone holds is refused, and nothing is kept", () => {
     assert.equal(tooMany.status, 400, JSON.stringify(tooMany.data));
     const db = dbNow();
     assert.ok(!db.users.some((u: any) => u.email === "many@example.com"));
@@ -231,7 +231,7 @@ try {
   const sanctionedResidence = await signup({
     name: "R", email: "r@example.com", country: "RU", accountType: "individual", usAnswers: NO_US,
   });
-  check("a sanctioned residence is still refused with no citizenship declared", () => {
+  await check("a sanctioned residence is still refused with no citizenship declared", () => {
     assert.equal(sanctionedResidence.status, 403);
     assert.equal(sanctionedResidence.data.code, "BLOCKED_SANCTIONED");
   });
@@ -242,7 +242,7 @@ try {
     name: "Forger", email: "forger@example.com", country: "IN", citizenships: ["IN"], accountType: "individual",
     usAnswers: NO_US, segment: { value: "EU_FULL" },
   });
-  check("a segment in the signup body is ignored", () => {
+  await check("a segment in the signup body is ignored", () => {
     assert.equal(forged.data.segment.value, "IN_COLLECTIONS");
   });
 
@@ -254,7 +254,7 @@ try {
   const quote = await call("POST", "/api/quotes", {
     token: inToken, body: { userId: inId, sendEur: 50, rail: "sepa" },
   });
-  check("an IN_COLLECTIONS account cannot get a SEPA quote — refused 403 in the route", () => {
+  await check("an IN_COLLECTIONS account cannot get a SEPA quote — refused 403 in the route", () => {
     assert.equal(quote.status, 403);
     assert.equal(quote.data.code, "CAPABILITY_UNAVAILABLE");
     assert.equal(quote.data.capability, "monerium");
@@ -263,31 +263,31 @@ try {
   const ngQuote = await call("POST", "/api/quotes", {
     token: nigerian.data.sessionToken, body: { userId: nigerian.data.id, sendEur: 50, rail: "sepa" },
   });
-  check("a WALLET_ONLY account cannot get a SEPA quote", () => {
+  await check("a WALLET_ONLY account cannot get a SEPA quote", () => {
     assert.equal(ngQuote.status, 403);
     assert.equal(ngQuote.data.capability, "monerium");
   });
 
   const safe = await call("POST", `/api/users/${inId}/passkey-safe/deployment`, { token: inToken });
-  check("an IN_COLLECTIONS account is not refused a Safe by the capability guard", () => {
+  await check("an IN_COLLECTIONS account is not refused a Safe by the capability guard", () => {
     // It may still fail for passkey reasons; the guard is what changed.
     assert.notEqual(safe.data.code, "CAPABILITY_UNAVAILABLE");
   });
 
   const ngMon = await call("POST", `/api/users/${nigerian.data.id}/monerium/connect/start`, { token: nigerian.data.sessionToken });
-  check("a WALLET_ONLY account cannot reach Monerium", () => {
+  await check("a WALLET_ONLY account cannot reach Monerium", () => {
     assert.equal(ngMon.status, 403);
     assert.equal(ngMon.data.capability, "monerium");
   });
 
   const mon = await call("POST", `/api/users/${inId}/monerium/connect/start`, { token: inToken });
-  check("an IN_COLLECTIONS account cannot reach Monerium", () => {
+  await check("an IN_COLLECTIONS account cannot reach Monerium", () => {
     assert.equal(mon.status, 403);
     assert.equal(mon.data.capability, "monerium");
   });
 
   const gp = await call("GET", "/api/gnosis-pay/config", { token: inToken });
-  check("an IN_COLLECTIONS account cannot reach Gnosis Pay", () => {
+  await check("an IN_COLLECTIONS account cannot reach Gnosis Pay", () => {
     assert.equal(gp.status, 403);
     assert.equal(gp.data.capability, "gnosis_pay");
   });
@@ -295,10 +295,74 @@ try {
   const euQuote = await call("POST", "/api/quotes", {
     token: de.data.sessionToken, body: { userId: de.data.id, sendEur: 50, rail: "sepa" },
   });
-  check("the same call from an EU_FULL account is NOT blocked by the guard", () => {
+  await check("the same call from an EU_FULL account is NOT blocked by the guard", () => {
     // It may still fail later for balance or Safe reasons; what matters is that
     // it is not the capability guard refusing it.
     assert.notEqual(euQuote.data.code, "CAPABILITY_UNAVAILABLE");
+  });
+
+  console.log("\nA signup with no country is decided later, from Home");
+
+  const late = await signup({ name: "Late", email: "late@example.com", accountType: "company", companyName: "Late GmbH", consents: [{ kind: "zold_terms" }] });
+  await check("it opens with its own Safe and nothing else", () => {
+    assert.equal(late.status, 201, JSON.stringify(late.data));
+    assert.equal(late.data.segment.value, "UNDECIDED");
+    assert.deepEqual(late.data.segment.capabilities, ["safe"]);
+    assert.equal(late.data.country, "");
+    assert.equal(late.data.companyName, "Late GmbH");
+  });
+  const lateTok: string = late.data.sessionToken, lateId: string = late.data.id;
+  const lateMon = await call("POST", `/api/users/${lateId}/monerium/connect/start`, { token: lateTok });
+  await check("an UNDECIDED account cannot reach Monerium", () => {
+    assert.equal(lateMon.status, 403);
+    assert.equal(lateMon.data.capability, "monerium");
+  });
+  const lateHandle = await call("POST", `/api/users/${lateId}/handle`, { token: lateTok, body: { handle: "late-gmbh" } });
+  await check("an UNDECIDED account cannot open a payment page", () => {
+    assert.equal(lateHandle.status, 403);
+    assert.equal(lateHandle.data.capability, "onchain_balance");
+  });
+  const orgBody = { type: "business", entity: "company", name: "Late GmbH", country: "DE" };
+  const lateOrg = await call("POST", "/api/orgs", { token: lateTok, body: orgBody });
+  await check("an UNDECIDED login cannot create an organisation", () => {
+    assert.equal(lateOrg.status, 403);
+    assert.equal(lateOrg.data.code, "RESIDENCE_NEEDED");
+  });
+  const residence = (token: string | undefined, id: string, body: any) => call("POST", `/api/users/${id}/residence`, { token, body });
+  const noSession = await residence(undefined, lateId, { country: "DE", usAnswers: { usPerson: false, companyUsNexus: false } });
+  await check("the residence answer needs the account's own session", async () => {
+    assert.equal(noSession.status, 401);
+    assert.equal((await residence(de.data.sessionToken, lateId, { country: "DE", usAnswers: { usPerson: false, companyUsNexus: false } })).status, 403);
+  });
+  await check("a company that was not asked the ownership question is not decided", async () => {
+    assert.equal((await residence(lateTok, lateId, { country: "DE", usAnswers: { usPerson: false } })).status, 400);
+  });
+  const lateUs = await residence(lateTok, lateId, { country: "DE", usAnswers: { usPerson: true, companyUsNexus: false } });
+  await check("a US person is refused there too, audited, and the account stays undecided", () => {
+    assert.equal(lateUs.status, 403);
+    assert.equal(lateUs.data.code, "BLOCKED_US");
+    const db = dbNow();
+    assert.equal(db.users.find((u: any) => u.id === lateId).segment.value, "UNDECIDED");
+    const row = db.audit.filter((a: any) => a.kind === "segment.decided").at(-1);
+    assert.equal(row.data.outcome, "refused_at_residence");
+  });
+  const lateOk = await residence(lateTok, lateId, { country: "DE", usAnswers: { usPerson: false, companyUsNexus: false }, segment: { value: "EU_FULL" }, softSignals: { usPhoneCode: true } });
+  await check("a German resident is decided EU_FULL, with the answers on the row", () => {
+    assert.equal(lateOk.status, 200, JSON.stringify(lateOk.data));
+    assert.equal(lateOk.data.segment.value, "EU_FULL");
+    assert.equal(lateOk.data.country, "DE");
+    const row = dbNow().users.find((u: any) => u.id === lateId);
+    assert.equal(row.usPersonAnswers.length, 1);
+    assert.equal(row.softSignals, undefined, "soft signals are not the client's to raise here");
+  });
+  await check("and then it may create its organisation", async () => {
+    assert.equal((await call("POST", "/api/orgs", { token: lateTok, body: orgBody })).status, 201);
+  });
+  const again = await residence(lateTok, lateId, { country: "IN", usAnswers: { usPerson: false, companyUsNexus: false } });
+  await check("it is decided once", async () => {
+    assert.equal(again.status, 409);
+    assert.equal(again.data.code, "RESIDENCE_SET");
+    assert.equal((await residence(de.data.sessionToken, de.data.id, { country: "IN", usAnswers: { usPerson: false } })).status, 409);
   });
 
   console.log(`\nONBOARDING SEGMENTS TEST PASSED — ${passed}/${passed} checks.`);

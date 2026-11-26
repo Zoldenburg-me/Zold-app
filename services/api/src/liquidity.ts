@@ -15,6 +15,7 @@
  */
 import { FX, LIQUIDITY, railFeeEur } from "./config.js";
 import { eur } from "./chain.js";
+import { describeCause } from "./http/log-cause.js";
 import type { Transfer } from "./store.js";
 import { store } from "./store.js";
 import { FxSwapperLiquidityProvider } from "./liquidity/fx-swapper.js";
@@ -106,13 +107,84 @@ export async function prepareTransferLiquidity(transfer: Transfer): Promise<NonN
   };
 }
 
+/** Whether the configured venue can build a Safe-executed swap at all. Best
+ *  has safeSwapPlan whatever its venues are, so it answers for them. */
+export function venueServesSafe(provider: LiquidityProvider = liquidityProvider()): boolean {
+  if (!provider.safeSwapPlan) return false;
+  return provider instanceof BestExecutionProvider ? provider.servesSafe() : true;
+}
+
+/** Whether the configured venue can settle the swaps it prices. */
+export function venueSettles(provider: LiquidityProvider = liquidityProvider()): boolean {
+  if (provider.quoteOnly) return false;
+  return provider instanceof BestExecutionProvider ? provider.settles() : true;
+}
+
+/** The custody posture the startup log reports, decided by the same checks
+ *  the transfer builder uses, so the log cannot describe a path it refuses.
+ *  Never throws: it runs in the listen callback, where a throw exits the whole
+ *  API. A venue config that does not resolve is reported; the quote that
+ *  resolves it at request time still refuses. */
+export function custodyPosture(
+  bridgeLive: boolean,
+  provider?: LiquidityProvider,
+): { warn: boolean; message: string } {
+  let settles: boolean;
+  let servesSafe: boolean;
+  try {
+    provider ??= liquidityProvider();
+    settles = venueSettles(provider);
+    servesSafe = venueServesSafe(provider);
+  } catch (err) {
+    return {
+      warn: true,
+      message:
+        `CUSTODY: the liquidity venue configuration is invalid (LIQUIDITY_PROVIDER=${LIQUIDITY.PROVIDER}, ` +
+        `LIQUIDITY_VENUES=${LIQUIDITY.VENUES.join(",") || "(empty)"}): ${describeCause(err)}. ` +
+        "Every cash quote will fail until it is fixed; the rest of the API runs.",
+    };
+  }
+  if (!settles) {
+    return {
+      warn: true,
+      message:
+        `CUSTODY: LIQUIDITY_PROVIDER=${LIQUIDITY.PROVIDER} includes a venue that prices but cannot settle a swap, so ` +
+        "every cash-rail transfer is refused (VENUE_CANNOT_SETTLE) before any debit.",
+    };
+  }
+  if (!servesSafe) {
+    return {
+      warn: true,
+      message:
+        `CUSTODY: LIQUIDITY_PROVIDER=${LIQUIDITY.PROVIDER} cannot be executed by a user's Safe, so ` +
+        "cash-rail transfers debit the full amount to the orchestrator and swap from there. " +
+        "The non-custodial path needs dex, lifi, rfq or best over one of them.",
+    };
+  }
+  if (!bridgeLive) {
+    return {
+      warn: true,
+      message:
+        "CUSTODY: the Safe-executed swap batch is available, but BRIDGE_LIVE is not set — with no " +
+        "external deposit address the batch delivers its output to the orchestrator. Cash-rail " +
+        "transfers are recorded as custodial until Bridge is live.",
+    };
+  }
+  return {
+    warn: false,
+    message:
+      "CUSTODY: cash-rail transfers run non-custodially — the user's Safe signs one batch that " +
+      "delivers straight to Bridge. The SEPA rail moves only the fee.",
+  };
+}
+
 /**
  * The Safe-executed swap for one transfer, prepared at CREATION time — its
  * calldata rides inside the UserOperation the user signs, so unlike the
  * orchestrator path there is no execute-time quote: the price serialized here
  * is the price the user's signature covers. Returns null when the configured
- * venue cannot serve a Safe executor (FxSwapper's permissioned inventory,
- * CoW) — the transfer then falls back to the plain user-signed debit.
+ * venue cannot serve a Safe executor (FxSwapper's permissioned inventory)
+ * — the transfer then falls back to the plain user-signed debit.
  */
 export async function prepareSafeSwapForTransfer(
   transfer: Transfer,

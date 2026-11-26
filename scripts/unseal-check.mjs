@@ -1,0 +1,73 @@
+/**
+ * What `secrets.sh unseal` refuses in an archive, and `seal` in a source tree,
+ * so seal never writes an archive unseal refuses.
+ *
+ *   tar -tzf ARCHIVE | node unseal-check.mjs names   a name that is absolute or has a .. part
+ *   node unseal-check.mjs tree DIR                    after unpacking: a symlink that points out
+ *                                                     of DIR, or anything but files, dirs and links
+ *   node unseal-check.mjs seal DIR                    the same tree check, before sealing DIR
+ *
+ * A link target is resolved one component at a time, following the links
+ * already in the tree, so `x -> .` plus `d -> x/..` is seen to leave DIR. An
+ * absolute target, a step above DIR or more than 40 hops is refused; a
+ * component that does not exist cannot be a link and is taken as written.
+ *
+ * Exits 1 with the first offending name (a path in the tree, never its content).
+ */
+import { lstatSync, readdirSync, readFileSync, readlinkSync } from "node:fs";
+import path from "node:path";
+
+const [mode, dir] = process.argv.slice(2);
+const refuse = (why) => {
+  console.error(`refusing to ${mode === "seal" ? "seal" : "unseal"}: ${why}`);
+  process.exit(1);
+};
+
+if (mode === "names") {
+  for (const name of readFileSync(0, "utf8").split("\n")) {
+    if (name.startsWith("/") || name.split("/").includes("..")) refuse(`the archive names ${JSON.stringify(name)}`);
+  }
+} else if ((mode === "tree" || mode === "seal") && dir) {
+  const root = path.resolve(dir);
+  /** Whether the link at `p` (under root, its parents real dirs) resolves outside root. */
+  const leaves = (p) => {
+    const stack = path.relative(root, path.dirname(p)).split(path.sep).filter(Boolean);
+    let target = readlinkSync(p);
+    if (path.isAbsolute(target)) return true;
+    let todo = target.split("/");
+    let hops = 0;
+    while (todo.length) {
+      const c = todo.shift();
+      if (c === "" || c === ".") continue;
+      if (c === "..") {
+        if (!stack.length) return true;
+        stack.pop();
+        continue;
+      }
+      stack.push(c);
+      let st;
+      try { st = lstatSync(path.join(root, ...stack)); } catch { continue; }
+      if (!st.isSymbolicLink()) continue;
+      if (++hops > 40) return true;
+      target = readlinkSync(path.join(root, ...stack));
+      if (path.isAbsolute(target)) return true;
+      stack.pop();
+      todo = [...target.split("/"), ...todo];
+    }
+    return false;
+  };
+  const walk = (at) => {
+    for (const entry of readdirSync(at)) {
+      const p = path.join(at, entry);
+      const st = lstatSync(p);
+      const rel = path.relative(root, p);
+      if (st.isSymbolicLink()) {
+        if (leaves(p)) refuse(`${rel} links out of ${mode === "seal" ? "the sealed dir" : "the archive"}`);
+      } else if (st.isDirectory()) walk(p);
+      else if (!st.isFile()) refuse(`${rel} is not a file, a directory or a link`);
+    }
+  };
+  walk(root);
+} else {
+  refuse("usage: unseal-check.mjs names | tree DIR | seal DIR");
+}
